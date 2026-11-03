@@ -16,6 +16,9 @@ pub const RESPONSES_URL: &str = "https://api.x.ai/v1/responses";
 /// xAI server-side context compaction. One pass per call; the conversation must
 /// already fit the window.
 pub const RESPONSES_COMPACT_URL: &str = "https://api.x.ai/v1/responses/compact";
+/// xAI's Batch API (HX-13). Night passes on an API key go here at 20% off
+/// ([`XaiClient::deferrable`]); every call under it is [`batch_url`]-checked.
+pub const BATCHES_URL: &str = "https://api.x.ai/v1/batches";
 pub const USER_AGENT: &str = concat!("GrokHub/", env!("CARGO_PKG_VERSION"));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -705,7 +708,41 @@ pub struct XaiClient {
     bearer: String,
     auth_kind: AuthKind,
     url: String,
+    /// Set by [`XaiClient::deferrable`]: eligible asks go through the Batch API.
+    batch: Option<crate::batch::BatchPolicy>,
 }
+
+/// One Batch API call on api.x.ai: the root, or a batch id with `/requests`,
+/// `/results` or `:cancel`, and an optional `?limit=` read.
+pub fn batch_url(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix(BATCHES_URL) else {
+        return false;
+    };
+    if rest.is_empty() {
+        return true;
+    }
+    let Some(rest) = rest.strip_prefix('/') else {
+        return false;
+    };
+    let (path, query) = rest.split_once('?').unwrap_or((rest, ""));
+    if !query.is_empty()
+        && !query
+            .strip_prefix("limit=")
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+    {
+        return false;
+    }
+    let (id, tail) = match path.split_once(['/', ':']) {
+        Some((id, _)) => (id, &path[id.len()..]),
+        None => (path, ""),
+    };
+    crate::batch::valid_batch_id(id) && matches!(tail, "" | "/requests" | "/results" | ":cancel")
+}
+
+/// Each Batch API call is a small JSON exchange.
+const BATCH_CALL_TIMEOUT: Duration = Duration::from_secs(60);
+/// A batch call's reply is read up to this many bytes.
+const BATCH_REPLY_CAP: u64 = 8 * 1024 * 1024;
 
 /// `http://127.0.0.1:<port>/…` or `http://localhost:<port>/…` only.
 fn loopback_http(url: &str) -> bool {
@@ -735,7 +772,36 @@ impl XaiClient {
             bearer: bearer.into(),
             auth_kind,
             url: RESPONSES_URL.to_string(),
+            batch: None,
         }
+    }
+
+    /// For night passes that can wait: a one-shot text ask goes through xAI's
+    /// Batch API (20% off, answered within hours) and falls back to a normal
+    /// call when the batch can't answer. Only on an API key (the SuperGrok
+    /// pool has no batch price), and not when `app.json` has
+    /// `"batch_background": false`.
+    pub fn deferrable(mut self, config_dir: &std::path::Path) -> Self {
+        if self.auth_kind == AuthKind::ApiKey && crate::batch::enabled_at(config_dir) {
+            self.batch = Some(crate::batch::BatchPolicy::new(config_dir));
+        }
+        self
+    }
+
+    /// Whether [`XaiClient::deferrable`] took effect.
+    pub fn defers(&self) -> bool {
+        self.batch.is_some()
+    }
+
+    /// The Batch API root next to this client's responses URL, if it has one.
+    fn batches_url(&self) -> Option<String> {
+        if self.url == RESPONSES_URL {
+            return Some(BATCHES_URL.to_string());
+        }
+        (loopback_http(&self.url) && self.url.ends_with("/v1/responses")).then(|| {
+            let root = &self.url[..self.url.len() - "/v1/responses".len()];
+            format!("{root}/v1/batches")
+        })
     }
 
     /// Send to a local test server instead of api.x.ai. Only plain-http loopback
@@ -767,8 +833,8 @@ impl XaiClient {
         call_timeout: Option<Duration>,
         body: Value,
     ) -> Result<grokhub_core::http::Response, ClientError> {
-        // Only the listed xAI endpoints, or a loopback test server.
-        if !loopback_http(url) && !XAI_MODEL_ENDPOINTS.contains(&url) {
+        // Only the listed xAI endpoints, a batch call, or a loopback test server.
+        if !loopback_http(url) && !XAI_MODEL_ENDPOINTS.contains(&url) && !batch_url(url) {
             return Err(ClientError::Protocol(format!(
                 "not an xAI model endpoint: {url}"
             )));
@@ -797,6 +863,38 @@ impl XaiClient {
         let sent = crate::timing::lap("client:to_headers");
         let response = call.send_json(body);
         drop(sent);
+        self.answered(response)
+    }
+
+    /// The Batch API's reads (status and results): batch URLs only, then the
+    /// guard, then one GET with the bearer. Nothing of the user's goes out.
+    fn get_guarded(&self, url: &str) -> Result<grokhub_core::http::Response, ClientError> {
+        if !loopback_http(url) && !batch_url(url) {
+            return Err(ClientError::Protocol(format!(
+                "not an xAI batch call: {url}"
+            )));
+        }
+        let egress = guard_egress(&crate::perm::config_dir(), &EgressReq::new(url, &[]));
+        if let GateOutcome::Park { reason, .. } | GateOutcome::Refuse { reason } = egress {
+            return Err(ClientError::Protocol(reason));
+        }
+        let response = self
+            .agent
+            .get(url)
+            .header("Authorization", &format!("Bearer {}", self.bearer))
+            .header("User-Agent", USER_AGENT)
+            .header("Accept", "application/json")
+            .timeout(BATCH_CALL_TIMEOUT)
+            .any_status()
+            .call();
+        self.answered(response)
+    }
+
+    /// An HTTP reply as this client reports it: errors mapped, transport noted.
+    fn answered(
+        &self,
+        response: Result<grokhub_core::http::Response, grokhub_core::http::Error>,
+    ) -> Result<grokhub_core::http::Response, ClientError> {
         match response {
             Ok(resp) if resp.status() < 400 => {
                 grokhub_core::connectivity::note_global_transport_success(grokhub_core::now_ms());
@@ -936,6 +1034,7 @@ impl std::fmt::Debug for XaiClient {
         f.debug_struct("XaiClient")
             .field("bearer", &"<redacted>")
             .field("auth_kind", &self.auth_kind)
+            .field("batch", &self.batch.is_some())
             .finish()
     }
 }
@@ -947,6 +1046,25 @@ impl ModelClient for XaiClient {
         cancel: &CancelToken,
         sink: &mut dyn FnMut(StreamEvent),
     ) -> Result<TurnOutput, ClientError> {
+        if let Some(policy) = self.batch.as_ref().filter(|_| crate::batch::eligible(req)) {
+            match crate::batch::run(
+                self,
+                policy,
+                req,
+                cancel,
+                &grokhub_core::now_ms,
+                &sleep_cancellable,
+            ) {
+                crate::batch::Deferred::Done(turn) => {
+                    if !turn.text.is_empty() {
+                        sink(StreamEvent::TextDelta(turn.text.clone()));
+                    }
+                    return Ok(turn);
+                }
+                crate::batch::Deferred::Cancelled => return Err(ClientError::Cancelled),
+                crate::batch::Deferred::Fallback(_) => {}
+            }
+        }
         Self::with_retries(cancel, None, |_| self.once(req, cancel, sink))
     }
 
@@ -964,6 +1082,96 @@ impl ModelClient for XaiClient {
         Some(Self::with_retries(cancel, Some(deadline), |limit| {
             self.compact_once(&url, req, cancel, limit)
         }))
+    }
+}
+
+impl XaiClient {
+    fn batch_root(&self) -> Result<String, ClientError> {
+        self.batches_url()
+            .ok_or_else(|| ClientError::Protocol("this client has no batch endpoint".into()))
+    }
+
+    fn batch_id_url(&self, batch_id: &str, tail: &str) -> Result<String, ClientError> {
+        if !crate::batch::valid_batch_id(batch_id) {
+            return Err(ClientError::Protocol(format!("not a batch id: {batch_id}")));
+        }
+        Ok(format!("{}/{batch_id}{tail}", self.batch_root()?))
+    }
+
+    fn batch_post(&self, url: &str, body: Value) -> Result<Value, ClientError> {
+        let response = self.post_guarded(
+            url,
+            BATCH_CONV_ID,
+            "application/json",
+            Some(BATCH_CALL_TIMEOUT),
+            body,
+        )?;
+        read_json(response)
+    }
+
+    fn batch_get(&self, url: &str) -> Result<Value, ClientError> {
+        read_json(self.get_guarded(url)?)
+    }
+}
+
+/// The `x-grok-conv-id` on Batch API calls (no chat of the user's).
+const BATCH_CONV_ID: &str = "loadout-batch";
+
+fn read_json(response: grokhub_core::http::Response) -> Result<Value, ClientError> {
+    let mut text = String::new();
+    response
+        .into_reader()
+        .take(BATCH_REPLY_CAP)
+        .read_to_string(&mut text)
+        .map_err(|e| ClientError::Transport(e.to_string()))?;
+    if text.trim().is_empty() {
+        return Ok(Value::Null);
+    }
+    serde_json::from_str(&text).map_err(|e| ClientError::Protocol(format!("batch reply: {e}")))
+}
+
+impl crate::batch::BatchApi for XaiClient {
+    fn create(&self, name: &str) -> Result<String, ClientError> {
+        let reply = self.batch_post(&self.batch_root()?, json!({ "name": name }))?;
+        reply
+            .get("batch_id")
+            .and_then(Value::as_str)
+            .filter(|id| crate::batch::valid_batch_id(id))
+            .map(str::to_string)
+            .ok_or_else(|| ClientError::Protocol("batch reply had no batch id".into()))
+    }
+
+    fn add(&self, batch_id: &str, request_id: &str, body: Value) -> Result<(), ClientError> {
+        let url = self.batch_id_url(batch_id, "/requests")?;
+        let wire = json!({
+            "batch_requests": [{
+                "batch_request_id": request_id,
+                "batch_request": { "responses": body },
+            }]
+        });
+        self.batch_post(&url, wire).map(|_| ())
+    }
+
+    fn get(&self, batch_id: &str) -> Result<crate::batch::BatchState, ClientError> {
+        let url = self.batch_id_url(batch_id, "")?;
+        Ok(crate::batch::BatchState::of(&self.batch_get(&url)?))
+    }
+
+    fn results(&self, batch_id: &str) -> Result<Vec<Value>, ClientError> {
+        let url = self.batch_id_url(batch_id, "/results?limit=10")?;
+        let reply = self.batch_get(&url)?;
+        Ok(reply
+            .get("results")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn cancel(&self, batch_id: &str) -> Result<crate::batch::BatchState, ClientError> {
+        let url = self.batch_id_url(batch_id, ":cancel")?;
+        Ok(crate::batch::BatchState::of(
+            &self.batch_post(&url, json!({}))?,
+        ))
     }
 }
 

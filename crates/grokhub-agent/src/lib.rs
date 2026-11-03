@@ -1,6 +1,7 @@
 //! Native engine. Sync HTTP, no CLI, no credential files.
 
 mod auto_review;
+pub mod batch;
 pub mod brain;
 pub mod cache_watch;
 mod checkpoint;

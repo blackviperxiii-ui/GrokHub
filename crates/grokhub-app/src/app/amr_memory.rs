@@ -402,7 +402,9 @@ impl Cabin {
         let dream_model = self.cfg.dream_model;
         let client = if dream_model {
             self.native_cred().ok().map(|(bearer, kind)| {
+                // The dream can wait: on an API key it goes through the Batch API.
                 grokhub_agent::XaiClient::new(bearer, kind, std::time::Duration::from_secs(120))
+                    .deferrable(&dir)
             })
         } else {
             None
