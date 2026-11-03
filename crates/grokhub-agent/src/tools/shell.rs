@@ -668,8 +668,36 @@ fn spawn_and_wait(
     Err("shell is not available on this system".into())
 }
 
+/// The working folder a child process starts in, without the `\\?\` verbatim
+/// prefix `canonicalize` adds on Windows. Windows PowerShell treats a
+/// verbatim current folder as a provider path it can't resolve, so relative
+/// paths (`Set-Content inside.txt`) fail with "object does not exist".
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn plain_dir(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
+    match path.strip_prefix(r"\\?\") {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => rest.to_string(),
+        _ => path.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_child_starts_in_a_plain_folder_not_a_verbatim_one() {
+        assert_eq!(super::plain_dir(r"\\?\C:\Users\me\ws"), r"C:\Users\me\ws");
+        assert_eq!(
+            super::plain_dir(r"\\?\UNC\server\share\ws"),
+            r"\\server\share\ws"
+        );
+        assert_eq!(super::plain_dir(r"C:\Users\me\ws"), r"C:\Users\me\ws");
+        assert_eq!(super::plain_dir("/home/user/ws"), "/home/user/ws");
+        // A verbatim device path has no plain form, so it stays as it is.
+        assert_eq!(super::plain_dir(r"\\?\Volume{x}\ws"), r"\\?\Volume{x}\ws");
+    }
+
     #[cfg(unix)]
     use super::run;
     use serde_json::json;
@@ -1169,7 +1197,7 @@ mod win {
                     "\"{exe}\" -NoProfile -NonInteractive -EncodedCommand {encoded}"
                 ));
                 let app = wide(&exe);
-                let dir = wide(&cwd.display().to_string());
+                let dir = wide(&super::plain_dir(&cwd.display().to_string()));
                 let mut si: STARTUPINFOW = std::mem::zeroed();
                 si.cb = u32::try_from(std::mem::size_of::<STARTUPINFOW>()).unwrap_or(0);
                 si.dwFlags = STARTF_USESTDHANDLES;
@@ -1511,7 +1539,7 @@ mod win {
                 "\"{exe}\" -NoProfile -NonInteractive -EncodedCommand {encoded}"
             ));
             let app = wide(&exe);
-            let dir = wide(&cwd.display().to_string());
+            let dir = wide(&super::plain_dir(&cwd.display().to_string()));
             let mut si: STARTUPINFOW = std::mem::zeroed();
             si.cb = u32::try_from(std::mem::size_of::<STARTUPINFOW>()).unwrap_or(0);
             si.dwFlags = STARTF_USESTDHANDLES;
