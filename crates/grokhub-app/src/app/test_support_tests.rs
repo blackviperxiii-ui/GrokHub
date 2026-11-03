@@ -193,12 +193,41 @@ pub(super) fn wait_until(label: &str, mut ready: impl FnMut() -> bool) {
     panic!("{label}");
 }
 
+/// How long a background file write gets to report. `wait_until`'s 2 s is
+/// sized for in-memory state; these writes go through `config::atomic_write`
+/// (write, `sync_all`, rename), and the flush alone has taken over 2 s on a
+/// busy Windows CI runner. A write that never reports still fails here.
+const FILE_WRITE_BUDGET: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Poll `ready` every 25 ms until it holds; panic with `label` once `budget`
+/// has passed. For waits on real disk I/O; use `wait_until` for in-memory state.
+pub(super) fn wait_within(
+    budget: std::time::Duration,
+    label: &str,
+    mut ready: impl FnMut() -> bool,
+) {
+    let deadline = std::time::Instant::now() + budget;
+    loop {
+        if ready() {
+            return;
+        }
+        if std::time::Instant::now() >= deadline {
+            panic!("{label} within {budget:?}");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+}
+
 /// Poll background file writes until each has reported to the status line.
 pub(super) fn wait_file_writes(cabin: &mut Cabin) {
-    wait_until("background file writes must report", || {
-        cabin.poll_file_writes();
-        cabin.file_writes.is_empty()
-    });
+    wait_within(
+        FILE_WRITE_BUDGET,
+        "background file writes must report",
+        || {
+            cabin.poll_file_writes();
+            cabin.file_writes.is_empty()
+        },
+    );
 }
 
 /// Alias kept for existing call sites.
@@ -543,6 +572,44 @@ fn wait_until_returns_when_ready() {
         n >= 2
     });
     assert_eq!(n, 2);
+}
+
+#[test]
+fn wait_within_returns_when_ready() {
+    let mut n = 0;
+    wait_within(
+        std::time::Duration::from_secs(1),
+        "counter should reach 3",
+        || {
+            n += 1;
+            n >= 3
+        },
+    );
+    assert_eq!(n, 3);
+}
+
+#[test]
+fn wait_within_panics_with_its_label_once_the_budget_passes() {
+    let budget = std::time::Duration::from_millis(100);
+    let start = std::time::Instant::now();
+    let mut polls = 0;
+    let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        wait_within(budget, "never ready", || {
+            polls += 1;
+            false
+        })
+    }))
+    .expect_err("a wait that never holds must panic");
+    let waited = start.elapsed();
+    assert_eq!(
+        err.downcast_ref::<String>().map(String::as_str),
+        Some("never ready within 100ms")
+    );
+    assert!(
+        waited >= budget,
+        "gave up after {waited:?}, before {budget:?}"
+    );
+    assert!(polls >= 2, "must poll again after sleeping, polled {polls}");
 }
 
 #[test]

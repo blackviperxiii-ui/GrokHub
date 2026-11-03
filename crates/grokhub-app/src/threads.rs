@@ -1348,6 +1348,97 @@ mod tests {
         unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     }
 
+    /// Saves pinned to a dir, as the persist worker pins each job: another
+    /// store's save between Clear chat and this store's save takes nothing.
+    #[test]
+    fn clear_main_scrubs_its_own_store_when_another_store_saves_first() {
+        let here = crate::config::test_config_root("clear-main-here");
+        let there = crate::config::test_config_root("clear-main-there");
+        let mut main = ChatThread::new("Main", false);
+        main.main = true;
+        let mut told = main.clone();
+        told.messages_mut()
+            .push(("user".into(), "the vault code is kumquat".into()));
+        let mut other = ChatThread::new("Pier light", false);
+        other
+            .messages_mut()
+            .push(("user".into(), "bring the lamp".into()));
+        {
+            let _pin = crate::config::TestConfigDir::set(there.clone());
+            let mut theirs = main.clone();
+            theirs.messages_mut().push(("user".into(), "fig".into()));
+            save(&[theirs]).expect("seed the other store");
+            fs::copy(there.join("threads.json"), there.join("threads.json.bak"))
+                .expect("seed the other bak");
+        }
+        {
+            let _pin = crate::config::TestConfigDir::set(here.clone());
+            save(&[told, other.clone()]).expect("seed save");
+            fs::copy(here.join("threads.json"), here.join("threads.json.bak")).expect("seed bak");
+        }
+        {
+            let _pin = crate::config::TestConfigDir::set(there.clone());
+            save(&[main.clone()]).expect("the other store saves an empty Main");
+        }
+        let theirs = fs::read_to_string(there.join("threads.json.bak")).expect("other bak");
+        assert!(
+            theirs.contains("fig"),
+            "another store's backup was scrubbed"
+        );
+        {
+            let _pin = crate::config::TestConfigDir::set(here.clone());
+            save_forgetting(&[main, other], Forget::Main).expect("save the cleared Main");
+        }
+        let bak = fs::read_to_string(here.join("threads.json.bak")).expect("bak");
+        assert!(
+            !bak.contains("kumquat"),
+            "the backup still holds Main: {bak}"
+        );
+        assert!(
+            bak.contains("bring the lamp"),
+            "the backup lost another chat"
+        );
+        let _ = fs::remove_dir_all(&here);
+        let _ = fs::remove_dir_all(&there);
+    }
+
+    #[test]
+    fn delete_all_clears_its_own_store_when_another_store_saves_first() {
+        let here = crate::config::test_config_root("delete-all-here");
+        let there = crate::config::test_config_root("delete-all-there");
+        let mut main = ChatThread::new("Main", false);
+        main.main = true;
+        let mut old = ChatThread::new("Night watch", false);
+        old.messages_mut()
+            .push(("user".into(), "keep the lamp lit".into()));
+        for (dir, list) in [
+            (&there, vec![main.clone()]),
+            (&here, vec![main.clone(), old]),
+        ] {
+            let _pin = crate::config::TestConfigDir::set(dir.clone());
+            save(&list).expect("seed save");
+            fs::copy(dir.join("threads.json"), dir.join("threads.json.bak")).expect("seed bak");
+        }
+        {
+            let _pin = crate::config::TestConfigDir::set(there.clone());
+            save(&[main.clone()]).expect("the other store saves only an empty Main");
+        }
+        assert!(
+            there.join("threads.json.bak").exists(),
+            "another store's backup was removed"
+        );
+        {
+            let _pin = crate::config::TestConfigDir::set(here.clone());
+            save_forgetting(&[main], Forget::All).expect("save the emptied list");
+        }
+        assert!(
+            !here.join("threads.json.bak").exists(),
+            "no backup keeps the deleted history"
+        );
+        let _ = fs::remove_dir_all(&here);
+        let _ = fs::remove_dir_all(&there);
+    }
+
     #[test]
     fn adopt_sessions_from_skips_stubs_and_known_ids() {
         let root = crate::config::test_config_root("adopt-sess");

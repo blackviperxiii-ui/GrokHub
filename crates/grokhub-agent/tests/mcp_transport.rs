@@ -640,6 +640,12 @@ impl StreamServer {
             while !stop2.load(Ordering::SeqCst) {
                 match listener.accept() {
                     Ok((sock, _)) => {
+                        // Windows gives an accepted socket the listener's
+                        // non-blocking mode (Linux doesn't). The read timeout
+                        // needs a blocking socket, or `read_http` sees
+                        // WouldBlock, drops it unread, and the client gets
+                        // WSAECONNABORTED (os error 10053).
+                        let _ = sock.set_nonblocking(false);
                         let bearer = bearer2.clone();
                         let pending = pending.clone();
                         std::thread::spawn(move || handle_stream(sock, bearer, pending, elicit));
@@ -777,6 +783,8 @@ impl SseServer {
             while !stop2.load(Ordering::SeqCst) {
                 match listener.accept() {
                     Ok((sock, _)) => {
+                        // Blocking again; see `StreamServer::start`.
+                        let _ = sock.set_nonblocking(false);
                         let events = events.clone();
                         let stop3 = stop2.clone();
                         std::thread::spawn(move || handle_sse(sock, port, events, stop3));
