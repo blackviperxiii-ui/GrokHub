@@ -292,9 +292,9 @@ pub(crate) fn spawn_background(
 pub(crate) fn spawn_background(
     cwd: &Path,
     command: &str,
-    _plan: Option<&crate::sandbox::Plan>,
+    plan: Option<&crate::sandbox::Plan>,
 ) -> Result<BgProc, String> {
-    win::spawn_background(cwd, command)
+    win::spawn_background(cwd, command, plan)
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -652,9 +652,9 @@ fn spawn_and_wait(
     command: &str,
     timeout_ms: u64,
     stop: &dyn Fn() -> bool,
-    _plan: Option<&crate::sandbox::Plan>,
+    plan: Option<&crate::sandbox::Plan>,
 ) -> Result<ToolOutput, String> {
-    win::run(cwd, command, timeout_ms, stop)
+    win::run(cwd, command, timeout_ms, stop, plan)
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -668,8 +668,36 @@ fn spawn_and_wait(
     Err("shell is not available on this system".into())
 }
 
+/// The working folder a child process starts in, without the `\\?\` verbatim
+/// prefix `canonicalize` adds on Windows. Windows PowerShell treats a
+/// verbatim current folder as a provider path it can't resolve, so relative
+/// paths (`Set-Content inside.txt`) fail with "object does not exist".
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn plain_dir(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
+    match path.strip_prefix(r"\\?\") {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => rest.to_string(),
+        _ => path.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_child_starts_in_a_plain_folder_not_a_verbatim_one() {
+        assert_eq!(super::plain_dir(r"\\?\C:\Users\me\ws"), r"C:\Users\me\ws");
+        assert_eq!(
+            super::plain_dir(r"\\?\UNC\server\share\ws"),
+            r"\\server\share\ws"
+        );
+        assert_eq!(super::plain_dir(r"C:\Users\me\ws"), r"C:\Users\me\ws");
+        assert_eq!(super::plain_dir("/home/user/ws"), "/home/user/ws");
+        // A verbatim device path has no plain form, so it stays as it is.
+        assert_eq!(super::plain_dir(r"\\?\Volume{x}\ws"), r"\\?\Volume{x}\ws");
+    }
+
     #[cfg(unix)]
     use super::run;
     use serde_json::json;
@@ -921,9 +949,9 @@ mod win {
     };
     use windows_sys::Win32::System::Pipes::CreatePipe;
     use windows_sys::Win32::System::Threading::{
-        CreateProcessW, GetExitCodeProcess, ResumeThread, TerminateProcess, WaitForSingleObject,
-        CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, PROCESS_INFORMATION,
-        STARTF_USESTDHANDLES, STARTUPINFOW,
+        CreateProcessAsUserW, CreateProcessW, GetExitCodeProcess, ResumeThread, TerminateProcess,
+        WaitForSingleObject, CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT,
+        PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOW,
     };
 
     use super::{finish, CapBuf, POLL};
@@ -938,7 +966,7 @@ mod win {
         env: &[(String, String)],
         timeout: Duration,
     ) -> Result<super::HookProc, String> {
-        let mut child = JobChild::spawn_io(cwd, command, stdin, env)?;
+        let mut child = JobChild::spawn_io(cwd, command, stdin, env, None)?;
         let started = Instant::now();
         let timed_out = loop {
             if started.elapsed() >= timeout {
@@ -970,23 +998,25 @@ mod win {
     }
 
     fn env_wide(extra: &[(String, String)]) -> Vec<u16> {
+        // Windows names are case-insensitive and the block is sorted that way:
+        // key by upper case so an extra `HTTPS_PROXY` replaces `https_proxy`.
         let mut map = std::collections::BTreeMap::new();
         if !extra.is_empty() {
             for (key, value) in std::env::vars() {
-                map.insert(key, value);
+                map.insert(key.to_uppercase(), (key, value));
             }
             for (key, value) in extra {
                 if key.contains('=') || key.contains('\0') || value.contains('\0') {
                     continue;
                 }
-                map.insert(key.clone(), value.clone());
+                map.insert(key.to_uppercase(), (key.clone(), value.clone()));
             }
         }
         if map.is_empty() {
             return vec![0, 0];
         }
         let mut wide = Vec::new();
-        for (key, value) in map {
+        for (key, value) in map.into_values() {
             let pair = format!("{key}={value}");
             wide.extend(OsStr::new(&pair).encode_wide());
             wide.push(0);
@@ -1000,8 +1030,15 @@ mod win {
         command: &str,
         timeout_ms: u64,
         stop: &dyn Fn() -> bool,
+        plan: Option<&crate::sandbox::Plan>,
     ) -> Result<super::ToolOutput, String> {
-        let mut child = JobChild::spawn(cwd, command)?;
+        let sandbox = plan.map(crate::sandbox::windows::prepare);
+        let env = sandbox.as_ref().map(|s| s.env.as_slice()).unwrap_or(&[]);
+        let token = sandbox
+            .as_ref()
+            .and_then(|s| s.token.as_ref())
+            .map(crate::sandbox::windows::Restricted::handle);
+        let mut child = JobChild::spawn_io(cwd, command, &[], env, token)?;
         let started = Instant::now();
         let limit = Duration::from_millis(timeout_ms);
         let kind = loop {
@@ -1028,6 +1065,53 @@ mod win {
             Kind::TimedOut => finish(&format!("timed out after {timeout_ms}ms"), &raw, true),
             Kind::Killed => finish("killed", &raw, true),
         })
+    }
+
+    /// `CreateProcessW`, or `CreateProcessAsUserW` with the sandbox's
+    /// write-restricted token (a restricted copy of our own token needs no
+    /// extra privilege).
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn create_process(
+        token: Option<HANDLE>,
+        app: &[u16],
+        cmdline: &mut [u16],
+        flags: u32,
+        env: *const core::ffi::c_void,
+        dir: &[u16],
+        si: &STARTUPINFOW,
+        pi: &mut PROCESS_INFORMATION,
+    ) -> i32 {
+        // SAFETY: every pointer is valid for the call; the caller owns the
+        // handles it inherits.
+        unsafe {
+            match token {
+                Some(token) => CreateProcessAsUserW(
+                    token,
+                    app.as_ptr(),
+                    cmdline.as_mut_ptr(),
+                    ptr::null(),
+                    ptr::null(),
+                    TRUE,
+                    flags,
+                    env,
+                    dir.as_ptr(),
+                    si,
+                    pi,
+                ),
+                None => CreateProcessW(
+                    app.as_ptr(),
+                    cmdline.as_mut_ptr(),
+                    ptr::null(),
+                    ptr::null(),
+                    TRUE,
+                    flags,
+                    env,
+                    dir.as_ptr(),
+                    si,
+                    pi,
+                ),
+            }
+        }
     }
 
     enum Kind {
@@ -1058,15 +1142,12 @@ mod win {
     }
 
     impl JobChild {
-        fn spawn(cwd: &Path, command: &str) -> Result<Self, String> {
-            Self::spawn_io(cwd, command, &[], &[])
-        }
-
         fn spawn_io(
             cwd: &Path,
             command: &str,
             stdin: &[u8],
             env: &[(String, String)],
+            token: Option<HANDLE>,
         ) -> Result<Self, String> {
             let mut child = Self {
                 job: ptr::null_mut(),
@@ -1116,7 +1197,7 @@ mod win {
                     "\"{exe}\" -NoProfile -NonInteractive -EncodedCommand {encoded}"
                 ));
                 let app = wide(&exe);
-                let dir = wide(&cwd.display().to_string());
+                let dir = wide(&super::plain_dir(&cwd.display().to_string()));
                 let mut si: STARTUPINFOW = std::mem::zeroed();
                 si.cb = u32::try_from(std::mem::size_of::<STARTUPINFOW>()).unwrap_or(0);
                 si.dwFlags = STARTF_USESTDHANDLES;
@@ -1132,15 +1213,13 @@ mod win {
                     flags |= CREATE_UNICODE_ENVIRONMENT;
                     env_block.as_ptr().cast()
                 };
-                let created = CreateProcessW(
-                    app.as_ptr(),
-                    cmdline.as_mut_ptr(),
-                    ptr::null(),
-                    ptr::null(),
-                    TRUE,
+                let created = create_process(
+                    token,
+                    &app,
+                    &mut cmdline,
                     flags,
                     env_ptr,
-                    dir.as_ptr(),
+                    &dir,
                     &si,
                     &mut pi,
                 );
@@ -1410,10 +1489,21 @@ mod win {
         }
     }
 
-    pub(super) fn spawn_background(cwd: &Path, command: &str) -> Result<super::BgProc, String> {
+    pub(super) fn spawn_background(
+        cwd: &Path,
+        command: &str,
+        plan: Option<&crate::sandbox::Plan>,
+    ) -> Result<super::BgProc, String> {
         use std::sync::atomic::AtomicBool;
         use std::sync::{Arc, Mutex};
 
+        let sandbox = plan.map(crate::sandbox::windows::prepare);
+        let env = sandbox.as_ref().map(|s| s.env.as_slice()).unwrap_or(&[]);
+        let token = sandbox
+            .as_ref()
+            .and_then(|s| s.token.as_ref())
+            .map(crate::sandbox::windows::Restricted::handle);
+        let env_block = env_wide(env);
         let mut guard = SpawnGuard::blank();
         unsafe {
             guard.job = CreateJobObjectW(ptr::null(), ptr::null());
@@ -1449,7 +1539,7 @@ mod win {
                 "\"{exe}\" -NoProfile -NonInteractive -EncodedCommand {encoded}"
             ));
             let app = wide(&exe);
-            let dir = wide(&cwd.display().to_string());
+            let dir = wide(&super::plain_dir(&cwd.display().to_string()));
             let mut si: STARTUPINFOW = std::mem::zeroed();
             si.cb = u32::try_from(std::mem::size_of::<STARTUPINFOW>()).unwrap_or(0);
             si.dwFlags = STARTF_USESTDHANDLES;
@@ -1457,15 +1547,20 @@ mod win {
             si.hStdOutput = guard.stdout_write;
             si.hStdError = guard.stderr_write;
             let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
-            let created = CreateProcessW(
-                app.as_ptr(),
-                cmdline.as_mut_ptr(),
-                ptr::null(),
-                ptr::null(),
-                TRUE,
-                CREATE_SUSPENDED | CREATE_NO_WINDOW,
-                ptr::null(),
-                dir.as_ptr(),
+            let mut flags = CREATE_SUSPENDED | CREATE_NO_WINDOW;
+            let env_ptr: *const core::ffi::c_void = if env.is_empty() {
+                ptr::null()
+            } else {
+                flags |= CREATE_UNICODE_ENVIRONMENT;
+                env_block.as_ptr().cast()
+            };
+            let created = create_process(
+                token,
+                &app,
+                &mut cmdline,
+                flags,
+                env_ptr,
+                &dir,
                 &si,
                 &mut pi,
             );

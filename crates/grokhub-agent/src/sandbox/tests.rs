@@ -225,3 +225,84 @@ fn a_sandboxed_command_writes_only_in_the_workspace() {
         let _ = std::fs::remove_dir_all(dir);
     }
 }
+
+/// Windows: the same check with the write-restricted token. The folders sit
+/// under the home folder, not the temp folder: a grant on the temp folder is
+/// kept in its ACL and would be inherited by a scratch folder made there.
+#[cfg(windows)]
+#[test]
+fn a_sandboxed_command_writes_only_in_the_workspace_on_windows() {
+    let home = grokhub_core::user_home().expect("home");
+    let base = home.join(format!("gh-sbx-win-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let config = base.join("config");
+    let ws = base.join("ws");
+    let outside = base.join("out");
+    for dir in [&config, &ws, &outside] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    let ws = ws.canonicalize().unwrap();
+    let _pin = crate::perm::ConfigGuard::set(&config);
+    // The sandbox falls back to no token when it can't be set up, so check
+    // each step here: a failure names the step instead of a stray write.
+    let plan = crate::sandbox::plan_for_call(
+        "run_terminal_command",
+        &json!({ "command": "Get-Location" }),
+        &ws,
+    )
+    .expect("a sandbox plan");
+    assert_eq!(plan.writable.first(), Some(&ws), "{:?}", plan.writable);
+    assert!(
+        !plan.writable.iter().any(|root| outside.starts_with(root)),
+        "the outside folder sits under a writable root: {:?}",
+        plan.writable
+    );
+    crate::sandbox::windows::grant(&ws).expect("grant on the workspace");
+    if let Err(e) = crate::sandbox::windows::restricted_token() {
+        panic!(
+            "the restricted token: {e} ({})",
+            crate::sandbox::windows::probe_restricting_sids()
+        );
+    }
+    let acl = |path: &std::path::Path| {
+        std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command"])
+            .arg(format!(
+                "(Get-Acl -LiteralPath '{}').AccessToString; whoami /groups /fo list",
+                path.display()
+            ))
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default()
+    };
+    let run =
+        |command: String| crate::tools::shell::run(&ws, &json!({ "command": command }), &|| false);
+
+    let out = run("Set-Content -Path inside.txt -Value in; Get-Content inside.txt".into());
+    assert!(!out.failed, "{}", out.text);
+    assert!(out.text.contains("in"), "{}", out.text);
+
+    let target = outside.join("new.txt");
+    let out = run(format!(
+        "Set-Content -Path '{}' -Value out -ErrorAction Stop",
+        target.display()
+    ));
+    assert!(
+        out.failed && !target.exists(),
+        "a write outside the workspace went through: {}\n{}",
+        out.text,
+        acl(&outside)
+    );
+
+    let out = run(format!(
+        "Set-Content -Path '{}' -Value x -ErrorAction Stop",
+        config.join("policy.toml").display()
+    ));
+    assert!(out.failed, "the config folder is read-only: {}", out.text);
+
+    let out = run("Write-Output $env:HTTPS_PROXY; Write-Output x | Out-Null".into());
+    assert!(!out.failed, "{}", out.text);
+    assert!(out.text.contains("http://127.0.0.1:"), "{}", out.text);
+
+    let _ = std::fs::remove_dir_all(&base);
+}
