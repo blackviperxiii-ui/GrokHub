@@ -79,6 +79,7 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("crates/grokhub-agent/src/tools/web_fetch.rs", 1, "every hop: egress guard + public_only_resolve (refuses all while on)"),
     ("crates/grokhub-agent/src/tools/web_search.rs", 1, "Brave: egress guard; DDG / SearXNG go through web_fetch"),
     ("crates/grokhub-agent/src/tools/media.rs", 1, "Imagine media: egress guard"),
+    ("crates/grokhub-agent/src/memory_embed.rs", 1, "memory recall's embedding model from Hugging Face (HX-12): offline::refuse, then egress guard + public_only on every hop; a pinned hash check before a file is kept"),
     ("crates/grokhub-agent/src/sandbox/proxy.rs", 1, "sandboxed shell's egress proxy (HX-11): egress guard on every CONNECT and request before it dials the host or the app's own upstream proxy"),
     ("crates/grokhub-app/src/app/pulse_ui.rs", 1, "Pulse previews: egress_ok"),
     ("crates/grokhub-app/src/app/pulse_sources_ui.rs", 1, "Pulse sources: egress_ok on every hop"),

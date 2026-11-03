@@ -165,6 +165,7 @@ pub mod slash;
 pub mod ssrf;
 pub mod stardew_saves;
 pub mod state;
+pub mod static_embed;
 pub mod steam;
 pub mod steam_achievements;
 pub mod steam_wishlist;

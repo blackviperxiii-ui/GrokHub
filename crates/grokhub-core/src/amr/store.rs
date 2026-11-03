@@ -233,6 +233,62 @@ impl AmrStore {
             .collect()
     }
 
+    /// Lines found by meaning (HX-12): for each live node that isn't
+    /// superseded or proposed, its body line closest to `query` by `encode`
+    /// cosine, when that is at least `floor`. Best first, then newest, then
+    /// id; at most `cap`. Superseded nodes stay on disk with their edge, so a
+    /// replaced fact is never recalled but is never deleted either.
+    pub fn recall_semantic(
+        &self,
+        query: &[f32],
+        encode: &dyn Fn(&str) -> Option<Vec<f32>>,
+        floor: f32,
+        cap: usize,
+    ) -> Vec<NodeHit> {
+        if query.is_empty() || cap == 0 {
+            return Vec::new();
+        }
+        let loaded = self.load_live();
+        let superseded = self.superseded_ids();
+        let mut hits: Vec<(f32, &str, &str, String)> = Vec::new();
+        for node in loaded
+            .nodes
+            .iter()
+            .filter(|n| !superseded.contains(&n.id) && !is_proposed(n))
+        {
+            let best = node
+                .body
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .filter_map(|line| {
+                    let v = encode(line)?;
+                    Some((crate::static_embed::cosine(query, &v), line))
+                })
+                .max_by(|a, b| a.0.total_cmp(&b.0));
+            if let Some((cos, line)) = best.filter(|(cos, _)| *cos >= floor) {
+                hits.push((
+                    cos,
+                    node.updated.as_str(),
+                    node.id.as_str(),
+                    line.to_string(),
+                ));
+            }
+        }
+        hits.sort_by(|a, b| {
+            b.0.total_cmp(&a.0)
+                .then_with(|| b.1.cmp(a.1))
+                .then_with(|| a.2.cmp(b.2))
+        });
+        hits.truncate(cap);
+        hits.into_iter()
+            .map(|(_, _, id, line)| NodeHit {
+                id: id.to_string(),
+                line,
+            })
+            .collect()
+    }
+
     /// True when `nodes/<id>.tombstone` is there.
     pub fn is_forgotten(&self, id: &str) -> bool {
         NodeId::parse(id)
