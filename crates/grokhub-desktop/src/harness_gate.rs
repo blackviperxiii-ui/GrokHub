@@ -109,7 +109,7 @@ pub(crate) fn handle_desk_line<B: DesktopBackend>(
 }
 
 /// Spike-2b: what a click will land on, read before `decide` (AT-SPI on
-/// Linux, capped; unknown on Windows, D3), plus the focused window for the
+/// Linux, UI Automation on Windows, both capped), plus the focused window for the
 /// card. Only the matched rule id ever reaches a span.
 fn click_hint<B: DesktopBackend>(server: &mut DesktopServer<B>, args: &Value) -> Value {
     let mut hint = match server.click_target(args) {
@@ -1330,9 +1330,21 @@ mod tests {
             "the cabin's hints never reach the span"
         );
         assert!(hx::pending_parks(&dir).is_empty());
-        // Windows path A keeps the default reader: unknown, so soft (D3, no UIA).
-        if !cfg!(target_os = "linux") {
-            assert_eq!(super::super::LiveBackend::new().target_at(5, 5), None);
+        // Windows path A reads UI Automation for real here: it answers within
+        // the cap, and anything it names is a labelled interactive control.
+        #[cfg(windows)]
+        {
+            let started = std::time::Instant::now();
+            let hit = super::super::LiveBackend::new().target_at(5, 5);
+            assert!(
+                started.elapsed() < crate::uia::HIT_CAP + std::time::Duration::from_millis(200),
+                "{:?}",
+                started.elapsed()
+            );
+            if let Some(t) = hit {
+                assert!(!t.label.is_empty(), "{t:?}");
+                assert!(grokhub_core::is_interactive_role(&t.role), "{t:?}");
+            }
         }
         let _ = std::fs::remove_dir_all(dir);
     }

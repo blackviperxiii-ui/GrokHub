@@ -141,6 +141,29 @@ pub fn is_interactive_role(role: &str) -> bool {
         || r.contains("close")
 }
 
+/// The role name the click rules read for a Windows UI Automation control
+/// type id, for the kinds [`is_interactive_role`] counts as controls on Linux.
+/// `None` for windows, panes, groups, plain text, list and tree items and the
+/// rest, so a click on them is unknown, as on Linux.
+pub fn uia_role(control_type: i32) -> Option<&'static str> {
+    Some(match control_type {
+        // Button, SplitButton
+        50000 | 50031 => "push-button",
+        50002 => "check-box",
+        50003 => "combo-box",
+        // Edit
+        50004 => "entry",
+        // Hyperlink
+        50005 => "link",
+        50011 => "menu-item",
+        50013 => "radio-button",
+        50015 => "slider",
+        // TabItem
+        50019 => "page-tab",
+        _ => return None,
+    })
+}
+
 fn closeish(s: &str) -> bool {
     s.to_ascii_lowercase().contains("close")
 }
@@ -506,6 +529,33 @@ pub fn lock_check_titles(lines: &[&str]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn uia_control_types_map_to_the_roles_the_click_rules_read() {
+        for (id, role) in [
+            (50000, "push-button"),
+            (50031, "push-button"),
+            (50002, "check-box"),
+            (50003, "combo-box"),
+            (50004, "entry"),
+            (50005, "link"),
+            (50011, "menu-item"),
+            (50013, "radio-button"),
+            (50015, "slider"),
+            (50019, "page-tab"),
+        ] {
+            assert_eq!(uia_role(id), Some(role), "{id}");
+            assert!(is_interactive_role(role), "{role}");
+        }
+        // Window, Pane, Group, Text, Document, TitleBar, ListItem, TreeItem,
+        // Custom and unknown ids: a click there is unknown, as on Linux.
+        for id in [
+            50032, 50033, 50026, 50020, 50030, 50037, 50007, 50024, 50025, 0, -1,
+        ] {
+            assert_eq!(uia_role(id), None, "{id}");
+        }
+    }
+
     use super::*;
 
     #[test]
