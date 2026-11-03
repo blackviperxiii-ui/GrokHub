@@ -1,0 +1,1 @@
+- Chat usage lines and exported chats now show the real cost: xAI reports cost in units of a ten-billionth of a dollar, and the app had been reading them as millionths, showing costs 10,000 times too high.
