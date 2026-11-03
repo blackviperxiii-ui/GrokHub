@@ -612,20 +612,21 @@ mod tests {
                 "chat",
                 profile(PermMode::Ask, false, true),
                 full.clone(),
-                10_975,
+                // +150 for the shell's outside_sandbox arg (HX-11).
+                11_125,
             ),
             (
                 "agent",
                 profile(PermMode::Always, false, true),
                 full.clone(),
-                10_975,
+                11_125,
             ),
             ("plan/ask", profile(PermMode::Ask, true, true), full, 6_824),
             (
                 "background",
                 profile(PermMode::Auto, false, false),
                 ToolSet::background(),
-                9_795,
+                9_945,
             ),
         ];
         for (label, gate, set, budget) in cases {

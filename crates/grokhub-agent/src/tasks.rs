@@ -117,7 +117,7 @@ pub struct TaskRow {
 }
 
 impl TaskHub {
-    fn new(session_id: impl Into<String>) -> Arc<Self> {
+    pub(crate) fn new(session_id: impl Into<String>) -> Arc<Self> {
         Arc::new(Self {
             inner: Mutex::new(HubInner {
                 session_id: session_id.into(),
@@ -145,7 +145,7 @@ impl TaskHub {
     }
 
     pub fn spawn(self: &Arc<Self>, cwd: &Path, command: &str) -> Result<String, String> {
-        self.spawn_for(cwd, command, None)
+        self.spawn_owned(cwd, command, false, None, None)
     }
 
     pub fn spawn_for(
@@ -153,8 +153,9 @@ impl TaskHub {
         cwd: &Path,
         command: &str,
         owner: Option<&str>,
+        plan: Option<crate::sandbox::Plan>,
     ) -> Result<String, String> {
-        self.spawn_owned(cwd, command, false, owner.map(str::to_string))
+        self.spawn_owned(cwd, command, false, owner.map(str::to_string), plan)
     }
 
     fn spawn_owned(
@@ -163,6 +164,7 @@ impl TaskHub {
         command: &str,
         owned_by_monitor: bool,
         owner: Option<String>,
+        plan: Option<crate::sandbox::Plan>,
     ) -> Result<String, String> {
         let command = command.trim().to_string();
         if command.is_empty() {
@@ -182,7 +184,7 @@ impl TaskHub {
             hub.seq = hub.seq.saturating_add(1);
             format!("t{}", hub.seq)
         };
-        let proc = spawn_background(&cwd, &command)?;
+        let proc = spawn_background(&cwd, &command, plan.as_ref())?;
         if self.is_halted() {
             proc.kill_tree();
             return Err("halted".into());
@@ -360,7 +362,9 @@ impl TaskHub {
             Some(text) => Some(regex::Regex::new(text).map_err(|err| format!("pattern: {err}"))?),
         };
         let launched = if let Some(command) = command.filter(|c| !c.trim().is_empty()) {
-            Some(self.spawn_owned(cwd, &command, true, None)?)
+            let args = serde_json::json!({ "command": command });
+            let plan = crate::sandbox::plan_for_call("monitor", &args, cwd);
+            Some(self.spawn_owned(cwd, &command, true, None, plan)?)
         } else {
             None
         };
