@@ -225,3 +225,48 @@ fn a_sandboxed_command_writes_only_in_the_workspace() {
         let _ = std::fs::remove_dir_all(dir);
     }
 }
+
+/// Windows: the same check with the write-restricted token. The folders sit
+/// under the home folder, not the temp folder: a grant on the temp folder is
+/// kept in its ACL and would be inherited by a scratch folder made there.
+#[cfg(windows)]
+#[test]
+fn a_sandboxed_command_writes_only_in_the_workspace_on_windows() {
+    let home = grokhub_core::user_home().expect("home");
+    let base = home.join(format!("gh-sbx-win-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let config = base.join("config");
+    let ws = base.join("ws");
+    let outside = base.join("out");
+    for dir in [&config, &ws, &outside] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    let ws = ws.canonicalize().unwrap();
+    let _pin = crate::perm::ConfigGuard::set(&config);
+    let run =
+        |command: String| crate::tools::shell::run(&ws, &json!({ "command": command }), &|| false);
+
+    let out = run("Set-Content -Path inside.txt -Value in; Get-Content inside.txt".into());
+    assert!(!out.failed, "{}", out.text);
+    assert!(out.text.contains("in"), "{}", out.text);
+
+    let target = outside.join("new.txt");
+    let out = run(format!(
+        "Set-Content -Path '{}' -Value out -ErrorAction Stop",
+        target.display()
+    ));
+    assert!(out.failed, "{}", out.text);
+    assert!(!target.exists(), "{}", out.text);
+
+    let out = run(format!(
+        "Set-Content -Path '{}' -Value x -ErrorAction Stop",
+        config.join("policy.toml").display()
+    ));
+    assert!(out.failed, "the config folder is read-only: {}", out.text);
+
+    let out = run("Write-Output $env:HTTPS_PROXY; Write-Output x | Out-Null".into());
+    assert!(!out.failed, "{}", out.text);
+    assert!(out.text.contains("http://127.0.0.1:"), "{}", out.text);
+
+    let _ = std::fs::remove_dir_all(&base);
+}

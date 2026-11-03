@@ -1,7 +1,7 @@
 //! HX-11: model-written shell commands run in a sandbox by default.
 //!
 //! Writes are allowed only in the workspace, temp folders, `/dev` and the
-//! usual tool caches (Landlock on Linux). Network goes through the egress
+//! usual tool caches (Landlock on Linux, a write-restricted token on Windows). Network goes through the egress
 //! proxy, so the egress guard (offline mode, the egress log) sees every host.
 //! The gate stays on top and decides first.
 //!
@@ -18,6 +18,8 @@
 #[cfg(target_os = "linux")]
 pub mod landlock;
 pub mod proxy;
+#[cfg(windows)]
+pub mod windows;
 
 use std::path::{Path, PathBuf};
 
@@ -180,6 +182,13 @@ const CACHE_DIRS: &[&str] = &[
     ".nuget",
     ".dotnet",
     ".local/share/pnpm",
+    // Windows homes keep the caches under AppData\Local.
+    "AppData/Local/npm-cache",
+    "AppData/Local/pip/Cache",
+    "AppData/Local/go-build",
+    "AppData/Local/Yarn",
+    "AppData/Local/pnpm",
+    "AppData/Local/NuGet",
 ];
 
 /// The writable roots, canonical and existing. A root that holds the config
