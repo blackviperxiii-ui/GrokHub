@@ -57,6 +57,10 @@ pub use client::{
 pub use compact::{estimate_input_tokens, message_text};
 pub use dream_model::sleep_dream;
 pub use eval::efficiency::{render_bench, run_bench, BenchRow};
+pub use eval::live::{
+    parse_budget as parse_live_budget, render_live, run_live, LiveOpts, LiveReport,
+    DEFAULT_K as LIVE_DEFAULT_K,
+};
 pub use eval::memory_index::{render_memory_index_bench, run_memory_index_bench, MemoryIndexBench};
 pub use eval::turn_endings::{generic_closing, last_sentence};
 pub use eval::{

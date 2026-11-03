@@ -29,6 +29,7 @@ pub mod ab;
 pub mod care_first;
 pub mod close_check;
 pub mod efficiency;
+pub mod live;
 pub mod longmem;
 pub mod memory_index;
 pub mod metrics;
