@@ -1,0 +1,1 @@
+- Read-only tool calls in one reply now run in parallel (up to 4) by default; set `enabled = false` in `batched_tools.toml` to turn it off.
