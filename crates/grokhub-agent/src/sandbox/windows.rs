@@ -1,9 +1,9 @@
 //! Windows: a write-restricted token (the same idea as Chromium's and Codex's
 //! Windows sandboxes). Reads and execs are unchanged; a write must be allowed
 //! both to the user and to one of the restricting SIDs: Loadout's own
-//! capability SID, Everyone (devices such as NUL) and the logon SID (the
+//! sandbox SID, Everyone (devices such as NUL) and the logon SID (the
 //! window station). The writable roots get one inheritable ACE for the
-//! capability SID, added once and kept; a normal token never checks it.
+//! sandbox SID, added once and kept; a normal token never checks it.
 //!
 //! The process still runs in a Job object (see `tools::shell::win`), so a
 //! stop kills the whole tree.
@@ -22,24 +22,22 @@ use windows_sys::Win32::Security::Authorization::{
 };
 use windows_sys::Win32::Security::{
     AclSizeInformation, AddAccessAllowedAceEx, CopySid, CreateRestrictedToken, CreateWellKnownSid,
-    DeriveCapabilitySidsFromName, EqualSid, GetAce, GetAclInformation, GetLengthSid,
-    GetTokenInformation, InitializeAcl, SetTokenInformation, TokenDefaultDacl, TokenGroups,
-    TokenUser, WinLocalSystemSid, WinWorldSid, ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_REVISION,
-    ACL_SIZE_INFORMATION, DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
-    SECURITY_MAX_SID_SIZE, SID_AND_ATTRIBUTES, SUB_CONTAINERS_AND_OBJECTS_INHERIT,
-    TOKEN_ADJUST_DEFAULT, TOKEN_ASSIGN_PRIMARY, TOKEN_DEFAULT_DACL, TOKEN_DUPLICATE, TOKEN_GROUPS,
-    TOKEN_QUERY, TOKEN_USER, WRITE_RESTRICTED,
+    EqualSid, GetAce, GetAclInformation, GetLengthSid, GetTokenInformation, InitializeAcl,
+    SetTokenInformation, TokenDefaultDacl, TokenGroups, TokenUser, WinLocalSystemSid, WinWorldSid,
+    ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_REVISION, ACL_SIZE_INFORMATION,
+    DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SECURITY_MAX_SID_SIZE,
+    SID_AND_ATTRIBUTES, SUB_CONTAINERS_AND_OBJECTS_INHERIT, TOKEN_ADJUST_DEFAULT,
+    TOKEN_ASSIGN_PRIMARY, TOKEN_DEFAULT_DACL, TOKEN_DUPLICATE, TOKEN_GROUPS, TOKEN_QUERY,
+    TOKEN_USER, WRITE_RESTRICTED,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     DELETE, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
-/// The name Loadout's capability SID is derived from.
-const CAPABILITY: &str = "loadoutShellSandbox";
 const SE_GROUP_LOGON_ID: u32 = 0xC000_0000;
 const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
-/// What a writable root grants the capability SID.
+/// What a writable root grants the sandbox SID.
 const ROOT_RIGHTS: u32 = FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE;
 
 /// A SID in owned memory.
@@ -71,49 +69,27 @@ fn wide(path: &Path) -> Vec<u16> {
     path.as_os_str().encode_wide().chain([0]).collect()
 }
 
-/// Loadout's capability SID (the same on every run and machine).
-fn capability_sid() -> Result<&'static Sid, String> {
-    static SID: OnceLock<Result<Sid, String>> = OnceLock::new();
-    SID.get_or_init(|| {
-        let name: Vec<u16> = CAPABILITY.encode_utf16().chain([0]).collect();
-        let mut groups: *mut PSID = ptr::null_mut();
-        let mut group_count = 0u32;
-        let mut caps: *mut PSID = ptr::null_mut();
-        let mut cap_count = 0u32;
-        // SAFETY: all out-pointers are valid; the arrays are LocalAlloc'd.
-        let ok = unsafe {
-            DeriveCapabilitySidsFromName(
-                name.as_ptr(),
-                &mut groups,
-                &mut group_count,
-                &mut caps,
-                &mut cap_count,
-            )
-        };
-        if ok == 0 {
-            return Err(last_error("DeriveCapabilitySidsFromName"));
-        }
-        // SAFETY: the arrays hold the counts the call returned; each SID and
-        // each array is freed once with LocalFree.
-        unsafe {
-            let sid = if cap_count > 0 {
-                Sid::copy(*caps)
-            } else {
-                Err("no capability SID".into())
-            };
-            for i in 0..group_count as usize {
-                LocalFree(*groups.add(i));
-            }
-            for i in 0..cap_count as usize {
-                LocalFree(*caps.add(i));
-            }
-            LocalFree(groups.cast());
-            LocalFree(caps.cast());
-            sid
-        }
-    })
-    .as_ref()
-    .map_err(Clone::clone)
+/// The sandbox SID's sub-authorities ("LOAD" "OUTS" "ANDB" "OX" 1), under
+/// the resource-manager authority (S-1-9), which is set aside for SIDs an
+/// application defines. With a capability SID (S-1-15-3) among the
+/// restricting SIDs, `CreateRestrictedToken` failed with error 87.
+const SANDBOX_SUBAUTHORITIES: [u32; 4] = [0x4C4F_4144, 0x4F55_5453, 0x414E_4442, 0x4F58_0001];
+
+/// The bytes of a SID: revision 1, the sub-authority count, a 48-bit
+/// big-endian authority, then each sub-authority little-endian.
+fn sid_bytes(authority: u8, subs: &[u32]) -> Vec<u8> {
+    let mut out = vec![1, subs.len() as u8, 0, 0, 0, 0, 0, authority];
+    for sub in subs {
+        out.extend_from_slice(&sub.to_le_bytes());
+    }
+    out
+}
+
+/// Loadout's sandbox SID (the same on every run and machine). Writable roots
+/// grant it write access; the restricted token lists it as a restricting SID.
+fn sandbox_sid() -> &'static Sid {
+    static SID: OnceLock<Sid> = OnceLock::new();
+    SID.get_or_init(|| Sid(sid_bytes(9, &SANDBOX_SUBAUTHORITIES)))
 }
 
 fn well_known(kind: i32) -> Result<Sid, String> {
@@ -165,7 +141,7 @@ unsafe impl Send for Restricted {}
 
 /// The write-restricted copy of this process's token.
 pub fn restricted_token() -> Result<Restricted, String> {
-    let cap = capability_sid()?;
+    let cap = sandbox_sid();
     let world = well_known(WinWorldSid)?;
     let system = well_known(WinLocalSystemSid)?;
     let mut own: HANDLE = ptr::null_mut();
@@ -184,6 +160,56 @@ pub fn restricted_token() -> Result<Restricted, String> {
     // SAFETY: `own` came from OpenProcessToken.
     unsafe { CloseHandle(own) };
     result
+}
+
+/// For tests: try a write-restricted token with each restricting SID on its
+/// own, so a failure names the SID it comes from.
+#[cfg(test)]
+pub(crate) fn probe_restricting_sids() -> String {
+    let mut own: HANDLE = ptr::null_mut();
+    // SAFETY: the pseudo handle needs no closing; `own` is closed below.
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_DUPLICATE | TOKEN_QUERY, &mut own) }
+        == 0
+    {
+        return last_error("OpenProcessToken");
+    }
+    let mut lines = Vec::new();
+    let mut candidates: Vec<(&str, Sid)> =
+        vec![("sandbox", Sid(sid_bytes(9, &SANDBOX_SUBAUTHORITIES)))];
+    if let Ok(world) = well_known(WinWorldSid) {
+        candidates.push(("everyone", world));
+    }
+    for (name, sid) in &candidates {
+        let one = [SID_AND_ATTRIBUTES {
+            Sid: sid.psid(),
+            Attributes: 0,
+        }];
+        let mut token: HANDLE = ptr::null_mut();
+        // SAFETY: the SID array lives until the call returns.
+        let made = unsafe {
+            CreateRestrictedToken(
+                own,
+                WRITE_RESTRICTED,
+                0,
+                ptr::null(),
+                0,
+                ptr::null(),
+                1,
+                one.as_ptr(),
+                &mut token,
+            )
+        };
+        if made == 0 {
+            lines.push(format!("{name}: {}", last_error("CreateRestrictedToken")));
+        } else {
+            lines.push(format!("{name}: ok"));
+            // SAFETY: the handle came from CreateRestrictedToken.
+            unsafe { CloseHandle(token) };
+        }
+    }
+    // SAFETY: `own` came from OpenProcessToken.
+    unsafe { CloseHandle(own) };
+    lines.join("; ")
 }
 
 fn build(own: HANDLE, cap: &Sid, world: &Sid, system: &Sid) -> Result<Restricted, String> {
@@ -281,7 +307,7 @@ fn default_dacl(sids: &[&Sid]) -> Result<Vec<u64>, String> {
     Ok(buf)
 }
 
-/// Give the capability SID write access beneath `root` (inherited by
+/// Give the sandbox SID write access beneath `root` (inherited by
 /// everything in it), once. Already granted, directly or from a parent: no
 /// change, so a big tree is walked only the first time.
 pub fn grant(root: &Path) -> Result<(), String> {
@@ -294,7 +320,7 @@ pub fn grant(root: &Path) -> Result<(), String> {
     {
         return Ok(());
     }
-    let cap = capability_sid()?;
+    let cap = sandbox_sid();
     let name = wide(root);
     let mut dacl: *mut ACL = ptr::null_mut();
     let mut sd: PSECURITY_DESCRIPTOR = ptr::null_mut();

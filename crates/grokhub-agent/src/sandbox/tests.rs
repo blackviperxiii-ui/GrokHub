@@ -258,7 +258,12 @@ fn a_sandboxed_command_writes_only_in_the_workspace_on_windows() {
         plan.writable
     );
     crate::sandbox::windows::grant(&ws).expect("grant on the workspace");
-    drop(crate::sandbox::windows::restricted_token().expect("the restricted token"));
+    if let Err(e) = crate::sandbox::windows::restricted_token() {
+        panic!(
+            "the restricted token: {e} ({})",
+            crate::sandbox::windows::probe_restricting_sids()
+        );
+    }
     let acl = |path: &std::path::Path| {
         std::process::Command::new("powershell")
             .args(["-NoProfile", "-Command"])
