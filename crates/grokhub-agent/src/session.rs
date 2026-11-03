@@ -266,16 +266,28 @@ pub fn local_title(text: &str) -> String {
     }
 }
 
+/// A cost in xAI ticks as dollars. A tick is 1e-10 USD (docs.x.ai cost
+/// tracking), so whole cents show two places and smaller amounts keep two
+/// significant digits, down to one tick.
 pub fn format_cost_ticks(ticks: i64) -> String {
+    const TICKS_PER_USD: u64 = 10_000_000_000;
     let sign = if ticks < 0 { "-" } else { "" };
     let ticks = ticks.unsigned_abs();
-    let whole = ticks / 1_000_000;
-    let frac = ticks % 1_000_000;
-    if frac == 0 {
-        return format!("{sign}${whole}.00");
-    }
-    let mut frac_s = format!("{frac:06}");
-    while frac_s.ends_with('0') {
+    let whole = ticks / TICKS_PER_USD;
+    let frac = ticks % TICKS_PER_USD;
+    // Ten places is one tick. Keep two places, or two significant digits when
+    // the amount is under a cent.
+    let digits = format!("{frac:010}");
+    let places = if whole > 0 {
+        2
+    } else {
+        match digits.find(|c: char| c != '0') {
+            Some(first) => (first + 2).clamp(2, 10),
+            None => 2,
+        }
+    };
+    let mut frac_s = digits[..places].to_string();
+    while frac_s.len() > 2 && frac_s.ends_with('0') {
         frac_s.pop();
     }
     format!("{sign}${whole}.{frac_s}")
@@ -1602,9 +1614,17 @@ mod tests {
         assert!(md.contains("## Tool read_file"), "{md}");
         assert!(md.contains("## Tool result"), "{md}");
         assert!(md.contains("## Usage"), "{md}");
-        assert!(md.contains("$0.000009"), "{md}");
+        assert!(md.contains("$0.0000000009"), "{md}");
         assert!(md.contains("API credits"), "{md}");
-        assert_eq!(format_cost_ticks(84_000), "$0.084");
+        // A tick is 1e-10 USD.
+        assert_eq!(format_cost_ticks(84_000), "$0.0000084");
+        assert_eq!(format_cost_ticks(37_756_000), "$0.0037");
+        assert_eq!(format_cost_ticks(840_000_000), "$0.084");
+        assert_eq!(format_cost_ticks(12_345_000_000), "$1.23");
+        assert_eq!(format_cost_ticks(5_000_000_000), "$0.50");
+        assert_eq!(format_cost_ticks(1), "$0.0000000001");
+        assert_eq!(format_cost_ticks(0), "$0.00");
+        assert_eq!(format_cost_ticks(-31_000_000), "-$0.0031");
         assert_eq!(
             local_title("<user_query>\nfix the dock\n</user_query>"),
             "fix the dock"
