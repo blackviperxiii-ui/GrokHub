@@ -190,10 +190,10 @@ impl AskRead {
 }
 
 const NONE: usize = 0;
-const LOW: usize = 2;
+pub(crate) const LOW: usize = 2;
 const MEDIUM: usize = 3;
 const HIGH: usize = 4;
-const XHIGH: usize = 5;
+pub(crate) const XHIGH: usize = 5;
 
 fn rung_name(r: usize) -> &'static str {
     grokhub_core::model_registry::EFFORT_LADDER
