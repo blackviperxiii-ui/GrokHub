@@ -2,7 +2,7 @@ use crate::channel::{Channel, ChannelTips};
 use crate::host_plan::{explain_host_risk, host_risk, HostPlanStep, HostRisk};
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 /// Overlay update only. Never wipes `~/.config/GrokHub`.
@@ -68,7 +68,7 @@ fn git_stdout_within(
     args: &[&str],
     timeout: Duration,
 ) -> Result<(bool, String), String> {
-    let mut cmd = Command::new("git");
+    let mut cmd = crate::git_cmd::git();
     cmd.arg("-C")
         .arg(source)
         .args(args)
@@ -1829,6 +1829,7 @@ mod tests {
 #[cfg(test)]
 mod channel_tip_tests {
     use super::*;
+    use std::process::Command;
 
     /// Temp fixture: a bare `origin` with `main` and `beta` (both at a seed
     /// commit), a `work` clone that moves them, and a GrokHub-shaped `client`

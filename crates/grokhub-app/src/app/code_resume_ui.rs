@@ -51,7 +51,14 @@ pub(super) fn scan(folders: &[String], now_s: u64) -> Vec<RepoStatus> {
     for folder in folders {
         for repo in cr::repo_dirs(&PathBuf::from(folder)) {
             if let Some(status) = cr::read_repo(&repo, now_s, &mut |args| {
-                super::setup_wizard::run("git", args)
+                // Hooks and fsmonitor off: these are the person's code folders,
+                // where a sandboxed command may have planted either.
+                let full: Vec<&str> = grokhub_core::git_cmd::SAFE_ARGS
+                    .iter()
+                    .copied()
+                    .chain(args.iter().copied())
+                    .collect();
+                super::setup_wizard::run("git", &full)
             }) {
                 out.push(status);
             }
