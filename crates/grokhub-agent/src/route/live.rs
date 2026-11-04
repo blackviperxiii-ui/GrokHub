@@ -357,29 +357,47 @@ pub fn table_snapshot(config_dir: &Path) -> Arc<RoutingTable> {
     }
 }
 
-/// The model this episode already runs on, unless `turn` is a new user message.
-/// From here a chat's history is big enough that switching models costs more
-/// in uncached re-sends than a cheaper model saves on the next turn.
+/// D12: from here (prompt tokens) a chat pins its model between turns. Its
+/// history is big enough that a switch re-sends a lot uncached, so a cheaper
+/// model takes over only when [`super::policy::pin_switch`] says it pays.
 pub const SESSION_KEEP_TOKENS: u64 = 16_000;
 
-static SESSION_MODELS: Mutex<Option<BTreeMap<String, String>>> = Mutex::new(None);
+/// A chat's pin: the model its last typed turn went to, that turn, and how
+/// many typed turns the chat has had.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SessionPin {
+    model: String,
+    turn: u64,
+    turns: u32,
+}
 
-/// The model a chat's last typed turn went to.
-fn session_model(key: &str) -> Option<String> {
+static SESSION_MODELS: Mutex<Option<BTreeMap<String, SessionPin>>> = Mutex::new(None);
+
+/// The model a chat's last typed turn went to, and the chat's turns so far.
+pub(super) fn session_model(key: &str) -> Option<(String, u32)> {
     SESSION_MODELS
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .as_ref()
-        .and_then(|m| m.get(key).cloned())
+        .and_then(|m| m.get(key).map(|p| (p.model.clone(), p.turns)))
 }
 
-fn keep_session_model(key: &str, model: &str) {
+pub(super) fn keep_session_model(key: &str, turn: u64, model: &str) {
     let mut g = SESSION_MODELS.lock().unwrap_or_else(|e| e.into_inner());
     let m = g.get_or_insert_with(BTreeMap::new);
     if m.len() >= EPISODES_CAP && !m.contains_key(key) {
         m.clear();
     }
-    m.insert(key.to_string(), model.to_string());
+    let pin = m.entry(key.to_string()).or_insert(SessionPin {
+        model: String::new(),
+        turn,
+        turns: 1,
+    });
+    if pin.turn != turn {
+        pin.turn = turn;
+        pin.turns = pin.turns.saturating_add(1);
+    }
+    pin.model = model.to_string();
 }
 
 fn episode_model(key: &str, turn: u64) -> Option<String> {
@@ -709,16 +727,20 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         "{key}\u{1f}{}",
         base_row.map(|r| r.class).unwrap_or(call.class)
     );
+    let mut pin_turns = None;
     let sticky = if key.is_empty() {
         None
     } else {
         episode_model(&class_key, turn).or_else(|| {
-            // A long chat keeps its model between turns: a switch re-sends the
-            // whole history uncached. Attention still breaks it for a turn
-            // that needs a stronger model; nothing downgrades it to save money.
-            (ask.is_some() && call.ctx_tokens >= SESSION_KEEP_TOKENS)
+            // D12: a long chat keeps its model between turns: a switch
+            // re-sends the whole history uncached. Attention still breaks it
+            // for a turn that needs a stronger model, and a cheaper one takes
+            // over only when the saving beats the re-send.
+            let (model, turns) = (ask.is_some() && call.ctx_tokens >= SESSION_KEEP_TOKENS)
                 .then(|| session_model(key))
-                .flatten()
+                .flatten()?;
+            pin_turns = Some(turns);
+            Some(model)
         })
     };
     // PR E: a failed verify on an on-device turn asks the next online pick to escalate.
@@ -784,6 +806,7 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         bump,
         pick,
         episode_model: sticky.as_deref(),
+        pin_turns,
         spend: spend.clone(),
         routine,
         start: st.start.as_deref(),
@@ -800,7 +823,7 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         route.rule_ids.splice(0..0, a.rules.iter().cloned());
         super::ask::remember(key, a.kind);
         if !route.no_route && !key.is_empty() {
-            keep_session_model(key, route.base.as_deref().unwrap_or(&route.model));
+            keep_session_model(key, turn, route.base.as_deref().unwrap_or(&route.model));
         }
     }
     laps.mark("route:choose");
@@ -906,6 +929,7 @@ fn shadow_mark(
     let mut shadow = input.clone();
     shadow.pick = None;
     shadow.episode_model = None;
+    shadow.pin_turns = None;
     let ok = match &c.change {
         Some(tune::Change::Order { model }) => {
             let t = tune::with_order(table, row.class, model);
@@ -1182,6 +1206,23 @@ pub fn route_log(
     // test that pinned a scratch config folder gets the span and health lines.
     if cfg!(test) && !crate::perm::config_pinned() {
         return rec;
+    }
+    if !key.is_empty() && !done.cancelled && !decision.route.no_route {
+        // D13: the chat's cache hit rate, switches and escalations. Counts only.
+        timing::time("route:log_session", || {
+            super::session_metrics::note_call(
+                config_dir,
+                key,
+                &super::session_metrics::CallFacts {
+                    model: &rec.used.model,
+                    rule_ids: &rec.rule_ids,
+                    prompt_tokens: done.usage.input_tokens,
+                    cached_tokens: done.usage.cached_tokens,
+                    ok: done.ok,
+                },
+                now,
+            )
+        });
     }
     let args = serde_json::json!({
         "provider": rec.used.provider,

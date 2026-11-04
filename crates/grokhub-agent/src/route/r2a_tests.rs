@@ -930,3 +930,91 @@ fn only_five_old_tables_are_kept() {
 fn models_file(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
     grokhub_core::model_registry::store::models_dir(dir).join(name)
 }
+
+#[test]
+fn a_long_chat_keeps_its_pin_until_a_cheaper_model_pays_for_the_resend() {
+    assert_eq!(live::SESSION_KEEP_TOKENS, 16_000);
+    let (reg, profiles) = fleet();
+    let table = top_first("grok-4.3");
+    let mut i = ask("grok-4.7");
+    i.episode_model = Some("grok-4.7");
+    i.ctx_tokens = 20_000;
+    // One turn so far: one turn's saving is less than the history re-sent uncached.
+    i.pin_turns = Some(1);
+    let kept = Router::choose(&i, &reg, &profiles, &table, NOW);
+    assert_eq!(kept.model, "grok-4.7");
+    assert!(
+        kept.rule_ids.contains(&"pin:keep".to_string())
+            && kept.rule_ids.contains(&"episode:keep".to_string()),
+        "{:?}",
+        kept.rule_ids
+    );
+    // Two turns so far: two more expected, and the saving beats the re-send.
+    i.pin_turns = Some(2);
+    let down = Router::choose(&i, &reg, &profiles, &table, NOW);
+    assert_eq!(down.model, "grok-4.3");
+    assert!(
+        down.rule_ids.contains(&"pin:downgrade".to_string())
+            && !down.rule_ids.contains(&"episode:keep".to_string()),
+        "{:?}",
+        down.rule_ids
+    );
+    // Mid-turn (no pin) the episode keeps its model whatever it costs.
+    i.pin_turns = None;
+    let step = Router::choose(&i, &reg, &profiles, &table, NOW);
+    assert_eq!(step.model, "grok-4.7");
+    assert!(
+        !step.rule_ids.iter().any(|r| r.starts_with("pin:")),
+        "{:?}",
+        step.rule_ids
+    );
+}
+
+#[test]
+fn a_pin_never_holds_back_a_turn_that_needs_a_stronger_model() {
+    let (reg, profiles) = fleet();
+    let table = top_first("grok-4.3");
+    let mut i = ask("grok-4.3");
+    i.episode_model = Some("grok-4.3");
+    i.ctx_tokens = 20_000;
+    i.pin_turns = Some(8);
+    i.steer = super::ladder::Steer::Harder;
+    let up = Router::choose(&i, &reg, &profiles, &table, NOW);
+    assert_eq!(up.model, "grok-4.7");
+    assert!(
+        up.rule_ids.contains(&"pin:upgrade".to_string())
+            && up
+                .rule_ids
+                .contains(&"attn:escalate:steer:mid_flow".to_string()),
+        "{:?}",
+        up.rule_ids
+    );
+    // E15 on a pinned chat: the stronger step goes ahead and says so.
+    i.steer = super::ladder::Steer::default();
+    i.pick = Some(Pick {
+        rung: rung("xhigh").unwrap(),
+        rules: vec!["E2".into(), super::ladder::NEXT_MODEL.into()],
+        ..Pick::default()
+    });
+    let e15 = Router::choose(&i, &reg, &profiles, &table, NOW);
+    assert_eq!(e15.model, "grok-4.7");
+    assert!(
+        e15.rule_ids.contains(&"model:stronger".to_string())
+            && e15.rule_ids.contains(&"pin:upgrade".to_string()),
+        "{:?}",
+        e15.rule_ids
+    );
+}
+
+#[test]
+fn a_chat_pin_counts_its_typed_turns_and_follows_the_latest_model() {
+    let key = "pin-count-chat";
+    assert_eq!(live::session_model(key), None);
+    live::keep_session_model(key, 11, "grok-4.7");
+    // Tool steps of the same turn don't count again.
+    live::keep_session_model(key, 11, "grok-4.7");
+    assert_eq!(live::session_model(key), Some(("grok-4.7".to_string(), 1)));
+    live::keep_session_model(key, 12, "grok-4.7");
+    live::keep_session_model(key, 13, "grok-4.3");
+    assert_eq!(live::session_model(key), Some(("grok-4.3".to_string(), 3)));
+}
