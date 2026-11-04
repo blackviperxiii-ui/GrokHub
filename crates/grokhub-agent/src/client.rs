@@ -505,6 +505,12 @@ pub trait ModelClient {
         false
     }
 
+    /// True when calls go through a batch queue that answers in minutes, so
+    /// their wall time says nothing about how fast the model is.
+    fn batches(&self) -> bool {
+        false
+    }
+
     /// xAI server-side compaction. `None` when this client has no such endpoint
     /// (local runtimes, providers, test fakes): the caller summarizes instead.
     fn compact(
@@ -1107,6 +1113,10 @@ impl ModelClient for XaiClient {
 
     fn compacts_server_side(&self) -> bool {
         self.compact_url().is_some()
+    }
+
+    fn batches(&self) -> bool {
+        self.defers()
     }
 
     fn compact(
