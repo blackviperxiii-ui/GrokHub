@@ -57,7 +57,10 @@ pub struct Layout {
     pub proxy: Option<String>,
 }
 
+/// Adds `path` in its full, long form, so a denied path inside a writable
+/// root names it the same way (Windows also has short `RUNNER~1` names).
 fn push(list: &mut Vec<String>, path: &Path) {
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let s = crate::tools::shell::plain_dir(&path.display().to_string());
     if !s.is_empty() && !list.contains(&s) {
         list.push(s);
@@ -302,12 +305,15 @@ mod tests {
         std::fs::write(home.join(".gitconfig"), "x").unwrap();
         let tools = vec![base.join("tools").display().to_string()];
         let temp = vec![base.join("tmp").display().to_string()];
-        let s = |p: PathBuf| p.canonicalize().unwrap_or(p).display().to_string();
+        let s = |p: PathBuf| {
+            let p = p.canonicalize().unwrap_or(p);
+            crate::tools::shell::plain_dir(&p.display().to_string())
+        };
 
         // The OS denies paths: the whole home folder, minus the secrets.
         let l = layout(&plan(&base, true), Some(&home), true, &tools, &temp);
-        assert!(l.readwrite.contains(&base.join("ws").display().to_string()));
-        assert!(l.readwrite.contains(&temp[0]));
+        assert!(l.readwrite.contains(&s(base.join("ws"))), "{l:?}");
+        assert!(l.readwrite.contains(&temp[0]), "{l:?}");
         assert!(l.readonly.contains(&s(home.clone())), "{l:?}");
         assert!(l.readonly.contains(&s(base.join("tools"))), "{l:?}");
         assert!(l.denied.contains(&s(home.join(".ssh"))), "{l:?}");
