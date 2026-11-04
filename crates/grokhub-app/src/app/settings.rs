@@ -776,20 +776,6 @@ impl Cabin {
                                                                 crate::cards::settings_note(ui, p);
                                                             }
                                                             self.ui_provider_rows(ui);
-                                                            crate::ui_kit::section_header(
-                                                                ui,
-                                                                "Models",
-                                                                None,
-                                                            );
-                                                            if crate::cards::settings_action(
-                                                                ui,
-                                                                "Refresh models",
-                                                                "Check xAI's model list and your plan now.",
-                                                                "Refresh",
-                                                            ) {
-                                                                self.refresh_models_now();
-                                                            }
-                                                            crate::cards::settings_note(ui, &self.how_auto_picks_lines());
                                                             crate::ui_kit::section_header(ui, "Local AI", None);
                                                             super::privacy_page::paint_offline_row(ui);
                                                             self.ui_local_model_rows(ui);
@@ -806,7 +792,7 @@ impl Cabin {
                                                             ) {
                                                                 crate::cards::settings_note(ui, line);
                                                             }
-                                                            crate::ui_kit::section_header(ui, "Spend & effort", None);
+                                                            crate::ui_kit::section_header(ui, "Spend", None);
                                                             self.ui_spend_rows(ui);
                                                             let budgets = grokhub_core::TOKEN_BUDGETS;
                                                             let budget_labels: Vec<String> = budgets

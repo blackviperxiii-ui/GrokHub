@@ -56,12 +56,10 @@ pub(super) struct ImagineNative {
     pub results: Vec<String>,
     pub note: String,
     pub image_op: u8,
-    pub image_model: u8,
     pub count: u8,
     pub edit_sources: Vec<String>,
     pub edit_mask: Option<String>,
     pub video_op: u8,
-    pub video_model: u8,
     pub video_res_1080: bool,
     pub video_image: Option<String>,
     pub video_url: String,
@@ -92,12 +90,10 @@ impl Default for ImagineNative {
             results: Vec::new(),
             note: String::new(),
             image_op: 0,
-            image_model: 0,
             count: 1,
             edit_sources: Vec::new(),
             edit_mask: None,
             video_op: 0,
-            video_model: 0,
             video_res_1080: false,
             video_image: None,
             video_url: String::new(),
@@ -662,7 +658,6 @@ impl Cabin {
         } else {
             crate::theme::border()
         };
-        let model = dedicated_imagine_model(&self.cfg.imagine_model);
         let ready = !self.imagine_prompt.trim().is_empty();
         let signed_in = self.imagine_ui_ready();
         egui::Frame::NONE
@@ -934,7 +929,7 @@ impl Cabin {
                                     egui::Id::new("imagine-aspect-hit"),
                                     egui::Sense::click(),
                                 )
-                                .on_hover_text(format!("{aspect} {aspect_name} · {model}"));
+                                .on_hover_text(format!("{aspect} {aspect_name}"));
                             if aspect_hit.clicked() {
                                 self.imagine_aspect_open = !self.imagine_aspect_open;
                                 self.imagine_style_open = false;
@@ -965,7 +960,7 @@ impl Cabin {
                                     egui::Id::new("imagine-more-hit"),
                                     egui::Sense::click(),
                                 )
-                                .on_hover_text("Account, mode, model, and sources");
+                                .on_hover_text("Account, mode, and sources");
                             if more.clicked() {
                                 self.imagine_native.more_open = !self.imagine_native.more_open;
                                 self.imagine_style_open = false;
@@ -1248,11 +1243,9 @@ impl Cabin {
         None
     }
 
+    /// Imagine always uses the default model; nothing on screen picks or names it.
     fn imagine_image_model_now(&self) -> String {
-        match self.imagine_native.image_model {
-            1 => grokhub_core::FALLBACK_IMAGINE_MODEL.into(),
-            _ => grokhub_core::DEFAULT_IMAGINE_MODEL.into(),
-        }
+        grokhub_core::DEFAULT_IMAGINE_MODEL.into()
     }
 
     fn imagine_resolution_now(&self) -> String {
@@ -1260,9 +1253,6 @@ impl Cabin {
     }
 
     fn imagine_quality_now(&self) -> String {
-        if self.imagine_native.image_model != 0 {
-            return String::new();
-        }
         grokhub_core::imagine_image_quality(self.imagine_quality).into()
     }
 
@@ -1276,7 +1266,7 @@ impl Cabin {
     }
 
     fn video_resolution_now(&self) -> String {
-        let allow_1080 = self.imagine_native.video_model == 0 && self.imagine_native.video_op <= 1;
+        let allow_1080 = self.imagine_native.video_op <= 1;
         if self.imagine_native.video_res_1080 && allow_1080 {
             "1080p".into()
         } else {
@@ -1292,14 +1282,9 @@ impl Cabin {
                 3 => grokhub_core::ImagineVideoOp::Extend,
                 _ => grokhub_core::ImagineVideoOp::TextToVideo,
             };
-            let model = if self.imagine_native.video_model == 1 {
-                grokhub_core::FALLBACK_VIDEO_MODEL
-            } else {
-                grokhub_core::DEFAULT_VIDEO_MODEL
-            };
             return ImagineCall::Video {
                 op,
-                model: model.into(),
+                model: grokhub_core::DEFAULT_VIDEO_MODEL.into(),
                 duration: self.video_duration_now(),
                 resolution: self.video_resolution_now(),
                 aspect: self.imagine_api_aspect_now(),
@@ -1727,7 +1712,6 @@ impl Cabin {
         if let Some(i) = imagine_more_seg(ui, "Mode", &["Generate", "Edit"], n.image_op) {
             n.image_op = i;
         }
-        self.ui_imagine_more_image_model(ui);
         self.ui_imagine_more_count(ui);
         if self.imagine_native.image_op != 1 {
             return;
@@ -1759,22 +1743,14 @@ impl Cabin {
         });
     }
 
-    /// Agent always generates a sprite still; share image model + count, not Edit.
+    /// Agent always generates a sprite still; share the count, not Edit.
     fn ui_imagine_more_agent(&mut self, ui: &mut egui::Ui) {
         ui.label(
             RichText::new("Character sprite still")
                 .size(crate::theme::FONT_META)
                 .color(crate::theme::muted()),
         );
-        self.ui_imagine_more_image_model(ui);
         self.ui_imagine_more_count(ui);
-    }
-
-    fn ui_imagine_more_image_model(&mut self, ui: &mut egui::Ui) {
-        let n = &mut self.imagine_native;
-        if let Some(i) = imagine_more_seg(ui, "Model", &["2.0", "Original"], n.image_model) {
-            n.image_model = i;
-        }
     }
 
     /// Image count 1–10 (API clamp); stepper keeps the More menu readable.
@@ -1805,10 +1781,7 @@ impl Cabin {
         {
             n.video_op = i;
         }
-        if let Some(i) = imagine_more_seg(ui, "Model", &["1.5", "Original"], n.video_model) {
-            n.video_model = i;
-        }
-        if n.video_model == 0 && n.video_op <= 1 {
+        if n.video_op <= 1 {
             let on = u8::from(n.video_res_1080);
             if let Some(i) = imagine_more_seg(ui, "Resolution", &[composer_res, "1080p"], on) {
                 n.video_res_1080 = i == 1;

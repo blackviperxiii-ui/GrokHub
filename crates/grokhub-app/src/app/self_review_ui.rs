@@ -599,7 +599,8 @@ impl Cabin {
                 Some(CardTarget::Router(id)) => id,
                 _ => continue,
             };
-            let details = format!("{body}\n\nAccept applies it. Nothing changes without your click, and /why table shows the router's picks.");
+            let details =
+                format!("{body}\n\nAccept applies it. Nothing changes without your click.");
             let card = ProposalCard {
                 source,
                 skill: &candidate,

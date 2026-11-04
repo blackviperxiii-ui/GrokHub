@@ -935,7 +935,7 @@ pub struct Rebuilt {
 }
 
 /// Rebuild the table when the registry or profiles changed (or `force`, the
-/// Refresh models button), running due evals through `eval` once a day.
+/// set-up of a provider or Local AI), running due evals through `eval` once a day.
 pub fn rebuild(config_dir: &Path, eval: Option<EvalEnv<'_>>, force: bool, now_ms: u64) -> Rebuilt {
     let (reg, profiles) = (
         grokhub_core::model_registry::store::load_registry(config_dir),

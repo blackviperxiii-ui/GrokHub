@@ -368,8 +368,6 @@ fn ai_models_holds_every_model_setting_once() {
     for row in [
         "account_auth.action",
         "self.ui_provider_rows(ui)",
-        "self.refresh_models_now()",
-        "self.how_auto_picks_lines()",
         "paint_offline_row(ui)",
         "self.ui_local_model_rows(ui)",
         "local_notes(",
@@ -380,7 +378,16 @@ fn ai_models_holds_every_model_setting_once() {
         assert!(models.contains(row), "AI models paints {row}");
     }
     // The router alone picks the model and effort: no pick row is painted.
-    for gone in ["ROW_MODEL", "Steady effort", "ui_model_pref_rows"] {
+    // No model list, refresh button or "How Auto picks" either.
+    for gone in [
+        "ROW_MODEL",
+        "Steady effort",
+        "ui_model_pref_rows",
+        "refresh_models_now",
+        "how_auto_picks_lines",
+        "\"Refresh models\"",
+        "\"Spend & effort\"",
+    ] {
         assert!(!models.contains(gone), "AI models still paints {gone}");
     }
     // Each of those rows is painted from AI models and nowhere else.
@@ -409,7 +416,6 @@ fn ai_models_holds_every_model_setting_once() {
             "ui_provider_rows",
             "ui_local_model_rows",
             "ui_spend_rows",
-            "how_auto_picks_lines",
             "Daily token budget",
         ] {
             assert!(!arm.contains(row), "{name} still paints {row}");

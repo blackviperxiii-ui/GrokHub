@@ -279,26 +279,6 @@ pub(super) fn work_row(kind: ChangeKind, c: &hx::Change) -> ChangeRow {
     }
 }
 
-/// The one tell-only Home note for a router change (routing table or
-/// tuning). It carries no Undo or Keep; the ledger line stays for `/why table`.
-pub(super) fn model_change_note(c: &hx::Change) -> grokhub_core::UpdateCard {
-    let title = format!("Router {} {}", what(c.op), c.shown_name());
-    let why = c.reason.trim();
-    let body = if why.is_empty() {
-        "/why table shows the picks.".to_string()
-    } else {
-        format!("{why} · /why table shows the picks.")
-    };
-    grokhub_core::router_update_card(&format!("model:{}#{}", c.id, c.seq), &title, &body, c.at)
-}
-
-/// A self-tuning promotion, which posts its own "why" card instead of a note.
-pub(super) fn is_promotion(c: &hx::Change) -> bool {
-    c.id == grokhub_agent::route::learn::TUNING_ID
-        && c.reason
-            .starts_with(grokhub_agent::route::learn::TUNED_PREFIX)
-}
-
 /// Work-tree rows after a restart: self-made changes from the last day that
 /// are still in effect and not kept, newest first.
 /// `skip` drops lines that already have their own Undo (a Done-for-you card).
@@ -465,11 +445,8 @@ impl Cabin {
                 continue;
             }
             if kind == ChangeKind::Model {
-                // Router changes are tell-only: one Home note, no Undo/Keep row.
-                // A tuning promotion's note is its "why" card (router_ui).
-                if !is_promotion(&c) {
-                    self.post_feed_card(model_change_note(&c));
-                }
+                // Router changes show nowhere: which model or effort a class
+                // uses is the router's alone. The ledger line stays for `/why table`.
                 continue;
             }
             if kind == ChangeKind::Skill {

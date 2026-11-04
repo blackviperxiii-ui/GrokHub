@@ -1284,7 +1284,7 @@ pub fn call_model(
     let openrouter = p.kind == ProviderKind::OpenAiCompatible && is_openrouter_host(&p.dest());
     // The prompt calls the assistant Grok: every call that reaches a provider
     // is told which model really answers, so it says so when asked.
-    super::identity::stamp(&mut req.to_mut().input, model, None);
+    super::identity::stamp(&mut req.to_mut().input, model, None, effort);
     let key = key(config_dir, &p.id)
         .ok_or_else(|| ClientError::Protocol(format!("no key for {}: add it in Settings", p.id)))?;
     let url = p.call_url();

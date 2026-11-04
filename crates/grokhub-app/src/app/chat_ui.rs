@@ -2934,8 +2934,7 @@ impl Cabin {
         }
         let session_now = self.session_mode.as_str().to_string();
         let perm_now = self.permission_mode.as_str().to_string();
-        let (rung, why) = self.auto_chip();
-        let row = crate::cards::session_row(ui, &session_now, &perm_now, (&rung, &why));
+        let row = crate::cards::session_row(ui, &session_now, &perm_now);
         if let Some(mode) = row.mode {
             if let Some(m) = SessionMode::parse(&mode) {
                 if m == SessionMode::Plan {
@@ -2982,9 +2981,6 @@ impl Cabin {
                     self.status = format!("Permission {}", p.as_str());
                 }
             }
-        }
-        if row.why {
-            self.run_why(false);
         }
     }
 

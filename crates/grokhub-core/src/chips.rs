@@ -32,6 +32,8 @@ pub enum ChipKind {
     Chat,
     Shell,
     Nav,
+    /// Retired: mode chips are gone (the router alone picks the model and
+    /// effort). Kept so chip memory written before still reads; never offered.
     Mode,
 }
 
@@ -2101,7 +2103,12 @@ pub struct LocalLesson {
 pub fn local_lessons(memory: &ChipMemory) -> Vec<LocalLesson> {
     let mut out = Vec::new();
     for hit in &memory.hits {
-        if hit.dismisses > 0 || hit.uses < 2 || hit.successes < 1 || hit.label.trim().is_empty() {
+        if hit.dismisses > 0
+            || hit.uses < 2
+            || hit.successes < 1
+            || hit.label.trim().is_empty()
+            || hit.kind == ChipKind::Mode
+        {
             continue;
         }
         let Some((hour, n)) = best_hour(&hit.hour_hits) else {
@@ -2415,39 +2422,7 @@ fn apply_draft_boost(
     }
 }
 
-fn routing_chip(id: &str, mode: &str, score: f32) -> QuickChip {
-    let mode = mode.trim();
-    if matches!(mode, "max" | "deep" | "heavy") {
-        chip(
-            id,
-            "Use Adaptive",
-            "__mode:auto",
-            ChipKind::Mode,
-            score,
-            "Auto routes Fast / Balance / Think / Max",
-        )
-    } else if matches!(mode, "think" | "thinking" | "expert" | "build") {
-        chip(
-            id,
-            "Go Max",
-            "__mode:max",
-            ChipKind::Mode,
-            score,
-            "Max · Grok 4.7 xhigh",
-        )
-    } else {
-        chip(
-            id,
-            "Think Harder",
-            "__mode:think",
-            ChipKind::Mode,
-            score,
-            "Think · Grok 4.7 high",
-        )
-    }
-}
-
-fn stage_chips(stage: ChipStage, mode: &str) -> Vec<QuickChip> {
+fn stage_chips(stage: ChipStage) -> Vec<QuickChip> {
     match stage {
         ChipStage::Empty => vec![
             chip(
@@ -2520,7 +2495,6 @@ fn stage_chips(stage: ChipStage, mode: &str) -> Vec<QuickChip> {
                 80.0,
                 "Long thread",
             ),
-            routing_chip("long-think", mode, 72.0),
         ],
         ChipStage::Mid | ChipStage::Default => vec![
             chip(
@@ -2531,7 +2505,6 @@ fn stage_chips(stage: ChipStage, mode: &str) -> Vec<QuickChip> {
                 74.0,
                 "Mid-thread",
             ),
-            routing_chip("mid-think", mode, 70.0),
         ],
     }
 }
@@ -2911,7 +2884,7 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
             "Implement context",
         ));
     }
-    chips.extend(stage_chips(stage, input.mode));
+    chips.extend(stage_chips(stage));
     if input.first_run {
         chips.retain(|c| {
             let label = c.label.to_ascii_lowercase();
@@ -2988,6 +2961,7 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
             && !family_quiet_this_hour(input.memory, &c.id, &c.value, &c.label, input.hour)
             && is_plain_text(&c.value)
             && !is_desk_takeover_chip(c)
+            && c.kind != ChipKind::Mode
     });
     if input.grok_connected {
         chips.retain(|c| !is_stale_connect_chip(c));
@@ -3167,7 +3141,7 @@ pub fn reply_suggestions(said: &str, heard: &str, failed: bool) -> Vec<QuickChip
         ));
     }
     if detect_chip_stage(&chat, failed) == ChipStage::Error {
-        out.extend(stage_chips(ChipStage::Error, ""));
+        out.extend(stage_chips(ChipStage::Error));
     }
     let mut seen = std::collections::HashSet::new();
     out.retain(|c| {
@@ -3248,7 +3222,7 @@ pub fn chip_suggest_prompt(
         r#"[{"label":"≤28 chars","value":"full prompt to send","kind":"chat","hint":"why useful"}]"#.into(),
         String::new(),
         "Rules:".into(),
-        "- label: short, action-first, naming the thing (e.g. Fix the login test, Add tests for parse_row, Think Harder)".into(),
+        "- label: short, action-first, naming the thing (e.g. Fix the login test, Add tests for parse_row)".into(),
         "- value: a concrete instruction the user would send (1–2 sentences max)".into(),
         "- Every chip names a specific action grounded in the transcript (a file, error, task or result in it), never a generic tip".into(),
         "- Never a generic follow-up: no What's next, Next step, Take the next step, or Anything else".into(),
@@ -3384,6 +3358,10 @@ pub fn parse_llm_chips(raw: &str) -> Vec<QuickChip> {
                 }
                 let mut kind =
                     ChipKind::from_str(row.get("kind").and_then(|v| v.as_str()).unwrap_or("chat"));
+                // No chip changes the model or effort: the router alone picks them.
+                if kind == ChipKind::Mode {
+                    continue;
+                }
                 if kind == ChipKind::Shell && !value.starts_with('$') && !value.starts_with("/sh") {
                     kind = ChipKind::Chat;
                 }
@@ -3506,19 +3484,6 @@ pub fn nav_from_chip_value(value: &str) -> Option<&'static str> {
         "__nav:command" => Some("command"),
         "__nav:queue" | "__nav:agents" => Some("agents"),
         "__nav:chat" | "__nav:agent" => Some("chat"),
-        _ => None,
-    }
-}
-
-pub fn mode_from_chip_value(value: &str) -> Option<&'static str> {
-    let v = value.trim();
-    let rest = v.strip_prefix("__mode:").unwrap_or(v);
-    match rest {
-        "max" | "deep" | "heavy" => Some("max"),
-        "think" | "thinking" | "build" | "expert" => Some("think"),
-        "balanced" | "balance" => Some("balanced"),
-        "fast" => Some("fast"),
-        "auto" => Some("auto"),
         _ => None,
     }
 }
@@ -3731,7 +3696,7 @@ mod tests {
     }
 
     #[test]
-    fn mid_stage_offers_think_harder() {
+    fn no_stage_offers_a_mode_chip() {
         let mem = ChipMemory::default();
         let chat = [
             msg("user", "hi"),
@@ -3740,50 +3705,36 @@ mod tests {
                 "Hello — what should we work on in the cabin tonight?",
             ),
         ];
-        let chips = build_quick_chips(input(&chat, "", &mem, &[], &[]));
-        let think = chips
-            .iter()
-            .find(|c| c.label == "Think Harder" && c.kind == ChipKind::Mode)
-            .expect("think chip");
-        assert_eq!(think.value, "__mode:think");
-        assert_eq!(mode_from_chip_value(&think.value), Some("think"));
-        assert!(chips.len() <= CHIP_VISIBLE_MAX);
-    }
-
-    #[test]
-    fn routing_chips_follow_new_modes() {
-        let mem = ChipMemory::default();
-        let chat = [
-            msg("user", "hi"),
-            msg(
-                "assistant",
-                "Hello — what should we work on in the cabin tonight?",
-            ),
-        ];
-        let mut auto = input(&chat, "", &mem, &[], &[]);
-        auto.mode = "auto";
-        let auto_chips = build_quick_chips(auto);
-        assert!(auto_chips.iter().any(|c| {
-            c.label == "Think Harder" && c.value == "__mode:think" && c.kind == ChipKind::Mode
-        }));
-
-        let mut think = input(&chat, "", &mem, &[], &[]);
-        think.mode = "think";
-        let think_chips = build_quick_chips(think);
-        assert!(think_chips.iter().any(|c| {
-            (c.label == "Go Max" || c.label == "Max")
-                && c.value == "__mode:max"
-                && c.kind == ChipKind::Mode
-        }));
-        assert!(!think_chips.iter().any(|c| c.label == "Think Harder"));
-
-        let mut max = input(&chat, "", &mem, &[], &[]);
-        max.mode = "max";
-        let max_chips = build_quick_chips(max);
-        assert!(max_chips.iter().any(|c| {
-            c.label == "Use Adaptive" && c.value == "__mode:auto" && c.kind == ChipKind::Mode
-        }));
-        assert!(!max_chips.iter().any(|c| c.label == "Think Harder"));
+        // The router alone picks the model and effort: whatever the mode, no
+        // chip offers to change it.
+        for mode in ["auto", "think", "max", "fast"] {
+            let mut i = input(&chat, "", &mem, &[], &[]);
+            i.mode = mode;
+            let chips = build_quick_chips(i);
+            assert!(!chips.is_empty(), "{mode}");
+            assert!(chips.len() <= CHIP_VISIBLE_MAX);
+            assert!(
+                chips
+                    .iter()
+                    .all(|c| c.kind != ChipKind::Mode && !c.value.starts_with("__mode:")),
+                "{mode}: {:?}",
+                labels(&chips)
+            );
+            for gone in ["Think Harder", "Go Max", "Use Adaptive"] {
+                assert!(!chips.iter().any(|c| c.label == gone), "{mode}: {gone}");
+            }
+        }
+        // A mode chip from an older model reply is dropped too.
+        let old = chip(
+            "llm-0-Think",
+            "Think Harder",
+            "__mode:think",
+            ChipKind::Mode,
+            99.0,
+            "",
+        );
+        let chips = build_quick_chips(input(&chat, "", &mem, &[], std::slice::from_ref(&old)));
+        assert!(!chips.iter().any(|c| c.kind == ChipKind::Mode));
     }
 
     #[test]
@@ -3948,9 +3899,9 @@ mod tests {
         let base = build_quick_chips(input(&chat, "", &mem0, &[], &[]));
         let think = base
             .iter()
-            .find(|c| c.label == "Think Harder")
+            .find(|c| c.id == "mid-continue")
             .cloned()
-            .expect("think chip");
+            .expect("continue chip");
         let mut mem = ChipMemory::default();
         remember_chip_dismiss(&mut mem, &think, 2_000, 21);
         let after = build_quick_chips(input(
@@ -4119,10 +4070,10 @@ mod tests {
     fn a_repeated_success_becomes_a_lesson_and_a_dismiss_removes_it() {
         let mut mem = ChipMemory::default();
         let think = chip(
-            "route-think",
-            "Think Harder",
-            "__mode:think",
-            ChipKind::Mode,
+            "ctx-tests",
+            "Add unit tests",
+            "Add unit tests for the last change.",
+            ChipKind::Chat,
             10.0,
             "",
         );
@@ -4133,13 +4084,13 @@ mod tests {
         assert!(
             lessons
                 .iter()
-                .any(|l| l.text.contains("21:00") && l.text.contains("Think Harder")),
+                .any(|l| l.text.contains("21:00") && l.text.contains("Add unit tests")),
             "{lessons:?}"
         );
         remember_chip_dismiss(&mut mem, &think, 4_000, 21);
         let gone = local_lessons(&mem);
         assert!(
-            gone.iter().all(|l| !l.text.contains("Think Harder")),
+            gone.iter().all(|l| !l.text.contains("Add unit tests")),
             "a later no removes the lesson: {gone:?}"
         );
         let mut state = crate::learning::LearningState::default();
@@ -4153,13 +4104,25 @@ mod tests {
     }
 
     #[test]
-    fn mode_and_nav_values() {
-        assert_eq!(mode_from_chip_value("__mode:max"), Some("max"));
-        assert_eq!(mode_from_chip_value("__mode:auto"), Some("auto"));
-        assert_eq!(mode_from_chip_value("__mode:fast"), Some("fast"));
-        assert_eq!(mode_from_chip_value("fast"), Some("fast"));
-        assert_eq!(mode_from_chip_value("__mode:think"), Some("think"));
-        assert_eq!(mode_from_chip_value("__mode:balanced"), Some("balanced"));
+    fn an_old_mode_chip_in_memory_makes_no_lesson() {
+        let mut mem = ChipMemory::default();
+        let think = chip(
+            "route-think",
+            "Think Harder",
+            "__mode:think",
+            ChipKind::Mode,
+            10.0,
+            "",
+        );
+        remember_chip_click(&mut mem, &think, None, 1_000, 21);
+        remember_chip_click(&mut mem, &think, None, 2_000, 21);
+        remember_chip_outcome(&mut mem, true, 3_000);
+        assert_eq!(mem.hits.len(), 1, "old memory still reads");
+        assert!(local_lessons(&mem).is_empty());
+    }
+
+    #[test]
+    fn nav_values() {
         assert_eq!(nav_from_chip_value("__nav:imagine"), Some("imagine"));
     }
 
@@ -4695,9 +4658,14 @@ mod tests {
     #[test]
     fn parse_llm_accepts_five() {
         let chips = parse_llm_chips(
-            r#"[{"label":"Continue the wall","value":"Continue painting the cabin wall.","kind":"chat"},{"label":"Cabin brief","value":"Give me a short cabin brief.","kind":"chat"},{"label":"Think Harder","value":"__mode:think","kind":"mode"},{"label":"Open Imagine","value":"__nav:imagine","kind":"nav"},{"label":"Make a checklist","value":"Turn the last answer into a short checklist.","kind":"chat"}]"#,
+            r#"[{"label":"Continue the wall","value":"Continue painting the cabin wall.","kind":"chat"},{"label":"Cabin brief","value":"Give me a short cabin brief.","kind":"chat"},{"label":"Draft the release note","value":"Draft a short release note for the cabin wall.","kind":"chat"},{"label":"Open Imagine","value":"__nav:imagine","kind":"nav"},{"label":"Make a checklist","value":"Turn the last answer into a short checklist.","kind":"chat"}]"#,
         );
         assert_eq!(chips.len(), 5, "{:?}", labels(&chips));
+        // A mode row changes the model or effort: dropped.
+        let mode = parse_llm_chips(
+            r#"[{"label":"Think Harder","value":"__mode:think","kind":"mode"},{"label":"Cabin brief","value":"Give me a short cabin brief.","kind":"chat"}]"#,
+        );
+        assert_eq!(labels(&mode), vec!["Cabin brief"]);
     }
 
     #[test]
@@ -5178,7 +5146,8 @@ mod tests {
             &[],
         );
         assert!(
-            !prompt.contains("Add tests, Next step, Think Harder"),
+            !prompt.contains("Add tests, Next step, Think Harder")
+                && !prompt.contains("Think Harder"),
             "{prompt}"
         );
         assert!(prompt.contains(

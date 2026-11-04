@@ -2,9 +2,9 @@
 //! The step that hit "no model in your plan is answering" waits. The
 //! heartbeat re-checks the models on a backoff and, once one answers,
 //! resumes the paused chat turn on its own with one quiet note naming the
-//! model and the step. The Home card only informs: it names the models and
-//! the step, with Retry now. Nothing outside your plan is ever tried, and
-//! the budget pause is not this: it still waits for you.
+//! provider and the step. The Home card only informs: it names the provider
+//! (never the model) and the step, with Retry now. Nothing outside your plan
+//! is ever tried, and the budget pause is not this: it still waits for you.
 
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -84,16 +84,9 @@ impl Cabin {
             Some((m, a, at)) if m == model && at.elapsed() < CARRY_FOR => *a,
             _ => 0,
         };
-        let (reg, _) = grokhub_agent::route::live::snapshot(&crate::config::config_dir());
         let clock = Self::local_clock();
         let since = grokhub_core::automation::format_ampm(clock.hour * 60 + clock.minute);
-        let card = model_wait_card(
-            &wait::waiting_models(&reg, model),
-            model,
-            &since,
-            &step,
-            now,
-        );
+        let card = model_wait_card(model, &since, &step, now);
         let id = card.id.clone();
         self.status = card.title.clone();
         self.post_feed_card(card);
@@ -106,7 +99,7 @@ impl Cabin {
     pub(super) fn retry_model_wait_now(&mut self) {
         if let Some(w) = self.harness.router.wait.wait.as_mut() {
             w.retry_now(now_ms());
-            self.status = "Checking the models now…".into();
+            self.status = "Checking again now…".into();
         }
     }
 
@@ -198,7 +191,7 @@ impl Cabin {
         if paused && !ask.is_empty() {
             self.kick_model_retry(ask);
             let note = if offline {
-                reconnect_note(&model, &step)
+                reconnect_note(&step)
             } else {
                 wait::back_note(&model, &step, true)
             };
@@ -225,19 +218,18 @@ fn is_waiting_turn(text: &str) -> bool {
 }
 
 /// The note when a turn kept while offline gets its answer.
-pub(super) fn reconnect_note(model: &str, step: &str) -> String {
-    format!("Back online: answered after reconnect on {model} ({step})")
+pub(super) fn reconnect_note(step: &str) -> String {
+    format!("Back online: answered after reconnect ({step})")
 }
 
-/// The waiting card for `model`'s wait.
+/// The waiting card for `model`'s wait. It names the provider, never the model.
 pub(super) fn model_wait_card(
-    models: &[String],
     model: &str,
     since: &str,
     step: &str,
     now: u64,
 ) -> grokhub_core::UpdateCard {
-    let (title, text) = wait::waiting_card(models, since, step);
+    let (title, text) = wait::waiting_card(model, since, step);
     grokhub_core::router_update_card(
         &format!("{}{model}", grokhub_core::MODEL_WAIT_SOURCE_PREFIX),
         &title,
@@ -284,7 +276,7 @@ mod tests {
             app.harness.router.rows.first(),
             Some(&(
                 "model-back".to_string(),
-                "Back online: answered after reconnect on grok-4.7 (test)".to_string()
+                "Back online: answered after reconnect (test)".to_string()
             ))
         );
         let _ = std::fs::remove_dir_all(root);
@@ -311,16 +303,17 @@ mod tests {
         app.start_model_wait("chat:default", "grok-4.7", 1_000);
         let cards = wait_cards(&app);
         assert_eq!(cards.len(), 1);
-        assert_eq!(cards[0].title, "Waiting for a model: grok-4.7");
+        assert_eq!(cards[0].title, "Waiting for xAI");
         let body = cards[0].body.clone().unwrap();
         assert!(
-            body.starts_with("grok-4.7 isn't answering since ")
+            body.starts_with("xAI isn't answering since ")
                 && body.ends_with(
-                    "; retrying. “Summarize inbox” picks up on its own once one answers."
+                    "; retrying. “Summarize inbox” picks up on its own once it answers."
                 ),
             "{body}"
         );
-        assert_eq!(app.status, "Waiting for a model: grok-4.7");
+        assert!(!body.contains("grok-"), "the card names no model: {body}");
+        assert_eq!(app.status, "Waiting for xAI");
         // The same pause again keeps the one card and the one wait.
         app.start_model_wait("chat:default", "grok-4.7", 2_000);
         assert_eq!(wait_cards(&app).len(), 1);
@@ -350,7 +343,7 @@ mod tests {
             app.harness.router.rows.first(),
             Some(&(
                 "model-back".to_string(),
-                "Back on grok-4.6; resumed: Summarize inbox".to_string()
+                "xAI is answering again; resumed: Summarize inbox".to_string()
             ))
         );
         // Pausing again right away keeps the backoff's place.
@@ -388,7 +381,7 @@ mod tests {
             Some(step)
         );
         app.end_model_wait("grok-4.7");
-        assert_eq!(app.status, format!("Back on grok-4.7 for {step}"));
+        assert_eq!(app.status, format!("xAI is answering again for {step}"));
         assert!(wait_cards(&app).is_empty());
         let _ = std::fs::remove_dir_all(root);
     }

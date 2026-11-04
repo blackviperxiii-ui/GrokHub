@@ -496,21 +496,6 @@ impl Registry {
         })
     }
 
-    /// How a pin or setting names `id`: with "(retired)" once it is retired,
-    /// pruned or gone from the registry after its tombstone.
-    pub fn pin_label(&self, id: &str) -> String {
-        let id = id.trim();
-        let gone = match self.get(id) {
-            Some(r) => r.state.tombstone(),
-            None => !self.models.is_empty(),
-        };
-        if gone {
-            format!("{id} (retired)")
-        } else {
-            id.to_string()
-        }
-    }
-
     pub fn compute_hash(&self) -> String {
         let mut h = Sha256::new();
         for (id, rec) in &self.models {
@@ -837,7 +822,7 @@ mod tests {
     }
 
     #[test]
-    fn a_retired_row_is_a_tombstone_for_30_days_then_deleted_and_a_pin_shows_retired() {
+    fn a_retired_row_is_a_tombstone_for_30_days_then_deleted() {
         let mut reg = Registry::default();
         let mut old = meta("grok-4.5");
         old.deprecated = Some(true);
@@ -845,8 +830,7 @@ mod tests {
         let r = reg.get("grok-4.5").unwrap();
         assert_eq!((r.state, r.tombstone_ms), (ModelState::Retired, 1_000));
         assert!(!r.state.routable());
-        assert_eq!(reg.pin_label("grok-4.5"), "grok-4.5 (retired)");
-        assert_eq!(reg.pin_label("grok-4.7"), "grok-4.7");
+        assert!(reg.get("grok-4.7").unwrap().state.routable());
         let ev = reg.apply_refresh(
             &[api(vec![meta("grok-4.7"), old.clone()])],
             &[],
@@ -865,9 +849,6 @@ mod tests {
             }]
         );
         assert!(reg.get("grok-4.5").is_none());
-        // Gone after its tombstone still reads as retired.
-        assert_eq!(reg.pin_label("grok-4.5"), "grok-4.5 (retired)");
-        assert_eq!(Registry::default().pin_label("grok-4.5"), "grok-4.5");
     }
 
     #[test]

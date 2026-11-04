@@ -856,70 +856,20 @@ pub fn why_lines(
     out
 }
 
-/// The cost-raising card's words.
+/// The cost-raising card's words. They name the kind of step and the cost,
+/// never the model or effort: the router alone picks those.
 pub fn card_text(c: &Candidate) -> (String, String) {
     let plain = class_row(&c.class)
         .map(|r| r.plain)
         .unwrap_or(c.class.as_str());
     let rise = c.cost_rise_pct.unwrap_or(0.0).round();
-    match &c.change {
-        Some(Change::Start { effort }) => {
-            let level = grokhub_core::effort_label(effort);
-            (format!("Start {plain} at {level}?"), format!("{plain} would do better at {level}, which costs about {rise:.0}% more. Start it at {level}?"))
-        }
-        Some(Change::Order { model }) => (format!("Use {model} for {plain}?"), format!("{plain} would do better on {model}, which costs about {rise:.0}% more. Use it first?")),
-        None => (String::new(), String::new()),
+    if c.change.is_none() {
+        return (String::new(), String::new());
     }
-}
-
-/// "Oct 6" (UTC) for a card.
-fn month_day(ms: u64) -> String {
-    const MONTHS: [&str; 12] = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-    ];
-    let stamp = grokhub_core::oauth::unix_ms_to_rfc3339(ms);
-    let month = stamp
-        .get(5..7)
-        .and_then(|m| m.parse::<usize>().ok())
-        .unwrap_or(1);
-    let day = stamp
-        .get(8..10)
-        .and_then(|d| d.parse::<u32>().ok())
-        .unwrap_or(1);
-    format!("{} {day}", MONTHS[month.clamp(1, 12) - 1])
-}
-
-/// The info-only "why this model" card for a promoted candidate, built from
-/// its canary and the live arm it beat: `(title, body)`. `None` until it was
-/// promoted. It asks nothing; the router keeps changing routes on its own.
-pub fn why_card_text(c: &Candidate) -> Option<(String, String)> {
-    let (change, at, won, beat) = (
-        c.change.as_ref()?,
-        c.promoted_at?,
-        c.promoted_snap?,
-        c.baseline?,
-    );
-    let plain = class_row(&c.class)
-        .map(|r| r.plain)
-        .unwrap_or(c.class.as_str());
-    let what = match change {
-        Change::Order { model } => model.clone(),
-        Change::Start { effort } => grokhub_core::effort_label(effort).to_string(),
-    };
-    let title = format!(
-        "Why {what} for {plain}: {:.0}% pass vs {:.0}%, promoted {}",
-        won.pass_pct,
-        beat.pass_pct,
-        month_day(at)
-    );
-    let body = format!(
-        "Auto now runs {plain} with {}: {:.0}% cheaper and {:.0}% faster over {} canary steps. Info only; Auto keeps tuning on its own.",
-        change.label(),
-        won.cost_gain_pct(&beat),
-        won.latency_gain_pct(&beat),
-        won.n
-    );
-    Some((title, body))
+    (
+        format!("Spend more on {plain}?"),
+        format!("Auto could do {plain} better for about {rise:.0}% more. Allow it?"),
+    )
 }
 
 #[cfg(test)]

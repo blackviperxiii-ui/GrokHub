@@ -175,28 +175,25 @@ pub fn recheck(
     model_back(&reg, &profiles, model, now_ms)
 }
 
-fn join_names(models: &[String]) -> String {
-    match models {
-        [] => "your plan's models".into(),
-        [one] => one.clone(),
-        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
-    }
+/// The waiting card: (title, body). It names who serves the model (never the
+/// model) and the step, and asks nothing.
+pub fn waiting_card(model: &str, since: &str, step: &str) -> (String, String) {
+    let who = super::identity::served_by(model);
+    (
+        format!("Waiting for {who}"),
+        format!("{who} isn't answering since {since}; retrying. “{step}” picks up on its own once it answers."),
+    )
 }
 
-/// The waiting card: (title, body). It names the models and the step and asks nothing.
-pub fn waiting_card(models: &[String], since: &str, step: &str) -> (String, String) {
-    let names = join_names(models);
-    let verb = if models.len() == 1 { "isn't" } else { "aren't" };
-    (format!("Waiting for a model: {names}"), format!("{names} {verb} answering since {since}; retrying. “{step}” picks up on its own once one answers."))
-}
-
-/// The quiet note when the wait ends. `resumed`: the paused step went out
-/// again; otherwise it runs on its own next turn (a background job) or you moved on.
+/// The quiet note when the wait ends on `model`. `resumed`: the paused step
+/// went out again; otherwise it runs on its own next turn (a background job)
+/// or you moved on.
 pub fn back_note(model: &str, step: &str, resumed: bool) -> String {
+    let who = super::identity::served_by(model);
     if resumed {
-        format!("Back on {model}; resumed: {step}")
+        format!("{who} is answering again; resumed: {step}")
     } else {
-        format!("Back on {model} for {step}")
+        format!("{who} is answering again for {step}")
     }
 }
 
@@ -259,25 +256,32 @@ mod tests {
     }
 
     #[test]
-    fn the_card_and_note_name_the_models_and_the_step() {
+    fn the_card_and_note_name_the_provider_and_the_step_never_the_model() {
         let (reg, _) = fleet();
-        let models = waiting_models(&reg, "grok-4.7");
-        assert_eq!(models, vec!["grok-4.7", "grok-4.6", "grok-4.5"]);
-        let (title, text) = waiting_card(&models, "12:14 AM", "Summarize inbox");
         assert_eq!(
-            title,
-            "Waiting for a model: grok-4.7, grok-4.6 and grok-4.5"
+            waiting_models(&reg, "grok-4.7"),
+            vec!["grok-4.7", "grok-4.6", "grok-4.5"]
         );
-        assert_eq!(text, "grok-4.7, grok-4.6 and grok-4.5 aren't answering since 12:14 AM; retrying. “Summarize inbox” picks up on its own once one answers.");
-        assert_eq!(waiting_card(&["grok-4.7".into()], "9:05 PM", "dream time").1, "grok-4.7 isn't answering since 9:05 PM; retrying. “dream time” picks up on its own once one answers.");
+        let (title, text) = waiting_card("grok-4.7", "12:14 AM", "Summarize inbox");
+        assert_eq!(title, "Waiting for xAI");
+        assert_eq!(text, "xAI isn't answering since 12:14 AM; retrying. “Summarize inbox” picks up on its own once it answers.");
+        assert_eq!(waiting_card("openrouter/vendor/model", "9:05 PM", "dream time").1, "OpenRouter isn't answering since 9:05 PM; retrying. “dream time” picks up on its own once it answers.");
         assert_eq!(
             back_note("grok-4.6", "Summarize inbox", true),
-            "Back on grok-4.6; resumed: Summarize inbox"
+            "xAI is answering again; resumed: Summarize inbox"
         );
         assert_eq!(
-            back_note("grok-4.6", "dream time", false),
-            "Back on grok-4.6 for dream time"
+            back_note("local:small", "dream time", false),
+            "Local AI is answering again for dream time"
         );
+        for shown in [
+            title,
+            text,
+            back_note("grok-4.6", "Summarize inbox", true),
+            (*crate::route::live::NO_ROUTE_MSG).to_string(),
+        ] {
+            assert!(!shown.contains("grok-"), "{shown}");
+        }
         assert_eq!(
             step_name("chat:default", "\n  Summarize inbox  \nthen file it"),
             "Summarize inbox"

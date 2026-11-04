@@ -1,9 +1,9 @@
 //! Router R3b in the cabin: other AI providers you add with your own key.
 //! Off until you add a key and allow the destination.
 //!
-//! - Settings → Cabin defaults (the model rows): "Add a provider" (base URL
-//!   plus key; the key goes straight into the OS keyring), and one row per
-//!   provider with its state tag and Remove. Auto picks among their models.
+//! - Settings → AI models: "Add a provider" (base URL plus key; the key goes
+//!   straight into the OS keyring), and one row per provider with its state
+//!   tag and Remove. Auto picks among their models; no row names one.
 //! - Settings → Permissions: one destination row per provider. Allow parks a
 //!   hard send card (no Always, Enter doesn't approve, Esc and the timeout
 //!   deny); only its Approve click writes the grant (`UserClick::from_click`).
@@ -16,8 +16,8 @@
 //!   "Get a key" opens a known provider's key page; "Sign in with
 //!   OpenRouter" runs its browser PKCE flow and brings a key back to the
 //!   same credentials card.
-//! - After a refresh, a quiet status names the models a provider added, or
-//!   says it turned the key down.
+//! - After a refresh, a quiet status counts the models a provider added (no
+//!   names), or says it turned the key down.
 //!
 //! The key field is cleared the moment Add is clicked and is never logged,
 //! spanned or shown.
@@ -156,8 +156,8 @@ pub(super) fn key_action(dest: &str) -> String {
     format!("Save your key for {dest} to your keyring")
 }
 
-/// After a model refresh: the models each provider you added brought in
-/// ("Added 2 models from openrouter.ai: vendor/a, vendor/b"), or that it
+/// After a model refresh: how many models each provider you added brought in
+/// ("Added 2 models from openrouter.ai."), never their names, or that it
 /// turned the key down. `None` when nothing about a provider changed.
 pub(super) fn provider_refresh_note(
     events: &[RegistryEvent],
@@ -167,27 +167,14 @@ pub(super) fn provider_refresh_note(
     let mut lines = Vec::new();
     for p in all {
         let prefix = format!("{}/", p.id);
-        let added: Vec<&str> = events
+        let added = events
             .iter()
-            .filter_map(|e| match e {
-                RegistryEvent::Added { id } => id.strip_prefix(&prefix),
-                _ => None,
-            })
-            .collect();
-        match added.len() {
+            .filter(|e| matches!(e, RegistryEvent::Added { id } if id.starts_with(&prefix)))
+            .count();
+        match added {
             0 => {}
-            1 => lines.push(format!("Added 1 model from {}: {}", p.dest(), added[0])),
-            n if n <= 3 => lines.push(format!(
-                "Added {n} models from {}: {}",
-                p.dest(),
-                added.join(", ")
-            )),
-            n => lines.push(format!(
-                "Added {n} models from {}: {}, and {} more",
-                p.dest(),
-                added[..3].join(", "),
-                n - 3
-            )),
+            1 => lines.push(format!("Added 1 model from {}.", p.dest())),
+            n => lines.push(format!("Added {n} models from {}.", p.dest())),
         }
         let refused = errors
             .iter()
@@ -210,7 +197,7 @@ pub(super) fn provider_label(p: &providers::Provider) -> String {
 /// The hard card's action line.
 pub(super) fn provider_action(p: &providers::Provider) -> String {
     format!(
-        "Send your chats and memory to {} when you pick one of its models or Auto uses one",
+        "Send your chats and memory to {} when Auto uses one of its models",
         p.dest()
     )
 }
@@ -705,7 +692,7 @@ mod tests {
         assert!(is_provider_card(park.class, &park.source));
         assert_eq!(
             park.action,
-            "Send your chats and memory to openrouter.ai when you pick one of its models or Auto uses one"
+            "Send your chats and memory to openrouter.ai when Auto uses one of its models"
         );
         // Enter never approves it; Esc denies it, and Deny writes nothing.
         assert_eq!(hx::hard_card_key(true, false, false), None);
@@ -819,7 +806,7 @@ mod tests {
             app.harness.router.providers.kind, 0,
             "the pick resets after a save"
         );
-        assert_eq!(app.harness.park.as_ref().map(|c| c.action.as_str()), Some("Send your chats and memory to claude-proxy.example.org when you pick one of its models or Auto uses one"));
+        assert_eq!(app.harness.park.as_ref().map(|c| c.action.as_str()), Some("Send your chats and memory to claude-proxy.example.org when Auto uses one of its models"));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1089,7 +1076,7 @@ mod tests {
                 &[or.clone(), an.clone()]
             )
             .as_deref(),
-            Some("Added 2 models from openrouter.ai: vendor/a, vendor/b")
+            Some("Added 2 models from openrouter.ai.")
         );
         assert_eq!(
             provider_refresh_note(
@@ -1098,7 +1085,7 @@ mod tests {
                 &[or.clone(), an.clone()]
             )
             .as_deref(),
-            Some("Added 1 model from api.anthropic.com: claude-x")
+            Some("Added 1 model from api.anthropic.com.")
         );
         assert_eq!(
             provider_refresh_note(
@@ -1113,7 +1100,7 @@ mod tests {
                 std::slice::from_ref(&or)
             )
             .as_deref(),
-            Some("Added 5 models from openrouter.ai: a, b, c, and 2 more")
+            Some("Added 5 models from openrouter.ai.")
         );
         assert_eq!(
             provider_refresh_note(

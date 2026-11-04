@@ -536,11 +536,10 @@ fn imagine_more_finishes_agent_count_and_results_chrome() {
     let mut cabin = Cabin::quiet_for_test();
     cabin.imagine_kind = grokhub_core::ImagineKind::Agent;
     cabin.imagine_native.count = 7;
-    cabin.imagine_native.image_model = 1;
     match cabin.imagine_call() {
         super::imagine::ImagineCall::Generate { n, model, .. } => {
             assert_eq!(n, 7);
-            assert_eq!(model, grokhub_core::FALLBACK_IMAGINE_MODEL);
+            assert_eq!(model, grokhub_core::DEFAULT_IMAGINE_MODEL);
         }
         _ => panic!("Agent must generate stills"),
     }
@@ -586,11 +585,12 @@ fn imagine_more_finishes_agent_count_and_results_chrome() {
     }
     let blob = texts.join(" | ");
     assert!(
-        blob.contains("Character sprite still")
-            && blob.contains("Model")
-            && blob.contains("Images")
-            && blob.contains("3"),
-        "Agent More must paint model + count: {blob}"
+        blob.contains("Character sprite still") && blob.contains("Images") && blob.contains("3"),
+        "Agent More must paint the count: {blob}"
+    );
+    assert!(
+        !blob.contains("Model") && !blob.contains("Original") && !blob.contains("v2.0"),
+        "Agent More paints no model picker: {blob}"
     );
     cabin.imagine_native.more_open = false;
     cabin.imagine_error = "network interrupted".into();

@@ -1,13 +1,14 @@
 //! The router in the cabin: the model registry refresh on the heartbeat, the
 //! passive-health fold, the onboarding and half-open probes, the routing table
 //! rebuild (R2a), what the user hears when a model breaks, and `/why`. Network
-//! and file work run off the UI thread.
+//! and file work run off the UI thread. Nothing here shows which model or
+//! effort the router picked: only a chat question about it is told.
 
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use grokhub_agent::route::guard::{run_guard, GuardRun};
-use grokhub_agent::route::heal::{heal_messages, joined_messages, HealMsg, HealNotes, Heard, Tier};
+use grokhub_agent::route::heal::{heal_messages, joined_messages, HealMsg, HealNotes, Heard};
 use grokhub_agent::route::learn::{self, TuneRun};
 use grokhub_agent::route::local::LocalSource;
 use grokhub_agent::route::refresh::{
@@ -43,8 +44,7 @@ fn heal_after(dir: &std::path::Path, events: &[RegistryEvent], joined: &[String]
     let now = grokhub_core::now_ms();
     let mut heard = Heard::default();
     if !events.is_empty() {
-        // No pin: the router alone picks the model.
-        heard = heal_messages(events, &load_registry(dir), &read_profiles(dir), "", now);
+        heard = heal_messages(events, &load_registry(dir), &read_profiles(dir), now);
     }
     heard.msgs.extend(joined_messages(joined));
     if heard.msgs.is_empty() && heard.cleared.is_empty() {
@@ -68,13 +68,11 @@ pub(super) struct RouterUi {
     pub last_guard: Option<Instant>,
     /// R3a self-tuning, on the guard's hourly slot.
     pub tune_rx: Option<mpsc::Receiver<Result<TuneRun, String>>>,
-    /// Refresh models was clicked: the next refresh rebuilds the table even unchanged.
+    /// A provider or Local AI was just set up: the next refresh rebuilds the
+    /// table even unchanged.
     pub force_table: bool,
-    /// Open router incidents (key, text), newest first. Each one lands in
-    /// the bell once, until the model answers again and clears it.
+    /// Quiet router notes (key, text), newest first: a wait that ended.
     pub rows: Vec<(String, String)>,
-    /// Pauses already shown this launch (a model that answers again clears them).
-    pub paused: Vec<String>,
     /// Router R2b: spend settings, premium asks, budget cards.
     pub budget: super::budget_ui::BudgetUi,
     /// Router R3b: the "Add a provider" fields and the data policy the router last heard.
@@ -274,78 +272,25 @@ impl Cabin {
         });
     }
 
-    /// A class the accuracy guard reverted gets one Pulse Suggestion saying why.
+    /// The accuracy guard reverts on its own and tells nothing: which effort a
+    /// class starts at shows nowhere.
     fn poll_guard(&mut self) {
         let Some(rx) = self.harness.router.guard_rx.take() else {
             return;
         };
-        match rx.try_recv() {
-            Ok(run) => {
-                if run.reverted.is_empty() {
-                    return;
-                }
-                let now = now_ms();
-                for (class, text) in run.reverted {
-                    grokhub_core::post_update(&mut self.updates, guard_card(&class, &text, now));
-                }
-                self.persist_updates();
-            }
-            Err(mpsc::TryRecvError::Empty) => self.harness.router.guard_rx = Some(rx),
-            Err(mpsc::TryRecvError::Disconnected) => {}
+        if let Err(mpsc::TryRecvError::Empty) = rx.try_recv() {
+            self.harness.router.guard_rx = Some(rx);
         }
     }
 
-    /// Self-tuning runs on its own and asks nothing. A promotion gets one
-    /// info-only "why" card; a rollback is a ledger line and the weekly
-    /// review's router line.
+    /// Self-tuning runs on its own and asks nothing; a promotion or rollback
+    /// is a ledger line and the weekly review's router line, never a card.
     fn poll_tune(&mut self) {
         let Some(rx) = self.harness.router.tune_rx.take() else {
             return;
         };
-        match rx.try_recv() {
-            Ok(Ok(run)) if !run.promoted.is_empty() => {
-                let state = learn::load_state(&crate::config::config_dir());
-                self.post_why_cards(&state, &run.promoted);
-            }
-            Ok(_) | Err(mpsc::TryRecvError::Disconnected) => {}
-            Err(mpsc::TryRecvError::Empty) => self.harness.router.tune_rx = Some(rx),
-        }
-    }
-
-    /// One "Why grok-4-fast for summaries" card per promoted candidate. No actions.
-    pub(super) fn post_why_cards(
-        &mut self,
-        state: &grokhub_agent::route::tune::TuneState,
-        promoted: &[String],
-    ) {
-        for c in state.candidates.iter().filter(|c| promoted.contains(&c.id)) {
-            let Some((title, body)) = grokhub_agent::route::tune::why_card_text(c) else {
-                continue;
-            };
-            let at = c.promoted_at.unwrap_or_else(now_ms);
-            self.post_feed_card(grokhub_core::router_update_card(
-                &format!("router-why:{}", c.id),
-                &title,
-                &body,
-                at,
-            ));
-        }
-    }
-
-    /// The Auto chip: the current rung's label and the router's last plain reason.
-    pub(super) fn auto_chip(&self) -> (String, String) {
-        match grokhub_agent::route::live::last_user_pick() {
-            Some((effort, reason)) => (
-                grokhub_agent::route::effort_word(effort.as_deref()).to_string(),
-                reason,
-            ),
-            None => {
-                let start = grokhub_agent::route::live::start_effort(
-                    grokhub_agent::route::live::DEFAULT_CLASS,
-                );
-                let word = grokhub_agent::route::effort_word(start.as_deref());
-                (word.to_string(), format!("{word}: everyday chat starts here. {} picks how hard to think on each step. Click for /why.", grokhub_core::brand::product_name()))
-            }
+        if let Err(mpsc::TryRecvError::Empty) = rx.try_recv() {
+            self.harness.router.tune_rx = Some(rx);
         }
     }
 
@@ -403,62 +348,27 @@ impl Cabin {
         self.sync_local_tuning();
     }
 
-    /// Work-tree lines, Home updates and pauses, by tier. Home updates go
-    /// through the feed, which holds them in quiet hours.
+    /// Tell-only Home updates, through the feed, which holds them in quiet hours.
     pub(super) fn deliver_heal(&mut self, heal: HealOut) {
-        let router = &mut self.harness.router;
-        router.rows.retain(|(k, _)| !heal.cleared.contains(k));
-        router.paused.retain(|k| !heal.cleared.contains(k));
+        self.harness
+            .router
+            .rows
+            .retain(|(k, _)| !heal.cleared.contains(k));
         let now = now_ms();
         for m in heal.msgs {
-            match m.tier {
-                Tier::WorkRow => {
-                    // Tell-only: the bell keeps it, once per incident until
-                    // it clears, instead of a line under every chat.
-                    let router = &mut self.harness.router;
-                    let fresh = !router.rows.iter().any(|(k, _)| *k == m.key);
-                    router.rows.retain(|(k, _)| *k != m.key);
-                    router.rows.insert(0, (m.key, m.text.clone()));
-                    router.rows.truncate(ROUTER_ROWS_MAX);
-                    if fresh {
-                        self.notify(super::notices::NoticeKind::Info, m.text, None);
-                    }
-                }
-                Tier::HomeUpdate => {
-                    let card = grokhub_core::router_update_card(&m.key, &m.title, &m.text, now);
-                    self.post_feed_card(card);
-                }
-                Tier::Pause => {
-                    if self.harness.router.paused.contains(&m.key) {
-                        continue;
-                    }
-                    self.harness.router.paused.push(m.key.clone());
-                    self.status = m.title.clone();
-                    let card = grokhub_core::suggestion_card(
-                        &format!("router-{}", m.key),
-                        &m.title,
-                        &m.text,
-                        now,
-                    );
-                    self.post_feed_card(card);
-                }
-            }
+            let card = grokhub_core::router_update_card(&m.key, &m.title, &m.text, now);
+            self.post_feed_card(card);
         }
     }
 
-    /// Settings → Refresh models: list, probes and the table now.
+    /// A provider or Local AI was just set up: list, probes and the table now.
+    /// There is no button for it; the heartbeat refreshes on its own too.
     pub(super) fn refresh_models_now(&mut self) {
         self.harness.router.force_table = true;
         if let Some(clock) = self.harness.router.clock.as_mut() {
             clock.demand = true;
         }
         self.status = "Refreshing models...".into();
-    }
-
-    /// "How Auto picks": read-only, one line per class from the routing table.
-    pub(super) fn how_auto_picks_lines(&self) -> String {
-        let table = grokhub_agent::route::live::table_snapshot(&crate::config::config_dir());
-        how_auto_picks_note(grokhub_agent::route::table::how_auto_picks(&table))
     }
 
     /// `/why table`.
@@ -486,111 +396,61 @@ impl Cabin {
     }
 }
 
-fn how_auto_picks_note(lines: Vec<String>) -> String {
-    if lines.is_empty() {
-        return "Refresh the model list to see how Auto chooses models.".into();
-    }
-    let mut note = vec!["How Auto picks:".to_string()];
-    note.extend(lines);
-    note.join("\n")
-}
-
-/// The Pulse Suggestion for a class the accuracy guard reverted. The title
-/// names the kind of step ("Auto now thinks harder on everyday chat").
-pub(super) fn guard_card(class: &str, text: &str, now: u64) -> grokhub_core::UpdateCard {
-    let plain = grokhub_agent::route::policy::class_row(class).map_or(class, |row| row.plain);
-    grokhub_core::suggestion_card(
-        &format!("router-guard:{class}"),
-        &format!("Auto now thinks harder on {plain}"),
-        text,
-        now,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use grokhub_agent::route::heal::pause_msg;
+    use grokhub_agent::route::heal::plan_change_msg;
 
     #[test]
-    fn settings_auto_picks_copy_hides_table_version() {
-        assert_eq!(
-            how_auto_picks_note(Vec::new()),
-            "Refresh the model list to see how Auto chooses models."
-        );
-        assert_eq!(
-            how_auto_picks_note(vec!["Everyday chat: Grok".into()]),
-            "How Auto picks:\nEveryday chat: Grok"
-        );
-    }
-
-    fn msg(tier: Tier, key: &str, text: &str) -> HealMsg {
-        HealMsg {
-            tier,
-            key: key.into(),
-            title: format!("title {key}"),
-            text: text.into(),
-        }
-    }
-
-    #[test]
-    fn heal_tiers_land_in_the_work_tree_on_home_or_as_a_pause() {
+    fn heal_updates_land_on_home_and_name_no_model() {
         let _g = crate::config::hold_test_config();
         let root = crate::config::test_config_root("router-heal");
         std::fs::create_dir_all(&root).unwrap();
         let _pin = crate::config::TestConfigDir::set(root.clone());
         let mut app = Cabin::quiet_for_test();
-        let row = "grok-4.6 isn't answering, so I'm using grok-4.7 for now. Your pick is saved.";
         app.deliver_heal(HealOut {
-            msgs: vec![
-                msg(Tier::WorkRow, "unhealthy:grok-4.6", row),
-                msg(
-                    Tier::HomeUpdate,
-                    "retired:grok-4.3",
-                    "grok-4.3 was retired by xAI",
+            msgs: [
+                vec![plan_change_msg("SuperGrok", true)],
+                joined_messages(&["grok-4.8".to_string()]),
+            ]
+            .concat(),
+            cleared: Vec::new(),
+        });
+        let shown: Vec<(&str, &str)> = app
+            .updates
+            .iter()
+            .map(|c| (c.title.as_str(), c.body.as_deref().unwrap_or("")))
+            .collect();
+        assert_eq!(
+            shown,
+            vec![
+                (
+                    "Your plan changed",
+                    "Your plan no longer includes some of the AI models it had. Auto keeps going on the ones it still has."
                 ),
-                pause_msg("grok-4.7", "It failed 3 times in a row.", &[]),
-            ],
-            cleared: Vec::new(),
-        });
-        assert_eq!(
-            app.harness.router.rows,
-            vec![("unhealthy:grok-4.6".to_string(), row.to_string())]
+                (
+                    "New in your plan",
+                    "Your plan has a new AI model. Auto uses it where it does best."
+                ),
+            ]
         );
-        assert_eq!(
-            app.notices.items.iter().filter(|n| n.text == row).count(),
-            1,
-            "the router's quiet line goes to the bell"
-        );
-        app.deliver_heal(HealOut {
-            msgs: vec![msg(Tier::WorkRow, "unhealthy:grok-4.6", row)],
-            cleared: Vec::new(),
-        });
-        assert_eq!(
-            app.notices.items.iter().filter(|n| n.text == row).count(),
-            1,
-            "the same open incident lands once"
-        );
-        assert_eq!(app.status, "Paused: grok-4.7 isn't answering");
-        let titles: Vec<&str> = app.updates.iter().map(|c| c.title.as_str()).collect();
-        assert_eq!(titles.len(), 2, "{titles:?}");
-        assert!(
-            titles.contains(&"title retired:grok-4.3")
-                && titles.contains(&"Paused: grok-4.7 isn't answering")
-        );
-        // The same pause again says nothing; the model answering again clears the row and the pause.
-        app.deliver_heal(HealOut {
-            msgs: vec![pause_msg("grok-4.7", "It failed.", &[])],
-            cleared: Vec::new(),
-        });
-        assert_eq!(app.updates.len(), 2);
-        app.deliver_heal(HealOut {
-            msgs: Vec::new(),
-            cleared: vec!["unhealthy:grok-4.6".into(), "noroute:grok-4.7".into()],
-        });
+        assert!(app.notices.items.is_empty(), "nothing goes to the bell");
         assert!(app.harness.router.rows.is_empty());
-        assert!(app.harness.router.paused.is_empty());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn several_new_models_make_one_update() {
+        let msgs = joined_messages(&["b".to_string(), "a".to_string(), "b".to_string()]);
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(
+            (msgs[0].key.as_str(), msgs[0].text.as_str()),
+            (
+                "new:a,b",
+                "Your plan has 2 new AI models. Auto uses them where they do best."
+            )
+        );
+        assert!(joined_messages(&[]).is_empty());
     }
 
     #[test]
