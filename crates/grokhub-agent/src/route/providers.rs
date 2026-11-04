@@ -14,8 +14,9 @@
 //!   hard send card. Each one that goes writes one egress line (no content).
 //! - Its models are cost class `new_provider`: the router takes one only when
 //!   the key and the grant exist (the grant covering the request's data, so
-//!   sensitive data needs a grant that names it) and you or the class
-//!   preference picked it; never as a fallback and never to save money.
+//!   sensitive data needs a grant that names it), its listed price is under
+//!   your $/M ceiling and it answers in text. It ranks after xAI unless the
+//!   routing table ranks it.
 //! - Effort maps per provider: xAI `reasoning.effort` (unchanged), Anthropic
 //!   `output_config.effort`, OpenAI-compatible `reasoning.effort`. The effort
 //!   list, prices and context come from the listing; nothing is filled in.
@@ -1145,7 +1146,7 @@ pub fn parse_anthropic_reply(body: &str) -> Result<TurnOutput, ClientError> {
 /// What the chat says when OpenRouter's account settings leave a model with
 /// no endpoint. OpenRouter answers HTTP 404 with "guardrail" / "ZDR" / "data
 /// policy" in the message; the raw text names its dashboards, not what to do.
-pub const POLICY_REFUSED: &str = "OpenRouter has no endpoint for this model under your account's privacy settings (zero data retention or a guardrail excluded it). Pick another model in Settings → AI models → Use for your chats, or change them at https://openrouter.ai/settings/privacy and https://openrouter.ai/settings/guardrails.";
+pub const POLICY_REFUSED: &str = "OpenRouter has no endpoint for this model under your account's privacy settings (zero data retention or a guardrail excluded it). Change OpenRouter data policy in Settings → AI models, or change your account settings at https://openrouter.ai/settings/privacy and https://openrouter.ai/settings/guardrails.";
 
 /// A provider reply that is a policy refusal from the account's own settings,
 /// not a model or network fault: HTTP 404 whose message names a guardrail,
@@ -1157,9 +1158,8 @@ pub fn policy_refusal(status: u16, message: &str) -> bool {
             .any(|w| message.contains(w))
 }
 
-/// OpenRouter's own routers: the free pool and Auto. Pickable like any model.
+/// OpenRouter's own free router, a model id like any other.
 pub const OPENROUTER_FREE_ROUTER: &str = "openrouter/free";
-pub const OPENROUTER_AUTO_ROUTER: &str = "openrouter/auto";
 
 /// A free tier on OpenRouter: a `:free` variant or its free router. Takes the
 /// wire model (`google/x:free`) or the registry id (`openrouter/google/x:free`).
@@ -1176,18 +1176,15 @@ pub fn is_openrouter_router(id: &str) -> bool {
         || id.starts_with("openrouter/openrouter/")
 }
 
-/// Settings → AI models → OpenRouter routing: how OpenRouter picks the
-/// endpoint for the model you chose. Sent only to openrouter.ai, as its
-/// `provider` and `models` request fields; a plain OpenAI-compatible host
-/// never sees them. All off is OpenRouter's own default.
+/// Settings → AI models → OpenRouter privacy: which of OpenRouter's
+/// endpoints may see your data. Sent only to openrouter.ai, as its `provider`
+/// request field; a plain OpenAI-compatible host never sees it. The router
+/// alone decides the model and the endpoint order, so nothing else is sent.
+/// An older `app.json` that still holds `sort` or `fallback` loads with them
+/// dropped.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Routing {
-    /// `provider.sort`: "" (OpenRouter's default), "price", "throughput" or "latency".
-    pub sort: String,
-    /// `models`: when the model you picked has no endpoint left, OpenRouter
-    /// goes on to its free router (for a free pick) or Auto instead of failing.
-    pub fallback: bool,
     /// "" (your account's default), "zdr" (`provider.zdr`: zero-data-retention
     /// endpoints only) or "allow" (`provider.data_collection: allow`).
     pub data: String,
@@ -1206,7 +1203,7 @@ pub fn set_routing(r: Routing) {
     *ROUTING.lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
 }
 
-/// The OpenRouter routing as last set.
+/// The OpenRouter privacy setting as last set.
 pub fn routing() -> Routing {
     ROUTING
         .lock()
@@ -1215,25 +1212,13 @@ pub fn routing() -> Routing {
         .unwrap_or_default()
 }
 
-/// Add OpenRouter's routing fields to an OpenAI-compatible body. `wire_model`
-/// is the model as OpenRouter names it (`google/gemma-4-31b-it:free`).
-pub fn apply_openrouter_routing(body: &mut Value, wire_model: &str, r: &Routing) {
-    if matches!(r.sort.as_str(), "price" | "throughput" | "latency") {
-        body["provider"]["sort"] = json!(r.sort);
-    }
+/// Add OpenRouter's privacy field to an OpenAI-compatible body. No `sort`
+/// and no `models` fallback list: the router picked the model.
+pub fn apply_openrouter_routing(body: &mut Value, r: &Routing) {
     match r.data.as_str() {
         "zdr" => body["provider"]["zdr"] = json!(true),
         "allow" => body["provider"]["data_collection"] = json!("allow"),
         _ => {}
-    }
-    if r.fallback && !is_openrouter_router(wire_model) {
-        let next = if is_free_model(wire_model) {
-            OPENROUTER_FREE_ROUTER
-        } else {
-            OPENROUTER_AUTO_ROUTER
-        };
-        // `model` goes first; `models` lists only what comes after it.
-        body["models"] = json!([next]);
     }
 }
 
@@ -1299,12 +1284,7 @@ pub fn call_model(
     let openrouter = p.kind == ProviderKind::OpenAiCompatible && is_openrouter_host(&p.dest());
     // The prompt calls the assistant Grok: every call that reaches a provider
     // is told which model really answers, so it says so when asked.
-    super::identity::stamp(
-        &mut req.to_mut().input,
-        model,
-        None,
-        openrouter && routing().fallback,
-    );
+    super::identity::stamp(&mut req.to_mut().input, model, None);
     let key = key(config_dir, &p.id)
         .ok_or_else(|| ClientError::Protocol(format!("no key for {}: add it in Settings", p.id)))?;
     let url = p.call_url();
@@ -1327,7 +1307,7 @@ pub fn call_model(
     let max_output = reg.get(model).and_then(|r| r.meta.max_output);
     let mut body = request_body(p.kind, wire_model, effort, &req, max_output);
     if openrouter {
-        apply_openrouter_routing(&mut body, wire_model, &routing());
+        apply_openrouter_routing(&mut body, &routing());
     }
     let body = body.to_string();
     let r = transport_for(config_dir)

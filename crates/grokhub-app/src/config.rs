@@ -318,8 +318,6 @@ pub struct AppConfig {
     #[serde(default = "default_yolo")]
     pub yolo: bool,
     #[serde(default)]
-    pub model: String,
-    #[serde(default)]
     pub imagine_model: String,
     /// Git clone used by Settings → Update / `grokhub --update`.
     #[serde(default)]
@@ -341,8 +339,6 @@ pub struct AppConfig {
     /// First close-to-tray toast has been shown. Quiet hours do not set this.
     #[serde(default)]
     pub close_to_tray_tip_seen: bool,
-    #[serde(default)]
-    pub mode: String,
     /// Pre-R1 saved effort. Effort is automatic now: [`load`] drops it and logs
     /// that once, and it is never written back.
     #[serde(default, rename = "reasoningEffort", skip_serializing)]
@@ -362,12 +358,8 @@ pub struct AppConfig {
     /// Brief. On, it costs one fast-model call instead.
     #[serde(default)]
     pub brief_model_fallback: bool,
-    /// Router R3b: the model on a provider you added (`<provider>/<model>`)
-    /// for your own chats. Used only while its key and your grant exist.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub provider_model: String,
-    /// Settings → AI models → OpenRouter routing (sort, fallback, data policy).
-    /// Sent only to openrouter.ai.
+    /// Settings → AI models → OpenRouter data policy. Sent only to
+    /// openrouter.ai. An old saved sort or fallback loads dropped.
     #[serde(
         default,
         skip_serializing_if = "grokhub_agent::route::providers::Routing::is_default"
@@ -376,17 +368,6 @@ pub struct AppConfig {
     /// Settings → AI models → Local AI: how the on-device model runs.
     #[serde(default, skip_serializing_if = "LocalTuning::is_default")]
     pub local_tuning: LocalTuning,
-    /// Settings → AI models → Models Auto may use: where Auto may send each
-    /// model on its own, and the effort it sends. By model id.
-    #[serde(
-        default,
-        skip_serializing_if = "grokhub_agent::route::prefs::ModelPrefs::is_empty"
-    )]
-    pub model_prefs: grokhub_agent::route::prefs::ModelPrefs,
-    /// "Use for your chats" → "Auto: all models": every model on a provider
-    /// you allowed joins Auto's pool next to xAI and Local AI.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub auto_all_models: bool,
     /// Composer session pill — chat / plan / ask.
     #[serde(default = "default_session_mode")]
     pub session_mode: String,
@@ -427,9 +408,6 @@ pub struct AppConfig {
     /// kind (`grokhub_core::governor`). Omitted while it stays default.
     #[serde(default, skip_serializing_if = "BackgroundBudgets::is_default")]
     pub background: BackgroundBudgets,
-    /// Router R2b: Settings → "Use Grok 4.7 Fast when you're waiting". On by default.
-    #[serde(default = "default_fast_when_waiting")]
-    pub fast_when_waiting: bool,
     /// Router R2b: weekly spend cap in USD for an API key. 0 is no cap.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub weekly_spend_cap_usd: u32,
@@ -455,10 +433,6 @@ pub struct AppConfig {
     /// Inline sentence autocomplete in the chat composer (ghost text). Off by default.
     #[serde(default)]
     pub composer_autocomplete: bool,
-    /// Settings → Behavior: steady effort. The router reads `steadyEffort`
-    /// (`grokhub_agent::route::ladder::EffortSettings`). Off by default.
-    #[serde(default)]
-    pub steady_effort: bool,
     /// Settings → Behavior: suggest help for the app the user was just in,
     /// from its process name only. Off by default.
     #[serde(default)]
@@ -803,10 +777,6 @@ fn default_budget_pause() -> bool {
     true
 }
 
-fn default_fast_when_waiting() -> bool {
-    true
-}
-
 fn default_price_ceiling() -> u32 {
     grokhub_core::model_registry::cost_class::DEFAULT_CEILING_USD_PER_M as u32
 }
@@ -816,8 +786,6 @@ fn default_price_ceiling() -> u32 {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct LocalTuning {
-    /// "Local AI for chats": "" (only when nothing else can answer), "chat", "all".
-    pub first: String,
     /// Context tokens for the launch; 0 is Auto.
     pub ctx: u32,
     /// GPU offload: "" Auto, "all" (every layer), "cpu" (none).
@@ -872,7 +840,6 @@ impl Default for AppConfig {
             api_key: String::new(),
             device_name: String::new(),
             yolo: default_yolo(),
-            model: String::new(),
             imagine_model: String::new(),
             source_dir: String::new(),
             project_dir: String::new(),
@@ -882,16 +849,12 @@ impl Default for AppConfig {
             last_chat_tab: String::new(),
             close_to_tray: default_close_to_tray(),
             close_to_tray_tip_seen: false,
-            mode: String::new(),
             legacy_reasoning_effort: None,
             local_model: false,
             prompt_cleanup: false,
             brief_model_fallback: false,
-            provider_model: String::new(),
             provider_routing: Default::default(),
             local_tuning: LocalTuning::default(),
-            model_prefs: Default::default(),
-            auto_all_models: false,
             session_mode: default_session_mode(),
             permission_mode: default_permission_mode(),
             always_confirmed: false,
@@ -905,7 +868,6 @@ impl Default for AppConfig {
             budget_pauses_scheduled: default_budget_pause(),
             heartbeat: HeartbeatPace::default(),
             background: BackgroundBudgets::default(),
-            fast_when_waiting: default_fast_when_waiting(),
             weekly_spend_cap_usd: 0,
             price_ceiling_usd_per_m: default_price_ceiling(),
             proactive_reminders: false,
@@ -914,7 +876,6 @@ impl Default for AppConfig {
             imagine_wall: default_imagine_wall(),
             composer_glow: false,
             composer_autocomplete: false,
-            steady_effort: false,
             focus_help: false,
             resume_code: false,
             downloads_tidy: false,
@@ -1796,35 +1757,6 @@ mod tests {
     }
 
     #[test]
-    fn steady_effort() {
-        assert!(!AppConfig::default().steady_effort);
-        let absent: AppConfig = serde_json::from_str(r#"{"deviceName":"cabin"}"#).unwrap();
-        assert!(!absent.steady_effort);
-        let _g = hold_test_config();
-        let root = test_config_root("steady-effort");
-        let _ = fs::remove_dir_all(&root);
-        let _pin = TestConfigDir::set(root.clone());
-        let mut cfg = AppConfig {
-            device_name: "cabin".into(),
-            steady_effort: true,
-            ..Default::default()
-        };
-        save_in(&root, &cfg).expect("save");
-        assert!(load().steady_effort);
-        let text = fs::read_to_string(root.join("app.json")).unwrap();
-        assert!(
-            text.contains("\"steadyEffort\": true"),
-            "the router reads this key: {text}"
-        );
-        assert!(grokhub_agent::route::ladder::EffortSettings::load(&root).steady);
-        cfg.steady_effort = false;
-        save_in(&root, &cfg).expect("save off");
-        assert!(!load().steady_effort);
-        assert!(!grokhub_agent::route::ladder::EffortSettings::load(&root).steady);
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
     fn diagnostics_mode_defaults_off() {
         assert!(!AppConfig::default().diagnostics_mode);
         assert!(!AppConfig::default().diagnostics_include_logs);
@@ -2083,19 +2015,16 @@ mod tests {
         let mut cfg = AppConfig::default();
         assert!(!cfg.always_collapse_thoughts);
         assert!(!cfg.close_to_tray_tip_seen);
-        cfg.model = grokhub_core::sanitize_chat_model("grok-4.6").into();
         cfg.permission_mode = persistable_permission_mode("auto");
         cfg.session_mode = "plan".into();
         cfg.always_collapse_thoughts = true;
         cfg.close_to_tray_tip_seen = true;
         save(&cfg).expect("save");
         let loaded = load();
-        assert_eq!(loaded.model, "grok-4.6");
         assert_eq!(loaded.permission_mode, "auto");
         assert_eq!(loaded.session_mode, "plan");
         assert!(loaded.always_collapse_thoughts);
         assert!(loaded.close_to_tray_tip_seen);
-        cfg.model.clear();
         cfg.permission_mode = persistable_permission_mode("always-approve");
         cfg.always_confirmed = true;
         cfg.session_mode = "ask".into();
@@ -2104,10 +2033,6 @@ mod tests {
         assert_eq!(cfg.permission_mode, "always-approve");
         save(&cfg).expect("save always");
         let body = fs::read_to_string(config_dir().join("app.json")).expect("app.json");
-        assert!(
-            body.contains("\"model\": \"\""),
-            "Auto persists an empty model pin: {body}"
-        );
         assert!(
             body.contains("always-approve"),
             "Always must be written: {body}"
@@ -2125,7 +2050,6 @@ mod tests {
             "tray tip seen round-trips through app.json: {body}"
         );
         let loaded = load();
-        assert_eq!(loaded.model, "");
         assert_eq!(loaded.permission_mode, "always-approve");
         assert!(loaded.always_confirmed);
         assert_eq!(loaded.session_mode, "ask");
@@ -2135,7 +2059,6 @@ mod tests {
         raw["permissionMode"] = serde_json::json!("always");
         raw["alwaysConfirmed"] = serde_json::json!(true);
         raw["alwaysCollapseThoughts"] = serde_json::json!(true);
-        raw["model"] = serde_json::json!("grok-4.7");
         raw["reasoningEffort"] = serde_json::json!("minimal");
         raw["sessionMode"] = serde_json::json!("chat");
         fs::write(
@@ -2150,7 +2073,6 @@ mod tests {
             "Always aliases round-trip as always-approve"
         );
         assert_eq!(loaded.permission_mode, "always-approve");
-        assert_eq!(loaded.model, "grok-4.7");
         assert_eq!(
             loaded.legacy_reasoning_effort, None,
             "R1: a saved effort is dropped on load"
@@ -2350,12 +2272,70 @@ mod tests {
         let old = r#"{"model":"grok-4","voiceModel":"grok-voice","cabinEyes":true,
             "connectorHosts":["a.example"],"proactiveReminders":true}"#;
         let cfg: AppConfig = serde_json::from_str(old).unwrap();
-        assert_eq!(cfg.model, "grok-4");
         assert!(cfg.proactive_reminders);
         let text = serde_json::to_string(&cfg).unwrap();
-        for gone in ["voiceModel", "cabinEyes", "connectorHosts"] {
+        for gone in ["\"model\"", "voiceModel", "cabinEyes", "connectorHosts"] {
             assert!(!text.contains(gone), "{gone} is dropped on save: {text}");
         }
+    }
+
+    #[test]
+    fn an_old_app_json_with_every_dropped_routing_pick_loads_and_save_leaves_them_out() {
+        let _g = hold_test_config();
+        let root = test_config_root("dropped-routing-picks");
+        let _ = fs::remove_dir_all(&root);
+        let _pin = TestConfigDir::set(root.clone());
+        fs::create_dir_all(&root).expect("dir");
+        fs::write(
+            root.join("app.json"),
+            r#"{"deviceName":"cabin","model":"grok-4.6","mode":"think",
+            "providerModel":"openrouter/vendor/cheap",
+            "providerRouting":{"sort":"price","fallback":true,"data":"zdr"},
+            "modelPrefs":{"all":true,"models":{"openrouter/vendor/cheap":{"use":"never","effort":"high"}}},
+            "autoAllModels":true,"fastWhenWaiting":false,"steadyEffort":true,
+            "localTuning":{"first":"chat","ctx":8192,"gpu":"all"},
+            "priceCeilingUsdPerM":20,"weeklySpendCapUsd":5}"#,
+        )
+        .expect("write");
+        let loaded = load();
+        assert_eq!(loaded.device_name, "cabin", "an old config still loads");
+        // What stays: the data policy, the local tuning, the price ceiling and the cap.
+        assert_eq!(
+            loaded.provider_routing,
+            grokhub_agent::route::providers::Routing { data: "zdr".into() }
+        );
+        assert_eq!(
+            loaded.local_tuning,
+            LocalTuning {
+                ctx: 8192,
+                gpu: "all".into(),
+                ..LocalTuning::default()
+            }
+        );
+        assert_eq!(
+            (loaded.price_ceiling_usd_per_m, loaded.weekly_spend_cap_usd),
+            (20, 5)
+        );
+        save_in(&root, &loaded).expect("save");
+        let body = fs::read_to_string(root.join("app.json")).expect("app.json");
+        let raw: serde_json::Value = serde_json::from_str(&body).expect("json");
+        for gone in [
+            "model",
+            "mode",
+            "providerModel",
+            "modelPrefs",
+            "autoAllModels",
+            "fastWhenWaiting",
+            "steadyEffort",
+        ] {
+            assert_eq!(raw.get(gone), None, "{gone} is not written back: {body}");
+        }
+        assert_eq!(raw["providerRouting"], serde_json::json!({"data": "zdr"}));
+        assert_eq!(
+            raw["localTuning"],
+            serde_json::json!({"ctx": 8192, "gpu": "all", "threads": "", "keepLoaded": false})
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

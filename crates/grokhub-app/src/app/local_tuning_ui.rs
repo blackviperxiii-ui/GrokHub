@@ -1,8 +1,7 @@
 //! Settings → AI models → Local AI: how the on-device model runs.
 //!
-//! - "Local AI for chats" picks when the device answers while you're online:
-//!   only as a fallback (default), first for your chats, or for every step it
-//!   can run. The router reads it as [`LocalFirst`](local::LocalFirst).
+//! - The device answers while you're online only when nothing else can (the
+//!   router's fallback); offline, or with no sign-in or key, it answers anyway.
 //! - Context size, GPU offload and CPU threads are launch overrides for
 //!   `llama-server` ([`local_autoconfig::Overrides`]); a change restarts a
 //!   running model as soon as no request is in flight.
@@ -15,20 +14,13 @@
 
 use std::sync::Mutex;
 
-use grokhub_agent::route::local::{self, LocalFirst};
+use grokhub_agent::route::local;
 use grokhub_agent::route::{local_autoconfig, local_gov, local_perf, local_sidecar};
 use grokhub_core::local_governor::Rules;
 
 use super::*;
 use crate::config::LocalTuning;
 
-const FIRST_ROW: &str = "Local AI for chats";
-const FIRST_HINT: &str = "When the on-device model answers while you're online. Offline, or with no sign-in or key, it answers anyway. A model picked under \"Use for your chats\" wins, and while a game keeps the device busy the cloud answers.";
-const FIRST_LABELS: [&str; 3] = [
-    "Only when nothing else can answer",
-    "First for your chats",
-    "For everything it can run",
-];
 const CTX_ROW: &str = "Context size";
 const CTX_HINT: &str = "How much of the chat the local model keeps in view. Auto fits your memory; a bigger size loads slower and may move layers off the GPU.";
 const CTX_CHOICES: [(&str, u32); 6] = [
@@ -101,7 +93,6 @@ pub(super) fn launch_changed(a: &LocalTuning, b: &LocalTuning) -> bool {
 /// Hand a tuning to the router and the launcher. `restart` asks a running
 /// model to relaunch when the launch knobs changed from `prev`.
 fn apply(t: &LocalTuning, prev: Option<&LocalTuning>) {
-    local::set_first(LocalFirst::parse(&t.first));
     local_autoconfig::set_overrides(overrides_for(t, local_perf::physical_cores()));
     local_perf::set_ctx_override((t.ctx > 0).then(|| u64::from(t.ctx)));
     if t.ctx > 0 {
@@ -226,17 +217,6 @@ impl Cabin {
         let before = self.cfg.local_tuning.clone();
         let mut t = before.clone();
 
-        let first = LocalFirst::parse(&t.first);
-        let labels: Vec<String> = FIRST_LABELS.iter().map(|l| l.to_string()).collect();
-        let picked = labels[first as usize].clone();
-        if let Some(i) =
-            crate::cards::settings_dropdown(ui, FIRST_ROW, FIRST_HINT, &picked, &labels)
-        {
-            t.first = [LocalFirst::Fallback, LocalFirst::Chat, LocalFirst::All][i.min(2)]
-                .as_str()
-                .to_string();
-        }
-
         let labels: Vec<String> = CTX_CHOICES.iter().map(|(l, _)| l.to_string()).collect();
         let picked = CTX_CHOICES
             .iter()
@@ -330,9 +310,8 @@ impl Cabin {
 mod tests {
     use super::*;
 
-    fn tuning(first: &str, ctx: u32, gpu: &str, threads: &str, keep: bool) -> LocalTuning {
+    fn tuning(ctx: u32, gpu: &str, threads: &str, keep: bool) -> LocalTuning {
         LocalTuning {
-            first: first.into(),
             ctx,
             gpu: gpu.into(),
             threads: threads.into(),
@@ -341,28 +320,24 @@ mod tests {
     }
 
     #[test]
-    fn tuning_maps_to_launch_overrides_and_the_router_mode() {
+    fn tuning_maps_to_launch_overrides() {
         let auto = overrides_for(&LocalTuning::default(), Some(16));
         assert_eq!(auto, local_autoconfig::Overrides::default());
-        let manual = overrides_for(&tuning("chat", 16_384, "all", "half", true), Some(16));
+        let manual = overrides_for(&tuning(16_384, "all", "half", true), Some(16));
         assert_eq!(
             (manual.ngl, manual.ctx, manual.threads, manual.kv),
             (Some(u32::MAX), Some(16_384), Some(8), None)
         );
-        let cpu = overrides_for(&tuning("all", 0, "cpu", "all", false), None);
+        let cpu = overrides_for(&tuning(0, "cpu", "all", false), None);
         assert_eq!(
             (cpu.ngl, cpu.ctx, cpu.threads),
             (Some(0), None, Some(u32::MAX))
         );
         // Half of an unknown core count still gives a sane positive number.
         assert_eq!(
-            overrides_for(&tuning("", 0, "", "half", false), None).threads,
+            overrides_for(&tuning(0, "", "half", false), None).threads,
             Some(4)
         );
-        assert_eq!(LocalFirst::parse("chat"), LocalFirst::Chat);
-        assert_eq!(LocalFirst::parse("all"), LocalFirst::All);
-        assert_eq!(LocalFirst::parse("anything else"), LocalFirst::Fallback);
-        assert_eq!(LocalFirst::All.as_str(), "all");
     }
 
     #[test]
@@ -426,10 +401,10 @@ mod tests {
     #[test]
     fn only_launch_knobs_ask_for_a_relaunch() {
         let base = LocalTuning::default();
-        assert!(!launch_changed(&base, &tuning("all", 0, "", "", true)));
-        assert!(launch_changed(&base, &tuning("", 8_192, "", "", false)));
-        assert!(launch_changed(&base, &tuning("", 0, "cpu", "", false)));
-        assert!(launch_changed(&base, &tuning("", 0, "", "all", false)));
+        assert!(!launch_changed(&base, &tuning(0, "", "", true)));
+        assert!(launch_changed(&base, &tuning(8_192, "", "", false)));
+        assert!(launch_changed(&base, &tuning(0, "cpu", "", false)));
+        assert!(launch_changed(&base, &tuning(0, "", "all", false)));
     }
 
     #[test]
@@ -453,8 +428,6 @@ mod tests {
             })
             .collect();
         for want in [
-            FIRST_ROW,
-            FIRST_LABELS[0],
             CTX_ROW,
             "Auto",
             GPU_ROW,

@@ -35,9 +35,6 @@ pub(super) fn token_budget_notice(
 }
 
 /// Settings → Cabin defaults rows.
-pub(super) const FAST_ROW: &str = "Use Grok 4.7 Fast when you're waiting";
-pub(super) const FAST_HINT: &str =
-    "Auto may use the faster Grok 4.7 Fast (about twice the usage) only while you wait on a reply. Never for background work. Off means never.";
 pub(super) const CAP_ROW: &str = "Weekly spend cap";
 const CAP_HINT: &str = "API key only. At 80% background work moves to cheaper settings. At 100% it pauses and chats ask first.";
 pub(super) const CEILING_ROW: &str = "Price limit";
@@ -133,7 +130,6 @@ pub(super) struct BudgetUi {
 impl Cabin {
     fn spend_settings(&self) -> SpendSettings {
         SpendSettings {
-            fast_when_waiting: self.cfg.fast_when_waiting,
             weekly_cap_usd: self.cfg.weekly_spend_cap_usd as f64,
             ceiling_usd_per_m: self.cfg.price_ceiling_usd_per_m as f64,
         }
@@ -398,10 +394,9 @@ impl Cabin {
         }
     }
 
-    /// Settings → Cabin defaults: the Fast toggle, the weekly cap, the price limit.
+    /// Settings → Cabin defaults: the weekly cap and the price limit.
     pub(super) fn ui_spend_rows(&mut self, ui: &mut egui::Ui) {
-        let mut changed =
-            crate::cards::settings_toggle(ui, FAST_ROW, FAST_HINT, &mut self.cfg.fast_when_waiting);
+        let mut changed = false;
         let caps: Vec<String> = CAPS.iter().map(|c| cap_label(*c)).collect();
         if let Some(i) = crate::cards::settings_dropdown(
             ui,
@@ -629,9 +624,8 @@ mod tests {
     }
 
     #[test]
-    fn spend_settings_reach_the_router_and_fast_is_on_by_default() {
+    fn spend_settings_reach_the_router() {
         let mut app = Cabin::quiet_for_test();
-        assert!(app.cfg.fast_when_waiting);
         assert_eq!(
             (
                 app.cfg.weekly_spend_cap_usd,
@@ -639,13 +633,11 @@ mod tests {
             ),
             (0, 15)
         );
-        app.cfg.fast_when_waiting = false;
         app.cfg.weekly_spend_cap_usd = 25;
         app.sync_spend();
         assert_eq!(
             spend::spend_settings(),
             SpendSettings {
-                fast_when_waiting: false,
                 weekly_cap_usd: 25.0,
                 ceiling_usd_per_m: 15.0
             }

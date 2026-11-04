@@ -37,11 +37,9 @@ const CARD_MIN_W: f32 = 170.0;
 const DETAIL_ICON: f32 = 96.0;
 /// A Try it that has not answered by then shows a timeout instead of spinning.
 const TRY_IT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
-/// Signed out with no provider or local model: the neutral line where Try it sits.
-pub(super) const TRY_IT_SIGN_IN: &str = "Sign in or add a provider to hear a sample.";
+/// Signed out with no local model: the neutral line where Try it sits.
+pub(super) const TRY_IT_SIGN_IN: &str = "Sign in or turn on Local AI to hear a sample.";
 const TRY_IT_SIGN_IN_LINK: &str = "Open Account";
-const TRY_IT_NO_PROVIDER: &str =
-    "Your provider needs its key and permission first. Check Settings, then try again.";
 /// Slots build.rs watches under `assets/personalities/<id>/`.
 const PHOTO_SLOTS: u8 = 5;
 const _: u8 = PHOTO_SLOTS;
@@ -111,23 +109,10 @@ pub(super) struct PickerState {
 /// Where a Try it goes: the same place your chats do.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum TryRoute {
-    /// The provider model you picked for your chats (`<provider>/<model>`).
-    Provider(String),
     /// Grok, with this bearer.
     Xai(String),
     /// The model on this computer.
     Local,
-}
-
-/// The sample request, ready for a provider or the local model.
-fn try_it_input(p: &Personality) -> Vec<grokhub_agent::InputItem> {
-    personality::try_it_messages(p)
-        .into_iter()
-        .map(|(role, text)| grokhub_agent::InputItem::Message {
-            role,
-            content: vec![grokhub_agent::ContentPart::InputText(text)],
-        })
-        .collect()
 }
 
 /// Runs one Try it on its route. Off the UI thread. Every route ends within
@@ -152,29 +137,6 @@ fn run_try_it(
                 Ok(text)
             }
         }),
-        TryRoute::Provider(model) => {
-            let req = grokhub_agent::ResponsesRequest {
-                text_format: None,
-                model: model.clone(),
-                effort: None,
-                input: try_it_input(p),
-                conversation_id: format!("try-it-{}", p.id),
-                tools: Vec::new(),
-                hosted_search: false,
-                call_timeout: Some(TRY_IT_TIMEOUT),
-            };
-            grokhub_agent::route::providers::call_model(
-                &crate::config::config_dir(),
-                &model,
-                None,
-                &req,
-                grokhub_agent::route::providers::CALL_DATA,
-                &format!("try-it:{}", grokhub_core::now_ms()),
-                cancel,
-            )
-            .map(|out| out.text)
-            .map_err(|e| e.to_string())
-        }
         TryRoute::Local => {
             // The local model takes one user turn: the voice rules ride in front.
             let text = personality::try_it_messages(p)
@@ -575,22 +537,8 @@ impl Cabin {
         self.status = format!("Deleted {name}");
     }
 
-    /// Where a Try it goes now, in the order chats use: your provider model while its
-    /// key and grant are there, then Grok, then the model on this computer.
-    /// `explicit`: the preset is an 18+ voice, so a provider that bans adult chat
-    /// (or, like OpenRouter, may pass it to one that does) is skipped for Grok.
-    pub(super) fn try_route(&mut self, explicit: bool) -> Option<TryRoute> {
-        let pick = self.cfg.provider_model.trim().to_string();
-        if let Some((pid, _)) = grokhub_core::model_registry::split_provider_model(&pick) {
-            let dir = crate::config::config_dir();
-            let usable = grokhub_agent::route::providers::usable(
-                &dir,
-                grokhub_agent::route::providers::CALL_DATA,
-            );
-            if takes_adult(&dir, &pick, explicit) && usable.iter().any(|u| u == pid) {
-                return Some(TryRoute::Provider(pick));
-            }
-        }
+    /// Where a Try it goes now: Grok, then the model on this computer.
+    pub(super) fn try_route(&mut self) -> Option<TryRoute> {
         if self.llm_ready() {
             return Some(TryRoute::Xai(self.bearer()));
         }
@@ -599,25 +547,18 @@ impl Cabin {
     }
 
     /// Cheap per-frame check for the Selected card: is there anywhere a Try it could go?
-    /// [`Self::try_route`] makes the real choice on click. `explicit`: the shown preset
-    /// is an 18+ voice, so a provider pick only counts when it may take adult chat.
-    pub(super) fn can_try(&self, explicit: bool) -> bool {
-        let pick = self.cfg.provider_model.trim();
-        (!pick.is_empty() && takes_adult(&crate::config::config_dir(), pick, explicit))
-            || self.llm_ready()
-            || (self.cfg.local_model && grokhub_agent::route::local::installed())
+    /// [`Self::try_route`] makes the real choice on click.
+    pub(super) fn can_try(&self) -> bool {
+        self.llm_ready() || (self.cfg.local_model && grokhub_agent::route::local::installed())
     }
 
     fn try_personality(&mut self, id: &str) {
-        let explicit = personality::lookup(&presets_dir(), id).explicit;
-        let Some(route) = self.try_route(explicit) else {
+        let Some(route) = self.try_route() else {
             // A Try it still running would land its reply over this line.
             self.cancel_try_it();
             self.picker.rx = None;
             // Signed out: the card shows the sign-in line, never a red failure.
-            // A provider pick without its key or grant says what is missing.
-            self.picker.shown = (!self.cfg.provider_model.trim().is_empty())
-                .then(|| (id.to_string(), TryState::Failed(TRY_IT_NO_PROVIDER.into())));
+            self.picker.shown = None;
             return;
         };
         self.start_try_it(id, route);
@@ -738,7 +679,7 @@ impl Cabin {
             .filter(|id| presets.iter().any(|p| p.id == *id))
             .unwrap_or(focus.clone());
         let showcased = personality::find(&presets, &showcase_id);
-        let can_try = self.can_try(showcased.explicit);
+        let can_try = self.can_try();
         let mut act_on: Option<CardAct> = None;
         let mut hover_id: Option<String> = None;
         let avail_raw = ui.available_width().max(1.0);
@@ -1579,17 +1520,6 @@ fn paint_detail_panel(
     act
 }
 
-/// A provider pick may take this Try it: always for a clean voice; for an 18+ one only
-/// when it is xAI or this computer's, since the others ban adult chat (or, like
-/// OpenRouter, may pass it to a model that does).
-fn takes_adult(dir: &std::path::Path, pick: &str, explicit: bool) -> bool {
-    !explicit
-        || matches!(
-            grokhub_agent::route::providers::dest(dir, pick),
-            grokhub_core::adult_guard::Dest::Xai | grokhub_core::adult_guard::Dest::Local
-        )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1924,10 +1854,9 @@ mod tests {
         let (_lock, _root, mut cabin) = cabin_with_chat();
         cabin.cfg.api_key.clear();
         cabin.secrets = Default::default();
-        cabin.cfg.provider_model.clear();
         cabin.cfg.local_model = false;
-        assert!(!cabin.can_try(false));
-        assert_eq!(cabin.try_route(false), None);
+        assert!(!cabin.can_try());
+        assert_eq!(cabin.try_route(), None);
         // Nothing turns red: no failure is stored, and nothing runs.
         cabin.try_personality("pirate");
         assert_eq!(cabin.picker.shown, None);
@@ -1978,30 +1907,13 @@ mod tests {
         cabin.cfg.api_key.clear();
         cabin.secrets = Default::default();
         cabin.cfg.local_model = false;
-        // A provider pick without its key or grant says what is missing.
-        cabin.cfg.provider_model = "openrouter/vendor/model-x".into();
-        assert!(cabin.can_try(false));
-        // An 18+ voice can't go to that provider, so with nothing else there's no Try it.
-        assert!(!cabin.can_try(true));
-        assert_eq!(cabin.try_route(true), None);
-        assert_eq!(cabin.try_route(false), None);
-        cabin.try_personality("pirate");
-        assert_eq!(
-            cabin.picker.shown,
-            Some((
-                "pirate".to_string(),
-                TryState::Failed(TRY_IT_NO_PROVIDER.into())
-            ))
-        );
-        // With a console key, an unusable provider pick falls back to Grok.
+        assert!(!cabin.can_try());
+        assert_eq!(cabin.try_route(), None);
+        // With a console key, it goes to Grok (an 18+ voice too).
         cabin.cfg.api_key = "sk-abcdefghijklmnopqrstuv".into();
+        assert!(cabin.can_try());
         assert_eq!(
-            cabin.try_route(false),
-            Some(TryRoute::Xai("sk-abcdefghijklmnopqrstuv".into()))
-        );
-        assert!(cabin.can_try(true), "an 18+ voice can try it on Grok");
-        assert_eq!(
-            cabin.try_route(true),
+            cabin.try_route(),
             Some(TryRoute::Xai("sk-abcdefghijklmnopqrstuv".into()))
         );
     }
@@ -2039,23 +1951,18 @@ mod tests {
     #[test]
     fn a_try_it_with_nowhere_to_go_still_stops_the_one_running() {
         let (_lock, _root, mut cabin) = cabin_with_chat();
-        cabin.cfg.provider_model = "openrouter/vendor/x".into();
+        cabin.cfg.api_key.clear();
+        cabin.secrets = Default::default();
+        cabin.cfg.local_model = false;
         let first = grokhub_agent::CancelToken::new();
         cabin.picker.cancel = Some(first.clone());
         let (_tx, rx) = mpsc::channel();
         cabin.picker.rx = Some(rx);
-        assert_eq!(
-            cabin.try_route(false),
-            None,
-            "no key or grant for that provider"
-        );
+        assert_eq!(cabin.try_route(), None, "signed out, no local model");
         cabin.try_personality("pirate");
         assert!(first.is_cancelled(), "the earlier call is stopped");
         assert!(cabin.picker.rx.is_none(), "its late reply can't land");
-        assert_eq!(
-            cabin.picker.shown,
-            Some(("pirate".into(), TryState::Failed(TRY_IT_NO_PROVIDER.into())))
-        );
+        assert_eq!(cabin.picker.shown, None, "signed out stays neutral");
     }
 
     #[test]
@@ -2063,8 +1970,8 @@ mod tests {
         let (_lock, _root, mut cabin) = cabin_with_chat();
         let first = grokhub_agent::CancelToken::new();
         cabin.picker.cancel = Some(first.clone());
-        // A provider nobody added: the worker fails at once, nothing is sent.
-        cabin.start_try_it("pirate", TryRoute::Provider("openrouter/vendor/x".into()));
+        // No local runtime here: the worker fails at once, nothing is sent.
+        cabin.start_try_it("pirate", TryRoute::Local);
         assert!(first.is_cancelled(), "the replaced call is stopped");
         let second = cabin.picker.cancel.clone().expect("the new call's token");
         assert!(!second.is_cancelled());

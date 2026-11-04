@@ -38,6 +38,8 @@ impl WorkflowVerb {
 
 /// What `/effort` says now. It changes nothing.
 pub const EFFORT_AUTO_MSG: &str = "Effort is automatic now, see /why";
+/// `/model` and `/mode`: Auto picks the model for each step; nothing is saved.
+pub const MODEL_AUTO_MSG: &str = "The model is automatic now, see /why";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Slash {
@@ -394,7 +396,7 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     },
     SlashDef {
         cmd: "/mode",
-        hint: "Set mode…",
+        hint: "The model is automatic now",
         insert: "/mode ",
         run_on_pick: false,
     },
@@ -784,7 +786,7 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     },
     SlashDef {
         cmd: "/model",
-        hint: "Set the chat model…",
+        hint: "The model is automatic now",
         insert: "/model ",
         run_on_pick: false,
     },
@@ -949,7 +951,7 @@ pub fn slash_help() -> String {
         "/automations changes — automations {product} made or changed on its own, each with Undo",
         "/plugins /marketplace /mcps — connectors",
         "/hooks — open Connectors with the Hooks section in view",
-        "/model <id> — chat model for {product}",
+        "/model — the model is automatic now; see /why",
         "/imagine-video <prompt> — Imagine video",
         "/goal <objective> — pin a goal",
         "Skill slashes such as /create-skill run that skill in chat.",
@@ -1001,7 +1003,7 @@ pub fn slash_help() -> String {
         "/brief — weekly systems briefing from local records",
         "/fix — halt + doctor",
         "/remember <fact> — write MEMORY.md",
-        "/mode auto|fast|balance|think|max — legacy composer ladder (effort is automatic now)",
+        "/mode — the model and effort are automatic now; see /why",
         "/dream — Imagine last night",
         "/tools — same as /host",
         "/import — OpenClaw workspace",

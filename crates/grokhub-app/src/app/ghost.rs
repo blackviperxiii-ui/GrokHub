@@ -307,7 +307,7 @@ impl Cabin {
         let slash_open = !filter_slash_hits(&self.composer, &self.grok_commands).is_empty();
         let cursor = self.composer_cursor_index(ctx, composer_id);
         let attach_fp = self.attach_fingerprint();
-        let model = resolve_chat_model(&self.cfg.mode, &self.cfg.model);
+        let model = grokhub_agent::DEFAULT_MODEL.to_string();
         let api_key = self.bearer();
         self.composer_ghost.frame(
             self.cfg.composer_autocomplete,

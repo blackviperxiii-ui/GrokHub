@@ -461,11 +461,8 @@ impl Cabin {
             draft: &self.composer,
             grok_connected: self.cabin_signed_in(),
             host_on: false,
-            mode: if self.cfg.mode.trim().is_empty() {
-                "auto"
-            } else {
-                self.cfg.mode.as_str()
-            },
+            // The router alone picks the model: chips always see Auto.
+            mode: "auto",
             thread_title: &title,
             usage_messages: self.usage.messages,
             usage_cap: self.cfg.daily_auto_cap,
@@ -601,11 +598,7 @@ impl Cabin {
             return;
         }
         let hour = Self::chip_hour();
-        let mode = if self.cfg.mode.trim().is_empty() {
-            "auto"
-        } else {
-            self.cfg.mode.as_str()
-        };
+        let mode = "auto";
         let tag = context_fingerprint(
             &self.chip_chat_pairs(),
             &self.composer,

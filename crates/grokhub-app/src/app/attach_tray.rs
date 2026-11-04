@@ -94,8 +94,8 @@ impl AttachTray {
     }
 }
 
-fn chat_input_modalities(cabin: &Cabin) -> Vec<String> {
-    let model = resolve_chat_model(&cabin.cfg.mode, &cabin.cfg.model);
+fn chat_input_modalities() -> Vec<String> {
+    let model = grokhub_agent::DEFAULT_MODEL.to_string();
     let dir = crate::config::config_dir();
     let reg = load_registry(&dir);
     if let Some(m) = reg.models.get(&model) {
@@ -299,7 +299,7 @@ impl Cabin {
                 }
                 match self.attach_tray.queue.stage(path.clone(), size_bytes) {
                     Ok(()) => {
-                        let mods = chat_input_modalities(self);
+                        let mods = chat_input_modalities();
                         self.attach_tray.apply_modalities(&modality_refs(&mods));
                         let row = AttachTrayRow {
                             preparing: false,
@@ -361,7 +361,7 @@ impl Cabin {
             vision_url: ready.image_url,
             worker_err: None,
         });
-        let mods = chat_input_modalities(self);
+        let mods = chat_input_modalities();
         self.attach_tray.apply_modalities(&modality_refs(&mods));
         self.sync_legacy_attach_from_tray();
         self.status = chat_attach_status(ready.kind, &ready.name);
@@ -501,7 +501,7 @@ impl Cabin {
         if self.attach_tray.is_empty() {
             return;
         }
-        let mods = chat_input_modalities(self);
+        let mods = chat_input_modalities();
         self.attach_tray.apply_modalities(&modality_refs(&mods));
         let ctx = ui.ctx().clone();
         let thumbs: Vec<(usize, ColorImage)> = self

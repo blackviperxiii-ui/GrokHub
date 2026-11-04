@@ -138,15 +138,15 @@ fn always_permission_keeps_the_acp_session() {
         "/auto must not clone every thread — bump the idle key so persist_bg skips: {auto}"
     );
     let mode = src
-        .split("Slash::Mode(mode)")
+        .split("Slash::Mode(_)")
         .nth(1)
         .and_then(|s| s.split("Slash::Dream").next())
         .expect("Mode");
     assert!(
-        mode.contains("self.persist_cfg()")
+        !mode.contains("self.persist_cfg()")
             && !mode.contains("self.persist()")
             && !mode.contains("persist_snap"),
-        "/mode must not clone every thread just to write app.json: {mode}"
+        "/mode saves nothing now (the router picks the model): {mode}"
     );
     let appearance = src
         .split("SettingsSec::Appearance => {")
@@ -289,35 +289,6 @@ fn always_permission_keeps_the_acp_session() {
     assert!(
         plan.contains("hold_chat_name_for_plan"),
         "/plan must keep the chat name when it clears the session id: {plan}"
-    );
-}
-
-#[test]
-fn mode_status_does_not_treat_ladder_default_as_auto_pin() {
-    assert_eq!(
-        super::slash::mode_status_line("auto", "grok-3-mini-fast"),
-        "Mode auto — routes Fast / Balance / Think / Max"
-    );
-    assert_eq!(
-        super::slash::mode_status_line("auto", "grok-4.6"),
-        "Mode auto — routes Fast / Balance / Think / Max"
-    );
-    assert_eq!(
-        super::slash::mode_status_line("auto", "grok-4.7"),
-        "Mode auto — routes Fast / Balance / Think / Max"
-    );
-    assert_eq!(
-        super::slash::mode_status_line("auto", "grok-3"),
-        "Mode auto → grok-4.3",
-        "a pin on retired grok-3 goes to grok-4.3, which xAI serves it with"
-    );
-    assert_eq!(
-        super::slash::mode_status_line("think", "grok-3"),
-        "Mode think → grok-4.7 · high"
-    );
-    assert_eq!(
-        super::slash::mode_status_line("max", ""),
-        "Mode max → grok-4.7 · xhigh"
     );
 }
 

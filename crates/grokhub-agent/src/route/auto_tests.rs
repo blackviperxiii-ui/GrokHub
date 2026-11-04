@@ -100,7 +100,6 @@ fn ask<'a>(class: &'a str, model: &'a str) -> RouteInput<'a> {
         class,
         current_model: model,
         current_effort: None,
-        pinned: false,
         d: 0.5,
         needs_tools: !class.starts_with("background:") && class != "chat:quick",
         ..RouteInput::default()

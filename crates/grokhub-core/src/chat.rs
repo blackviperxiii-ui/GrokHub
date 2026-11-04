@@ -13,16 +13,6 @@ pub const CABIN_FAST_FALLBACK: &str = "grok-4.5";
 /// and the thread goal. The composer's effort is for what you type.
 pub const BACKGROUND_EFFORT: &str = "low";
 
-/// Model passed to `grok -p --model`. An empty pin uses [`CABIN_FAST_MODEL`].
-pub fn cabin_spawn_model(pinned: &str) -> &str {
-    let t = pinned.trim();
-    if t.is_empty() {
-        CABIN_FAST_MODEL
-    } else {
-        t
-    }
-}
-
 pub fn needs_auth_banner(has_key: bool) -> bool {
     !has_key
 }
@@ -230,87 +220,6 @@ pub fn model_for_mode(mode: &str) -> &'static str {
         "balanced" | "balance" => "grok-4.3",
         "auto" | "fast" => "grok-4.3",
         _ => DEFAULT_MODEL,
-    }
-}
-
-/// Legacy Max and Think send Grok 4.7. Balance and Fast send Grok 4.3.
-/// Auto keeps a real Settings pin; leftover ladder defaults do not count.
-pub fn resolve_chat_model(mode: &str, model: &str) -> String {
-    match mode.trim() {
-        "max" | "deep" | "heavy" | "think" | "build" | "expert" | "balanced" | "balance"
-        | "fast" => model_for_mode(mode.trim()).to_string(),
-        _ if settings_pin_blocks_auto(model) => {
-            crate::models::sanitize_chat_model(model).to_string()
-        }
-        mode if !mode.is_empty() => model_for_mode(mode).to_string(),
-        _ => DEFAULT_MODEL.to_string(),
-    }
-}
-
-/// Models the composer ladder already owns. `/mode` used to write these into
-/// the Settings pin, which made Auto look pinned and never route.
-pub fn is_composer_ladder_model(model: &str) -> bool {
-    matches!(
-        model.trim(),
-        "grok-3-mini-fast" | "grok-4.3" | "grok-4.6" | "grok-4.7"
-    )
-}
-
-/// A Settings chat-model pin skips Auto. Ladder defaults do not count as a pin.
-pub fn settings_pin_blocks_auto(pinned_model: &str) -> bool {
-    let pin = pinned_model.trim();
-    !pin.is_empty() && !is_composer_ladder_model(pin)
-}
-
-/// Auto picks Fast / Balance / Think / Max from the ask. A Settings chat-model pin skips this.
-pub fn route_auto_mode(prompt: &str) -> &'static str {
-    let t = prompt.to_ascii_lowercase();
-    let len = prompt.chars().count();
-    if len > 4000 || contains_any(&t, MAX_ROUTE_SIGNALS) {
-        return "max";
-    }
-    if len > 800 || contains_any(&t, THINK_ROUTE_SIGNALS) {
-        return "think";
-    }
-    if len > 160 || contains_any(&t, BALANCE_ROUTE_SIGNALS) {
-        return "balanced";
-    }
-    "fast"
-}
-
-const MAX_ROUTE_SIGNALS: &[&str] = &[
-    "think as hard as possible",
-    "maximum effort",
-    "deepest model",
-    "xhigh",
-];
-
-const THINK_ROUTE_SIGNALS: &[&str] = &[
-    "architect",
-    "root cause",
-    "step by step",
-    "debug",
-    "refactor",
-    "implement",
-    "design a",
-    "prove ",
-];
-
-const BALANCE_ROUTE_SIGNALS: &[&str] = &[
-    "explain", "compare", "why ", "how does", "review", "write a",
-];
-
-fn contains_any(hay: &str, needles: &[&str]) -> bool {
-    needles.iter().any(|n| hay.contains(n))
-}
-
-pub fn effective_chat_mode(mode: &str, prompt: &str, pinned_model: &str) -> String {
-    let mode = mode.trim();
-    let mode = if mode.is_empty() { "auto" } else { mode };
-    if matches!(mode, "auto" | "adaptive" | "smart") && !settings_pin_blocks_auto(pinned_model) {
-        route_auto_mode(prompt).to_string()
-    } else {
-        mode.to_string()
     }
 }
 
@@ -678,19 +587,6 @@ mod tests {
         assert_eq!(model_for_mode("heavy"), "grok-4.7");
         assert_eq!(reasoning_effort_for_mode("max"), Some("xhigh"));
         assert_ne!(model_for_mode("max"), "grok-4-latest");
-        assert_eq!(resolve_chat_model("max", "grok-3"), "grok-4.7");
-        assert_eq!(resolve_chat_model("max", ""), "grok-4.7");
-        assert_eq!(
-            resolve_chat_model("auto", "grok-3"),
-            "grok-4.3",
-            "a pin on retired grok-3 sends what xAI serves it with"
-        );
-        assert_eq!(resolve_chat_model("auto", ""), "grok-4.3");
-        assert_eq!(
-            resolve_chat_model("auto", "gpt-4"),
-            DEFAULT_MODEL,
-            "invalid Settings pin must not be sent to the API"
-        );
         assert_eq!(reasoning_effort_for_mode("max"), Some("xhigh"));
     }
 
@@ -712,9 +608,6 @@ mod tests {
         assert!(REASONING_EFFORTS
             .iter()
             .all(|(id, label)| *id != "max" && *label != "Max"));
-        assert_eq!(cabin_spawn_model(""), "grok-4.7");
-        assert_eq!(cabin_spawn_model("  "), "grok-4.7");
-        assert_eq!(cabin_spawn_model("grok-4.6"), "grok-4.6");
     }
 
     /// 2.10.87: Minimal is off the ladder. Saved `minimal` / `mini` load as Low.
@@ -737,8 +630,6 @@ mod tests {
         assert_eq!(model_for_mode("think"), "grok-4.7");
         assert_eq!(model_for_mode("build"), "grok-4.7");
         assert_eq!(model_for_mode("expert"), "grok-4.7");
-        assert_eq!(resolve_chat_model("think", "grok-3"), "grok-4.7");
-        assert_eq!(resolve_chat_model("think", ""), "grok-4.7");
         assert_eq!(reasoning_effort_for_mode("think"), Some("high"));
         assert_eq!(reasoning_effort_for_mode("max"), Some("xhigh"));
         assert_eq!(agent_reasoning_effort_for_mode("fast"), Some("low"));
@@ -768,8 +659,6 @@ mod tests {
     fn balance_is_grok_4_3() {
         assert_eq!(model_for_mode("balanced"), "grok-4.3");
         assert_eq!(model_for_mode("balance"), "grok-4.3");
-        assert_eq!(resolve_chat_model("balanced", "grok-4.6"), "grok-4.3");
-        assert_eq!(resolve_chat_model("balance", ""), "grok-4.3");
         assert_eq!(reasoning_effort_for_mode("balanced"), None);
         assert_eq!(reasoning_effort_for_mode("think"), Some("high"));
         let body = chat_request_body_for_mode("balanced", &[("user".into(), "hi".into())]);
@@ -816,134 +705,6 @@ mod tests {
             model_for_mode(crate::next_failover_tier("balanced")),
             "grok-4.3"
         );
-    }
-
-    #[test]
-    fn auto_routes_among_new_modes() {
-        assert_eq!(route_auto_mode("hi"), "fast");
-        assert_eq!(route_auto_mode("thanks"), "fast");
-        assert_eq!(
-            route_auto_mode("explain how rust ownership works in detail"),
-            "balanced"
-        );
-        assert_eq!(
-            route_auto_mode("architect a host-tool plan and implement the first slice"),
-            "think"
-        );
-        assert_eq!(
-            route_auto_mode("debug the root cause step by step and refactor the auth path"),
-            "think"
-        );
-        assert_eq!(
-            route_auto_mode("think as hard as possible about this proof"),
-            "max"
-        );
-        assert_eq!(model_for_mode(route_auto_mode("hi")), "grok-4.3");
-        assert_eq!(
-            reasoning_effort_for_mode(route_auto_mode("hi")),
-            Some("none")
-        );
-        assert_eq!(
-            model_for_mode(route_auto_mode(
-                "architect a host-tool plan and implement the first slice"
-            )),
-            "grok-4.7"
-        );
-        assert_eq!(
-            reasoning_effort_for_mode(route_auto_mode(
-                "architect a host-tool plan and implement the first slice"
-            )),
-            Some("high")
-        );
-        assert_eq!(
-            reasoning_effort_for_mode(route_auto_mode(
-                "think as hard as possible about this proof"
-            )),
-            Some("xhigh")
-        );
-        assert_eq!(effective_chat_mode("auto", "hi", ""), "fast");
-        assert_eq!(
-            effective_chat_mode(
-                "",
-                "architect a host-tool plan and implement the first slice",
-                ""
-            ),
-            "think",
-            "empty composer mode is Auto"
-        );
-        assert_eq!(
-            resolve_chat_model(&effective_chat_mode("", "hi", ""), ""),
-            "grok-4.3"
-        );
-        assert_eq!(effective_chat_mode("auto", "hi", "grok-3"), "auto");
-        assert_eq!(
-            effective_chat_mode(
-                "auto",
-                "architect a host-tool plan and implement the first slice",
-                ""
-            ),
-            "think"
-        );
-        assert_eq!(effective_chat_mode("think", "hi", ""), "think");
-        assert_eq!(effective_chat_mode("max", "hi", ""), "max");
-        assert_eq!(effective_chat_mode("balanced", "hi", ""), "balanced");
-    }
-
-    #[test]
-    fn auto_routes_when_pin_is_a_ladder_default() {
-        assert_eq!(
-            effective_chat_mode(
-                "auto",
-                "architect a host-tool plan and implement the first slice",
-                "grok-3-mini-fast"
-            ),
-            "think"
-        );
-        assert_eq!(
-            effective_chat_mode("auto", "hi", "grok-3-mini-fast"),
-            "fast"
-        );
-        assert_eq!(
-            effective_chat_mode(
-                "auto",
-                "explain how rust ownership works in detail",
-                "grok-4.3"
-            ),
-            "balanced"
-        );
-        assert_eq!(
-            effective_chat_mode(
-                "auto",
-                "think as hard as possible about this proof",
-                "grok-4.6"
-            ),
-            "max"
-        );
-        assert_eq!(
-            effective_chat_mode(
-                "auto",
-                "architect a host-tool plan and implement the first slice",
-                "grok-3"
-            ),
-            "auto"
-        );
-        assert_eq!(effective_chat_mode("auto", "hi", "grok-4-latest"), "auto");
-        assert_eq!(
-            resolve_chat_model(&effective_chat_mode("auto", "hi", "grok-4.6"), "grok-4.6"),
-            "grok-4.3"
-        );
-        assert_eq!(resolve_chat_model("fast", "grok-4.6"), "grok-4.3");
-        assert_eq!(resolve_chat_model("fast", "grok-3"), "grok-4.3");
-        assert!(settings_pin_blocks_auto("grok-3"));
-        assert!(settings_pin_blocks_auto("grok-4-latest"));
-        assert!(!settings_pin_blocks_auto("grok-3-mini-fast"));
-        assert!(!settings_pin_blocks_auto("grok-4.3"));
-        assert!(!settings_pin_blocks_auto("grok-4.6"));
-        assert!(!settings_pin_blocks_auto("grok-4.7"));
-        assert!(!settings_pin_blocks_auto(""));
-        assert!(is_composer_ladder_model("grok-4.6"));
-        assert!(is_composer_ladder_model("grok-4.7"));
-        assert!(!is_composer_ladder_model("grok-3"));
     }
 
     #[test]

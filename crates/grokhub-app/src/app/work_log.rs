@@ -52,11 +52,11 @@ fn tool_name(card: &ToolCard) -> String {
 }
 
 impl Cabin {
-    /// The model a run starts on: the cabin's model, or the device's tag while
+    /// The model a run starts on: the router's default, or the device's tag while
     /// the route falls back to Local AI. Resume compares against it (KB-03).
     pub(super) fn run_model(&self) -> String {
         res::run_model_tag(
-            grokhub_core::cabin_spawn_model(&self.cfg.model),
+            grokhub_agent::DEFAULT_MODEL,
             grokhub_agent::route::local::fallback_active(),
         )
     }

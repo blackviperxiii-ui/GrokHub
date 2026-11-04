@@ -93,88 +93,6 @@ pub fn set_enabled(on: bool) {
 
 static PROMPT_CLEANUP: AtomicBool = AtomicBool::new(false);
 
-/// Settings → Local AI → "Local AI for chats": when the on-device model takes
-/// a step while online and a cloud model could answer.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum LocalFirst {
-    /// Only when no cloud model can answer (offline, signed out, cloud down).
-    #[default]
-    Fallback,
-    /// Your chats go to the device first; background work keeps its cloud route.
-    Chat,
-    /// Every step the device can run ([`OFFLINE_CLASSES`]) goes to it.
-    All,
-}
-
-impl LocalFirst {
-    /// The `app.json` value (`""`, `"chat"`, `"all"`).
-    pub fn parse(s: &str) -> Self {
-        match s.trim() {
-            "chat" => Self::Chat,
-            "all" => Self::All,
-            _ => Self::Fallback,
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Fallback => "",
-            Self::Chat => "chat",
-            Self::All => "all",
-        }
-    }
-
-    fn from_u8(v: u8) -> Self {
-        match v {
-            1 => Self::Chat,
-            2 => Self::All,
-            _ => Self::Fallback,
-        }
-    }
-}
-
-static LOCAL_FIRST: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
-
-/// The cabin sets this from `app.json` next to [`set_enabled`].
-pub fn set_first(mode: LocalFirst) {
-    LOCAL_FIRST.store(mode as u8, Ordering::SeqCst);
-}
-
-/// "Local AI for chats", as last set.
-pub fn first() -> LocalFirst {
-    LocalFirst::from_u8(LOCAL_FIRST.load(Ordering::SeqCst))
-}
-
-/// A user-facing chat class (`chat:quick`, `chat:default`).
-fn is_chat_class(class: &str) -> bool {
-    class_row(class)
-        .map(|r| r.class)
-        .unwrap_or(class.trim())
-        .starts_with("chat:")
-}
-
-/// "Local AI for chats" sends this step to the device although a cloud model
-/// could take it: the switch is on, the mode covers the class, the device has
-/// room (the governor is not throttling it for a game or a busy GPU: then the
-/// cloud wins and the device stays the fallback), and the step fits the
-/// device as it would offline (never a cloud-only, hard-tool or
-/// `prepare:hard` step, and never one over the context cap).
-pub fn first_takes(gate: &LocalGate, class: &str, ctx_tokens: u64) -> bool {
-    let covers = match gate.first {
-        LocalFirst::Fallback => false,
-        LocalFirst::Chat => is_chat_class(class),
-        LocalFirst::All => true,
-    };
-    let as_offline = LocalGate {
-        offline: true,
-        ..gate.clone()
-    };
-    covers
-        && gate.enabled
-        && gate.capacity.background_ok()
-        && eligible(&as_offline, class, ctx_tokens)
-}
-
 /// LO-48: the cabin sets this from `app.json` `promptCleanup` (default
 /// `false`) next to [`set_enabled`]. [`super::cleanup::tidy`] runs only while
 /// it is on.
@@ -491,16 +409,7 @@ pub fn fallback_active() -> bool {
 /// model answering. Online with the cloud up, it loads on demand only.
 pub fn warm_wanted() -> bool {
     super::connectivity::sync_from_core();
-    super::connectivity::state().prefer_local() || fallback_active() || first_has_room()
-}
-
-/// "Local AI for chats" is on and the governor leaves the device room to
-/// take chats ([`first_takes`]). While a game or a busy GPU throttles it the
-/// cloud answers, so the model is not wanted loaded then: a game unloads it.
-fn first_has_room() -> bool {
-    switched_on()
-        && first() != LocalFirst::Fallback
-        && matches!(super::local_gov::level(), Level::RampUp | Level::Normal)
+    super::connectivity::state().prefer_local() || fallback_active()
 }
 
 /// What a route may do with the local model for one call.
@@ -523,8 +432,6 @@ pub struct LocalGate {
     pub local_verify_failed: bool,
     /// The governor's level and whether the runtime is there at all.
     pub capacity: LocalCapacity,
-    /// Settings → Local AI → "Local AI for chats".
-    pub first: LocalFirst,
 }
 
 impl LocalGate {
@@ -541,7 +448,6 @@ impl LocalGate {
             offline: super::connectivity::state().prefer_local(),
             offline_switch: grokhub_core::offline::enabled(),
             local_verify_failed: local_verify_failed(),
-            first: first(),
         }
     }
 }
@@ -915,7 +821,6 @@ pub fn serve_request(
         &mut req.input,
         live_tier(),
         super::local_sidecar::model_name(&crate::perm::config_dir()).as_deref(),
-        false,
     );
     // The device window is often 4k to 16k: send only what fits, with room to
     // answer. With or without tools, so a long chat is trimmed on the way

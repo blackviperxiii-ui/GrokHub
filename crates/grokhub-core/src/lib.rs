@@ -279,15 +279,14 @@ pub use channel::{
 };
 pub use chat::{
     accepts_effort_none, accepts_reasoning_effort, agent_reasoning_effort_for_mode,
-    cabin_spawn_model, chat_request_body, chat_request_body_for_mode, chat_request_body_images,
-    chat_request_body_vision, chat_timeout_secs, effective_chat_mode, effort_label,
-    extract_host_cmds, failover_model, is_composer_ladder_model, model_for_mode, needs_auth_banner,
-    paint_connect_banner, parse_chat_content, parse_chat_reasoning, parse_model_reasoning,
-    parse_model_text, parse_reasoning_effort, parse_responses_reasoning, parse_responses_text,
-    quick_effort, reasoning_effort_for_mode, resolve_chat_model, responses_request_body,
-    responses_request_body_images, responses_url, route_auto_mode, settings_pin_blocks_auto,
-    should_failover_status, BACKGROUND_EFFORT, CABIN_FAST_FALLBACK, CABIN_FAST_MODEL,
-    DEFAULT_MODEL, REASONING_EFFORTS, XAI_BASE,
+    chat_request_body, chat_request_body_for_mode, chat_request_body_images,
+    chat_request_body_vision, chat_timeout_secs, effort_label, extract_host_cmds, failover_model,
+    model_for_mode, needs_auth_banner, paint_connect_banner, parse_chat_content,
+    parse_chat_reasoning, parse_model_reasoning, parse_model_text, parse_reasoning_effort,
+    parse_responses_reasoning, parse_responses_text, quick_effort, reasoning_effort_for_mode,
+    responses_request_body, responses_request_body_images, responses_url, should_failover_status,
+    BACKGROUND_EFFORT, CABIN_FAST_FALLBACK, CABIN_FAST_MODEL, DEFAULT_MODEL, REASONING_EFFORTS,
+    XAI_BASE,
 };
 pub use chat_bubble::{
     bubble_max_width, bubble_outer_height, bubble_outer_width, bubble_wrap_width,
@@ -602,7 +601,7 @@ pub use slash::{
     filter_slash_commands, filter_slash_hits, grok_command_hits, is_cabin_slash_turn,
     mark_slash_result, parse_slash, resolve_mode_arg, slash_effect, slash_help, slash_kind,
     strip_slash_result, unknown_cabin_slash, Slash, SlashDef, SlashEffect, SlashHit, WorkflowVerb,
-    EFFORT_AUTO_MSG, SLASH_COMMANDS, SLASH_RESULT_PREFIX, SLASH_SAMPLES,
+    EFFORT_AUTO_MSG, MODEL_AUTO_MSG, SLASH_COMMANDS, SLASH_RESULT_PREFIX, SLASH_SAMPLES,
 };
 pub use ssrf::{
     guard_mcp_registry_url, host_name_blocked, ip_blocked, public_only_resolve, MCP_REGISTRY_HOST,

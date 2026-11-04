@@ -7,10 +7,6 @@
 //!
 //! Background classes never move on their own: they run at their start (the
 //! same effort they sent before R1) and only DE3 can lower them.
-//!
-//! Steady effort (opt-in, [`EffortSettings`]) slows E1: it climbs only after
-//! [`STEADY_STREAK`] failed tool steps in a row, a chat class climbs no higher
-//! than `high` on it, and the next clean step takes E1's rung back (`DE4`).
 
 use std::cell::Cell;
 use std::collections::BTreeMap;
@@ -187,30 +183,6 @@ pub struct Obs {
     pub budget_pct: Option<u8>,
     /// DE2: the rung this task's signature is known to succeed at ([`routine_rung`]).
     pub routine: Option<usize>,
-    /// Steady effort is on ([`EffortSettings`]). Off keeps E1 as it was.
-    pub steady: bool,
-}
-
-/// Steady effort: failed tool steps in a row before E1 climbs.
-pub const STEADY_STREAK: u8 = 2;
-
-/// Effort settings the cabin saves in `{config}/app.json`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct EffortSettings {
-    /// `steadyEffort` (Settings > Behavior). Off by default.
-    pub steady: bool,
-}
-
-impl EffortSettings {
-    /// Read `steadyEffort` from `{config}/app.json`. Missing or bad is off.
-    pub fn load(config_dir: &std::path::Path) -> Self {
-        let steady = std::fs::read_to_string(config_dir.join("app.json"))
-            .ok()
-            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-            .and_then(|v| v.get("steadyEffort").and_then(serde_json::Value::as_bool))
-            .unwrap_or(false);
-        Self { steady }
-    }
 }
 
 /// One episode's effort in one class.
@@ -227,10 +199,6 @@ pub struct EffortState {
     pub moved: Move,
     /// The user message this turn answers (a hash, never the text).
     pub turn: u64,
-    /// Steady effort: failed tool steps in a row.
-    pub fail_streak: u8,
-    /// Steady effort: E1 raised the rung this turn and no clean step took it back yet.
-    pub e1_raised: bool,
 }
 
 /// The ladder's pick for one call.
@@ -343,9 +311,7 @@ pub fn advance_holding(
         if fresh && obs.correction {
             up(&mut st, &mut rules, "E3");
         }
-        if !fresh && obs.steady {
-            steady_step(&mut st, &mut rules, class, band, obs, !hard && !hold_drops);
-        } else if !fresh {
+        if !fresh {
             if obs.tool_errors > 0 {
                 up(&mut st, &mut rules, "E1");
             } else if st.last_ok {
@@ -408,57 +374,6 @@ pub fn advance_holding(
         recover,
     };
     (st, pick)
-}
-
-/// Steady effort's E1 for one tool step. A failed step adds to the streak and
-/// climbs once the streak reaches [`STEADY_STREAK`] (a chat class stops at
-/// `high`). A step with no failed tool ends the streak; when it also came back
-/// fine and E1 raised the rung this turn, it drops that rung (`DE4`), unless a
-/// reject's hold, care-first or `prepare:hard` keeps drops off (`may_drop`).
-fn steady_step(
-    st: &mut EffortState,
-    rules: &mut Vec<String>,
-    class: &str,
-    band: Band,
-    obs: &Obs,
-    may_drop: bool,
-) {
-    if obs.tool_errors > 0 {
-        st.clean = 0;
-        st.fail_streak = st.fail_streak.saturating_add(1);
-        if st.fail_streak < STEADY_STREAK {
-            return;
-        }
-        let cap = if class.trim().starts_with("chat:") {
-            band.ceiling.min(high())
-        } else {
-            band.ceiling
-        };
-        if st.rung < cap {
-            st.rung += 1;
-            st.moved = Move::Up;
-            st.e1_raised = true;
-            rules.push("E1".into());
-        } else if st.rung < band.ceiling {
-            rules.push("E1:steady_cap".into());
-        } else {
-            rules.push("E1:ceiling".into());
-        }
-        return;
-    }
-    st.fail_streak = 0;
-    if !st.last_ok {
-        st.clean = 0;
-        return;
-    }
-    st.clean += 1;
-    if st.e1_raised && may_drop && !st.hold && st.rung > band.floor {
-        st.rung -= 1;
-        st.clean = 0;
-        st.e1_raised = false;
-        st.moved = Move::Down;
-        rules.push("DE4".into());
-    }
 }
 
 /// Clamp a rung to a model's effort list. Going up rounds up to the next
@@ -747,6 +662,51 @@ mod tests {
         assert_eq!(
             (name(p1.rung), p1.moved, p1.rules.clone()),
             ("high", Move::Up, vec!["E1".to_string()])
+        );
+    }
+
+    /// Moved from the retired steady-effort tests: with no switch any more,
+    /// every failed tool step climbs one rung, up to the class ceiling.
+    #[test]
+    fn each_failed_tool_step_climbs_one_rung_up_to_the_ceiling() {
+        let turn = |errors: &[u32]| {
+            let (mut s, _) = go(
+                None,
+                "chat:default",
+                Obs {
+                    new_turn: true,
+                    ..Obs::default()
+                },
+            );
+            let mut out = Vec::new();
+            for n in errors {
+                s.last_ok = true;
+                let (next, pick) = go(
+                    Some(&s),
+                    "chat:default",
+                    Obs {
+                        tool_errors: *n,
+                        ..Obs::default()
+                    },
+                );
+                out.push((name(pick.rung), pick.rules));
+                s = next;
+            }
+            out
+        };
+        let rules = |r: &[&str]| r.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            turn(&[1, 0]),
+            vec![("high", rules(&["E1"])), ("high", rules(&[]))]
+        );
+        assert_eq!(
+            turn(&[1, 1, 1, 0]),
+            vec![
+                ("high", rules(&["E1"])),
+                ("xhigh", rules(&["E1"])),
+                ("xhigh", rules(&["E1:ceiling"])),
+                ("xhigh", rules(&[])),
+            ]
         );
     }
 

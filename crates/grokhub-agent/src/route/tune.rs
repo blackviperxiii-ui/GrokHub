@@ -446,13 +446,12 @@ impl TuneState {
 
 /// A low-risk step the canary may serve: a soft class (not `prepare:hard`, not
 /// `repair:*`, not a hard tool step), not in the R1 holdout, not under a
-/// VerifyGate reject, not pinned by you.
+/// VerifyGate reject.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StepRisk<'a> {
     pub class: &'a str,
     pub holdout: bool,
     pub under_reject: bool,
-    pub pinned: bool,
     /// The step offers a send, delete, credential or other hard-class tool.
     pub hard_tool: bool,
 }
@@ -464,7 +463,6 @@ pub fn canary_eligible(r: &StepRisk<'_>) -> bool {
         && !class.starts_with("repair:")
         && !r.holdout
         && !r.under_reject
-        && !r.pinned
         && !r.hard_tool
 }
 

@@ -76,9 +76,8 @@ pub struct Signals {
     pub os_pressure: Option<bool>,
     /// Executable or app name of the foreground window, lowercase.
     pub foreground: Option<String>,
-    /// The on-device model is wanted loaded right now (offline, the cloud
-    /// down, or "Local AI for chats" while the device has room): a game then
-    /// throttles it instead of unloading it.
+    /// The on-device model is wanted loaded right now (offline, or the cloud
+    /// down): a game then throttles it instead of unloading it.
     pub needed: bool,
 }
 

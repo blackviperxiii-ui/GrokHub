@@ -81,43 +81,43 @@ use grokhub_core::{
     refresh_last_stretch, refund_host_reserved, release_inflight_card, remember_chip_click,
     remember_chip_dismiss, remember_chip_turn_outcome, remember_home_slash, remember_home_surface,
     remember_typed_prompt, rename_node, replay_automation_target, replay_ops, resolve_bind_path,
-    resolve_chat_model, restore_bound_path, retain_held_plan, reuse_empty_thread_idx, review_due,
-    rewind_allowed, rewind_blocked_reason, rewind_copy_cmd, rewind_dest, rewind_restore_matches,
+    restore_bound_path, retain_held_plan, reuse_empty_thread_idx, review_due, rewind_allowed,
+    rewind_blocked_reason, rewind_copy_cmd, rewind_dest, rewind_restore_matches,
     rewind_snapshot_ready, roll_usage_day, route_schedule, save_hub_state, screen_from_extents,
     scrolled_off_tail, search_corpus, search_corpus_tagged, search_place, search_thread_body,
-    seed_from_bound, settings_pin_blocks_auto, settings_update_hint, settings_update_label,
-    settle_inflight_card, settle_project_path, should_anticipate, should_capture_before_chat,
-    should_idle_reflect, should_keep_frame, should_name_thread, should_notify_cabin_update,
-    should_paint_greeting, should_seed_sidebar, should_send_screenshot, should_trim_result_bodies,
-    skill_follow_block, skill_from_suggestion, skill_offer_chip, skill_use_in_chat_prompt,
-    skip_night_check_receipt, slash_help, slash_kind, start_hub_rotates_pair, state_for_disk,
-    stretch_saved_skill, strip_thinking, suggestions_from_sessions, summarize_trajectory,
-    summarize_write, take_ui_text, teachable_steps, theme_label, thought_body_key,
-    thought_control_act, thought_fold_controls, thought_fold_draws, thought_shows_acts,
-    thought_shows_label, thread_host_receipts, thread_host_receipts_from, toggle_pin, token_delta,
-    tool_display_title, tool_group_label, tool_status_failed, tool_status_running,
-    top_habit_labels, topics_from_turns, trajectory_jsonl_line, transcribe_route,
-    trim_result_bodies_in_place, turn_needs_timeline, uid, unified_diff_cite, unknown_cabin_slash,
-    update_check_due, update_chip_label, update_cmds_for_host_in, update_wipes_config,
-    upsert_assistant_turn, upsert_bound, upsert_inflight_card, usage_line, user_pref_facts,
-    verify_ok_after_user_turn, views_up_to_last_user, visible_chat_refs, visible_tree,
-    visible_turn_count, visible_turn_count_from, voice_mode_label, voice_state_after_ptt_stt,
-    voice_strip_visible, voice_tts_script, wall_can_paint, wall_evict, wall_gif_from_generation,
-    worker_gone_status, yesterday_ms, AttachKind, Automation, BoardCard, BoardStatus, ChatKind,
-    ChatRunPhase, ChatSendKind, ChatView, ChipInput, ChipKind, ChipMemory, ChipThread,
-    ComposerEnter, ComposerGo, DeviceCodeStart, DigestLine, GreetingInput, GrokLoop, HeartbeatAct,
-    HeyGrokAction, HeyGrokRoute, HostPlanStep, HostRisk, HubMemoryFile, HubSnapshot, HubState,
-    ImagineKind, ImagineSpec, ImagineToolboxDock, ImagineWall, InhabitBundle, KanbanColumn,
-    LearningState, LiveBlock, LiveKind, LocalClock, PermKey, PlusAct, PlusTarget, Policy,
-    PresenceFrame, ProjectKind, ProjectMenuAct, ProjectNode, PttLine, QuickChip, Recipe, ReplayOp,
-    ReviewDigest, RewindRecord, ScheduleRoute, SkillMd, Slash, SlashHit, SuggestionStore,
-    ThoughtFold, ThreadReuseView, ThreadTab, TranscribeRoute, UpdatePending, UsageDay,
-    VerifyResult, VoiceState, WallGif, BUBBLE_PAD_X, BUBBLE_PAD_Y, CABIN_FAST_FALLBACK,
-    CABIN_FAST_MODEL, CABIN_GITHUB_TOOLS, CHAT_TAIL_FRAMES, CHAT_TAIL_SLACK, CHIP_VISIBLE_MAX,
-    CONTEXT_BUDGET_TOKENS, FRAME_CAP, GOAL_DROP_AFTER, HEARTBEAT_MS, HUB_KIND, IDLE_REFLECT_MS,
-    IMAGE_FILE_CAP, IMAGINE_ASPECTS, IMAGINE_STYLES, IMAGINE_WALL_GAP, LOOP_MAX, PRESENCE_RING_MS,
-    RESULT_TRIM_KEEP_HOPS, SKILL_SAVED_MARK, SKILL_SAVED_NOTE, TEXT_FILE_CAP, THOUGHT_ROW_LABEL,
-    TRANSCRIBERS, UPDATE_CHECK_EVERY, WALL_GIF_EVERY_MS, WALL_GIF_MAX,
+    seed_from_bound, settings_update_hint, settings_update_label, settle_inflight_card,
+    settle_project_path, should_anticipate, should_capture_before_chat, should_idle_reflect,
+    should_keep_frame, should_name_thread, should_notify_cabin_update, should_paint_greeting,
+    should_seed_sidebar, should_send_screenshot, should_trim_result_bodies, skill_follow_block,
+    skill_from_suggestion, skill_offer_chip, skill_use_in_chat_prompt, skip_night_check_receipt,
+    slash_help, slash_kind, start_hub_rotates_pair, state_for_disk, stretch_saved_skill,
+    strip_thinking, suggestions_from_sessions, summarize_trajectory, summarize_write, take_ui_text,
+    teachable_steps, theme_label, thought_body_key, thought_control_act, thought_fold_controls,
+    thought_fold_draws, thought_shows_acts, thought_shows_label, thread_host_receipts,
+    thread_host_receipts_from, toggle_pin, token_delta, tool_display_title, tool_group_label,
+    tool_status_failed, tool_status_running, top_habit_labels, topics_from_turns,
+    trajectory_jsonl_line, transcribe_route, trim_result_bodies_in_place, turn_needs_timeline, uid,
+    unified_diff_cite, unknown_cabin_slash, update_check_due, update_chip_label,
+    update_cmds_for_host_in, update_wipes_config, upsert_assistant_turn, upsert_bound,
+    upsert_inflight_card, usage_line, user_pref_facts, verify_ok_after_user_turn,
+    views_up_to_last_user, visible_chat_refs, visible_tree, visible_turn_count,
+    visible_turn_count_from, voice_mode_label, voice_state_after_ptt_stt, voice_strip_visible,
+    voice_tts_script, wall_can_paint, wall_evict, wall_gif_from_generation, worker_gone_status,
+    yesterday_ms, AttachKind, Automation, BoardCard, BoardStatus, ChatKind, ChatRunPhase,
+    ChatSendKind, ChatView, ChipInput, ChipKind, ChipMemory, ChipThread, ComposerEnter, ComposerGo,
+    DeviceCodeStart, DigestLine, GreetingInput, GrokLoop, HeartbeatAct, HeyGrokAction,
+    HeyGrokRoute, HostPlanStep, HostRisk, HubMemoryFile, HubSnapshot, HubState, ImagineKind,
+    ImagineSpec, ImagineToolboxDock, ImagineWall, InhabitBundle, KanbanColumn, LearningState,
+    LiveBlock, LiveKind, LocalClock, PermKey, PlusAct, PlusTarget, Policy, PresenceFrame,
+    ProjectKind, ProjectMenuAct, ProjectNode, PttLine, QuickChip, Recipe, ReplayOp, ReviewDigest,
+    RewindRecord, ScheduleRoute, SkillMd, Slash, SlashHit, SuggestionStore, ThoughtFold,
+    ThreadReuseView, ThreadTab, TranscribeRoute, UpdatePending, UsageDay, VerifyResult, VoiceState,
+    WallGif, BUBBLE_PAD_X, BUBBLE_PAD_Y, CABIN_FAST_FALLBACK, CABIN_FAST_MODEL, CABIN_GITHUB_TOOLS,
+    CHAT_TAIL_FRAMES, CHAT_TAIL_SLACK, CHIP_VISIBLE_MAX, CONTEXT_BUDGET_TOKENS, FRAME_CAP,
+    GOAL_DROP_AFTER, HEARTBEAT_MS, HUB_KIND, IDLE_REFLECT_MS, IMAGE_FILE_CAP, IMAGINE_ASPECTS,
+    IMAGINE_STYLES, IMAGINE_WALL_GAP, LOOP_MAX, PRESENCE_RING_MS, RESULT_TRIM_KEEP_HOPS,
+    SKILL_SAVED_MARK, SKILL_SAVED_NOTE, TEXT_FILE_CAP, THOUGHT_ROW_LABEL, TRANSCRIBERS,
+    UPDATE_CHECK_EVERY, WALL_GIF_EVERY_MS, WALL_GIF_MAX,
 };
 use grokhub_hub::serve_lan;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -211,7 +211,6 @@ mod mission_page;
 mod mission_ui;
 mod model_download_ui;
 mod model_drop_ui;
-mod model_prefs_ui;
 mod model_wait_ui;
 mod mods_ui;
 #[cfg(test)]
@@ -1558,8 +1557,8 @@ impl Cabin {
         };
         steps.mark("startup:new:fields");
         if !quiet {
-            // The router hears the saved pin, Local AI switch, provider pick
-            // and model preferences before anything can send.
+            // The router hears the Local AI switch, OpenRouter's data policy
+            // and the local tuning before anything can send.
             c.sync_router_pin();
             c.imagine_native.auth_rx = Some(crate::imagine_auth::begin_load());
             steps.mark("startup:new:imagine");
