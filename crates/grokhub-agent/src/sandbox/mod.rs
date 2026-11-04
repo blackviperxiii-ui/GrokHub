@@ -15,8 +15,8 @@
 //! permission policy and the consent ledger, so a command that could write it
 //! could loosen its own gate.
 
-#[cfg(target_os = "linux")]
 pub mod git_guard;
+#[cfg(target_os = "linux")]
 pub mod landlock;
 pub mod proxy;
 #[cfg(windows)]
