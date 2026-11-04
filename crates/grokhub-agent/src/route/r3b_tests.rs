@@ -2355,3 +2355,79 @@ fn a_batched_call_teaches_no_speed() {
     assert_eq!(lines[1]["latency_ms"], json!(0), "health takes no sample");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// xAI is down: the client's retries ran out on a 503.
+struct XaiDown;
+
+impl ModelClient for XaiDown {
+    fn stream(
+        &self,
+        _r: &ResponsesRequest,
+        _c: &CancelToken,
+        _s: &mut dyn FnMut(StreamEvent),
+    ) -> Result<TurnOutput, ClientError> {
+        Err(ClientError::Server {
+            status: 503,
+            message: "overloaded".into(),
+            retry_after_secs: None,
+        })
+    }
+}
+
+#[test]
+fn xai_down_hands_an_ordinary_turn_to_a_provider_then_to_this_computer() {
+    let (dir, wire) = setup("outage-fallback");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    save_registry(&dir, &fleet()).unwrap();
+    let send = |client: &dyn ModelClient, n: u32, lines: &[&str]| {
+        let mut shown = String::new();
+        let out = live::stream_routed(
+            client,
+            &chat(&format!("outage-{n}"), lines),
+            &CancelToken::new(),
+            &mut |ev| {
+                if let StreamEvent::TextDelta(t) = ev {
+                    shown.push_str(&t);
+                }
+            },
+            "chat:default",
+        );
+        (out, shown)
+    };
+    // Nothing else is set up: the outage is the answer.
+    let (out, _) = send(&XaiDown, 1, &["fix my wifi"]);
+    assert!(
+        matches!(out, Err(ClientError::Server { status: 503, .. })),
+        "{out:?}"
+    );
+    // This computer's model takes it.
+    {
+        let _on = super::local::ForceOn::with(Some(Arc::new(LocalChat)));
+        let (out, shown) = send(&XaiDown, 2, &["fix my wifi"]);
+        assert_eq!(out.unwrap().text, "local here");
+        assert_eq!(shown, "local here");
+    }
+    assert_eq!(wire.n(), 0);
+    // A provider you set up goes first, ahead of this computer's model.
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    grant_destination(&dir, OR_DEST, CALL_DATA, UserClick::from_click()).unwrap();
+    let _on = super::local::ForceOn::with(Some(Arc::new(LocalChat)));
+    let (out, shown) = send(&XaiDown, 3, &["fix my wifi"]);
+    assert_eq!(out.unwrap().text, "hello from the provider");
+    assert_eq!(shown, "hello from the provider");
+    assert_eq!(wire.n(), 1);
+    assert!(wire.bodies()[0].contains("\"model\":\"vendor/cheap\""));
+    let (_, rec) = last_routes(&dir).pop().expect("a route record");
+    assert_eq!(
+        (rec.used.provider.as_str(), rec.used.model.as_str()),
+        ("openrouter", OR_MODEL)
+    );
+    // A signed-out xAI is no outage: nothing stands in for it.
+    let (out, _) = send(&XaiSignedOut, 4, &["fix my wifi"]);
+    assert!(matches!(out, Err(ClientError::Auth { .. })), "{out:?}");
+    // An 18+ chat never goes to the provider: this computer's model answers.
+    let (out, _) = send(&XaiDown, 5, &["talk dirty to me, I'm horny"]);
+    assert!(out.unwrap().text.ends_with("local here"));
+    assert_eq!(wire.n(), 1, "nothing more reached the provider");
+    let _ = std::fs::remove_dir_all(dir);
+}
