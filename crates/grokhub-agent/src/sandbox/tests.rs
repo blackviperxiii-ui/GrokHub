@@ -453,12 +453,16 @@ fn a_failed_connection_in_its_own_network_gets_a_note_and_nothing_else_does() {
         isolation: Some(Isolation {
             hide: Vec::new(),
             bridge: Some((PathBuf::from("/tmp/s"), 1)),
+            net_confined: true,
         }),
     };
     let ssh = "ssh: connect to host github.com port 22: Network is unreachable";
     assert!(network_note(Some(&isolated), true, ssh).is_some());
     assert!(network_note(Some(&isolated), false, ssh).is_none());
     assert!(network_note(Some(&isolated), true, "error: no such file").is_none());
+    // macOS's words for a fenced-in lookup.
+    let mac = "curl: (6) Could not resolve: nodename nor servname provided, or not known";
+    assert!(network_note(Some(&isolated), true, mac).is_some());
     let open = Plan {
         isolation: None,
         ..isolated.clone()

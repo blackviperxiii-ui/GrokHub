@@ -36,62 +36,6 @@ pub struct Setup {
     bridge: Option<(libc::sockaddr_un, u16)>,
 }
 
-/// Folders under the home folder whose contents a sandboxed command never
-/// needs and a leak of which is costly. Missing ones are skipped.
-pub const SECRET_DIRS: &[&str] = &[
-    ".ssh",
-    ".gnupg",
-    ".aws",
-    ".azure",
-    ".config/gcloud",
-    ".kube",
-    ".docker",
-    ".password-store",
-    ".local/share/keyrings",
-    ".mozilla",
-    ".config/google-chrome",
-    ".config/chromium",
-    ".config/BraveSoftware",
-    ".config/microsoft-edge",
-    ".config/vivaldi",
-    ".config/gh",
-];
-
-/// Single files that hold tokens. Missing ones are skipped.
-pub const SECRET_FILES: &[&str] = &[
-    ".netrc",
-    ".git-credentials",
-    ".cargo/credentials",
-    ".cargo/credentials.toml",
-    ".pypirc",
-];
-
-/// The folders and files to hide, existing ones only, for this home and
-/// config folder. The sign-in folder and the config folder are added to the
-/// fixed lists.
-pub fn hidden(home: Option<&Path>, config_dir: &Path, workspace: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let ws = workspace.canonicalize().ok();
-    let mut push = |p: PathBuf| {
-        let Ok(p) = p.canonicalize() else { return };
-        // Never hide the workspace or anything above it: no work gets done.
-        if ws.as_ref().is_some_and(|ws| ws.starts_with(&p)) || out.contains(&p) {
-            return;
-        }
-        out.push(p);
-    };
-    if let Some(home) = home {
-        for rel in SECRET_DIRS.iter().chain(SECRET_FILES) {
-            push(home.join(rel));
-        }
-    }
-    if let Some(sign_in) = grokhub_core::cli_history::grok_home() {
-        push(sign_in);
-    }
-    push(config_dir.to_path_buf());
-    out
-}
-
 impl Setup {
     /// `bridge` is the Unix socket of the egress proxy and the port the
     /// command's proxy variables name.
