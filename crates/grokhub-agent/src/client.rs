@@ -725,7 +725,8 @@ pub fn responses_body(req: &ResponsesRequest) -> Value {
     if is_grok_model(model) {
         // Routes this chat's requests to the same warm server (xAI's cache key
         // on the Responses API; `x-grok-conv-id` is the Chat Completions one).
-        let key = req.conversation_id.trim();
+        // A fork shares its chat's key, so it reaches the warm prefix.
+        let key = crate::subagent::cache_key(req.conversation_id.trim());
         if !key.is_empty() {
             body["prompt_cache_key"] = json!(key);
         }
