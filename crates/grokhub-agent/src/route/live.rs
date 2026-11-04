@@ -646,6 +646,10 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         super::goal::pinned_for(&[call.session, call.episode])
     };
     let mut routine = None;
+    // C10: a step of a typed chat turn that hit trouble, and the turn's band
+    // and ladder class for the learner.
+    let mut trouble = false;
+    let mut chat_band: Option<(Band, &'static str)> = None;
     let pick = match row {
         Some(_) if holdout => Some(Pick {
             rung: rung(HOLDOUT_EFFORT).unwrap_or(0),
@@ -679,8 +683,22 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
                     now_ms,
                 );
             }
+            let tool_errors = take_tool_errors();
+            let stage = ladder::take_stage(new_turn);
+            if ask.is_some() {
+                trouble = tool_errors > 0
+                    || stage.same_tool_failed
+                    || stage.looped
+                    || stage.check_failed
+                    || stage.out_of_budget
+                    || (rejects.unwrap_or(0) > 0 && !verify_ok);
+                if trouble && !new_turn {
+                    super::knn::note_trouble(key);
+                }
+                chat_band = Some((band, own));
+            }
             let obs = Obs {
-                tool_errors: take_tool_errors(),
+                tool_errors,
                 rejects,
                 verify_ok,
                 // "That's wrong" or "try again": the next answer starts one rung up.
@@ -689,7 +707,7 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
                 low_check: None,
                 budget_pct: b.pct,
                 routine,
-                stage: ladder::take_stage(new_turn),
+                stage,
                 keep_start: super::capabilities::BaselineLane::of(r.class)
                     == super::capabilities::BaselineLane::Flagship,
                 ..Obs::default()
@@ -713,12 +731,19 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         }
         _ => None,
     };
+    if let (Some(r), true, true) = (row, holdout, ask.is_some()) {
+        // The holdout's turns are logged for the R1 guard, never steered.
+        chat_band = Some((Band::of(r, bump), base_row.map_or(r.class, |b| b.class)));
+    }
+    let redo = ask.is_some() && (is_correction(call.text) || super::ask::asks_redo(call.text));
     if ask.is_some() && !key.is_empty() {
         // The bank learns from turns the read started, never the holdout's fixed rung.
         match &pick {
             Some(p) if !holdout => super::knn::note_rung(key, turn, p.rung),
             _ => super::knn::forget(key),
         }
+        // C10: a new turn settles the last one for the learner.
+        super::bandit::on_call(config_dir, key, turn, trouble, redo, now_ms);
     }
     laps.mark("route:ladder");
     let recover = pick.as_ref().is_some_and(|p| p.recover);
@@ -819,6 +844,57 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         lane,
     };
     let mut route = Router::choose(&input, &reg, &profiles, &table, now_ms);
+    if let (Some(a), Some(p), Some((band, own))) = (&ask, &input.pick, chat_band)
+        && !key.is_empty()
+    {
+        let model = route.base.as_deref().unwrap_or(&route.model);
+        // C9: only a turn the read routed in the cloud, in the open, outside a canary.
+        let ours = !route.no_route
+            && !call.step_up
+            && !call.sensitive
+            && st.mark.is_none()
+            && !super::local::is_local(model)
+            && grokhub_core::adult_guard::check(super::ask::own_words(call.text))
+                == grokhub_core::adult_guard::Risk::Clean;
+        if ours {
+            let attn = route
+                .rule_ids
+                .iter()
+                .any(|r| r.starts_with("attn:escalate") || r.starts_with("attn:force_top"));
+            let guard = if attn {
+                Some(super::bandit::ATTENTION_GUARD)
+            } else if a.stakes != super::ask::Stakes::None {
+                Some("stakes")
+            } else if super::capabilities::BaselineLane::of(a.lane())
+                == super::capabilities::BaselineLane::Flagship
+            {
+                Some("flagship")
+            } else if d >= 0.7 {
+                Some("hard")
+            } else if call.planned_tools > 0 || call.plan_mode || call.hard_tool {
+                Some("agentic")
+            } else if redo {
+                Some("redo")
+            } else if p.moved == ladder::Move::Up {
+                Some("climb")
+            } else {
+                None
+            };
+            let steer = super::bandit::Steer {
+                config_dir,
+                key,
+                turn,
+                own,
+                ctx: super::bandit::context(a.lane(), a.kind.id(), d),
+                band,
+                guard,
+                hold: holdout,
+            };
+            route = super::bandit::steer(&steer, route, &input, &reg, &profiles, &table, now_ms);
+        } else {
+            super::bandit::skip(key, turn);
+        }
+    }
     if let Some(a) = &ask {
         route.rule_ids.splice(0..0, a.rules.iter().cloned());
         super::ask::remember(key, a.kind);
@@ -829,7 +905,12 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     laps.mark("route:choose");
     let mut tune_mark = st.mark.clone();
     if let (Some(c), Some(r)) = (&st.shadow, row) {
-        tune_mark = Some(shadow_mark(c, r, &input, &reg, &profiles, &table, now_ms));
+        let (mark, arm) = shadow_mark(c, r, &input, &reg, &profiles, &table, now_ms);
+        // C11: the candidate's pick sits next to the live one in the propensity log.
+        if let Some(arm) = arm.filter(|_| ask.is_some()) {
+            super::bandit::note_shadow(key, turn, &c.id, arm);
+        }
+        tune_mark = Some(mark);
     }
     laps.mark("route:shadow");
     let live = POLICY_LIVE && row.is_some();
@@ -916,7 +997,8 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
 
 /// A shadow candidate computed next to the live pick, logged only:
 /// `shadow:<id>`, or `shadow:<id>!` when it could not be served inside the
-/// filters (fit, entitlement, cost class, privacy, floors).
+/// filters (fit, entitlement, cost class, privacy, floors). With it, the arm
+/// (`model@effort`) the candidate would have sent this call.
 fn shadow_mark(
     c: &tune::Candidate,
     row: &ClassRow,
@@ -925,7 +1007,7 @@ fn shadow_mark(
     profiles: &BTreeMap<String, ModelProfile>,
     table: &RoutingTable,
     now_ms: u64,
-) -> String {
+) -> (String, Option<String>) {
     let mut shadow = input.clone();
     shadow.pick = None;
     shadow.episode_model = None;
@@ -944,7 +1026,41 @@ fn shadow_mark(
         }
         None => false,
     };
-    format!("shadow:{}{}", c.id, if ok { "" } else { "!" })
+    let arm = shadow_arm(c, row, input, reg, profiles, table, now_ms);
+    (format!("shadow:{}{}", c.id, if ok { "" } else { "!" }), arm)
+}
+
+/// What the candidate would send in this call's own place (its pick, pin and
+/// sticky model kept): its model first, or its start shifted onto the pick.
+fn shadow_arm(
+    c: &tune::Candidate,
+    row: &ClassRow,
+    input: &RouteInput<'_>,
+    reg: &Registry,
+    profiles: &BTreeMap<String, ModelProfile>,
+    table: &RoutingTable,
+    now_ms: u64,
+) -> Option<String> {
+    let mut alt = input.clone();
+    let ordered;
+    let table = match c.change.as_ref()? {
+        tune::Change::Order { model } => {
+            ordered = tune::with_order(table, row.class, model);
+            &ordered
+        }
+        tune::Change::Start { effort } => {
+            let band = Band::tuned(row, input.bump, input.start);
+            let pick = alt.pick.as_mut()?;
+            let shift = rung(effort)? as isize - band.start as isize;
+            pick.rung = (pick.rung as isize + shift)
+                .clamp(band.floor as isize, band.ceiling.max(band.floor) as isize)
+                as usize;
+            table
+        }
+    };
+    let r = Router::choose(&alt, reg, profiles, table, now_ms);
+    (!r.no_route)
+        .then(|| super::bandit::arm_id(r.base.as_deref().unwrap_or(&r.model), r.effort.as_deref()))
 }
 
 /// The route record for one call. `call.effort` is what was actually sent.
@@ -1200,6 +1316,7 @@ pub fn route_log(
         ladder::finish(key, class, done.ok);
         if class == super::ask::CHAT_CLASS {
             super::knn::note_done(key, done.ok, done.cancelled);
+            super::bandit::note_call(key, done.ok, done.cancelled, done.usage.cost_in_usd_ticks);
         }
     }
     // This crate's own tests drive fake clients with made-up model ids: only a

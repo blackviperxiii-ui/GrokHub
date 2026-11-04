@@ -1880,6 +1880,22 @@ impl Cabin {
                         );
                     }
                     if let Some(code) = crate::markdown::take_code_copy(ui.ctx()) {
+                        // C10: code copied from the latest answer tells the router it served.
+                        let latest = self
+                            .messages
+                            .iter()
+                            .rev()
+                            .take_while(|(role, _)| role != "user")
+                            .any(|(_, body)| body.contains(code.trim()));
+                        if let Some(key) = self
+                            .threads
+                            .iter()
+                            .find(|t| t.id == fold_thread)
+                            .and_then(|t| t.grok_session.as_deref())
+                            .filter(|_| latest)
+                        {
+                            grokhub_agent::route::bandit::note_copy(key);
+                        }
                         act = ChatBlockAct::Copy(code);
                     }
                     match act {

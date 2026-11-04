@@ -935,9 +935,14 @@ pub fn revert_source(skill: &str) -> String {
     format!("{CARD_SOURCE_PREFIX}revert:{skill}")
 }
 
-/// A router tuning change that would cost more money (Router R3a).
-pub fn router_source(candidate: &str) -> String {
-    format!("{CARD_SOURCE_PREFIX}router:{candidate}")
+/// A Home card the weekly pass no longer posts: the router's cost-raising
+/// Suggestion cards and its weekly review line. The router tunes itself
+/// silently now, so a feed that still holds one drops it.
+pub fn retired_card_source(source_id: &str) -> bool {
+    source_id == "router-review"
+        || source_id
+            .strip_prefix(CARD_SOURCE_PREFIX)
+            .is_some_and(|rest| rest.starts_with("router:"))
 }
 
 /// What a self-review card's source id stands for.
@@ -946,8 +951,6 @@ pub enum CardTarget {
     Patch(String),
     Draft(String),
     Revert(String),
-    /// A router candidate id: Accept applies it through the ChangeLedger.
-    Router(String),
     /// A chat note in `tunable/`: Apply writes it and puts it on trial.
     Snippet(String),
     /// A code-change idea: Save keeps it locally; nothing is applied.
@@ -962,7 +965,6 @@ pub fn card_target(source_id: &str) -> Option<CardTarget> {
         "patch" => Some(CardTarget::Patch(name)),
         "draft" => Some(CardTarget::Draft(name)),
         "revert" => Some(CardTarget::Revert(name)),
-        "router" => Some(CardTarget::Router(name)),
         "snippet" => Some(CardTarget::Snippet(name)),
         "code" => Some(CardTarget::Code(name)),
         _ => None,
@@ -1346,6 +1348,12 @@ mod tests {
             Some(CardTarget::Revert("z".into()))
         );
         assert_eq!(card_target("situation:x"), None);
+        // The router's old Accept cards and weekly line are retired: no target.
+        assert_eq!(card_target("self-review:router:chat:default#2"), None);
+        assert!(retired_card_source("self-review:router:chat:default#2"));
+        assert!(retired_card_source("router-review"));
+        assert!(!retired_card_source(&patch_source("weekly-report")));
+        assert!(!retired_card_source("route:fallback"));
     }
 
     #[test]

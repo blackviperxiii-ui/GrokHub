@@ -267,3 +267,210 @@ fn knn_blend_keeps_the_held_out_set_whole() {
     assert_eq!(s.n, 48);
     assert_whole("held-out+knn", &s);
 }
+
+// ---------------------------------------------------------------- M37: the learner
+
+use super::bandit::{self, choose, ArmSpec, Ctx, Line, Rng, Turn};
+
+fn arm(model: &str, effort: &str, strength: u8, cost_usd: f64) -> ArmSpec {
+    ArmSpec {
+        model: model.into(),
+        rung: rung(effort),
+        strength,
+        provider: false,
+        cost_usd,
+    }
+}
+
+/// A cheaper rung below the read, the read's own arm, and a stronger model above it.
+fn three(guard: Option<&'static str>) -> Turn {
+    Turn {
+        arms: vec![
+            arm("grok-4.3", "low", 1, 0.001),
+            arm("grok-4.3", "medium", 1, 0.002),
+            arm("grok-4.7", "high", 3, 0.020),
+        ],
+        base: 1,
+        guard,
+    }
+}
+
+/// `settled` turns of history, `n` rewards of `r` for each arm given.
+fn history(settled: u32, arms: &[(&Turn, usize, u32, f64)]) -> Ctx {
+    let mut c = Ctx {
+        settled,
+        ..Ctx::default()
+    };
+    for (t, i, n, r) in arms {
+        let s = c.arms.entry(t.arms[*i].id()).or_default();
+        (0..*n).for_each(|_| s.add(*r));
+    }
+    c
+}
+
+#[test]
+fn the_learner_never_explores_down_on_a_hard_or_stakes_turn() {
+    // The cheaper rung has done far better than the read's arm.
+    let low = three(None);
+    let ctx = history(200, &[(&low, 0, 60, 0.95), (&low, 1, 60, 0.40)]);
+    for guard in ["stakes", "hard", "agentic", "flagship", "redo", "climb"] {
+        let t = three(Some(guard));
+        let mut rng = Rng::new(11);
+        for _ in 0..2_000 {
+            let c = choose(&t, &ctx, &mut rng);
+            assert!(!c.explore, "{guard}");
+            assert!(t.up(c.arm), "{guard}: picked {}", t.arms[c.arm].id());
+        }
+    }
+    // A low-stakes turn may use what it learned, but explores only upward.
+    let mut rng = Rng::new(11);
+    let (mut learned_down, mut explored) = (0, 0);
+    for _ in 0..2_000 {
+        let c = choose(&low, &ctx, &mut rng);
+        if c.explore {
+            explored += 1;
+            assert!(low.up(c.arm) && c.arm != low.base);
+        } else if c.arm == 0 {
+            learned_down += 1;
+        }
+    }
+    assert_eq!((learned_down, explored), (1_942, 58));
+}
+
+#[test]
+fn the_learner_explores_at_its_rate_on_low_stakes_turns_with_a_fixed_seed() {
+    assert_eq!(
+        (
+            bandit::EXPLORE_RATE,
+            bandit::EXPLORE_AFTER,
+            bandit::MIN_EVIDENCE
+        ),
+        (0.03, 20, 20)
+    );
+    let t = three(None);
+    let count = |settled: u32| {
+        let ctx = history(settled, &[]);
+        let mut rng = Rng::new(42);
+        (0..10_000)
+            .map(|_| choose(&t, &ctx, &mut rng))
+            .filter(|c| c.explore)
+            .count()
+    };
+    assert_eq!(count(20), 299);
+    // A context with too little history only follows the read.
+    assert_eq!(count(19), 0);
+    // With no evidence anywhere, an exploit is the read's own arm, p = 0.97.
+    let mut rng = Rng::new(42);
+    let c = (0..100)
+        .map(|_| choose(&t, &history(20, &[]), &mut rng))
+        .find(|c| !c.explore)
+        .unwrap();
+    assert_eq!((c.arm, c.p), (1, 0.97));
+}
+
+/// Run `turns` turns where arm i earns `quality[i]` less its cost; the picks of the last 500.
+fn converge(quality: [f64; 3], turns: usize) -> [usize; 3] {
+    let t = three(None);
+    let mut ctx = history(bandit::EXPLORE_AFTER, &[]);
+    let mut rng = Rng::new(5);
+    let mut last = [0; 3];
+    for i in 0..turns {
+        let c = choose(&t, &ctx, &mut rng);
+        let a = &t.arms[c.arm];
+        let r = bandit::reward(quality[c.arm], a.cost_usd);
+        ctx.settled += 1;
+        ctx.arms.entry(a.id()).or_default().add(r);
+        if i + 500 >= turns {
+            last[c.arm] += 1;
+        }
+    }
+    last
+}
+
+#[test]
+fn the_learner_settles_on_the_cheaper_arm_when_it_is_as_good() {
+    // As good: the read's arm keeps the turns; the pricier model is only explored.
+    assert_eq!(converge([0.8, 0.8, 0.8], 4_000), [0, 488, 12]);
+    // Clearly better: the stronger model takes over once it has the evidence.
+    assert_eq!(converge([0.8, 0.5, 1.0], 4_000), [0, 0, 500]);
+}
+
+fn line(ctx: &str, arm: &str, p: f64, r: f64, shadow: &[(&str, &str)]) -> Line {
+    Line {
+        ctx: ctx.into(),
+        arm: arm.into(),
+        base: arm.into(),
+        p,
+        r,
+        shadow: shadow
+            .iter()
+            .map(|(c, a)| (c.to_string(), a.to_string()))
+            .collect(),
+        ..Line::default()
+    }
+}
+
+#[test]
+fn ips_and_dr_on_a_small_hand_built_log() {
+    let mut held = line("A", "a", 1.0, 5.0, &[("c", "a")]);
+    held.hold = true;
+    let log = vec![
+        line("A", "a", 0.5, 1.0, &[("c", "a")]),
+        line("A", "b", 0.5, 0.0, &[("c", "a")]),
+        line("B", "a", 0.25, 0.5, &[("c", "b")]),
+        line("B", "b", 1.0, 0.4, &[]),
+        held,
+    ];
+    let o = bandit::ope(&log, "c");
+    assert_eq!((o.n, o.matched), (3, 1));
+    // Live earned (1.0 + 0.0 + 0.5) / 3; IPS = (1.0 / 0.5) / 3; DR = (1.0 + 1.0 + 0.4) / 3.
+    assert!((o.live - 0.5).abs() < 1e-12, "{o:?}");
+    assert!((o.ips - 2.0 / 3.0).abs() < 1e-12, "{o:?}");
+    assert!((o.dr - 0.8).abs() < 1e-12, "{o:?}");
+    assert_eq!(bandit::ope(&log, "nobody"), bandit::Ope::default());
+}
+
+#[test]
+fn shadow_mode_promotes_a_candidate_the_log_scores_no_worse_and_rejects_a_worse_one() {
+    use super::tune::{judge, Candidate, Change, Evidence, Stage, Verdict, DAY_MS};
+    // Live splits its turns between a good arm and a poor one.
+    let log: Vec<Line> = (0..40)
+        .map(|i| {
+            let (arm, r) = if i % 2 == 0 { ("a", 0.9) } else { ("b", 0.3) };
+            line("A", arm, 0.5, r, &[("good", "a"), ("poor", "b")])
+        })
+        .collect();
+    let c = |id: &str| Candidate {
+        id: id.into(),
+        class: "chat:default".into(),
+        change: Some(Change::Start {
+            effort: "low".into(),
+        }),
+        stage: Stage::Shadow,
+        created_at: 100 * DAY_MS,
+        ..Candidate::default()
+    };
+    let ev = |id: &str, lines: &[Line]| Evidence {
+        shadow_steps: 200,
+        ope: bandit::ope(lines, id),
+        ..Evidence::default()
+    };
+    let now = 101 * DAY_MS;
+    let good = ev("good", &log);
+    assert_eq!(good.ope.matched, 20);
+    assert!((good.ope.live - 0.6).abs() < 1e-12);
+    assert!((good.ope.dr - 0.9).abs() < 1e-12);
+    assert_eq!(judge(&c("good"), &good, 0, now), Verdict::StartCanary);
+    assert_eq!(
+        judge(&c("poor"), &ev("poor", &log), 0, now),
+        Verdict::Reject {
+            why: "its logged score fell short in shadow (0.30 vs 0.60)".into(),
+            rollback: false
+        }
+    );
+    // Half the log is too few matched turns to judge yet.
+    assert_eq!(
+        judge(&c("good"), &ev("good", &log[..30]), 0, now),
+        Verdict::Wait
+    );
+}

@@ -10,7 +10,10 @@ pub fn path() -> std::path::PathBuf {
 
 pub fn load() -> Vec<UpdateCard> {
     let mut cards: Vec<UpdateCard> = config::load_json(&path(), config::JSON_STORE_CAP);
-    if grokhub_core::collapse_feed(&mut cards) {
+    let before = cards.len();
+    // The router tunes itself silently now: its old Accept cards and weekly line go.
+    cards.retain(|c| !grokhub_core::self_review::retired_card_source(&c.source_id));
+    if grokhub_core::collapse_feed(&mut cards) || cards.len() != before {
         let _ = save(&cards);
     }
     cards
@@ -39,6 +42,18 @@ mod tests {
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].id, card.id);
         assert!(feed_visible(&loaded));
+        // A retired router card from an older version is dropped on load.
+        let mut old = automation_done_card("loop-2", "Board", "done", 43);
+        old.source_id = "self-review:router:chat:default#2".into();
+        let mut line = automation_done_card("loop-3", "Board", "done", 44);
+        line.source_id = "router-review".into();
+        save(&[card.clone(), old, line]).expect("save");
+        let loaded = load();
+        assert_eq!(
+            loaded.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+            vec![card.id.as_str()]
+        );
+        assert_eq!(super::load().len(), 1);
         let src = include_str!("feed.rs");
         let code = src.split("#[cfg(test)]").next().expect("feed");
         assert!(

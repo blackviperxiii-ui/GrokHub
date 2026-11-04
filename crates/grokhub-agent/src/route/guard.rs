@@ -6,7 +6,9 @@
 //! and floor one rung up, and the cabin posts a Pulse Suggestion saying so.
 //!
 //! Success is the Spike-7 outcome (#556): VERIFY_OK, no correction and no undo
-//! within 24 h. Until any outcome exists the guard only logs "guard waiting on
+//! within 24 h. A chat lane with no such outcomes is judged on the learner's
+//! own settled rewards ([`super::bandit::guard_stats`]): its holdout turns are
+//! logged too. Until either exists the guard only logs "guard waiting on
 //! outcomes", once a day.
 
 use std::collections::BTreeMap;
@@ -180,7 +182,8 @@ const DAY_MS: u64 = 86_400_000;
 /// Read route records and outcomes, revert any class that trails, and save the overrides.
 pub fn run_guard(config_dir: &Path, now_ms: u64) -> GuardRun {
     let outcomes = read_outcomes(config_dir);
-    if outcomes.is_empty() {
+    let lines = super::bandit::read_log(config_dir);
+    if outcomes.is_empty() && lines.is_empty() {
         let day = now_ms / DAY_MS;
         note_once(
             config_dir,
@@ -197,7 +200,12 @@ pub fn run_guard(config_dir: &Path, now_ms: u64) -> GuardRun {
         .into_iter()
         .unzip();
     let mut overrides = load_overrides(config_dir);
-    let stats = tally(&records, &ts, &outcomes, &overrides, now_ms);
+    let mut stats = tally(&records, &ts, &outcomes, &overrides, now_ms);
+    // C11: a lane the outcomes don't cover is judged on the settled rewards.
+    let since = |lane: &str| overrides.get(lane).map_or(0, |o| o.at_ms);
+    for (lane, s) in super::bandit::guard_stats(&lines, since) {
+        stats.entry(lane).or_insert(s);
+    }
     let mut run = GuardRun::default();
     for class in judge(&stats) {
         let Some(row) = class_row(&class) else {
