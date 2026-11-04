@@ -261,6 +261,13 @@ fn doc_table_split_match_and_severity() {
         ),
         Decision::Refuse(gate::unattended_deny("run_terminal_command"))
     );
+    // Unattended Auto runs it only where the sandbox fully holds it.
+    let held = crate::sandbox::plan_for_call(
+        "run_terminal_command",
+        &serde_json::json!({ "command": "npm test" }),
+        Path::new("/work"),
+    )
+    .is_some_and(|plan| plan.enforced());
     assert_eq!(
         at(
             &empty,
@@ -270,7 +277,11 @@ fn doc_table_split_match_and_severity() {
             "run_terminal_command",
             &shell("npm test")
         ),
-        Decision::Refuse(gate::unattended_deny("run_terminal_command"))
+        if held {
+            Decision::Run
+        } else {
+            Decision::Refuse(gate::unattended_deny("run_terminal_command"))
+        }
     );
     assert_eq!(
         at(
@@ -1233,4 +1244,62 @@ fn hosted_search_rides_only_where_the_cabin_search_would_run_unasked() {
     let _offline = grokhub_core::offline::force_for_thread(true);
     assert!(!hosted_search_allowed(&open, &[], false));
     assert!(!hosted_search_allowed_background());
+}
+
+#[test]
+fn auto_mode_runs_an_ordinary_command_the_sandbox_fully_holds() {
+    let cfg = ws_file("auto-allow-cfg");
+    let work = ws_file("auto-allow-ws");
+    let _pin = ConfigGuard::set(&cfg);
+    let decide = |mode: PermMode, attended: bool, arguments: &str| {
+        let g = gate(mode, attended);
+        let base = gate::decide(&g, "run_terminal_command", false, None);
+        govern(
+            base,
+            &g,
+            "run_terminal_command",
+            arguments,
+            &work,
+            &Policy::empty(),
+        )
+    };
+    let npm = shell("npm install");
+    let held = crate::sandbox::plan_for_call(
+        "run_terminal_command",
+        &serde_json::json!({ "command": "npm install" }),
+        &work,
+    )
+    .is_some_and(|plan| plan.enforced());
+    for attended in [true, false] {
+        let got = decide(PermMode::Auto, attended, &npm);
+        if held {
+            assert_eq!(got, Decision::Run, "attended={attended}");
+        } else {
+            assert_ne!(
+                got,
+                Decision::Run,
+                "no full sandbox here, attended={attended}"
+            );
+        }
+    }
+    // Supervised keeps asking.
+    assert_eq!(decide(PermMode::Ask, true, &npm), Decision::Ask);
+    // Outside the sandbox, or raising privileges, never runs on its own.
+    let outside =
+        serde_json::json!({ "command": "npm install", "outside_sandbox": true }).to_string();
+    assert_ne!(decide(PermMode::Auto, true, &outside), Decision::Run);
+    assert_ne!(
+        decide(PermMode::Auto, true, &shell("sudo npm install -g x")),
+        Decision::Run
+    );
+    // A dangerous or unsplittable command keeps its card.
+    assert_ne!(
+        decide(PermMode::Auto, true, &shell("rm -rf ~")),
+        Decision::Run
+    );
+    // The settings file turns it off.
+    std::fs::write(cfg.join("shell_sandbox.toml"), "auto_allow = false\n").unwrap();
+    assert_ne!(decide(PermMode::Auto, true, &npm), Decision::Run);
+    let _ = std::fs::remove_dir_all(&cfg);
+    let _ = std::fs::remove_dir_all(&work);
 }

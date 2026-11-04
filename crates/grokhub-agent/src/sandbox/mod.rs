@@ -56,6 +56,9 @@ pub const OUTSIDE_ARG: &str = "outside_sandbox";
 pub struct Settings {
     pub enabled: bool,
     pub network_guard: bool,
+    /// Run an ordinary command without asking when the sandbox fully holds
+    /// it (writes, network and secrets). `auto_allow = false` asks as before.
+    pub auto_allow: bool,
     pub writable: Vec<PathBuf>,
 }
 
@@ -64,6 +67,7 @@ impl Default for Settings {
         Self {
             enabled: true,
             network_guard: true,
+            auto_allow: true,
             writable: Vec::new(),
         }
     }
@@ -89,6 +93,7 @@ fn parse_file(text: &str, home: Option<&Path>) -> Settings {
         match key.as_str() {
             "enabled" => out.enabled = !off,
             "network_guard" => out.network_guard = !off,
+            "auto_allow" => out.auto_allow = !off,
             "writable" => {
                 let inner = value.trim_start_matches('[').trim_end_matches(']');
                 out.writable = inner
@@ -129,6 +134,21 @@ pub struct Plan {
 }
 
 impl Plan {
+    /// Whether the command is fully held: writes confined, the network only
+    /// through the proxy and secret folders hidden. Linux needs Landlock and
+    /// its own network namespace; macOS its Seatbelt profile with the proxy
+    /// port. Windows doesn't fence the network yet.
+    pub fn enforced(&self) -> bool {
+        let net = self.isolation.as_ref().is_some_and(|i| i.net_confined);
+        #[cfg(target_os = "linux")]
+        let writes = landlock::abi().is_some();
+        #[cfg(target_os = "macos")]
+        let writes = true;
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        let writes = false;
+        net && writes
+    }
+
     /// The port the proxy variables name.
     pub fn proxy_port(&self) -> Option<u16> {
         self.proxy.as_deref()?.rsplit(':').next()?.parse().ok()
@@ -151,6 +171,14 @@ pub struct Isolation {
 /// `workspace`, from the config folder in effect.
 pub fn plan_for_call(tool: &str, args: &Value, workspace: &Path) -> Option<Plan> {
     plan_in(&crate::perm::config_dir(), tool, args, workspace)
+}
+
+/// Whether the gate may run this shell call without asking: auto-allow is on
+/// and the sandbox will fully hold it (see [`Plan::enforced`]). A call that
+/// asks to run outside the sandbox, or raises privileges, never qualifies.
+pub fn auto_allows(config_dir: &Path, tool: &str, args: &Value, workspace: &Path) -> bool {
+    settings(config_dir).auto_allow
+        && plan_in(config_dir, tool, args, workspace).is_some_and(|plan| plan.enforced())
 }
 
 pub fn plan_in(config_dir: &Path, tool: &str, args: &Value, workspace: &Path) -> Option<Plan> {
