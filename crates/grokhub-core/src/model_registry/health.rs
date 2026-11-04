@@ -337,9 +337,108 @@ pub fn half_open_due(rec: &ModelRecord, now_ms: u64) -> bool {
         && now_ms >= rec.breaker.open_until_ms
 }
 
+/// The span a model's request rate is counted over.
+pub const RATE_WINDOW_MS: u64 = 1_000;
+
+/// Requests a second xAI takes for a model (docs.x.ai rate limits): grok-4.7
+/// takes 150, grok-4.3 and grok-build 37. Dated and `-latest` ids share their
+/// model's limit; `None` when the limit isn't known.
+pub fn rate_limit_rps(id: &str) -> Option<usize> {
+    match super::record::model_id_stem(id).as_str() {
+        "grok-4.7" => Some(150),
+        "grok-4.3" | "grok-build" => Some(37),
+        _ => None,
+    }
+}
+
+/// Requests sent per model in the last [`RATE_WINDOW_MS`], so a model at its
+/// limit reads as busy before it answers 429 and failover takes the next one.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Pacer {
+    sent: std::collections::BTreeMap<String, std::collections::VecDeque<u64>>,
+}
+
+impl Pacer {
+    /// One request to `id` was sent at `now_ms`.
+    pub fn note(&mut self, id: &str, now_ms: u64) {
+        if rate_limit_rps(id).is_none() {
+            return;
+        }
+        let q = self.sent.entry(id.to_string()).or_default();
+        q.push_back(now_ms);
+        while q
+            .front()
+            .is_some_and(|t| now_ms.saturating_sub(*t) >= RATE_WINDOW_MS)
+        {
+            q.pop_front();
+        }
+    }
+
+    /// `id` already had its limit of requests in the last second.
+    pub fn at_limit(&self, id: &str, now_ms: u64) -> bool {
+        let (Some(limit), Some(q)) = (rate_limit_rps(id), self.sent.get(id)) else {
+            return false;
+        };
+        q.iter()
+            .filter(|t| now_ms.saturating_sub(**t) < RATE_WINDOW_MS)
+            .count()
+            >= limit
+    }
+}
+
+/// Mark a live model at its request limit busy for this pick: degraded, so
+/// the router takes a healthy model when there is one and keeps this one
+/// only when nothing else can answer.
+pub fn mark_busy(rec: &mut ModelRecord) {
+    if rec.state == ModelState::Live {
+        rec.state = ModelState::Degraded;
+        rec.reason = "It is at its request limit this second.".into();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_model_at_its_request_limit_reads_busy_for_one_second() {
+        assert_eq!(rate_limit_rps("grok-4.7"), Some(150));
+        assert_eq!(rate_limit_rps("grok-4.7-0414"), Some(150));
+        assert_eq!(rate_limit_rps("grok-4.3"), Some(37));
+        assert_eq!(rate_limit_rps("grok-build"), Some(37));
+        assert_eq!(rate_limit_rps("grok-4.5"), None);
+        let mut p = Pacer::default();
+        for i in 0..36 {
+            p.note("grok-4.3", 1_000 + i);
+        }
+        assert!(!p.at_limit("grok-4.3", 1_036));
+        p.note("grok-4.3", 1_036);
+        assert!(p.at_limit("grok-4.3", 1_036));
+        assert!(!p.at_limit("grok-4.7", 1_036));
+        // The oldest send leaves the window a second later.
+        assert!(!p.at_limit("grok-4.3", 2_000));
+        assert!(p.at_limit("grok-4.3", 1_999));
+        // A model with no known limit is never counted.
+        for _ in 0..500 {
+            p.note("grok-4.5", 1_000);
+        }
+        assert!(!p.at_limit("grok-4.5", 1_000));
+        let mut rec = ModelRecord {
+            state: ModelState::Live,
+            ..ModelRecord::default()
+        };
+        mark_busy(&mut rec);
+        assert_eq!(
+            (rec.state, rec.reason.as_str()),
+            (
+                ModelState::Degraded,
+                "It is at its request limit this second."
+            )
+        );
+        rec.state = ModelState::Quarantined;
+        mark_busy(&mut rec);
+        assert_eq!(rec.state, ModelState::Quarantined);
+    }
     use crate::model_registry::record::ModelMeta;
 
     fn rec() -> ModelRecord {

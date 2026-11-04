@@ -130,16 +130,33 @@ fn cost_is_the_providers_figure_or_a_safe_estimate() {
         cost_in_usd_ticks: cost,
     };
     assert_eq!(turn_cost("grok-4.3", &u(1, 0, 1, 77)), 77);
-    // 1M fresh in at $1.25 plus 1M out at $2.50.
+    // 100k fresh in at $1.25 plus 100k out at $2.50.
     assert_eq!(
-        turn_cost("grok-4.3", &u(1_000_000, 0, 1_000_000, 0)),
-        37_500_000_000
+        turn_cost("grok-4.3", &u(100_000, 0, 100_000, 0)),
+        3_750_000_000
     );
-    // Half cached: 0.5M at $1.25 and 0.5M at $0.20.
+    // Half cached: 50k at $1.25 and 50k at $0.20.
     assert_eq!(
-        turn_cost("grok-4.3", &u(1_000_000, 500_000, 0, 0)),
-        7_250_000_000
+        turn_cost("grok-4.3", &u(100_000, 50_000, 0, 0)),
+        725_000_000
     );
+    // A 1M prompt is past the 200k step: every token at twice the rate,
+    // 0.5M at $2.50, 0.5M cached at $0.40 and 1M out at $5.
+    assert_eq!(
+        turn_cost("grok-4.3", &u(1_000_000, 500_000, 1_000_000, 0)),
+        64_500_000_000
+    );
+    // grok-4.7: $2 in, $0.50 cached, $6 out; grok-4.5: $2, $0.30, $6.
+    assert_eq!(
+        turn_cost("grok-4.7", &u(100_000, 50_000, 10_000, 0)),
+        1_850_000_000
+    );
+    assert_eq!(
+        turn_cost("grok-4.5", &u(100_000, 50_000, 10_000, 0)),
+        1_750_000_000
+    );
+    // At 200k exactly grok-4.7 doubles: 200k fresh at $4.
+    assert_eq!(turn_cost("grok-4.7", &u(200_000, 0, 0, 0)), 8_000_000_000);
     // Unknown model: $5 in, $25 out per million.
     assert_eq!(
         turn_cost("vendor/x", &u(1_000_000, 0, 0, 0)),

@@ -1,5 +1,6 @@
 //! One model's row in the registry: what its sources say (metadata), where it
-//! was seen, and its state. Unknown fields stay `None`; nothing is filled from code.
+//! was seen, and its state. Unknown fields stay `None`; only a row no xAI API
+//! listing describes takes the known prices and window from [`super::seed`].
 
 use std::collections::VecDeque;
 
@@ -113,6 +114,31 @@ pub struct Prices {
 impl Prices {
     pub fn is_empty(&self) -> bool {
         self.prompt.is_none() && self.cached.is_none() && self.completion.is_none()
+    }
+
+    /// (prompt, cached, completion) rates for a request whose prompt is
+    /// `prompt_tokens` long. At or past the long-context threshold every token
+    /// pays the long rate, cached ones too (scaled like the prompt). `None`
+    /// when the prompt or completion price is unknown.
+    pub fn rates_at(&self, prompt_tokens: u64) -> Option<(u64, u64, u64)> {
+        let long = self
+            .long_context_threshold
+            .is_some_and(|t| t > 0 && prompt_tokens >= t);
+        let (short, prompt, completion) = if long {
+            (
+                self.prompt?,
+                self.prompt_long.or(self.prompt)?,
+                self.completion_long.or(self.completion)?,
+            )
+        } else {
+            (self.prompt?, self.prompt?, self.completion?)
+        };
+        let cached = match self.cached {
+            Some(c) if short > 0 => c * prompt / short,
+            Some(c) => c,
+            None => prompt,
+        };
+        Some((prompt, cached, completion))
     }
 }
 

@@ -10,6 +10,7 @@ pub mod health;
 pub mod probe;
 pub mod profile;
 pub mod record;
+pub mod seed;
 pub mod store;
 
 use std::collections::BTreeMap;
@@ -278,8 +279,13 @@ impl Registry {
         if tier.is_some() {
             self.entitlement.tier = tier;
         }
-        for (id, (meta, sources)) in &merged {
+        for (id, (meta, sources)) in &mut merged {
             let api = sources.contains(&SourceKind::XaiApi);
+            if !api {
+                // No xAI API listing describes it (a Grok Build sign-in lists bare
+                // ids): the known prices and window stand in. An API row keeps its own.
+                seed::fill(meta);
+            }
             let hash = meta.content_hash();
             let rec = match self.models.get_mut(id) {
                 Some(rec) => {
