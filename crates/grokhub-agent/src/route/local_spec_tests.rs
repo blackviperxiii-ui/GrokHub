@@ -512,7 +512,7 @@ fn every_launch_flag_is_live_in_the_pinned_engine() {
     assert_eq!(
         crate::route::local_sidecar::llama_args_with_launch(model, "127.0.0.1", 4711, &launches[0])
             .join(" "),
-        "-m /m/model.gguf --host 127.0.0.1 --port 4711 -ngl 49 -c 16384 --threads 8 \
+        "-m /m/model.gguf --host 127.0.0.1 --port 4711 --reasoning-format deepseek -ngl 49 -c 16384 --threads 8 \
 --cache-type-k q8_0 --cache-type-v q8_0 --flash-attn on --n-cpu-moe 4 --threads-batch 16 \
 --load-mode mmap+mlock --split-mode layer --tensor-split 3,1 --spec-type draft-simple \
 --spec-draft-model /m/drafters/e2b.gguf --spec-draft-ngl all --spec-draft-n-max 16 --cache-prompt"
@@ -529,7 +529,7 @@ fn every_launch_flag_is_live_in_the_pinned_engine() {
     let line = crate::route::local_sidecar::llama_args_with_perf(model, "127.0.0.1", 4711, &perf);
     assert_eq!(
         line.join(" "),
-        "-m /m/model.gguf --host 127.0.0.1 --port 4711 -ngl 99 --threads 8 -c 8192 \
+        "-m /m/model.gguf --host 127.0.0.1 --port 4711 --reasoning-format deepseek -ngl 99 --threads 8 -c 8192 \
 --flash-attn on --cache-type-k q8_0 --cache-type-v q8_0 --cache-prompt"
     );
     assert_eq!(not_live(B12017_HELP, &line), Vec::<String>::new());

@@ -86,6 +86,9 @@ pub enum ContentPart {
     InputImage(String),
 }
 
+/// The `type` of a provider's reasoning item ([`InputItem::provider_reasoning`]).
+pub const PROVIDER_REASONING: &str = "reasoning_details";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputItem {
     Message {
@@ -121,6 +124,9 @@ pub enum InputItem {
     /// providers and the local model never see it, and it goes only to the
     /// model that wrote it (`model`), since another model can't read it and the
     /// cache is per model anyway. Build it with [`InputItem::reasoning`].
+    /// A provider's `reasoning_details` ride in the same item
+    /// ([`InputItem::provider_reasoning`]) and likewise go back only to the
+    /// model that wrote them, never to xAI.
     Reasoning {
         raw: String,
         model: String,
@@ -129,18 +135,47 @@ pub enum InputItem {
 
 impl InputItem {
     /// A [`InputItem::Reasoning`] from one item's JSON text, or `None` when it is
-    /// not a JSON object of type `reasoning` with a non-empty `encrypted_content`.
+    /// neither a JSON object of type `reasoning` with a non-empty
+    /// `encrypted_content` (xAI) nor one of type [`PROVIDER_REASONING`] with a
+    /// non-empty `reasoning_details` list (an OpenAI-compatible provider).
     pub fn reasoning(raw: &str, model: &str) -> Option<InputItem> {
         let value: Value = serde_json::from_str(raw).ok()?;
-        let typed = value.get("type").and_then(Value::as_str) == Some("reasoning");
-        let sealed = value
-            .get("encrypted_content")
-            .and_then(Value::as_str)
-            .is_some_and(|s| !s.is_empty());
-        (typed && sealed).then(|| InputItem::Reasoning {
+        let sealed = match value.get("type").and_then(Value::as_str) {
+            Some("reasoning") => value
+                .get("encrypted_content")
+                .and_then(Value::as_str)
+                .is_some_and(|s| !s.is_empty()),
+            Some(PROVIDER_REASONING) => value
+                .get("reasoning_details")
+                .and_then(Value::as_array)
+                .is_some_and(|d| !d.is_empty()),
+            _ => false,
+        };
+        sealed.then(|| InputItem::Reasoning {
             raw: raw.to_string(),
             model: model.trim().to_string(),
         })
+    }
+
+    /// A provider's `reasoning_details` (OpenRouter) as a [`InputItem::Reasoning`]
+    /// for the model that wrote it, so the next tool step sends them back.
+    pub fn provider_reasoning(details: &Value, model: &str) -> Option<InputItem> {
+        let raw = json!({"type": PROVIDER_REASONING, "reasoning_details": details});
+        Self::reasoning(&raw.to_string(), model)
+    }
+
+    /// The `reasoning_details` this item carries for `model`, when it is a
+    /// provider's and that model wrote it.
+    pub fn reasoning_details(&self, model: &str) -> Option<Value> {
+        let InputItem::Reasoning { raw, model: wrote } = self else {
+            return None;
+        };
+        if !wrote.eq_ignore_ascii_case(model.trim()) {
+            return None;
+        }
+        let mut v: Value = serde_json::from_str(raw).ok()?;
+        (v.get("type").and_then(Value::as_str) == Some(PROVIDER_REASONING))
+            .then(|| v["reasoning_details"].take())
     }
 
     /// xAI-only opaque items: server compaction and encrypted reasoning.
@@ -551,9 +586,11 @@ fn input_wire(items: &[InputItem], model: Option<&str>) -> (Vec<Value>, bool) {
             // Built only from valid JSON ([`InputItem::reasoning`]).
             InputItem::Reasoning { raw, model: wrote } => {
                 let same = model.is_none_or(|m| m.trim().eq_ignore_ascii_case(wrote));
+                // A provider's reasoning details are never xAI's to read.
                 if let Some(item) = same
                     .then(|| serde_json::from_str::<Value>(raw).ok())
                     .flatten()
+                    .filter(|v| v["type"] == "reasoning")
                 {
                     input.push(item);
                 }

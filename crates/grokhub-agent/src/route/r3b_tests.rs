@@ -2292,3 +2292,69 @@ fn every_provider_call_is_told_which_model_answers() {
     assert_eq!(body["messages"][1]["role"], "user", "{body}");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn a_providers_thinking_is_read_and_goes_back_to_it_alone() {
+    // llama.cpp with `--reasoning-format deepseek` says `reasoning_content`.
+    let local = providers::parse_openai_reply(
+        r#"{"choices":[{"message":{"content":"Hi.","reasoning_content":"They said hello."}}]}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        (local.text.as_str(), local.reasoning.as_str()),
+        ("Hi.", "They said hello.")
+    );
+    assert!(local.reasoning_items.is_empty());
+
+    // OpenRouter adds `reasoning_details`, which the next tool step sends back.
+    let or = providers::parse_openai_reply(
+        r#"{"choices":[{"message":{"content":null,"reasoning":"Look it up.","reasoning_details":[{"type":"reasoning.encrypted","data":"abc","id":"r1","format":"openai-responses-v1","index":0}],"tool_calls":[{"id":"c1","type":"function","function":{"name":"weather","arguments":"{}"}}]}}]}"#,
+    )
+    .unwrap();
+    assert_eq!(or.reasoning, "Look it up.");
+    assert_eq!(or.reasoning_items.len(), 1);
+    let mut item = or.reasoning_items[0].clone();
+    if let InputItem::Reasoning { model, .. } = &mut item {
+        *model = "x-ai/grok-4.3".into();
+    }
+    let history = vec![
+        InputItem::Message {
+            role: "user".into(),
+            content: vec![ContentPart::InputText("weather?".into())],
+        },
+        item,
+        InputItem::FunctionCall {
+            call_id: "c1".into(),
+            name: "weather".into(),
+            arguments: "{}".into(),
+        },
+        InputItem::FunctionCallOutput {
+            call_id: "c1".into(),
+            output: "sunny".into(),
+        },
+    ];
+    let req = ResponsesRequest {
+        input: history,
+        ..hello()
+    };
+    let back = providers::openai_body("x-ai/grok-4.3", None, &req);
+    let msgs = back["messages"].as_array().unwrap();
+    assert_eq!(msgs.len(), 3, "{back}");
+    assert_eq!(msgs[1]["role"], "assistant");
+    assert_eq!(msgs[1]["tool_calls"][0]["id"], "c1");
+    assert_eq!(msgs[1]["reasoning_details"][0]["data"], "abc");
+    assert_eq!(msgs[1]["reasoning_details"][0]["id"], "r1");
+    // Another model never gets them, and neither does xAI.
+    let other = providers::openai_body("google/gemini-3-pro", None, &req);
+    assert!(
+        other["messages"][1].get("reasoning_details").is_none(),
+        "{other}"
+    );
+    let xai = responses_body(&ResponsesRequest {
+        model: "x-ai/grok-4.3".into(),
+        ..req.clone()
+    });
+    let wire = xai["input"].to_string();
+    assert!(!wire.contains("reasoning_details"), "{wire}");
+    assert!(!wire.contains("abc"), "{wire}");
+}
