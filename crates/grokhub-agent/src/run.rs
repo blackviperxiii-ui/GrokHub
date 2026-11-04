@@ -632,16 +632,21 @@ pub fn run_loop(
                 emit_usage(on_event, &usage, history, input.context_length);
             }
         }
-        if !trimmed
-            && crate::compact::trim_pass(
+        let config_dir = crate::perm::config_dir();
+        let mut changed = 0;
+        if !trimmed {
+            changed = crate::compact::trim_pass(
                 history,
                 crate::compact::trim_window(input.model, input.context_length),
-                &crate::perm::config_dir(),
+                &config_dir,
                 input.workspace,
                 input.conversation_id,
-            ) > 0
-        {
-            trimmed = true;
+            );
+            trimmed = changed > 0;
+        }
+        // Old images go in the same cache break as a trim, else once per batch.
+        changed += crate::compact::mask_images_pass(history, &config_dir, changed > 0);
+        if changed > 0 {
             prompt_mark = None;
             crate::prefix_guard::note_trim(&guard_key);
         }

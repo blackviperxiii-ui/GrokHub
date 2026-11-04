@@ -469,7 +469,8 @@ pub fn trim_results(conversation_id: &str) -> std::collections::HashSet<String> 
 /// `age_out = false` keeps every old output whole. With `age_out` on (the
 /// default) an output is spooled once it is big and `age_out_user_turns` user
 /// turns old, or once `keep_recent_outputs` newer outputs follow it and it is
-/// at least `mask_min_bytes`.
+/// at least `mask_min_bytes`. With `age_out` on, only the newest
+/// `keep_recent_images` images stay whole (see [`mask_images_pass`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HistoryTrimSettings {
     pub enabled: bool,
@@ -478,6 +479,7 @@ pub struct HistoryTrimSettings {
     pub age_out_user_turns: usize,
     pub keep_recent_outputs: usize,
     pub mask_min_bytes: usize,
+    pub keep_recent_images: usize,
 }
 
 impl Default for HistoryTrimSettings {
@@ -489,6 +491,7 @@ impl Default for HistoryTrimSettings {
             age_out_user_turns: AGE_OUT_USER_TURNS,
             keep_recent_outputs: KEEP_RECENT_OUTPUTS,
             mask_min_bytes: MASK_MIN_BYTES,
+            keep_recent_images: crate::image_budget::KEEP_RECENT_IMAGES,
         }
     }
 }
@@ -519,6 +522,9 @@ fn parse_history_trim_file(text: &str) -> HistoryTrimSettings {
             "mask_min_bytes" => {
                 settings.mask_min_bytes = count().unwrap_or(settings.mask_min_bytes)
             }
+            "keep_recent_images" => {
+                settings.keep_recent_images = count().unwrap_or(settings.keep_recent_images)
+            }
             _ => {}
         }
     }
@@ -542,6 +548,20 @@ pub fn trim_pass(
         0
     };
     dropped + age_out_history(history, ctx_len, &settings, workspace, conversation_id)
+}
+
+/// With `age_out` on in `{config}/history_trim.toml`, only the newest
+/// `keep_recent_images` images stay whole; older ones become a short note
+/// ([`crate::image_budget::mask_old_images`]). They wait for a batch to pile up
+/// unless `now` is set because another trim already changed the history this
+/// turn. Unlike [`trim_pass`] it may run every turn: each batch costs the
+/// prompt cache one miss. Returns how many images changed.
+pub fn mask_images_pass(history: &mut [InputItem], config_dir: &Path, now: bool) -> usize {
+    let settings = history_trim_settings(config_dir);
+    if !settings.age_out {
+        return 0;
+    }
+    crate::image_budget::mask_old_images(history, settings.keep_recent_images, now)
 }
 
 fn trim_due(history: &[InputItem], ctx_len: u64) -> bool {

@@ -177,13 +177,14 @@ fn history_trim_settings_default_on_with_age_out_on_and_parse_the_file() {
             age_out_user_turns: 3,
             keep_recent_outputs: 10,
             mask_min_bytes: 2_000,
+            keep_recent_images: 3,
         }
     );
     assert_eq!(
         parse_history_trim_file(
             "# trim\nenabled = false\nage_out = false\n\
              age_out_min_bytes = 500\nage_out_user_turns = 2\nbogus = 1\n\
-             keep_recent_outputs = 4\nmask_min_bytes = 900\n"
+             keep_recent_outputs = 4\nmask_min_bytes = 900\nkeep_recent_images = 5\n"
         ),
         HistoryTrimSettings {
             enabled: false,
@@ -192,6 +193,7 @@ fn history_trim_settings_default_on_with_age_out_on_and_parse_the_file() {
             age_out_user_turns: 2,
             keep_recent_outputs: 4,
             mask_min_bytes: 900,
+            keep_recent_images: 5,
         }
     );
     assert_eq!(
@@ -436,4 +438,34 @@ fn outputs_older_than_the_newest_ten_are_masked_in_one_batch() {
     let mut roomy = many_reads(14, 3_000);
     assert_eq!(age_out_history(&mut roomy, 10_000_000, &on, &ws, "mask"), 0);
     let _ = std::fs::remove_dir_all(&ws);
+}
+
+#[test]
+fn old_images_follow_history_trim_toml() {
+    let shot = |n: usize| InputItem::Message {
+        role: "user".into(),
+        content: vec![ContentPart::InputImage(format!(
+            "data:image/png;base64,{n}"
+        ))],
+    };
+    let whole = |items: &[InputItem]| {
+        items
+            .iter()
+            .filter(|item| {
+                matches!(item, InputItem::Message { content, .. }
+                    if matches!(content.first(), Some(ContentPart::InputImage(_))))
+            })
+            .count()
+    };
+    let dir = std::env::temp_dir().join(format!("gh-trim-img-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut history: Vec<InputItem> = (0..7).map(shot).collect();
+    assert_eq!(mask_images_pass(&mut history, &dir, false), 4);
+    assert_eq!(whole(&history), 3);
+
+    std::fs::write(dir.join(HISTORY_TRIM_CONFIG), "age_out = false\n").unwrap();
+    let mut kept: Vec<InputItem> = (0..7).map(shot).collect();
+    assert_eq!(mask_images_pass(&mut kept, &dir, true), 0);
+    assert_eq!(whole(&kept), 7);
+    let _ = std::fs::remove_dir_all(&dir);
 }
