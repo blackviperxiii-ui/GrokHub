@@ -156,6 +156,14 @@ fn budget_pause(sent: u64, depth: u32) -> String {
     )
 }
 
+/// The request lets the model start a subagent, which may fork from it.
+fn offers_spawn(tools: &[serde_json::Value]) -> bool {
+    tools.iter().any(|tool| {
+        tool.get("name").and_then(|n| n.as_str()) == Some("spawn_subagent")
+            || tool.pointer("/function/name").and_then(|n| n.as_str()) == Some("spawn_subagent")
+    })
+}
+
 /// Tokens one request asks the model to read: its input plus the tool schemas.
 fn request_tokens(req: &ResponsesRequest) -> u64 {
     let tools = serde_json::to_vec(&req.tools).map(|b| b.len()).unwrap_or(0);
@@ -338,16 +346,30 @@ fn run_compact_pass(
         server: None,
     });
     crate::hooks::on_compact(input.conversation_id, input.workspace, true);
-    let compact_result = crate::compact::compact_after_flush(
-        input.workspace,
-        input.client,
-        input.cancel,
-        input.model,
-        input.effort,
-        input.conversation_id,
-        history,
-        modified_paths,
-    );
+    // Only the chat writes its session log to memory: a subagent's history
+    // is one task, and a fork's starts with the chat's own.
+    let compact_result = if input.depth == 0 {
+        crate::compact::compact_after_flush(
+            input.workspace,
+            input.client,
+            input.cancel,
+            input.model,
+            input.effort,
+            input.conversation_id,
+            history,
+            modified_paths,
+        )
+    } else {
+        crate::compact::compact_transcript(
+            input.client,
+            input.cancel,
+            input.model,
+            input.effort,
+            input.conversation_id,
+            history,
+            modified_paths,
+        )
+    };
     crate::hooks::on_compact(input.conversation_id, input.workspace, false);
     match compact_result {
         Ok(done) => {
@@ -395,6 +417,13 @@ pub fn run_loop(
     on_event: &mut dyn FnMut(LoopEvent),
 ) -> LoopOut {
     let first_turn = history.is_empty();
+    // A fork starts with its chat's history. Its budget counts what it adds
+    // on top, until a compaction turns that history into its own.
+    let mut inherited_tokens = if input.depth > 0 {
+        crate::compact::estimate_input_tokens(history)
+    } else {
+        0
+    };
     // Brain 5: the turn's talk style sits in the system prompt's volatile tail.
     let style = (input.depth == 0)
         .then(|| crate::checkpoint::turn_style(input.conversation_id))
@@ -636,6 +665,7 @@ pub fn run_loop(
                     compacted_once = true;
                     turns_since_compact = 0;
                     prompt_mark = None;
+                    inherited_tokens = 0;
                 }
                 CompactPass::Cancelled => {
                     return finish(input, StopReason::Cancelled, usage, compacted_once, true);
@@ -664,7 +694,7 @@ pub fn run_loop(
             ),
             call_timeout: None,
         };
-        let req_tokens = request_tokens(&req);
+        let req_tokens = request_tokens(&req).saturating_sub(inherited_tokens);
         if turns > 1
             && run_token_budget(input.max_turns, input.depth)
                 .is_some_and(|budget| run_tokens.saturating_add(req_tokens) > budget)
@@ -675,6 +705,9 @@ pub fn run_loop(
         run_tokens = run_tokens.saturating_add(req_tokens);
         // Each request should extend the last one; a rewrite logs its first changed segment.
         crate::prefix_guard::observe(&guard_key, &req);
+        if input.depth == 0 && offers_spawn(&req.tools) {
+            crate::subagent::remember_request(input.conversation_id, input.model, &req.input);
+        }
         let class = crate::route::live::current_class();
         drop(turn_top);
         if let Some(t) = step_ended {
@@ -2490,6 +2523,48 @@ mod tests {
             texts.iter().any(|t| t.contains("this subagent has sent")),
             "{texts:?}"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_fork_counts_only_what_it_adds_to_the_chat_it_inherited() {
+        let dir = workspace("fork-budget");
+        let config = dir.join("config");
+        std::fs::create_dir_all(&config).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&config);
+        let client = AlwaysTool {
+            calls: AtomicUsize::new(0),
+        };
+        let input = LoopIn {
+            client: &client,
+            workspace: &dir,
+            model: "grok-4.7",
+            effort: None,
+            system: "sys",
+            conversation_id: "fork-budget",
+            max_turns: 3,
+            usage_base: Usage::default(),
+            cancel: &CancelToken::new(),
+            steer: &SteerQueue::new(),
+            halt: &NeverHalt,
+            gate: Gate::phase_readonly(),
+            desktop: None,
+            permits: &gate::ClosedPermits,
+            perms: None,
+            context_length: 0,
+            tasks: None,
+            depth: 1,
+            agent_id: Some("a1"),
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
+        };
+        // About 250k tokens inherited: two requests would be 500k in all, but
+        // only what the fork adds counts against its 400k.
+        let mut history = vec![user_message(&"x".repeat(1_000_000), None)];
+        let out = run_loop(&input, &mut history, "task", None, &mut |_| {});
+        assert_eq!(out.stop, StopReason::MaxTurns);
+        assert_eq!(client.calls.load(Ordering::SeqCst), 3);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
