@@ -413,6 +413,9 @@ struct Pending {
     last: usize,
     ok: bool,
     cancelled: bool,
+    /// C10: a step of the turn hit trouble (a tool error, a failed check, a
+    /// loop, a reject, an answer cut off by its budget).
+    trouble: bool,
 }
 
 static PENDING: Mutex<BTreeMap<String, Pending>> = Mutex::new(BTreeMap::new());
@@ -420,14 +423,14 @@ static PENDING: Mutex<BTreeMap<String, Pending>> = Mutex::new(BTreeMap::new());
 /// What a finished turn teaches: the start rung when it worked without
 /// climbing, the rung that finally worked when it climbed, or the rung that
 /// wasn't enough when the next turn said it was wrong ("that's wrong", "try
-/// again"). A turn whose last call errored or was cancelled teaches nothing:
-/// an outage says nothing about effort.
+/// again") or the turn hit trouble without climbing. A turn whose last call
+/// errored or was cancelled teaches nothing: an outage says nothing about effort.
 fn settled(p: &Pending, redo: bool, now_ms: u64) -> Option<Entry> {
     let start = p.start?;
     if p.cancelled || !p.ok {
         return None;
     }
-    let ok = !redo;
+    let ok = !redo && !(p.trouble && p.last <= start);
     Some(Entry {
         v: p.v.clone(),
         kind: p.read.kind,
@@ -494,6 +497,7 @@ pub fn blend_turn(
                 last: 0,
                 ok: false,
                 cancelled: false,
+                trouble: false,
             },
         );
     }
@@ -506,6 +510,27 @@ pub fn note_rung(key: &str, turn: u64, rung: usize) {
     if let Some(p) = pending.get_mut(key).filter(|p| p.turn == turn) {
         p.start.get_or_insert(rung);
         p.last = rung;
+    }
+}
+
+/// C9: the learner moved the turn's first call to `rung`, so that is the
+/// rung the turn started at.
+pub fn note_start(key: &str, turn: u64, rung: usize) {
+    let mut pending = PENDING.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(p) = pending.get_mut(key).filter(|p| p.turn == turn) {
+        p.start = Some(rung);
+        p.last = rung;
+    }
+}
+
+/// C10: a step of `key`'s waiting turn hit trouble.
+pub fn note_trouble(key: &str) {
+    if let Some(p) = PENDING
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_mut(key)
+    {
+        p.trouble = true;
     }
 }
 

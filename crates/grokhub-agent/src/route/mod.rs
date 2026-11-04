@@ -11,6 +11,7 @@ pub mod adult;
 pub mod ask;
 pub mod ask_set;
 pub mod attention;
+pub mod bandit;
 pub mod budget;
 pub mod cabin;
 pub mod capabilities;
@@ -557,8 +558,34 @@ pub(crate) fn lane_needs_reasoning(class: &str) -> bool {
         || capabilities::class_need(class).require_reasoning
 }
 
+/// Auto's own pool: xAI and the device, plus a model on a provider you set
+/// up (its key and a grant covering the data, which [`policy::fits`] checks)
+/// that is under your $/M ceiling, answers in text and is no utility model (a
+/// safety classifier, an embedding or rerank model). A provider model with no
+/// listed price stays out (an OpenRouter router may pick any model at any
+/// price, and some providers list no prices at all). Auto picks the model
+/// itself, so never one of OpenRouter's own routers.
+pub(crate) fn in_auto_pool(reg: &Registry, m: &str, ceiling_usd_per_m: f64) -> bool {
+    let over_ceiling = || {
+        reg.get(m).is_some_and(|r| {
+            r.meta
+                .prices
+                .completion
+                .is_none_or(|p| usd_per_m(p) > ceiling_usd_per_m)
+                || r.meta
+                    .output_modalities
+                    .as_ref()
+                    .is_some_and(|o| !o.iter().any(|x| x == "text"))
+        })
+    };
+    !policy::is_new_provider(reg, m)
+        || !(policy::utility_model(m)
+            || over_ceiling()
+            || providers::is_openrouter_router(split_provider_model(m).map_or("", |(_, id)| id)))
+}
+
 /// grok-4.20-multi-agent and its dated or `-latest` ids.
-fn is_multi_agent(model: &str) -> bool {
+pub(crate) fn is_multi_agent(model: &str) -> bool {
     model
         .trim()
         .to_ascii_lowercase()
@@ -636,35 +663,7 @@ impl Router {
                     table::is_reasoning_model(reg, profiles, m)
                 }
         };
-        // A provider model must show it stays under your $/M ceiling: one over
-        // it, or with no listed price (an OpenRouter router may pick any model
-        // at any price, and some providers list no prices at all), stays out,
-        // and so does one that answers in something other than text.
-        let over_ceiling = |m: &str| {
-            reg.get(m).is_some_and(|r| {
-                r.meta
-                    .prices
-                    .completion
-                    .is_none_or(|p| usd_per_m(p) > input.spend.settings.ceiling_usd_per_m)
-                    || r.meta
-                        .output_modalities
-                        .as_ref()
-                        .is_some_and(|o| !o.iter().any(|x| x == "text"))
-            })
-        };
-        // Auto's own pool: xAI and the device, plus a model on a provider you
-        // set up (its key and a grant covering the data) that is under your
-        // $/M ceiling, answers in text and is no utility model (a safety
-        // classifier, an embedding or rerank model). Auto picks the model
-        // itself, so never one of OpenRouter's own routers.
-        let allowed = |m: &str| {
-            !policy::is_new_provider(reg, m)
-                || !(policy::utility_model(m)
-                    || over_ceiling(m)
-                    || providers::is_openrouter_router(
-                        split_provider_model(m).map_or("", |(_, id)| id),
-                    ))
-        };
+        let allowed = |m: &str| in_auto_pool(reg, m, input.spend.settings.ceiling_usd_per_m);
         // A provider model ranks after xAI and the device unless the routing
         // table ranks it for this step.
         let xai_first = |ranked: &mut Vec<String>| {

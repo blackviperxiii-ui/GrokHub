@@ -283,7 +283,7 @@ impl Cabin {
     }
 
     /// Self-tuning runs on its own and asks nothing; a promotion or rollback
-    /// is a ledger line and the weekly review's router line, never a card.
+    /// is a ledger line, never a card or a notice.
     fn poll_tune(&mut self) {
         let Some(rx) = self.harness.router.tune_rx.take() else {
             return;

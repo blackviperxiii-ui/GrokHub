@@ -564,27 +564,28 @@ fn a_success_drop_after_a_patch_gives_a_revert_card_and_revert_puts_v1_back() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// Router R3a: a cost-raising tuning change is one of the week's cards, the
-/// review gets one router line, and only the Accept click changes the router.
+/// Router R3a/C11: a cost-raising tuning change is no card any more. The
+/// weekly pass posts nothing about the router and changes nothing; the
+/// candidate waits in its guarded shadow.
 #[test]
-fn a_cost_raising_router_card_rides_the_weekly_pass_and_applies_only_on_accept() {
+fn a_cost_raising_router_candidate_posts_no_card_and_the_weekly_pass_leaves_it_in_shadow() {
     use grokhub_agent::route::{learn, tune};
     let _g = crate::config::hold_test_config();
     let (_pin, root) = pin("r3a-router-card");
     let now = grokhub_core::now_ms();
-    let card = tune::Candidate {
+    let pricier = tune::Candidate {
         id: "chat:default#7".into(),
         class: "chat:default".into(),
         change: Some(tune::Change::Start {
             effort: "high".into(),
         }),
-        stage: tune::Stage::Card,
+        stage: tune::Stage::Shadow,
         created_at: now,
         cost_rise_pct: Some(30.0),
         ..tune::Candidate::default()
     };
     let state = tune::TuneState {
-        candidates: vec![card],
+        candidates: vec![pricier],
         ..tune::TuneState::default()
     };
     grokhub_core::model_registry::store::write_json(&learn::state_path(&root), &state).unwrap();
@@ -592,44 +593,18 @@ fn a_cost_raising_router_card_rides_the_weekly_pass_and_applies_only_on_accept()
     let mut cabin = Cabin::quiet_for_test();
     cabin.run_self_review_now(now);
     assert_eq!(calls.load(Ordering::SeqCst), 0);
-    let cards = self_review_cards(&cabin);
-    assert_eq!(cards.len(), 1);
-    assert_eq!(cards[0].source_id, "self-review:router:chat:default#7");
-    assert_eq!(cards[0].title, "Spend more on everyday chat?");
-    assert_eq!(
-        cards[0].body.as_deref(),
-        Some("Auto could do everyday chat better for about 30% more. Allow it?")
-    );
-    let review = cabin
-        .updates
-        .iter()
-        .find(|c| c.source_id == "router-review")
-        .expect("the weekly router line");
-    assert_eq!(
-        review.body.as_deref(),
-        Some("Router: 0 changes kept, 0 rolled back.")
-    );
+    assert!(self_review_cards(&cabin).is_empty());
     assert!(
-        !learn::tuning_path(&root).exists(),
-        "nothing changes before the click"
+        cabin
+            .updates
+            .iter()
+            .all(|c| c.source_id != "router-review"
+                && !c.source_id.starts_with("self-review:router:"))
     );
-    cabin.pulse_accept(&cards[0].id, "2026-10-11");
+    assert!(!learn::tuning_path(&root).exists());
     assert_eq!(
-        learn::load_tuning(&root)
-            .starts
-            .get("chat:default")
-            .map(String::as_str),
-        Some("high")
-    );
-    assert_eq!(cabin.status, "Auto now spends more on everyday chat.");
-    let line = hx::ChangeLedger::load_kind(&root, hx::ChangeKind::Model)
-        .all()
-        .last()
-        .cloned()
-        .unwrap();
-    assert_eq!(
-        (line.id.as_str(), line.origin.as_str()),
-        ("route_tuning", "self_manage")
+        learn::load_state(&root).candidates[0].stage,
+        tune::Stage::Shadow
     );
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -818,14 +793,11 @@ fn quiet_mode_logs_the_weekly_suggestions_and_posts_no_cards() {
         .collect();
     assert_eq!(
         sources,
-        vec![
-            (
-                day.as_str(),
-                "self-review:draft:summarize-march-invoic",
-                "Make a skill: summarize-march-invoic"
-            ),
-            (day.as_str(), "router-review", "Weekly router review"),
-        ]
+        vec![(
+            day.as_str(),
+            "self-review:draft:summarize-march-invoic",
+            "Make a skill: summarize-march-invoic"
+        ),]
     );
     let note = super::self_review_ui::quiet_log_note(&state.quiet_log);
     assert!(
@@ -850,10 +822,10 @@ fn quiet_mode_logs_the_weekly_suggestions_and_posts_no_cards() {
         "off again, the pass posts its card as before"
     );
     assert_eq!(cards[0].title, "Make a skill: summarize-march-invoic");
-    assert!(cabin.updates.iter().any(|c| c.source_id == "router-review"));
+    assert!(cabin.updates.iter().all(|c| c.source_id != "router-review"));
     assert_eq!(
         super::self_review_ui::load_state().quiet_log.len(),
-        2,
+        1,
         "off, nothing more is logged"
     );
     let _ = std::fs::remove_dir_all(&root);

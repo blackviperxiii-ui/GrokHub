@@ -737,6 +737,21 @@ pub fn is_new_turn(episode: &str, class: &str, turn: u64) -> bool {
         .is_none_or(|s| s.turn != turn)
 }
 
+/// The learner ([`super::bandit`]) moved this turn's first call to `rung`:
+/// the turn's later steps climb from there.
+pub fn set_rung(episode: &str, class: &str, rung: usize) {
+    if let Some(st) = STATES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_mut(&key(episode, class))
+    {
+        if st.rung != rung {
+            st.rung = rung;
+            st.fails = 0;
+        }
+    }
+}
+
 /// The rung this episode is on now, if it has routed a call in `class`.
 pub fn current(episode: &str, class: &str) -> Option<usize> {
     STATES

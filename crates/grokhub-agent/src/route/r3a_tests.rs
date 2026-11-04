@@ -1,7 +1,7 @@
 //! Router R3a acceptance on real files: DE2 from outcome records, one
 //! fixture run of shadow → canary → promote → rollback through the
-//! ChangeLedger, a cost-raising card that changes nothing until you accept
-//! it, Undo byte-identical, the stub refusal, and the local model: off by
+//! ChangeLedger, a cost-raising candidate that takes the same silent guarded
+//! path, Undo byte-identical, the stub refusal, and the local model: off by
 //! default, and with it forced on (fake runtime) only for background work.
 
 use std::collections::BTreeMap;
@@ -97,7 +97,6 @@ fn seed(dir: &std::path::Path, c: Candidate) {
             super::table::profiles_hash(&BTreeMap::new())
         ),
         seq: 1,
-        ..TuneState::default()
     };
     grokhub_core::model_registry::store::write_json(&learn::state_path(dir), &state).unwrap();
 }
@@ -180,11 +179,15 @@ fn shadow_then_canary_then_promote_then_rollback_with_both_ledger_lines_and_undo
         promoted.contains("\"chat:default\": \"grok-4.6\""),
         "{promoted}"
     );
-    assert_eq!(
-        learn::review_line(&dir, t2),
-        "Router: 1 change kept (everyday chat: \u{2212}12% cost, quality same), 0 rolled back."
-    );
     let promoted = &load_state(&dir).candidates[0];
+    assert_eq!(
+        promoted
+            .promoted_snap
+            .unwrap()
+            .cost_gain_pct(&promoted.baseline.unwrap())
+            .round(),
+        12.0
+    );
     assert_eq!(
         (promoted.id.as_str(), promoted.stage),
         ("chat:default#1", Stage::Watch)
@@ -249,10 +252,7 @@ fn shadow_then_canary_then_promote_then_rollback_with_both_ledger_lines_and_undo
         (c.stage, c.until),
         (Stage::Rejected, Some(t3 + 14 * DAY_MS))
     );
-    assert_eq!(
-        learn::review_line(&dir, t3),
-        "Router: 0 changes kept, 1 rolled back."
-    );
+    assert!(c.promoted_at.is_some(), "rolled back after it went live");
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -308,40 +308,54 @@ fn undo_of_a_promotion_restores_the_tuning_file_byte_identical_and_the_tuner_bac
 }
 
 #[test]
-fn a_cost_raising_card_changes_nothing_until_accepted_and_undo_puts_the_file_back() {
-    let dir = test_dir("r3a-card");
-    let card = Candidate {
+fn a_cost_raising_candidate_promotes_silently_on_its_canary_and_undo_puts_the_file_back() {
+    let dir = test_dir("r3a-pricier");
+    let pricier = Candidate {
         id: "chat:default#2".into(),
         class: "chat:default".into(),
         change: Some(Change::Start {
             effort: "high".into(),
         }),
-        stage: Stage::Card,
+        stage: Stage::Canary,
         created_at: T0,
+        canary_at: Some(T0),
         cost_rise_pct: Some(30.0),
         ..Candidate::default()
     };
-    seed(&dir, card);
-    let due = learn::cards_due(&dir, T0);
-    assert_eq!(due.len(), 1);
-    assert_eq!(due[0].0, "self-review:router:chat:default#2");
-    assert_eq!(
-        due[0].2,
-        "Auto could do everyday chat better for about 30% more. Allow it?"
-    );
-    // No click: a tick never applies it.
-    tick(&dir, T0 + DAY_MS);
-    assert!(!tuning_path(&dir).exists());
-    assert_eq!(load_state(&dir).candidates[0].stage, Stage::Card);
-    // Two cards a week at most.
-    learn::cards_posted(&dir, 2, T0);
-    assert!(learn::cards_due(&dir, T0 + DAY_MS).is_empty());
-    assert_eq!(learn::cards_due(&dir, T0 + 8 * DAY_MS).len(), 1);
-    // Accept writes through the ledger; Undo removes the file again (it was not there).
-    assert_eq!(
-        learn::accept_card(&dir, "chat:default#2", T0).unwrap(),
-        "Auto now spends more on everyday chat."
-    );
+    seed(&dir, pricier);
+    // Live 80% passed at $0.0100 a step; the canary 95% at $0.0130.
+    for i in 0..400u64 {
+        let pass = if i % 5 == 4 { "reject" } else { "ok" };
+        log(
+            &dir,
+            T0 + 1 + i,
+            rec(
+                "grok-4.7",
+                "medium",
+                &format!("live-{i}"),
+                pass,
+                0.0100,
+                None,
+            ),
+        );
+    }
+    for i in 0..60u64 {
+        let pass = if i % 20 == 19 { "reject" } else { "ok" };
+        log(
+            &dir,
+            T0 + 500 + i,
+            rec(
+                "grok-4.7",
+                "high",
+                &format!("can-{i}"),
+                pass,
+                0.0130,
+                Some("canary:chat:default#2".into()),
+            ),
+        );
+    }
+    let run = tick(&dir, T0 + DAY_MS);
+    assert_eq!(run.promoted, vec!["chat:default#2".to_string()]);
     assert_eq!(
         learn::load_tuning(&dir)
             .starts
@@ -349,6 +363,7 @@ fn a_cost_raising_card_changes_nothing_until_accepted_and_undo_puts_the_file_bac
             .map(String::as_str),
         Some("high")
     );
+    assert_eq!(load_state(&dir).candidates[0].stage, Stage::Watch);
     let line = ChangeLedger::load_kind(&dir, ChangeKind::Model)
         .all()
         .last()
@@ -358,7 +373,7 @@ fn a_cost_raising_card_changes_nothing_until_accepted_and_undo_puts_the_file_bac
         (line.id.as_str(), line.reason.as_str()),
         (
             learn::TUNING_ID,
-            "you accepted: everyday chat: start at High"
+            "router tuned everyday chat: start at High (quality +15 pts for about 30% more cost)"
         )
     );
     undo_change(
@@ -370,10 +385,9 @@ fn a_cost_raising_card_changes_nothing_until_accepted_and_undo_puts_the_file_bac
     )
     .unwrap();
     assert!(!tuning_path(&dir).exists());
-    assert!(
-        learn::accept_card(&dir, "chat:default#2", T0).is_err(),
-        "a used card can't apply twice"
-    );
+    tick(&dir, T0 + 2 * DAY_MS);
+    let c = &load_state(&dir).candidates[0];
+    assert_eq!((c.stage, c.reason.as_str()), (Stage::Rejected, "undone"));
     let _ = std::fs::remove_dir_all(dir);
 }
 

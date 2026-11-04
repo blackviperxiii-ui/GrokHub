@@ -1343,14 +1343,6 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         }),
         "inbox-zero",
     ));
-    cabin.post_router_review(now);
-    rows.push((
-        "post_router_review",
-        posted_card(&cabin, "post_router_review", |c| {
-            c.source_id == "router-review"
-        }),
-        "router review",
-    ));
     cabin
         .live_mut()
         .push(("user".into(), "Summarize inbox".into()));

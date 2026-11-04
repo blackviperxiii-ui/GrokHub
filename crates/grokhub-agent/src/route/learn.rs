@@ -405,8 +405,9 @@ pub fn live_view(
     (top, bands)
 }
 
-/// Evidence for one candidate from the log.
-pub fn evidence(c: &Candidate, log: &Log) -> Evidence {
+/// Evidence for one candidate from the route log and the learner's
+/// propensity log (`lines`, C11).
+pub fn evidence(c: &Candidate, log: &Log, lines: &[super::bandit::Line]) -> Evidence {
     let shadow = log.shadow.get(&c.id).map(Vec::as_slice).unwrap_or_default();
     let since_canary = c.canary_at.unwrap_or(u64::MAX);
     let in_class = |s: &&Step| s.class == c.class;
@@ -416,6 +417,7 @@ pub fn evidence(c: &Candidate, log: &Log) -> Evidence {
             .iter()
             .filter(|(t, bad)| *t >= c.created_at && *bad)
             .count() as u32,
+        ope: super::bandit::ope(lines, &c.id),
         canary: Snap::of(
             log.steps
                 .iter()
@@ -445,11 +447,9 @@ pub struct TuneRun {
     pub promoted: Vec<String>,
     pub rolled_back: Vec<String>,
     pub rejected: Vec<String>,
-    /// New cost-raising cards waiting for the weekly self-review.
-    pub cards: Vec<String>,
     /// D13: the per-chat metrics this pass read (cache hits, switches,
-    /// escalations and their precision). Read only; nothing here moves a
-    /// candidate yet.
+    /// escalations and their precision). The measured cache hit rate feeds
+    /// the learner's cost estimates.
     pub sessions: super::session_metrics::SessionSummary,
 }
 
@@ -486,15 +486,19 @@ pub fn tick(
         sessions: super::session_metrics::summary(&super::session_metrics::load(config_dir)),
         ..TuneRun::default()
     };
+    super::bandit::set_cache_hit(
+        config_dir,
+        (run.sessions.calls > 0).then_some(run.sessions.cache_hit_pct),
+    );
+    super::bandit::trim_log(config_dir);
+    let lines = super::bandit::read_log(config_dir);
     for i in 0..state.candidates.len() {
         let c = state.candidates[i].clone();
         let Some(change) = c.change.clone() else {
             continue;
         };
         // You undid it (Undo on the ledger line): it stays off for a while.
-        if matches!(c.stage, Stage::Watch | Stage::Kept | Stage::Accepted)
-            && !tuning.has(&c.class, &change)
-        {
+        if matches!(c.stage, Stage::Watch | Stage::Kept) && !tuning.has(&c.class, &change) {
             let c = &mut state.candidates[i];
             c.stage = Stage::Rejected;
             c.reason = "undone".into();
@@ -505,7 +509,7 @@ pub fn tick(
         if !c.active() {
             continue;
         }
-        let ev = evidence(&c, &log);
+        let ev = evidence(&c, &log, &lines);
         let week = state.promotions_since(now_ms.saturating_sub(WEEK_MS));
         match tune::judge(&c, &ev, week, now_ms) {
             Verdict::Wait => {}
@@ -521,7 +525,19 @@ pub fn tick(
             } => {
                 let before = tuning.value(&c.class, &change);
                 tuning.apply(&c.class, &change);
-                let reason = format!("{TUNED_PREFIX}{}: {} ({cost_gain_pct:.0}% cheaper, {latency_gain_pct:.0}% faster, quality held)", plain(&c.class), change.label());
+                let reason = match c.cost_rise_pct {
+                    Some(rise) => format!(
+                        "{TUNED_PREFIX}{}: {} (quality {:+.0} pts for about {rise:.0}% more cost)",
+                        plain(&c.class),
+                        change.label(),
+                        ev.canary.pass_pct - ev.live.pass_pct
+                    ),
+                    None => format!(
+                        "{TUNED_PREFIX}{}: {} ({cost_gain_pct:.0}% cheaper, {latency_gain_pct:.0}% faster, quality held)",
+                        plain(&c.class),
+                        change.label()
+                    ),
+                };
                 write_tuning(config_dir, &tuning, &reason)?;
                 let c = &mut state.candidates[i];
                 c.stage = Stage::Watch;
@@ -566,10 +582,8 @@ pub fn tick(
             now_ms,
         };
         let p = tune::propose(&cards, &log.steps, &state, &top, &bands, &filters, now_ms);
-        state.seq += (p.auto.len() + p.cards.len()) as u64;
-        run.cards.extend(p.cards.iter().map(|c| c.id.clone()));
+        state.seq += p.auto.len() as u64;
         state.candidates.extend(p.auto);
-        state.candidates.extend(p.cards);
         state.built_at = now_ms;
         state.inputs_hash = inputs;
     }
@@ -605,68 +619,6 @@ pub fn tick(
         );
     }
     Ok(run)
-}
-
-/// Cost-raising cards the weekly self-review may post now: at most
-/// [`tune::ROUTER_CARDS_PER_WEEK`] a week. Each is `(source id, title, body)`.
-pub fn cards_due(config_dir: &Path, now_ms: u64) -> Vec<(String, String, String)> {
-    let state = load_state(config_dir);
-    let sent = state
-        .cards_at
-        .iter()
-        .filter(|t| **t + WEEK_MS > now_ms)
-        .count();
-    let room = tune::ROUTER_CARDS_PER_WEEK.saturating_sub(sent);
-    state
-        .candidates
-        .iter()
-        .filter(|c| c.stage == Stage::Card)
-        .take(room)
-        .map(|c| {
-            let (title, body) = tune::card_text(c);
-            (grokhub_core::self_review::router_source(&c.id), title, body)
-        })
-        .collect()
-}
-
-/// The weekly self-review posted these cards: they count against this week's two.
-pub fn cards_posted(config_dir: &Path, n: usize, now_ms: u64) {
-    if n == 0 {
-        return;
-    }
-    let mut state = load_state(config_dir);
-    state.cards_at.retain(|t| *t + WEEK_MS > now_ms);
-    state.cards_at.extend(std::iter::repeat_n(now_ms, n));
-    let _ = write_json(&state_path(config_dir), &state);
-}
-
-/// Your Accept click on a cost-raising card: the change goes in through the
-/// ledger (Undo restores the file byte-identical). Nothing else applies one.
-pub fn accept_card(config_dir: &Path, id: &str, now_ms: u64) -> Result<String, String> {
-    let mut state = load_state(config_dir);
-    let Some(c) = state
-        .candidates
-        .iter_mut()
-        .find(|c| c.id == id && c.stage == Stage::Card)
-    else {
-        return Err("That suggestion is no longer open.".into());
-    };
-    let change = c.change.clone().ok_or("That suggestion has no change.")?;
-    let mut tuning = load_tuning(config_dir);
-    c.before = tuning.value(&c.class, &change);
-    tuning.apply(&c.class, &change);
-    let what = format!("{}: {}", plain(&c.class), change.label());
-    write_tuning(config_dir, &tuning, &format!("you accepted: {what}"))?;
-    c.stage = Stage::Accepted;
-    c.promoted_at = Some(now_ms);
-    let done = format!("Auto now spends more on {}.", plain(&c.class));
-    write_json(&state_path(config_dir), &state)?;
-    Ok(done)
-}
-
-/// The weekly self-review's router line.
-pub fn review_line(config_dir: &Path, now_ms: u64) -> String {
-    tune::review_line(&load_state(config_dir), now_ms)
 }
 
 /// What the router should do with one step's tuning: the start to use, the
