@@ -111,7 +111,6 @@ pub mod mission;
 pub mod model_download;
 pub mod model_drop;
 pub mod model_registry;
-pub mod models;
 pub mod mods;
 pub mod net_log;
 pub mod nudge_watchers;
@@ -488,7 +487,6 @@ pub use mission::{
     mission_worthy_intent, MissionCheckItem, MissionCheckStatus, MissionOutcomeView, MissionSeed,
     MissionStatus, MissionView,
 };
-pub use models::{sanitize_chat_model, MODEL_CATALOG};
 pub use nudge_watchers::{
     dismiss_snooze, is_nudge_watcher_card, nudge_watcher_card, tick, NudgeLedger, NudgeWatcherMeta,
     NudgeWatcherSettings, TickInput, TickOutput, WatcherId, WatcherSnapshot, COOLDOWN_MS,

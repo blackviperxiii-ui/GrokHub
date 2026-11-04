@@ -45,7 +45,7 @@ export const DESKTOP_NOTE =
   `${PRODUCT_NAME} can see your screen, click and type. Deleting, sending, paying and credentials always wait for your OK.`;
 
 export const GENERAL_EMPTY =
-  "Nothing here on this device. The model, work folder and approvals are in Defaults.";
+  "Nothing here on this device. The work folder and approvals are in Defaults.";
 
 export const HALT_KEYS_NOTE =
   "Halt stops desktop control and every reply: the Halt button, Ctrl+Alt+H in this window, the tray's Halt, or Super+Shift+Esc from any app.";
@@ -150,10 +150,10 @@ export function Settings({
   async function save(event: FormEvent) {
     event.preventDefault();
     if (!settings) return;
-    // Defaults and Behavior save the model, tray, folder and approvals themselves.
-    const { model, closeToTray, workspace, approvals } = settings;
+    // Defaults and Behavior save the tray, folder and approvals themselves.
+    const { closeToTray, workspace, approvals } = settings;
     try {
-      show(await saveSettings(model, closeToTray, workspace, approvals, desktopControl));
+      show(await saveSettings(closeToTray, workspace, approvals, desktopControl));
       ok("Settings saved.");
     } catch (err) {
       fail(err);

@@ -23,7 +23,6 @@ vi.mock("./external", () => ({ openExternal: api.openExternal }));
 import { GrokSignIn, signedInAs } from "./GrokSignIn";
 
 const SETTINGS: Settings = {
-  model: "grok-4.7",
   closeToTray: true,
   hasApiKey: false,
   signedIn: null,

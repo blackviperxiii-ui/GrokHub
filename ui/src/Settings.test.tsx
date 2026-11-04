@@ -9,7 +9,6 @@ const api = vi.hoisted(() => ({
   saveSettings:
     vi.fn<
       (
-        model: string,
         closeToTray: boolean,
         workspace: string,
         approvals: string,
@@ -23,9 +22,7 @@ const api = vi.hoisted(() => ({
   setAutostart: vi.fn<(on: boolean) => Promise<boolean>>(),
   setSummonHotkey: vi.fn<(on: boolean) => Promise<Shape>>(),
   setNotifications: vi.fn<(on: boolean) => Promise<Shape>>(),
-  listModels: vi.fn(),
   getHaltKeys: vi.fn(() => Promise.resolve({ global: true })),
-  setModel: vi.fn<(id: string) => Promise<Shape>>(),
 }));
 
 vi.mock("./api", () => api);
@@ -94,7 +91,6 @@ const BASICS: Capabilities = { ...DESKTOP, autostart: true, summonHotkey: true, 
 
 function shape(over: Partial<Shape>): Shape {
   return {
-    model: "grok-4.7",
     closeToTray: true,
     hasApiKey: false,
     workspace: "",
@@ -117,39 +113,19 @@ describe("Settings", () => {
   });
 
   it("General saves desktop control, keeping what Defaults and Behavior saved", async () => {
-    api.listModels.mockResolvedValue({
-      current: "grok-4.7",
-      options: [{ id: "grok-4.7", label: "Grok 4.7", source: "catalog" }],
-      note: null,
-    });
-    api.setModel.mockResolvedValue(shape({ model: "grok-5" }));
     api.saveDefaults.mockResolvedValue(
-      shape({ model: "grok-5", workspace: "/work", workspacePath: "/work", approvals: "always" }),
+      shape({ workspace: "/work", workspacePath: "/work", approvals: "always" }),
     );
-    api.saveSettings.mockResolvedValue(shape({ model: "grok-5", workspace: "/work", approvals: "always" }));
+    api.saveSettings.mockResolvedValue(shape({ workspace: "/work", approvals: "always" }));
     render(<Settings caps={DESKTOP} />);
 
     expect(await screen.findByLabelText("Let Loadout control the desktop")).toBeInTheDocument();
-    // The model, folder, approvals and tray moved out of General.
-    expect(screen.queryByLabelText("Model")).toBeNull();
+    // The folder, approvals and tray moved out of General.
     expect(screen.queryByLabelText("Work folder")).toBeNull();
     expect(screen.queryByLabelText("Approvals")).toBeNull();
     expect(screen.queryByLabelText(/keeps Loadout in the tray/)).toBeNull();
 
     await openSection("Defaults");
-    const model = screen.getByLabelText("Model");
-    expect(model).toHaveTextContent("grok-4.7");
-    await userEvent.click(model);
-    expect(await screen.findByRole("button", { name: /Grok 4\.7/ })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    await userEvent.click(screen.getByRole("button", { name: "Other…" }));
-    await userEvent.type(screen.getByLabelText("Model id"), " grok-5 ");
-    await userEvent.click(screen.getByRole("button", { name: "Use" }));
-    expect(api.setModel).toHaveBeenCalledWith("grok-5");
-    expect(await screen.findByText("New messages use grok-5.")).toBeInTheDocument();
-    expect(screen.getByLabelText("Model")).toHaveTextContent("grok-5");
     await userEvent.type(screen.getByLabelText("Work folder"), "/work");
     await userEvent.selectOptions(screen.getByLabelText("Approvals"), "always");
     await userEvent.click(screen.getByRole("button", { name: "Save defaults" }));
@@ -160,7 +136,7 @@ describe("Settings", () => {
     await openSection("General");
     await userEvent.click(screen.getByLabelText("Let Loadout control the desktop"));
     await userEvent.click(screen.getByRole("button", { name: "Save settings" }));
-    expect(api.saveSettings).toHaveBeenCalledWith("grok-5", false, "/work", "always", true);
+    expect(api.saveSettings).toHaveBeenCalledWith(false, "/work", "always", true);
     expect(await screen.findByText("Settings saved.")).toBeInTheDocument();
   });
 
@@ -175,7 +151,7 @@ describe("Settings", () => {
     expect(screen.getByText(DESKTOP_NOTE)).toHaveClass("warn");
     await userEvent.click(screen.getByRole("button", { name: "Save settings" }));
 
-    expect(api.saveSettings).toHaveBeenCalledWith("grok-4.7", true, "", "ask", true);
+    expect(api.saveSettings).toHaveBeenCalledWith(true, "", "ask", true);
     expect(await screen.findByText("Settings saved.")).toBeInTheDocument();
     expect(screen.getByLabelText("Let Loadout control the desktop")).toBeChecked();
   });
@@ -335,6 +311,26 @@ describe("Settings", () => {
     expect(screen.getByRole("heading", { level: 1, name: "About" })).toBeTruthy();
   });
 
+  it("no page shows or picks a model or an effort", async () => {
+    render(<Settings caps={DESKTOP} />);
+    expect(await screen.findByLabelText("Let Loadout control the desktop")).toBeInTheDocument();
+    const tabs = screen.getByRole("navigation", { name: "Settings categories" });
+    const seen: string[] = [];
+    for (const tab of Array.from(tabs.querySelectorAll("button"))) {
+      await userEvent.click(tab);
+      for (const page of Array.from(sideMenu().querySelectorAll("button"))) {
+        await userEvent.click(page);
+        seen.push(page.textContent ?? "");
+        expect(screen.queryByLabelText(/^model$/i), page.textContent ?? "").toBeNull();
+        expect(screen.queryByLabelText(/^model id$/i), page.textContent ?? "").toBeNull();
+        expect(screen.queryByText(/effort/i), page.textContent ?? "").toBeNull();
+        expect(screen.queryByText(/grok-\d/i), page.textContent ?? "").toBeNull();
+      }
+    }
+    expect(seen).toContain("Defaults");
+    expect(seen).toContain("Account");
+  });
+
   it("opens every section from the nav, one at a time", async () => {
     render(<Settings caps={DESKTOP} />);
     expect(await screen.findByLabelText("Let Loadout control the desktop")).toBeInTheDocument();
@@ -347,7 +343,7 @@ describe("Settings", () => {
     expect(within(sideMenu()).queryByRole("button", { name: "General" })).toBeNull();
 
     await openSection("Defaults");
-    expect(screen.getByLabelText("Model")).toHaveTextContent("grok-4.7");
+    expect(screen.queryByLabelText("Model")).toBeNull();
     expect(screen.getByLabelText("Work folder")).toBeInTheDocument();
     expect(screen.queryByLabelText("API key")).toBeNull();
 
@@ -424,7 +420,9 @@ describe("Settings", () => {
     render(<Settings caps={WEB} />);
 
     expect(await screen.findByText(REMOTE_NOTE)).toBeInTheDocument();
-    expect(screen.getByText("grok-4.7")).toBeInTheDocument();
+    // The web app sees no model or effort either.
+    expect(screen.queryByText(/grok-\d/i)).toBeNull();
+    expect(screen.queryByText(/effort/i)).toBeNull();
     expect(screen.getByText("/home/user/GrokHub")).toBeInTheDocument();
     expect(screen.getByText("Auto")).toBeInTheDocument();
     expect(screen.getByText("Saved on your computer.")).toBeInTheDocument();

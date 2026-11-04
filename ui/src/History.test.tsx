@@ -24,7 +24,6 @@ const row = (id: string, title: string, updated: number): ChatRow => ({
   title,
   created: updated - 60_000,
   updated,
-  model: "grok-4.7",
 });
 
 const TODAY = row("shell-a", "Fix the build", at(0, 9));

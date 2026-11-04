@@ -12,7 +12,6 @@ export interface SignedIn {
 }
 
 export interface Settings {
-  model: string;
   closeToTray: boolean;
   hasApiKey: boolean;
   /** Signed in with Grok: who, when xAI said. */
@@ -138,14 +137,12 @@ export function setTheme(theme: Theme): Promise<Settings> {
 }
 
 export function saveSettings(
-  model: string,
   closeToTray: boolean,
   workspace: string,
   approvals: Approvals,
   desktopControl: boolean,
 ): Promise<Settings> {
   return invoke<Settings>("save_settings", {
-    model,
     closeToTray,
     workspace,
     approvals,
@@ -169,28 +166,6 @@ export function setSummonHotkey(on: boolean): Promise<Settings> {
 
 export function setNotifications(on: boolean): Promise<Settings> {
   return invoke<Settings>("set_notifications", { on });
-}
-
-/** Where a model in the picker came from. */
-export type ModelSource = "catalog" | "account" | "custom";
-
-export type ModelOption = { id: string; label: string; source: ModelSource };
-
-export type ModelList = {
-  current: string;
-  options: ModelOption[];
-  /** Why the account's models are missing, when they are. */
-  note: string | null;
-};
-
-/** The chat models to pick from; `refresh` skips the 10-minute cache. */
-export function listModels(refresh = false): Promise<ModelList> {
-  return invoke<ModelList>("list_models", { refresh });
-}
-
-/** Saves the chat model for the next message. */
-export function setModel(id: string): Promise<Settings> {
-  return invoke<Settings>("set_model", { id });
 }
 
 export function setApiKey(key: string): Promise<Settings> {
@@ -299,7 +274,6 @@ export interface ChatRow {
   created: number;
   /** Unix ms of its last saved turn. */
   updated: number;
-  model: string;
 }
 
 /** "tools": a run of tool steps, named on one muted line (not replayed as cards). */
@@ -549,7 +523,6 @@ export type SlashEffect =
   | { kind: "newChat" }
   | { kind: "mode"; mode: SessionMode; text: string | null }
   | { kind: "open"; view: "settings" | "memory" | "automations" | "connectors" }
-  | { kind: "modelSet"; id: string; text: string }
   | { kind: "notice"; text: string };
 
 export function slashHits(draft: string): Promise<SlashHit[]> {

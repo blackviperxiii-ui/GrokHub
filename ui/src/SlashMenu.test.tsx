@@ -21,8 +21,6 @@ vi.mock("./api", () => ({
   saveSettings: vi.fn(),
   answerPermission: vi.fn(),
   cancelChat: vi.fn(),
-  setModel: vi.fn(),
-  listModels: vi.fn(),
   // No chat saved from an earlier launch.
   getLastChat: () => Promise.resolve(null),
   loadChat: vi.fn(),
@@ -40,7 +38,6 @@ import { Chat } from "./Chat";
 import { isSlashCommand } from "./SlashMenu";
 
 const SETTINGS: Settings = {
-  model: "grok-4.7",
   closeToTray: true,
   hasApiKey: true,
   workspace: "",

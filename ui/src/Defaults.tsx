@@ -1,13 +1,11 @@
 import { useState, type FormEvent } from "react";
-import { saveDefaults, setModel, type Approvals, type Settings } from "./api";
+import { saveDefaults, type Approvals, type Settings } from "./api";
 import { APPROVALS } from "./approvals";
 import { PRODUCT_NAME } from "./brand";
-import { ModelPicker } from "./ModelPicker";
 
-/** Settings → Defaults: the model new messages use, where the agent works and
- * how chat handles changes. A model pick saves at once, as the composer chip
- * does; the folder and approvals save with the button. `readOnly` is the web
- * app's view. */
+/** Settings → Defaults: where the agent works and how chat handles changes,
+ * saved with the button. There is no model or effort here: the router picks
+ * both for every step. `readOnly` is the web app's view. */
 export function Defaults({
   settings,
   readOnly = false,
@@ -33,8 +31,6 @@ export function Defaults({
   if (readOnly) {
     return (
       <dl aria-label="Defaults">
-        <dt>Model</dt>
-        <dd>{settings.model}</dd>
         <dt>Work folder</dt>
         <dd>
           <code>{settings.workspacePath}</code>
@@ -43,16 +39,6 @@ export function Defaults({
         <dd>{APPROVALS[settings.approvals].label}</dd>
       </dl>
     );
-  }
-
-  async function pick(id: string) {
-    try {
-      const next = await setModel(id);
-      onSaved?.(next);
-      setNote(`New messages use ${next.model}.`);
-    } catch (err) {
-      setNote(String(err));
-    }
   }
 
   async function save(event: FormEvent) {
@@ -70,14 +56,6 @@ export function Defaults({
 
   return (
     <form onSubmit={(e) => void save(e)}>
-      <div className="field">
-        <span id="defaults-model-label">Model</span>
-        <ModelPicker
-          value={settings.model}
-          onPick={(id) => void pick(id)}
-          labelledBy="defaults-model-label"
-        />
-      </div>
       <label>
         Work folder
         <input

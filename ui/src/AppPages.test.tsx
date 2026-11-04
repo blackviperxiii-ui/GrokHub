@@ -51,7 +51,6 @@ import { App } from "./App";
 
 function settings(over: Partial<Settings> = {}): Settings {
   return {
-    model: "grok-4.7",
     closeToTray: true,
     hasApiKey: true,
     workspace: "",

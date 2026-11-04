@@ -19,7 +19,6 @@ import {
   getLastChat,
   getSettings,
   loadChat,
-  setModel,
   onChatEvent,
   onEventGap,
   runSlash,
@@ -559,20 +558,11 @@ export function Chat({
     if (active) getSettings().then(setSettings, () => {});
   }, [active]);
 
-  async function pickModel(id: string) {
-    try {
-      setSettings(await setModel(id));
-    } catch (err) {
-      setError(String(err));
-    }
-  }
-
   async function setApprovals(approvals: Approvals) {
     if (!settings) return;
     try {
       setSettings(
         await saveSettings(
-          settings.model,
           settings.closeToTray,
           settings.workspace,
           approvals,
@@ -857,10 +847,6 @@ export function Chat({
       case "open":
         onOpenView?.(effect.view);
         break;
-      case "modelSet":
-        getSettings().then(setSettings, () => {});
-        setItems((now) => [...now, { kind: "slash", command, text: effect.text }]);
-        break;
       case "notice":
         setItems((now) => [...now, { kind: "slash", command, text: effect.text }]);
         break;
@@ -1019,8 +1005,6 @@ export function Chat({
         onApprovals={(a) => void setApprovals(a)}
         busy={busy}
         remote={remote}
-        model={settings?.model ?? null}
-        onModel={(id) => void pickModel(id)}
       />
       <AttachChips files={attach.files} note={attach.note} onRemove={attach.remove} busy={busy} />
       <form className="composer slash-wrap" onSubmit={send}>

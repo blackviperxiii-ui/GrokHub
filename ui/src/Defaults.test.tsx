@@ -5,8 +5,6 @@ import type { Settings } from "./api";
 
 const api = vi.hoisted(() => ({
   saveDefaults: vi.fn<(workspace: string, approvals: string) => Promise<Settings>>(),
-  setModel: vi.fn<(id: string) => Promise<Settings>>(),
-  listModels: vi.fn(),
 }));
 
 vi.mock("./api", () => api);
@@ -15,7 +13,6 @@ import { Defaults } from "./Defaults";
 
 function shape(over: Partial<Settings> = {}): Settings {
   return {
-    model: "grok-4.7",
     closeToTray: true,
     hasApiKey: false,
     workspace: "",
@@ -33,28 +30,20 @@ function shape(over: Partial<Settings> = {}): Settings {
 describe("Defaults", () => {
   beforeEach(() => {
     for (const fn of Object.values(api)) fn.mockReset();
-    api.listModels.mockResolvedValue({
-      current: "grok-4.7",
-      options: [
-        { id: "grok-4.7", label: "Grok 4.7", source: "catalog" },
-        { id: "grok-5", label: "Grok 5", source: "catalog" },
-      ],
-      note: null,
-    });
   });
 
-  it("a model pick saves at once with the picker from the composer", async () => {
-    const onSaved = vi.fn();
-    const saved = shape({ model: "grok-5" });
-    api.setModel.mockResolvedValue(saved);
-    render(<Defaults settings={shape()} onSaved={onSaved} />);
-    expect(screen.getByLabelText("Model")).toHaveTextContent("grok-4.7");
-    await userEvent.click(screen.getByLabelText("Model"));
-    await userEvent.click(await screen.findByRole("button", { name: /Grok 5/ }));
-    expect(api.setModel).toHaveBeenCalledWith("grok-5");
-    expect(onSaved).toHaveBeenCalledWith(saved);
-    expect(await screen.findByText("New messages use grok-5.")).toBeInTheDocument();
-    expect(api.saveDefaults).not.toHaveBeenCalled();
+  it("has no model or effort to see or pick: the router picks both", () => {
+    const view = render(<Defaults settings={shape()} />);
+    expect(screen.queryByLabelText("Model")).toBeNull();
+    expect(screen.queryByText(/model/i)).toBeNull();
+    expect(screen.queryByText(/effort/i)).toBeNull();
+    expect(screen.queryByText(/grok-/i)).toBeNull();
+    expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["Save defaults"]);
+    view.unmount();
+    render(<Defaults settings={shape()} readOnly />);
+    expect(screen.queryByText(/model/i)).toBeNull();
+    expect(screen.queryByText(/effort/i)).toBeNull();
+    expect(screen.queryByText(/grok-/i)).toBeNull();
   });
 
   it("saves the work folder and approvals, and Always says what still asks", async () => {
@@ -90,7 +79,6 @@ describe("Defaults", () => {
 
   it("the web app sees them with nothing to change them", () => {
     render(<Defaults settings={shape({ approvals: "auto" })} readOnly />);
-    expect(screen.getByText("grok-4.7")).toBeInTheDocument();
     expect(screen.getByText("/home/user/GrokHub")).toBeInTheDocument();
     expect(screen.getByText("Auto")).toBeInTheDocument();
     expect(screen.queryByRole("button")).toBeNull();

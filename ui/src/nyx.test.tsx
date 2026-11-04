@@ -36,8 +36,6 @@ vi.mock("./api", () => ({
   },
   onEventGap: () => Promise.resolve(() => {}),
   // The rest of the composer has its own tests (Chat.test.tsx, AttachChips.test.tsx).
-  setModel: vi.fn(),
-  listModels: vi.fn(() => Promise.resolve([])),
   slashHits: vi.fn(() => Promise.resolve([])),
   runSlash: vi.fn(),
   transcribe: vi.fn(),
@@ -55,7 +53,6 @@ import { Personality } from "./Personality";
 import { activityOf, artUrl, PoseCycle } from "./nyx";
 
 const SETTINGS: Settings = {
-  model: "grok-4.7",
   closeToTray: true,
   hasApiKey: true,
   workspace: "",

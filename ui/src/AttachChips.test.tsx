@@ -27,7 +27,6 @@ vi.mock("./api", () => ({
   },
   getSettings: () =>
     Promise.resolve({
-      model: "grok-4.7",
       closeToTray: true,
       hasApiKey: true,
       workspace: "",
