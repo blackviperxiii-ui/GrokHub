@@ -1105,6 +1105,10 @@ mod win {
         stop: &dyn Fn() -> bool,
         plan: Option<&crate::sandbox::Plan>,
     ) -> Result<super::ToolOutput, String> {
+        if let Some(plan) = plan.filter(|p| p.isolation.is_some()) {
+            let bg = container(cwd, command, plan)?;
+            return Ok(wait_container(bg, timeout_ms, stop));
+        }
         let sandbox = plan.map(crate::sandbox::windows::prepare);
         let env = sandbox.as_ref().map(|s| s.env.as_slice()).unwrap_or(&[]);
         let token = sandbox
@@ -1138,6 +1142,103 @@ mod win {
             Kind::TimedOut => finish(&format!("timed out after {timeout_ms}ms"), &raw, true),
             Kind::Killed => finish("killed", &raw, true),
         })
+    }
+
+    /// PowerShell running `command` in the plan's process container. A
+    /// container that won't start turns containers off for the session, so
+    /// the next command runs with the restricted token (and the gate asks).
+    fn container(
+        cwd: &Path,
+        command: &str,
+        plan: &crate::sandbox::Plan,
+    ) -> Result<super::BgProc, String> {
+        use std::sync::atomic::AtomicBool;
+
+        let exe = powershell_exe();
+        let line = format!(
+            "\"{exe}\" -NoProfile -NonInteractive -EncodedCommand {}",
+            encode_ps(command)
+        );
+        let dir = super::plain_dir(&cwd.display().to_string());
+        let env = crate::sandbox::windows::proxy_env(plan);
+        let mut proc = crate::sandbox::mxc::spawn(plan, &dir, line, &env).map_err(|err| {
+            crate::sandbox::mxc::mark_broken();
+            format!("{err}. Commands from now on run with the restricted token; run it again.")
+        })?;
+        let stdout = proc.take_stdout();
+        let stderr = proc.take_stderr();
+        let proc = Arc::new(Mutex::new(proc));
+        let killer = Arc::clone(&proc);
+        let kill: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let _ = killer.lock().unwrap_or_else(|err| err.into_inner()).kill();
+        });
+        let waiter = Arc::clone(&proc);
+        let wait: Mutex<Box<dyn FnMut() -> super::WaitPoll + Send>> =
+            Mutex::new(Box::new(move || {
+                match waiter
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .try_wait()
+                {
+                    Ok(Some(code)) => super::WaitPoll::Exited(code),
+                    Ok(None) => super::WaitPoll::Running,
+                    Err(err) => super::WaitPoll::Failed(err.to_string()),
+                }
+            }));
+        Ok(super::BgProc {
+            stdout,
+            stderr,
+            armed: Arc::new(AtomicBool::new(true)),
+            kill,
+            wait,
+        })
+    }
+
+    /// Run a container's command to its end, a stop or the timeout.
+    fn wait_container(
+        mut bg: super::BgProc,
+        timeout_ms: u64,
+        stop: &dyn Fn() -> bool,
+    ) -> super::ToolOutput {
+        let out_buf = Arc::new(Mutex::new(CapBuf::new()));
+        let err_buf = Arc::new(Mutex::new(CapBuf::new()));
+        let readers = [
+            super::spawn_reader(bg.stdout.take(), Arc::clone(&out_buf)),
+            super::spawn_reader(bg.stderr.take(), Arc::clone(&err_buf)),
+        ];
+        let started = Instant::now();
+        let limit = Duration::from_millis(timeout_ms);
+        let kind = loop {
+            if stop() {
+                bg.kill_tree();
+                break Kind::Killed;
+            }
+            if started.elapsed() >= limit {
+                bg.kill_tree();
+                break Kind::TimedOut;
+            }
+            match bg.poll() {
+                super::WaitPoll::Running => thread::sleep(POLL),
+                super::WaitPoll::Exited(code) => {
+                    bg.disarm();
+                    break Kind::Exited(u32::from_ne_bytes(code.to_ne_bytes()));
+                }
+                super::WaitPoll::Failed(err) => {
+                    bg.kill_tree();
+                    return finish(&format!("wait failed: {err}"), &[], true);
+                }
+            }
+        };
+        let drained = super::drain_readers(&readers, stop, super::DRAIN_GRACE);
+        let mut raw = super::merge_output(super::take_buf(&out_buf), super::take_buf(&err_buf));
+        if !drained {
+            raw.extend_from_slice(super::HELD_OPEN.as_bytes());
+        }
+        match kind {
+            Kind::Exited(code) => finish(&format!("exit {code}"), &raw, code != 0),
+            Kind::TimedOut => finish(&format!("timed out after {timeout_ms}ms"), &raw, true),
+            Kind::Killed => finish("killed", &raw, true),
+        }
     }
 
     /// `CreateProcessW`, or `CreateProcessAsUserW` with the sandbox's
@@ -1570,6 +1671,9 @@ mod win {
         use std::sync::atomic::AtomicBool;
         use std::sync::{Arc, Mutex};
 
+        if let Some(plan) = plan.filter(|p| p.isolation.is_some()) {
+            return container(cwd, command, plan);
+        }
         let sandbox = plan.map(crate::sandbox::windows::prepare);
         let env = sandbox.as_ref().map(|s| s.env.as_slice()).unwrap_or(&[]);
         let token = sandbox
