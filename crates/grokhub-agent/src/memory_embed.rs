@@ -7,6 +7,8 @@
 //! Hugging Face, through the egress guard and never while Offline only is on.
 //! A failed fetch waits a day before the next try. `"memory_embeddings":
 //! false` in `app.json` turns all of it off: no fetch, word search only.
+//! The auto router's nearest-neighbour memory ([`crate::route::knn`]) uses
+//! the same model and the same switch.
 //!
 //! Each file is checked against its pin before it is kept, and again before
 //! it loads, so a swapped or truncated file never reaches recall.

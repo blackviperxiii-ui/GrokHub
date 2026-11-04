@@ -562,21 +562,22 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         .flatten();
     let key = episode_key(call);
     let base_row = class_row(call.class);
+    let turn = turn_hash(call.text);
     // A typed chat turn reads its own kind: the lane (its band and model
-    // needs) and the effort to start at. Everything else keeps its class.
+    // needs) and the effort to start at, blended with its nearest labeled
+    // turns when the embedding model is on disk. Everything else keeps its class.
     let ask = (base_row.is_some_and(|r| r.class == super::ask::CHAT_CLASS)
         && !call.text.trim().is_empty())
     .then(|| {
-        super::ask::read(
-            call.text,
-            &super::ask::AskContext {
-                ctx_tokens: call.ctx_tokens,
-                needs_image: call.needs_image,
-                planned_tools: call.planned_tools,
-                plan_mode: call.plan_mode,
-                prior: super::ask::prior(key),
-            },
-        )
+        let cx = super::ask::AskContext {
+            ctx_tokens: call.ctx_tokens,
+            needs_image: call.needs_image,
+            planned_tools: call.planned_tools,
+            plan_mode: call.plan_mode,
+            prior: super::ask::prior(key),
+        };
+        let read = super::ask::read(call.text, &cx);
+        super::knn::blend_turn(config_dir, key, call.text, turn, &cx, read, now_ms)
     });
     let lane = ask.as_ref().map(|a| a.lane());
     let d = match &ask {
@@ -616,7 +617,6 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     };
     let st = learn::step_tune(&tuned, lane.unwrap_or(call.class), key, &risk);
     laps.mark("route:tune");
-    let turn = turn_hash(call.text);
     // Brain 2: the goal the turn's Brief named; user-facing steps only, never the holdout.
     // Brain 4: a goal the cabin pinned on a background run (cost while you're active) is
     // logged with it; only user-facing steps move by a goal.
@@ -695,6 +695,13 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         }
         _ => None,
     };
+    if ask.is_some() && !key.is_empty() {
+        // The bank learns from turns the read started, never the holdout's fixed rung.
+        match &pick {
+            Some(p) if !holdout => super::knn::note_rung(key, turn, p.rung),
+            _ => super::knn::forget(key),
+        }
+    }
     laps.mark("route:ladder");
     let recover = pick.as_ref().is_some_and(|p| p.recover);
     // Keyed by the call's own class, so a chat keeps one model across lanes.
@@ -1165,11 +1172,11 @@ pub fn route_log(
     });
     let key = episode_key(call);
     if !key.is_empty() {
-        ladder::finish(
-            key,
-            class_row(call.class).map(|r| r.class).unwrap_or(call.class),
-            done.ok,
-        );
+        let class = class_row(call.class).map(|r| r.class).unwrap_or(call.class);
+        ladder::finish(key, class, done.ok);
+        if class == super::ask::CHAT_CLASS {
+            super::knn::note_done(key, done.ok, done.cancelled);
+        }
     }
     // This crate's own tests drive fake clients with made-up model ids: only a
     // test that pinned a scratch config folder gets the span and health lines.

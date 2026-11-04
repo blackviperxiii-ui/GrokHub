@@ -9,6 +9,7 @@
 
 pub mod adult;
 pub mod ask;
+pub mod ask_set;
 pub mod attention;
 pub mod budget;
 pub mod cabin;
@@ -22,6 +23,7 @@ pub mod guard;
 pub mod heal;
 pub mod host;
 pub mod identity;
+pub mod knn;
 pub mod ladder;
 pub mod learn;
 pub mod live;
@@ -1457,6 +1459,8 @@ impl Router {
 
 #[cfg(test)]
 mod ask_eval;
+#[cfg(test)]
+mod knn_tests;
 #[cfg(test)]
 mod auto_tests;
 
