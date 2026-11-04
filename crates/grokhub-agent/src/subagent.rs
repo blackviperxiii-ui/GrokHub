@@ -43,6 +43,9 @@ pub struct SpawnCall<'a> {
     pub effort: Option<&'a str>,
     pub system: &'a str,
     pub max_turns: u32,
+    /// The parent's context window: a child trims, compacts and stops before
+    /// the long-context price step the same way.
+    pub context_length: u64,
     pub policy: Option<&'a crate::perm::Policy>,
     pub on_event: &'a mut dyn FnMut(LoopEvent),
 }
@@ -279,6 +282,7 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         } else {
             call.max_turns
         },
+        context_length: call.context_length,
         cancel: child_cancel.clone(),
         steer,
         gate: child_gate(call.gate, spec.explore),
@@ -364,6 +368,7 @@ struct ChildJob {
     /// The parent run's origin trace: the child's task text is not yours.
     trace: Option<crate::harness::provenance::Trace>,
     max_turns: u32,
+    context_length: u64,
     cancel: CancelToken,
     steer: SteerQueue,
     gate: Gate,
@@ -470,7 +475,7 @@ fn run_child(job: &ChildJob, tx: &Option<Sender<ChildNote>>) -> ChildDone {
         desktop,
         permits: job.permits.as_ref(),
         perms: policy.as_ref(),
-        context_length: 0,
+        context_length: job.context_length,
         tasks: Some(Arc::clone(&job.tasks)),
         depth: job.depth,
         agent_id: Some(&agent_id),
