@@ -104,6 +104,9 @@ pub struct RouteDone {
     /// The call was cancelled, or its result is not ours to see (Grok Build
     /// runs the turn): no outcome and nothing about the model is learned.
     pub cancelled: bool,
+    /// The call went through a batch queue ([`ModelClient::batches`]): its
+    /// wall time is queueing, so neither tuning nor health learns from it.
+    pub batched: bool,
 }
 
 fn http_of(err: &ClientError) -> u16 {
@@ -188,6 +191,7 @@ impl RouteDone {
             latency_ms: elapsed.as_millis() as u64,
             served_model,
             cancelled: false,
+            batched: false,
         }
     }
 }
@@ -956,7 +960,7 @@ pub fn route_record(
             failures: call.failures,
             verify: verify.clone(),
             origin: Some(current_origin().as_str().to_string()),
-            latency: Some(done.latency_ms),
+            latency: (!done.batched).then_some(done.latency_ms),
             budget_pct: decision.budget_pct,
             privacy: route
                 .rule_ids
@@ -1060,7 +1064,8 @@ pub fn observation(call: &RouteCall<'_>, done: &RouteDone, now_ms: u64) -> Optio
         model: call.model.trim().to_string(),
         ts_ms: now_ms,
         status,
-        latency_ms: done.latency_ms,
+        // 0 is "no sample": health skips it ([`grokhub_core::model_registry::health`]).
+        latency_ms: if done.batched { 0 } else { done.latency_ms },
         served_model: done.served_model.clone(),
         endpoint_ok: true,
         reasoning_tokens: done.usage.reasoning_tokens,
@@ -1451,12 +1456,10 @@ pub fn stream_routed(
     } else if on_provider {
         call.provider = &decision.route.provider;
     }
-    route_log(
-        &dir,
-        &call,
-        &decision,
-        &RouteDone::of(&out, started.elapsed()),
-    );
+    let mut done = RouteDone::of(&out, started.elapsed());
+    // Only the xAI client queues; a local or provider answer was timed live.
+    done.batched = client.batches() && !on_device && !on_provider;
+    route_log(&dir, &call, &decision, &done);
     out
 }
 

@@ -123,7 +123,7 @@ pub fn degraded_reason(rec: &ModelRecord, now_ms: u64) -> Option<&'static str> {
     }
     let mut last: Vec<u64> = recent
         .iter()
-        .filter(|c| c.ok)
+        .filter(|c| c.ok && c.latency_ms > 0)
         .map(|c| c.latency_ms)
         .collect();
     let window_start = recent.front().map(|c| c.ts_ms).unwrap_or(now_ms);
@@ -185,7 +185,10 @@ pub fn observe(rec: &mut ModelRecord, listed: bool, obs: &Observation) -> bool {
                 rec.reason = "It isn't listed, but it answers as itself.".into();
                 rec.not_found.clear();
             }
-            rec.health.latencies.push_back((now, obs.latency_ms));
+            // 0 is "no sample" (a batched call's wall time is queueing).
+            if obs.latency_ms > 0 {
+                rec.health.latencies.push_back((now, obs.latency_ms));
+            }
             while rec.health.latencies.len() > LATENCY_CAP {
                 rec.health.latencies.pop_front();
             }
@@ -498,6 +501,29 @@ mod tests {
             r.reason,
             "It is answering more than twice as slowly as its usual week."
         );
+    }
+
+    #[test]
+    fn a_call_with_no_time_is_no_speed_sample() {
+        let mut r = rec();
+        for t in 0..30 {
+            observe(&mut r, true, &obs(CallStatus::Ok, t));
+        }
+        // Batched calls: answered fine, wall time not a measure of the model.
+        for t in 30..40 {
+            let mut o = obs(CallStatus::Ok, t);
+            o.latency_ms = 0;
+            observe(&mut r, true, &o);
+        }
+        assert_eq!(r.state, ModelState::Live);
+        assert_eq!(r.health.latencies.len(), 30);
+        // A slow live stretch after them still degrades.
+        for t in 40..50 {
+            let mut o = obs(CallStatus::Ok, t);
+            o.latency_ms = 2_000;
+            observe(&mut r, true, &o);
+        }
+        assert_eq!(r.state, ModelState::Degraded);
     }
 
     fn hard(ts_ms: u64) -> Observation {
