@@ -43,6 +43,7 @@ pub mod match_ask;
 pub mod policy;
 pub mod providers;
 pub mod refresh;
+pub mod session_metrics;
 pub mod signals;
 pub mod sources;
 pub mod spend;
@@ -333,6 +334,11 @@ pub struct RouteInput<'a> {
     pub pick: Option<ladder::Pick>,
     /// The model this episode already runs on. `None` at an episode boundary.
     pub episode_model: Option<&'a str>,
+    /// D12: `episode_model` is a long chat's pin on a new turn, and the chat
+    /// has had this many turns. A cheaper model takes over only when the
+    /// saving over the rest of the chat beats re-sending its history
+    /// ([`policy::pin_switch`]).
+    pub pin_turns: Option<u32>,
     /// R2b: what this call may spend (cost classes, the Fast policy, grants, budget).
     pub spend: spend::Spend,
     /// R3a DE2: the rung this task's signature is known to succeed at, for a fresh pick.
@@ -818,8 +824,38 @@ impl Router {
                 let stronger = attn.kind.breaks_episode_sticky()
                     && ranked.first().is_some_and(|m| m.as_str() != ep);
                 if !stronger {
+                    if let Some(turns) = input.pin_turns {
+                        // D12: a long chat moves to a cheaper model only when
+                        // the saving over its rest beats the uncached re-send.
+                        let price = |m: &str| reg.get(m).map(|r| &r.meta.prices);
+                        let down = ranked.first().filter(|m| {
+                            m.as_str() != ep
+                                && sound(m)
+                                && price(ep)
+                                    .zip(price(m))
+                                    .and_then(|(old, new)| {
+                                        policy::pin_switch(
+                                            old,
+                                            new,
+                                            input.lane(),
+                                            input.ctx_tokens,
+                                            turns,
+                                        )
+                                    })
+                                    .is_some_and(|s| s.pays())
+                        });
+                        if let Some(m) = down {
+                            rules.push("pin:downgrade".into());
+                            return keep(m);
+                        }
+                        rules.push("pin:keep".into());
+                    }
                     rules.push("episode:keep".into());
                     return keep(ep);
+                }
+                if input.pin_turns.is_some() {
+                    // The turn needs a stronger model: the pin never holds it back.
+                    rules.push("pin:upgrade".into());
                 }
                 rules.push(format!("{}:mid_flow", attn.rule));
             } else if !e2 {
@@ -857,6 +893,9 @@ impl Router {
             return match next {
                 Some(m) => {
                     rules.push("model:stronger".into());
+                    if input.pin_turns.is_some() {
+                        rules.push("pin:upgrade".into());
+                    }
                     if policy::is_new_provider(reg, m) {
                         rules.push("provider:auto".into());
                     }

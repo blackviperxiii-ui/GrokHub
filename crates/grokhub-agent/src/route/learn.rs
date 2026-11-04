@@ -447,6 +447,10 @@ pub struct TuneRun {
     pub rejected: Vec<String>,
     /// New cost-raising cards waiting for the weekly self-review.
     pub cards: Vec<String>,
+    /// D13: the per-chat metrics this pass read (cache hits, switches,
+    /// escalations and their precision). Read only; nothing here moves a
+    /// candidate yet.
+    pub sessions: super::session_metrics::SessionSummary,
 }
 
 fn plain(class: &str) -> &str {
@@ -478,7 +482,10 @@ pub fn tick(
     write_json(&scorecards_path(config_dir), &cards)?;
     let mut state = load_state(config_dir);
     let mut tuning = load_tuning(config_dir);
-    let mut run = TuneRun::default();
+    let mut run = TuneRun {
+        sessions: super::session_metrics::summary(&super::session_metrics::load(config_dir)),
+        ..TuneRun::default()
+    };
     for i in 0..state.candidates.len() {
         let c = state.candidates[i].clone();
         let Some(change) = c.change.clone() else {

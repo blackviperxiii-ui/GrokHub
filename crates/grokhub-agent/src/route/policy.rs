@@ -199,6 +199,62 @@ pub fn expected_cost_usd(prices: &Prices, class: &str, ctx_tokens: u64) -> Optio
     Some(cents / 100.0)
 }
 
+/// D12: most turns a pinned chat is expected to run past this one.
+pub const PIN_TURNS_CAP: u32 = 8;
+
+/// D12: a chat that has had `turns_so_far` turns is expected to run about as
+/// many again, at least one and at most [`PIN_TURNS_CAP`].
+pub fn expected_remaining_turns(turns_so_far: u32) -> u32 {
+    turns_so_far.clamp(1, PIN_TURNS_CAP)
+}
+
+/// D12: what moving a pinned chat to another model costs and saves, in xAI
+/// ticks (1e-10 USD: a rate in USD cents per 100M tokens times tokens).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PinSwitch {
+    /// The whole history re-sent uncached on the new model.
+    pub switch_ticks: i64,
+    /// The expected rest of the chat, each turn's old cost less its new cost.
+    pub saving_ticks: i64,
+    pub remaining_turns: u32,
+}
+
+impl PinSwitch {
+    /// The saving beats the re-send.
+    pub fn pays(&self) -> bool {
+        self.saving_ticks > self.switch_ticks
+    }
+}
+
+/// One more turn of a chat with `history` tokens behind it: the history read
+/// from the cache, the class's new (uncached) share of a prompt and its reply.
+fn turn_ticks(prices: &Prices, class: &str, history: u64) -> Option<i64> {
+    let (input, out, hit_pct) = predicted_tokens(class);
+    let fresh = input * (100 - hit_pct.min(100)) / 100;
+    let (prompt, cached, completion) = prices.rates_at(history + fresh)?;
+    Some((history * cached + fresh * prompt + out * completion) as i64)
+}
+
+/// D12: the price of moving a long chat (`history` prompt tokens, after
+/// `turns_so_far` turns) from the model priced `old` to the one priced `new`.
+/// `None` when either listing has no prompt or completion price.
+pub fn pin_switch(
+    old: &Prices,
+    new: &Prices,
+    class: &str,
+    history: u64,
+    turns_so_far: u32,
+) -> Option<PinSwitch> {
+    let per_turn = turn_ticks(old, class, history)? - turn_ticks(new, class, history)?;
+    let (uncached, _, _) = new.rates_at(history)?;
+    let remaining_turns = expected_remaining_turns(turns_so_far);
+    Some(PinSwitch {
+        switch_ticks: (history * uncached) as i64,
+        saving_ticks: per_turn * remaining_turns as i64,
+        remaining_turns,
+    })
+}
+
 /// What a step needs from a model.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Fit {
@@ -555,6 +611,57 @@ mod tests {
         );
         assert_eq!(
             expected_cost_usd(&Prices::default(), "chat:default", 0),
+            None
+        );
+    }
+
+    fn tiered(v: u64) -> Prices {
+        Prices {
+            prompt: Some(10_000 * v),
+            cached: Some(2_500 * v),
+            completion: Some(50_000 * v),
+            long_context_threshold: Some(200_000),
+            ..Prices::default()
+        }
+    }
+
+    #[test]
+    fn a_pinned_chat_moves_down_only_when_the_saving_beats_the_uncached_resend() {
+        assert_eq!(PIN_TURNS_CAP, 8);
+        assert_eq!(
+            [0, 1, 5, 8, 99].map(expected_remaining_turns),
+            [1, 1, 5, 8, 8]
+        );
+        let (old, new) = (tiered(7), tiered(3));
+        // chat:default: 1,600 new tokens and a 600-token reply a turn, 20,000 of history.
+        // Old turn 672M ticks, new turn 288M, the re-send 20,000 × 30,000 = 600M.
+        let one = pin_switch(&old, &new, "chat:default", 20_000, 1).unwrap();
+        assert_eq!(
+            one,
+            PinSwitch {
+                switch_ticks: 600_000_000,
+                saving_ticks: 384_000_000,
+                remaining_turns: 1,
+            }
+        );
+        assert!(!one.pays());
+        let two = pin_switch(&old, &new, "chat:default", 20_000, 2).unwrap();
+        assert_eq!(
+            (two.saving_ticks, two.remaining_turns, two.pays()),
+            (768_000_000, 2, true)
+        );
+        let long = pin_switch(&old, &new, "chat:default", 20_000, 40).unwrap();
+        assert_eq!(
+            (long.saving_ticks, long.remaining_turns),
+            (3_072_000_000, 8)
+        );
+        // Moving up never saves.
+        let up = pin_switch(&new, &old, "chat:default", 20_000, 40).unwrap();
+        assert_eq!(up.saving_ticks, -3_072_000_000);
+        assert!(!up.pays());
+        // No price, no move.
+        assert_eq!(
+            pin_switch(&old, &Prices::default(), "chat:default", 20_000, 4),
             None
         );
     }

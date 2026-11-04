@@ -1013,3 +1013,37 @@ fn a_heavy_background_step_waits_for_ramp_up_and_a_pause_refuses_it() {
     );
     super::local_gov::reset_for_test();
 }
+
+#[test]
+fn a_tick_reads_the_chat_metrics_as_an_input() {
+    use super::session_metrics::{note_call, CallFacts, SessionSummary};
+    let dir = test_dir("r3a-sessions");
+    let up = vec!["model:stronger".to_string()];
+    let keep = vec!["episode:keep".to_string()];
+    let facts = |model, rule_ids, cached, ok| CallFacts {
+        model,
+        rule_ids,
+        prompt_tokens: 1_000,
+        cached_tokens: cached,
+        ok,
+    };
+    note_call(&dir, "ep-1", &facts("grok-4.3", &keep, 0, true), T0);
+    note_call(&dir, "ep-1", &facts("grok-4.7", &up, 500, true), T0 + 1);
+    note_call(&dir, "ep-2", &facts("grok-4.7", &up, 1_000, false), T0 + 2);
+    note_call(&dir, "ep-2", &facts("grok-4.7", &keep, 500, true), T0 + 3);
+    let run = tick(&dir, T0 + DAY_MS);
+    assert_eq!(
+        run.sessions,
+        SessionSummary {
+            chats: 2,
+            calls: 4,
+            cache_hit_pct: 50.0,
+            switches: 1,
+            switches_per_chat: 0.5,
+            escalations: 2,
+            escalation_pct: 50.0,
+            precision_pct: 50.0,
+        }
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
