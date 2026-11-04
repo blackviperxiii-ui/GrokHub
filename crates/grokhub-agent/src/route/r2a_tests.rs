@@ -700,10 +700,13 @@ fn the_live_path_keeps_an_episode_on_its_model_and_pauses_with_no_route() {
         .map(|_| echo.0.lock().unwrap().last().unwrap().model.clone())
     };
     // Auto: the table's top model, for every step of the episode.
-    assert_eq!(send("grok-4.7", "plan the trip").unwrap(), "grok-4.5");
+    assert_eq!(
+        send("grok-4.7", "chat with me about the trip").unwrap(),
+        "grok-4.5"
+    );
     write_table(&dir, &top_first("grok-4.3"), 20);
     assert_eq!(
-        send("grok-4.7", "plan the trip").unwrap(),
+        send("grok-4.7", "chat with me about the trip").unwrap(),
         "grok-4.5",
         "a table change waits for the next episode"
     );

@@ -105,6 +105,8 @@ pub const CLASS_TABLE: &[ClassRow] = &[
     // Speed tier: never pays for high effort (ceiling medium).
     row("chat:quick", "low", "none", "medium", "a quick answer"),
     row("chat:default", "medium", "low", "xhigh", "everyday chat"),
+    // Math, logic and proofs typed in chat: reasoning pays here.
+    row("chat:reason", "high", "medium", "xhigh", "math and logic"),
     // Small edits reason at low; plan/design/repair diagnose at high.
     row(
         "code:edit-small",
@@ -173,6 +175,7 @@ pub fn predicted_tokens(class: &str) -> (u64, u64, u64) {
         c if c.starts_with("background:") => (2_000, 300, 0),
         "chat:quick" => (3_000, 200, 50),
         "chat:default" => (8_000, 600, 80),
+        "chat:reason" => (8_000, 2_000, 80),
         "code:edit-small" => (12_000, 1_000, 80),
         "plan" | "design" => (16_000, 2_000, 70),
         "code:multi-file" | "debug" => (40_000, 3_000, 80),
@@ -526,7 +529,7 @@ mod tests {
 
     #[test]
     fn every_row_is_on_the_ladder_and_floor_le_start_le_ceiling() {
-        assert_eq!(CLASS_TABLE.len(), 18);
+        assert_eq!(CLASS_TABLE.len(), 19);
         for r in CLASS_TABLE {
             assert!(
                 rung(r.floor) <= rung(r.start) && rung(r.start) <= rung(r.ceiling),

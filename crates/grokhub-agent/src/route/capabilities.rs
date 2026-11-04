@@ -47,7 +47,9 @@ impl BaselineLane {
             | "background:compact"
             | "chat:quick" => Self::Cheap,
             "code:multi-file" => Self::Code,
-            "plan" | "design" | "debug" | "prepare:hard" | "repair:diagnose" => Self::Flagship,
+            "plan" | "design" | "debug" | "chat:reason" | "prepare:hard" | "repair:diagnose" => {
+                Self::Flagship
+            }
             // chat:default, code:edit-small, desktop:soft, memory/judge/dream, …
             _ => Self::Workhorse,
         }
@@ -183,6 +185,16 @@ pub fn class_need(class: &str) -> ClassNeed {
             vision: 2,
             long_context: 3,
             tools: 4,
+            require_reasoning: true,
+        },
+        "chat:reason" => ClassNeed {
+            reasoning: 10,
+            code: 2,
+            speed: 1,
+            cost: 2,
+            vision: 1,
+            long_context: 2,
+            tools: 2,
             require_reasoning: true,
         },
         "code:edit-small" => ClassNeed {

@@ -133,6 +133,7 @@ fn each_class_maps_to_its_tier_and_start_effort() {
         ("background:judge", SpeedQuality::Balanced, "low"),
         ("background:dream", SpeedQuality::Balanced, "low"),
         ("chat:default", SpeedQuality::Balanced, "medium"),
+        ("chat:reason", SpeedQuality::Quality, "high"),
         ("code:edit-small", SpeedQuality::Balanced, "low"),
         ("plan", SpeedQuality::Quality, "high"),
         ("design", SpeedQuality::Quality, "high"),
