@@ -2699,3 +2699,42 @@ fn a_busy_or_slow_provider_stands_in_after_a_healthy_one() {
     assert_eq!(stand_in(&dir).as_deref(), Some("openrouter/x-ai/grok-test"));
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn an_openrouter_long_context_step_reaches_the_ceiling_and_the_cost() {
+    // Base $10/M out, $15/M past 200,000 prompt tokens (OpenRouter's
+    // `pricing.overrides`), read the way a refresh reads the listing.
+    let body = r#"{"data":[{"id":"vendor/long-ctx","context_length":1000000,
+        "supported_parameters":["tools","reasoning"],
+        "architecture":{"output_modalities":["text"]},
+        "pricing":{"prompt":"0.00000125","completion":"0.00001",
+          "overrides":[{"min_prompt_tokens":200000,"prompt":"0.0000025","completion":"0.000015"}]}}]}"#;
+    let rows =
+        grokhub_core::model_registry::parse_openai_compatible_catalog("openrouter", body).unwrap();
+    let meta = &rows[0];
+    let need = |ctx_tokens| providers::PickNeed {
+        tools: true,
+        reasoning: true,
+        ctx_tokens,
+        ceiling_usd_per_m: 12.0,
+    };
+    let id = "openrouter/vendor/long-ctx";
+    assert!(providers::auto_pickable(id, meta, &need(200_000)));
+    assert!(
+        !providers::auto_pickable(id, meta, &need(200_001)),
+        "past the step its $15/M output is over a $12/M ceiling"
+    );
+    // chat:default predicts 600 tokens out; no cache price is listed, so
+    // cached tokens pay the prompt rate.
+    let cost = |ctx| super::policy::expected_cost_usd(&meta.prices, "chat:default", ctx).unwrap();
+    assert_eq!(
+        (cost(200_000) * 1e8).round() / 1e8,
+        0.256,
+        "200,000 in at $1.25/M and 600 out at $10/M"
+    );
+    assert_eq!(
+        (cost(200_001) * 1e8).round() / 1e8,
+        0.5090025,
+        "every token at the long rates: $2.50/M in, $15/M out"
+    );
+}

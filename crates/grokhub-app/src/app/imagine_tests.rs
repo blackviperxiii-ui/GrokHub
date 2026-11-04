@@ -606,3 +606,92 @@ fn imagine_more_finishes_agent_count_and_results_chrome() {
         "failed stage must offer Retry: {fail}"
     );
 }
+
+#[test]
+fn the_prompt_picks_the_imagine_model_and_quality() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.imagine_quality = false;
+    cabin.imagine_prompt = "a concert poster that says \"Jazz Night\"".into();
+    match cabin.imagine_call() {
+        super::imagine::ImagineCall::Generate {
+            model,
+            resolution,
+            quality,
+            ..
+        } => assert_eq!(
+            (model.as_str(), resolution.as_str(), quality.as_str()),
+            ("grok-imagine-image-2.0", "2k", "medium")
+        ),
+        _ => panic!("Image mode generates"),
+    }
+    cabin.imagine_quality = true;
+    cabin.imagine_prompt = "quick sketch of a cat".into();
+    match cabin.imagine_call() {
+        super::imagine::ImagineCall::Generate {
+            model,
+            resolution,
+            quality,
+            ..
+        } => assert_eq!(
+            (model.as_str(), resolution.as_str(), quality.as_str()),
+            ("grok-imagine-image", "1k", "low")
+        ),
+        _ => panic!("Image mode generates"),
+    }
+    // No cue: the composer's Quality stays.
+    cabin.imagine_prompt = "a red fox in the snow".into();
+    match cabin.imagine_call() {
+        super::imagine::ImagineCall::Generate {
+            model, resolution, ..
+        } => assert_eq!(
+            (model.as_str(), resolution.as_str()),
+            ("grok-imagine-image-2.0", "2k")
+        ),
+        _ => panic!("Image mode generates"),
+    }
+    cabin.imagine_kind = grokhub_core::ImagineKind::Video;
+    cabin.imagine_video_dur = 0;
+    cabin.imagine_video_res = 0;
+    cabin.imagine_prompt = "cinematic 4k drone shot over a canyon, 15 seconds".into();
+    match cabin.imagine_call() {
+        super::imagine::ImagineCall::Video {
+            model,
+            duration,
+            resolution,
+            ..
+        } => assert_eq!(
+            (model.as_str(), duration, resolution.as_str()),
+            ("grok-imagine-video-1.5", 15, "1080p")
+        ),
+        _ => panic!("Video mode makes video"),
+    }
+    cabin.imagine_prompt = "waves at sunset".into();
+    match cabin.imagine_call() {
+        super::imagine::ImagineCall::Video {
+            model,
+            duration,
+            resolution,
+            ..
+        } => assert_eq!(
+            (model.as_str(), duration, resolution.as_str()),
+            ("grok-imagine-video-1.5", 6, "480p")
+        ),
+        _ => panic!("Video mode makes video"),
+    }
+}
+
+#[test]
+fn a_still_asked_to_move_goes_out_as_a_video() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("imagine-asks-video");
+    cabin.secrets.oauth = None;
+    cabin.imagine_native.tokens = None;
+    cabin.imagine_kind = grokhub_core::ImagineKind::Image;
+    cabin.imagine_prompt = "box art for a video game".into();
+    cabin.kick_imagine();
+    assert_eq!(cabin.imagine_kind, grokhub_core::ImagineKind::Image);
+    cabin.imagine_prompt = "a timelapse of a city at night".into();
+    cabin.kick_imagine();
+    assert_eq!(cabin.imagine_kind, grokhub_core::ImagineKind::Video);
+    release_isolated(&root, cabin);
+}

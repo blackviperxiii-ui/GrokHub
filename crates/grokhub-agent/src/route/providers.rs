@@ -885,7 +885,7 @@ pub struct PickNeed {
     /// A reasoning lane: the model must take `reasoning` and an effort.
     pub reasoning: bool,
     pub ctx_tokens: u64,
-    /// Your $/M ceiling on the listed output price.
+    /// Your $/M ceiling on the listed output price at this prompt's size.
     pub ceiling_usd_per_m: f64,
 }
 
@@ -904,7 +904,8 @@ pub fn takes_reasoning(id: &str, meta: &ModelMeta) -> bool {
 /// A provider model Auto may pick for a step needing `need`: one model, never
 /// OpenRouter's own router (`openrouter/auto` and the like picks any model at
 /// any price), not dated for retirement, no utility model, answering in text,
-/// its listed output price under your ceiling, taking tools and reasoning
+/// its listed output price at this prompt's size (a long-context step
+/// included) under your ceiling, taking tools and reasoning
 /// when the lane needs them, and a window that holds the prompt.
 pub fn auto_pickable(id: &str, meta: &ModelMeta, need: &PickNeed) -> bool {
     let wire = split_provider_model(id).map_or(id, |(_, m)| m);
@@ -917,7 +918,7 @@ pub fn auto_pickable(id: &str, meta: &ModelMeta, need: &PickNeed) -> bool {
             .is_none_or(|o| o.iter().any(|x| x == "text"))
         && meta
             .prices
-            .completion
+            .completion_at(need.ctx_tokens)
             .is_some_and(|p| usd_per_m(p) <= need.ceiling_usd_per_m)
         && (!need.tools || meta.tool_calling != Some(false))
         && (!need.reasoning || takes_reasoning(id, meta))

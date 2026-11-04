@@ -49,9 +49,10 @@ pub struct Sidecar {
     /// The one-shot defaults with every GPU left out (`launch` is `None` and
     /// the GPU backend crashed the first start).
     bare_cpu: bool,
-    /// The `reasoning_effort` levels the model's chat template renders, read
-    /// from `/props` once the server is up; empty sends no effort.
-    pub effort_levels: Vec<String>,
+    /// How the model's chat template thinks (its `reasoning_effort` levels
+    /// and thinking switch), read from `/props` once the server is up;
+    /// empty sends no effort.
+    pub thinking: super::local_effort::Thinking,
 }
 
 impl std::fmt::Debug for Sidecar {
@@ -64,7 +65,7 @@ impl std::fmt::Debug for Sidecar {
             .field("model", &self.model)
             .field("restarts", &self.restart_count())
             .field("idle_unload_secs", &self.idle_unload_secs)
-            .field("effort_levels", &self.effort_levels)
+            .field("thinking", &self.thinking)
             .finish()
     }
 }
@@ -418,13 +419,13 @@ pub fn start(paths: &SidecarPaths) -> Result<Sidecar, String> {
             idle_unload_secs: idle,
             launch: launch.clone(),
             bare_cpu,
-            effort_levels: Vec::new(),
+            thinking: Default::default(),
         };
         let err = match side.wait_healthy() {
             Ok(()) => {
                 // Free VRAM with the model loaded: the governor's drop baseline.
                 autoconfig::mark_resident();
-                side.effort_levels = super::local_effort::fetch_levels(
+                side.thinking = super::local_effort::fetch_thinking(
                     &side.host,
                     side.port,
                     &side.token,
@@ -822,18 +823,18 @@ pub fn global_pid() -> Option<u32> {
 pub struct Endpoint {
     pub base_url: String,
     pub token: String,
-    /// [`Sidecar::effort_levels`].
-    pub effort_levels: Vec<String>,
+    /// [`Sidecar::thinking`].
+    pub thinking: super::local_effort::Thinking,
 }
 
-/// Base URL, token and effort levels of the global sidecar, when running.
+/// Base URL, token and how the model thinks of the global sidecar, when running.
 pub fn global_endpoint() -> Option<Endpoint> {
     tick_idle_unload();
     let slot = global_slot().lock().expect("sidecar global");
     slot.as_ref().map(|s| Endpoint {
         base_url: s.base_url(),
         token: s.token.clone(),
-        effort_levels: s.effort_levels.clone(),
+        thinking: s.thinking.clone(),
     })
 }
 
@@ -1279,7 +1280,7 @@ mod tests {
             idle_unload_secs,
             launch: None,
             bare_cpu: false,
-            effort_levels: Vec::new(),
+            thinking: Default::default(),
         }
     }
 

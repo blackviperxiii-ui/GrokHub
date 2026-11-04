@@ -193,6 +193,15 @@ impl Cabin {
             self.status = "Halt the live job before Imagine, or wait.".into();
             return;
         }
+        // A still asked to move ("a video of", "animate", "timelapse") is a
+        // text-to-video clip.
+        if self.imagine_kind == ImagineKind::Image
+            && self.imagine_native.image_op == 0
+            && self.imagine_native.video_op == 0
+            && grokhub_core::imagine_asks_video(&prompt)
+        {
+            self.imagine_kind = ImagineKind::Video;
+        }
         let kind = self.imagine_kind;
         let cred = if self.imagine_native.force_key {
             self.imagine_native.force_key = false;
@@ -241,7 +250,7 @@ impl Cabin {
         let prompt = compose_imagine_prompt(&ImagineSpec {
             prompt: &prompt,
             kind,
-            quality: self.imagine_quality,
+            quality: self.imagine_still_now().quality,
             style: imagine_style_label(self.imagine_style),
             aspect: &aspect,
             video_res: &video_res,
@@ -669,10 +678,8 @@ impl Cabin {
                 ui.set_width(bar_w);
                 let prompt_w = (ui.available_width() - 8.0).max(80.0);
                 let prompt_h = crate::cards::imagine_prompt_h();
-                let (prompt_rect, _) = ui.allocate_exact_size(
-                    egui::vec2(prompt_w, prompt_h),
-                    egui::Sense::hover(),
-                );
+                let (prompt_rect, _) =
+                    ui.allocate_exact_size(egui::vec2(prompt_w, prompt_h), egui::Sense::hover());
                 let edit = ui.put(
                     prompt_rect,
                     egui::TextEdit::singleline(&mut self.imagine_prompt)
@@ -688,7 +695,9 @@ impl Cabin {
                 }
                 if edit.has_focus()
                     && ui.input(|i| {
-                        i.key_pressed(egui::Key::Enter) && !i.modifiers.shift && !i.modifiers.command
+                        i.key_pressed(egui::Key::Enter)
+                            && !i.modifiers.shift
+                            && !i.modifiers.command
                     })
                 {
                     if self.imagine_prompt.ends_with('\n') {
@@ -718,8 +727,11 @@ impl Cabin {
                                 egui::vec2(crate::theme::IMAGINE_HIT, crate::theme::IMAGINE_HIT),
                                 egui::Sense::click(),
                             );
-                            ui.painter()
-                                .circle_filled(plus_r.center(), 18.0, crate::theme::panel());
+                            ui.painter().circle_filled(
+                                plus_r.center(),
+                                18.0,
+                                crate::theme::panel(),
+                            );
                             let plus_pose = crate::motion::icon::pose(
                                 ui,
                                 plus.id,
@@ -739,11 +751,9 @@ impl Cabin {
                                 self.open_plus(PlusTarget::Imagine, plus_r.left_bottom());
                             }
                             crate::cards::imagine_seg_track(ui, |ui| {
-                                for kind in [
-                                    ImagineKind::Image,
-                                    ImagineKind::Video,
-                                    ImagineKind::Agent,
-                                ] {
+                                for kind in
+                                    [ImagineKind::Image, ImagineKind::Video, ImagineKind::Agent]
+                                {
                                     let on = self.imagine_kind == kind;
                                     let label = crate::cards::imagine_kind_label(kind);
                                     let ink = if on {
@@ -773,10 +783,7 @@ impl Cabin {
                                         self.imagine_kind = kind;
                                         self.status = match kind {
                                             ImagineKind::Image => "Image still".into(),
-                                            ImagineKind::Video => {
-                                                "Video calls grok-imagine-video-1.5 and saves an mp4."
-                                                    .into()
-                                            }
+                                            ImagineKind::Video => "Video saves an mp4.".into(),
                                             ImagineKind::Agent => {
                                                 "Agent paints a character sprite still.".into()
                                             }
@@ -805,7 +812,8 @@ impl Cabin {
                                         }
                                     });
                                     crate::cards::imagine_seg_track(ui, |ui| {
-                                        for (i, label) in ["6s", "10s", "15s"].into_iter().enumerate()
+                                        for (i, label) in
+                                            ["6s", "10s", "15s"].into_iter().enumerate()
                                         {
                                             let on = self.imagine_video_dur == i as u8;
                                             if crate::cards::imagine_seg_chip(ui, on, |ui| {
@@ -843,7 +851,8 @@ impl Cabin {
                                     crate::cards::imagine_seg_track(ui, |ui| {
                                         for quality in [false, true] {
                                             let on = self.imagine_quality == quality;
-                                            let label = crate::cards::imagine_quality_label(quality);
+                                            let label =
+                                                crate::cards::imagine_quality_label(quality);
                                             if crate::cards::imagine_seg_chip(ui, on, |ui| {
                                                 ui.label(
                                                     RichText::new(label)
@@ -870,7 +879,11 @@ impl Cabin {
                                     ui.set_height(crate::theme::IMAGINE_HIT - 12.0);
                                     ui.set_min_width(56.0);
                                     ui.horizontal_centered(|ui| {
-                                        crate::icons::paint_style_auto(ui, 16.0, crate::theme::fg());
+                                        crate::icons::paint_style_auto(
+                                            ui,
+                                            16.0,
+                                            crate::theme::fg(),
+                                        );
                                         ui.add_space(4.0);
                                         ui.label(
                                             RichText::new(style_label)
@@ -1243,17 +1256,19 @@ impl Cabin {
         None
     }
 
-    /// Imagine always uses the default model; nothing on screen picks or names it.
-    fn imagine_image_model_now(&self) -> String {
-        grokhub_core::DEFAULT_IMAGINE_MODEL.into()
+    /// The still's model and quality, read from the prompt's words (the
+    /// composer's Speed or Quality when they name neither). Nothing on screen
+    /// picks or names the model.
+    fn imagine_still_now(&self) -> grokhub_core::ImagineStill {
+        grokhub_core::imagine_still_for(&self.imagine_prompt, self.imagine_quality)
     }
 
     fn imagine_resolution_now(&self) -> String {
-        imagine_image_resolution(self.imagine_quality).into()
+        imagine_image_resolution(self.imagine_still_now().quality).into()
     }
 
     fn imagine_quality_now(&self) -> String {
-        grokhub_core::imagine_image_quality(self.imagine_quality).into()
+        grokhub_core::imagine_image_quality(self.imagine_still_now().quality).into()
     }
 
     /// The composer's aspect pill is the one aspect control, for stills and video alike.
@@ -1282,11 +1297,16 @@ impl Cabin {
                 3 => grokhub_core::ImagineVideoOp::Extend,
                 _ => grokhub_core::ImagineVideoOp::TextToVideo,
             };
+            // The prompt's words pick the model, and its length and
+            // resolution when they name them; the composer's chips otherwise.
+            let clip = grokhub_core::imagine_clip_for(&self.imagine_prompt);
             return ImagineCall::Video {
                 op,
-                model: grokhub_core::DEFAULT_VIDEO_MODEL.into(),
-                duration: self.video_duration_now(),
-                resolution: self.video_resolution_now(),
+                model: clip.model.into(),
+                duration: clip.secs.unwrap_or_else(|| self.video_duration_now()),
+                resolution: clip
+                    .resolution
+                    .map_or_else(|| self.video_resolution_now(), str::to_string),
                 aspect: self.imagine_api_aspect_now(),
                 audio: self.imagine_video_audio,
                 image_url: self.imagine_native.video_image.clone().unwrap_or_default(),
@@ -1294,8 +1314,9 @@ impl Cabin {
             };
         }
         if self.imagine_kind == ImagineKind::Image && self.imagine_native.image_op == 1 {
+            // Edits stay on the full model: the cheaper one may not edit.
             return ImagineCall::Edit {
-                model: self.imagine_image_model_now(),
+                model: grokhub_core::DEFAULT_IMAGINE_MODEL.into(),
                 n: u32::from(self.imagine_native.count.clamp(1, 10)),
                 resolution: self.imagine_resolution_now(),
                 aspect: self.imagine_api_aspect_now(),
@@ -1304,7 +1325,7 @@ impl Cabin {
             };
         }
         ImagineCall::Generate {
-            model: self.imagine_image_model_now(),
+            model: self.imagine_still_now().model.into(),
             n: u32::from(self.imagine_native.count.clamp(1, 10)),
             resolution: self.imagine_resolution_now(),
             aspect: self.imagine_api_aspect_now(),

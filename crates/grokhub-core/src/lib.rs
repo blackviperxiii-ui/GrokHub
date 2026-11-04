@@ -88,6 +88,7 @@ pub mod hygiene;
 pub mod ideas;
 pub mod imagine;
 pub mod imagine_auth;
+pub mod imagine_pick;
 pub use grokhub_proto::inhabit;
 pub mod ask_offers;
 pub mod day_brief;
@@ -463,6 +464,10 @@ pub use imagine_auth::{
     IMAGINE_NO_KEYCHAIN, IMAGINE_OAUTH_DENIED, IMAGINE_OAUTH_REFERRER, IMAGINE_OAUTH_SCOPE,
     IMAGINE_RATE_LIMIT, IMAGINE_SIGN_IN_AGAIN, METER_API_KEY, METER_OAUTH, XAI_NEED_SIGNIN,
     XAI_OAUTH_ACCOUNT, XAI_OAUTH_LEGACY_ACCOUNT,
+};
+pub use imagine_pick::{
+    imagine_asks_video, imagine_clip_for, imagine_still_for, imagine_tier, imagine_video_secs,
+    ImagineClip, ImagineStill, ImagineTier,
 };
 pub use inhabit::{can_inhabit, inhabit_bundle_usable, inhabit_ready, InhabitBundle};
 pub use journal::{

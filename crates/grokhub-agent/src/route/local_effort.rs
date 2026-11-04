@@ -1,32 +1,102 @@
 //! Reasoning effort for the on-device model. llama-server's `GET /props`
-//! lists, under `chat_template_caps.reasoning_effort_levels`, the
-//! `reasoning_effort` values the model's chat template renders differently
-//! from its own default, lowest first (b12017). The sidecar reads it once
-//! after it starts ([`fetch_levels`]); a local turn's effort, a rung of
-//! [`EFFORT_LADDER`], then goes out as the nearest listed level
-//! ([`nearest`]), and none goes out when the list is empty or missing.
+//! says two things about how the model thinks, and the sidecar reads both
+//! once after it starts ([`fetch_thinking`]):
+//!
+//! - `chat_template_caps.reasoning_effort_levels`: the `reasoning_effort`
+//!   values the model's chat template renders differently from its own
+//!   default, lowest first (b12017).
+//! - `chat_template`: the template itself. One that reads `enable_thinking`
+//!   (or a bare `thinking` flag) turns thinking on and off through
+//!   `chat_template_kwargs`, which llama-server takes on every request.
+//!
+//! A local turn's effort, a rung of [`EFFORT_LADDER`], then goes out as
+//! [`Thinking::plan`] says: `none` and `minimal` turn thinking off where the
+//! template has the switch; `low` and up turn it on and send the nearest
+//! listed level ([`nearest`]). A template with neither gets nothing, and the
+//! model thinks as it always does. A thinking budget is a launch flag
+//! (`--reasoning-budget`), not a request field, so a turn never sets one.
 //!
 //! The template's default level is never in the list: a template that
 //! defaults to `medium` and also renders `low` and `high` lists
 //! `["low", "high"]`. So an effort exactly between two listed levels sends
-//! nothing and the template keeps its default.
+//! no level and the template keeps its default.
 
 use std::time::Duration;
 
 use grokhub_core::model_registry::EFFORT_LADDER;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use super::ladder::rung;
 
 /// How long the one `/props` read may take.
 pub const PROPS_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// How the running model's template thinks, from one `/props` read.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Thinking {
+    /// The `reasoning_effort` levels the template renders, lowest first.
+    pub levels: Vec<String>,
+    /// The template variable that turns thinking on and off, when it reads one.
+    pub switch: Option<&'static str>,
+}
+
+/// What one local request sends for its effort.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Sent {
+    /// `reasoning_effort`: a level the template renders.
+    pub effort: Option<String>,
+    /// `chat_template_kwargs.{switch}`: thinking on or off.
+    pub thinking: Option<(&'static str, bool)>,
+}
+
+impl Thinking {
+    /// What a turn at effort `want` sends. `None` (or an effort off the
+    /// ladder) sends nothing, so the template keeps its own default.
+    pub fn plan(&self, want: Option<&str>) -> Sent {
+        let Some(want) = want.filter(|w| rung(w).is_some()) else {
+            return Sent::default();
+        };
+        let off = rung(want) <= rung("minimal");
+        match self.switch {
+            // Thinking off makes a level moot, so none goes with it.
+            Some(switch) if off => Sent {
+                effort: None,
+                thinking: Some((switch, false)),
+            },
+            Some(switch) => Sent {
+                effort: nearest(want, &self.levels),
+                thinking: Some((switch, true)),
+            },
+            // No switch: the lowest listed level is as far down as it goes.
+            None => Sent {
+                effort: nearest(want, &self.levels),
+                thinking: None,
+            },
+        }
+    }
+}
+
+impl Sent {
+    /// Put the effort on a `/v1/chat/completions` body.
+    pub fn apply(&self, body: &mut Value) {
+        if let Some(e) = &self.effort {
+            body["reasoning_effort"] = json!(e);
+        }
+        if let Some((switch, on)) = self.thinking {
+            body["chat_template_kwargs"] = json!({ switch: on });
+        }
+    }
+}
+
 /// `chat_template_caps.reasoning_effort_levels` of a `/props` reply. Empty
 /// when the reply has no list (an older engine) or isn't JSON.
 pub fn parse_levels(props_json: &str) -> Vec<String> {
-    let Ok(v) = serde_json::from_str::<Value>(props_json) else {
-        return Vec::new();
-    };
+    serde_json::from_str::<Value>(props_json)
+        .map(|v| levels_of(&v))
+        .unwrap_or_default()
+}
+
+fn levels_of(v: &Value) -> Vec<String> {
     v.get("chat_template_caps")
         .and_then(|c| c.get("reasoning_effort_levels"))
         .and_then(Value::as_array)
@@ -39,6 +109,43 @@ pub fn parse_levels(props_json: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// The thinking switch a chat template reads: `enable_thinking` (Qwen3,
+/// GLM and the like), else a bare `thinking` flag tested in a Jinja
+/// condition (`if thinking`, `thinking is defined`). Prose that only says
+/// "thinking" is no switch.
+fn template_switch(template: &str) -> Option<&'static str> {
+    let words: Vec<&str> = template
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .filter(|w| !w.is_empty())
+        .collect();
+    if words.contains(&"enable_thinking") {
+        return Some("enable_thinking");
+    }
+    let flag = words.iter().enumerate().any(|(i, w)| {
+        *w == "thinking"
+            && (i
+                .checked_sub(1)
+                .is_some_and(|p| matches!(words[p], "if" | "elif" | "not" | "and" | "or"))
+                || words.get(i + 1) == Some(&"is"))
+    });
+    flag.then_some("thinking")
+}
+
+/// The levels and the switch of a `/props` reply. Empty when the reply has
+/// neither, or isn't JSON.
+pub fn parse_thinking(props_json: &str) -> Thinking {
+    let Ok(v) = serde_json::from_str::<Value>(props_json) else {
+        return Thinking::default();
+    };
+    Thinking {
+        levels: levels_of(&v),
+        switch: v
+            .get("chat_template")
+            .and_then(Value::as_str)
+            .and_then(template_switch),
+    }
 }
 
 /// The level of `levels` to send for the effort `want`: the same level when
@@ -70,12 +177,12 @@ pub fn nearest(want: &str, levels: &[String]) -> Option<String> {
     Some(EFFORT_LADDER[rung(level)?].to_string())
 }
 
-/// Read the levels from a running llama-server on loopback, with its API
-/// key (`/props` answers 401 without it). Empty on any failure, so a turn
-/// then sends no effort.
-pub fn fetch_levels(host: &str, port: u16, token: &str, timeout: Duration) -> Vec<String> {
+/// Read how the model thinks from a running llama-server on loopback, with
+/// its API key (`/props` answers 401 without it). Empty on any failure, so a
+/// turn then sends no effort.
+pub fn fetch_thinking(host: &str, port: u16, token: &str, timeout: Duration) -> Thinking {
     if !super::local_sidecar::is_loopback_host(host) {
-        return Vec::new();
+        return Thinking::default();
     }
     let agent = grokhub_core::http::agent(grokhub_core::http::Opts {
         connect: timeout,
@@ -87,8 +194,8 @@ pub fn fetch_levels(host: &str, port: u16, token: &str, timeout: Duration) -> Ve
         .header("Authorization", &format!("Bearer {token}"))
         .call();
     match resp {
-        Ok(r) if r.status() == 200 => parse_levels(&r.into_string().unwrap_or_default()),
-        _ => Vec::new(),
+        Ok(r) if r.status() == 200 => parse_thinking(&r.into_string().unwrap_or_default()),
+        _ => Thinking::default(),
     }
 }
 
@@ -158,8 +265,104 @@ mod tests {
     #[test]
     fn levels_are_read_only_from_loopback() {
         assert_eq!(
-            fetch_levels("192.0.2.1", 80, "sk-abcdefghijklmnopqrstuv", PROPS_TIMEOUT),
-            Vec::<String>::new()
+            fetch_thinking("192.0.2.1", 80, "sk-abcdefghijklmnopqrstuv", PROPS_TIMEOUT),
+            Thinking::default()
+        );
+    }
+
+    /// A Qwen3-style template: `enable_thinking` decides, no effort levels.
+    const PROPS_QWEN: &str = r#"{"chat_template":"{%- if enable_thinking is defined and enable_thinking is false %}{{- '<think>\n\n</think>\n\n' }}{%- endif %}","chat_template_caps":{"supports_reasoning_effort":false},"total_slots":1}"#;
+    /// A DeepSeek-V3.1-style template: a bare `thinking` flag.
+    const PROPS_FLAG: &str = r#"{"chat_template":"{% if not thinking is defined %}{% set thinking = false %}{% endif %}{% if thinking %}<think>{% else %}</think>{% endif %}"}"#;
+
+    #[test]
+    fn the_thinking_switch_comes_from_the_chat_template() {
+        assert_eq!(
+            parse_thinking(PROPS_QWEN),
+            Thinking {
+                levels: Vec::new(),
+                switch: Some("enable_thinking"),
+            }
+        );
+        assert_eq!(parse_thinking(PROPS_FLAG).switch, Some("thinking"));
+        assert_eq!(
+            parse_thinking(PROPS_LOW_HIGH),
+            Thinking {
+                levels: levels(&["low", "high"]),
+                switch: None,
+            }
+        );
+        // Prose that only says "thinking" is no switch, nor is a longer name.
+        assert_eq!(
+            parse_thinking(
+                r#"{"chat_template":"Show your thinking step by step. {{ thinking_budget }}"}"#
+            )
+            .switch,
+            None
+        );
+        assert_eq!(parse_thinking("not json"), Thinking::default());
+    }
+
+    fn body(sent: &Sent) -> Value {
+        let mut b = json!({"model": "local"});
+        sent.apply(&mut b);
+        b
+    }
+
+    #[test]
+    fn none_and_minimal_turn_thinking_off_and_low_and_up_turn_it_on() {
+        let qwen = parse_thinking(PROPS_QWEN);
+        for off in ["none", "minimal"] {
+            assert_eq!(
+                body(&qwen.plan(Some(off))),
+                json!({"model": "local", "chat_template_kwargs": {"enable_thinking": false}})
+            );
+        }
+        for on in ["low", "medium", "high", "xhigh", "max"] {
+            assert_eq!(
+                body(&qwen.plan(Some(on))),
+                json!({"model": "local", "chat_template_kwargs": {"enable_thinking": true}})
+            );
+        }
+        // No effort, or one off the ladder: the template's own default.
+        assert_eq!(qwen.plan(None), Sent::default());
+        assert_eq!(qwen.plan(Some("fast")), Sent::default());
+        assert_eq!(
+            body(&parse_thinking(PROPS_FLAG).plan(Some("none"))),
+            json!({"model": "local", "chat_template_kwargs": {"thinking": false}})
+        );
+    }
+
+    #[test]
+    fn a_switch_and_levels_together_send_both_on_and_only_the_switch_off() {
+        let both = Thinking {
+            levels: levels(&["low", "high"]),
+            switch: Some("enable_thinking"),
+        };
+        assert_eq!(
+            body(&both.plan(Some("xhigh"))),
+            json!({
+                "model": "local",
+                "reasoning_effort": "high",
+                "chat_template_kwargs": {"enable_thinking": true}
+            })
+        );
+        assert_eq!(
+            body(&both.plan(Some("minimal"))),
+            json!({"model": "local", "chat_template_kwargs": {"enable_thinking": false}})
+        );
+        // Without a switch, the lowest level is as low as it goes.
+        let levels_only = Thinking {
+            levels: levels(&["low", "high"]),
+            switch: None,
+        };
+        assert_eq!(
+            body(&levels_only.plan(Some("none"))),
+            json!({"model": "local", "reasoning_effort": "low"})
+        );
+        assert_eq!(
+            body(&Thinking::default().plan(Some("high"))),
+            json!({"model": "local"})
         );
     }
 }
