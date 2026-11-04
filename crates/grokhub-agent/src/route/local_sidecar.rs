@@ -258,6 +258,10 @@ fn base_args(model: &Path, host: &str, port: u16) -> Vec<String> {
         host.into(),
         "--port".into(),
         port.to_string(),
+        // The model's thinking comes back in `reasoning_content`, apart from
+        // the answer, so it never reaches the chat as reply text.
+        "--reasoning-format".into(),
+        "deepseek".into(),
     ]
 }
 
@@ -1495,6 +1499,9 @@ mod tests {
         assert!(args.windows(2).any(|w| w == ["--port", "4711"]));
         assert!(!args.iter().any(|a| a.contains("--api-key")));
         assert!(args.windows(2).any(|w| w == ["-m", "/m.gguf"]));
+        assert!(args
+            .windows(2)
+            .any(|w| w == ["--reasoning-format", "deepseek"]));
         // Perf defaults (PR C) ride along even with the CPU floor.
         assert!(args.windows(2).any(|w| w[0] == "-ngl"));
         assert!(args.iter().any(|a| a == "--cache-prompt"));
