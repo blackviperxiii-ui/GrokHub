@@ -1,0 +1,1 @@
+- Work board: on Windows, a save that lands while another writer is releasing the board lock now waits for it instead of failing with "Access is denied".

@@ -69,7 +69,9 @@ pub fn lock_board(path: &Path) -> Result<BoardLock, String> {
                 let _ = write!(f, "{}", std::process::id());
                 return Ok(BoardLock(lock));
             }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            // Windows refuses the create with "access denied" while the last
+            // holder's lock file is still being deleted: that is a held lock too.
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists || lock_pending_delete(&e) => {
                 let stale = fs::metadata(&lock)
                     .and_then(|m| m.modified())
                     .ok()
@@ -80,6 +82,10 @@ pub fn lock_board(path: &Path) -> Result<BoardLock, String> {
                     continue;
                 }
                 if start.elapsed() >= LOCK_WAIT {
+                    // Still refused after the wait: a real permission problem.
+                    if lock_pending_delete(&e) {
+                        return Err(e.to_string());
+                    }
                     return Err("workboard.json is locked by another writer".into());
                 }
                 std::thread::sleep(Duration::from_millis(15));
@@ -87,6 +93,12 @@ pub fn lock_board(path: &Path) -> Result<BoardLock, String> {
             Err(e) => return Err(e.to_string()),
         }
     }
+}
+
+/// Windows answers an exclusive create with "access denied" (error 5) while
+/// a file of that name is deleted but a handle to it is still open.
+fn lock_pending_delete(e: &std::io::Error) -> bool {
+    cfg!(windows) && e.kind() == std::io::ErrorKind::PermissionDenied
 }
 
 /// The cards on disk, migrated. A missing or empty file is an empty board; a
@@ -379,6 +391,21 @@ pub fn read_work_log_tail(dir: &Path, id: &str, max_bytes: u64, lines: usize) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A lock file Windows is still deleting counts as held, so a second
+    /// writer waits instead of failing its save; nowhere else does "access
+    /// denied" mean that.
+    #[test]
+    fn a_lock_windows_is_still_deleting_counts_as_held() {
+        use std::io::{Error, ErrorKind};
+        assert_eq!(
+            lock_pending_delete(&Error::from(ErrorKind::PermissionDenied)),
+            cfg!(windows)
+        );
+        assert!(!lock_pending_delete(&Error::from(ErrorKind::NotFound)));
+        #[cfg(windows)]
+        assert!(lock_pending_delete(&Error::from_raw_os_error(5)));
+    }
     use crate::work_item::{append_work_log, WorkOrigin, SWEEP_EVERY_MS};
     use crate::workboard::BoardStatus;
 
