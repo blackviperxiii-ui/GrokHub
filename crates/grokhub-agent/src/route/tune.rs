@@ -810,52 +810,6 @@ pub fn review_line(state: &TuneState, now_ms: u64) -> String {
     }
 }
 
-/// `/why table` lines for the tuner: the live tuning, any candidate and canary status.
-pub fn why_lines(
-    tuning: &Tuning,
-    version: u32,
-    state: &TuneState,
-    ev: &BTreeMap<String, Evidence>,
-) -> Vec<String> {
-    let mut out = vec![if tuning.is_empty() {
-        format!("Self-tuning v{version}: nothing tuned yet")
-    } else {
-        format!("Self-tuning v{version}:")
-    }];
-    for (class, e) in &tuning.starts {
-        out.push(format!(
-            "  {class} starts at {}",
-            grokhub_core::effort_label(e)
-        ));
-    }
-    for (class, m) in &tuning.orders {
-        out.push(format!("  {class} → {m} first"));
-    }
-    for c in state.candidates.iter().filter(|c| {
-        matches!(
-            c.stage,
-            Stage::Shadow | Stage::Canary | Stage::Watch | Stage::Card
-        )
-    }) {
-        let what = c.change.as_ref().map(Change::label).unwrap_or_default();
-        let e = ev.get(&c.id).copied().unwrap_or_default();
-        let status = match c.stage {
-            Stage::Shadow => format!("shadow, {}/{SHADOW_MIN_STEPS} steps", e.shadow_steps),
-            Stage::Canary => format!(
-                "canary on {:.0}% of steps, {}/{CANARY_MIN_N}, passed {:.0}% vs {:.0}% live",
-                CANARY_SHARE * 100.0,
-                e.canary.n,
-                e.canary.pass_pct,
-                e.live.pass_pct
-            ),
-            Stage::Watch => format!("live, watched {WATCH_DAYS} days"),
-            _ => "waiting on your OK (costs more)".into(),
-        };
-        out.push(format!("  candidate {}: {} ({status})", c.class, what));
-    }
-    out
-}
-
 /// The cost-raising card's words. They name the kind of step and the cost,
 /// never the model or effort: the router alone picks those.
 pub fn card_text(c: &Candidate) -> (String, String) {

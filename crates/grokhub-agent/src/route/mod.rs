@@ -2,8 +2,8 @@
 //! model call names its class and goes through [`call_model`],
 //! [`live::stream_routed`] or [`cabin::call_model`], which take the effort from
 //! [`Router::choose`]. There is no effort setting: the class table
-//! ([`policy`]), difficulty and the ladder ([`ladder`]) decide, and `/why`
-//! shows the reasons. xAI goes over [`crate::XaiClient`] (or a test
+//! ([`policy`]), difficulty and the ladder ([`ladder`]) decide, and the route
+//! log keeps the reasons. xAI goes over [`crate::XaiClient`] (or a test
 //! [`ModelClient`]); a provider you added with your own key (R3b) goes over
 //! [`providers::call_model`], only under its key and your destination grant.
 
@@ -67,7 +67,7 @@ use crate::client::{
 use crate::CancelToken;
 
 pub use live::{route_log, RouteCall, RouteDone};
-pub use log::{why_models_text, why_text, Chosen, RouteRecord};
+pub use log::{Chosen, RouteRecord};
 
 /// The provider [`call_model`] knows.
 pub const PROVIDER_XAI: &str = "xai";
@@ -1812,7 +1812,7 @@ mod tests {
             .as_deref(),
             Some("high")
         );
-        let routes = crate::route::log::last_routes(&dir);
+        let routes = crate::route::log::route_records(&dir, log::ROUTE_TAIL_LINES);
         let (_, newest) = routes.last().unwrap();
         assert_eq!(
             (newest.used.effort.as_deref(), newest.reason.as_str()),
@@ -1848,7 +1848,6 @@ mod tests {
         let route = rec.route.unwrap();
         assert!(route.holdout && !route.shadow);
         assert_eq!(route.reason, "balanced · High: everyday chat.");
-        assert!(!why_text(&dir).to_ascii_lowercase().contains("holdout"));
         // prepare:hard is never held out.
         let hard = (0..)
             .map(|i| format!("hard-{i}"))
@@ -1886,10 +1885,9 @@ mod tests {
     }
 
     #[test]
-    fn route_records_hold_no_prompt_text_and_why_prints_at_most_ten_lines() {
+    fn route_records_hold_no_prompt_text() {
         let dir = crate::harness::test_dir("route-why");
         let _cfg = crate::perm::ConfigGuard::set(&dir);
-        assert_eq!(why_text(&dir), "No routed model calls yet. Effort is automatic: each step's reason shows here once it runs.");
         let echo = Echo(Mutex::new(Vec::new()));
         // No bare digits: "4512" matched a `ts_ms` and failed a clean run.
         let secret = "PROMPT-FIXTURE my bank PIN is QZXW-PIN and sk-abcdefghijklmnopqrstuv";
@@ -1938,38 +1936,7 @@ mod tests {
         );
         assert_eq!(route.outcome.unwrap().cost_usd, 1_200.0 / 1e10);
         assert_eq!(route.span_id, rec.span_ref());
-        let why = why_text(&dir);
-        assert_eq!(why.lines().count(), 10);
-        assert_eq!(
-            why.lines().next(),
-            Some("background:judge · grok-4.7 · balanced · Low: an independent check.")
-        );
-        // Brain 1: the newest Brief leads, and the list stays at ten lines.
-        let brief = crate::brain::rules(&crate::brain::BriefInput {
-            text: "the printer service won't start",
-            ..Default::default()
-        })
-        .unwrap();
-        crate::brain::record_brief(
-            &dir,
-            &crate::brain::BriefLine {
-                at: 1,
-                session: "ep-9".into(),
-                brief,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let why = why_text(&dir);
-        assert_eq!(why.lines().count(), 10);
-        assert_eq!(
-            why.lines().next(),
-            Some("Brief: repair × critical, done = services, packages, boot errors, ports")
-        );
-        assert_eq!(
-            why.lines().nth(1),
-            Some("background:judge · grok-4.7 · balanced · Low: an independent check.")
-        );
+        assert_eq!(route.reason, "balanced · Low: an independent check.");
         let health =
             std::fs::read_to_string(grokhub_core::model_registry::store::health_path(&dir))
                 .unwrap();

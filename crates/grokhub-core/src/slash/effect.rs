@@ -65,10 +65,6 @@ pub fn slash_effect(s: &Slash) -> SlashEffect {
         | Slash::Privacy
         | Slash::Diagnose
         | Slash::RecordStop
-        | Slash::Why
-        | Slash::WhyModels
-        | Slash::WhyTable
-        | Slash::WhyLocal
         | Slash::Hub
         | Slash::Rewind
         | Slash::RewindStep(_)
@@ -81,17 +77,14 @@ pub fn slash_effect(s: &Slash) -> SlashEffect {
         | Slash::Brief
         | Slash::Fix
         | Slash::Remember(_)
-        | Slash::Mode(_)
         | Slash::Dream
         | Slash::HostStatus
         | Slash::Import
         | Slash::Usage
-        | Slash::Models
         | Slash::Palette
         | Slash::Pin
         | Slash::Delete
         | Slash::Plan
-        | Slash::Effort
         | Slash::Sessions
         | Slash::Inspect
         | Slash::GrokSkills
@@ -103,7 +96,6 @@ pub fn slash_effect(s: &Slash) -> SlashEffect {
         | Slash::GrokConnectors
         | Slash::GrokHooks
         | Slash::GrokWorkflows
-        | Slash::Model(_)
         | Slash::Goal(_)
         | Slash::Workflow(_)
         | Slash::WorkflowCtl { .. }
@@ -154,10 +146,6 @@ pub const SLASH_SAMPLES: &[&str] = &[
     "/record the menu flickers",
     "/record stop",
     "/audiocheck",
-    "/why",
-    "/why models",
-    "/why table",
-    "/why local",
     "/hub",
     "/inhabit desk",
     "/rewind",
@@ -171,20 +159,17 @@ pub const SLASH_SAMPLES: &[&str] = &[
     "/brief",
     "/fix",
     "/remember tabs over spaces",
-    "/mode fast",
     "/dream",
     "/host",
     "/import",
     "/consult is this safe",
     "/usage",
-    "/models",
     "/palette",
     "/pin",
     "/delete",
     "/plan",
     "/always-approve",
     "/auto",
-    "/effort",
     "/sessions",
     "/inspect",
     "/loop check mail",
@@ -197,7 +182,6 @@ pub const SLASH_SAMPLES: &[&str] = &[
     "/connectors",
     "/hooks",
     "/workflows",
-    "/model grok-4.7",
     "/imagine-video waves",
     "/goal ship it",
     "/workflow nightly",

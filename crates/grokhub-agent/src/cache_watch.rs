@@ -1,6 +1,6 @@
 //! Prompt-cache share. xAI reports how much of each prompt it served from its
 //! cache; a cached token costs a fraction of a fresh one. This sums that share
-//! for `/why` and Home's AI usage tile, and spots a turn whose share fell under
+//! for Home's AI usage tile, and spots a turn whose share fell under
 //! the floor right after one above it (a broken prefix), so the turn's usage
 //! line can say so.
 
@@ -11,7 +11,7 @@ use crate::route::PROVIDER_XAI;
 pub const FLOOR_PCT: u8 = CACHE_FLOOR_PCT as u8;
 /// A turn with less fresh-plus-cached input than this says nothing about the cache.
 pub const MIN_TURN_INPUT: u64 = 2_000;
-/// The window `/why` and the usage tile sum over.
+/// The window the usage tile sums over.
 pub const WINDOW_MS: u64 = 24 * 60 * 60 * 1_000;
 
 /// Cached share of the prompt tokens xAI calls sent.
@@ -46,16 +46,6 @@ pub fn share_since(records: &[(u64, RouteRecord)], since_ms: u64) -> Option<Shar
         pct: grokhub_core::wire::cache_pct(cached, input),
         calls,
     })
-}
-
-/// The `/why` line for the last [`WINDOW_MS`], or `None` with no xAI calls.
-pub fn why_line(records: &[(u64, RouteRecord)], now_ms: u64) -> Option<String> {
-    let share = share_since(records, now_ms.saturating_sub(WINDOW_MS))?;
-    let calls = if share.calls == 1 { "call" } else { "calls" };
-    Some(format!(
-        "Cache: {}% of Grok prompt tokens came from the cache in the last 24 hours ({} {calls}).",
-        share.pct, share.calls
-    ))
 }
 
 /// The share this turn fell from, when it dropped under [`FLOOR_PCT`] right
@@ -109,17 +99,17 @@ mod tests {
     }
 
     #[test]
-    fn the_why_line_reads_the_last_day() {
+    fn the_usage_tile_window_reads_the_last_day() {
         let now = WINDOW_MS + 1_000;
         let records = vec![
             (0, rec(PROVIDER_XAI, 10_000, 0)),
             (now - 10, rec(PROVIDER_XAI, 4_000, 3_000)),
         ];
         assert_eq!(
-            why_line(&records, now).as_deref(),
-            Some("Cache: 75% of Grok prompt tokens came from the cache in the last 24 hours (1 call).")
+            share_since(&records, now - WINDOW_MS),
+            Some(Share { pct: 75, calls: 1 })
         );
-        assert_eq!(why_line(&[], now), None);
+        assert_eq!(share_since(&[], now - WINDOW_MS), None);
     }
 
     #[test]

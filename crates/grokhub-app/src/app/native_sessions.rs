@@ -528,7 +528,10 @@ mod tests {
         assert!(sheet < table, "the slash table follows the shortcut sheet");
         assert!(body.contains("Slash commands"));
         let rows = grokhub_agent::slash_parity();
-        assert_eq!(rows.len(), 74);
+        assert_eq!(rows.len(), 72);
+        assert!(rows
+            .iter()
+            .all(|row| row.command != "model" && row.command != "effort"));
         assert!(rows.iter().any(|row| row.command == "remember"));
         assert!(rows.iter().any(|row| row.command == "flush"));
         assert!(rows.iter().any(|row| row.command == "dream"));

@@ -54,7 +54,7 @@ pub struct AttentionDecision {
     pub kind: Attention,
     /// Stable rule id for route logs (`attn:escalate:host`).
     pub rule: &'static str,
-    /// Short plain clause for `/why` and the Auto chip.
+    /// Short plain clause for the route reason.
     pub why: &'static str,
 }
 
@@ -429,9 +429,6 @@ pub fn rank_models(
         }
     }
 }
-
-/// Note under Settings / `/why table` baseline rows.
-pub const TABLE_ATTENTION_NOTE: &str = "Baselines: Cheap / Workhorse / Code / Flagship (flagship reserved for plan/design/debug/prepare/repair). Each turn can escalate or de-escalate from built-in signals + learned feedback (no model-in-the-loop). Token savings apply to the task model.";
 
 #[cfg(test)]
 mod tests {

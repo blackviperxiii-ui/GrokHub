@@ -133,31 +133,6 @@ fn run_slash_help_export_and_clear() {
     quiet.settle();
 }
 
-/// Router R1: `/effort <level>` changes nothing and says effort is automatic.
-#[test]
-fn effort_slash_leaves_the_config_byte_identical_and_says_effort_is_automatic() {
-    let _g = crate::config::hold_test_config();
-    let root = crate::config::test_config_root("effort-slash");
-    let _ = std::fs::remove_dir_all(&root);
-    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
-    let mut cabin = Cabin::quiet_for_test();
-    crate::config::save(&cabin.cfg).expect("save");
-    let app_json = crate::config::config_dir().join("app.json");
-    let before = std::fs::read(&app_json).expect("app.json");
-    for line in ["/effort high", "/effort xhigh", "/effort banana", "/effort"] {
-        cabin.status.clear();
-        cabin.run_slash_line(line);
-        assert_eq!(cabin.status, "Effort is automatic now, see /why", "{line}");
-        assert_eq!(
-            std::fs::read(&app_json).expect("app.json"),
-            before,
-            "{line} must not touch app.json"
-        );
-    }
-    let _ = std::fs::remove_dir_all(&root);
-    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
-}
-
 /// Router R1: there is no effort control in the composer, Settings or the slash list.
 #[test]
 fn no_effort_selector_anywhere() {
@@ -185,8 +160,7 @@ fn no_effort_selector_anywhere() {
         .iter()
         .all(|d| d.cmd != "/effort"));
     let help = grokhub_core::slash_help();
-    assert!(help.contains("/effort — effort is automatic now"), "{help}");
-    assert!(!help.contains("/effort <"), "{help}");
+    assert!(!help.contains("/effort"), "{help}");
 }
 
 // Landed from PR #106. `/health` is one chat block since card 10.
@@ -266,24 +240,6 @@ fn undo_retry_and_context_on_an_empty_chat() {
     assert!(!cabin.running);
     cabin.run_slash_line("/context");
     assert_eq!(cabin.status, "0 turns · 0 tokens · 0% · pin none");
-    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
-}
-
-// Landed from PR #108.
-#[test]
-fn mode_slash_says_the_model_is_automatic() {
-    let _g = crate::config::hold_test_config();
-    let root = crate::config::test_config_root("mode-slash");
-    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
-    let mut cabin = Cabin::quiet_for_test();
-    // The router alone picks the model and effort: /mode steers nothing.
-    for line in ["/mode think", "/mode auto"] {
-        cabin.run_slash_line(line);
-        assert_eq!(
-            cabin.status, "The model is automatic now, see /why",
-            "{line}"
-        );
-    }
     unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
@@ -399,8 +355,6 @@ fn memory_goal_model_loop_forget_and_empty_imagine() {
     cabin.run_slash_line("/goal clear");
     assert!(cabin.cfg.goal_pin.is_empty());
     assert_eq!(cabin.status, "Goal cleared");
-    cabin.run_slash_line("/model grok-4.7");
-    assert_eq!(cabin.status, "The model is automatic now, see /why");
     cabin.run_slash_line("/loop");
     assert!(matches!(cabin.nav, Nav::Night));
     assert!(cabin.auto_compose);
@@ -733,22 +687,12 @@ fn rewind_and_compact_stay_closed_without_grok() {
 
 // Landed from PR #128.
 #[test]
-fn models_and_inspect_without_grok() {
+fn inspect_without_grok() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("models-inspect");
     unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     unsafe { std::env::set_var("GROKHUB_GROK", "/tmp/grokhub-no-such-grok") };
     let mut cabin = Cabin::quiet_for_test();
-    cabin.run_slash_line("/models");
-    assert!(
-        cabin
-            .messages
-            .iter()
-            .any(|m| { m.0 == "assistant" && m.1.contains("grok-4.7 — Grok 4.7 (chat)") }),
-        "models catalog did not land: {:?}",
-        cabin.messages
-    );
-    assert!(!cabin.running);
     cabin.run_slash_line("/inspect");
     assert!(matches!(cabin.nav, Nav::Settings));
     assert_eq!(cabin.settings_sec, SettingsSec::Connectors);
@@ -963,26 +907,58 @@ fn hooks_slash_opens_connectors_on_the_hooks_section() {
     unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
-// Landed from PR #161.
+/// The router alone picks the model and effort: the commands that once
+/// changed or showed them answer like any retired command, from the composer,
+/// and touch nothing.
 #[test]
-fn model_slash_saves_nothing_and_runs_nothing() {
+fn routing_commands_answer_as_unknown_and_change_nothing() {
     let _hold = config::hold_test_config();
-    let root = config::test_config_root("model-slash");
+    let root = config::test_config_root("routing-slash-gone");
     let _ = std::fs::remove_dir_all(&root);
     unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
 
     let mut cabin = Cabin::quiet_for_test();
-    assert!(!cabin.running);
-    cabin.run_slash(Slash::Model("grok-4.7".into()));
-    // The router alone picks the model: /model says so and saves no pick.
-    assert_eq!(cabin.status, "The model is automatic now, see /why");
-    assert!(!cabin.running);
-    let body = std::fs::read_to_string(root.join("app.json")).unwrap_or_default();
-    assert!(
-        !body.contains("\"model\""),
-        "no model pick is saved: {body}"
-    );
-
+    if cabin.threads.is_empty() {
+        cabin.new_thread(false);
+    }
+    crate::config::save(&cabin.cfg).expect("save");
+    let app_json = crate::config::config_dir().join("app.json");
+    let before = std::fs::read(&app_json).expect("app.json");
+    let transcript = cabin.messages.clone();
+    for line in [
+        "/model grok-4.7",
+        "/model",
+        "/m grok-4.5",
+        "/mode think",
+        "/models",
+        "/effort high",
+        "/effort",
+        "/why",
+        "/why models",
+        "/why table",
+        "/why local",
+    ] {
+        cabin.status.clear();
+        cabin.send_chat(line.to_string());
+        assert_eq!(cabin.status, "Unknown command — /help", "{line}");
+        assert_eq!(&*cabin.messages, &*transcript, "{line}");
+        assert!(!cabin.running, "{line}");
+        assert_eq!(
+            std::fs::read(&app_json).expect("app.json"),
+            before,
+            "{line} must not touch app.json"
+        );
+    }
+    for word in ["/model", "/mode", "/models", "/effort", "/why"] {
+        assert!(
+            grokhub_core::filter_slash_hits(word, &[]).iter().all(|h| h
+                .cmd
+                .split_whitespace()
+                .next()
+                != Some(word)),
+            "{word} autocompletes"
+        );
+    }
     unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -1073,9 +1049,9 @@ fn slash_pick_fills_or_returns_the_command() {
     assert!(composer.is_empty());
 
     let mut composer = String::new();
-    let run = super::slash_pick_take(&mut composer, "/model ", false);
+    let run = super::slash_pick_take(&mut composer, "/goal ", false);
     assert!(run.is_none());
-    assert_eq!(composer, "/model ");
+    assert_eq!(composer, "/goal ");
 
     assert_eq!(super::slash_pick_step(0, 3, 1), 1);
     assert_eq!(super::slash_pick_step(2, 3, 1), 2);

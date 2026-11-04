@@ -20,7 +20,7 @@ use grokhub_core::model_registry::{
 };
 
 use super::learn::RegistryFilters;
-use super::log::last_routes;
+use super::log::{route_records, ROUTE_TAIL_LINES};
 use super::policy::{class_row, CLASS_TABLE};
 use super::providers::{
     self, add_provider, call_data, parse_base_url, request_body, usable, HttpReply, MemoryVault,
@@ -961,7 +961,9 @@ fn a_provider_call_the_table_ranks_first_routes_logs_its_provider_and_the_key_is
         (g.id.as_str(), true)
     );
     // The route record carries the provider and the cost class.
-    let (_, rec) = last_routes(&dir).pop().expect("a route record");
+    let (_, rec) = route_records(&dir, ROUTE_TAIL_LINES)
+        .pop()
+        .expect("a route record");
     assert_eq!(
         (
             rec.chosen.provider.as_str(),
@@ -1969,7 +1971,7 @@ fn a_batched_call_teaches_no_speed() {
         "chat:default",
     )
     .unwrap();
-    let latencies: Vec<Option<u64>> = last_routes(&dir)
+    let latencies: Vec<Option<u64>> = route_records(&dir, ROUTE_TAIL_LINES)
         .into_iter()
         .map(|(_, r)| r.signals.latency)
         .collect();
@@ -2051,7 +2053,9 @@ fn xai_down_hands_an_ordinary_turn_to_a_provider_then_to_this_computer() {
     assert_eq!(shown, "hello from the provider");
     assert_eq!(wire.n(), 1);
     assert!(wire.bodies()[0].contains("\"model\":\"vendor/cheap\""));
-    let (_, rec) = last_routes(&dir).pop().expect("a route record");
+    let (_, rec) = route_records(&dir, ROUTE_TAIL_LINES)
+        .pop()
+        .expect("a route record");
     assert_eq!(
         (rec.used.provider.as_str(), rec.used.model.as_str()),
         ("openrouter", OR_MODEL)

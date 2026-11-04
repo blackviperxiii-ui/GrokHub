@@ -209,8 +209,6 @@ impl Cabin {
                 self.open_connectors();
                 self.scroll_to_hooks = true;
             }
-            // The router alone picks the model: nothing to save.
-            Slash::Model(_) => self.status = grokhub_core::MODEL_AUTO_MSG.into(),
             Slash::Goal(obj) => {
                 let obj = obj.trim();
                 if obj.is_empty() || obj.eq_ignore_ascii_case("status") {
@@ -412,7 +410,6 @@ impl Cabin {
                 self.status = self.doctor_text();
             }
             Slash::Remember(note) => self.run_slash(Slash::MemoryNote(note)),
-            Slash::Mode(_) => self.status = grokhub_core::MODEL_AUTO_MSG.into(),
             Slash::Dream => self.run_dream(),
             Slash::Import => self.import_openclaw(),
             Slash::Consult(q) => self.run_consult(q),
@@ -430,12 +427,6 @@ impl Cabin {
                 } else {
                     format!("{cabin} · {grok}")
                 };
-            }
-            Slash::Models => {
-                self.live_mut()
-                    .push(("assistant".into(), mark_slash_result(&catalog_line())));
-                self.stamp_current_access();
-                self.persist();
             }
             Slash::Palette => self.open_palette(),
             Slash::Plan => {
@@ -483,9 +474,6 @@ impl Cabin {
                 }
                 self.persist_idle_key = self.persist_idle_now();
                 self.status = "Permission auto".into();
-            }
-            Slash::Effort => {
-                self.status = grokhub_core::EFFORT_AUTO_MSG.into();
             }
             Slash::Sessions => {
                 self.nav = Nav::History;
@@ -574,10 +562,6 @@ impl Cabin {
             Slash::Send(task) => self.dispatch_send(task),
             Slash::Sync => self.sync_hub(),
             Slash::Privacy => self.run_privacy(),
-            Slash::Why => self.run_why(false),
-            Slash::WhyModels => self.run_why(true),
-            Slash::WhyTable => self.run_why_table(),
-            Slash::WhyLocal => self.run_why_local(),
             Slash::Diagnose => self.run_diagnose(Vec::new(), true),
             Slash::Record(note) => self.start_screen_recording(note),
             Slash::RecordStop => self.stop_screen_recording(),
@@ -870,13 +854,6 @@ impl Cabin {
                 self.status = self.native_usage_status();
                 true
             }
-            Slash::Models => {
-                self.live_mut()
-                    .push(("assistant".into(), mark_slash_result(&catalog_line())));
-                self.stamp_current_access();
-                self.persist();
-                true
-            }
             Slash::Workflow(_)
             | Slash::WorkflowCtl { .. }
             | Slash::WorkflowUsage
@@ -967,15 +944,6 @@ impl Cabin {
             grokhub_agent::UnparsedSlash::Memory => {
                 self.nav = Nav::Memory;
                 self.status = "Memory".into();
-            }
-            grokhub_agent::UnparsedSlash::ModelCatalog => {
-                self.live_mut()
-                    .push(("assistant".into(), mark_slash_result(&catalog_line())));
-                self.stamp_current_access();
-                self.persist();
-            }
-            grokhub_agent::UnparsedSlash::EffortHint => {
-                self.status = grokhub_core::EFFORT_AUTO_MSG.into();
             }
             grokhub_agent::UnparsedSlash::Note(text) => {
                 self.status = text.into();

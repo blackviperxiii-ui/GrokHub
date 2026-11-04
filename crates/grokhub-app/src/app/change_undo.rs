@@ -446,7 +446,7 @@ impl Cabin {
             }
             if kind == ChangeKind::Model {
                 // Router changes show nowhere: which model or effort a class
-                // uses is the router's alone. The ledger line stays for `/why table`.
+                // uses is the router's alone. The ledger line stays for history.
                 continue;
             }
             if kind == ChangeKind::Skill {

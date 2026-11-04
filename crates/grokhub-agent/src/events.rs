@@ -215,7 +215,7 @@ impl NativeEngine {
             .collect()
     }
 
-    /// Brain 1: sort the ask and store its Brief for the trail and `/why`.
+    /// Brain 1: sort the ask and store its Brief for the trail.
     /// The Brief changes nothing about the run or its reply. It is returned so
     /// the turn's router can read its intent, care, domain and confidence.
     fn write_brief(&self, text: &str, has_image: bool) -> crate::brain::Brief {

@@ -167,13 +167,14 @@ pub fn hw_tier(config_dir: &std::path::Path) -> Option<&'static str> {
     super::local_autoconfig::catalog_model_for(&paths.model).map(|m| m.tier)
 }
 
-/// `/why local`: whether the on-device model can take work, the governor's
-/// level and reason, the hardware tier, the heavy-step queue, and the log.
-pub fn why_local_text(config_dir: &std::path::Path) -> String {
+/// Settings → Local AI's status notes: whether the on-device model can take
+/// work, the governor's level and reason, the hardware tier, the heavy-step
+/// queue, and the log. They name no model.
+pub fn status_lines(config_dir: &std::path::Path) -> Vec<String> {
     let cap = LocalCapacity::now();
     let gov = super::local_gov::level();
     let state = if !switched_on() {
-        "off (Settings → Local AI)".to_string()
+        "off".to_string()
     } else if !cap.ready {
         "on, but no engine and model are installed".to_string()
     } else if cap.paused() {
@@ -215,7 +216,7 @@ pub fn why_local_text(config_dir: &std::path::Path) -> String {
                 .display()
         ),
     ]
-    .join("\n")
+    .into()
 }
 
 /// The chip and pause message while the governor holds the local route.

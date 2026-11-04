@@ -184,11 +184,17 @@ fn shadow_then_canary_then_promote_then_rollback_with_both_ledger_lines_and_undo
         learn::review_line(&dir, t2),
         "Router: 1 change kept (everyday chat: \u{2212}12% cost, quality same), 0 rolled back."
     );
-    let why = learn::why_table_lines(&dir, t2).join("\n");
-    assert!(
-        why.contains("chat:default → grok-4.6 first")
-            && why.contains("candidate chat:default: grok-4.6 first (live, watched 7 days)"),
-        "{why}"
+    let promoted = &load_state(&dir).candidates[0];
+    assert_eq!(
+        (promoted.id.as_str(), promoted.stage),
+        ("chat:default#1", Stage::Watch)
+    );
+    assert_eq!(
+        learn::load_tuning(&dir)
+            .orders
+            .get("chat:default")
+            .map(String::as_str),
+        Some("grok-4.6")
     );
     // After promotion: 30 steps at 80% passed (10 points down) roll it back at once.
     for i in 0..30u64 {

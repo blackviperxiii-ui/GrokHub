@@ -1,8 +1,8 @@
 //! The router in the cabin: the model registry refresh on the heartbeat, the
 //! passive-health fold, the onboarding and half-open probes, the routing table
-//! rebuild (R2a), what the user hears when a model breaks, and `/why`. Network
-//! and file work run off the UI thread. Nothing here shows which model or
-//! effort the router picked: only a chat question about it is told.
+//! rebuild (R2a) and what the user hears when a model breaks. Network and file
+//! work run off the UI thread. Nothing here shows which model or effort the
+//! router picked: only a chat question about it is told.
 
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -63,7 +63,6 @@ pub(super) struct RouterUi {
     pub rx: Option<mpsc::Receiver<(RefreshDone, HealOut)>>,
     pub fold_rx: Option<mpsc::Receiver<(bool, HealOut)>>,
     pub last_fold: Option<Instant>,
-    pub why_rx: Option<mpsc::Receiver<String>>,
     pub guard_rx: Option<mpsc::Receiver<GuardRun>>,
     pub last_guard: Option<Instant>,
     /// R3a self-tuning, on the guard's hourly slot.
@@ -294,46 +293,6 @@ impl Cabin {
         }
     }
 
-    /// `/why` (last 10 route reasons) or `/why models` (one line per model; also
-    /// asks for a refresh).
-    pub(super) fn run_why(&mut self, models: bool) {
-        if self.harness.router.why_rx.is_some() {
-            return;
-        }
-        if models {
-            if let Some(clock) = self.harness.router.clock.as_mut() {
-                clock.demand = true;
-            }
-        }
-        let dir = crate::config::config_dir();
-        let (tx, rx) = mpsc::channel();
-        self.harness.router.why_rx = Some(rx);
-        std::thread::spawn(move || {
-            let body = if models {
-                grokhub_agent::route::why_models_text(&load_registry(&dir), &read_profiles(&dir))
-            } else {
-                grokhub_agent::route::why_text(&dir)
-            };
-            let _ = tx.send(body);
-        });
-    }
-
-    pub(super) fn poll_why(&mut self) {
-        let Some(rx) = self.harness.router.why_rx.take() else {
-            return;
-        };
-        match rx.try_recv() {
-            Ok(body) => {
-                self.live_mut()
-                    .push(("assistant".into(), mark_slash_result(&body)));
-                self.stamp_current_access();
-                self.persist();
-            }
-            Err(mpsc::TryRecvError::Empty) => self.harness.router.why_rx = Some(rx),
-            Err(mpsc::TryRecvError::Disconnected) => {}
-        }
-    }
-
     /// What the live router reads from Settings: Local AI, the prompt tidy,
     /// OpenRouter's data policy and the local tuning. It takes no model pick.
     pub(super) fn sync_router_pin(&mut self) {
@@ -369,30 +328,6 @@ impl Cabin {
             clock.demand = true;
         }
         self.status = "Refreshing models...".into();
-    }
-
-    /// `/why table`.
-    pub(super) fn run_why_table(&mut self) {
-        let table = grokhub_agent::route::live::table_snapshot(&crate::config::config_dir());
-        let dir = crate::config::config_dir();
-        let mut body = grokhub_agent::route::table::why_table_text(&table, now_ms());
-        for line in learn::why_table_lines(&dir, now_ms()) {
-            body.push('\n');
-            body.push_str(&line);
-        }
-        self.live_mut()
-            .push(("assistant".into(), mark_slash_result(&body)));
-        self.stamp_current_access();
-        self.persist();
-    }
-
-    /// `/why local`: the on-device model's state, governor level and queue.
-    pub(super) fn run_why_local(&mut self) {
-        let body = grokhub_agent::route::local::why_local_text(&crate::config::config_dir());
-        self.live_mut()
-            .push(("assistant".into(), mark_slash_result(&body)));
-        self.stamp_current_access();
-        self.persist();
     }
 }
 

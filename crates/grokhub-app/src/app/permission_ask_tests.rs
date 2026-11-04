@@ -127,7 +127,7 @@ fn always_permission_keeps_the_acp_session() {
     let auto = src
         .split("Slash::AutoPerm =>")
         .nth(1)
-        .and_then(|s| s.split("Slash::Effort =>").next())
+        .and_then(|s| s.split("Slash::Sessions =>").next())
         .expect("AutoPerm");
     assert!(
         auto.contains("grok_session = None"),
@@ -136,17 +136,6 @@ fn always_permission_keeps_the_acp_session() {
     assert!(
         auto.contains("persist_idle_key") && !auto.contains("self.persist()"),
         "/auto must not clone every thread — bump the idle key so persist_bg skips: {auto}"
-    );
-    let mode = src
-        .split("Slash::Mode(_)")
-        .nth(1)
-        .and_then(|s| s.split("Slash::Dream").next())
-        .expect("Mode");
-    assert!(
-        !mode.contains("self.persist_cfg()")
-            && !mode.contains("self.persist()")
-            && !mode.contains("persist_snap"),
-        "/mode saves nothing now (the router picks the model): {mode}"
     );
     let appearance = src
         .split("SettingsSec::Appearance => {")

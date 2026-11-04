@@ -427,8 +427,6 @@ mod tests {
                 Some("Tool calls didn't come back in the right shape.")
             )
         );
-        let text = crate::route::why_models_text(&load_registry(&dir), &read_profiles(&dir));
-        assert_eq!(text, "grok-4.7 · live · not usable. In your model list. Tool calls didn't come back in the right shape.");
         let _ = std::fs::remove_dir_all(dir);
     }
 

@@ -1135,21 +1135,6 @@ pub fn brief_for_turn(config_dir: &Path, chat_id: &str, turn: u32) -> Option<Bri
         .find(|l| l.chat_id == chat_id && l.turn == turn)
 }
 
-/// `/why`'s first lines: the newest Brief and its policy row, and a note
-/// when the user's policy file is being ignored.
-pub fn why_lines(config_dir: &Path) -> Vec<String> {
-    let mut out = read_briefs(config_dir)
-        .pop()
-        .map(|l| l.lines())
-        .unwrap_or_default();
-    if let (_, Some(why)) = super::load_policy(config_dir) {
-        out.push(format!(
-            "Policy file ignored ({why}); using the shipped rows."
-        ));
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1790,7 +1775,7 @@ mod tests {
     fn briefs_are_stored_without_the_ask_and_found_by_turn() {
         let dir = std::env::temp_dir().join(format!("gh-brief-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
-        assert!(why_lines(&dir).is_empty());
+        assert!(read_briefs(&dir).is_empty());
         let text = "the printer service won't start, my password is hunter2";
         let b = rules(&input(text)).unwrap();
         let policy = Some(super::super::PolicyPick {
@@ -1856,8 +1841,8 @@ mod tests {
         assert_eq!(brief_for_turn(&dir, "chat-1", 9), None);
         assert_eq!(brief_for_turn(&dir, "", 2), None);
         assert_eq!(
-            why_lines(&dir),
-            vec!["Brief: chat × casual, done = answered".to_string()]
+            read_briefs(&dir).last().map(|l| l.brief.label()).as_deref(),
+            Some("chat × casual, done = answered")
         );
         for i in 0..BRIEF_TRIM_AT as u64 {
             record_brief(
