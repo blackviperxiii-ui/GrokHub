@@ -140,7 +140,7 @@ pub fn unasked_title(class: HardClass) -> String {
         HardClass::Delete => "delete something",
         HardClass::Credentials => "type into a credential field",
         HardClass::IrreversibleOs => "do an irreversible OS action",
-        HardClass::AgentConfig => "change the agent's settings",
+        HardClass::AgentConfig => "change the agent's instructions or settings",
     };
     format!(
         "{} tried to {what} without asking",

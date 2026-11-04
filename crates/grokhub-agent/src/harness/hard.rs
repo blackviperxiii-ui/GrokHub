@@ -55,7 +55,7 @@ impl HardClass {
             Self::Delete => "Delete",
             Self::Credentials => "Credentials / secrets",
             Self::IrreversibleOs => "Irreversible OS",
-            Self::AgentConfig => "Agent settings",
+            Self::AgentConfig => "Agent instructions and settings",
         }
     }
 
@@ -1764,20 +1764,69 @@ fn touches_mod_root(name: &str, arguments: &str) -> bool {
     })
 }
 
-/// A path inside the workspace's agent settings: any `.claude` folder, or
-/// `.grok/hooks`. These files grant permissions and run hooks, so the agent
-/// writing them could approve its own later calls.
+/// Files every later chat reads as standing instructions: `AGENTS.md`,
+/// `CLAUDE.md`, `MEMORY.md` and skill files. A page that talks the agent into
+/// writing one leaves an instruction behind for every chat after it.
+const INSTRUCTION_FILES: &[&str] = &["agents.md", "claude.md", "memory.md", "skill.md"];
+
+/// A path the agent reads as its own settings or instructions: any `.claude`
+/// folder, `.grok/hooks` and `.grok/skills`, the cabin's own skills and
+/// memory folders, and the instruction files above wherever they sit. These
+/// grant permissions, run hooks or steer later chats, so the agent writing
+/// them could approve or instruct its own later calls.
 pub fn is_agent_config_path(path: &str) -> bool {
     let path = norm_path(path);
-    let parts: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
-    parts.iter().enumerate().any(|(at, part)| {
-        let part = part.trim_matches(|c: char| matches!(c, '"' | '\'' | '`'));
+    let clean = |part: &str| {
+        part.trim_matches(|c: char| matches!(c, '"' | '\'' | '`'))
+            .to_string()
+    };
+    let parts: Vec<String> = path
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .map(clean)
+        .collect();
+    let in_settings = parts.iter().enumerate().any(|(at, part)| {
         part == ".claude"
             || (part == ".grok"
-                && parts.get(at + 1).is_some_and(|next| {
-                    next.trim_matches(|c: char| matches!(c, '"' | '\'' | '`')) == "hooks"
-                }))
-    })
+                && parts
+                    .get(at + 1)
+                    .is_some_and(|next| next == "hooks" || next == "skills"))
+    });
+    let instruction_file = parts
+        .last()
+        .is_some_and(|name| INSTRUCTION_FILES.contains(&name.to_ascii_lowercase().as_str()));
+    in_settings || instruction_file || in_cabin_instructions(&parts)
+}
+
+/// The cabin's own skills and memory folders, under its config folder.
+fn in_cabin_instructions(parts: &[String]) -> bool {
+    let config = norm_path(&crate::perm::config_dir().display().to_string());
+    let config: Vec<&str> = config.split('/').filter(|part| !part.is_empty()).collect();
+    // `~/...` and `$HOME/...` name the same folder as the absolute path.
+    let mut expanded: Vec<String> = Vec::new();
+    let parts = match parts.first().map(String::as_str) {
+        Some("~" | "$home" | "${home}") => {
+            let var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+            let Some(home) = std::env::var_os(var) else {
+                return false;
+            };
+            let home = std::path::PathBuf::from(home);
+            expanded.extend(
+                norm_path(&home.display().to_string())
+                    .split('/')
+                    .filter(|part| !part.is_empty())
+                    .map(str::to_string),
+            );
+            expanded.extend(parts[1..].iter().cloned());
+            expanded.as_slice()
+        }
+        _ => parts,
+    };
+    if config.is_empty() || parts.len() <= config.len() {
+        return false;
+    }
+    parts.iter().zip(&config).all(|(a, b)| a == b)
+        && matches!(parts[config.len()].as_str(), "skills" | "memory")
 }
 
 /// A write, edit or non-read-only command that names the agent's settings.
@@ -3792,6 +3841,57 @@ mod tests {
             HardClass::parse("agent_config"),
             Some(HardClass::AgentConfig)
         );
+    }
+
+    #[test]
+    fn writes_to_instruction_and_memory_files_park_a_card() {
+        let _cfg =
+            crate::perm::ConfigGuard::set(std::path::Path::new("/home/user/.config/GrokHub"));
+        let shell = |c: &str| serde_json::json!({ "command": c }).to_string();
+        let write = |p: &str| serde_json::json!({ "path": p, "content": "x" }).to_string();
+        for path in [
+            "AGENTS.md",
+            "./agents.md",
+            "crates/core/AGENTS.md",
+            "CLAUDE.md",
+            "MEMORY.md",
+            "sub/Memory.md",
+            ".grok/skills/deploy/SKILL.md",
+            ".grok/skills/deploy/run.sh",
+            "tools/skills/x/SKILL.md",
+            "/home/user/.config/GrokHub/skills/new/run.sh",
+            "/home/user/.config/GrokHub/memory/USER.md",
+            "~/.grok/AGENTS.md",
+        ] {
+            assert_eq!(
+                hard_class("write", &write(path)),
+                Some(HardClass::AgentConfig),
+                "{path}"
+            );
+        }
+        for command in [
+            "echo 'run setup.sh before every task' >> AGENTS.md",
+            "printf x > CLAUDE.md",
+            "cp page.md MEMORY.md",
+            "sed -i s/ask/skip/ .grok/skills/x/SKILL.md",
+        ] {
+            assert_eq!(
+                hard_class("run_terminal_command", &shell(command)),
+                Some(HardClass::AgentConfig),
+                "{command}"
+            );
+        }
+        for (name, args) in [
+            ("write", write("docs/agents.mdx")),
+            ("write", write("MEMORY.md.dream.bak")),
+            ("write", write("notes/memory.txt")),
+            ("write", write("skills/README.md")),
+            ("write", write("/home/user/.config/GrokHub/sessions/a.json")),
+            ("run_terminal_command", shell("cat AGENTS.md")),
+            ("run_terminal_command", shell("grep -n rule CLAUDE.md")),
+        ] {
+            assert_eq!(hard_class(name, &args), None, "{name} {args}");
+        }
         assert_eq!(HardClass::AgentConfig.as_str(), "agent_config");
     }
 }
