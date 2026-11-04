@@ -613,6 +613,70 @@ fn no_key_or_no_grant_means_never_a_candidate_and_xai_stands_in_for_the_episode(
     assert_eq!(r.candidates_n, 2, "only the two xAI models are candidates");
 }
 
+/// E15: after two failures at one rung the episode moves to the strongest
+/// xAI model above its own, then to the strongest provider model you set up;
+/// with nothing stronger it keeps its model.
+#[test]
+fn e15_a_failing_episode_moves_to_a_stronger_model_one_step_at_a_time() {
+    let reg = fleet();
+    let next = super::ladder::Pick {
+        rung: super::ladder::rung("xhigh").unwrap(),
+        rules: vec!["E1:ceiling".into(), super::ladder::NEXT_MODEL.into()],
+        ..super::ladder::Pick::default()
+    };
+    let step = |episode: &str, spend: Spend| {
+        let mut input = ask("chat:default", episode, spend);
+        input.episode_model = Some(episode);
+        input.pick = Some(next.clone());
+        let r = Router::choose(&input, &reg, &none(), &RoutingTable::default(), NOW);
+        let stronger = ["model:stronger", "model:strongest_kept", "provider:auto"]
+            .iter()
+            .filter(|id| r.rule_ids.contains(&id.to_string()))
+            .copied()
+            .collect::<Vec<_>>();
+        (r.model, r.provider, r.effort, stronger)
+    };
+    let or = granted(&["openrouter"]);
+    assert_eq!(
+        step("grok-4.3", or.clone()),
+        (
+            "grok-4.7".to_string(),
+            "xai".to_string(),
+            Some("xhigh".to_string()),
+            vec!["model:stronger"]
+        )
+    );
+    assert_eq!(
+        step("grok-4.7", or),
+        (
+            OR_MODEL.to_string(),
+            "openrouter".to_string(),
+            Some("high".to_string()),
+            vec!["model:stronger", "provider:auto"]
+        )
+    );
+    // No provider set up for this data: the strongest xAI model keeps the step.
+    assert_eq!(
+        step("grok-4.7", Spend::default()),
+        (
+            "grok-4.7".to_string(),
+            "xai".to_string(),
+            Some("xhigh".to_string()),
+            vec!["model:strongest_kept"]
+        )
+    );
+    // A plain step (no E15 rule) keeps the episode's model: no cache bust.
+    let mut input = ask("chat:default", "grok-4.3", granted(&["openrouter"]));
+    input.episode_model = Some("grok-4.3");
+    let r = Router::choose(&input, &reg, &none(), &RoutingTable::default(), NOW);
+    assert_eq!(r.model, "grok-4.3");
+    assert!(
+        r.rule_ids.contains(&"episode:keep".to_string()),
+        "{:?}",
+        r.rule_ids
+    );
+}
+
 #[test]
 fn fallback_chains_never_include_a_provider_and_one_answers_only_when_xai_cannot() {
     let mut reg = fleet();
@@ -903,6 +967,65 @@ fn replies_map_back_to_turns() {
         (7, 2, 5)
     );
     assert!(providers::parse_anthropic_reply("{}").is_err());
+}
+
+/// E14: a chat-completions or messages reply cut at the output limit is a
+/// truncated turn; with no answer text it reads as a spent reasoning budget.
+#[test]
+fn e14_a_length_cut_with_no_answer_reads_as_a_spent_budget() {
+    let empty = providers::parse_openai_reply(
+        r#"{"choices":[{"finish_reason":"length","message":{"content":"","reasoning_content":"thinking and thinking"}}],"usage":{"prompt_tokens":9,"completion_tokens":4096}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        (
+            empty.truncated,
+            empty.truncate_reason.as_deref(),
+            empty.out_of_budget()
+        ),
+        (true, Some("max_output_tokens"), true)
+    );
+    let partial = providers::parse_openai_reply(
+        r#"{"choices":[{"finish_reason":"length","message":{"content":"Here is the first half"}}]}"#,
+    )
+    .unwrap();
+    assert_eq!((partial.truncated, partial.out_of_budget()), (true, false));
+    let done = providers::parse_openai_reply(
+        r#"{"choices":[{"finish_reason":"stop","message":{"content":""}}]}"#,
+    )
+    .unwrap();
+    assert_eq!((done.truncated, done.out_of_budget()), (false, false));
+    let cut = providers::parse_anthropic_reply(
+        r#"{"content":[{"type":"thinking","thinking":"hmm"}],"stop_reason":"max_tokens","usage":{"input_tokens":3,"output_tokens":2048}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        (
+            cut.truncated,
+            cut.truncate_reason.as_deref(),
+            cut.out_of_budget()
+        ),
+        (true, Some("max_output_tokens"), true)
+    );
+    let ended = providers::parse_anthropic_reply(
+        r#"{"content":[{"type":"text","text":"Hi"}],"stop_reason":"end_turn"}"#,
+    )
+    .unwrap();
+    assert!(!ended.truncated);
+    // The Responses API: status incomplete for max_output_tokens, no text.
+    let xai = TurnOutput {
+        truncated: true,
+        truncate_reason: Some("max_output_tokens".into()),
+        reasoning: "long".into(),
+        ..TurnOutput::default()
+    };
+    assert!(xai.out_of_budget());
+    // Cut for another reason (a content filter) is not a spent budget.
+    let filtered = TurnOutput {
+        truncate_reason: Some("content_filter".into()),
+        ..xai.clone()
+    };
+    assert!(!filtered.out_of_budget());
 }
 
 // ---- End to end: the route record, and the key is nowhere ---------------------

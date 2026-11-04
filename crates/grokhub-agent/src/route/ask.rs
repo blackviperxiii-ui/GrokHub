@@ -132,10 +132,39 @@ pub struct AskContext {
     pub prior: Option<AskKind>,
 }
 
+/// A3: what a turn puts at risk, from its own words.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Stakes {
+    #[default]
+    None,
+    /// A destructive or irreversible step: `rm -rf`, dropping or truncating a
+    /// table, a force push, a hard reset, deleting a branch, a production
+    /// deploy or migration.
+    Destructive,
+    /// Security or crypto: authentication, password hashing, encryption,
+    /// keys and secrets, CVEs and vulnerabilities, permissions.
+    Security,
+}
+
+impl Stakes {
+    pub fn id(self) -> Option<&'static str> {
+        match self {
+            Stakes::None => None,
+            Stakes::Destructive => Some("destructive"),
+            Stakes::Security => Some("security"),
+        }
+    }
+}
+
+/// The lane a high-stakes turn takes: Flagship, and never below High.
+pub const STAKES_LANE: &str = super::ladder::PREPARE_HARD;
+
 /// The read of one turn.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AskRead {
     pub kind: AskKind,
+    /// A3: what the turn puts at risk. Anything but `None` takes [`STAKES_LANE`].
+    pub stakes: Stakes,
     /// Difficulty, rounded to hundredths.
     pub d: f64,
     /// The rung to start at (index on `EFFORT_LADDER`).
@@ -148,7 +177,11 @@ pub struct AskRead {
 
 impl AskRead {
     pub fn lane(&self) -> &'static str {
-        self.kind.lane()
+        if self.stakes == Stakes::None {
+            self.kind.lane()
+        } else {
+            STAKES_LANE
+        }
     }
 
     pub fn effort_name(&self) -> &'static str {
@@ -863,6 +896,171 @@ const CORRECTION: &[&str] = &[
     "try again",
 ];
 
+// ---------------------------------------------------------------- stakes
+
+/// Destructive or irreversible, matched as written (lowercase).
+const DESTRUCTIVE: &[&str] = &[
+    "rm -rf",
+    "rm -fr",
+    "drop table",
+    "drop database",
+    "drop schema",
+    "truncate table",
+    "git push --force",
+    "git push -f",
+    "push --force",
+    "--force-with-lease",
+    "force push",
+    "force-push",
+    "git reset --hard",
+    "reset --hard",
+    "git branch -d",
+    "push origin --delete",
+    "git clean -fd",
+    "mkfs",
+    "dd if=",
+    "wipe the disk",
+    "format the drive",
+];
+
+/// Words that delete, for "delete the old branch".
+const DELETE_WORDS: &[&str] = &["delete", "deleting", "remove", "removing", "nuke"];
+/// Words that ship to production, for "run the migration in prod".
+const SHIP_WORDS: &[&str] = &[
+    "deploy",
+    "deploys",
+    "deploying",
+    "deployment",
+    "migrate",
+    "migrating",
+    "migration",
+    "migrations",
+    "rollout",
+    "rollback",
+    "push",
+    "pushing",
+    "ship",
+    "shipping",
+];
+/// Words that wipe data, for "drop the users table".
+const WIPE_WORDS: &[&str] = &["drop", "dropping", "truncate", "wipe", "wiping", "purge"];
+const DATA_WORDS: &[&str] = &["table", "tables", "database", "databases", "db", "schema"];
+
+/// Security or crypto, matched as written (lowercase).
+const SECURITY: &[&str] = &[
+    "authentication",
+    "authenticate",
+    "authorization",
+    "oauth",
+    "jwt",
+    "access token",
+    "auth token",
+    "session token",
+    "2fa",
+    "csrf",
+    "xss",
+    "sql injection",
+    "privilege escalation",
+    "cve",
+    "cve-",
+    "vulnerability",
+    "vulnerabilities",
+    "security hole",
+    "security flaw",
+    "security bug",
+    "security issue",
+    "security risk",
+    "security review",
+    "security audit",
+    "encryption",
+    "encrypt",
+    "decrypt",
+    "bcrypt",
+    "argon2",
+    "scrypt",
+    "pbkdf2",
+    "api key",
+    "api keys",
+    "private key",
+    "secret key",
+    "ssh key",
+    "signing key",
+    "secrets",
+    "credentials",
+    "permissions",
+    "chmod",
+    "sudoers",
+];
+
+/// Password words that make a turn security work when they come with one of [`PASSWORD_WITH`].
+const PASSWORD_WITH: &[&str] = &[
+    "hash",
+    "hashes",
+    "hashed",
+    "hashing",
+    "salt",
+    "salted",
+    "store",
+    "storing",
+    "stored",
+    "plaintext",
+    "encrypt",
+    "leak",
+    "leaked",
+];
+
+/// `a` and `b` within `gap` words of each other.
+fn near(tokens: &[&str], a: &[&str], b: &[&str], gap: usize) -> bool {
+    tokens.iter().enumerate().any(|(i, w)| {
+        a.contains(w)
+            && tokens[i.saturating_sub(gap)..(i + gap + 1).min(tokens.len())]
+                .iter()
+                .any(|x| b.contains(x))
+    })
+}
+
+/// A3: what a turn puts at risk. Casual words never count: "drop me a line",
+/// "the production value of a movie", "truncate this string".
+pub fn stakes(text: &str) -> Stakes {
+    let raw = own_words(text);
+    let t = raw.to_lowercase();
+    let tokens: Vec<&str> = t
+        .split(|c: char| !(c.is_alphanumeric() || c == '-'))
+        .filter(|w| !w.is_empty())
+        .collect();
+    let destructive = DESTRUCTIVE.iter().any(|w| t.contains(w))
+        // SQL keeps its capitals: `TRUNCATE users`.
+        || raw.contains("TRUNCATE ")
+        || near(&tokens, DELETE_WORDS, &["branch", "branches"], 4)
+        || near(&tokens, WIPE_WORDS, DATA_WORDS, 3)
+        || near(&tokens, &["prod", "production"], SHIP_WORDS, 5);
+    if destructive {
+        return Stakes::Destructive;
+    }
+    let security = SECURITY.iter().any(|w| hits(&t, &tokens, &[w]) > 0)
+        || near(&tokens, &["password", "passwords"], PASSWORD_WITH, 3);
+    if security {
+        Stakes::Security
+    } else {
+        Stakes::None
+    }
+}
+
+/// "Try again", "regenerate": the user wants another answer to the same ask,
+/// so the next one starts a rung higher (E3). Only a short turn that is just that.
+pub fn asks_redo(text: &str) -> bool {
+    const REDO: &[&str] = &[
+        "try again",
+        "regenerate",
+        "redo that",
+        "redo it",
+        "another answer",
+        "one more try",
+    ];
+    let t = own_words(text).trim().to_lowercase();
+    t.chars().count() <= 60 && REDO.iter().any(|w| t.contains(w))
+}
+
 // ---------------------------------------------------------------- features
 
 /// Phrase match: a needle with a space, symbol or more than four letters is a
@@ -1306,10 +1504,17 @@ pub fn read(text: &str, cx: &AskContext) -> AskRead {
         // Reading a picture is never a no-thinking turn.
         e = LOW;
     }
+    let stakes = stakes(text);
+    if let Some(id) = stakes.id() {
+        // A3: a wrong answer here costs data or safety: Flagship, at least High.
+        e = e.max(HIGH);
+        rules.push(format!("ask:stakes:{id}"));
+    }
     rules.insert(0, format!("ask:{}", kind.id()));
     rules.push(format!("ask:effort:{}", rung_name(e)));
     AskRead {
         kind,
+        stakes,
         d,
         effort: e,
         confidence: (confidence * 100.0).round() / 100.0,
@@ -1712,5 +1917,116 @@ mod tests {
             Some("Resuming workboard card w-2 \"Ask what model you are\"."),
         );
         assert!(!route_question(&turn).any());
+    }
+
+    #[test]
+    fn a3_destructive_turns_take_the_flagship_lane_at_high_or_more() {
+        let cases = [
+            (
+                "write a bash script that runs rm -rf on my old build folders",
+                "code_small",
+            ),
+            ("DROP TABLE users; is that safe to run?", "chat"),
+            (
+                "how do I TRUNCATE the sessions table in postgres",
+                "explain",
+            ),
+            ("git push --force to main after the rebase", "code_small"),
+            ("should I force push my feature branch", "explain"),
+            (
+                "git reset --hard to the last commit and lose my changes",
+                "code_small",
+            ),
+            ("delete the old release branch on the remote", "chat"),
+            ("run the database migration in prod tonight", "chat"),
+            ("deploy the new build to production", "chat"),
+        ];
+        for (text, kind) in cases {
+            let r = read(text, &AskContext::default());
+            assert_eq!(
+                (r.kind.id(), r.stakes, r.lane()),
+                (kind, Stakes::Destructive, "prepare:hard"),
+                "{text}"
+            );
+            assert!(r.effort >= HIGH, "{text}: {}", r.effort_name());
+            assert!(r.rules.contains(&"ask:stakes:destructive".to_string()));
+            assert_eq!(
+                super::super::capabilities::BaselineLane::of(r.lane()),
+                super::super::capabilities::BaselineLane::Flagship
+            );
+        }
+        // A multi-file turn that is also destructive keeps its kind, takes the
+        // stakes lane and keeps its own higher start.
+        let hard = read(
+            "the migration to production fails with a deadlock across src/db.rs, src/a.rs and src/b.rs, it's subtle, check edge cases carefully",
+            &AskContext::default(),
+        );
+        assert_eq!(
+            (hard.kind, hard.stakes, hard.lane(), hard.effort_name()),
+            (
+                AskKind::CodeMulti,
+                Stakes::Destructive,
+                "prepare:hard",
+                "xhigh"
+            )
+        );
+    }
+
+    #[test]
+    fn a3_security_turns_take_the_flagship_lane_at_high_or_more() {
+        for text in [
+            "how should I hash passwords in rust",
+            "add JWT authentication to my axum api",
+            "is CVE-2024-3094 a vulnerability in my xz version?",
+            "encrypt the save files with AES",
+            "where do I keep my api key in a tauri app",
+            "fix the file permissions on my ssh folder",
+            "chmod 777 on the web root, ok?",
+        ] {
+            let r = read(text, &AskContext::default());
+            assert_eq!(
+                (r.stakes, r.lane()),
+                (Stakes::Security, "prepare:hard"),
+                "{text}"
+            );
+            assert!(r.effort >= HIGH, "{text}: {}", r.effort_name());
+            assert!(r.rules.contains(&"ask:stakes:security".to_string()));
+        }
+    }
+
+    #[test]
+    fn a3_casual_words_are_not_stakes() {
+        for (text, lane, effort) in [
+            ("drop me a text when you get home", "chat:default", "low"),
+            ("what's the production value of a movie like dune", "chat:quick", "none"),
+            ("the drop rate on this boss is awful", "chat:default", "low"),
+            ("truncate this string to 10 characters in python", "code:edit-small", "medium"),
+            ("how do I hash a string in python", "code:edit-small", "medium"),
+            ("my security camera app keeps logging me out", "chat:default", "low"),
+            ("what's the key to winning more ranked games", "chat:quick", "none"),
+            ("delete my old screenshots folder", "chat:default", "low"),
+            ("we shipped the production build of the mod last week, any feedback?", "chat:default", "low"),
+            ("Refactor the auth flow across the codebase: move src/auth.rs, src/session.rs and src/api/login.rs into a new crate and update every caller", "code:multi-file", "high"),
+        ] {
+            let r = read(text, &AskContext::default());
+            assert_eq!(
+                (r.stakes, r.lane(), r.effort_name()),
+                (Stakes::None, lane, effort),
+                "{text}"
+            );
+            assert!(!r.rules.iter().any(|x| x.starts_with("ask:stakes")));
+        }
+        assert_eq!(stakes(""), Stakes::None);
+    }
+
+    #[test]
+    fn asks_redo_reads_short_retries_only() {
+        assert!(asks_redo("try again"));
+        assert!(asks_redo("Regenerate that please"));
+        assert!(asks_redo("nah, redo it"));
+        assert!(!asks_redo("thanks, that worked"));
+        assert!(!asks_redo(
+            "the installer said to try again later, what does error 0x80070005 mean on windows 11"
+        ));
     }
 }

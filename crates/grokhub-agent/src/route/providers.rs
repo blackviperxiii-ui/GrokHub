@@ -1086,7 +1086,12 @@ pub fn parse_openai_reply(body: &str) -> Result<TurnOutput, ClientError> {
         .and_then(|d| InputItem::provider_reasoning(&Value::Array(d.clone()), ""))
         .into_iter()
         .collect();
+    // Cut off at the output limit: the run loop holds its tool calls, and with
+    // no answer text the router reads it as a spent budget (E14).
+    let truncated = v["choices"][0]["finish_reason"].as_str() == Some("length");
     Ok(TurnOutput {
+        truncated,
+        truncate_reason: truncated.then(|| "max_output_tokens".to_string()),
         text: msg["content"].as_str().unwrap_or("").to_string(),
         reasoning: reasoning.to_string(),
         reasoning_items,
@@ -1101,7 +1106,6 @@ pub fn parse_openai_reply(body: &str) -> Result<TurnOutput, ClientError> {
                 .map(|c| (c * 1e10).round() as i64)
                 .unwrap_or(0),
         },
-        ..Default::default()
     })
 }
 
@@ -1132,6 +1136,10 @@ pub fn parse_anthropic_reply(body: &str) -> Result<TurnOutput, ClientError> {
             }),
             _ => {}
         }
+    }
+    if v["stop_reason"].as_str() == Some("max_tokens") {
+        out.truncated = true;
+        out.truncate_reason = Some("max_output_tokens".into());
     }
     let u = &v["usage"];
     out.usage = Usage {
