@@ -632,7 +632,11 @@ pub fn run_loop(
             input: wire,
             conversation_id: input.conversation_id.to_string(),
             tools,
-            hosted_search: true,
+            hosted_search: crate::perm::hosted_search_allowed(
+                &gate,
+                &crate::perm::Policy::load(input.workspace).rules,
+                !crate::memory::recall_lines(history).is_empty(),
+            ),
             call_timeout: None,
         };
         let req_tokens = request_tokens(&req);
@@ -2891,6 +2895,114 @@ mod tests {
         );
         assert_eq!(out.stop, StopReason::EndTurn);
         log.efforts.into_inner().unwrap()
+    }
+
+    /// [`Script`], plus whether each request carried xAI's hosted search.
+    struct HostedLog {
+        script: Script,
+        hosted: Mutex<Vec<bool>>,
+        has_cabin_search: Mutex<Vec<bool>>,
+    }
+
+    impl ModelClient for HostedLog {
+        fn stream(
+            &self,
+            req: &ResponsesRequest,
+            cancel: &CancelToken,
+            sink: &mut dyn FnMut(StreamEvent),
+        ) -> Result<crate::TurnOutput, ClientError> {
+            self.hosted.lock().unwrap().push(req.hosted_search);
+            let body = crate::client::responses_body(req);
+            let cabin = body["tools"].as_array().is_some_and(|tools| {
+                tools
+                    .iter()
+                    .any(|t| t["type"] == "function" && t["name"] == "web_search")
+            });
+            self.has_cabin_search.lock().unwrap().push(cabin);
+            self.script.stream(req, cancel, sink)
+        }
+    }
+
+    #[test]
+    fn hosted_search_is_off_in_plan_read_only_and_unattended_sessions() {
+        let _online = grokhub_core::offline::force_for_thread(false);
+        let run_with = |tag: &str, gate: Gate| {
+            let dir = workspace(tag);
+            let log = HostedLog {
+                script: Script {
+                    turns: Mutex::new(vec![ScriptTurn::text("done")]),
+                    seen: Mutex::new(Vec::new()),
+                    cancel_on_text: false,
+                    steer: None,
+                },
+                hosted: Mutex::new(Vec::new()),
+                has_cabin_search: Mutex::new(Vec::new()),
+            };
+            let permits = Answer {
+                answer: PermAnswer::Allow,
+                asks: AtomicUsize::new(0),
+            };
+            let input = LoopIn {
+                client: &log,
+                workspace: &dir,
+                model: "grok-4.7",
+                effort: None,
+                system: "",
+                conversation_id: tag,
+                max_turns: 2,
+                usage_base: Usage::default(),
+                cancel: &CancelToken::new(),
+                steer: &SteerQueue::new(),
+                halt: &NeverHalt,
+                gate,
+                desktop: None,
+                permits: &permits,
+                perms: None,
+                context_length: 0,
+                tasks: None,
+                depth: 0,
+                agent_id: None,
+                shared_client: None,
+                shared_permits: None,
+                shared_desktop: None,
+            };
+            let mut history = Vec::new();
+            run_loop(
+                &input,
+                &mut history,
+                "look up the release notes",
+                None,
+                &mut |_| {},
+            );
+            (
+                log.hosted.into_inner().unwrap(),
+                log.has_cabin_search.into_inner().unwrap(),
+            )
+        };
+        let (hosted, cabin) = run_with("hosted-on", chat(gate::PermMode::Ask, true, false));
+        assert_eq!(hosted, vec![true]);
+        assert_eq!(
+            cabin,
+            vec![false],
+            "Grok never sees hosted and cabin search at once"
+        );
+        let mut readonly = chat(gate::PermMode::Ask, true, false);
+        readonly.readonly_session = true;
+        let (hosted, cabin) = run_with("hosted-readonly", readonly);
+        assert_eq!(hosted, vec![false]);
+        assert_eq!(
+            cabin,
+            vec![false],
+            "a read-only session has no search at all, as the gate already says"
+        );
+        crate::session_tools::set_plan_session("hosted-plan", true);
+        let (hosted, _) = run_with("hosted-plan", chat(gate::PermMode::Ask, true, false));
+        crate::session_tools::set_plan_session("hosted-plan", false);
+        assert_eq!(hosted, vec![false]);
+        let (hosted, cabin) =
+            run_with("hosted-unattended", chat(gate::PermMode::Ask, false, false));
+        assert_eq!(hosted, vec![false]);
+        assert_eq!(cabin, vec![true], "the gated cabin search takes over");
     }
 
     #[test]

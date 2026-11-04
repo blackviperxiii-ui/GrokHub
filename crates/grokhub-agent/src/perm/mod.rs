@@ -271,6 +271,30 @@ pub fn websearch_matches(rule: &Rule) -> bool {
     matchers::tool_reaches(rule.tool, Tool::WebSearch)
 }
 
+/// Whether xAI's hosted `web_search` / `x_search` may ride this request.
+/// Hosted calls run on xAI's side, so the gate never sees their queries.
+/// They are offered only where the cabin's own `web_search` would run with no
+/// card: an attended, writable session, online, with no deny or ask rule for
+/// search, and no recalled memory lines in the chat (a hosted query could
+/// carry one out with no check). Otherwise the cabin `web_search` tool goes
+/// through the gate and the egress guard instead.
+pub fn hosted_search_allowed(gate: &Gate, rules: &[Rule], recalled: bool) -> bool {
+    gate.attended && !gate.readonly_session && !recalled && hosted_search_rules_allow(rules)
+}
+
+/// [`hosted_search_allowed`] for a background one-shot (the feed digest):
+/// online and no deny or ask rule for search in the saved rules.
+pub fn hosted_search_allowed_background() -> bool {
+    hosted_search_rules_allow(&store::load_rules(&store::config_dir()))
+}
+
+fn hosted_search_rules_allow(rules: &[Rule]) -> bool {
+    !grokhub_core::offline::enabled()
+        && !rules
+            .iter()
+            .any(|rule| rule.action != Action::Allow && websearch_matches(rule))
+}
+
 fn govern_search(base: Decision, gate: &Gate, policy: &Policy, always: bool) -> Decision {
     if policy
         .rules
