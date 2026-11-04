@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
+use grokhub_core::model_registry::discover::split_provider_model;
 use grokhub_core::model_registry::profile::{read_profiles, ModelProfile};
 use grokhub_core::model_registry::store::{
     append_observation, load_registry, profiles_dir, registry_path,
@@ -1086,6 +1087,69 @@ fn note_failure(config_dir: &Path, call: &RouteCall<'_>, err: &ClientError, elap
     }
 }
 
+/// xAI couldn't answer for a reason another model could get past: it is down,
+/// overloaded, rate limited or unreachable after the client's own retries. A
+/// refused key, a cancel, a prompt too long for any model, or this computer
+/// being offline is not an outage another cloud model fixes.
+fn xai_outage(err: &ClientError) -> bool {
+    err.is_retryable() || matches!(err, ClientError::IdleTimeout)
+}
+
+/// The provider model you set up that takes a turn xAI couldn't: its key and a
+/// grant for this call's data, it fits the turn (tools, images, context), its
+/// price is listed and under your $/M ceiling, and it ranks best for the class.
+/// Grok on a provider goes first, so the reply keeps its voice. `None` when no
+/// provider you added can take it.
+pub(crate) fn outage_stand_in(
+    config_dir: &Path,
+    call: &RouteCall<'_>,
+    now_ms: u64,
+) -> Option<String> {
+    let providers =
+        super::providers::usable(config_dir, super::providers::call_data(call.sensitive));
+    if providers.is_empty() {
+        return None;
+    }
+    let (reg, profiles) = snapshot(config_dir);
+    let spend = Spend {
+        settings: spend::spend_settings(),
+        providers,
+        ..Spend::default()
+    };
+    let fit = super::policy::Fit {
+        needs_image: call.needs_image,
+        needs_tools: call.needs_tools,
+        ctx_tokens: call.ctx_tokens,
+        grok_build: false,
+    };
+    let ceiling = spend.settings.ceiling_usd_per_m;
+    let pool: Vec<&str> = reg
+        .models
+        .iter()
+        .filter(|(id, r)| {
+            super::policy::is_new_provider(&reg, id)
+                && super::policy::fits(&reg, &profiles, id, fit, &spend, now_ms)
+                && r.meta.prices.completion.is_some_and(|p| {
+                    grokhub_core::model_registry::cost_class::usd_per_m(p) <= ceiling
+                })
+                && r.meta
+                    .output_modalities
+                    .as_ref()
+                    .is_none_or(|o| o.iter().any(|x| x == "text"))
+                && !super::providers::is_openrouter_router(
+                    split_provider_model(id).map_or("", |(_, m)| m),
+                )
+        })
+        .map(|(id, _)| id.as_str())
+        .collect();
+    let table = load_table(config_dir);
+    let mut ranked =
+        super::policy::rank(call.class, &pool, &table, &reg, call.model, call.ctx_tokens);
+    // Stable: the rank decides within each group.
+    ranked.sort_by_key(|m| !m.to_ascii_lowercase().contains("grok"));
+    ranked.into_iter().next()
+}
+
 /// Write the route span and the health line for one call. Never fails the call.
 /// `call.effort` is what was sent.
 pub fn route_log(
@@ -1260,7 +1324,7 @@ pub fn stream_routed(
     };
     // Explicit turns go only to xAI or this computer's model.
     let screen = super::adult::screen(&req.conversation_id, &sent.input, dest);
-    let on_provider = decision.on_provider() && !screen.to_xai;
+    let mut on_provider = decision.on_provider() && !screen.to_xai;
     let model = if screen.to_xai {
         super::adult::xai_model(&req.model)
     } else {
@@ -1317,8 +1381,10 @@ pub fn stream_routed(
             sink(StreamEvent::TextDelta(format!("{note}\n\n")));
         }
     }
-    // xAI's error and how long it took, when this computer's model answered instead.
+    // xAI's error and how long it took, when another model answered instead.
     let mut xai_failed: Option<(ClientError, Duration)> = None;
+    // The provider model that answered when xAI was down.
+    let mut stood_in: Option<String> = None;
     let out = if on_device {
         // Pass the full request so cabin web_search / web_fetch tool calls round-trip
         // through the agent loop (OpenAI-compatible tools on the local sidecar).
@@ -1369,16 +1435,62 @@ pub fn stream_routed(
             }
             super::adult::guard(&mut reply, &mut *sink, ev)
         });
+        // xAI down for an ordinary turn: a provider you set up answers, and
+        // failing that this computer's model (below). Only when xAI showed
+        // nothing yet, and never an 18+ chat, which no provider takes.
+        let stand_in = match &out {
+            Err(err) if !streamed && xai_outage(err) && !super::adult::explicit(&sent.input) => {
+                outage_stand_in(&dir, &call, now)
+            }
+            _ => None,
+        };
         match out {
+            Err(err) if stand_in.is_some() => {
+                let m = stand_in.unwrap_or_default();
+                xai_failed = Some((err, started.elapsed()));
+                on_provider = true;
+                if asks_route {
+                    let n = route_note(&m, effort.as_deref(), false);
+                    super::ask::add_route_note(&mut sent.input, &n);
+                }
+                let span_id = format!("{}:{now}", req.conversation_id);
+                let out = super::providers::call_model(
+                    &dir,
+                    &m,
+                    effort.as_deref(),
+                    &sent,
+                    super::providers::call_data(call.sensitive),
+                    &span_id,
+                    cancel,
+                );
+                if let Ok(turn) = &out {
+                    if let Some(note) = &note {
+                        sink(StreamEvent::TextDelta(format!("{note}\n\n")));
+                    }
+                    if !turn.text.is_empty() {
+                        super::adult::guard(
+                            &mut reply,
+                            &mut *sink,
+                            StreamEvent::TextDelta(turn.text.clone()),
+                        );
+                    }
+                }
+                stood_in = Some(m);
+                out
+            }
             // An 18+ chat xAI couldn't take (signed out, down) falls back to this
-            // computer's model, never to a provider that bans adult chat. Only
-            // when xAI showed nothing yet: a half-streamed xAI answer is never
-            // finished by another model.
+            // computer's model, never to a provider that bans adult chat; an
+            // ordinary turn does too when xAI is down and no provider could
+            // take it. Only when xAI showed nothing yet: a half-streamed xAI
+            // answer is never finished by another model.
             Err(err)
                 if !streamed
                     && !matches!(err, ClientError::Cancelled)
                     && super::local::available()
-                    && super::adult::explicit(&sent.input) =>
+                    && (super::adult::explicit(&sent.input)
+                        || xai_outage(&err)
+                        || matches!(&err, ClientError::Transport(m)
+                            if grokhub_core::offline::is_refusal(m))) =>
             {
                 xai_failed = Some((err, started.elapsed()));
                 on_device = true;
@@ -1442,12 +1554,14 @@ pub fn stream_routed(
     call.effort = effort.as_deref();
     call.model = &model;
     if let Some((err, elapsed)) = &xai_failed {
-        // xAI's health line says it failed; the answer is logged as the local model's.
+        // xAI's health line says it failed; the answer is logged as the model's that gave it.
         note_failure(&dir, &call, err, *elapsed);
-        call.model = super::local::live_tier();
+        call.model = stood_in.as_deref().unwrap_or(super::local::live_tier());
     }
     if on_device {
         call.provider = super::local::PROVIDER_LOCAL;
+    } else if let Some(m) = &stood_in {
+        call.provider = split_provider_model(m).map_or(&decision.route.provider, |(p, _)| p);
     } else if on_provider {
         call.provider = &decision.route.provider;
     }
