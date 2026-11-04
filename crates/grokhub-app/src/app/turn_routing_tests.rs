@@ -1288,19 +1288,6 @@ fn chat_side_effects_keep_the_origin_thread() {
         help.contains("mark_slash_result") || help.contains("SLASH_RESULT"),
         "/help must not become the next model turn: {help}"
     );
-    let models = src
-        .split("Slash::Models =>")
-        .nth(1)
-        .and_then(|s| s.split("Slash::Palette =>").next())
-        .expect("Models");
-    assert!(
-        models.contains("stamp_current_access") || models.contains("accessed_ms"),
-        "/models must bump accessed_ms or /sync LWW can drop the catalog turn: {models}"
-    );
-    assert!(
-        models.contains("mark_slash_result") || models.contains("SLASH_RESULT"),
-        "/models must not become the next model turn: {models}"
-    );
     let undo = src
         .split("Slash::Undo =>")
         .nth(1)

@@ -86,7 +86,7 @@ pub struct CeilingCtx {
     pub budget_left: u32,
 }
 
-/// Which ceiling term held the candidate back, for `/why`-style text.
+/// Which ceiling term held the candidate back, for a plain reason line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CeilingMiss {

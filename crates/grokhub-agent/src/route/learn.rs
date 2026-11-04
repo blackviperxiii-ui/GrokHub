@@ -662,34 +662,6 @@ pub fn review_line(config_dir: &Path, now_ms: u64) -> String {
     tune::review_line(&load_state(config_dir), now_ms)
 }
 
-/// `/why table`'s tuner lines: the live tuning, candidates and canary status.
-pub fn why_table_lines(config_dir: &Path, now_ms: u64) -> Vec<String> {
-    let state = load_state(config_dir);
-    let tuning = load_tuning(config_dir);
-    let version = crate::harness::ChangeLedger::load_kind(config_dir, ChangeKind::Model)
-        .all()
-        .iter()
-        .filter(|c| c.id == TUNING_ID)
-        .count() as u32;
-    let mut ev = BTreeMap::new();
-    if state
-        .candidates
-        .iter()
-        .any(|c| matches!(c.stage, Stage::Shadow | Stage::Canary))
-    {
-        let log = steps_from(
-            &read_records(config_dir, TUNE_SCAN_LINES),
-            &read_outcomes(config_dir),
-            &load_registry(config_dir),
-            now_ms,
-        );
-        for c in &state.candidates {
-            ev.insert(c.id.clone(), evidence(c, &log));
-        }
-    }
-    tune::why_lines(&tuning, version, &state, &ev)
-}
-
 /// What the router should do with one step's tuning: the start to use, the
 /// order to merge, and the mark for its route record.
 #[derive(Debug, Clone, Default, PartialEq)]

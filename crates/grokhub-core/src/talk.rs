@@ -114,7 +114,7 @@ impl TalkStyle {
         }
     }
 
-    /// "short, under 60 words": the style as the trail and `/why` show it.
+    /// "short, under 60 words": the style as the trail shows it.
     pub fn label(self) -> String {
         let (name, cap) = match self {
             Self::Short => ("short", "under"),

@@ -425,7 +425,7 @@ fn a_model_written_automation_gets_a_work_row_a_home_update_and_undo() {
 }
 
 /// Bug 4: a routing-table write or an R3a tuning change shows nowhere: no
-/// Home note and no Undo/Keep row; the ledger lines stay for `/why table`. A
+/// Home note and no Undo/Keep row; the ledger lines stay for history. A
 /// connection change in the same poll still gets its Work-tree row and Home update.
 #[test]
 fn router_model_changes_post_no_home_note_and_no_undo_row() {
@@ -488,7 +488,7 @@ fn router_model_changes_post_no_home_note_and_no_undo_row() {
         .find(|u| u.source_id == "connection:wiki")
         .expect("connection Home update");
     assert_eq!(conn.title, "Loadout added connection wiki");
-    // The ledger lines stay, so `/why table` and history still read them.
+    // The ledger lines stay, so history still reads them.
     let ids: Vec<String> = hx::ChangeLedger::load_kind(&root, hx::ChangeKind::Model)
         .all()
         .iter()

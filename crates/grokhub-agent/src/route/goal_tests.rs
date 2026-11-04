@@ -1,5 +1,5 @@
 //! Brain 2 acceptance: the Brief's goal changes the starting effort for the
-//! same call class, the reason lands in the route log and `/why`, nothing
+//! same call class, the reason lands in the route log, nothing
 //! prompts, and the ladder still escalates on failure and drops back after
 //! clean work.
 
@@ -10,7 +10,6 @@ use super::goal::{pin_goal, set_goal, RouteGoal};
 use super::guard::in_holdout;
 use super::ladder::note_tool_error;
 use super::live::{self, RouteCall, RouteDone};
-use super::log::why_text;
 
 const NOW: u64 = 1_000_000;
 
@@ -128,11 +127,6 @@ fn the_goal_changes_the_effort_for_the_same_class_and_the_reason_is_logged() {
     assert_eq!(
         (rec.goal.as_str(), rec.goal_reason.as_str()),
         ("quality", "mistakes can break the system")
-    );
-    let why = why_text(&dir);
-    assert!(
-        why.contains("Goal: quality (mistakes can break the system)."),
-        "{why}"
     );
     let (speed, rules, _) = effort(
         "g2-s-speed",

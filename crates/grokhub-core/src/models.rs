@@ -83,14 +83,6 @@ pub fn sanitize_chat_model(id: &str) -> &'static str {
         .unwrap_or(crate::DEFAULT_MODEL)
 }
 
-pub fn catalog_line() -> String {
-    MODEL_CATALOG
-        .iter()
-        .map(|m| format!("{} — {} ({})", m.id, m.label, m.kind))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,19 +104,5 @@ mod tests {
         assert_eq!(sanitize_chat_model("grok-4.7"), "grok-4.7");
         assert_eq!(sanitize_chat_model("grok-4.3"), "grok-4.3");
         assert_eq!(sanitize_chat_model("nope"), crate::DEFAULT_MODEL);
-        assert!(catalog_line().contains("grok-4.6"));
-        assert!(catalog_line().contains("grok-4.7"));
-        assert!(catalog_line().contains("grok-4.3"));
-        assert!(catalog_line().contains("Grok 4.3"));
-        assert!(catalog_line().contains("Grok 4.6"));
-        assert!(catalog_line().contains("Grok 4.7"));
-        assert!(!catalog_line().contains("Grok 4.6 xhigh"));
-        assert!(!catalog_line().contains("Grok 4.7 xhigh"));
-        assert!(catalog_line().contains("grok-voice-3.0"));
-        assert!(catalog_line().contains("grok-voice-think-fast-2.0"));
-        assert!(catalog_line().contains("grok-voice-latest"));
-        assert!(catalog_line().contains("grok-imagine-image-2.0"));
-        assert!(catalog_line().contains("grok-imagine-video-1.5"));
-        assert!(!catalog_line().contains("grok-2-image"));
     }
 }

@@ -230,7 +230,7 @@ fn empty_home_pulse_stays_off_scratch_and_off_about() {
     let auto = src
         .split("Slash::AutoPerm =>")
         .nth(1)
-        .and_then(|s| s.split("Slash::Effort =>").next())
+        .and_then(|s| s.split("Slash::Sessions =>").next())
         .expect("AutoPerm");
     assert!(
         auto.contains("self.confirm = None"),

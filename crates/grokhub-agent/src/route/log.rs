@@ -1,4 +1,4 @@
-//! The `route` record on each model-call span, and `/why`.
+//! The `route` record on each model-call span.
 //! Records hold ids, counts and one plain sentence. Never prompt text, never secrets.
 
 use std::collections::BTreeMap;
@@ -8,16 +8,11 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
 use grokhub_core::model_registry::profile::RuntimeSettings;
-use grokhub_core::model_registry::Registry;
 
 use crate::harness::{span_path, Span, SpanTail};
 
 /// Span session for model calls (shared with [`super::cabin::MODEL_TRACE`]).
 pub const ROUTE_TRACE: &str = super::cabin::MODEL_TRACE;
-/// `/why` prints at most this many reasons.
-pub const WHY_LINES: usize = 10;
-/// Span lines `/why` reads from the end of the model-call log.
-pub const WHY_SCAN_LINES: usize = 400;
 
 /// Provider, model and effort.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -169,129 +164,4 @@ pub fn with_route_records<R>(
     tail.refresh();
     let mut records = tail.newest_iter(lines.min(ROUTE_TAIL_LINES));
     f(&mut records)
-}
-
-/// Every route record in the scanned tail, oldest first.
-fn scanned_routes(config_dir: &Path) -> Vec<(u64, RouteRecord)> {
-    route_records(config_dir, WHY_SCAN_LINES)
-}
-
-/// The last [`WHY_LINES`] route records, oldest first.
-pub fn last_routes(config_dir: &Path) -> Vec<(u64, RouteRecord)> {
-    let mut out = scanned_routes(config_dir);
-    let skip = out.len().saturating_sub(WHY_LINES);
-    out.drain(..skip);
-    out
-}
-
-/// `cached_tokens / prompt_tokens` of the newest multi-turn episode, after
-/// its first call (which never has a cache), as a percent.
-pub fn episode_cache_pct(routes: &[(u64, RouteRecord)]) -> Option<(String, u64)> {
-    let newest = routes
-        .iter()
-        .rev()
-        .filter(|(_, r)| !r.episode.is_empty() && r.outcome.is_some())
-        .find_map(|(_, r)| {
-            let calls: Vec<&RouteRecord> = routes
-                .iter()
-                .map(|(_, x)| x)
-                .filter(|x| x.episode == r.episode && x.outcome.is_some())
-                .collect();
-            (calls.len() >= 2).then_some((r.episode.clone(), calls))
-        })?;
-    let (episode, calls) = newest;
-    let (cached, input) = calls[1..]
-        .iter()
-        .filter_map(|r| r.outcome.as_ref())
-        .fold((0, 0), |(c, i), o| {
-            (c + o.tokens.cached, i + o.tokens.input)
-        });
-    (input > 0).then(|| (episode, cached * 100 / input))
-}
-
-/// `/why`: one line per recent route, at most [`WHY_LINES`], then the last
-/// day's Grok cache share ([`crate::cache_watch::why_line`]). When the newest
-/// multi-turn task got less than [`CACHE_FLOOR_PCT`] of its prompt from the
-/// cache, the oldest line makes room for that flag.
-pub fn why_text(config_dir: &Path) -> String {
-    let brief = crate::brain::why_lines(config_dir);
-    let scanned = scanned_routes(config_dir);
-    let mut routes = last_routes(config_dir);
-    if routes.is_empty() {
-        let none = "No routed model calls yet. Effort is automatic: each step's reason shows here once it runs.";
-        return brief
-            .into_iter()
-            .chain([none.to_string()])
-            .collect::<Vec<_>>()
-            .join("\n");
-    }
-    let flag = episode_cache_pct(&scanned).filter(|(_, pct)| *pct < CACHE_FLOOR_PCT).map(|(_, pct)| {
-        format!("Cache: the last multi-turn task got {pct}% of its prompt from the cache (under {CACHE_FLOOR_PCT}%), so it paid for more of it.")
-    });
-    let share = crate::cache_watch::why_line(&scanned, grokhub_core::now_ms());
-    let extra = usize::from(flag.is_some()) + usize::from(share.is_some());
-    while !routes.is_empty() && routes.len() + extra + brief.len() > WHY_LINES {
-        routes.remove(0);
-    }
-    let mut lines: Vec<String> = brief;
-    lines.extend(routes.iter().map(|(_, r)| {
-        let same = r.used.effort == r.chosen.effort;
-        let used = if same {
-            String::new()
-        } else {
-            format!(
-                " (this session sent {})",
-                super::effort_word(r.used.effort.as_deref())
-            )
-        };
-        let goal = match (r.goal.as_str(), r.goal_reason.as_str()) {
-            ("", _) => String::new(),
-            (g, "") => format!(" Goal: {g}."),
-            (g, why) => format!(" Goal: {g} ({why})."),
-        };
-        format!(
-            "{} · {} · {}{}{}",
-            r.class, r.used.model, r.reason, used, goal
-        )
-    }));
-    lines.extend(share);
-    lines.extend(flag);
-    lines.join("\n")
-}
-
-/// `/why models`: one line per model with state, usable and reason.
-pub fn why_models_text(
-    reg: &Registry,
-    profiles: &std::collections::BTreeMap<
-        String,
-        grokhub_core::model_registry::profile::ModelProfile,
-    >,
-) -> String {
-    if reg.models.is_empty() {
-        return "No model list yet. It refreshes 30 s after start, then every 6 hours.".into();
-    }
-    reg.models
-        .values()
-        .map(|r| {
-            let (usable, why) = match profiles.get(&r.meta.id) {
-                Some(p) if p.usable => ("usable".to_string(), String::new()),
-                Some(p) => (
-                    "not usable".to_string(),
-                    format!(" {}", p.unusable_reason.clone().unwrap_or_default()),
-                ),
-                None => ("no profile yet".to_string(), String::new()),
-            };
-            format!(
-                "{} · {} · {}. {}{}",
-                r.meta.id,
-                r.state.as_str(),
-                usable,
-                r.reason,
-                why
-            )
-            .trim_end()
-            .to_string()
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }

@@ -287,7 +287,8 @@ impl Cabin {
         self.status = local_model_status(on, installed, local::live_tier());
     }
 
-    /// The Settings → Cabin defaults rows: engine download, toggle, Set up, Test speed.
+    /// The Settings → Cabin defaults rows: engine download, toggle, Set up,
+    /// Test speed, then the status notes (state, governor, tier, queue, log).
     pub(super) fn ui_local_model_rows(&mut self, ui: &mut egui::Ui) {
         self.ui_runtime_engine_rows(ui);
         let installed = local::installed();
@@ -341,6 +342,9 @@ impl Cabin {
             )
         {
             self.run_local_speed_test();
+        }
+        for line in local::status_lines(&self.config_dir()) {
+            crate::cards::settings_note(ui, &line);
         }
     }
 
@@ -801,6 +805,78 @@ mod tests {
             !failed.iter().any(|t| t.ends_with(" · recommended")),
             "{failed:?}"
         );
+    }
+
+    /// What `/why local` printed lives in Settings → Local AI now: the state,
+    /// the governor's level and reason, the tier, the heavy-step queue and the
+    /// log, and none of it names a model.
+    #[test]
+    fn local_ai_settings_show_the_engine_status_notes() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("local-ai-status");
+        std::fs::create_dir_all(&root).unwrap();
+        let _pin = crate::config::TestConfigDir::set(root.clone());
+        local::set_enabled(false);
+        let mut cabin = Cabin::quiet_for_test();
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let out = crate::theme::test_pass(&ctx, egui::RawInput::default(), |ui| {
+            cabin.ui_local_model_rows(ui)
+        });
+        fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(t) => out.push(t.galley.job.text.clone()),
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+                _ => {}
+            }
+        }
+        let mut texts = Vec::new();
+        for c in &out.shapes {
+            walk(&c.shape, &mut texts);
+        }
+        let log = format!(
+            "Log: {} (this device only, 7 days, safe to delete).",
+            root.join("local").join("governor.jsonl").display()
+        );
+        for want in ["On-device model: off.", log.as_str()] {
+            assert!(
+                texts.iter().any(|t| t == want),
+                "missing {want:?} in {texts:?}"
+            );
+        }
+        for start in [
+            "Governor: ",
+            "Tier: ",
+            "Heavy background steps waiting for idle time: ",
+        ] {
+            assert!(
+                texts.iter().any(|t| t.starts_with(start)),
+                "missing {start:?} in {texts:?}"
+            );
+        }
+        assert_eq!(
+            local::status_lines(&root),
+            texts
+                .iter()
+                .filter(|t| {
+                    [
+                        "On-device model: ",
+                        "Governor: ",
+                        "Tier: ",
+                        "Heavy background",
+                        "Log: ",
+                    ]
+                    .iter()
+                    .any(|p| t.starts_with(p))
+                })
+                .cloned()
+                .collect::<Vec<_>>(),
+            "the notes are the status lines, in order"
+        );
+        for t in &texts {
+            assert!(!t.contains("grok-"), "{t}");
+        }
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
