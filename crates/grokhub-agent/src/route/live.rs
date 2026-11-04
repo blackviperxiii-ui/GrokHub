@@ -647,7 +647,8 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
                     .clamp(band.floor as isize, band.ceiling.max(band.floor) as isize)
                     as usize;
             }
-            if ladder::is_new_turn(key, own, turn) {
+            let new_turn = ladder::is_new_turn(key, own, turn);
+            if new_turn {
                 let sig = if call.signature.is_empty() {
                     topic_signature(call.text)
                 } else {
@@ -664,11 +665,15 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
                 tool_errors: take_tool_errors(),
                 rejects,
                 verify_ok,
-                correction: is_correction(call.text),
+                // "That's wrong" or "try again": the next answer starts one rung up.
+                correction: is_correction(call.text) || super::ask::asks_redo(call.text),
                 // No self-check score yet, so E4 stays quiet. DE3 reads the week's budget.
                 low_check: None,
                 budget_pct: b.pct,
                 routine,
+                stage: ladder::take_stage(new_turn),
+                keep_start: super::capabilities::BaselineLane::of(r.class)
+                    == super::capabilities::BaselineLane::Flagship,
                 ..Obs::default()
             };
             let hold = ladder::hold_chat_drops(own, care_first);

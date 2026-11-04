@@ -13,7 +13,7 @@
 //! Run with `cargo test -p grokhub-agent --lib route::ask_eval -- --nocapture`
 //! to see the table and every miss.
 
-use super::ask::{read, AskContext, AskKind};
+use super::ask::{read, AskContext, AskKind, STAKES_LANE};
 use AskKind::*;
 
 /// (turn, kind, lowest ok effort, highest ok effort)
@@ -114,6 +114,118 @@ pub(crate) const SET: &[(&str, AskKind, &str, &str)] = &[
     ("find the integral of x^2 * e^x dx", Math, "medium", "high"),
     ("what's the time complexity of quicksort and why", Math, "medium", "high"),
     ("logic puzzle: three boxes are all mislabeled, one has apples, one oranges, one both. how many picks to fix the labels?", Math, "medium", "high"),
+    // Casual words that sound like stakes and aren't (A3)
+    ("drop me a text when you get home", Chat, "low", "medium"),
+    ("the drop rate on this boss is awful", Chat, "low", "medium"),
+    ("truncate this string to 10 characters in python", CodeSmall, "low", "medium"),
+    ("how do I hash a string in python", CodeSmall, "low", "medium"),
+];
+
+/// A3: destructive or security turns. Each takes [`STAKES_LANE`] at High or more,
+/// whatever its kind.
+pub(crate) const STAKES_SET: &[(&str, AskKind, &str, &str)] = &[
+    (
+        "write a bash script that runs rm -rf on my old build folders",
+        CodeSmall,
+        "high",
+        "xhigh",
+    ),
+    (
+        "DROP TABLE users; is that safe to run?",
+        Explain,
+        "high",
+        "xhigh",
+    ),
+    (
+        "how do I TRUNCATE the sessions table in postgres",
+        CodeSmall,
+        "high",
+        "xhigh",
+    ),
+    (
+        "git push --force to main after the rebase",
+        CodeSmall,
+        "high",
+        "xhigh",
+    ),
+    (
+        "git reset --hard to the last commit and lose my changes",
+        CodeSmall,
+        "high",
+        "xhigh",
+    ),
+    (
+        "delete the old release branch on the remote",
+        CodeSmall,
+        "high",
+        "xhigh",
+    ),
+    (
+        "run the database migration in prod tonight",
+        CodeMulti,
+        "high",
+        "xhigh",
+    ),
+    ("deploy the new build to production", Plan, "high", "xhigh"),
+    (
+        "how should I hash passwords in rust",
+        CodeSmall,
+        "high",
+        "xhigh",
+    ),
+    (
+        "add JWT authentication to my axum api",
+        CodeSmall,
+        "high",
+        "xhigh",
+    ),
+    (
+        "is CVE-2024-3094 a vulnerability in my xz version?",
+        Research,
+        "high",
+        "xhigh",
+    ),
+    (
+        "encrypt the save files with AES",
+        CodeSmall,
+        "high",
+        "xhigh",
+    ),
+];
+
+/// A3, held out: written before the stakes reader was checked against them.
+pub(crate) const STAKES_HELD_OUT: &[(&str, AskKind, &str, &str)] = &[
+    (
+        "wipe the staging database and reseed it",
+        CodeSmall,
+        "high",
+        "xhigh",
+    ),
+    ("git push -f origin main", CodeSmall, "high", "xhigh"),
+    (
+        "rotate the leaked aws credentials in our ci",
+        Plan,
+        "high",
+        "xhigh",
+    ),
+    (
+        "how do I store user passwords safely",
+        Explain,
+        "high",
+        "xhigh",
+    ),
+    (
+        "roll out the schema migration to prod",
+        CodeMulti,
+        "high",
+        "xhigh",
+    ),
+    (
+        "is my nginx config affected by the new openssl cve",
+        Research,
+        "high",
+        "xhigh",
+    ),
 ];
 
 fn rung(e: &str) -> usize {
@@ -183,11 +295,26 @@ pub(crate) const HELD_OUT: &[(&str, AskKind, &str, &str)] = &[
     ("how many ways can 5 players be arranged in a line", Math, "low", "high"),
     ("prove there are infinitely many primes", Math, "medium", "high"),
     ("solve for x: 2x^2 - 8 = 0", Math, "low", "medium"),
+    ("we shipped the production build of the mod last week, any feedback?", Chat, "low", "medium"),
+    ("delete my old screenshots folder", Chat, "low", "medium"),
 ];
 
-pub(crate) fn score_set(set: &[(&str, AskKind, &str, &str)]) -> Score {
+/// Score `set` (each turn on its kind's lane) and `stakes` (each on [`STAKES_LANE`]).
+pub(crate) fn score_set(
+    set: &[(&str, AskKind, &str, &str)],
+    stakes: &[(&str, AskKind, &str, &str)],
+) -> Score {
+    let rows: Vec<(&str, AskKind, &str, &str, &str)> = set
+        .iter()
+        .map(|(t, k, lo, hi)| (*t, *k, k.lane(), *lo, *hi))
+        .chain(
+            stakes
+                .iter()
+                .map(|(t, k, lo, hi)| (*t, *k, STAKES_LANE, *lo, *hi)),
+        )
+        .collect();
     let mut s = Score {
-        n: set.len(),
+        n: rows.len(),
         kind_exact: 0,
         lane_same: 0,
         effort_ok: 0,
@@ -197,13 +324,13 @@ pub(crate) fn score_set(set: &[(&str, AskKind, &str, &str)]) -> Score {
         spend_high: 0.0,
         misses: Vec::new(),
     };
-    for (text, kind, lo, hi) in set {
+    for (text, kind, lane, lo, hi) in &rows {
         let r = read(text, &AskContext::default());
         let (lo, hi) = (rung(lo), rung(hi));
         if r.kind == *kind {
             s.kind_exact += 1;
         }
-        if r.kind.lane() == kind.lane() {
+        if r.lane() == *lane {
             s.lane_same += 1;
         }
         if r.effort < lo {
@@ -215,14 +342,16 @@ pub(crate) fn score_set(set: &[(&str, AskKind, &str, &str)]) -> Score {
         }
         s.spend += reasoning_cost(r.effort);
         s.spend_high += reasoning_cost(rung("high"));
-        if r.kind != *kind || r.effort < lo || r.effort > hi {
+        if r.kind != *kind || r.lane() != *lane || r.effort < lo || r.effort > hi {
             let short: String = text.chars().take(60).collect();
             s.misses.push(format!(
-                "{short:?}: got {} {} (d {:.2}), want {} {}..{}",
+                "{short:?}: got {} {} {} (d {:.2}), want {} {} {}..{}",
                 r.kind.id(),
+                r.lane(),
                 r.effort_name(),
                 r.d,
                 kind.id(),
+                lane,
                 grokhub_core::model_registry::EFFORT_LADDER[lo],
                 grokhub_core::model_registry::EFFORT_LADDER[hi],
             ));
@@ -250,7 +379,7 @@ fn report(name: &str, s: &Score) {
 
 #[test]
 fn ask_reader_routes_the_labeled_set() {
-    let s = score_set(SET);
+    let s = score_set(SET, STAKES_SET);
     report("tuning", &s);
     let pct = |x: usize| 100.0 * x as f64 / s.n as f64;
     assert!(s.n >= 80, "set too small: {}", s.n);
@@ -272,7 +401,7 @@ fn ask_reader_routes_the_labeled_set() {
 
 #[test]
 fn ask_reader_holds_up_on_turns_it_was_not_tuned_on() {
-    let s = score_set(HELD_OUT);
+    let s = score_set(HELD_OUT, STAKES_HELD_OUT);
     report("held-out", &s);
     let pct = |x: usize| 100.0 * x as f64 / s.n as f64;
     assert!(s.n >= 40, "held-out too small: {}", s.n);

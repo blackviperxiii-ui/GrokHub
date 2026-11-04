@@ -591,6 +591,7 @@ impl Router {
         ids: &[&str],
         table: &RoutingTable,
         e2: bool,
+        stronger: bool,
         rules: &mut Vec<String>,
     ) -> ModelPick {
         let current = input.current_model.trim();
@@ -808,6 +809,51 @@ impl Router {
                 return stand_in(ep, rules, "episode");
             }
         }
+        if stronger {
+            // E15: the strongest xAI model above the episode's, then the
+            // strongest provider model you set up. Nothing stronger keeps it.
+            let away = input.episode_model.unwrap_or(current).trim();
+            let floor = attention::reasoning_of(reg, away);
+            let strongest = |theirs: bool, above: u8| {
+                pool.iter()
+                    .copied()
+                    .filter(|m| *m != away && policy::is_new_provider(reg, m) == theirs)
+                    .filter(|m| {
+                        !theirs
+                            || !providers::is_openrouter_router(
+                                split_provider_model(m).map_or("", |(_, id)| id),
+                            )
+                    })
+                    .filter(|m| attention::reasoning_of(reg, m) > above)
+                    .max_by(|a, b| {
+                        attention::reasoning_of(reg, a)
+                            .cmp(&attention::reasoning_of(reg, b))
+                            .then(b.cmp(a))
+                    })
+            };
+            let next = if policy::is_new_provider(reg, away) {
+                strongest(true, floor)
+            } else {
+                strongest(false, floor).or_else(|| strongest(true, 0))
+            };
+            return match next {
+                Some(m) => {
+                    rules.push("model:stronger".into());
+                    if policy::is_new_provider(reg, m) {
+                        rules.push("provider:auto".into());
+                    }
+                    ModelPick {
+                        model: m.to_string(),
+                        no_route: false,
+                        replaced: None,
+                    }
+                }
+                None => {
+                    rules.push("model:strongest_kept".into());
+                    keep(away)
+                }
+            };
+        }
         if !gb
             && reg.entitlement.credential == Credential::ApiKey
             && table.rows(input.lane()).is_empty()
@@ -959,8 +1005,12 @@ impl Router {
         let e2 = pick.as_ref().is_some_and(|p| {
             p.rules
                 .iter()
-                .any(|r| r == "E2:next_model" || r == STEP_UP_RULE)
+                .any(|r| r == ladder::NEXT_MODEL || r == STEP_UP_RULE)
         });
+        // E15: a second failure at a rung that can't climb moves to a stronger model.
+        let stronger = pick
+            .as_ref()
+            .is_some_and(|p| p.rules.iter().any(|r| r == ladder::NEXT_MODEL));
         let local_paused = |rules: &mut Vec<String>| {
             rules.push("local:paused".into());
             ModelPick {
@@ -1068,8 +1118,9 @@ impl Router {
         } else if local::escalate_after_verify(&input.local) {
             // PR E: on-device answer failed verify — pick cloud and name both models.
             let local_tier = input.local.tier.clone();
-            let mut pick =
-                Self::pick_model(input, reg, profiles, &cloud_ids, table, e2, &mut rules);
+            let mut pick = Self::pick_model(
+                input, reg, profiles, &cloud_ids, table, e2, stronger, &mut rules,
+            );
             let no_keys = no_cloud_route(&rules, &pick);
             if !pick.no_route && !local::is_local(&pick.model) && !no_keys {
                 rules.push("local:escalate_verify".into());
@@ -1112,7 +1163,8 @@ impl Router {
             } else {
                 &cloud_ids
             };
-            let mut pick = Self::pick_model(input, reg, profiles, pool, table, e2, &mut rules);
+            let mut pick =
+                Self::pick_model(input, reg, profiles, pool, table, e2, stronger, &mut rules);
             // No sign-in or key and no provider you added took it: no cloud model can answer.
             let no_keys = no_cloud_route(&rules, &pick);
             // Cloud pool empty + local already won: retag as cloud_down.
@@ -1125,7 +1177,9 @@ impl Router {
             if !input.local.offline && !pick.no_route && local::is_local(&pick.model) && too_hard {
                 rules.push("local:escalate_hard".into());
                 let from = pick.model.clone();
-                pick = Self::pick_model(input, reg, profiles, &cloud_ids, table, e2, &mut rules);
+                pick = Self::pick_model(
+                    input, reg, profiles, &cloud_ids, table, e2, stronger, &mut rules,
+                );
                 if !pick.no_route {
                     pick.replaced = Some(from);
                 }
@@ -1911,6 +1965,56 @@ mod tests {
                 "balanced · High: you corrected the last answer."
             )
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A3, A4, E14 and the redo words through the live helper: what the
+    /// client is sent, step by step.
+    #[test]
+    fn stakes_loop_signals_and_a_spent_budget_move_the_sent_effort() {
+        let dir = crate::harness::test_dir("route-stage");
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let echo = Echo(Mutex::new(Vec::new()));
+        let s = auto_session("stage");
+        let send = |text: &str| {
+            sent_effort(
+                &echo,
+                &req("grok-4.7", Some("low"), &s, text),
+                "chat:default",
+            )
+        };
+        let _ = ladder::take_stage(true);
+        let _ = ladder::take_tool_errors();
+        // A3: a force push is a destructive turn: Flagship lane, High.
+        let push = "git push --force to main after the rebase";
+        assert_eq!(send(push).as_deref(), Some("high"));
+        let routes = crate::route::log::route_records(&dir, log::ROUTE_TAIL_LINES);
+        let rules = &routes.last().unwrap().1.rule_ids;
+        assert!(
+            rules.contains(&"ask:stakes:destructive".to_string())
+                && rules.contains(&"class:prepare:hard".to_string()),
+            "{rules:?}"
+        );
+        // Reading tool output on a stakes turn never drops below its floor (High).
+        ladder::note_tool_run("read_file", r#"{"path":"notes.md"}"#, false);
+        assert_eq!(send(push).as_deref(), Some("high"));
+        // A4 on an everyday turn: a read-only step thinks at low, for that call only.
+        let next = "Explain how the parser works";
+        assert_eq!(send(next).as_deref(), Some("medium"));
+        ladder::note_tool_run("read_file", r#"{"path":"src/parse.rs"}"#, false);
+        assert_eq!(send(next).as_deref(), Some("low"));
+        assert_eq!(send(next).as_deref(), Some("medium"));
+        // E14: reasoning that spent the budget with no answer climbs one rung.
+        ladder::note_out_of_budget();
+        assert_eq!(send(next).as_deref(), Some("high"));
+        // A read while that escalation holds stays on it; the same call again
+        // is a loop and one more rung.
+        ladder::note_tool_run("grep", r#"{"pattern":"parse"}"#, false);
+        assert_eq!(send(next).as_deref(), Some("high"));
+        ladder::note_tool_run("grep", r#"{"pattern":"parse"}"#, false);
+        assert_eq!(send(next).as_deref(), Some("xhigh"));
+        // "try again" is a redo: the next answer starts one rung up (E3).
+        assert_eq!(send("try again").as_deref(), Some("high"));
         let _ = std::fs::remove_dir_all(dir);
     }
 

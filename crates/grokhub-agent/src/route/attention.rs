@@ -378,6 +378,12 @@ fn caps_of(reg: &Registry, id: &str) -> Caps {
     caps
 }
 
+/// E15: how strong a reasoner `id` is (its reasoning score, 0..=100), for
+/// moving a failing episode to a stronger model.
+pub fn reasoning_of(reg: &Registry, id: &str) -> u8 {
+    caps_of(reg, id).reasoning
+}
+
 /// Re-order candidates for the attention decision. Table order is the Stay
 /// baseline; escalate/force-top score against max-reasoning; de-escalate picks
 /// a cheaper *task* model when attention is confident care can be light.

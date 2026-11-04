@@ -275,6 +275,10 @@ pub fn run_episode(
         };
         on_event(LoopEvent::Usage(run.usage.clone()));
         if turn.truncated {
+            if turn.out_of_budget() {
+                // E14: the reasoning spent the budget and left no answer.
+                crate::route::ladder::note_out_of_budget();
+            }
             let reason = turn
                 .truncate_reason
                 .as_deref()

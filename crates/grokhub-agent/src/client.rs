@@ -298,6 +298,20 @@ pub struct TurnOutput {
     pub truncate_reason: Option<String>,
 }
 
+impl TurnOutput {
+    /// E14: cut off at the output-token limit with no answer text, so the
+    /// reasoning used the whole budget. A cut-off with no reason counts too
+    /// (an incomplete stream that names none is the output limit).
+    pub fn out_of_budget(&self) -> bool {
+        self.truncated
+            && self.text.trim().is_empty()
+            && self
+                .truncate_reason
+                .as_deref()
+                .is_none_or(|r| r == "max_output_tokens")
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClientError {
     KeyOffer {

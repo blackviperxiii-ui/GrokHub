@@ -472,7 +472,7 @@ fn one_model_per_episode_over_fifty_episodes() {
     let tables = [top_first("grok-4.7"), top_first("grok-4.5")];
     let e2 = Pick {
         rung: rung("xhigh").unwrap(),
-        rules: vec!["E2".into(), "E2:next_model".into()],
+        rules: vec!["E2".into(), super::ladder::NEXT_MODEL.into()],
         ..Pick::default()
     };
     let mut per_episode = Vec::new();

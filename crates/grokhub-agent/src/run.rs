@@ -741,6 +741,10 @@ pub fn run_loop(
             });
         }
         if turn.truncated {
+            if turn.out_of_budget() {
+                // E14: the reasoning spent the budget and left no answer.
+                crate::route::ladder::note_out_of_budget();
+            }
             truncated_streak = truncated_streak.saturating_add(1);
             record_turn_truncated(
                 input.conversation_id,
@@ -1339,10 +1343,8 @@ pub(crate) fn push_output(
     call: &FunctionCall,
     output: ToolOutput,
 ) {
-    if output.failed {
-        // E1: the next routed step thinks one rung harder.
-        crate::route::ladder::note_tool_error();
-    }
+    // E1 on a failure, and the A4 stage signals: the next routed step reads them.
+    crate::route::ladder::note_tool_run(&call.name, &call.arguments, output.failed);
     push_result(history, conversation_id, call, output);
 }
 
@@ -2133,6 +2135,158 @@ mod tests {
         let spans = std::fs::read_to_string(crate::harness::span_path(&config, "conv")).unwrap();
         assert!(spans.contains("turn_truncated"), "{spans}");
         assert!(spans.contains("max_output_tokens"), "{spans}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Records the effort each request was sent with and plays back its turns.
+    struct EffortScript {
+        turns: Mutex<Vec<crate::TurnOutput>>,
+        efforts: Mutex<Vec<Option<String>>>,
+    }
+
+    impl ModelClient for EffortScript {
+        fn stream(
+            &self,
+            req: &ResponsesRequest,
+            _cancel: &CancelToken,
+            _sink: &mut dyn FnMut(StreamEvent),
+        ) -> Result<crate::TurnOutput, ClientError> {
+            self.efforts.lock().unwrap().push(req.effort.clone());
+            let mut turns = self.turns.lock().unwrap();
+            Ok(if turns.is_empty() {
+                crate::TurnOutput::default()
+            } else {
+                turns.remove(0)
+            })
+        }
+    }
+
+    /// A4 and E14 in the real loop: a step that only read a file runs at low,
+    /// and reasoning that spent the output budget with no answer climbs one
+    /// rung for the next step.
+    #[test]
+    fn a_read_only_step_runs_low_and_a_spent_budget_climbs_one_rung() {
+        let dir = workspace("stage");
+        let config = dir.join("config");
+        std::fs::create_dir_all(&config).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&config);
+        let _ = crate::route::ladder::take_stage(true);
+        let _ = crate::route::ladder::take_tool_errors();
+        let conv = (0..)
+            .map(|i| format!("conv-stage-{i}"))
+            .find(|s| !crate::route::guard::in_holdout(s))
+            .unwrap();
+        let client = EffortScript {
+            turns: Mutex::new(vec![
+                crate::TurnOutput {
+                    calls: vec![call("r1", "read_file", r#"{"target_file":"note.txt"}"#)],
+                    ..Default::default()
+                },
+                crate::TurnOutput {
+                    calls: vec![call(
+                        "r2",
+                        "read_file",
+                        r#"{"target_file":"note.txt","offset":1}"#,
+                    )],
+                    ..Default::default()
+                },
+                crate::TurnOutput {
+                    reasoning: "thinking".into(),
+                    truncated: true,
+                    truncate_reason: Some("max_output_tokens".into()),
+                    ..Default::default()
+                },
+                crate::TurnOutput {
+                    text: "It says hello native.".into(),
+                    ..Default::default()
+                },
+            ]),
+            efforts: Mutex::new(Vec::new()),
+        };
+        let input = LoopIn {
+            client: &client,
+            workspace: &dir,
+            model: "grok-4.7",
+            effort: Some("low"),
+            system: "sys",
+            conversation_id: &conv,
+            max_turns: 0,
+            usage_base: Usage::default(),
+            cancel: &CancelToken::new(),
+            steer: &SteerQueue::new(),
+            halt: &NeverHalt,
+            gate: Gate::phase_readonly(),
+            desktop: None,
+            permits: &gate::ClosedPermits,
+            perms: None,
+            context_length: 0,
+            tasks: None,
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
+        };
+        let mut history = Vec::new();
+        let out = run_loop(
+            &input,
+            &mut history,
+            "explain what the note file says",
+            None,
+            &mut |_| {},
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        let efforts = client.efforts.lock().unwrap().clone();
+        assert_eq!(
+            efforts.iter().map(Option::as_deref).collect::<Vec<_>>(),
+            vec![Some("medium"), Some("low"), Some("low"), Some("high")],
+            "start, two read-only steps at low, then one rung up after the spent budget"
+        );
+        // A refused write changes nothing; a failed read climbs one rung (E1),
+        // and the same tool failing again climbs one more (A4).
+        let conv2 = (0..)
+            .map(|i| format!("conv-stage-fail-{i}"))
+            .find(|s| !crate::route::guard::in_holdout(s))
+            .unwrap();
+        let client = EffortScript {
+            turns: Mutex::new(vec![
+                crate::TurnOutput {
+                    calls: vec![call("w1", "write", r#"{"path":"a.txt","contents":"x"}"#)],
+                    ..Default::default()
+                },
+                crate::TurnOutput {
+                    calls: vec![call("r1", "read_file", r#"{"target_file":"gone.txt"}"#)],
+                    ..Default::default()
+                },
+                crate::TurnOutput {
+                    calls: vec![call("r2", "read_file", r#"{"target_file":"gone2.txt"}"#)],
+                    ..Default::default()
+                },
+                crate::TurnOutput {
+                    text: "Neither file is there.".into(),
+                    ..Default::default()
+                },
+            ]),
+            efforts: Mutex::new(Vec::new()),
+        };
+        let input = LoopIn {
+            client: &client,
+            conversation_id: &conv2,
+            ..input
+        };
+        let mut history = Vec::new();
+        run_loop(
+            &input,
+            &mut history,
+            "explain why the config file is missing",
+            None,
+            &mut |_| {},
+        );
+        let efforts = client.efforts.lock().unwrap().clone();
+        assert_eq!(
+            efforts.iter().map(Option::as_deref).collect::<Vec<_>>(),
+            vec![Some("medium"), Some("medium"), Some("high"), Some("xhigh")]
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
