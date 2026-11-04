@@ -1090,10 +1090,14 @@ fn xai_outage(err: &ClientError) -> bool {
 }
 
 /// The provider model you set up that takes a turn xAI couldn't: its key and a
-/// grant for this call's data, it fits the turn (tools, images, context), its
-/// price is listed and under your $/M ceiling, and it ranks best for the class.
-/// Grok on a provider goes first, so the reply keeps its voice. `None` when no
-/// provider you added can take it.
+/// grant for this call's data, it fits the turn (tools, images, context), it
+/// passes Auto's own pick filter ([`super::providers::auto_pickable`]: listed
+/// price under your $/M ceiling, text out, reasoning on a reasoning lane, no
+/// router), and it ranks best for the class. A provider that has been busy
+/// (429) or much slower than the others lately ranks after a healthy one
+/// ([`health::lagging_providers`]); within each, Grok on a provider goes
+/// first, so the reply keeps its voice. `None` when no provider you added can
+/// take it.
 pub(crate) fn outage_stand_in(
     config_dir: &Path,
     call: &RouteCall<'_>,
@@ -1116,31 +1120,33 @@ pub(crate) fn outage_stand_in(
         ctx_tokens: call.ctx_tokens,
         grok_build: false,
     };
-    let ceiling = spend.settings.ceiling_usd_per_m;
+    let need = super::providers::PickNeed {
+        tools: call.needs_tools,
+        reasoning: super::lane_needs_reasoning(call.class),
+        ctx_tokens: call.ctx_tokens,
+        ceiling_usd_per_m: spend.settings.ceiling_usd_per_m,
+    };
     let pool: Vec<&str> = reg
         .models
         .iter()
         .filter(|(id, r)| {
             super::policy::is_new_provider(&reg, id)
                 && super::policy::fits(&reg, &profiles, id, fit, &spend, now_ms)
-                && r.meta.prices.completion.is_some_and(|p| {
-                    grokhub_core::model_registry::cost_class::usd_per_m(p) <= ceiling
-                })
-                && r.meta
-                    .output_modalities
-                    .as_ref()
-                    .is_none_or(|o| o.iter().any(|x| x == "text"))
-                && !super::providers::is_openrouter_router(
-                    split_provider_model(id).map_or("", |(_, m)| m),
-                )
+                && super::providers::auto_pickable(id, &r.meta, &need)
         })
         .map(|(id, _)| id.as_str())
         .collect();
     let table = load_table(config_dir);
     let mut ranked =
         super::policy::rank(call.class, &pool, &table, &reg, call.model, call.ctx_tokens);
+    let lagging = health::lagging_providers(&health::provider_healths(&reg, now_ms));
     // Stable: the rank decides within each group.
-    ranked.sort_by_key(|m| !m.to_ascii_lowercase().contains("grok"));
+    ranked.sort_by_key(|m| {
+        (
+            split_provider_model(m).is_some_and(|(p, _)| lagging.contains(p)),
+            !m.to_ascii_lowercase().contains("grok"),
+        )
+    });
     ranked.into_iter().next()
 }
 
@@ -1397,6 +1403,7 @@ pub fn stream_routed(
         let span_id = format!("{}:{now}", req.conversation_id);
         let out = super::providers::call_model(
             &dir,
+            class,
             &model,
             effort.as_deref(),
             &sent,
@@ -1446,6 +1453,7 @@ pub fn stream_routed(
                 let span_id = format!("{}:{now}", req.conversation_id);
                 let out = super::providers::call_model(
                     &dir,
+                    class,
                     &m,
                     effort.as_deref(),
                     &sent,

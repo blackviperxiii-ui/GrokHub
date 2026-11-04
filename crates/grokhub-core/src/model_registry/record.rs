@@ -183,6 +183,10 @@ pub struct ModelMeta {
     pub output_modalities: Option<Vec<String>>,
     #[serde(default)]
     pub tool_calling: Option<bool>,
+    /// The listing names `reasoning` among the request fields the model takes
+    /// (OpenRouter's `supported_parameters`). `None` when it didn't say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<bool>,
     #[serde(default)]
     pub structured_output: Option<bool>,
     /// `responses` or `chat_completions`, when the listing names its endpoints.
@@ -248,6 +252,7 @@ impl ModelMeta {
         take(&mut self.input_modalities, &other.input_modalities);
         take(&mut self.output_modalities, &other.output_modalities);
         take(&mut self.tool_calling, &other.tool_calling);
+        take(&mut self.reasoning, &other.reasoning);
         take(&mut self.structured_output, &other.structured_output);
         take(&mut self.api_shape, &other.api_shape);
         take(&mut self.deprecated, &other.deprecated);

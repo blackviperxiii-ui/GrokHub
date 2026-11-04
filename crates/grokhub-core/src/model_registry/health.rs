@@ -396,9 +396,217 @@ pub fn mark_busy(rec: &mut ModelRecord) {
     }
 }
 
+/// The weight of the newest latency sample in a provider's moving average.
+pub const PROVIDER_EWMA_ALPHA: f64 = 0.2;
+/// A provider's health reads its models' calls from this recent span only, so
+/// one that rested after a busy spell is judged afresh.
+pub const PROVIDER_WINDOW_MS: u64 = 30 * 60 * 1000;
+/// Over this share of busy answers (429 or 503) in the span is a busy provider.
+pub const PROVIDER_BUSY_PCT: usize = DEGRADED_ERROR_PCT;
+/// A provider this many times slower than the fastest one (by the moving
+/// average) is a slow one.
+pub const PROVIDER_SLOW_FACTOR: f64 = 2.0;
+
+/// One provider's recent health, read from its models' recent calls
+/// ([`ModelRecord::health`]): no second record is kept.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ProviderHealth {
+    /// Calls inside [`PROVIDER_WINDOW_MS`].
+    pub calls: usize,
+    /// Of those, answered busy (429 or 503).
+    pub busy: usize,
+    /// The moving average of its answered calls' latency, oldest first. A
+    /// batched call keeps no sample (0), so queueing teaches it nothing.
+    pub latency_ewma_ms: Option<f64>,
+}
+
+impl ProviderHealth {
+    /// Over [`PROVIDER_BUSY_PCT`] busy answers, once it has
+    /// [`DEGRADED_MIN_CALLS`] calls to judge by.
+    pub fn is_busy(&self) -> bool {
+        self.calls >= DEGRADED_MIN_CALLS && self.busy * 100 > self.calls * PROVIDER_BUSY_PCT
+    }
+}
+
+/// Fold one provider's call marks into its health as of `now_ms`.
+pub fn provider_health<'a>(
+    marks: impl IntoIterator<Item = &'a CallMark>,
+    now_ms: u64,
+) -> ProviderHealth {
+    let mut recent: Vec<&CallMark> = marks
+        .into_iter()
+        .filter(|m| now_ms.saturating_sub(m.ts_ms) <= PROVIDER_WINDOW_MS)
+        .collect();
+    recent.sort_by_key(|m| m.ts_ms);
+    let mut h = ProviderHealth {
+        calls: recent.len(),
+        busy: recent.iter().filter(|m| m.pressure).count(),
+        latency_ewma_ms: None,
+    };
+    for m in recent.iter().filter(|m| m.ok && m.latency_ms > 0) {
+        let x = m.latency_ms as f64;
+        h.latency_ewma_ms = Some(match h.latency_ewma_ms {
+            Some(avg) => PROVIDER_EWMA_ALPHA * x + (1.0 - PROVIDER_EWMA_ALPHA) * avg,
+            None => x,
+        });
+    }
+    h
+}
+
+/// Each provider you added (`openrouter`, `anthropic`) and its health, from
+/// the recent calls of every model only its listing names.
+pub fn provider_healths(
+    reg: &super::Registry,
+    now_ms: u64,
+) -> std::collections::BTreeMap<String, ProviderHealth> {
+    let mut marks: std::collections::BTreeMap<&str, Vec<&CallMark>> = Default::default();
+    for (id, rec) in &reg.models {
+        let theirs = !rec.sources.is_empty() && rec.sources.iter().all(|s| s.is_new_provider());
+        if let Some((p, _)) = super::discover::split_provider_model(id).filter(|_| theirs) {
+            marks.entry(p).or_default().extend(rec.health.recent.iter());
+        }
+    }
+    marks
+        .into_iter()
+        .map(|(p, m)| (p.to_string(), provider_health(m, now_ms)))
+        .collect()
+}
+
+/// The providers a stand-in ranks after a healthy one: busy, or more than
+/// [`PROVIDER_SLOW_FACTOR`] times slower than the fastest provider that isn't busy.
+pub fn lagging_providers(
+    healths: &std::collections::BTreeMap<String, ProviderHealth>,
+) -> std::collections::BTreeSet<String> {
+    let fastest = healths
+        .values()
+        .filter(|h| !h.is_busy())
+        .filter_map(|h| h.latency_ewma_ms)
+        .fold(f64::INFINITY, f64::min);
+    healths
+        .iter()
+        .filter(|(_, h)| {
+            h.is_busy()
+                || h.latency_ewma_ms
+                    .is_some_and(|l| fastest.is_finite() && l > fastest * PROVIDER_SLOW_FACTOR)
+        })
+        .map(|(p, _)| p.clone())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn mark(ts_ms: u64, ok: bool, pressure: bool, latency_ms: u64) -> CallMark {
+        CallMark {
+            ts_ms,
+            ok,
+            pressure,
+            latency_ms,
+        }
+    }
+
+    #[test]
+    fn provider_health_averages_live_latency_and_counts_busy_answers() {
+        let now = PROVIDER_WINDOW_MS + 10_000;
+        // Out of order on purpose: the average runs oldest first.
+        let marks = [
+            mark(now - 1_000, true, false, 2_000),
+            mark(now - 2_000, true, false, 1_000),
+            // A batched call's 0 is no sample.
+            mark(now - 500, true, false, 0),
+            mark(now - 400, false, true, 300),
+            // Older than the window: not read.
+            mark(1, false, true, 90_000),
+        ];
+        let h = provider_health(&marks, now);
+        // 1000, then 0.2 * 2000 + 0.8 * 1000.
+        assert_eq!(
+            h,
+            ProviderHealth {
+                calls: 4,
+                busy: 1,
+                latency_ewma_ms: Some(1_200.0)
+            }
+        );
+        assert!(!h.is_busy(), "4 calls is too few to judge");
+        assert_eq!(PROVIDER_EWMA_ALPHA, 0.2);
+        let busy = [
+            mark(now - 5, false, true, 0),
+            mark(now - 4, false, true, 0),
+            mark(now - 3, true, false, 800),
+            mark(now - 2, true, false, 800),
+            mark(now - 1, true, false, 800),
+        ];
+        let h = provider_health(&busy, now);
+        assert_eq!((h.calls, h.busy, h.is_busy()), (5, 2, true));
+        // One busy answer in five is 20%: not over the line.
+        let h = provider_health(&busy[1..], now);
+        assert_eq!((h.calls, h.busy, h.is_busy()), (4, 1, false));
+    }
+
+    #[test]
+    fn a_busy_or_much_slower_provider_lags_a_healthy_one() {
+        let h = |calls, busy, l: Option<f64>| ProviderHealth {
+            calls,
+            busy,
+            latency_ewma_ms: l,
+        };
+        let all: std::collections::BTreeMap<String, ProviderHealth> = [
+            ("fast".to_string(), h(6, 0, Some(1_000.0))),
+            ("ok".to_string(), h(6, 0, Some(2_000.0))),
+            ("slow".to_string(), h(6, 0, Some(2_001.0))),
+            ("busy".to_string(), h(6, 3, Some(900.0))),
+            ("new".to_string(), h(0, 0, None)),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            lagging_providers(&all).into_iter().collect::<Vec<_>>(),
+            vec!["busy".to_string(), "slow".to_string()]
+        );
+    }
+
+    #[test]
+    fn provider_healths_group_only_provider_models_by_provider() {
+        use super::super::{Listing, ModelMeta, Registry, SourceKind};
+        let mut reg = Registry::default();
+        reg.apply_refresh(
+            &[
+                Listing::new(SourceKind::XaiApi, vec![ModelMeta::bare("grok-4.7")]),
+                Listing::new(
+                    SourceKind::OpenAiCompatible,
+                    vec![
+                        ModelMeta::bare("openrouter/vendor/a"),
+                        ModelMeta::bare("openrouter/vendor/b"),
+                    ],
+                ),
+            ],
+            &[],
+            1,
+        );
+        let now = 10_000;
+        for (id, ms) in [
+            ("openrouter/vendor/a", 500),
+            ("openrouter/vendor/b", 1_500),
+            ("grok-4.7", 9_000),
+        ] {
+            reg.models
+                .get_mut(id)
+                .unwrap()
+                .health
+                .recent
+                .push_back(mark(now - ms, true, false, ms));
+        }
+        let got = provider_healths(&reg, now);
+        assert_eq!(
+            got.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec!["openrouter"]
+        );
+        // b's call came first (1500 ms ago), then a's: 1500, then 0.2 * 500 + 0.8 * 1500.
+        assert_eq!(got["openrouter"].latency_ewma_ms, Some(1_300.0));
+        assert_eq!(got["openrouter"].calls, 2);
+    }
 
     #[test]
     fn a_model_at_its_request_limit_reads_busy_for_one_second() {

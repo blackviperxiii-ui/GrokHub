@@ -33,11 +33,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use zeroize::Zeroizing;
 
+use sha2::{Digest, Sha256};
+
+use grokhub_core::model_registry::cost_class::usd_per_m;
 use grokhub_core::model_registry::discover::{
     parse_anthropic_catalog, parse_openai_compatible_catalog, split_provider_model,
 };
+use grokhub_core::model_registry::probe::DAY_MS;
+use grokhub_core::model_registry::profile::ModelProfile;
 use grokhub_core::model_registry::store::{models_dir, read_json, write_json};
-use grokhub_core::model_registry::{CatalogSource, Listing, SourceKind};
+use grokhub_core::model_registry::{CatalogSource, Listing, ModelMeta, Registry, SourceKind};
 
 use crate::client::{
     map_http_status, AuthKind, ClientError, ContentPart, FunctionCall, InputItem, ResponsesRequest,
@@ -117,6 +122,11 @@ impl Provider {
     /// The egress destination (host only), what the grant names.
     pub fn dest(&self) -> String {
         egress_dest(&self.base_url)
+    }
+
+    /// An OpenAI-compatible provider at openrouter.ai.
+    pub fn is_openrouter(&self) -> bool {
+        self.kind == ProviderKind::OpenAiCompatible && is_openrouter_host(&self.dest())
     }
 
     fn api_root(&self) -> String {
@@ -285,6 +295,7 @@ pub fn add_provider_as(
         .ok_or_else(|| "The keyring isn't available, so the key wasn't saved.".to_string())?
         .set(&id, key)?;
     forget_key_cache(config_dir, &id);
+    forget_listing(config_dir, &id);
     let mut all = load_providers(config_dir);
     let p = Provider {
         id: id.clone(),
@@ -306,6 +317,7 @@ pub fn remove_provider(config_dir: &Path, id: &str) -> Result<(), String> {
         v.delete(id)?;
     }
     forget_key_cache(config_dir, id);
+    forget_listing(config_dir, id);
     let mut all = load_providers(config_dir);
     all.retain(|p| p.id != id);
     save_providers(config_dir, &all)
@@ -762,14 +774,68 @@ pub fn sources(config_dir: &Path) -> Vec<ProviderSource> {
         .collect()
 }
 
-impl CatalogSource for ProviderSource {
-    fn kind(&self) -> SourceKind {
-        self.provider.kind.source_kind()
-    }
+/// OpenRouter's model list is read at most once a day: the registry refreshes
+/// every few hours and on every sign-in or listing change, and the other
+/// refreshes reuse the day's list, which sends nothing.
+pub const LISTING_MAX_AGE_MS: u64 = DAY_MS;
 
-    fn fetch(&self) -> Result<Listing, String> {
+/// OpenRouter's own effort levels for its unified `reasoning.effort`: every
+/// model whose listing names `reasoning` takes them, and OpenRouter maps each
+/// onto that model's own setting.
+pub const OPENROUTER_EFFORTS: &[&str] = &["none", "minimal", "low", "medium", "high", "xhigh"];
+
+/// `{config}/models/listing-<provider>.json`: the day's model list (no key, no user data).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct ListingCache {
+    fetched_ms: u64,
+    base_url: String,
+    models: Vec<ModelMeta>,
+}
+
+fn listing_path(config_dir: &Path, id: &str) -> PathBuf {
+    models_dir(config_dir).join(format!("listing-{id}.json"))
+}
+
+fn forget_listing(config_dir: &Path, id: &str) {
+    let _ = std::fs::remove_file(listing_path(config_dir, id));
+}
+
+/// The day's list for `p`, while it is under [`LISTING_MAX_AGE_MS`] old and
+/// your grant for the destination still stands.
+fn day_listing(config_dir: &Path, p: &Provider, now_ms: u64) -> Option<Vec<ModelMeta>> {
+    let c = read_json::<ListingCache>(&listing_path(config_dir, &p.id))?;
+    let ledger = ConsentLedger::load(config_dir);
+    (c.base_url == p.base_url
+        && c.fetched_ms <= now_ms
+        && now_ms - c.fetched_ms < LISTING_MAX_AGE_MS
+        && ledger.locked().is_none()
+        && ledger.destination_grant(&p.dest(), &[]).is_some())
+    .then_some(c.models)
+}
+
+/// An OpenRouter model whose listing names `reasoning` and no effort list of
+/// its own takes OpenRouter's unified levels.
+pub fn openrouter_efforts(rows: &mut [ModelMeta]) {
+    for m in rows.iter_mut() {
+        if m.reasoning == Some(true) && m.efforts.is_none() {
+            m.efforts = Some(OPENROUTER_EFFORTS.iter().map(|e| e.to_string()).collect());
+        }
+    }
+}
+
+impl ProviderSource {
+    /// [`CatalogSource::fetch`] as of `now_ms`: OpenRouter's list comes from
+    /// the day's copy when there is one ([`LISTING_MAX_AGE_MS`]).
+    pub fn fetch_at(&self, now_ms: u64) -> Result<Listing, String> {
         let p = &self.provider;
         let key = key(&self.config_dir, &p.id).ok_or_else(|| format!("{}: no key", p.id))?;
+        let daily = p.is_openrouter();
+        if let Some(rows) = daily
+            .then(|| day_listing(&self.config_dir, p, now_ms))
+            .flatten()
+        {
+            return Ok(Listing::new(self.kind(), rows));
+        }
         let url = p.models_url();
         if let GateOutcome::Park { reason, .. } | GateOutcome::Refuse { reason } =
             guard_provider(&self.config_dir, &EgressReq::new(&url, &[]))
@@ -780,12 +846,113 @@ impl CatalogSource for ProviderSource {
         if !(200..300).contains(&r.status) {
             return Err(format!("{}: HTTP {}", p.id, r.status));
         }
-        let rows = match p.kind {
+        let mut rows = match p.kind {
             ProviderKind::OpenAiCompatible => parse_openai_compatible_catalog(&p.id, &r.body)?,
             ProviderKind::Anthropic => parse_anthropic_catalog(&p.id, &r.body)?,
         };
+        if daily {
+            openrouter_efforts(&mut rows);
+            let _ = write_json(
+                &listing_path(&self.config_dir, &p.id),
+                &ListingCache {
+                    fetched_ms: now_ms,
+                    base_url: p.base_url.clone(),
+                    models: rows.clone(),
+                },
+            );
+        }
         Ok(Listing::new(self.kind(), rows))
     }
+}
+
+impl CatalogSource for ProviderSource {
+    fn kind(&self) -> SourceKind {
+        self.provider.kind.source_kind()
+    }
+
+    fn fetch(&self) -> Result<Listing, String> {
+        self.fetch_at(grokhub_core::now_ms())
+    }
+}
+
+// ---- Which provider models Auto picks ----------------------------------------
+
+/// What a step needs from a provider model Auto picks itself.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PickNeed {
+    /// An agent lane: the model must take `tools`.
+    pub tools: bool,
+    /// A reasoning lane: the model must take `reasoning` and an effort.
+    pub reasoning: bool,
+    pub ctx_tokens: u64,
+    /// Your $/M ceiling on the listed output price.
+    pub ceiling_usd_per_m: f64,
+}
+
+/// Whether a provider model takes a reasoning effort: what its listing's
+/// `supported_parameters` say when it lists them, else any model not named
+/// non-reasoning; and an effort list it names must hold a real effort.
+pub fn takes_reasoning(id: &str, meta: &ModelMeta) -> bool {
+    meta.reasoning
+        .unwrap_or_else(|| !id.to_ascii_lowercase().contains("non-reasoning"))
+        && meta
+            .efforts
+            .as_ref()
+            .is_none_or(|e| e.iter().any(|x| x != "none"))
+}
+
+/// A provider model Auto may pick for a step needing `need`: one model, never
+/// OpenRouter's own router (`openrouter/auto` and the like picks any model at
+/// any price), not dated for retirement, no utility model, answering in text,
+/// its listed output price under your ceiling, taking tools and reasoning
+/// when the lane needs them, and a window that holds the prompt.
+pub fn auto_pickable(id: &str, meta: &ModelMeta, need: &PickNeed) -> bool {
+    let wire = split_provider_model(id).map_or(id, |(_, m)| m);
+    !is_openrouter_router(wire)
+        && meta.deprecated != Some(true)
+        && !super::policy::utility_model(id)
+        && meta
+            .output_modalities
+            .as_ref()
+            .is_none_or(|o| o.iter().any(|x| x == "text"))
+        && meta
+            .prices
+            .completion
+            .is_some_and(|p| usd_per_m(p) <= need.ceiling_usd_per_m)
+        && (!need.tools || meta.tool_calling != Some(false))
+        && (!need.reasoning || takes_reasoning(id, meta))
+        && meta.context_length.is_none_or(|c| need.ctx_tokens <= c)
+}
+
+/// The backup for OpenRouter's `models` list: the next best model on the
+/// primary's provider from the same filter ([`auto_pickable`] and the step's
+/// fit), ranked as the router ranks. `None` when there is none.
+pub fn openrouter_backup(
+    reg: &Registry,
+    profiles: &BTreeMap<String, ModelProfile>,
+    table: &super::table::RoutingTable,
+    class: &str,
+    primary: &str,
+    need: &PickNeed,
+    fit: super::policy::Fit,
+    now_ms: u64,
+) -> Option<String> {
+    let (pid, _) = split_provider_model(primary)?;
+    let pool: Vec<&str> = reg
+        .models
+        .iter()
+        .filter(|(id, r)| {
+            id.as_str() != primary
+                && split_provider_model(id).is_some_and(|(p, _)| p == pid)
+                && super::policy::is_new_provider(reg, id)
+                && super::policy::fits_any_cost(reg, profiles, id, fit, now_ms)
+                && auto_pickable(id, &r.meta, need)
+        })
+        .map(|(id, _)| id.as_str())
+        .collect();
+    super::policy::rank(class, &pool, table, reg, primary, need.ctx_tokens)
+        .into_iter()
+        .next()
 }
 
 // ---- Request bodies ----------------------------------------------------------
@@ -1049,7 +1216,9 @@ fn u64_at(v: &Value, path: &[&str]) -> u64 {
     path.iter().fold(v, |v, k| &v[*k]).as_u64().unwrap_or(0)
 }
 
-/// A `/chat/completions` answer as a turn. OpenRouter's `usage.cost` (USD) becomes ticks.
+/// A `/chat/completions` answer as a turn. OpenRouter's `usage.cost` (USD)
+/// becomes ticks. The reply's `model` is not read: which model or endpoint
+/// answered never reaches the chat.
 pub fn parse_openai_reply(body: &str) -> Result<TurnOutput, ClientError> {
     let v: Value = serde_json::from_str(body)
         .map_err(|e| ClientError::Protocol(format!("provider reply: {e}")))?;
@@ -1185,16 +1354,18 @@ pub fn is_openrouter_router(id: &str) -> bool {
 }
 
 /// Settings → AI models → OpenRouter privacy: which of OpenRouter's
-/// endpoints may see your data. Sent only to openrouter.ai, as its `provider`
+/// endpoints may see your data. Sent only to openrouter.ai, in its `provider`
 /// request field; a plain OpenAI-compatible host never sees it. The router
-/// alone decides the model and the endpoint order, so nothing else is sent.
+/// alone decides the model and its one backup, so no `sort` is sent.
 /// An older `app.json` that still holds `sort` or `fallback` loads with them
 /// dropped.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Routing {
-    /// "" (your account's default), "zdr" (`provider.zdr`: zero-data-retention
-    /// endpoints only) or "allow" (`provider.data_collection: allow`).
+    /// "" (the default: `provider.data_collection: deny`, no endpoint that
+    /// keeps or trains on prompts), "zdr" (that plus `provider.zdr`:
+    /// zero-data-retention endpoints only) or "allow"
+    /// (`provider.data_collection: allow`).
     pub data: String,
 }
 
@@ -1220,14 +1391,53 @@ pub fn routing() -> Routing {
         .unwrap_or_default()
 }
 
-/// Add OpenRouter's privacy field to an OpenAI-compatible body. No `sort`
-/// and no `models` fallback list: the router picked the model.
+/// Add OpenRouter's `provider` field to an OpenAI-compatible body: only
+/// endpoints that take every field the request sends (`require_parameters`),
+/// and your data policy, deny by default. No `sort`: the router picked the model.
 pub fn apply_openrouter_routing(body: &mut Value, r: &Routing) {
+    body["provider"]["require_parameters"] = json!(true);
     match r.data.as_str() {
-        "zdr" => body["provider"]["zdr"] = json!(true),
         "allow" => body["provider"]["data_collection"] = json!("allow"),
-        _ => {}
+        "zdr" => {
+            body["provider"]["data_collection"] = json!("deny");
+            body["provider"]["zdr"] = json!(true);
+        }
+        _ => body["provider"]["data_collection"] = json!("deny"),
     }
+}
+
+/// OpenRouter's `session_id` for a chat: a hash of its conversation id, so
+/// one chat's calls stick to the same endpoint (and its warm cache). Never
+/// user text. `None` for a call with no conversation.
+pub fn openrouter_session_id(conversation_id: &str) -> Option<String> {
+    let id = conversation_id.trim();
+    if id.is_empty() {
+        return None;
+    }
+    let digest = Sha256::digest(id.as_bytes());
+    Some(digest.iter().take(16).map(|b| format!("{b:02x}")).collect())
+}
+
+/// The OpenRouter-only fields after [`apply_openrouter_routing`]: the
+/// `models` fallback list (the router's pick, then its backup; left out with
+/// no backup) and the chat's `session_id`. `model` stays the pick.
+pub fn apply_openrouter_picks(body: &mut Value, backup: Option<&str>, conversation_id: &str) {
+    if let Some(b) = backup {
+        let primary = body["model"].clone();
+        body["models"] = json!([primary, b]);
+    }
+    if let Some(sid) = openrouter_session_id(conversation_id) {
+        body["session_id"] = json!(sid);
+    }
+}
+
+/// The model a `/chat/completions` reply says answered, when it is one of
+/// `sent` (the pick or its backup). Read only to give the reply's reasoning
+/// back to the model that wrote it; never shown, never kept on the turn.
+fn answered_by<'a>(body: &str, sent: &[&'a str]) -> Option<&'a str> {
+    let v: Value = serde_json::from_str(body).ok()?;
+    let m = v["model"].as_str()?.trim();
+    sent.iter().copied().find(|s| s.eq_ignore_ascii_case(m))
 }
 
 /// `host` is openrouter.ai or one of its subdomains.
@@ -1259,11 +1469,13 @@ fn error_of(status: u16, body: &str, openrouter: bool) -> ClientError {
 
 /// Send one routed call to a provider you added: `model` is its registry id
 /// (`<provider>/<model>`), `effort` the router's pick from that model's own
-/// list. It goes only under your grant (one egress line, `span_id` on it);
+/// list, `class` the call's class (an OpenRouter call's backup is ranked for
+/// it). It goes only under your grant (one egress line, `span_id` on it);
 /// with no grant a hard send card parks and waits (Approve once = one
 /// `approved_once` line), and Deny, Esc, the timeout or a cancel send nothing.
 pub fn call_model(
     config_dir: &Path,
+    class: &str,
     model: &str,
     effort: Option<&str>,
     req: &ResponsesRequest,
@@ -1289,7 +1501,7 @@ pub fn call_model(
             grokhub_core::adult_guard::dest_name(to)
         )));
     }
-    let openrouter = p.kind == ProviderKind::OpenAiCompatible && is_openrouter_host(&p.dest());
+    let openrouter = p.is_openrouter();
     // The prompt calls the assistant Grok: every call that reaches a provider
     // is told which model really answers, so it says so when asked.
     super::identity::stamp(&mut req.to_mut().input, model, None, effort);
@@ -1311,11 +1523,19 @@ pub fn call_model(
     if cancel.is_cancelled() {
         return Err(ClientError::Cancelled);
     }
-    let (reg, _) = super::live::snapshot(config_dir);
+    let (reg, profiles) = super::live::snapshot(config_dir);
     let max_output = reg.get(model).and_then(|r| r.meta.max_output);
     let mut body = request_body(p.kind, wire_model, effort, &req, max_output);
+    let backup = openrouter
+        .then(|| call_backup(config_dir, &reg, &profiles, class, model, effort, &req))
+        .flatten();
+    let backup_wire = backup
+        .as_deref()
+        .and_then(split_provider_model)
+        .map(|(_, m)| m);
     if openrouter {
         apply_openrouter_routing(&mut body, &routing());
+        apply_openrouter_picks(&mut body, backup_wire, &req.conversation_id);
     }
     let body = body.to_string();
     let r = transport_for(config_dir)
@@ -1332,11 +1552,62 @@ pub fn call_model(
         ProviderKind::OpenAiCompatible => parse_openai_reply(&r.body),
         ProviderKind::Anthropic => parse_anthropic_reply(&r.body),
     }?;
-    // The next request names the model as the provider does ([`openai_body`]).
+    // The next request names the model as the provider does ([`openai_body`]):
+    // the backup's thinking goes back to the backup.
+    let sent: Vec<&str> = std::iter::once(wire_model).chain(backup_wire).collect();
+    let wrote = if openrouter {
+        answered_by(&r.body, &sent).unwrap_or(wire_model)
+    } else {
+        wire_model
+    };
     for item in &mut turn.reasoning_items {
         if let InputItem::Reasoning { model, .. } = item {
-            *model = wire_model.to_string();
+            *model = wrote.to_string();
         }
     }
     Ok(turn)
+}
+
+/// The backup for an OpenRouter call of `class` to `model`: it must take what
+/// this request sends (`require_parameters`): tools when it carries them, an
+/// effort when one goes or the lane reasons, images when it has them.
+fn call_backup(
+    config_dir: &Path,
+    reg: &Registry,
+    profiles: &BTreeMap<String, ModelProfile>,
+    class: &str,
+    model: &str,
+    effort: Option<&str>,
+    req: &ResponsesRequest,
+) -> Option<String> {
+    let effort_sent = effort
+        .map(str::trim)
+        .is_some_and(|e| !e.is_empty() && e != "none");
+    let ctx_tokens = crate::compact::estimate_input_tokens(&req.input);
+    let needs_image = req
+        .input
+        .iter()
+        .any(|i| matches!(i, InputItem::Message { content, .. } if has_image(content)));
+    let need = PickNeed {
+        tools: !req.tools.is_empty(),
+        reasoning: effort_sent || super::lane_needs_reasoning(class),
+        ctx_tokens,
+        ceiling_usd_per_m: super::spend::spend_settings().ceiling_usd_per_m,
+    };
+    let fit = super::policy::Fit {
+        needs_image,
+        needs_tools: need.tools,
+        ctx_tokens,
+        grok_build: false,
+    };
+    openrouter_backup(
+        reg,
+        profiles,
+        &super::table::load_table(config_dir),
+        class,
+        model,
+        &need,
+        fit,
+        grokhub_core::now_ms(),
+    )
 }

@@ -37,9 +37,9 @@ const URL_HINT: &str =
 const KEY_ROW: &str = "Provider key";
 const KEY_HINT: &str = "Saved to your keyring, never to a file, a log or the model.";
 const DATA_ROW: &str = "OpenRouter data policy";
-const DATA_HINT: &str = "Zero data retention keeps your prompts off providers that store them; Allow also reaches providers that may train on prompts. Your account settings at openrouter.ai/settings/privacy still win.";
+const DATA_HINT: &str = "By default no provider that may keep or train on your prompts gets them. Zero data retention also needs providers that store nothing; Allow reaches providers that may train on prompts. Your account settings at openrouter.ai/settings/privacy still win.";
 const DATA_LABELS: [(&str, &str); 3] = [
-    ("Your account's default", ""),
+    ("Providers that don't keep prompts", ""),
     ("Zero data retention only", "zdr"),
     ("Allow providers that may store prompts", "allow"),
 ];
