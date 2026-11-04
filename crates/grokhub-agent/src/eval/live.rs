@@ -376,18 +376,21 @@ pub fn check(task: &LiveTask, reply: &str, workspace: &Path) -> bool {
     true
 }
 
-/// Per-model prices in ticks per million tokens (input, cached input, output),
-/// used only when a provider returns no cost. Unknown models get a
-/// deliberately high price so the cap stays safe.
-fn price(model: &str) -> (i64, i64, i64) {
-    let usd = |d: f64| (d * TICKS_PER_USD as f64) as i64;
-    let m = model.trim().to_ascii_lowercase();
-    if m.starts_with("grok-4.3") {
-        (usd(1.25), usd(0.20), usd(2.50))
-    } else if m.starts_with("grok-4.7") {
-        (usd(2.0), usd(0.50), usd(6.0))
-    } else {
-        (usd(5.0), usd(5.0), usd(25.0))
+/// Per-model prices in ticks per million tokens (input, cached input, output)
+/// for a prompt of `prompt_tokens`, used only when a provider returns no cost.
+/// Known Grok models take the seed list prices (twice the rate from the 200k
+/// step); unknown models get a deliberately high price so the cap stays safe.
+fn price(model: &str, prompt_tokens: u64) -> (i64, i64, i64) {
+    // Seed prices are USD cents per 100M tokens: ×TICKS_PER_USD / 10_000 per million.
+    let ticks = |cents: u64| cents as i64 * (TICKS_PER_USD / 10_000);
+    match grokhub_core::model_registry::seed::seed_prices(model.trim())
+        .and_then(|p| p.rates_at(prompt_tokens))
+    {
+        Some((input, cached, output)) => (ticks(input), ticks(cached), ticks(output)),
+        None => {
+            let usd = |d: i64| d * TICKS_PER_USD;
+            (usd(5), usd(5), usd(25))
+        }
     }
 }
 
@@ -396,7 +399,7 @@ pub fn turn_cost(model: &str, usage: &Usage) -> i64 {
     if usage.cost_in_usd_ticks > 0 {
         return usage.cost_in_usd_ticks;
     }
-    let (input, cached, output) = price(model);
+    let (input, cached, output) = price(model, usage.input_tokens);
     let hit = usage.cached_tokens.min(usage.input_tokens);
     let fresh = usage.input_tokens - hit;
     let out = usage.output_tokens.saturating_add(usage.reasoning_tokens);

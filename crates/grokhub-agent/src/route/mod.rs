@@ -58,6 +58,7 @@ use grokhub_core::model_registry::cost_class::{
 };
 use grokhub_core::model_registry::discover::split_provider_model;
 use grokhub_core::model_registry::profile::{ModelProfile, RuntimeSettings};
+use grokhub_core::model_registry::seed::{LONG_CONTEXT_TOKENS, MILLION_CONTEXT};
 use grokhub_core::model_registry::{Credential, ModelState, Registry, EFFORT_LADDER};
 
 use table::RoutingTable;
@@ -504,6 +505,84 @@ fn cloud_can_answer(
     })
 }
 
+/// The 200k gate. From xAI's long-context step every token of a request costs
+/// twice as much, and grok-4.7's 500k window fills soon after, so a prompt at
+/// or past [`LONG_CONTEXT_TOKENS`] moves the xAI models with a 1M window
+/// (grok-4.3, the grok-4.20 family) to the front: doubled, grok-4.3 still costs
+/// well under grok-4.7 doubled. The Flagship lane (plan, design, debug,
+/// chat:reason, hard prepare, host repair) wants the plan's strongest reasoner,
+/// which no 1M model is, so it keeps grok-4.7 while the prompt fits there. A
+/// model whose window can't hold the prompt never reaches the ranking
+/// ([`policy::fits`]), so past 500k every lane lands on a 1M model.
+fn long_context_first(
+    ranked: &mut [String],
+    reg: &Registry,
+    lane: &str,
+    ctx_tokens: u64,
+    rules: &mut Vec<String>,
+) {
+    if ctx_tokens < LONG_CONTEXT_TOKENS
+        || capabilities::BaselineLane::of(lane) == capabilities::BaselineLane::Flagship
+    {
+        return;
+    }
+    let million = |m: &str| {
+        !local::is_local(m)
+            && !policy::is_new_provider(reg, m)
+            && reg
+                .get(m)
+                .and_then(|r| r.meta.context_length)
+                .is_some_and(|c| c >= MILLION_CONTEXT)
+    };
+    let before = ranked.first().cloned();
+    ranked.sort_by_key(|m| !million(m));
+    if ranked.first() != before.as_ref() {
+        rules.push("ctx:long_1m".into());
+    }
+}
+
+/// grok-4.20-multi-agent and its dated or `-latest` ids.
+fn is_multi_agent(model: &str) -> bool {
+    model
+        .trim()
+        .to_ascii_lowercase()
+        .strip_prefix("grok-4.20-multi-agent")
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('-'))
+}
+
+/// grok-4.20-multi-agent reads `reasoning.effort` as how many agents run, not
+/// how deep one thinks: low and medium run 4 agents, high and xhigh run 16.
+/// Sixteen agents is the `+agents16` premium route ([`RouteOpts::multi_agent_16`]),
+/// so Auto sends High only on a Flagship lane whose ladder reached High and
+/// only under your grant for that route. Every other turn, a cheap one above
+/// all, runs 4 agents at Low.
+fn multi_agent_effort(
+    effort: Option<String>,
+    lane: &str,
+    model: &str,
+    spend: &spend::Spend,
+    rules: &mut Vec<String>,
+) -> Option<String> {
+    let deep = matches!(effort.as_deref(), Some("high" | "xhigh"));
+    let key = route_key(
+        model,
+        RouteOpts {
+            multi_agent_16: true,
+            ..RouteOpts::default()
+        },
+    );
+    if deep
+        && capabilities::BaselineLane::of(lane) == capabilities::BaselineLane::Flagship
+        && spend.grants.contains(&key)
+    {
+        rules.push("multi_agent:16".into());
+        Some("high".into())
+    } else {
+        rules.push("multi_agent:4".into());
+        Some("low".into())
+    }
+}
+
 impl Router {
     fn pick_model(
         input: &RouteInput<'_>,
@@ -752,6 +831,7 @@ impl Router {
             input.ctx_tokens,
         );
         xai_first(&mut ranked);
+        long_context_first(&mut ranked, reg, input.lane(), input.ctx_tokens, rules);
         if e2 {
             let away = input.episode_model.unwrap_or(current).trim().to_string();
             ranked.retain(|m| *m != away);
@@ -1101,8 +1181,11 @@ impl Router {
             .iter()
             .any(|r| r == "cost:premium_ungranted")
             .then(|| route_key(input.current_model, RouteOpts::default()));
-        // The Fast variant goes only under the latency policy.
-        let fast = (!chosen.no_route && ids.contains(&chosen.model.as_str()))
+        // The Fast variant goes only under the latency policy, and only on a
+        // Grok Build sign-in (or Grok Build's own path): Grok 4.7 Fast isn't on
+        // the public API, so a plain API key never gets it.
+        let fast_signin = gb || reg.entitlement.credential == Credential::Plan;
+        let fast = (fast_signin && !chosen.no_route && ids.contains(&chosen.model.as_str()))
             .then(|| fast_of(reg, &chosen.model))
             .flatten()
             .filter(|f| {
@@ -1195,6 +1278,9 @@ impl Router {
                     .map(str::to_string)
                     .unwrap_or(e)
             });
+        }
+        if is_multi_agent(sent_model) {
+            effort = multi_agent_effort(effort, input.lane(), sent_model, &input.spend, &mut rules);
         }
         let what = row.map(|r| r.plain).unwrap_or("this step");
         let clause = if row.is_some() {
@@ -1321,6 +1407,9 @@ mod speed_bench_tests;
 
 #[cfg(test)]
 mod local_router_tests;
+
+#[cfg(test)]
+mod facts_tests;
 
 #[cfg(test)]
 mod tests {

@@ -21,7 +21,7 @@ use grokhub_core::model_registry::profile::{read_profiles, ModelProfile};
 use grokhub_core::model_registry::store::{
     append_observation, load_registry, profiles_dir, registry_path,
 };
-use grokhub_core::model_registry::{classify_status, CallStatus, Observation, Registry};
+use grokhub_core::model_registry::{classify_status, health, CallStatus, Observation, Registry};
 
 use super::cabin::{MODEL_TOOL, MODEL_TRACE};
 use grokhub_core::model_registry::EFFORT_LADDER;
@@ -304,6 +304,45 @@ pub fn snapshot(config_dir: &Path) -> (Arc<Registry>, Arc<BTreeMap<String, Model
     (reg, profiles)
 }
 
+/// Requests sent per model this second, per config dir ([`health::Pacer`]).
+static PACE: Mutex<BTreeMap<PathBuf, health::Pacer>> = Mutex::new(BTreeMap::new());
+
+/// The registry the router picks from: a live model already at its request
+/// limit this second reads as busy (degraded), so failover takes the next one.
+pub(super) fn paced(config_dir: &Path, reg: Arc<Registry>, now_ms: u64) -> Arc<Registry> {
+    let pace = PACE.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(p) = pace.get(config_dir) else {
+        return reg;
+    };
+    let busy: Vec<String> = reg
+        .models
+        .iter()
+        .filter(|(id, r)| {
+            r.state == grokhub_core::model_registry::ModelState::Live && p.at_limit(id, now_ms)
+        })
+        .map(|(id, _)| id.clone())
+        .collect();
+    if busy.is_empty() {
+        return reg;
+    }
+    let mut view = (*reg).clone();
+    for id in busy {
+        if let Some(r) = view.models.get_mut(&id) {
+            health::mark_busy(r);
+        }
+    }
+    Arc::new(view)
+}
+
+/// One request to `model` goes out now.
+pub(super) fn note_send(config_dir: &Path, model: &str, now_ms: u64) {
+    PACE.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .entry(config_dir.to_path_buf())
+        .or_default()
+        .note(model, now_ms);
+}
+
 /// The saved routing table, re-read only when its file changes.
 pub fn table_snapshot(config_dir: &Path) -> Arc<RoutingTable> {
     let stamp = (config_dir.to_path_buf(), mtime(&table_path(config_dir)));
@@ -509,6 +548,7 @@ fn verify_counts(config_dir: &Path, call: &RouteCall<'_>) -> (Option<u32>, bool)
 pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision {
     let mut laps = Breakdown::start();
     let (reg, profiles) = snapshot(config_dir);
+    let reg = paced(config_dir, reg, now_ms);
     laps.mark("route:snapshot");
     let settings = spend::spend_settings();
     let b = week_budget(config_dir, &reg, settings.weekly_cap_usd, now_ms);
@@ -819,6 +859,9 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
             call.model.trim().to_string(),
             failed,
         ));
+    }
+    if !route.no_route && budget_pause.is_none() {
+        note_send(config_dir, &route.model, now_ms);
     }
     laps.mark("route:budget_check");
     let timing = laps.finish("route:decide");

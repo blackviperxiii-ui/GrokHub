@@ -185,26 +185,14 @@ pub fn predicted_tokens(class: &str) -> (u64, u64, u64) {
     }
 }
 
-/// List price × predicted tokens with the cache hit in, in USD. A call over
-/// the model's long-context threshold pays the long prices. `None` when the
-/// listing has no prices.
+/// List price × predicted tokens with the cache hit in, in USD. A call at or
+/// over the model's long-context threshold pays the long prices on every
+/// token, cached ones too ([`Prices::rates_at`]). `None` when the listing has
+/// no prices.
 pub fn expected_cost_usd(prices: &Prices, class: &str, ctx_tokens: u64) -> Option<f64> {
     let (mut input, out, hit_pct) = predicted_tokens(class);
     input = input.max(ctx_tokens);
-    let long = prices
-        .long_context_threshold
-        .is_some_and(|t| t > 0 && input >= t);
-    let prompt = if long {
-        prices.prompt_long.or(prices.prompt)
-    } else {
-        prices.prompt
-    }?;
-    let completion = if long {
-        prices.completion_long.or(prices.completion)
-    } else {
-        prices.completion
-    }?;
-    let cached = prices.cached.unwrap_or(prompt);
+    let (prompt, cached, completion) = prices.rates_at(input)?;
     let hit = input * hit_pct / 100;
     // Prices are USD cents per 100M tokens.
     let cents = ((input - hit) * prompt + hit * cached + out * completion) as f64 / 100_000_000.0;
@@ -556,11 +544,12 @@ mod tests {
             250_000,
         )
         .unwrap();
-        // 250k in, 80% cached: the uncached prompt and the output pay the long prices.
+        // 250k in, 80% cached: every token pays the long prices, the cached ones
+        // at twice their rate too.
         assert_eq!(
             (long, short),
             (
-                (50_000.0 * 40_000.0 + 200_000.0 * 5_000.0 + 600.0 * 200_000.0) / 1e8 / 100.0,
+                (50_000.0 * 40_000.0 + 200_000.0 * 10_000.0 + 600.0 * 200_000.0) / 1e8 / 100.0,
                 (50_000.0 * 20_000.0 + 200_000.0 * 5_000.0 + 600.0 * 100_000.0) / 1e8 / 100.0
             )
         );

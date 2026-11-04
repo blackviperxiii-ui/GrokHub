@@ -853,7 +853,10 @@ fn compact_native() -> (&'static str, u32) {
         return ("failed: scratch", 0);
     };
     let history = long_history();
-    if !crate::compact::needs_auto_compact(&history, crate::models::GROK_47_CONTEXT_LENGTH) {
+    // The window a Grok chat trims in: its own, capped at the 200k price step.
+    let window =
+        crate::compact::trim_window(crate::DEFAULT_MODEL, crate::models::GROK_47_CONTEXT_LENGTH);
+    if !crate::compact::needs_auto_compact(&history, window) {
         let _ = std::fs::remove_dir_all(&dir);
         return ("failed: compact", 0);
     }
