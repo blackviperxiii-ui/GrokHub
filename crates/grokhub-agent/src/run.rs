@@ -919,7 +919,7 @@ pub fn run_loop(
             if batch_failed {
                 let output = ToolOutput::err(gate::NOT_EXECUTED);
                 emit_tool(on_event, &tool_id(call), call, "failed", &output.text, None);
-                push_output(history, input.conversation_id, call, output);
+                push_refusal(history, input.conversation_id, call, output);
                 call_i += 1;
                 continue;
             }
@@ -977,7 +977,7 @@ pub fn run_loop(
             *seen = seen.saturating_add(1);
             if *seen >= REPEAT_LIMIT {
                 let output = ToolOutput::err(REPEAT_REPLAN);
-                push_output(history, input.conversation_id, call, output);
+                push_refusal(history, input.conversation_id, call, output);
                 call_i += 1;
                 continue;
             }
@@ -1017,7 +1017,7 @@ pub fn run_loop(
             if reviewed.cancelled {
                 let output = ToolOutput::err(gate::user_cancelled(&call.name));
                 emit_tool(on_event, &id, call, "failed", &output.text, None);
-                push_output(history, input.conversation_id, call, output);
+                push_refusal(history, input.conversation_id, call, output);
                 return finish(input, StopReason::Cancelled, usage, compacted_once, true);
             }
             if reviewed.halted {
@@ -1037,8 +1037,10 @@ pub fn run_loop(
             drop(gate_lap);
             let ask_reason = constrained.ask_reason;
             let pre_context = constrained.context;
+            let mut refused = false;
             let (output, extra_usage) = match constrained.decision {
                 Decision::Refuse(text) => {
+                    refused = true;
                     batch_failed = hard_step(&call.name, &gate_args);
                     crate::hooks::on_permission_denied(
                         input.conversation_id,
@@ -1108,6 +1110,7 @@ pub fn run_loop(
                             )
                         }
                         Waited::Answer(PermAnswer::Deny) => {
+                            refused = true;
                             batch_failed = hard_step(&call.name, &gate_args);
                             crate::hooks::on_permission_denied(
                                 input.conversation_id,
@@ -1123,7 +1126,7 @@ pub fn run_loop(
                         Waited::Answer(PermAnswer::Cancel) | Waited::Cancelled => {
                             let output = ToolOutput::err(gate::user_cancelled(&call.name));
                             emit_tool(on_event, &id, call, "failed", &output.text, None);
-                            push_output(history, input.conversation_id, call, output);
+                            push_refusal(history, input.conversation_id, call, output);
                             return finish(
                                 input,
                                 StopReason::Cancelled,
@@ -1173,7 +1176,11 @@ pub fn run_loop(
             if !output.failed && call.name == "report_findings" {
                 fresh.note_findings();
             }
-            push_output(history, input.conversation_id, call, output);
+            if refused {
+                push_refusal(history, input.conversation_id, call, output);
+            } else {
+                push_output(history, input.conversation_id, call, output);
+            }
             if cancelled {
                 return finish(input, StopReason::Cancelled, usage, compacted_once, true);
             }
@@ -1336,6 +1343,27 @@ pub(crate) fn push_output(
         // E1: the next routed step thinks one rung harder.
         crate::route::ladder::note_tool_error();
     }
+    push_result(history, conversation_id, call, output);
+}
+
+/// [`push_output`] for a call that never ran: the user said no, a gate or
+/// hook refused it, it repeated too often, or an earlier step in its batch
+/// failed. Nothing went wrong in the work, so the next step's effort stays put.
+pub(crate) fn push_refusal(
+    history: &mut Vec<InputItem>,
+    conversation_id: &str,
+    call: &FunctionCall,
+    output: ToolOutput,
+) {
+    push_result(history, conversation_id, call, output);
+}
+
+fn push_result(
+    history: &mut Vec<InputItem>,
+    conversation_id: &str,
+    call: &FunctionCall,
+    output: ToolOutput,
+) {
     // Only a call that succeeded may stand in for an older identical one.
     crate::compact::note_tool_result(conversation_id, &call.call_id, &call.name, output.failed);
     history.push(InputItem::FunctionCallOutput {
@@ -2640,6 +2668,125 @@ mod tests {
         let mut events = Vec::new();
         let out = run_loop(&input, &mut history, "go", None, &mut |ev| events.push(ev));
         (out, history, events)
+    }
+
+    /// [`Script`], plus the effort each request was sent with.
+    struct EffortLog {
+        script: Script,
+        efforts: Mutex<Vec<Option<String>>>,
+    }
+
+    impl ModelClient for EffortLog {
+        fn stream(
+            &self,
+            req: &ResponsesRequest,
+            cancel: &CancelToken,
+            sink: &mut dyn FnMut(StreamEvent),
+        ) -> Result<crate::TurnOutput, ClientError> {
+            self.efforts.lock().unwrap().push(req.effort.clone());
+            self.script.stream(req, cancel, sink)
+        }
+    }
+
+    fn efforts_for(tag: &str, steps: Vec<ScriptTurn>, permits: &Answer) -> Vec<Option<String>> {
+        assert!(
+            !crate::route::guard::in_holdout(tag),
+            "{tag} is in the effort holdout"
+        );
+        let dir = workspace(tag);
+        let log = EffortLog {
+            script: Script {
+                turns: Mutex::new(steps),
+                seen: Mutex::new(Vec::new()),
+                cancel_on_text: false,
+                steer: None,
+            },
+            efforts: Mutex::new(Vec::new()),
+        };
+        let input = LoopIn {
+            client: &log,
+            workspace: &dir,
+            model: "grok-4.7",
+            effort: None,
+            system: "",
+            conversation_id: tag,
+            max_turns: 4,
+            usage_base: Usage::default(),
+            cancel: &CancelToken::new(),
+            steer: &SteerQueue::new(),
+            halt: &NeverHalt,
+            gate: chat(gate::PermMode::Ask, true, false),
+            desktop: None,
+            permits,
+            perms: None,
+            context_length: 0,
+            tasks: None,
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
+        };
+        let mut history = Vec::new();
+        let out = run_loop(
+            &input,
+            &mut history,
+            "Fix the crash in src/parser.rs",
+            None,
+            &mut |_| {},
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        log.efforts.into_inner().unwrap()
+    }
+
+    #[test]
+    fn saying_no_to_a_tool_does_not_raise_the_next_effort() {
+        let step = |id: &str, name: &str, args: &str| ScriptTurn {
+            text: String::new(),
+            calls: vec![call(id, name, args)],
+            usage: Usage::default(),
+            truncated: false,
+        };
+        let done = ScriptTurn::text("done");
+        let no = Answer {
+            answer: PermAnswer::Deny,
+            asks: AtomicUsize::new(0),
+        };
+        let denied = efforts_for(
+            "deny-effort",
+            vec![
+                step("d1", "write", r#"{"path":"one.txt","content":"x"}"#),
+                step("d2", "write", r#"{"path":"two.txt","content":"x"}"#),
+                done.clone(),
+            ],
+            &no,
+        );
+        assert_eq!(no.asks.load(Ordering::SeqCst), 2);
+        assert_eq!(denied.len(), 3);
+        assert!(
+            denied.iter().all(|e| e == &denied[0]),
+            "two noes moved effort: {denied:?}"
+        );
+
+        // A tool that ran and failed still lifts the next step.
+        let yes = Answer {
+            answer: PermAnswer::Allow,
+            asks: AtomicUsize::new(0),
+        };
+        let failed = efforts_for(
+            "fail-effort",
+            vec![
+                step("m1", "read_file", r#"{"path":"nope.txt"}"#),
+                step("m2", "read_file", r#"{"path":"still-nope.txt"}"#),
+                done,
+            ],
+            &yes,
+        );
+        assert_eq!(failed[0], denied[0]);
+        assert_ne!(
+            failed[1], failed[0],
+            "a failed read lifts effort: {failed:?}"
+        );
     }
 
     #[test]

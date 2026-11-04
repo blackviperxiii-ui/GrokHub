@@ -2293,6 +2293,69 @@ fn every_provider_call_is_told_which_model_answers() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// [`XaiRec`] behind xAI's Batch API: the answer took minutes in a queue.
+struct BatchedXai(XaiRec);
+
+impl ModelClient for BatchedXai {
+    fn stream(
+        &self,
+        r: &ResponsesRequest,
+        c: &CancelToken,
+        s: &mut dyn FnMut(StreamEvent),
+    ) -> Result<TurnOutput, ClientError> {
+        self.0.stream(r, c, s)
+    }
+
+    fn batches(&self) -> bool {
+        true
+    }
+}
+
+#[test]
+fn a_batched_call_teaches_no_speed() {
+    let (dir, _wire) = setup("batched-latency");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    save_registry(&dir, &fleet()).unwrap();
+    let live_xai = XaiRec::default();
+    let queued = BatchedXai(XaiRec::default());
+    let req = chat("batched-1", &["sum up the week"]);
+    live::stream_routed(
+        &live_xai,
+        &req,
+        &CancelToken::new(),
+        &mut |_| {},
+        "chat:default",
+    )
+    .unwrap();
+    live::stream_routed(
+        &queued,
+        &req,
+        &CancelToken::new(),
+        &mut |_| {},
+        "chat:default",
+    )
+    .unwrap();
+    let latencies: Vec<Option<u64>> = last_routes(&dir)
+        .into_iter()
+        .map(|(_, r)| r.signals.latency)
+        .collect();
+    assert_eq!(latencies.len(), 2, "{latencies:?}");
+    assert!(latencies[0].is_some(), "a live call is timed");
+    assert_eq!(latencies[1], None, "a queued call is not");
+    let health = std::fs::read_to_string(
+        dir.join("models")
+            .join(grokhub_core::model_registry::store::HEALTH_FILE),
+    )
+    .unwrap();
+    let lines: Vec<serde_json::Value> = health
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 2, "{health}");
+    assert_eq!(lines[1]["latency_ms"], json!(0), "health takes no sample");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// xAI is down: the client's retries ran out on a 503.
 struct XaiDown;
 
