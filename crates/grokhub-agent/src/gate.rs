@@ -232,10 +232,16 @@ pub fn unattended_deny(name: &str) -> String {
 }
 
 pub fn hard_class_unattended(name: &str, class: crate::harness::HardClass) -> String {
-    format!(
+    let base = format!(
         "Tool `{name}` was not executed: hard-class {} needs you, and nobody is here to approve it",
         class.as_str()
-    )
+    );
+    match class {
+        crate::harness::HardClass::OutsideValue => {
+            format!("{base}. {}", crate::harness::provenance::UNATTENDED_NOTE)
+        }
+        _ => base,
+    }
 }
 
 pub fn user_rejected(name: &str) -> String {

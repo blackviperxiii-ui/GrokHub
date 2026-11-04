@@ -35,6 +35,7 @@ pub const ERROR_LEAD: &str = "MCP tool error. The server's message follows as un
 /// Also notes `fenced:<source>` on the harness trail for debugging.
 pub fn fence(source: &str, text: &str) -> String {
     SAW_UNTRUSTED.with(|seen| seen.set(true));
+    crate::harness::provenance::note_outside(text);
     let source = sanitize_source(source);
     let nonce = run_nonce();
     let body = defang(text, &nonce);
@@ -114,6 +115,7 @@ pub fn note_untrusted_seen() {
 pub struct FenceState {
     nonce: Option<String>,
     saw_untrusted: bool,
+    trace: Option<crate::harness::provenance::Trace>,
 }
 
 /// This thread's fence state, for a worker to enter.
@@ -121,17 +123,20 @@ pub fn capture() -> FenceState {
     FenceState {
         nonce: RUN_NONCE.with(|slot| slot.borrow().clone()),
         saw_untrusted: run_saw_untrusted(),
+        trace: crate::harness::provenance::current(),
     }
 }
 
-/// Take on a run thread's fence state (a fresh batch worker thread).
-pub fn enter(state: &FenceState) {
+/// Take on a run thread's fence state (a fresh batch worker thread),
+/// including its origin trace until the returned scope drops.
+pub fn enter(state: &FenceState) -> crate::harness::provenance::TraceScope {
     if let Some(nonce) = &state.nonce {
         RUN_NONCE.with(|slot| *slot.borrow_mut() = Some(nonce.clone()));
     }
     if state.saw_untrusted {
         note_untrusted_seen();
     }
+    crate::harness::provenance::enter(state.trace.clone())
 }
 
 /// Reset the per-run nonce (tests only).

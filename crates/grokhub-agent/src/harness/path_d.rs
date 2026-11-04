@@ -141,6 +141,7 @@ pub fn unasked_title(class: HardClass) -> String {
         HardClass::Credentials => "type into a credential field",
         HardClass::IrreversibleOs => "do an irreversible OS action",
         HardClass::AgentConfig => "change the agent's instructions or settings",
+        HardClass::OutsideValue => "use a value it only read in outside text",
     };
     format!(
         "{} tried to {what} without asking",

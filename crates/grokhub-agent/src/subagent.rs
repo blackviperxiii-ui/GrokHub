@@ -273,6 +273,7 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         conversation_id,
         parent_session: call.session.to_string(),
         parent_workspace: call.workspace.to_path_buf(),
+        trace: crate::harness::provenance::current(),
         max_turns: if call.max_turns == 0 {
             SUBAGENT_MAX_TURNS
         } else {
@@ -360,6 +361,8 @@ struct ChildJob {
     parent_session: String,
     /// The parent's folder, where a long result is spooled (a worktree can go).
     parent_workspace: PathBuf,
+    /// The parent run's origin trace: the child's task text is not yours.
+    trace: Option<crate::harness::provenance::Trace>,
     max_turns: u32,
     cancel: CancelToken,
     steer: SteerQueue,
@@ -401,6 +404,7 @@ impl HaltCheck for HubHalt {
 
 fn run_job(job: ChildJob, tx: Option<Sender<ChildNote>>) {
     let _origin = crate::harness::OriginScope::enter(job.origin);
+    let _trace = crate::harness::provenance::enter(job.trace.clone());
     let mut done = run_child(&job, &tx);
     done.text = guard_result(
         &job.parent_workspace,
