@@ -445,6 +445,110 @@ fn a_sandboxed_command_writes_only_in_the_workspace_on_windows() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// macOS, live: a command under the Seatbelt profile writes only in its
+/// writable roots, can't read a hidden file, and reaches only the proxy's
+/// port on loopback. Runs where macOS tests run (the nightly and manual
+/// cross-check on Apple silicon).
+#[cfg(target_os = "macos")]
+#[test]
+fn a_seatbelt_command_writes_reads_and_connects_only_where_allowed() {
+    use std::io::Write as _;
+    use std::net::TcpListener;
+
+    if !seatbelt::available() {
+        eprintln!("skipped: sandbox-exec is off or missing");
+        return;
+    }
+    // Outside the temp folders, which a real plan leaves writable.
+    let home = grokhub_core::user_home().expect("home");
+    let base = home.join(format!("gh-sbx-mac-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let ws = base.join("ws");
+    let outside = base.join("out");
+    let secret_dir = base.join("secret");
+    for dir in [&ws, &outside, &secret_dir] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    let (ws, outside, secret_dir) = (
+        ws.canonicalize().unwrap(),
+        outside.canonicalize().unwrap(),
+        secret_dir.canonicalize().unwrap(),
+    );
+    let secret_file = base.join("netrc");
+    std::fs::write(&secret_file, "machine x password y").unwrap();
+    std::fs::write(secret_dir.join("id_ed25519"), "key").unwrap();
+    let secret_file = secret_file.canonicalize().unwrap();
+
+    let serve = || {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for mut s in l.incoming().flatten() {
+                let _ = s.write_all(b"hello\n");
+            }
+        });
+        port
+    };
+    let proxy_port = serve();
+    let other_port = serve();
+
+    let profile = seatbelt::profile(
+        &[ws.clone(), PathBuf::from("/dev")],
+        &[secret_dir.clone(), secret_file.clone()],
+        Some(proxy_port),
+    );
+    let sh = |script: String| {
+        let argv = ["bash", "--noprofile", "--norc", "-c", script.as_str()];
+        let (program, args) = seatbelt::wrap(&profile, &argv);
+        let out = std::process::Command::new(program)
+            .args(args)
+            .current_dir(&ws)
+            .output()
+            .expect("sandbox-exec runs");
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        (out.status.success(), text)
+    };
+
+    let (ok, text) = sh("echo in > inside.txt && cat inside.txt".into());
+    assert!(
+        ok && text.contains("in"),
+        "a write in the workspace: {text}"
+    );
+
+    let target = outside.join("new.txt");
+    let (ok, text) = sh(format!("echo out > '{}'", target.display()));
+    assert!(
+        !ok && !target.exists(),
+        "a write outside the workspace went through: {text}"
+    );
+
+    let (ok, text) = sh(format!("cat '{}'", secret_file.display()));
+    assert!(
+        !ok && !text.contains("password"),
+        "a hidden file was read: {text}"
+    );
+    let (ok, text) = sh(format!("ls '{}'", secret_dir.display()));
+    assert!(
+        !ok && !text.contains("id_ed25519"),
+        "a hidden folder was listed: {text}"
+    );
+
+    let connect = |port: u16| format!("exec 3<>/dev/tcp/127.0.0.1/{port} && head -n1 <&3");
+    let (ok, text) = sh(connect(proxy_port));
+    assert!(ok && text.contains("hello"), "the proxy's port: {text}");
+    let (ok, text) = sh(connect(other_port));
+    assert!(
+        !ok && !text.contains("hello"),
+        "another loopback port was reached: {text}"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 #[test]
 fn a_failed_connection_in_its_own_network_gets_a_note_and_nothing_else_does() {
     let isolated = Plan {
