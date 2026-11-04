@@ -218,6 +218,58 @@ fn usd_per_token(v: Option<&Value>) -> Option<u64> {
     (usd.is_finite() && usd >= 0.0).then(|| (usd * 1e10).round() as u64)
 }
 
+/// A whole number of tokens sent as a number or a numeric string.
+fn tokens_of(v: Option<&Value>) -> Option<u64> {
+    match v? {
+        Value::Number(n) => n.as_u64(),
+        Value::String(s) => s.trim().parse().ok(),
+        _ => None,
+    }
+}
+
+/// OpenRouter's `pricing.overrides` as one long-context step:
+/// `(long_context_threshold, prompt_long, completion_long)`.
+///
+/// An entry with `min_prompt_tokens` is a long-context tier: its prices
+/// apply once the prompt is *more than* that many tokens, and a price it
+/// leaves out stays the base one. [`Prices::rates_at`] switches at or past
+/// its threshold, so the threshold is one token past `min_prompt_tokens`.
+/// A listing may name up to two tiers, and [`Prices`] holds one step: it
+/// starts at the lowest tier and takes the highest rate any tier lists, so
+/// a long prompt is never priced under what it may pay.
+///
+/// Entries this can't map are left out, and the base prices stand for them:
+/// a time window (`utc_start`, `utc_end`, `utc_days`) or an entry with no
+/// prompt-size threshold. A tier's `input_cache_read` is left out too:
+/// `rates_at` scales the cached rate with the prompt's.
+fn long_context_step(pricing: &Value) -> (Option<u64>, Option<u64>, Option<u64>) {
+    let Some(tiers) = pricing.get("overrides").and_then(Value::as_array) else {
+        return (None, None, None);
+    };
+    let mut threshold: Option<u64> = None;
+    let (mut prompt, mut completion) = (None::<u64>, None::<u64>);
+    for tier in tiers {
+        let timed = ["utc_start", "utc_end", "utc_days"]
+            .iter()
+            .any(|k| tier.get(*k).is_some_and(|v| !v.is_null()));
+        let Some(min) = tokens_of(tier.get("min_prompt_tokens")).filter(|_| !timed) else {
+            continue;
+        };
+        let p = usd_per_token(tier.get("prompt"));
+        let c = usd_per_token(tier.get("completion"));
+        if p.is_none() && c.is_none() {
+            continue;
+        }
+        threshold = Some(threshold.map_or(min, |t| t.min(min)));
+        prompt = prompt.max(p);
+        completion = completion.max(c);
+    }
+    match threshold {
+        Some(t) => (Some(t.saturating_add(1)), prompt, completion),
+        None => (None, None, None),
+    }
+}
+
 /// An effort list the listing itself names. Nothing is filled from code.
 fn listed_efforts(row: &Value) -> Option<Vec<String>> {
     const KEYS: &[&str] = &[
@@ -242,7 +294,9 @@ fn listed_efforts(row: &Value) -> Option<Vec<String>> {
 }
 
 /// An OpenAI-compatible `/models` listing (OpenRouter and the like), ids as
-/// `<provider>/<model>`. Prices are USD per token there; unknown stays `None`.
+/// `<provider>/<model>`. Prices are USD per token there; unknown stays `None`,
+/// and a long-context price step comes from `pricing.overrides`
+/// (`long_context_step`).
 /// `supported_parameters` says whether it takes `tools` and `reasoning`, and a
 /// non-null `expiration_date` marks it deprecated.
 pub fn parse_openai_compatible_catalog(
@@ -257,6 +311,7 @@ pub fn parse_openai_compatible_catalog(
         let top = row.get("top_provider").cloned().unwrap_or(Value::Null);
         let pricing = row.get("pricing").cloned().unwrap_or(Value::Null);
         let params = strings(row.get("supported_parameters"));
+        let (long_context_threshold, prompt_long, completion_long) = long_context_step(&pricing);
         out.push(ModelMeta {
             id: provider_model_id(provider, &id),
             context_length: u64_of(&row, &["context_length", "context_window"])
@@ -267,7 +322,9 @@ pub fn parse_openai_compatible_catalog(
                 prompt: usd_per_token(pricing.get("prompt")),
                 cached: usd_per_token(pricing.get("input_cache_read")),
                 completion: usd_per_token(pricing.get("completion")),
-                ..Prices::default()
+                prompt_long,
+                completion_long,
+                long_context_threshold,
             },
             efforts: listed_efforts(&row),
             input_modalities: strings(
@@ -559,6 +616,75 @@ mod tests {
         assert_eq!(
             parse_anthropic_catalog("anthropic", "{}").unwrap_err(),
             "models payload has no data array"
+        );
+    }
+
+    /// Rows shaped like OpenRouter's `GET /api/v1/models` with
+    /// `pricing.overrides`: one long-context tier, two tiers, a time window,
+    /// and a threshold sent as a string.
+    const OPENROUTER_OVERRIDES: &str = r#"{"data":[
+        {"id":"vendor/long-ctx","context_length":1000000,
+         "pricing":{"prompt":"0.00000125","completion":"0.00001","input_cache_read":"0.000000125",
+           "overrides":[{"min_prompt_tokens":200000,"prompt":"0.0000025","completion":"0.000015","input_cache_read":"0.00000025"}]}},
+        {"id":"vendor/two-tiers",
+         "pricing":{"prompt":"0.000001","completion":"0.000004",
+           "overrides":[{"min_prompt_tokens":"256000","prompt":"0.000003","completion":"0.000008"},
+                        {"min_prompt_tokens":128000,"prompt":"0.000002"}]}},
+        {"id":"vendor/peak-hours",
+         "pricing":{"prompt":"0.000001","completion":"0.000002",
+           "overrides":[{"utc_start":"1400","utc_end":"2200","prompt":"0.000002","completion":"0.000004"}]}},
+        {"id":"vendor/cache-only",
+         "pricing":{"prompt":"0.000001","completion":"0.000002",
+           "overrides":[{"min_prompt_tokens":100000,"input_cache_read":"0.0000005"}]}}
+    ]}"#;
+
+    #[test]
+    fn openrouter_overrides_become_the_long_context_step() {
+        let got = parse_openai_compatible_catalog("openrouter", OPENROUTER_OVERRIDES).unwrap();
+        let prices = |id: &str| got.iter().find(|m| m.id == id).unwrap().prices.clone();
+        let long = prices("openrouter/vendor/long-ctx");
+        assert_eq!(
+            long,
+            Prices {
+                prompt: Some(12_500),
+                cached: Some(1_250),
+                completion: Some(100_000),
+                prompt_long: Some(25_000),
+                completion_long: Some(150_000),
+                long_context_threshold: Some(200_001),
+            }
+        );
+        // OpenRouter's step is strictly past 200,000 prompt tokens.
+        assert_eq!(long.rates_at(200_000), Some((12_500, 1_250, 100_000)));
+        assert_eq!(long.rates_at(200_001), Some((25_000, 2_500, 150_000)));
+        // Two tiers: the step starts at the lower one, at the higher rates;
+        // a price no tier names stays the base one.
+        assert_eq!(
+            prices("openrouter/vendor/two-tiers"),
+            Prices {
+                prompt: Some(10_000),
+                completion: Some(40_000),
+                prompt_long: Some(30_000),
+                completion_long: Some(80_000),
+                long_context_threshold: Some(128_001),
+                ..Prices::default()
+            }
+        );
+        // A time window and a cache-only tier don't map: base prices only.
+        for id in [
+            "openrouter/vendor/peak-hours",
+            "openrouter/vendor/cache-only",
+        ] {
+            let p = prices(id);
+            assert_eq!(
+                (p.prompt_long, p.completion_long, p.long_context_threshold),
+                (None, None, None),
+                "{id}"
+            );
+        }
+        assert_eq!(
+            prices("openrouter/vendor/peak-hours").completion,
+            Some(20_000)
         );
     }
 }

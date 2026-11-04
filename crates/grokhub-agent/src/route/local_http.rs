@@ -19,8 +19,8 @@ pub struct HttpLocalRuntime {
     base_url: String,
     token: String,
     model: String,
-    /// The `reasoning_effort` levels the server's `/props` listed.
-    effort_levels: Vec<String>,
+    /// How the model's template thinks, from the server's `/props`.
+    thinking: super::local_effort::Thinking,
     /// Keeps the global sidecar's request count up while this runtime lives.
     busy: Option<Arc<super::local_sidecar::Busy>>,
 }
@@ -31,7 +31,7 @@ impl std::fmt::Debug for HttpLocalRuntime {
             .field("base_url", &self.base_url)
             .field("token", &"[redacted]")
             .field("model", &self.model)
-            .field("effort_levels", &self.effort_levels)
+            .field("thinking", &self.thinking)
             .finish()
     }
 }
@@ -43,20 +43,21 @@ impl HttpLocalRuntime {
             base_url,
             token: token.into(),
             model: "local".into(),
-            effort_levels: Vec::new(),
+            thinking: Default::default(),
             busy: None,
         }
     }
 
-    /// The levels `/props` listed (see [`super::local_effort`]).
-    pub fn with_effort_levels(mut self, levels: Vec<String>) -> Self {
-        self.effort_levels = levels;
+    /// What `/props` said about thinking (see [`super::local_effort`]).
+    pub fn with_thinking(mut self, thinking: super::local_effort::Thinking) -> Self {
+        self.thinking = thinking;
         self
     }
 
-    /// The level to send for the turn's effort, if the model renders one.
-    fn effort(&self, want: Option<&str>) -> Option<String> {
-        super::local_effort::nearest(want?, &self.effort_levels)
+    /// What to send for the turn's effort: a level the model renders, and
+    /// thinking on or off where its template has the switch.
+    fn effort(&self, want: Option<&str>) -> super::local_effort::Sent {
+        self.thinking.plan(want)
     }
 
     /// Reject non-loopback bases so a mis-set URL never leaves the device.
@@ -92,12 +93,7 @@ impl HttpLocalRuntime {
             return Err("local model URL must be loopback (127.0.0.1 / localhost)".into());
         }
         super::local_sidecar::touch_global();
-        let body = chat_body(
-            &self.model,
-            messages,
-            stream,
-            self.effort(effort).as_deref(),
-        );
+        let body = chat_body(&self.model, messages, stream, &self.effort(effort));
         Self::agent()
             .post(&format!("{}/v1/chat/completions", self.base_url))
             .header("Authorization", &format!("Bearer {}", self.token))
@@ -270,9 +266,7 @@ impl LocalRuntime for HttpLocalRuntime {
         // Non-streaming: tool_calls are unreliable on SSE for llama-server.
         let mut body = openai_body(&self.model, None, req);
         body["stream"] = json!(false);
-        if let Some(e) = self.effort(req.effort.as_deref()) {
-            body["reasoning_effort"] = json!(e);
-        }
+        self.effort(req.effort.as_deref()).apply(&mut body);
         let resp = Self::agent()
             .post(&format!("{}/v1/chat/completions", self.base_url))
             .header("Authorization", &format!("Bearer {}", self.token))
@@ -291,17 +285,20 @@ impl LocalRuntime for HttpLocalRuntime {
     }
 }
 
-/// A `/v1/chat/completions` body. `effort` is a level the model's template
-/// renders (llama-server's `reasoning_effort`); `None` leaves it out.
-fn chat_body(model: &str, messages: &[ChatMessage], stream: bool, effort: Option<&str>) -> Value {
+/// A `/v1/chat/completions` body with what [`super::local_effort::Thinking::plan`]
+/// sends for the turn's effort (`reasoning_effort`, `chat_template_kwargs`).
+fn chat_body(
+    model: &str,
+    messages: &[ChatMessage],
+    stream: bool,
+    effort: &super::local_effort::Sent,
+) -> Value {
     let mut body = json!({
         "model": model,
         "stream": stream,
         "messages": messages.iter().map(|m| json!({"role": m.role, "content": m.content})).collect::<Vec<_>>(),
     });
-    if let Some(e) = effort {
-        body["reasoning_effort"] = json!(e);
-    }
+    effort.apply(&mut body);
     body
 }
 
@@ -383,8 +380,7 @@ fn read_sse(
 /// Build a runtime from a running sidecar endpoint, if any.
 pub fn from_global_sidecar(busy: super::local_sidecar::Busy) -> Option<Arc<dyn LocalRuntime>> {
     let end = super::local_sidecar::global_endpoint()?;
-    let mut rt =
-        HttpLocalRuntime::new(end.base_url, end.token).with_effort_levels(end.effort_levels);
+    let mut rt = HttpLocalRuntime::new(end.base_url, end.token).with_thinking(end.thinking);
     rt.busy = Some(Arc::new(busy));
     Some(Arc::new(rt))
 }
@@ -429,9 +425,13 @@ mod tests {
             role: "user".into(),
             content: "hi".into(),
         }];
-        let rt = HttpLocalRuntime::new("http://127.0.0.1:9", "t")
-            .with_effort_levels(vec!["low".into(), "high".into()]);
-        let sent = |want| chat_body("local", &user, true, rt.effort(want).as_deref());
+        let rt = HttpLocalRuntime::new("http://127.0.0.1:9", "t").with_thinking(
+            super::super::local_effort::Thinking {
+                levels: vec!["low".into(), "high".into()],
+                switch: None,
+            },
+        );
+        let sent = |want| chat_body("local", &user, true, &rt.effort(want));
         assert_eq!(
             sent(Some("xhigh")),
             json!({
@@ -446,29 +446,57 @@ mod tests {
         assert_eq!(sent(None).get("reasoning_effort"), None);
         // A model whose template renders no level never gets one.
         let plain = HttpLocalRuntime::new("http://127.0.0.1:9", "t");
-        assert_eq!(plain.effort(Some("high")), None);
+        assert_eq!(plain.effort(Some("high")).effort, None);
+    }
+
+    #[test]
+    fn a_fallback_turn_at_no_effort_turns_a_template_switch_off() {
+        let user = [ChatMessage {
+            role: "user".into(),
+            content: "hi".into(),
+        }];
+        let rt = HttpLocalRuntime::new("http://127.0.0.1:9", "t").with_thinking(
+            super::super::local_effort::Thinking {
+                levels: Vec::new(),
+                switch: Some("enable_thinking"),
+            },
+        );
+        assert_eq!(
+            chat_body("local", &user, false, &rt.effort(Some("none"))),
+            json!({
+                "model": "local",
+                "stream": false,
+                "messages": [{"role": "user", "content": "hi"}],
+                "chat_template_kwargs": {"enable_thinking": false}
+            })
+        );
+        assert_eq!(
+            chat_body("local", &user, false, &rt.effort(Some("high")))["chat_template_kwargs"],
+            json!({"enable_thinking": true})
+        );
     }
 
     #[test]
     fn effort_levels_are_read_from_props_with_the_api_key() {
         let fake = FakeServer::start(None);
         assert_eq!(
-            super::super::local_effort::fetch_levels(
+            super::super::local_effort::fetch_thinking(
                 &fake.host,
                 fake.port,
                 &fake.token,
                 super::super::local_effort::PROPS_TIMEOUT
-            ),
+            )
+            .levels,
             ["low", "high"]
         );
         assert_eq!(
-            super::super::local_effort::fetch_levels(
+            super::super::local_effort::fetch_thinking(
                 &fake.host,
                 fake.port,
                 "sk-abcdefghijklmnopqrstuv",
                 super::super::local_effort::PROPS_TIMEOUT
             ),
-            Vec::<String>::new()
+            super::super::local_effort::Thinking::default()
         );
     }
 
