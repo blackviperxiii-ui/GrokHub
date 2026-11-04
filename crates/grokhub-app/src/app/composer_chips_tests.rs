@@ -1087,9 +1087,12 @@ fn chip_apply_mode_and_help_stay_off_a_run() {
     unsafe { std::env::set_var("GROKHUB_GROK", "/no/such/grok-binary-xyz") };
 
     let mut mode = super::Cabin::quiet_for_test();
+    let before = mode.status.clone();
+    let turns = mode.messages.len();
     mode.apply_chip(chip("mode-fast", "__mode:fast", super::ChipKind::Mode));
-    // The router alone picks the model: a mode chip only says so.
-    assert_eq!(mode.status, grokhub_core::MODEL_AUTO_MSG);
+    // The router alone picks the model: an old mode chip does nothing at all.
+    assert_eq!(mode.status, before);
+    assert_eq!(mode.messages.len(), turns);
     assert!(!mode.running);
 
     let mut typed_help = super::Cabin::quiet_for_test();

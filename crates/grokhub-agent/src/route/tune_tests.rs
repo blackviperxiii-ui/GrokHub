@@ -371,8 +371,11 @@ fn a_cheaper_model_goes_to_shadow_and_a_pricier_one_is_only_ever_a_card() {
     assert_eq!(p.cards[0].stage, Stage::Card);
     assert_eq!(p.cards[0].cost_rise_pct.map(f64::round), Some(20.0));
     assert_eq!(
-        card_text(&p.cards[0]).1,
-        "everyday chat would do better on c, which costs about 20% more. Use it first?"
+        card_text(&p.cards[0]),
+        (
+            "Spend more on everyday chat?".to_string(),
+            "Auto could do everyday chat better for about 20% more. Allow it?".to_string()
+        )
     );
     // A higher start rung that does better is a card too.
     let mut steps = steps_for("chat:default", "a", "medium", 40, 80, 0.010, 2_000);
@@ -395,7 +398,7 @@ fn a_cheaper_model_goes_to_shadow_and_a_pricier_one_is_only_ever_a_card() {
     );
     assert_eq!(
         card_text(&p.cards[0]).1,
-        "everyday chat would do better at High, which costs about 30% more. Start it at High?"
+        "Auto could do everyday chat better for about 30% more. Allow it?"
     );
 }
 
@@ -564,34 +567,5 @@ fn the_live_table_merges_tuned_orders_and_a_rebuild_cannot_drop_them() {
         t.rows("chat:default")[0].model,
         "a",
         "the saved table is untouched"
-    );
-}
-
-#[test]
-fn the_why_card_names_the_model_the_class_the_scores_and_the_day() {
-    let mut c = canary("c");
-    assert_eq!(
-        why_card_text(&c),
-        None,
-        "nothing to explain before a promotion"
-    );
-    c.stage = Stage::Watch;
-    // 2026-10-06 15:00 UTC.
-    c.promoted_at = Some(1_791_298_800_000);
-    c.baseline = Some(snap(400, 85.0, 4.0, 0.0100, 2_000));
-    c.promoted_snap = Some(snap(60, 92.0, 3.0, 0.0088, 1_600));
-    let (title, body) = why_card_text(&c).unwrap();
-    assert_eq!(
-        title,
-        "Why grok-4.6 for everyday chat: 92% pass vs 85%, promoted Oct 6"
-    );
-    assert_eq!(body, "Auto now runs everyday chat with grok-4.6 first: 12% cheaper and 20% faster over 60 canary steps. Info only; Auto keeps tuning on its own.");
-
-    c.change = Some(Change::Start {
-        effort: "medium".into(),
-    });
-    assert_eq!(
-        why_card_text(&c).unwrap().0,
-        "Why Medium for everyday chat: 92% pass vs 85%, promoted Oct 6"
     );
 }

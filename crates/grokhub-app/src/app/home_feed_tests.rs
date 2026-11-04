@@ -1217,8 +1217,7 @@ fn app_feed_post_sites() -> std::collections::BTreeSet<String> {
 /// call the site makes. A new site with no row fails here.
 #[test]
 fn every_home_card_the_cabin_posts_names_its_item() {
-    use grokhub_agent::route::heal::{joined_messages, pause_msg};
-    use grokhub_agent::route::tune;
+    use grokhub_agent::route::heal::{joined_messages, plan_change_msg};
     use grokhub_core::proactive::{proactive_card, Candidate, CandidateSource, ProactiveRoute};
     let _g = config::hold_test_config();
     let root = config::test_config_root("feed-names");
@@ -1261,7 +1260,7 @@ fn every_home_card_the_cabin_posts_names_its_item() {
     ));
     cabin.deliver_heal(super::router_ui::HealOut {
         msgs: [
-            vec![pause_msg("grok-4.7", "It failed 3 times in a row.", &[])],
+            vec![plan_change_msg("SuperGrok", true)],
             joined_messages(&["grok-4.8".to_string()]),
         ]
         .concat(),
@@ -1269,53 +1268,13 @@ fn every_home_card_the_cabin_posts_names_its_item() {
     });
     rows.push((
         "deliver_heal",
-        posted_card(&cabin, "deliver_heal", |c| c.title.starts_with("Paused:")),
-        "grok-4.7",
+        posted_card(&cabin, "deliver_heal", |c| c.title == "Your plan changed"),
+        "Your plan",
     ));
     rows.push((
         "deliver_heal",
         posted_card(&cabin, "deliver_heal", |c| c.source_id == "new:grok-4.8"),
-        "grok-4.8",
-    ));
-    let promoted = tune::Candidate {
-        id: "chat:default#3".into(),
-        class: "chat:default".into(),
-        change: Some(tune::Change::Order {
-            model: "grok-4-fast".into(),
-        }),
-        stage: tune::Stage::Watch,
-        promoted_at: Some(1_791_298_800_000),
-        baseline: Some(tune::Snap {
-            n: 400,
-            pass_pct: 85.0,
-            rework_pct: 4.0,
-            cost_per_step: 0.0100,
-            p50_ms: 2_000,
-            p95_ms: 4_000,
-        }),
-        promoted_snap: Some(tune::Snap {
-            n: 60,
-            pass_pct: 92.0,
-            rework_pct: 3.0,
-            cost_per_step: 0.0088,
-            p50_ms: 1_600,
-            p95_ms: 3_200,
-        }),
-        ..tune::Candidate::default()
-    };
-    cabin.post_why_cards(
-        &tune::TuneState {
-            candidates: vec![promoted],
-            ..tune::TuneState::default()
-        },
-        &["chat:default#3".to_string()],
-    );
-    rows.push((
-        "post_why_cards",
-        posted_card(&cabin, "post_why_cards", |c| {
-            c.source_id.starts_with("router-why:")
-        }),
-        "grok-4-fast",
+        "New in your plan",
     ));
     cabin.post_screen_done(
         "Screen recording 0:42: video stutters on 4K",
@@ -1399,7 +1358,7 @@ fn every_home_card_the_cabin_posts_names_its_item() {
     rows.push((
         "start_model_wait",
         posted_card(&cabin, "start_model_wait", grokhub_core::is_model_wait_card),
-        "grok-4.7",
+        "Summarize inbox",
     ));
     std::fs::write(root.join("projects.json"), "{\"torn").unwrap();
     let _: Vec<serde_json::Value> =
@@ -1644,21 +1603,10 @@ fn every_home_card_the_cabin_posts_names_its_item() {
     ));
     rows.push((
         "model_wait_card",
-        super::model_wait_ui::model_wait_card(
-            &["grok-4.6".into()],
-            "grok-4.6",
-            "9:05 PM",
-            "dream time",
-            now,
-        ),
-        "grok-4.6",
+        super::model_wait_ui::model_wait_card("grok-4.6", "9:05 PM", "dream time", now),
+        "dream time",
     ));
     // Sites a test cabin can't reach without a live run: the card from the same call.
-    let guard_text =
-        "Auto was succeeding less on everyday chat, so it now starts that work one step higher.";
-    let guard = super::router_ui::guard_card("chat:default", guard_text, now);
-    rows.push(("guard_card", guard.clone(), "everyday chat"));
-    rows.push(("poll_guard", guard, "everyday chat"));
     let run = super::background::BgRun {
         id: 1,
         thread_id: "t-bg".into(),
@@ -1678,24 +1626,6 @@ fn every_home_card_the_cabin_posts_names_its_item() {
     let crashed = super::background::bg_crash_card(&run);
     rows.push(("bg_crash_card", crashed.clone(), "Sync ~/Photos"));
     rows.push(("poll_bg_runs", crashed, "Sync ~/Photos"));
-    let change = grokhub_agent::harness::Change {
-        seq: 3,
-        at: now,
-        kind: "model".into(),
-        id: "chat:default".into(),
-        op: grokhub_agent::harness::ChangeOp::Modify,
-        origin: Default::default(),
-        reason: String::new(),
-        before_hash: String::new(),
-        after_hash: String::new(),
-        undoes: None,
-        label: String::new(),
-    };
-    rows.push((
-        "model_change_note",
-        super::change_undo::model_change_note(&change),
-        "chat:default",
-    ));
     let trial = grokhub_agent::harness::Version {
         version: "skill:save-page@0123456789ab".into(),
         label: "Use ctrl+s in save-page".into(),

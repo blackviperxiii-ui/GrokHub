@@ -170,7 +170,7 @@ pub fn imagine_kind_label(kind: ImagineKind) -> &'static str {
 
 pub fn imagine_quality_label(quality: bool) -> &'static str {
     if quality {
-        "Quality (v2.0)"
+        "Quality"
     } else {
         "Speed"
     }
@@ -830,76 +830,19 @@ fn with_composer_tip(resp: egui::Response, title: &str, body: &str) -> egui::Res
     resp.on_hover_ui_at_pointer(|ui| show_composer_tip(ui, title, body))
 }
 
-/// Title of the Auto chip's hover card.
-pub const AUTO_CHIP_TIP: &str = "Auto effort";
-
-/// "Auto · Medium": the word Auto, then the current rung in small text.
-pub fn auto_chip_job(rung: &str) -> LayoutJob {
-    let mut job = LayoutJob::default();
-    let fmt = |size: f32, color: Color32| TextFormat {
-        font_id: FontId::proportional(size),
-        color,
-        valign: egui::Align::Center,
-        ..Default::default()
-    };
-    job.append(
-        "Auto",
-        0.0,
-        fmt(crate::theme::FONT_CHROME, crate::theme::fg()),
-    );
-    job.append(
-        &format!(" · {rung}"),
-        0.0,
-        fmt(crate::theme::FONT_META, crate::theme::muted()),
-    );
-    job
-}
-
-/// The read-only Auto chip where the effort pill was. Hover shows the last
-/// reason; a click asks for `/why`. No dropdown, no pulse. True when clicked.
-pub fn auto_chip(ui: &mut egui::Ui, rung: &str, reason: &str) -> bool {
-    let galley = ui.fonts_mut(|f| f.layout_job(auto_chip_job(rung)));
-    let size = egui::vec2(galley.size().x + 24.0, 28.0);
-    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
-    let stroke = if resp.hovered() {
-        crate::theme::fg()
-    } else {
-        crate::theme::border()
-    };
-    ui.painter().rect_stroke(
-        rect,
-        14.0,
-        Stroke::new(1.0_f32, stroke),
-        egui::StrokeKind::Inside,
-    );
-    let at = egui::pos2(rect.left() + 12.0, rect.center().y - galley.size().y / 2.0);
-    ui.painter().galley(at, galley, crate::theme::fg());
-    let name = format!("Auto effort, {rung}");
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
-    let resp = with_composer_tip(
-        resp.on_hover_cursor(egui::CursorIcon::PointingHand),
-        AUTO_CHIP_TIP,
-        reason,
-    );
-    resp.clicked()
-}
-
 pub struct SessionRowOut {
     pub mode: Option<String>,
     pub perm: Option<String>,
-    /// The Auto chip was clicked: show `/why`.
-    pub why: bool,
 }
 
-/// Chat / Plan / btw, Ask / Auto / Always, and the read-only Auto effort chip above the composer.
-/// `auto` is the chip's rung label and its hover reason.
-pub fn session_row(ui: &mut egui::Ui, mode: &str, perm: &str, auto: (&str, &str)) -> SessionRowOut {
+/// Chat / Plan / btw and Ask / Auto / Always above the composer. No model or
+/// effort shows here: the router picks both and only a chat question is told.
+pub fn session_row(ui: &mut egui::Ui, mode: &str, perm: &str) -> SessionRowOut {
     let mut out = SessionRowOut {
         mode: None,
         perm: None,
-        why: false,
     };
-    // Wrapped so a narrow pane drops the Auto chip to a second line instead of clipping it.
+    // Wrapped so a narrow pane drops the permission group to a second line instead of clipping it.
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 3.0;
         crate::theme::glide_paint(ui, "session-mode");
@@ -957,23 +900,12 @@ pub fn session_row(ui: &mut egui::Ui, mode: &str, perm: &str, auto: (&str, &str)
             perm_on.is_some(),
         );
         crate::theme::glide_aim(ui, "session-perm");
-        // The chip drops to its own line as a unit; no divider left dangling at a line end.
-        let chip_w = ui.fonts_mut(|f| f.layout_job(auto_chip_job(auto.0)).size().x) + 24.0;
-        let gap = ui.spacing().item_spacing.x;
-        // Inside horizontal_wrapped, available_width() is the whole row; use the cursor.
-        let left_on_line = ui.max_rect().right() - ui.cursor().min.x;
-        if left_on_line < SESSION_DIVIDER_W + chip_w + gap * 2.0 + 1.0 {
-            ui.end_row();
-        } else {
-            session_row_divider(ui);
-        }
-        out.why = auto_chip(ui, auto.0, auto.1);
     });
     ui.add_space(8.0);
     out
 }
 
-/// Hairline between the session, permission, and Auto chip groups.
+/// Hairline between the session and permission groups.
 const SESSION_DIVIDER_W: f32 = 9.0;
 
 fn session_row_divider(ui: &mut egui::Ui) {
@@ -3290,16 +3222,6 @@ mod tests {
         );
         assert!(composer_perm_tip("chat").is_none());
         assert!(composer_perm_tip("plan").is_none());
-
-        let chip = include_str!("cards.rs")
-            .split("pub fn auto_chip(")
-            .nth(1)
-            .and_then(|s| s.split("pub struct SessionRowOut").next())
-            .expect("auto_chip");
-        assert!(
-            chip.contains("AUTO_CHIP_TIP") && chip.contains("reason") && !chip.contains("Popup"),
-            "the Auto chip shows the reason on hover and opens no dropdown: {chip}"
-        );
     }
 
     #[test]
@@ -3315,8 +3237,9 @@ mod tests {
         assert!(
             session.contains("felt_segment")
                 && session.contains("felt_perm_segment")
-                && session.contains("out.why = auto_chip("),
-            "composer session row ends with the read-only Auto chip: {session}"
+                && !session.contains("auto_chip")
+                && !session.contains("effort"),
+            "composer session row holds the session and permission groups, no Auto chip: {session}"
         );
         assert_eq!(
             permission_risk_stroke_w("always-approve", false),
@@ -4135,7 +4058,7 @@ mod tests {
         assert_eq!(imagine_kind_label(ImagineKind::Video), "Video");
         assert_eq!(imagine_kind_label(ImagineKind::Agent), "Agent");
         assert_eq!(imagine_quality_label(false), "Speed");
-        assert_eq!(imagine_quality_label(true), "Quality (v2.0)");
+        assert_eq!(imagine_quality_label(true), "Quality");
         let fallback = imagine_still_rgba(b"not-a-jpeg");
         assert_eq!((fallback.width(), fallback.height()), (1, 1));
         for s in IMAGINE_SCENES {

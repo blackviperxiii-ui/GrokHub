@@ -2,8 +2,9 @@
 //! device or a provider model used to insist it was Grok when asked which
 //! model it is. A call the router sends anywhere but an xAI Grok model gets
 //! one paragraph at the end of its first system message naming the model the
-//! router actually picked, and who serves it. Only the sent copy changes, never
-//! the session's history.
+//! router actually picked, who serves it, and the reasoning effort the call is
+//! sent with. The app shows neither anywhere, so asking in chat is how a user
+//! finds out. Only the sent copy changes, never the session's history.
 
 use grokhub_core::model_registry::discover::split_provider_model;
 
@@ -38,6 +39,19 @@ pub fn describe(model: &str, local_name: Option<&str>) -> String {
     }
 }
 
+/// Who serves `model`, as a notice names it: the router's model never shows,
+/// only where it runs ("xAI", "OpenRouter", "Local AI").
+pub fn served_by(model: &str) -> String {
+    let m = model.trim();
+    if super::local::is_local(m) {
+        return "Local AI".to_string();
+    }
+    match split_provider_model(m) {
+        Some((provider, _)) => provider_name(provider),
+        None => "xAI".to_string(),
+    }
+}
+
 fn provider_name(id: &str) -> String {
     match id {
         "openrouter" => "OpenRouter".to_string(),
@@ -65,17 +79,32 @@ fn grok_family(model: &str) -> bool {
     })
 }
 
-/// The paragraph the model reads.
-pub fn line(model: &str, local_name: Option<&str>) -> String {
+/// How the paragraph states the call's reasoning effort: empty when the call
+/// sends none.
+fn effort_words(effort: Option<&str>) -> String {
+    match effort.map(str::trim).filter(|e| !e.is_empty()) {
+        Some("none") => " with reasoning off".to_string(),
+        Some(e) => format!(" at {} reasoning effort", grokhub_core::effort_label(e)),
+        None => String::new(),
+    }
+}
+
+/// The paragraph the model reads. `effort` is the reasoning effort the call
+/// is sent with, if any.
+pub fn line(model: &str, local_name: Option<&str>, effort: Option<&str>) -> String {
     let product = grokhub_core::brand::product_name();
     let who = describe(model, local_name);
+    let how = effort_words(effort);
+    let ask = if how.is_empty() {
+        "When the user asks which model or AI is answering, name this model plainly"
+    } else {
+        "When the user asks which model or AI is answering, or at what effort, name this model and effort plainly"
+    };
     if grok_family(model) {
-        return format!(
-            "{OPENS}{who}, which {product} sent this turn to. When the user asks which model or AI is answering, name this model plainly."
-        );
+        return format!("{OPENS}{who}, which {product} sent this turn to{how}. {ask}.");
     }
     format!(
-        "{OPENS}{who}, which {product} sent this turn to. \"Grok\" above is this app's assistant name, not your model. When the user asks which model or AI is answering, name this model plainly, and never insist you are Grok or made by xAI."
+        "{OPENS}{who}, which {product} sent this turn to{how}. \"Grok\" above is this app's assistant name, not your model. {ask}, and never insist you are Grok or made by xAI."
     )
 }
 
@@ -84,11 +113,16 @@ pub fn line(model: &str, local_name: Option<&str>) -> String {
 /// its own trailing paragraph, never text that merely names the tag). One
 /// system message stays one: some on-device chat templates take a single
 /// system turn only. An xAI Grok model is left as it is.
-pub fn stamp(input: &mut Vec<InputItem>, model: &str, local_name: Option<&str>) {
+pub fn stamp(
+    input: &mut Vec<InputItem>,
+    model: &str,
+    local_name: Option<&str>,
+    effort: Option<&str>,
+) {
     if is_grok(model) {
         return;
     }
-    let para = line(model, local_name);
+    let para = line(model, local_name, effort);
     for item in input.iter_mut() {
         let InputItem::Message { role, content } = item else {
             continue;
@@ -171,6 +205,20 @@ mod tests {
         );
         assert!(describe("openrouter/openrouter/free", None)
             .starts_with("a model that OpenRouter's router `openrouter/free` chose"));
+        assert_eq!(
+            (
+                served_by("grok-4.7"),
+                served_by("local:small"),
+                served_by("openrouter/vendor/model"),
+                served_by("anthropic/claude-x"),
+            ),
+            (
+                "xAI".to_string(),
+                "Local AI".to_string(),
+                "OpenRouter".to_string(),
+                "Anthropic".to_string()
+            )
+        );
         assert!(is_grok("grok-4.7"));
         assert!(!is_grok("local:small"));
         assert!(!is_grok("openrouter/openrouter/auto"));
@@ -182,13 +230,13 @@ mod tests {
             system("You are Grok inside Loadout."),
             user("which model are you?"),
         ];
-        stamp(&mut input, "local:small", Some("Qwen3-8B"));
+        stamp(&mut input, "local:small", Some("Qwen3-8B"), None);
         assert_eq!(input.len(), 2, "no second system message");
         let first = text_of(&input[0]).to_string();
         assert!(first.starts_with("You are Grok inside Loadout.\n\n[Model identity] This reply comes from Qwen3-8B, an open model"), "{first}");
         assert!(first.contains("never insist you are Grok"));
         // A second stamp (xAI fell back to another route) replaces the first.
-        stamp(&mut input, "openrouter/vendor/model", None);
+        stamp(&mut input, "openrouter/vendor/model", None, None);
         let again = text_of(&input[0]);
         assert_eq!(again.matches(TAG).count(), 1, "{again}");
         assert!(
@@ -199,20 +247,53 @@ mod tests {
         assert_eq!(text_of(&input[1]), "which model are you?");
         // A Grok model keeps the prompt untouched.
         let mut grok = vec![system("You are Grok inside Loadout."), user("hi")];
-        stamp(&mut grok, "grok-4.7", None);
+        stamp(&mut grok, "grok-4.7", None, Some("high"));
         assert_eq!(text_of(&grok[0]), "You are Grok inside Loadout.");
         // No system message: one is added up front.
         let mut bare = vec![user("hi")];
-        stamp(&mut bare, "anthropic/claude-x", None);
+        stamp(&mut bare, "anthropic/claude-x", None, None);
         assert_eq!(bare.len(), 2);
         assert!(text_of(&bare[0]).starts_with(TAG));
         assert_eq!(text_of(&bare[1]), "hi");
     }
 
     #[test]
+    fn the_stamp_states_the_effort_the_call_is_sent_with() {
+        let product = grokhub_core::brand::product_name();
+        let mut with = vec![user("which model and effort are you on?")];
+        stamp(&mut with, "openrouter/vendor/model", None, Some("high"));
+        assert_eq!(
+            text_of(&with[0]),
+            format!(
+                "[Model identity] This reply comes from `vendor/model`, served through OpenRouter, which {product} sent this turn to at High reasoning effort. \"Grok\" above is this app's assistant name, not your model. When the user asks which model or AI is answering, or at what effort, name this model and effort plainly, and never insist you are Grok or made by xAI."
+            )
+        );
+        let mut without = vec![user("which model are you?")];
+        stamp(&mut without, "openrouter/vendor/model", None, None);
+        assert_eq!(
+            text_of(&without[0]),
+            format!(
+                "[Model identity] This reply comes from `vendor/model`, served through OpenRouter, which {product} sent this turn to. \"Grok\" above is this app's assistant name, not your model. When the user asks which model or AI is answering, name this model plainly, and never insist you are Grok or made by xAI."
+            )
+        );
+        assert_eq!(
+            line("local:small", Some("Qwen3-8B"), Some("none")),
+            format!(
+                "[Model identity] This reply comes from Qwen3-8B, an open model running on this computer through llama.cpp, which {product} sent this turn to with reasoning off. \"Grok\" above is this app's assistant name, not your model. When the user asks which model or AI is answering, or at what effort, name this model and effort plainly, and never insist you are Grok or made by xAI."
+            )
+        );
+        assert_eq!(
+            line("openrouter/x-ai/grok-4", None, Some("low")),
+            format!(
+                "[Model identity] This reply comes from `x-ai/grok-4`, served through OpenRouter, which {product} sent this turn to at Low reasoning effort. When the user asks which model or AI is answering, or at what effort, name this model and effort plainly."
+            )
+        );
+    }
+
+    #[test]
     fn grok_through_a_provider_and_the_tag_in_a_prompt() {
         // Grok through OpenRouter is still Grok: no "never insist you are Grok".
-        let grok = line("openrouter/x-ai/grok-4", None);
+        let grok = line("openrouter/x-ai/grok-4", None, None);
         assert!(
             grok.contains("`x-ai/grok-4`, served through OpenRouter"),
             "{grok}"
@@ -223,8 +304,8 @@ mod tests {
             system("Rules mention [Model identity] lines. Keep this."),
             user("hi"),
         ];
-        stamp(&mut input, "local:small", None);
-        stamp(&mut input, "local:small", None);
+        stamp(&mut input, "local:small", None, None);
+        stamp(&mut input, "local:small", None, None);
         let text = text_of(&input[0]);
         assert!(text.starts_with("Rules mention [Model identity] lines. Keep this.\n\n[Model identity] This reply comes from"), "{text}");
         assert_eq!(text.matches("This reply comes from").count(), 1, "{text}");

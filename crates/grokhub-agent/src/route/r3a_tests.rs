@@ -321,7 +321,7 @@ fn a_cost_raising_card_changes_nothing_until_accepted_and_undo_puts_the_file_bac
     assert_eq!(due[0].0, "self-review:router:chat:default#2");
     assert_eq!(
         due[0].2,
-        "everyday chat would do better at High, which costs about 30% more. Start it at High?"
+        "Auto could do everyday chat better for about 30% more. Allow it?"
     );
     // No click: a tick never applies it.
     tick(&dir, T0 + DAY_MS);
@@ -334,7 +334,7 @@ fn a_cost_raising_card_changes_nothing_until_accepted_and_undo_puts_the_file_bac
     // Accept writes through the ledger; Undo removes the file again (it was not there).
     assert_eq!(
         learn::accept_card(&dir, "chat:default#2", T0).unwrap(),
-        "Router changed (everyday chat: start at High). /why table shows it."
+        "Auto now spends more on everyday chat."
     );
     assert_eq!(
         learn::load_tuning(&dir)

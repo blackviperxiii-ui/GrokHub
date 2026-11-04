@@ -68,15 +68,16 @@ pub(super) fn ceiling_label(usd: u32) -> String {
     format!("${usd} per million")
 }
 
-/// The model a premium grant key names (`premium:grok-heavy+priority` → `grok-heavy`).
-pub(super) fn premium_model(key: &str) -> &str {
+/// The model a premium grant key names (`premium:grok-heavy+priority` → `grok-heavy`),
+/// for the price lookup only: no label shows it.
+fn premium_model(key: &str) -> &str {
     let rest = key.strip_prefix(PREMIUM_PREFIX).unwrap_or(key);
     rest.split('+').next().unwrap_or(rest)
 }
 
-/// How a premium grant reads in Settings and `/privacy`.
+/// How a premium grant reads in Settings and `/privacy`: the options, never the model.
 pub(super) fn premium_label(key: &str) -> String {
-    let mut label = format!("Use {}", premium_model(key));
+    let mut label = "Use a premium model".to_string();
     for (tag, words) in [
         ("+priority", " at priority speed"),
         ("+us", " on the US endpoint"),
@@ -183,7 +184,7 @@ impl Cabin {
         }
     }
 
-    /// "Let Auto use grok-heavy ($60 per million, over your $15 limit)".
+    /// "Let Auto use a premium model ($60 per million, over your $15 limit)".
     fn premium_action(&self, key: &str) -> String {
         let model = premium_model(key);
         let (reg, _) = grokhub_agent::route::live::snapshot(&crate::config::config_dir());
@@ -494,15 +495,15 @@ mod tests {
     }
 
     #[test]
-    fn premium_labels_name_the_model_and_its_options() {
+    fn premium_labels_name_the_options_and_never_the_model() {
         assert_eq!(
             premium_model("premium:grok-heavy+priority+us"),
             "grok-heavy"
         );
-        assert_eq!(premium_label("premium:grok-heavy"), "Use grok-heavy");
+        assert_eq!(premium_label("premium:grok-heavy"), "Use a premium model");
         assert_eq!(
             premium_label("premium:grok-4.7+priority+us+agents16"),
-            "Use grok-4.7 at priority speed on the US endpoint with 16 agents"
+            "Use a premium model at priority speed on the US endpoint with 16 agents"
         );
         assert_eq!(
             (cap_label(0), cap_label(25), ceiling_label(15)),
@@ -522,6 +523,9 @@ mod tests {
         let park = app.harness.park.clone().expect("a hard card");
         assert!(is_premium_card(park.class, &park.source));
         assert_eq!(park.class.label(), "Purchase / money");
+        // The card asks about a premium model and never names it.
+        assert_eq!(park.action, "Let Auto use a premium model");
+        assert!(!park.action.contains("grok"), "{}", park.action);
         // Enter never approves it; Esc denies it.
         assert_eq!(hx::hard_card_key(true, false, false), None);
         assert_eq!(

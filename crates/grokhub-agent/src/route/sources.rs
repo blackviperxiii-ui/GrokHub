@@ -265,7 +265,7 @@ pub fn ping_model(config_dir: &Path, bearer: &str, meta: &ModelMeta) -> bool {
 }
 
 /// Rebuild the routing table when the model list or a profile changed
-/// (`force`: the Refresh models button). With a plan sign-in, today's eval
+/// (`force`: a provider or Local AI was just set up). With a plan sign-in, today's eval
 /// build runs on the real wire: guarded, spanned as `background:eval`
 /// (origin `self_manage`), only on `included` routes.
 pub fn rebuild_table(

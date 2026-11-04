@@ -161,15 +161,10 @@ fn effort_slash_leaves_the_config_byte_identical_and_says_effort_is_automatic() 
 /// Router R1: there is no effort control in the composer, Settings or the slash list.
 #[test]
 fn no_effort_selector_anywhere() {
-    // The composer row returns a mode, a permission, and the Auto chip's /why click. Nothing else.
-    let crate::cards::SessionRowOut {
-        mode: _,
-        perm: _,
-        why: _,
-    } = crate::cards::SessionRowOut {
+    // The composer row returns a mode and a permission. Nothing else.
+    let crate::cards::SessionRowOut { mode: _, perm: _ } = crate::cards::SessionRowOut {
         mode: None,
         perm: None,
-        why: false,
     };
     for (id, label) in crate::cards::composer_modes()
         .iter()
@@ -192,8 +187,6 @@ fn no_effort_selector_anywhere() {
     let help = grokhub_core::slash_help();
     assert!(help.contains("/effort — effort is automatic now"), "{help}");
     assert!(!help.contains("/effort <"), "{help}");
-    let job = crate::cards::auto_chip_job("Medium");
-    assert_eq!(job.text, "Auto · Medium");
 }
 
 // Landed from PR #106. `/health` is one chat block since card 10.

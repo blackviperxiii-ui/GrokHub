@@ -31,7 +31,8 @@ fn chip_chat_runs_immediately(chip: &QuickChip, composer_draft: &str) -> bool {
 fn chip_action_tip(chip: &QuickChip, composer_draft: &str) -> String {
     match chip.kind {
         ChipKind::Nav => "Opens this page — nothing is sent".into(),
-        ChipKind::Mode => "Changes the model mode — nothing is sent".into(),
+        // Retired: never offered (old chip memory only). Nothing happens.
+        ChipKind::Mode => "Nothing is sent".into(),
         ChipKind::Shell => "Runs on the host when you send — review the command first".into(),
         ChipKind::Chat => {
             if chip_chat_runs_immediately(chip, composer_draft) {
@@ -629,11 +630,8 @@ impl Cabin {
                     }
                 }
             }
-            ChipKind::Mode => {
-                if let Some(mode) = mode_from_chip_value(&chip.value) {
-                    self.run_slash(Slash::Mode(mode.to_string()));
-                }
-            }
+            // No chip changes the model or effort: the router alone picks them.
+            ChipKind::Mode => {}
             ChipKind::Shell => {
                 let cmd = chip.value.trim().trim_start_matches('$').trim();
                 let cmd = cmd.strip_prefix("/sh ").unwrap_or(cmd);

@@ -821,6 +821,7 @@ pub fn serve_request(
         &mut req.input,
         live_tier(),
         super::local_sidecar::model_name(&crate::perm::config_dir()).as_deref(),
+        req.effort.as_deref(),
     );
     // The device window is often 4k to 16k: send only what fits, with room to
     // answer. With or without tools, so a long chat is trimmed on the way

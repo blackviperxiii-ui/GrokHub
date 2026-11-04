@@ -1812,9 +1812,10 @@ mod tests {
             .as_deref(),
             Some("high")
         );
-        let (effort, reason) = live::last_user_pick().unwrap();
+        let routes = crate::route::log::last_routes(&dir);
+        let (_, newest) = routes.last().unwrap();
         assert_eq!(
-            (effort.as_deref(), reason.as_str()),
+            (newest.used.effort.as_deref(), newest.reason.as_str()),
             (
                 Some("high"),
                 "balanced · High: you corrected the last answer."
@@ -2120,7 +2121,7 @@ mod tests {
         let rec = reg.get("grok-4.7").unwrap();
         assert_eq!((rec.state, rec.state.routable()), (ModelState::Live, true));
         let none = BTreeMap::new();
-        let heard = heal::heal_messages(&events, &reg, &none, "grok-4.7", 10);
+        let heard = heal::heal_messages(&events, &reg, &none, 10);
         assert_eq!(
             heard
                 .msgs
@@ -2146,12 +2147,7 @@ mod tests {
             to: ModelState::Redirected,
             reason: String::new(),
         }];
-        assert_eq!(
-            heal::heal_messages(&moved, &only, &none, "grok-4.7", 10)
-                .msgs
-                .len(),
-            0
-        );
+        assert_eq!(heal::heal_messages(&moved, &only, &none, 10).msgs.len(), 0);
     }
 
     #[test]

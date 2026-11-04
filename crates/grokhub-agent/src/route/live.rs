@@ -224,7 +224,7 @@ const EPISODES_CAP: usize = 256;
 /// The text a call that paused returns: no healthy, included model could take
 /// it. The cabin waits and resumes it on its own ([`super::wait`]).
 pub static NO_ROUTE_MSG: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
-    grokhub_core::brand::filled("No model in your plan is answering right now. {product} keeps checking and picks this back up on its own once one answers; Home shows which models it's waiting on.")
+    grokhub_core::brand::filled("No model in your plan is answering right now. {product} keeps checking and picks this back up on its own once one answers; Home shows the wait.")
 });
 
 /// A pause the cabin hasn't shown yet: (class, model, what failed).
@@ -978,23 +978,6 @@ pub fn route_record(
     }
 }
 
-/// The last user-facing pick (effort and reason), for the composer's Auto chip.
-static LAST_USER: Mutex<Option<(Option<String>, String)>> = Mutex::new(None);
-
-/// Effort and plain reason of the newest user-facing routed call, if any.
-pub fn last_user_pick() -> Option<(Option<String>, String)> {
-    LAST_USER.lock().unwrap_or_else(|e| e.into_inner()).clone()
-}
-
-fn note_user_pick(call: &RouteCall<'_>, decision: &Decision) {
-    if decision.live && user_facing(call.class) {
-        *LAST_USER.lock().unwrap_or_else(|e| e.into_inner()) = Some((
-            call.effort.map(str::to_string),
-            decision.route.reason.clone(),
-        ));
-    }
-}
-
 /// The class table's start effort for `class` (no difficulty, no ladder), as it goes on the wire.
 /// `None` for an unlisted class.
 pub fn start_effort(class: &str) -> Option<String> {
@@ -1134,7 +1117,6 @@ pub fn route_log(
             done.ok,
         );
     }
-    note_user_pick(call, decision);
     // This crate's own tests drive fake clients with made-up model ids: only a
     // test that pinned a scratch config folder gets the span and health lines.
     if cfg!(test) && !crate::perm::config_pinned() {

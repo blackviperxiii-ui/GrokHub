@@ -424,12 +424,11 @@ fn a_model_written_automation_gets_a_work_row_a_home_update_and_undo() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// Bug 4: a routing-table write or an R3a tuning change is tell-only. Each
-/// posts exactly one Home note naming it and makes no Undo/Keep row; the
-/// ledger lines stay for `/why table`. A connection change in the same poll
-/// still gets its Work-tree row and Home update.
+/// Bug 4: a routing-table write or an R3a tuning change shows nowhere: no
+/// Home note and no Undo/Keep row; the ledger lines stay for `/why table`. A
+/// connection change in the same poll still gets its Work-tree row and Home update.
 #[test]
-fn router_model_changes_post_one_home_note_and_no_undo_row() {
+fn router_model_changes_post_no_home_note_and_no_undo_row() {
     use grokhub_agent::harness as hx;
     use grokhub_agent::route::{learn, table, tune};
     use hx::ChangeTarget as _;
@@ -475,20 +474,13 @@ fn router_model_changes_post_one_home_note_and_no_undo_row() {
         .filter(|u| u.source_id.starts_with("model:"))
         .map(|u| (u.title.as_str(), u.body.as_deref()))
         .collect();
-    assert_eq!(notes.len(), 2, "{notes:?}");
+    assert!(notes.is_empty(), "no router note on Home: {notes:?}");
     assert!(
-        notes.contains(&(
-            "Router added routing table",
-            Some("routing table v1: first build · /why table shows the picks.")
-        )),
-        "{notes:?}"
-    );
-    assert!(
-        notes.contains(&(
-            "Router added router tuning",
-            Some("chat:default starts at High · /why table shows the picks.")
-        )),
-        "{notes:?}"
+        cabin.updates.iter().all(|u| {
+            let text = format!("{} {}", u.title, u.body.as_deref().unwrap_or(""));
+            !text.contains("Router ") && !text.contains("starts at High")
+        }),
+        "no card names the router change"
     );
     let conn = cabin
         .updates
@@ -504,7 +496,7 @@ fn router_model_changes_post_one_home_note_and_no_undo_row() {
         .collect();
     assert_eq!(ids.len(), 2, "{ids:?}");
     assert!(ids.contains(&"route_tuning".to_string()), "{ids:?}");
-    // Looked again and after a restart: no router row, no second note.
+    // Looked again and after a restart: still no router row or note.
     cabin.harness.ledger_watch.next_ms = 0;
     cabin.poll_self_changes();
     assert_eq!(
@@ -513,7 +505,7 @@ fn router_model_changes_post_one_home_note_and_no_undo_row() {
             .iter()
             .filter(|u| u.source_id.starts_with("model:"))
             .count(),
-        2
+        0
     );
     let mut fresh = Cabin::quiet_for_test();
     fresh.poll_self_changes();
@@ -527,15 +519,16 @@ fn router_model_changes_post_one_home_note_and_no_undo_row() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// Card 12: a self-tuning promotion posts one info-only "why" card naming the
-/// model, the class, the scores and the day, and no ledger note, Undo or Keep.
+/// Card 12: a self-tuning promotion shows nowhere: no Home card naming the
+/// model, no ledger note, no Undo or Keep row. Only a chat question is told.
 #[test]
-fn a_router_promotion_posts_one_why_card_and_no_prompt() {
+fn a_router_promotion_posts_nothing_on_home() {
     use grokhub_agent::route::{learn, tune};
     let _g = crate::config::hold_test_config();
     let (_pin, root) = pin_skill_config("router-why-card");
     let mut cabin = Cabin::quiet_for_test();
     cabin.poll_self_changes();
+    let before = cabin.updates.len();
     let mut tuning = tune::Tuning::default();
     tuning
         .orders
@@ -551,72 +544,17 @@ fn a_router_promotion_posts_one_why_card_and_no_prompt() {
         "no Undo/Keep row for a router change"
     );
     assert_eq!(
-        cabin
-            .updates
-            .iter()
-            .filter(|u| u.source_id.starts_with("model:"))
-            .count(),
-        0,
-        "the why card replaces the note"
+        cabin.updates.len(),
+        before,
+        "no Home card for a router change"
     );
-
-    let promoted = tune::Candidate {
-        id: "chat:default#3".into(),
-        class: "chat:default".into(),
-        change: Some(tune::Change::Order {
-            model: "grok-4-fast".into(),
+    assert!(
+        cabin.updates.iter().all(|u| {
+            let text = format!("{} {}", u.title, u.body.as_deref().unwrap_or(""));
+            !text.contains("grok-4-fast")
         }),
-        stage: tune::Stage::Watch,
-        // 2026-10-06 15:00 UTC.
-        promoted_at: Some(1_791_298_800_000),
-        baseline: Some(tune::Snap {
-            n: 400,
-            pass_pct: 85.0,
-            rework_pct: 4.0,
-            cost_per_step: 0.0100,
-            p50_ms: 2_000,
-            p95_ms: 4_000,
-        }),
-        promoted_snap: Some(tune::Snap {
-            n: 60,
-            pass_pct: 92.0,
-            rework_pct: 3.0,
-            cost_per_step: 0.0088,
-            p50_ms: 1_600,
-            p95_ms: 3_200,
-        }),
-        ..tune::Candidate::default()
-    };
-    let shadow = tune::Candidate {
-        id: "chat:default#4".into(),
-        class: "chat:default".into(),
-        ..tune::Candidate::default()
-    };
-    let state = tune::TuneState {
-        candidates: vec![promoted, shadow],
-        ..tune::TuneState::default()
-    };
-    cabin.post_why_cards(
-        &state,
-        &["chat:default#3".to_string(), "chat:default#4".to_string()],
+        "no card names the model"
     );
-    let why: Vec<&grokhub_core::UpdateCard> = cabin
-        .updates
-        .iter()
-        .filter(|u| u.source_id.starts_with("router-why:"))
-        .collect();
-    assert_eq!(why.len(), 1, "only the promoted candidate gets a card");
-    assert_eq!(why[0].source_id, "router-why:chat:default#3");
-    assert_eq!(
-        why[0].title,
-        "Why grok-4-fast for everyday chat: 92% pass vs 85%, promoted Oct 6"
-    );
-    assert_eq!(
-        why[0].body.as_deref(),
-        Some("Auto now runs everyday chat with grok-4-fast first: 12% cheaper and 20% faster over 60 canary steps. Info only; Auto keeps tuning on its own.")
-    );
-    assert_eq!(why[0].action, None, "info only: no Accept, Undo or Keep");
-    assert!(cabin.harness.work_rows.is_empty());
     let _ = std::fs::remove_dir_all(&root);
 }
 

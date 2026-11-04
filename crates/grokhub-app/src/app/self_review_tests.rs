@@ -595,12 +595,10 @@ fn a_cost_raising_router_card_rides_the_weekly_pass_and_applies_only_on_accept()
     let cards = self_review_cards(&cabin);
     assert_eq!(cards.len(), 1);
     assert_eq!(cards[0].source_id, "self-review:router:chat:default#7");
-    assert_eq!(cards[0].title, "Start everyday chat at High?");
+    assert_eq!(cards[0].title, "Spend more on everyday chat?");
     assert_eq!(
         cards[0].body.as_deref(),
-        Some(
-            "everyday chat would do better at High, which costs about 30% more. Start it at High?"
-        )
+        Some("Auto could do everyday chat better for about 30% more. Allow it?")
     );
     let review = cabin
         .updates
@@ -623,10 +621,7 @@ fn a_cost_raising_router_card_rides_the_weekly_pass_and_applies_only_on_accept()
             .map(String::as_str),
         Some("high")
     );
-    assert_eq!(
-        cabin.status,
-        "Router changed (everyday chat: start at High). /why table shows it."
-    );
+    assert_eq!(cabin.status, "Auto now spends more on everyday chat.");
     let line = hx::ChangeLedger::load_kind(&root, hx::ChangeKind::Model)
         .all()
         .last()

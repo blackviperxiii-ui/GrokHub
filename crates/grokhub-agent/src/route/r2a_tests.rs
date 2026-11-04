@@ -15,7 +15,7 @@ use grokhub_core::model_registry::{
     RegistryEvent, SourceKind,
 };
 
-use super::heal::{heal_messages, HealNotes, Tier};
+use super::heal::{heal_messages, HealNotes};
 use super::ladder::{rung, Pick};
 use super::table::{
     build_table, table_path, ClassTable, EvalCache, RoutingTable, SpeedQuality, TableInputs,
@@ -153,10 +153,10 @@ fn ask(model: &str) -> RouteInput<'_> {
 }
 
 type Apply = fn(&mut Registry, u64) -> Vec<RegistryEvent>;
-/// (fixture, the model's state after, the one message tier for a saved pick, for Auto)
-type Fixture = (&'static str, Apply, ModelState, Option<Tier>, Option<Tier>);
+/// (fixture, the model's state after, whether it posts one Home update)
+type Fixture = (&'static str, Apply, ModelState, bool);
 
-/// The pinned model in every fixture.
+/// The model every fixture breaks.
 const PIN: &str = "grok-4.6";
 
 fn storm(reg: &mut Registry, t: u64) -> Vec<RegistryEvent> {
@@ -197,152 +197,90 @@ fn placeholder(reg: &mut Registry, t: u64) -> Vec<RegistryEvent> {
 #[test]
 fn chaos_fixtures_heal_with_the_right_route_and_exactly_the_planned_messages() {
     let fixtures: &[Fixture] = &[
-        (
-            "404 storm",
-            storm,
-            ModelState::Ghost,
-            Some(Tier::HomeUpdate),
-            None,
-        ),
-        (
-            "429 burst",
-            busy,
-            ModelState::Degraded,
-            Some(Tier::WorkRow),
-            None,
-        ),
-        (
-            "503 flap",
-            flap,
-            ModelState::Quarantined,
-            Some(Tier::WorkRow),
-            None,
-        ),
-        (
-            "redirected slug",
-            redirect,
-            ModelState::Redirected,
-            Some(Tier::HomeUpdate),
-            None,
-        ),
-        (
-            "tier downgrade",
-            downgrade,
-            ModelState::NotInPlan,
-            Some(Tier::HomeUpdate),
-            Some(Tier::HomeUpdate),
-        ),
-        (
-            "placeholder row",
-            placeholder,
-            ModelState::Ghost,
-            Some(Tier::HomeUpdate),
-            None,
-        ),
+        ("404 storm", storm, ModelState::Ghost, false),
+        ("429 burst", busy, ModelState::Degraded, false),
+        ("503 flap", flap, ModelState::Quarantined, false),
+        ("redirected slug", redirect, ModelState::Redirected, false),
+        ("tier downgrade", downgrade, ModelState::NotInPlan, true),
+        ("placeholder row", placeholder, ModelState::Ghost, false),
     ];
-    for (name, apply, state, pin_tier, auto_tier) in fixtures {
-        for pinned in [true, false] {
-            let (mut reg, profiles) = fleet();
-            let table = build_table(
-                &TableInputs {
-                    reg: &reg,
-                    profiles: &profiles,
-                },
-                &EvalCache::default(),
-                NOW,
-            );
-            let events = apply(&mut reg, NOW);
-            assert_eq!(reg.get(PIN).unwrap().state, *state, "{name}");
-            let route = Router::choose(&ask(PIN), &reg, &profiles, &table, NOW + 10);
-            assert!(!route.no_route, "{name}");
-            assert_ne!(route.model, PIN, "{name}: never the broken model");
-            let mut notes = HealNotes::default();
-            let pin = if pinned { PIN } else { "" };
-            let told = notes.admit(heal_messages(&events, &reg, &profiles, pin, NOW), NOW);
-            let tiers: Vec<Tier> = told.iter().map(|m| m.tier).collect();
-            let want = if pinned { pin_tier } else { auto_tier };
-            assert_eq!(
-                tiers,
-                want.iter().copied().collect::<Vec<_>>(),
-                "{name} pinned={pinned}: {told:?}"
-            );
-            // The incident goes on: nothing more is said.
-            let again = apply(&mut reg, NOW + 1_000);
-            assert!(
-                notes
-                    .admit(
-                        heal_messages(&again, &reg, &profiles, pin, NOW + 1_000),
-                        NOW + 1_000
-                    )
-                    .is_empty(),
-                "{name} pinned={pinned}"
-            );
-        }
+    for (name, apply, state, tells) in fixtures {
+        let (mut reg, profiles) = fleet();
+        let table = build_table(
+            &TableInputs {
+                reg: &reg,
+                profiles: &profiles,
+            },
+            &EvalCache::default(),
+            NOW,
+        );
+        let events = apply(&mut reg, NOW);
+        assert_eq!(reg.get(PIN).unwrap().state, *state, "{name}");
+        let route = Router::choose(&ask(PIN), &reg, &profiles, &table, NOW + 10);
+        assert!(!route.no_route, "{name}");
+        assert_ne!(route.model, PIN, "{name}: never the broken model");
+        let mut notes = HealNotes::default();
+        let told = notes.admit(heal_messages(&events, &reg, &profiles, NOW), NOW);
+        assert_eq!(told.len(), usize::from(*tells), "{name}: {told:?}");
+        // The incident goes on: nothing more is said.
+        let again = apply(&mut reg, NOW + 1_000);
+        assert!(
+            notes
+                .admit(
+                    heal_messages(&again, &reg, &profiles, NOW + 1_000),
+                    NOW + 1_000
+                )
+                .is_empty(),
+            "{name}"
+        );
     }
 }
 
 #[test]
-fn the_messages_read_as_the_plan_words_them() {
-    let (mut reg, profiles) = fleet();
-    let ev = busy(&mut reg, NOW);
-    let told = heal_messages(&ev, &reg, &profiles, PIN, NOW).msgs;
-    assert_eq!(
-        told[0].text,
-        "grok-4.6 isn't answering, so I'm using grok-4.7 for now. Your pick is saved."
-    );
+fn a_plan_change_reads_as_the_plan_words_it_and_names_no_model() {
     let (mut reg, profiles) = fleet();
     let ev = downgrade(&mut reg, NOW);
-    let told = heal_messages(&ev, &reg, &profiles, PIN, NOW).msgs;
+    let told = heal_messages(&ev, &reg, &profiles, NOW).msgs;
     assert_eq!(told.len(), 1);
+    assert_eq!(told[0].title, "Your plan changed");
     assert_eq!(
         told[0].text,
-        "Your plan changed, so grok-4.6 isn't included anymore. I'll use grok-4.7."
+        "Your plan no longer includes some of the AI models it had. Auto keeps going on the ones it still has."
     );
-    let (mut reg, profiles) = fleet();
-    let mut old = meta(PIN, true);
-    old.deprecated = Some(true);
-    let ev = reg.apply_refresh(
-        &[listing(
-            IDS.iter()
-                .map(|id| {
-                    if *id == PIN {
-                        old.clone()
-                    } else {
-                        meta(id, true)
-                    }
-                })
-                .collect(),
-            "SuperGrok Heavy",
-        )],
-        &[],
-        NOW,
+    let none_left = super::heal::plan_change_msg("SuperGrok", false);
+    assert_eq!(
+        none_left.text,
+        "Your plan no longer includes some of the AI models it had, and none left in it can answer right now."
     );
-    let told = heal_messages(&ev, &reg, &profiles, PIN, NOW).msgs;
-    assert_eq!(told[0].text, "grok-4.6 was retired by xAI, so I'm using grok-4.7 where you picked it. Your pick shows (retired) until you choose another in Settings.");
-    assert_eq!(reg.pin_label(PIN), "grok-4.6 (retired)");
+    for m in told.iter().chain([&none_left]) {
+        let shown = format!("{} {}", m.title, m.text).to_ascii_lowercase();
+        assert!(
+            !shown.contains("grok-") && !shown.contains("grok 4"),
+            "{shown}"
+        );
+    }
 }
 
 #[test]
-fn a_flap_tells_once_per_incident_and_again_after_it_recovers() {
+fn a_flap_says_nothing_and_its_recovery_ends_the_incident() {
     let (mut reg, profiles) = fleet();
-    let mut notes = HealNotes::default();
-    let mut told = 0;
-    for round in 0..3u64 {
-        let t = NOW + round * 10_000_000;
-        let ev = flap(&mut reg, t);
-        told += notes
-            .admit(heal_messages(&ev, &reg, &profiles, PIN, t), t)
-            .len();
-        // Its half-open check passes: healthy again, the incident ends.
-        let until = reg.get(PIN).unwrap().breaker.open_until_ms;
-        reg.mark_half_open(PIN);
-        let ev: Vec<RegistryEvent> = reg.half_open_result(PIN, true, until).into_iter().collect();
-        told += notes
-            .admit(heal_messages(&ev, &reg, &profiles, PIN, until), until)
-            .len();
-        assert_eq!(reg.get(PIN).unwrap().state, ModelState::Live);
-    }
-    assert_eq!(told, 3, "one row per incident");
+    let ev = flap(&mut reg, NOW);
+    let heard = heal_messages(&ev, &reg, &profiles, NOW);
+    assert!(heard.msgs.is_empty(), "{heard:?}");
+    // Its half-open check passes: healthy again, the incident ends.
+    let until = reg.get(PIN).unwrap().breaker.open_until_ms;
+    reg.mark_half_open(PIN);
+    let ev: Vec<RegistryEvent> = reg.half_open_result(PIN, true, until).into_iter().collect();
+    let heard = heal_messages(&ev, &reg, &profiles, until);
+    assert_eq!(reg.get(PIN).unwrap().state, ModelState::Live);
+    assert_eq!(
+        heard.cleared,
+        vec![
+            "unhealthy:grok-4.6".to_string(),
+            "noroute:grok-4.6".to_string()
+        ]
+    );
+    assert!(heard.msgs.is_empty());
 }
 
 #[test]

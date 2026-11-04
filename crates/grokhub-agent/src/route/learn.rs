@@ -652,8 +652,9 @@ pub fn accept_card(config_dir: &Path, id: &str, now_ms: u64) -> Result<String, S
     write_tuning(config_dir, &tuning, &format!("you accepted: {what}"))?;
     c.stage = Stage::Accepted;
     c.promoted_at = Some(now_ms);
+    let done = format!("Auto now spends more on {}.", plain(&c.class));
     write_json(&state_path(config_dir), &state)?;
-    Ok(format!("Router changed ({what}). /why table shows it."))
+    Ok(done)
 }
 
 /// The weekly self-review's router line.
