@@ -119,7 +119,7 @@ where
             scope.spawn(|| {
                 let _origin = crate::harness::OriginScope::enter(origin);
                 let _recall = crate::harness::RecallScope::enter(recall.clone());
-                super::fence::enter(&fence_state);
+                let _trace = super::fence::enter(&fence_state);
                 loop {
                     let slot = next.fetch_add(1, Ordering::SeqCst);
                     if slot >= indices.len() {

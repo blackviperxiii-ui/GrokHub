@@ -34,6 +34,8 @@ pub enum HardClass {
     /// A write to the files that set what the agent may do or is told:
     /// the workspace's `.claude/` folder and `.grok/hooks/`.
     AgentConfig,
+    /// A value the call carries came only from outside text the run read.
+    OutsideValue,
 }
 
 impl HardClass {
@@ -45,6 +47,7 @@ impl HardClass {
             Self::Credentials => "credentials",
             Self::IrreversibleOs => "irreversible_os",
             Self::AgentConfig => "agent_config",
+            Self::OutsideValue => "outside_value",
         }
     }
 
@@ -56,6 +59,7 @@ impl HardClass {
             Self::Credentials => "Credentials / secrets",
             Self::IrreversibleOs => "Irreversible OS",
             Self::AgentConfig => "Agent instructions and settings",
+            Self::OutsideValue => "Value from outside text",
         }
     }
 
@@ -67,6 +71,7 @@ impl HardClass {
             "credentials" => Some(Self::Credentials),
             "irreversible_os" => Some(Self::IrreversibleOs),
             "agent_config" => Some(Self::AgentConfig),
+            "outside_value" => Some(Self::OutsideValue),
             _ => None,
         }
     }
@@ -121,6 +126,10 @@ pub fn classify(name: &str, arguments: &str) -> HardHit {
     }
     match hard_class(name, arguments) {
         Some(class) => HardHit::Class(class),
+        // ROPE / PACT: a value only outside text named needs your yes.
+        None if crate::harness::provenance::outside_value(name, arguments).is_some() => {
+            HardHit::Class(HardClass::OutsideValue)
+        }
         None => HardHit::None,
     }
 }

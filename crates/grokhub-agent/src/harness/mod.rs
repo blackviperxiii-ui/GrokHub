@@ -75,6 +75,7 @@ mod mindcheck;
 mod park;
 mod path_d;
 mod proactive;
+pub mod provenance;
 mod self_improve;
 mod self_manage;
 mod span;
