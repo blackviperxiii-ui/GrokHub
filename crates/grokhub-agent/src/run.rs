@@ -124,11 +124,31 @@ pub const TRUNCATED_STREAK_LIMIT: u32 = 3;
 /// pauses for the user. Each request resends the whole context, so a run that
 /// loops burns this fast; a "continue" starts a fresh budget.
 pub const RUN_INPUT_TOKEN_BUDGET: u64 = 1_000_000;
+/// The same for a subagent, halved again for each level below it. A child
+/// works one task, so it stops sooner and hands back what it found.
+pub const CHILD_RUN_INPUT_TOKEN_BUDGET: u64 = 400_000;
+
+/// Input tokens this run may send before it stops: a bounded root run (a
+/// script, a scheduled job) keeps its own turn limit instead.
+pub fn run_token_budget(max_turns: u32, depth: u32) -> Option<u64> {
+    match depth {
+        0 if max_turns == 0 => Some(RUN_INPUT_TOKEN_BUDGET),
+        0 => None,
+        d => Some(CHILD_RUN_INPUT_TOKEN_BUDGET >> (d - 1).min(8)),
+    }
+}
 
 const TRUNCATED_STOP: &str = "I stopped here: my last three replies were cut off at the output \
 limit before they finished. Say continue and I'll go on in smaller steps.";
 
-fn budget_pause(sent: u64) -> String {
+fn budget_pause(sent: u64, depth: u32) -> String {
+    if depth > 0 {
+        return format!(
+            "I stopped here: this subagent has sent about {}k tokens to the model, \
+             its share for one task. What I found so far is above.",
+            sent / 1000
+        );
+    }
     format!(
         "I paused here: this run has sent about {}k tokens to the model so far. \
          Say continue and I'll pick it up where I stopped.",
@@ -645,11 +665,11 @@ pub fn run_loop(
             call_timeout: None,
         };
         let req_tokens = request_tokens(&req);
-        if input.max_turns == 0
-            && turns > 1
-            && run_tokens.saturating_add(req_tokens) > RUN_INPUT_TOKEN_BUDGET
+        if turns > 1
+            && run_token_budget(input.max_turns, input.depth)
+                .is_some_and(|budget| run_tokens.saturating_add(req_tokens) > budget)
         {
-            stop_with_note(history, on_event, budget_pause(run_tokens));
+            stop_with_note(history, on_event, budget_pause(run_tokens, input.depth));
             return finish(input, StopReason::MaxTurns, usage, compacted_once, true);
         }
         run_tokens = run_tokens.saturating_add(req_tokens);
@@ -1821,6 +1841,7 @@ fn dispatch_tool_call(
         effort: input.effort,
         system: input.system,
         max_turns: input.max_turns,
+        context_length: input.context_length,
         policy: input.perms,
         on_event,
     }) {
@@ -2407,6 +2428,66 @@ mod tests {
         assert_eq!(client.calls.load(Ordering::SeqCst), 1);
         assert!(
             texts.iter().any(|t| t.contains("I paused here")),
+            "{texts:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_subagent_stops_at_its_smaller_token_budget() {
+        assert_eq!(run_token_budget(0, 0), Some(RUN_INPUT_TOKEN_BUDGET));
+        assert_eq!(run_token_budget(8, 0), None);
+        assert_eq!(run_token_budget(50, 1), Some(CHILD_RUN_INPUT_TOKEN_BUDGET));
+        assert_eq!(
+            run_token_budget(50, 2),
+            Some(CHILD_RUN_INPUT_TOKEN_BUDGET / 2)
+        );
+
+        let dir = workspace("child-budget");
+        let config = dir.join("config");
+        std::fs::create_dir_all(&config).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&config);
+        let client = AlwaysTool {
+            calls: AtomicUsize::new(0),
+        };
+        // About 250k tokens of context: well under a root run's budget, but the
+        // second request would take a child past its 400k.
+        let system = "x".repeat(1_000_000);
+        let input = LoopIn {
+            client: &client,
+            workspace: &dir,
+            model: "grok-4.7",
+            effort: None,
+            system: &system,
+            conversation_id: "child-budget",
+            max_turns: 50,
+            usage_base: Usage::default(),
+            cancel: &CancelToken::new(),
+            steer: &SteerQueue::new(),
+            halt: &NeverHalt,
+            gate: Gate::phase_readonly(),
+            desktop: None,
+            permits: &gate::ClosedPermits,
+            perms: None,
+            context_length: 0,
+            tasks: None,
+            depth: 1,
+            agent_id: Some("a1"),
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
+        };
+        let mut history = Vec::new();
+        let mut texts = Vec::new();
+        let out = run_loop(&input, &mut history, "go", None, &mut |ev| {
+            if let LoopEvent::Text(t) = ev {
+                texts.push(t);
+            }
+        });
+        assert_eq!(out.stop, StopReason::MaxTurns);
+        assert_eq!(client.calls.load(Ordering::SeqCst), 1);
+        assert!(
+            texts.iter().any(|t| t.contains("this subagent has sent")),
             "{texts:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
