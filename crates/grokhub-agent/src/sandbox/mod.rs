@@ -18,6 +18,7 @@
 pub mod git_guard;
 #[cfg(target_os = "linux")]
 pub mod landlock;
+pub mod net_allow;
 #[cfg(target_os = "linux")]
 pub mod netns;
 pub mod proxy;
@@ -188,6 +189,14 @@ fn isolation(_: &Path, _: &Path, _: Option<&Path>, _: Option<&str>) -> Option<Is
 /// note that only the HTTP proxy reaches out and how to get the whole
 /// machine. None otherwise.
 pub fn network_note(plan: Option<&Plan>, failed: bool, output: &str) -> Option<&'static str> {
+    // The proxy's refusal, as curl, git, pip and the like report it.
+    const REFUSED: &[&str] = &[
+        "not on the sandbox's network list",
+        "CONNECT tunnel failed, response 403",
+        "HTTP code 403 from proxy",
+        "Tunnel connection failed: 403",
+        "403 Forbidden",
+    ];
     const SIGNS: &[&str] = &[
         "Could not resolve host",
         "Could not resolve hostname",
@@ -197,10 +206,14 @@ pub fn network_note(plan: Option<&Plan>, failed: bool, output: &str) -> Option<&
         "Connection refused",
         "ssh: connect to host",
     ];
-    let isolated = plan
-        .and_then(|p| p.isolation.as_ref())
-        .is_some_and(|i| i.bridge.is_some());
-    (isolated && failed && SIGNS.iter().any(|s| output.contains(s))).then_some(
+    let plan = plan.filter(|_| failed)?;
+    if plan.proxy.is_some() && REFUSED.iter().any(|s| output.contains(s)) {
+        return Some(
+            "[sandbox] The proxy only lets sandboxed commands reach package registries, code hosts, model hosts and hosts your WebFetch allow rules name. For another host, rerun with outside_sandbox (asks the user).",
+        );
+    }
+    let isolated = plan.isolation.as_ref().is_some_and(|i| i.bridge.is_some());
+    (isolated && SIGNS.iter().any(|s| output.contains(s))).then_some(
         "[sandbox] This command has its own network: only HTTP(S) through the proxy reaches out, so SSH, raw sockets and services on the host's localhost don't. If it needs them, rerun with outside_sandbox (asks the user).",
     )
 }

@@ -250,6 +250,13 @@ fn a_command_in_its_own_network_reaches_out_only_through_the_proxy() {
     let config = scratch("ns-cfg");
     let _pin = crate::perm::ConfigGuard::set(&config);
     std::fs::write(config.join("secret.txt"), "hunter2").unwrap();
+    // The host-side test server is on loopback, which the proxy reaches only
+    // when a rule names it.
+    std::fs::write(
+        config.join("permission-rules.json"),
+        r#"{"allow":["WebFetch(domain:127.0.0.1)"]}"#,
+    )
+    .unwrap();
     let ws = scratch("ns-ws");
     let run =
         |command: String| crate::tools::shell::run(&ws, &json!({ "command": command }), &|| false);
@@ -458,4 +465,14 @@ fn a_failed_connection_in_its_own_network_gets_a_note_and_nothing_else_does() {
     };
     assert!(network_note(Some(&open), true, ssh).is_none());
     assert!(network_note(None, true, ssh).is_none());
+    // The proxy's refusal gets the list note wherever the proxy is set.
+    let refused = "curl: (56) CONNECT tunnel failed, response 403";
+    let note = network_note(Some(&open), true, refused).unwrap();
+    assert!(note.contains("WebFetch allow rules"), "{note}");
+    assert!(network_note(Some(&open), false, refused).is_none());
+    let no_proxy = Plan {
+        proxy: None,
+        ..open.clone()
+    };
+    assert!(network_note(Some(&no_proxy), true, refused).is_none());
 }
