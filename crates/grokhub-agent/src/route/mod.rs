@@ -278,6 +278,7 @@ pub fn call_model(
         );
         providers::call_model(
             &dir,
+            &call.class,
             &sent.model,
             sent.effort.as_deref(),
             &sent.request(),
@@ -541,6 +542,13 @@ fn long_context_first(
     }
 }
 
+/// A lane that must pick a reasoning model: the Balanced and Quality tiers,
+/// and every class the capability table marks.
+pub(crate) fn lane_needs_reasoning(class: &str) -> bool {
+    table::SpeedQuality::of(class).needs_reasoning()
+        || capabilities::class_need(class).require_reasoning
+}
+
 /// grok-4.20-multi-agent and its dated or `-latest` ids.
 fn is_multi_agent(model: &str) -> bool {
     model
@@ -605,18 +613,20 @@ impl Router {
             rules.push("registry:empty".into());
             return keep(current);
         }
-        let tier = table::SpeedQuality::of(input.lane());
-        let need_reasoning =
-            tier.needs_reasoning() || capabilities::class_need(input.lane()).require_reasoning;
-        // Balanced/Quality Auto pool: reasoning models only. A provider's
-        // listing seldom says whether a model reasons, so only one named
-        // non-reasoning is left out; the ranking decides.
+        let need_reasoning = lane_needs_reasoning(input.lane());
+        // Balanced/Quality Auto pool: reasoning models only. A provider model
+        // reasons when its listing's `supported_parameters` name `reasoning`
+        // (OpenRouter); a listing that doesn't say leaves out only one named
+        // non-reasoning, and the ranking decides.
         let auto_ok = |m: &str| {
             local::is_local(m)
                 || !need_reasoning
-                || table::is_reasoning_model(reg, profiles, m)
-                || (policy::is_new_provider(reg, m)
-                    && !m.to_ascii_lowercase().contains("non-reasoning"))
+                || if policy::is_new_provider(reg, m) {
+                    reg.get(m)
+                        .is_some_and(|r| providers::takes_reasoning(m, &r.meta))
+                } else {
+                    table::is_reasoning_model(reg, profiles, m)
+                }
         };
         // A provider model must show it stays under your $/M ceiling: one over
         // it, or with no listed price (an OpenRouter router may pick any model
@@ -637,9 +647,15 @@ impl Router {
         // Auto's own pool: xAI and the device, plus a model on a provider you
         // set up (its key and a grant covering the data) that is under your
         // $/M ceiling, answers in text and is no utility model (a safety
-        // classifier, an embedding or rerank model).
+        // classifier, an embedding or rerank model). Auto picks the model
+        // itself, so never one of OpenRouter's own routers.
         let allowed = |m: &str| {
-            !policy::is_new_provider(reg, m) || !(policy::utility_model(m) || over_ceiling(m))
+            !policy::is_new_provider(reg, m)
+                || !(policy::utility_model(m)
+                    || over_ceiling(m)
+                    || providers::is_openrouter_router(
+                        split_provider_model(m).map_or("", |(_, id)| id),
+                    ))
         };
         // A provider model ranks after xAI and the device unless the routing
         // table ranks it for this step.

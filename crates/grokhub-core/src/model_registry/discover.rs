@@ -135,6 +135,7 @@ pub fn parse_model_row(row: &Value) -> Option<ModelMeta> {
         input_modalities: strings(row.get("input_modalities")),
         output_modalities: strings(row.get("output_modalities")),
         tool_calling: bool_of(&caps, &["function_calling", "tools", "tool_calling"]),
+        reasoning: None,
         structured_output: bool_of(
             &caps,
             &["structured_outputs", "structured_output", "json_schema"],
@@ -242,6 +243,8 @@ fn listed_efforts(row: &Value) -> Option<Vec<String>> {
 
 /// An OpenAI-compatible `/models` listing (OpenRouter and the like), ids as
 /// `<provider>/<model>`. Prices are USD per token there; unknown stays `None`.
+/// `supported_parameters` says whether it takes `tools` and `reasoning`, and a
+/// non-null `expiration_date` marks it deprecated.
 pub fn parse_openai_compatible_catalog(
     provider: &str,
     body: &str,
@@ -276,6 +279,12 @@ pub fn parse_openai_compatible_catalog(
                     .and_then(|a| a.get("output_modalities")),
             ),
             tool_calling: params.as_ref().map(|p| p.iter().any(|x| x == "tools")),
+            reasoning: params.as_ref().map(|p| p.iter().any(|x| x == "reasoning")),
+            // OpenRouter dates an endpoint it is retiring: routing skips it from then on.
+            deprecated: row
+                .get("expiration_date")
+                .is_some_and(|d| !d.is_null())
+                .then_some(true),
             ..ModelMeta::default()
         });
     }
@@ -458,6 +467,68 @@ mod tests {
         );
         assert_eq!(split_provider_model("grok-4.7"), None);
         assert_eq!(split_provider_model("/x"), None);
+    }
+
+    /// Shaped like OpenRouter's `GET /api/v1/models`.
+    const OPENROUTER_MODELS: &str = include_str!("../../tests/fixtures/openrouter_models.json");
+
+    #[test]
+    fn openrouter_listing_reads_tools_reasoning_and_expiry_from_the_row() {
+        let got = parse_openai_compatible_catalog("openrouter", OPENROUTER_MODELS).unwrap();
+        let row = |id: &str| got.iter().find(|m| m.id == id).unwrap();
+        let flags = |id: &str| {
+            let m = row(id);
+            (m.tool_calling, m.reasoning, m.deprecated)
+        };
+        assert_eq!(got.len(), 10);
+        assert_eq!(
+            flags("openrouter/vendor/agent-pro"),
+            (Some(true), Some(true), None)
+        );
+        assert_eq!(
+            flags("openrouter/vendor/tools-only"),
+            (Some(true), Some(false), None)
+        );
+        assert_eq!(
+            flags("openrouter/vendor/chat-only"),
+            (Some(false), Some(true), None)
+        );
+        assert_eq!(
+            flags("openrouter/vendor/retiring"),
+            (Some(true), Some(true), Some(true)),
+            "a dated expiration_date marks it deprecated"
+        );
+        // OpenRouter's router lists -1 prices: unknown, never a cheap pick.
+        assert_eq!(row("openrouter/openrouter/auto").prices, Prices::default());
+        let pro = row("openrouter/vendor/agent-pro");
+        assert_eq!(
+            pro.prices,
+            Prices {
+                prompt: Some(20_000),
+                cached: Some(5_000),
+                completion: Some(80_000),
+                ..Prices::default()
+            }
+        );
+        assert_eq!(
+            (pro.context_length, pro.max_output),
+            (Some(400_000), Some(128_000))
+        );
+        assert_eq!(
+            pro.efforts.as_deref(),
+            Some(&["low".to_string(), "medium".into(), "high".into()][..])
+        );
+        assert_eq!(row("openrouter/vendor/agent-lite").efforts, None);
+        assert_eq!(
+            row("openrouter/vendor/image-maker")
+                .output_modalities
+                .as_deref(),
+            Some(&["image".to_string()][..])
+        );
+        // An xAI row has no such field, so it serializes as before.
+        assert!(!serde_json::to_string(&ModelMeta::bare("grok-4.7"))
+            .unwrap()
+            .contains("reasoning"));
     }
 
     #[test]
