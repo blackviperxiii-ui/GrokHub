@@ -7,9 +7,15 @@
 //! `http://` requests. When the app itself runs behind a proxy, it goes
 //! through that one, as the command would have.
 //!
-//! This is routing by environment variable: a program that ignores the proxy
-//! variables still reaches the network directly. Hard network enforcement is
-//! a separate step.
+//! Before the guard, the host must be on the sandbox's network list
+//! ([`net_allow`]). Both checks use the name the client sent, so a host that
+//! isn't allowed is refused before any DNS lookup.
+//!
+//! On Linux with namespaces this proxy is a command's only way out (see
+//! `netns`). Elsewhere it is routing by environment variable, and a program
+//! that ignores the proxy variables still reaches the network directly.
+//!
+//! [`net_allow`]: super::net_allow
 //!
 //! [`guard_egress`]: crate::harness::egress::guard_egress
 
@@ -170,16 +176,19 @@ pub fn env(addr: &str) -> Vec<(&'static str, String)> {
 pub const UNSET: &[&str] = &["ALL_PROXY", "all_proxy"];
 
 fn serve(client: TcpStream, config_dir: &Path) {
-    serve_with(
-        client,
-        &|url| match guard_egress(config_dir, &EgressReq::new(url, &[])) {
-            GateOutcome::Allow => Ok(()),
+    serve_with(client, &|host, url| {
+        let basis = super::net_allow::verdict(config_dir, host)?;
+        match guard_egress(config_dir, &EgressReq::new(url, &[])) {
+            GateOutcome::Allow => Ok(basis.reaches_private()),
             GateOutcome::Park { reason, .. } | GateOutcome::Refuse { reason } => Err(reason),
-        },
-    );
+        }
+    });
 }
 
-fn serve_with(mut client: TcpStream, guard: &dyn Fn(&str) -> Result<(), String>) {
+/// `guard` gets the host as the client named it and the URL to log, and runs
+/// before anything is dialed or looked up. `Ok(true)` lets the host resolve
+/// to a loopback or private address.
+fn serve_with(mut client: TcpStream, guard: &dyn Fn(&str, &str) -> Result<bool, String>) {
     let _ = client.set_read_timeout(Some(HEAD_TIMEOUT));
     let Some((head, extra)) = read_head(&mut client) else {
         return;
@@ -189,20 +198,24 @@ fn serve_with(mut client: TcpStream, guard: &dyn Fn(&str) -> Result<(), String>)
         refuse(&mut client, 400, "Loadout egress proxy: bad request");
         return;
     };
-    if let Err(reason) = guard(&req.guard_url()) {
-        refuse(
-            &mut client,
-            403,
-            &format!("Loadout egress guard refused {}: {reason}", req.host),
-        );
-        return;
-    }
+    let inward_ok = match guard(&req.host, &req.guard_url()) {
+        Ok(inward_ok) => inward_ok,
+        Err(reason) => {
+            refuse(
+                &mut client,
+                403,
+                &format!("Loadout egress guard refused {}: {reason}", req.host),
+            );
+            return;
+        }
+    };
     LET_OUT.fetch_add(1, Ordering::SeqCst);
     let upstream = Upstream::from_env();
     let route = upstream.route(&req.host, req.connect);
     let server = match route {
-        Some(proxy) => dial(&proxy.host, proxy.port),
-        None => dial(&req.host, req.port),
+        // The app's own upstream proxy is the person's setting, wherever it is.
+        Some(proxy) => dial(&proxy.host, proxy.port, true),
+        None => dial(&req.host, req.port, inward_ok),
     };
     let Ok(mut server) = server else {
         refuse(
@@ -396,10 +409,17 @@ fn split_host_port(authority: &str, default: Option<u16>) -> Option<(String, u16
     (ok && port != 0).then(|| (host.to_ascii_lowercase(), port))
 }
 
-fn dial(host: &str, port: u16) -> Result<TcpStream, String> {
+/// Resolve and connect. Unless `inward_ok`, an address on loopback or the
+/// local network is skipped, so an allowed name that resolves inward (DNS
+/// rebinding) reaches nothing.
+fn dial(host: &str, port: u16, inward_ok: bool) -> Result<TcpStream, String> {
     let addrs = (host, port).to_socket_addrs().map_err(|e| e.to_string())?;
     let mut last = String::from("no address");
     for addr in addrs {
+        if !inward_ok && super::net_allow::is_inward(addr.ip()) {
+            last = format!("{} is a local address", addr.ip());
+            continue;
+        }
         match TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT) {
             Ok(stream) => return Ok(stream),
             Err(e) => last = e.to_string(),
@@ -634,10 +654,17 @@ mod tests {
         assert_eq!(get("NO_PROXY"), Some(NO_PROXY));
     }
 
+    /// A config folder whose rules let the proxy reach loopback, where the
+    /// test servers listen.
     fn scratch(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("gh-proxy-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("permission-rules.json"),
+            r#"{"allow":["WebFetch(domain:127.0.0.1)"]}"#,
+        )
+        .unwrap();
         dir
     }
 
@@ -681,7 +708,7 @@ mod tests {
         let log = std::sync::Arc::clone(&asked);
         std::thread::spawn(move || {
             let (conn, _) = listener.accept().unwrap();
-            serve_with(conn, &|url| {
+            serve_with(conn, &|_host, url| {
                 log.lock().unwrap().push(url.to_string());
                 Err("offline only is on".into())
             });
@@ -698,6 +725,48 @@ mod tests {
             "{reply}"
         );
         assert_eq!(*asked.lock().unwrap(), ["https://api.example.test:443"]);
+    }
+
+    /// A host off the network list is refused with the list's reason before
+    /// anything is looked up: the 403 names the list, not a failed lookup.
+    #[test]
+    fn a_host_off_the_list_is_refused_before_any_lookup() {
+        let dir = scratch("offlist");
+        let mut client = TcpStream::connect(address(&dir).unwrap()).unwrap();
+        client
+            .write_all(b"CONNECT c2VjcmV0.exfil.invalid:443 HTTP/1.1\r\n\r\n")
+            .unwrap();
+        let mut reply = String::new();
+        client.read_to_string(&mut reply).unwrap();
+        assert!(reply.starts_with("HTTP/1.1 403 Forbidden\r\n"), "{reply}");
+        assert!(
+            reply.contains("not on the sandbox's network list"),
+            "{reply}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An allowed name that resolves to loopback is not dialed unless the
+    /// person named it (DNS rebinding).
+    #[test]
+    fn an_allowed_name_that_resolves_inward_is_not_dialed() {
+        let server = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = server.local_addr().unwrap().port();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (conn, _) = listener.accept().unwrap();
+            serve_with(conn, &|_host, _url| Ok(false));
+        });
+        let mut client = TcpStream::connect(addr).unwrap();
+        client
+            .write_all(format!("CONNECT localhost:{port} HTTP/1.1\r\n\r\n").as_bytes())
+            .unwrap();
+        let mut reply = String::new();
+        client.read_to_string(&mut reply).unwrap();
+        assert!(reply.starts_with("HTTP/1.1 502"), "{reply}");
+        server.set_nonblocking(true).unwrap();
+        assert!(server.accept().is_err(), "nothing reached the server");
     }
 
     /// A tunnel to a loopback server carries bytes both ways.
