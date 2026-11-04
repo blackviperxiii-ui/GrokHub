@@ -179,16 +179,30 @@ fn serve(client: TcpStream, config_dir: &Path) {
     serve_with(client, &|host, url| {
         let basis = super::net_allow::verdict(config_dir, host)?;
         match guard_egress(config_dir, &EgressReq::new(url, &[])) {
-            GateOutcome::Allow => Ok(basis.reaches_private()),
+            GateOutcome::Allow => Ok(Pass {
+                inward_ok: basis.reaches_private(),
+                #[cfg(unix)]
+                unmask: super::mask::session().intercepts(host),
+            }),
             GateOutcome::Park { reason, .. } | GateOutcome::Refuse { reason } => Err(reason),
         }
     });
 }
 
+/// What the guard lets a request do.
+#[derive(Debug, Clone, Copy, Default)]
+struct Pass {
+    /// The host may resolve to a loopback or private address.
+    inward_ok: bool,
+    /// A masked token may go to this host: a tunnel is ended here and the
+    /// real token put back (see `mitm`).
+    #[cfg(unix)]
+    unmask: bool,
+}
+
 /// `guard` gets the host as the client named it and the URL to log, and runs
-/// before anything is dialed or looked up. `Ok(true)` lets the host resolve
-/// to a loopback or private address.
-fn serve_with(mut client: TcpStream, guard: &dyn Fn(&str, &str) -> Result<bool, String>) {
+/// before anything is dialed or looked up.
+fn serve_with(mut client: TcpStream, guard: &dyn Fn(&str, &str) -> Result<Pass, String>) {
     let _ = client.set_read_timeout(Some(HEAD_TIMEOUT));
     let Some((head, extra)) = read_head(&mut client) else {
         return;
@@ -198,8 +212,8 @@ fn serve_with(mut client: TcpStream, guard: &dyn Fn(&str, &str) -> Result<bool, 
         refuse(&mut client, 400, "Loadout egress proxy: bad request");
         return;
     };
-    let inward_ok = match guard(&req.host, &req.guard_url()) {
-        Ok(inward_ok) => inward_ok,
+    let pass = match guard(&req.host, &req.guard_url()) {
+        Ok(pass) => pass,
         Err(reason) => {
             refuse(
                 &mut client,
@@ -215,7 +229,7 @@ fn serve_with(mut client: TcpStream, guard: &dyn Fn(&str, &str) -> Result<bool, 
     let server = match route {
         // The app's own upstream proxy is the person's setting, wherever it is.
         Some(proxy) => dial(&proxy.host, proxy.port, true),
-        None => dial(&req.host, req.port, inward_ok),
+        None => dial(&req.host, req.port, pass.inward_ok),
     };
     let Ok(mut server) = server else {
         refuse(
@@ -246,6 +260,13 @@ fn serve_with(mut client: TcpStream, guard: &dyn Fn(&str, &str) -> Result<bool, 
             &format!("Loadout egress proxy: {} not reached: {why}", req.host),
         );
         return;
+    }
+    #[cfg(unix)]
+    if req.connect && pass.unmask {
+        if let Some(mitm) = super::mitm::session() {
+            let _ = mitm.serve(super::mask::session(), &req.host, client, &extra, server);
+            return;
+        }
     }
     if !extra.is_empty() && server.write_all(&extra).is_err() {
         return;
@@ -708,7 +729,7 @@ mod tests {
         let log = std::sync::Arc::clone(&asked);
         std::thread::spawn(move || {
             let (conn, _) = listener.accept().unwrap();
-            serve_with(conn, &|_host, url| {
+            serve_with(conn, &|_host, url| -> Result<Pass, String> {
                 log.lock().unwrap().push(url.to_string());
                 Err("offline only is on".into())
             });
@@ -756,7 +777,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         std::thread::spawn(move || {
             let (conn, _) = listener.accept().unwrap();
-            serve_with(conn, &|_host, _url| Ok(false));
+            serve_with(conn, &|_host, _url| Ok(Pass::default()));
         });
         let mut client = TcpStream::connect(addr).unwrap();
         client

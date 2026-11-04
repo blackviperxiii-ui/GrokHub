@@ -34,6 +34,12 @@ keyring = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.189"
+# Sandbox credential masking: the egress proxy ends TLS for hosts a masked
+# token may go to, with a session CA (rcgen) and rustls on the ring provider,
+# the same rustls and roots ureq already builds.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+webpki-roots = "1"
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring", "pem"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [

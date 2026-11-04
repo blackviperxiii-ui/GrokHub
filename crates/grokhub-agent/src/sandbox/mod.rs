@@ -18,6 +18,10 @@
 pub mod git_guard;
 #[cfg(target_os = "linux")]
 pub mod landlock;
+#[cfg(unix)]
+pub mod mask;
+#[cfg(unix)]
+pub mod mitm;
 pub mod net_allow;
 #[cfg(target_os = "linux")]
 pub mod netns;
@@ -247,7 +251,10 @@ pub fn status(config_dir: &Path) -> String {
             };
             (net, "reads open")
         };
-        format!("Shell sandbox: {writes}; {net}; {reads}")
+        format!(
+            "Shell sandbox: {writes}; {net}; {reads}{}",
+            masked_clause(settings.network_guard)
+        )
     }
     #[cfg(windows)]
     {
@@ -260,7 +267,21 @@ pub fn status(config_dir: &Path) -> String {
     }
     #[cfg(not(any(target_os = "linux", windows)))]
     {
-        "Shell sandbox: proxy variables only on this system".into()
+        format!(
+            "Shell sandbox: proxy variables only on this system{}",
+            masked_clause(settings.network_guard)
+        )
+    }
+}
+
+/// How many of the app's tokens commands see only as stand-ins.
+#[cfg(unix)]
+fn masked_clause(network_guard: bool) -> String {
+    let n = mask::session().command_env().len();
+    match (network_guard, n) {
+        (false, _) | (_, 0) => String::new(),
+        (true, 1) => "; 1 token masked".into(),
+        (true, n) => format!("; {n} tokens masked"),
     }
 }
 
@@ -389,6 +410,12 @@ pub fn apply(cmd: &mut std::process::Command, plan: &Plan) -> Result<(), String>
             cmd.env_remove(key);
         }
         cmd.envs(proxy::env(addr));
+        // Tokens reach the command only as stand-ins; the proxy puts the
+        // real one back for its own hosts.
+        cmd.envs(mask::session().command_env());
+        if let Some(mitm) = mitm::session() {
+            cmd.envs(mitm.command_env());
+        }
     }
     #[cfg(target_os = "linux")]
     {
