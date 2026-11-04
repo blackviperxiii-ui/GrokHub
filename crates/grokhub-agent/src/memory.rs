@@ -193,6 +193,41 @@ pub fn remember(workspace: &Path, text: &str) -> Result<String, String> {
     Ok(format!("Remembered in {where_} MEMORY.md{extra}"))
 }
 
+/// A `MEMORY.md` the model writes with its file tools: true for any file of
+/// that name, since every chat reads the ones it finds.
+pub(crate) fn is_memory_file(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("MEMORY.md"))
+}
+
+/// Text the model writes into a `MEMORY.md` goes through the same secret
+/// redaction as `/remember`, so a key read from a page never lands in a file
+/// every later chat reads.
+pub(crate) fn redact_model_text(path: &Path, text: &str) -> String {
+    if is_memory_file(path) {
+        grokhub_core::redact_secrets(text)
+    } else {
+        text.to_string()
+    }
+}
+
+/// After a model write to this workspace's or the global `MEMORY.md`, index
+/// it again so recall sees the new lines. Other files are left alone.
+pub(crate) fn after_model_write(workspace: &Path, path: &Path) {
+    let same = |a: &Path, b: &Path| {
+        a.canonicalize()
+            .ok()
+            .zip(b.canonicalize().ok())
+            .is_some_and(|(a, b)| a == b)
+    };
+    if same(path, &workspace_memory_path(workspace)) {
+        let _ = reindex_file(path, "workspace");
+    } else if same(path, &global_memory_path()) {
+        let _ = reindex_file(path, "global");
+    }
+}
+
 /// Write pending user and assistant text into this workspace's flush file in
 /// the config dir before compaction. The repo `MEMORY.md` is not touched.
 /// A second flush of the same text is a no-op. This does not call the model.
