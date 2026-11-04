@@ -275,6 +275,11 @@ fn run_doctor() {
     for l in &lines {
         println!("{} {}", if l.ok { "ok " } else { "ERR" }, l.text);
     }
+    // Informational: how this machine confines model-written commands.
+    println!(
+        "    {}",
+        grokhub_agent::sandbox::status(&grokhub_agent::perm::config_dir())
+    );
     if !doctor_ok(&lines) {
         std::process::exit(1);
     }
