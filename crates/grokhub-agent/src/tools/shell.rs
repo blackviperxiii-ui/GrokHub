@@ -243,9 +243,31 @@ fn bash(
 ) -> Result<std::process::Command, String> {
     use std::process::{Command, Stdio};
 
-    let mut cmd = Command::new("bash");
-    cmd.args(["--noprofile", "--norc", "-c", command])
-        .current_dir(cwd)
+    let argv = ["bash", "--noprofile", "--norc", "-c", command];
+    // macOS: the Seatbelt profile wraps bash, so everything it starts is in it.
+    #[cfg(target_os = "macos")]
+    let mut cmd = match plan.and_then(|p| p.isolation.as_ref().map(|iso| (p, iso))) {
+        Some((plan, iso)) => {
+            let port = plan.proxy_port().filter(|_| iso.net_confined);
+            let profile = crate::sandbox::seatbelt::profile(&plan.writable, &iso.hide, port);
+            let (program, args) = crate::sandbox::seatbelt::wrap(&profile, &argv);
+            let mut cmd = Command::new(program);
+            cmd.args(args);
+            cmd
+        }
+        None => {
+            let mut cmd = Command::new(argv[0]);
+            cmd.args(&argv[1..]);
+            cmd
+        }
+    };
+    #[cfg(not(target_os = "macos"))]
+    let mut cmd = {
+        let mut cmd = Command::new(argv[0]);
+        cmd.args(&argv[1..]);
+        cmd
+    };
+    cmd.current_dir(cwd)
         .envs(crate::sudo_pass::shell_env())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

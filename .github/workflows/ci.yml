@@ -352,6 +352,12 @@ jobs:
           echo "AR_aarch64_linux_android=$bin/llvm-ar" >> "$GITHUB_ENV"
           echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$bin/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
       - run: cargo clippy --locked ${{ matrix.crates }} --target ${{ matrix.target }} -- -D warnings
+      # The agent's sandbox tests on the runner's own macOS (Apple silicon):
+      # the only place the Seatbelt profile runs for real. Off PRs, like the
+      # rest of this job.
+      - name: Sandbox tests (macOS)
+        if: matrix.target == 'aarch64-apple-darwin'
+        run: cargo test --locked -p grokhub-agent --lib sandbox
 
   # The Tauri desktop shell (src-tauri/ + ui/, cross-platform Phase 2). It is
   # its own Cargo workspace, so only this job needs the webview libraries.

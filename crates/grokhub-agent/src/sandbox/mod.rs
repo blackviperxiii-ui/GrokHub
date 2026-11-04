@@ -1,7 +1,8 @@
 //! HX-11: model-written shell commands run in a sandbox by default.
 //!
 //! Writes are allowed only in the workspace, temp folders, `/dev` and the
-//! usual tool caches (Landlock on Linux, a write-restricted token on Windows). Network goes through the egress
+//! usual tool caches (Landlock on Linux, a Seatbelt profile on macOS, a
+//! write-restricted token on Windows). Network goes through the egress
 //! proxy, so the egress guard (offline mode, the egress log) sees every host.
 //! The gate stays on top and decides first.
 //!
@@ -26,8 +27,11 @@ pub mod net_allow;
 #[cfg(target_os = "linux")]
 pub mod netns;
 pub mod proxy;
+#[cfg(any(target_os = "macos", test))]
+pub mod seatbelt;
 #[cfg(target_os = "linux")]
 pub mod seccomp;
+pub mod secrets;
 #[cfg(windows)]
 pub mod windows;
 
@@ -119,17 +123,28 @@ pub struct Plan {
     /// `127.0.0.1:port` of the egress proxy, when the network guard is on.
     pub proxy: Option<String>,
     /// Linux, where unprivileged namespaces are allowed: the command's own
-    /// namespaces (see [`netns`]). None elsewhere.
+    /// namespaces (see [`netns`]). macOS: its Seatbelt profile (see
+    /// [`seatbelt`]). None elsewhere.
     pub isolation: Option<Isolation>,
 }
 
-/// A command's own namespaces: these paths hidden, and, with `bridge`, a
-/// network of its own whose only way out is the proxy's Unix socket.
+impl Plan {
+    /// The port the proxy variables name.
+    pub fn proxy_port(&self) -> Option<u16> {
+        self.proxy.as_deref()?.rsplit(':').next()?.parse().ok()
+    }
+}
+
+/// What hides secrets and fences the network in: on Linux the command's own
+/// namespaces, on macOS its Seatbelt profile.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Isolation {
     pub hide: Vec<PathBuf>,
-    /// The proxy's Unix socket and the port the proxy variables name.
+    /// Linux: the proxy's Unix socket and the port the proxy variables name,
+    /// for the relay in the command's own network.
     pub bridge: Option<(PathBuf, u16)>,
+    /// Only the proxy reaches out: no direct connection, no DNS.
+    pub net_confined: bool,
 }
 
 /// The plan for a shell tool call (`run_terminal_command` or `monitor`) in
@@ -177,13 +192,31 @@ fn isolation(
     if proxy.is_some() && bridge.is_none() {
         return None;
     }
+    let net_confined = bridge.is_some();
     Some(Isolation {
-        hide: netns::hidden(home, config_dir, workspace),
+        hide: secrets::hidden(home, config_dir, workspace),
         bridge,
+        net_confined,
     })
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+fn isolation(
+    config_dir: &Path,
+    workspace: &Path,
+    home: Option<&Path>,
+    proxy: Option<&str>,
+) -> Option<Isolation> {
+    seatbelt::available().then(|| Isolation {
+        hide: secrets::hidden(home, config_dir, workspace),
+        bridge: None,
+        net_confined: proxy
+            .and_then(|a| a.rsplit(':').next()?.parse::<u16>().ok())
+            .is_some(),
+    })
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn isolation(_: &Path, _: &Path, _: Option<&Path>, _: Option<&str>) -> Option<Isolation> {
     None
 }
@@ -209,6 +242,10 @@ pub fn network_note(plan: Option<&Plan>, failed: bool, output: &str) -> Option<&
         "Network is unreachable",
         "Connection refused",
         "ssh: connect to host",
+        // curl, and macOS, where a fenced-in connect fails with EPERM.
+        "Failed to connect to",
+        "connect: Operation not permitted",
+        "nodename nor servname provided",
     ];
     let plan = plan.filter(|_| failed)?;
     if plan.proxy.is_some() && REFUSED.iter().any(|s| output.contains(s)) {
@@ -216,9 +253,9 @@ pub fn network_note(plan: Option<&Plan>, failed: bool, output: &str) -> Option<&
             "[sandbox] The proxy only lets sandboxed commands reach package registries, code hosts, model hosts and hosts your WebFetch allow rules name. For another host, rerun with outside_sandbox (asks the user).",
         );
     }
-    let isolated = plan.isolation.as_ref().is_some_and(|i| i.bridge.is_some());
+    let isolated = plan.isolation.as_ref().is_some_and(|i| i.net_confined);
     (isolated && SIGNS.iter().any(|s| output.contains(s))).then_some(
-        "[sandbox] This command has its own network: only HTTP(S) through the proxy reaches out, so SSH, raw sockets and services on the host's localhost don't. If it needs them, rerun with outside_sandbox (asks the user).",
+        "[sandbox] This command's network is fenced in: only HTTP(S) through the proxy gets out, so SSH, DNS lookups, raw sockets and host services such as Docker or an SSH agent don't. If it needs them, rerun with outside_sandbox (asks the user).",
     )
 }
 
@@ -265,7 +302,25 @@ pub fn status(config_dir: &Path) -> String {
         };
         format!("Shell sandbox: writes confined (restricted token); {net}; reads open")
     }
-    #[cfg(not(any(target_os = "linux", windows)))]
+    #[cfg(target_os = "macos")]
+    {
+        if !seatbelt::available() {
+            return format!(
+                "Shell sandbox: proxy variables only (sandbox-exec is off or missing){}",
+                masked_clause(settings.network_guard)
+            );
+        }
+        let net = if settings.network_guard {
+            "network only through the egress proxy (Seatbelt)"
+        } else {
+            "network open (network_guard = false)"
+        };
+        format!(
+            "Shell sandbox: writes confined (Seatbelt); {net}; secret folders hidden{}",
+            masked_clause(settings.network_guard)
+        )
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
         format!(
             "Shell sandbox: proxy variables only on this system{}",
@@ -348,6 +403,9 @@ pub const CACHE_DIRS: &[&str] = &[
     "AppData/Local/Yarn/Cache",
     "AppData/Local/pnpm/store",
     "AppData/Local/NuGet",
+    // macOS homes keep them under Library.
+    "Library/Caches",
+    "Library/Developer/Xcode/DerivedData",
 ];
 
 /// The writable roots, canonical and existing. A root that holds the config
