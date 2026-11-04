@@ -16,21 +16,21 @@ Recommendation rule: **adopt** only if cost per solved task falls and success de
 
 | Arm | Success | Cost/solved | Δ cost/solved | In tokens | Cached | Prefix-stable | Schema B/req | Calls/task | Tools/call | Noise | Rec |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| baseline (all off) | 100.00% (22/22) | 7454.50 | — | 379214 | 215955 | 96.25% | 21159 | 2.41 | 0.32 | — | — |
-| R2 prefix cache | 100.00% (22/22) | 7187.45 | -267.05 (-3.58%) | 377988 | 220604 | 98.63% | 21159 | 2.41 | 0.32 | yes | adopt |
-| R3 tool-output summaries | 100.00% (22/22) | 7454.50 | 0 | 379214 | 215955 | 96.25% | 21159 | 2.41 | 0.32 | yes | spike |
-| R4 deferred tools | 100.00% (22/22) | 4718.86 | -2735.64 (-36.70%) | 240527 | 137452 | 95.95% | 10692 | 2.41 | 0.32 | yes | adopt |
-| R5 batched read-only | 100.00% (22/22) | 7454.50 | 0 | 379214 | 215955 | 96.25% | 21159 | 2.41 | 0.32 | yes | spike |
-| all on | 100.00% (22/22) | 4570.82 | -2883.68 (-38.68%) | 239301 | 139483 | 97.85% | 10692 | 2.41 | 0.32 | yes | adopt |
+| baseline (all off) | 100.00% (22/22) | 7567 | — | 384912 | 219178 | 96.26% | 21589 | 2.41 | 0.32 | — | — |
+| R2 prefix cache | 100.00% (22/22) | 7295 | -272 (-3.59%) | 383685 | 223935 | 98.65% | 21589 | 2.41 | 0.32 | yes | adopt |
+| R3 tool-output summaries | 100.00% (22/22) | 7567 | 0 | 384912 | 219178 | 96.26% | 21589 | 2.41 | 0.32 | yes | spike |
+| R4 deferred tools | 100.00% (22/22) | 4831.32 | -2735.68 (-36.15%) | 246223 | 140674 | 95.97% | 11122 | 2.41 | 0.32 | yes | adopt |
+| R5 batched read-only | 100.00% (22/22) | 7567 | 0 | 384912 | 219178 | 96.26% | 21589 | 2.41 | 0.32 | yes | spike |
+| all on | 100.00% (22/22) | 4678.41 | -2888.59 (-38.17%) | 244999 | 142814 | 97.89% | 11122 | 2.41 | 0.32 | yes | adopt |
 
 ## Per-technique notes
 
-- **baseline (all off)**: 22/22 success, 53 model calls, 379214 input tokens of which 215955 cached (96.25% prefix-stable), 21159 schema bytes per request, cost/solved 7454.50.
-- **R2 prefix cache**: **adopt** (Δ cost/solved -267.05 (-3.58%)). input tokens 379214 → 377988; prefix-stable 96.25% → 98.63%
+- **baseline (all off)**: 22/22 success, 53 model calls, 384912 input tokens of which 219178 cached (96.26% prefix-stable), 21589 schema bytes per request, cost/solved 7567.
+- **R2 prefix cache**: **adopt** (Δ cost/solved -272 (-3.59%)). input tokens 384912 → 383685; prefix-stable 96.26% → 98.65%
 - **R3 tool-output summaries**: **spike** (Δ cost/solved 0). no request byte, call or schema change on this fixture set. Fixture tool outputs are a few bytes, below the size that triggers a summary.
-- **R4 deferred tools**: **adopt** (Δ cost/solved -2735.64 (-36.70%)). input tokens 379214 → 240527; prefix-stable 96.25% → 95.95%; schema bytes/request 21159 → 10692
+- **R4 deferred tools**: **adopt** (Δ cost/solved -2735.68 (-36.15%)). input tokens 384912 → 246223; prefix-stable 96.26% → 95.97%; schema bytes/request 21589 → 11122
 - **R5 batched read-only**: **spike** (Δ cost/solved 0). no request byte, call or schema change on this fixture set. R5 runs consecutive read-only calls from one reply in parallel; the model still decides how many calls a reply holds, so requests and model calls stay the same and only wall time (not measured here) can move.
-- **all on**: **adopt** (Δ cost/solved -2883.68 (-38.68%)). input tokens 379214 → 239301; prefix-stable 96.25% → 97.85%; schema bytes/request 21159 → 10692
+- **all on**: **adopt** (Δ cost/solved -2888.59 (-38.17%)). input tokens 384912 → 244999; prefix-stable 96.26% → 97.89%; schema bytes/request 21589 → 11122
 
 ## Verdict
 

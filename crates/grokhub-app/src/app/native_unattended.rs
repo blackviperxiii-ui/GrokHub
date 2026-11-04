@@ -613,7 +613,9 @@ impl Cabin {
         std::thread::spawn(move || {
             let digest = Some(JobKind::Digest);
             let model = tier_model(CABIN_FAST_MODEL, goal.as_ref());
-            let out = fast_once(&ready, &prompt, &model, digest, goal.as_ref(), true);
+            // Hosted search follows the saved search rules and the offline switch.
+            let search = grokhub_agent::perm::hosted_search_allowed_background();
+            let out = fast_once(&ready, &prompt, &model, digest, goal.as_ref(), search);
             let _ = tx.send(out);
         });
     }

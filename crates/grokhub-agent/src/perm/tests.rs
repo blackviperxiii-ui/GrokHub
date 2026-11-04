@@ -1184,3 +1184,53 @@ fn always_allow_stops_only_for_hard_classes() {
         Decision::Refuse(gate::unattended_deny("run_terminal_command"))
     );
 }
+
+#[test]
+fn hosted_search_rides_only_where_the_cabin_search_would_run_unasked() {
+    let _online = grokhub_core::offline::force_for_thread(false);
+    let open = Gate {
+        mode: PermMode::Always,
+        readonly_session: false,
+        attended: true,
+        desktop: false,
+    };
+    let rule = |text: &str, action| parse_rule(text, action).unwrap();
+    assert!(hosted_search_allowed(&open, &[], false));
+    assert!(hosted_search_allowed(
+        &open,
+        &[rule("WebSearch", Action::Allow)],
+        false
+    ));
+    // Read-only and plan sessions, unattended runs, and recalled memory lines.
+    let readonly = Gate {
+        readonly_session: true,
+        ..open
+    };
+    let unattended = Gate {
+        attended: false,
+        ..open
+    };
+    assert!(!hosted_search_allowed(&readonly, &[], false));
+    assert!(!hosted_search_allowed(&unattended, &[], false));
+    assert!(!hosted_search_allowed(&open, &[], true));
+    // A deny or ask rule for search can't be honored on xAI's side.
+    assert!(!hosted_search_allowed(
+        &open,
+        &[rule("WebSearch", Action::Deny)],
+        false
+    ));
+    assert!(!hosted_search_allowed(
+        &open,
+        &[rule("WebSearch", Action::Ask)],
+        false
+    ));
+    // A rule for another tool changes nothing.
+    assert!(hosted_search_allowed(
+        &open,
+        &[rule("WebFetch(domain:example.com)", Action::Deny)],
+        false
+    ));
+    let _offline = grokhub_core::offline::force_for_thread(true);
+    assert!(!hosted_search_allowed(&open, &[], false));
+    assert!(!hosted_search_allowed_background());
+}
