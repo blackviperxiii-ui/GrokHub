@@ -135,6 +135,11 @@ pub fn govern(
         if readonly_shell(&facts) {
             return Decision::Run;
         }
+        // Auto mode: an ordinary command the sandbox fully holds runs without
+        // the judge or a card. Supervised keeps asking.
+        if gate.mode == PermMode::Auto && sandbox_holds(name, arguments, workspace) {
+            return Decision::Run;
+        }
         return base;
     }
     if rule_hit_paths(policy, Action::Deny, kind, workspace, &paths) {
@@ -395,6 +400,11 @@ fn tool_kind(name: &str) -> Option<Tool> {
         "write" | "search_replace" => Some(Tool::Edit),
         _ => None,
     }
+}
+
+fn sandbox_holds(name: &str, arguments: &str, workspace: &Path) -> bool {
+    serde_json::from_str::<serde_json::Value>(arguments)
+        .is_ok_and(|args| crate::sandbox::auto_allows(&config_dir(), name, &args, workspace))
 }
 
 fn command_arg(arguments: &str) -> Option<String> {

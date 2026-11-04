@@ -36,6 +36,34 @@ fn settings_default_on_and_the_file_can_widen_or_turn_it_off() {
     assert!(!s.network_guard);
     assert_eq!(s.writable, [home.join("src/other"), sdk]);
     assert!(!parse_file("enabled = FALSE", None).enabled);
+    assert!(Settings::default().auto_allow);
+    assert!(!parse_file("auto_allow = false", None).auto_allow);
+}
+
+#[test]
+fn only_a_plan_that_holds_writes_and_the_network_counts_as_enforced() {
+    let held = |net_confined| Plan {
+        writable: vec![PathBuf::from("/work")],
+        proxy: Some("127.0.0.1:8123".into()),
+        isolation: Some(Isolation {
+            hide: Vec::new(),
+            bridge: None,
+            net_confined,
+        }),
+    };
+    assert!(!held(false).enforced(), "the network isn't fenced in");
+    let bare = Plan {
+        isolation: None,
+        ..held(true)
+    };
+    assert!(!bare.enforced(), "no isolation at all");
+    // Writes: Landlock on Linux, Seatbelt on macOS, nothing yet on Windows.
+    #[cfg(target_os = "linux")]
+    assert_eq!(held(true).enforced(), landlock::abi().is_some());
+    #[cfg(target_os = "macos")]
+    assert!(held(true).enforced());
+    #[cfg(windows)]
+    assert!(!held(true).enforced());
 }
 
 #[test]
