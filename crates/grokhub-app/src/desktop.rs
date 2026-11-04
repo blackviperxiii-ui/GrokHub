@@ -998,6 +998,11 @@ fn wait_for_title(title: Option<&str>, cancel: Option<&AtomicBool>) -> Result<St
 }
 
 pub fn run_computer_op_cancel(op: &ComputerOp, cancel: Option<&AtomicBool>) -> String {
+    // Halt first: reading the game guard lists processes, which can take a
+    // second on Windows, and a halted op must not wait on it.
+    if cancelled(cancel) {
+        return hands_receipt(&computer_cmd_line(op), Instant::now(), false, "halted");
+    }
     run_computer_op_under(op, cancel, crate::desktop_mcp::game_guard())
 }
 

@@ -1519,8 +1519,31 @@ impl Cabin {
         if let Some(imported) = grokhub_agent::perm::load_claude_project(&workspace) {
             if !imported.is_empty() {
                 crate::cards::settings_note(ui, "From .claude/settings.json. Read only.");
+                let trusted = grokhub_agent::folder_trusted(&workspace);
+                let grants = imported
+                    .iter()
+                    .any(|rule| rule.action == grokhub_agent::perm::Action::Allow);
                 for rule in imported {
                     crate::cards::settings_note(ui, &format!("{}  {}", rule.action, rule.source));
+                }
+                if grants {
+                    let (note, button) = if trusted {
+                        (
+                            "This folder is trusted, so its allow rules apply.",
+                            "Stop trusting",
+                        )
+                    } else {
+                        (
+                            "Allow rules from this repository don't apply until you trust this folder. Deny and ask rules always apply.",
+                            "Trust folder",
+                        )
+                    };
+                    if crate::cards::settings_action(ui, "Folder trust", note, button) {
+                        match grokhub_agent::set_folder_trust(&workspace, !trusted) {
+                            Ok(()) => self.status = "Saved".into(),
+                            Err(err) => self.status = err,
+                        }
+                    }
                 }
             }
         }

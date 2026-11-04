@@ -251,6 +251,13 @@ fn should_review(input: &ReviewIn<'_>) -> bool {
     if !matches!(attended_decision(input), Decision::Ask) {
         return false;
     }
+    // A hard class keeps its card: the judge can't approve what Always can't skip.
+    if !matches!(
+        crate::harness::classify(input.name, input.arguments),
+        crate::harness::HardHit::None
+    ) {
+        return false;
+    }
     // A tool its MCP server marks destructive keeps its card for the user.
     if hard_shell(input.name, input.arguments)
         || crate::mcp::is_destructive_call(input.name, input.arguments)
@@ -998,6 +1005,55 @@ mod tests {
         let seen = client.seen.lock().unwrap();
         let blob = format!("{:?}", seen[0].input);
         assert!(blob.contains("unvetted_env"), "{blob}");
+    }
+
+    #[test]
+    fn hard_classes_keep_their_card_and_never_reach_the_judge() {
+        let client = Scripted {
+            text: r#"{"verdict":"allow"}"#.into(),
+            usage: Usage::default(),
+            hang: false,
+            err: false,
+            panic: true,
+            seen: Mutex::new(Vec::new()),
+        };
+        let gate = auto_gate(true);
+        for (name, arguments) in [
+            (
+                "write",
+                r#"{"path":".claude/settings.json","content":"{}"}"#,
+            ),
+            (
+                "search_replace",
+                r#"{"file_path":".grok/hooks/post.sh","old_string":"a","new_string":"b"}"#,
+            ),
+            (
+                "run_terminal_command",
+                r#"{"command":"echo '{}' > .claude/settings.json","timeout":3000}"#,
+            ),
+            ("hard_money_stub", "{}"),
+        ] {
+            let base = gate::decide_with(&gate, name, arguments, false, None, Path::new("."), None);
+            assert_eq!(base, Decision::Ask, "{name} {arguments}");
+            let reviewed = review(&ReviewIn {
+                client: &client,
+                cancel: &CancelToken::new(),
+                halt: &|| false,
+                gate: &gate,
+                name,
+                arguments,
+                workspace: Path::new("."),
+                policy: None,
+                latched_always: false,
+                desk: None,
+                history: &[],
+                conversation_id: "conv",
+                base,
+                timeout: JUDGE_TIMEOUT,
+            });
+            assert_eq!(reviewed.decision, Decision::Ask, "{name} {arguments}");
+            assert!(reviewed.judge_usage.is_none());
+        }
     }
 
     #[test]

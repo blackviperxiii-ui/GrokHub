@@ -529,6 +529,38 @@ fn claude_settings_import_reads_only_the_permissions_block() {
     std::fs::create_dir_all(project.join(".claude")).unwrap();
     std::fs::write(project.join(".claude").join("settings.json"), text).unwrap();
     let _guard = ConfigGuard::set(root.join("cfg"));
+    // An untrusted folder's file can tighten but never grant.
+    let untrusted = Policy::load(&project);
+    assert!(!untrusted
+        .rules
+        .iter()
+        .any(|rule| rule.action == Action::Allow));
+    assert!(untrusted
+        .rules
+        .iter()
+        .any(|rule| rule.action == Action::Deny && rule.source.contains("rm")));
+    assert!(untrusted
+        .rules
+        .iter()
+        .any(|rule| rule.action == Action::Ask && rule.mode == PatMode::Domain));
+    let base = gate::decide(
+        &gate(PermMode::Ask, false),
+        "run_terminal_command",
+        false,
+        None,
+    );
+    assert_eq!(
+        govern(
+            base.clone(),
+            &gate(PermMode::Ask, false),
+            "run_terminal_command",
+            &shell("npm test"),
+            &project,
+            &untrusted,
+        ),
+        base
+    );
+    crate::hooks::set_folder_trust(&project, true).unwrap();
     let loaded = Policy::load(&project);
     assert!(loaded
         .rules

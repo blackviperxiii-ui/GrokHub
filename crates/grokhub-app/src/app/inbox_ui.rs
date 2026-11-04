@@ -125,6 +125,7 @@ pub(super) fn hard_words(class: HardClass, tool: &str, action: &str, held: &[Str
         HardClass::Money => format!("Spend money: {action}"),
         HardClass::Credentials => capitalized(action),
         HardClass::IrreversibleOs => format!("Irreversible: {action}"),
+        HardClass::AgentConfig => format!("Change agent settings: {action}"),
     };
     cut(&text)
 }

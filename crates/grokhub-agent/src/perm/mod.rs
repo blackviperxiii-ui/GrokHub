@@ -47,11 +47,19 @@ impl Policy {
     }
 
     /// Saved rules, the project's `.claude/settings.json` permissions, and this project's grants.
+    /// The project file's allow rules count only in a folder the person trusted, like project
+    /// hooks: a cloned repo, or the agent itself, could otherwise write an allow-all file.
+    /// Its deny and ask rules always count, since they only tighten.
     pub fn load(workspace: &Path) -> Self {
         let dir = store::config_dir();
         let mut rules = store::load_rules(&dir);
         if let Some(imported) = claude::load_project(workspace) {
-            rules.extend(imported);
+            let trusted = crate::hooks::folder_trusted(workspace);
+            rules.extend(
+                imported
+                    .into_iter()
+                    .filter(|rule| trusted || rule.action != Action::Allow),
+            );
         }
         let grants = store::load_grants(&dir, workspace);
         Self { rules, grants }

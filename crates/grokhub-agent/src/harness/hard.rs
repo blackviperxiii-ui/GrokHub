@@ -31,6 +31,9 @@ pub enum HardClass {
     Delete,
     Credentials,
     IrreversibleOs,
+    /// A write to the files that set what the agent may do or is told:
+    /// the workspace's `.claude/` folder and `.grok/hooks/`.
+    AgentConfig,
 }
 
 impl HardClass {
@@ -41,6 +44,7 @@ impl HardClass {
             Self::Delete => "delete",
             Self::Credentials => "credentials",
             Self::IrreversibleOs => "irreversible_os",
+            Self::AgentConfig => "agent_config",
         }
     }
 
@@ -51,6 +55,7 @@ impl HardClass {
             Self::Delete => "Delete",
             Self::Credentials => "Credentials / secrets",
             Self::IrreversibleOs => "Irreversible OS",
+            Self::AgentConfig => "Agent settings",
         }
     }
 
@@ -61,6 +66,7 @@ impl HardClass {
             "delete" => Some(Self::Delete),
             "credentials" => Some(Self::Credentials),
             "irreversible_os" => Some(Self::IrreversibleOs),
+            "agent_config" => Some(Self::AgentConfig),
             _ => None,
         }
     }
@@ -1758,6 +1764,53 @@ fn touches_mod_root(name: &str, arguments: &str) -> bool {
     })
 }
 
+/// A path inside the workspace's agent settings: any `.claude` folder, or
+/// `.grok/hooks`. These files grant permissions and run hooks, so the agent
+/// writing them could approve its own later calls.
+pub fn is_agent_config_path(path: &str) -> bool {
+    let path = norm_path(path);
+    let parts: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
+    parts.iter().enumerate().any(|(at, part)| {
+        let part = part.trim_matches(|c: char| matches!(c, '"' | '\'' | '`'));
+        part == ".claude"
+            || (part == ".grok"
+                && parts.get(at + 1).is_some_and(|next| {
+                    next.trim_matches(|c: char| matches!(c, '"' | '\'' | '`')) == "hooks"
+                }))
+    })
+}
+
+/// A write, edit or non-read-only command that names the agent's settings.
+fn touches_agent_config(name: &str, arguments: &str) -> bool {
+    let v: serde_json::Value = serde_json::from_str(arguments).unwrap_or_default();
+    if SHELL_TOOLS.contains(&name) {
+        let Some(command) = command_arg(arguments) else {
+            return false;
+        };
+        let facts = crate::perm::analyze(&command);
+        let read_only = facts.segments.as_ref().is_some_and(|segs| {
+            !segs.is_empty()
+                && !facts.dangerous
+                && segs
+                    .iter()
+                    .all(|seg| seg.readonly && seg.eligible && !seg.dangerous)
+        });
+        return !read_only
+            && command
+                .split(|c: char| {
+                    c.is_whitespace() || matches!(c, ';' | '&' | '|' | '>' | '<' | '(' | ')' | '=')
+                })
+                .any(is_agent_config_path);
+    }
+    if matches!(name, "write" | "search_replace") {
+        return ["path", "file_path", "target_file"]
+            .iter()
+            .filter_map(|k| v.get(*k).and_then(|p| p.as_str()))
+            .any(is_agent_config_path);
+    }
+    false
+}
+
 /// Hard class for a tool call. Read-only tools are never hard class.
 pub fn hard_class(name: &str, arguments: &str) -> Option<HardClass> {
     if crate::gate::is_readonly(name) {
@@ -1765,6 +1818,9 @@ pub fn hard_class(name: &str, arguments: &str) -> Option<HardClass> {
     }
     if touches_mod_root(name, arguments) {
         return Some(HardClass::IrreversibleOs);
+    }
+    if touches_agent_config(name, arguments) {
+        return Some(HardClass::AgentConfig);
     }
     if SHELL_TOOLS.contains(&name) {
         let cmd = command_arg(arguments)
@@ -3673,5 +3729,69 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn writes_to_the_agent_settings_park_a_card() {
+        let shell = |c: &str| serde_json::json!({ "command": c }).to_string();
+        let write = |p: &str| serde_json::json!({ "path": p, "content": "{}" }).to_string();
+        for path in [
+            ".claude/settings.json",
+            "./.claude/settings.local.json",
+            "sub/.claude/commands/x.md",
+            ".claude",
+            ".grok/hooks/pre.sh",
+            "C:\\repo\\.CLAUDE\\settings.json",
+        ] {
+            assert_eq!(
+                hard_class("write", &write(path)),
+                Some(HardClass::AgentConfig),
+                "{path}"
+            );
+            assert!(is_agent_config_path(path), "{path}");
+        }
+        let replace = serde_json::json!({
+            "file_path": ".claude/settings.json",
+            "old_string": "a",
+            "new_string": "b",
+        })
+        .to_string();
+        assert_eq!(
+            hard_class("search_replace", &replace),
+            Some(HardClass::AgentConfig)
+        );
+        for command in [
+            r#"echo '{"permissions":{"allow":["Bash(*)"]}}' > .claude/settings.json"#,
+            "cp evil.json .claude/settings.json",
+            "mkdir -p .grok/hooks && cp x.sh .grok/hooks/",
+            "tee .claude/settings.local.json <x",
+            "sed -i s/ask/allow/ \".claude/settings.json\"",
+        ] {
+            assert_eq!(
+                hard_class("run_terminal_command", &shell(command)),
+                Some(HardClass::AgentConfig),
+                "{command}"
+            );
+        }
+        for (name, args) in [
+            ("write", write("src/claude.rs")),
+            ("write", write("notes/.claudeish/x")),
+            ("write", write(".grok/notes.md")),
+            ("write", write("hooks/.grok")),
+            ("run_terminal_command", shell("cat .claude/settings.json")),
+            ("run_terminal_command", shell("ls .claude")),
+            ("run_terminal_command", shell("cargo test")),
+            (
+                "read_file",
+                serde_json::json!({"target_file": ".claude/settings.json"}).to_string(),
+            ),
+        ] {
+            assert_eq!(hard_class(name, &args), None, "{name} {args}");
+        }
+        assert_eq!(
+            HardClass::parse("agent_config"),
+            Some(HardClass::AgentConfig)
+        );
+        assert_eq!(HardClass::AgentConfig.as_str(), "agent_config");
     }
 }

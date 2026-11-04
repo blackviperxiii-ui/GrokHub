@@ -113,7 +113,11 @@ fn fake(reply: &str) -> Arc<AtomicUsize> {
 }
 
 fn wait_pass(cabin: &mut Cabin) {
-    for _ in 0..500 {
+    // A wall-clock deadline, not a count of sleeps: a Windows sleep rounds up
+    // to about 16 ms, and a loaded CI runner can take seconds to schedule the
+    // pass's thread.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while std::time::Instant::now() < deadline {
         cabin.poll_self_review();
         if cabin.harness.self_review.rx.is_none() {
             return;
