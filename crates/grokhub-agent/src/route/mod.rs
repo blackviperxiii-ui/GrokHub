@@ -1460,9 +1460,9 @@ impl Router {
 #[cfg(test)]
 mod ask_eval;
 #[cfg(test)]
-mod knn_tests;
-#[cfg(test)]
 mod auto_tests;
+#[cfg(test)]
+mod knn_tests;
 
 #[cfg(test)]
 mod r2a_tests;
