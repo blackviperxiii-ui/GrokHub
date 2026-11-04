@@ -1276,6 +1276,7 @@ pub fn parse_openai_reply(body: &str) -> Result<TurnOutput, ClientError> {
                 .map(|c| (c * 1e10).round() as i64)
                 .unwrap_or(0),
         },
+        ..TurnOutput::default()
     })
 }
 

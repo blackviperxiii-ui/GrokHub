@@ -107,6 +107,9 @@ pub struct RouteDone {
     /// The call went through a batch queue ([`ModelClient::batches`]): its
     /// wall time is queueing, so neither tuning nor health learns from it.
     pub batched: bool,
+    /// Hosted search the reply ran, and how many pages it cited.
+    pub hosted: crate::client::HostedUsage,
+    pub sources: u32,
 }
 
 fn http_of(err: &ClientError) -> u16 {
@@ -143,6 +146,8 @@ impl RouteDone {
                 usage: turn.usage.clone(),
                 latency_ms,
                 served_model,
+                hosted: turn.hosted,
+                sources: u32::try_from(turn.sources.len()).unwrap_or(u32::MAX),
                 ..Self::default()
             },
             Err(e) => Self {
@@ -190,8 +195,7 @@ impl RouteDone {
             },
             latency_ms: elapsed.as_millis() as u64,
             served_model,
-            cancelled: false,
-            batched: false,
+            ..Self::default()
         }
     }
 }
@@ -1140,6 +1144,8 @@ pub fn route_record(
             cost_usd: u.cost_in_usd_ticks as f64 / TICKS_PER_USD,
             limit: done.http == 429
                 && classify_status(done.http, &done.error) == CallStatus::FreeUsageExhausted,
+            hosted: done.hosted,
+            sources: done.sources,
         }),
         used,
         shadow: !decision.live,

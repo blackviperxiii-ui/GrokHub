@@ -55,6 +55,16 @@ pub struct RouteOutcome {
     /// R2b: the call hit the plan's usage limit (429 `free-usage-exhausted`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub limit: bool,
+    /// Hosted search the reply ran and was billed for.
+    #[serde(default, skip_serializing_if = "crate::client::HostedUsage::is_empty")]
+    pub hosted: crate::client::HostedUsage,
+    /// Pages the reply cited.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub sources: u32,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 /// `{span_id, episode, step, class, d, ctx_tokens, signals, candidates_n,

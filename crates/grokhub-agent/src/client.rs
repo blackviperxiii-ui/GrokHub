@@ -89,6 +89,26 @@ pub enum ContentPart {
 /// The `type` of a provider's reasoning item ([`InputItem::provider_reasoning`]).
 pub const PROVIDER_REASONING: &str = "reasoning_details";
 
+/// Output items of xAI's hosted search: `web_search_call`, and `custom_tool_call`
+/// for X search (`xs_` call ids) and attachment search (`as_`). They go back
+/// with the next request like sealed reasoning, as xAI asks for every output
+/// item, so the reasoning that refers to them still lines up.
+pub const HOSTED_CALLS: [&str; 3] = ["web_search_call", "x_search_call", "custom_tool_call"];
+
+/// A hosted search call item: one of [`HOSTED_CALLS`] with an `id` or `call_id`.
+pub fn is_hosted_call(value: &Value) -> bool {
+    value
+        .get("type")
+        .and_then(Value::as_str)
+        .is_some_and(|t| HOSTED_CALLS.contains(&t))
+        && ["id", "call_id"].iter().any(|k| {
+            value
+                .get(*k)
+                .and_then(Value::as_str)
+                .is_some_and(|s| !s.is_empty())
+        })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputItem {
     Message {
@@ -117,8 +137,8 @@ pub enum InputItem {
         raw: String,
         digest: String,
     },
-    /// One xAI `reasoning` output item with its `encrypted_content`, kept as the
-    /// JSON text it arrived as. Opaque like [`InputItem::ServerCompaction`]: it goes
+    /// One xAI `reasoning` output item with its `encrypted_content`, or one hosted
+    /// search call ([`HOSTED_CALLS`]), kept as the JSON text it arrived as. Opaque like [`InputItem::ServerCompaction`]: it goes
     /// back to xAI unchanged on the next request, so the model keeps its own
     /// reasoning between tool steps and the prompt cache keeps matching. Other
     /// providers and the local model never see it, and it goes only to the
@@ -136,21 +156,23 @@ pub enum InputItem {
 impl InputItem {
     /// A [`InputItem::Reasoning`] from one item's JSON text, or `None` when it is
     /// neither a JSON object of type `reasoning` with a non-empty
-    /// `encrypted_content` (xAI) nor one of type [`PROVIDER_REASONING`] with a
-    /// non-empty `reasoning_details` list (an OpenAI-compatible provider).
+    /// `encrypted_content` (xAI), a hosted search call ([`is_hosted_call`]), nor
+    /// one of type [`PROVIDER_REASONING`] with a non-empty `reasoning_details`
+    /// list (an OpenAI-compatible provider).
     pub fn reasoning(raw: &str, model: &str) -> Option<InputItem> {
         let value: Value = serde_json::from_str(raw).ok()?;
-        let sealed = match value.get("type").and_then(Value::as_str) {
-            Some("reasoning") => value
-                .get("encrypted_content")
-                .and_then(Value::as_str)
-                .is_some_and(|s| !s.is_empty()),
-            Some(PROVIDER_REASONING) => value
-                .get("reasoning_details")
-                .and_then(Value::as_array)
-                .is_some_and(|d| !d.is_empty()),
-            _ => false,
-        };
+        let sealed = is_hosted_call(&value)
+            || match value.get("type").and_then(Value::as_str) {
+                Some("reasoning") => value
+                    .get("encrypted_content")
+                    .and_then(Value::as_str)
+                    .is_some_and(|s| !s.is_empty()),
+                Some(PROVIDER_REASONING) => value
+                    .get("reasoning_details")
+                    .and_then(Value::as_array)
+                    .is_some_and(|d| !d.is_empty()),
+                _ => false,
+            };
         sealed.then(|| InputItem::Reasoning {
             raw: raw.to_string(),
             model: model.trim().to_string(),
@@ -282,6 +304,35 @@ pub enum StreamEvent {
     ReasoningDelta(String),
 }
 
+/// What xAI's hosted search did in one reply (`usage.server_side_tool_usage_details`).
+/// Only successful calls are counted, and only those are billed: web search per
+/// call, X search per post and per profile fetched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub struct HostedUsage {
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub web_search_calls: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub x_posts_fetched: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub x_users_fetched: u64,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
+}
+
+impl HostedUsage {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    pub fn add(&mut self, other: &HostedUsage) {
+        self.web_search_calls = self.web_search_calls.saturating_add(other.web_search_calls);
+        self.x_posts_fetched = self.x_posts_fetched.saturating_add(other.x_posts_fetched);
+        self.x_users_fetched = self.x_users_fetched.saturating_add(other.x_users_fetched);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TurnOutput {
     pub text: String,
@@ -296,6 +347,11 @@ pub struct TurnOutput {
     pub truncated: bool,
     /// Provider reason for truncation, when present (e.g. `max_output_tokens`).
     pub truncate_reason: Option<String>,
+    /// Pages hosted search cited in the reply (`url_citation` annotations), once
+    /// each, in order. The reply text carries them inline as well.
+    pub sources: Vec<String>,
+    /// Hosted search the reply ran and was billed for.
+    pub hosted: HostedUsage,
 }
 
 impl TurnOutput {
@@ -610,7 +666,7 @@ fn input_wire(items: &[InputItem], model: Option<&str>) -> (Vec<Value>, bool) {
                 if let Some(item) = same
                     .then(|| serde_json::from_str::<Value>(raw).ok())
                     .flatten()
-                    .filter(|v| v["type"] == "reasoning")
+                    .filter(|v| v["type"] == "reasoning" || is_hosted_call(v))
                 {
                     input.push(item);
                 }
@@ -691,6 +747,20 @@ pub fn parse_compact_reply(body: &str) -> Result<CompactOutput, ClientError> {
     })
 }
 
+/// Cap on xAI's own search loop in one reply (`max_turns`), by what the turn
+/// is for: a quick lookup for chat, more room for a task, deep for research
+/// (xAI suggests 1 to 2, 3 to 5 and 10 or more). A run with no brief, such as
+/// a subagent, gets the middle. Hosted search is billed per call, so this
+/// bounds its spend; a client tool call starts the count again.
+pub fn hosted_max_turns(conversation_id: &str) -> u32 {
+    use crate::brain::Intent;
+    match crate::checkpoint::turn_brief(conversation_id).map(|b| b.intent) {
+        Some(Intent::Research) => 5,
+        Some(Intent::Task | Intent::Repair) | None => 3,
+        Some(Intent::Chat | Intent::Question | Intent::Creative | Intent::Background) => 2,
+    }
+}
+
 pub fn responses_body(req: &ResponsesRequest) -> Value {
     let model = if req.model.trim().is_empty() {
         DEFAULT_MODEL
@@ -707,12 +777,17 @@ pub fn responses_body(req: &ResponsesRequest) -> Value {
         tools.push(json!({"type": "web_search"}));
         tools.push(json!({"type": "x_search"}));
     }
+    let hosted_turns = (req.hosted_search && is_grok_model(model))
+        .then(|| hosted_max_turns(req.conversation_id.trim()));
     let mut body = json!({
         "model": model,
         "stream": true,
         "input": input,
         "tools": tools,
     });
+    if let Some(turns) = hosted_turns {
+        body["max_turns"] = json!(turns);
+    }
     // Normalize here too, so a saved legacy level (e.g. `minimal`) never reaches the wire.
     let effort = req
         .effort
@@ -1359,13 +1434,7 @@ fn read_sse<R: Read>(
 ) -> Result<TurnOutput, ClientError> {
     let mut parser = SseParser::new();
     let mut buf = [0u8; 4096];
-    let mut text = String::new();
-    let mut reasoning = String::new();
-    let mut reasoning_items = Vec::new();
-    let mut calls = Vec::new();
-    let mut usage = Usage::default();
-    let mut truncated = false;
-    let mut truncate_reason = None;
+    let mut out = TurnOutput::default();
     // Bytes of a character that a read cut in half, kept for the next read.
     let mut pending: Vec<u8> = Vec::new();
     loop {
@@ -1387,44 +1456,22 @@ fn read_sse<R: Read>(
         };
         pending.extend_from_slice(&buf[..n]);
         let chunk = take_utf8(&mut pending);
-        fold_events(
-            parser.push(&chunk),
-            sink,
-            &mut text,
-            &mut reasoning,
-            &mut reasoning_items,
-            &mut calls,
-            &mut usage,
-            &mut truncated,
-            &mut truncate_reason,
-        )?;
+        fold_events(parser.push(&chunk), sink, &mut out)?;
     }
     if !pending.is_empty() {
         let tail = String::from_utf8_lossy(&pending).into_owned();
-        fold_events(
-            parser.push(&tail),
-            sink,
-            &mut text,
-            &mut reasoning,
-            &mut reasoning_items,
-            &mut calls,
-            &mut usage,
-            &mut truncated,
-            &mut truncate_reason,
-        )?;
+        fold_events(parser.push(&tail), sink, &mut out)?;
     }
-    fold_events(
-        parser.finish()?,
-        sink,
-        &mut text,
-        &mut reasoning,
-        &mut reasoning_items,
-        &mut calls,
-        &mut usage,
-        &mut truncated,
-        &mut truncate_reason,
-    )?;
-    Ok(TurnOutput {
+    fold_events(parser.finish()?, sink, &mut out)?;
+    Ok(out)
+}
+
+fn fold_events(
+    events: Vec<SseEvent>,
+    sink: &mut dyn FnMut(StreamEvent),
+    out: &mut TurnOutput,
+) -> Result<(), ClientError> {
+    let TurnOutput {
         text,
         reasoning,
         reasoning_items,
@@ -1432,20 +1479,9 @@ fn read_sse<R: Read>(
         usage,
         truncated,
         truncate_reason,
-    })
-}
-
-fn fold_events(
-    events: Vec<SseEvent>,
-    sink: &mut dyn FnMut(StreamEvent),
-    text: &mut String,
-    reasoning: &mut String,
-    reasoning_items: &mut Vec<InputItem>,
-    calls: &mut Vec<FunctionCall>,
-    usage: &mut Usage,
-    truncated: &mut bool,
-    truncate_reason: &mut Option<String>,
-) -> Result<(), ClientError> {
+        sources,
+        hosted,
+    } = out;
     for ev in events {
         match ev {
             SseEvent::TextDelta(delta) => {
@@ -1460,6 +1496,14 @@ fn fold_events(
             SseEvent::ReasoningItem(raw) => {
                 reasoning_items.extend(InputItem::reasoning(&raw, ""));
             }
+            SseEvent::Sources(urls) => {
+                for url in urls {
+                    if !sources.contains(&url) {
+                        sources.push(url);
+                    }
+                }
+            }
+            SseEvent::Hosted(next) => *hosted = next,
             SseEvent::Completed {
                 usage: next,
                 incomplete,
@@ -2034,5 +2078,57 @@ mod tests {
         );
         assert!(InputItem::reasoning("not json", "m").is_none());
         assert!(sealed.is_opaque());
+    }
+
+    #[test]
+    fn hosted_search_calls_go_back_in_order_to_the_same_model_only() {
+        let web = r#"{"id":"ws_1","type":"web_search_call","status":"completed"}"#;
+        let x = r#"{"call_id":"xs_2","type":"custom_tool_call","name":"x_keyword_search","input":"{}"}"#;
+        let mut req = grok_req("grok-4.7", Some("high"));
+        req.input
+            .push(InputItem::reasoning(SEALED, "grok-4.7").unwrap());
+        req.input
+            .push(InputItem::reasoning(web, "grok-4.7").unwrap());
+        req.input.push(InputItem::reasoning(x, "grok-4.7").unwrap());
+        let body = responses_body(&req);
+        let sent = body["input"].as_array().unwrap();
+        assert_eq!(sent.len(), 4);
+        assert_eq!(sent[2], serde_json::from_str::<Value>(web).unwrap());
+        assert_eq!(sent[3], serde_json::from_str::<Value>(x).unwrap());
+        req.model = "grok-4.3".into();
+        assert_eq!(responses_body(&req)["input"].as_array().unwrap().len(), 1);
+        // A call item needs its id to be passed back.
+        assert!(InputItem::reasoning(r#"{"type":"web_search_call"}"#, "m").is_none());
+        assert!(InputItem::reasoning(r#"{"type":"function_call","id":"f"}"#, "m").is_none());
+    }
+
+    #[test]
+    fn hosted_search_turns_are_capped_by_what_the_turn_is_for() {
+        use crate::brain::{Brief, Intent};
+        let conv = format!("hosted-turns-{}", std::process::id());
+        let mut req = grok_req("grok-4.7", Some("low"));
+        req.conversation_id = conv.clone();
+        assert!(
+            responses_body(&req).get("max_turns").is_none(),
+            "no hosted search"
+        );
+        req.hosted_search = true;
+        // No brief (a subagent): the middle.
+        assert_eq!(responses_body(&req)["max_turns"], 3);
+        for (intent, turns) in [
+            (Intent::Chat, 2),
+            (Intent::Question, 2),
+            (Intent::Task, 3),
+            (Intent::Research, 5),
+        ] {
+            crate::checkpoint::set_turn_brief(
+                &conv,
+                Brief {
+                    intent,
+                    ..Default::default()
+                },
+            );
+            assert_eq!(responses_body(&req)["max_turns"], turns, "{intent:?}");
+        }
     }
 }
