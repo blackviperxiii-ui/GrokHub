@@ -18,7 +18,11 @@
 pub mod git_guard;
 #[cfg(target_os = "linux")]
 pub mod landlock;
+#[cfg(target_os = "linux")]
+pub mod netns;
 pub mod proxy;
+#[cfg(target_os = "linux")]
+pub mod seccomp;
 #[cfg(windows)]
 pub mod windows;
 
@@ -109,6 +113,18 @@ pub struct Plan {
     pub writable: Vec<PathBuf>,
     /// `127.0.0.1:port` of the egress proxy, when the network guard is on.
     pub proxy: Option<String>,
+    /// Linux, where unprivileged namespaces are allowed: the command's own
+    /// namespaces (see [`netns`]). None elsewhere.
+    pub isolation: Option<Isolation>,
+}
+
+/// A command's own namespaces: these paths hidden, and, with `bridge`, a
+/// network of its own whose only way out is the proxy's Unix socket.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Isolation {
+    pub hide: Vec<PathBuf>,
+    /// The proxy's Unix socket and the port the proxy variables name.
+    pub bridge: Option<(PathBuf, u16)>,
 }
 
 /// The plan for a shell tool call (`run_terminal_command` or `monitor`) in
@@ -129,7 +145,110 @@ pub fn plan_in(config_dir: &Path, tool: &str, args: &Value, workspace: &Path) ->
     } else {
         None
     };
-    Some(Plan { writable, proxy })
+    let isolation = isolation(config_dir, workspace, home.as_deref(), proxy.as_deref());
+    Some(Plan {
+        writable,
+        proxy,
+        isolation,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn isolation(
+    config_dir: &Path,
+    workspace: &Path,
+    home: Option<&Path>,
+    proxy: Option<&str>,
+) -> Option<Isolation> {
+    if !netns::available() {
+        return None;
+    }
+    let bridge = proxy.and_then(|addr| {
+        let port = addr.rsplit(':').next()?.parse().ok()?;
+        Some((proxy::unix_bridge(config_dir).ok()?, port))
+    });
+    // The network guard is on but the bridge can't start: no namespace, so
+    // the command isn't cut off; the proxy variables still apply.
+    if proxy.is_some() && bridge.is_none() {
+        return None;
+    }
+    Some(Isolation {
+        hide: netns::hidden(home, config_dir, workspace),
+        bridge,
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn isolation(_: &Path, _: &Path, _: Option<&Path>, _: Option<&str>) -> Option<Isolation> {
+    None
+}
+
+/// After a failed command in its own network: when the output reads like a
+/// connection that had no way out (SSH, a raw socket, a host service), a
+/// note that only the HTTP proxy reaches out and how to get the whole
+/// machine. None otherwise.
+pub fn network_note(plan: Option<&Plan>, failed: bool, output: &str) -> Option<&'static str> {
+    const SIGNS: &[&str] = &[
+        "Could not resolve host",
+        "Could not resolve hostname",
+        "Temporary failure in name resolution",
+        "Name or service not known",
+        "Network is unreachable",
+        "Connection refused",
+        "ssh: connect to host",
+    ];
+    let isolated = plan
+        .and_then(|p| p.isolation.as_ref())
+        .is_some_and(|i| i.bridge.is_some());
+    (isolated && failed && SIGNS.iter().any(|s| output.contains(s))).then_some(
+        "[sandbox] This command has its own network: only HTTP(S) through the proxy reaches out, so SSH, raw sockets and services on the host's localhost don't. If it needs them, rerun with outside_sandbox (asks the user).",
+    )
+}
+
+/// One line on how commands are confined on this machine, for the doctor
+/// and the docs.
+pub fn status(config_dir: &Path) -> String {
+    let settings = settings(config_dir);
+    if !settings.enabled {
+        return "Shell sandbox: off (shell_sandbox.toml)".into();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let writes = if landlock::abi().is_some() {
+            "writes confined (Landlock)"
+        } else {
+            "writes not confined (no Landlock on this kernel)"
+        };
+        let (net, reads) = if netns::available() {
+            let net = if settings.network_guard {
+                "network only through the egress proxy (own namespace)"
+            } else {
+                "network open (network_guard = false)"
+            };
+            (net, "secret folders hidden")
+        } else {
+            let net = if settings.network_guard {
+                "network through the proxy variables only (this system doesn't allow unprivileged namespaces)"
+            } else {
+                "network open (network_guard = false)"
+            };
+            (net, "reads open")
+        };
+        format!("Shell sandbox: {writes}; {net}; {reads}")
+    }
+    #[cfg(windows)]
+    {
+        let net = if settings.network_guard {
+            "network through the proxy variables only"
+        } else {
+            "network open (network_guard = false)"
+        };
+        format!("Shell sandbox: writes confined (restricted token); {net}; reads open")
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
+    {
+        "Shell sandbox: proxy variables only on this system".into()
+    }
 }
 
 /// Whether this call runs on the whole machine: it raises privileges, or the
@@ -246,8 +365,10 @@ pub fn writable_roots(
 }
 
 /// Apply a plan to a command before it is spawned: the proxy variables, and
-/// on Linux the Landlock ruleset, which the child turns on just before exec.
-/// Called after any other `pre_exec` (so `setsid` runs first).
+/// on Linux, in the child just before exec, the namespaces (with the relay),
+/// the seccomp filter and the Landlock ruleset, in that order: the relay
+/// needs the Unix socket the filter then refuses. Called after any other
+/// `pre_exec` (so `setsid` runs first).
 #[cfg(unix)]
 pub fn apply(cmd: &mut std::process::Command, plan: &Plan) -> Result<(), String> {
     if let Some(addr) = &plan.proxy {
@@ -260,18 +381,37 @@ pub fn apply(cmd: &mut std::process::Command, plan: &Plan) -> Result<(), String>
     {
         use std::os::fd::AsRawFd;
         use std::os::unix::process::CommandExt;
-        let Ok(ruleset) = landlock::ruleset(&plan.writable) else {
-            // No Landlock on this kernel: writes are not confined.
-            return Ok(());
+        let setup = match &plan.isolation {
+            Some(iso) => Some(netns::Setup::new(
+                &iso.hide,
+                iso.bridge
+                    .as_ref()
+                    .map(|(sock, port)| (sock.as_path(), *port)),
+            )?),
+            None => None,
         };
-        let ruleset = std::sync::Arc::new(ruleset);
-        let raw = ruleset.as_raw_fd();
-        // SAFETY: restrict_self only calls prctl and one syscall, both
-        // async-signal-safe; the Arc keeps the fd open while `cmd` lives.
+        let filter = if plan.isolation.as_ref().is_some_and(|i| i.bridge.is_some()) {
+            seccomp::program()
+        } else {
+            Vec::new()
+        };
+        // No Landlock on this kernel: writes are not confined.
+        let ruleset = landlock::ruleset(&plan.writable).ok();
+        if setup.is_none() && filter.is_empty() && ruleset.is_none() {
+            return Ok(());
+        }
+        // SAFETY: enter, install and restrict_self only make async-signal-safe
+        // syscalls; the closure owns the ruleset fd while `cmd` lives.
         unsafe {
             cmd.pre_exec(move || {
-                let _keep = &ruleset;
-                landlock::restrict_self(raw)
+                if let Some(setup) = &setup {
+                    netns::enter(setup)?;
+                }
+                seccomp::install(&filter)?;
+                if let Some(ruleset) = &ruleset {
+                    landlock::restrict_self(ruleset.as_raw_fd())?;
+                }
+                Ok(())
             });
         }
     }

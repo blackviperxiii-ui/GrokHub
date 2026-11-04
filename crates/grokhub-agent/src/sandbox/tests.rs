@@ -235,6 +235,128 @@ fn a_sandboxed_command_writes_only_in_the_workspace() {
     }
 }
 
+/// Linux with namespaces: a command can't reach a port on the host's loopback
+/// directly (no `--noproxy` way out), the proxy still carries it there, a
+/// server the command starts on its own loopback works, the config folder
+/// reads as empty, new Unix sockets are refused while socket pairs work, and
+/// a script's `wait` doesn't wait on the relay.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_command_in_its_own_network_reaches_out_only_through_the_proxy() {
+    if !netns::available() {
+        eprintln!("skipped: unprivileged namespaces are not allowed here");
+        return;
+    }
+    let config = scratch("ns-cfg");
+    let _pin = crate::perm::ConfigGuard::set(&config);
+    std::fs::write(config.join("secret.txt"), "hunter2").unwrap();
+    let ws = scratch("ns-ws");
+    let run =
+        |command: String| crate::tools::shell::run(&ws, &json!({ "command": command }), &|| false);
+
+    // A host-side server on loopback that answers "pong".
+    let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = server.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for conn in server.incoming().flatten() {
+            let mut conn = conn;
+            let _ = std::io::Write::write_all(&mut conn, b"pong\n");
+        }
+    });
+
+    let out = run(format!(
+        "exec 3<>/dev/tcp/127.0.0.1/{port} && head -c4 <&3 || echo blocked"
+    ));
+    assert!(out.text.contains("blocked"), "{}", out.text);
+    assert!(!out.text.contains("pong"), "{}", out.text);
+
+    // Through the proxy (a CONNECT on its port, as an HTTP client would).
+    let proxy_port = plan_for_call("run_terminal_command", &json!({"command": "x"}), &ws)
+        .and_then(|p| p.proxy)
+        .and_then(|a| a.rsplit(':').next().map(str::to_string))
+        .unwrap();
+    let out = run(format!(
+        "exec 3<>/dev/tcp/127.0.0.1/{proxy_port} && \
+         printf 'CONNECT 127.0.0.1:{port} HTTP/1.1\\r\\nHost: 127.0.0.1:{port}\\r\\n\\r\\n' >&3 && \
+         timeout 5 head -c 200 <&3"
+    ));
+    assert!(out.text.contains("200"), "{}", out.text);
+    assert!(out.text.contains("pong"), "{}", out.text);
+
+    // Its own loopback works for a server it starts itself.
+    if std::process::Command::new("python3")
+        .arg("-V")
+        .output()
+        .is_ok()
+    {
+        let out = run("python3 -c 'import socket,threading\n\
+             s=socket.socket(); s.bind((\"127.0.0.1\",0)); s.listen(1)\n\
+             p=s.getsockname()[1]\n\
+             threading.Thread(target=lambda: s.accept()[0].sendall(b\"hi\")).start()\n\
+             c=socket.create_connection((\"127.0.0.1\",p)); print(c.recv(2))\n\
+             a,b=socket.socketpair(); a.sendall(b\"pair\"); print(b.recv(4))\n\
+             try:\n  socket.socket(socket.AF_UNIX)\n  print(\"unix-ok\")\n\
+             except PermissionError:\n  print(\"unix-refused\")'"
+            .into());
+        assert!(out.text.contains("b'hi'"), "{}", out.text);
+        assert!(out.text.contains("b'pair'"), "{}", out.text);
+        assert!(out.text.contains("unix-refused"), "{}", out.text);
+    }
+
+    let out = run(format!(
+        "cat {}/secret.txt || echo hidden",
+        config.display()
+    ));
+    assert!(out.text.contains("hidden"), "{}", out.text);
+    assert!(!out.text.contains("hunter2"), "{}", out.text);
+    assert_eq!(
+        std::fs::read_to_string(config.join("secret.txt")).unwrap(),
+        "hunter2"
+    );
+
+    let started = std::time::Instant::now();
+    let out = run("sleep 0.1 & wait; echo waited".into());
+    assert!(out.text.contains("waited"), "{}", out.text);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "wait returned without the relay"
+    );
+
+    let _ = std::fs::remove_dir_all(&config);
+    let _ = std::fs::remove_dir_all(&ws);
+}
+
+/// The filter's jumps land where they mean to: on socket, one of the two
+/// refused families or the io_uring calls, the last instruction refuses.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_seccomp_program_refuses_unix_vsock_and_io_uring_only() {
+    let prog = seccomp::program();
+    if prog.is_empty() {
+        return;
+    }
+    let last = prog.len() - 1;
+    for (pc, ins) in prog.iter().enumerate() {
+        if ins.code == (libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K) as u16 {
+            let target = pc + 1 + ins.jt as usize;
+            assert!(target <= last, "jump at {pc} lands past the end");
+            if [
+                libc::SYS_io_uring_setup as u32,
+                libc::SYS_io_uring_enter as u32,
+                libc::SYS_io_uring_register as u32,
+                libc::AF_UNIX as u32,
+                40,
+            ]
+            .contains(&ins.k)
+                && pc > 4
+            {
+                assert_eq!(target, last, "jump at {pc} should refuse");
+            }
+        }
+    }
+    assert_eq!(prog[last].k & 0xffff, libc::EPERM as u32);
+}
+
 /// Windows: the same check with the write-restricted token. The folders sit
 /// under the home folder, not the temp folder: a grant on the temp folder is
 /// kept in its ACL and would be inherited by a scratch folder made there.
@@ -314,4 +436,26 @@ fn a_sandboxed_command_writes_only_in_the_workspace_on_windows() {
     assert!(out.text.contains("http://127.0.0.1:"), "{}", out.text);
 
     let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn a_failed_connection_in_its_own_network_gets_a_note_and_nothing_else_does() {
+    let isolated = Plan {
+        writable: Vec::new(),
+        proxy: Some("127.0.0.1:1".into()),
+        isolation: Some(Isolation {
+            hide: Vec::new(),
+            bridge: Some((PathBuf::from("/tmp/s"), 1)),
+        }),
+    };
+    let ssh = "ssh: connect to host github.com port 22: Network is unreachable";
+    assert!(network_note(Some(&isolated), true, ssh).is_some());
+    assert!(network_note(Some(&isolated), false, ssh).is_none());
+    assert!(network_note(Some(&isolated), true, "error: no such file").is_none());
+    let open = Plan {
+        isolation: None,
+        ..isolated.clone()
+    };
+    assert!(network_note(Some(&open), true, ssh).is_none());
+    assert!(network_note(None, true, ssh).is_none());
 }

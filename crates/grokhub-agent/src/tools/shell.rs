@@ -63,7 +63,16 @@ pub fn run(workspace: &Path, args: &Value, stop: &dyn Fn() -> bool) -> ToolOutpu
     // The output is fenced first; the sandbox's own note stays outside the fence.
     let result = spawn_and_wait(&cwd, &command, timeout_ms, stop, plan.as_ref())
         .map(|o| fence_if_fetched(o, let_out));
-    let note = guard.as_ref().and_then(crate::sandbox::git_guard::restore);
+    let note = guard
+        .as_ref()
+        .and_then(crate::sandbox::git_guard::restore)
+        .or_else(|| {
+            result
+                .as_ref()
+                .ok()
+                .and_then(|o| crate::sandbox::network_note(plan.as_ref(), o.failed, &o.text))
+                .map(str::to_string)
+        });
     match (result, note) {
         (Ok(mut output), Some(note)) => {
             output.text = format!("{}\n{note}", output.text);

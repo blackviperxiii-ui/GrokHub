@@ -79,6 +79,64 @@ pub fn address(config_dir: &Path) -> Result<String, String> {
     Ok(addr)
 }
 
+/// The Unix socket that reaches the proxy for this config folder, for a
+/// command in its own network namespace (its relay connects here). The
+/// socket sits in a fresh owner-only folder under the temp folder; each
+/// connection is carried to the proxy's loopback port.
+#[cfg(unix)]
+pub fn unix_bridge(config_dir: &Path) -> Result<PathBuf, String> {
+    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::net::UnixListener;
+    static RUNNING: OnceLock<Mutex<HashMap<PathBuf, PathBuf>>> = OnceLock::new();
+    let mut running = RUNNING
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(path) = running.get(config_dir) {
+        return Ok(path.clone());
+    }
+    let addr = address(config_dir)?;
+    let err = |e: std::io::Error| format!("egress bridge: {e}");
+    let dir = std::env::temp_dir().join(format!("egress-{}-{}", std::process::id(), running.len()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir(&dir).map_err(err)?;
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).map_err(err)?;
+    let path = dir.join("s");
+    let listener = UnixListener::bind(&path).map_err(err)?;
+    std::thread::Builder::new()
+        .name("egress-bridge".into())
+        .spawn(move || {
+            for conn in listener.incoming().flatten() {
+                let addr = addr.clone();
+                let _ = std::thread::Builder::new()
+                    .name("egress-bridge-conn".into())
+                    .spawn(move || {
+                        if let Ok(server) = TcpStream::connect(&addr) {
+                            bridge_pipe(conn, server);
+                        }
+                    });
+            }
+        })
+        .map_err(err)?;
+    running.insert(config_dir.to_path_buf(), path.clone());
+    Ok(path)
+}
+
+#[cfg(unix)]
+fn bridge_pipe(client: std::os::unix::net::UnixStream, server: TcpStream) {
+    let (Ok(mut client_r), Ok(mut server_w)) = (client.try_clone(), server.try_clone()) else {
+        return;
+    };
+    let up = std::thread::spawn(move || {
+        let _ = std::io::copy(&mut client_r, &mut server_w);
+        let _ = server_w.shutdown(Shutdown::Write);
+    });
+    let (mut server_r, mut client_w) = (server, client);
+    let _ = std::io::copy(&mut server_r, &mut client_w);
+    let _ = client_w.shutdown(Shutdown::Write);
+    let _ = up.join();
+}
+
 /// The variables that point a command's HTTP clients at the proxy.
 pub fn env(addr: &str) -> Vec<(&'static str, String)> {
     let url = format!("http://{addr}");
