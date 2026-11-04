@@ -272,6 +272,7 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         system: child_system(call.system, &spec.persona, spec.explore),
         conversation_id,
         parent_session: call.session.to_string(),
+        parent_workspace: call.workspace.to_path_buf(),
         max_turns: if call.max_turns == 0 {
             SUBAGENT_MAX_TURNS
         } else {
@@ -357,6 +358,8 @@ struct ChildJob {
     system: String,
     conversation_id: String,
     parent_session: String,
+    /// The parent's folder, where a long result is spooled (a worktree can go).
+    parent_workspace: PathBuf,
     max_turns: u32,
     cancel: CancelToken,
     steer: SteerQueue,
@@ -398,7 +401,13 @@ impl HaltCheck for HubHalt {
 
 fn run_job(job: ChildJob, tx: Option<Sender<ChildNote>>) {
     let _origin = crate::harness::OriginScope::enter(job.origin);
-    let done = run_child(&job, &tx);
+    let mut done = run_child(&job, &tx);
+    done.text = guard_result(
+        &job.parent_workspace,
+        &job.parent_session,
+        &job.agent_id,
+        &done.text,
+    );
     let cancelled = matches!(done.stop, StopReason::Cancelled | StopReason::Halted);
     if cancelled {
         let _ = job.tasks.append_output(&job.agent_id, &done.text);
@@ -763,6 +772,33 @@ fn running_text(id: &str, worktree: Option<&Path>) -> String {
     text
 }
 
+/// About 3k tokens of a child's result reach the parent; the rest is
+/// spooled for a `read_file`.
+const RESULT_CHARS: usize = 12_000;
+
+/// A child's result as the parent sees it: capped, with the rest spooled,
+/// and fenced, since a child that read a page can pass its words on.
+fn guard_result(workspace: &Path, session: &str, id: &str, text: &str) -> String {
+    let text = text.trim();
+    if text.is_empty() {
+        return String::new();
+    }
+    let total = text.chars().count();
+    let body = if total > RESULT_CHARS {
+        let head: String = text.chars().take(RESULT_CHARS).collect();
+        let rest = total - RESULT_CHARS;
+        match crate::compact::spool_text(workspace, session, &format!("subagent-{id}"), text) {
+            Some(rel) => {
+                format!("{head}\n[… {rest} more chars; read_file `{rel}` for the whole result]")
+            }
+            None => format!("{head}\n[… {rest} more chars clipped]"),
+        }
+    } else {
+        text.to_string()
+    };
+    crate::tools::fence::fence("subagent", &body)
+}
+
 fn format_result(text: &str, id: &str, worktree: Option<&Path>, stop: &StopReason) -> String {
     let mut out = text.trim().to_string();
     if !matches!(stop, StopReason::EndTurn) {
@@ -915,6 +951,32 @@ fn forget_steer(id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_child_result_is_fenced_and_a_long_one_is_capped_with_the_rest_spooled() {
+        let ws = crate::harness::test_dir("child-result");
+        assert_eq!(guard_result(&ws, "sess", "s1", "  "), "");
+        let short = guard_result(&ws, "sess", "s1", "found it in src/lib.rs");
+        assert!(crate::tools::fence::looks_fenced(&short), "{short}");
+        assert!(short.contains("found it in src/lib.rs"));
+
+        let long = format!("start {} end-marker", "word ".repeat(5_000));
+        let out = guard_result(&ws, "sess", "s2", &long);
+        assert!(crate::tools::fence::looks_fenced(&out));
+        assert!(out.contains("start"), "the head stays");
+        assert!(!out.contains("end-marker"), "the tail is spooled");
+        let rel = out
+            .split("read_file `")
+            .nth(1)
+            .and_then(|rest| rest.split('`').next())
+            .expect("a spool path");
+        assert_eq!(std::fs::read_to_string(ws.join(rel)).unwrap(), long.trim());
+        assert!(
+            crate::tools::taint::is_tainted(&ws, &ws.join(rel)),
+            "reading the spooled result back is fenced too"
+        );
+        let _ = std::fs::remove_dir_all(&ws);
+    }
     use crate::gate::{ClosedPermits, Decision, Gate, PermAnswer, PermMode, PermitWait, Waited};
     use crate::tools::{self, READ_ONLY_PHASE};
     use crate::{ClientError, FunctionCall, InputItem, ResponsesRequest, TurnOutput};

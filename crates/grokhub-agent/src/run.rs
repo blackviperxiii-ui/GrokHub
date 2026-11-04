@@ -503,6 +503,7 @@ pub fn run_loop(
     let mut modified_paths: Vec<String> = Vec::new();
     let mut nested_agents = crate::prompt::NestedAgents::new(input.workspace);
     let mut repeats: HashMap<String, u32> = HashMap::new();
+    let mut breaker = crate::denials::Breaker::default();
     let mut stop_hook_active = false;
     let mut truncated_streak = 0u32;
     let mut run_tokens = 0u64;
@@ -914,6 +915,9 @@ pub fn run_loop(
         let _ = crate::file_checkpoint::begin_step(input.conversation_id);
         // Spike-2b: a denied hard step stops the rest of this batch.
         let mut batch_failed = false;
+        // The breaker counts replies, not calls: calls in one reply were all
+        // written before the model saw any of their answers.
+        let mut denied_in_reply: Option<String> = None;
         let batched_tools_on = tools::batch::settings(&config_dir).enabled;
         let mut call_i = 0usize;
         while call_i < turn.calls.len() {
@@ -1184,6 +1188,9 @@ pub fn run_loop(
             if !output.failed && call.name == "report_findings" {
                 fresh.note_findings();
             }
+            if refused && crate::denials::is_denial(&output.text) {
+                denied_in_reply = Some(call.call_id.clone());
+            }
             if refused {
                 push_refusal(history, input.conversation_id, call, output);
             } else {
@@ -1196,6 +1203,17 @@ pub fn run_loop(
                 return finish(input, StopReason::Halted, usage, compacted_once, true);
             }
             call_i += 1;
+        }
+        if let Some(trip) = breaker.record(denied_in_reply.is_some()) {
+            if let Some(id) = &denied_in_reply {
+                add_to_output(history, id, crate::denials::DONT_WORK_AROUND);
+            }
+            stop_with_note(
+                history,
+                on_event,
+                crate::denials::stop_note(trip == crate::denials::Trip::InARow),
+            );
+            return finish(input, StopReason::EndTurn, usage, compacted_once, true);
         }
         if drive.is_some() && evidence >= checkpoint_at + crate::checkpoint::CHECKPOINT_EVERY {
             // A checkpoint between phases: name the Brief's done items still uncovered, once per change.
@@ -1350,6 +1368,16 @@ pub(crate) fn push_output(
     // E1 on a failure, and the A4 stage signals: the next routed step reads them.
     crate::route::ladder::note_tool_run(&call.name, &call.arguments, output.failed);
     push_result(history, conversation_id, call, output);
+}
+
+/// Append a note to the result already pushed for `call_id`.
+fn add_to_output(history: &mut [InputItem], call_id: &str, note: &str) {
+    if let Some(InputItem::FunctionCallOutput { output, .. }) = history.iter_mut().rev().find(
+        |item| matches!(item, InputItem::FunctionCallOutput { call_id: id, .. } if id == call_id),
+    ) {
+        output.push('\n');
+        output.push_str(note);
+    }
 }
 
 /// [`push_output`] for a call that never ran: the user said no, a gate or
@@ -3053,6 +3081,72 @@ mod tests {
             failed[1], failed[0],
             "a failed read lifts effort: {failed:?}"
         );
+    }
+
+    #[test]
+    fn three_denied_replies_in_a_row_end_the_turn_with_a_dont_work_around_note() {
+        let dir = workspace("breaker");
+        let write_turn = |id: &str, path: &str| ScriptTurn {
+            text: String::new(),
+            calls: vec![call(
+                id,
+                "write",
+                &format!(r#"{{"path":"{path}","content":"x"}}"#),
+            )],
+            usage: Usage::default(),
+            truncated: false,
+        };
+        let no = Answer {
+            answer: PermAnswer::Deny,
+            asks: AtomicUsize::new(0),
+        };
+        let script = Script {
+            turns: Mutex::new(vec![
+                write_turn("b1", "one.txt"),
+                write_turn("b2", "two.txt"),
+                ScriptTurn {
+                    text: String::new(),
+                    calls: vec![
+                        call("b3", "write", r#"{"path":"three.txt","content":"x"}"#),
+                        call("b4", "write", r#"{"path":"four.txt","content":"x"}"#),
+                    ],
+                    usage: Usage::default(),
+                    truncated: false,
+                },
+                write_turn("b5", "never.txt"),
+                ScriptTurn::text("done"),
+            ]),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+        let (out, history, events) = once(
+            &script,
+            &dir,
+            chat(gate::PermMode::Ask, true, false),
+            None,
+            &no,
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(
+            no.asks.load(Ordering::SeqCst),
+            4,
+            "both calls of the third reply ask; the fourth reply never comes"
+        );
+        assert_eq!(script.seen.lock().unwrap().len(), 3, "no fourth request");
+        assert!(history.iter().any(|item| matches!(
+            item,
+            InputItem::FunctionCallOutput { call_id, output }
+                if call_id == "b4" && output.contains(crate::denials::DONT_WORK_AROUND)
+        )));
+        assert!(!history.iter().any(|item| matches!(
+            item,
+            InputItem::FunctionCallOutput { call_id, .. } if call_id == "b5"
+        )));
+        assert!(events.iter().any(|ev| matches!(
+            ev,
+            LoopEvent::Text(text) if text.contains("denied three times in a row")
+        )));
     }
 
     #[test]

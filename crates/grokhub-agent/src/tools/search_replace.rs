@@ -64,6 +64,7 @@ pub fn run(workspace: &Path, args: &Value) -> ToolOutput {
     match replaced {
         Ok(n) => {
             crate::memory::after_model_write(workspace, &path);
+            super::taint::after_write(workspace, &path, false);
             ToolOutput::ok(format!("replaced {n} in {raw}{note}"))
         }
         Err(err) => ToolOutput::err(err),

@@ -68,7 +68,11 @@ pub fn run(workspace: &Path, args: &Value) -> ToolOutput {
     let end = (start + limit as usize).min(lines.len());
     let out = numbered_lines(&lines, start, end);
     // Workspace reads stay plain for coding. Outside-workspace text (if a
-    // future path allows it) is fenced as untrusted data.
+    // future path allows it) is fenced as untrusted data, and so is a file
+    // the agent wrote from outside text (a stored-injection mark).
+    if super::taint::is_tainted(workspace, &path) {
+        return ToolOutput::ok(super::fence::fence("read_file:stored", &out));
+    }
     ToolOutput::ok(super::fence::fence_if_outside(
         workspace,
         &path,

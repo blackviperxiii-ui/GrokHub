@@ -289,7 +289,14 @@ impl TaskHub {
         }
         *phase = Phase::Exited(0);
         drop(phase);
-        let tail = notice_tail(&slot);
+        // A fenced result longer than the notice would lose its opening
+        // marker in a tail, so it is read whole with the output tool instead.
+        let tail = if crate::tools::fence::looks_fenced(text) && text.chars().count() > NOTICE_TAIL
+        {
+            format!("Read its result with get_command_or_subagent_output({id}).")
+        } else {
+            notice_tail(&slot)
+        };
         let note = if tail.is_empty() {
             format!("Subagent {id} finished.")
         } else {

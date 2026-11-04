@@ -49,6 +49,7 @@ pub fn run(workspace: &Path, args: &Value) -> ToolOutput {
     match written {
         Ok(bytes) => {
             crate::memory::after_model_write(workspace, &path);
+            super::taint::after_write(workspace, &path, true);
             ToolOutput::ok(format!("wrote {bytes} bytes to {raw}{note}"))
         }
         Err(err) => ToolOutput::err(err),
