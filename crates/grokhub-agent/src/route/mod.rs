@@ -20,6 +20,7 @@ pub mod feedback;
 pub mod goal;
 pub mod guard;
 pub mod heal;
+pub mod host;
 pub mod identity;
 pub mod ladder;
 pub mod learn;

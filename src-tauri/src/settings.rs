@@ -1,5 +1,7 @@
 //! The shell's own settings file, `shell.json` in the GrokHub config folder.
-//! The API key is never written here; it lives in the OS keychain.
+//! The API key is never written here; it lives in the OS keychain. No model or
+//! effort is kept: the router picks both, and a model or effort an older build
+//! saved is dropped when the file loads.
 
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
@@ -51,7 +53,6 @@ pub enum Theme {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ShellSettings {
-    pub model: String,
     pub close_to_tray: bool,
     /// The folder the agent works in. Empty means the cabin's default.
     pub workspace: String,
@@ -157,7 +158,6 @@ fn lenient_behavior<'de, D: Deserializer<'de>>(d: D) -> Result<Behavior, D::Erro
 impl Default for ShellSettings {
     fn default() -> Self {
         Self {
-            model: grokhub_agent::DEFAULT_MODEL.to_string(),
             close_to_tray: true,
             workspace: String::new(),
             approvals: Approvals::Ask,
@@ -219,15 +219,11 @@ pub fn load(config_dir: &Path) -> ShellSettings {
             ..ShellSettings::default()
         };
     }
+    // A `model` or `effort` an older build saved is an unknown key now: it is
+    // ignored here and gone from the file at the next save.
     let mut settings = std::fs::read_to_string(path(config_dir))
         .ok()
         .and_then(|raw| serde_json::from_str::<ShellSettings>(&raw).ok())
-        .map(|mut s| {
-            if s.model.trim().is_empty() {
-                s.model = ShellSettings::default().model;
-            }
-            s
-        })
         .unwrap_or_default();
     // The plain "Default" preset is gone; a shell still on it speaks as Nyx.
     if settings.personality.trim() == grokhub_core::personality::LEGACY_DEFAULT_ID {
@@ -239,9 +235,6 @@ pub fn load(config_dir: &Path) -> ShellSettings {
 
 /// Writes through a temp file and a rename, so a crash never leaves half a file.
 pub fn save(config_dir: &Path, settings: &ShellSettings) -> Result<(), String> {
-    if settings.model.trim().is_empty() {
-        return Err("Pick a model.".into());
-    }
     std::fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
     let raw = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
     let tmp = config_dir.join(format!("{FILE}.tmp"));
@@ -269,7 +262,6 @@ mod tests {
         assert_eq!(
             load(&dir),
             ShellSettings {
-                model: "grok-4.7".into(),
                 close_to_tray: true,
                 workspace: String::new(),
                 approvals: Approvals::Ask,
@@ -318,7 +310,6 @@ mod tests {
     fn save_then_load_round_trips() {
         let dir = temp_dir("roundtrip");
         let wanted = ShellSettings {
-            model: "grok-5".into(),
             close_to_tray: false,
             workspace: "/work/notes".into(),
             approvals: Approvals::Always,
@@ -358,16 +349,15 @@ mod tests {
     }
 
     #[test]
-    fn junk_or_blank_model_falls_back() {
+    fn junk_falls_back_to_the_defaults() {
         let dir = temp_dir("junk");
         std::fs::create_dir_all(&dir).expect("dir");
         std::fs::write(path(&dir), "{not json").expect("write");
-        assert_eq!(load(&dir).model, "grok-4.7");
+        assert_eq!(load(&dir), ShellSettings::default());
         std::fs::write(path(&dir), r#"{"model":"  ","closeToTray":false}"#).expect("write");
         assert_eq!(
             load(&dir),
             ShellSettings {
-                model: "grok-4.7".into(),
                 close_to_tray: false,
                 workspace: String::new(),
                 approvals: Approvals::Ask,
@@ -385,24 +375,40 @@ mod tests {
     }
 
     #[test]
-    fn blank_model_is_refused() {
-        let dir = temp_dir("blank");
-        let blank = ShellSettings {
-            model: " ".into(),
-            close_to_tray: true,
-            workspace: String::new(),
-            approvals: Approvals::Ask,
-            desktop_control: false,
-            personality: String::new(),
-            explicit_personalities: false,
-            theme: Theme::System,
-            last_chat: String::new(),
-            behavior: Behavior::default(),
-            summon_hotkey: false,
-            notifications: true,
-        };
-        assert_eq!(save(&dir, &blank), Err("Pick a model.".to_string()));
-        assert!(!path(&dir).exists());
+    fn an_old_model_or_effort_pick_still_loads_and_is_dropped() {
+        let dir = temp_dir("retired-pick");
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(
+            path(&dir),
+            r#"{"model":"grok-5","effort":"high","reasoningEffort":"low","closeToTray":false,"approvals":"auto","personality":"pirate"}"#,
+        )
+        .expect("write");
+        let loaded = load(&dir);
+        assert_eq!(
+            loaded,
+            ShellSettings {
+                close_to_tray: false,
+                workspace: String::new(),
+                approvals: Approvals::Auto,
+                desktop_control: false,
+                personality: "pirate".into(),
+                explicit_personalities: false,
+                theme: Theme::System,
+                last_chat: String::new(),
+                behavior: Behavior::default(),
+                summon_hotkey: false,
+                notifications: true,
+            }
+        );
+        save(&dir, &loaded).expect("save");
+        let raw = std::fs::read_to_string(path(&dir)).expect("file");
+        assert!(!raw.contains("\"model\""), "{raw}");
+        assert!(!raw.contains("grok-5"), "{raw}");
+        assert!(!raw.contains("\"effort\""), "{raw}");
+        assert!(!raw.contains("reasoningEffort"), "{raw}");
+        assert!(raw.contains("\"approvals\": \"auto\""), "{raw}");
+        assert_eq!(load(&dir), loaded);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -410,11 +416,7 @@ mod tests {
         let dir = temp_dir("approvals");
         std::fs::create_dir_all(&dir).expect("dir");
         std::fs::write(path(&dir), r#"{"model":"grok-5","approvals":"yolo"}"#).expect("write");
-        let loaded = load(&dir);
-        assert_eq!(
-            (loaded.model.as_str(), loaded.approvals),
-            ("grok-5", Approvals::Ask)
-        );
+        assert_eq!(load(&dir).approvals, Approvals::Ask);
         std::fs::write(path(&dir), r#"{"approvals":"auto"}"#).expect("write");
         assert_eq!(load(&dir).approvals, Approvals::Auto);
         let _ = std::fs::remove_dir_all(&dir);
@@ -440,19 +442,15 @@ mod tests {
             r#"{"model":"grok-5","behavior":{"autocomplete":"yes","quietStart":"bedtime","quietEnd":"07:00","dailyTokenBudget":123,"pauseOverBudget":1}}"#,
         )
         .expect("write");
-        let loaded = load(&dir);
         assert_eq!(
-            (loaded.model.as_str(), loaded.behavior),
-            (
-                "grok-5",
-                Behavior {
-                    autocomplete: false,
-                    quiet_start: String::new(),
-                    quiet_end: String::new(),
-                    daily_token_budget: 0,
-                    pause_over_budget: false,
-                }
-            )
+            load(&dir).behavior,
+            Behavior {
+                autocomplete: false,
+                quiet_start: String::new(),
+                quiet_end: String::new(),
+                daily_token_budget: 0,
+                pause_over_budget: false,
+            }
         );
         std::fs::write(path(&dir), r#"{"model":"grok-5","behavior":"loud"}"#).expect("write");
         assert_eq!(load(&dir).behavior, Behavior::default());
@@ -523,10 +521,7 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("dir");
         std::fs::write(path(&dir), r#"{"model":"grok-5","closeToTray":false}"#).expect("write");
         let old = load(&dir);
-        assert_eq!(
-            (old.model.as_str(), old.summon_hotkey, old.notifications),
-            ("grok-5", false, true)
-        );
+        assert_eq!((old.summon_hotkey, old.notifications), (false, true));
         std::fs::write(path(&dir), r#"{"summonHotkey":true,"notifications":false}"#)
             .expect("write");
         let set = load(&dir);

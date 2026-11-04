@@ -2,7 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { EFFORT_TIP, ElicitCard, ModeChips, type ElicitItem } from "./Modes";
+import { ElicitCard, ModeChips, type ElicitItem } from "./Modes";
 
 vi.mock("./api", () => ({}));
 
@@ -54,9 +54,9 @@ describe("ModeChips", () => {
         "Files change and commands run without asking. Deleting, sending, paying and credentials still ask.",
       ],
     ]);
-    // Effort is automatic: a label with its tip, not a button.
-    expect(screen.getByText("Effort: auto")).toHaveAttribute("title", EFFORT_TIP);
-    expect(screen.queryByRole("button", { name: /effort/i })).not.toBeInTheDocument();
+    // The router picks the model and the effort: neither shows, as a chip or a label.
+    expect(screen.queryByText(/effort/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/model/i)).not.toBeInTheDocument();
   });
 
   it("picks a mode and an approval", async () => {

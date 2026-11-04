@@ -50,10 +50,6 @@ pub const SHELL_SLASH: &[ShellCmd] = &[
     row("/remember", "Save a memory note…", "/remember "),
     ShellCmd {
         desktop_only: true,
-        ..row("/model", "Set the chat model…", "/model ")
-    },
-    ShellCmd {
-        desktop_only: true,
         ..row("/settings", "Open Settings", "/settings")
     },
     row("/memory", "Open Memory", "/memory"),
@@ -90,9 +86,7 @@ pub enum Effect {
     },
     /// `/settings`, `/memory`, `/automations`, `/connectors`.
     Open { view: &'static str },
-    /// `/model <id>` saved the model.
-    ModelSet { id: String, text: String },
-    /// A line to show in the chat log: help, a saved note, the model.
+    /// A line to show in the chat log: help or a saved note.
     Notice { text: String },
 }
 
@@ -101,8 +95,6 @@ pub enum Effect {
 pub enum Action {
     Effect(Effect),
     Remember(String),
-    /// `/model` with an id to save, or none to say which is in use.
-    Model(Option<String>),
 }
 
 /// The command word, when `line` is a slash command at all. `/usr/bin` and
@@ -227,35 +219,19 @@ pub fn parse(line: &str, remote: bool) -> Result<Action, String> {
                 None => Err("Type the note after /remember.".into()),
             }
         }
-        "/model" => return Ok(Action::Model(text)),
         _ => return Err(format!("Unknown command {word}. Type /help for the list.")),
     };
     Ok(Action::Effect(effect))
 }
 
 /// Runs what `parse` read. A note goes to `workspace`'s memory with its
-/// secrets redacted; `save_model` stores a model id and returns it cleaned.
-pub fn apply(
-    action: Action,
-    workspace: &std::path::Path,
-    current_model: &str,
-    save_model: impl FnOnce(&str) -> Result<String, String>,
-) -> Result<Effect, String> {
+/// secrets redacted.
+pub fn apply(action: Action, workspace: &std::path::Path) -> Result<Effect, String> {
     match action {
         Action::Effect(effect) => Ok(effect),
         Action::Remember(note) => Ok(Effect::Notice {
             text: crate::memory::add(workspace, &note, false)?,
         }),
-        Action::Model(None) => Ok(Effect::Notice {
-            text: format!("Chat uses {current_model}. Type /model and an id to change it."),
-        }),
-        Action::Model(Some(id)) => {
-            let id = save_model(&id)?;
-            Ok(Effect::ModelSet {
-                text: format!("Chat now uses {id}."),
-                id,
-            })
-        }
     }
 }
 
@@ -336,27 +312,43 @@ mod tests {
             parse("/remember ship on fridays", false),
             Ok(Action::Remember("ship on fridays".into()))
         );
-        assert_eq!(
-            parse("/model grok-x", false),
-            Ok(Action::Model(Some("grok-x".into())))
-        );
     }
 
     #[test]
-    fn the_browser_cant_set_the_model_or_open_settings() {
-        assert_eq!(
-            parse("/model grok-x", true),
-            Err("/model works on your computer.".into())
-        );
+    fn the_browser_cant_open_settings() {
         assert_eq!(
             parse("/settings", true),
             Err("/settings works on your computer.".into())
         );
-        let hit = hits("/mod", true)
+        let hit = hits("/sett", true)
             .into_iter()
-            .find(|h| h.cmd == "/model")
-            .expect("model row");
+            .find(|h| h.cmd == "/settings")
+            .expect("settings row");
         assert_eq!(hit.disabled.as_deref(), Some(ON_YOUR_COMPUTER));
+    }
+
+    #[test]
+    fn routing_commands_are_unknown_here() {
+        for line in [
+            "/model grok-x",
+            "/model",
+            "/mode fast",
+            "/models",
+            "/effort high",
+            "/why",
+        ] {
+            let word = line.split_whitespace().next().expect("word");
+            assert_eq!(
+                parse(line, false),
+                Err(format!("Unknown command {word}. Type /help for the list.")),
+                "{line}"
+            );
+            assert_eq!(parse(line, true), parse(line, false), "{line}");
+        }
+        for draft in ["/model", "/mode", "/models", "/effort", "/why"] {
+            assert_eq!(cmds(&hits(draft, false)), Vec::<&str>::new(), "{draft}");
+        }
+        assert!(!help().contains("/model"));
     }
 
     #[test]
@@ -392,44 +384,10 @@ mod tests {
             false,
         )
         .expect("parse");
-        let effect = apply(action, &ws, "grok-4.3", |_| unreachable!()).expect("apply");
+        let effect = apply(action, &ws).expect("apply");
         assert!(matches!(effect, Effect::Notice { .. }));
         let notes = crate::memory::load(&ws).expect("load");
         assert!(notes.workspace.contains("the deploy key is [redacted]"));
         assert!(!notes.workspace.contains("sk-abcdefghijklmnopqrstuv"));
-    }
-
-    #[test]
-    fn model_saves_the_cleaned_id_or_says_which_is_in_use() {
-        let (ws, _guard) = workspace("model");
-        let mut saved = None;
-        let effect = apply(
-            parse("/model  grok-x ", false).expect("parse"),
-            &ws,
-            "grok-4.3",
-            |id| {
-                saved = Some(id.to_string());
-                crate::models::clean_id(id)
-            },
-        );
-        assert_eq!(
-            effect,
-            Ok(Effect::ModelSet {
-                id: "grok-x".into(),
-                text: "Chat now uses grok-x.".into()
-            })
-        );
-        assert_eq!(saved.as_deref(), Some("grok-x"));
-        assert_eq!(
-            apply(
-                parse("/model", false).expect("parse"),
-                &ws,
-                "grok-4.3",
-                |_| { unreachable!() }
-            ),
-            Ok(Effect::Notice {
-                text: "Chat uses grok-4.3. Type /model and an id to change it.".into()
-            })
-        );
     }
 }

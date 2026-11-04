@@ -234,12 +234,12 @@ pub fn answer_word(answer: PermAnswer) -> &'static str {
     }
 }
 
-/// The model, credential and folder for one prompt. Read fresh for every
-/// prompt, so a Settings change applies to the next message.
+/// The credential and folder for one prompt. Read fresh for every prompt, so
+/// a Settings change applies to the next message. It names no model and no
+/// effort: the router picks both for every step (`route::live::stream_routed`).
 pub struct Route {
     pub client: Arc<dyn ModelClient + Send + Sync>,
     pub auth_kind: AuthKind,
-    pub model: String,
     pub workspace: PathBuf,
     /// Settings' approvals. Read on every prompt, so a change applies to the
     /// next message in an open chat.
@@ -483,9 +483,12 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
             mut emit,
             done,
         } = job;
+        // Where the engine starts; the router picks each step's provider,
+        // model and effort, as in the cabin.
+        let (model, effort) = grokhub_agent::route::host::chat_start();
         // The first picture goes as image input; a file the model can't
         // read stops the send with the cabin's note.
-        let mods = crate::attach::modalities(&config_dir, &route.model);
+        let mods = crate::attach::modalities(&config_dir, &model);
         let message = match crate::attach::compose(&text, &attachments, &mods) {
             Ok(message) => message,
             Err(err) => {
@@ -507,7 +510,7 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
             (Some(engine), _) => {
                 engine.set_workspace(route.workspace);
                 engine.set_gate(gate);
-                engine.set_route(route.client, route.model, None, system, route.auth_kind);
+                engine.set_route(route.client, model, effort, system, route.auth_kind);
                 engine
             }
             (none, inbox) => {
@@ -518,8 +521,8 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                 let engine = none.insert(NativeEngine::new(EngineParts {
                     client: route.client,
                     workspace: route.workspace,
-                    model: route.model,
-                    effort: None,
+                    model,
+                    effort,
                     system,
                     conversation_id: conversation_id.clone(),
                     auth_kind: route.auth_kind,
@@ -745,7 +748,6 @@ mod tests {
         let route = Route {
             client,
             auth_kind: AuthKind::ApiKey,
-            model: "grok-4.7".into(),
             workspace: workspace.to_path_buf(),
             mode,
             desktop,
@@ -1442,7 +1444,6 @@ mod tests {
         let route = Route {
             client: Arc::clone(&client) as Arc<dyn ModelClient + Send + Sync>,
             auth_kind: AuthKind::ApiKey,
-            model: "grok-4.7".into(),
             workspace,
             mode: PermMode::Ask,
             desktop: false,

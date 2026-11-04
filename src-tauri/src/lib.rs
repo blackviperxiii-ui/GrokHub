@@ -24,7 +24,6 @@ pub mod local_engine;
 #[cfg(test)]
 mod md_fixtures;
 pub mod memory;
-pub mod models;
 pub mod nyx;
 pub mod oauth;
 pub mod opener;
@@ -87,7 +86,6 @@ struct ShellState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsView {
-    pub model: String,
     pub close_to_tray: bool,
     pub has_api_key: bool,
     /// Signed in with Grok: who, when xAI said.
@@ -116,7 +114,6 @@ struct ChatEvent<'a> {
 
 fn view(settings: &ShellSettings) -> SettingsView {
     SettingsView {
-        model: settings.model.clone(),
         close_to_tray: settings.close_to_tray,
         has_api_key: credential::has_key(),
         signed_in: oauth::signed_in(&oauth::Keychain),
@@ -154,7 +151,6 @@ async fn get_settings(state: State<'_, ShellState>) -> Result<SettingsView, Stri
 #[tauri::command]
 fn save_settings(
     state: State<'_, ShellState>,
-    model: String,
     close_to_tray: bool,
     workspace: String,
     approvals: settings::Approvals,
@@ -164,7 +160,6 @@ fn save_settings(
     let desktop_control = desktop_control && caps.desktop_control;
     let close_to_tray = close_to_tray && caps.tray;
     let next = ShellSettings {
-        model: model.trim().to_string(),
         close_to_tray,
         workspace: workspace.trim().to_string(),
         approvals,
@@ -192,51 +187,6 @@ fn set_theme(state: State<'_, ShellState>, theme: settings::Theme) -> Result<Set
     Ok(view(&next))
 }
 
-/// Settings → Defaults and the composer chip: the models to pick from.
-/// `refresh` reads the account's list again instead of the 10-minute cache.
-#[tauri::command]
-async fn list_models(
-    state: State<'_, ShellState>,
-    refresh: Option<bool>,
-) -> Result<models::ModelList, String> {
-    let model = current(&state).model;
-    let config_dir = state.config_dir.clone();
-    off_main(move || {
-        // The loopback mock model lists nothing; tests see the catalog.
-        if credential::test_responses_url().is_some() {
-            return models::list(&model, None);
-        }
-        match credential::load_key() {
-            Ok(bearer) => {
-                let api = grokhub_agent::route::sources::XaiApiSource {
-                    config_dir,
-                    bearer: bearer.clone(),
-                };
-                let cached = models::Cached {
-                    inner: &api,
-                    bearer_tag: models::bearer_tag(&bearer),
-                    refresh: refresh.unwrap_or(false),
-                };
-                models::list(&model, Some(&cached))
-            }
-            Err(_) => models::list(&model, None),
-        }
-    })
-    .await
-}
-
-/// The picker's choice, saved for the next message. Unknown ids are kept.
-#[tauri::command]
-fn set_model(state: State<'_, ShellState>, id: String) -> Result<SettingsView, String> {
-    let next = ShellSettings {
-        model: models::clean_id(&id)?,
-        ..current(&state)
-    };
-    settings::save(&state.config_dir, &next)?;
-    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
-    Ok(view(&next))
-}
-
 /// The composer's command list for a draft that starts with `/`.
 #[tauri::command]
 fn slash_hits(draft: String) -> Vec<slash::Hit> {
@@ -251,17 +201,7 @@ fn run_slash(state: State<'_, ShellState>, line: String) -> Result<slash::Effect
 
 fn run_slash_line(state: &ShellState, line: &str, remote: bool) -> Result<slash::Effect, String> {
     let action = slash::parse(line, remote)?;
-    let settings = current(state);
-    slash::apply(action, &workspace(state), &settings.model, |id| {
-        let next = ShellSettings {
-            model: models::clean_id(id)?,
-            ..current(state)
-        };
-        settings::save(&state.config_dir, &next)?;
-        let id = next.model.clone();
-        *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next;
-        Ok(id)
-    })
+    slash::apply(action, &workspace(state))
 }
 
 #[tauri::command]
@@ -326,6 +266,20 @@ fn model_client() -> Result<(XaiClient, AuthKind), String> {
     signed_client(oauth::bearer(&oauth::Keychain), credential::load_key, idle)
 }
 
+/// [`model_client`] for a chat turn. With no usable sign-in or key and Local
+/// AI ready, the client has no bearer and the router answers on this
+/// computer, as the cabin's chat does.
+fn chat_client() -> Result<(XaiClient, AuthKind), String> {
+    match model_client() {
+        Ok(found) => Ok(found),
+        Err(_) if grokhub_agent::route::local::available() => Ok((
+            XaiClient::new(String::new(), AuthKind::ApiKey, Duration::from_secs(120)),
+            AuthKind::ApiKey,
+        )),
+        Err(err) => Err(err),
+    }
+}
+
 /// Picks the bearer: a live Grok sign-in wins over a key. A sign-in that
 /// ended falls back to the key when there is one.
 fn signed_client(
@@ -349,16 +303,19 @@ fn signed_client(
     }
 }
 
+/// One turn's route. The router alone picks each step's provider (xAI, a
+/// provider you added, or Local AI), model and effort; this hands it the
+/// cabin's Local AI switch, OpenRouter policy and spend limits first.
 fn route(
     settings: &ShellSettings,
     session: agent::SessionMode,
     config_dir: &Path,
 ) -> Result<agent::Route, String> {
-    let (client, auth_kind) = model_client()?;
+    grokhub_agent::route::host::sync(config_dir);
+    let (client, auth_kind) = chat_client()?;
     Ok(agent::Route {
         client: Arc::new(client),
         auth_kind,
-        model: settings.model.clone(),
         workspace: agent::workspace_for(&settings.workspace),
         mode: settings.approvals.mode(),
         desktop: settings.desktop_control && capabilities::current().desktop_control,
@@ -640,9 +597,12 @@ fn drop_worker(state: &ShellState, conversation_id: &str) {
     }
 }
 
-/// The chat model's input kinds, for the chips' notes.
+/// The input kinds of the model a chat starts at, for the chips' notes.
 fn model_mods(state: &ShellState) -> Vec<String> {
-    attach::modalities(&state.config_dir, &current(state).model)
+    attach::modalities(
+        &state.config_dir,
+        &grokhub_agent::route::host::chat_start().0,
+    )
 }
 
 /// A pasted or dropped file from the webview or the web app, as base64.
@@ -936,7 +896,7 @@ async fn run_automation_now(
             &config_dir,
             &id,
             route.client,
-            &route.model,
+            &grokhub_agent::route::host::chat_start().0,
             route.workspace,
         )
     })
@@ -2273,7 +2233,8 @@ fn start_scheduler(app: &tauri::App) {
         move || {
             let settings = settings::load(&config_dir);
             let route = route(&settings, agent::SessionMode::Chat, &config_dir)?;
-            Ok((route.client, route.model, route.workspace))
+            let (model, _) = grokhub_agent::route::host::chat_start();
+            Ok((route.client, model, route.workspace))
         },
         move |fired| {
             let _ = handle.emit(scheduler::RAN_EVENT, fired);
@@ -2635,12 +2596,12 @@ pub fn run() {
                     grokhub_desktop::set_desktop_enabled(true);
                 }
             }
-            pulse_feed::start(config_dir.clone(), {
-                let config_dir = config_dir.clone();
-                move || {
-                    let client: Box<dyn grokhub_agent::ModelClient> = Box::new(model_client()?.0);
-                    Ok((client, settings::load(&config_dir).model))
-                }
+            // The router takes Local AI's switch, OpenRouter's policy and the
+            // spend limits from the cabin's settings from the start.
+            grokhub_agent::route::host::sync(&config_dir);
+            pulse_feed::start(config_dir.clone(), || {
+                let client: Box<dyn grokhub_agent::ModelClient> = Box::new(model_client()?.0);
+                Ok((client, grokhub_agent::route::host::chat_start().0))
             });
             #[cfg(desktop)]
             os_extras::setup(app.handle(), &loaded);
@@ -2697,8 +2658,6 @@ pub fn run() {
             set_theme,
             open_external,
             set_api_key,
-            list_models,
-            set_model,
             slash_hits,
             run_slash,
             clear_api_key,

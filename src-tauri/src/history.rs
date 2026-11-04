@@ -34,7 +34,6 @@ pub struct ChatRow {
     pub created: u64,
     /// Unix ms of its last saved turn; the page groups and sorts by it.
     pub updated: u64,
-    pub model: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -91,7 +90,6 @@ fn row(info: &SessionInfo) -> ChatRow {
         title: info.title.clone(),
         created: info.created,
         updated: updated_ms(info),
-        model: info.model.clone(),
     }
 }
 
@@ -359,7 +357,6 @@ mod tests {
         let route = Route {
             client: model,
             auth_kind: AuthKind::ApiKey,
-            model: "grok-4.7".into(),
             workspace: workspace.to_path_buf(),
             mode: PermMode::Ask,
             desktop: false,
@@ -389,12 +386,8 @@ mod tests {
         let rows = list(&config);
         assert_eq!(rows.len(), 1, "{rows:?}");
         assert_eq!(
-            (
-                rows[0].id.as_str(),
-                rows[0].title.as_str(),
-                rows[0].model.as_str()
-            ),
-            (id, "hello there", "grok-4.7")
+            (rows[0].id.as_str(), rows[0].title.as_str()),
+            (id, "hello there")
         );
         assert!(rows[0].updated >= rows[0].created, "{rows:?}");
 

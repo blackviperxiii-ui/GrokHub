@@ -24,7 +24,7 @@ const api = vi.hoisted(() => ({
   getSettings: vi.fn<() => Promise<Settings>>(),
   saveSettings:
     vi.fn<
-      (model: string, tray: boolean, ws: string, approvals: Approvals, desk: boolean) => Promise<Settings>
+      (tray: boolean, ws: string, approvals: Approvals, desk: boolean) => Promise<Settings>
     >(),
   answerPermission: vi.fn<(id: string, callId: string, answer: Answer) => Promise<void>>(),
   cancelChat: vi.fn<(id: string) => Promise<void>>(),
@@ -34,8 +34,6 @@ const api = vi.hoisted(() => ({
     vi.fn<(id: string, cut: { reply: boolean; text: string | null; later: number }) => Promise<boolean>>(),
   getLastChat: vi.fn<() => Promise<Transcript | null>>(),
   loadChat: vi.fn<(id: string, limit?: number) => Promise<Transcript>>(),
-  setModel: vi.fn<(id: string) => Promise<Settings>>(),
-  listModels: vi.fn(),
   slashHits: vi.fn(() => Promise.resolve([])),
   runSlash: vi.fn(),
 }));
@@ -52,8 +50,6 @@ vi.mock("./api", () => ({
   forgetMessage: api.forgetMessage,
   getLastChat: api.getLastChat,
   loadChat: api.loadChat,
-  setModel: api.setModel,
-  listModels: api.listModels,
   slashHits: api.slashHits,
   runSlash: api.runSlash,
   onChatEvent: (handler: (envelope: ChatEnvelope) => void) => {
@@ -99,7 +95,6 @@ const SAVED: Transcript = {
 };
 
 const SETTINGS: Settings = {
-  model: "grok-4.7",
   closeToTray: true,
   hasApiKey: true,
   workspace: "",
@@ -595,6 +590,20 @@ describe("applyEvent", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Chat" })).toBeEnabled());
   });
 
+  it("the composer shows no model or effort and has nothing to pick one with", async () => {
+    render(<Chat onOpenSettings={() => {}} />);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Ask" })).toHaveAttribute("aria-pressed", "true"),
+    );
+    expect(screen.queryByText(/effort/i)).toBeNull();
+    expect(screen.queryByText(/grok-\d/i)).toBeNull();
+    expect(screen.queryByText(/^model/i)).toBeNull();
+    expect(screen.queryByLabelText(/model/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: /model|effort|grok/i })).toBeNull();
+    const chips = screen.getAllByRole("button").filter((b) => b.closest(".chips"));
+    expect(chips.map((b) => b.textContent)).toEqual(["Chat", "Plan", "btw", "Ask", "Auto", "Always"]);
+  });
+
   it("the approvals chips show and save Settings' approvals", async () => {
     api.saveSettings.mockResolvedValue({ ...SETTINGS, approvals: "auto" });
     render(<Chat onOpenSettings={() => {}} />);
@@ -606,7 +615,7 @@ describe("applyEvent", () => {
       "A quick check approves routine steps and asks you about the rest.",
     );
     await userEvent.click(screen.getByRole("button", { name: "Auto" }));
-    expect(api.saveSettings).toHaveBeenCalledWith("grok-4.7", true, "", "auto", false);
+    expect(api.saveSettings).toHaveBeenCalledWith(true, "", "auto", false);
     expect(screen.getByRole("button", { name: "Auto" })).toHaveAttribute("aria-pressed", "true");
   });
 
