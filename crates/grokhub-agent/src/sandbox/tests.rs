@@ -101,11 +101,20 @@ fn writable_roots_keep_the_workspace_and_never_expose_the_config_folder() {
     let config = home.join(".cache").join("GrokHub");
     std::fs::create_dir_all(&ws).unwrap();
     std::fs::create_dir_all(&config).unwrap();
-    std::fs::create_dir_all(home.join(".cargo")).unwrap();
+    std::fs::create_dir_all(home.join(".cargo/bin")).unwrap();
     let extra = [home.clone(), base.join("missing")];
     let roots = writable_roots(&ws, Some(&home), &config, &extra);
     assert_eq!(roots[0], ws, "workspace first");
-    assert!(roots.contains(&home.join(".cargo")));
+    // Only the download cache is writable, made up front since cargo is
+    // installed. The tool's own folder holds `bin` and its config file, which
+    // run later with no sandbox, so neither is a root.
+    assert!(roots.contains(&home.join(".cargo/registry")));
+    assert!(roots.contains(&home.join(".cargo/git")));
+    assert!(!roots.contains(&home.join(".cargo")));
+    assert!(!roots.iter().any(|r| r.starts_with(home.join(".cargo/bin"))));
+    // No folder appears for a tool that isn't installed.
+    assert!(!home.join(".m2").exists());
+    assert!(!home.join(".gradle").exists());
     assert!(!roots.contains(&home.join(".cache")), "holds the config");
     assert!(!roots.contains(&home), "holds the config");
     assert!(!roots.iter().any(|r| r.ends_with("missing")));

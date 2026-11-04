@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -1922,7 +1922,7 @@ fn git_clone(url: &str, dest: &Path) -> Result<(), String> {
 }
 
 fn run_git(args: &[String], empty_cfg: &Path) -> Result<(), String> {
-    let mut cmd = Command::new("git");
+    let mut cmd = grokhub_core::git_cmd::git();
     cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())

@@ -67,6 +67,7 @@ pub mod game_watch_rl;
 pub mod game_watch_store;
 pub mod game_watch_wow;
 pub mod gguf;
+pub mod git_cmd;
 pub mod goal;
 pub mod governor;
 pub mod greeting;

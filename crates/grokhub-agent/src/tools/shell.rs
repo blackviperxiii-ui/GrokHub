@@ -56,9 +56,19 @@ pub fn run(workspace: &Path, args: &Value, stop: &dyn Fn() -> bool) -> ToolOutpu
         Err(err) => return ToolOutput::err(format!("workspace is not available: {err}")),
     };
     let plan = crate::sandbox::plan_for_call("run_terminal_command", args, &cwd);
-    match spawn_and_wait(&cwd, &command, timeout_ms, stop, plan.as_ref()) {
-        Ok(output) => output,
-        Err(err) => ToolOutput::err(err),
+    let guard = plan
+        .as_ref()
+        .and_then(|_| crate::sandbox::git_guard::take(&cwd));
+    let result = spawn_and_wait(&cwd, &command, timeout_ms, stop, plan.as_ref());
+    let note = guard.as_ref().and_then(crate::sandbox::git_guard::restore);
+    match (result, note) {
+        (Ok(mut output), Some(note)) => {
+            output.text = format!("{}\n{note}", output.text);
+            output
+        }
+        (Ok(output), None) => output,
+        (Err(err), Some(note)) => ToolOutput::err(format!("{err}\n{note}")),
+        (Err(err), None) => ToolOutput::err(err),
     }
 }
 

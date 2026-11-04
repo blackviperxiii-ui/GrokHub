@@ -184,6 +184,9 @@ impl TaskHub {
             hub.seq = hub.seq.saturating_add(1);
             format!("t{}", hub.seq)
         };
+        let guard = plan
+            .as_ref()
+            .and_then(|_| crate::sandbox::git_guard::take(&cwd));
         let proc = spawn_background(&cwd, &command, plan.as_ref())?;
         if self.is_halted() {
             proc.kill_tree();
@@ -201,7 +204,7 @@ impl TaskHub {
         self.lock().tasks.insert(id.clone(), Arc::clone(&slot));
         let notice_hub = Arc::clone(self);
         let task_id = id.clone();
-        thread::spawn(move || supervise(proc, slot, notice_hub, task_id));
+        thread::spawn(move || supervise(proc, slot, notice_hub, task_id, guard));
         Ok(id)
     }
 
@@ -570,6 +573,7 @@ fn supervise(
     slot: Arc<TaskSlot>,
     hub: Arc<TaskHub>,
     id: String,
+    guard: Option<crate::sandbox::git_guard::Guard>,
 ) {
     let stdout = proc.stdout.take();
     let stderr = proc.stderr.take();
@@ -578,7 +582,20 @@ fn supervise(
     let out_thread = thread::spawn(move || read_pipe(stdout, out_ring));
     let err_thread = thread::spawn(move || read_pipe(stderr, err_ring));
     let mut failed = None;
+    let mut guard_note = None;
+    let mut polls = 0u32;
+    // A sandboxed task's git config and hooks are put back about once a
+    // second while it runs, so a planted hook can't wait for its exit.
+    let check_guard = |note: &mut Option<String>| {
+        if let Some(found) = guard.as_ref().and_then(crate::sandbox::git_guard::restore) {
+            *note = Some(found);
+        }
+    };
     let phase = loop {
+        polls = polls.wrapping_add(1);
+        if polls.is_multiple_of(50) {
+            check_guard(&mut guard_note);
+        }
         if hub.is_halted()
             || matches!(
                 *slot.phase.lock().unwrap_or_else(|e| e.into_inner()),
@@ -604,6 +621,13 @@ fn supervise(
     };
     let _ = out_thread.join();
     let _ = err_thread.join();
+    check_guard(&mut guard_note);
+    if let Some(note) = guard_note {
+        slot.ring
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(format!("\n{note}\n").as_bytes());
+    }
     let tail = notice_tail(&slot);
     let text = match phase {
         Phase::Exited(code) => {

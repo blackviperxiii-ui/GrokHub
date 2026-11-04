@@ -16,6 +16,7 @@
 //! could loosen its own gate.
 
 #[cfg(target_os = "linux")]
+pub mod git_guard;
 pub mod landlock;
 pub mod proxy;
 #[cfg(windows)]
@@ -166,28 +167,33 @@ pub fn raises_privileges(command: &str) -> bool {
         })
 }
 
-/// Folders the tool caches write to, under the home folder.
-const CACHE_DIRS: &[&str] = &[
+/// Folders the tool caches write to, under the home folder. Only the data
+/// parts: a tool's `bin`, its config (cargo's config file,
+/// `~/.m2/settings.xml`) and `~/.gradle/init.d` stay read-only, since code a
+/// sandboxed command left there would later run outside the sandbox.
+pub const CACHE_DIRS: &[&str] = &[
     ".cache",
-    ".cargo",
-    ".rustup",
-    ".npm",
+    ".cargo/registry",
+    ".cargo/git",
+    ".rustup/downloads",
+    ".rustup/tmp",
+    ".npm/_cacache",
+    ".npm/_logs",
     ".pnpm-store",
-    ".yarn",
-    ".bun",
-    ".deno",
-    "go",
-    ".gradle",
-    ".m2",
-    ".nuget",
-    ".dotnet",
-    ".local/share/pnpm",
+    ".yarn/berry/cache",
+    ".bun/install/cache",
+    "go/pkg/mod",
+    ".gradle/caches",
+    ".gradle/daemon",
+    ".m2/repository",
+    ".nuget/packages",
+    ".local/share/pnpm/store",
     // Windows homes keep the caches under AppData\Local.
     "AppData/Local/npm-cache",
     "AppData/Local/pip/Cache",
     "AppData/Local/go-build",
-    "AppData/Local/Yarn",
-    "AppData/Local/pnpm",
+    "AppData/Local/Yarn/Cache",
+    "AppData/Local/pnpm/store",
     "AppData/Local/NuGet",
 ];
 
@@ -210,7 +216,17 @@ pub fn writable_roots(
         PathBuf::from("/dev"),
     ];
     if let Some(home) = home {
-        wanted.extend(CACHE_DIRS.iter().map(|d| home.join(d)));
+        for dir in CACHE_DIRS {
+            let path = home.join(dir);
+            // A tool that is installed gets its data folder made up front, so
+            // its first sandboxed build doesn't fail on a missing folder. Only
+            // when the folder just above it is there (`~/.cargo` for
+            // `~/.cargo/registry`), so no folder appears for a tool that isn't.
+            if dir.contains('/') && !path.exists() && path.parent().is_some_and(Path::is_dir) {
+                let _ = std::fs::create_dir_all(&path);
+            }
+            wanted.push(path);
+        }
     }
     wanted.extend(extra.iter().cloned());
     let mut out: Vec<PathBuf> = Vec::new();

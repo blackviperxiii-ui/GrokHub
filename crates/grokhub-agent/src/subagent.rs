@@ -850,7 +850,9 @@ fn remove_worktree(workspace: &Path, dest: &Path) {
 }
 
 fn git(workspace: &Path, args: &[&str]) -> Result<std::process::Output, String> {
-    std::process::Command::new("git")
+    // Hooks and fsmonitor off: a sandboxed command can plant either in the
+    // workspace's repository, and this runs with no sandbox.
+    grokhub_core::git_cmd::git()
         .arg("-C")
         .arg(workspace)
         .args(args)
