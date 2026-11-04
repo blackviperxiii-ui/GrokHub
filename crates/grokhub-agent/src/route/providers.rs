@@ -830,7 +830,11 @@ fn function_tool(t: &Value) -> Option<(String, String, Value)> {
 /// OpenAI-compatible `/chat/completions`. Effort is `reasoning.effort`.
 pub fn openai_body(model: &str, effort: Option<&str>, req: &ResponsesRequest) -> Value {
     let mut messages: Vec<Value> = Vec::new();
+    // This model's own reasoning details, waiting for the assistant turn they
+    // belong to: OpenRouter wants them back on it so a tool step keeps its working.
+    let mut details: Option<Value> = None;
     for item in &req.input {
+        let before = messages.len();
         match item {
             InputItem::Message { role, content } => {
                 let role = if matches!(role.as_str(), "system" | "developer") {
@@ -881,8 +885,21 @@ pub fn openai_body(model: &str, effort: Option<&str>, req: &ResponsesRequest) ->
                     messages.push(json!({"role": "user", "content": text}));
                 }
             }
-            // Sealed reasoning: only xAI can read it.
-            InputItem::Reasoning { .. } => {}
+            // xAI's sealed reasoning only xAI can read; a provider's goes back
+            // to the model that wrote it.
+            InputItem::Reasoning { .. } => {
+                if let Some(d) = item.reasoning_details(model) {
+                    details = Some(d);
+                }
+            }
+        }
+        if let Some(m) = messages[before..]
+            .iter_mut()
+            .find(|m| m["role"] == "assistant")
+        {
+            if let Some(d) = details.take() {
+                m["reasoning_details"] = d;
+            }
         }
     }
     let mut body = json!({"model": model, "stream": false, "messages": messages});
@@ -1056,9 +1073,23 @@ pub fn parse_openai_reply(body: &str) -> Result<TurnOutput, ClientError> {
         })
         .collect();
     let u = &v["usage"];
+    // OpenRouter says `reasoning`; llama.cpp (`--reasoning-format deepseek`) and
+    // most other hosts say `reasoning_content`.
+    let reasoning = ["reasoning", "reasoning_content"]
+        .iter()
+        .find_map(|k| msg[*k].as_str().filter(|r| !r.is_empty()))
+        .unwrap_or("");
+    // Tagged with the model that wrote them once the caller knows it ([`call_model`]).
+    let reasoning_items = msg["reasoning_details"]
+        .as_array()
+        .filter(|d| !d.is_empty())
+        .and_then(|d| InputItem::provider_reasoning(&Value::Array(d.clone()), ""))
+        .into_iter()
+        .collect();
     Ok(TurnOutput {
         text: msg["content"].as_str().unwrap_or("").to_string(),
-        reasoning: msg["reasoning"].as_str().unwrap_or("").to_string(),
+        reasoning: reasoning.to_string(),
+        reasoning_items,
         calls,
         usage: Usage {
             input_tokens: u64_at(u, &["prompt_tokens"]),
@@ -1289,8 +1320,15 @@ pub fn call_model(
     if !(200..300).contains(&r.status) {
         return Err(error_of(r.status, &r.body, openrouter));
     }
-    match p.kind {
+    let mut turn = match p.kind {
         ProviderKind::OpenAiCompatible => parse_openai_reply(&r.body),
         ProviderKind::Anthropic => parse_anthropic_reply(&r.body),
+    }?;
+    // The next request names the model as the provider does ([`openai_body`]).
+    for item in &mut turn.reasoning_items {
+        if let InputItem::Reasoning { model, .. } = item {
+            *model = wire_model.to_string();
+        }
     }
+    Ok(turn)
 }
