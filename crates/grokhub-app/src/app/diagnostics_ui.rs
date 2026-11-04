@@ -145,16 +145,9 @@ impl Cabin {
         let active = self.thread_personality(self.thread_idx);
         let personality = active.id.clone();
         let content_level = content_level_label(self.cfg.explicit_personalities, active.explicit);
-        let model = if self.cfg.model.trim().is_empty() {
-            "default".into()
-        } else {
-            self.cfg.model.clone()
-        };
-        let provider: String = if self.cfg.provider_model.trim().is_empty() {
-            "xai".into()
-        } else {
-            "provider".into()
-        };
+        // The router picks each call's model: the export names its default.
+        let model: String = grokhub_agent::DEFAULT_MODEL.into();
+        let provider: String = "xai".into();
         let config_dir = config::config_dir();
         let home = grokhub_core::user_home().and_then(|p| p.into_os_string().into_string().ok());
         let home_ref = home.as_deref();

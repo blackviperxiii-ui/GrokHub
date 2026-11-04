@@ -236,7 +236,6 @@ fn the_canary_never_touches_hard_holdout_pinned_or_rejected_retry_steps_and_take
             class: rng.pick(&classes),
             holdout: rng.coin(10),
             under_reject: rng.coin(8),
-            pinned: rng.coin(6),
             hard_tool: rng.coin(9),
         };
         let episode = format!("ep-{i}");
@@ -247,10 +246,7 @@ fn the_canary_never_touches_hard_holdout_pinned_or_rejected_retry_steps_and_take
                 r.class != PREPARE_HARD && !r.class.starts_with("repair:"),
                 "{r:?}"
             );
-            assert!(
-                !r.holdout && !r.under_reject && !r.pinned && !r.hard_tool,
-                "{r:?}"
-            );
+            assert!(!r.holdout && !r.under_reject && !r.hard_tool, "{r:?}");
         }
         if canary_eligible(&r) {
             eligible += 1;

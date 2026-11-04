@@ -140,13 +140,12 @@ fn burst(model: &str, status: CallStatus, http: u16, n: u64, from: u64) -> Vec<O
         .collect()
 }
 
-fn ask<'a>(model: &'a str, pinned: bool) -> RouteInput<'a> {
+fn ask(model: &str) -> RouteInput<'_> {
     RouteInput {
         provider: "xai",
         class: "chat:default",
         current_model: model,
         current_effort: None,
-        pinned,
         d: 0.5,
         needs_tools: true,
         ..RouteInput::default()
@@ -154,16 +153,8 @@ fn ask<'a>(model: &'a str, pinned: bool) -> RouteInput<'a> {
 }
 
 type Apply = fn(&mut Registry, u64) -> Vec<RegistryEvent>;
-/// (fixture, the pin's state after, pinned route, its rule, the one message tier for a pin, for Auto)
-type Fixture = (
-    &'static str,
-    Apply,
-    ModelState,
-    &'static str,
-    &'static str,
-    Option<Tier>,
-    Option<Tier>,
-);
+/// (fixture, the model's state after, the one message tier for a saved pick, for Auto)
+type Fixture = (&'static str, Apply, ModelState, Option<Tier>, Option<Tier>);
 
 /// The pinned model in every fixture.
 const PIN: &str = "grok-4.6";
@@ -210,8 +201,6 @@ fn chaos_fixtures_heal_with_the_right_route_and_exactly_the_planned_messages() {
             "404 storm",
             storm,
             ModelState::Ghost,
-            "grok-4.7",
-            "pin:fallback",
             Some(Tier::HomeUpdate),
             None,
         ),
@@ -219,8 +208,6 @@ fn chaos_fixtures_heal_with_the_right_route_and_exactly_the_planned_messages() {
             "429 burst",
             busy,
             ModelState::Degraded,
-            "grok-4.7",
-            "pin:fallback",
             Some(Tier::WorkRow),
             None,
         ),
@@ -228,8 +215,6 @@ fn chaos_fixtures_heal_with_the_right_route_and_exactly_the_planned_messages() {
             "503 flap",
             flap,
             ModelState::Quarantined,
-            "grok-4.7",
-            "pin:fallback",
             Some(Tier::WorkRow),
             None,
         ),
@@ -237,8 +222,6 @@ fn chaos_fixtures_heal_with_the_right_route_and_exactly_the_planned_messages() {
             "redirected slug",
             redirect,
             ModelState::Redirected,
-            "grok-4.7",
-            "pin:redirect",
             Some(Tier::HomeUpdate),
             None,
         ),
@@ -246,8 +229,6 @@ fn chaos_fixtures_heal_with_the_right_route_and_exactly_the_planned_messages() {
             "tier downgrade",
             downgrade,
             ModelState::NotInPlan,
-            "grok-4.7",
-            "pin:fallback",
             Some(Tier::HomeUpdate),
             Some(Tier::HomeUpdate),
         ),
@@ -255,13 +236,11 @@ fn chaos_fixtures_heal_with_the_right_route_and_exactly_the_planned_messages() {
             "placeholder row",
             placeholder,
             ModelState::Ghost,
-            "grok-4.7",
-            "pin:fallback",
             Some(Tier::HomeUpdate),
             None,
         ),
     ];
-    for (name, apply, state, model, rule, pin_tier, auto_tier) in fixtures {
+    for (name, apply, state, pin_tier, auto_tier) in fixtures {
         for pinned in [true, false] {
             let (mut reg, profiles) = fleet();
             let table = build_table(
@@ -274,16 +253,9 @@ fn chaos_fixtures_heal_with_the_right_route_and_exactly_the_planned_messages() {
             );
             let events = apply(&mut reg, NOW);
             assert_eq!(reg.get(PIN).unwrap().state, *state, "{name}");
-            let route = Router::choose(&ask(PIN, pinned), &reg, &profiles, &table, NOW + 10);
+            let route = Router::choose(&ask(PIN), &reg, &profiles, &table, NOW + 10);
             assert!(!route.no_route, "{name}");
             assert_ne!(route.model, PIN, "{name}: never the broken model");
-            if pinned {
-                assert_eq!(
-                    (route.model.as_str(), route.rule_ids[0].as_str()),
-                    (*model, *rule),
-                    "{name}"
-                );
-            }
             let mut notes = HealNotes::default();
             let pin = if pinned { PIN } else { "" };
             let told = notes.admit(heal_messages(&events, &reg, &profiles, pin, NOW), NOW);
@@ -348,18 +320,6 @@ fn the_messages_read_as_the_plan_words_them() {
     let told = heal_messages(&ev, &reg, &profiles, PIN, NOW).msgs;
     assert_eq!(told[0].text, "grok-4.6 was retired by xAI, so I'm using grok-4.7 where you picked it. Your pick shows (retired) until you choose another in Settings.");
     assert_eq!(reg.pin_label(PIN), "grok-4.6 (retired)");
-    let r = Router::choose(
-        &ask(PIN, true),
-        &reg,
-        &profiles,
-        &RoutingTable::default(),
-        NOW,
-    );
-    assert_eq!(
-        (r.model.as_str(), r.replaced.as_deref()),
-        ("grok-4.7", Some(PIN)),
-        "a retired pin falls back"
-    );
 }
 
 #[test]
@@ -401,24 +361,22 @@ fn fallback_never_picks_a_route_that_is_not_included() {
     for id in IDS {
         reg.fold(&burst(id, CallStatus::Error, 500, 3, NOW));
     }
-    for pinned in [true, false] {
-        let r = Router::choose(
-            &ask(PIN, pinned),
-            &reg,
-            &profiles,
-            &RoutingTable::default(),
-            NOW + 1,
-        );
-        assert!(r.no_route, "pinned={pinned}: {:?}", r.rule_ids);
-        assert_ne!(r.model, "grok-4.8");
-    }
+    let r = Router::choose(
+        &ask(PIN),
+        &reg,
+        &profiles,
+        &RoutingTable::default(),
+        NOW + 1,
+    );
+    assert!(r.no_route, "{:?}", r.rule_ids);
+    assert_ne!(r.model, "grok-4.8");
     // R2b: a key at list price is included up to your $/M ceiling. grok-4.5
     // ($25/M out) is over the default $15/M, so it's premium: Auto stands in
     // with grok-4.3 ($15/M) and the cabin asks once.
     let (mut keyed, profiles) = fleet();
     keyed.entitlement.credential = Credential::ApiKey;
     let r = Router::choose(
-        &ask("grok-4.5", false),
+        &ask("grok-4.5"),
         &keyed,
         &profiles,
         &RoutingTable::default(),
@@ -437,7 +395,7 @@ fn fallback_never_picks_a_route_that_is_not_included() {
         (CostClass::Included, Some("premium:grok-4.5"))
     );
     // Under a $30/M ceiling it is included, and with no table row a key keeps the call's own model.
-    let mut wide = ask("grok-4.5", false);
+    let mut wide = ask("grok-4.5");
     wide.spend.settings.ceiling_usd_per_m = 30.0;
     let r = Router::choose(&wide, &keyed, &profiles, &RoutingTable::default(), NOW);
     assert_eq!(
@@ -451,7 +409,7 @@ fn fallback_never_picks_a_route_that_is_not_included() {
     // No sign-in: nothing native is included, the call keeps its own model.
     keyed.entitlement.credential = Credential::None;
     let r = Router::choose(
-        &ask("grok-4.5", false),
+        &ask("grok-4.5"),
         &keyed,
         &profiles,
         &RoutingTable::default(),
@@ -488,7 +446,7 @@ fn a_vision_step_never_picks_a_model_without_image_input() {
         ModelProfile::build(&text_only, ok_probe(), 2),
     );
     let table = top_first("grok-4.7");
-    let mut i = ask("grok-4.7", false);
+    let mut i = ask("grok-4.7");
     assert_eq!(
         Router::choose(&i, &reg, &profiles, &table, NOW).model,
         "grok-4.7"
@@ -540,7 +498,7 @@ pub(super) fn top_first(top: &str) -> RoutingTable {
 fn a_replan_steps_up_one_model_for_the_call_and_the_episode_drops_back_after() {
     let (reg, profiles) = fleet();
     let table = top_first("grok-4.7");
-    let mut i = ask("grok-4.7", false);
+    let mut i = ask("grok-4.7");
     i.episode_model = Some("grok-4.7");
     let before = Router::choose(&i, &reg, &profiles, &table, NOW);
     assert_eq!(before.model, "grok-4.7");
@@ -597,7 +555,7 @@ fn one_model_per_episode_over_fifty_episodes() {
             }
             // Every eleventh episode the check rejects twice at the ceiling at step 4.
             let reject = ep % 11 == 5 && step == 4;
-            let mut i = ask("grok-4.7", false);
+            let mut i = ask("grok-4.7");
             i.episode_model = model.as_deref();
             i.pick = reject.then(|| e2.clone());
             let r = Router::choose(&i, &reg, &profiles, table, t);
@@ -715,10 +673,6 @@ fn the_live_path_keeps_an_episode_on_its_model_and_pauses_with_no_route() {
         "grok-4.3",
         "a new user message is a new episode"
     );
-    // A pin is kept while it answers.
-    live::set_pin("grok-4.6");
-    assert_eq!(send("grok-4.6", "and again").unwrap(), "grok-4.6");
-    live::set_pin("");
     // Nothing healthy: the call pauses, nothing is sent, and the cabin hears why.
     let mut dead = reg.clone();
     for id in IDS {

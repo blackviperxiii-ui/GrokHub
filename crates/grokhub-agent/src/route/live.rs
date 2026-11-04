@@ -7,9 +7,9 @@
 //! R2a: one model per episode. The model is picked at an episode boundary (a
 //! new user message), on a second VerifyGate reject at the ceiling (E2), or
 //! when the episode's model goes unhealthy; otherwise every step of the
-//! episode keeps it, so the prompt cache stays warm. A pin is kept while it
-//! answers and stood in for (same family first) when it doesn't. With no
-//! healthy, included model the call pauses instead of sending.
+//! episode keeps it, so the prompt cache stays warm. Nothing you set pins,
+//! forces or steers the model or the effort: the router alone picks them. With
+//! no healthy, included model the call pauses instead of sending.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -66,7 +66,6 @@ pub struct RouteCall<'a> {
     pub session: &'a str,
     pub ctx_tokens: u64,
     pub text: &'a str,
-    pub pinned: bool,
     pub failures: u32,
     pub planned_tools: u32,
     pub plan_mode: bool,
@@ -220,34 +219,6 @@ static CACHE: Mutex<Cache> = Mutex::new(Cache {
 
 /// Episodes remembered at once; a long-running cabin stays small.
 const EPISODES_CAP: usize = 256;
-
-/// The user's pinned chat model (`cfg.model`), set by the cabin. Empty is Auto.
-static PIN: Mutex<String> = Mutex::new(String::new());
-
-/// The cabin sets the pin on start and whenever the model setting changes.
-pub fn set_pin(model: &str) {
-    *PIN.lock().unwrap_or_else(|e| e.into_inner()) = model.trim().to_string();
-}
-
-fn pinned_model() -> String {
-    PIN.lock().unwrap_or_else(|e| e.into_inner()).clone()
-}
-
-/// R3b: the provider model you picked in Settings for your own chats
-/// (`<provider>/<model>`), set by the cabin. Empty is none.
-static PROVIDER_PICK: Mutex<String> = Mutex::new(String::new());
-
-/// The cabin sets this on start and whenever Settings changes it.
-pub fn set_provider_pick(model: &str) {
-    *PROVIDER_PICK.lock().unwrap_or_else(|e| e.into_inner()) = model.trim().to_string();
-}
-
-fn provider_pick() -> String {
-    PROVIDER_PICK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone()
-}
 
 /// The text a call that paused returns: no healthy, included model could take
 /// it. The cabin waits and resumes it on its own ([`super::wait`]).
@@ -595,15 +566,11 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         (None, false)
     };
     laps.mark("route:verify_counts");
-    let pin = pinned_model();
-    let pinned =
-        call.pinned || (!pin.is_empty() && pin == call.model.trim() && user_facing(call.class));
     let tuned = learn::live_tune(config_dir);
     let risk = StepRisk {
         class: call.class,
         holdout,
         under_reject: rejects.unwrap_or(0) > 0 && !verify_ok,
-        pinned,
         hard_tool: call.hard_tool,
     };
     let st = learn::step_tune(&tuned, lane.unwrap_or(call.class), key, &risk);
@@ -661,7 +628,6 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
                 low_check: None,
                 budget_pct: b.pct,
                 routine,
-                steady: ladder::EffortSettings::load(config_dir).steady,
                 ..Obs::default()
             };
             let hold = ladder::hold_chat_drops(own, care_first);
@@ -746,7 +712,6 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         grants,
         providers,
     };
-    let picked = provider_pick();
     let class_key_for_bias = row.map(|r| r.class).unwrap_or(call.class);
     let escalate_bias = super::feedback::load(config_dir).bias(class_key_for_bias);
     let prior_escalated = sticky.as_ref().is_some_and(|_| {
@@ -758,7 +723,6 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         class: call.class,
         current_model: call.model,
         current_effort: call.effort,
-        pinned,
         d,
         ctx_tokens: call.ctx_tokens,
         needs_image: call.needs_image,
@@ -771,15 +735,11 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         routine,
         start: st.start.as_deref(),
         local: LocalGate::now(call.sensitive, call.cloud_grant, call.hard_tool),
-        // Your own chats only, never the holdout; the router still checks key and grant.
-        prefer: (call.providers && facing && !holdout && !picked.is_empty())
-            .then_some(picked.as_str()),
         goal: goal.clone(),
         text: call.text,
         escalate_bias,
         prior_escalated,
         care_first,
-        prefs: super::prefs::model_prefs(),
         lane,
     };
     let mut route = Router::choose(&input, &reg, &profiles, &table, now_ms);
@@ -890,7 +850,6 @@ fn shadow_mark(
     let mut shadow = input.clone();
     shadow.pick = None;
     shadow.episode_model = None;
-    shadow.pinned = false;
     let ok = match &c.change {
         Some(tune::Change::Order { model }) => {
             let t = tune::with_order(table, row.class, model);
@@ -973,7 +932,6 @@ pub fn route_record(
         prev,
         rule_ids: route.rule_ids.clone(),
         reason: route.reason.clone(),
-        pinned: call.pinned,
         outcome: (!done.cancelled).then(|| RouteOutcome {
             ok: done.ok,
             verify,
@@ -1285,10 +1243,7 @@ pub fn stream_routed(
         let name = local
             .then(|| super::local_sidecar::model_name(&dir))
             .flatten();
-        super::ask::route_note(
-            &super::identity::describe(model, name.as_deref(), false),
-            effort,
-        )
+        super::ask::route_note(&super::identity::describe(model, name.as_deref()), effort)
     };
     if asks_route {
         let n = route_note(&model, sent.effort.as_deref(), on_device);
@@ -1527,13 +1482,12 @@ pub const PROVIDER_GROK_BUILD: &str = "grok_build";
 /// episode at spawn (R0 Step-0: live `set_config_option` is not verified), so a
 /// session already running keeps its spawn effort. `None` means this turn spawns
 /// fresh and runs at the router's pick, which is returned with the model it
-/// spawns with (R2a: Auto's pick from Grok Build's own plan list; a pin is kept
-/// while it is listed). A running session keeps the model it spawned with.
+/// spawns with (R2a: Auto's pick from Grok Build's own plan list). A running
+/// session keeps the model it spawned with.
 /// `origin` is who started the turn: only your own typed turn waits live (R2b).
 pub fn route_gb_turn(
     config_dir: &Path,
     model: &str,
-    pinned: bool,
     sent: Option<Option<&str>>,
     session: &str,
     text: &str,
@@ -1549,7 +1503,6 @@ pub fn route_gb_turn(
         model,
         session,
         text,
-        pinned,
         origin: Some(origin),
         ..RouteCall::default()
     };

@@ -368,19 +368,20 @@ fn ai_models_holds_every_model_setting_once() {
     for row in [
         "account_auth.action",
         "self.ui_provider_rows(ui)",
-        "ROW_MODEL",
-        "cabin_default_model_id",
         "self.refresh_models_now()",
         "self.how_auto_picks_lines()",
         "paint_offline_row(ui)",
         "self.ui_local_model_rows(ui)",
         "local_notes(",
         "self.ui_spend_rows(ui)",
-        "\"Steady effort\"",
         "\"Daily token budget\"",
         "\"Pause scheduled work over budget\"",
     ] {
         assert!(models.contains(row), "AI models paints {row}");
+    }
+    // The router alone picks the model and effort: no pick row is painted.
+    for gone in ["ROW_MODEL", "Steady effort", "ui_model_pref_rows"] {
+        assert!(!models.contains(gone), "AI models still paints {gone}");
     }
     // Each of those rows is painted from AI models and nowhere else.
     let account = settings_arm(
@@ -406,11 +407,9 @@ fn ai_models_holds_every_model_setting_once() {
         for row in [
             "account_auth",
             "ui_provider_rows",
-            "ROW_MODEL",
             "ui_local_model_rows",
             "ui_spend_rows",
             "how_auto_picks_lines",
-            "Steady effort",
             "Daily token budget",
         ] {
             assert!(!arm.contains(row), "{name} still paints {row}");

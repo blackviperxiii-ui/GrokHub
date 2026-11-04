@@ -14,9 +14,8 @@ pub const TAG: &str = "[Model identity]";
 const OPENS: &str = "[Model identity] This reply comes from ";
 
 /// The model as a reply should name it: `local_name` is the device's model
-/// file (its GGUF name) when there is one; `fallback` is OpenRouter's
-/// fallback switch, which may hand the call to its router instead.
-pub fn describe(model: &str, local_name: Option<&str>, fallback: bool) -> String {
+/// file (its GGUF name) when there is one.
+pub fn describe(model: &str, local_name: Option<&str>) -> String {
     let m = model.trim();
     if super::local::is_local(m) {
         return match local_name.map(str::trim).filter(|n| !n.is_empty()) {
@@ -30,10 +29,6 @@ pub fn describe(model: &str, local_name: Option<&str>, fallback: bool) -> String
             if super::providers::is_openrouter_router(wire) {
                 format!(
                     "a model that {host}'s router `{wire}` chose for this reply (name your own underlying model if you know it, and say it came through {host})"
-                )
-            } else if fallback && provider == "openrouter" {
-                format!(
-                    "`{wire}` through {host} (or, if it had no endpoint, a model {host}'s router picked instead: then name your own model if you know it)"
                 )
             } else {
                 format!("`{wire}`, served through {host}")
@@ -71,9 +66,9 @@ fn grok_family(model: &str) -> bool {
 }
 
 /// The paragraph the model reads.
-pub fn line(model: &str, local_name: Option<&str>, fallback: bool) -> String {
+pub fn line(model: &str, local_name: Option<&str>) -> String {
     let product = grokhub_core::brand::product_name();
-    let who = describe(model, local_name, fallback);
+    let who = describe(model, local_name);
     if grok_family(model) {
         return format!(
             "{OPENS}{who}, which {product} sent this turn to. When the user asks which model or AI is answering, name this model plainly."
@@ -89,11 +84,11 @@ pub fn line(model: &str, local_name: Option<&str>, fallback: bool) -> String {
 /// its own trailing paragraph, never text that merely names the tag). One
 /// system message stays one: some on-device chat templates take a single
 /// system turn only. An xAI Grok model is left as it is.
-pub fn stamp(input: &mut Vec<InputItem>, model: &str, local_name: Option<&str>, fallback: bool) {
+pub fn stamp(input: &mut Vec<InputItem>, model: &str, local_name: Option<&str>) {
     if is_grok(model) {
         return;
     }
-    let para = line(model, local_name, fallback);
+    let para = line(model, local_name);
     for item in input.iter_mut() {
         let InputItem::Message { role, content } = item else {
             continue;
@@ -159,26 +154,22 @@ mod tests {
     #[test]
     fn each_route_names_the_model_that_really_answers() {
         assert_eq!(
-            describe("local:small", Some("Qwen3-8B-Q4_K_M"), false),
+            describe("local:small", Some("Qwen3-8B-Q4_K_M")),
             "Qwen3-8B-Q4_K_M, an open model running on this computer through llama.cpp"
         );
         assert_eq!(
-            describe("local:tiny", None, false),
+            describe("local:tiny", None),
             "an open model running on this computer through llama.cpp"
         );
         assert_eq!(
-            describe(
-                "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
-                None,
-                false
-            ),
+            describe("openrouter/nvidia/nemotron-3-ultra-550b-a55b:free", None),
             "`nvidia/nemotron-3-ultra-550b-a55b:free`, served through OpenRouter"
         );
         assert_eq!(
-            describe("anthropic/claude-x", None, false),
+            describe("anthropic/claude-x", None),
             "`claude-x`, served through Anthropic"
         );
-        assert!(describe("openrouter/openrouter/free", None, false)
+        assert!(describe("openrouter/openrouter/free", None)
             .starts_with("a model that OpenRouter's router `openrouter/free` chose"));
         assert!(is_grok("grok-4.7"));
         assert!(!is_grok("local:small"));
@@ -191,13 +182,13 @@ mod tests {
             system("You are Grok inside Loadout."),
             user("which model are you?"),
         ];
-        stamp(&mut input, "local:small", Some("Qwen3-8B"), false);
+        stamp(&mut input, "local:small", Some("Qwen3-8B"));
         assert_eq!(input.len(), 2, "no second system message");
         let first = text_of(&input[0]).to_string();
         assert!(first.starts_with("You are Grok inside Loadout.\n\n[Model identity] This reply comes from Qwen3-8B, an open model"), "{first}");
         assert!(first.contains("never insist you are Grok"));
         // A second stamp (xAI fell back to another route) replaces the first.
-        stamp(&mut input, "openrouter/vendor/model", None, false);
+        stamp(&mut input, "openrouter/vendor/model", None);
         let again = text_of(&input[0]);
         assert_eq!(again.matches(TAG).count(), 1, "{again}");
         assert!(
@@ -208,42 +199,32 @@ mod tests {
         assert_eq!(text_of(&input[1]), "which model are you?");
         // A Grok model keeps the prompt untouched.
         let mut grok = vec![system("You are Grok inside Loadout."), user("hi")];
-        stamp(&mut grok, "grok-4.7", None, false);
+        stamp(&mut grok, "grok-4.7", None);
         assert_eq!(text_of(&grok[0]), "You are Grok inside Loadout.");
         // No system message: one is added up front.
         let mut bare = vec![user("hi")];
-        stamp(&mut bare, "anthropic/claude-x", None, false);
+        stamp(&mut bare, "anthropic/claude-x", None);
         assert_eq!(bare.len(), 2);
         assert!(text_of(&bare[0]).starts_with(TAG));
         assert_eq!(text_of(&bare[1]), "hi");
     }
 
     #[test]
-    fn grok_through_a_provider_the_fallback_router_and_the_tag_in_a_prompt() {
+    fn grok_through_a_provider_and_the_tag_in_a_prompt() {
         // Grok through OpenRouter is still Grok: no "never insist you are Grok".
-        let grok = line("openrouter/x-ai/grok-4", None, false);
+        let grok = line("openrouter/x-ai/grok-4", None);
         assert!(
             grok.contains("`x-ai/grok-4`, served through OpenRouter"),
             "{grok}"
         );
         assert!(!grok.contains("never insist"), "{grok}");
-        // With OpenRouter's fallback on, the router may have answered.
-        let fb = describe("openrouter/vendor/model", None, true);
-        assert!(
-            fb.starts_with("`vendor/model` through OpenRouter (or, if it had no endpoint"),
-            "{fb}"
-        );
-        assert_eq!(
-            describe("anthropic/claude-x", None, true),
-            "`claude-x`, served through Anthropic"
-        );
         // A prompt that merely names the tag keeps its text; only a stamp goes.
         let mut input = vec![
             system("Rules mention [Model identity] lines. Keep this."),
             user("hi"),
         ];
-        stamp(&mut input, "local:small", None, false);
-        stamp(&mut input, "local:small", None, false);
+        stamp(&mut input, "local:small", None);
+        stamp(&mut input, "local:small", None);
         let text = text_of(&input[0]);
         assert!(text.starts_with("Rules mention [Model identity] lines. Keep this.\n\n[Model identity] This reply comes from"), "{text}");
         assert_eq!(text.matches("This reply comes from").count(), 1, "{text}");

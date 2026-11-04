@@ -63,7 +63,7 @@ pub struct RouteOutcome {
 }
 
 /// `{span_id, episode, step, class, d, ctx_tokens, signals, candidates_n,
-/// chosen, prev, rule_ids, reason, pinned, outcome}` plus `used` (what the call
+/// chosen, prev, rule_ids, reason, outcome}` plus `used` (what the call
 /// really sent) and `settings` (the profile's runtime settings for `chosen`).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RouteRecord {
@@ -93,8 +93,6 @@ pub struct RouteRecord {
     pub rule_ids: Vec<String>,
     #[serde(default)]
     pub reason: String,
-    #[serde(default)]
-    pub pinned: bool,
     #[serde(default)]
     pub outcome: Option<RouteOutcome>,
     /// What the call actually sent.

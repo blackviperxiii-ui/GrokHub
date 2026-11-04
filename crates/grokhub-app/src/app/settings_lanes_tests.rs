@@ -428,17 +428,6 @@ fn avatar_chrome_returns_menu_fields() {
     assert!(cabin.chat_job_thread.is_none());
 }
 
-// Folded from PR #414.
-#[test]
-fn cabin_default_model_id_empty_and_known() {
-    // Real fn: empty/whitespace → ""; known chat id → sanitized non-empty. No spawn/network.
-    assert_eq!(cabin_default_model_id(""), "");
-    assert_eq!(cabin_default_model_id("  \t"), "");
-    let id = cabin_default_model_id("grok-4.7");
-    assert!(!id.is_empty());
-    assert_eq!(id, grokhub_core::sanitize_chat_model("grok-4.7"));
-}
-
 // Folded from PR #416.
 #[test]
 fn fallback_cabin_name_defaults_to_you() {
@@ -487,15 +476,6 @@ fn always_session_spec_title_primary_not_danger() {
     assert_eq!(spec.title, ALWAYS_SESSION_TITLE);
     assert_eq!(spec.primary, "Confirm");
     assert!(!spec.danger);
-}
-
-// Folded from PR #420.
-#[test]
-fn cabin_default_model_label_empty_unknown_and_known() {
-    // Real fn: empty/unknown pin → "Auto"; known catalog id → its label. No spawn/network.
-    assert_eq!(cabin_default_model_label(""), "Auto");
-    assert_eq!(cabin_default_model_label("  \t"), "Auto");
-    assert_eq!(cabin_default_model_label("grok-4.7"), "Grok 4.7");
 }
 
 #[test]
@@ -650,31 +630,4 @@ fn cabin_default_session_id_empty_unknown_and_known() {
     assert_eq!(cabin_default_session_id("chat"), "chat");
     assert_eq!(cabin_default_session_id("plan"), "plan");
     assert_eq!(cabin_default_session_id("ask"), "ask");
-}
-
-// Folded from PR #431.
-#[test]
-fn cabin_default_models_lists_known_ids() {
-    // Real fn: non-empty chat catalog plus Auto with known ids/labels. No spawn/network.
-    let models = cabin_default_models();
-    assert!(!models.is_empty());
-    let ids: Vec<&str> = models.iter().map(|(id, _)| *id).collect();
-    let labels: Vec<&str> = models.iter().map(|(_, label)| *label).collect();
-    assert!(ids.contains(&""), "missing Auto id: {ids:?}");
-    assert!(labels.contains(&"Auto"), "missing Auto label: {labels:?}");
-    for (want_id, want_label) in [
-        ("grok-4.7", "Grok 4.7"),
-        ("grok-4.6", "Grok 4.6"),
-        ("grok-4.3", "Grok 4.3"),
-        ("grok-3-mini-fast", "Grok 3 Mini Fast"),
-    ] {
-        assert!(
-            ids.contains(&want_id),
-            "missing model id {want_id}: {ids:?}"
-        );
-        assert!(
-            labels.contains(&want_label),
-            "missing model label {want_label}: {labels:?}"
-        );
-    }
 }

@@ -310,6 +310,29 @@ pub fn approved(reg: &Registry, id: &str, grok_build: bool, spend: &Spend) -> bo
     }
 }
 
+/// A model that answers something other than a chat (a safety classifier,
+/// an embedding or rerank model): Auto never adds it to its pool. Matched on
+/// whole words of the id (`llama-guard-4`, `text-embedding-3`), so
+/// `vanguard-70b` stays a chat model; the router also leaves out a model
+/// whose listing says it answers in something other than text.
+pub fn utility_model(id: &str) -> bool {
+    const WORDS: [&str; 10] = [
+        "safety",
+        "guard",
+        "moderation",
+        "embed",
+        "embedding",
+        "embeddings",
+        "rerank",
+        "reranker",
+        "shield",
+        "shieldgemma",
+    ];
+    id.to_ascii_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|w| WORDS.contains(&w))
+}
+
 /// A model on a provider you added (R3b), not xAI: only its own sources list it.
 pub fn is_new_provider(reg: &Registry, id: &str) -> bool {
     reg.get(id)
@@ -380,7 +403,7 @@ pub fn fallback_chain(from: &str, candidates: &[&str]) -> Vec<String> {
 }
 
 /// Each candidate's capability fit for `class` (the baseline score
-/// [`rank`] and [`rank_efficient`] both order by), scored once per model.
+/// [`rank`] orders by), scored once per model.
 fn fit_scores(class: &str, candidates: &[&str], reg: &Registry) -> Vec<f64> {
     let need = super::capabilities::class_need(class);
     let lane = super::capabilities::BaselineLane::of(class);
@@ -443,74 +466,6 @@ pub fn rank(
             } else {
                 std::cmp::Ordering::Equal
             })
-            .then(a.3.total_cmp(&b.3))
-            .then(a.4.cmp(&b.4))
-            .then(a.5.cmp(b.5))
-    });
-    keyed.into_iter().map(|k| k.5.to_string()).collect()
-}
-
-/// A busy answer (429/503) counts for [`rank_efficient`] this long.
-pub const BUSY_WINDOW_MS: u64 = 15 * 60_000;
-
-/// Rank for a tight week ("Auto: all models" with the budget at 80%): among
-/// the models that fit the step nearly as well as the best one (within 15%
-/// of its capability score, so a hard step never lands on a tiny model), the
-/// one that answers for the least without a slowdown or a limit. Degraded
-/// last, then a model that answered busy (429/503) in its last few calls
-/// within [`BUSY_WINDOW_MS`], then the good-enough ones first, then the
-/// lowest expected cost (an unpriced model counts as dearest), then the
-/// quickest recent answers, then the id.
-pub fn rank_efficient(
-    class: &str,
-    candidates: &[&str],
-    reg: &Registry,
-    ctx_tokens: u64,
-    now_ms: u64,
-) -> Vec<String> {
-    let fits = fit_scores(class, candidates, reg);
-    let best = fits.iter().copied().fold(f64::MIN, f64::max);
-    let band = best - best.abs() * 0.15;
-    // (degraded, busy, short of the band, cost, p50 latency, id), once each.
-    let mut keyed: Vec<(bool, bool, bool, f64, u64, &str)> = candidates
-        .iter()
-        .zip(fits)
-        .map(|(&id, fit)| {
-            let rec = reg.get(id);
-            let busy = rec.is_some_and(|r| {
-                r.health
-                    .recent
-                    .iter()
-                    .rev()
-                    .take(3)
-                    .any(|c| c.pressure && now_ms.saturating_sub(c.ts_ms) <= BUSY_WINDOW_MS)
-            });
-            let mut ms: Vec<u64> = rec
-                .map(|r| {
-                    r.health
-                        .recent
-                        .iter()
-                        .filter(|c| c.ok)
-                        .map(|c| c.latency_ms)
-                        .collect()
-                })
-                .unwrap_or_default();
-            ms.sort_unstable();
-            (
-                rec.is_some_and(|r| r.state == ModelState::Degraded),
-                busy,
-                fit < band,
-                rec.and_then(|r| expected_cost_usd(&r.meta.prices, class, ctx_tokens))
-                    .unwrap_or(f64::MAX),
-                ms.get(ms.len() / 2).copied().unwrap_or(u64::MAX),
-                id,
-            )
-        })
-        .collect();
-    keyed.sort_by(|a, b| {
-        a.0.cmp(&b.0)
-            .then(a.1.cmp(&b.1))
-            .then(a.2.cmp(&b.2))
             .then(a.3.total_cmp(&b.3))
             .then(a.4.cmp(&b.4))
             .then(a.5.cmp(b.5))

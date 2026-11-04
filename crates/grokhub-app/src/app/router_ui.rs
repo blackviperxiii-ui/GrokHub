@@ -39,16 +39,12 @@ pub(super) struct HealOut {
 }
 
 /// Messages for a batch of registry events, each incident told once.
-fn heal_after(
-    dir: &std::path::Path,
-    events: &[RegistryEvent],
-    joined: &[String],
-    pin: &str,
-) -> HealOut {
+fn heal_after(dir: &std::path::Path, events: &[RegistryEvent], joined: &[String]) -> HealOut {
     let now = grokhub_core::now_ms();
     let mut heard = Heard::default();
     if !events.is_empty() {
-        heard = heal_messages(events, &load_registry(dir), &read_profiles(dir), pin, now);
+        // No pin: the router alone picks the model.
+        heard = heal_messages(events, &load_registry(dir), &read_profiles(dir), "", now);
     }
     heard.msgs.extend(joined_messages(joined));
     if heard.msgs.is_empty() && heard.cleared.is_empty() {
@@ -74,8 +70,6 @@ pub(super) struct RouterUi {
     pub tune_rx: Option<mpsc::Receiver<Result<TuneRun, String>>>,
     /// Refresh models was clicked: the next refresh rebuilds the table even unchanged.
     pub force_table: bool,
-    /// The pin the router last heard.
-    pub pin: Option<String>,
     /// Open router incidents (key, text), newest first. Each one lands in
     /// the bell once, until the model answers again and clears it.
     pub rows: Vec<(String, String)>,
@@ -83,7 +77,7 @@ pub(super) struct RouterUi {
     pub paused: Vec<String>,
     /// Router R2b: spend settings, premium asks, budget cards.
     pub budget: super::budget_ui::BudgetUi,
-    /// Router R3b: the "Add a provider" fields and the provider pick the router last heard.
+    /// Router R3b: the "Add a provider" fields and the data policy the router last heard.
     pub providers: super::provider_ui::ProviderUi,
     /// A no-route pause waiting on its own for a model to answer.
     pub wait: super::model_wait_ui::ModelWaitUi,
@@ -97,10 +91,9 @@ impl Cabin {
         format!("plan={plan};key={key}")
     }
 
-    /// Ids a pin or a default names (a ghost if no source lists them).
+    /// Ids a default names (a ghost if no source lists them).
     fn router_named_models(&self) -> Vec<String> {
         let mut named: Vec<String> = vec![
-            self.cfg.model.trim().to_string(),
             grokhub_core::CABIN_FAST_MODEL.to_string(),
             grokhub_core::CABIN_FAST_FALLBACK.to_string(),
             grokhub_core::DEFAULT_MODEL.to_string(),
@@ -219,12 +212,11 @@ impl Cabin {
         if fold_due && self.harness.router.rx.is_none() && self.harness.router.fold_rx.is_none() {
             self.harness.router.last_fold = Some(Instant::now());
             let dir = crate::config::config_dir();
-            let pin = self.cfg.model.trim().to_string();
             let (tx, rx) = mpsc::channel();
             self.harness.router.fold_rx = Some(rx);
             std::thread::spawn(move || {
                 let (events, signal) = fold_health(&dir);
-                let heal = heal_after(&dir, &events, &[], &pin);
+                let heal = heal_after(&dir, &events, &[]);
                 let _ = tx.send((signal, heal));
             });
         }
@@ -238,7 +230,6 @@ impl Cabin {
         };
         let named = self.router_named_models();
         let default_model = grokhub_agent::DEFAULT_MODEL.to_string();
-        let pin = self.cfg.model.trim().to_string();
         let force = std::mem::take(&mut self.harness.router.force_table);
         let dir = crate::config::config_dir();
         let (tx, rx) = mpsc::channel();
@@ -278,7 +269,7 @@ impl Cabin {
             }
             // Evals run only on a plan sign-in (included routes); a key rebuilds from metadata.
             let table = rebuild_table(&dir, plan, force, grokhub_core::now_ms());
-            let heal = heal_after(&dir, &done.events, &table.joined, &pin);
+            let heal = heal_after(&dir, &done.events, &table.joined);
             let _ = tx.send((done, heal));
         });
     }
@@ -398,7 +389,8 @@ impl Cabin {
         }
     }
 
-    /// The live router keeps a pin while it answers; Auto is an empty pin.
+    /// What the live router reads from Settings: Local AI, the prompt tidy,
+    /// OpenRouter's data policy and the local tuning. It takes no model pick.
     pub(super) fn sync_router_pin(&mut self) {
         grokhub_agent::route::local::set_enabled(self.cfg.local_model);
         grokhub_agent::route::local::set_prompt_cleanup(
@@ -407,13 +399,8 @@ impl Cabin {
         if self.cfg.local_model {
             super::local_signals::start(crate::config::config_dir());
         }
-        self.sync_provider_pick();
+        self.sync_provider_routing();
         self.sync_local_tuning();
-        let pin = self.cfg.model.trim();
-        if self.harness.router.pin.as_deref() != Some(pin) {
-            grokhub_agent::route::live::set_pin(pin);
-            self.harness.router.pin = Some(pin.to_string());
-        }
     }
 
     /// Work-tree lines, Home updates and pauses, by tier. Home updates go
@@ -461,35 +448,11 @@ impl Cabin {
 
     /// Settings → Refresh models: list, probes and the table now.
     pub(super) fn refresh_models_now(&mut self) {
-        // Registry rows may change; drop the cached provider model pick list.
-        self.harness.router.providers.model_choices = None;
         self.harness.router.force_table = true;
         if let Some(clock) = self.harness.router.clock.as_mut() {
             clock.demand = true;
         }
         self.status = "Refreshing models...".into();
-    }
-
-    /// The Settings model list: Auto first, retired models gone (unless pinned),
-    /// and a tag on a model that isn't in your plan or isn't answering.
-    pub(super) fn router_model_choices(&self) -> Vec<(String, String)> {
-        let (reg, _) = grokhub_agent::route::live::snapshot(&crate::config::config_dir());
-        let pin = self.cfg.model.trim();
-        super::settings::cabin_default_models()
-            .into_iter()
-            .filter(|(id, _)| {
-                id.is_empty() || !grokhub_agent::route::heal::settings_hidden(&reg, id, pin)
-            })
-            .map(|(id, label)| {
-                let retired = !id.is_empty() && reg.get(id).is_some_and(|r| r.state.tombstone());
-                let label = match grokhub_agent::route::heal::settings_tag(&reg, id) {
-                    _ if retired => format!("{label} (retired)"),
-                    Some(tag) => format!("{label} · {tag}"),
-                    None => label.to_string(),
-                };
-                (id.to_string(), label)
-            })
-            .collect()
     }
 
     /// "How Auto picks": read-only, one line per class from the routing table.
@@ -631,14 +594,8 @@ mod tests {
     }
 
     #[test]
-    fn the_pin_reaches_the_router_and_refresh_forces_a_table_rebuild() {
+    fn refresh_forces_a_table_rebuild() {
         let mut app = Cabin::quiet_for_test();
-        app.cfg.model = "grok-4.6".into();
-        app.sync_router_pin();
-        assert_eq!(app.harness.router.pin.as_deref(), Some("grok-4.6"));
-        app.cfg.model = String::new();
-        app.sync_router_pin();
-        assert_eq!(app.harness.router.pin.as_deref(), Some(""));
         app.harness.router.clock = Some(RefreshClock::new(1));
         app.refresh_models_now();
         assert!(app.harness.router.force_table);

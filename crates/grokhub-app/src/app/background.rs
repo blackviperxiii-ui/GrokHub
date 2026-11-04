@@ -291,7 +291,7 @@ impl Cabin {
         }
         let (client, auth_kind, bearer) = native_bg_model(self)?;
         crate::desktop_mcp::sync_native_cua(&self.cfg);
-        let model = grokhub_core::cabin_spawn_model(&self.cfg.model).to_string();
+        let model = grokhub_agent::DEFAULT_MODEL.to_string();
         let effort = self.bg_effort(origin);
         let (stable, volatile) = self.chat_prompt_parts();
         let need = grokhub_agent::prompt_need_from_job(task);

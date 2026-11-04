@@ -1088,11 +1088,8 @@ fn chip_apply_mode_and_help_stay_off_a_run() {
 
     let mut mode = super::Cabin::quiet_for_test();
     mode.apply_chip(chip("mode-fast", "__mode:fast", super::ChipKind::Mode));
-    assert_eq!(mode.cfg.mode, "fast");
-    assert_eq!(
-        mode.status,
-        super::slash::mode_status_line("fast", &mode.cfg.model)
-    );
+    // The router alone picks the model: a mode chip only says so.
+    assert_eq!(mode.status, grokhub_core::MODEL_AUTO_MSG);
     assert!(!mode.running);
 
     let mut typed_help = super::Cabin::quiet_for_test();

@@ -404,7 +404,7 @@ impl Cabin {
         };
         let cwd = self.grok_cwd();
         let gate = scheduled_gate(self, self.session_mode);
-        let model = grokhub_core::cabin_spawn_model(&self.cfg.model).to_string();
+        let model = grokhub_agent::DEFAULT_MODEL.to_string();
         let system = native_rules(self, &cwd, &row.prompt);
         let prompt = row.prompt.clone();
         let id = row.id.clone();

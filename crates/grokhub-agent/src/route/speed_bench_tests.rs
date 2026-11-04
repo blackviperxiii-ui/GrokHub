@@ -335,7 +335,6 @@ fn bench(name: &str, n: usize) -> Vec<Stat> {
         live::route_gb_turn(
             &dir,
             "grok-4.7",
-            false,
             None,
             "bench-gb",
             &format!("{ASK} ({i})"),

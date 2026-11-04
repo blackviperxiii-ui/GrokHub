@@ -264,37 +264,6 @@ pub(super) fn settings_save_visible(sec: SettingsSec) -> bool {
     sec != SettingsSec::Appearance
 }
 
-/// Chat catalog ids plus Auto. Auto persists an empty model pin.
-pub(super) fn cabin_default_models() -> Vec<(&'static str, &'static str)> {
-    let mut out = vec![("", "Auto")];
-    for row in grokhub_core::MODEL_CATALOG {
-        if row.kind == "chat" {
-            out.push((row.id, row.label));
-        }
-    }
-    out
-}
-
-/// Empty stays empty. Any other value is a chat catalog id.
-pub(super) fn cabin_default_model_id(raw: &str) -> String {
-    let t = raw.trim();
-    if t.is_empty() {
-        String::new()
-    } else {
-        grokhub_core::sanitize_chat_model(t).to_string()
-    }
-}
-
-pub(super) fn cabin_default_model_label(raw: &str) -> &'static str {
-    let id = cabin_default_model_id(raw);
-    cabin_default_models()
-        .into_iter()
-        .find(|(k, _)| *k == id)
-        .map(|(_, label)| label)
-        .unwrap_or("Auto")
-}
-
-const ROW_MODEL: &str = "Default model";
 /// Account keeps your name and picture; the Grok sign-in moved to AI models.
 pub(super) const ACCOUNT_SIGN_IN_MOVED: &str =
     "Sign in with Grok, OpenRouter and API keys are in Settings → AI models.";
@@ -310,10 +279,8 @@ const ROW_COLLAPSE: &str = "Always collapse";
 
 /// Settings → Defaults, in order. There is no effort row: effort is automatic (Router R1).
 #[cfg(test)]
-pub(super) fn defaults_rows() -> [&'static str; 10] {
+pub(super) fn defaults_rows() -> [&'static str; 8] {
     [
-        ROW_MODEL,
-        super::budget_ui::FAST_ROW,
         super::budget_ui::CAP_ROW,
         super::budget_ui::CEILING_ROW,
         ROW_PERMISSION,
@@ -499,15 +466,6 @@ impl Cabin {
         if !on {
             self.composer_ghost.clear();
         }
-        self.persist_cfg();
-        self.status = "Saved".into();
-    }
-
-    pub(super) fn set_steady_effort(&mut self, on: bool) {
-        if self.cfg.steady_effort == on {
-            return;
-        }
-        self.cfg.steady_effort = on;
         self.persist_cfg();
         self.status = "Saved".into();
     }
@@ -823,31 +781,6 @@ impl Cabin {
                                                                 "Models",
                                                                 None,
                                                             );
-                                                            let models = self.router_model_choices();
-                                                            let model_labels: Vec<String> =
-                                                                models.iter().map(|(_, label)| label.clone()).collect();
-                                                            let pin = cabin_default_model_id(&self.cfg.model);
-                                                            let model_selected = models
-                                                                .iter()
-                                                                .find(|(id, _)| *id == pin)
-                                                                .map(|(_, label)| label.clone())
-                                                                .unwrap_or_else(|| cabin_default_model_label(&pin).to_string());
-                                                            if let Some(i) = settings_dropdown(
-                                                                ui,
-                                                                ROW_MODEL,
-                                                                "Auto picks the model for each step. A model you pick here is kept while it answers.",
-                                                                &model_selected,
-                                                                &model_labels,
-                                                            ) {
-                                                                if let Some((id, _)) = models.get(i) {
-                                                                    let next = cabin_default_model_id(id);
-                                                                    if next != self.cfg.model {
-                                                                        self.cfg.model = next;
-                                                                        self.persist_cfg();
-                                                                        self.status = "Saved".into();
-                                                                    }
-                                                                }
-                                                            }
                                                             if crate::cards::settings_action(
                                                                 ui,
                                                                 "Refresh models",
@@ -857,7 +790,6 @@ impl Cabin {
                                                                 self.refresh_models_now();
                                                             }
                                                             crate::cards::settings_note(ui, &self.how_auto_picks_lines());
-                                                            self.ui_model_pref_rows(ui);
                                                             crate::ui_kit::section_header(ui, "Local AI", None);
                                                             super::privacy_page::paint_offline_row(ui);
                                                             self.ui_local_model_rows(ui);
@@ -876,15 +808,6 @@ impl Cabin {
                                                             }
                                                             crate::ui_kit::section_header(ui, "Spend & effort", None);
                                                             self.ui_spend_rows(ui);
-                                                            let mut steady_effort = self.cfg.steady_effort;
-                                                            if settings_toggle(
-                                                                ui,
-                                                                "Steady effort",
-                                                                "Thinks harder only after two failed tools in a row, keeps chat at High or below, and eases back after a clean step. Spends less; a hard run of errors may get less thought. Off by default.",
-                                                                &mut steady_effort,
-                                                            ) {
-                                                                self.set_steady_effort(steady_effort);
-                                                            }
                                                             let budgets = grokhub_core::TOKEN_BUDGETS;
                                                             let budget_labels: Vec<String> = budgets
                                                                 .iter()
@@ -2004,42 +1927,10 @@ mod tests {
     }
 
     #[test]
-    fn cabin_default_choices_match_the_headless_pins() {
-        let models = cabin_default_models();
-        assert_eq!(models[0], ("", "Auto"));
-        let chat: Vec<_> = grokhub_core::MODEL_CATALOG
-            .iter()
-            .filter(|row| row.kind == "chat")
-            .map(|row| row.id)
-            .collect();
-        assert!(chat.len() >= 4);
-        for id in &chat {
-            assert!(
-                models.iter().any(|(k, _)| k == id),
-                "missing chat model {id}"
-            );
-        }
-        assert!(models.iter().all(|(id, _)| {
-            id.is_empty()
-                || grokhub_core::MODEL_CATALOG
-                    .iter()
-                    .any(|row| row.kind == "chat" && row.id == *id)
-        }));
-        assert_eq!(cabin_default_model_id(""), "");
-        assert_eq!(cabin_default_model_label(""), "Auto");
-        assert_eq!(
-            cabin_default_model_id("grok-4.7"),
-            grokhub_core::sanitize_chat_model("grok-4.7")
-        );
-        assert_eq!(
-            cabin_default_model_id("nope"),
-            grokhub_core::sanitize_chat_model("nope")
-        );
+    fn cabin_default_rows_and_permissions() {
         assert_eq!(
             defaults_rows(),
             [
-                "Default model",
-                "Use Grok 4.7 Fast when you're waiting",
                 "Weekly spend cap",
                 "Price limit",
                 "Permission",

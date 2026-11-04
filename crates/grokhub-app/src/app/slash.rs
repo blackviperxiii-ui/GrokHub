@@ -209,26 +209,8 @@ impl Cabin {
                 self.open_connectors();
                 self.scroll_to_hooks = true;
             }
-            Slash::Model(name) => {
-                let name = name.trim();
-                let (id, effort) = name
-                    .split_once(char::is_whitespace)
-                    .map(|(a, b)| (a.trim(), b.trim()))
-                    .unwrap_or((name, ""));
-                if !id.is_empty() {
-                    self.cfg.model = id.to_string();
-                    self.persist_cfg();
-                }
-                self.status = if effort.is_empty() {
-                    format!("grok --model {}", self.cfg.model)
-                } else {
-                    format!(
-                        "grok --model {} · {}",
-                        self.cfg.model,
-                        grokhub_core::EFFORT_AUTO_MSG
-                    )
-                };
-            }
+            // The router alone picks the model: nothing to save.
+            Slash::Model(_) => self.status = grokhub_core::MODEL_AUTO_MSG.into(),
             Slash::Goal(obj) => {
                 let obj = obj.trim();
                 if obj.is_empty() || obj.eq_ignore_ascii_case("status") {
@@ -430,11 +412,7 @@ impl Cabin {
                 self.status = self.doctor_text();
             }
             Slash::Remember(note) => self.run_slash(Slash::MemoryNote(note)),
-            Slash::Mode(mode) => {
-                self.cfg.mode = mode.clone();
-                self.persist_cfg();
-                self.status = mode_status_line(&mode, &self.cfg.model);
-            }
+            Slash::Mode(_) => self.status = grokhub_core::MODEL_AUTO_MSG.into(),
             Slash::Dream => self.run_dream(),
             Slash::Import => self.import_openclaw(),
             Slash::Consult(q) => self.run_consult(q),
@@ -928,7 +906,7 @@ impl Cabin {
                 }
             }
             grokhub_agent::UnparsedSlash::ContextWindow => {
-                let model = grokhub_core::cabin_spawn_model(&self.cfg.model);
+                let model = grokhub_agent::DEFAULT_MODEL;
                 let len = grokhub_agent::context_length_for(model, &[]);
                 self.status = format!("Context window {len} tokens");
             }
@@ -1091,15 +1069,4 @@ fn one_line(text: &str, max_chars: usize) -> String {
     let mut out: String = flat.chars().take(max_chars).collect();
     out.push('…');
     out
-}
-
-pub(super) fn mode_status_line(mode: &str, pinned_model: &str) -> String {
-    if matches!(mode, "auto" | "adaptive" | "smart") && !settings_pin_blocks_auto(pinned_model) {
-        return "Mode auto — routes Fast / Balance / Think / Max".into();
-    }
-    let model = resolve_chat_model(mode, pinned_model);
-    match grokhub_core::reasoning_effort_for_mode(mode) {
-        Some(effort) => format!("Mode {mode} → {model} · {effort}"),
-        None => format!("Mode {mode} → {model}"),
-    }
 }

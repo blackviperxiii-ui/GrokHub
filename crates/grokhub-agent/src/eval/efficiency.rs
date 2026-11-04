@@ -331,8 +331,6 @@ struct Scenario {
     context_tokens: Option<u64>,
     /// Write `history_trim.toml` with `enabled = false` (the control row).
     trim_off: bool,
-    /// Turn Steady effort on (`steadyEffort` in `app.json`).
-    steady: bool,
     /// What the Workboard holds while it runs (KB-04).
     board: Board,
     /// The engine's conversation id after `bench-`; empty uses the name. The
@@ -469,7 +467,6 @@ fn kanban(name: &'static str, board: Board, session: &'static str) -> Scenario {
         facts: vec![],
         context_tokens: None,
         trim_off: false,
-        steady: false,
         board,
         session,
     }
@@ -499,15 +496,14 @@ fn re_reads(name: &'static str, trim_off: bool) -> Scenario {
         facts: vec![FACT_NOTE, FACT_LOG],
         context_tokens: Some(LOCAL_CONTEXT_TOKENS),
         trim_off,
-        steady: false,
         board: Board::Off,
         session: "",
     }
 }
 
 /// LO-37: three tool calls that fail (missing files), then one that works.
-/// Off, effort climbs on every failed step; Steady climbs after two in a row.
-fn tool_errors(name: &'static str, steady: bool) -> Scenario {
+/// Effort climbs on every failed step.
+fn tool_errors(name: &'static str) -> Scenario {
     Scenario {
         name,
         prompts: vec!["Find my crash notes and read them to me."],
@@ -523,7 +519,6 @@ fn tool_errors(name: &'static str, steady: bool) -> Scenario {
         facts: vec![FACT_NOTE],
         context_tokens: None,
         trim_off: false,
-        steady,
         board: Board::Off,
         session: "",
     }
@@ -542,7 +537,6 @@ fn scenarios() -> Vec<Scenario> {
             facts: vec![],
             context_tokens: None,
             trim_off: false,
-            steady: false,
             board: Board::Off,
             session: "",
         },
@@ -560,7 +554,6 @@ fn scenarios() -> Vec<Scenario> {
             facts: vec![FACT_NOTE],
             context_tokens: None,
             trim_off: false,
-            steady: false,
             board: Board::Off,
             session: "",
         },
@@ -578,7 +571,6 @@ fn scenarios() -> Vec<Scenario> {
             facts: vec![FACT_NOTE],
             context_tokens: None,
             trim_off: false,
-            steady: false,
             board: Board::Off,
             session: "",
         },
@@ -591,7 +583,6 @@ fn scenarios() -> Vec<Scenario> {
             facts: vec![FACT_HISTORY],
             context_tokens: None,
             trim_off: false,
-            steady: false,
             board: Board::Off,
             session: "",
         },
@@ -613,7 +604,6 @@ fn scenarios() -> Vec<Scenario> {
             facts: vec![FACT_NOTE],
             context_tokens: None,
             trim_off: false,
-            steady: false,
             board: Board::Off,
             session: "",
         },
@@ -631,14 +621,12 @@ fn scenarios() -> Vec<Scenario> {
             facts: vec![FACT_NOTE],
             context_tokens: None,
             trim_off: false,
-            steady: false,
             board: Board::Off,
             session: "",
         },
         re_reads("re-reads", false),
         re_reads("re-reads (trim off)", true),
-        tool_errors("tool-errors", false),
-        tool_errors("tool-errors (steady)", true),
+        tool_errors("tool-errors"),
         // KB-04: the Workboard costs a normal turn nothing; a resume pays once.
         kanban("kanban_off", Board::Off, "kanban-1"),
         kanban("kanban_idle_on", Board::Idle, "kanban-2"),
@@ -653,7 +641,6 @@ fn scenarios() -> Vec<Scenario> {
             facts: vec![],
             context_tokens: None,
             trim_off: false,
-            steady: false,
             board: Board::Off,
             session: "",
         },
@@ -711,13 +698,6 @@ fn run_scenarios(keep: impl Fn(&str) -> bool) -> Vec<BenchRow> {
             let _ = std::fs::write(
                 dir.join("cfg").join(crate::compact::HISTORY_TRIM_CONFIG),
                 "enabled = false\n",
-            );
-        }
-        if sc.steady {
-            let _ = std::fs::create_dir_all(dir.join("cfg"));
-            let _ = std::fs::write(
-                dir.join("cfg").join("app.json"),
-                "{\"steadyEffort\": true}\n",
             );
         }
         let rec = Arc::new(Recorder::new(sc.script, sc.finish));
@@ -820,7 +800,6 @@ mod tests {
                 "re-reads",
                 "re-reads (trim off)",
                 "tool-errors",
-                "tool-errors (steady)",
                 "kanban_off",
                 "kanban_idle_on",
                 "kanban_resume",
@@ -855,19 +834,12 @@ mod tests {
             trimmed.total_bytes < control.total_bytes,
             "{trimmed:?} vs {control:?}"
         );
-        // LO-37: off, each failed read lifts effort; Steady holds chat at high.
+        // LO-37: each failed read lifts effort.
         let climbs = row("tool-errors");
-        let steady = row("tool-errors (steady)");
-        assert_eq!(climbs.requests, steady.requests);
         assert_eq!(
             climbs.efforts[..5],
             ["high", "xhigh", "xhigh", "xhigh", "xhigh"],
             "{climbs:?}"
-        );
-        assert_eq!(
-            steady.efforts[..5],
-            ["high", "high", "high", "high", "high"],
-            "{steady:?}"
         );
         let table = render_bench(rows);
         assert!(table.contains("| diagnostics |"), "{table}");

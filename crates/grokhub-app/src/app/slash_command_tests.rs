@@ -278,22 +278,19 @@ fn undo_retry_and_context_on_an_empty_chat() {
 
 // Landed from PR #108.
 #[test]
-fn mode_slash_sets_think_and_auto() {
+fn mode_slash_says_the_model_is_automatic() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("mode-slash");
     unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
-    cabin.cfg.model.clear();
-    cabin.run_slash_line("/mode think");
-    assert_eq!(cabin.cfg.mode, "think");
-    assert_eq!(cabin.status, "Mode think → grok-4.7 · high");
-    cabin.cfg.model.clear();
-    cabin.run_slash_line("/mode auto");
-    assert_eq!(cabin.cfg.mode, "auto");
-    assert_eq!(
-        cabin.status,
-        "Mode auto — routes Fast / Balance / Think / Max"
-    );
+    // The router alone picks the model and effort: /mode steers nothing.
+    for line in ["/mode think", "/mode auto"] {
+        cabin.run_slash_line(line);
+        assert_eq!(
+            cabin.status, "The model is automatic now, see /why",
+            "{line}"
+        );
+    }
     unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
@@ -410,8 +407,7 @@ fn memory_goal_model_loop_forget_and_empty_imagine() {
     assert!(cabin.cfg.goal_pin.is_empty());
     assert_eq!(cabin.status, "Goal cleared");
     cabin.run_slash_line("/model grok-4.7");
-    assert_eq!(cabin.cfg.model, "grok-4.7");
-    assert_eq!(cabin.status, "grok --model grok-4.7");
+    assert_eq!(cabin.status, "The model is automatic now, see /why");
     cabin.run_slash_line("/loop");
     assert!(matches!(cabin.nav, Nav::Night));
     assert!(cabin.auto_compose);
@@ -976,7 +972,7 @@ fn hooks_slash_opens_connectors_on_the_hooks_section() {
 
 // Landed from PR #161.
 #[test]
-fn model_slash_saves_without_a_run() {
+fn model_slash_saves_nothing_and_runs_nothing() {
     let _hold = config::hold_test_config();
     let root = config::test_config_root("model-slash");
     let _ = std::fs::remove_dir_all(&root);
@@ -985,33 +981,14 @@ fn model_slash_saves_without_a_run() {
     let mut cabin = Cabin::quiet_for_test();
     assert!(!cabin.running);
     cabin.run_slash(Slash::Model("grok-4.7".into()));
-
-    assert_eq!(cabin.cfg.model, "grok-4.7");
-    assert_eq!(cabin.status, "grok --model grok-4.7");
+    // The router alone picks the model: /model says so and saves no pick.
+    assert_eq!(cabin.status, "The model is automatic now, see /why");
     assert!(!cabin.running);
-
-    let path = root.join("app.json");
-    let started = Instant::now();
-    let mut body = String::new();
-    while started.elapsed() < Duration::from_secs(3) {
-        if let Ok(text) = std::fs::read_to_string(&path) {
-            body = text;
-            if body.contains("\"model\": \"grok-4.7\"") {
-                break;
-            }
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    let body = std::fs::read_to_string(root.join("app.json")).unwrap_or_default();
     assert!(
-        path.starts_with(&root),
-        "model file must stay under the test config root"
+        !body.contains("\"model\""),
+        "no model pick is saved: {body}"
     );
-    assert!(
-        body.contains("\"model\": \"grok-4.7\""),
-        "model was not persisted under {}: {body}",
-        path.display()
-    );
-    assert_eq!(config::load().model, "grok-4.7");
 
     unsafe { std::env::remove_var("GROKHUB_CONFIG") };
     let _ = std::fs::remove_dir_all(&root);

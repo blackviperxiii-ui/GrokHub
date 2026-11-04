@@ -305,19 +305,6 @@ fn with_no_sign_in_hard_chat_goes_to_the_device_but_prepare_hard_does_not() {
         "{:?}",
         r.rule_ids
     );
-    // "Never" in Models Auto may use keeps the device out of that fallback too.
-    let mut never = super::prefs::ModelPrefs::default();
-    never.set_use("local:small", super::prefs::ModelUse::Never);
-    let mut kept_out = ask("chat:default", online());
-    kept_out.d = 0.8;
-    kept_out.prefs = Arc::new(never);
-    let r = Router::choose(&kept_out, &no_keys, &profiles, &table, 10);
-    assert_ne!(r.model, "local:small", "{:?}", r.rule_ids);
-    assert!(
-        !r.rule_ids.iter().any(|x| x == "local:no_keys"),
-        "{:?}",
-        r.rule_ids
-    );
     // prepare:hard still never runs on the device.
     let r = Router::choose(
         &ask("prepare:hard", online()),
@@ -448,15 +435,18 @@ fn no_keys_with_a_granted_provider_routes_to_that_provider() {
         providers: vec!["openrouter".into()],
         ..Spend::default()
     };
-    // Pinned to the provider: it answers on its own key.
-    let mut pinned = ask("chat:default", online());
-    pinned.current_model = OR;
-    pinned.pinned = true;
-    pinned.spend = granted.clone();
-    let r = Router::choose(&pinned, &reg, &profiles, &table, 10);
+    // Auto, with no sign-in: the provider you set up answers on its own key.
+    let mut auto = ask("chat:default", online());
+    auto.spend = granted.clone();
+    let r = Router::choose(&auto, &reg, &profiles, &table, 10);
     assert_eq!(
         (r.provider.as_str(), r.model.as_str(), r.no_route),
         ("openrouter", OR, false),
+        "{:?}",
+        r.rule_ids
+    );
+    assert!(
+        r.rule_ids.contains(&"provider:auto".into()),
         "{:?}",
         r.rule_ids
     );
@@ -465,27 +455,10 @@ fn no_keys_with_a_granted_provider_routes_to_that_provider() {
         "{:?}",
         r.rule_ids
     );
-    // Picked in Settings: the same.
-    let mut picked = ask("chat:default", online());
-    picked.prefer = Some(OR);
-    picked.spend = granted.clone();
-    let r = Router::choose(&picked, &reg, &profiles, &table, 10);
-    assert_eq!(
-        (r.provider.as_str(), r.model.as_str()),
-        ("openrouter", OR),
-        "{:?}",
-        r.rule_ids
-    );
-    assert!(
-        r.rule_ids.contains(&"provider:picked".into()),
-        "{:?}",
-        r.rule_ids
-    );
     // With the verify flag set, it escalates there too.
     local::note_local_verify_failed(true);
     let mut verify = ask("chat:default", online());
     verify.local.local_verify_failed = true;
-    verify.prefer = Some(OR);
     verify.spend = granted;
     let r = Router::choose(&verify, &reg, &profiles, &table, 10);
     assert_eq!(r.model, OR, "{:?}", r.rule_ids);
@@ -496,8 +469,7 @@ fn no_keys_with_a_granted_provider_routes_to_that_provider() {
     );
     // No grant for it: no cloud route, so the device answers.
     local::note_local_verify_failed(false);
-    let mut ungranted = ask("chat:default", online());
-    ungranted.prefer = Some(OR);
+    let ungranted = ask("chat:default", online());
     let r = Router::choose(&ungranted, &reg, &profiles, &table, 10);
     assert_eq!(r.model, "local:small", "{:?}", r.rule_ids);
     assert!(

@@ -413,7 +413,7 @@ impl Cabin {
         };
         crate::desktop_mcp::sync_native_cua(&self.cfg);
         let workspace = self.native_workspace();
-        let model = grokhub_core::cabin_spawn_model(&self.cfg.model).to_string();
+        let model = grokhub_agent::DEFAULT_MODEL.to_string();
         // The router picks each call's effort; this is only the fallback for an unlisted class.
         let effort =
             grokhub_agent::route::live::start_effort(grokhub_agent::route::live::DEFAULT_CLASS);
