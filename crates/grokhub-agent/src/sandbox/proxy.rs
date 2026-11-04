@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
@@ -24,6 +25,20 @@ use base64::Engine as _;
 
 use crate::harness::GateOutcome;
 use crate::harness::{guard_egress, EgressReq};
+
+/// Requests the proxy let out, ever. A shell call that sees this move ran
+/// while something fetched from the network, so its output is fenced.
+static LET_OUT: AtomicU64 = AtomicU64::new(0);
+
+/// How many requests the proxy has let out so far.
+pub fn let_out_count() -> u64 {
+    LET_OUT.load(Ordering::SeqCst)
+}
+
+#[cfg(test)]
+pub fn note_let_out_for_tests() {
+    LET_OUT.fetch_add(1, Ordering::SeqCst);
+}
 
 const HEAD_CAP: usize = 32 * 1024;
 const HEAD_TIMEOUT: Duration = Duration::from_secs(15);
@@ -124,6 +139,7 @@ fn serve_with(mut client: TcpStream, guard: &dyn Fn(&str) -> Result<(), String>)
         );
         return;
     }
+    LET_OUT.fetch_add(1, Ordering::SeqCst);
     let upstream = Upstream::from_env();
     let route = upstream.route(&req.host, req.connect);
     let server = match route {
@@ -639,6 +655,7 @@ mod tests {
             conn.write_all(&buf.map(|b| b.to_ascii_uppercase()))
                 .unwrap();
         });
+        let before = let_out_count();
         let mut client = TcpStream::connect(address(&dir).unwrap()).unwrap();
         client
             .write_all(format!("CONNECT 127.0.0.1:{port} HTTP/1.1\r\n\r\nping").as_bytes())
@@ -646,6 +663,7 @@ mod tests {
         let mut reply = String::new();
         client.read_to_string(&mut reply).unwrap();
         assert_eq!(reply, "HTTP/1.1 200 Connection established\r\n\r\nPING");
+        assert!(let_out_count() > before, "a let-out request is counted");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

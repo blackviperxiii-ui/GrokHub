@@ -63,6 +63,19 @@ fn cap_for(url: &str) -> u64 {
     }
 }
 
+/// What a mod request sends. A search carries typed text: it is checked for
+/// recalled memory lines, so a personal line in a query is classed personal.
+fn sent_classes(req: &Request, url: &str) -> &'static [grokhub_agent::harness::DataClass] {
+    if !req.carries_text {
+        return &[];
+    }
+    let sent = match &req.body {
+        Some(body) => format!("{url}\n{body}"),
+        None => url.to_string(),
+    };
+    grokhub_agent::harness::model_text_classes(&sent)
+}
+
 pub(crate) struct ModsNet;
 
 impl ModsNet {
@@ -94,11 +107,7 @@ impl ModsNet {
             )));
         }
         grokhub_core::offline::refuse().map_err(|_| SourceError::Offline)?;
-        let data: &[grokhub_agent::harness::DataClass] = if req.carries_text {
-            &[grokhub_agent::harness::DataClass::Chat]
-        } else {
-            &[]
-        };
+        let data = sent_classes(req, url);
         crate::xai::egress_ok(url, data).map_err(|why| {
             if grokhub_core::offline::is_refusal(&why) {
                 SourceError::Offline
@@ -216,6 +225,24 @@ impl Fetch for ModsNet {
 mod tests {
     use super::*;
     use grokhub_core::mods::Source;
+
+    #[test]
+    fn a_mod_search_carrying_a_recalled_line_is_classed_personal() {
+        use grokhub_agent::harness::{DataClass, RecallScope};
+        let line = "my sister lives on maple street";
+        let _recall = RecallScope::enter(vec![line.to_string()]);
+        let url = format!(
+            "https://api.modrinth.com/v2/search?query={}",
+            line.replace(' ', "%20")
+        );
+        let search = Request::get(Source::Modrinth, url.clone()).with_text(true);
+        assert!(sent_classes(&search, &url).contains(&DataClass::Personal));
+        let plain = "https://api.modrinth.com/v2/search?query=shaders";
+        let other = Request::get(Source::Modrinth, plain.into()).with_text(true);
+        assert_eq!(sent_classes(&other, plain), &[DataClass::Chat]);
+        let listing = Request::get(Source::Modrinth, url.clone());
+        assert!(sent_classes(&listing, &url).is_empty());
+    }
 
     #[test]
     fn only_a_sources_own_https_hosts_are_allowed() {

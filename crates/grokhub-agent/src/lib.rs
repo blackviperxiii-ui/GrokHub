@@ -8,6 +8,7 @@ mod checkpoint;
 mod client;
 mod close_check;
 mod compact;
+mod denials;
 mod dream_model;
 mod drive;
 pub mod episode;

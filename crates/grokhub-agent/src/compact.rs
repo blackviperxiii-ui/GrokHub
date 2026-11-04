@@ -248,6 +248,19 @@ pub fn read_spooled_tool_output(
     std::fs::read_to_string(path).ok()
 }
 
+/// Write a long body to the tool-output spool; returns its path relative to
+/// the workspace for a `read_file`.
+pub(crate) fn spool_text(
+    workspace: &Path,
+    conversation_id: &str,
+    call_id: &str,
+    body: &str,
+) -> Option<String> {
+    spool_tool_output(workspace, conversation_id, call_id, body)
+        .ok()
+        .map(|(_, rel)| rel)
+}
+
 fn spool_tool_output(
     workspace: &Path,
     conversation_id: &str,

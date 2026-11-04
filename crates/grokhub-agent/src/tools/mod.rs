@@ -21,6 +21,7 @@ mod search_replace;
 pub(crate) mod set;
 pub(crate) mod shell;
 mod show_panel;
+pub(crate) mod taint;
 pub(crate) mod talk;
 mod web_fetch;
 pub(crate) mod web_search;

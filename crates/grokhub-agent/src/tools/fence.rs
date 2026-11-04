@@ -5,7 +5,7 @@
 //! cannot pose as the user, the system, or close the fence early.
 
 use std::borrow::Cow;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -14,6 +14,9 @@ use crate::perm;
 
 thread_local! {
     static RUN_NONCE: RefCell<Option<String>> = const { RefCell::new(None) };
+    /// Set once this thread has fenced outside text: a file the run writes
+    /// after that may carry it, so the file keeps a taint mark.
+    static SAW_UNTRUSTED: Cell<bool> = const { Cell::new(false) };
 }
 
 static NONCE_FALLBACK: AtomicU64 = AtomicU64::new(1);
@@ -31,6 +34,7 @@ pub const ERROR_LEAD: &str = "MCP tool error. The server's message follows as un
 /// Wrap `text` from `source` in a per-run nonce fence, defanging look-alikes.
 /// Also notes `fenced:<source>` on the harness trail for debugging.
 pub fn fence(source: &str, text: &str) -> String {
+    SAW_UNTRUSTED.with(|seen| seen.set(true));
     let source = sanitize_source(source);
     let nonce = run_nonce();
     let body = defang(text, &nonce);
@@ -94,10 +98,47 @@ fn fenced_parts(text: &str) -> Option<(&str, &str)> {
     Some((&rest[..end], &rest[end + close.len()..]))
 }
 
+/// True once this run has read outside text that was fenced.
+pub fn run_saw_untrusted() -> bool {
+    SAW_UNTRUSTED.with(Cell::get)
+}
+
+/// Mark this run as having read outside text (a batch worker fenced it).
+pub fn note_untrusted_seen() {
+    SAW_UNTRUSTED.with(|seen| seen.set(true));
+}
+
+/// The fence state a batch worker carries from its run thread, so its
+/// fences share the run's nonce.
+#[derive(Debug, Clone, Default)]
+pub struct FenceState {
+    nonce: Option<String>,
+    saw_untrusted: bool,
+}
+
+/// This thread's fence state, for a worker to enter.
+pub fn capture() -> FenceState {
+    FenceState {
+        nonce: RUN_NONCE.with(|slot| slot.borrow().clone()),
+        saw_untrusted: run_saw_untrusted(),
+    }
+}
+
+/// Take on a run thread's fence state (a fresh batch worker thread).
+pub fn enter(state: &FenceState) {
+    if let Some(nonce) = &state.nonce {
+        RUN_NONCE.with(|slot| *slot.borrow_mut() = Some(nonce.clone()));
+    }
+    if state.saw_untrusted {
+        note_untrusted_seen();
+    }
+}
+
 /// Reset the per-run nonce (tests only).
 #[cfg(test)]
 pub fn reset_run_nonce_for_tests() {
     RUN_NONCE.with(|slot| *slot.borrow_mut() = None);
+    SAW_UNTRUSTED.with(|seen| seen.set(false));
 }
 
 fn run_nonce() -> String {

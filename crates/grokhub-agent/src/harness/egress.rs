@@ -292,6 +292,11 @@ impl RecallScope {
     }
 }
 
+/// The recall-pack lines this thread holds, for a batch worker to enter.
+pub fn current_recall() -> Vec<String> {
+    RECALL.with(|r| r.borrow().clone())
+}
+
 impl Drop for RecallScope {
     fn drop(&mut self) {
         let prev = std::mem::take(&mut self.prev);
