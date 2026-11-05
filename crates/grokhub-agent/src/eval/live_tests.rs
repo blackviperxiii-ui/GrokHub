@@ -942,3 +942,81 @@ fn the_report_sums_each_probe() {
     );
     assert_eq!(render_probes(&[]), "");
 }
+
+#[test]
+fn the_dream_lessons_arm_seeds_only_the_on_arm_and_never_writes_a_setting() {
+    let root = std::env::temp_dir().join(format!("gh-live-lessons-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (user, on, off) = (root.join("user"), root.join("on"), root.join("off"));
+    let flag = ab_flag(DREAM_LESSONS).unwrap();
+    assert!(write_ab(&on, flag, true).is_err());
+    let from = crate::dream_gate::skill_dir(&user);
+    assert!(
+        seed_lessons(&on, Some(&from), true).is_err(),
+        "no lessons yet"
+    );
+    std::fs::create_dir_all(&from).unwrap();
+    std::fs::write(
+        from.join("SKILL.md"),
+        "---\nname: dream-lessons\n---\n\n- run fmt first\n",
+    )
+    .unwrap();
+    seed_lessons(&on, Some(&from), true).unwrap();
+    seed_lessons(&off, Some(&from), false).unwrap();
+    assert!(crate::dream_gate::proven(&crate::dream_gate::skill_dir(
+        &on
+    )));
+    assert!(!crate::dream_gate::skill_dir(&off).exists());
+    // The user's own lessons are read, never marked.
+    assert!(!crate::dream_gate::proven(&from));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn dream_lessons_pass_only_when_they_solve_more_or_cost_less() {
+    let a = |task: &'static str, on: bool, pass: bool| Attempt {
+        task,
+        set: TaskSet::Capability,
+        recall: false,
+        pass,
+        usage: Usage::default(),
+        wall_ms: 1,
+        error: None,
+        arm: Some(on),
+        asks: 0,
+        compactions: 0,
+        calls: 1,
+        safety: None,
+    };
+    let report = |ab: &str, attempts: Vec<Attempt>| LiveReport {
+        model: "m".into(),
+        provider: Provider::Grok,
+        ab: Some(ab.into()),
+        mde: 0.1,
+        k: 1,
+        attempts,
+        spent_ticks: 0,
+        budget_ticks: 1,
+        billed_errors: 0,
+        stopped_by_budget: false,
+    };
+    let tasks = ["t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8"];
+    let better: Vec<Attempt> = tasks
+        .iter()
+        .flat_map(|t| [a(t, true, true), a(t, false, false)])
+        .collect();
+    assert!(dream_lessons_passed(&report(DREAM_LESSONS, better)));
+    let same: Vec<Attempt> = tasks
+        .iter()
+        .flat_map(|t| [a(t, true, true), a(t, false, true)])
+        .collect();
+    assert!(!dream_lessons_passed(&report(DREAM_LESSONS, same)));
+    let other: Vec<Attempt> = tasks
+        .iter()
+        .flat_map(|t| [a(t, true, true), a(t, false, false)])
+        .collect();
+    assert!(
+        !dream_lessons_passed(&report("age_out", other)),
+        "only its own arm counts"
+    );
+}

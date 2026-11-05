@@ -9,7 +9,7 @@
 //! with a scripted answerer that allows every ask and counts it. `--ab <flag>`
 //! runs every task with one setting on and off.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -25,7 +25,8 @@ use crate::{
 };
 
 pub use super::live_shape::{
-    ab_flag, write_ab, AbFlag, LocalClient, OpenRouterClient, Provider, ScriptedPermits, AB_FLAGS,
+    ab_flag, seed_lessons, write_ab, AbFlag, LocalClient, OpenRouterClient, Provider,
+    ScriptedPermits, AB_FLAGS, DREAM_LESSONS,
 };
 use super::live_shape::{
     seed_big_reports, seed_injected_copy, seed_injected_send, seed_long_logs, seed_shots,
@@ -879,6 +880,9 @@ pub struct LiveOpts {
     /// is meant to detect. Set before the run; a run too noisy to see it
     /// gets no verdict.
     pub mde: f64,
+    /// With `--ab dream_lessons`: the user's own dream-lessons folder, read
+    /// (never written) to seed the on arm's throwaway config.
+    pub lessons: Option<PathBuf>,
 }
 
 impl LiveOpts {
@@ -892,6 +896,7 @@ impl LiveOpts {
             provider: Provider::Grok,
             ab: None,
             mde: super::paired::DEFAULT_MDE,
+            lessons: None,
         }
     }
 }
@@ -989,7 +994,12 @@ fn one_try(
     let _cfg = ConfigGuard::set(cfg.clone());
     let mut error = None;
     if let Some((flag, on)) = arm {
-        if let Err(err) = write_ab(&cfg, flag, on) {
+        let set = if flag.name == DREAM_LESSONS {
+            seed_lessons(&cfg, opts.lessons.as_deref(), on)
+        } else {
+            write_ab(&cfg, flag, on)
+        };
+        if let Err(err) = set {
             error = Some(format!("could not set --ab {}: {err}", flag.name));
         }
     }
@@ -1356,17 +1366,17 @@ fn render_probes(a: &[Attempt]) -> String {
     out
 }
 
-fn render_ab(flag: &str, a: &[Attempt], mde: f64) -> String {
-    use super::paired::{cost_per_solved, summarize, verdict_line, ArmTally, Pair};
-    let both = |task: &str| {
-        a.iter().any(|x| x.task == task && x.arm == Some(true))
-            && a.iter().any(|x| x.task == task && x.arm == Some(false))
-    };
-    let mut out = format!(
-        "## A/B: {flag}\n\n| arm | pass@1 | cost | cost per solved task | cached share | model calls per try | p50 wall | gate asks |\n|---|---|---|---|---|---|---|---|\n"
-    );
+/// Did both arms run `task`?
+fn in_both(a: &[Attempt], task: &str) -> bool {
+    a.iter().any(|x| x.task == task && x.arm == Some(true))
+        && a.iter().any(|x| x.task == task && x.arm == Some(false))
+}
+
+/// The paired on-minus-off summary of an `--ab` run's tries.
+fn ab_summary(a: &[Attempt], mde: f64) -> super::paired::Summary {
+    use super::paired::{summarize, ArmTally, Pair};
     let mut pairs: Vec<Pair> = Vec::new();
-    for x in a.iter().filter(|x| x.arm.is_some() && both(x.task)) {
+    for x in a.iter().filter(|x| x.arm.is_some() && in_both(a, x.task)) {
         let at = match pairs.iter().position(|p| p.task == x.task) {
             Some(at) => at,
             None => {
@@ -1385,7 +1395,27 @@ fn render_ab(flag: &str, a: &[Attempt], mde: f64) -> String {
         };
         arm.add(x.pass, x.usage.cost_in_usd_ticks, x.calls);
     }
-    let summary = summarize(pairs, mde);
+    summarize(pairs, mde)
+}
+
+/// True when an `--ab dream_lessons` run passed the lessons: on cost less
+/// solving no fewer, or solved more (the whole 95% interval above zero).
+pub fn dream_lessons_passed(report: &LiveReport) -> bool {
+    if report.ab.as_deref() != Some(DREAM_LESSONS) {
+        return false;
+    }
+    let summary = ab_summary(&report.attempts, report.mde);
+    matches!(summary.verdict, super::paired::Verdict::Cheaper { .. })
+        || summary.solve.is_some_and(|s| s.low > 0.0)
+}
+
+fn render_ab(flag: &str, a: &[Attempt], mde: f64) -> String {
+    use super::paired::{cost_per_solved, verdict_line};
+    let both = |task: &str| in_both(a, task);
+    let mut out = format!(
+        "## A/B: {flag}\n\n| arm | pass@1 | cost | cost per solved task | cached share | model calls per try | p50 wall | gate asks |\n|---|---|---|---|---|---|---|---|\n"
+    );
+    let summary = ab_summary(a, mde);
     for (on, tally) in [(true, &summary.on), (false, &summary.off)] {
         let rows: Vec<&Attempt> = a
             .iter()

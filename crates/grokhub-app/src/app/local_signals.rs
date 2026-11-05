@@ -51,10 +51,16 @@ pub(super) fn start(config_dir: PathBuf) {
             // Launch sizing needs the hardware profile, and the setup wizard
             // only reads it on a first run.
             let home = grokhub_core::paths::user_home().unwrap_or_else(|| PathBuf::from("."));
-            grokhub_agent::route::local_autoconfig::set_profile(
-                super::local_probe::read_profile(&home),
-                config_dir.join("local"),
+            let profile = super::local_probe::read_profile(&home);
+            // The GPU micro-fact: re-checked each launch, retired if it changes.
+            let gpu = grokhub_core::env_facts::gpu_reading(&profile.gpus);
+            grokhub_core::env_facts::observe_machine(
+                &config_dir,
+                grokhub_core::env_facts::Kind::Gpu,
+                gpu.as_deref().map(|g| (g, "hardware probe")),
+                grokhub_core::now_ms(),
             );
+            grokhub_agent::route::local_autoconfig::set_profile(profile, config_dir.join("local"));
             local_gov::set_log_dir(config_dir.join("local"));
             // Every launch plans against the memory free right now.
             grokhub_agent::route::local_autoconfig::set_free_probe(std::sync::Arc::new(|| {
