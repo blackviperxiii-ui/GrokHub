@@ -47,7 +47,16 @@ const IDLE_CLOSE: Duration = Duration::from_secs(10 * 60);
 const MAX_SOCKETS: usize = 8;
 /// After a socket fails to open, HTTP carries every call this long.
 const DOWN_FOR: Duration = Duration::from_secs(10 * 60);
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// The whole open (name lookup, TCP, TLS, upgrade) gets this long before the
+/// call goes over HTTP instead, so a bad network costs seconds, not tens.
+#[cfg(not(test))]
+const CONNECT_DEADLINE: Duration = Duration::from_secs(3);
+#[cfg(test)]
+const CONNECT_DEADLINE: Duration = Duration::from_millis(600);
+/// Addresses tried for one open.
+const CONNECT_ADDRS: usize = 2;
+/// How often a pending open wakes to check Stop and the deadline.
+const CONNECT_POLL: Duration = Duration::from_millis(50);
 /// How often a read wakes to check Stop and the idle limit.
 const READ_POLL: Duration = Duration::from_millis(250);
 
@@ -137,6 +146,11 @@ impl WsPool {
     fn slot(&self, chat: &str) -> Option<Slot> {
         let mut slots = self.slots.lock().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
+        // A socket nobody used for IDLE_CLOSE is shut now, not when a ninth
+        // chat needs its place: the server would close it anyway.
+        slots.retain(|key, (slot, used)| {
+            key == chat || Arc::strong_count(slot) > 1 || now.duration_since(*used) < IDLE_CLOSE
+        });
         if let Some((slot, used)) = slots.get_mut(chat) {
             *used = now;
             return Some(slot.clone());
@@ -200,11 +214,14 @@ impl WsPool {
         // with the whole input on a fresh chain, once.
         for _ in 0..2 {
             let now = Instant::now();
-            if guard.as_ref().is_some_and(|c| c.stale(now)) {
+            if guard
+                .as_mut()
+                .is_some_and(|c| c.stale(now) || !still_open(&mut c.socket))
+            {
                 close(guard.take());
             }
             if guard.is_none() {
-                match connect(&self.url, bearer, chat) {
+                match connect_within(&self.url, bearer, chat, cancel) {
                     Ok(socket) => {
                         *guard = Some(Conn {
                             socket,
@@ -213,7 +230,8 @@ impl WsPool {
                             chain: None,
                         });
                     }
-                    Err(_) => {
+                    Err(Opened::Cancelled) => return WsTurn::Failed(ClientError::Cancelled),
+                    Err(Opened::Failed) => {
                         self.mark_down();
                         return WsTurn::Http;
                     }
@@ -235,7 +253,11 @@ impl WsPool {
                 return WsTurn::Http;
             }
             let mut shown = false;
-            let read = read_turn(conn, cancel, idle, auth_kind, &mut |ev| {
+            // Set once the server sent anything for this request: it took the
+            // request and is billing it, so a drop is a retry, not a quiet
+            // resend over HTTP.
+            let mut accepted = false;
+            let read = read_turn(conn, cancel, idle, auth_kind, &mut accepted, &mut |ev| {
                 if matches!(&ev, StreamEvent::TextDelta(t) if !t.is_empty()) {
                     shown = true;
                 }
@@ -277,10 +299,17 @@ impl WsPool {
                     if !keep {
                         close(guard.take());
                     }
-                    if !shown && matches!(err, ClientError::Transport(_) | ClientError::Disconnect)
+                    if !shown
+                        && !accepted
+                        && matches!(err, ClientError::Transport(_) | ClientError::Disconnect)
                     {
-                        // The socket broke before anything showed: HTTP.
+                        // The socket broke before the server took the
+                        // request: HTTP carries it.
                         return WsTurn::Http;
+                    }
+                    if !shown && accepted && matches!(err, ClientError::Transport(_)) {
+                        // Taken, then dropped: the retry policy decides.
+                        return WsTurn::Failed(ClientError::Disconnect);
                     }
                     if !shown && refused_shape(&err) {
                         // A request HTTP may take: it goes there, and after
@@ -399,6 +428,7 @@ fn read_turn(
     cancel: &CancelToken,
     idle: Duration,
     auth_kind: AuthKind,
+    accepted: &mut bool,
     sink: &mut dyn FnMut(StreamEvent),
 ) -> Read {
     let mut parser = SseParser::new();
@@ -429,6 +459,9 @@ fn read_turn(
             continue;
         };
         let kind = event.get("type").and_then(Value::as_str).unwrap_or("");
+        if kind != "error" && !kind.is_empty() {
+            *accepted = true;
+        }
         if kind == "error" {
             let code = event
                 .pointer("/error/code")
@@ -495,11 +528,12 @@ fn connect(url: &str, bearer: &str, chat: &str) -> Result<Socket, String> {
     let addrs: Vec<_> = (host.as_str(), port)
         .to_socket_addrs()
         .map_err(|e| e.to_string())?
+        .take(CONNECT_ADDRS)
         .collect();
     let mut last_err = String::from("no address");
     let mut stream = None;
     for addr in addrs {
-        match TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT) {
+        match TcpStream::connect_timeout(&addr, CONNECT_DEADLINE) {
             Ok(s) => {
                 stream = Some(s);
                 break;
@@ -510,10 +544,10 @@ fn connect(url: &str, bearer: &str, chat: &str) -> Result<Socket, String> {
     let stream = stream.ok_or(last_err)?;
     let _ = stream.set_nodelay(true);
     stream
-        .set_read_timeout(Some(CONNECT_TIMEOUT))
+        .set_read_timeout(Some(CONNECT_DEADLINE))
         .map_err(|e| e.to_string())?;
     stream
-        .set_write_timeout(Some(CONNECT_TIMEOUT))
+        .set_write_timeout(Some(CONNECT_DEADLINE))
         .map_err(|e| e.to_string())?;
     let connector = if tls {
         Some(tungstenite::Connector::Rustls(tls_config()?))
@@ -522,14 +556,89 @@ fn connect(url: &str, bearer: &str, chat: &str) -> Result<Socket, String> {
     };
     let (socket, _) = tungstenite::client_tls_with_config(request, stream, None, connector)
         .map_err(|e| e.to_string())?;
-    let tcp = match socket.get_ref() {
-        MaybeTlsStream::Plain(s) => s,
-        MaybeTlsStream::Rustls(s) => s.get_ref(),
-        _ => return Err("unknown stream".into()),
-    };
-    tcp.set_read_timeout(Some(READ_POLL))
+    tcp_of(&socket)
+        .ok_or("unknown stream")?
+        .set_read_timeout(Some(READ_POLL))
         .map_err(|e| e.to_string())?;
     Ok(socket)
+}
+
+fn tcp_of(socket: &Socket) -> Option<&TcpStream> {
+    match socket.get_ref() {
+        MaybeTlsStream::Plain(s) => Some(s),
+        MaybeTlsStream::Rustls(s) => Some(s.get_ref()),
+        _ => None,
+    }
+}
+
+/// Why a socket did not open.
+enum Opened {
+    /// Stop was pressed while it was opening.
+    Cancelled,
+    /// It failed, or missed [`CONNECT_DEADLINE`].
+    Failed,
+}
+
+/// [`connect`] on its own thread, so Stop and the deadline are checked every
+/// [`CONNECT_POLL`] while a name lookup or a handshake blocks. An open that
+/// misses the deadline is left to end on its own timeouts.
+fn connect_within(
+    url: &str,
+    bearer: &str,
+    chat: &str,
+    cancel: &CancelToken,
+) -> Result<Socket, Opened> {
+    use std::sync::mpsc::RecvTimeoutError;
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    let (url, bearer, chat) = (url.to_string(), bearer.to_string(), chat.to_string());
+    std::thread::Builder::new()
+        .name("ws-connect".into())
+        .spawn(move || {
+            let _ = tx.send(connect(&url, &bearer, &chat));
+        })
+        .map_err(|_| Opened::Failed)?;
+    let deadline = Instant::now() + CONNECT_DEADLINE;
+    loop {
+        if cancel.is_cancelled() {
+            return Err(Opened::Cancelled);
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(Opened::Failed);
+        }
+        match rx.recv_timeout(left.min(CONNECT_POLL)) {
+            Ok(Ok(socket)) => return Ok(socket),
+            Ok(Err(_)) | Err(RecvTimeoutError::Disconnected) => return Err(Opened::Failed),
+            Err(RecvTimeoutError::Timeout) => {}
+        }
+    }
+}
+
+/// Between turns nobody reads a socket. Before the next turn, read what came
+/// meanwhile without waiting: pings get their pong, and a socket the server
+/// closed is reported, so the turn opens a fresh one instead of failing.
+fn still_open(socket: &mut Socket) -> bool {
+    let Some(tcp) = tcp_of(socket) else {
+        return false;
+    };
+    if tcp.set_nonblocking(true).is_err() {
+        return false;
+    }
+    let open = loop {
+        match socket.read() {
+            Ok(Message::Close(_)) => break false,
+            Ok(_) => {}
+            Err(tungstenite::Error::Io(e))
+                if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) =>
+            {
+                break true
+            }
+            Err(_) => break false,
+        }
+    };
+    let restored = tcp_of(socket).is_some_and(|tcp| tcp.set_nonblocking(false).is_ok());
+    // Send any pong the reads queued.
+    open && restored && socket.flush().is_ok()
 }
 
 fn tls_config() -> Result<Arc<rustls::ClientConfig>, String> {
