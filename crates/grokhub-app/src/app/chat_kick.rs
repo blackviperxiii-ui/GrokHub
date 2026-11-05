@@ -317,6 +317,7 @@ impl Cabin {
         self.eyes_attach = false;
         self.hands_attach = false;
         self.stream_buf.clear();
+        self.begin_reply_chips();
         self.thought_buf.clear();
         self.turn_log.clear();
         self.thought_seam = false;

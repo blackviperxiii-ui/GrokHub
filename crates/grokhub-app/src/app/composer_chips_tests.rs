@@ -1494,3 +1494,125 @@ fn a_chip_turn_is_credited_to_its_chip_and_a_typed_turn_to_none() {
     }
     assert_eq!(typed_before, Some(1));
 }
+
+/// The model ends a reply with a hidden `<chips>` block: it never shows,
+/// never lands in the saved chat, and its lines join the row's pool.
+#[test]
+fn a_reply_chips_block_is_hidden_and_feeds_the_row() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("reply-chips");
+    let mut t = crate::threads::ChatThread::new("Login fix", false);
+    t.messages = Arc::new(vec![("user".into(), "fix the login test".into())]);
+    let tid = t.id.clone();
+    cabin.threads = vec![t];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    cabin.running = true;
+    cabin.chat_job_thread = Some(tid);
+    cabin.begin_reply_chips();
+    // The tag splits across chunks, as a stream may send it.
+    for chunk in [
+        "Fixed: the token check was off by one.\n<chi",
+        "ps>\nask|Add a test for the expiry edge|Test the edge\nopen|history|See history\n",
+        "ask|Send the fix to the team|Tell the team\n</chips>",
+    ] {
+        cabin.ingest_stream_chunk(LiveKind::Say, chunk);
+        assert!(!cabin.stream_buf.contains("<chi"), "{}", cabin.stream_buf);
+    }
+    let shown: String = cabin.live_blocks.iter().map(|b| b.body.as_str()).collect();
+    assert!(
+        !shown.contains("chips") && !shown.contains("ask|"),
+        "{shown}"
+    );
+    let text = cabin.stream_buf.clone();
+    cabin.finish_acp_turn(text);
+    let saved = cabin
+        .messages
+        .last()
+        .map(|m| m.1.clone())
+        .unwrap_or_default();
+    assert!(saved.contains("off by one"), "{saved}");
+    assert!(
+        !saved.contains("chips") && !saved.contains("ask|"),
+        "{saved}"
+    );
+    let reply: Vec<(String, String)> = cabin
+        .reply_chips_here()
+        .into_iter()
+        .map(|c| (c.id, c.value))
+        .collect();
+    assert_eq!(
+        reply,
+        vec![
+            ("reply-0".into(), "Add a test for the expiry edge".into()),
+            ("reply-1".into(), "__nav:history".into()),
+        ],
+        "the send line is dropped"
+    );
+    // The next ask moves the chat on: the old reply's chips go.
+    let mut next = cabin.messages.as_ref().clone();
+    next.push(("user".into(), "thanks".into()));
+    cabin.messages = Arc::new(next);
+    assert!(cabin.reply_chips_here().is_empty());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// A reply that only came in the end event still loses its block.
+#[test]
+fn a_block_in_the_final_text_is_stripped_too() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("reply-chips-final");
+    let mut t = crate::threads::ChatThread::new("Plain", false);
+    t.messages = Arc::new(vec![("user".into(), "hi".into())]);
+    let tid = t.id.clone();
+    cabin.threads = vec![t];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    cabin.running = true;
+    cabin.chat_job_thread = Some(tid);
+    cabin.begin_reply_chips();
+    cabin.finish_acp_turn("Hello there.\n<chips>\nask|Plan my week|Plan the week\n</chips>".into());
+    let saved = cabin
+        .messages
+        .last()
+        .map(|m| m.1.clone())
+        .unwrap_or_default();
+    assert_eq!(saved.trim(), "Hello there.");
+    assert_eq!(cabin.reply_chips_here().len(), 1);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// The rule rides the live chat's prompt only, never a side question or an
+/// unwatched run, and leaves while the reply's chips keep losing.
+#[test]
+fn the_reply_chips_rule_follows_the_chat() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.reply_chips_on());
+    cabin.side_ask_kick = true;
+    assert!(!cabin.reply_chips_on());
+    cabin.side_ask_kick = false;
+    cabin.scheduled_perm = true;
+    assert!(!cabin.reply_chips_on());
+    cabin.scheduled_perm = false;
+    cabin.chip_memory.trailer_off_at = now_ms();
+    assert!(!cabin.reply_chips_on());
+    let src = include_str!("native_engine.rs");
+    let publish = src
+        .split("fn publish_native_cfg_for(")
+        .nth(1)
+        .and_then(|s| s.split("fn chat_rules(").next())
+        .expect("publish");
+    assert!(
+        publish.contains("reply_chips_on()") && publish.contains("CHIP_TRAILER_RULE"),
+        "{publish}"
+    );
+    let parts = src
+        .split("fn chat_prompt_parts_for(")
+        .nth(1)
+        .and_then(|s| s.split("fn native_gate(").next())
+        .expect("parts");
+    assert!(
+        !parts.contains("CHIP_TRAILER_RULE"),
+        "background jobs share chat_prompt_parts and must not get chips"
+    );
+}

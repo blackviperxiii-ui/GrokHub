@@ -417,7 +417,11 @@ impl Cabin {
         // The router picks each call's effort; this is only the fallback for an unlisted class.
         let effort =
             grokhub_agent::route::live::start_effort(grokhub_agent::route::live::DEFAULT_CLASS);
-        let (stable, volatile) = self.chat_prompt_parts_for(session_id);
+        let (mut stable, volatile) = self.chat_prompt_parts_for(session_id);
+        // Fixed text in the cached prefix: on or off, it changes rarely.
+        if self.reply_chips_on() {
+            stable = format!("{stable}\n\n{}", grokhub_core::CHIP_TRAILER_RULE);
+        }
         let system = grokhub_agent::system_prompt_parts(&stable, &volatile, &workspace);
         // A side question stays read-only even in plan mode, so it never gets plan approval.
         grokhub_agent::set_plan_session(
