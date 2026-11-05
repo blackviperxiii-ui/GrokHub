@@ -133,6 +133,32 @@ pub struct RouteRecord {
     pub gov_state: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub tier: String,
+    /// This request rewrote the cached prompt prefix: where, and why. Its
+    /// cache share drops with it, so the cause sits next to the numbers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix_break: Option<BreakNote>,
+}
+
+/// Where a request first stopped repeating the one before it, and why
+/// ([`crate::prefix_guard::PrefixBreak`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BreakNote {
+    /// `system`, `tools` or `input`.
+    pub part: String,
+    /// Segment index in cache order.
+    pub index: u32,
+    /// `compaction`, `trim`, `model_switch`, `effort_switch`, `tools_appended` or `unexpected`.
+    pub reason: String,
+}
+
+impl From<&crate::prefix_guard::PrefixBreak> for BreakNote {
+    fn from(b: &crate::prefix_guard::PrefixBreak) -> Self {
+        Self {
+            part: b.part.as_str().to_string(),
+            index: u32::try_from(b.index).unwrap_or(u32::MAX),
+            reason: b.reason.as_str().to_string(),
+        }
+    }
 }
 
 // `d` and `cost_usd` are finite (rounded rules and token math), so equality is total.

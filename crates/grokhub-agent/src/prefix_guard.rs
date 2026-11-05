@@ -7,6 +7,7 @@
 //! other break logs one
 //! structured line. Nothing here panics or changes the request.
 
+use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
@@ -187,17 +188,29 @@ fn tools_only_appended(prev: &Shape, next: &Shape) -> bool {
 struct Guard {
     last: BTreeMap<String, Shape>,
     noted: BTreeMap<String, Reason>,
-    breaks: BTreeMap<String, Vec<PrefixBreak>>,
+    /// Each run's newest breaks, with the order they were seen in.
+    breaks: BTreeMap<String, Vec<(u64, PrefixBreak)>>,
+    /// Counts every break seen, so a caller can ask what broke after a point.
+    seq: u64,
 }
 
 static GUARD: Mutex<Guard> = Mutex::new(Guard {
     last: BTreeMap::new(),
     noted: BTreeMap::new(),
     breaks: BTreeMap::new(),
+    seq: 0,
 });
 
 /// Keep the guard small: a long-lived cabin opens many runs.
 const MAX_RUNS: usize = 256;
+/// Breaks kept per run, newest last.
+const MAX_BREAKS: usize = 64;
+
+thread_local! {
+    /// The break [`observe`] found for the request this thread is about to
+    /// send, until that request's route record takes it.
+    static STAGED: RefCell<Option<(String, PrefixBreak)>> = const { RefCell::new(None) };
+}
 
 /// Compare `req` with the last request of the same run (`key`), remember it, and
 /// return the break if there is one. A run's first request has nothing to break.
@@ -222,12 +235,55 @@ pub fn observe(key: &str, req: &ResponsesRequest) -> Option<PrefixBreak> {
                 b.reason.as_str()
             );
         }
+        g.seq += 1;
+        let seq = g.seq;
         let list = g.breaks.entry(key.to_string()).or_default();
-        if list.len() < 64 {
-            list.push(b.clone());
+        if list.len() >= MAX_BREAKS {
+            list.remove(0);
         }
+        list.push((seq, b.clone()));
     }
+    drop(g);
+    STAGED.with(|s| *s.borrow_mut() = found.clone().map(|b| (key.to_string(), b)));
     found
+}
+
+/// The break the last [`observe`] on this thread found for a run of
+/// `conversation_id`, once: the route record of the request that follows it
+/// carries the cause of its cache miss.
+pub fn take_staged(conversation_id: &str) -> Option<PrefixBreak> {
+    if conversation_id.is_empty() {
+        return None;
+    }
+    STAGED.with(|s| {
+        let mut staged = s.borrow_mut();
+        let ours = staged
+            .as_ref()
+            .is_some_and(|(key, _)| key.starts_with(&format!("{conversation_id}#")));
+        if ours {
+            staged.take().map(|(_, b)| b)
+        } else {
+            None
+        }
+    })
+}
+
+/// A point to compare against with [`first_break_since`].
+pub fn break_mark() -> u64 {
+    GUARD.lock().unwrap_or_else(|e| e.into_inner()).seq
+}
+
+/// The first break of run `key` seen after `mark`: what most likely cost a
+/// turn its cache.
+pub fn first_break_since(key: &str, mark: u64) -> Option<PrefixBreak> {
+    GUARD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .breaks
+        .get(key)?
+        .iter()
+        .find(|(seq, _)| *seq > mark)
+        .map(|(_, b)| b.clone())
 }
 
 /// The transcript of this run was compacted: its next request may rewrite the prefix.
@@ -263,7 +319,7 @@ pub fn breaks(key: &str) -> Vec<PrefixBreak> {
         .unwrap_or_else(|e| e.into_inner())
         .breaks
         .get(key)
-        .cloned()
+        .map(|list| list.iter().map(|(_, b)| b.clone()).collect())
         .unwrap_or_default()
 }
 
@@ -497,5 +553,32 @@ mod tests {
         );
         assert_eq!(Reason::Trim.as_str(), "trim");
         assert!(Reason::Trim.expected());
+    }
+
+    #[test]
+    fn a_turns_break_is_found_after_its_mark_and_staged_once_for_its_chat() {
+        let conv = format!("guard-mark-{}", std::process::id());
+        let key = run_key(&conv, 0, None);
+        let a = req(vec![msg("system", "S"), msg("user", "u")], vec![]);
+        assert_eq!(observe(&key, &a), None);
+        assert_eq!(take_staged(&conv), None, "no break, nothing staged");
+        let first = req(vec![msg("system", "S2"), msg("user", "u")], vec![]);
+        note_compaction(&key);
+        assert!(observe(&key, &first).is_some());
+        // A turn that started after that break does not inherit it.
+        let mark = break_mark();
+        assert_eq!(first_break_since(&key, mark), None);
+        let second = req(vec![msg("system", "S2"), msg("user", "u")], vec![tool("t")]);
+        let found = observe(&key, &second).expect("a new tool breaks the prefix");
+        assert_eq!(first_break_since(&key, mark), Some(found.clone()));
+        // The staged break belongs to this chat only, and is taken once.
+        assert_eq!(take_staged("some-other-chat"), None);
+        assert_eq!(take_staged(&conv), Some(found));
+        assert_eq!(take_staged(&conv), None);
+        // A request that breaks nothing clears what an earlier one staged.
+        let third = req(vec![msg("system", "S3"), msg("user", "u")], vec![]);
+        assert!(observe(&key, &third).is_some());
+        assert_eq!(observe(&key, &third), None);
+        assert_eq!(take_staged(&conv), None);
     }
 }

@@ -474,6 +474,8 @@ impl Engine for NativeEngine {
         let meter = kind.meter();
         let before_len = self.history.len();
         let before_usage = self.usage.clone();
+        // Breaks after this mark belong to this prompt: a cache drop names one.
+        let break_mark = crate::prefix_guard::break_mark();
         let _network = crate::tools::install_network(&self.imagine_bearer, &self.conversation_id);
         let _origin = crate::harness::OriginScope::enter(self.origin);
         let mut meter_used = crate::compact::estimate_input_tokens(&self.history);
@@ -504,6 +506,7 @@ impl Engine for NativeEngine {
                     kind,
                     meter_used,
                     meter_limit,
+                    None,
                     None,
                 ));
             }
@@ -544,6 +547,10 @@ impl Engine for NativeEngine {
         };
         let used = crate::compact::estimate_input_tokens(&self.history);
         let dropped = self.watch_turn_cache(&delta, out.compacted);
+        let why = dropped.and_then(|_| {
+            let key = crate::prefix_guard::run_key(&self.conversation_id, 0, None);
+            crate::prefix_guard::first_break_since(&key, break_mark)
+        });
         emit(turn_usage_event(
             &self.usage,
             &delta,
@@ -551,6 +558,7 @@ impl Engine for NativeEngine {
             used,
             self.context_length,
             dropped,
+            why.map(|b| b.reason),
         ));
         emit(AcpEvent::Done { stop_reason: stop });
         Ok(())
@@ -840,6 +848,7 @@ impl NativeEngine {
             used,
             limit,
             None,
+            None,
         ));
         emit(AcpEvent::Done {
             stop_reason: "end_turn".into(),
@@ -1067,7 +1076,8 @@ fn grok_usage_event(usage: &Usage, kind: AuthKind, used: u64, limit: u64) -> Acp
 }
 
 /// Session totals plus the share of this turn's input the prompt cache served.
-/// `dropped_from` is the previous turn's share when this one fell under the floor.
+/// `dropped_from` is the previous turn's share when this one fell under the floor,
+/// and `why` the prompt rewrite that caused it, when one was seen.
 fn turn_usage_event(
     total: &Usage,
     turn: &Usage,
@@ -1075,6 +1085,7 @@ fn turn_usage_event(
     used: u64,
     limit: u64,
     dropped_from: Option<u8>,
+    why: Option<crate::prefix_guard::Reason>,
 ) -> AcpEvent {
     let mut usage = grok_usage(total, kind, used, limit);
     usage.turn_cache_pct = Some(grokhub_core::wire::cache_pct(
@@ -1082,6 +1093,7 @@ fn turn_usage_event(
         turn.input_tokens,
     ));
     usage.turn_cache_drop_from = dropped_from;
+    usage.turn_cache_drop_reason = dropped_from.and(why).map(|r| r.as_str().to_string());
     AcpEvent::Usage(usage)
 }
 
@@ -1167,7 +1179,7 @@ mod tests {
             cached_tokens: 870,
             ..Usage::default()
         };
-        match turn_usage_event(&total, &turn, AuthKind::ApiKey, 0, 0, None) {
+        match turn_usage_event(&total, &turn, AuthKind::ApiKey, 0, 0, None, None) {
             AcpEvent::Usage(u) => {
                 assert_eq!(u.turn_cache_pct, Some(87));
                 assert_eq!(u.cache_read_input_tokens, 2000);
@@ -1181,6 +1193,7 @@ mod tests {
             AuthKind::ApiKey,
             0,
             0,
+            None,
             None,
         ) {
             AcpEvent::Usage(u) => assert_eq!(u.turn_cache_pct, Some(0), "0 input is 0%, not NaN"),
