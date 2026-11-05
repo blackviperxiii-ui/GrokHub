@@ -650,15 +650,14 @@ struct Frozen {
     refresh: bool,
 }
 
-/// Keep the record small: a long-lived cabin opens many chats.
+/// Keep the record small: a long-lived cabin opens many chats. The least
+/// recently used one goes first, so the open chat keeps its list.
 const MAX_FROZEN_CHATS: usize = 256;
 
-fn frozen_chats() -> MutexGuard<'static, std::collections::HashMap<String, Frozen>> {
-    static FROZEN: OnceLock<Mutex<std::collections::HashMap<String, Frozen>>> = OnceLock::new();
-    FROZEN
-        .get_or_init(Default::default)
-        .lock()
-        .unwrap_or_else(|err| err.into_inner())
+fn frozen_chats() -> MutexGuard<'static, crate::lru_map::LruMap<Frozen>> {
+    static FROZEN: Mutex<crate::lru_map::LruMap<Frozen>> =
+        Mutex::new(crate::lru_map::LruMap::new(MAX_FROZEN_CHATS));
+    FROZEN.lock().unwrap_or_else(|err| err.into_inner())
 }
 
 /// A new user turn in `session`: its next request may take in servers that
@@ -684,10 +683,7 @@ pub(crate) fn chat_schema_tools(session: &str, native: usize) -> Vec<Value> {
     }
     let now = schema_tools(native);
     let mut chats = frozen_chats();
-    if chats.len() >= MAX_FROZEN_CHATS && !chats.contains_key(session) {
-        chats.clear();
-    }
-    let chat = chats.entry(session.to_string()).or_insert(Frozen {
+    let chat = chats.get_or_insert_with(session, || Frozen {
         schemas: Vec::new(),
         refresh: true,
     });

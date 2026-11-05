@@ -417,11 +417,11 @@ const DROPPED_OUTPUT_PREFIX: &str = "[Output dropped: ";
 /// per conversation. Only these may stand in for an older identical call, so a
 /// later error never drops a good result, and a history resumed after a restart
 /// keeps its old outputs until the reads run again.
-static TRIM_RESULTS: std::sync::Mutex<
-    std::collections::BTreeMap<String, std::collections::HashSet<String>>,
-> = std::sync::Mutex::new(std::collections::BTreeMap::new());
+static TRIM_RESULTS: std::sync::Mutex<crate::lru_map::LruMap<std::collections::HashSet<String>>> =
+    std::sync::Mutex::new(crate::lru_map::LruMap::new(MAX_TRIM_CONVERSATIONS));
 
-/// Keep the record small: a long-lived cabin opens many conversations.
+/// Keep the record small: a long-lived cabin opens many conversations. The
+/// least recently used one goes first, so the open chat keeps its record.
 const MAX_TRIM_CONVERSATIONS: usize = 256;
 
 /// Record how a tool call ended (the run loop does, for every output it adds).
@@ -430,11 +430,7 @@ pub fn note_tool_result(conversation_id: &str, call_id: &str, tool: &str, failed
         return;
     }
     let mut map = TRIM_RESULTS.lock().unwrap_or_else(|e| e.into_inner());
-    if map.len() >= MAX_TRIM_CONVERSATIONS && !map.contains_key(conversation_id) {
-        map.clear();
-    }
-    map.entry(conversation_id.to_string())
-        .or_default()
+    map.get_or_insert_with(conversation_id, Default::default)
         .insert(call_id.to_string());
 }
 
