@@ -107,8 +107,10 @@ pub fn bind_session(session: &str) {
 /// Start a user turn. Schemas this chat already loaded stay, in load order,
 /// so the tool list only ever grows at its end and the cached prefix holds;
 /// clearing them each turn shrank the tail, broke the cache and cost a reload.
+/// MCP servers that connected since the last turn join here, not mid-turn.
 pub fn begin_turn(session: &str) {
     bind_session(session);
+    crate::mcp::begin_turn(session);
     loaded_by_session()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -239,7 +241,7 @@ fn offer(gate: &Gate, cfg: Settings) -> Offer {
         } else {
             0
         };
-        stable.extend(crate::mcp::schema_tools(native));
+        stable.extend(crate::mcp::chat_schema_tools(&session, native));
     }
     Offer { stable, volatile }
 }

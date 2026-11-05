@@ -1584,6 +1584,12 @@ impl Cabin {
             c.apply_web_search_shot_seed();
             #[cfg(not(test))]
             crate::desktop_mcp::set_desktop_enabled(c.cfg.desktop_control);
+            // MCP servers start connecting now, so the first chat doesn't wait.
+            #[cfg(not(test))]
+            {
+                crate::desktop_mcp::sync_native_cua(&c.cfg);
+                grokhub_agent::mcp::connect_in_background(&c.native_workspace());
+            }
             steps.mark("startup:new:home");
             // Auto-archive idle chats on launch (day gate also runs daily below).
             c.tick_chat_auto_archive(&Self::local_day());

@@ -632,32 +632,36 @@ pub fn run_loop(
                 emit_usage(on_event, &usage, history, input.context_length);
             }
         }
-        if !trimmed
-            && crate::compact::trim_pass(
+        let config_dir = crate::perm::config_dir();
+        let sent_before = crate::compact::sent_estimate(history, prompt_mark);
+        let mut changed = 0;
+        if !trimmed {
+            changed = crate::compact::trim_pass(
                 history,
                 crate::compact::trim_window(input.model, input.context_length),
-                &crate::perm::config_dir(),
+                prompt_mark,
+                &config_dir,
                 input.workspace,
                 input.conversation_id,
-            ) > 0
-        {
-            trimmed = true;
-            prompt_mark = None;
+            );
+            trimmed = changed > 0;
+        }
+        // Old images go in the same cache break as a trim, else once per batch.
+        changed += crate::compact::mask_images_pass(history, &config_dir, changed > 0);
+        if changed > 0 {
+            prompt_mark = crate::compact::rebase_mark(prompt_mark, sent_before, history);
             crate::prefix_guard::note_trim(&guard_key);
         }
         // Compact when the context fills (or before a long-context price step).
         // Re-arm after at least one new turn since the last successful compact.
-        let long = crate::route::live::crosses_long_context(
-            &crate::perm::config_dir(),
-            input.model,
-            crate::compact::estimate_input_tokens(history),
-        );
+        let trigger = crate::compact::trigger_tokens(history, prompt_mark);
+        let long = crate::route::live::crosses_long_context(&config_dir, input.model, trigger);
         // xAI bills the whole request at about 2x from 200k prompt tokens, so a
         // Grok chat compacts before that, whatever the model's window.
         let projected = crate::compact::projected_prompt_tokens(history, prompt_mark);
         let step = crate::compact::crosses_price_step(input.model, input.context_length, projected);
         let over =
-            crate::compact::needs_auto_compact(history, input.context_length) || long || step;
+            crate::compact::needs_auto_compact_at(trigger, input.context_length) || long || step;
         let may_compact = over && (!compacted_once || turns_since_compact >= 1);
         if may_compact {
             match run_compact_pass(input, history, &modified_paths, &mut usage, on_event) {
@@ -736,6 +740,9 @@ pub fn run_loop(
                             input.model,
                             turn.usage.input_tokens,
                         );
+                    }
+                    if let Some(sent) = history.get(..sent_len) {
+                        crate::compact::log_blob_sizes_once(sent, turn.usage.input_tokens);
                     }
                     prompt_mark = Some((turn.usage.input_tokens, sent_len));
                 }

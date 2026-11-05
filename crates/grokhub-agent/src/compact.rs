@@ -469,7 +469,8 @@ pub fn trim_results(conversation_id: &str) -> std::collections::HashSet<String> 
 /// `age_out = false` keeps every old output whole. With `age_out` on (the
 /// default) an output is spooled once it is big and `age_out_user_turns` user
 /// turns old, or once `keep_recent_outputs` newer outputs follow it and it is
-/// at least `mask_min_bytes`.
+/// at least `mask_min_bytes`. With `age_out` on, only the newest
+/// `keep_recent_images` images stay whole (see [`mask_images_pass`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HistoryTrimSettings {
     pub enabled: bool,
@@ -478,6 +479,7 @@ pub struct HistoryTrimSettings {
     pub age_out_user_turns: usize,
     pub keep_recent_outputs: usize,
     pub mask_min_bytes: usize,
+    pub keep_recent_images: usize,
 }
 
 impl Default for HistoryTrimSettings {
@@ -489,6 +491,7 @@ impl Default for HistoryTrimSettings {
             age_out_user_turns: AGE_OUT_USER_TURNS,
             keep_recent_outputs: KEEP_RECENT_OUTPUTS,
             mask_min_bytes: MASK_MIN_BYTES,
+            keep_recent_images: crate::image_budget::KEEP_RECENT_IMAGES,
         }
     }
 }
@@ -519,6 +522,9 @@ fn parse_history_trim_file(text: &str) -> HistoryTrimSettings {
             "mask_min_bytes" => {
                 settings.mask_min_bytes = count().unwrap_or(settings.mask_min_bytes)
             }
+            "keep_recent_images" => {
+                settings.keep_recent_images = count().unwrap_or(settings.keep_recent_images)
+            }
             _ => {}
         }
     }
@@ -527,29 +533,47 @@ fn parse_history_trim_file(text: &str) -> HistoryTrimSettings {
 
 /// One trim pass over `history` as `{config}/history_trim.toml` allows: drop
 /// repeated read-only outputs ([`trim_history`]), then spool old big ones when
-/// `age_out` is on ([`age_out_history`]). Returns how many outputs changed.
+/// `age_out` is on ([`age_out_history`]). Whether it is due reads
+/// [`trigger_tokens`], so `mark` (the last request's real prompt size and the
+/// history length it was sent with) stands in for what was already sent.
+/// Returns how many outputs changed.
 pub fn trim_pass(
     history: &mut [InputItem],
     ctx_len: u64,
+    mark: Option<(u64, usize)>,
     config_dir: &Path,
     workspace: &Path,
     conversation_id: &str,
 ) -> usize {
+    let due = trim_due(trigger_tokens(history, mark), ctx_len);
+    if !due {
+        return 0;
+    }
     let settings = history_trim_settings(config_dir);
     let dropped = if settings.enabled {
-        trim_history(history, ctx_len, &trim_results(conversation_id))
+        drop_repeats(history, due, &trim_results(conversation_id))
     } else {
         0
     };
-    dropped + age_out_history(history, ctx_len, &settings, workspace, conversation_id)
+    dropped + spool_old_outputs(history, due, &settings, workspace, conversation_id)
 }
 
-fn trim_due(history: &[InputItem], ctx_len: u64) -> bool {
-    tokens::exceeds_threshold(
-        estimate_input_tokens(history),
-        ctx_len,
-        HISTORY_TRIM_PERCENT,
-    )
+/// With `age_out` on in `{config}/history_trim.toml`, only the newest
+/// `keep_recent_images` images stay whole; older ones become a short note
+/// ([`crate::image_budget::mask_old_images`]). They wait for a batch to pile up
+/// unless `now` is set because another trim already changed the history this
+/// turn. Unlike [`trim_pass`] it may run every turn: each batch costs the
+/// prompt cache one miss. Returns how many images changed.
+pub fn mask_images_pass(history: &mut [InputItem], config_dir: &Path, now: bool) -> usize {
+    let settings = history_trim_settings(config_dir);
+    if !settings.age_out {
+        return 0;
+    }
+    crate::image_budget::mask_old_images(history, settings.keep_recent_images, now)
+}
+
+fn trim_due(prompt_tokens: u64, ctx_len: u64) -> bool {
+    tokens::exceeds_threshold(prompt_tokens, ctx_len, HISTORY_TRIM_PERCENT)
 }
 
 fn already_shrunk(output: &str) -> bool {
@@ -563,12 +587,22 @@ fn already_shrunk(output: &str) -> bool {
 /// An errored, refused or unknown later call never drops anything.
 /// Every item stays, so call/output pairs hold; messages, other tools and the
 /// newest of each repeat are never touched. Returns how many outputs changed.
+#[cfg(test)]
 pub fn trim_history(
     history: &mut [InputItem],
     ctx_len: u64,
     succeeded: &std::collections::HashSet<String>,
 ) -> usize {
-    if !trim_due(history, ctx_len) {
+    let due = trim_due(estimate_input_tokens(history), ctx_len);
+    drop_repeats(history, due, succeeded)
+}
+
+fn drop_repeats(
+    history: &mut [InputItem],
+    due: bool,
+    succeeded: &std::collections::HashSet<String>,
+) -> usize {
+    if !due {
         return 0;
     }
     let outputs: std::collections::HashMap<&str, &str> = history
@@ -639,6 +673,7 @@ pub fn trim_history(
 /// (observation masking: the newest outputs stay whole). No model call. It
 /// runs only when trimming is due, so the prompt cache breaks once per batch.
 /// Returns how many outputs changed.
+#[cfg(test)]
 pub fn age_out_history(
     history: &mut [InputItem],
     ctx_len: u64,
@@ -646,7 +681,18 @@ pub fn age_out_history(
     workspace: &Path,
     conversation_id: &str,
 ) -> usize {
-    if !settings.age_out || !trim_due(history, ctx_len) {
+    let due = trim_due(estimate_input_tokens(history), ctx_len);
+    spool_old_outputs(history, due, settings, workspace, conversation_id)
+}
+
+fn spool_old_outputs(
+    history: &mut [InputItem],
+    due: bool,
+    settings: &HistoryTrimSettings,
+    workspace: &Path,
+    conversation_id: &str,
+) -> usize {
+    if !settings.age_out || !due {
         return 0;
     }
     let calls: std::collections::HashMap<String, (String, String)> = history
@@ -985,11 +1031,74 @@ pub fn crosses_price_step(model: &str, context_length: u64, projected: u64) -> b
 }
 
 pub fn needs_auto_compact(items: &[InputItem], context_length: u64) -> bool {
-    tokens::exceeds_threshold(
-        estimate_input_tokens(items),
-        context_length,
-        AUTO_COMPACT_PERCENT,
-    )
+    needs_auto_compact_at(estimate_input_tokens(items), context_length)
+}
+
+/// [`needs_auto_compact`] for a prompt size already worked out, such as
+/// [`trigger_tokens`].
+pub fn needs_auto_compact_at(prompt_tokens: u64, context_length: u64) -> bool {
+    tokens::exceeds_threshold(prompt_tokens, context_length, AUTO_COMPACT_PERCENT)
+}
+
+/// Prompt tokens the trim and compaction triggers read. With `mark` (the last
+/// request's real `input_tokens` and the history length it was sent with) it is
+/// that real count plus an estimate of what was added since, so sealed reasoning
+/// counts as the provider counts it, not by the size of its encrypted blob.
+/// With no real count yet it is the plain estimate.
+pub fn trigger_tokens(items: &[InputItem], mark: Option<(u64, usize)>) -> u64 {
+    match mark {
+        Some((real, sent_len)) if sent_len <= items.len() => {
+            real.saturating_add(estimate_input_tokens(&items[sent_len..]))
+        }
+        _ => estimate_input_tokens(items),
+    }
+}
+
+/// Estimated tokens of the part of `items` the last request carried (0 with no
+/// mark), read before a trim so [`rebase_mark`] can take the shrink off.
+pub fn sent_estimate(items: &[InputItem], mark: Option<(u64, usize)>) -> u64 {
+    mark.and_then(|(_, sent_len)| items.get(..sent_len))
+        .map_or(0, estimate_input_tokens)
+}
+
+/// After a trim rewrote items the last request already carried (trims never add
+/// or remove items), take their estimated shrink off the real count, so the
+/// triggers keep reading the provider's number instead of the blob-heavy estimate.
+pub fn rebase_mark(
+    mark: Option<(u64, usize)>,
+    sent_before: u64,
+    items: &[InputItem],
+) -> Option<(u64, usize)> {
+    let (real, sent_len) = mark?;
+    let after = estimate_input_tokens(items.get(..sent_len)?);
+    Some((
+        real.saturating_sub(sent_before.saturating_sub(after)),
+        sent_len,
+    ))
+}
+
+/// Log once per process how big the sealed reasoning blobs in a sent history
+/// are next to the provider's real prompt count, so the gap the estimate
+/// would have had shows up in the log.
+pub fn log_blob_sizes_once(sent: &[InputItem], real_prompt_tokens: u64) {
+    static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let (count, bytes) = sent
+        .iter()
+        .fold((0usize, 0usize), |(n, b), item| match item {
+            InputItem::Reasoning { raw, .. } | InputItem::ServerCompaction { raw, .. } => {
+                (n + 1, b.saturating_add(raw.len()))
+            }
+            _ => (n, b),
+        });
+    if count == 0 || LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    eprintln!(
+        "[compact] sealed reasoning: {count} items, {bytes} bytes (estimate ~{} tokens); \
+         the estimate for the whole history is ~{} tokens, the provider counted {real_prompt_tokens}",
+        estimate_token_bytes(bytes as u64),
+        estimate_input_tokens(sent),
+    );
 }
 
 pub fn is_manual_compact_command(text: &str) -> bool {

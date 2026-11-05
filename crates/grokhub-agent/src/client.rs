@@ -821,10 +821,12 @@ pub fn responses_body(req: &ResponsesRequest) -> Value {
         if !key.is_empty() {
             body["prompt_cache_key"] = json!(key);
         }
+        // History is managed here, so xAI never needs to keep a copy of a
+        // request or its reply, reasoning or not.
+        body["store"] = json!(false);
         if returns_encrypted_reasoning(model) {
-            // History is managed here, so ask for the reasoning back and pass
-            // it in on the next request ([`InputItem::Reasoning`]).
-            body["store"] = json!(false);
+            // Ask for the reasoning back and pass it in on the next request
+            // ([`InputItem::Reasoning`]).
             body["include"] = json!(["reasoning.encrypted_content"]);
         }
         if let Some(text) = req.text_format.as_ref().and_then(TextFormat::wire) {
@@ -2004,11 +2006,12 @@ mod tests {
             body,
             r#"{"include":["reasoning.encrypted_content"],"input":[{"content":[{"text":"hi","type":"input_text"}],"role":"user","type":"message"}],"model":"grok-4.7","prompt_cache_key":"chat-9","reasoning":{"effort":"high"},"store":false,"stream":true,"tools":[]}"#
         );
-        // A non-reasoning Grok still pins its cache, and asks for nothing sealed.
+        // A non-reasoning Grok still pins its cache and isn't stored, and asks
+        // for nothing sealed.
         let body = responses_body(&grok_req("grok-4.20-0309-non-reasoning", None)).to_string();
         assert_eq!(
             body,
-            r#"{"input":[{"content":[{"text":"hi","type":"input_text"}],"role":"user","type":"message"}],"model":"grok-4.20-0309-non-reasoning","prompt_cache_key":"chat-9","stream":true,"tools":[]}"#
+            r#"{"input":[{"content":[{"text":"hi","type":"input_text"}],"role":"user","type":"message"}],"model":"grok-4.20-0309-non-reasoning","prompt_cache_key":"chat-9","store":false,"stream":true,"tools":[]}"#
         );
         // Another provider's model gets neither.
         let body = responses_body(&grok_req("vendor/model", None)).to_string();
