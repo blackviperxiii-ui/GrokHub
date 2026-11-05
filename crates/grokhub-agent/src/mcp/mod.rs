@@ -239,10 +239,11 @@ impl Conn {
         key: Option<&str>,
         timeout: std::time::Duration,
         stop: &dyn Fn() -> bool,
+        retry_safe: bool,
     ) -> Result<(String, bool), String> {
         match self {
             Conn::Stdio(conn) => conn.call(name, args, key, timeout),
-            Conn::Http(conn) => conn.call(name, args, key, timeout, stop),
+            Conn::Http(conn) => conn.call(name, args, key, timeout, stop, retry_safe),
         }
     }
 
@@ -697,6 +698,9 @@ pub(crate) fn schema_tools(native: usize) -> Vec<Value> {
 struct Frozen {
     schemas: Vec<Value>,
     refresh: bool,
+    /// Tools a provider refused over their schema: sent with no parameters
+    /// for the rest of the chat, refresh included.
+    bare: std::collections::HashSet<String>,
 }
 
 /// Keep the record small: a long-lived cabin opens many chats. The least
@@ -735,12 +739,46 @@ pub(crate) fn chat_schema_tools(session: &str, native: usize) -> Vec<Value> {
     let chat = chats.get_or_insert_with(session, || Frozen {
         schemas: Vec::new(),
         refresh: true,
+        bare: Default::default(),
     });
     if chat.refresh {
         chat.schemas = merge_frozen(&chat.schemas, now);
+        for tool in &mut chat.schemas {
+            if tool["name"].as_str().is_some_and(|n| chat.bare.contains(n)) {
+                tool["parameters"] = bare_parameters();
+            }
+        }
         chat.refresh = false;
     }
     chat.schemas.clone()
+}
+
+fn bare_parameters() -> Value {
+    json!({"type": "object", "properties": {}})
+}
+
+/// The provider refused a request with `error`. When it names an MCP tool
+/// this chat offers with parameters, that tool is offered bare from now on
+/// (its server still checks the arguments) and this returns true, so the
+/// step can be sent once more instead of every turn failing on one schema.
+pub(crate) fn bare_schema_named_in(session: &str, error: &str) -> bool {
+    let mut chats = frozen_chats();
+    let Some(chat) = chats.get_mut(session) else {
+        return false;
+    };
+    let mut changed = false;
+    for tool in &mut chat.schemas {
+        let Some(name) = tool["name"].as_str().map(str::to_string) else {
+            continue;
+        };
+        if !name.contains("__") || !error.contains(&name) || chat.bare.contains(&name) {
+            continue;
+        }
+        tool["parameters"] = bare_parameters();
+        chat.bare.insert(name);
+        changed = true;
+    }
+    changed
 }
 
 /// `old`'s tools that are still offered, in `old`'s order with today's
@@ -1006,7 +1044,10 @@ fn call_qualified(rec: &ToolRec, args: &Value, stop: &dyn Fn() -> bool) -> ToolO
     // the same one when it is resent after an answer that never came.
     let keyed = idem::needs_key(&rec.hints).then(|| idem::fingerprint(&rec.server, &rec.raw, args));
     let key = keyed.as_deref().map(idem::begin);
-    let result = conn.call(&rec.raw, args, key.as_deref(), timeout, stop);
+    // A dropped HTTP call is sent once more only when running it twice is
+    // harmless: the server says the tool is read-only or idempotent.
+    let retry_safe = rec.hints.read_only || rec.hints.idempotent == Some(true);
+    let result = conn.call(&rec.raw, args, key.as_deref(), timeout, stop, retry_safe);
     if let Some(print) = &keyed {
         idem::end(
             print,
@@ -1495,8 +1536,8 @@ fn install_test_recs(tools: Vec<ToolRec>) -> TestGuard {
 #[cfg(test)]
 mod tests {
     use super::{
-        begin_turn, chat_schema_tools, import_documents, install_test_tools, read_mcp_text,
-        schema_tools, search_output, try_dispatch,
+        bare_schema_named_in, begin_turn, chat_schema_tools, import_documents, install_test_tools,
+        read_mcp_text, schema_tools, search_output, try_dispatch,
     };
     use crate::gate::{decide, decide_with, mcp_policy_deny, Decision, Gate, PermMode};
     use crate::perm::ConfigGuard;
@@ -1985,6 +2026,48 @@ mod tests {
             .is_some_and(|d| d.contains("Peek again")));
         // No chat: the live list.
         assert_eq!(names(&chat_schema_tools("", 0)), ["aaa__ask", "box__peek"]);
+    }
+
+    #[test]
+    fn a_tool_the_provider_refuses_is_offered_bare_for_the_rest_of_the_chat() {
+        let session = format!("bare-{}", std::process::id());
+        let _tools = install_test_tools(&[
+            ("box", "peek", "Peek", true),
+            ("box", "poke", "Poke", false),
+        ]);
+        chat_schema_tools(&session, 0);
+        let strict = json!({"type": "object", "properties": {"n": {"type": "integer"}}});
+        for tool in &mut super::frozen_chats().get_mut(&session).unwrap().schemas {
+            tool["parameters"] = strict.clone();
+        }
+        assert!(!bare_schema_named_in(&session, "HTTP 400: bad request"));
+        assert!(bare_schema_named_in(
+            &session,
+            "HTTP 400: invalid parameters schema for function box__poke"
+        ));
+        // Named again: nothing new to strip, so no second retry.
+        assert!(!bare_schema_named_in(&session, "HTTP 400: box__poke"));
+        let params = |tools: &[serde_json::Value], name: &str| {
+            tools
+                .iter()
+                .find(|t| t["name"] == name)
+                .map(|t| t["parameters"].clone())
+                .unwrap()
+        };
+        let now = chat_schema_tools(&session, 0);
+        assert_eq!(params(&now, "box__peek"), strict);
+        assert_eq!(
+            params(&now, "box__poke"),
+            json!({"type": "object", "properties": {}})
+        );
+        // A new user turn rebuilds the list; the refused tool stays bare.
+        begin_turn(&session);
+        let next = chat_schema_tools(&session, 0);
+        assert_eq!(
+            params(&next, "box__poke"),
+            json!({"type": "object", "properties": {}})
+        );
+        assert!(!bare_schema_named_in("no-such-chat", "box__poke"));
     }
 
     #[test]

@@ -299,9 +299,18 @@ fn parse_args(arguments: &str) -> Result<Value, ToolOutput> {
     }
     match serde_json::from_str::<Value>(arguments) {
         Ok(value) if value.as_object().is_some() => Ok(value),
-        Ok(_) => Err(ToolOutput::err("arguments must be a JSON object")),
-        Err(err) => Err(ToolOutput::err(format!("arguments are not JSON: {err}"))),
+        Ok(_) => Err(ToolOutput::err(
+            "arguments must be a JSON object: send the call again with them as one object",
+        )),
+        Err(err) => Err(ToolOutput::err(format!(
+            "arguments are not JSON ({err}): send the call again with valid JSON"
+        ))),
     }
+}
+
+/// Whether a call's arguments parse the way [`parse_args`] takes them.
+pub fn args_parse(arguments: &str) -> bool {
+    parse_args(arguments).is_ok()
 }
 
 /// Lexical `..` and symlink targets that leave the canonical workspace are rejected.
