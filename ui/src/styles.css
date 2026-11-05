@@ -243,6 +243,7 @@ button:disabled {
 button.quiet:disabled,
 button.link:disabled,
 .chip:disabled,
+.quick-chip:disabled,
 .tabs button:disabled,
 .switch button:disabled,
 .settings-nav button:disabled,
@@ -1972,16 +1973,61 @@ span.chip.quiet {
   cursor: default;
 }
 
-/* Next steps stay one row that scrolls sideways; the next chip peeks in. */
-.card.suggest .card-buttons {
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  position: relative;
+/* Quick chips: one row on every page, big enough to hit. It stays one line
+   that scrolls sideways, and the next chip peeks in. */
+.chip-row {
+  margin: 8px 0;
 }
 
-.card.suggest .card-buttons button {
+.chip-row-items {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 8px;
+  overflow-x: auto;
+  position: relative;
+  scrollbar-width: none;
+}
+
+.chip-row-items::-webkit-scrollbar {
+  display: none;
+}
+
+.quick-chip {
   flex: none;
+  min-height: 48px;
+  padding: 0 18px;
+  font-size: 16px;
   white-space: nowrap;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.quick-chip.primary {
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.quick-chip:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+/* The × sits tight against its chip, still a full-height target. */
+.quick-chip-hide {
+  flex: none;
+  min-width: 36px;
+  min-height: 48px;
+  margin-left: -6px;
+  padding: 0;
+  font-size: 18px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+}
+
+.quick-chip-hide:hover {
+  color: var(--text);
 }
 
 .card.elicit .card-buttons input {

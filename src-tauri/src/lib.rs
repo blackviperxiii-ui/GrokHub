@@ -11,6 +11,7 @@ pub mod background;
 #[cfg(test)]
 mod brand_guard;
 pub mod capabilities;
+pub mod chips;
 pub mod connectors;
 pub mod credential;
 pub mod history;
@@ -77,6 +78,8 @@ struct ShellState {
     global_halt: std::sync::atomic::AtomicBool,
     /// Files waiting on each chat's composer.
     trays: attach::Trays,
+    /// The chip rows the page was shown, for the tap that follows.
+    chip_rows: Mutex<chips::Rows>,
     sign_in: Arc<oauth::SignIn>,
     /// Asks whose notifications are out (os_extras.rs).
     #[cfg(desktop)]
@@ -325,6 +328,7 @@ fn route(
             &settings.personality,
             settings.explicit_personalities,
         ),
+        suggestions: settings.behavior.suggestions,
     })
 }
 
@@ -793,6 +797,126 @@ async fn stop_task(
 
 fn now_clock(clock: automations::Clock) -> grokhub_core::LocalClock {
     clock.at(grokhub_core::now_ms())
+}
+
+/// The chat's transcript (without its chips blocks) and its follow-ups
+/// while they still belong to its last reply, which rank in its row (a chat
+/// opened from History, or the last chat after a restart, keeps them). A
+/// chat with no file has none.
+fn chip_chat(dir: &Path, id: &str) -> (Vec<(String, String)>, Option<chips::FollowUps>) {
+    let _config = grokhub_agent::perm::ConfigGuard::set(dir);
+    let Ok(info) = grokhub_agent::load_session(id) else {
+        return (Vec::new(), None);
+    };
+    let pairs = chips::chat_pairs(&info);
+    let ups = chips::follow_ups(dir, id, chips::user_turns(&pairs));
+    (pairs, ups)
+}
+
+/// The quick chips for the composer (`conversation_id` the open chat, with
+/// the box's `draft`), for Home, or for the empty palette. The cabin's engine, memory and ranker;
+/// empty with Settings → Behavior → Suggestions off.
+fn chip_row(
+    state: &ShellState,
+    surface: &str,
+    conversation_id: Option<String>,
+    draft: &str,
+    mode: agent::SessionMode,
+    clock: automations::Clock,
+) -> Vec<chips::Chip> {
+    let settings = current(state);
+    if !settings.behavior.suggestions {
+        return Vec::new();
+    }
+    let surface = match surface {
+        chips::HOME => chips::HOME,
+        chips::PALETTE => chips::PALETTE,
+        _ => chips::COMPOSER,
+    };
+    let dir = &state.config_dir;
+    let (chat, ups) = match (&conversation_id, surface) {
+        (Some(id), chips::COMPOSER) => chip_chat(dir, id),
+        _ => (Vec::new(), None),
+    };
+    let follow = ups.map(|u| u.chips).unwrap_or_default();
+    let local = now_clock(clock);
+    let quiet = !settings.behavior.quiet_start.is_empty()
+        && grokhub_core::quiet_hours_active(
+            &local.hm(),
+            &settings.behavior.quiet_start,
+            &settings.behavior.quiet_end,
+        );
+    let first_run = chat.is_empty() && history::list(dir).is_empty();
+    chips::row(
+        dir,
+        &state.chip_rows,
+        chips::RowAsk {
+            surface,
+            chat: &chat,
+            draft: if surface == chips::COMPOSER {
+                draft
+            } else {
+                ""
+            },
+            follow_ups: &follow,
+            mode: mode.as_str(),
+            signed_in: credential::has_key() || oauth::signed_in(&oauth::Keychain).is_some(),
+            first_run,
+            hour: local.hour as u8,
+            weekday: local.weekday,
+            quiet_hours: quiet,
+            now_ms: local.now_ms,
+        },
+    )
+}
+
+#[tauri::command]
+async fn quick_chips(
+    app: AppHandle,
+    surface: String,
+    conversation_id: Option<String>,
+    draft: Option<String>,
+    mode: Option<agent::SessionMode>,
+    clock: automations::Clock,
+) -> Result<Vec<chips::Chip>, String> {
+    off_main(move || {
+        let state = app.state::<ShellState>();
+        chip_row(
+            &state,
+            &surface,
+            conversation_id,
+            &draft.unwrap_or_default(),
+            mode.unwrap_or_default(),
+            clock,
+        )
+    })
+    .await
+}
+
+/// A tap (`picked`) or a hide on a chip of the row `surface` last showed.
+/// Teaches the ranker and the habits; the page acts on the tap itself.
+#[tauri::command]
+async fn chip_outcome(
+    app: AppHandle,
+    surface: String,
+    id: String,
+    picked: bool,
+    clock: automations::Clock,
+) -> Result<bool, String> {
+    off_main(move || {
+        let state = app.state::<ShellState>();
+        let local = now_clock(clock);
+        chips::outcome(
+            &state.config_dir,
+            &state.chip_rows,
+            &surface,
+            &id,
+            picked,
+            (local.hour as u8, local.weekday, local.now_ms),
+        )
+        .is_some()
+    })
+    .await
 }
 
 #[tauri::command]
@@ -2215,6 +2339,28 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         ))?),
         "workboard_sweep_undo" => out(block_on(workboard_sweep_undo(state))?),
         "workboard_sweep_dismiss" => out(block_on(workboard_sweep_dismiss(state))?),
+        "quick_chips" => {
+            // A browser sees chips only for the chats it started.
+            let id: Option<String> = arg(args, "conversationId")?;
+            if id.as_deref().is_some_and(|id| !web.owns(id)) {
+                return Err(remote::NOT_YOURS.into());
+            }
+            out(chip_row(
+                &state,
+                &arg::<String>(args, "surface")?,
+                id,
+                &arg::<Option<String>>(args, "draft")?.unwrap_or_default(),
+                arg::<Option<agent::SessionMode>>(args, "mode")?.unwrap_or_default(),
+                arg(args, "clock")?,
+            ))
+        }
+        "chip_outcome" => out(block_on(chip_outcome(
+            app.clone(),
+            arg(args, "surface")?,
+            arg(args, "id")?,
+            arg(args, "picked")?,
+            arg(args, "clock")?,
+        ))?),
         "get_behavior" => out(get_behavior(state)),
         "get_privacy" => out(block_on(get_privacy(state))?),
         "get_background" => out(get_background(state)?),
@@ -2611,6 +2757,7 @@ pub fn run() {
                 chats: Mutex::new(HashMap::new()),
                 global_halt: std::sync::atomic::AtomicBool::new(false),
                 trays: attach::Trays::default(),
+                chip_rows: Mutex::new(chips::Rows::default()),
                 sign_in: Arc::default(),
                 #[cfg(desktop)]
                 notified: os_extras::Pending::default(),
@@ -2652,6 +2799,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             phone_smoke_report,
+            quick_chips,
+            chip_outcome,
             get_capabilities,
             get_settings,
             save_settings,

@@ -12,6 +12,8 @@ const api = vi.hoisted(() => ({
 }));
 
 vi.mock("./api", () => ({
+  quickChips: () => Promise.resolve([]),
+  chipOutcome: () => Promise.resolve(true),
   sendChat: api.sendChat,
   getSettings: api.getSettings,
   slashHits: api.slashHits,

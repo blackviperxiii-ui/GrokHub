@@ -163,12 +163,13 @@ pub fn lines(info: &SessionInfo) -> Vec<Line> {
                 }),
             },
             (None, true) => {}
+            (None, false) if assistant => out.push(Line {
+                role: Role::Assistant,
+                // The reply's chips block was never shown.
+                text: grokhub_core::split_chip_trailer(&text).0,
+            }),
             (None, false) => out.push(Line {
-                role: if role == "user" {
-                    Role::User
-                } else {
-                    Role::Assistant
-                },
+                role: Role::User,
                 text,
             }),
         }
@@ -362,6 +363,7 @@ mod tests {
             desktop: false,
             session: SessionMode::Chat,
             voice: String::new(),
+            suggestions: true,
         };
         assert_eq!(
             session.prompt(text, Vec::new(), route, Box::new(|_| {})),
@@ -449,6 +451,89 @@ mod tests {
             )
         );
         assert_eq!(list(&config).len(), 1);
+    }
+
+    #[test]
+    fn a_replys_chips_block_becomes_follow_ups_and_never_shows() {
+        let (config, workspace) = (temp_dir("chips-cfg"), temp_dir("chips-ws"));
+        let id = "shell-history-chips";
+        let model = Model::new(
+            "Plug it in, then pick it in Settings.\n<chips>\nask|Explain the second step in more detail|Explain step two\nopen|automations|See automations\n</chips>",
+            false,
+        );
+        let session = Session::spawn_with(id, config.clone(), no_desktop);
+        let route = Route {
+            client: Arc::clone(&model) as Arc<dyn ModelClient + Send + Sync>,
+            auth_kind: AuthKind::ApiKey,
+            workspace: workspace.clone(),
+            mode: PermMode::Ask,
+            desktop: false,
+            session: SessionMode::Plan,
+            voice: String::new(),
+            suggestions: true,
+        };
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&events);
+        assert_eq!(
+            session.prompt(
+                "how do I set up the backup drive?",
+                Vec::new(),
+                route,
+                Box::new(move |event| sink.lock().expect("events").push(event)),
+            ),
+            Ok("end_turn".to_string())
+        );
+        // The chips rule rode on the cached rules.
+        let asked = model.requests.lock().expect("requests")[0].clone();
+        assert!(
+            asked.input.iter().any(|item| matches!(
+                item,
+                InputItem::Message { role, content } if role == "system"
+                    && content.iter().any(|part| matches!(
+                        part,
+                        ContentPart::InputText(text) if text.contains(grokhub_core::CHIP_TRAILER_RULE)
+                    ))
+            )),
+            "no chips rule in the system prompt"
+        );
+        let events = events.lock().expect("events").clone();
+        let shown: String = events
+            .iter()
+            .filter_map(|event| match event {
+                crate::agent::UiEvent::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(shown, "Plug it in, then pick it in Settings.\n");
+        let ups = events
+            .iter()
+            .find_map(|event| match event {
+                crate::agent::UiEvent::Suggestions { items } => Some(items.clone()),
+                _ => None,
+            })
+            .expect("follow-ups");
+        assert_eq!(
+            ups.iter()
+                .map(|c| (c.label.as_str(), c.view, c.mode.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("Explain step two", None, "plan"),
+                ("See automations", Some("automations"), ""),
+            ]
+        );
+        // The saved chat shows the reply as it was shown, and its follow-ups
+        // stay with it until the chat moves on.
+        let lines = load(&config, id, LOAD_CAP).expect("load").lines;
+        assert_eq!(
+            lines.last(),
+            Some(&line(
+                Role::Assistant,
+                "Plug it in, then pick it in Settings.\n"
+            ))
+        );
+        let saved = crate::chips::follow_ups(&config, id, 1).expect("saved");
+        assert_eq!((saved.chips.len(), saved.mode.as_str()), (2, "plan"));
+        assert_eq!(crate::chips::follow_ups(&config, id, 2), None);
     }
 
     #[test]

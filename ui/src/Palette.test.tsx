@@ -2,7 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Capabilities } from "./api";
+import type { Capabilities, QuickChip } from "./api";
 import { NO_SOURCES, Palette, paletteRows, type PaletteExtras, type PaletteSources } from "./Palette";
 import { answersTo, PALETTE_SYNONYMS, shellKeys, type ChatHit, type CommandRunners } from "./paletteCommands";
 
@@ -19,6 +19,10 @@ const DESKTOP: Capabilities = {
 };
 const PHONE: Capabilities = { ...DESKTOP, desktopControl: false, pulse: false, localAi: false, tray: false, webAccess: false, plugins: false, library: false };
 const WEB: Capabilities = { ...PHONE, remote: true };
+
+const PLAN: QuickChip = { id: "pred-1", label: "Plan my day", value: "Plan my day", action: "ask", hint: "", primary: true };
+const NIGHT: QuickChip = { id: "nav-1", label: "Automations", value: "__nav:night", action: "go", hint: "", primary: false, view: "automations" };
+const HISTORY: QuickChip = { id: "nav-2", label: "History", value: "__nav:history", action: "go", hint: "", primary: false, view: "history" };
 
 const labels = (caps: Capabilities, q: string) => paletteRows(caps, q).map((r) => r.label);
 
@@ -190,6 +194,19 @@ describe("paletteRows", () => {
   });
 });
 
+describe("paletteRows suggestions", () => {
+  it("lead the empty palette, drop a page this app lacks, and go once something is typed", () => {
+    const extras = { ...EXTRAS, chips: [PLAN, NIGHT, HISTORY] };
+    const rows = paletteRows(WEB, "", extras);
+    expect(rows.slice(0, 2)).toEqual([
+      { label: "Suggested: Plan my day", chip: PLAN, action: { kind: "ask", text: "Plan my day" } },
+      { label: "Suggested: Automations", chip: NIGHT, action: { kind: "view", view: "automations" } },
+    ]);
+    expect(rows.map((r) => r.label)).not.toContain("Suggested: History");
+    expect(paletteRows(WEB, "plan", extras).some((r) => r.chip)).toBe(false);
+  });
+});
+
 describe("shellKeys", () => {
   it("lists the palette, the commands the shell can run, Settings and the chat box", () => {
     expect(shellKeys(DESKTOP, { "new-chat": run, shortcuts: run, "sign-in": run })).toEqual([
@@ -241,6 +258,18 @@ describe("Palette", () => {
     await userEvent.keyboard("{Enter}");
     expect(onPick).toHaveBeenCalledWith({ kind: "ask", text: "/plan " });
     expect(slash).toHaveBeenLastCalledWith("/pl");
+  });
+
+  it("a picked suggestion is taught and then acts", async () => {
+    const onPick = vi.fn();
+    const onChip = vi.fn();
+    render(
+      <Palette caps={PHONE} sources={{ ...NO_SOURCES, chips: [PLAN], onChip }} onPick={onPick} onClose={vi.fn()} />,
+    );
+    expect(screen.getByRole("option", { name: "Suggested: Plan my day" })).toHaveAttribute("aria-selected", "true");
+    await userEvent.keyboard("{Enter}");
+    expect(onChip).toHaveBeenCalledWith(PLAN);
+    expect(onPick).toHaveBeenCalledWith({ kind: "ask", text: "Plan my day" });
   });
 
   it("shows a row's key beside it and names it for screen readers", () => {

@@ -42,6 +42,8 @@ const api = vi.hoisted(() => ({
     return Promise.resolve(() => {});
   }),
   shareSchedulerClock: vi.fn(() => Promise.resolve()),
+  quickChips: vi.fn(() => Promise.resolve([])),
+  chipOutcome: vi.fn(() => Promise.resolve(true)),
 }));
 
 vi.mock("./api", () => api);

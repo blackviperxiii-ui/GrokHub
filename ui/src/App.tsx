@@ -15,6 +15,7 @@ import { cardsByChat, chatActivity, pruneActivity, routineFinished, routineStart
 import { ActivityDock } from "./ActivityDock";
 import { Automations, resultLine, type RunNotice } from "./Automations";
 import { Chat, newConversationId, type Prefill } from "./Chat";
+import { useChipRow } from "./Chips";
 import { HALT_DONE, HALT_FAILED, HaltButton, HaltNote, haltShown, isHaltKey } from "./Halt";
 import { NO_SOURCES, Palette, VIEW_LABELS, views, type PaletteAction, type View } from "./Palette";
 import { COMPOSER_SLASH, shellKeys, type CommandRunners } from "./paletteCommands";
@@ -85,6 +86,7 @@ export function App() {
   const [caps, setCaps] = useState<Capabilities>(CORE_ONLY);
   const [palette, setPalette] = useState(false);
   const [sheet, setSheet] = useState(false);
+  const paletteChips = useChipRow({ surface: "palette", active: palette });
   const [signedOut, setSignedOut] = useState(false);
   const [goTo, setGoTo] = useState<{ section: Section; n: number }>();
   const [notice, setNotice] = useState<RunNotice & { n: number }>();
@@ -345,7 +347,14 @@ export function App() {
       {palette && (
         <Palette
           caps={caps}
-          sources={{ ...NO_SOURCES, runners, signedOut, slash: COMPOSER_SLASH }}
+          sources={{
+            ...NO_SOURCES,
+            runners,
+            signedOut,
+            slash: COMPOSER_SLASH,
+            chips: paletteChips.chips,
+            onChip: paletteChips.picked,
+          }}
           onPick={run}
           onClose={() => setPalette(false)}
         />

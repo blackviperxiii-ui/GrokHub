@@ -128,6 +128,9 @@ pub const WEB_COMMANDS: &[&str] = &[
     // Read only; Accept as done (`set_mission_done`) stays on the computer.
     "get_home",
     "get_mission",
+    // Chips read and teach chip memory only; a tap acts on the page.
+    "quick_chips",
+    "chip_outcome",
 ];
 
 pub fn web_command(name: &str) -> bool {
