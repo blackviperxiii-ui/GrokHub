@@ -1,0 +1,1 @@
+- Once a chat has seen recalled memory lines, xAI hosted search stays off for the rest of that chat, so a compaction or a later turn can't flip the tool list back and break the prompt cache.
