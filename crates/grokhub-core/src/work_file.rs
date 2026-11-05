@@ -54,11 +54,21 @@ pub fn lock_path(path: &Path) -> PathBuf {
 /// Take `<file>.lock` with an exclusive create. A lock older than
 /// [`LOCK_STALE`] is stale and broken.
 pub fn lock_board(path: &Path) -> Result<BoardLock, String> {
+    lock_board_within(path, LOCK_WAIT)
+}
+
+/// [`lock_board`] with its wait. The wait counts from the last time the lock
+/// changed hands, not from the first try: while other writers keep taking
+/// and releasing it, this writer is in a queue, not stuck, and gives up only
+/// when one holder keeps it for the whole wait.
+fn lock_board_within(path: &Path, wait: Duration) -> Result<BoardLock, String> {
     let lock = lock_path(path);
     if let Some(dir) = lock.parent() {
         fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
-    let start = Instant::now();
+    let mut start = Instant::now();
+    // The mtime of the lock file last seen held: a new one is a new holder.
+    let mut holder = None;
     loop {
         match fs::OpenOptions::new()
             .write(true)
@@ -72,16 +82,19 @@ pub fn lock_board(path: &Path) -> Result<BoardLock, String> {
             // Windows refuses the create with "access denied" while the last
             // holder's lock file is still being deleted: that is a held lock too.
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists || lock_pending_delete(&e) => {
-                let stale = fs::metadata(&lock)
-                    .and_then(|m| m.modified())
-                    .ok()
+                let taken_at = fs::metadata(&lock).and_then(|m| m.modified()).ok();
+                let stale = taken_at
                     .and_then(|t| t.elapsed().ok())
                     .is_some_and(|age| age >= LOCK_STALE);
                 if stale {
                     let _ = fs::remove_file(&lock);
                     continue;
                 }
-                if start.elapsed() >= LOCK_WAIT {
+                if taken_at.is_some() && taken_at != holder {
+                    holder = taken_at;
+                    start = Instant::now();
+                }
+                if start.elapsed() >= wait {
                     // Still refused after the wait: a real permission problem.
                     if lock_pending_delete(&e) {
                         return Err(e.to_string());
@@ -405,6 +418,49 @@ mod tests {
         assert!(!lock_pending_delete(&Error::from(ErrorKind::NotFound)));
         #[cfg(windows)]
         assert!(lock_pending_delete(&Error::from_raw_os_error(5)));
+    }
+
+    /// A busy board is a queue: while the lock keeps changing hands for
+    /// longer than the wait, a waiting writer keeps waiting and gets it once
+    /// the others are done. One holder that never lets go still runs the
+    /// wait out.
+    #[test]
+    fn a_lock_that_keeps_changing_hands_is_waited_for_not_given_up_on() {
+        let d = dir("lock-queue");
+        let path = d.join("workboard.json");
+        let lock = lock_path(&path);
+        let wait = Duration::from_millis(300);
+        fs::write(&lock, "1").unwrap();
+        let busy = {
+            let (lock, d) = (lock.clone(), d.clone());
+            std::thread::spawn(move || {
+                // Hand the lock on (a fresh file over the old, no gap) every
+                // 100 ms for three waits, then release it.
+                for i in 0..9 {
+                    std::thread::sleep(Duration::from_millis(100));
+                    let next = d.join(format!("next-{i}"));
+                    fs::write(&next, "2").unwrap();
+                    fs::rename(&next, &lock).unwrap();
+                }
+                fs::remove_file(&lock).unwrap();
+            })
+        };
+        let started = Instant::now();
+        let got = lock_board_within(&path, wait);
+        busy.join().unwrap();
+        assert!(got.is_ok(), "{:?}", got.err());
+        assert!(started.elapsed() >= Duration::from_millis(900));
+        drop(got);
+
+        fs::write(&lock, "3").unwrap();
+        let started = Instant::now();
+        let held = lock_board_within(&path, wait);
+        assert_eq!(
+            held.err().as_deref(),
+            Some("workboard.json is locked by another writer")
+        );
+        assert!(started.elapsed() < Duration::from_secs(2));
+        let _ = fs::remove_dir_all(&d);
     }
     use crate::work_item::{append_work_log, WorkOrigin, SWEEP_EVERY_MS};
     use crate::workboard::BoardStatus;
