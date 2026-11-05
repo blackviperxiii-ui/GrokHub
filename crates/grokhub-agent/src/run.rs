@@ -879,7 +879,7 @@ pub fn run_loop(
                         crate::checkpoint::Gaps::of(brief.as_ref(), &todos, evidence, &fresh);
                     match drive.check_with(&todos, evidence, &gaps) {
                         crate::drive::Verdict::Push(note) => {
-                            history.push(user_message(&note, None));
+                            history.push(cabin_note(&note));
                             continue;
                         }
                         crate::drive::Verdict::Blocked(text) => {
@@ -956,7 +956,7 @@ pub fn run_loop(
                         crate::close_check::CloseGate::Continue { note, steps } => {
                             close_continued = true;
                             close_steps = steps;
-                            history.push(user_message(&note, None));
+                            history.push(cabin_note(&note));
                             continue;
                         }
                         crate::close_check::CloseGate::Proceed(notice) => {
@@ -971,10 +971,7 @@ pub fn run_loop(
                         crate::hooks::on_stop(input.conversation_id, input.workspace, "Stop", false)
                     {
                         stop_hook_active = true;
-                        history.push(user_message(
-                            &format!("Stop hook blocked the turn: {reason}"),
-                            None,
-                        ));
+                        history.push(cabin_note(&format!("Stop hook blocked the turn: {reason}")));
                         continue;
                     }
                     return finish(input, StopReason::EndTurn, usage, compacted_once, false);
@@ -1316,7 +1313,7 @@ pub fn run_loop(
                     uncovered: due.clone(),
                     ..Default::default()
                 };
-                history.push(user_message(&format!("Checkpoint: {}", gaps.note()), None));
+                history.push(cabin_note(&format!("Checkpoint: {}", gaps.note())));
             }
             checkpoint_due = due;
         }
@@ -1434,6 +1431,13 @@ fn history_has_text(history: &[InputItem], needle: &str) -> bool {
             .any(|part| matches!(part, ContentPart::InputText(text) if text.contains(needle))),
         _ => false,
     })
+}
+
+/// A note the app adds to the chat for the model (a nudge to keep going, a
+/// checkpoint, a stop hook), tagged so it never reads as the person's words:
+/// not to the model, not to the summary, and not to the rules compaction pins.
+fn cabin_note(text: &str) -> InputItem {
+    user_message(&crate::compact::cabin_note_text(text), None)
 }
 
 fn user_message(text: &str, image: Option<&str>) -> InputItem {
@@ -4766,8 +4770,14 @@ mod tests {
             .iter()
             .filter_map(|item| match item {
                 InputItem::Message { role, content } if role == "user" => match content.first() {
+                    // An app note reads as its words; one test checks the tag.
                     Some(ContentPart::InputText(t)) => {
-                        Some(crate::prefix_cache::visible_user_text(t).to_string())
+                        let text = crate::prefix_cache::visible_user_text(t);
+                        Some(
+                            crate::compact::cabin_note_body(text)
+                                .unwrap_or(text)
+                                .to_string(),
+                        )
                     }
                     _ => None,
                 },
@@ -4812,6 +4822,12 @@ mod tests {
         let (out, history, _) = run_drive(&script, &dir, &conv);
         assert_eq!(out.stop, StopReason::EndTurn);
         assert_eq!(script.seen.lock().unwrap().len(), 4);
+        // The push goes in as the app's note, never as the person's words.
+        assert!(history.iter().any(|item| matches!(
+            item,
+            InputItem::Message { role, content } if role == "user"
+                && matches!(content.first(), Some(ContentPart::InputText(t)) if t.starts_with("<cabin-note>\nNot done yet"))
+        )));
         assert_eq!(
             user_texts(&history),
             [

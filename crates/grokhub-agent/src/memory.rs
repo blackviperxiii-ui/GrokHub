@@ -108,7 +108,14 @@ Verify it before you rely on it.\n\n";
 const DREAM_SYSTEM: &str = "\
 You consolidate MEMORY.md. Deduplicate and tighten. Keep every distinct fact. \
 Do not add facts that are not in the files. Do not include secrets, tokens, or keys. \
-Reply with only the rewritten markdown, no commentary.";
+Reply with JSON only: the rewritten workspace and global files, and every line you \
+removed without merging its fact into another line.";
+
+/// Dream's reply shape, held to by xAI's strict JSON output.
+const DREAM_FORMAT: crate::TextFormat = crate::TextFormat {
+    name: "memory_dream",
+    schema: r#"{"type":"object","properties":{"workspace":{"type":"string"},"global":{"type":"string"},"dropped":{"type":"array","items":{"type":"string"}}},"required":["workspace","global","dropped"],"additionalProperties":false}"#,
+};
 
 static STATUS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
@@ -272,7 +279,7 @@ pub fn dream(
     }
     let prompt = dream_prompt(&workspace_body, &global_body);
     let req = ResponsesRequest {
-        text_format: None,
+        text_format: Some(DREAM_FORMAT),
         model: model.to_string(),
         effort: Some("low".into()),
         input: vec![
@@ -305,22 +312,167 @@ pub fn dream(
     if cancel.is_cancelled() {
         return Err("Dream cancelled".into());
     }
-    let (next_ws, next_global) = parse_dream(&turn.text)
+    let reply = parse_dream_reply(&turn.text)
         .ok_or_else(|| "Dream reply was not usable. MEMORY.md was left unchanged.".to_string())?;
-    let ws_ok = accept_rewrite(&workspace_body, &next_ws);
-    let global_ok = accept_rewrite(&global_body, &next_global);
-    if !ws_ok && !global_ok {
-        return Err("Dream reply was empty. MEMORY.md was left unchanged.".into());
-    }
-    if ws_ok {
-        replace_with_backup(&workspace_path, workspace, &next_ws)?;
+    let ws = judge_rewrite(&workspace_body, &reply.workspace, &reply.dropped);
+    let global = judge_rewrite(&global_body, &reply.global, &reply.dropped);
+    if let DreamVerdict::Accept { .. } = ws {
+        replace_with_backup(&workspace_path, workspace, &reply.workspace)?;
         reindex_file(&workspace_path, "workspace")?;
     }
-    if global_ok {
-        replace_with_backup(&global_path, workspace, &next_global)?;
+    if let DreamVerdict::Accept { .. } = global {
+        replace_with_backup(&global_path, workspace, &reply.global)?;
         reindex_file(&global_path, "global")?;
     }
-    Ok("Consolidated MEMORY.md".into())
+    let report = [("Project memory", &ws), ("Global memory", &global)]
+        .iter()
+        .filter_map(|(name, verdict)| verdict.report(name))
+        .collect::<Vec<_>>()
+        .join(" ");
+    match (&ws, &global) {
+        (DreamVerdict::Accept { .. }, _) | (_, DreamVerdict::Accept { .. }) => {
+            Ok(format!("Consolidated MEMORY.md. {report}")
+                .trim()
+                .to_string())
+        }
+        _ if report.is_empty() => {
+            Err("Dream reply was empty. MEMORY.md was left unchanged.".into())
+        }
+        _ => Err(format!("MEMORY.md was left unchanged. {report}")),
+    }
+}
+
+/// Dream's reply: both rewritten files and the lines it removed outright.
+#[derive(Debug, Default, PartialEq, Eq, serde::Deserialize)]
+struct DreamReply {
+    workspace: String,
+    global: String,
+    #[serde(default)]
+    dropped: Vec<String>,
+}
+
+/// The strict JSON reply, or the older marker shape a model without JSON
+/// output (this computer's, a provider's) may still send.
+fn parse_dream_reply(text: &str) -> Option<DreamReply> {
+    let trimmed = text.trim();
+    let json = trimmed
+        .strip_prefix("```json")
+        .or_else(|| trimmed.strip_prefix("```"))
+        .and_then(|t| t.strip_suffix("```"))
+        .unwrap_or(trimmed);
+    if let Ok(reply) = serde_json::from_str::<DreamReply>(json.trim()) {
+        return Some(reply);
+    }
+    let (workspace, global) = parse_dream(text)?;
+    Some(DreamReply {
+        workspace,
+        global,
+        dropped: Vec::new(),
+    })
+}
+
+/// What dream does with one file's rewrite.
+#[derive(Debug, PartialEq, Eq)]
+enum DreamVerdict {
+    /// The file was empty and so is the rewrite: nothing to say.
+    Unchanged,
+    Accept {
+        before: usize,
+        after: usize,
+        dropped: Vec<String>,
+    },
+    /// The old file stays, for this reason.
+    Keep(String),
+}
+
+impl DreamVerdict {
+    fn report(&self, name: &str) -> Option<String> {
+        match self {
+            DreamVerdict::Unchanged => None,
+            DreamVerdict::Accept {
+                before,
+                after,
+                dropped,
+            } => {
+                let mut line = format!("{name}: {before} lines to {after}");
+                if dropped.is_empty() {
+                    line.push('.');
+                } else {
+                    let shown: Vec<String> = dropped
+                        .iter()
+                        .take(3)
+                        .map(|d| format!("\"{}\"", clip_bytes(d.trim(), 80)))
+                        .collect();
+                    let more = dropped.len().saturating_sub(shown.len());
+                    line.push_str(&format!(", dropped {}", shown.join(", ")));
+                    if more > 0 {
+                        line.push_str(&format!(" and {more} more"));
+                    }
+                    line.push('.');
+                }
+                Some(line)
+            }
+            DreamVerdict::Keep(why) => Some(format!("{name} kept as it was: {why}.")),
+        }
+    }
+}
+
+fn lines_of(body: &str) -> usize {
+    body.lines().filter(|l| !l.trim().is_empty()).count()
+}
+
+/// The file's distinct non-blank lines, so removing exact repeats is never
+/// read as gutting it.
+fn distinct_of(body: &str) -> (usize, usize) {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut bytes = 0;
+    for line in body.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        if seen.insert(line) {
+            bytes += line.len() + 1;
+        }
+    }
+    (seen.len(), bytes)
+}
+
+/// Accepts a rewrite only when it keeps at least half the old distinct lines
+/// and bytes, and drops no line that recall served lately. Otherwise the old
+/// file stays.
+fn judge_rewrite(old: &str, new_body: &str, dropped: &[String]) -> DreamVerdict {
+    if new_body.trim().is_empty() {
+        return if old.trim().is_empty() {
+            DreamVerdict::Unchanged
+        } else {
+            DreamVerdict::Keep("the rewrite was empty".into())
+        };
+    }
+    let (before, after) = (lines_of(old), lines_of(new_body));
+    let (distinct, distinct_bytes) = distinct_of(old);
+    if after * 2 < distinct || new_body.trim().len() * 2 < distinct_bytes.saturating_sub(1) {
+        return DreamVerdict::Keep(format!(
+            "the rewrite kept {after} of {before} lines, under half"
+        ));
+    }
+    // Only drops of lines this file actually had count.
+    let had: Vec<String> = old.lines().map(normalize_hit).collect();
+    let dropped: Vec<String> = dropped
+        .iter()
+        .filter(|d| {
+            let key = normalize_hit(d);
+            !key.is_empty() && had.contains(&key)
+        })
+        .cloned()
+        .collect();
+    if let Some(used) = dropped.iter().find(|d| recently_recalled(d)) {
+        return DreamVerdict::Keep(format!(
+            "it dropped \"{}\", which recall used lately",
+            clip_bytes(used.trim(), 80)
+        ));
+    }
+    DreamVerdict::Accept {
+        before,
+        after,
+        dropped,
+    }
 }
 
 /// First-turn recall, fenced and capped. `None` when there is nothing to say.
@@ -343,7 +495,37 @@ pub fn dream(
 /// one transaction (`examples/memory_index_bench.rs` times it).
 pub fn first_turn_injection(workspace: &Path, user_text: &str) -> Option<String> {
     let _lap = crate::timing::lap("turn:memory_recall");
-    format_injection(&collect_snippets(workspace, user_text, &[]))
+    let snippets = collect_snippets(workspace, user_text, &[]);
+    note_recalled(&snippets);
+    format_injection(&snippets)
+}
+
+/// Lines recall served lately (newest last). Dream won't drop one of these.
+static RECALLED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+/// How many recalled lines dream remembers.
+const RECALLED_CAP: usize = 200;
+
+fn note_recalled(snippets: &[String]) {
+    let mut seen = RECALLED.lock().unwrap_or_else(|e| e.into_inner());
+    for line in snippets.iter().flat_map(|s| s.lines()) {
+        let key = normalize_hit(line);
+        if key.is_empty() {
+            continue;
+        }
+        seen.retain(|k| *k != key);
+        seen.push(key);
+    }
+    let over = seen.len().saturating_sub(RECALLED_CAP);
+    seen.drain(..over);
+}
+
+fn recently_recalled(line: &str) -> bool {
+    let key = normalize_hit(line);
+    !key.is_empty()
+        && RECALLED
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(&key)
 }
 
 /// Later-turn recall. Same pack as the first turn, minus lines already in
@@ -360,6 +542,7 @@ pub fn followup_injection(workspace: &Path, user_text: &str, already: &[String])
         .into_iter()
         .filter(|body| !already_has(already, body))
         .collect();
+    note_recalled(&fresh);
     format_injection(&fresh)
 }
 
@@ -1404,6 +1587,11 @@ fn file_stamp(path: &Path) -> String {
     format!("{}:{mtime}", meta.len())
 }
 
+/// What the pre-compaction flush saves: the chat's own words only. A user
+/// turn loses the cabin's notes in front of it, and the app's tagged blocks
+/// (nudges, recalled memory, playbooks, summaries, todo lists, pinned rules)
+/// are skipped, so recall never learns its own notes back as memory. When it
+/// runs long, the newest 8 KB win.
 fn extract_pending(history: &[InputItem]) -> String {
     let mut parts = Vec::new();
     for item in history {
@@ -1422,8 +1610,11 @@ fn extract_pending(history: &[InputItem]) -> String {
                 text.push_str(line);
             }
         }
-        let text = text.trim();
-        if text.is_empty() {
+        let text = crate::prefix_cache::visible_user_text(text.trim()).trim();
+        if text.is_empty()
+            || text.starts_with('<')
+            || text.starts_with("This session is being continued")
+        {
             continue;
         }
         let label = if role == "assistant" {
@@ -1433,19 +1624,36 @@ fn extract_pending(history: &[InputItem]) -> String {
         };
         parts.push(format!("{label}: {text}"));
     }
-    clip_bytes(&parts.join("\n"), 8_000).to_string()
+    newest_bytes(&parts.join("\n"), PENDING_FLUSH_BYTES).to_string()
+}
+
+/// Bytes of chat the pre-compaction flush keeps.
+const PENDING_FLUSH_BYTES: usize = 8_000;
+
+/// The last `max` bytes of `text`, starting on a whole line when one fits.
+fn newest_bytes(text: &str, max: usize) -> &str {
+    if text.len() <= max {
+        return text;
+    }
+    let mut at = text.len() - max;
+    while !text.is_char_boundary(at) {
+        at += 1;
+    }
+    let tail = &text[at..];
+    match tail.find('\n') {
+        Some(nl) if nl + 1 < tail.len() => &tail[nl + 1..],
+        _ => tail,
+    }
 }
 
 fn dream_prompt(workspace_body: &str, global_body: &str) -> String {
     let workspace_body = grokhub_core::redact_secrets(workspace_body);
     let global_body = grokhub_core::redact_secrets(global_body);
     format!(
-        "Rewrite both files. Reply in exactly this shape and nothing else:\n\
-         <<<GH_WORKSPACE>>>\n\
-         <rewritten workspace MEMORY.md>\n\
-         <<<GH_GLOBAL>>>\n\
-         <rewritten global MEMORY.md>\n\
-         <<<GH_END>>>\n\n\
+        "Rewrite both files. Reply with one JSON object and nothing else: \
+         {{\"workspace\": \"<rewritten workspace MEMORY.md>\", \
+         \"global\": \"<rewritten global MEMORY.md>\", \
+         \"dropped\": [\"<each line removed without merging its fact elsewhere>\"]}}\n\n\
          <<<GH_WORKSPACE>>>\n{workspace}\n\
          <<<GH_GLOBAL>>>\n{global}\n\
          <<<GH_END>>>\n",
@@ -1475,11 +1683,6 @@ fn parse_dream(text: &str) -> Option<(String, String)> {
         return None;
     }
     Some((ws, global))
-}
-
-/// An empty rewrite is rejected so the original file stays byte for byte.
-fn accept_rewrite(_old: &str, new_body: &str) -> bool {
-    !new_body.trim().is_empty()
 }
 
 fn replace_with_backup(path: &Path, workspace: &Path, new_body: &str) -> Result<(), String> {
@@ -2348,6 +2551,118 @@ mod tests {
         let body = fs::read_to_string(&global).unwrap();
         assert!(body.contains("night cabin"));
         assert!(!workspace_memory_path(&ws).exists());
+    }
+
+    #[test]
+    fn the_flush_saves_only_the_chats_own_words_and_the_newest_of_them() {
+        let msg = |role: &str, text: &str| InputItem::Message {
+            role: role.into(),
+            content: vec![ContentPart::InputText(text.into())],
+        };
+        let history = vec![
+            msg("system", "PLAYBOOK system text"),
+            msg(
+                "user",
+                &crate::prefix_cache::user_message_text(
+                    "style: PLAYBOOK casual\n<memory-context>RECALLED line</memory-context>",
+                    "the dock code is 4417",
+                ),
+            ),
+            msg("assistant", "Noted."),
+            msg(
+                "user",
+                "<cabin-note>\nNot done yet. Continue.\n</cabin-note>",
+            ),
+            msg(
+                "user",
+                "<memory-context>\nRECALLED again\n</memory-context>",
+            ),
+        ];
+        let body = extract_pending(&history);
+        assert_eq!(body, "User: the dock code is 4417\nAssistant: Noted.");
+
+        let mut long = Vec::new();
+        for n in 0..400 {
+            long.push(msg("user", &format!("fact number {n} is worth keeping")));
+        }
+        let body = extract_pending(&long);
+        assert!(body.len() <= PENDING_FLUSH_BYTES);
+        assert!(
+            body.ends_with("fact number 399 is worth keeping"),
+            "the newest win"
+        );
+        assert!(!body.contains("fact number 0 "));
+        assert!(
+            body.starts_with("User: "),
+            "starts on a whole line: {}",
+            &body[..40]
+        );
+    }
+
+    #[test]
+    fn dream_keeps_the_old_file_when_a_rewrite_guts_it_or_drops_a_recalled_line() {
+        let old = "a\nb\nc\nd\ne\nf\n";
+        assert!(matches!(
+            judge_rewrite(old, "a\nb\n", &[]),
+            DreamVerdict::Keep(why) if why.contains("2 of 6")
+        ));
+        assert_eq!(judge_rewrite("", "", &[]), DreamVerdict::Unchanged);
+        assert!(matches!(
+            judge_rewrite(old, " ", &[]),
+            DreamVerdict::Keep(_)
+        ));
+
+        note_recalled(&["the ferry leaves at nine".to_string()]);
+        let old = "the ferry leaves at nine\nthe ferry leaves at 9\nlikes tea\n";
+        let dropped = vec!["the ferry leaves at nine".to_string()];
+        assert!(matches!(
+            judge_rewrite(old, "the ferry leaves at 9\nlikes tea\n", &dropped),
+            DreamVerdict::Keep(why) if why.contains("recall used lately")
+        ));
+        // A drop the old file never had doesn't count against it.
+        let made_up = vec!["never in the file".to_string()];
+        let ok = judge_rewrite(
+            "likes tea\nlikes tea\nwalks at six\n",
+            "likes tea\nwalks at six\n",
+            &made_up,
+        );
+        assert_eq!(
+            ok,
+            DreamVerdict::Accept {
+                before: 3,
+                after: 2,
+                dropped: Vec::new()
+            }
+        );
+        assert_eq!(
+            ok.report("Project memory").unwrap(),
+            "Project memory: 3 lines to 2."
+        );
+
+        // Taking out exact repeats isn't gutting the file.
+        assert!(matches!(
+            judge_rewrite("likes tea\nlikes tea\nlikes tea\n", "likes tea\n", &[]),
+            DreamVerdict::Accept {
+                before: 3,
+                after: 1,
+                ..
+            }
+        ));
+
+        let reply = parse_dream_reply(
+            r#"{"workspace":"likes tea\nreads at night","global":"","dropped":["walks at six"]}"#,
+        )
+        .unwrap();
+        assert_eq!(reply.dropped, vec!["walks at six".to_string()]);
+        let verdict = judge_rewrite(
+            "likes tea\nwalks at six\nreads at night\n",
+            &reply.workspace,
+            &reply.dropped,
+        );
+        assert_eq!(
+            verdict.report("Project memory").unwrap(),
+            "Project memory: 3 lines to 2, dropped \"walks at six\"."
+        );
     }
 
     #[test]
