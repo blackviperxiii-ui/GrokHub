@@ -73,6 +73,8 @@ pub(crate) struct HttpConn {
     stateless: bool,
     /// Stateless era: each tool's `x-mcp-header` annotations from `tools/list`.
     param_headers: HashMap<String, Vec<ParamHeader>>,
+    /// How long the last `tools/list` may be reused (`ttlMs`); `None` keeps it.
+    pub(crate) list_ttl: Option<Duration>,
     next_id: u64,
     legacy: bool,
     legacy_rx: Option<Receiver<IoMsg>>,
@@ -103,6 +105,7 @@ pub(crate) fn connect(
         protocol: None,
         stateless: false,
         param_headers: HashMap::new(),
+        list_ttl: None,
         next_id: 0,
         legacy: sse,
         legacy_rx: None,
@@ -453,9 +456,22 @@ pub(super) fn guard_handshake(url: &str) -> Result<(), String> {
     )
 }
 
+/// List the server's tools again, after its `ttlMs` ran out.
+pub(crate) fn relist(conn: &mut HttpConn, timeout: Duration) -> Result<Vec<RawTool>, String> {
+    list_tools(conn, timeout)
+}
+
 fn list_tools(conn: &mut HttpConn, timeout: Duration) -> Result<Vec<RawTool>, String> {
+    let mut all = list_pages(conn, timeout)?;
+    rpc::sort_tools(&mut all);
+    Ok(all)
+}
+
+fn list_pages(conn: &mut HttpConn, timeout: Duration) -> Result<Vec<RawTool>, String> {
     let mut all = Vec::new();
     let mut cursor: Option<String> = None;
+    conn.list_ttl = None;
+    conn.param_headers.clear();
     for _ in 0..100 {
         let mut params = json!({});
         if let Some(token) = &cursor {
@@ -464,6 +480,9 @@ fn list_tools(conn: &mut HttpConn, timeout: Duration) -> Result<Vec<RawTool>, St
         let mut result = conn.roundtrip("tools/list", params, timeout)?;
         if conn.stateless {
             result = rpc::complete(&conn.server, result)?;
+        }
+        if cursor.is_none() {
+            conn.list_ttl = rpc::list_ttl(&result);
         }
         let (page, next) = rpc::parse_tools(&result);
         for tool in page {
@@ -960,7 +979,7 @@ pub(crate) mod tests {
                     json!({"name": "echo", "description": "Echo", "inputSchema": {"type": "object"}}),
                 ];
                 tools.extend(extra.as_array().cloned().unwrap_or_default());
-                json!({"tools": tools})
+                json!({"tools": tools, "ttlMs": 60_000})
             }
             "tools/call" => {
                 calls.fetch_add(1, Ordering::SeqCst);
@@ -1332,6 +1351,24 @@ pub(crate) mod tests {
         );
         assert_eq!(seen[2].body["params"]["arguments"], json!({"q": 1}));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn tools_come_back_sorted_with_their_ttl_and_relist_asks_again() {
+        let dir = hx::test_dir("mcp-sorted-ttl");
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let server = Counting::with(Mode::StatelessTools(json!([
+            {"name": "zeta", "inputSchema": {"type": "object"}},
+            {"name": "alpha", "inputSchema": {"type": "object"}}
+        ])));
+        let (mut c, tools) = connect_to(&server).unwrap();
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, vec!["alpha", "echo", "zeta"]);
+        assert_eq!(c.list_ttl, Some(Duration::from_secs(60)));
+        let before = server.requests.load(Ordering::SeqCst);
+        let again = relist(&mut c, Duration::from_secs(5)).unwrap();
+        assert_eq!(again.len(), 3);
+        assert!(server.requests.load(Ordering::SeqCst) > before);
     }
 
     #[test]
