@@ -936,6 +936,23 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     } else {
         None
     };
+    // Item 34: between boundaries the segment's first effort is sent again.
+    if live
+        && !route.no_route
+        && !key.is_empty()
+        && facing
+        && !holdout
+        && super::boundary::enabled(config_dir)
+    {
+        let floor = row.map(|r| ladder::Band::of(r, bump).floor);
+        let model = route.base.clone().unwrap_or_else(|| route.model.clone());
+        let (effort, held) =
+            super::boundary::hold(&class_key, key, turn, &model, route.effort.take(), floor);
+        route.effort = effort;
+        if held {
+            route.rule_ids.push(super::boundary::HELD_RULE.into());
+        }
+    }
     if live && !route.no_route && !key.is_empty() && !call.step_up {
         // A stepped-up call keeps the episode's own model, so the next call drops back.
         // The plain model: a Fast swap is decided again on every call.
@@ -1434,24 +1451,47 @@ pub fn current_class() -> &'static str {
 
 /// The newest user text in a request (difficulty only; never stored), without
 /// the `<cabin-volatile>` notes, so style or playbook words never steer routing.
+/// Messages the app itself writes in the user's place (a cabin note, a
+/// background notice, the ledger, standing rules, a compaction summary) are
+/// skipped: they arrive mid-run, and reading one as the ask made the router
+/// treat it as a new turn and move the effort mid-run.
 pub(crate) fn last_user_text(input: &[InputItem]) -> (String, bool) {
-    let mut image = false;
-    let mut text = String::new();
     for item in input.iter().rev() {
-        if let InputItem::Message { role, content } = item {
-            if role == "user" {
-                for part in content {
-                    match part {
-                        ContentPart::InputText(t) => text.push_str(t),
-                        ContentPart::InputImage(_) => image = true,
-                    }
-                }
-                break;
+        let InputItem::Message { role, content } = item else {
+            continue;
+        };
+        if role != "user" {
+            continue;
+        }
+        let mut image = false;
+        let mut text = String::new();
+        for part in content {
+            match part {
+                ContentPart::InputText(t) => text.push_str(t),
+                ContentPart::InputImage(_) => image = true,
             }
         }
+        let text = crate::prefix_cache::visible_user_text(&text).to_string();
+        if app_written(&text) {
+            continue;
+        }
+        return (text, image);
     }
-    let text = crate::prefix_cache::visible_user_text(&text).to_string();
-    (text, image)
+    (String::new(), false)
+}
+
+/// A user-role message the app wrote, not the person.
+fn app_written(text: &str) -> bool {
+    const TAGS: [&str; 6] = [
+        "<cabin-note>",
+        "<background-notice>",
+        "<harness_ledger>",
+        "<standing_rules>",
+        "<conversation_summary>",
+        "This session is being continued",
+    ];
+    let t = text.trim_start();
+    TAGS.iter().any(|tag| t.starts_with(tag))
 }
 
 /// The single helper every native model call goes through: the router picks
