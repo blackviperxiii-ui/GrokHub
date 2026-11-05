@@ -314,6 +314,7 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         ports: crate::tools::ports::current(),
         origin: crate::harness::current_origin(),
         fork,
+        config: crate::perm::pinned_config(),
     };
     if spec.background {
         thread::spawn(move || run_job(job, None));
@@ -403,6 +404,8 @@ struct ChildJob {
     origin: crate::harness::Origin,
     /// Set for a fork: the parent's last request, which the child starts from.
     fork: Option<Arc<ParentRequest>>,
+    /// The parent thread's pinned config folder: the child reads the same rules and grants.
+    config: Option<PathBuf>,
 }
 
 struct ChildDone {
@@ -429,6 +432,7 @@ impl HaltCheck for HubHalt {
 fn run_job(job: ChildJob, tx: Option<Sender<ChildNote>>) {
     let _origin = crate::harness::OriginScope::enter(job.origin);
     let _trace = crate::harness::provenance::enter(job.trace.clone());
+    let _config = job.config.clone().map(crate::perm::ConfigGuard::set);
     let mut done = run_child(&job, &tx);
     done.text = guard_result(
         &job.parent_workspace,
@@ -2027,6 +2031,55 @@ mod tests {
             thread::sleep(Duration::from_millis(15));
         }
         assert_eq!(rolled.input_tokens, 8, "{seen}");
+        let _ = drain_side_events();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_child_reads_the_config_folder_its_parent_pinned() {
+        let dir = scratch("childcfg");
+        let cfg = dir.join("pinned-config");
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        let sid = session("childcfg");
+        let parent_id = sid.clone();
+        let seen = Arc::new(Mutex::new(Vec::<(usize, PathBuf)>::new()));
+        let seen_step = Arc::clone(&seen);
+        let client = fake(&sid, move |req, _cancel, n| {
+            let depth = depth_of(&parent_id, &req.conversation_id);
+            seen_step
+                .lock()
+                .unwrap()
+                .push((depth, crate::perm::config_dir()));
+            if depth == 0 && n == 0 {
+                return Ok(calls_turn(
+                    vec![call(
+                        "s",
+                        "spawn_subagent",
+                        &spawn_args("cfg", "explore", false, "none"),
+                    )],
+                    Usage::default(),
+                ));
+            }
+            if depth >= 1 {
+                return Ok(text_turn("child-done", Usage::default()));
+            }
+            Ok(text_turn("parent-done", Usage::default()))
+        });
+        let (out, _) = run_parent(
+            &client,
+            &dir,
+            &sid,
+            chat(PermMode::Always, false, true),
+            &closed(),
+            &CancelToken::new(),
+            &mut |_| {},
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        let seen = seen.lock().unwrap().clone();
+        assert!(seen.iter().any(|(d, _)| *d >= 1), "the child ran: {seen:?}");
+        for (depth, dir_seen) in &seen {
+            assert_eq!(dir_seen, &cfg, "depth {depth} read another config folder");
+        }
         let _ = drain_side_events();
         let _ = std::fs::remove_dir_all(&dir);
     }

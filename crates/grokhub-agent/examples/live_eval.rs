@@ -11,6 +11,8 @@
 //! model `--provider-model`, token GROKHUB_EVAL_LOCAL_TOKEN.
 //!
 //! Run it before changing a default; it is never part of pull-request CI.
+//! It runs against a throwaway config folder, so your own rules, grants,
+//! memory and logs are never read or written.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,6 +23,7 @@ use grokhub_agent::{
 };
 
 fn main() {
+    let scratch = scratch_config();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut budget = None;
     let mut opts = grokhub_agent::LiveOpts::new(grokhub_agent::DEFAULT_MODEL);
@@ -87,6 +90,20 @@ fn main() {
         }
     }
     print!("{md}");
+    let _ = std::fs::remove_dir_all(&scratch);
+}
+
+/// Points `GROKHUB_CONFIG` at a fresh empty folder, before any thread starts,
+/// so every thread of the run (subagents included) stays out of the real one.
+fn scratch_config() -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("grokhub-live-eval-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    if let Err(err) = std::fs::create_dir_all(&dir) {
+        fail(&format!("could not make a scratch config folder: {err}"));
+    }
+    // SAFETY: called first thing in `main`, while this is the only thread.
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &dir) };
+    dir
 }
 
 fn env(name: &str) -> String {

@@ -538,9 +538,11 @@ pub fn turn_cost(model: &str, usage: &Usage) -> i64 {
         / 1_000_000) as i64
 }
 
-/// Wraps the real client: counts every request's spend and refuses the next
-/// request once the budget is used up, so a run never goes over by more than
-/// one response.
+/// Wraps the real client: counts every request's spend and refuses a request
+/// the rest of the budget can't cover. Each call reserves its input's price
+/// before it is sent, so parallel subagents see each other's spend and can't
+/// all pass the check together; a call that fails after it was billed still
+/// counts. Only output past that reservation can land over the cap.
 pub struct Capped {
     inner: Arc<dyn ModelClient + Send + Sync>,
     provider: Provider,
@@ -548,6 +550,16 @@ pub struct Capped {
     spent: AtomicI64,
     over: AtomicBool,
     usage: Mutex<Usage>,
+    billed_errors: AtomicI64,
+}
+
+/// A failure that came after the request reached the model, so its input
+/// was billed even though no usage came back.
+fn billed_failure(err: &ClientError) -> bool {
+    matches!(
+        err,
+        ClientError::CutOff(_) | ClientError::Disconnect | ClientError::IdleTimeout
+    )
 }
 
 impl Capped {
@@ -565,7 +577,94 @@ impl Capped {
             spent: AtomicI64::new(0),
             over: AtomicBool::new(false),
             usage: Mutex::new(Usage::default()),
+            billed_errors: AtomicI64::new(0),
         }
+    }
+
+    /// Calls that failed after they were billed: counted at their input's
+    /// price, since the error brought no usage.
+    pub fn billed_errors(&self) -> i64 {
+        self.billed_errors.load(Ordering::SeqCst)
+    }
+
+    /// What `usage` costs where these calls go.
+    fn price_of(&self, model: &str, usage: &Usage) -> i64 {
+        match self.provider {
+            Provider::Grok => turn_cost(model, usage),
+            // `model` names the Grok model the router picked, not the one
+            // that answered: an unknown name prices it high, so the cap holds.
+            Provider::OpenRouter => turn_cost("provider/unknown", usage),
+            Provider::Local => 0,
+        }
+    }
+
+    /// Hold `ticks` of the budget for a call about to go out. False, with
+    /// nothing held, once the budget can't cover it.
+    fn reserve(&self, ticks: i64, cancel: &CancelToken) -> bool {
+        let budget = self.budget_ticks;
+        let held = self
+            .spent
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |before| {
+                (before < budget && before.saturating_add(ticks) <= budget)
+                    .then_some(before + ticks)
+            })
+            .is_ok();
+        if !held {
+            self.over.store(true, Ordering::SeqCst);
+            cancel.cancel();
+        }
+        held
+    }
+
+    /// Settle a call: swap its reservation for what it really cost.
+    fn settle(&self, reserved: i64, mut usage: Usage, model: &str) {
+        usage.cost_in_usd_ticks = self.price_of(model, &usage);
+        self.spent
+            .fetch_add(usage.cost_in_usd_ticks - reserved, Ordering::SeqCst);
+        let mut total = self.usage.lock().unwrap_or_else(|e| e.into_inner());
+        total.input_tokens += usage.input_tokens;
+        total.cached_tokens += usage.cached_tokens;
+        total.output_tokens += usage.output_tokens;
+        total.reasoning_tokens += usage.reasoning_tokens;
+        total.cost_in_usd_ticks += usage.cost_in_usd_ticks;
+    }
+
+    /// After `result`, the reservation is settled: by the usage that came
+    /// back, by the input's price for a failure that was billed anyway, or
+    /// released for one that never reached the model.
+    fn finish<T>(
+        &self,
+        reserved: i64,
+        input_tokens: u64,
+        model: &str,
+        result: &Result<T, ClientError>,
+        usage_of: impl Fn(&T) -> Usage,
+    ) {
+        match result {
+            Ok(out) => self.settle(reserved, usage_of(out), model),
+            Err(err) if billed_failure(err) => {
+                self.billed_errors.fetch_add(1, Ordering::SeqCst);
+                let usage = Usage {
+                    input_tokens,
+                    ..Usage::default()
+                };
+                self.settle(reserved, usage, model);
+            }
+            Err(_) => {
+                self.spent.fetch_sub(reserved, Ordering::SeqCst);
+            }
+        }
+    }
+
+    /// The input's price, held before a call goes out.
+    fn input_price(&self, model: &str, input_tokens: u64) -> i64 {
+        self.price_of(
+            model,
+            &Usage {
+                input_tokens,
+                ..Usage::default()
+            },
+        )
     }
 
     pub fn spent_ticks(&self) -> i64 {
@@ -588,29 +687,51 @@ impl ModelClient for Capped {
         cancel: &CancelToken,
         sink: &mut dyn FnMut(StreamEvent),
     ) -> Result<TurnOutput, ClientError> {
-        if self.spent_ticks() >= self.budget_ticks {
-            self.over.store(true, Ordering::SeqCst);
-            cancel.cancel();
+        let tokens = crate::route::local_fit::request_tokens(req);
+        let reserved = self.input_price(&req.model, tokens);
+        if !self.reserve(reserved, cancel) {
             return Err(ClientError::Cancelled);
         }
-        let out = self.inner.stream(req, cancel, sink)?;
-        let mut usage = out.usage.clone();
-        usage.cost_in_usd_ticks = match self.provider {
-            Provider::Grok => turn_cost(&req.model, &out.usage),
-            // req.model names the Grok model the router picked, not the one
-            // that answered: an unknown name prices it high, so the cap holds.
-            Provider::OpenRouter => turn_cost("provider/unknown", &out.usage),
-            Provider::Local => 0,
-        };
-        self.spent
-            .fetch_add(usage.cost_in_usd_ticks, Ordering::SeqCst);
-        let mut total = self.usage.lock().unwrap_or_else(|e| e.into_inner());
-        total.input_tokens += usage.input_tokens;
-        total.cached_tokens += usage.cached_tokens;
-        total.output_tokens += usage.output_tokens;
-        total.reasoning_tokens += usage.reasoning_tokens;
-        total.cost_in_usd_ticks += usage.cost_in_usd_ticks;
-        Ok(out)
+        let result = self.inner.stream(req, cancel, sink);
+        self.finish(reserved, tokens, &req.model, &result, |out| {
+            out.usage.clone()
+        });
+        result
+    }
+
+    fn compacts_server_side(&self) -> bool {
+        self.inner.compacts_server_side()
+    }
+
+    fn batches(&self) -> bool {
+        self.inner.batches()
+    }
+
+    /// Server compaction goes through too, so a live run uses it the way the
+    /// app does, and its cost counts against the cap.
+    fn compact(
+        &self,
+        req: &crate::client::CompactRequest,
+        cancel: &CancelToken,
+    ) -> Option<Result<crate::client::CompactOutput, ClientError>> {
+        if !self.inner.compacts_server_side() {
+            return None;
+        }
+        let tokens = crate::compact::estimate_input_tokens(&req.input);
+        let reserved = self.input_price(&req.model, tokens);
+        if !self.reserve(reserved, cancel) {
+            return Some(Err(ClientError::Cancelled));
+        }
+        let result = self.inner.compact(req, cancel);
+        match &result {
+            Some(result) => self.finish(reserved, tokens, &req.model, result, |out| {
+                out.usage.clone()
+            }),
+            None => {
+                self.spent.fetch_sub(reserved, Ordering::SeqCst);
+            }
+        }
+        result
     }
 }
 
@@ -665,6 +786,8 @@ pub struct LiveReport {
     pub attempts: Vec<Attempt>,
     pub spent_ticks: i64,
     pub budget_ticks: i64,
+    /// Calls that failed after they were billed (counted at their input's price).
+    pub billed_errors: i64,
     /// The cap stopped the run before every try was made.
     pub stopped_by_budget: bool,
 }
@@ -874,6 +997,7 @@ pub fn run_live(
         attempts,
         spent_ticks: capped.spent_ticks(),
         budget_ticks,
+        billed_errors: capped.billed_errors(),
         stopped_by_budget: stopped,
     }
 }
@@ -948,7 +1072,8 @@ pub fn render_live(report: &LiveReport) -> String {
          | pass@1 (all tries) | {} |\n| pass^{} (tasks) | {} |\n\
          | capability | {} |\n| regression | {} |\n| recall | {} |\n\
          | input tokens | {} |\n| cached share | {} |\n| output + reasoning tokens | {} |\n\
-         | cost | {} |\n| p50 wall | {} ms |\n| gate asks | {} |\n\n",
+         | cost | {} |\n| p50 wall | {} ms |\n| gate asks | {} |\n\
+         | billed failures | {} |\n\n",
         report.model,
         report.provider.label(),
         report
@@ -976,6 +1101,7 @@ pub fn render_live(report: &LiveReport) -> String {
         usd(report.spent_ticks),
         p50,
         asks,
+        report.billed_errors,
     );
     if let Some(flag) = &report.ab {
         out.push_str(&render_ab(flag, a));
