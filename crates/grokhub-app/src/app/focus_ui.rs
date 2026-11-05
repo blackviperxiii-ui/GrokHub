@@ -80,6 +80,7 @@ impl Cabin {
         self.tick_work_resume();
         self.tick_net_log();
         self.tick_game_companion();
+        self.tick_chip_guard();
         self.tick_game_watch();
         self.tick_wow();
         self.tick_poe();
@@ -216,7 +217,11 @@ mod tests {
         let chip = cabin.focus_chip().expect("chip");
         assert_eq!(chip.label, "Next coding step");
         assert_eq!(chip.hint, "Because you were in Cursor");
-        assert_eq!(cabin.composer_chips()[0].id, "focus:coding:cursor");
+        cabin.refresh_chips();
+        let row: Vec<String> = cabin.composer_chips().into_iter().map(|c| c.id).collect();
+        // The first-run guide holds the row's lead; the offer is on it.
+        assert_eq!(row[..2], ["guide-connect", "guide-start"], "{row:?}");
+        assert_eq!(row[2], "focus:coding:cursor", "{row:?}");
         assert_eq!(
             cabin.take_focus_context().as_deref(),
             Some(
@@ -226,6 +231,7 @@ mod tests {
         assert_eq!(cabin.take_focus_context(), None, "once per return");
         cabin.dismiss_chip(chip);
         assert_eq!(cabin.focus_chip(), None, "dismissed stays gone");
+        cabin.refresh_chips();
         assert!(cabin
             .composer_chips()
             .iter()

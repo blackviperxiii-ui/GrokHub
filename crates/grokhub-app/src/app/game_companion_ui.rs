@@ -30,6 +30,9 @@ pub(super) struct GameUi {
     ended: Option<(SteamGame, u64)>,
     /// The note being written: game and text.
     editing: Option<(SteamGame, String)>,
+    /// The game guard's last reading, for the chip row, and when it was read.
+    guard: grokhub_core::game_guard::GameGuard,
+    guard_ms: u64,
 }
 
 /// What Steam says is running: its launch wrapper's command line on Linux
@@ -113,6 +116,23 @@ impl Cabin {
         std::thread::spawn(move || {
             let _ = tx.send(running_now());
         });
+    }
+
+    /// Each frame: take the game guard's cached reading every few seconds,
+    /// so the chip row knows about gaming and anti-cheats without a read of
+    /// its own. Tests keep a clear guard so a busy machine can't move rows.
+    pub(super) fn tick_chip_guard(&mut self) {
+        let now = now_ms();
+        if cfg!(test) || now.saturating_sub(self.focus.game.guard_ms) < SAMPLE_EVERY_MS {
+            return;
+        }
+        self.focus.game.guard_ms = now;
+        self.focus.game.guard = grokhub_desktop::game_guard::peek();
+    }
+
+    /// The game guard as the chip row last saw it.
+    pub(super) fn chip_guard(&self) -> grokhub_core::game_guard::GameGuard {
+        self.focus.game.guard
     }
 
     /// The library game that closed in the last half hour, while no other runs.
@@ -630,11 +650,17 @@ mod tests {
         let ended = body(&own, "fn game_just_ended(", "\n    }\n");
         let live = include_str!("home/live.rs").replace("\r\n", "\n");
         let drives = body(&live, "fn cached_drives(", "\n}\n");
+        let features = body(&chips, "fn feature_chips(", "\n    }\n");
+        let attached = body(&chips, "fn attached_file_name(", "\n    }\n");
+        let guard = body(&own, "fn chip_guard(", "\n    }\n");
         for (what, src) in [
             ("fill", &fill),
             ("name", &name),
             ("ended", &ended),
             ("drives", &drives),
+            ("features", &features),
+            ("attached", &attached),
+            ("guard", &guard),
         ] {
             for io in [
                 "refresh(",

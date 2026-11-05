@@ -3,6 +3,14 @@
 use super::*;
 use grokhub_core::ChipSignals;
 
+/// Where a feature's offer ranks: above the PC's plain signals and seeds,
+/// under a reply's own follow-ups.
+const FEATURE_SCORE: f32 = 100.0;
+/// The app you just came from leads the empty row, as it did before.
+const FEATURE_FOCUS_SCORE: f32 = 110.0;
+/// A skill matching the draft is what the person is typing toward.
+const FEATURE_SKILL_SCORE: f32 = 108.0;
+
 /// Chips on Home's row.
 pub(super) const HOME_CHIP_MAX: usize = grokhub_core::CHIP_ROW_MAX;
 
@@ -14,6 +22,8 @@ struct ChipSignalsKey {
     weekday: u8,
     update_waiting: bool,
     quiet_hours: bool,
+    gaming: bool,
+    anticheat: bool,
 }
 
 /// True when a chat chip should run through `send_chat` (slash parse or empty-composer send).
@@ -447,6 +457,10 @@ impl Cabin {
             .and_then(|id| self.steam_cached_name(id))
             .map(str::to_string);
         let game_ended = self.game_just_ended().map(str::to_string);
+        let features = self.feature_chips();
+        let feature_ids: Vec<&str> = features.iter().map(|c| c.id.as_str()).collect();
+        let guard = self.chip_guard();
+        let attachment = self.attached_file_name();
         let signals_key = ChipSignalsKey {
             low_disk: super::home::cached_drives()
                 .iter()
@@ -454,9 +468,11 @@ impl Cabin {
             weekday: Self::local_clock().weekday,
             update_waiting: self.cabin_update_available(),
             quiet_hours: self.quiet_now(),
+            gaming: guard.gaming,
+            anticheat: guard.anticheat.is_some(),
         };
         let key = format!(
-            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{:?}|{:?}",
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{:?}|{:?}|{:?}|{:?}",
             self.thread_idx,
             n,
             last,
@@ -479,7 +495,9 @@ impl Cabin {
             persistable_cabin_lane(&self.cfg.cabin_lane),
             game,
             game_ended,
-            signals_key
+            signals_key,
+            feature_ids,
+            attachment
         );
         if self.chip_paint_key == key && !self.visible_chips.is_empty() {
             return;
@@ -519,7 +537,11 @@ impl Cabin {
                 weekday: signals_key.weekday,
                 update_waiting: signals_key.update_waiting,
                 quiet_hours: signals_key.quiet_hours,
+                gaming: signals_key.gaming,
+                anticheat: signals_key.anticheat,
+                attachment: attachment.as_deref(),
             },
+            extra: &features,
         };
         let pace = grokhub_core::cabin_pace(&input);
         self.offer_repeated = matches!(
@@ -534,6 +556,12 @@ impl Cabin {
             thread_title: "",
             last_failed: false,
             max: grokhub_core::CHIP_HARD_MAX,
+            // Feature offers and the tray's file belong to the open chat.
+            extra: &[],
+            signals: ChipSignals {
+                attachment: None,
+                ..input.signals
+            },
             ..input.clone()
         };
         // Chips are local only: no model ask, cloud or local (LO-28).
@@ -566,6 +594,78 @@ impl Cabin {
         );
     }
 
+    /// Every feature's offer for the open chat, with the score it ranks at.
+    /// Each was spliced in front of the row before; now the engine weighs
+    /// it against the chat's own chips. All read cached state only.
+    pub(super) fn feature_chips(&self) -> Vec<QuickChip> {
+        fn scored(chips: Vec<QuickChip>, score: f32, hint: &str) -> Vec<QuickChip> {
+            chips
+                .into_iter()
+                .map(|mut c| {
+                    c.score = score;
+                    if c.hint.trim().is_empty() {
+                        c.hint = hint.to_string();
+                    }
+                    c
+                })
+                .collect()
+        }
+        let mut out: Vec<QuickChip> = Vec::new();
+        out.extend(scored(
+            skill_offer_chip(&self.composer, &self.skill_list)
+                .into_iter()
+                .collect(),
+            FEATURE_SKILL_SCORE,
+            "A skill fits what you're typing",
+        ));
+        out.extend(scored(
+            self.focus_chip().into_iter().collect(),
+            FEATURE_FOCUS_SCORE,
+            "The app you were just in",
+        ));
+        out.extend(scored(
+            self.model_chips(),
+            FEATURE_SCORE + 4.0,
+            "New model file",
+        ));
+        out.extend(scored(
+            self.resume_chips(),
+            FEATURE_SCORE + 3.0,
+            "Code you left",
+        ));
+        out.extend(scored(
+            self.backup_chips(),
+            FEATURE_SCORE + 2.0,
+            "Backup due",
+        ));
+        out.extend(scored(
+            self.tidy_chips(),
+            FEATURE_SCORE,
+            "Downloads cleanup",
+        ));
+        out.extend(scored(self.game_chips(), FEATURE_SCORE, "Your game"));
+        out.extend(scored(
+            self.radar_chips(),
+            FEATURE_SCORE - 2.0,
+            "Release radar",
+        ));
+        // Order inside one feature is its own: keep it among equal scores.
+        for (i, c) in out.iter_mut().enumerate() {
+            c.score -= i as f32 * 0.001;
+        }
+        out.retain(|c| !self.chip_hidden(c));
+        out
+    }
+
+    /// The first file waiting in the attach tray, by name only.
+    fn attached_file_name(&self) -> Option<String> {
+        let item = self.attach_tray.queue.items().first()?;
+        std::path::Path::new(&item.path)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .filter(|n| !n.trim().is_empty())
+    }
+
     /// Ranked composer chips. Empty home and mid-thread share `visible_chips`
     /// (habit / static / stage pool when the LLM row is not ready). A thread
     /// with messages must not clear that pool.
@@ -577,34 +677,11 @@ impl Cabin {
         {
             return super::loadout_home::hangout_quick_chips();
         }
+        // Feature offers (focus help, model drop, code resume, tidy, backup,
+        // radar, game, skill offer) are already in the ranked pool.
         let mut chips = self.visible_chips.clone();
-        if let Some(c) = skill_offer_chip(&self.composer, &self.skill_list) {
-            if !self.chip_hidden(&c) && chips.iter().all(|x| x.id != c.id) {
-                chips.insert(0, c);
-            }
-        }
         bias_chips_for_lane(&mut chips, cabin_lane(&self.cfg.cabin_lane));
         polish_chip_hints(&mut chips, &self.composer);
-        let mut resume = self.model_chips();
-        resume.extend(self.resume_chips());
-        resume.extend(self.tidy_chips());
-        resume.extend(self.backup_chips());
-        resume.extend(self.radar_chips());
-        resume.extend(self.game_chips());
-        // One × rule for every chip on the row: a hidden feature chip stays
-        // hidden after a restart, like a core chip.
-        resume.retain(|c| !self.chip_hidden(c));
-        // A clicked resume chip is remembered and can come back as a plain chip.
-        chips.retain(|x| {
-            resume
-                .iter()
-                .all(|r| r.id != x.id && r.value != x.value && r.label != x.label)
-        });
-        chips.splice(0..0, resume);
-        if let Some(c) = self.focus_chip().filter(|c| !self.chip_hidden(c)) {
-            chips.retain(|x| x.id != c.id);
-            chips.insert(0, c);
-        }
         // A shell chip fills the box with its command; with a draft typed
         // there is no room for it, so it waits until the box is empty.
         if !self.composer.trim().is_empty() {
