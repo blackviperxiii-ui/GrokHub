@@ -25,7 +25,8 @@ pub const RECENT_TAIL_TOKEN_BUDGET: u64 = 4_000;
 pub const CONTEXT_STILL_TOO_LARGE: &str = "context still too large after compaction";
 
 /// Config file under [`crate::perm::config_dir`]: `backend = "summary"` turns the
-/// xAI server-side compaction off. With no file an xAI model uses the server.
+/// xAI server-side compaction off, and `background = false` the background
+/// compaction. With no file an xAI model uses the server.
 pub const COMPACTION_CONFIG: &str = "compaction.toml";
 
 /// How one compaction folds the history.
@@ -71,12 +72,18 @@ pub fn summary_forced(config_dir: &Path) -> bool {
 }
 
 fn parse_compaction_file(text: &str) -> Option<CompactBackend> {
-    let file = crate::config_file::parse(COMPACTION_CONFIG, text, &["backend"]);
+    let file = crate::config_file::parse(COMPACTION_CONFIG, text, &["backend", "background"]);
     match file.one_of("backend", &["summary", "server"], "the model's own")? {
         "summary" => Some(CompactBackend::Summary),
         "server" => Some(CompactBackend::Server),
         _ => None,
     }
+}
+
+/// `background = false` in `compaction.toml` turns background compaction off.
+fn parse_background(text: &str) -> bool {
+    crate::config_file::parse(COMPACTION_CONFIG, text, &["backend", "background"])
+        .flag("background", true)
 }
 
 /// A bare xAI model id (`grok-…`), not a provider's `provider/model` or a local tier.
@@ -2128,6 +2135,9 @@ fn neutralize_compaction_control_tokens(text: &str) -> String {
 
 #[path = "compact_ledger.rs"]
 mod ledger;
+
+#[path = "compact_bg.rs"]
+pub mod bg;
 
 #[cfg(test)]
 #[path = "compact_server_tests.rs"]
