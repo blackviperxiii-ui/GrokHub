@@ -2311,7 +2311,7 @@ mod tests {
             assert_eq!(
                 body(model),
                 format!(
-                    r#"{{"input":[{{"content":[{{"text":"hi","type":"input_text"}}],"role":"user","type":"message"}}],"max_turns":3,"model":"{model}","prompt_cache_key":"s","stream":true,"tools":[{{"type":"web_search"}},{{"type":"x_search"}}]}}"#
+                    r#"{{"input":[{{"content":[{{"text":"hi","type":"input_text"}}],"role":"user","type":"message"}}],"max_turns":3,"model":"{model}","prompt_cache_key":"s","store":false,"stream":true,"tools":[{{"type":"web_search"}},{{"type":"x_search"}}]}}"#
                 )
             );
         }

@@ -281,7 +281,7 @@ fn trim_pass_follows_the_config_file_and_only_trusts_noted_results() {
     let ctx = half_full(&history);
     let before = history.clone();
     // Nothing noted for this conversation yet (a resumed chat): nothing drops.
-    assert_eq!(trim_pass(&mut history, ctx, &dir, &dir, &conv), 0);
+    assert_eq!(trim_pass(&mut history, ctx, None, &dir, &dir, &conv), 0);
     assert_eq!(history, before);
     note_tool_result(&conv, "c1", "read_file", false);
     note_tool_result(&conv, "c2", "read_file", false);
@@ -289,10 +289,10 @@ fn trim_pass_follows_the_config_file_and_only_trusts_noted_results() {
     let noted: std::collections::HashSet<String> = ["c1".into(), "c2".into()].into();
     assert_eq!(trim_results(&conv), noted);
     std::fs::write(dir.join(HISTORY_TRIM_CONFIG), "enabled = false\n").unwrap();
-    assert_eq!(trim_pass(&mut history, ctx, &dir, &dir, &conv), 0);
+    assert_eq!(trim_pass(&mut history, ctx, None, &dir, &dir, &conv), 0);
     assert_eq!(history, before);
     std::fs::remove_file(dir.join(HISTORY_TRIM_CONFIG)).unwrap();
-    assert_eq!(trim_pass(&mut history, ctx, &dir, &dir, &conv), 1);
+    assert_eq!(trim_pass(&mut history, ctx, None, &dir, &dir, &conv), 1);
     assert_eq!(output_of(&history, "c1"), NOTE_C2);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -341,7 +341,7 @@ fn a_later_read_that_errored_never_drops_the_good_result() {
     history.extend([c2, o2.clone()]);
     let ctx = half_full(&history);
     let before = history.clone();
-    assert_eq!(trim_pass(&mut history, ctx, &ws, &ws, &conv), 0);
+    assert_eq!(trim_pass(&mut history, ctx, None, &ws, &ws, &conv), 0);
     assert_eq!(output_of(&history, "c1"), "1|save folder is D:/saves\n");
     assert_eq!(history, before);
     // Once the file is back and read again, both older outputs point at it.
@@ -350,7 +350,7 @@ fn a_later_read_that_errored_never_drops_the_good_result() {
     assert!(!failed3);
     history.extend([c3, o3]);
     let ctx = half_full(&history);
-    assert_eq!(trim_pass(&mut history, ctx, &ws, &ws, &conv), 2);
+    assert_eq!(trim_pass(&mut history, ctx, None, &ws, &ws, &conv), 2);
     assert_eq!(
         output_of(&history, "c1"),
         "[Output dropped: read_file ran again later with the same arguments (call c3). Use that result.]"
@@ -468,4 +468,62 @@ fn old_images_follow_history_trim_toml() {
     assert_eq!(mask_images_pass(&mut kept, &dir, true), 0);
     assert_eq!(whole(&kept), 7);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn trim_reads_the_providers_count_not_the_sealed_reasoning_blob() {
+    let dir = std::env::temp_dir().join(format!("gh-trim-real-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let conv = format!("trim-real-{}", std::process::id());
+    note_tool_result(&conv, "c1", "read_file", false);
+    note_tool_result(&conv, "c2", "read_file", false);
+    let mut history = two_calls("read_file", NOTES_ARGS, NOTES_ARGS);
+    let ctx = half_full(&history);
+    // A big sealed blob sent last turn makes the estimate look over 40%...
+    let blob = InputItem::Reasoning {
+        raw: serde_json::json!({"type":"reasoning","encrypted_content":"Z".repeat(4_000)})
+            .to_string(),
+        model: "grok-4".into(),
+    };
+    history.insert(2, blob);
+    let sent = history.len();
+    let estimate = estimate_input_tokens(&history);
+    assert!(estimate * 100 >= ctx * 40);
+    // ...but the provider counted a small prompt, so nothing is due.
+    let mark = Some((ctx / 10, sent));
+    assert_eq!(trigger_tokens(&history, mark), ctx / 10);
+    let before = history.clone();
+    assert_eq!(trim_pass(&mut history, ctx, mark, &dir, &dir, &conv), 0);
+    assert_eq!(history, before);
+    assert!(!needs_auto_compact_at(trigger_tokens(&history, mark), ctx));
+    // Without a real count the estimate still decides, as before.
+    assert_eq!(trigger_tokens(&history, None), estimate);
+    assert_eq!(trim_pass(&mut history, ctx, None, &dir, &dir, &conv), 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_trim_takes_its_shrink_off_the_real_count() {
+    let mut history = two_calls("read_file", NOTES_ARGS, NOTES_ARGS);
+    history.push(out("c3", &"x".repeat(4_000)));
+    let mark = Some((5_000, history.len()));
+    let before = sent_estimate(&history, mark);
+    let len = history.len();
+    if let Some(InputItem::FunctionCallOutput { output, .. }) = history.last_mut() {
+        *output = "short".into();
+    }
+    let shrunk = before - estimate_input_tokens(&history);
+    assert!(shrunk > 900);
+    assert_eq!(
+        rebase_mark(mark, before, &history),
+        Some((5_000 - shrunk, len))
+    );
+    assert_eq!(rebase_mark(None, before, &history), None);
+    // Items added after the mark are not part of what was sent.
+    history.push(msg("user", "more"));
+    assert_eq!(
+        trigger_tokens(&history, Some((100, len))),
+        100 + estimate_input_tokens(&history[len..])
+    );
 }

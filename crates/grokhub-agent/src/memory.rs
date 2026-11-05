@@ -348,14 +348,32 @@ pub fn first_turn_injection(workspace: &Path, user_text: &str) -> Option<String>
 
 /// Later-turn recall. Same pack as the first turn, minus lines already in
 /// `already` (the fenced bodies from earlier turns). `None` when nothing new
-/// matched. Library asks still include sealed installed-app lines.
+/// matched, or when the turn is only small talk ([`small_talk_turn`]): the
+/// first turn's recall is still in the history. Library asks still include
+/// sealed installed-app lines.
 pub fn followup_injection(workspace: &Path, user_text: &str, already: &[String]) -> Option<String> {
+    if small_talk_turn(user_text) {
+        return None;
+    }
     let _lap = crate::timing::lap("turn:memory_recall");
     let fresh: Vec<String> = collect_snippets(workspace, user_text, already)
         .into_iter()
         .filter(|body| !already_has(already, body))
         .collect();
     format_injection(&fresh)
+}
+
+/// "ok", "lol", "how are you?": a go-ahead or a casual chat line with nothing
+/// to look up, so recall would only add unrelated memory to the turn.
+fn small_talk_turn(user_text: &str) -> bool {
+    crate::brain::is_follow_up(user_text)
+        || crate::brain::rules(&crate::brain::BriefInput {
+            text: user_text,
+            ..Default::default()
+        })
+        .is_some_and(|b| {
+            b.intent == crate::brain::Intent::Chat && b.care == crate::brain::Care::Casual
+        })
 }
 
 fn already_has(already: &[String], body: &str) -> bool {
@@ -2614,6 +2632,32 @@ mod tests {
                 "ranked mode off".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn small_talk_after_the_first_turn_recalls_nothing() {
+        for text in [
+            "ok",
+            "Yes!",
+            "do it",
+            "lol",
+            "how are you?",
+            "thanks!",
+            "lol same, long day",
+            "hey",
+        ] {
+            assert!(small_talk_turn(text), "{text}");
+        }
+        for text in [
+            "where is my steam library folder",
+            "what did we decide about the router",
+            "fix my audio crackling",
+            "remember that I prefer dark mode",
+        ] {
+            assert!(!small_talk_turn(text), "{text}");
+        }
+        let ws = std::env::temp_dir().join(format!("gh-mem-small-{}", std::process::id()));
+        assert_eq!(followup_injection(&ws, "lol", &[]), None);
     }
 
     #[test]

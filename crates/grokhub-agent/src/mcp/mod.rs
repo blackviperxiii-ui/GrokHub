@@ -190,6 +190,10 @@ struct SlotInner {
     tools: Vec<ToolRec>,
     last_error: Option<String>,
     tried: bool,
+    /// A connect is running with the slot unlocked; its tools join when it ends.
+    connecting: bool,
+    /// Bumped per connect, so one that a restart or sign-out overtook is dropped.
+    attempt: u64,
     conn: Option<Conn>,
 }
 
@@ -202,6 +206,8 @@ impl SlotInner {
             tools: Vec::new(),
             last_error: None,
             tried: false,
+            connecting: false,
+            attempt: 0,
             conn: None,
         }
     }
@@ -280,6 +286,16 @@ pub fn set_workspace(path: &Path) {
     lock_state().workspace = path.to_path_buf();
 }
 
+/// Start every enabled server's connection on background threads at launch,
+/// so a chat's first request doesn't wait on them. A server still connecting
+/// when a chat starts joins that chat's tools at its next user turn.
+pub fn connect_in_background(workspace: &Path) {
+    set_workspace(workspace);
+    std::thread::spawn(|| {
+        let _ = current_tools();
+    });
+}
+
 pub fn shutdown_all() {
     let mut held = lock_state();
     for slot in held.slots.values() {
@@ -315,6 +331,13 @@ pub fn configured() -> Vec<DoctorRow> {
 pub fn doctor() -> Vec<DoctorRow> {
     let _ = current_tools();
     let slots = slots_now();
+    // A launch connect still running: give it a moment so the row is real.
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < until && slots.values().any(|slot| lock_slot(slot).connecting)
+    {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    requalify(&slots);
     let mut rows = Vec::new();
     for (name, slot) in slots {
         let mut inner = lock_slot(&slot);
@@ -338,6 +361,8 @@ pub fn doctor() -> Vec<DoctorRow> {
         }
         let status = if inner.conn.is_some() && inner.last_error.is_none() {
             "connected"
+        } else if inner.connecting {
+            "connecting"
         } else if inner
             .last_error
             .as_deref()
@@ -613,6 +638,78 @@ pub(crate) fn schema_tools(native: usize) -> Vec<Value> {
         return vec![search_schema(), use_schema()];
     }
     tools.iter().map(one_schema).collect()
+}
+
+/// The MCP schemas each chat was offered, so a server that connects mid-turn
+/// never rewrites the chat's tool list (a full prompt-cache miss). `refresh`
+/// is set at a user-turn boundary, the only time the list may change.
+struct Frozen {
+    schemas: Vec<Value>,
+    refresh: bool,
+}
+
+/// Keep the record small: a long-lived cabin opens many chats.
+const MAX_FROZEN_CHATS: usize = 256;
+
+fn frozen_chats() -> MutexGuard<'static, std::collections::HashMap<String, Frozen>> {
+    static FROZEN: OnceLock<Mutex<std::collections::HashMap<String, Frozen>>> = OnceLock::new();
+    FROZEN
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+}
+
+/// A new user turn in `session`: its next request may take in servers that
+/// connected since, at the end of its MCP tools.
+pub(crate) fn begin_turn(session: &str) {
+    if let Some(chat) = frozen_chats().get_mut(session) {
+        chat.refresh = true;
+    }
+}
+
+/// [`schema_tools`] frozen per chat: the first request's list holds for the
+/// rest of that user turn. At the next turn, tools the chat already had keep
+/// their place, gone ones leave and new ones join at the end. An empty
+/// `session` gets the live list.
+pub(crate) fn chat_schema_tools(session: &str, native: usize) -> Vec<Value> {
+    if session.is_empty() {
+        return schema_tools(native);
+    }
+    if let Some(chat) = frozen_chats().get(session) {
+        if !chat.refresh {
+            return chat.schemas.clone();
+        }
+    }
+    let now = schema_tools(native);
+    let mut chats = frozen_chats();
+    if chats.len() >= MAX_FROZEN_CHATS && !chats.contains_key(session) {
+        chats.clear();
+    }
+    let chat = chats.entry(session.to_string()).or_insert(Frozen {
+        schemas: Vec::new(),
+        refresh: true,
+    });
+    if chat.refresh {
+        chat.schemas = merge_frozen(&chat.schemas, now);
+        chat.refresh = false;
+    }
+    chat.schemas.clone()
+}
+
+/// `old`'s tools that are still offered, in `old`'s order with today's
+/// schema, then the new ones in the order `now` lists them.
+fn merge_frozen(old: &[Value], now: Vec<Value>) -> Vec<Value> {
+    let name = |tool: &Value| tool["name"].as_str().unwrap_or_default().to_string();
+    let mut merged: Vec<Value> = old
+        .iter()
+        .filter_map(|kept| now.iter().find(|tool| name(tool) == name(kept)).cloned())
+        .collect();
+    for tool in now {
+        if !merged.iter().any(|have| name(have) == name(&tool)) {
+            merged.push(tool);
+        }
+    }
+    merged
 }
 
 /// `stop` is the run's Stop / Halt: an egress park waiting on a card gives up
@@ -963,8 +1060,30 @@ fn current_tools() -> Vec<ToolRec> {
         return tools;
     }
     let (slots, workspace) = load_slots();
-    for slot in slots.values() {
-        connect_if_needed(slot, &workspace);
+    let pending: Vec<_> = slots
+        .values()
+        .filter(|slot| {
+            let inner = lock_slot(slot);
+            inner.def.enabled && !inner.tried && inner.conn.is_none()
+        })
+        .collect();
+    // Servers nobody has started connect side by side, so the wait is the
+    // slowest one, not their sum. One a launch connect is still opening is
+    // not waited on.
+    // Tests pin config and Offline only per thread, so they connect in line.
+    let side_by_side = !cfg!(test) && pending.len() > 1;
+    match pending.as_slice() {
+        many if side_by_side => std::thread::scope(|scope| {
+            for slot in many {
+                let workspace = &workspace;
+                scope.spawn(move || connect_if_needed(slot, workspace));
+            }
+        }),
+        each => {
+            for slot in each {
+                connect_if_needed(slot, &workspace);
+            }
+        }
     }
     requalify(&slots);
     flatten(&slots)
@@ -1031,14 +1150,29 @@ fn fingerprint(path: &Path) -> (u64, Option<SystemTime>) {
 }
 
 fn connect_if_needed(slot: &Mutex<SlotInner>, workspace: &Path) {
+    let (name, def, attempt) = {
+        let mut inner = lock_slot(slot);
+        if !inner.def.enabled || inner.tried || inner.conn.is_some() {
+            return;
+        }
+        inner.tried = true;
+        inner.connecting = true;
+        inner.attempt = inner.attempt.wrapping_add(1);
+        (inner.name.clone(), inner.def.clone(), inner.attempt)
+    };
+    // Open without holding the slot: a reader sees no tools from it until it
+    // is up, instead of waiting on a slow server.
+    let opened = open_def(&name, &def, workspace);
     let mut inner = lock_slot(slot);
-    if !inner.def.enabled || inner.tried || inner.conn.is_some() {
+    if inner.attempt != attempt {
         return;
     }
-    inner.tried = true;
-    let name = inner.name.clone();
-    let def = inner.def.clone();
-    match open_def(&name, &def, workspace) {
+    inner.connecting = false;
+    if !inner.tried {
+        // Signed out or restarted while it opened: this connection is stale.
+        return;
+    }
+    match opened {
         Ok((conn, raw)) => {
             inner.raw = raw;
             inner.conn = Some(conn);
@@ -1300,8 +1434,8 @@ fn install_test_recs(tools: Vec<ToolRec>) -> TestGuard {
 #[cfg(test)]
 mod tests {
     use super::{
-        import_documents, install_test_tools, read_mcp_text, schema_tools, search_output,
-        try_dispatch,
+        begin_turn, chat_schema_tools, import_documents, install_test_tools, read_mcp_text,
+        schema_tools, search_output, try_dispatch,
     };
     use crate::gate::{decide, decide_with, mcp_policy_deny, Decision, Gate, PermMode};
     use crate::perm::ConfigGuard;
@@ -1757,6 +1891,39 @@ mod tests {
         let list = listed.iter().find(|t| t.name == "list").unwrap();
         assert_eq!(list.display_name(), "list");
         assert_eq!(list.output_schema, Some(json!({"type": "object"})));
+    }
+
+    #[test]
+    fn a_chats_mcp_tools_hold_for_the_turn_and_new_ones_join_at_the_end() {
+        let names = |tools: &[serde_json::Value]| -> Vec<String> {
+            tools
+                .iter()
+                .map(|tool| tool["name"].as_str().unwrap_or_default().to_string())
+                .collect()
+        };
+        let session = format!("frozen-{}", std::process::id());
+        let first = install_test_tools(&[
+            ("box", "peek", "Peek", true),
+            ("box", "poke", "Poke", false),
+        ]);
+        let turn_one = chat_schema_tools(&session, 0);
+        assert_eq!(names(&turn_one), ["box__peek", "box__poke"]);
+        drop(first);
+        // A server connects mid-turn and one tool goes: the list holds.
+        let _later = install_test_tools(&[
+            ("aaa", "ask", "Ask", true),
+            ("box", "peek", "Peek again", true),
+        ]);
+        assert_eq!(chat_schema_tools(&session, 0), turn_one);
+        // Next user turn: kept tools keep their place, the new one joins last.
+        begin_turn(&session);
+        let turn_two = chat_schema_tools(&session, 0);
+        assert_eq!(names(&turn_two), ["box__peek", "aaa__ask"]);
+        assert!(turn_two[0]["description"]
+            .as_str()
+            .is_some_and(|d| d.contains("Peek again")));
+        // No chat: the live list.
+        assert_eq!(names(&chat_schema_tools("", 0)), ["aaa__ask", "box__peek"]);
     }
 
     #[test]

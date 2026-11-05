@@ -799,6 +799,12 @@ fn small_talk(t: &str, ws: &[&str]) -> bool {
         || (about_you && ws.len() <= 8 && !any_word(ws, SUBJECT_WORDS))
 }
 
+/// "ok", "yes", "do it": a bare go-ahead that carries on the last ask.
+pub fn is_follow_up(text: &str) -> bool {
+    let t = text.trim().to_lowercase();
+    FOLLOW_UPS.contains(&t.trim_end_matches(['.', '!']).trim())
+}
+
 /// The rules' Brief, or `None` when they can't tell what the ask is.
 pub fn rules(input: &BriefInput<'_>) -> Option<Brief> {
     let t = input.text.trim().to_lowercase();
