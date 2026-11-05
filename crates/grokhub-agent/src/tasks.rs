@@ -170,6 +170,9 @@ impl TaskHub {
         if command.is_empty() {
             return Err("command is required".into());
         }
+        if let Some(why) = crate::tools::shell::too_long(&command) {
+            return Err(why);
+        }
         if self.is_halted() {
             return Err("halted".into());
         }

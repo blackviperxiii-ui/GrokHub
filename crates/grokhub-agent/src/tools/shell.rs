@@ -37,6 +37,26 @@ pub fn schema() -> Value {
     })
 }
 
+/// Linux and macOS pass the command as one argument to bash, and the kernel
+/// caps one argument at 128 KB (`MAX_ARG_STRLEN`). Windows stages a long
+/// command in a script file instead, so it has no cap here.
+#[cfg(unix)]
+const ONE_ARG_MAX: usize = 128 * 1024;
+
+/// A plain refusal for a command too long to start, before the OS gives a
+/// bare "Argument list too long".
+pub(crate) fn too_long(command: &str) -> Option<String> {
+    #[cfg(unix)]
+    if command.len() >= ONE_ARG_MAX {
+        return Some(format!(
+            "This command is {} KB, over the 128 KB one command can carry. Put the long part in a file with the write tool and run that file.",
+            command.len() / 1024
+        ));
+    }
+    let _ = command;
+    None
+}
+
 pub fn run(workspace: &Path, args: &Value, stop: &dyn Fn() -> bool) -> ToolOutput {
     let command = args
         .get("command")
@@ -49,6 +69,9 @@ pub fn run(workspace: &Path, args: &Value, stop: &dyn Fn() -> bool) -> ToolOutpu
     }
     if crate::sudo_pass::names_helper(&command) {
         return ToolOutput::err(*crate::sudo_pass::HELPER_REFUSAL);
+    }
+    if let Some(why) = too_long(&command) {
+        return ToolOutput::err(why);
     }
     let timeout_ms = timeout_ms(args);
     let cwd = match workspace.canonicalize() {
@@ -361,7 +384,69 @@ pub(crate) fn spawn_background(
     Err("shell is not available on this system".into())
 }
 
+/// Windows PowerShell writes a piped stderr as CLIXML (`#< CLIXML` then
+/// XML records). The model and the chat need the error text itself: this
+/// keeps each record's text, decoded, and drops progress records. Any other
+/// stderr comes back as it was.
+fn plain_stderr(stderr: Vec<u8>) -> Vec<u8> {
+    let text = String::from_utf8_lossy(&stderr);
+    if !text
+        .trim_start_matches('\u{feff}')
+        .trim_start()
+        .starts_with("#< CLIXML")
+    {
+        return stderr;
+    }
+    let mut out = String::new();
+    let mut rest = text.as_ref();
+    while let Some(at) = rest.find("<S S=\"") {
+        rest = &rest[at..];
+        let Some(open_end) = rest.find('>') else {
+            break;
+        };
+        let Some(close) = rest[open_end..].find("</S>") else {
+            break;
+        };
+        out.push_str(&clixml_unescape(&rest[open_end + 1..open_end + close]));
+        rest = &rest[open_end + close + 4..];
+    }
+    out.into_bytes()
+}
+
+/// XML entities, then CLIXML's `_xHHHH_` UTF-16 code units (`_x000D__x000A_`
+/// is a line break; a literal underscore comes as `_x005F_`).
+fn clixml_unescape(raw: &str) -> String {
+    let xml = raw
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&");
+    let mut units: Vec<u16> = Vec::with_capacity(xml.len());
+    let mut i = 0;
+    let bytes = xml.as_bytes();
+    while i < bytes.len() {
+        if bytes[i] == b'_' && i + 7 <= bytes.len() && bytes[i + 1] == b'x' && bytes[i + 6] == b'_'
+        {
+            if let Some(unit) = xml
+                .get(i + 2..i + 6)
+                .and_then(|hex| u16::from_str_radix(hex, 16).ok())
+            {
+                units.push(unit);
+                i += 7;
+                continue;
+            }
+        }
+        let ch = xml[i..].chars().next().unwrap_or('\u{fffd}');
+        let mut buf = [0u16; 2];
+        units.extend_from_slice(ch.encode_utf16(&mut buf));
+        i += ch.len_utf8();
+    }
+    String::from_utf16_lossy(&units).replace("\r\n", "\n")
+}
+
 fn merge_output(stdout: Vec<u8>, stderr: Vec<u8>) -> Vec<u8> {
+    let stderr = plain_stderr(stderr);
     if stderr.is_empty() {
         return stdout;
     }
@@ -995,6 +1080,28 @@ mod tests {
         }
         std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
     }
+
+    #[test]
+    fn powershell_clixml_errors_read_as_plain_text() {
+        let raw = "#< CLIXML\r\n<Objs Version=\"1.1.0.1\" xmlns=\"http://schemas.microsoft.com/powershell/2004/04\"><Obj S=\"progress\" RefId=\"0\"><TN RefId=\"0\"><T>System.Management.Automation.PSCustomObject</T></TN><MS><I64 N=\"SourceId\">1</I64></MS></Obj><S S=\"Error\">At line:2 char:17_x000D__x000A_</S><S S=\"Error\">+ echo a &amp;&amp; echo b_x000D__x000A_</S><S S=\"Error\">my_x005F_file h\u{e9}llo &lt;x&gt;_x000D__x000A_</S></Objs>";
+        let plain = String::from_utf8(super::plain_stderr(raw.as_bytes().to_vec())).unwrap();
+        assert_eq!(
+            plain,
+            "At line:2 char:17\n+ echo a && echo b\nmy_file h\u{e9}llo <x>\n"
+        );
+        // Progress alone leaves nothing; ordinary stderr is untouched.
+        let progress =
+            "#< CLIXML\n<Objs Version=\"1.1.0.1\"><Obj S=\"progress\" RefId=\"0\"></Obj></Objs>";
+        assert!(super::plain_stderr(progress.as_bytes().to_vec()).is_empty());
+        assert_eq!(
+            super::plain_stderr(b"oops _x0041_\n".to_vec()),
+            b"oops _x0041_\n".to_vec()
+        );
+        let merged = super::merge_output(b"out".to_vec(), raw.as_bytes().to_vec());
+        assert!(String::from_utf8(merged)
+            .unwrap()
+            .starts_with("out\nAt line:2"));
+    }
 }
 
 #[cfg(windows)]
@@ -1053,7 +1160,7 @@ mod win {
                     return Ok(super::HookProc {
                         exit_code: Some(i32::try_from(code).unwrap_or(1)),
                         stdout: String::from_utf8_lossy(&stdout).into_owned(),
-                        stderr: String::from_utf8_lossy(&stderr).into_owned(),
+                        stderr: String::from_utf8_lossy(&super::plain_stderr(stderr)).into_owned(),
                         timed_out: false,
                     });
                 }
@@ -1065,7 +1172,7 @@ mod win {
         Ok(super::HookProc {
             exit_code: None,
             stdout: String::from_utf8_lossy(&stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&stderr).into_owned(),
+            stderr: String::from_utf8_lossy(&super::plain_stderr(stderr)).into_owned(),
             timed_out: true,
         })
     }
@@ -1265,10 +1372,7 @@ mod win {
                 hide_inherit(child.stderr_read)?;
                 hide_inherit(child.stdin_write)?;
                 let exe = powershell_exe();
-                let encoded = encode_ps(command);
-                let mut cmdline = wide(&format!(
-                    "\"{exe}\" -NoProfile -NonInteractive -EncodedCommand {encoded}"
-                ));
+                let mut cmdline = wide(&ps_command_line(&exe, command, env)?);
                 let app = wide(&exe);
                 let dir = wide(&super::plain_dir(&cwd.display().to_string()));
                 let mut si: STARTUPINFOW = std::mem::zeroed();
@@ -1477,6 +1581,55 @@ mod win {
         format!(r"{root}\System32\WindowsPowerShell\v1.0\powershell.exe")
     }
 
+    /// Opens every agent and hook script: UTF-8 in and out, so text that
+    /// isn't ASCII survives the pipes (Windows PowerShell 5.1 otherwise uses
+    /// the console's OEM code page and the output decodes as `?`), and no
+    /// progress records, which reach a piped stderr as CLIXML noise. Plain
+    /// .NET calls, so no module loads for it. On a line of its own, so an
+    /// error shows the command's whole line and the right column. Each
+    /// switch is tried on its own, so one that fails leaves the others.
+    pub(super) const PS_PRELUDE: &str = "$GrokHubUtf8 = [System.Text.UTF8Encoding]::new($false); $OutputEncoding = $GrokHubUtf8; $ProgressPreference = 'SilentlyContinue'; try { [Console]::OutputEncoding = $GrokHubUtf8 } catch {}; try { [Console]::InputEncoding = $GrokHubUtf8 } catch {}\n";
+    /// CreateProcess takes 32,767 UTF-16 units for the whole command line.
+    pub(super) const CMDLINE_MAX: usize = 32_000;
+
+    /// The PowerShell command line for `command`. A command whose encoded
+    /// form won't fit one command line (about 12,000 characters) goes to a
+    /// script file that a short bootstrap reads, deletes and runs in the same
+    /// scope, instead of failing to start.
+    pub(super) fn ps_command_line(
+        exe: &str,
+        command: &str,
+        env: &[(String, String)],
+    ) -> Result<String, String> {
+        let line = |script: &str| {
+            format!(
+                "\"{exe}\" -NoProfile -NonInteractive -EncodedCommand {}",
+                encode_ps(&format!("{PS_PRELUDE}{script}"))
+            )
+        };
+        let direct = line(command);
+        if direct.len() <= CMDLINE_MAX {
+            return Ok(direct);
+        }
+        let dir = env
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("TEMP"))
+            .map(|(_, v)| std::path::PathBuf::from(v))
+            .unwrap_or_else(std::env::temp_dir);
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let path = dir.join(format!(
+            "grokhub-cmd-{}-{}.ps1",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::write(&path, command.as_bytes())
+            .map_err(|err| format!("could not stage a long command: {err}"))?;
+        let quoted = path.display().to_string().replace('\'', "''");
+        Ok(line(&format!(
+            "$p = '{quoted}'; $s = [IO.File]::ReadAllText($p); try {{ [IO.File]::Delete($p) }} catch {{}}; . ([scriptblock]::Create($s))"
+        )))
+    }
+
     fn encode_ps(script: &str) -> String {
         let bytes: Vec<u8> = script
             .encode_utf16()
@@ -1607,10 +1760,7 @@ mod win {
             hide_inherit(guard.stderr_read)?;
             hide_inherit(guard.stdin_write)?;
             let exe = powershell_exe();
-            let encoded = encode_ps(command);
-            let mut cmdline = wide(&format!(
-                "\"{exe}\" -NoProfile -NonInteractive -EncodedCommand {encoded}"
-            ));
+            let mut cmdline = wide(&ps_command_line(&exe, command, env)?);
             let app = wide(&exe);
             let dir = wide(&super::plain_dir(&cwd.display().to_string()));
             let mut si: STARTUPINFOW = std::mem::zeroed();

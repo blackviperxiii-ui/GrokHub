@@ -105,17 +105,18 @@ impl StdioConn {
         &mut self,
         name: &str,
         args: &Value,
+        key: Option<&str>,
         timeout: Duration,
     ) -> Result<(String, bool), String> {
         if self.stateless.is_some() {
             let server = self.server.clone();
             return rpc::call_tool(&server, name, args, &mut |params| {
-                self.roundtrip("tools/call", params, timeout)
+                self.roundtrip("tools/call", rpc::with_key(params, key), timeout)
             });
         }
         let result = self.roundtrip(
             "tools/call",
-            serde_json::json!({"name": name, "arguments": args}),
+            rpc::with_key(serde_json::json!({"name": name, "arguments": args}), key),
             timeout,
         )?;
         Ok(rpc::tool_output(&result))

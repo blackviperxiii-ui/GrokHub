@@ -437,6 +437,30 @@ pub(crate) fn initialize_params() -> Value {
     })
 }
 
+/// The `_meta` field that carries an idempotency key on `tools/call`.
+pub(crate) const IDEMPOTENCY_META: &str = "idempotency-key";
+
+/// `params` with `key` in its `_meta`, so a server (or a proxy in front of
+/// it) that honors idempotency keys runs a resent call once. `None` leaves
+/// `params` as it is.
+pub(crate) fn with_key(params: Value, key: Option<&str>) -> Value {
+    let Some(key) = key else {
+        return params;
+    };
+    let mut params = match params {
+        Value::Object(map) => map,
+        _ => serde_json::Map::new(),
+    };
+    let meta = params.entry("_meta").or_insert_with(|| json!({}));
+    if !meta.is_object() {
+        *meta = json!({});
+    }
+    if let Some(meta) = meta.as_object_mut() {
+        meta.insert(IDEMPOTENCY_META.into(), json!(key));
+    }
+    Value::Object(params)
+}
+
 /// `params` with the stateless era's per-request `_meta`: the version, the
 /// client's capabilities (required) and its name (recommended). Keys the
 /// caller already put in `_meta` stay.
@@ -654,6 +678,20 @@ mod tests {
             Ok(Era::Session)
         );
         assert_eq!(era(None), Ok(Era::Session));
+    }
+
+    #[test]
+    fn a_key_rides_in_meta_and_survives_the_per_request_fields() {
+        let keyed = with_key(json!({"name": "send", "arguments": {}}), Some("k1"));
+        assert_eq!(keyed["_meta"][IDEMPOTENCY_META], "k1");
+        let both = with_meta(keyed, "2026-07-28");
+        assert_eq!(both["_meta"][IDEMPOTENCY_META], "k1");
+        assert_eq!(
+            both["_meta"]["io.modelcontextprotocol/protocolVersion"],
+            "2026-07-28"
+        );
+        let plain = json!({"name": "read", "arguments": {}});
+        assert_eq!(with_key(plain.clone(), None), plain);
     }
 
     #[test]

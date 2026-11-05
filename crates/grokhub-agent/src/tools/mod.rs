@@ -439,6 +439,9 @@ pub fn u32_field(v: &Value, key: &str) -> Option<u32> {
 }
 
 #[cfg(test)]
+mod arg_roundtrip_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
