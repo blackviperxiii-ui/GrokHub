@@ -49,6 +49,7 @@ const EXITS: &[&str] = &[
     "UdpSocket::bind(",
     "tungstenite::client(",
     "tungstenite::connect(",
+    "tungstenite::client_tls_with_config(",
     "Invoke-WebRequest",
     "Command::new(\"curl",
     "Command::new(\"wget",
@@ -69,6 +70,7 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("crates/grokhub-core/src/http.rs", 1, "agent factory (LU-12, ureq 3): no guard of its own; each caller below runs its guard first, and public_only dials public_only_resolve (refuses all while on)"),
     // Model providers.
     ("crates/grokhub-agent/src/client.rs", 1, "XaiClient::once: egress guard (api.x.ai); a refusal is Protocol, never retried"),
+    ("crates/grokhub-agent/src/ws_mode.rs", 2, "WsPool::turn (TCP connect, then the WebSocket upgrade): XaiClient::over_socket runs the egress guard (api.x.ai) first; a refusal is Protocol, never retried"),
     ("crates/grokhub-agent/src/route/providers.rs", 1, "providers you added: guard_provider / provider_or_park"),
     ("crates/grokhub-app/src/xai.rs", 1, "cabin Grok calls (STT, TTS, Imagine): egress_ok"),
     // Model registry, probes, connectivity.

@@ -626,7 +626,7 @@ pub fn input_wire_len(items: &[InputItem]) -> usize {
 
 /// The `input` list for `model`. A sealed reasoning item goes only to the model
 /// that wrote it; `None` keeps every one (size estimates).
-fn input_wire(items: &[InputItem], model: Option<&str>) -> (Vec<Value>, bool) {
+pub(crate) fn input_wire(items: &[InputItem], model: Option<&str>) -> (Vec<Value>, bool) {
     let mut input = Vec::new();
     let mut has_image = false;
     for item in items {
@@ -880,6 +880,9 @@ pub struct XaiClient {
     compact_key_refused: AtomicBool,
     /// The base idle clock for a stream; see [`idle_for`].
     idle: Duration,
+    /// WebSocket mode's sockets (`ws_mode`), for api.x.ai or a loopback test
+    /// server; `None` for a plain loopback client.
+    ws: Option<crate::ws_mode::WsPool>,
 }
 
 /// One Batch API call on api.x.ai: the root, or a batch id with `/requests`,
@@ -945,6 +948,8 @@ impl XaiClient {
             url: RESPONSES_URL.to_string(),
             batch: None,
             compact_key_refused: AtomicBool::new(false),
+            // Unit tests never dial api.x.ai; their sockets are loopback only.
+            ws: (!cfg!(test)).then(|| crate::ws_mode::WsPool::new(crate::ws_mode::WS_URL)),
         }
     }
 
@@ -983,6 +988,19 @@ impl XaiClient {
             return Err(format!("not a loopback URL: {url}"));
         }
         self.url = url.to_string();
+        // A loopback server speaks HTTP only, unless a test adds a socket.
+        self.ws = None;
+        Ok(self)
+    }
+
+    /// Test servers: send turns over a WebSocket at this loopback `ws://` URL
+    /// first, as the real client does to api.x.ai.
+    pub fn with_loopback_ws(mut self, url: &str) -> Result<Self, String> {
+        let http = url.replacen("ws://", "http://", 1);
+        if !url.starts_with("ws://") || !loopback_http(&http) {
+            return Err(format!("not a loopback ws URL: {url}"));
+        }
+        self.ws = Some(crate::ws_mode::WsPool::new(url));
         Ok(self)
     }
 
@@ -1113,6 +1131,16 @@ impl XaiClient {
         if !crate::pace::take(&req.model, cancel) {
             return Err(ClientError::Cancelled);
         }
+        let idle = idle_for(req.effort.as_deref(), self.idle);
+        let wrote = req.model.trim();
+        let wrote = if wrote.is_empty() {
+            DEFAULT_MODEL
+        } else {
+            wrote
+        };
+        if let Some(turn) = self.over_socket(req, &body, wrote, cancel, idle, sink) {
+            return turn;
+        }
         let response = self
             .post_guarded(
                 &self.url,
@@ -1127,20 +1155,60 @@ impl XaiClient {
                 }
             })?;
         crate::pace::note_ok(&req.model);
-        let idle = idle_for(req.effort.as_deref(), self.idle);
         let mut turn = read_sse(response.into_reader(), cancel, idle, sink)?;
-        let wrote = req.model.trim();
-        let wrote = if wrote.is_empty() {
-            DEFAULT_MODEL
-        } else {
-            wrote
-        };
         for item in &mut turn.reasoning_items {
             if let InputItem::Reasoning { model, .. } = item {
                 *model = wrote.to_string();
             }
         }
         Ok(turn)
+    }
+
+    /// WebSocket mode first, when it's on: `None` hands the call to HTTP.
+    fn over_socket(
+        &self,
+        req: &ResponsesRequest,
+        body: &Value,
+        wrote: &str,
+        cancel: &CancelToken,
+        idle: Duration,
+        sink: &mut dyn FnMut(StreamEvent),
+    ) -> Option<Result<TurnOutput, ClientError>> {
+        let pool = self.ws.as_ref()?;
+        let config_dir = crate::perm::config_dir();
+        if !crate::ws_mode::enabled_at(&config_dir) {
+            return None;
+        }
+        // The same EgressGuard as HTTP, for the same endpoint.
+        let data = [DataClass::Chat, DataClass::Personal];
+        let egress = guard_egress(&config_dir, &EgressReq::new(&self.url, &data));
+        if let GateOutcome::Park { reason, .. } | GateOutcome::Refuse { reason } = egress {
+            return Some(Err(ClientError::Protocol(reason)));
+        }
+        let turn = pool.turn(
+            &self.bearer,
+            self.auth_kind,
+            &req.conversation_id,
+            body,
+            wrote,
+            cancel,
+            idle,
+            sink,
+        );
+        match turn {
+            crate::ws_mode::WsTurn::Done(turn) => {
+                grokhub_core::connectivity::note_global_transport_success(grokhub_core::now_ms());
+                crate::pace::note_ok(&req.model);
+                Some(Ok(turn))
+            }
+            crate::ws_mode::WsTurn::Failed(err) => {
+                if matches!(err, ClientError::RateLimited { .. }) {
+                    crate::pace::note_limited(&req.model);
+                }
+                Some(Err(err))
+            }
+            crate::ws_mode::WsTurn::Http => None,
+        }
     }
 
     fn compact_once(
@@ -1616,7 +1684,7 @@ fn read_sse(
     Ok(out)
 }
 
-fn fold_events(
+pub(crate) fn fold_events(
     events: Vec<SseEvent>,
     sink: &mut dyn FnMut(StreamEvent),
     out: &mut TurnOutput,
