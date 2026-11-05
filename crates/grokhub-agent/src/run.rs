@@ -556,6 +556,10 @@ fn run_turn(
         volatile_intentions,
     );
     crate::prefix_cache::push_user_turn(history, &volatile, user_text, image);
+    // Item 31: the Auto judge weighs each call against the person's own asks.
+    if input.depth == 0 {
+        crate::auto_review::note_ask(input.conversation_id, user_text);
+    }
     if crate::prefix_cache::old_notes(&config_dir) == crate::prefix_cache::OldNotes::EveryTurn {
         crate::prefix_cache::drop_older_notes(history);
     }
@@ -1094,6 +1098,7 @@ fn run_turn(
                 return finish(input, StopReason::EndTurn, usage, compacted_once, true);
             }
             for note in notes {
+                note_steer(input, &note);
                 history.push(user_message(&note, None));
             }
             continue;
@@ -1470,8 +1475,16 @@ fn run_turn(
             on_event(LoopEvent::Text(format!("\n\n{note}\n\n")));
         }
         for note in input.steer.drain() {
+            note_steer(input, &note);
             history.push(user_message(&note, None));
         }
+    }
+}
+
+/// A steer is the person's own words mid-run, so the Auto judge keeps it as an ask.
+fn note_steer(input: &LoopIn<'_>, note: &str) {
+    if input.depth == 0 {
+        crate::auto_review::note_ask(input.conversation_id, note);
     }
 }
 
