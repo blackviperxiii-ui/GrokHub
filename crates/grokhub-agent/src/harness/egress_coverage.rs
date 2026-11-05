@@ -45,6 +45,7 @@ const BUILDERS: &[&str] = &[
     "http::agent(",
     "tungstenite::client(",
     "tungstenite::connect(",
+    "tungstenite::client_tls_with_config(",
 ];
 
 /// `(path under crates/, builders in it, the guard in front of them)`.
@@ -53,6 +54,7 @@ const WRAPPED: &[(&str, usize, &str)] = &[
     ("grokhub-core/src/connectivity.rs", 1, "default_http_client: the connectivity re-probe (HEAD to the xAI models URL, no user data; run_probe_if_due sends nothing while Offline only is on) and the net log speed test (offline::refuse first)"),
     ("grokhub-core/src/game_watch_league.rs", 1, "RiotLoopback: League's live client API on 127.0.0.1 only (loopback_self_signed: loopback-only resolver, https only, no redirects); no egress line (on-device)"),
     ("grokhub-agent/src/client.rs", 1, "XaiClient::post_guarded (turns, /v1/responses/compact, Batch API submits): XAI_MODEL_ENDPOINTS or batch_url + guard_egress (chat, personal) to api.x.ai; get_guarded (Batch API status and results): batch_url + guard_egress (no user data), same agent"),
+    ("grokhub-agent/src/ws_mode.rs", 1, "WsPool::turn's socket (WebSocket mode): only XaiClient::over_socket calls it, after guard_egress (chat, personal) for the same endpoint; api.x.ai, or a loopback ws URL in tests"),
     ("grokhub-agent/src/mcp/http.rs", 1, "connect / ping: guard_quiet (no user data); call: guard_or_park"),
     ("grokhub-agent/src/route/providers.rs", 1, "ProviderSource::fetch / call_model: guard_provider / provider_or_park (your grant, else a hard send card)"),
     ("grokhub-agent/src/route/local_http.rs", 2, "HttpLocalRuntime: loopback-only chat/completions and the /props window lookup; no egress line (on-device)"),

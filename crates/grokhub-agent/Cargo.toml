@@ -39,6 +39,9 @@ libc = "0.2.189"
 # the same rustls and roots ureq already builds.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 webpki-roots = "1"
+# xAI WebSocket mode (ws_mode.rs): the same crate and features the app uses,
+# with the rustls/ring/webpki config built here.
+tungstenite = { version = "0.30", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring", "pem"] }
 
 [target.'cfg(windows)'.dependencies]

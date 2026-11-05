@@ -55,6 +55,7 @@ pub mod timing;
 pub mod tokens;
 mod tools;
 mod unattended;
+mod ws_mode;
 
 pub use client::{
     map_http_status, request_headers, responses_body, AuthKind, CancelToken, ClientError,
