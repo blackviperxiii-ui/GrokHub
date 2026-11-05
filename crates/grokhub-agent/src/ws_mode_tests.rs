@@ -567,3 +567,107 @@ fn a_socket_the_server_closed_between_turns_reopens_cleanly() {
         got[1].1
     );
 }
+
+/// A reply `id` that asks for one `read_file` call.
+fn wants_read(id: &str, call_id: &str, file: &str) -> Answer {
+    let item = json!({
+        "type": "function_call",
+        "call_id": call_id,
+        "name": "read_file",
+        "arguments": json!({"target_file": file}).to_string(),
+    });
+    Answer::Events(vec![
+        json!({"type": "response.created", "response": {"id": id}}),
+        json!({"type": "response.output_item.done", "item": item}),
+        json!({"type": "response.completed", "response": {"id": id,
+            "usage": {"input_tokens": 10, "output_tokens": 2}, "output": [item]}}),
+    ])
+}
+
+/// Round 3 item 30: the real run loop over a socket chains every step. Two
+/// tool steps and a final answer go out on one socket, steps 2 and 3 name the
+/// step before them and carry only the new tool output.
+#[test]
+fn the_run_loop_chains_each_tool_step_on_the_socket() {
+    let srv = server(|seq, _| match seq {
+        0 => wants_read("resp_0", "c1", "one.txt"),
+        1 => wants_read("resp_1", "c2", "two.txt"),
+        _ => reply(&format!("resp_{seq}"), "all done"),
+    });
+    // Side calls (a judge, a close check) go over HTTP, to a closed port.
+    let client = crate::XaiClient::new("test-bearer", AuthKind::ApiKey, Duration::from_secs(5))
+        .with_loopback_url("http://127.0.0.1:9/v1/responses")
+        .unwrap()
+        .with_loopback_ws(&srv.url)
+        .unwrap();
+    let ws = std::env::temp_dir().join(format!("gh-ws-loop-{}", std::process::id()));
+    std::fs::create_dir_all(&ws).unwrap();
+    std::fs::write(ws.join("one.txt"), "first file says ALPHA").unwrap();
+    std::fs::write(ws.join("two.txt"), "second file says BRAVO").unwrap();
+    struct Never;
+    impl crate::HaltCheck for Never {
+        fn halted(&self) -> bool {
+            false
+        }
+    }
+    let chat = format!("ws-loop-{}", std::process::id());
+    let input = crate::LoopIn {
+        client: &client,
+        workspace: &ws,
+        model: "grok-test",
+        effort: None,
+        system: "",
+        conversation_id: &chat,
+        max_turns: 6,
+        usage_base: crate::Usage::default(),
+        cancel: &CancelToken::new(),
+        steer: &crate::SteerQueue::new(),
+        halt: &Never,
+        gate: crate::gate::Gate {
+            mode: crate::gate::PermMode::Always,
+            readonly_session: false,
+            attended: true,
+            desktop: false,
+        },
+        desktop: None,
+        permits: &crate::gate::ClosedPermits,
+        perms: None,
+        context_length: 0,
+        tasks: None,
+        depth: 0,
+        agent_id: None,
+        shared_client: None,
+        shared_permits: None,
+        shared_desktop: None,
+    };
+    let mut history = Vec::new();
+    let mut text = String::new();
+    let out = crate::run_loop(&input, &mut history, "read both files", None, &mut |ev| {
+        if let crate::LoopEvent::Text(t) = ev {
+            text.push_str(&t);
+        }
+    });
+    assert_eq!(out.stop, crate::StopReason::EndTurn, "{text}");
+    assert!(text.contains("all done"), "{text}");
+
+    let got = srv.got();
+    assert_eq!(got.len(), 3, "{got:?}");
+    assert!(
+        got.iter().all(|(socket, _)| *socket == got[0].0),
+        "one socket"
+    );
+    assert!(got[0].1.get("previous_response_id").is_none());
+    for (step, prev, call, word) in [(1, "resp_0", "c1", "ALPHA"), (2, "resp_1", "c2", "BRAVO")] {
+        let m = &got[step].1;
+        assert_eq!(m["previous_response_id"], prev, "step {step}: {m}");
+        let items = m["input"].as_array().unwrap();
+        assert!(
+            items.iter().all(|i| i["type"] == "function_call_output"),
+            "step {step} carries only the new tool output: {m}"
+        );
+        assert_eq!(items.len(), 1, "step {step}: {m}");
+        assert_eq!(items[0]["call_id"], call);
+        assert!(items[0]["output"].to_string().contains(word), "{m}");
+    }
+    let _ = std::fs::remove_dir_all(&ws);
+}
