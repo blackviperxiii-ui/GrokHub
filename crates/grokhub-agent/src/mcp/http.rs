@@ -141,6 +141,7 @@ impl HttpConn {
         &mut self,
         name: &str,
         args: &Value,
+        key: Option<&str>,
         timeout: Duration,
         stop: &dyn Fn() -> bool,
     ) -> Result<(String, bool), String> {
@@ -153,12 +154,12 @@ impl HttpConn {
         if self.stateless {
             let server = self.server.clone();
             return rpc::call_tool(&server, name, args, &mut |params| {
-                self.roundtrip("tools/call", params, timeout)
+                self.roundtrip("tools/call", rpc::with_key(params, key), timeout)
             });
         }
         let result = self.roundtrip(
             "tools/call",
-            json!({"name": name, "arguments": args}),
+            rpc::with_key(json!({"name": name, "arguments": args}), key),
             timeout,
         )?;
         Ok(rpc::tool_output(&result))
@@ -1031,7 +1032,7 @@ pub(crate) mod tests {
         let args = json!({"note": format!("remember: {MEMORY}")});
         let deny = hx::answer_next_park(dir.clone(), false);
         let err = c
-            .call("echo", &args, Duration::from_secs(5), &|| false)
+            .call("echo", &args, None, Duration::from_secs(5), &|| false)
             .unwrap_err();
         let card = deny.join().unwrap().expect("a hard card was posted");
         assert_eq!((card.path.as_str(), card.class.as_str()), ("E", "send"));
@@ -1047,7 +1048,7 @@ pub(crate) mod tests {
 
         let approve = hx::answer_next_park(dir.clone(), true);
         let (text, failed) = c
-            .call("echo", &args, Duration::from_secs(5), &|| false)
+            .call("echo", &args, None, Duration::from_secs(5), &|| false)
             .unwrap();
         assert!(approve.join().unwrap().is_some());
         assert_eq!((text.as_str(), failed), ("counted", false));
@@ -1086,7 +1087,7 @@ pub(crate) mod tests {
         // Nobody answers the card; Stop is already pressed.
         let started = std::time::Instant::now();
         let err = c
-            .call("echo", &args, Duration::from_secs(5), &|| true)
+            .call("echo", &args, None, Duration::from_secs(5), &|| true)
             .unwrap_err();
         assert!(
             started.elapsed() < Duration::from_secs(10),
@@ -1142,7 +1143,7 @@ pub(crate) mod tests {
         let mut c = conn(&server);
         let args = json!({"q": "weather sk-abcdefghijklmnopqrstuv"});
         let (text, _) = c
-            .call("echo", &args, Duration::from_secs(5), &|| false)
+            .call("echo", &args, None, Duration::from_secs(5), &|| false)
             .unwrap();
         assert_eq!(text, "counted");
         assert_eq!(server.calls.load(Ordering::SeqCst), 1);
@@ -1201,7 +1202,7 @@ pub(crate) mod tests {
         let server = Counting::answering("2025-11-25");
         let (mut c, _) = connect_to(&server).unwrap();
         assert_eq!(c.protocol, Some("2025-11-25"));
-        c.call("echo", &json!({}), Duration::from_secs(5), &|| false)
+        c.call("echo", &json!({}), None, Duration::from_secs(5), &|| false)
             .unwrap();
         c.ping(Duration::from_secs(5)).unwrap();
         let v = Some("2025-11-25".to_string());
@@ -1234,7 +1235,7 @@ pub(crate) mod tests {
         let (mut c, tools) = connect_to(&server).unwrap();
         assert_eq!(tools.len(), 1);
         assert_eq!(c.protocol, Some("2025-03-26"));
-        c.call("echo", &json!({}), Duration::from_secs(5), &|| false)
+        c.call("echo", &json!({}), None, Duration::from_secs(5), &|| false)
             .unwrap();
         let headers: Vec<Option<String>> = seen(&server).into_iter().map(|(_, v)| v).collect();
         let old = Some("2025-03-26".to_string());
@@ -1277,7 +1278,13 @@ pub(crate) mod tests {
         assert_eq!(tools.len(), 1);
         assert_eq!((c.protocol, c.stateless), (Some("2026-07-28"), true));
         let (text, failed) = c
-            .call("echo", &json!({"q": 1}), Duration::from_secs(5), &|| false)
+            .call(
+                "echo",
+                &json!({"q": 1}),
+                None,
+                Duration::from_secs(5),
+                &|| false,
+            )
             .unwrap();
         assert_eq!((text.as_str(), failed), ("counted", false));
         c.ping(Duration::from_secs(5)).unwrap();
@@ -1346,6 +1353,7 @@ pub(crate) mod tests {
         c.call(
             "execute_sql",
             &json!({"region": "us-west1", "query": "SELECT * FROM users"}),
+            None,
             Duration::from_secs(5),
             &|| false,
         )
@@ -1353,6 +1361,7 @@ pub(crate) mod tests {
         c.call(
             "execute_sql",
             &json!({"region": "Zürich"}),
+            None,
             Duration::from_secs(5),
             &|| false,
         )
@@ -1360,6 +1369,7 @@ pub(crate) mod tests {
         c.call(
             "echo",
             &json!({"region": "x"}),
+            None,
             Duration::from_secs(5),
             &|| false,
         )
@@ -1394,6 +1404,7 @@ pub(crate) mod tests {
             .call(
                 "echo",
                 &json!({"ask": true}),
+                None,
                 Duration::from_secs(5),
                 &|| false,
             )
@@ -1414,9 +1425,13 @@ pub(crate) mod tests {
         assert_eq!(calls[1]["params"]["arguments"], json!({"ask": true}));
         assert_ne!(calls[0]["id"], calls[1]["id"], "a retry is a new request");
         let err = c
-            .call("echo", &json!({"odd": 1}), Duration::from_secs(5), &|| {
-                false
-            })
+            .call(
+                "echo",
+                &json!({"odd": 1}),
+                None,
+                Duration::from_secs(5),
+                &|| false,
+            )
             .unwrap_err();
         assert_eq!(err, "MCP server `box` sent a result of type partial");
         let _ = std::fs::remove_dir_all(dir);

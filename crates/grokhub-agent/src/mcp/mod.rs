@@ -6,6 +6,7 @@ mod config;
 mod elicit;
 mod headers;
 mod http;
+mod idem;
 mod names;
 mod oauth;
 mod rpc;
@@ -223,12 +224,13 @@ impl Conn {
         &mut self,
         name: &str,
         args: &Value,
+        key: Option<&str>,
         timeout: std::time::Duration,
         stop: &dyn Fn() -> bool,
     ) -> Result<(String, bool), String> {
         match self {
-            Conn::Stdio(conn) => conn.call(name, args, timeout),
-            Conn::Http(conn) => conn.call(name, args, timeout, stop),
+            Conn::Stdio(conn) => conn.call(name, args, key, timeout),
+            Conn::Http(conn) => conn.call(name, args, key, timeout, stop),
         }
     }
 
@@ -955,7 +957,20 @@ fn call_qualified(rec: &ToolRec, args: &Value, stop: &dyn Fn() -> bool) -> ToolO
             None => ToolOutput::err(format!("MCP server `{}` stopped", rec.server)),
         };
     };
-    match conn.call(&rec.raw, args, timeout, stop) {
+    // Item 24: a call that can change things carries an idempotency key,
+    // the same one when it is resent after an answer that never came.
+    let keyed = idem::needs_key(&rec.hints).then(|| idem::fingerprint(&rec.server, &rec.raw, args));
+    let key = keyed.as_deref().map(idem::begin);
+    let result = conn.call(&rec.raw, args, key.as_deref(), timeout, stop);
+    if let Some(print) = &keyed {
+        idem::end(
+            print,
+            result
+                .as_ref()
+                .map_or_else(|err| !idem::maybe_ran(err), |_| true),
+        );
+    }
+    match result {
         Ok((text, true)) => fenced_error(&text),
         Ok((text, false)) => ToolOutput::ok(fence::fence("mcp", &text)),
         Err(err) => {
@@ -966,7 +981,11 @@ fn call_qualified(rec: &ToolRec, args: &Value, stop: &dyn Fn() -> bool) -> ToolO
             if http::is_unauthorized(&err) {
                 inner.tried = false;
             }
-            fenced_error(&err)
+            let mut out = fenced_error(&err);
+            if keyed.is_some() && idem::maybe_ran(&err) {
+                out.text.push_str(idem::MAYBE_RAN);
+            }
+            out
         }
     }
 }

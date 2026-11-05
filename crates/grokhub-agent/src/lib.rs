@@ -30,6 +30,7 @@ mod pace;
 pub mod perm;
 mod plan_skills;
 pub mod plugins;
+mod post_check;
 mod prefix_cache;
 pub mod prefix_guard;
 mod prompt;

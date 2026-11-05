@@ -567,6 +567,9 @@ pub fn run_loop(
     let mut drive = (input.depth == 0 && !plan_at_start && !input.conversation_id.is_empty())
         .then(|| crate::drive::Drive::new(&crate::session_tools::todos_for(input.conversation_id)));
     let mut evidence = 0usize;
+    // This run's tool calls, for the checks before the turn ends.
+    let mut ran: Vec<crate::post_check::Ran> = Vec::new();
+    let mut post_checked = false;
     let mut close_continued = false;
     let mut close_steps: Vec<String> = Vec::new();
     let mut close_surfaced = false;
@@ -869,6 +872,15 @@ pub fn run_loop(
         if turn.calls.is_empty() {
             let notes = input.steer.drain();
             if notes.is_empty() {
+                // Item 24: once per run, the reply's totals, test counts and
+                // claimed commits, pushes and edits meet this run's results.
+                if !std::mem::replace(&mut post_checked, true) {
+                    let findings = crate::post_check::check(&last_assistant, &ran);
+                    if let Some(note) = crate::post_check::note(&findings) {
+                        history.push(cabin_note(&note));
+                        continue;
+                    }
+                }
                 let mut drive_blocked = false;
                 if let Some(drive) = drive
                     .as_mut()
@@ -1029,6 +1041,7 @@ pub fn run_loop(
                         &mut repeats,
                         &mut nested_agents,
                         &mut evidence,
+                        &mut ran,
                         &mut fresh,
                         &mut modified_paths,
                         history,
@@ -1256,6 +1269,7 @@ pub fn run_loop(
             if !refused {
                 note_repeat(&mut repeats, call, &output);
             }
+            crate::post_check::note_ran(&mut ran, call, &output);
             if !output.failed && !crate::drive::is_session_tool(&call.name) {
                 evidence += 1;
                 fresh.note(
@@ -1726,6 +1740,7 @@ fn run_readonly_tool_batch(
     repeats: &mut HashMap<String, u32>,
     nested_agents: &mut crate::prompt::NestedAgents,
     evidence: &mut usize,
+    ran: &mut Vec<crate::post_check::Ran>,
     fresh: &mut crate::checkpoint::Fresh,
     modified_paths: &mut Vec<String>,
     history: &mut Vec<InputItem>,
@@ -1859,6 +1874,7 @@ fn run_readonly_tool_batch(
             usage.add(&extra_usage);
             emit_usage(on_event, usage, history, input.context_length);
         }
+        crate::post_check::note_ran(ran, call, &output);
         if !output.failed && !crate::drive::is_session_tool(&call.name) {
             *evidence += 1;
             fresh.note(
@@ -5041,6 +5057,36 @@ mod tests {
                 "scan my computer".to_string(),
                 "Not verified since your last change to notes.txt. Check it (run the tests or build, re-read the file, look at the result) before you finish.".to_string(),
             ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_reply_that_says_the_tests_pass_after_a_red_run_gets_one_note() {
+        let dir = workspace("post-check");
+        let conv = format!("post-check-{}", std::process::id());
+        // Prints a cargo-style summary and fails, in bash and PowerShell alike.
+        let red =
+            r#"{"command":"echo 'test result: FAILED. 3 passed; 1 failed'; exit 1 # cargo test"}"#;
+        let script = scripted(vec![
+            turn("", vec![call("t1", "run_terminal_command", red)]),
+            turn("Done, all tests pass.", Vec::new()),
+            turn("Correction: 1 test still fails.", Vec::new()),
+        ]);
+        let (out, history, _) = run_drive_in(
+            &script,
+            &dir,
+            &conv,
+            chat(gate::PermMode::Always, true, false),
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(script.seen.lock().unwrap().len(), 3);
+        let texts = user_texts(&history);
+        assert_eq!(texts.len(), 2, "{texts:?}");
+        assert!(
+            texts[1].starts_with("Before this turn ends") && texts[1].contains("shows 1 failed"),
+            "{}",
+            texts[1]
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -38,6 +38,8 @@ enum Act {
     Done,
     /// Done, with a `VERIFY_OK` of its own: no detector finding on a reject.
     DoneSelfChecked,
+    /// Done, self-checked, with a sum that doesn't add up.
+    DoneWrongSum,
     Say,
     Shell(&'static str),
     Shot,
@@ -205,6 +207,10 @@ impl ModelClient for FakeModel {
             ),
             Act::Done => ("All set.\nGOAL_COMPLETE".into(), vec![]),
             Act::DoneSelfChecked => ("Saved it.\nVERIFY_OK\nGOAL_COMPLETE".into(), vec![]),
+            Act::DoneWrongSum => (
+                "Cleared 2 + 3 = 6 GB.\nVERIFY_OK\nGOAL_COMPLETE".into(),
+                vec![],
+            ),
             Act::Say => ("Which network should I pick?".into(), vec![]),
             Act::Shell(cmd) => (
                 String::new(),
@@ -1363,6 +1369,39 @@ fn recoveries(spans: &[crate::harness::Span]) -> Vec<(String, String, String)> {
             )
         })
         .collect()
+}
+
+#[test]
+fn a_claim_whose_sum_is_wrong_is_rejected_in_code_without_the_checker() {
+    let mut r = rig(
+        "wrong-sum",
+        Box::new(|n| match n {
+            0 => Act::Click(5),
+            1 => Act::DoneWrongSum,
+            2 => Act::Click(6),
+            _ => Act::Done,
+        }),
+    );
+    r.model.judge_says = "VERIFY_OK";
+    let mut ep = r.episode("Clear the two cache folders");
+    let out = r.run(&mut ep, &mut EpisodeView::default());
+    assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    let spans = r.spans();
+    let checks: Vec<(&str, &str)> = spans
+        .iter()
+        .filter(|s| s.tool == VERIFY_TOOL)
+        .map(|s| (s.result.as_str(), s.claim.as_str()))
+        .collect();
+    assert_eq!(checks.len(), 2);
+    assert_eq!(checks[0].0, "fail");
+    assert!(
+        checks[0].1.contains("2 + 3 = 6") && checks[0].1.contains("comes to 5"),
+        "{}",
+        checks[0].1
+    );
+    assert_eq!(checks[1].0, "pass");
+    // Only the second claim needed the checker's call.
+    assert_eq!(r.model.judge_calls.lock().unwrap().len(), 1);
 }
 
 #[test]

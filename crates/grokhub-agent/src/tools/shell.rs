@@ -37,6 +37,26 @@ pub fn schema() -> Value {
     })
 }
 
+/// Linux and macOS pass the command as one argument to bash, and the kernel
+/// caps one argument at 128 KB (`MAX_ARG_STRLEN`). Windows stages a long
+/// command in a script file instead, so it has no cap here.
+#[cfg(unix)]
+const ONE_ARG_MAX: usize = 128 * 1024;
+
+/// A plain refusal for a command too long to start, before the OS gives a
+/// bare "Argument list too long".
+pub(crate) fn too_long(command: &str) -> Option<String> {
+    #[cfg(unix)]
+    if command.len() >= ONE_ARG_MAX {
+        return Some(format!(
+            "This command is {} KB, over the 128 KB one command can carry. Put the long part in a file with the write tool and run that file.",
+            command.len() / 1024
+        ));
+    }
+    let _ = command;
+    None
+}
+
 pub fn run(workspace: &Path, args: &Value, stop: &dyn Fn() -> bool) -> ToolOutput {
     let command = args
         .get("command")
@@ -49,6 +69,9 @@ pub fn run(workspace: &Path, args: &Value, stop: &dyn Fn() -> bool) -> ToolOutpu
     }
     if crate::sudo_pass::names_helper(&command) {
         return ToolOutput::err(*crate::sudo_pass::HELPER_REFUSAL);
+    }
+    if let Some(why) = too_long(&command) {
+        return ToolOutput::err(why);
     }
     let timeout_ms = timeout_ms(args);
     let cwd = match workspace.canonicalize() {
@@ -1265,10 +1288,7 @@ mod win {
                 hide_inherit(child.stderr_read)?;
                 hide_inherit(child.stdin_write)?;
                 let exe = powershell_exe();
-                let encoded = encode_ps(command);
-                let mut cmdline = wide(&format!(
-                    "\"{exe}\" -NoProfile -NonInteractive -EncodedCommand {encoded}"
-                ));
+                let mut cmdline = wide(&ps_command_line(&exe, command, env)?);
                 let app = wide(&exe);
                 let dir = wide(&super::plain_dir(&cwd.display().to_string()));
                 let mut si: STARTUPINFOW = std::mem::zeroed();
@@ -1477,6 +1497,53 @@ mod win {
         format!(r"{root}\System32\WindowsPowerShell\v1.0\powershell.exe")
     }
 
+    /// Opens every agent and hook script: UTF-8 in and out, so text that
+    /// isn't ASCII survives the pipes (Windows PowerShell 5.1 otherwise uses
+    /// the console's OEM code page and the output decodes as `?`). On the
+    /// first line, so error line numbers still match the command's own. Each
+    /// switch is tried on its own, so one that fails leaves the others.
+    pub(super) const PS_PRELUDE: &str = "$GrokHubUtf8 = New-Object System.Text.UTF8Encoding $false; $OutputEncoding = $GrokHubUtf8; try { [Console]::OutputEncoding = $GrokHubUtf8 } catch {}; try { [Console]::InputEncoding = $GrokHubUtf8 } catch {}; ";
+    /// CreateProcess takes 32,767 UTF-16 units for the whole command line.
+    pub(super) const CMDLINE_MAX: usize = 32_000;
+
+    /// The PowerShell command line for `command`. A command whose encoded
+    /// form won't fit one command line (about 12,000 characters) goes to a
+    /// script file that a short bootstrap reads, deletes and runs in the same
+    /// scope, instead of failing to start.
+    pub(super) fn ps_command_line(
+        exe: &str,
+        command: &str,
+        env: &[(String, String)],
+    ) -> Result<String, String> {
+        let line = |script: &str| {
+            format!(
+                "\"{exe}\" -NoProfile -NonInteractive -EncodedCommand {}",
+                encode_ps(&format!("{PS_PRELUDE}{script}"))
+            )
+        };
+        let direct = line(command);
+        if direct.len() <= CMDLINE_MAX {
+            return Ok(direct);
+        }
+        let dir = env
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("TEMP"))
+            .map(|(_, v)| std::path::PathBuf::from(v))
+            .unwrap_or_else(std::env::temp_dir);
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let path = dir.join(format!(
+            "grokhub-cmd-{}-{}.ps1",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::write(&path, command.as_bytes())
+            .map_err(|err| format!("could not stage a long command: {err}"))?;
+        let quoted = path.display().to_string().replace('\'', "''");
+        Ok(line(&format!(
+            "$p = '{quoted}'; $s = [IO.File]::ReadAllText($p); Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue; . ([scriptblock]::Create($s))"
+        )))
+    }
+
     fn encode_ps(script: &str) -> String {
         let bytes: Vec<u8> = script
             .encode_utf16()
@@ -1607,10 +1674,7 @@ mod win {
             hide_inherit(guard.stderr_read)?;
             hide_inherit(guard.stdin_write)?;
             let exe = powershell_exe();
-            let encoded = encode_ps(command);
-            let mut cmdline = wide(&format!(
-                "\"{exe}\" -NoProfile -NonInteractive -EncodedCommand {encoded}"
-            ));
+            let mut cmdline = wide(&ps_command_line(&exe, command, env)?);
             let app = wide(&exe);
             let dir = wide(&super::plain_dir(&cwd.display().to_string()));
             let mut si: STARTUPINFOW = std::mem::zeroed();
