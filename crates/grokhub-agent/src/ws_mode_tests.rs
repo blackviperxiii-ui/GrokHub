@@ -17,6 +17,8 @@ enum Answer {
     Events(Vec<Value>),
     /// Close the socket without answering.
     Hang,
+    /// Stream these events, then close the socket.
+    EventsThenClose(Vec<Value>),
 }
 
 type Script = dyn Fn(usize, &Value) -> Answer + Send + Sync;
@@ -71,6 +73,14 @@ fn server(script: impl Fn(usize, &Value) -> Answer + Send + Sync + 'static) -> S
                             }
                         }
                         Answer::Hang => {
+                            let _ = ws.close(None);
+                            let _ = ws.flush();
+                            return;
+                        }
+                        Answer::EventsThenClose(events) => {
+                            for ev in events {
+                                let _ = ws.send(Message::text(ev.to_string()));
+                            }
                             let _ = ws.close(None);
                             let _ = ws.flush();
                             return;
@@ -464,4 +474,96 @@ fn a_side_call_goes_over_http_and_leaves_the_chats_chain_alone() {
     let got = srv.got();
     assert_eq!(got.len(), 2, "side calls never reach the chat's socket");
     assert_eq!(got[1].1["previous_response_id"], "resp_0");
+}
+
+/// A port that takes the TCP connection and then never answers the upgrade.
+fn silent_port() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        let mut held = Vec::new();
+        for stream in listener.incoming() {
+            held.push(stream);
+        }
+    });
+    format!("ws://127.0.0.1:{port}/v1/responses")
+}
+
+#[test]
+fn an_open_that_stalls_goes_to_http_within_the_deadline() {
+    let pool = WsPool::new(silent_port());
+    let started = std::time::Instant::now();
+    let t = run(&pool, "chat-stall", &body(vec![user("a")]));
+    let took = started.elapsed();
+    assert!(matches!(t.turn, WsTurn::Http));
+    assert!(
+        took < CONNECT_DEADLINE + Duration::from_millis(500),
+        "took {took:?}"
+    );
+    assert!(pool.down(), "a stalled open rests the socket path");
+}
+
+#[test]
+fn stop_during_an_open_returns_at_once() {
+    let pool = WsPool::new(silent_port());
+    let cancel = CancelToken::new();
+    let stopper = cancel.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(100));
+        stopper.cancel();
+    });
+    let started = std::time::Instant::now();
+    let t = run_with(&pool, "chat-stop-open", &body(vec![user("a")]), &cancel);
+    let took = started.elapsed();
+    assert!(matches!(t.turn, WsTurn::Failed(ClientError::Cancelled)));
+    assert!(took < Duration::from_millis(400), "took {took:?}");
+    assert!(!pool.down(), "a Stop is not a broken socket");
+}
+
+#[test]
+fn a_drop_after_the_server_took_the_request_is_a_retry_not_an_http_resend() {
+    let srv = server(|_, _| {
+        Answer::EventsThenClose(vec![
+            json!({"type": "response.created", "response": {"id": "resp_0"}}),
+            json!({"type": "response.reasoning_summary_text.delta", "delta": "thinking"}),
+        ])
+    });
+    let pool = WsPool::new(&srv.url);
+    let t = run(&pool, "chat-taken", &body(vec![user("a")]));
+    assert!(
+        matches!(t.turn, WsTurn::Failed(ClientError::Disconnect)),
+        "a taken request must not go to HTTP behind the retry budget"
+    );
+}
+
+#[test]
+fn a_socket_the_server_closed_between_turns_reopens_cleanly() {
+    let srv = server(|seq, _| {
+        if seq == 0 {
+            match reply("resp_0", "one") {
+                Answer::Events(events) => Answer::EventsThenClose(events),
+                other => other,
+            }
+        } else {
+            reply("resp_1", "two")
+        }
+    });
+    let pool = WsPool::new(&srv.url);
+    let first = run(&pool, "chat-closed", &body(vec![user("a")]));
+    assert_eq!(done_text(&first), "one");
+    std::thread::sleep(Duration::from_millis(200));
+    let second = run(
+        &pool,
+        "chat-closed",
+        &body(vec![user("a"), said("one"), user("b")]),
+    );
+    assert_eq!(done_text(&second), "two");
+    assert_eq!(srv.sockets.load(Ordering::SeqCst), 2);
+    // The new socket can't continue the old chain: the whole input goes.
+    let got = srv.got();
+    assert!(
+        got[1].1.get("previous_response_id").is_none(),
+        "{:?}",
+        got[1].1
+    );
 }
