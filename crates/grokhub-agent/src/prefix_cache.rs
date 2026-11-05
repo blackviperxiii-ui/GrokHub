@@ -1,10 +1,11 @@
 //! Provider prompt prefix cache: keep the start of each model `input` byte-identical
 //! across turns when only per-turn state (talk style, playbook, memory snippets) changes.
 //!
-//! On by default; `enabled = false` in `{config_dir}/prefix_cache.toml` turns it off. When enabled, the first system
-//! message stays the published cabin prompt for the session; volatile blocks ride on
-//! the user turn inside `<cabin-volatile>` instead of mutating that system message or
-//! inserting extra system rows mid-history.
+//! Always on: the first system message stays the published cabin prompt for
+//! the session; volatile blocks ride on the user turn inside
+//! `<cabin-volatile>` instead of mutating that system message or inserting
+//! extra system rows mid-history. `{config_dir}/prefix_cache.toml` only says
+//! when old notes leave (`old_notes`); an `enabled` line there is ignored.
 
 use std::path::Path;
 
@@ -14,13 +15,6 @@ pub const WRAPPER_START: &str = "<cabin-volatile>\n";
 pub const WRAPPER_END: &str = "\n</cabin-volatile>";
 
 const CONFIG_NAME: &str = "prefix_cache.toml";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct Settings {
-    pub enabled: bool,
-    /// When earlier turns lose their `<cabin-volatile>` notes.
-    pub old_notes: OldNotes,
-}
 
 /// When an earlier turn's `<cabin-volatile>` notes (its talk style, playbook,
 /// memory) leave the history, so only the current turn's notes steer the reply.
@@ -34,64 +28,22 @@ pub enum OldNotes {
     EveryTurn,
 }
 
-thread_local! {
-    static TEST_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
-}
-
-/// Test hook for this thread: `Some(true|false)` overrides the file; `None` reads the file again.
-/// Per thread, so parallel tests that pin a mode never flip each other.
-#[cfg(test)]
-pub fn set_enabled_for_tests(on: Option<bool>) {
-    TEST_OVERRIDE.with(|cell| cell.set(on));
-}
-
 pub fn config_path(config_dir: &Path) -> std::path::PathBuf {
     config_dir.join(CONFIG_NAME)
 }
 
-pub fn settings(config_dir: &Path) -> Settings {
-    if let Some(on) = TEST_OVERRIDE.with(|cell| cell.get()) {
-        return Settings {
-            enabled: on,
-            ..Settings::default()
-        };
-    }
-    let Ok(text) = std::fs::read_to_string(config_path(config_dir)) else {
-        return Settings {
-            enabled: true,
-            ..Settings::default()
-        };
-    };
-    parse_file(&text)
+/// When earlier turns lose their notes, from `prefix_cache.toml`.
+pub fn old_notes(config_dir: &Path) -> OldNotes {
+    std::fs::read_to_string(config_path(config_dir))
+        .map(|text| parse_old_notes(&text))
+        .unwrap_or_default()
 }
 
-fn parse_file(text: &str) -> Settings {
-    let mut enabled = true;
-    let mut old_notes = OldNotes::default();
-    for line in text.lines() {
-        let line = line.split('#').next().unwrap_or("").trim();
-        if line.is_empty() {
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        let value = value.trim().trim_matches('"');
-        if key.trim().eq_ignore_ascii_case("enabled") {
-            enabled = !value.eq_ignore_ascii_case("false");
-        } else if key.trim().eq_ignore_ascii_case("old_notes") {
-            old_notes = if value.eq_ignore_ascii_case("every_turn") {
-                OldNotes::EveryTurn
-            } else {
-                OldNotes::AtCompaction
-            };
-        }
+fn parse_old_notes(text: &str) -> OldNotes {
+    match crate::config_file::parse(CONFIG_NAME, text).get("old_notes") {
+        Some(value) if value.eq_ignore_ascii_case("every_turn") => OldNotes::EveryTurn,
+        _ => OldNotes::AtCompaction,
     }
-    Settings { enabled, old_notes }
-}
-
-pub fn enabled(config_dir: &Path) -> bool {
-    settings(config_dir).enabled
 }
 
 /// Per-turn volatile system state kept out of the stable system prefix.
@@ -269,42 +221,24 @@ pub fn episode_worker_input(
 mod tests {
     use super::*;
     use crate::client::input_wire_value;
-    fn temp_config(enabled: bool) -> (std::path::PathBuf, Settings) {
+    #[test]
+    fn an_old_enabled_line_is_ignored() {
         let dir = crate::harness::test_dir("prefix-cache-settings");
         let path = config_path(&dir);
-        std::fs::write(&path, format!("enabled = {enabled}\n")).unwrap();
-        let s = settings(&dir);
-        (dir, s)
-    }
-
-    #[test]
-    fn settings_default_on_and_file_disables() {
-        set_enabled_for_tests(None);
-        let dir = crate::harness::test_dir("prefix-cache-default");
-        let path = config_path(&dir);
         let _ = std::fs::remove_file(&path);
-        assert!(enabled(&dir));
-        assert!(parse_file("").enabled);
-        let (_dir, off) = temp_config(false);
-        assert!(!off.enabled);
-        let (_dir, on) = temp_config(true);
-        assert!(on.enabled);
-        set_enabled_for_tests(Some(false));
-        assert!(!enabled(&_dir));
-        set_enabled_for_tests(None);
+        assert_eq!(old_notes(&dir), OldNotes::AtCompaction);
+        std::fs::write(&path, "enabled = false\nold_notes = every_turn\n").unwrap();
+        assert_eq!(old_notes(&dir), OldNotes::EveryTurn);
     }
 
     #[test]
     fn old_notes_leave_at_compaction_unless_set_to_every_turn() {
-        assert_eq!(parse_file("").old_notes, OldNotes::AtCompaction);
+        assert_eq!(parse_old_notes(""), OldNotes::AtCompaction);
         assert_eq!(
-            parse_file("old_notes = \"every_turn\"\n").old_notes,
+            parse_old_notes("old_notes = \"every_turn\"\n"),
             OldNotes::EveryTurn
         );
-        assert_eq!(
-            parse_file("old_notes = soon").old_notes,
-            OldNotes::AtCompaction
-        );
+        assert_eq!(parse_old_notes("old_notes = soon"), OldNotes::AtCompaction);
     }
 
     #[test]

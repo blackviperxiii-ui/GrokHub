@@ -84,8 +84,8 @@ pub struct AbFlag {
 /// config folder, so the eval sets it in the run's own throwaway folder.
 pub const AB_FLAGS: &[AbFlag] = &[
     AbFlag {
-        name: "prefix_cache",
-        file: "prefix_cache.toml",
+        name: "websocket",
+        file: crate::ws_mode::CONFIG_NAME,
         key: "enabled",
     },
     AbFlag {

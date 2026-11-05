@@ -112,10 +112,6 @@ pub use plan_skills::{
     standing_reminder as plan_skills_standing, PlanSkillCtx, SkillMoment, AV_QA_WALKTHROUGH,
     CREATE_VERIFICATION, FOLLOW_THROUGH, MAINTAIN_VERIFICATION, QA_WALKTHROUGH,
 };
-pub use prefix_cache::{
-    enabled as prefix_cache_enabled, settings as prefix_cache_settings,
-    Settings as PrefixCacheSettings,
-};
 pub use prompt::{
     chat_volatile_tail, prompt_need_from_job, system_prompt, system_prompt_parts,
     system_prompt_with, tool_set_from_job, ChatTail, PromptNeed, PromptProfile,

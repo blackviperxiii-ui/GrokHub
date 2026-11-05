@@ -38,8 +38,8 @@ pub fn set_enabled_for_tests(on: Option<bool>) {
     TEST_OVERRIDE.with(|cell| cell.set(on));
 }
 
-/// Pins deferred tools and the stable prompt off on this thread until dropped,
-/// for tests that check the full tool list or the per-turn system rewrite.
+/// Pins deferred tools off on this thread until dropped, for tests that check
+/// the full tool list.
 #[cfg(test)]
 pub struct LegacyPromptGuard;
 
@@ -47,7 +47,6 @@ pub struct LegacyPromptGuard;
 impl LegacyPromptGuard {
     pub fn set() -> Self {
         set_enabled_for_tests(Some(false));
-        crate::prefix_cache::set_enabled_for_tests(Some(false));
         Self
     }
 }
@@ -56,7 +55,6 @@ impl LegacyPromptGuard {
 impl Drop for LegacyPromptGuard {
     fn drop(&mut self) {
         set_enabled_for_tests(None);
-        crate::prefix_cache::set_enabled_for_tests(None);
     }
 }
 

@@ -111,11 +111,11 @@ pub enum ArmKind {
     Variant,
 }
 
-/// R6 technique matrix arms. A = [`Technique::Baseline`] (all settings off).
+/// R6 technique matrix arms. A = [`Technique::Baseline`] (every switch off;
+/// the stable prompt prefix is always on).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Technique {
     Baseline,
-    PrefixCache,
     ToolOutputSummaries,
     DeferredTools,
     BatchedReadOnly,
@@ -123,9 +123,8 @@ pub enum Technique {
 }
 
 impl Technique {
-    pub const ALL: [Technique; 6] = [
+    pub const ALL: [Technique; 5] = [
         Technique::Baseline,
-        Technique::PrefixCache,
         Technique::ToolOutputSummaries,
         Technique::DeferredTools,
         Technique::BatchedReadOnly,
@@ -134,8 +133,7 @@ impl Technique {
 
     pub fn label(self) -> &'static str {
         match self {
-            Technique::Baseline => "baseline (all off)",
-            Technique::PrefixCache => "R2 prefix cache",
+            Technique::Baseline => "baseline (switches off)",
             Technique::ToolOutputSummaries => "R3 tool-output summaries",
             Technique::DeferredTools => "R4 deferred tools",
             Technique::BatchedReadOnly => "R5 batched read-only",
@@ -146,7 +144,6 @@ impl Technique {
     pub fn id(self) -> &'static str {
         match self {
             Technique::Baseline => "baseline",
-            Technique::PrefixCache => "prefix_cache",
             Technique::ToolOutputSummaries => "tool_output_summaries",
             Technique::DeferredTools => "deferred_tools",
             Technique::BatchedReadOnly => "batched_readonly",
@@ -160,15 +157,13 @@ impl Technique {
 /// state from a prior arm cannot leak.
 pub fn arm_settings(technique: Technique, config_dir: &Path) -> Result<(), String> {
     std::fs::create_dir_all(config_dir).map_err(|err| err.to_string())?;
-    let (prefix, summaries, deferred, batched) = match technique {
-        Technique::Baseline => (false, false, false, false),
-        Technique::PrefixCache => (true, false, false, false),
-        Technique::ToolOutputSummaries => (false, true, false, false),
-        Technique::DeferredTools => (false, false, true, false),
-        Technique::BatchedReadOnly => (false, false, false, true),
-        Technique::AllOn => (true, true, true, true),
+    let (summaries, deferred, batched) = match technique {
+        Technique::Baseline => (false, false, false),
+        Technique::ToolOutputSummaries => (true, false, false),
+        Technique::DeferredTools => (false, true, false),
+        Technique::BatchedReadOnly => (false, false, true),
+        Technique::AllOn => (true, true, true),
     };
-    write_enabled(config_dir, "prefix_cache.toml", prefix)?;
     write_enabled(config_dir, TOOL_OUTPUT_COMPACT_CONFIG, summaries)?;
     write_enabled(config_dir, "deferred_tools.toml", deferred)?;
     write_enabled(config_dir, "batched_tools.toml", batched)?;
@@ -378,8 +373,6 @@ fn run_technique_arm(
     arm_settings(technique, &cfg)?;
     let _guard = ConfigGuard::set(&cfg);
     // Clear test overrides so on-disk arm_settings win.
-    #[cfg(test)]
-    crate::prefix_cache::set_enabled_for_tests(None);
     crate::compact::set_tool_output_compact_for_tests(None);
     let mut metrics = ArmMetrics::default();
     let mut tasks = Vec::with_capacity(fixtures.len());
@@ -912,14 +905,12 @@ mod tests {
     #[test]
     fn arm_settings_toggles_exactly_one_file_per_b_arm() {
         let dir = scratch("arm-settings").expect("scratch");
-        arm_settings(Technique::PrefixCache, &dir).expect("write");
+        arm_settings(Technique::DeferredTools, &dir).expect("write");
         let read = |name: &str| std::fs::read_to_string(dir.join(name)).expect("read");
-        assert!(read("prefix_cache.toml").contains("enabled = true"));
         assert!(read(TOOL_OUTPUT_COMPACT_CONFIG).contains("enabled = false"));
-        assert!(read("deferred_tools.toml").contains("enabled = false"));
+        assert!(read("deferred_tools.toml").contains("enabled = true"));
         assert!(read("batched_tools.toml").contains("enabled = false"));
         arm_settings(Technique::AllOn, &dir).expect("all");
-        assert!(read("prefix_cache.toml").contains("enabled = true"));
         assert!(read(TOOL_OUTPUT_COMPACT_CONFIG).contains("enabled = true"));
         assert!(read("deferred_tools.toml").contains("enabled = true"));
         assert!(read("batched_tools.toml").contains("enabled = true"));
