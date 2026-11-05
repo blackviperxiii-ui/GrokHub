@@ -917,6 +917,14 @@ pub fn responses_body(req: &ResponsesRequest) -> Value {
     body
 }
 
+/// The chat's socket carries only the chat's own agent steps. A side call
+/// (auto-review judge, close check, Brief, memory, dream) sends no tools or
+/// has a hard deadline: it goes over HTTP, so it never replaces the chat's
+/// `previous_response_id` chain, and HTTP holds it to its deadline.
+pub(crate) fn rides_chat_socket(req: &ResponsesRequest) -> bool {
+    !req.tools.is_empty() && req.call_timeout.is_none()
+}
+
 /// An xAI Grok id as the Responses API takes it (not an OpenRouter slug).
 pub fn is_grok_model(model: &str) -> bool {
     model.trim().to_ascii_lowercase().starts_with("grok-")
@@ -1243,6 +1251,9 @@ impl XaiClient {
         sink: &mut dyn FnMut(StreamEvent),
     ) -> Option<Result<TurnOutput, ClientError>> {
         let pool = self.ws.as_ref()?;
+        if !rides_chat_socket(req) {
+            return None;
+        }
         let config_dir = crate::perm::config_dir();
         if !crate::ws_mode::enabled_at(&config_dir) {
             return None;
