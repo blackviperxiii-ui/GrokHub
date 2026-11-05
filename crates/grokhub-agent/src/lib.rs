@@ -64,8 +64,9 @@ pub use compact::{estimate_input_tokens, message_text};
 pub use dream_model::sleep_dream;
 pub use eval::efficiency::{render_bench, run_bench, BenchRow};
 pub use eval::live::{
-    parse_budget as parse_live_budget, render_live, run_live, LiveOpts, LiveReport,
-    DEFAULT_K as LIVE_DEFAULT_K,
+    ab_flag as live_ab_flag, parse_budget as parse_live_budget, render_live, run_live, LiveOpts,
+    LiveReport, LocalClient as LiveLocalClient, OpenRouterClient as LiveOpenRouterClient,
+    Provider as LiveProvider, AB_FLAGS as LIVE_AB_FLAGS, DEFAULT_K as LIVE_DEFAULT_K,
 };
 pub use eval::memory_index::{render_memory_index_bench, run_memory_index_bench, MemoryIndexBench};
 pub use eval::turn_endings::{generic_closing, last_sentence};
@@ -113,8 +114,8 @@ pub use prefix_cache::{
     Settings as PrefixCacheSettings,
 };
 pub use prompt::{
-    prompt_need_from_job, system_prompt, system_prompt_parts, system_prompt_with,
-    tool_set_from_job, PromptNeed, PromptProfile,
+    chat_volatile_tail, prompt_need_from_job, system_prompt, system_prompt_parts,
+    system_prompt_with, tool_set_from_job, ChatTail, PromptNeed, PromptProfile,
 };
 pub use recovery::{
     project as project_recovery, state_for_rung, DriveFact, RecoveryFacts, RecoverySnapshot,

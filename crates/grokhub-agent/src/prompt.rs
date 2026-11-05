@@ -307,6 +307,52 @@ pub fn system_prompt(cabin_rules: &str, workspace: &Path) -> String {
     )
 }
 
+/// The pieces of a chat's volatile prompt tail, already read by the caller.
+/// The app and the live eval both build the tail from this, so the eval runs
+/// the prompt the app sends.
+#[derive(Debug, Clone, Default)]
+pub struct ChatTail {
+    /// The personality's prompt block.
+    pub voice: String,
+    /// Tuned notes.
+    pub notes: String,
+    /// The learned brief for chat, before it is wrapped.
+    pub learned: String,
+    /// SOUL.md and USER.md blocks.
+    pub identity: String,
+    /// This session's intentions block.
+    pub intentions: String,
+    /// The personality allows explicit talk (picks the safety closer).
+    pub explicit: bool,
+}
+
+/// Join a chat's volatile tail in the app's order. When a voice, notes,
+/// identity or intentions block is present, a short closer comes last so the
+/// cabin safety rules (earlier, in the stable prefix) still outrank it.
+pub fn chat_volatile_tail(tail: &ChatTail) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    let mut closer = false;
+    for (block, needs_closer) in [
+        (tail.voice.clone(), true),
+        (tail.notes.clone(), true),
+        (
+            grokhub_core::cabin_rules::cabin_learned_tail(&tail.learned),
+            false,
+        ),
+        (tail.identity.clone(), true),
+        (tail.intentions.clone(), true),
+    ] {
+        if !block.is_empty() {
+            parts.push(block);
+            closer |= needs_closer;
+        }
+    }
+    if closer {
+        parts.push(grokhub_core::talk::safety_closer(tail.explicit).to_string());
+    }
+    parts.join("\n\n")
+}
+
 /// Cache-friendly chat system prompt: stable rules + disk blocks first, volatile
 /// personality / tuned notes / learned brief last.
 pub fn system_prompt_parts(stable_rules: &str, volatile_tail: &str, workspace: &Path) -> String {
@@ -519,6 +565,32 @@ fn regular_file(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chat_tail_keeps_the_apps_order_and_closes_with_safety() {
+        assert_eq!(chat_volatile_tail(&ChatTail::default()), "");
+        // A learned brief alone is the user's own facts: no closer.
+        let learned = chat_volatile_tail(&ChatTail {
+            learned: "likes FPS games".into(),
+            ..Default::default()
+        });
+        assert!(learned.contains("likes FPS games"));
+        assert!(!learned.contains(grokhub_core::talk::safety_closer(false)));
+        let full = chat_volatile_tail(&ChatTail {
+            voice: "VOICE".into(),
+            notes: "NOTES".into(),
+            learned: "LEARNED".into(),
+            identity: "IDENTITY".into(),
+            intentions: "INTENTIONS".into(),
+            explicit: false,
+        });
+        let at = |needle: &str| full.find(needle).unwrap();
+        assert!(at("VOICE") < at("NOTES"));
+        assert!(at("NOTES") < at("LEARNED"));
+        assert!(at("LEARNED") < at("IDENTITY"));
+        assert!(at("IDENTITY") < at("INTENTIONS"));
+        assert!(full.ends_with(grokhub_core::talk::safety_closer(false)));
+    }
 
     fn fixture_workspace(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
