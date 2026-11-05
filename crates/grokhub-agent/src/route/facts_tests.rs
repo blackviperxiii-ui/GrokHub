@@ -215,6 +215,7 @@ fn request_bodies_for_a_reasoning_model_carry_no_penalty_or_stop_keys() {
         [
             "include",
             "input",
+            "max_turns",
             "model",
             "prompt_cache_key",
             "reasoning",
@@ -229,6 +230,7 @@ fn request_bodies_for_a_reasoning_model_carry_no_penalty_or_stop_keys() {
         [
             "include",
             "input",
+            "max_turns",
             "model",
             "prompt_cache_key",
             "reasoning",

@@ -220,6 +220,7 @@ impl ModelClient for FakeModel {
             usage,
             truncated,
             truncate_reason: truncated.then(|| "max_output_tokens".into()),
+            ..Default::default()
         })
     }
 }

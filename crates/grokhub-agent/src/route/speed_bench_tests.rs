@@ -113,6 +113,7 @@ fn fixture(name: &str) -> PathBuf {
                 },
                 cost_usd: 0.004,
                 limit: false,
+                ..RouteOutcome::default()
             }),
             ..RouteRecord::default()
         }));

@@ -2028,6 +2028,7 @@ mod tests {
                 usage: turn.usage,
                 truncated: turn.truncated,
                 truncate_reason: turn.truncated.then(|| "max_output_tokens".into()),
+                ..Default::default()
             })
         }
     }
