@@ -8,6 +8,7 @@ mod checkpoint;
 mod client;
 mod close_check;
 mod compact;
+mod config_file;
 mod denials;
 mod dream_model;
 mod drive;

@@ -65,23 +65,12 @@ pub fn summary_forced(config_dir: &Path) -> bool {
 }
 
 fn parse_compaction_file(text: &str) -> Option<CompactBackend> {
-    let mut backend = None;
-    for line in text.lines() {
-        let line = line.split('#').next().unwrap_or("").trim();
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        if !key.trim().eq_ignore_ascii_case("backend") {
-            continue;
-        }
-        let value = value.trim().trim_matches('"').trim();
-        if value.eq_ignore_ascii_case("summary") {
-            backend = Some(CompactBackend::Summary);
-        } else if value.eq_ignore_ascii_case("server") {
-            backend = Some(CompactBackend::Server);
-        }
+    let file = crate::config_file::parse(COMPACTION_CONFIG, text);
+    match file.get("backend")?.to_ascii_lowercase().as_str() {
+        "summary" => Some(CompactBackend::Summary),
+        "server" => Some(CompactBackend::Server),
+        _ => None,
     }
-    backend
 }
 
 /// A bare xAI model id (`grok-…`), not a provider's `provider/model` or a local tier.
@@ -166,27 +155,13 @@ pub fn tool_output_compact_settings(config_dir: &Path) -> ToolOutputCompactSetti
     parse_tool_output_compact_file(&text)
 }
 
-/// `key = value` pairs of a flat config file, `#` comments and blank lines skipped.
-fn config_pairs(text: &str) -> impl Iterator<Item = (&str, &str)> {
-    text.lines().filter_map(|line| {
-        let line = line.split('#').next().unwrap_or("").trim();
-        let (key, value) = line.split_once('=')?;
-        Some((key.trim(), value.trim()))
-    })
-}
-
 fn parse_tool_output_compact_file(text: &str) -> ToolOutputCompactSettings {
-    let mut settings = ToolOutputCompactSettings::default();
-    for (key, value) in config_pairs(text) {
-        if key.eq_ignore_ascii_case("enabled") && value.eq_ignore_ascii_case("true") {
-            settings.enabled = true;
-        } else if key.eq_ignore_ascii_case("min_bytes") {
-            if let Ok(n) = value.parse::<usize>() {
-                settings.min_bytes = n.max(1);
-            }
-        }
+    let file = crate::config_file::parse(TOOL_OUTPUT_COMPACT_CONFIG, text);
+    let defaults = ToolOutputCompactSettings::default();
+    ToolOutputCompactSettings {
+        enabled: file.flag("enabled", defaults.enabled),
+        min_bytes: file.count("min_bytes", 1, defaults.min_bytes),
     }
-    settings
 }
 
 /// Outcome of [`maybe_compact_tool_output`].
@@ -503,32 +478,17 @@ pub fn history_trim_settings(config_dir: &Path) -> HistoryTrimSettings {
 }
 
 fn parse_history_trim_file(text: &str) -> HistoryTrimSettings {
-    let mut settings = HistoryTrimSettings::default();
-    for (key, value) in config_pairs(text) {
-        let flag = || value.parse::<bool>().ok();
-        let count = || value.parse::<usize>().ok().map(|n| n.max(1));
-        match key.to_ascii_lowercase().as_str() {
-            "enabled" => settings.enabled = flag().unwrap_or(settings.enabled),
-            "age_out" => settings.age_out = flag().unwrap_or(settings.age_out),
-            "age_out_min_bytes" => {
-                settings.age_out_min_bytes = count().unwrap_or(settings.age_out_min_bytes)
-            }
-            "age_out_user_turns" => {
-                settings.age_out_user_turns = count().unwrap_or(settings.age_out_user_turns)
-            }
-            "keep_recent_outputs" => {
-                settings.keep_recent_outputs = count().unwrap_or(settings.keep_recent_outputs)
-            }
-            "mask_min_bytes" => {
-                settings.mask_min_bytes = count().unwrap_or(settings.mask_min_bytes)
-            }
-            "keep_recent_images" => {
-                settings.keep_recent_images = count().unwrap_or(settings.keep_recent_images)
-            }
-            _ => {}
-        }
+    let file = crate::config_file::parse(HISTORY_TRIM_CONFIG, text);
+    let d = HistoryTrimSettings::default();
+    HistoryTrimSettings {
+        enabled: file.flag("enabled", d.enabled),
+        age_out: file.flag("age_out", d.age_out),
+        age_out_min_bytes: file.count("age_out_min_bytes", 1, d.age_out_min_bytes),
+        age_out_user_turns: file.count("age_out_user_turns", 1, d.age_out_user_turns),
+        keep_recent_outputs: file.count("keep_recent_outputs", 1, d.keep_recent_outputs),
+        mask_min_bytes: file.count("mask_min_bytes", 1, d.mask_min_bytes),
+        keep_recent_images: file.count("keep_recent_images", 1, d.keep_recent_images),
     }
-    settings
 }
 
 /// One trim pass over `history` as `{config}/history_trim.toml` allows: drop

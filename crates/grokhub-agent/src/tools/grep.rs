@@ -1,6 +1,5 @@
 use std::path::Path;
 
-use regex::Regex;
 use serde_json::{json, Value};
 
 use super::{confine, str_field, u32_field, ToolOutput};
@@ -11,13 +10,15 @@ pub fn schema() -> Value {
     json!({
         "type": "function",
         "name": "grep",
-        "description": "Search workspace text with a regex. Skips gitignored files. Supports path, glob, -A, and -B.",
+        "description": "Search workspace text with a regex. Skips gitignored files. Max 200 lines; output_mode files or count says only where.",
         "parameters": {
             "type": "object",
             "properties": {
                 "pattern": {"type": "string"},
                 "path": {"type": "string"},
                 "glob": {"type": "string"},
+                "-i": {"type": "boolean", "description": "Ignore case."},
+                "output_mode": {"type": "string", "enum": ["content", "files", "count"]},
                 "-A": {"type": "integer", "description": "Lines of context after a hit."},
                 "-B": {"type": "integer", "description": "Lines of context before a hit."}
             },
@@ -27,12 +28,33 @@ pub fn schema() -> Value {
     })
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Content,
+    Files,
+    Count,
+}
+
 pub fn run(workspace: &Path, args: &Value) -> ToolOutput {
     let pattern = str_field(args, "pattern");
     if pattern.is_empty() {
         return ToolOutput::err("pattern is required");
     }
-    let re = match Regex::new(&pattern) {
+    let mode = match str_field(args, "output_mode").to_ascii_lowercase().as_str() {
+        "" | "content" => Mode::Content,
+        "files" | "files_with_matches" | "files_only" => Mode::Files,
+        "count" => Mode::Count,
+        other => {
+            return ToolOutput::err(format!(
+                "output_mode {other} is not one of content, files, count"
+            ))
+        }
+    };
+    let ignore_case = args.get("-i").and_then(Value::as_bool).unwrap_or(false);
+    let re = match regex::RegexBuilder::new(&pattern)
+        .case_insensitive(ignore_case)
+        .build()
+    {
         Ok(re) => re,
         Err(e) => return ToolOutput::err(format!("regex: {e}")),
     };
@@ -83,6 +105,15 @@ pub fn run(workspace: &Path, args: &Value) -> ToolOutput {
             .display()
             .to_string()
             .replace('\\', "/");
+        if mode != Mode::Content {
+            let n = lines.iter().filter(|line| re.is_match(line)).count();
+            match (mode, n) {
+                (_, 0) => {}
+                (Mode::Files, _) => hits.push(rel),
+                _ => hits.push(format!("{rel}:{n}")),
+            }
+            continue;
+        }
         for (i, line) in lines.iter().enumerate() {
             if !re.is_match(line) {
                 continue;
@@ -98,10 +129,16 @@ pub fn run(workspace: &Path, args: &Value) -> ToolOutput {
         }
     }
     if hits.is_empty() {
-        ToolOutput::ok("(no matches)")
-    } else {
-        ToolOutput::ok(hits.join("\n"))
+        return ToolOutput::ok("(no matches)");
     }
+    let full = hits.len() >= MAX_HITS;
+    let mut text = hits.join("\n");
+    if full {
+        text.push_str(&format!(
+            "\n(stopped at {MAX_HITS} lines: narrow it with path or glob, or use output_mode files)"
+        ));
+    }
+    ToolOutput::ok(text)
 }
 
 fn compile_glob(pat: &str) -> Result<Option<globset::GlobMatcher>, String> {
@@ -139,6 +176,59 @@ mod tests {
         assert!(out.text.contains("omega"), "{}", out.text);
         assert!(!out.text.contains("secret.txt"), "{}", out.text);
         assert!(!out.text.contains("b.txt"), "{}", out.text);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn grep_can_ignore_case_and_answer_with_files_or_counts() {
+        let dir = std::env::temp_dir().join(format!("gh-grep-modes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/a.rs"), "Needle one\nneedle two\nhay\n").unwrap();
+        std::fs::write(dir.join("src/b.rs"), "NEEDLE\n").unwrap();
+        std::fs::write(dir.join("src/c.rs"), "hay only\n").unwrap();
+
+        let out = execute(&dir, "grep", r#"{"pattern":"needle"}"#);
+        assert!(out.text.contains("src/a.rs:2:needle two"), "{}", out.text);
+        assert!(!out.text.contains("Needle one"), "case matters by default");
+
+        let out = execute(&dir, "grep", r#"{"pattern":"needle","-i":true}"#);
+        assert!(out.text.contains("src/a.rs:1:Needle one"), "{}", out.text);
+        assert!(out.text.contains("src/b.rs:1:NEEDLE"), "{}", out.text);
+
+        let out = execute(
+            &dir,
+            "grep",
+            r#"{"pattern":"needle","-i":true,"output_mode":"files"}"#,
+        );
+        let mut files: Vec<&str> = out.text.lines().collect();
+        files.sort_unstable();
+        assert_eq!(files, ["src/a.rs", "src/b.rs"]);
+
+        let out = execute(
+            &dir,
+            "grep",
+            r#"{"pattern":"needle","-i":true,"output_mode":"count"}"#,
+        );
+        let mut counts: Vec<&str> = out.text.lines().collect();
+        counts.sort_unstable();
+        assert_eq!(counts, ["src/a.rs:2", "src/b.rs:1"]);
+
+        let out = execute(&dir, "grep", r#"{"pattern":"x","output_mode":"lines"}"#);
+        assert!(out.failed, "an unknown mode is an error");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn grep_says_when_it_stopped_at_the_cap() {
+        let dir = std::env::temp_dir().join(format!("gh-grep-cap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("big.txt"), "hit\n".repeat(500)).unwrap();
+        let out = execute(&dir, "grep", r#"{"pattern":"hit"}"#);
+        assert!(out.text.contains("stopped at 200 lines"), "{}", out.text);
+        let out = execute(&dir, "grep", r#"{"pattern":"hit","output_mode":"count"}"#);
+        assert_eq!(out.text, "big.txt:500");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

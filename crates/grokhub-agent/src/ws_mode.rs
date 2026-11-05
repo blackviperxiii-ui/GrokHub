@@ -54,19 +54,9 @@ const READ_POLL: Duration = Duration::from_millis(250);
 /// Whether WebSocket mode is on (it is unless `websocket.toml` says
 /// `enabled = false`).
 pub fn enabled_at(config_dir: &Path) -> bool {
-    let Ok(text) = std::fs::read_to_string(config_dir.join(CONFIG_NAME)) else {
-        return true;
-    };
-    let mut enabled = true;
-    for line in text.lines() {
-        let line = line.split('#').next().unwrap_or("").trim();
-        if let Some((key, value)) = line.split_once('=') {
-            if key.trim().eq_ignore_ascii_case("enabled") {
-                enabled = !value.trim().eq_ignore_ascii_case("false");
-            }
-        }
-    }
-    enabled
+    std::fs::read_to_string(config_dir.join(CONFIG_NAME))
+        .map(|text| crate::config_file::parse(CONFIG_NAME, &text).flag("enabled", true))
+        .unwrap_or(true)
 }
 
 type Socket = WebSocket<MaybeTlsStream<TcpStream>>;
