@@ -127,6 +127,7 @@ pub(super) fn hard_words(class: HardClass, tool: &str, action: &str, held: &[Str
         HardClass::IrreversibleOs => format!("Irreversible: {action}"),
         HardClass::AgentConfig => format!("Change agent instructions: {action}"),
         HardClass::OutsideValue => format!("Uses a value from outside text: {action}"),
+        HardClass::RunsLater => format!("Changes a file that runs later: {action}"),
     };
     cut(&text)
 }
