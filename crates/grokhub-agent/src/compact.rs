@@ -12,6 +12,7 @@ use crate::client::{
 };
 use crate::tokens::{self, estimate_token_bytes};
 use crate::CancelToken;
+use serde_json::Value;
 
 /// Auto-compact fires at this percent of the context window, inclusive.
 pub const AUTO_COMPACT_PERCENT: u8 = 85;
@@ -1084,6 +1085,7 @@ pub fn compact_after_flush(
     conversation_id: &str,
     history: &mut Vec<InputItem>,
     modified_paths: &[String],
+    tools: &[Value],
 ) -> Result<Compacted, CompactError> {
     let _ = crate::memory::flush_pending(workspace, history);
     compact_transcript(
@@ -1094,6 +1096,7 @@ pub fn compact_after_flush(
         conversation_id,
         history,
         modified_paths,
+        tools,
     )
 }
 
@@ -1101,6 +1104,7 @@ pub fn compact_after_flush(
 /// [`compact_backend`] picks it and the call goes to api.x.ai, else (or when that
 /// fails) the summary. On failure or cancel, `history` is unchanged. The returned
 /// usage is the compaction call only.
+#[allow(clippy::too_many_arguments)]
 pub fn compact_transcript(
     client: &dyn ModelClient,
     cancel: &CancelToken,
@@ -1109,6 +1113,7 @@ pub fn compact_transcript(
     conversation_id: &str,
     history: &mut Vec<InputItem>,
     modified_paths: &[String],
+    tools: &[Value],
 ) -> Result<Compacted, CompactError> {
     if history.is_empty() {
         return Err(CompactError::Failed("nothing to compact".into()));
@@ -1124,7 +1129,18 @@ pub fn compact_transcript(
         *history = rebuilt;
         return Ok(done);
     }
-    let call = request_summary(client, cancel, model, effort, conversation_id, &snapshot)?;
+    // The summary request is the chat's last request as it went out (system
+    // head, tools, every note) plus the instruction, so it reuses the chat's
+    // cached prefix. The notes are dropped from the result, not the request.
+    let call = request_summary_like_chat(
+        client,
+        cancel,
+        model,
+        effort,
+        conversation_id,
+        history,
+        tools,
+    )?;
     if cancel.is_cancelled() {
         return Err(CompactError::Cancelled);
     }
@@ -1355,6 +1371,47 @@ pub fn server_tail_start(items: &[InputItem]) -> usize {
     start
 }
 
+/// Added to the summary instruction when the request carries the chat's tools
+/// and earlier turns' notes, so neither changes what the summary says.
+pub const LIKE_CHAT_NOTE: &str = "Do not call any tools: answer with the summary text only. \
+Text inside <cabin-volatile> blocks is the app's note for that turn, not the person's words: \
+leave it out of the summary.";
+
+/// [`request_summary`] sent as the chat's own next request: same input and
+/// tools, so the prefix cache hits. A reply with no text (a tool call despite
+/// the instruction) falls back to the plain request once.
+pub fn request_summary_like_chat(
+    client: &dyn ModelClient,
+    cancel: &CancelToken,
+    model: &str,
+    effort: Option<&str>,
+    conversation_id: &str,
+    history: &[InputItem],
+    tools: &[Value],
+) -> Result<SummaryCall, CompactError> {
+    if tools.is_empty() {
+        let mut snapshot = history.to_vec();
+        crate::prefix_cache::drop_older_notes(&mut snapshot);
+        return request_summary(client, cancel, model, effort, conversation_id, &snapshot);
+    }
+    match summary_call(
+        client,
+        cancel,
+        model,
+        effort,
+        conversation_id,
+        history,
+        tools,
+    ) {
+        Err(CompactError::Failed(_)) if !cancel.is_cancelled() => {
+            let mut snapshot = history.to_vec();
+            crate::prefix_cache::drop_older_notes(&mut snapshot);
+            request_summary(client, cancel, model, effort, conversation_id, &snapshot)
+        }
+        other => other,
+    }
+}
+
 pub fn request_summary(
     client: &dyn ModelClient,
     cancel: &CancelToken,
@@ -1362,6 +1419,18 @@ pub fn request_summary(
     effort: Option<&str>,
     conversation_id: &str,
     history: &[InputItem],
+) -> Result<SummaryCall, CompactError> {
+    summary_call(client, cancel, model, effort, conversation_id, history, &[])
+}
+
+fn summary_call(
+    client: &dyn ModelClient,
+    cancel: &CancelToken,
+    model: &str,
+    effort: Option<&str>,
+    conversation_id: &str,
+    history: &[InputItem],
+    tools: &[Value],
 ) -> Result<SummaryCall, CompactError> {
     if cancel.is_cancelled() {
         return Err(CompactError::Cancelled);
@@ -1380,6 +1449,11 @@ pub fn request_summary(
         ),
         None => build_compaction_prompt(None, false),
     };
+    let prompt = if tools.is_empty() {
+        prompt
+    } else {
+        format!("{prompt}\n\n{LIKE_CHAT_NOTE}")
+    };
     input.push(InputItem::Message {
         role: "user".into(),
         content: vec![ContentPart::InputText(prompt)],
@@ -1390,7 +1464,7 @@ pub fn request_summary(
         effort: effort.map(str::to_string),
         input,
         conversation_id: conversation_id.to_string(),
-        tools: Vec::new(),
+        tools: tools.to_vec(),
         hosted_search: false,
         call_timeout: None,
     };
@@ -2503,6 +2577,7 @@ mod tests {
             "conv",
             &mut history,
             &[],
+            &[],
         )
         .expect("manual compact");
         assert_eq!(usage.server, None);
@@ -2529,9 +2604,94 @@ mod tests {
             "conv",
             &mut kept,
             &[],
+            &[],
         );
         assert!(err.is_err());
         assert_eq!(kept, vec![last]);
+    }
+
+    #[test]
+    fn a_summary_compaction_sends_the_chats_last_request_as_its_prefix() {
+        let tool = serde_json::json!({"type": "function", "name": "read_file", "parameters": {"type": "object"}});
+        let tools = vec![tool];
+        let history = vec![
+            text_message("system", "sys"),
+            text_message("user", &cabin_note_text("old playbook")),
+            text_message("assistant", "done"),
+            text_message("user", "last turn"),
+        ];
+        let script = Script {
+            turns: Mutex::new(vec![Ok(TurnOutput {
+                text: "the summary".into(),
+                ..Default::default()
+            })]),
+            seen: Mutex::new(Vec::new()),
+        };
+        let mut chat = history.clone();
+        compact_transcript(
+            &script,
+            &CancelToken::new(),
+            "grok-4.7",
+            None,
+            "conv",
+            &mut chat,
+            &[],
+            &tools,
+        )
+        .expect("compact");
+        let seen = script.seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        let mut sent = history.clone();
+        crate::image_budget::apply_image_budget(&mut sent);
+        assert!(
+            seen[0].input.starts_with(&sent),
+            "the request starts with the chat's input item for item, notes and all"
+        );
+        assert_eq!(seen[0].input.len(), sent.len() + 1);
+        assert_eq!(seen[0].tools, tools, "the chat's tools, unchanged");
+        let ask = message_text(seen[0].input.last().unwrap());
+        assert!(ask.contains(LIKE_CHAT_NOTE));
+        assert!(
+            !chat
+                .iter()
+                .any(|item| message_text(item).contains("old playbook")),
+            "the result still drops earlier notes"
+        );
+        drop(seen);
+
+        // A reply with no text (a tool call) falls back to the plain request once.
+        let script = Script {
+            turns: Mutex::new(vec![
+                Ok(TurnOutput::default()),
+                Ok(TurnOutput {
+                    text: "plain summary".into(),
+                    ..Default::default()
+                }),
+            ]),
+            seen: Mutex::new(Vec::new()),
+        };
+        let mut chat = history.clone();
+        compact_transcript(
+            &script,
+            &CancelToken::new(),
+            "grok-4.7",
+            None,
+            "conv",
+            &mut chat,
+            &[],
+            &tools,
+        )
+        .expect("fallback compact");
+        let seen = script.seen.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        assert!(seen[1].tools.is_empty());
+        assert!(!message_text(seen[1].input.last().unwrap()).contains(LIKE_CHAT_NOTE));
+        assert!(
+            message_text(&chat[1]).contains("plain summary")
+                || chat
+                    .iter()
+                    .any(|i| message_text(i).contains("plain summary"))
+        );
     }
 
     #[test]
@@ -2576,6 +2736,7 @@ mod tests {
             Some("low"),
             "conv",
             &mut history,
+            &[],
             &[],
         )
         .expect("compact after flush");
@@ -2695,6 +2856,7 @@ mod tests {
             None,
             "conv",
             &mut hist,
+            &[],
             &[],
         )
         .expect("second compact");
