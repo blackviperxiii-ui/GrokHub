@@ -17,6 +17,7 @@ pub mod budget;
 pub mod cabin;
 pub mod capabilities;
 pub mod cleanup;
+pub mod coaching;
 pub mod connectivity;
 pub mod difficulty;
 pub mod feedback;
@@ -233,6 +234,13 @@ pub fn call_model(
     let mut sent = call.clone();
     adult::scrub(&mut sent.input);
     if let Some(out) = adult::held_reply(&sent.input) {
+        return Ok(Routed {
+            out,
+            tokens: CallTokens::default(),
+        });
+    }
+    // Round 3 item 37: no gameplay advice during a match that bars it.
+    if let Some(out) = coaching::held_reply(&call.class, &sent.input) {
         return Ok(Routed {
             out,
             tokens: CallTokens::default(),

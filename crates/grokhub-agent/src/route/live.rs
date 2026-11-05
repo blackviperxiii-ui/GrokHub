@@ -1514,6 +1514,11 @@ pub fn stream_routed(
         sink(StreamEvent::TextDelta(held.text.clone()));
         return Ok(held);
     }
+    // Round 3 item 37: no gameplay advice during a match that bars it.
+    if let Some(held) = super::coaching::held_reply(class, &sent.input) {
+        sink(StreamEvent::TextDelta(held.text.clone()));
+        return Ok(held);
+    }
     let (text, needs_image) = last_user_text(&sent.input);
     let mut call = RouteCall {
         provider: super::PROVIDER_XAI,

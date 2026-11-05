@@ -427,6 +427,9 @@ fn run_cabin(hidden: bool) -> eframe::Result<()> {
         return Ok(());
     }
     cabin_async::install();
+    // Round 3 item 37: the router holds gameplay advice during a Riot match.
+    #[cfg(windows)]
+    grokhub_core::game_profile::set_exe_probe(grokhub_desktop::game_guard::exe_names);
     #[cfg(windows)]
     crate::win_native::set_app_user_model_id();
     tray::pin_session_bus();
