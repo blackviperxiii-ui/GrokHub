@@ -2031,6 +2031,80 @@ mod tests {
         assert!(responses_body(&req("off")).get("reasoning").is_none());
     }
 
+    /// The body carries only fields xAI's Responses API reads. Ones it ignores
+    /// or rejects (server-side history, sampling knobs) would cost bytes or a
+    /// 400 and never help: none goes out, for any request shape.
+    #[test]
+    fn responses_body_sends_only_fields_xai_reads() {
+        const ALLOWED: &[&str] = &[
+            "model",
+            "stream",
+            "input",
+            "tools",
+            "max_turns",
+            "reasoning",
+            "store",
+            "prompt_cache_key",
+            "include",
+            "text",
+        ];
+        const NEVER: &[&str] = &[
+            "context_management",
+            "background",
+            "truncation",
+            "metadata",
+            "logprobs",
+            "top_logprobs",
+            "top_p",
+            "temperature",
+            "min_p",
+            "top_k",
+            "reasoning_effort",
+            "previous_response_id",
+        ];
+        let format = TextFormat {
+            name: "pick",
+            schema: r#"{"type":"object","properties":{"a":{"type":"string"}},"required":["a"],"additionalProperties":false}"#,
+        };
+        let req = |model: &str, image: bool, text_format: Option<TextFormat>, hosted: bool| {
+            let part = if image {
+                ContentPart::InputImage("data:image/png;base64,YQ==".into())
+            } else {
+                ContentPart::InputText("hi".into())
+            };
+            ResponsesRequest {
+                text_format,
+                model: model.into(),
+                effort: Some("high".into()),
+                input: vec![InputItem::Message {
+                    role: "user".into(),
+                    content: vec![part],
+                }],
+                conversation_id: "c".into(),
+                tools: crate::tool_schemas(),
+                hosted_search: hosted,
+                call_timeout: None,
+            }
+        };
+        let shapes = [
+            req("grok-4.3", false, None, false),
+            req("grok-4.3", false, None, true),
+            req("grok-4.3", true, None, false),
+            req("grok-4.3", false, Some(format), false),
+            req("grok-4-fast-non-reasoning", false, None, true),
+            req("openai/gpt-5", false, None, true),
+            req("openai/gpt-5", true, Some(format), false),
+            req("", false, None, false),
+        ];
+        for r in &shapes {
+            let body = responses_body(r);
+            for key in body.as_object().unwrap().keys() {
+                assert!(ALLOWED.contains(&key.as_str()), "{}: sends {key}", r.model);
+                assert!(!NEVER.contains(&key.as_str()), "{}: sends {key}", r.model);
+            }
+        }
+    }
+
     #[test]
     fn responses_body_tools_effort_and_store_flag() {
         let plain = ResponsesRequest {

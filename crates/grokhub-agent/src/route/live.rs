@@ -1176,6 +1176,8 @@ pub fn route_record(
         } else {
             String::new()
         },
+        // Set by `route_log`, from the request this call just sent.
+        prefix_break: None,
     }
 }
 
@@ -1316,6 +1318,13 @@ pub fn route_log(
     let mut rec = timing::time("route:log_record", || {
         route_record(config_dir, call, decision, done)
     });
+    // The request this call sent may have rewritten its cached prefix.
+    // The chat path names its conversation in `session`, the router's own
+    // calls in `episode`.
+    rec.prefix_break = crate::prefix_guard::take_staged(call.session)
+        .or_else(|| crate::prefix_guard::take_staged(call.episode))
+        .as_ref()
+        .map(super::log::BreakNote::from);
     let key = episode_key(call);
     if !key.is_empty() {
         let class = class_row(call.class).map(|r| r.class).unwrap_or(call.class);

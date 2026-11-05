@@ -514,3 +514,62 @@ fn at_100_percent_background_pauses_and_chat_asks_until_you_say_go_on() {
     budget::forget_week();
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn the_route_record_after_a_prefix_break_says_where_and_why() {
+    let dir = crate::harness::test_dir("r2b-prefix-break");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    let conv = format!("r2b-break-{}", std::process::id());
+    let call = RouteCall {
+        provider: "xai",
+        class: "chat:default",
+        model: "grok-4.3",
+        episode: &conv,
+        session: &conv,
+        text: "hi",
+        ..RouteCall::default()
+    };
+    let ok = RouteDone {
+        ok: true,
+        http: 200,
+        ..RouteDone::default()
+    };
+    let key = crate::prefix_guard::run_key(&conv, 0, None);
+    let msg = |text: &str| crate::client::InputItem::Message {
+        role: "system".into(),
+        content: vec![crate::client::ContentPart::InputText(text.into())],
+    };
+    let mut req = crate::client::ResponsesRequest {
+        model: "grok-4.3".into(),
+        conversation_id: conv.clone(),
+        input: vec![msg("S")],
+        text_format: None,
+        effort: None,
+        tools: Vec::new(),
+        hosted_search: false,
+        call_timeout: None,
+    };
+    crate::prefix_guard::observe(&key, &req);
+    let d = live::decide(&dir, &call, grokhub_core::now_ms());
+    let rec = live::route_log(&dir, &call, &d, &ok);
+    assert_eq!(rec.prefix_break, None, "the first request breaks nothing");
+    req.input = vec![msg("S2")];
+    crate::prefix_guard::note_trim(&key);
+    crate::prefix_guard::observe(&key, &req);
+    let rec = live::route_log(&dir, &call, &d, &ok);
+    let note = rec
+        .prefix_break
+        .clone()
+        .expect("the break is on the record");
+    assert_eq!((note.part.as_str(), note.index), ("system", 0));
+    assert!(!note.reason.is_empty());
+    let line = serde_json::to_string(&rec).unwrap();
+    assert!(line.contains("\"prefix_break\""), "{line}");
+    // Only the request that followed the break carries it.
+    let rec = live::route_log(&dir, &call, &d, &ok);
+    assert_eq!(rec.prefix_break, None);
+    assert!(!serde_json::to_string(&rec)
+        .unwrap()
+        .contains("prefix_break"));
+    let _ = std::fs::remove_dir_all(dir);
+}

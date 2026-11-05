@@ -1160,6 +1160,7 @@ fn empty_grok_usage() -> GrokUsage {
         meter: String::new(),
         turn_cache_pct: None,
         turn_cache_drop_from: None,
+        turn_cache_drop_reason: None,
     }
 }
 

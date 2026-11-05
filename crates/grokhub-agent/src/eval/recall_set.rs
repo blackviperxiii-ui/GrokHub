@@ -137,6 +137,39 @@ const ROWS: &[Row] = &[
     ),
 ];
 
+/// Asks the notes have nothing to say about: their pack must carry no note
+/// (recall precision), so an off-topic turn pays for no memory tokens.
+const NEGATIVE: &[&str] = &[
+    "how do I boil an egg",
+    "translate thank you into spanish",
+    "who wrote pride and prejudice",
+    "what is the capital of portugal",
+    "give me a haiku about autumn leaves",
+];
+
+/// What an off-topic ask's pack carried from the notes, if anything.
+fn leaked(pack: &str) -> Vec<&'static str> {
+    NOTES
+        .iter()
+        .copied()
+        .chain(std::iter::once("the shelf note number"))
+        .filter(|note| pack.contains(note))
+        .collect()
+}
+
+/// Each off-topic ask with its pack, on the index (legacy) backend.
+fn run_negative() -> Vec<(&'static str, String)> {
+    let (cfg, ws, _guard) = pair();
+    seed(&cfg, &ws);
+    NEGATIVE
+        .iter()
+        .map(|ask| {
+            let pack = crate::memory::first_turn_injection(&ws, ask).unwrap_or_default();
+            (*ask, pack)
+        })
+        .collect()
+}
+
 const fn row(ask: &'static str, kind: Kind, want: &'static str) -> Row {
     Row {
         ask,
@@ -413,6 +446,7 @@ mod tests {
         .unwrap();
         crate::memory_embed::set_test_model(Some(std::sync::Arc::new(model)));
         let results = run();
+        let negative = run_negative();
         crate::memory_embed::set_test_model(None);
         for (ask, kind, hit) in &results {
             println!("{} {kind:?} {ask}", if *hit { "hit " } else { "MISS" });
@@ -428,7 +462,25 @@ mod tests {
             .filter(|(_, kind, hit)| *kind == Kind::Paraphrase && *hit)
             .count();
         println!("paraphrase rows found by meaning: {paraphrase} of 5");
+        for (ask, pack) in &negative {
+            println!("off-topic {ask}: {} bytes injected", pack.len());
+        }
         assert!(paraphrase >= 3, "{paraphrase} of 5 paraphrases");
+    }
+
+    /// An ask the notes don't cover recalls none of them, with word search
+    /// alone and with the meaning model on.
+    #[test]
+    fn off_topic_asks_recall_no_note() {
+        for (ask, pack) in run_negative() {
+            assert_eq!(leaked(&pack), Vec::<&str>::new(), "{ask}: {pack}");
+        }
+        crate::memory_embed::set_test_model(Some(toy_model()));
+        let with_model = run_negative();
+        crate::memory_embed::set_test_model(None);
+        for (ask, pack) in with_model {
+            assert_eq!(leaked(&pack), Vec::<&str>::new(), "{ask}: {pack}");
+        }
     }
 
     /// Paraphrases share no word with their note. Word search misses all five
