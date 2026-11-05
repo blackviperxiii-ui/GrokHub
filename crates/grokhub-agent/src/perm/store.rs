@@ -46,6 +46,11 @@ pub fn config_pinned() -> bool {
     OVERRIDE.with(|slot| slot.borrow().is_some())
 }
 
+/// The folder a [`ConfigGuard`] pinned on this thread, so a worker thread can pin the same one.
+pub fn pinned_config() -> Option<PathBuf> {
+    OVERRIDE.with(|slot| slot.borrow().clone())
+}
+
 pub fn config_dir() -> PathBuf {
     if let Some(dir) = OVERRIDE.with(|slot| slot.borrow().clone()) {
         return dir;

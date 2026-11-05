@@ -167,7 +167,9 @@ fn cost_is_the_providers_figure_or_a_safe_estimate() {
 
 #[test]
 fn the_budget_stops_the_run_and_the_report_says_so() {
-    // Each response costs $0.01; a $0.025 cap allows three responses.
+    // Each response costs $0.01 and holds its input's price (well under
+    // $0.01) before it goes out, so a $0.03 cap allows exactly three: the
+    // fourth can't be covered and is never sent.
     let client: Arc<dyn ModelClient + Send + Sync> = Arc::new(Fixed {
         answers: vec![("exactly the word READY", "READY")],
         cost: 100_000_000,
@@ -177,7 +179,7 @@ fn the_budget_stops_the_run_and_the_report_says_so() {
         only: Some("exact-word".into()),
         ..LiveOpts::new("grok-4.3")
     };
-    let report = run_live(client, &opts, parse_budget("0.025").unwrap());
+    let report = run_live(client, &opts, parse_budget("0.03").unwrap());
     assert!(report.stopped_by_budget);
     assert_eq!(report.spent_ticks, 300_000_000);
     let passed = report.attempts.iter().filter(|a| a.pass).count();
@@ -185,11 +187,12 @@ fn the_budget_stops_the_run_and_the_report_says_so() {
     assert!(report.attempts.iter().all(|a| a.task == "exact-word"));
     let md = render_live(&report);
     assert!(
-        md.contains("spent $0.0300 of $0.0250  ·  stopped at the budget"),
+        md.contains("spent $0.0300 of $0.0300  ·  stopped at the budget"),
         "{md}"
     );
     assert!(md.contains("| cached share | 60.0% |"), "{md}");
     assert!(md.contains("| regression | 100% (3/3) |"), "{md}");
+    assert!(md.contains("| billed failures | 0 |"), "{md}");
 }
 
 #[test]
@@ -613,4 +616,163 @@ fn a_plan_mode_case_gets_its_plan_approved_and_finishes() {
     let a = &report.attempts[0];
     assert_eq!(a.error, None);
     assert!(a.pass, "{}", render_live(&report));
+}
+
+/// Bills each call `cost` (0: its input, priced by the cap), cuts off every
+/// call when `cut`, and compacts on the server when `server`.
+struct Billing {
+    cost: i64,
+    cut: bool,
+    server: bool,
+}
+
+impl ModelClient for Billing {
+    fn stream(
+        &self,
+        req: &ResponsesRequest,
+        _cancel: &CancelToken,
+        _sink: &mut dyn FnMut(StreamEvent),
+    ) -> Result<TurnOutput, ClientError> {
+        if self.cut {
+            return Err(ClientError::CutOff("dropped".into()));
+        }
+        // No cost figure: the cap prices the input it read, as for a real reply.
+        Ok(TurnOutput {
+            text: "ok".into(),
+            usage: Usage {
+                input_tokens: crate::route::local_fit::request_tokens(req),
+                cost_in_usd_ticks: self.cost,
+                ..Usage::default()
+            },
+            ..Default::default()
+        })
+    }
+
+    fn compacts_server_side(&self) -> bool {
+        self.server
+    }
+
+    fn compact(
+        &self,
+        _req: &crate::client::CompactRequest,
+        _cancel: &CancelToken,
+    ) -> Option<Result<crate::client::CompactOutput, ClientError>> {
+        self.server.then(|| {
+            Ok(crate::client::CompactOutput {
+                usage: Usage {
+                    cost_in_usd_ticks: self.cost,
+                    ..Usage::default()
+                },
+                ..Default::default()
+            })
+        })
+    }
+}
+
+fn one_line(text: &str) -> ResponsesRequest {
+    ResponsesRequest {
+        text_format: None,
+        model: "grok-4.3".into(),
+        effort: None,
+        input: vec![InputItem::Message {
+            role: "user".into(),
+            content: vec![ContentPart::InputText(text.into())],
+        }],
+        conversation_id: "c".into(),
+        tools: Vec::new(),
+        hosted_search: false,
+        call_timeout: None,
+    }
+}
+
+#[test]
+fn the_cap_passes_server_compaction_through_and_counts_it() {
+    for server in [true, false] {
+        let inner = Arc::new(Billing {
+            cost: 7,
+            cut: false,
+            server,
+        });
+        let capped = Capped::for_provider(inner, Provider::Grok, TICKS_PER_USD);
+        assert_eq!(capped.compacts_server_side(), server);
+        let req = crate::client::CompactRequest {
+            model: "grok-4.3".into(),
+            input: one_line("fold this").input,
+            conversation_id: "c".into(),
+            timeout: std::time::Duration::from_secs(1),
+        };
+        let out = capped.compact(&req, &CancelToken::new());
+        assert_eq!(out.is_some(), server);
+        assert_eq!(capped.spent_ticks(), if server { 7 } else { 0 });
+    }
+}
+
+#[test]
+fn a_call_cut_off_after_it_was_billed_still_counts() {
+    let inner = Arc::new(Billing {
+        cost: 0,
+        cut: true,
+        server: false,
+    });
+    let capped = Capped::for_provider(inner, Provider::Grok, TICKS_PER_USD);
+    let req = one_line(&"word ".repeat(4000));
+    let err = capped.stream(&req, &CancelToken::new(), &mut |_| {});
+    assert!(matches!(err, Err(ClientError::CutOff(_))));
+    assert_eq!(capped.billed_errors(), 1);
+    let tokens = crate::route::local_fit::request_tokens(&req);
+    assert!(tokens > 0);
+    assert_eq!(
+        capped.spent_ticks(),
+        turn_cost(
+            "grok-4.3",
+            &Usage {
+                input_tokens: tokens,
+                ..Usage::default()
+            }
+        )
+    );
+}
+
+#[test]
+fn parallel_calls_never_spend_past_the_cap_together() {
+    let inner = Arc::new(Billing {
+        cost: 0,
+        cut: false,
+        server: false,
+    });
+    let req = one_line(&"word ".repeat(4000));
+    let one = turn_cost(
+        "grok-4.3",
+        &Usage {
+            input_tokens: crate::route::local_fit::request_tokens(&req),
+            ..Usage::default()
+        },
+    );
+    assert!(one > 0);
+    // Room for four and a half calls: sixteen at once must stop at four.
+    let budget = one * 9 / 2;
+    let capped = Arc::new(Capped::for_provider(inner, Provider::Grok, budget));
+    let barrier = Arc::new(std::sync::Barrier::new(16));
+    let workers: Vec<_> = (0..16)
+        .map(|_| {
+            let capped = Arc::clone(&capped);
+            let barrier = Arc::clone(&barrier);
+            let req = req.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                capped
+                    .stream(&req, &CancelToken::new(), &mut |_| {})
+                    .is_ok()
+            })
+        })
+        .collect();
+    let ok = workers
+        .into_iter()
+        .map(|w| w.join().unwrap())
+        .filter(|ok| *ok)
+        .count();
+    assert_eq!(ok, 4);
+    assert!(capped.out_of_budget());
+    assert_eq!(capped.spent_ticks(), one * 4);
+    assert!(capped.spent_ticks() <= budget);
 }
