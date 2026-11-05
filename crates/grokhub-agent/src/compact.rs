@@ -1136,9 +1136,14 @@ pub fn compact_transcript(
     // never reads a stale playbook as something the person said.
     let mut snapshot = history.clone();
     crate::prefix_cache::drop_older_notes(&mut snapshot);
-    if let Some((rebuilt, done)) =
-        server_compact(client, cancel, model, conversation_id, &snapshot)?
-    {
+    if let Some((rebuilt, done)) = server_compact(
+        client,
+        cancel,
+        model,
+        conversation_id,
+        &snapshot,
+        modified_paths,
+    )? {
         *history = rebuilt;
         return Ok(done);
     }
@@ -1157,7 +1162,8 @@ pub fn compact_transcript(
     if cancel.is_cancelled() {
         return Err(CompactError::Cancelled);
     }
-    *history = build_compacted_history(&snapshot, &call.summary, modified_paths);
+    *history =
+        build_compacted_history_for(conversation_id, &snapshot, &call.summary, modified_paths);
     crate::image_budget::apply_image_budget(history);
     Ok(Compacted {
         usage: call.usage,
@@ -1174,6 +1180,7 @@ fn server_compact(
     model: &str,
     conversation_id: &str,
     items: &[InputItem],
+    modified_paths: &[String],
 ) -> Result<Option<(Vec<InputItem>, Compacted)>, CompactError> {
     if compact_backend(&crate::perm::config_dir(), model) != CompactBackend::Server
         || !client.compacts_server_side()
@@ -1218,6 +1225,11 @@ fn server_compact(
     let mut rebuilt = head.to_vec();
     rebuilt.extend(items_out);
     rebuilt.push(standing_rules_message(&rest[..tail_at]));
+    // The opaque item keeps no todos or file list, so the ledger goes here too.
+    if let Some(ledger) = ledger::ledger_message(conversation_id, &rest[..tail_at], modified_paths)
+    {
+        rebuilt.push(ledger);
+    }
     rebuilt.extend_from_slice(&rest[tail_at..]);
     crate::image_budget::apply_image_budget(&mut rebuilt);
     let detail = grokhub_core::wire::CompactDetail {
@@ -1512,28 +1524,38 @@ pub struct SummaryCall {
     pub usage: Usage,
 }
 
-/// Summary first, then open todos, modified file paths, then the recent verbatim
-/// tail (last user turn plus trailing tool pairs within [`RECENT_TAIL_TOKEN_BUDGET`]).
-/// Leading system messages stay in front of the summary.
+/// Summary first (merged with the prior one a section at a time), then the
+/// harness ledger (files written, commands and how they ended, open todos),
+/// the pinned rules, then the recent verbatim tail (last user turn plus
+/// trailing tool pairs within [`RECENT_TAIL_TOKEN_BUDGET`]). Leading system
+/// messages stay in front of the summary.
+#[cfg(test)]
 pub fn build_compacted_history(
+    items: &[InputItem],
+    summary_raw: &str,
+    modified_paths: &[String],
+) -> Vec<InputItem> {
+    build_compacted_history_for("", items, summary_raw, modified_paths)
+}
+
+/// [`build_compacted_history`] for one chat, whose session todo list the
+/// ledger reads.
+pub fn build_compacted_history_for(
+    conversation_id: &str,
     items: &[InputItem],
     summary_raw: &str,
     modified_paths: &[String],
 ) -> Vec<InputItem> {
     let (head, rest) = split_leading_system(items);
     let mut out = head.to_vec();
+    let prior = extract_prior_summary(items);
+    let merged = ledger::merge_summaries(prior.as_deref(), &format_compact_summary(summary_raw));
     out.push(InputItem::Message {
         role: "user".into(),
-        content: vec![ContentPart::InputText(format_compact_summary_content(
-            summary_raw,
-        ))],
+        content: vec![ContentPart::InputText(wrap_summary(&merged))],
     });
-    let todos = open_todos(items);
-    if !todos.is_empty() {
-        out.push(todos_message(&todos));
-    }
-    if let Some(files) = modified_files_message(modified_paths) {
-        out.push(files);
+    if let Some(ledger) = ledger::ledger_message(conversation_id, items, modified_paths) {
+        out.push(ledger);
     }
     let last_user = rest
         .iter()
@@ -1679,7 +1701,7 @@ pub fn standing_rules(folded: &[InputItem]) -> Vec<String> {
             found.extend(pinned_lines(said));
             continue;
         }
-        // Tagged blocks (<cabin-note>, <todos>, <background-notice>, a summary)
+        // Tagged blocks (<cabin-note>, <harness_ledger>, <background-notice>, a summary)
         // are the app's, not the person's.
         if said.starts_with('<') || said.starts_with("This session is being continued") {
             continue;
@@ -1776,30 +1798,6 @@ pub fn path_from_write_call(name: &str, arguments: &str) -> Option<String> {
         }
     }
     None
-}
-
-fn modified_files_message(paths: &[String]) -> Option<InputItem> {
-    let mut listed = Vec::new();
-    for path in paths {
-        let trimmed = path.trim();
-        if trimmed.is_empty() || listed.iter().any(|p: &String| p == trimmed) {
-            continue;
-        }
-        listed.push(trimmed.to_string());
-    }
-    if listed.is_empty() {
-        return None;
-    }
-    let mut body = String::from("<modified_files>\n");
-    for path in &listed {
-        body.push_str(path);
-        body.push('\n');
-    }
-    body.push_str("</modified_files>");
-    Some(InputItem::Message {
-        role: "user".into(),
-        content: vec![ContentPart::InputText(body)],
-    })
 }
 
 /// Last user turn plus trailing tool call/output pairs within the token budget.
@@ -1951,21 +1949,6 @@ pub fn open_todos(items: &[InputItem]) -> Vec<OpenTodo> {
     todos
 }
 
-fn todos_message(todos: &[OpenTodo]) -> InputItem {
-    let mut body = String::from("<todos>\n");
-    for todo in todos {
-        body.push_str(&format!(
-            "[{}] {}: {}\n",
-            todo.status, todo.id, todo.content
-        ));
-    }
-    body.push_str("</todos>");
-    InputItem::Message {
-        role: "user".into(),
-        content: vec![ContentPart::InputText(body)],
-    }
-}
-
 pub fn message_text(item: &InputItem) -> String {
     let InputItem::Message { content, .. } = item else {
         return String::new();
@@ -2043,8 +2026,12 @@ If the prior conversation contains a note about files at /tmp/compaction/segment
     )
 }
 
+#[cfg(test)]
 pub fn format_compact_summary_content(raw_summary: &str) -> String {
-    let cleaned = format_compact_summary(raw_summary);
+    wrap_summary(&format_compact_summary(raw_summary))
+}
+
+fn wrap_summary(cleaned: &str) -> String {
     format!(
         "This session is being continued from a previous conversation that ran out of context. \
          The summary below covers the earlier portion of the conversation.\n\n\
@@ -2138,6 +2125,9 @@ fn neutralize_compaction_control_tokens(text: &str) -> String {
         .replace("</summary_request>", "<\u{200b}/summary_request>")
         .replace("<summary_request>", "<\u{200b}summary_request>")
 }
+
+#[path = "compact_ledger.rs"]
+mod ledger;
 
 #[cfg(test)]
 #[path = "compact_server_tests.rs"]
@@ -2828,9 +2818,10 @@ mod tests {
             build_compacted_history(&history, "summary", &["src/a.rs".into(), "src/b.rs".into()]);
         let files = compacted
             .iter()
-            .find(|item| message_text(item).contains("<modified_files>"))
+            .find(|item| message_text(item).contains("<harness_ledger>"))
             .map(message_text)
-            .expect("modified files");
+            .expect("ledger with the modified files");
+        assert!(files.contains("Files written:"), "{files}");
         assert!(files.contains("src/a.rs"), "{files}");
         assert!(files.contains("src/b.rs"), "{files}");
         assert_eq!(
