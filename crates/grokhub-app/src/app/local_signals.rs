@@ -489,12 +489,12 @@ fn own_rss_mb(pid: u32) -> Option<u64> {
     use windows_sys::Win32::System::ProcessStatus::{
         K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
     };
-    use windows_sys::Win32::System::Threading::{
-        OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
-    };
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    // Query-limited access is all K32GetProcessMemoryInfo needs. No VM_READ:
+    // some anti-cheats flag any handle that can read memory.
     // SAFETY: the handle is checked and closed here; the counters struct is sized for the call.
     unsafe {
-        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, 0, pid);
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
         if h.is_null() {
             return None;
         }
