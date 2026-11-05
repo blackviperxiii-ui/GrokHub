@@ -25,6 +25,7 @@ pub(crate) mod taint;
 pub(crate) mod talk;
 mod web_fetch;
 pub(crate) mod web_search;
+pub(crate) mod workspace_tools;
 mod write;
 
 pub use registry::Settings as DeferredToolsSettings;
@@ -133,6 +134,16 @@ pub fn begin_deferred_turn(session: &str) {
     registry::begin_turn(session);
 }
 
+/// Item 33: count a chat's session in its workspace and freeze the workspace's
+/// up-front tool list for it. A chat already started keeps its list.
+pub fn start_workspace_session(session: &str, workspace: &Path) {
+    // Tests that share a config folder would count each other's sessions.
+    if cfg!(test) && crate::perm::pinned_config().is_none() {
+        return;
+    }
+    workspace_tools::start(&crate::perm::config_dir(), session, workspace);
+}
+
 /// LO-45: give the chat's Brief to the tool router. The first Brief picks the
 /// chat's tool profile; a later work Brief upgrades a Talk chat.
 pub fn note_turn_brief(session: &str, brief: &crate::brain::Brief) {
@@ -177,6 +188,9 @@ pub fn dispatch_for_job(
         if !set.allows(name) {
             return ToolOutput::err(set::tool_set_refusal(name));
         }
+    }
+    if let Some(session) = ctx.session {
+        workspace_tools::note_use(&crate::perm::config_dir(), session, name);
     }
     let args = match parse_args(arguments) {
         Ok(args) => args,

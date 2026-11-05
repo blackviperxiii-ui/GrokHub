@@ -189,8 +189,14 @@ fn offer(gate: &Gate, cfg: Settings) -> Offer {
     }
     let session = current_session().unwrap_or_default();
     let talk = talk_shaped(&session, cfg);
-    // Indexed (not eager): deferred rows, plus the demoted ones on Talk.
-    let indexed = |def: &ToolDef| def.defer || (talk && talk::is_demoted(def.name));
+    let ws = workspace_plan(&session);
+    // Indexed (not eager): deferred rows, plus the demoted ones on Talk, and
+    // this workspace's own changes, frozen for the session.
+    let indexed = |def: &ToolDef| {
+        (def.defer && !ws.promotes(def.name))
+            || (talk && talk::is_demoted(def.name))
+            || ws.demotes(def.name)
+    };
     let rows = offered_defs(gate);
     let mut stable: Vec<Value> = rows
         .iter()
@@ -231,6 +237,14 @@ fn offer(gate: &Gate, cfg: Settings) -> Offer {
         stable.extend(crate::mcp::chat_schema_tools(&session, native));
     }
     Offer { stable, volatile }
+}
+
+/// Item 33: this chat's per-workspace list changes. A bound job keeps its own set.
+fn workspace_plan(session: &str) -> super::workspace_tools::Plan {
+    if session.is_empty() || crate::run::has_job_tool_set(session) {
+        return super::workspace_tools::Plan::default();
+    }
+    super::workspace_tools::plan(session)
 }
 
 fn legacy_schemas(gate: &Gate) -> Vec<Value> {
@@ -367,6 +381,10 @@ pub fn run_load_tool_schema(args: &Value) -> ToolOutput {
         let session = current_session().unwrap_or_default();
         if talk::is_demoted(name) && talk_shaped(&session, settings(&crate::perm::config_dir())) {
             upgrade_talk(&session);
+            return finish_load(name, (def.schema)());
+        }
+        // This workspace sent it to the index for the session: load it alone.
+        if workspace_plan(&session).demotes(name) {
             return finish_load(name, (def.schema)());
         }
         return ToolOutput::err(format!(

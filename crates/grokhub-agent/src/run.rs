@@ -556,6 +556,9 @@ fn run_turn(
         })
         .filter(|block| !block.is_empty());
     tools::begin_deferred_turn(input.conversation_id);
+    if input.depth == 0 && !input.conversation_id.is_empty() {
+        tools::start_workspace_session(input.conversation_id, input.workspace);
+    }
     if first_turn {
         crate::prefix_cache::push_stable_system(history, input.system);
     }
@@ -665,6 +668,13 @@ fn run_turn(
     }
     let mut step_ended: Option<std::time::Instant> = None;
     let mut turns = 0u32;
+    // Item 33: a step budget learned from past runs of this kind, and one
+    // redirect before the token budget pauses the run.
+    let mut turn_budget = crate::turn_budget::TurnBudget::new(
+        (input.depth == 0)
+            .then(|| crate::turn_budget::for_ask(&crate::perm::config_dir(), user_text))
+            .flatten(),
+    );
     let guard_key =
         crate::prefix_guard::run_key(input.conversation_id, input.depth, input.agent_id);
     // At most one trim pass changes the history per turn, so it costs the prompt
@@ -1526,6 +1536,15 @@ fn run_turn(
                 history.push(cabin_note(&format!("Checkpoint: {}", gaps.note())));
             }
             checkpoint_due = due;
+        }
+        let calls_ran = u32::try_from(turn.calls.len()).unwrap_or(u32::MAX);
+        if let Some(note) = turn_budget.after_steps(calls_ran) {
+            history.push(cabin_note(&note));
+        }
+        if let Some(note) =
+            turn_budget.after_tokens(run_tokens, run_token_budget(input.max_turns, input.depth))
+        {
+            history.push(cabin_note(&note));
         }
         if let Some(note) = progress.as_mut().and_then(|p| {
             p.check(
