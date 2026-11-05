@@ -37,7 +37,7 @@ pub fn enabled(config_dir: &Path) -> bool {
 
 fn parse_file(text: &str) -> Settings {
     Settings {
-        enabled: crate::config_file::parse(CONFIG_NAME, text).flag("enabled", false),
+        enabled: crate::config_file::parse(CONFIG_NAME, text, &["enabled"]).flag("enabled", false),
     }
 }
 

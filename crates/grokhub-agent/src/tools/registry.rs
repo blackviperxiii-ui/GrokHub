@@ -80,7 +80,7 @@ pub fn settings(config_dir: &Path) -> Settings {
 
 fn parse_file(text: &str) -> Settings {
     Settings {
-        enabled: crate::config_file::parse(CONFIG_NAME, text).flag("enabled", true),
+        enabled: crate::config_file::parse(CONFIG_NAME, text, &["enabled"]).flag("enabled", true),
     }
 }
 

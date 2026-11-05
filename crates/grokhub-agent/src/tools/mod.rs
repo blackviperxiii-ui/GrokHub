@@ -35,6 +35,11 @@ pub use web_search::{
 };
 
 /// Whether `{config_dir}/deferred_tools.toml` has `enabled = true`.
+/// `generative_ui.toml` turns show_panel and the chat's panels on, read the one way.
+pub fn generative_ui_enabled(config_dir: &Path) -> bool {
+    show_panel::enabled(config_dir)
+}
+
 pub fn deferred_tools_enabled(config_dir: &Path) -> bool {
     registry::settings(config_dir).enabled
 }

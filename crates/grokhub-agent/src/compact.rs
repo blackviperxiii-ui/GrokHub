@@ -71,8 +71,8 @@ pub fn summary_forced(config_dir: &Path) -> bool {
 }
 
 fn parse_compaction_file(text: &str) -> Option<CompactBackend> {
-    let file = crate::config_file::parse(COMPACTION_CONFIG, text);
-    match file.get("backend")?.to_ascii_lowercase().as_str() {
+    let file = crate::config_file::parse(COMPACTION_CONFIG, text, &["backend"]);
+    match file.one_of("backend", &["summary", "server"], "the model's own")? {
         "summary" => Some(CompactBackend::Summary),
         "server" => Some(CompactBackend::Server),
         _ => None,
@@ -165,7 +165,8 @@ pub fn tool_output_compact_settings(config_dir: &Path) -> ToolOutputCompactSetti
 }
 
 fn parse_tool_output_compact_file(text: &str) -> ToolOutputCompactSettings {
-    let file = crate::config_file::parse(TOOL_OUTPUT_COMPACT_CONFIG, text);
+    let file =
+        crate::config_file::parse(TOOL_OUTPUT_COMPACT_CONFIG, text, &["enabled", "min_bytes"]);
     let defaults = ToolOutputCompactSettings::default();
     ToolOutputCompactSettings {
         enabled: file.flag("enabled", defaults.enabled),
@@ -483,7 +484,19 @@ pub fn history_trim_settings(config_dir: &Path) -> HistoryTrimSettings {
 }
 
 fn parse_history_trim_file(text: &str) -> HistoryTrimSettings {
-    let file = crate::config_file::parse(HISTORY_TRIM_CONFIG, text);
+    let file = crate::config_file::parse(
+        HISTORY_TRIM_CONFIG,
+        text,
+        &[
+            "enabled",
+            "age_out",
+            "age_out_min_bytes",
+            "age_out_user_turns",
+            "keep_recent_outputs",
+            "mask_min_bytes",
+            "keep_recent_images",
+        ],
+    );
     let d = HistoryTrimSettings::default();
     HistoryTrimSettings {
         enabled: file.flag("enabled", d.enabled),
