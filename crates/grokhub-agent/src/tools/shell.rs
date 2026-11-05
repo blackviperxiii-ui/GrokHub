@@ -290,7 +290,11 @@ fn bash(
         cmd.args(&argv[1..]);
         cmd
     };
+    // `bash -c` still sources $BASH_ENV, and `sh` sources $ENV, even with
+    // --noprofile --norc. Neither belongs in an agent command.
     cmd.current_dir(cwd)
+        .env_remove("BASH_ENV")
+        .env_remove("ENV")
         .envs(crate::sudo_pass::shell_env())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

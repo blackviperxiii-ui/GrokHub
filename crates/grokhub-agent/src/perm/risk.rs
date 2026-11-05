@@ -34,7 +34,23 @@ const INJECTION_ENV_KEYS: &[&str] = &[
     "PATH",
     "GIT_EXTERNAL_DIFF",
     "GIT_PROXY_COMMAND",
+    "GIT_SSH",
+    "GIT_SSH_COMMAND",
+    "GIT_ASKPASS",
+    "GIT_EXEC_PATH",
+    "GIT_TEMPLATE_DIR",
     "PROMPT_COMMAND",
+    // Interpreter start-up hooks: each runs code the command never named.
+    "NODE_OPTIONS",
+    "PYTHONSTARTUP",
+    "PYTHONPATH",
+    "PYTHONHOME",
+    "PERL5OPT",
+    "PERL5LIB",
+    "RUBYOPT",
+    "RUBYLIB",
+    "JAVA_TOOL_OPTIONS",
+    "_JAVA_OPTIONS",
 ];
 
 const INJECTION_ENV_PREFIXES: &[&str] = &["LD_", "DYLD_", "GIT_CONFIG"];

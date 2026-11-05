@@ -267,7 +267,7 @@ pub fn constrain_tool(hook: ToolHook<'_>) -> ToolConstraint {
         "",
     );
     let env = identity_env("PreToolUse", hook.session, &cwd, hook.name, hook.arguments);
-    let verdict = run_chain(&found, hook.workspace, body.as_bytes(), &env, false);
+    let verdict = run_chain_closed(&found, hook.workspace, body.as_bytes(), &env);
     apply_tighten(hook.decision, hook.ask_reason, hook.attended, verdict)
 }
 
@@ -551,6 +551,10 @@ fn apply_tighten(
     }
 }
 
+/// The reason a tool asks when a hook that checks it could not run.
+const HOOK_DID_NOT_RUN: &str =
+    "A hook that checks this tool could not run, so the call needs your OK.";
+
 fn run_chain(
     hooks: &[Loaded],
     workspace: &Path,
@@ -558,6 +562,33 @@ fn run_chain(
     env: &[(String, String)],
     prompt_or_stop: bool,
 ) -> Verdict {
+    chain(hooks, workspace, stdin, env, prompt_or_stop, false)
+}
+
+/// [`run_chain`] for a PreToolUse check: a hook that failed to start or ran
+/// out of time could have denied the call, so it asks instead of letting the
+/// call through unchecked.
+fn run_chain_closed(
+    hooks: &[Loaded],
+    workspace: &Path,
+    stdin: &[u8],
+    env: &[(String, String)],
+) -> Verdict {
+    chain(hooks, workspace, stdin, env, false, true)
+}
+
+fn chain(
+    hooks: &[Loaded],
+    workspace: &Path,
+    stdin: &[u8],
+    env: &[(String, String)],
+    prompt_or_stop: bool,
+    fail_closed: bool,
+) -> Verdict {
+    let did_not_run = || Verdict::Ask {
+        reason: HOOK_DID_NOT_RUN.to_string(),
+        context: String::new(),
+    };
     let mut ask: Option<Verdict> = None;
     let mut allow: Option<String> = None;
     for hook in hooks {
@@ -574,8 +605,16 @@ fn run_chain(
             &hook.source_dir,
         ) {
             Ok(proc) => proc,
-            Err(_) => continue,
+            Err(_) => {
+                if fail_closed && ask.is_none() {
+                    ask = Some(did_not_run());
+                }
+                continue;
+            }
         };
+        if fail_closed && proc.timed_out && ask.is_none() {
+            ask = Some(did_not_run());
+        }
         match interpret(&proc, prompt_or_stop) {
             Verdict::Deny { reason } => return Verdict::Deny { reason },
             Verdict::Ask { reason, context } => {
@@ -1459,6 +1498,56 @@ mod tests {
             started.elapsed() < Duration::from_secs(20),
             "hook stdin blocked: {:?}",
             started.elapsed()
+        );
+        drop(guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_tool_hook_that_times_out_asks_instead_of_letting_the_call_run() {
+        let dir = scratch("closed");
+        let session = format!("closed-{}", std::process::id());
+        let guard = install_test_hooks(
+            &session,
+            vec![TestHook {
+                event: "PreToolUse".into(),
+                matcher: String::new(),
+                command: "sleep 30".into(),
+                timeout: Duration::from_millis(300),
+                source_dir: dir.clone(),
+            }],
+        );
+        let attended = constrain_tool(ToolHook {
+            session: &session,
+            workspace: &dir,
+            attended: true,
+            decision: Decision::Run,
+            ask_reason: String::new(),
+            name: "write",
+            arguments: "{}",
+            tool_use_id: "closed",
+        });
+        assert!(
+            matches!(attended.decision, Decision::Ask),
+            "{:?}",
+            attended.decision
+        );
+        assert_eq!(attended.ask_reason, HOOK_DID_NOT_RUN);
+        let unattended = constrain_tool(ToolHook {
+            session: &session,
+            workspace: &dir,
+            attended: false,
+            decision: Decision::Run,
+            ask_reason: String::new(),
+            name: "write",
+            arguments: "{}",
+            tool_use_id: "closed2",
+        });
+        assert!(
+            matches!(unattended.decision, Decision::Refuse(_)),
+            "{:?}",
+            unattended.decision
         );
         drop(guard);
         let _ = std::fs::remove_dir_all(&dir);

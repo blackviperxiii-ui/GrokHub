@@ -127,6 +127,24 @@ fn doc_table_split_match_and_severity() {
         ("ls > /dev/null", Some("ls"), true, false),
         ("env -S 'rm -rf /'", None, false, true),
         ("LD_PRELOAD=x ls", Some("ls"), false, true),
+        (
+            "NODE_OPTIONS=--require=./x.js npm test",
+            Some("npm test"),
+            false,
+            true,
+        ),
+        (
+            "PYTHONSTARTUP=x.py python3 -V",
+            Some("python3 -V"),
+            false,
+            true,
+        ),
+        (
+            "GIT_SSH_COMMAND=./x git fetch",
+            Some("git fetch"),
+            false,
+            true,
+        ),
         ("FOO=1 npm test", Some("npm test"), false, false),
         ("timeout.exe 30 rm -rf /", Some("rm -rf /"), false, true),
     ];
