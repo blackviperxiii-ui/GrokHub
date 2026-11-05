@@ -149,6 +149,35 @@ fn a_long_powershell_command_with_emoji_round_trips() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The UTF-8 prelude sits on its own line: a parse error in the command
+/// still shows the command's whole line, and loading a module on first use
+/// writes no progress noise into the output.
+#[cfg(windows)]
+#[test]
+fn a_powershell_error_shows_the_whole_command_and_no_progress_noise() {
+    let dir = scratch("ps-err");
+    let out = super::shell::run(
+        &dir,
+        &json!({"command": "echo first-part && echo second-part"}),
+        &|| false,
+    );
+    assert!(
+        out.text.contains("echo first-part && echo second-part"),
+        "{}",
+        out.text
+    );
+    assert!(!out.text.contains("GrokHubUtf8"), "{}", out.text);
+    let out = super::shell::run(
+        &dir,
+        &json!({"command": "Get-ChildItem -LiteralPath . | Out-Null; Write-Output listed"}),
+        &|| false,
+    );
+    assert!(!out.failed, "{}", out.text);
+    assert!(!out.text.contains("CLIXML"), "{}", out.text);
+    assert_eq!(unix_newlines(&out.text), "exit 0\nlisted");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn newline_helper_only_touches_crlf() {
     assert_eq!(unix_newlines("a\r\nb\rc\n"), "a\nb\rc\n");

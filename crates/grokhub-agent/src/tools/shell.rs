@@ -1499,10 +1499,12 @@ mod win {
 
     /// Opens every agent and hook script: UTF-8 in and out, so text that
     /// isn't ASCII survives the pipes (Windows PowerShell 5.1 otherwise uses
-    /// the console's OEM code page and the output decodes as `?`). On the
-    /// first line, so error line numbers still match the command's own. Each
+    /// the console's OEM code page and the output decodes as `?`), and no
+    /// progress records, which reach a piped stderr as CLIXML noise. Plain
+    /// .NET calls, so no module loads for it. On a line of its own, so an
+    /// error shows the command's whole line and the right column. Each
     /// switch is tried on its own, so one that fails leaves the others.
-    pub(super) const PS_PRELUDE: &str = "$GrokHubUtf8 = New-Object System.Text.UTF8Encoding $false; $OutputEncoding = $GrokHubUtf8; try { [Console]::OutputEncoding = $GrokHubUtf8 } catch {}; try { [Console]::InputEncoding = $GrokHubUtf8 } catch {}; ";
+    pub(super) const PS_PRELUDE: &str = "$GrokHubUtf8 = [System.Text.UTF8Encoding]::new($false); $OutputEncoding = $GrokHubUtf8; $ProgressPreference = 'SilentlyContinue'; try { [Console]::OutputEncoding = $GrokHubUtf8 } catch {}; try { [Console]::InputEncoding = $GrokHubUtf8 } catch {}\n";
     /// CreateProcess takes 32,767 UTF-16 units for the whole command line.
     pub(super) const CMDLINE_MAX: usize = 32_000;
 
@@ -1540,7 +1542,7 @@ mod win {
             .map_err(|err| format!("could not stage a long command: {err}"))?;
         let quoted = path.display().to_string().replace('\'', "''");
         Ok(line(&format!(
-            "$p = '{quoted}'; $s = [IO.File]::ReadAllText($p); Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue; . ([scriptblock]::Create($s))"
+            "$p = '{quoted}'; $s = [IO.File]::ReadAllText($p); try {{ [IO.File]::Delete($p) }} catch {{}}; . ([scriptblock]::Create($s))"
         )))
     }
 
