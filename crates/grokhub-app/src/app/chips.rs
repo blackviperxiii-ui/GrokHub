@@ -28,12 +28,44 @@ fn chip_chat_runs_immediately(chip: &QuickChip, composer_draft: &str) -> bool {
     false
 }
 
+/// The composer text a shell chip leaves: one `/sh` line, ready to check
+/// and run with Enter.
+fn shell_chip_draft(value: &str) -> String {
+    let cmd = value.trim().trim_start_matches('$').trim();
+    let cmd = cmd.strip_prefix("/sh ").unwrap_or(cmd).trim();
+    format!("/sh {cmd}")
+}
+
+/// A chat chip picked while a draft is typed: the chip's text goes after
+/// the draft on its own line, so nothing typed is lost. A chip whose text
+/// already starts with the draft (expand-draft) replaces it.
+fn draft_with_chip(draft: &str, value: &str) -> String {
+    let draft = draft.trim_end();
+    let value = value.trim();
+    if draft.is_empty() || value.starts_with(draft) {
+        // Empty box, or the chip already builds on the draft (expand-draft).
+        value.to_string()
+    } else if value.is_empty() || draft.ends_with(value) {
+        draft.to_string()
+    } else {
+        format!("{draft}\n{value}")
+    }
+}
+
+/// Only the chip in the first slot carries the primary style, after every
+/// insert and re-order.
+fn mark_first_primary(chips: &mut [QuickChip]) {
+    for (i, c) in chips.iter_mut().enumerate() {
+        c.primary = i == 0;
+    }
+}
+
 fn chip_action_tip(chip: &QuickChip, composer_draft: &str) -> String {
     match chip.kind {
         ChipKind::Nav => "Opens this page — nothing is sent".into(),
         // Retired: never offered (old chip memory only). Nothing happens.
         ChipKind::Mode => "Nothing is sent".into(),
-        ChipKind::Shell => "Runs on the host when you send — review the command first".into(),
+        ChipKind::Shell => "Puts the command in the box — check it, then press Enter to run".into(),
         ChipKind::Chat => {
             if chip_chat_runs_immediately(chip, composer_draft) {
                 if chip.value.trim().starts_with('/') {
@@ -43,7 +75,7 @@ fn chip_action_tip(chip: &QuickChip, composer_draft: &str) -> String {
                         .into()
                 }
             } else {
-                "Inserts draft text — edit and send when ready (never auto-sends)".into()
+                "Adds to what you typed — edit and send when ready (never auto-sends)".into()
             }
         }
     }
@@ -523,12 +555,7 @@ impl Cabin {
         }
         let mut chips = self.visible_chips.clone();
         if let Some(c) = skill_offer_chip(&self.composer, &self.skill_list) {
-            let gone = grokhub_core::chip_dismissed_for_good(&self.chip_memory, &c)
-                || self
-                    .chip_dismissed
-                    .iter()
-                    .any(|d| d == &c.id || d == &c.value);
-            if !gone && chips.iter().all(|x| x.id != c.id) {
+            if !self.chip_hidden(&c) && chips.iter().all(|x| x.id != c.id) {
                 chips.insert(0, c);
             }
         }
@@ -540,6 +567,9 @@ impl Cabin {
         resume.extend(self.backup_chips());
         resume.extend(self.radar_chips());
         resume.extend(self.game_chips());
+        // One × rule for every chip on the row: a hidden feature chip stays
+        // hidden after a restart, like a core chip.
+        resume.retain(|c| !self.chip_hidden(c));
         // A clicked resume chip is remembered and can come back as a plain chip.
         chips.retain(|x| {
             resume
@@ -547,11 +577,26 @@ impl Cabin {
                 .all(|r| r.id != x.id && r.value != x.value && r.label != x.label)
         });
         chips.splice(0..0, resume);
-        if let Some(c) = self.focus_chip() {
+        if let Some(c) = self.focus_chip().filter(|c| !self.chip_hidden(c)) {
             chips.retain(|x| x.id != c.id);
             chips.insert(0, c);
         }
+        // A shell chip fills the box with its command; with a draft typed
+        // there is no room for it, so it waits until the box is empty.
+        if !self.composer.trim().is_empty() {
+            chips.retain(|c| c.kind != ChipKind::Shell);
+        }
+        mark_first_primary(&mut chips);
         chips
+    }
+
+    /// True when the person hid this chip, this session or for good.
+    fn chip_hidden(&self, chip: &QuickChip) -> bool {
+        grokhub_core::chip_dismissed_for_good(&self.chip_memory, chip)
+            || self
+                .chip_dismissed
+                .iter()
+                .any(|d| d == &chip.id || d == &chip.value)
     }
 
     /// Home's row. A chat chip starts its own chat, like an ask typed on
@@ -632,10 +677,12 @@ impl Cabin {
             }
             // No chip changes the model or effort: the router alone picks them.
             ChipKind::Mode => {}
+            // A shell chip never runs on tap: it puts the command in the box
+            // so the person sees it, and Enter runs it through the same path
+            // (and the same destructive-command confirm) as a typed `/sh`.
             ChipKind::Shell => {
-                let cmd = chip.value.trim().trim_start_matches('$').trim();
-                let cmd = cmd.strip_prefix("/sh ").unwrap_or(cmd);
-                self.run_slash(Slash::Sh(cmd.to_string()));
+                self.composer = shell_chip_draft(&chip.value);
+                self.composer_want_focus = true;
             }
             ChipKind::Chat => {
                 // Slash chips use the typed send path so `/learn` click and Enter
@@ -644,10 +691,21 @@ impl Cabin {
                     self.composer.clear();
                     // The send below is the chip's turn, not a typed one.
                     self.chip_send_key = Some(grokhub_core::chip_memory_key(&chip));
+                    // A send that can't go out (signed out) puts the text back
+                    // in the box; it is still the chip's text, not a draft.
+                    self.composer_chip_text = chip.value.clone();
                     self.send_chat(chip.value);
                     self.chip_send_key = None;
                 } else {
-                    self.composer = chip.value;
+                    // Never replace what the person typed: add to it. Text a
+                    // chip put there (and nobody edited) is swapped instead.
+                    let typed = if self.composer == self.composer_chip_text {
+                        ""
+                    } else {
+                        self.composer.as_str()
+                    };
+                    self.composer = draft_with_chip(typed, &chip.value);
+                    self.composer_chip_text = self.composer.clone();
                     self.composer_want_focus = true;
                 }
             }
@@ -997,11 +1055,72 @@ pub mod row {
         primary
     }
 
+    /// One hint segment in plain words. The engine's hints were written for
+    /// debugging ("Predicted · finish · Mid-thread"); the tooltip is for people.
+    fn plain_why_part(part: &str) -> Option<String> {
+        let part = part.trim();
+        let intent = |s: &str| -> Option<&'static str> {
+            Some(match s.trim() {
+                "finish" | "finish work" => "finish the job",
+                "fix" | "fix something" => "fix something",
+                "ship" | "build/ship" => "build or ship it",
+                "explain" => "understand it",
+                "host" | "run on host" => "run something on your PC",
+                "decide" => "make a call",
+                "create" => "make something",
+                "continue" => "keep going",
+                "review" => "check the work",
+                "chat" => "keep chatting",
+                _ => return None,
+            })
+        };
+        if part.is_empty() || part == "Predicted" {
+            return None;
+        }
+        if let Some(i) = intent(part) {
+            return Some(format!("Looks like you want to {i}"));
+        }
+        if let Some(rest) = part.strip_prefix("Predicted next:") {
+            return Some(match intent(rest) {
+                Some(i) => format!("Looks like you want to {i}"),
+                None => "A likely next step".into(),
+            });
+        }
+        let plain = match part {
+            "Highest-ranked next action" => "A likely next step",
+            "Mid-thread" => "You're mid-conversation",
+            "Predicted for this time of day" => "You often do this around now",
+            "Predicted — last attempt failed" => "The last try didn't work",
+            "Predicted incomplete turn" => "The last reply looks unfinished",
+            "Predicted: you need action, not another plan" => {
+                "The reply was a plan; this acts on it"
+            }
+            _ if part.starts_with("Predicted match") => "Matches what you're typing",
+            _ if part.starts_with("Predicted") => "Based on what you're typing",
+            _ => return Some(part.to_string()),
+        };
+        Some(plain.to_string())
+    }
+
+    /// A chip hint in plain words, one reason per line, no repeats.
+    fn plain_why(hint: &str) -> String {
+        let mut lines: Vec<String> = Vec::new();
+        for part in hint.split(['\n', '·']) {
+            if let Some(p) = plain_why_part(part) {
+                if !lines.contains(&p) {
+                    lines.push(p);
+                }
+            }
+        }
+        lines.join("\n")
+    }
+
     pub fn chip_why_tip(hint: &str, label: &str) -> String {
         let why = hint.trim();
         if why == "New here" {
             return "Suggested because you're new here".into();
         }
+        let why = plain_why(why);
         if !why.is_empty() {
             return format!("Why this?\n{why}");
         }
@@ -1314,5 +1433,161 @@ mod chip_apply_tests {
 
         let _ = std::fs::remove_dir_all(&root);
         unsafe { std::env::remove_var("GROKHUB_CONFIG") };
+    }
+
+    fn chip_of(id: &str, kind: ChipKind, score: f32) -> QuickChip {
+        QuickChip {
+            id: id.into(),
+            label: id.into(),
+            value: id.into(),
+            kind,
+            score,
+            hint: String::new(),
+            primary: false,
+        }
+    }
+
+    #[test]
+    fn shell_chip_fills_the_box_and_never_runs() {
+        assert_eq!(shell_chip_draft("$ cargo test"), "/sh cargo test");
+        assert_eq!(shell_chip_draft("/sh git status"), "/sh git status");
+        assert_eq!(shell_chip_draft("  ls -la "), "/sh ls -la");
+
+        let mut cabin = Cabin::quiet_for_test();
+        let mut chip = chip_of("shell", ChipKind::Shell, 1.0);
+        chip.value = "rm -rf build".into();
+        cabin.apply_chip(chip);
+        assert_eq!(cabin.composer, "/sh rm -rf build");
+        assert!(!cabin.running, "a tap only fills the box");
+        assert!(cabin.messages.is_empty());
+        assert!(cabin.composer_want_focus);
+    }
+
+    #[test]
+    fn chat_chip_adds_to_a_typed_draft() {
+        assert_eq!(draft_with_chip("", "Explain this"), "Explain this");
+        assert_eq!(
+            draft_with_chip("the build broke ", "Fix it"),
+            "the build broke\nFix it"
+        );
+        assert_eq!(draft_with_chip("Fix it", "Fix it"), "Fix it");
+        assert_eq!(
+            draft_with_chip("fix the leak", "fix the leak. Be concrete."),
+            "fix the leak. Be concrete."
+        );
+
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.composer = "my notes on the wall".into();
+        cabin.apply_chip(chat_chip("a", "A", "Summarize it"));
+        assert_eq!(cabin.composer, "my notes on the wall\nSummarize it");
+        assert!(!cabin.running);
+    }
+
+    #[test]
+    fn a_second_chip_swaps_text_the_first_chip_put_there() {
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.composer = "typed".into();
+        cabin.composer_chip_text = "typed".into();
+        cabin.apply_chip(chat_chip("b", "B", "Plan it"));
+        assert_eq!(cabin.composer, "Plan it");
+        // The person edits the chip's text: now it is theirs and is kept.
+        cabin.composer.push_str(" today");
+        cabin.apply_chip(chat_chip("c", "C", "Be brief"));
+        assert_eq!(cabin.composer, "Plan it today\nBe brief");
+    }
+
+    #[test]
+    fn only_the_first_chip_is_primary() {
+        let mut chips = vec![
+            QuickChip {
+                primary: true,
+                ..chip_of("a", ChipKind::Chat, 1.0)
+            },
+            QuickChip {
+                primary: true,
+                ..chip_of("b", ChipKind::Chat, 2.0)
+            },
+            chip_of("c", ChipKind::Nav, 3.0),
+        ];
+        mark_first_primary(&mut chips);
+        assert_eq!(
+            chips.iter().map(|c| c.primary).collect::<Vec<_>>(),
+            vec![true, false, false]
+        );
+    }
+
+    #[test]
+    fn shell_chips_wait_for_an_empty_box() {
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.visible_chips = vec![
+            chip_of("shell", ChipKind::Shell, 2.0),
+            chip_of("chat", ChipKind::Chat, 1.0),
+        ];
+        cabin.composer = "half a thought".into();
+        assert!(cabin
+            .composer_chips()
+            .iter()
+            .all(|c| c.kind != ChipKind::Shell));
+        cabin.composer.clear();
+        assert!(cabin.composer_chips().iter().any(|c| c.id == "shell"));
+    }
+
+    #[test]
+    fn a_hidden_chip_stays_hidden() {
+        let mut cabin = Cabin::quiet_for_test();
+        let chip = chip_of("radar:new", ChipKind::Nav, 1.0);
+        assert!(!cabin.chip_hidden(&chip));
+        cabin.chip_dismissed.push("radar:new".into());
+        assert!(cabin.chip_hidden(&chip));
+    }
+
+    #[test]
+    fn why_tip_speaks_plainly() {
+        let tip = |h: &str| row::chip_why_tip(h, "x");
+        assert_eq!(
+            tip("Predicted · finish · Mid-thread"),
+            "Why this?\nLooks like you want to finish the job\nYou're mid-conversation"
+        );
+        assert_eq!(
+            tip("Predicted match"),
+            "Why this?\nMatches what you're typing"
+        );
+        assert_eq!(
+            tip("Highest-ranked next action"),
+            "Why this?\nA likely next step"
+        );
+        assert_eq!(
+            tip("Predicted next: fix"),
+            "Why this?\nLooks like you want to fix something"
+        );
+        assert_eq!(
+            tip("Predicted for this time of day"),
+            "Why this?\nYou often do this around now"
+        );
+        assert_eq!(tip("Last slash"), "Why this?\nLast slash");
+        for h in ["Predicted · ship", "Predicted match · Predicted next: x"] {
+            assert!(!tip(h).contains("Predicted"), "{h} -> {}", tip(h));
+        }
+    }
+
+    #[test]
+    fn lane_only_breaks_near_ties() {
+        let mut chips = vec![
+            QuickChip {
+                label: "Open Imagine".into(),
+                value: "__nav:imagine".into(),
+                ..chip_of("imagine", ChipKind::Nav, 100.0)
+            },
+            QuickChip {
+                label: "Ship it".into(),
+                value: "Ship a minimal solid slice.".into(),
+                ..chip_of("ship", ChipKind::Chat, 40.0)
+            },
+        ];
+        super::super::glance::bias_chips_for_lane(&mut chips, super::super::CabinLane::Coding);
+        assert_eq!(chips[0].id, "imagine", "a far stronger chip keeps its spot");
+        chips[1].score = 95.0;
+        super::super::glance::bias_chips_for_lane(&mut chips, super::super::CabinLane::Coding);
+        assert_eq!(chips[0].id, "ship", "inside one band the lane decides");
     }
 }

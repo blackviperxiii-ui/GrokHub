@@ -2198,6 +2198,7 @@ fn quiet_cabin() -> Cabin {
         native_maximize_due: false,
         imagine_want_focus: false,
         composer_want_focus: false,
+        composer_chip_text: String::new(),
         settings_sec: super::SettingsSec::Account,
         market: Default::default(),
         picker: Default::default(),

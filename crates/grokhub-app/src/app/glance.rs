@@ -44,8 +44,19 @@ fn chip_leans_coding(chip: &QuickChip) -> bool {
 }
 
 /// Reorder existing chips. Does not invent tiles or rebrand Imagine as Life.
+///
+/// The lane only breaks near-ties: chips are grouped into bands of a tenth
+/// of the top score, and the lane orders chips inside a band. A much
+/// stronger suggestion is never pushed down just for being off-lane.
 pub(super) fn bias_chips_for_lane(chips: &mut [QuickChip], lane: CabinLane) {
-    chips.sort_by_key(|c| match lane {
+    let top = chips.iter().map(|c| c.score).fold(0.0_f32, f32::max);
+    let width = (top * 0.1).max(f32::EPSILON);
+    let band = |c: &QuickChip| ((top - c.score).max(0.0) / width).floor() as i64;
+    chips.sort_by_key(|c| (band(c), lane_rank(c, lane)));
+}
+
+fn lane_rank(c: &QuickChip, lane: CabinLane) -> u8 {
+    match lane {
         CabinLane::Coding => {
             if chip_leans_coding(c) {
                 0
@@ -64,7 +75,7 @@ pub(super) fn bias_chips_for_lane(chips: &mut [QuickChip], lane: CabinLane) {
                 1
             }
         }
-    });
+    }
 }
 
 pub(super) fn quiet_until_chip(now_hm: &str, start: &str, end: &str) -> Option<String> {

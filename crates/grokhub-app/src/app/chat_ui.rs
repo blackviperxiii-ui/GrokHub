@@ -3150,7 +3150,13 @@ impl Cabin {
                     }
                     ComposerStackSlot::Chips => {
                         ui.add_space(6.0);
-                        let chips = self.composer_chips();
+                        // While a reply streams the row's chips are for the
+                        // last turn, so the row waits for the turn to end.
+                        let chips = if self.running {
+                            Vec::new()
+                        } else {
+                            self.composer_chips()
+                        };
                         if let Some(act) = crate::cards::quick_chip_row(ui, &chips) {
                             self.take_chip_act(act, &chips);
                         }

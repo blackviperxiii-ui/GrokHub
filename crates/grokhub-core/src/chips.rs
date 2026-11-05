@@ -24,7 +24,6 @@ const MAX_TRANSITIONS: usize = 12;
 /// Hex chars kept from the sha256 of a normalized value (`kind:v1:{hex}`).
 const VALUE_KEY_HASH_HEX: usize = 16;
 /// Visible habit labels stay short; never the full typed line.
-const HABIT_LABEL_MAX_CHARS: usize = 28;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -471,26 +470,6 @@ pub fn chip_key_embeds_chat_text(key: &str) -> bool {
     }
     // Bare prose keys (defensive): spaces mean a line, not an id.
     key.contains(' ')
-}
-
-/// Short generated habit label — topic words only, never the full typed line.
-fn habit_label_from_text(text: &str) -> String {
-    let topic = topic_from_text(text);
-    let label = if topic.trim().is_empty() {
-        match text.trim().chars().next() {
-            Some('$') | Some('/') => "Host command".to_string(),
-            _ => "Saved ask".to_string(),
-        }
-    } else {
-        topic
-    };
-    let clipped: String = label.chars().take(HABIT_LABEL_MAX_CHARS).collect();
-    let clipped = clipped.trim();
-    if clipped.is_empty() {
-        "Saved ask".into()
-    } else {
-        chip_label(clipped)
-    }
 }
 
 pub fn chip_scan(s: &str) -> &str {
@@ -1708,10 +1687,42 @@ fn chip_text_from_chat(id: &str) -> bool {
     CHAT_TEXT_CHIP_IDS.iter().any(|p| id.starts_with(p))
 }
 
+/// Chips a feature producer builds from live state (a file that landed, a
+/// repo, a game, the app in focus). Their text names things that may be
+/// gone tomorrow, so a habit never replays it.
+const LIVE_STATE_CHIP_IDS: &[&str] = &[
+    "model:", "resume:", "backup:", "tidy:", "radar:", "game:", "focus:",
+];
+
+/// True when text names a full path: `/home/x`, `~/x`, `C:\x`.
+fn names_full_path(text: &str) -> bool {
+    text.split(|c: char| c.is_whitespace() || c == '"' || c == '\'')
+        .any(|w| {
+            let w = w.trim_matches(|c: char| matches!(c, '(' | ')' | ',' | ';'));
+            w.starts_with("~/")
+                || (w.starts_with('/') && w[1..].contains('/'))
+                || (w.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+                    && w.get(1..3) == Some(":\\"))
+        })
+}
+
+/// A chip whose text must never come back as a habit: shell lines run on
+/// the host, and live-state chips or full paths go stale. Its opaque key
+/// still carries the habit for ranking.
+fn replay_unsafe(kind: ChipKind, id: &str, label: &str, value: &str) -> bool {
+    kind == ChipKind::Shell
+        || LIVE_STATE_CHIP_IDS.iter().any(|p| id.starts_with(p))
+        || names_full_path(label)
+        || names_full_path(value)
+}
+
 /// The label and value a chip leaves in chips.json. A Chat chip built from
-/// chat text keeps neither; its opaque key carries the habit.
+/// chat text keeps neither; its opaque key carries the habit. Shell lines,
+/// live-state chips and full paths keep neither too (see [`replay_unsafe`]).
 fn stored_text(chip: &QuickChip) -> (&str, &str) {
-    if chip.kind == ChipKind::Chat && chip_text_from_chat(&chip.id) {
+    if (chip.kind == ChipKind::Chat && chip_text_from_chat(&chip.id))
+        || replay_unsafe(chip.kind, &chip.id, &chip.label, &chip.value)
+    {
         ("", "")
     } else {
         (&chip.label, &chip.value)
@@ -1787,13 +1798,14 @@ pub fn remember_typed_prompt(memory: &mut ChipMemory, text: &str, now_ms: u64, h
         !chip_key_embeds_chat_text(&key),
         "value_key must stay opaque: {key}"
     );
-    let label = habit_label_from_text(raw);
+    // A typed shell line keeps only its opaque key: replayed later as a
+    // chip it could run against a folder or file that is gone.
     let from = memory.last_chip_key.clone();
     upsert_hit(
         memory,
         key.clone(),
-        &label,
-        raw,
+        "",
+        "",
         kind,
         1,
         1,
@@ -2629,7 +2641,26 @@ fn retired_host_copy(id: &str, label: &str, value: &str) -> bool {
 pub fn prune_retired_chip_memory(mem: &mut ChipMemory) -> bool {
     let retired = prune_retired_host_hits(mem);
     let scrubbed = scrub_chat_text_chip_keys(mem);
-    retired || scrubbed
+    let unsafe_text = scrub_replay_unsafe_text(mem);
+    retired || scrubbed || unsafe_text
+}
+
+/// Idempotent scrub: clear the stored text of shell lines, live-state chips
+/// and full paths that older builds kept, so no habit chip replays them.
+/// The hits stay, so their counts still rank. True when anything changed.
+fn scrub_replay_unsafe_text(mem: &mut ChipMemory) -> bool {
+    let mut changed = false;
+    for h in mem.hits.iter_mut() {
+        let id = h.key.strip_prefix("id:").unwrap_or("");
+        if (!h.label.is_empty() || !h.value.is_empty())
+            && replay_unsafe(h.kind, id, &h.label, &h.value)
+        {
+            h.label.clear();
+            h.value.clear();
+            changed = true;
+        }
+    }
+    changed
 }
 
 fn prune_retired_host_hits(mem: &mut ChipMemory) -> bool {
@@ -4404,7 +4435,7 @@ mod tests {
     }
 
     #[test]
-    fn shell_typed_prompt_uses_opaque_key_and_short_label() {
+    fn shell_typed_prompt_keeps_only_an_opaque_key() {
         let mut mem = ChipMemory::default();
         remember_typed_prompt(&mut mem, "$ uname -a && whoami", 10, 8);
         remember_typed_prompt(&mut mem, "$ uname -a && whoami", 20, 8);
@@ -4417,12 +4448,149 @@ mod tests {
             mem.hits[0].key
         );
         assert!(!chip_key_embeds_chat_text(&mem.hits[0].key));
-        assert!(
-            mem.hits[0].label.chars().count() <= HABIT_LABEL_MAX_CHARS,
-            "label too long: {}",
-            mem.hits[0].label
+        assert_eq!(mem.hits[0].label, "");
+        assert_eq!(mem.hits[0].value, "");
+        // Nothing to replay, so no habit chip comes back from it.
+        assert!(learned_chips_from_memory(&mem, 30).is_empty());
+    }
+
+    fn feature_chip(id: &str, label: &str, value: &str, kind: ChipKind) -> QuickChip {
+        QuickChip {
+            id: id.into(),
+            label: label.into(),
+            value: value.into(),
+            kind,
+            score: 1.0,
+            hint: String::new(),
+            primary: false,
+        }
+    }
+
+    #[test]
+    fn live_state_and_shell_chips_never_come_back_as_habits() {
+        let mut mem = ChipMemory::default();
+        let picks = [
+            feature_chip(
+                "model:move:tiny.gguf",
+                "Move to models",
+                "mv \"/home/user/Downloads/tiny.gguf\" \"/home/user/models\"",
+                ChipKind::Shell,
+            ),
+            feature_chip(
+                "backup:push:my-app",
+                "Push my-app",
+                "Push /home/user/code/my-app to its remote",
+                ChipKind::Chat,
+            ),
+            feature_chip(
+                "resume:continue:my-app",
+                "Continue main",
+                "Continue main",
+                ChipKind::Chat,
+            ),
+            feature_chip("x-shell", "Status", "git status", ChipKind::Shell),
+            feature_chip(
+                "x-path",
+                "Open notes",
+                "Open C:\\notes\\todo.txt",
+                ChipKind::Chat,
+            ),
+        ];
+        for (i, c) in picks.iter().enumerate() {
+            remember_chip_click(&mut mem, c, None, 10 + i as u64, 8);
+            remember_chip_click(&mut mem, c, None, 20 + i as u64, 8);
+        }
+        assert_eq!(mem.hits.len(), 5);
+        for h in &mem.hits {
+            assert_eq!((h.label.as_str(), h.value.as_str()), ("", ""), "{}", h.key);
+        }
+        assert!(learned_chips_from_memory(&mem, 100).is_empty());
+
+        // A plain catalog chat chip still keeps its text.
+        let plain = feature_chip(
+            "empty-brief",
+            "Quick brief",
+            "Give me a quick brief.",
+            ChipKind::Chat,
         );
-        assert_ne!(mem.hits[0].label, "$ uname -a && whoami");
+        remember_chip_click(&mut mem, &plain, None, 50, 8);
+        let hit = mem.hits.iter().find(|h| h.key == "id:empty-brief").unwrap();
+        assert_eq!(hit.value, "Give me a quick brief.");
+    }
+
+    #[test]
+    fn load_scrub_clears_old_shell_and_path_habits() {
+        let mut mem = ChipMemory::default();
+        let mut push = |key: &str, label: &str, value: &str, kind: ChipKind| {
+            mem.hits.push(ChipHit {
+                key: key.into(),
+                label: label.into(),
+                value: value.into(),
+                kind,
+                uses: 3,
+                typed_uses: 0,
+                picks: 3,
+                last_used_at: 1,
+                hour_hits: Vec::new(),
+                successes: 0,
+                failures: 0,
+                context_tags: Vec::new(),
+                dismisses: 0,
+                dismiss_hours: Vec::new(),
+                last_dismissed_at: 0,
+            });
+        };
+        push(
+            "id:model:move:a.gguf",
+            "Move a.gguf",
+            "mv a.gguf models",
+            ChipKind::Shell,
+        );
+        push(
+            "shell:v1:0123456789abcdef",
+            "uname",
+            "$ uname -a",
+            ChipKind::Shell,
+        );
+        push(
+            "id:backup:push:my-app",
+            "Push my-app",
+            "Push /home/user/my-app",
+            ChipKind::Chat,
+        );
+        push(
+            "id:empty-brief",
+            "Quick brief",
+            "Give me a quick brief.",
+            ChipKind::Chat,
+        );
+        assert!(prune_retired_chip_memory(&mut mem));
+        let text: Vec<(&str, &str)> = mem
+            .hits
+            .iter()
+            .map(|h| (h.label.as_str(), h.value.as_str()))
+            .collect();
+        assert_eq!(
+            text,
+            vec![
+                ("", ""),
+                ("", ""),
+                ("", ""),
+                ("Quick brief", "Give me a quick brief.")
+            ]
+        );
+        assert_eq!(mem.hits.len(), 4, "counts stay for ranking");
+        assert!(!prune_retired_chip_memory(&mut mem), "idempotent");
+    }
+
+    #[test]
+    fn full_path_detection() {
+        assert!(names_full_path("open /home/user/x"));
+        assert!(names_full_path("~/notes.md"));
+        assert!(names_full_path("\"C:\\Users\\user\""));
+        assert!(!names_full_path("/learn"));
+        assert!(!names_full_path("Make a checklist"));
+        assert!(!names_full_path("and/or"));
     }
 
     fn labels(chips: &[QuickChip]) -> Vec<String> {
