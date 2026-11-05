@@ -4848,14 +4848,39 @@ impl Cabin {
     fn halt_work(&mut self, status: impl Into<String>) {
         let status = status.into();
         // A redirect steers the turn; every other stop ends the desktop episode.
-        if status != "Redirected" {
+        let stopped = status != "Redirected";
+        if stopped {
             self.end_episode(grokhub_agent::episode::EpisodeEnd::Stop);
         }
         self.heartbeat_turn_stopped();
         self.halt_in_flight();
         self.finish_hub_dispatch(&status, false);
-        self.status = status;
+        // Messages queued behind the stopped turn would otherwise sit unseen
+        // and send themselves after the next reply: hand them back instead.
+        let handed_back = if stopped {
+            self.queued_back_to_composer()
+        } else {
+            0
+        };
+        self.status = match handed_back {
+            0 => status,
+            1 => format!("{status} · your queued message is back in the box"),
+            _ => format!("{status} · your {handed_back} queued messages are back in the box"),
+        };
         self.maybe_continue_ptt();
+    }
+
+    /// Moves queued follow-ups and side asks into the composer, after
+    /// anything already typed there. Returns how many moved.
+    fn queued_back_to_composer(&mut self) -> usize {
+        let mut queued = std::mem::take(&mut self.side_ask_queue);
+        queued.append(&mut self.followup_queue);
+        let moved = queued.len();
+        if moved > 0 {
+            self.composer = composer_with_queued(&self.composer, queued);
+            self.composer_want_focus = true;
+        }
+        moved
     }
 
     /// Tray Halt and the halt hotkeys: the live turn and every background run.
@@ -5911,3 +5936,18 @@ fn select_all_edit(ui: &egui::Ui, id: egui::Id, text: &str) {
 const CLOCK_TTL: Duration = Duration::from_secs(15);
 static LAST_CLOCK: Mutex<Option<(Instant, LocalClock, bool)>> = Mutex::new(None);
 static LAST_DAY: Mutex<Option<(Instant, String, bool)>> = Mutex::new(None);
+
+/// `typed` then each queued message, one blank line apart.
+fn composer_with_queued(typed: &str, queued: Vec<String>) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if !typed.trim().is_empty() {
+        parts.push(typed.trim_end().to_string());
+    }
+    parts.extend(
+        queued
+            .into_iter()
+            .map(|q| q.trim().to_string())
+            .filter(|q| !q.is_empty()),
+    );
+    parts.join("\n\n")
+}

@@ -2156,6 +2156,47 @@ fn halt_work_stops_a_running_turn() {
 }
 
 #[test]
+fn stop_hands_queued_messages_back_instead_of_sending_them_later() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("stop-queue");
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.running = true;
+    cabin.composer = "half typed".into();
+    cabin.side_ask_queue = vec!["btw what time is it".into()];
+    cabin.followup_queue = vec!["also rename the folder".into(), "  ".into()];
+    cabin.halt_work("Stopped");
+    assert!(cabin.followup_queue.is_empty());
+    assert!(cabin.side_ask_queue.is_empty());
+    assert_eq!(
+        cabin.composer,
+        "half typed\n\nbtw what time is it\n\nalso rename the folder"
+    );
+    assert!(cabin.status.starts_with("Stopped"));
+    assert!(
+        cabin.status.contains("3 queued messages are back"),
+        "{}",
+        cabin.status
+    );
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
+}
+
+#[test]
+fn a_redirect_keeps_the_queue_and_a_stop_with_none_keeps_its_status() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("redirect-queue");
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.running = true;
+    cabin.followup_queue = vec!["next".into()];
+    cabin.halt_work("Redirected");
+    assert_eq!(cabin.followup_queue, vec!["next".to_string()]);
+    assert!(cabin.composer.is_empty());
+    assert_eq!(cabin.status, "Redirected");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
+}
+
+#[test]
 fn composer_stop_leaves_background_runs_going_and_tray_halt_stops_them() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("stop-spares-bg");
