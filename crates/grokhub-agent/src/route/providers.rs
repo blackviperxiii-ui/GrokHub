@@ -1539,6 +1539,7 @@ pub fn call_model(
         apply_openrouter_routing(&mut body, &routing());
         apply_openrouter_picks(&mut body, backup_wire, &req.conversation_id);
     }
+    crate::harness::replay::note_request(config_dir, &body);
     let body = body.to_string();
     let r = transport_for(config_dir)
         .post_within(&url, &p.headers(&key), &body, req.call_timeout)

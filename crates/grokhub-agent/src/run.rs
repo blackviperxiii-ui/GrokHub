@@ -7,6 +7,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::gate::{self, Decision, Gate, PermAnswer, PermitWait, Waited};
+use crate::harness::safety_events;
 use crate::tasks::TaskHub;
 use crate::tools::{self, DesktopOps, ToolCtx, ToolOutput, ToolSet};
 use crate::{
@@ -779,6 +780,8 @@ fn run_turn(
             },
             class,
         );
+        // The stored request this reply came from, for its calls' safety events.
+        let turn_request = crate::harness::replay::last_request();
         // A fork of this chat starts from exactly what went out. The request
         // is done with, so its input and tools move there instead of a copy.
         if remember {
@@ -1201,6 +1204,7 @@ fn run_turn(
                 input.workspace,
                 input.perms,
             );
+            let base_kind = safety_events::Kind::of(&base);
             let reviewed = crate::auto_review::review(&crate::auto_review::ReviewIn {
                 client: input.client,
                 cancel: input.cancel,
@@ -1231,6 +1235,7 @@ fn run_turn(
                 let _ = stop_for_halt(input);
                 return finish(input, StopReason::Halted, usage, compacted_once, true);
             }
+            let reviewed_kind = safety_events::Kind::of(&reviewed.decision);
             let constrained = crate::hooks::constrain_tool(crate::hooks::ToolHook {
                 session: input.conversation_id,
                 workspace: input.workspace,
@@ -1242,12 +1247,28 @@ fn run_turn(
                 tool_use_id: &id,
             });
             drop(gate_lap);
+            let decided_by = safety_events::decided_by(
+                base_kind,
+                reviewed_kind,
+                safety_events::Kind::of(&constrained.decision),
+                safety_events::wants_outside_sandbox(&call.arguments),
+            );
             let ask_reason = constrained.ask_reason;
             let pre_context = constrained.context;
             let mut refused = false;
             let (output, extra_usage) = match constrained.decision {
                 Decision::Refuse(text) => {
                     refused = true;
+                    if crate::denials::is_denial(&text) {
+                        note_safety(
+                            input,
+                            call,
+                            safety_events::Outcome::Stopped,
+                            decided_by,
+                            None,
+                            &turn_request,
+                        );
+                    }
                     batch_failed = hard_step(&call.name, &gate_args);
                     crate::hooks::on_permission_denied(
                         input.conversation_id,
@@ -1280,10 +1301,18 @@ fn run_turn(
                         action: action_line(&call.name, &call.arguments),
                         reason: ask_reason,
                     });
-                    match input
+                    let waited = input
                         .permits
-                        .wait(&id, input.cancel, &|| stop_for_halt(input))
-                    {
+                        .wait(&id, input.cancel, &|| stop_for_halt(input));
+                    note_safety(
+                        input,
+                        call,
+                        safety_events::Outcome::Asked,
+                        decided_by,
+                        ask_answer(&waited),
+                        &turn_request,
+                    );
+                    match waited {
                         Waited::Answer(PermAnswer::Allow) => note_tool(
                             input,
                             &mut gate,
@@ -1538,6 +1567,43 @@ fn add_to_output(history: &mut [InputItem], call_id: &str, note: &str) {
     ) {
         output.push('\n');
         output.push_str(note);
+    }
+}
+
+/// Round 3 item 28: one sealed safety event for a call that was stopped or
+/// asked about, linked to the stored request whose reply made it.
+fn note_safety(
+    input: &LoopIn<'_>,
+    call: &FunctionCall,
+    outcome: safety_events::Outcome,
+    by: safety_events::DecidedBy,
+    answer: Option<safety_events::Answer>,
+    request: &str,
+) {
+    let _ = safety_events::record(
+        &crate::perm::config_dir(),
+        &safety_events::SafetyEvent {
+            ts_ms: grokhub_core::now_ms(),
+            chat: input.conversation_id.to_string(),
+            tool: call.name.clone(),
+            outcome,
+            by,
+            answer,
+            request: request.to_string(),
+        },
+    );
+}
+
+/// What the person said to an ask, for its safety event.
+fn ask_answer(waited: &Waited) -> Option<safety_events::Answer> {
+    match waited {
+        Waited::Answer(PermAnswer::Allow) => Some(safety_events::Answer::Allowed),
+        Waited::Answer(PermAnswer::Always) => Some(safety_events::Answer::AlwaysAllowed),
+        Waited::Answer(PermAnswer::Deny) => Some(safety_events::Answer::Denied),
+        Waited::Answer(PermAnswer::Cancel) | Waited::Cancelled => {
+            Some(safety_events::Answer::Cancelled)
+        }
+        Waited::Halted => None,
     }
 }
 
@@ -4904,6 +4970,13 @@ mod tests {
     #[test]
     fn pre_tool_hook_deny_blocks_and_allow_does_not_skip_ask() {
         let dir = workspace("hook-gate");
+        // Round 3 item 28: each stopped or asked call leaves one safety event.
+        let cfg = dir.join("cfg");
+        let _cfg = crate::perm::ConfigGuard::set(cfg.clone());
+        crate::harness::use_key_store_for(
+            &cfg,
+            std::sync::Arc::new(crate::harness::MemoryKeyStore::new()),
+        );
         let session = format!("hook-gate-{}", std::process::id());
         let deny = crate::hooks::install_test_hooks(
             &session,
@@ -4971,6 +5044,23 @@ mod tests {
             "{history:?}"
         );
         drop(deny);
+        let safety = safety_events::read(&cfg);
+        assert_eq!(safety.len(), 1, "{safety:?}");
+        assert_eq!(
+            (
+                safety[0].tool.as_str(),
+                safety[0].outcome,
+                safety[0].by,
+                safety[0].answer
+            ),
+            (
+                "write",
+                safety_events::Outcome::Stopped,
+                safety_events::DecidedBy::Hook,
+                None
+            )
+        );
+        assert_eq!(safety[0].chat, session);
 
         let allow_session = format!("{session}-allow");
         let allow = crate::hooks::install_test_hooks(
@@ -5041,6 +5131,16 @@ mod tests {
             "{history:?}"
         );
         drop(allow);
+        let safety = safety_events::read(&cfg);
+        assert_eq!(safety.len(), 2, "{safety:?}");
+        assert_eq!(
+            (safety[1].outcome, safety[1].by, safety[1].answer),
+            (
+                safety_events::Outcome::Asked,
+                safety_events::DecidedBy::Rule,
+                Some(safety_events::Answer::Denied)
+            )
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
