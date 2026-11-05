@@ -4,7 +4,7 @@ Model: grok-4.7 (fixed; offline scripted replay)
 
 ## Method
 
-A = every optional cost technique off. Each B arm enables exactly one technique via a temp config dir (`tool_output_compact.toml`, `deferred_tools.toml`, `batched_tools.toml`), then an all-on arm. The stable prompt prefix is always on, in every arm. Same 22 fixture tasks and scripted model replies in every arm. No network, no paid runs.
+A = every optional cost technique off. Each B arm enables exactly one technique via a temp config dir (`tool_output_compact.toml`, `deferred_tools.toml`, `batched_tools.toml`, `prompt_diet.toml`), then an all-on arm of the first three. The stable prompt prefix is always on, in every arm. Same 22 fixture tasks and scripted model replies in every arm. No network, no paid runs.
 
 Input usage is measured, not scripted: the replay captures every outbound request (system messages, then the tools array, then the other input items, as the wire body sends them) and estimates tokens as bytes / 4. The part of a request that repeats the start of the previous request in the same task counts as cached, the way a provider prefix cache would hit; the rest is billable. Output and reasoning tokens still come from the fixtures. Cost uses the offline tick model in `metrics::offline_cost_ticks` (1 tick / billable input + 4 / output + 4 / reasoning). The scratch workspace path is replaced, terminal output (sh or PowerShell, so it differs by platform) counts as a fixed placeholder, and wall time is omitted, so the report is byte-stable.
 
@@ -20,6 +20,7 @@ Recommendation rule: **adopt** only if cost per solved task falls and success de
 | R3 tool-output summaries | 100.00% (22/22) | 7336.36 | 0 | 385837 | 225177 | 98.61% | 21735 | 2.41 | 0.32 | yes | spike |
 | R4 deferred tools | 100.00% (22/22) | 4719.73 | -2616.64 (-35.67%) | 247151 | 144057 | 97.84% | 11268 | 2.41 | 0.32 | yes | adopt |
 | R5 batched read-only | 100.00% (22/22) | 7336.36 | 0 | 385837 | 225177 | 98.61% | 21735 | 2.41 | 0.32 | yes | spike |
+| prompt diet (lean prompt, sparse line numbers) | 100.00% (22/22) | 6390.32 | -946.05 (-12.90%) | 335686 | 195839 | 98.40% | 21735 | 2.41 | 0.32 | yes | adopt |
 | all on | 100.00% (22/22) | 4719.73 | -2616.64 (-35.67%) | 247151 | 144057 | 97.84% | 11268 | 2.41 | 0.32 | yes | adopt |
 
 ## Per-technique notes
@@ -28,6 +29,7 @@ Recommendation rule: **adopt** only if cost per solved task falls and success de
 - **R3 tool-output summaries**: **spike** (Δ cost/solved 0). no request byte, call or schema change on this fixture set. Fixture tool outputs are a few bytes, below the size that triggers a summary.
 - **R4 deferred tools**: **adopt** (Δ cost/solved -2616.64 (-35.67%)). input tokens 385837 → 247151; prefix-stable 98.61% → 97.84%; schema bytes/request 21735 → 11268
 - **R5 batched read-only**: **spike** (Δ cost/solved 0). no request byte, call or schema change on this fixture set. R5 runs consecutive read-only calls from one reply in parallel; the model still decides how many calls a reply holds, so requests and model calls stay the same and only wall time (not measured here) can move.
+- **prompt diet (lean prompt, sparse line numbers)**: **adopt** (Δ cost/solved -946.05 (-12.90%)). input tokens 385837 → 335686; prefix-stable 98.61% → 98.40%
 - **all on**: **adopt** (Δ cost/solved -2616.64 (-35.67%)). input tokens 385837 → 247151; prefix-stable 98.61% → 97.84%; schema bytes/request 21735 → 11268
 
 ## Verdict

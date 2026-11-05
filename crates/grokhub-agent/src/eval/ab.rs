@@ -119,15 +119,17 @@ pub enum Technique {
     ToolOutputSummaries,
     DeferredTools,
     BatchedReadOnly,
+    PromptDiet,
     AllOn,
 }
 
 impl Technique {
-    pub const ALL: [Technique; 5] = [
+    pub const ALL: [Technique; 6] = [
         Technique::Baseline,
         Technique::ToolOutputSummaries,
         Technique::DeferredTools,
         Technique::BatchedReadOnly,
+        Technique::PromptDiet,
         Technique::AllOn,
     ];
 
@@ -137,6 +139,7 @@ impl Technique {
             Technique::ToolOutputSummaries => "R3 tool-output summaries",
             Technique::DeferredTools => "R4 deferred tools",
             Technique::BatchedReadOnly => "R5 batched read-only",
+            Technique::PromptDiet => "prompt diet (lean prompt, sparse line numbers)",
             Technique::AllOn => "all on",
         }
     }
@@ -147,6 +150,7 @@ impl Technique {
             Technique::ToolOutputSummaries => "tool_output_summaries",
             Technique::DeferredTools => "deferred_tools",
             Technique::BatchedReadOnly => "batched_readonly",
+            Technique::PromptDiet => "prompt_diet",
             Technique::AllOn => "all_on",
         }
     }
@@ -157,16 +161,22 @@ impl Technique {
 /// state from a prior arm cannot leak.
 pub fn arm_settings(technique: Technique, config_dir: &Path) -> Result<(), String> {
     std::fs::create_dir_all(config_dir).map_err(|err| err.to_string())?;
-    let (summaries, deferred, batched) = match technique {
-        Technique::Baseline => (false, false, false),
-        Technique::ToolOutputSummaries => (true, false, false),
-        Technique::DeferredTools => (false, true, false),
-        Technique::BatchedReadOnly => (false, false, true),
-        Technique::AllOn => (true, true, true),
+    // The all-on arm keeps to R3 to R5 so its numbers stay comparable; the
+    // diet is judged in its own arm.
+    let (summaries, deferred, batched, diet) = match technique {
+        Technique::Baseline => (false, false, false, false),
+        Technique::ToolOutputSummaries => (true, false, false, false),
+        Technique::DeferredTools => (false, true, false, false),
+        Technique::BatchedReadOnly => (false, false, true, false),
+        Technique::PromptDiet => (false, false, false, true),
+        Technique::AllOn => (true, true, true, false),
     };
     write_enabled(config_dir, TOOL_OUTPUT_COMPACT_CONFIG, summaries)?;
     write_enabled(config_dir, "deferred_tools.toml", deferred)?;
     write_enabled(config_dir, "batched_tools.toml", batched)?;
+    let diet_body = format!("lean_prompt = {diet}\nsparse_line_numbers = {diet}\n");
+    std::fs::write(config_dir.join(crate::diet::CONFIG_NAME), diet_body)
+        .map_err(|err| err.to_string())?;
     Ok(())
 }
 
@@ -912,6 +922,11 @@ mod tests {
         assert!(read(TOOL_OUTPUT_COMPACT_CONFIG).contains("enabled = true"));
         assert!(read("deferred_tools.toml").contains("enabled = true"));
         assert!(read("batched_tools.toml").contains("enabled = true"));
+        assert!(read(crate::diet::CONFIG_NAME).contains("lean_prompt = false"));
+        arm_settings(Technique::PromptDiet, &dir).expect("diet");
+        assert!(read(crate::diet::CONFIG_NAME).contains("lean_prompt = true"));
+        assert!(read(crate::diet::CONFIG_NAME).contains("sparse_line_numbers = true"));
+        assert!(read("deferred_tools.toml").contains("enabled = false"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

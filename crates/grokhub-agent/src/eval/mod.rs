@@ -230,8 +230,8 @@ pub fn render_markdown(report: &TechniqueMatrixReport) -> String {
     let _ = writeln!(
         out,
         "A = every optional cost technique off. Each B arm enables exactly one technique via a temp \
-config dir (`tool_output_compact.toml`, `deferred_tools.toml`, `batched_tools.toml`), \
-then an all-on arm. The stable prompt prefix is always on, in every arm. Same {tasks} \
+config dir (`tool_output_compact.toml`, `deferred_tools.toml`, `batched_tools.toml`, \
+`prompt_diet.toml`), then an all-on arm of the first three. The stable prompt prefix is always on, in every arm. Same {tasks} \
 fixture tasks and scripted model replies in every arm. No network, no paid runs.\n"
     );
     out.push_str(

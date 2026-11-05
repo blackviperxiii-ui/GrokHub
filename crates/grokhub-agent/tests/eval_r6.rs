@@ -92,6 +92,17 @@ fn r6_technique_matrix_matches_golden_and_measures_requests() {
     assert_eq!(summaries.input_tokens, base.input_tokens);
     assert_eq!(summaries.cost_ticks, base.cost_ticks);
 
+    // The prompt diet sends a leaner fixed prompt on every request. Its replay
+    // shows only the byte saving; the paired live eval judges the quality.
+    let diet = &arm(&report, Technique::PromptDiet).metrics;
+    assert!(
+        diet.input_tokens < base.input_tokens,
+        "diet {} vs baseline {}",
+        diet.input_tokens,
+        base.input_tokens
+    );
+    assert_eq!(diet.model_calls, base.model_calls);
+
     // The stable prompt prefix is on in every arm: the follow-up fixture's
     // second turn carries its notes in the user message, so the system
     // prompt is never rewritten mid-session.
