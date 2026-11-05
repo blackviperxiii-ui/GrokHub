@@ -128,6 +128,13 @@ pub(super) fn hard_words(class: HardClass, tool: &str, action: &str, held: &[Str
         HardClass::AgentConfig => format!("Change agent instructions: {action}"),
         HardClass::OutsideValue => format!("Uses a value from outside text: {action}"),
         HardClass::RunsLater => format!("Changes a file that runs later: {action}"),
+        HardClass::FlaggedDriver => {
+            let list = grokhub_core::driver_check::cached(&crate::config::config_dir());
+            match grokhub_core::driver_check::flag(&action.to_ascii_lowercase(), &list) {
+                Some(f) => grokhub_core::driver_check::explain(&f),
+                None => format!("Installs a driver anti-cheats block: {action}"),
+            }
+        }
     };
     cut(&text)
 }

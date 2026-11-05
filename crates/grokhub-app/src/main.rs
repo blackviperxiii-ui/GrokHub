@@ -13,6 +13,7 @@ mod cli;
 mod config;
 mod desktop;
 mod desktop_mcp;
+mod driver_blocklist;
 mod engine_handle;
 mod feed;
 #[cfg(feature = "fx")]
