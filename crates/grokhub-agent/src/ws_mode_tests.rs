@@ -394,7 +394,9 @@ fn the_client_tries_the_socket_first_and_falls_back_to_http() {
             content: vec![crate::client::ContentPart::InputText("ping".into())],
         }],
         conversation_id: "chat-x".into(),
-        tools: Vec::new(),
+        tools: vec![
+            json!({"type": "function", "name": "read_file", "parameters": {"type": "object"}}),
+        ],
         hosted_search: false,
         call_timeout: None,
     };
@@ -407,4 +409,59 @@ fn the_client_tries_the_socket_first_and_falls_back_to_http() {
             .is_err(),
         "only loopback sockets in tests"
     );
+}
+
+#[test]
+fn a_side_call_goes_over_http_and_leaves_the_chats_chain_alone() {
+    let srv = server(|seq, _| reply(&format!("resp_{seq}"), "pong"));
+    // HTTP points at a closed loopback port: a side call fails fast there
+    // instead of reaching the socket.
+    let client = crate::XaiClient::new("test-bearer", AuthKind::ApiKey, Duration::from_secs(5))
+        .with_loopback_url("http://127.0.0.1:9/v1/responses")
+        .unwrap()
+        .with_loopback_ws(&srv.url)
+        .unwrap();
+    let msg = |role: &str, text: &str| InputItem::Message {
+        role: role.into(),
+        content: vec![crate::client::ContentPart::InputText(text.into())],
+    };
+    let step = |input: Vec<InputItem>| crate::client::ResponsesRequest {
+        text_format: None,
+        model: "grok-test".into(),
+        effort: None,
+        input,
+        conversation_id: "chat-s".into(),
+        tools: vec![
+            json!({"type": "function", "name": "read_file", "parameters": {"type": "object"}}),
+        ],
+        hosted_search: false,
+        call_timeout: None,
+    };
+    let cancel = CancelToken::new();
+    crate::ModelClient::stream(
+        &client,
+        &step(vec![msg("user", "ping")]),
+        &cancel,
+        &mut |_| {},
+    )
+    .unwrap();
+
+    let mut judge = step(vec![msg("user", "is this safe?")]);
+    judge.tools.clear();
+    judge.call_timeout = Some(Duration::from_secs(2));
+    assert!(crate::ModelClient::stream(&client, &judge, &cancel, &mut |_| {}).is_err());
+    let mut brief = step(vec![msg("user", "classify this")]);
+    brief.tools.clear();
+    assert!(crate::ModelClient::stream(&client, &brief, &cancel, &mut |_| {}).is_err());
+
+    let next = step(vec![
+        msg("user", "ping"),
+        msg("assistant", "pong"),
+        msg("user", "again"),
+    ]);
+    crate::ModelClient::stream(&client, &next, &cancel, &mut |_| {}).unwrap();
+
+    let got = srv.got();
+    assert_eq!(got.len(), 2, "side calls never reach the chat's socket");
+    assert_eq!(got[1].1["previous_response_id"], "resp_0");
 }
