@@ -1496,6 +1496,9 @@ pub fn call_model(
     if let Some(held) = super::adult::held_reply(&req.input) {
         return Ok(held);
     }
+    if let Some(held) = super::coaching::held_reply(class, &req.input) {
+        return Ok(held);
+    }
     let to = dest(config_dir, model);
     if super::adult::to_xai(&req.input, to) {
         return Err(ClientError::Protocol(format!(

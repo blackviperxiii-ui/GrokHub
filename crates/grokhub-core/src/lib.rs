@@ -101,6 +101,7 @@ pub mod journal;
 pub mod know_me;
 pub mod learn_notes;
 pub mod learning;
+pub mod live_coaching;
 pub mod local_discover;
 pub mod local_draft;
 pub mod local_governor;

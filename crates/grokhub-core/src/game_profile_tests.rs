@@ -62,3 +62,57 @@ fn an_always_on_driver_counts_only_beside_a_game_it_protects() {
         let _ = std::fs::remove_dir_all(d);
     }
 }
+
+#[test]
+fn a_riot_match_shows_by_its_game_process_not_the_lobby() {
+    let lobby = [
+        "RiotClientServices.exe",
+        "LeagueClient.exe",
+        "LeagueClientUx.exe",
+        "vgc.exe",
+    ];
+    assert_eq!(live_match(&lobby), None);
+    let m = live_match(&[
+        "explorer.exe",
+        r"C:\Riot Games\League of Legends\Game\League of Legends.exe",
+    ])
+    .unwrap();
+    assert_eq!(
+        (m.game, m.rule.publisher),
+        ("League of Legends", "Riot Games")
+    );
+    assert_eq!(
+        live_match(&["VALORANT-Win64-Shipping.exe"]).unwrap().game,
+        "VALORANT"
+    );
+    assert_eq!(
+        live_match(&["Lion-Win64-Shipping.exe"]).unwrap().game,
+        "2XKO"
+    );
+}
+
+#[test]
+fn every_match_rule_is_sourced_and_checked_this_year() {
+    let today = (crate::now_ms() / 86_400_000) as i64;
+    for rule in MATCH_RULES {
+        assert!(rule.source.starts_with("https://"), "{}", rule.publisher);
+        let days = crate::mods::allowlist::days_from_ymd(rule.checked).expect("a YYYY-MM-DD date");
+        assert!(
+            today - days <= 365,
+            "re-check {}'s live-match rule against its source, then update `checked`",
+            rule.publisher
+        );
+        for (exe, _) in rule.match_exes {
+            assert_eq!(*exe, exe.to_ascii_lowercase());
+        }
+    }
+}
+
+#[test]
+fn the_probe_reports_a_live_match() {
+    fn riot() -> Vec<String> {
+        vec!["VALORANT-Win64-Shipping.exe".to_string()]
+    }
+    set_exe_probe(riot);
+    assert_eq!(live_match_now().map(|m| m.game), Some("VALORANT"));
+}

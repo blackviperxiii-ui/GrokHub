@@ -222,6 +222,15 @@ pub fn windows_game_label() -> Option<String> {
         .map(|exe| grokhub_core::game_guard::game_label(&exe))
 }
 
+/// Every running process's exe file name, for the live-match check
+/// (`grokhub_core::game_profile::set_exe_probe`). Empty when the snapshot fails.
+#[cfg(windows)]
+pub fn exe_names() -> Vec<String> {
+    process_names()
+        .map(|all| all.into_iter().map(|(_, name)| name).collect())
+        .unwrap_or_default()
+}
+
 /// `(pid, exe file name)` of every process, from a Toolhelp32 snapshot.
 /// The snapshot is a kernel copy of the process list: no process is opened.
 #[cfg(windows)]
