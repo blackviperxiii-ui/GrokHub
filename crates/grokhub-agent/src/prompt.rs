@@ -397,7 +397,7 @@ fn compose(
     need: PromptNeed,
 ) -> String {
     let started = Instant::now();
-    let mut out = template_body();
+    let mut out = fixed_prompt();
     let rules = stable_rules.trim();
     if !rules.is_empty() {
         out.push_str("\n\n");
@@ -452,6 +452,38 @@ pub(crate) fn prompt_prefix_growth() -> usize {
         .prompt_block()
         .len();
     template + voice
+}
+
+/// The lean fixed prompt's rules after the safety block. Only behaviour the
+/// app relies on stays: tool honesty, approvals, the cabin note, sealed
+/// Memory, the one-tap limit and how a turn ends.
+const LEAN_RULES: &str = "<rules>
+- Use only the tools in this turn's list, with paths inside the workspace. Don't invent tools or search results.
+- For a task with several parts, track it with todo_write and mark an item done only when a tool result shows it.
+- Claim done only when tool output shows it. If blocked, say so and use what you have; never offer a one-tap that claims to grant OS or path access or to activate a skill.
+- Sealed learnings in a <memory-context> block (such as Installed app: lines) are real Memory: use them.
+- A <cabin-volatile> block is the app's note for the turn, not the person's words; their latest ask outranks it.
+- Lead with the answer. No generic closing question. For a real decision, call ask_user_question with 2 to 4 options and one `recommended`.
+- Money, sending, deleting and credential steps still go through approval.
+- Write GitHub-flavored markdown. When citing the web, don't name tool backends or providers.
+</rules>";
+
+/// The fixed prompt with less coaching: the same opening line and the same
+/// `<dangerous_actions>` block, word for word, then [`LEAN_RULES`]. Used only
+/// when `prompt_diet.toml` turns `lean_prompt` on.
+pub(crate) fn lean_template_body() -> String {
+    let full = template_body();
+    let intro = full.split("\n\n").next().unwrap_or_default();
+    format!("{intro}\n\n{}\n\n{LEAN_RULES}", safety_rules())
+}
+
+/// The fixed prompt this thread's switches pick.
+fn fixed_prompt() -> String {
+    if crate::diet::current().lean_prompt {
+        lean_template_body()
+    } else {
+        template_body()
+    }
 }
 
 pub(crate) fn template_body() -> String {
@@ -820,6 +852,40 @@ mod tests {
         let second = layered_agents(&dir, None).unwrap();
         assert!(second.contains("SECOND"), "{second}");
         assert!(!second.contains("FIRST"), "{second}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_lean_prompt_keeps_the_safety_block_word_for_word_and_is_much_smaller() {
+        let dir = fixture_workspace("lean");
+        let cfg = dir.join("cfg");
+        std::fs::create_dir_all(&cfg).expect("cfg");
+        let _pin = crate::perm::ConfigGuard::set(&cfg);
+        let full = system_prompt_with(PromptProfile::Chat, "", "", &dir, PromptNeed::NONE);
+        std::fs::write(cfg.join(crate::diet::CONFIG_NAME), "lean_prompt = true\n").expect("on");
+        let lean = system_prompt_with(PromptProfile::Chat, "", "", &dir, PromptNeed::NONE);
+        assert!(
+            lean.contains(safety_rules()),
+            "safety block must stay verbatim"
+        );
+        assert!(lean.starts_with(template_body().split("\n\n").next().unwrap()));
+        for kept in [
+            "<cabin-volatile>",
+            "go through approval",
+            "Don't invent tools or search results",
+            "ask_user_question",
+            "<memory-context>",
+            "grant OS or path access",
+        ] {
+            assert!(lean.contains(kept), "lean prompt lost: {kept}");
+        }
+        assert!(!lean.contains("{product}"));
+        assert!(
+            lean.len() + 2048 <= full.len(),
+            "lean {} vs full {}",
+            lean.len(),
+            full.len()
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

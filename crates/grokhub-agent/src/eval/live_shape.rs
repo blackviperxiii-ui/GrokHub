@@ -113,6 +113,16 @@ pub const AB_FLAGS: &[AbFlag] = &[
         file: crate::compact::HISTORY_TRIM_CONFIG,
         key: "age_out",
     },
+    AbFlag {
+        name: "lean_prompt",
+        file: crate::diet::CONFIG_NAME,
+        key: "lean_prompt",
+    },
+    AbFlag {
+        name: "sparse_line_numbers",
+        file: crate::diet::CONFIG_NAME,
+        key: "sparse_line_numbers",
+    },
 ];
 
 /// The switch named `name`, or a message listing the ones there are.

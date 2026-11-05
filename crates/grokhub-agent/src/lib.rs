@@ -10,6 +10,7 @@ mod close_check;
 mod compact;
 mod config_file;
 mod denials;
+mod diet;
 mod dream_model;
 mod drive;
 pub mod episode;

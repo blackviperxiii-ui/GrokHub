@@ -66,7 +66,8 @@ pub fn run(workspace: &Path, args: &Value) -> ToolOutput {
         ));
     }
     let end = (start + limit as usize).min(lines.len());
-    let out = numbered_lines(&lines, start, end);
+    let sparse = crate::diet::current().sparse_line_numbers;
+    let out = numbered_lines(&lines, start, end, sparse);
     // Workspace reads stay plain for coding. Outside-workspace text (if a
     // future path allows it) is fenced as untrusted data, and so is a file
     // the agent wrote from outside text (a stored-injection mark).
@@ -82,19 +83,25 @@ pub fn run(workspace: &Path, args: &Value) -> ToolOutput {
 }
 
 /// `n|line` rows from `start` to `end`, stopping early at [`READ_CHARS`] with a
-/// note naming the offset that continues.
-fn numbered_lines(lines: &[&str], start: usize, end: usize) -> String {
+/// note naming the offset that continues. `sparse` numbers only the first row
+/// and every tenth line; the rest read `|line`.
+fn numbered_lines(lines: &[&str], start: usize, end: usize, sparse: bool) -> String {
     let mut out = String::new();
     let mut used = 0usize;
     for (i, line) in lines[start..end].iter().enumerate() {
         let n = start + i + 1;
+        let label = if !sparse || i == 0 || n.is_multiple_of(10) {
+            n.to_string()
+        } else {
+            String::new()
+        };
         let row = match line.char_indices().nth(LINE_CHARS) {
             Some((cut, _)) => format!(
-                "{n}|{} …[line cut at {LINE_CHARS} of {} chars]\n",
+                "{label}|{} …[line cut at {LINE_CHARS} of {} chars]\n",
                 &line[..cut],
                 line.chars().count()
             ),
-            None => format!("{n}|{line}\n"),
+            None => format!("{label}|{line}\n"),
         };
         let len = row.chars().count();
         if i > 0 && used + len > READ_CHARS {
@@ -188,6 +195,42 @@ mod tests {
     use crate::tools::execute;
     use image::ImageEncoder;
     use std::fs;
+
+    #[test]
+    fn sparse_numbers_label_the_first_row_and_every_tenth_line() {
+        let lines: Vec<String> = (1..=25).map(|n| format!("l{n}")).collect();
+        let lines: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let full = numbered_lines(&lines, 0, 25, false);
+        assert!(full.starts_with("1|l1\n2|l2\n"));
+        let sparse = numbered_lines(&lines, 0, 25, true);
+        let rows: Vec<&str> = sparse.lines().collect();
+        assert_eq!(rows[0], "1|l1");
+        assert_eq!(rows[1], "|l2");
+        assert_eq!(rows[9], "10|l10");
+        assert_eq!(rows[19], "20|l20");
+        assert_eq!(rows[24], "|l25");
+        assert!(sparse.len() < full.len());
+        let from_seven = numbered_lines(&lines, 6, 11, true);
+        assert_eq!(from_seven, "7|l7\n|l8\n|l9\n10|l10\n|l11\n");
+    }
+
+    #[test]
+    fn the_diet_switch_turns_sparse_numbers_on_for_read_file() {
+        let ws = std::env::temp_dir().join(format!("gh-read-sparse-{}", std::process::id()));
+        let cfg = ws.join(".cfg");
+        std::fs::create_dir_all(&cfg).expect("cfg");
+        std::fs::write(ws.join("a.txt"), "one\ntwo\nthree\n").expect("file");
+        let _pin = crate::perm::ConfigGuard::set(&cfg);
+        let args = serde_json::json!({"target_file": "a.txt"});
+        assert_eq!(run(&ws, &args).text, "1|one\n2|two\n3|three\n");
+        std::fs::write(
+            cfg.join(crate::diet::CONFIG_NAME),
+            "sparse_line_numbers = true\n",
+        )
+        .expect("on");
+        assert_eq!(run(&ws, &args).text, "1|one\n|two\n|three\n");
+        let _ = std::fs::remove_dir_all(&ws);
+    }
 
     #[test]
     fn a_big_file_reads_in_capped_pages_that_reach_the_end() {
