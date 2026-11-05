@@ -2121,6 +2121,7 @@ fn quiet_cabin() -> Cabin {
         goal_step: 0,
         followup_step: 0,
         stream_buf: String::new(),
+        reply_chips: Default::default(),
         thought_buf: String::new(),
         chat_views: Vec::new(),
         chat_view_keys: Vec::new(),

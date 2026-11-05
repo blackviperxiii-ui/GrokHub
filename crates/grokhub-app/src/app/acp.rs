@@ -336,6 +336,9 @@ impl Cabin {
     }
 
     pub(super) fn finish_acp_turn(&mut self, text: String) {
+        let here =
+            chat_stream_is_visible(self.chat_job_thread.as_deref(), &self.visible_thread_id());
+        let text = self.take_reply_chips(text, here);
         let text = self.scrub_transcript(take_ui_text(text, IMAGE_FILE_CAP));
         self.note_activity_chat_end(true, "Reply finished");
         self.withdraw_perm_asks();
@@ -349,8 +352,6 @@ impl Cabin {
         self.perm_ask = None;
         self.elicit_ask = None;
         self.elicit_draft.clear();
-        let here =
-            chat_stream_is_visible(self.chat_job_thread.as_deref(), &self.visible_thread_id());
         self.running = false;
         if !self.voice_is_on() {
             self.voice_orb = "idle".into();

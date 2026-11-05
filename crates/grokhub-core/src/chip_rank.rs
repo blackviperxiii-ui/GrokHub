@@ -30,7 +30,7 @@ use crate::chips::{chip_intent, chip_memory_key, ChipKind, ChipMemory, QuickChip
 /// Chips a row shows at most, on every surface.
 pub const CHIP_ROW_MAX: usize = 3;
 /// Feature count. A stored model of another size is reset to the prior.
-const DIMS: usize = 12;
+const DIMS: usize = 13;
 /// Evidence at which the draw's spread reaches half its full width.
 const SPREAD_HALF_AT: f32 = 50.0;
 const MMR_LAMBDA: f32 = 0.7;
@@ -59,6 +59,7 @@ const FEATURE_NAMES: [&str; DIMS] = [
     "time of day",
     "predicted",
     "learned habit",
+    "from the reply",
 ];
 
 /// The learned model, kept in chip memory.
@@ -388,6 +389,7 @@ fn features(mem: &ChipMemory, chip: &QuickChip, top: f32, ctx: RankCtx<'_>) -> V
         at_hour,
         flag(chip.id.starts_with("pred-")),
         flag(chip.id.starts_with("learn-") || chip.id.starts_with("pred-habit")),
+        flag(chip.id.starts_with(crate::chip_trailer::REPLY_CHIP_PREFIX)),
     ]
 }
 

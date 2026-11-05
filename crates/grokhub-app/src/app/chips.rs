@@ -26,6 +26,20 @@ struct ChipSignalsKey {
     anticheat: bool,
 }
 
+/// The model's own chips for the reply on screen, and the stream filter that
+/// keeps their `<chips>` block out of the chat. One turn at a time.
+#[derive(Debug, Default)]
+pub(super) struct ReplyChips {
+    filter: grokhub_core::ChipTrailerFilter,
+    thread: String,
+    user_turns: usize,
+    chips: Vec<QuickChip>,
+}
+
+fn user_turns(messages: &[(String, String)]) -> usize {
+    messages.iter().filter(|(role, _)| role == "user").count()
+}
+
 /// True when a chat chip should run through `send_chat` (slash parse or empty-composer send).
 fn chip_chat_runs_immediately(chip: &QuickChip, composer_draft: &str) -> bool {
     let value = chip.value.trim();
@@ -427,6 +441,61 @@ impl Cabin {
         self.apply_thread_goal(&tid, &reply);
     }
 
+    /// Whether this chat's prompt asks the model for its own chips: never for
+    /// a side question or an unwatched run, and not while they keep losing.
+    pub(super) fn reply_chips_on(&self) -> bool {
+        !self.side_ask_kick
+            && !self.scheduled_perm
+            && grokhub_core::chip_trailer_on(&self.chip_memory, now_ms())
+    }
+
+    /// A new turn: no block half read, and the last reply's chips are done.
+    pub(super) fn begin_reply_chips(&mut self) {
+        self.reply_chips = ReplyChips::default();
+    }
+
+    /// The part of a streamed chunk that is shown: a reply's chips block is
+    /// held back, thinking passes as it came.
+    pub(super) fn shown_chunk<'a>(
+        &mut self,
+        kind: LiveKind,
+        chunk: &'a str,
+    ) -> std::borrow::Cow<'a, str> {
+        match kind {
+            LiveKind::Say => self.reply_chips.filter.feed(chunk).into(),
+            _ => chunk.into(),
+        }
+    }
+
+    /// The finished reply without its chips block. The block's chips are kept
+    /// for the chat on screen, and the rule is reviewed against how they did.
+    pub(super) fn take_reply_chips(&mut self, mut text: String, here: bool) -> String {
+        let (tail, mut block) = self.reply_chips.filter.finish();
+        text.push_str(&tail);
+        let (text, late) = grokhub_core::split_chip_trailer(&text);
+        if block.trim().is_empty() {
+            block = late;
+        }
+        grokhub_core::review_chip_trailer(&mut self.chip_memory, now_ms());
+        let chips = grokhub_core::parse_chip_trailer(&block);
+        if here && !self.job_is_idea_talk() && !chips.is_empty() {
+            self.reply_chips.thread = self.visible_thread_id();
+            self.reply_chips.user_turns = user_turns(&self.messages);
+            self.reply_chips.chips = chips;
+        }
+        text
+    }
+
+    /// The model's chips for the reply on screen; none once the chat moved on.
+    pub(super) fn reply_chips_here(&self) -> Vec<QuickChip> {
+        let r = &self.reply_chips;
+        if r.thread == self.visible_thread_id() && r.user_turns == user_turns(&self.messages) {
+            r.chips.clone()
+        } else {
+            Vec::new()
+        }
+    }
+
     pub(super) fn refresh_chips(&mut self) {
         if self.running {
             return;
@@ -461,6 +530,8 @@ impl Cabin {
         let feature_ids: Vec<&str> = features.iter().map(|c| c.id.as_str()).collect();
         let guard = self.chip_guard();
         let attachment = self.attached_file_name();
+        let reply = self.reply_chips_here();
+        let reply_ids: Vec<&str> = reply.iter().map(|c| c.id.as_str()).collect();
         let signals_key = ChipSignalsKey {
             low_disk: super::home::cached_drives()
                 .iter()
@@ -472,7 +543,7 @@ impl Cabin {
             anticheat: guard.anticheat.is_some(),
         };
         let key = format!(
-            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{:?}|{:?}|{:?}|{:?}",
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
             self.thread_idx,
             n,
             last,
@@ -497,7 +568,8 @@ impl Cabin {
             game_ended,
             signals_key,
             feature_ids,
-            attachment
+            attachment,
+            reply_ids
         );
         if self.chip_paint_key == key && !self.visible_chips.is_empty() {
             return;
@@ -517,7 +589,7 @@ impl Cabin {
             usage_cap: self.cfg.daily_auto_cap,
             memory: &self.chip_memory,
             dismissed: &self.chip_dismissed,
-            llm_chips: &[],
+            reply_chips: &reply,
             last_failed,
             hour,
             now_ms: now_ms(),
@@ -556,8 +628,10 @@ impl Cabin {
             thread_title: "",
             last_failed: false,
             max: grokhub_core::CHIP_HARD_MAX,
-            // Feature offers and the tray's file belong to the open chat.
+            // Feature offers, the reply's chips and the tray's file belong
+            // to the open chat.
             extra: &[],
+            reply_chips: &[],
             signals: ChipSignals {
                 attachment: None,
                 ..input.signals
