@@ -141,6 +141,21 @@ pub fn run_token_budget(max_turns: u32, depth: u32) -> Option<u64> {
     }
 }
 
+/// HTTP 400 or 422: the provider refused what was sent, which a bad tool
+/// schema can cause.
+fn refused_over_a_schema(err: &ClientError) -> bool {
+    matches!(err, ClientError::Protocol(m) if m.starts_with("HTTP 400") || m.starts_with("HTTP 422"))
+}
+
+/// Replies in a row whose tool-call arguments don't parse that the model gets
+/// to try again before the run stops. Each one sees the parse error.
+pub const BAD_ARGS_RETRIES: u32 = 2;
+/// What each call of the reply that runs out of retries gets back.
+pub const BAD_ARGS_TOOL: &str =
+    "not run: three replies in a row sent tool arguments that were not a JSON object";
+const BAD_ARGS_STOP: &str = "I stopped here: my tool calls kept coming out garbled. \
+Say continue and I'll try again.";
+
 const TRUNCATED_STOP: &str = "I stopped here: my last three replies were cut off at the output \
 limit before they finished. Say continue and I'll go on in smaller steps.";
 
@@ -574,6 +589,7 @@ fn run_turn(
     let mut breaker = crate::denials::Breaker::default();
     let mut stop_hook_active = false;
     let mut truncated_streak = 0u32;
+    let mut bad_args_streak = 0u32;
     let mut run_tokens = 0u64;
     // A subagent's checklist belongs to its parent; plan mode can't do the work.
     let mut drive = (input.depth == 0 && !plan_at_start && !input.conversation_id.is_empty())
@@ -837,6 +853,16 @@ fn run_turn(
                 }
             }
             Err(err) => {
+                // A provider that refuses one MCP tool's schema would fail
+                // every turn: offer that tool bare and send the step again.
+                if shown.is_empty()
+                    && refused_over_a_schema(&err)
+                    && crate::mcp::bare_schema_named_in(input.conversation_id, &err.to_string())
+                {
+                    turns = turns.saturating_sub(1);
+                    run_tokens = run_tokens.saturating_sub(req_tokens);
+                    continue;
+                }
                 // A reply cut off partway stays as the chat showed it, so the
                 // next turn knows what was already said.
                 if !shown.trim().is_empty() {
@@ -911,6 +937,38 @@ fn run_turn(
             continue;
         }
         truncated_streak = 0;
+        if turn
+            .calls
+            .iter()
+            .any(|call| !tools::args_parse(&call.arguments))
+        {
+            bad_args_streak = bad_args_streak.saturating_add(1);
+        } else {
+            bad_args_streak = 0;
+        }
+        if bad_args_streak > BAD_ARGS_RETRIES {
+            for call in &turn.calls {
+                history.push(InputItem::FunctionCall {
+                    call_id: call.call_id.clone(),
+                    name: call.name.clone(),
+                    arguments: call.arguments.clone(),
+                });
+                emit_tool(
+                    on_event,
+                    &tool_id(call),
+                    call,
+                    "failed",
+                    BAD_ARGS_TOOL,
+                    None,
+                );
+                history.push(InputItem::FunctionCallOutput {
+                    call_id: call.call_id.clone(),
+                    output: BAD_ARGS_TOOL.into(),
+                });
+            }
+            stop_with_note(history, on_event, BAD_ARGS_STOP.to_string());
+            return finish(input, StopReason::MaxTurns, usage, compacted_once, true);
+        }
         if turn.calls.is_empty() {
             let notes = input.steer.drain();
             if notes.is_empty() {
@@ -2543,6 +2601,178 @@ mod tests {
         assert!(events
             .iter()
             .any(|ev| matches!(ev, LoopEvent::Text(t) if t.contains("cut off"))));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn garbled_tool_arguments_get_two_retries_then_the_run_stops() {
+        let dir = workspace("bad-args");
+        let config = dir.join("config");
+        std::fs::create_dir_all(&config).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&config);
+        let bad = || {
+            ScriptTurn::calls(
+                vec![call("g", "read_file", r#"{"target_file": "a"#)],
+                Usage::default(),
+            )
+        };
+        let script = Script {
+            turns: Mutex::new(vec![bad(), bad(), bad(), bad(), ScriptTurn::text("never")]),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+        let (out, history, _) = run(
+            &script,
+            &dir,
+            0,
+            &CancelToken::new(),
+            &SteerQueue::new(),
+            &NeverHalt,
+        );
+        assert_eq!(out.stop, StopReason::MaxTurns);
+        assert_eq!(script.seen.lock().unwrap().len(), 3);
+        let outputs: Vec<&str> = history
+            .iter()
+            .filter_map(|item| match item {
+                InputItem::FunctionCallOutput { output, .. } => Some(output.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(outputs.len(), 3, "{outputs:?}");
+        assert!(outputs[0].contains("send the call again"), "{}", outputs[0]);
+        assert!(outputs[1].contains("send the call again"), "{}", outputs[1]);
+        assert_eq!(outputs[2], BAD_ARGS_TOOL);
+        assert!(matches!(
+            history.last(),
+            Some(InputItem::Message { role, content })
+                if role == "assistant"
+                    && matches!(&content[0], ContentPart::InputText(t) if t == BAD_ARGS_STOP)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    struct RefusesASchemaOnce {
+        tools: Mutex<Vec<Vec<serde_json::Value>>>,
+    }
+
+    impl ModelClient for RefusesASchemaOnce {
+        fn stream(
+            &self,
+            req: &ResponsesRequest,
+            _cancel: &CancelToken,
+            sink: &mut dyn FnMut(StreamEvent),
+        ) -> Result<crate::TurnOutput, ClientError> {
+            let mut tools = self.tools.lock().unwrap();
+            tools.push(req.tools.clone());
+            if tools.len() == 1 {
+                return Err(ClientError::Protocol(
+                    "HTTP 400: invalid parameters schema for function box__poke".into(),
+                ));
+            }
+            sink(StreamEvent::TextDelta("done".into()));
+            Ok(crate::TurnOutput {
+                text: "done".into(),
+                ..Default::default()
+            })
+        }
+    }
+
+    #[test]
+    fn a_refused_mcp_schema_is_sent_bare_and_the_step_goes_again_once() {
+        let dir = workspace("bare-schema");
+        let config = dir.join("config");
+        std::fs::create_dir_all(&config).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&config);
+        let _tools = crate::mcp::install_test_tools(&[("box", "poke", "Poke", false)]);
+        let client = RefusesASchemaOnce {
+            tools: Mutex::new(Vec::new()),
+        };
+        let conversation = format!("bare-run-{}", std::process::id());
+        let gate = Gate {
+            readonly_session: false,
+            ..Gate::phase_readonly()
+        };
+        let input = LoopIn {
+            client: &client,
+            workspace: &dir,
+            model: "grok-4.7",
+            effort: Some("low"),
+            system: "sys",
+            conversation_id: &conversation,
+            max_turns: 0,
+            usage_base: Usage::default(),
+            cancel: &CancelToken::new(),
+            steer: &SteerQueue::new(),
+            halt: &NeverHalt,
+            gate,
+            desktop: None,
+            permits: &gate::ClosedPermits,
+            perms: None,
+            context_length: 0,
+            tasks: None,
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
+        };
+        let mut history = Vec::new();
+        let out = run_loop(&input, &mut history, "poke it", None, &mut |_| {});
+        assert_eq!(out.stop, StopReason::EndTurn);
+        let sent = client.tools.lock().unwrap();
+        assert_eq!(sent.len(), 2);
+        let poke = sent[1]
+            .iter()
+            .find(|tool| tool["name"] == "box__poke")
+            .expect("the tool is still offered");
+        assert_eq!(
+            poke["parameters"],
+            serde_json::json!({"type": "object", "properties": {}})
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_good_call_after_garbled_ones_starts_the_count_over() {
+        let dir = workspace("bad-args-reset");
+        let config = dir.join("config");
+        std::fs::create_dir_all(&config).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&config);
+        std::fs::write(dir.join("a"), "hi").unwrap();
+        let bad = || {
+            ScriptTurn::calls(
+                vec![call("g", "read_file", r#"{"target_file": "a"#)],
+                Usage::default(),
+            )
+        };
+        let good = ScriptTurn::calls(
+            vec![call("ok", "read_file", r#"{"target_file": "a"}"#)],
+            Usage::default(),
+        );
+        let script = Script {
+            turns: Mutex::new(vec![
+                bad(),
+                bad(),
+                good,
+                bad(),
+                bad(),
+                ScriptTurn::text("done"),
+            ]),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+        let (out, _, _) = run(
+            &script,
+            &dir,
+            0,
+            &CancelToken::new(),
+            &SteerQueue::new(),
+            &NeverHalt,
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(script.seen.lock().unwrap().len(), 6);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
