@@ -23,6 +23,7 @@ pub mod identity;
 mod image_budget;
 pub mod indexers;
 mod loopback;
+mod lru_map;
 pub mod mcp;
 mod memory;
 mod memory_embed;

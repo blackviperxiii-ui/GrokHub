@@ -186,7 +186,7 @@ fn tools_only_appended(prev: &Shape, next: &Shape) -> bool {
 }
 
 struct Guard {
-    last: BTreeMap<String, Shape>,
+    last: crate::lru_map::LruMap<Shape>,
     noted: BTreeMap<String, Reason>,
     /// Each run's newest breaks, with the order they were seen in.
     breaks: BTreeMap<String, Vec<(u64, PrefixBreak)>>,
@@ -195,7 +195,7 @@ struct Guard {
 }
 
 static GUARD: Mutex<Guard> = Mutex::new(Guard {
-    last: BTreeMap::new(),
+    last: crate::lru_map::LruMap::new(MAX_RUNS),
     noted: BTreeMap::new(),
     breaks: BTreeMap::new(),
     seq: 0,
@@ -218,13 +218,13 @@ pub fn observe(key: &str, req: &ResponsesRequest) -> Option<PrefixBreak> {
     let shape = Shape::of(req);
     let mut g = GUARD.lock().unwrap_or_else(|e| e.into_inner());
     let noted = g.noted.remove(key);
-    if g.last.len() >= MAX_RUNS && !g.last.contains_key(key) {
-        g.last.clear();
-        g.breaks.clear();
+    if let Some(gone) = g.last.make_room(key) {
+        g.breaks.remove(&gone);
+        g.noted.remove(&gone);
     }
     let found = g
         .last
-        .insert(key.to_string(), shape.clone())
+        .insert(key, shape.clone())
         .and_then(|prev| first_break(&prev, &shape, noted));
     if let Some(b) = &found {
         if !b.reason.expected() {

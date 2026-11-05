@@ -13,7 +13,6 @@
 //! a long task in a progress style gets a short note at each phase boundary
 //! (a checklist item closing), rate-limited by [`PROGRESS_GAP`].
 
-use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use serde_json::Value;
@@ -24,6 +23,7 @@ use grokhub_core::findings::{
 use grokhub_core::talk::TalkStyle;
 
 use crate::brain::{Brief, Care, Intent};
+use crate::lru_map::LruMap;
 use crate::session_tools::TodoItem;
 
 // File shadow checkpoints live in `file_checkpoint` (this module is Brain 2
@@ -688,7 +688,8 @@ pub fn fallback_findings(todos: &[TodoItem], gaps: &Gaps) -> Option<Findings> {
 }
 
 /// The turn's Brief, by chat session, for the run loop's checkpoints.
-static BRIEFS: Mutex<BTreeMap<String, Brief>> = Mutex::new(BTreeMap::new());
+/// Each per-session map drops its least recently used chat when full.
+static BRIEFS: Mutex<LruMap<Brief>> = Mutex::new(LruMap::new(BRIEFS_CAP));
 const BRIEFS_CAP: usize = 256;
 
 pub fn set_turn_brief(session: &str, brief: Brief) {
@@ -696,10 +697,7 @@ pub fn set_turn_brief(session: &str, brief: Brief) {
         return;
     }
     let mut m = BRIEFS.lock().unwrap_or_else(|e| e.into_inner());
-    if m.len() >= BRIEFS_CAP && !m.contains_key(session) {
-        m.clear();
-    }
-    m.insert(session.to_string(), brief);
+    m.insert(session, brief);
 }
 
 pub fn turn_brief(session: &str) -> Option<Brief> {
@@ -711,7 +709,7 @@ pub fn turn_brief(session: &str) -> Option<Brief> {
 }
 
 /// The turn's talk style, by chat session (Brain 5). `None` clears it.
-static STYLES: Mutex<BTreeMap<String, TalkStyle>> = Mutex::new(BTreeMap::new());
+static STYLES: Mutex<LruMap<TalkStyle>> = Mutex::new(LruMap::new(BRIEFS_CAP));
 
 pub fn set_turn_style(session: &str, style: Option<TalkStyle>) {
     if session.is_empty() {
@@ -722,10 +720,7 @@ pub fn set_turn_style(session: &str, style: Option<TalkStyle>) {
         m.remove(session);
         return;
     };
-    if m.len() >= BRIEFS_CAP && !m.contains_key(session) {
-        m.clear();
-    }
-    m.insert(session.to_string(), style);
+    m.insert(session, style);
 }
 
 pub fn turn_style(session: &str) -> Option<TalkStyle> {
@@ -737,7 +732,7 @@ pub fn turn_style(session: &str) -> Option<TalkStyle> {
 }
 
 /// The turn's playbook paragraph, by chat session (Brain 3). `None` clears it.
-static PLAYBOOKS: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
+static PLAYBOOKS: Mutex<LruMap<String>> = Mutex::new(LruMap::new(BRIEFS_CAP));
 
 pub fn set_turn_playbook(session: &str, block: Option<String>) {
     if session.is_empty() {
@@ -748,10 +743,7 @@ pub fn set_turn_playbook(session: &str, block: Option<String>) {
         m.remove(session);
         return;
     };
-    if m.len() >= BRIEFS_CAP && !m.contains_key(session) {
-        m.clear();
-    }
-    m.insert(session.to_string(), block);
+    m.insert(session, block);
 }
 
 pub fn turn_playbook(session: &str) -> Option<String> {
