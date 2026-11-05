@@ -1506,7 +1506,10 @@ fn inject_notices(input: &LoopIn<'_>, history: &mut Vec<InputItem>) {
         return;
     };
     for note in tasks.drain_notices() {
-        let text = format!("<background-notice>\n{note}\n</background-notice>");
+        let text = format!(
+            "<background-notice>\n{}\n</background-notice>",
+            note.render()
+        );
         history.push(user_message(&text, None));
     }
 }
@@ -4369,7 +4372,7 @@ mod tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
         let mut notes = Vec::new();
         while std::time::Instant::now() < deadline {
-            notes.extend(hub.drain_notices());
+            notes.extend(hub.drain_notices().iter().map(ToString::to_string));
             if notes
                 .iter()
                 .any(|note| note.contains("cancelled") || note.contains("killed"))
