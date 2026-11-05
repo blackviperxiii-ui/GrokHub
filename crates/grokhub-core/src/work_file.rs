@@ -341,13 +341,14 @@ fn create_private(path: &Path) -> std::io::Result<fs::File> {
 }
 
 /// A private temp file, fsync, then a rename, like the cabin's `atomic_write`.
-fn write_private_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let dir = path.parent().ok_or("the board needs a folder")?;
+/// Shared by the work board and the chip store.
+pub(crate) fn write_private_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let dir = path.parent().ok_or("the file needs a folder")?;
     fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let name = path
         .file_name()
         .and_then(|s| s.to_str())
-        .ok_or("the board needs a file name")?;
+        .ok_or("the file needs a file name")?;
     static NEXT_TMP: AtomicU64 = AtomicU64::new(0);
     let n = NEXT_TMP.fetch_add(1, Ordering::Relaxed);
     let tmp = dir.join(format!(".{name}.board-{}-{n}.tmp", std::process::id()));

@@ -26,6 +26,7 @@ pub mod chat;
 pub mod chat_bubble;
 pub mod chat_job;
 pub mod chat_view;
+pub mod chip_store;
 pub mod chips;
 pub mod cli_history;
 pub mod code_resume;
@@ -317,6 +318,11 @@ pub use chat_view::{
     CHAT_TAIL_FRAMES, CHAT_TAIL_SLACK, SKILL_SAVED_MARK, SKILL_SAVED_NOTE, THOUGHT_CLUSTER_GAP,
     THOUGHT_ROW_LABEL,
 };
+pub use chip_store::{
+    chip_log_key, chip_store_path, load_chip_memory, log_chip_outcome, log_chips_shown,
+    migrate_chip_memory, save_chip_memory, ChipEvent, ChipOutcome, ShownChip, CHIP_LOG_MAX,
+    CHIP_STORE_FILE,
+};
 pub use chips::{
     build_quick_chips, cabin_pace, chip_dismissed_for_good, chip_intent, chip_key_embeds_chat_text,
     chip_memory_key, chip_scan, chip_spend_allowed, chip_suggest_prompt, chip_thread_from_messages,
@@ -324,10 +330,11 @@ pub use chips::{
     home_slash_cmd, home_surface_from_nav, idea_talk_chips, local_lessons, nav_from_chip_value,
     parse_llm_chips, predict_intents, prune_retired_chip_memory, remember_chip_click,
     remember_chip_dismiss, remember_chip_outcome, remember_chip_turn_outcome, remember_home_slash,
-    remember_home_surface, remember_intent, remember_typed_prompt, scrub_chat_text_chip_keys,
-    should_refresh_llm, skill_offer_chip, top_habit_labels, CabinPace, ChipInput, ChipKind,
-    ChipMemory, ChipSignals, ChipStage, ChipThread, PredictedIntent, QuickChip,
-    CHIP_LLM_DEBOUNCE_MS, CHIP_LLM_MODE, CHIP_LLM_SPEND_MS, CHIP_MEMORY_VERSION, CHIP_VISIBLE_MAX,
+    remember_home_surface, remember_intent, remember_typed_prompt, retired_mode_value,
+    scrub_chat_text_chip_keys, should_refresh_llm, skill_offer_chip, top_habit_labels, CabinPace,
+    ChipInput, ChipKind, ChipMemory, ChipSignals, ChipStage, ChipThread, PredictedIntent,
+    QuickChip, CHIP_LLM_DEBOUNCE_MS, CHIP_LLM_MODE, CHIP_LLM_SPEND_MS, CHIP_MEMORY_VERSION,
+    CHIP_VISIBLE_MAX,
 };
 pub use connector::{
     connector_url_allowed, extract_connector_cmds, github_api_path, map_website_connector_name,
