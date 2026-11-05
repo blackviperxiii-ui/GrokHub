@@ -31,6 +31,8 @@ pub(crate) struct StdioConn {
     next_id: u64,
     /// The stateless revision sent in every request's `_meta`; `None` after `initialize`.
     stateless: Option<&'static str>,
+    /// How long the last `tools/list` may be reused (`ttlMs`); `None` keeps it.
+    pub(crate) list_ttl: Option<Duration>,
     #[cfg(unix)]
     pgid: i32,
     #[cfg(windows)]
@@ -272,9 +274,21 @@ impl Drop for StdioConn {
     }
 }
 
+/// List the server's tools again, after its `ttlMs` ran out.
+pub(crate) fn relist(conn: &mut StdioConn, timeout: Duration) -> Result<Vec<RawTool>, String> {
+    list_tools(conn, timeout)
+}
+
 fn list_tools(conn: &mut StdioConn, timeout: Duration) -> Result<Vec<RawTool>, String> {
+    let mut all = list_pages(conn, timeout)?;
+    rpc::sort_tools(&mut all);
+    Ok(all)
+}
+
+fn list_pages(conn: &mut StdioConn, timeout: Duration) -> Result<Vec<RawTool>, String> {
     let mut all = Vec::new();
     let mut cursor: Option<String> = None;
+    conn.list_ttl = None;
     for _ in 0..100 {
         let mut params = serde_json::json!({});
         if let Some(token) = &cursor {
@@ -283,6 +297,9 @@ fn list_tools(conn: &mut StdioConn, timeout: Duration) -> Result<Vec<RawTool>, S
         let mut result = conn.roundtrip("tools/list", params, timeout)?;
         if conn.stateless.is_some() {
             result = rpc::complete(&conn.server, result)?;
+        }
+        if cursor.is_none() {
+            conn.list_ttl = rpc::list_ttl(&result);
         }
         let (page, next) = rpc::parse_tools(&result);
         all.extend(page);
@@ -354,6 +371,7 @@ fn spawn(
         reader: Some(reader),
         next_id: 0,
         stateless: None,
+        list_ttl: None,
         #[cfg(unix)]
         pgid,
         #[cfg(windows)]

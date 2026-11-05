@@ -196,6 +196,8 @@ struct SlotInner {
     /// Bumped per connect, so one that a restart or sign-out overtook is dropped.
     attempt: u64,
     conn: Option<Conn>,
+    /// When `raw` was last listed, for the server's `ttlMs`.
+    listed_at: Option<std::time::Instant>,
 }
 
 impl SlotInner {
@@ -210,7 +212,17 @@ impl SlotInner {
             connecting: false,
             attempt: 0,
             conn: None,
+            listed_at: None,
         }
+    }
+
+    /// The server's `ttlMs` ran out since its tools were listed.
+    fn list_expired(&self, now: std::time::Instant) -> bool {
+        let (Some(conn), Some(at)) = (&self.conn, self.listed_at) else {
+            return false;
+        };
+        conn.list_ttl()
+            .is_some_and(|ttl| now.saturating_duration_since(at) >= ttl)
     }
 }
 
@@ -239,6 +251,43 @@ impl Conn {
             Conn::Stdio(conn) => conn.ping(timeout),
             Conn::Http(conn) => conn.ping(timeout),
         }
+    }
+
+    fn list_ttl(&self) -> Option<std::time::Duration> {
+        match self {
+            Conn::Stdio(conn) => conn.list_ttl,
+            Conn::Http(conn) => conn.list_ttl,
+        }
+    }
+
+    fn relist(&mut self, timeout: std::time::Duration) -> Result<Vec<RawTool>, String> {
+        match self {
+            Conn::Stdio(conn) => stdio::relist(conn, timeout),
+            Conn::Http(conn) => http::relist(conn, timeout),
+        }
+    }
+}
+
+/// Longest wait for a re-list after a server's `ttlMs` ran out.
+const RELIST_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// List again the tools of each connected server whose `ttlMs` ran out. A
+/// failed re-list keeps the old tools and waits out another `ttlMs`.
+fn relist_expired(slots: &BTreeMap<String, std::sync::Arc<Mutex<SlotInner>>>) {
+    let now = std::time::Instant::now();
+    for slot in slots.values() {
+        let mut inner = lock_slot(slot);
+        if !inner.list_expired(now) {
+            continue;
+        }
+        let wait = inner.def.startup_timeout.min(RELIST_WAIT);
+        let Some(conn) = inner.conn.as_mut() else {
+            continue;
+        };
+        if let Ok(raw) = conn.relist(wait) {
+            inner.raw = raw;
+        }
+        inner.listed_at = Some(std::time::Instant::now());
     }
 }
 
@@ -1100,6 +1149,7 @@ fn current_tools() -> Vec<ToolRec> {
             }
         }
     }
+    relist_expired(&slots);
     requalify(&slots);
     flatten(&slots)
 }
@@ -1191,6 +1241,7 @@ fn connect_if_needed(slot: &Mutex<SlotInner>, workspace: &Path) {
         Ok((conn, raw)) => {
             inner.raw = raw;
             inner.conn = Some(conn);
+            inner.listed_at = Some(std::time::Instant::now());
             inner.last_error = None;
         }
         Err(err) => {

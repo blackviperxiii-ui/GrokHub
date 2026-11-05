@@ -268,6 +268,23 @@ const MAX_ICON_SRC: usize = 64 * 1024;
 /// Largest `outputSchema` kept, serialized.
 const MAX_OUTPUT_SCHEMA: usize = 16 * 1024;
 
+/// How long a `tools/list` result may be reused (`ttlMs`, MCP 2026-07-28).
+/// Clamped to at least [`MIN_LIST_TTL`] so a tiny value can't turn into a
+/// re-list on every step. `None` when the server gave none: keep the list.
+pub(crate) fn list_ttl(result: &Value) -> Option<std::time::Duration> {
+    let ms = result.get("ttlMs").and_then(Value::as_u64)?;
+    Some(std::time::Duration::from_millis(ms).max(MIN_LIST_TTL))
+}
+
+/// The shortest reuse window honored for a listed `ttlMs`.
+pub(crate) const MIN_LIST_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// A server's tools by name, whatever order it sent: the same catalog always
+/// gives the same tool list, so the prompt cache keeps matching.
+pub(crate) fn sort_tools(tools: &mut [RawTool]) {
+    tools.sort_by(|a, b| a.name.cmp(&b.name));
+}
+
 pub(crate) fn parse_tools(result: &Value) -> (Vec<RawTool>, Option<String>) {
     let mut tools = Vec::new();
     if let Some(items) = result.get("tools").and_then(|v| v.as_array()) {
@@ -574,6 +591,17 @@ fn input_round(server: &str, result: &Value) -> Result<(Option<Value>, Option<St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_listed_ttl_is_read_and_never_shorter_than_the_floor() {
+        assert_eq!(list_ttl(&json!({"tools": []})), None);
+        assert_eq!(
+            list_ttl(&json!({"ttlMs": 120_000})),
+            Some(std::time::Duration::from_secs(120))
+        );
+        assert_eq!(list_ttl(&json!({"ttlMs": 5})), Some(MIN_LIST_TTL));
+        assert_eq!(list_ttl(&json!({"ttlMs": "soon"})), None);
+    }
 
     fn answer(version: &str) -> Value {
         json!({"protocolVersion": version, "capabilities": {}, "serverInfo": {"name": "s", "version": "0"}})
