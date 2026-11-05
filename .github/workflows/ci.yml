@@ -99,7 +99,7 @@ jobs:
       - name: Nightly already green on this SHA
         id: dedup
         if: github.event_name == 'schedule'
-        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .nightly-green
           key: ci-nightly-green-${{ steps.sha.outputs.sha }}
@@ -270,7 +270,7 @@ jobs:
       # Carcass: deny dead_code workspace-wide. Retired direct-xAI helpers
       # must be deleted, not allowed.
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2
+      - uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941 # v2
         with:
           tool: nextest
       # Each test runs in its own process (see .config/nextest.toml), so they
@@ -294,7 +294,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
-      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2
+      - uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941 # v2
         with:
           tool: cargo-deny
       - run: cargo deny --locked check
@@ -499,7 +499,7 @@ jobs:
       # The Gradle and Xcode projects call the CLI back while they build. The
       # npm CLI records a path relative to where it ran, which they can't
       # find, so the phone jobs use cargo's.
-      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2
+      - uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941 # v2
         with:
           tool: tauri-cli@2.12.4
       - name: Smoke build
@@ -595,7 +595,7 @@ jobs:
       # Carcass: deny dead_code workspace-wide. Retired direct-xAI helpers
       # must be deleted, not allowed.
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2
+      - uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941 # v2
         with:
           tool: nextest
       - run: cargo nextest run --workspace --locked --profile ci
@@ -652,7 +652,7 @@ jobs:
         run: |
           mkdir -p .nightly-green
           echo "$SHA" > .nightly-green/sha
-      - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .nightly-green
           key: ci-nightly-green-${{ needs.changes.outputs.sha }}
