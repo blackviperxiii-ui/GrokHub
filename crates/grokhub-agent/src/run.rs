@@ -655,11 +655,15 @@ fn run_turn(
         let sent_len = history.len();
         let mut wire = history.clone();
         crate::image_budget::apply_image_budget(&mut wire);
-        let tools = match bound_job_tool_set(input.conversation_id) {
-            Some(set) => tools::schemas_for_job(&gate, &set),
-            None => tools::schemas_for(&gate),
+        let tools = match (
+            crate::subagent::fork_tools(input.conversation_id),
+            bound_job_tool_set(input.conversation_id),
+        ) {
+            (Some(parents), _) => parents,
+            (None, Some(set)) => tools::schemas_for_job(&gate, &set),
+            (None, None) => tools::schemas_for(&gate),
         };
-        let req = ResponsesRequest {
+        let mut req = ResponsesRequest {
             text_format: None,
             model: input.model.to_string(),
             effort: input.effort.map(str::to_string),
@@ -684,9 +688,7 @@ fn run_turn(
         run_tokens = run_tokens.saturating_add(req_tokens);
         // Each request should extend the last one; a rewrite logs its first changed segment.
         crate::prefix_guard::observe(&guard_key, &req);
-        if input.depth == 0 && offers_spawn(&req.tools) {
-            crate::subagent::remember_request(input.conversation_id, input.model, &req.input);
-        }
+        let remember = input.depth == 0 && offers_spawn(&req.tools);
         let class = crate::route::live::current_class();
         drop(turn_top);
         if let Some(t) = step_ended {
@@ -694,7 +696,7 @@ fn run_turn(
         }
         // What the chat showed of this reply, kept if the reply fails partway.
         let mut shown = String::new();
-        let turn = match crate::route::live::stream_routed(
+        let streamed = crate::route::live::stream_routed(
             input.client,
             &req,
             input.cancel,
@@ -707,7 +709,18 @@ fn run_turn(
                 StreamEvent::RateWait(wait) => on_event(LoopEvent::Thought(rate_wait_note(wait))),
             },
             class,
-        ) {
+        );
+        // A fork of this chat starts from exactly what went out. The request
+        // is done with, so its input and tools move there instead of a copy.
+        if remember {
+            crate::subagent::remember_request(
+                input.conversation_id,
+                input.model,
+                std::mem::take(&mut req.input),
+                std::mem::take(&mut req.tools),
+            );
+        }
+        let turn = match streamed {
             Ok(turn) => {
                 overflow_compacted = false;
                 if turn.usage.input_tokens > 0 {
