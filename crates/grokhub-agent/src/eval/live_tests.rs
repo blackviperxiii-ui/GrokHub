@@ -208,6 +208,7 @@ fn pass_hat_k_needs_every_try() {
         arm: None,
         asks: 0,
         compactions: 0,
+        calls: 1,
     };
     let tries = vec![
         a("x", true),
@@ -493,6 +494,16 @@ fn ab_runs_each_try_with_the_switch_on_then_off() {
     assert!(md.contains("| on | 100% (2/2) |"), "{md}");
     assert!(md.contains("| off | 100% (2/2) |"), "{md}");
     assert!(md.contains("| exact-word | reg | off | 2 | yes |"), "{md}");
+    // One task in both arms: the paired part reports it but gives no verdict.
+    assert!(
+        md.contains("**Verdict:** No verdict: 1 task(s) ran in both arms"),
+        "{md}"
+    );
+    assert!(md.contains("| exact-word | 2/2 | 2/2 |"), "{md}");
+    assert!(
+        report.attempts.iter().all(|a| a.calls >= 1),
+        "every try made a model call"
+    );
 }
 
 #[test]
