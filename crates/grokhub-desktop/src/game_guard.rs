@@ -269,6 +269,19 @@ pub fn exe_name_of(pid: u32) -> Option<String> {
         .map(|(_, n)| n.to_ascii_lowercase())
 }
 
+/// Names of the running services and kernel drivers (empty off Windows),
+/// for the mod planner's anti-cheat profile. Asks the SCM only.
+pub fn service_names() -> Vec<String> {
+    #[cfg(windows)]
+    {
+        running_services()
+    }
+    #[cfg(not(windows))]
+    {
+        Vec::new()
+    }
+}
+
 /// Names of the running services and kernel drivers, from the Service
 /// Control Manager. This asks the SCM, never a game process.
 #[cfg(windows)]

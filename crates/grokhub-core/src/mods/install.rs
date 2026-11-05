@@ -303,6 +303,9 @@ pub struct Plan {
     pub dirs: Vec<String>,
     /// The game's build when planned (Steam `buildid`), to warn on uninstall.
     pub build: Option<String>,
+    /// Set when the anti-cheat rules offer this mod as offline only: the
+    /// plain-words note the card and the installed mod show.
+    pub offline_only: Option<String>,
 }
 
 impl Plan {
@@ -349,6 +352,10 @@ pub struct Manifest {
     #[serde(default)]
     pub build: Option<String>,
     pub at: u64,
+    /// The anti-cheat rules' offline-only note, when the install was offered
+    /// as offline only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offline_only: Option<String>,
 }
 
 /// What an uninstall did, or would do.
@@ -528,6 +535,7 @@ pub fn plan(
         files,
         dirs,
         build: info.build.clone(),
+        offline_only: None,
     })
 }
 
@@ -585,6 +593,7 @@ impl<'a> Installer<'a> {
             dirs: plan.dirs.clone(),
             build: plan.build.clone(),
             at: now,
+            offline_only: plan.offline_only.clone(),
         };
         save(&dir, &m)?;
         match self.write_all(plan, &mut m, &dir, &backups) {

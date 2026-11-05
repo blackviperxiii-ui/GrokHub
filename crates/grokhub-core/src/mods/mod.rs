@@ -14,6 +14,7 @@
 //! only is on, public addresses only, no redirect off the source's own hosts).
 
 pub mod allowlist;
+pub mod anticheat;
 pub mod archive;
 pub mod cache;
 pub mod client;

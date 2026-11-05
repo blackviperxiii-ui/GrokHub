@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::SystemTime;
 
 use eframe::egui;
+use grokhub_core::mods::anticheat::Screen;
 use grokhub_core::mods::install::{
     self as engine, Installer, Layout, Manifest, ModInfo, Plan, Removal,
 };
@@ -514,7 +515,16 @@ fn prepare(
         },
         build: t.build.clone(),
     };
-    let plan = engine::plan(&config(), game.entry.id, &t.root, &unpacked, &placed, &info)?;
+    let mut plan = engine::plan(&config(), game.entry.id, &t.root, &unpacked, &placed, &info)?;
+    // The anti-cheat rules judge the plan before the card shows it.
+    let services = grokhub_desktop::game_guard::service_names();
+    let profile =
+        grokhub_core::game_profile::profile(game.entry.protection, Some(&t.game_dir), &services);
+    match grokhub_core::mods::anticheat::screen(&plan, game.entry, &profile) {
+        Screen::Clear => {}
+        Screen::OfflineOnly(note) => plan.offline_only = Some(note),
+        Screen::Refused(why) => return Err(why),
+    }
     let update = installed(game.entry.id).iter().any(|i| i.mod_key == key);
     Ok(Sheet::Install {
         plan,
@@ -675,7 +685,11 @@ pub(super) fn sheet(ctx: &egui::Context) {
                         plan.name,
                         plan.version
                     ),
-                    if *update { "Update" } else { "Install" },
+                    match (*update, plan.offline_only.is_some()) {
+                        (true, _) => "Update",
+                        (false, true) => "Install for offline play",
+                        (false, false) => "Install",
+                    },
                 ),
                 Sheet::Remove { name, .. } => (format!("Uninstall {name}?"), "Uninstall"),
             };
@@ -703,6 +717,13 @@ pub(super) fn sheet(ctx: &egui::Context) {
                         let reps: Vec<String> = plan.replaces().map(|f| f.to.clone()).collect();
                         list(ui, "Adds", &adds);
                         list(ui, "Replaces (backed up first)", &reps);
+                        if let Some(n) = &plan.offline_only {
+                            ui.label(
+                                egui::RichText::new(n)
+                                    .size(crate::theme::TYPE_CAPTION)
+                                    .color(crate::theme::amber()),
+                            );
+                        }
                         if let Some(n) = note {
                             ui.label(
                                 egui::RichText::new(n)
