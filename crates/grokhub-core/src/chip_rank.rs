@@ -18,6 +18,8 @@
 //!    is unlikely to be picked is not shown at all.
 //! 5. **Propensity**: how often each chip would land in its slot over many
 //!    draws, logged with the row so offline evaluation can correct for it.
+//! 6. **Holdout**: one boundary in twenty shows no row, logged, so
+//!    `chip_health` can tell whether chips make the next step faster.
 //!
 //! The draw is seeded per boundary (a turn ending, a page opening), never per
 //! keystroke, so a row does not reshuffle while the person types.
@@ -185,6 +187,10 @@ pub fn rank_quick_chips(
     let pick = |seed: u64| select(&mem.ranker, &pool, &xs, seed, max);
     let row = pick(ctx.seed);
     if gate_closed(&mem.ranker, &pool, &xs, &row) {
+        return Vec::new();
+    }
+    if crate::chip_health::in_holdout(ctx.seed) && crate::chip_health::holdout_allowed(&pool) {
+        crate::chip_health::log_holdout(mem, ctx.surface, ctx.now_ms);
         return Vec::new();
     }
     // Propensity: share of draws that put the same chip in the same slot.
@@ -566,7 +572,9 @@ mod tests {
         let habit = chip("learn-brief", "Brief me", 8.0);
         let engine = chip("pred-plan", "Plan the week", 9.0);
         let mut t = 1_000_000;
-        for _ in 0..40 {
+        let mut shown = 0;
+        // Forty rows that showed; a held-back boundary teaches nothing.
+        while shown < 40 {
             t += 1;
             let row = rank_quick_chips(
                 &mut mem,
@@ -577,6 +585,11 @@ mod tests {
                     ..ctx(t)
                 },
             );
+            if row.is_empty() {
+                assert!(crate::chip_health::in_holdout(t));
+                continue;
+            }
+            shown += 1;
             log_chips_shown(&mut mem, "composer", &row, t);
             log_chip_outcome(&mut mem, "composer", &habit, true, t);
         }

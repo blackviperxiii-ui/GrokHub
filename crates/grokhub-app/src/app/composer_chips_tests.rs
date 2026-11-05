@@ -105,8 +105,8 @@ fn refresh_chips_does_not_rebuild_every_frame() {
         "chip rebuild must not clone an 8MB complete into chat_pairs: {chips}"
     );
     assert!(
-        chips.contains("host_on: false"),
-        "empty chips must not inject HOST_CMD host_chips: {chips}"
+        !chips.contains("host_on") && !chips.contains("HOST_CMD"),
+        "chips have no HOST_CMD path to switch on: {chips}"
     );
     assert!(
         chips.contains("grok_connected: self.cabin_signed_in()"),

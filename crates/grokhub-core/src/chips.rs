@@ -400,11 +400,9 @@ pub struct ChipInput<'a> {
     pub chat: &'a [(String, String)],
     pub draft: &'a str,
     pub grok_connected: bool,
-    pub host_on: bool,
     pub mode: &'a str,
     pub thread_title: &'a str,
     pub usage_messages: u32,
-    pub usage_cap: u32,
     pub memory: &'a ChipMemory,
     pub dismissed: &'a [String],
     pub reply_chips: &'a [QuickChip],
@@ -2192,101 +2190,6 @@ fn apply_home_signal_boost(chips: &mut [QuickChip], input: &ChipInput<'_>) {
     }
 }
 
-/// One lesson the cabin learned from its own chips. `drop` means the evidence is gone.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LocalLesson {
-    pub key: String,
-    pub text: String,
-    pub drop: bool,
-}
-
-/// Habits and skips from chip use and dismiss hour. No model call.
-/// A lesson disappears when the person later does the opposite.
-pub fn local_lessons(memory: &ChipMemory) -> Vec<LocalLesson> {
-    let mut out = Vec::new();
-    for hit in &memory.hits {
-        if hit.dismisses > 0
-            || hit.uses < 2
-            || hit.successes < 1
-            || hit.label.trim().is_empty()
-            || retired_mode_value(&hit.value)
-        {
-            continue;
-        }
-        let Some((hour, n)) = best_hour(&hit.hour_hits) else {
-            continue;
-        };
-        if n < 2 {
-            continue;
-        }
-        out.push(LocalLesson {
-            key: format!("habit:{hour}:{}", hit.key),
-            text: format!("Around {hour}:00 they use {}.", hit.label),
-            drop: false,
-        });
-    }
-    let mut families: Vec<&str> = Vec::new();
-    for hit in &memory.hits {
-        let family = chip_family(&hit.key, &hit.value, &hit.label);
-        if !family.is_empty() && !families.contains(&family) {
-            families.push(family);
-        }
-    }
-    for family in families {
-        for hour in 0..24 {
-            let dismissed: u32 = memory
-                .hits
-                .iter()
-                .filter(|h| chip_family(&h.key, &h.value, &h.label) == family)
-                .map(|h| h.dismiss_hours.get(hour).copied().unwrap_or(0))
-                .sum();
-            if dismissed < 2 {
-                continue;
-            }
-            let used_later = memory.hits.iter().any(|h| {
-                chip_family(&h.key, &h.value, &h.label) == family
-                    && h.successes > 0
-                    && h.hour_hits.get(hour).copied().unwrap_or(0) > 0
-            });
-            if used_later {
-                continue;
-            }
-            let name = if family == "guide" {
-                "the tour"
-            } else {
-                family
-            };
-            out.push(LocalLesson {
-                key: format!("skip:{hour}:{family}"),
-                text: format!("Around {hour}:00 they skip {name}."),
-                drop: false,
-            });
-        }
-    }
-    out.truncate(6);
-    out
-}
-
-fn best_hour(hours: &[u32]) -> Option<(u8, u32)> {
-    let mut best: Option<(u8, u32)> = None;
-    for (i, n) in hours.iter().copied().enumerate().take(24) {
-        if n == 0 {
-            continue;
-        }
-        if best.is_none_or(|(_, b)| n > b) {
-            best = Some((i as u8, n));
-        }
-    }
-    best
-}
-
-pub fn remember_chip_outcome(memory: &mut ChipMemory, success: bool, now_ms: u64) {
-    let Some(key) = memory.last_chip_key.clone() else {
-        return;
-    };
-    remember_chip_turn_outcome(memory, &key, success, now_ms);
-}
-
 /// Credit how a turn went to the chip that started it, by its memory key.
 /// A typed turn has no chip and credits nothing.
 pub fn remember_chip_turn_outcome(memory: &mut ChipMemory, key: &str, success: bool, now_ms: u64) {
@@ -3409,11 +3312,9 @@ mod tests {
             chat,
             draft,
             grok_connected: true,
-            host_on: true,
             mode: "auto",
             thread_title: "Chat",
             usage_messages: 1,
-            usage_cap: 40,
             memory,
             dismissed,
             reply_chips: llm,
@@ -3925,58 +3826,10 @@ mod tests {
     }
 
     #[test]
-    fn a_repeated_success_becomes_a_lesson_and_a_dismiss_removes_it() {
-        let mut mem = ChipMemory::default();
-        let think = chip(
-            "ctx-tests",
-            "Add unit tests",
-            "Add unit tests for the last change.",
-            ChipKind::Chat,
-            10.0,
-            "",
-        );
-        remember_chip_click(&mut mem, &think, None, 1_000, 21);
-        remember_chip_click(&mut mem, &think, None, 2_000, 21);
-        remember_chip_outcome(&mut mem, true, 3_000);
-        let lessons = local_lessons(&mem);
-        assert!(
-            lessons
-                .iter()
-                .any(|l| l.text.contains("21:00") && l.text.contains("Add unit tests")),
-            "{lessons:?}"
-        );
-        remember_chip_dismiss(&mut mem, &think, 4_000, 21);
-        let gone = local_lessons(&mem);
-        assert!(
-            gone.iter().all(|l| !l.text.contains("Add unit tests")),
-            "a later no removes the lesson: {gone:?}"
-        );
-        let mut state = crate::learning::LearningState::default();
-        crate::learning::apply_local_lessons(&mut state, &lessons);
-        assert!(state.insights.iter().any(|i| i.key.starts_with("habit:")));
-        crate::learning::apply_local_lessons(&mut state, &gone);
-        assert!(state.insights.iter().all(|i| !i.key.starts_with("habit:")));
+    fn a_paid_review_waits_for_enough_new_turns() {
         assert!(!crate::learning::review_worth_tokens(3, 0));
         assert!(crate::learning::review_worth_tokens(8, 0));
         assert!(!crate::learning::review_worth_tokens(10, 8));
-    }
-
-    #[test]
-    fn an_old_mode_chip_in_memory_makes_no_lesson() {
-        let mut mem = ChipMemory::default();
-        let think = chip(
-            "route-think",
-            "Think Harder",
-            "__mode:think",
-            ChipKind::Nav,
-            10.0,
-            "",
-        );
-        remember_chip_click(&mut mem, &think, None, 1_000, 21);
-        remember_chip_click(&mut mem, &think, None, 2_000, 21);
-        remember_chip_outcome(&mut mem, true, 3_000);
-        assert_eq!(mem.hits.len(), 1, "old memory still reads");
-        assert!(local_lessons(&mem).is_empty());
     }
 
     #[test]
@@ -4000,7 +3853,6 @@ mod tests {
         let mem = ChipMemory::default();
         let mut inp = input(&[], "", &mem, &[], &[]);
         inp.usage_messages = 40;
-        inp.usage_cap = 40;
         let chips = build_quick_chips(inp);
         assert!(!chips.iter().any(|c| c.id == "ctx-quota"));
         for c in &chips {
@@ -4764,8 +4616,9 @@ mod tests {
             "New chat",
         );
         remember_chip_click(&mut mem, &habit, Some("mid"), 3_000, 21);
-        remember_chip_outcome(&mut mem, true, 4_000);
-        remember_chip_outcome(&mut mem, true, 5_000);
+        let key = mem.last_chip_key.clone().unwrap();
+        remember_chip_turn_outcome(&mut mem, &key, true, 4_000);
+        remember_chip_turn_outcome(&mut mem, &key, true, 5_000);
         let chat = [
             msg("user", "hi"),
             msg(

@@ -694,12 +694,10 @@ impl Cabin {
             chat: &chat,
             draft: &self.composer,
             grok_connected: self.cabin_signed_in(),
-            host_on: false,
             // The router alone picks the model: chips always see Auto.
             mode: "auto",
             thread_title: &title,
             usage_messages: self.usage.messages,
-            usage_cap: self.cfg.daily_auto_cap,
             memory: &self.chip_memory,
             dismissed: &self.chip_dismissed,
             reply_chips: &reply,
@@ -753,7 +751,8 @@ impl Cabin {
         };
         // Chips are local only: no model ask, cloud or local (LO-28).
         let home_pool = build_quick_chips(home);
-        let pool = build_quick_chips(input);
+        let mut pool = build_quick_chips(input);
+        bias_chips_for_lane(&mut pool, cabin_lane(&self.cfg.cabin_lane));
         // One draw per boundary (thread, turn, hour), never per keystroke,
         // so the row holds still while the person types.
         let seed = {
@@ -867,7 +866,6 @@ impl Cabin {
         // Feature offers (focus help, model drop, code resume, tidy, backup,
         // radar, game, skill offer) are already in the ranked pool.
         let mut chips = self.visible_chips.clone();
-        bias_chips_for_lane(&mut chips, cabin_lane(&self.cfg.cabin_lane));
         polish_chip_hints(&mut chips, &self.composer);
         // A shell chip fills the box with its command; with a draft typed
         // there is no room for it, so it waits until the box is empty.

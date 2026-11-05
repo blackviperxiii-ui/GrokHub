@@ -43,16 +43,20 @@ fn chip_leans_coding(chip: &QuickChip) -> bool {
         || blob.contains("/sh")
 }
 
-/// Reorder existing chips. Does not invent tiles or rebrand Imagine as Life.
+/// Lean the pool toward the lane before the ranker sees it. Does not invent
+/// tiles or rebrand Imagine as Life.
 ///
-/// The lane only breaks near-ties: chips are grouped into bands of a tenth
-/// of the top score, and the lane orders chips inside a band. A much
-/// stronger suggestion is never pushed down just for being off-lane.
+/// The lane only breaks near-ties: an on-lane chip gains at most two thirds
+/// of a tenth of the top score, so a much stronger suggestion is never
+/// pushed down just for being off-lane. The ranker then weighs the leaned
+/// score like any other, so the row it logs is the row that shows.
 pub(super) fn bias_chips_for_lane(chips: &mut [QuickChip], lane: CabinLane) {
     let top = chips.iter().map(|c| c.score).fold(0.0_f32, f32::max);
-    let width = (top * 0.1).max(f32::EPSILON);
-    let band = |c: &QuickChip| ((top - c.score).max(0.0) / width).floor() as i64;
-    chips.sort_by_key(|c| (band(c), lane_rank(c, lane)));
+    let step = (top * 0.1).max(f32::EPSILON) / 3.0;
+    for c in chips.iter_mut() {
+        c.score += step * f32::from(2 - lane_rank(c, lane));
+    }
+    chips.sort_by(|a, b| b.score.total_cmp(&a.score));
 }
 
 /// A feature's own offers (code resume, focus help, backup and the rest)

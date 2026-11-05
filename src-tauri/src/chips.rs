@@ -230,8 +230,8 @@ pub struct Rows {
 /// The ranked row for one surface, logged as shown. Chip memory is read
 /// fresh each time, so the cabin's own picks count here too.
 pub fn row(dir: &Path, rows: &Mutex<Rows>, ask: RowAsk<'_>) -> Vec<Chip> {
-    let mut mem = grokhub_core::load_chip_memory(dir);
     let mut held = rows.lock().unwrap_or_else(|e| e.into_inner());
+    let mut mem = grokhub_core::load_chip_memory(dir);
     mem.ranker.last = std::mem::take(&mut held.ranked);
     let pool = pool(&mem, &ask);
     let seed = {
@@ -260,8 +260,9 @@ pub fn row(dir: &Path, rows: &Mutex<Rows>, ask: RowAsk<'_>) -> Vec<Chip> {
     held.ranked = std::mem::take(&mut mem.ranker.last);
     let out = wired(&shown, ask.mode);
     held.shown.insert(ask.surface.to_string(), shown);
-    drop(held);
+    // Saved under the lock: a tap and a row never write over each other.
     let _ = grokhub_core::save_chip_memory(dir, &mem);
+    drop(held);
     out
 }
 
@@ -272,12 +273,10 @@ fn pool(mem: &ChipMemory, ask: &RowAsk<'_>) -> Vec<QuickChip> {
         chat: ask.chat,
         draft: ask.draft,
         grok_connected: ask.signed_in,
-        host_on: false,
         // The router alone picks the model: chips always see Auto.
         mode: "auto",
         thread_title: "",
         usage_messages: 0,
-        usage_cap: 0,
         memory: mem,
         dismissed: &[],
         reply_chips: ask.follow_ups,
@@ -299,6 +298,22 @@ fn pool(mem: &ChipMemory, ask: &RowAsk<'_>) -> Vec<QuickChip> {
         },
         extra: &[],
     })
+}
+
+/// The person sent a message while `surface` was up: the row there notes
+/// how long it stood (`chip_health`). Rows-locked like a tap, so the two
+/// never write over each other.
+pub fn next_step(dir: &Path, rows: &Mutex<Rows>, surface: &str, now: u64) {
+    let held = rows.lock().unwrap_or_else(|e| e.into_inner());
+    let mut mem = grokhub_core::load_chip_memory(dir);
+    if mem.events.is_empty() {
+        return;
+    }
+    mem.ranker.last = held.ranked.clone();
+    grokhub_core::log_chip_next_action(&mut mem, surface, now);
+    // Saved under the lock: a tap and a row never write over each other.
+    let _ = grokhub_core::save_chip_memory(dir, &mem);
+    drop(held);
 }
 
 /// A tap or a hide on a chip the page was shown. Only a chip from that
@@ -330,8 +345,9 @@ pub fn outcome(
     }
     // The row was acted on: the next showing is a new one.
     held.shown.remove(surface);
-    drop(held);
+    // Saved under the lock: a tap and a row never write over each other.
     let _ = grokhub_core::save_chip_memory(dir, &mem);
+    drop(held);
     Some(chip)
 }
 
@@ -514,6 +530,11 @@ mod tests {
             mem.events[0].outcome,
             Some(grokhub_core::ChipOutcome::Picked { .. })
         ));
+        // The next message notes how long the row stood, once.
+        next_step(&dir, &rows, COMPOSER, 2_500);
+        next_step(&dir, &rows, COMPOSER, 9_000);
+        let mem = grokhub_core::load_chip_memory(&dir);
+        assert_eq!(mem.events[0].next_at, Some(2_500));
         // The row was acted on, so the same id is not taken twice.
         assert_eq!(
             outcome(&dir, &rows, COMPOSER, "reply-1", true, (10, 2, 3_000)),
