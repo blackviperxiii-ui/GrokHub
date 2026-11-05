@@ -272,7 +272,8 @@ fn an_agent_from_the_http_facade_counts_as_a_builder() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// The model client posts only from `post_guarded` and reads only from
+/// The model client builds its one POST only in `guarded_post` (which
+/// `post_guarded` and the compaction call send) and reads only from
 /// `get_guarded` (the Batch API's status and results), each after its endpoint
 /// allowlist and the guard. Every xAI URL it names is on
 /// [`XAI_MODEL_ENDPOINTS`] (compaction too) or is the Batch API root that
@@ -292,7 +293,11 @@ fn the_xai_client_posts_only_listed_endpoints_behind_the_guard() {
             .unwrap_or_else(|| panic!("{name}"))
             .to_string()
     };
-    let body = site("post_guarded");
+    assert!(
+        site("post_guarded").contains("self.guarded_post("),
+        "post_guarded sends only what guarded_post built"
+    );
+    let body = site("guarded_post");
     let allow = body
         .find("XAI_MODEL_ENDPOINTS.contains(")
         .expect("allowlist check");
