@@ -190,7 +190,10 @@ impl ModsOps for Host {
         let g = game_for(entry);
         let mut lines: Vec<String> = install::installed(entry.id)
             .iter()
-            .map(|m| format!("- {} {} (installed by Loadout)", m.name, m.version))
+            .map(|m| match &m.offline_only {
+                Some(note) => format!("- {} {} (installed by Loadout). {note}", m.name, m.version),
+                None => format!("- {} {} (installed by Loadout)", m.name, m.version),
+            })
             .collect();
         let steam = grokhub_core::steam::detect_root();
         lines.extend(

@@ -301,6 +301,7 @@ fn each_file_offers_one_way_to_get_it() {
         dirs: vec![],
         build: None,
         at: 0,
+        offline_only: None,
     };
     let key = "modrinth:abc";
     assert_eq!(
