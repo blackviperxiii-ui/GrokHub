@@ -321,9 +321,19 @@ fn composer_chips_stay_visible_mid_thread() {
         !body.contains("Vec::new()") && !body.contains("if home"),
         "a thread with messages must not clear ranked chips: {body}"
     );
+    let features = src
+        .split("fn feature_chips(")
+        .nth(1)
+        .and_then(|s| s.split("fn composer_chips(").next())
+        .expect("feature_chips");
+    let refresh = src
+        .split("fn refresh_chips(")
+        .nth(1)
+        .and_then(|s| s.split("fn feature_chips(").next())
+        .expect("refresh_chips");
     assert!(
-        body.contains("skill_offer_chip"),
-        "skill offer still inserts on the same row: {body}"
+        features.contains("skill_offer_chip") && refresh.contains("extra: &features"),
+        "skill offer still reaches the same row, ranked with the rest: {features}"
     );
     let ui = include_str!("chat_ui.rs");
     let chips = ui

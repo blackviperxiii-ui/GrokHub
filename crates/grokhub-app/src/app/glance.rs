@@ -55,7 +55,16 @@ pub(super) fn bias_chips_for_lane(chips: &mut [QuickChip], lane: CabinLane) {
     chips.sort_by_key(|c| (band(c), lane_rank(c, lane)));
 }
 
+/// A feature's own offers (code resume, focus help, backup and the rest)
+/// keep the order the feature gave them, as they did when they led the row.
+const FEATURE_OFFER_IDS: &[&str] = &[
+    "model:", "resume:", "backup:", "tidy:", "radar:", "game:", "focus:",
+];
+
 fn lane_rank(c: &QuickChip, lane: CabinLane) -> u8 {
+    if FEATURE_OFFER_IDS.iter().any(|p| c.id.starts_with(p)) {
+        return 0;
+    }
     match lane {
         CabinLane::Coding => {
             if chip_leans_coding(c) {
