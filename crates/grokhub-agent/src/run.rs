@@ -378,7 +378,10 @@ fn hosted_for_step(
 }
 
 enum CompactPass {
-    Ok,
+    /// `background`: the result came from a background compaction.
+    Ok {
+        background: bool,
+    },
     Cancelled,
     Failed,
 }
@@ -400,9 +403,25 @@ fn run_compact_pass(
         server: None,
     });
     crate::hooks::on_compact(input.conversation_id, input.workspace, true);
+    let key = crate::prefix_guard::run_key(input.conversation_id, input.depth, input.agent_id);
+    // A compaction already made in the background is used first, waiting for
+    // it if it is still running; it falls through when it failed or no
+    // longer fits the history.
+    let background = if crate::compact::bg::has(&key) {
+        if input.depth == 0 {
+            let _ = crate::memory::flush_pending(input.workspace, history);
+        }
+        crate::compact::bg::take(&key, history)
+    } else {
+        None
+    };
+    let from_background = background.is_some();
     // Only the chat writes its session log to memory: a subagent's history
     // is one task, and a fork's starts with the chat's own.
-    let compact_result = if input.depth == 0 {
+    let compact_result = if let Some((rebuilt, done)) = background {
+        *history = rebuilt;
+        Ok(done)
+    } else if input.depth == 0 {
         crate::compact::compact_after_flush(
             input.workspace,
             input.client,
@@ -442,7 +461,9 @@ fn run_compact_pass(
                 server: done.server,
             });
             emit_usage(on_event, usage, history, input.context_length);
-            CompactPass::Ok
+            CompactPass::Ok {
+                background: from_background,
+            }
         }
         Err(crate::compact::CompactError::Cancelled) => {
             on_event(LoopEvent::Compact {
@@ -701,26 +722,67 @@ fn run_turn(
         let step = crate::compact::crosses_price_step(input.model, input.context_length, projected);
         let over =
             crate::compact::needs_auto_compact_at(trigger, input.context_length) || long || step;
-        let may_compact = over && (!compacted_once || turns_since_compact >= 1);
+        let rearmed = !compacted_once || turns_since_compact >= 1;
+        let may_compact = over && rearmed;
         if may_compact {
-            match run_compact_pass(
-                input,
-                history,
-                &modified_paths,
-                &last_tools,
-                &mut usage,
-                on_event,
-            ) {
-                CompactPass::Ok => {
-                    compacted_once = true;
-                    turns_since_compact = 0;
-                    prompt_mark = None;
-                    inherited_tokens = 0;
+            // A background result can be older than the run's last steps: if
+            // the prompt is still over the line with it in, compact once more.
+            let mut passes = 0;
+            while passes < 2 {
+                passes += 1;
+                match run_compact_pass(
+                    input,
+                    history,
+                    &modified_paths,
+                    &last_tools,
+                    &mut usage,
+                    on_event,
+                ) {
+                    CompactPass::Ok { background } => {
+                        compacted_once = true;
+                        turns_since_compact = 0;
+                        prompt_mark = None;
+                        inherited_tokens = 0;
+                        let now = crate::compact::trigger_tokens(history, None);
+                        let still =
+                            crate::compact::needs_auto_compact_at(now, input.context_length)
+                                || crate::compact::crosses_price_step(
+                                    input.model,
+                                    input.context_length,
+                                    crate::compact::projected_prompt_tokens(history, None),
+                                );
+                        if !(background && still) {
+                            break;
+                        }
+                    }
+                    CompactPass::Cancelled => {
+                        return finish(input, StopReason::Cancelled, usage, compacted_once, true);
+                    }
+                    CompactPass::Failed => break,
                 }
-                CompactPass::Cancelled => {
-                    return finish(input, StopReason::Cancelled, usage, compacted_once, true);
-                }
-                CompactPass::Failed => {}
+            }
+        } else if rearmed
+            && crate::compact::bg::soft_due(input.model, input.context_length, trigger, projected)
+            && crate::compact::bg::enabled(&config_dir)
+            && !crate::route::local::is_local(input.model)
+        {
+            // Past the soft line: start the compaction now on a worker, so the
+            // hard line swaps it in instead of making the person wait. A local
+            // model is left alone: a second call would slow the run on the
+            // same machine.
+            if let Some(client) = &input.shared_client {
+                crate::compact::bg::start_unless_fresh(&guard_key, history, || {
+                    crate::compact::bg::Start {
+                        key: guard_key.clone(),
+                        client: Arc::clone(client),
+                        model: input.model.to_string(),
+                        effort: input.effort.map(str::to_string),
+                        conversation_id: input.conversation_id.to_string(),
+                        history: history.clone(),
+                        modified_paths: modified_paths.clone(),
+                        tools: last_tools.clone(),
+                    }
+                });
             }
         }
         let sent_len = history.len();
@@ -839,7 +901,7 @@ fn run_turn(
                     &mut usage,
                     on_event,
                 ) {
-                    CompactPass::Ok => {
+                    CompactPass::Ok { .. } => {
                         compacted_once = true;
                         turns_since_compact = 0;
                         overflow_compacted = true;
