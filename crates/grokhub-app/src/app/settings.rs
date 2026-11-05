@@ -470,6 +470,19 @@ impl Cabin {
         self.status = "Saved".into();
     }
 
+    /// The one chip setting. Off clears the rows and drops the reply rule,
+    /// so no tokens go to chips either.
+    pub(super) fn set_suggestions(&mut self, on: bool) {
+        if self.cfg.suggestions == on {
+            return;
+        }
+        self.cfg.suggestions = on;
+        self.chip_paint_key.clear();
+        self.refresh_chips();
+        self.persist_cfg();
+        self.status = "Saved".into();
+    }
+
     pub(super) fn set_reduce_motion(&mut self, on: bool) {
         if self.cfg.reduce_motion == on {
             return;
@@ -924,6 +937,15 @@ impl Cabin {
                                                                     self.set_composer_autocomplete(
                                                                         composer_autocomplete,
                                                                     );
+                                                                }
+                                                                let mut suggestions = self.cfg.suggestions;
+                                                                if settings_toggle(
+                                                                    ui,
+                                                                    "Suggestions",
+                                                                    "A few next steps to tap, under the box, on Home and after replies. They learn from what you pick.",
+                                                                    &mut suggestions,
+                                                                ) {
+                                                                    self.set_suggestions(suggestions);
                                                                 }
                                                                 let mut reminders = self.cfg.proactive_reminders;
                                                                 if settings_toggle(

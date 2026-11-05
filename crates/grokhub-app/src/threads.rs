@@ -80,6 +80,20 @@ pub struct ChatThread {
     /// project, always lists first, and background reports post into it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub main: bool,
+    /// The last reply's own follow-up chips, saved so they come back on reload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follow_ups: Option<FollowUps>,
+}
+
+/// A reply's follow-up chips. They belong to the reply after the `at`-th ask
+/// and to the mode (chat, plan, ask) that turn ran in.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FollowUps {
+    pub chips: Vec<grokhub_core::QuickChip>,
+    pub at: usize,
+    #[serde(default)]
+    pub mode: String,
 }
 
 impl ChatThread {
@@ -110,6 +124,7 @@ impl ChatThread {
             native_carry: false,
             personality: String::new(),
             main: false,
+            follow_ups: None,
         }
     }
 

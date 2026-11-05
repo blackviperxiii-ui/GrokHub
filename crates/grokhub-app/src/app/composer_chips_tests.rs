@@ -1616,3 +1616,109 @@ fn the_reply_chips_rule_follows_the_chat() {
         "background jobs share chat_prompt_parts and must not get chips"
     );
 }
+
+/// A reply's follow-ups are saved with the chat, come back after a reload,
+/// and run in the mode of the turn they came from.
+#[test]
+fn follow_ups_come_back_with_the_chat_and_its_mode() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("follow-ups-saved");
+    let mut t = crate::threads::ChatThread::new("Move plan", false);
+    t.messages = Arc::new(vec![("user".into(), "plan the move".into())]);
+    let tid = t.id.clone();
+    cabin.threads = vec![t];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    cabin.session_mode = SessionMode::Plan;
+    cabin.running = true;
+    cabin.chat_job_thread = Some(tid);
+    cabin.begin_reply_chips();
+    cabin.finish_acp_turn(
+        "Step one: book the van.\n<chips>\nask|Break step two into tasks|Split step two\n</chips>"
+            .into(),
+    );
+    let saved = cabin.threads[0]
+        .follow_ups
+        .clone()
+        .expect("saved with the chat");
+    assert_eq!((saved.at, saved.mode.as_str()), (1, "plan"));
+    // Reload: the chat file brings the follow-ups back.
+    let json = serde_json::to_string(&cabin.threads[0]).unwrap();
+    let back: crate::threads::ChatThread = serde_json::from_str(&json).unwrap();
+    let mut again = Cabin::quiet_for_test();
+    again.threads = vec![back];
+    again.thread_idx = 0;
+    again.messages = again.threads[0].messages.clone();
+    let chips = again.reply_chips_here();
+    assert_eq!(chips.len(), 1, "{chips:?}");
+    // Tapped while the box is in Chat, the follow-up goes back to Plan.
+    again.session_mode = SessionMode::Chat;
+    again.apply_chip(chips[0].clone());
+    assert_eq!(again.session_mode, SessionMode::Plan);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// A Do chip runs at once; the Undo chip that follows puts it back and is
+/// not learned as a suggestion.
+#[test]
+fn a_do_chip_runs_and_its_undo_puts_it_back() {
+    use grokhub_core::backup_nudge as bn;
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("chip-undo");
+    let dir = crate::config::config_dir();
+    let before = bn::load(&dir);
+    let snooze = grokhub_core::QuickChip {
+        id: bn::SNOOZE_ID.into(),
+        label: "Snooze backup reminders".into(),
+        value: String::new(),
+        kind: grokhub_core::ChipKind::Chat,
+        score: 1.0,
+        hint: String::new(),
+        primary: false,
+    };
+    assert_eq!(
+        grokhub_core::chip_action(&snooze),
+        grokhub_core::ChipAction::Do
+    );
+    cabin.apply_chip(snooze);
+    assert_ne!(bn::load(&dir), before, "the snooze ran on tap");
+    let chips = cabin.composer_chips();
+    let undo = chips.first().expect("undo chip");
+    assert_eq!(undo.id, grokhub_core::UNDO_CHIP_ID);
+    assert!(
+        undo.hint.contains("Snooze backup reminders"),
+        "{}",
+        undo.hint
+    );
+    let events = cabin.chip_memory.events.len();
+    cabin.take_chip_act(crate::cards::ChipRowAct::Apply(0), &chips);
+    assert_eq!(bn::load(&dir), before, "undo put the old state back");
+    assert_eq!(cabin.status, "Backup reminders are back on.");
+    assert_eq!(cabin.chip_memory.events.len(), events, "undo is not logged");
+    assert!(cabin
+        .composer_chips()
+        .iter()
+        .all(|c| c.id != grokhub_core::UNDO_CHIP_ID));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// One switch in Settings: off, no row paints and no reply asks for chips.
+#[test]
+fn the_suggestions_switch_turns_every_chip_off() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("chips-off");
+    assert!(cabin.cfg.suggestions && cabin.reply_chips_on());
+    cabin.set_suggestions(false);
+    assert!(!cabin.reply_chips_on(), "no tokens go to chips when off");
+    assert!(cabin.visible_chips.is_empty() && cabin.home_chips.is_empty());
+    assert!(cabin.composer_chips().is_empty());
+    cabin.persist_svc.flush();
+    assert!(!crate::config::load().suggestions, "the switch is saved");
+    let chat = include_str!("chat_ui.rs");
+    assert!(chat.contains("ComposerStackSlot::Chips if !self.cfg.suggestions => {}"));
+    let home = include_str!("home/page.rs");
+    assert!(home.contains("} else if self.cfg.suggestions {"));
+    cabin.set_suggestions(true);
+    assert!(cabin.reply_chips_on());
+    let _ = std::fs::remove_dir_all(root);
+}
