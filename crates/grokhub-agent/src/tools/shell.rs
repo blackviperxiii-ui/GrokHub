@@ -384,7 +384,69 @@ pub(crate) fn spawn_background(
     Err("shell is not available on this system".into())
 }
 
+/// Windows PowerShell writes a piped stderr as CLIXML (`#< CLIXML` then
+/// XML records). The model and the chat need the error text itself: this
+/// keeps each record's text, decoded, and drops progress records. Any other
+/// stderr comes back as it was.
+fn plain_stderr(stderr: Vec<u8>) -> Vec<u8> {
+    let text = String::from_utf8_lossy(&stderr);
+    if !text
+        .trim_start_matches('\u{feff}')
+        .trim_start()
+        .starts_with("#< CLIXML")
+    {
+        return stderr;
+    }
+    let mut out = String::new();
+    let mut rest = text.as_ref();
+    while let Some(at) = rest.find("<S S=\"") {
+        rest = &rest[at..];
+        let Some(open_end) = rest.find('>') else {
+            break;
+        };
+        let Some(close) = rest[open_end..].find("</S>") else {
+            break;
+        };
+        out.push_str(&clixml_unescape(&rest[open_end + 1..open_end + close]));
+        rest = &rest[open_end + close + 4..];
+    }
+    out.into_bytes()
+}
+
+/// XML entities, then CLIXML's `_xHHHH_` UTF-16 code units (`_x000D__x000A_`
+/// is a line break; a literal underscore comes as `_x005F_`).
+fn clixml_unescape(raw: &str) -> String {
+    let xml = raw
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&");
+    let mut units: Vec<u16> = Vec::with_capacity(xml.len());
+    let mut i = 0;
+    let bytes = xml.as_bytes();
+    while i < bytes.len() {
+        if bytes[i] == b'_' && i + 7 <= bytes.len() && bytes[i + 1] == b'x' && bytes[i + 6] == b'_'
+        {
+            if let Some(unit) = xml
+                .get(i + 2..i + 6)
+                .and_then(|hex| u16::from_str_radix(hex, 16).ok())
+            {
+                units.push(unit);
+                i += 7;
+                continue;
+            }
+        }
+        let ch = xml[i..].chars().next().unwrap_or('\u{fffd}');
+        let mut buf = [0u16; 2];
+        units.extend_from_slice(ch.encode_utf16(&mut buf));
+        i += ch.len_utf8();
+    }
+    String::from_utf16_lossy(&units).replace("\r\n", "\n")
+}
+
 fn merge_output(stdout: Vec<u8>, stderr: Vec<u8>) -> Vec<u8> {
+    let stderr = plain_stderr(stderr);
     if stderr.is_empty() {
         return stdout;
     }
@@ -1018,6 +1080,28 @@ mod tests {
         }
         std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
     }
+
+    #[test]
+    fn powershell_clixml_errors_read_as_plain_text() {
+        let raw = "#< CLIXML\r\n<Objs Version=\"1.1.0.1\" xmlns=\"http://schemas.microsoft.com/powershell/2004/04\"><Obj S=\"progress\" RefId=\"0\"><TN RefId=\"0\"><T>System.Management.Automation.PSCustomObject</T></TN><MS><I64 N=\"SourceId\">1</I64></MS></Obj><S S=\"Error\">At line:2 char:17_x000D__x000A_</S><S S=\"Error\">+ echo a &amp;&amp; echo b_x000D__x000A_</S><S S=\"Error\">my_x005F_file h\u{e9}llo &lt;x&gt;_x000D__x000A_</S></Objs>";
+        let plain = String::from_utf8(super::plain_stderr(raw.as_bytes().to_vec())).unwrap();
+        assert_eq!(
+            plain,
+            "At line:2 char:17\n+ echo a && echo b\nmy_file h\u{e9}llo <x>\n"
+        );
+        // Progress alone leaves nothing; ordinary stderr is untouched.
+        let progress =
+            "#< CLIXML\n<Objs Version=\"1.1.0.1\"><Obj S=\"progress\" RefId=\"0\"></Obj></Objs>";
+        assert!(super::plain_stderr(progress.as_bytes().to_vec()).is_empty());
+        assert_eq!(
+            super::plain_stderr(b"oops _x0041_\n".to_vec()),
+            b"oops _x0041_\n".to_vec()
+        );
+        let merged = super::merge_output(b"out".to_vec(), raw.as_bytes().to_vec());
+        assert!(String::from_utf8(merged)
+            .unwrap()
+            .starts_with("out\nAt line:2"));
+    }
 }
 
 #[cfg(windows)]
@@ -1076,7 +1160,7 @@ mod win {
                     return Ok(super::HookProc {
                         exit_code: Some(i32::try_from(code).unwrap_or(1)),
                         stdout: String::from_utf8_lossy(&stdout).into_owned(),
-                        stderr: String::from_utf8_lossy(&stderr).into_owned(),
+                        stderr: String::from_utf8_lossy(&super::plain_stderr(stderr)).into_owned(),
                         timed_out: false,
                     });
                 }
@@ -1088,7 +1172,7 @@ mod win {
         Ok(super::HookProc {
             exit_code: None,
             stdout: String::from_utf8_lossy(&stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&stderr).into_owned(),
+            stderr: String::from_utf8_lossy(&super::plain_stderr(stderr)).into_owned(),
             timed_out: true,
         })
     }
