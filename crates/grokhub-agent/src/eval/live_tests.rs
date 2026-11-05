@@ -437,7 +437,7 @@ fn an_ab_switch_is_written_into_the_runs_own_config() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Answers READY, saying whether prefix caching was on in the run's config.
+/// Answers READY, saying whether WebSocket mode was on in the run's config.
 struct SeesSwitch(std::sync::Mutex<Vec<bool>>);
 
 impl ModelClient for SeesSwitch {
@@ -447,9 +447,10 @@ impl ModelClient for SeesSwitch {
         _cancel: &CancelToken,
         sink: &mut dyn FnMut(StreamEvent),
     ) -> Result<TurnOutput, ClientError> {
-        let on = std::fs::read_to_string(crate::perm::config_dir().join("prefix_cache.toml"))
-            .unwrap_or_default()
-            .contains("enabled = true");
+        let on =
+            std::fs::read_to_string(crate::perm::config_dir().join(crate::ws_mode::CONFIG_NAME))
+                .unwrap_or_default()
+                .contains("enabled = true");
         self.0.lock().unwrap().push(on);
         sink(StreamEvent::TextDelta("READY".into()));
         Ok(TurnOutput {
@@ -470,7 +471,7 @@ fn ab_runs_each_try_with_the_switch_on_then_off() {
     let opts = LiveOpts {
         k: 2,
         only: Some("exact-word".into()),
-        ab: Some("prefix_cache".into()),
+        ab: Some("websocket".into()),
         ..LiveOpts::new("grok-4.3")
     };
     let report = run_live(client.clone(), &opts, parse_budget("1").unwrap());
@@ -483,8 +484,8 @@ fn ab_runs_each_try_with_the_switch_on_then_off() {
     assert_eq!(seen.first(), Some(&true));
     assert_eq!(seen.last(), Some(&false));
     let md = render_live(&report);
-    assert!(md.contains("A/B: prefix_cache"), "{md}");
-    assert!(md.contains("## A/B: prefix_cache"), "{md}");
+    assert!(md.contains("A/B: websocket"), "{md}");
+    assert!(md.contains("## A/B: websocket"), "{md}");
     assert!(md.contains("| on | 100% (2/2) |"), "{md}");
     assert!(md.contains("| off | 100% (2/2) |"), "{md}");
     assert!(md.contains("| exact-word | reg | off | 2 | yes |"), "{md}");

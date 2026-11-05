@@ -714,12 +714,6 @@ impl NativeEngine {
             return false;
         }
         let config_dir = crate::perm::config_dir();
-        // A chat's first turn starts with the system prompt. Only the prefix
-        // cache's stable one can be written without the model loop.
-        let first = self.history.is_empty();
-        if first && !crate::prefix_cache::enabled(&config_dir) {
-            return false;
-        }
         if pick.tool == crate::repair::DIAGNOSE_TOOL
             && !crate::repair::system_state_allowed(&config_dir)
         {
@@ -812,7 +806,7 @@ impl NativeEngine {
         // The next model turn sees the ask, the call, its output and the reply,
         // paired by call id like any tool turn.
         let before = self.history.len();
-        if first {
+        if self.history.is_empty() {
             crate::prefix_cache::push_stable_system(&mut self.history, &self.system);
         }
         self.history.push(InputItem::Message {
@@ -1249,7 +1243,7 @@ mod tests {
 
     #[test]
     fn native_engine_emits_acp_events_without_permission() {
-        // Full tool list and per-turn system rewrite: the mode this test checks.
+        // Full tool list: the mode this test checks.
         let _legacy = crate::tools::registry::LegacyPromptGuard::set();
         let dir = std::env::temp_dir().join(format!("gh-eng-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1303,7 +1297,8 @@ mod tests {
                 InputItem::Message { role, content }
                     if role == "user"
                         && content.iter().any(|part| {
-                            matches!(part, crate::ContentPart::InputText(text) if text == "hi")
+                            matches!(part, crate::ContentPart::InputText(text)
+                                if crate::prefix_cache::visible_user_text(text) == "hi")
                         })
             )),
             "{resumed:?}"

@@ -229,10 +229,10 @@ pub fn render_markdown(report: &TechniqueMatrixReport) -> String {
     let tasks = report.arms.first().map_or(0, |arm| arm.metrics.tasks);
     let _ = writeln!(
         out,
-        "A = all cost techniques off. Each B arm enables exactly one technique via a temp \
-config dir (`prefix_cache.toml`, `tool_output_compact.toml`, `deferred_tools.toml`, \
-`batched_tools.toml`), then an all-on arm. Same {tasks} fixture tasks and scripted model \
-replies in every arm. No network, no paid runs.\n"
+        "A = every optional cost technique off. Each B arm enables exactly one technique via a temp \
+config dir (`tool_output_compact.toml`, `deferred_tools.toml`, `batched_tools.toml`), \
+then an all-on arm. The stable prompt prefix is always on, in every arm. Same {tasks} \
+fixture tasks and scripted model replies in every arm. No network, no paid runs.\n"
     );
     out.push_str(
         "Input usage is measured, not scripted: the replay captures every outbound request \

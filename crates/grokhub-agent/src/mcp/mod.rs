@@ -2067,7 +2067,7 @@ mod tests {
     /// and a deferred hard tool still parks through `harness::decide`.
     #[test]
     fn native_desktop_and_mcp_tools_pass_forty_together_and_hard_use_tool_parks() {
-        // Full tool list and per-turn system rewrite: the mode this test checks.
+        // Full tool list: the mode this test checks.
         let _legacy = crate::tools::registry::LegacyPromptGuard::set();
         let desk_on = Gate {
             desktop: true,
