@@ -197,7 +197,7 @@ pub(super) fn wait_until(label: &str, mut ready: impl FnMut() -> bool) {
 /// sized for in-memory state; these writes go through `config::atomic_write`
 /// (write, `sync_all`, rename), and the flush alone has taken over 2 s on a
 /// busy Windows CI runner. A write that never reports still fails here.
-const FILE_WRITE_BUDGET: std::time::Duration = std::time::Duration::from_secs(10);
+pub(super) const FILE_WRITE_BUDGET: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Poll `ready` every 25 ms until it holds; panic with `label` once `budget`
 /// has passed. For waits on real disk I/O; use `wait_until` for in-memory state.
