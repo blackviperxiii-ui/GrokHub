@@ -20,6 +20,9 @@ const NOTICE_TAIL: usize = 2_000;
 const POLL: Duration = Duration::from_millis(20);
 pub const MONITOR_CAP_MS: u64 = 10 * 60 * 60 * 1000;
 const WAIT_CAP_MS: u64 = 120_000;
+/// After an adopted command ends, how long its foreground readers get to
+/// pass on the last of its output before the finished notice is written.
+const ADOPTED_SETTLE: Duration = Duration::from_millis(200);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
@@ -250,8 +253,22 @@ impl TaskHub {
             proc.kill_tree();
             return Err("halted".into());
         }
+        self.watch(&id, proc, command, owned_by_monitor, owner, guard);
+        Ok(id)
+    }
+
+    /// Track `proc` as task `id` and supervise it until it ends.
+    fn watch(
+        self: &Arc<Self>,
+        id: &str,
+        proc: crate::tools::shell::BgProc,
+        title: String,
+        owned_by_monitor: bool,
+        owner: Option<String>,
+        guard: Option<crate::sandbox::git_guard::Guard>,
+    ) -> Arc<TaskSlot> {
         let slot = Arc::new(TaskSlot {
-            title: command,
+            title,
             ring: Arc::new(Mutex::new(Ring::new())),
             read_at: AtomicU64::new(0),
             phase: Mutex::new(Phase::Running),
@@ -260,11 +277,54 @@ impl TaskHub {
             owner,
             agent: false,
         });
-        self.lock().tasks.insert(id.clone(), Arc::clone(&slot));
+        self.lock().tasks.insert(id.to_string(), Arc::clone(&slot));
         let notice_hub = Arc::clone(self);
-        let task_id = id.clone();
-        thread::spawn(move || supervise(proc, slot, notice_hub, task_id, guard));
-        Ok(id)
+        let task_id = id.to_string();
+        let watched = Arc::clone(&slot);
+        thread::spawn(move || supervise(proc, watched, notice_hub, task_id, guard));
+        slot
+    }
+
+    /// Take over a foreground command that outlived its timeout, as a new
+    /// background task: its id, and where the command's later output goes.
+    /// A halted session takes nothing: the process and guard come back.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn adopt(
+        self: &Arc<Self>,
+        proc: crate::tools::shell::BgProc,
+        command: &str,
+        owner: Option<&str>,
+        guard: Option<crate::sandbox::git_guard::Guard>,
+    ) -> Result<
+        (String, crate::tools::shell::Feed),
+        (
+            crate::tools::shell::BgProc,
+            Option<crate::sandbox::git_guard::Guard>,
+        ),
+    > {
+        let id = {
+            let mut hub = self.lock();
+            if hub.halted {
+                return Err((proc, guard));
+            }
+            hub.seq = hub.seq.saturating_add(1);
+            format!("t{}", hub.seq)
+        };
+        let slot = self.watch(
+            &id,
+            proc,
+            command.trim().to_string(),
+            false,
+            owner.map(str::to_string),
+            guard,
+        );
+        let ring = Arc::clone(&slot.ring);
+        let feed: crate::tools::shell::Feed = Arc::new(move |bytes: &[u8]| {
+            ring.lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .push(bytes);
+        });
+        Ok((id, feed))
     }
 
     pub fn read_output(&self, id: &str, timeout_ms: u64) -> Result<String, String> {
@@ -651,6 +711,9 @@ fn supervise(
 ) {
     let stdout = proc.stdout.take();
     let stderr = proc.stderr.take();
+    // An adopted command's pipes stay with the readers its foreground run
+    // started, which feed this ring: give them a moment after it ends.
+    let adopted = stdout.is_none() && stderr.is_none();
     let out_ring = Arc::clone(&slot.ring);
     let err_ring = Arc::clone(&slot.ring);
     let out_thread = thread::spawn(move || read_pipe(stdout, out_ring));
@@ -695,6 +758,9 @@ fn supervise(
     };
     let _ = out_thread.join();
     let _ = err_thread.join();
+    if adopted {
+        thread::sleep(ADOPTED_SETTLE);
+    }
     check_guard(&mut guard_note);
     if let Some(note) = guard_note {
         slot.ring
@@ -996,6 +1062,79 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// Prints `first`, waits, prints `second`; and the timeout it outlives.
+    fn first_then_second() -> (&'static str, u64) {
+        #[cfg(unix)]
+        {
+            ("echo first; sleep 1; echo second", 400)
+        }
+        #[cfg(not(unix))]
+        {
+            (
+                "Write-Output first; Start-Sleep -Seconds 8; Write-Output second",
+                4_000,
+            )
+        }
+    }
+
+    #[test]
+    fn a_command_past_its_timeout_keeps_running_as_a_background_task() {
+        let dir = scratch("adopt");
+        let hub = TaskHub::new("adopt");
+        let (command, timeout) = first_then_second();
+        let args = serde_json::json!({"command": command, "timeout": timeout});
+        let mut adopt = |proc, guard| hub.adopt(proc, command, None, guard);
+        let out = crate::tools::shell::run_adoptable(&dir, &args, &|| false, Some(&mut adopt));
+        assert!(!out.failed, "{}", out.text);
+        assert!(
+            out.text.contains("moved to the background as task t1"),
+            "{}",
+            out.text
+        );
+        assert!(!out.text.contains("second"), "{}", out.text);
+        #[cfg(unix)]
+        assert!(out.text.contains("first"), "output so far: {}", out.text);
+        assert_eq!(hub.rows()[0].state, TaskState::Running);
+
+        let rest = hub.read_output("t1", 60_000).unwrap();
+        assert!(rest.contains("second"), "{rest}");
+        assert!(rest.contains("exit_code: 0"), "{rest}");
+        let both = format!("{}{rest}", out.text);
+        assert_eq!(both.matches("first").count(), 1, "no byte twice: {both}");
+        let notices = hub.drain_notices();
+        assert!(
+            notices
+                .iter()
+                .any(|n| n.head == "Background task t1 finished with exit 0."),
+            "{notices:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_halted_session_still_kills_a_command_past_its_timeout() {
+        let dir = scratch("adopt-halted");
+        let hub = TaskHub::new("adopt-halted");
+        hub.halt_all();
+        #[cfg(unix)]
+        let (command, timeout) = ("sleep 30", 300);
+        #[cfg(not(unix))]
+        let (command, timeout) = ("Start-Sleep -Seconds 30", 3_000);
+        let args = serde_json::json!({"command": command, "timeout": timeout});
+        let mut adopt = |proc, guard| hub.adopt(proc, command, None, guard);
+        let started = Instant::now();
+        let out = crate::tools::shell::run_adoptable(&dir, &args, &|| false, Some(&mut adopt));
+        assert!(out.failed, "{}", out.text);
+        assert!(
+            out.text.contains(&format!("timed out after {timeout}ms")),
+            "{}",
+            out.text
+        );
+        assert!(started.elapsed() < Duration::from_secs(20));
+        assert!(hub.rows().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

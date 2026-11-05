@@ -22,7 +22,7 @@ pub fn schema() -> Value {
     json!({
         "type": "function",
         "name": "run_terminal_command",
-        "description": "Run a shell command in the workspace. Bash on Linux, PowerShell on Windows. timeout is milliseconds (default 120000, max 300000). The process tree is killed on timeout, cancel, or halt.",
+        "description": "Run a shell command in the workspace. Bash on Linux, PowerShell on Windows. timeout is milliseconds (default 120000, max 300000). Timeout may move it to the background; halt kills it.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -58,6 +58,33 @@ pub(crate) fn too_long(command: &str) -> Option<String> {
 }
 
 pub fn run(workspace: &Path, args: &Value, stop: &dyn Fn() -> bool) -> ToolOutput {
+    run_adoptable(workspace, args, stop, None)
+}
+
+/// What [`run_adoptable`] hands a command that outlived its timeout to: the
+/// still-running process and the sandbox's git guard. It answers with the new
+/// background task's id and where the rest of the output goes, or gives both
+/// back when it can't take the command (a halted session), and the command
+/// is killed as before.
+pub(crate) type Adopt<'a> =
+    &'a mut dyn FnMut(
+        BgProc,
+        Option<crate::sandbox::git_guard::Guard>,
+    )
+        -> Result<(String, Feed), (BgProc, Option<crate::sandbox::git_guard::Guard>)>;
+
+/// Where an adopted command's later output goes: its background task.
+pub(crate) type Feed = Arc<dyn Fn(&[u8]) + Send + Sync>;
+
+/// [`run`], with a command that outlives its timeout handed to `adopt` in
+/// place of being killed. The answer then holds the output so far and the
+/// background task's id.
+pub(crate) fn run_adoptable(
+    workspace: &Path,
+    args: &Value,
+    stop: &dyn Fn() -> bool,
+    adopt: Option<Adopt<'_>>,
+) -> ToolOutput {
     let command = args
         .get("command")
         .and_then(|v| v.as_str())
@@ -79,12 +106,27 @@ pub fn run(workspace: &Path, args: &Value, stop: &dyn Fn() -> bool) -> ToolOutpu
         Err(err) => return ToolOutput::err(format!("workspace is not available: {err}")),
     };
     let plan = crate::sandbox::plan_for_call("run_terminal_command", args, &cwd);
-    let guard = plan
+    let mut guard = plan
         .as_ref()
         .and_then(|_| crate::sandbox::git_guard::take(&cwd));
     let let_out = crate::sandbox::proxy::let_out_count();
+    // An adopted command takes the git guard with it: its task puts the git
+    // config and hooks back while it runs and once it ends.
+    let mut handover = adopt.map(|adopt| {
+        let guard = &mut guard;
+        move |proc: BgProc| match adopt(proc, guard.take()) {
+            Ok(taken) => Ok(taken),
+            Err((proc, back)) => {
+                *guard = back;
+                Err(proc)
+            }
+        }
+    });
+    let handover = handover
+        .as_mut()
+        .map(|f| f as &mut dyn FnMut(BgProc) -> Result<(String, Feed), BgProc>);
     // The output is fenced first; the sandbox's own note stays outside the fence.
-    let result = spawn_and_wait(&cwd, &command, timeout_ms, stop, plan.as_ref())
+    let result = spawn_and_wait(&cwd, &command, timeout_ms, stop, plan.as_ref(), handover)
         .map(|o| fence_if_fetched(o, let_out));
     let note = guard
         .as_ref()
@@ -161,6 +203,9 @@ struct CapBuf {
     head: Vec<u8>,
     tail: std::collections::VecDeque<u8>,
     overflow: bool,
+    /// Set once the command was handed to a background task: what arrives
+    /// from then on goes there.
+    forward: Option<Feed>,
 }
 
 impl CapBuf {
@@ -171,10 +216,15 @@ impl CapBuf {
             head: Vec::new(),
             tail: std::collections::VecDeque::new(),
             overflow: false,
+            forward: None,
         }
     }
 
     fn push(&mut self, data: &[u8]) {
+        if let Some(forward) = &self.forward {
+            forward(data);
+            return;
+        }
         if !self.overflow {
             let room = Self::KEEP.saturating_sub(self.head.len());
             let n = room.min(data.len());
@@ -245,6 +295,38 @@ impl BgProc {
     pub(crate) fn poll(&mut self) -> WaitPoll {
         let mut wait = self.wait.lock().unwrap_or_else(|err| err.into_inner());
         wait()
+    }
+}
+
+/// A foreground command's child, as a [`BgProc`] for its new task. Its pipes
+/// stay with the readers the foreground started; they feed the task.
+#[cfg(unix)]
+fn adopted_child(child: std::process::Child, pgid: i32) -> BgProc {
+    use std::sync::atomic::AtomicBool;
+    let child = Mutex::new(child);
+    let kill: Arc<dyn Fn() + Send + Sync> = Arc::new(move || kill_group(pgid));
+    BgProc {
+        stdout: None,
+        stderr: None,
+        armed: Arc::new(AtomicBool::new(pgid > 1)),
+        kill,
+        wait: Mutex::new(Box::new(move || {
+            let mut child = child.lock().unwrap_or_else(|err| err.into_inner());
+            match child.try_wait() {
+                Ok(Some(status)) => WaitPoll::Exited(status.code().unwrap_or(1)),
+                Ok(None) => WaitPoll::Running,
+                Err(err) => WaitPoll::Failed(err.to_string()),
+            }
+        })),
+    }
+}
+
+/// Kill a process that could not be handed over, and wait a moment for it.
+fn kill_and_reap(mut proc: BgProc) {
+    proc.kill_tree();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while matches!(proc.poll(), WaitPoll::Running) && Instant::now() < deadline {
+        std::thread::sleep(POLL);
     }
 }
 
@@ -465,6 +547,10 @@ fn merge_output(stdout: Vec<u8>, stderr: Vec<u8>) -> Vec<u8> {
     out
 }
 
+/// Hands a command that outlived its timeout to a background task: the task
+/// id and where its later output goes, or the process back to be killed.
+type Handover<'a> = &'a mut dyn FnMut(BgProc) -> Result<(String, Feed), BgProc>;
+
 #[cfg(unix)]
 fn spawn_and_wait(
     cwd: &Path,
@@ -472,6 +558,7 @@ fn spawn_and_wait(
     timeout_ms: u64,
     stop: &dyn Fn() -> bool,
     plan: Option<&crate::sandbox::Plan>,
+    mut handover: Option<Handover<'_>>,
 ) -> Result<ToolOutput, String> {
     use std::thread;
 
@@ -501,6 +588,29 @@ fn spawn_and_wait(
             break StopKind::Killed;
         }
         if started.elapsed() >= limit {
+            if let Some(handover) = handover.take() {
+                group.disarm();
+                match handover(adopted_child(child, pgid)) {
+                    Ok((id, feed)) => {
+                        let stdout = hand_over(&out_buf, Arc::clone(&feed));
+                        let stderr = hand_over(&err_buf, feed);
+                        return Ok(handed_over(timeout_ms, &id, stdout, stderr));
+                    }
+                    Err(proc) => {
+                        kill_and_reap(proc);
+                        let drained = drain_readers(&readers, stop, DRAIN_GRACE);
+                        let mut raw = merge_output(take_buf(&out_buf), take_buf(&err_buf));
+                        if !drained {
+                            raw.extend_from_slice(HELD_OPEN.as_bytes());
+                        }
+                        return Ok(finish(
+                            &format!("timed out after {timeout_ms}ms"),
+                            &raw,
+                            true,
+                        ));
+                    }
+                }
+            }
             kill_group(group.pgid);
             group.disarm();
             let _ = child.wait();
@@ -598,6 +708,31 @@ fn drain_readers(
         }
         std::thread::sleep(POLL);
     }
+}
+
+/// What `buf` holds so far, with the rest of the command's output sent to
+/// `feed` from now on. Both happen under the buffer's lock, so no byte is
+/// lost or sent twice.
+fn hand_over(buf: &Mutex<CapBuf>, feed: Feed) -> Vec<u8> {
+    let mut held = buf.lock().unwrap_or_else(|err| err.into_inner());
+    let mut fresh = CapBuf::new();
+    fresh.forward = Some(feed);
+    std::mem::replace(&mut *held, fresh).bytes()
+}
+
+/// The answer for a command handed to background task `id` at its timeout:
+/// what it wrote so far, and how to follow it.
+fn handed_over(timeout_ms: u64, id: &str, stdout: Vec<u8>, stderr: Vec<u8>) -> ToolOutput {
+    let raw = merge_output(stdout, stderr);
+    let mut out = finish(
+        &format!("still running after {timeout_ms}ms: moved to the background as task {id}"),
+        &raw,
+        false,
+    );
+    out.text.push_str(&format!(
+        "\n(task {id} keeps running. Read the rest with get_command_or_subagent_output, or stop it with kill_command_or_subagent.)"
+    ));
+    out
 }
 
 fn take_buf(buf: &Mutex<CapBuf>) -> Vec<u8> {
@@ -797,8 +932,9 @@ fn spawn_and_wait(
     timeout_ms: u64,
     stop: &dyn Fn() -> bool,
     plan: Option<&crate::sandbox::Plan>,
+    handover: Option<Handover<'_>>,
 ) -> Result<ToolOutput, String> {
-    win::run(cwd, command, timeout_ms, stop, plan)
+    win::run(cwd, command, timeout_ms, stop, plan, handover)
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -808,6 +944,7 @@ fn spawn_and_wait(
     _timeout_ms: u64,
     _stop: &dyn Fn() -> bool,
     _plan: Option<&crate::sandbox::Plan>,
+    _handover: Option<Handover<'_>>,
 ) -> Result<ToolOutput, String> {
     Err("shell is not available on this system".into())
 }
@@ -1215,6 +1352,7 @@ mod win {
         timeout_ms: u64,
         stop: &dyn Fn() -> bool,
         plan: Option<&crate::sandbox::Plan>,
+        mut handover: Option<super::Handover<'_>>,
     ) -> Result<super::ToolOutput, String> {
         let sandbox = plan.map(crate::sandbox::windows::prepare);
         let env = sandbox.as_ref().map(|s| s.env.as_slice()).unwrap_or(&[]);
@@ -1231,6 +1369,28 @@ mod win {
                 break Kind::Killed;
             }
             if started.elapsed() >= limit {
+                if let Some(handover) = handover.take() {
+                    let (proc, out_buf, err_buf) = child.into_bg();
+                    match handover(proc) {
+                        Ok((id, feed)) => {
+                            let stdout = super::hand_over(&out_buf, Arc::clone(&feed));
+                            let stderr = super::hand_over(&err_buf, feed);
+                            return Ok(super::handed_over(timeout_ms, &id, stdout, stderr));
+                        }
+                        Err(proc) => {
+                            super::kill_and_reap(proc);
+                            let raw = super::merge_output(
+                                super::take_buf(&out_buf),
+                                super::take_buf(&err_buf),
+                            );
+                            return Ok(finish(
+                                &format!("timed out after {timeout_ms}ms"),
+                                &raw,
+                                true,
+                            ));
+                        }
+                    }
+                }
                 child.kill();
                 break Kind::TimedOut;
             }
@@ -1472,6 +1632,28 @@ mod win {
                     Poll::Exited(code)
                 }
             }
+        }
+
+        /// This command as a [`super::BgProc`] for a background task, with
+        /// the buffers its readers keep filling. The job, process and thread
+        /// move to the task; the pipe ends this side wrote with are closed.
+        fn into_bg(
+            mut self,
+        ) -> (
+            super::BgProc,
+            Arc<Mutex<super::CapBuf>>,
+            Arc<Mutex<super::CapBuf>>,
+        ) {
+            close(&mut self.stdout_write);
+            close(&mut self.stderr_write);
+            close(&mut self.stdin_write);
+            close(&mut self.stdin_read);
+            let job = std::mem::replace(&mut self.job, ptr::null_mut());
+            let process = std::mem::replace(&mut self.process, ptr::null_mut());
+            let thread = std::mem::replace(&mut self.thread, ptr::null_mut());
+            let out_buf = Arc::clone(&self.out_buf);
+            let err_buf = Arc::clone(&self.err_buf);
+            (bg_proc(job, process, thread, None, None), out_buf, err_buf)
         }
 
         fn output(self, stop: &dyn Fn() -> bool) -> Vec<u8> {
@@ -1724,9 +1906,6 @@ mod win {
         command: &str,
         plan: Option<&crate::sandbox::Plan>,
     ) -> Result<super::BgProc, String> {
-        use std::sync::atomic::AtomicBool;
-        use std::sync::{Arc, Mutex};
-
         let sandbox = plan.map(crate::sandbox::windows::prepare);
         let env = sandbox.as_ref().map(|s| s.env.as_slice()).unwrap_or(&[]);
         let token = sandbox
@@ -1813,6 +1992,25 @@ mod win {
         let process = std::mem::replace(&mut guard.process, ptr::null_mut());
         let thread = std::mem::replace(&mut guard.thread, ptr::null_mut());
         drop(guard);
+        Ok(bg_proc(
+            job,
+            process,
+            thread,
+            Some(Box::new(stdout) as Box<dyn std::io::Read + Send>),
+            Some(Box::new(stderr) as Box<dyn std::io::Read + Send>),
+        ))
+    }
+
+    /// A [`super::BgProc`] that owns `job`, `process` and `thread`.
+    fn bg_proc(
+        job: HANDLE,
+        process: HANDLE,
+        thread: HANDLE,
+        stdout: Option<Box<dyn std::io::Read + Send>>,
+        stderr: Option<Box<dyn std::io::Read + Send>>,
+    ) -> super::BgProc {
+        use std::sync::atomic::AtomicBool;
+
         let shared = Arc::new(WinProc {
             job: job as usize,
             process: process as usize,
@@ -1847,13 +2045,13 @@ mod win {
                     super::WaitPoll::Exited(i32::try_from(code).unwrap_or(1))
                 }
             }));
-        Ok(super::BgProc {
-            stdout: Some(Box::new(stdout)),
-            stderr: Some(Box::new(stderr)),
+        super::BgProc {
+            stdout,
+            stderr,
             armed,
             kill,
             wait,
-        })
+        }
     }
 
     #[cfg(test)]

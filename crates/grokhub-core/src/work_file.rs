@@ -423,21 +423,22 @@ mod tests {
     /// A busy board is a queue: while the lock keeps changing hands for
     /// longer than the wait, a waiting writer keeps waiting and gets it once
     /// the others are done. One holder that never lets go still runs the
-    /// wait out.
+    /// wait out. Hands change twenty times inside one wait, so a busy test
+    /// runner that stalls the handing thread can't pass for a stuck holder.
     #[test]
     fn a_lock_that_keeps_changing_hands_is_waited_for_not_given_up_on() {
         let d = dir("lock-queue");
         let path = d.join("workboard.json");
         let lock = lock_path(&path);
-        let wait = Duration::from_millis(300);
+        let wait = Duration::from_millis(1000);
         fs::write(&lock, "1").unwrap();
         let busy = {
             let (lock, d) = (lock.clone(), d.clone());
             std::thread::spawn(move || {
                 // Hand the lock on (a fresh file over the old, no gap) every
-                // 100 ms for three waits, then release it.
-                for i in 0..9 {
-                    std::thread::sleep(Duration::from_millis(100));
+                // 50 ms for two waits, then release it.
+                for i in 0..40 {
+                    std::thread::sleep(Duration::from_millis(50));
                     let next = d.join(format!("next-{i}"));
                     fs::write(&next, "2").unwrap();
                     fs::rename(&next, &lock).unwrap();
@@ -449,7 +450,7 @@ mod tests {
         let got = lock_board_within(&path, wait);
         busy.join().unwrap();
         assert!(got.is_ok(), "{:?}", got.err());
-        assert!(started.elapsed() >= Duration::from_millis(900));
+        assert!(started.elapsed() >= Duration::from_millis(2000));
         drop(got);
 
         fs::write(&lock, "3").unwrap();
@@ -459,7 +460,8 @@ mod tests {
             held.err().as_deref(),
             Some("workboard.json is locked by another writer")
         );
-        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(started.elapsed() >= wait);
+        assert!(started.elapsed() < wait + Duration::from_secs(2));
         let _ = fs::remove_dir_all(&d);
     }
     use crate::work_item::{append_work_log, WorkOrigin, SWEEP_EVERY_MS};
