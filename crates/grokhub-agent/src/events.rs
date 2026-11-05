@@ -879,6 +879,8 @@ impl NativeEngine {
             &self.conversation_id,
             &mut self.history,
             &[],
+            // A manual compact has no step request to match: plain summary.
+            &[],
         );
         crate::hooks::on_compact(&self.conversation_id, &self.workspace, false);
         if compact_result.is_ok() {

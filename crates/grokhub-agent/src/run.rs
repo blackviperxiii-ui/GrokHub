@@ -335,10 +335,13 @@ enum CompactPass {
     Failed,
 }
 
+/// `last_tools` is the tool list of the chat's last request, so a summary
+/// compaction sends the same prefix and reuses its cache.
 fn run_compact_pass(
     input: &LoopIn<'_>,
     history: &mut Vec<InputItem>,
     modified_paths: &[String],
+    last_tools: &[serde_json::Value],
     usage: &mut Usage,
     on_event: &mut dyn FnMut(LoopEvent),
 ) -> CompactPass {
@@ -361,6 +364,7 @@ fn run_compact_pass(
             input.conversation_id,
             history,
             modified_paths,
+            last_tools,
         )
     } else {
         crate::compact::compact_transcript(
@@ -371,6 +375,7 @@ fn run_compact_pass(
             input.conversation_id,
             history,
             modified_paths,
+            last_tools,
         )
     };
     crate::hooks::on_compact(input.conversation_id, input.workspace, false);
@@ -523,6 +528,8 @@ fn run_turn(
         gate.readonly_session = true;
     }
     let mut compacted_once = false;
+    // The tool list the last request sent, for a compaction that keeps its prefix.
+    let mut last_tools: Vec<serde_json::Value> = Vec::new();
     let mut turns_since_compact = 0u32;
     let mut overflow_compacted = false;
     let mut modified_paths: Vec<String> = Vec::new();
@@ -639,7 +646,14 @@ fn run_turn(
             crate::compact::needs_auto_compact_at(trigger, input.context_length) || long || step;
         let may_compact = over && (!compacted_once || turns_since_compact >= 1);
         if may_compact {
-            match run_compact_pass(input, history, &modified_paths, &mut usage, on_event) {
+            match run_compact_pass(
+                input,
+                history,
+                &modified_paths,
+                &last_tools,
+                &mut usage,
+                on_event,
+            ) {
                 CompactPass::Ok => {
                     compacted_once = true;
                     turns_since_compact = 0;
@@ -688,6 +702,7 @@ fn run_turn(
         run_tokens = run_tokens.saturating_add(req_tokens);
         // Each request should extend the last one; a rewrite logs its first changed segment.
         crate::prefix_guard::observe(&guard_key, &req);
+        last_tools.clone_from(&req.tools);
         let remember = input.depth == 0 && offers_spawn(&req.tools);
         let class = crate::route::live::current_class();
         drop(turn_top);
@@ -755,7 +770,14 @@ fn run_turn(
                         true,
                     );
                 }
-                match run_compact_pass(input, history, &modified_paths, &mut usage, on_event) {
+                match run_compact_pass(
+                    input,
+                    history,
+                    &modified_paths,
+                    &last_tools,
+                    &mut usage,
+                    on_event,
+                ) {
                     CompactPass::Ok => {
                         compacted_once = true;
                         turns_since_compact = 0;

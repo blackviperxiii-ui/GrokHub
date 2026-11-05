@@ -200,6 +200,7 @@ fn compact_with(client: &XaiClient, model: &str, items: &mut Vec<InputItem>) -> 
         "conv-srv",
         items,
         &[],
+        &[],
     )
     .expect("compaction")
 }
@@ -418,6 +419,7 @@ fn forced_summary_and_non_xai_models_never_call_the_endpoint() {
             None,
             "conv-local",
             &mut items,
+            &[],
             &[],
         );
         assert!(
