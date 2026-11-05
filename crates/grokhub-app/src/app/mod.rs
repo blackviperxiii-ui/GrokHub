@@ -778,6 +778,10 @@ pub struct Cabin {
     native_maximize_due: bool,
     imagine_want_focus: bool,
     composer_want_focus: bool,
+    /// The text the last chat chip put in the box. While the box still holds
+    /// exactly that, a second chip swaps it; once the person edits it, chips
+    /// add to it instead.
+    composer_chip_text: String,
     settings_sec: SettingsSec,
     /// Settings → Connectors tab and Marketplace view state.
     market: marketplace_ui::MarketState,
@@ -1403,6 +1407,7 @@ impl Cabin {
             native_maximize_due: false,
             imagine_want_focus: false,
             composer_want_focus: false,
+            composer_chip_text: String::new(),
             settings_sec: SettingsSec::Account,
             market: Default::default(),
             picker: personality_ui::first_picker(),
@@ -1896,6 +1901,7 @@ impl Cabin {
             native_maximize_due: false,
             imagine_want_focus: false,
             composer_want_focus: false,
+            composer_chip_text: String::new(),
             settings_sec: SettingsSec::Account,
             market: Default::default(),
             picker: Default::default(),

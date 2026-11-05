@@ -1213,12 +1213,22 @@ fn shell_chip_stays_off_a_run_when_host_is_blocked() {
         primary: false,
     };
 
+    // A tap only fills the box; Enter sends it down the typed `/sh` path.
+    fn tap_then_enter(cabin: &mut super::Cabin, chip: grokhub_core::QuickChip) {
+        cabin.apply_chip(chip);
+        assert_eq!(cabin.composer, "/sh cat /etc/passwd");
+        assert!(!cabin.running, "a shell chip never runs on tap");
+        assert!(cabin.messages.is_empty(), "a tap writes nothing to chat");
+        let typed = std::mem::take(&mut cabin.composer);
+        cabin.send_chat(typed);
+    }
+
     let mut off = super::Cabin::quiet_for_test();
     off.cfg.host_on = false;
     off.cfg.project_dir = project_dir.clone();
     off.permission_mode = grokhub_core::wire::PermissionMode::Ask;
     off.running = false;
-    off.apply_chip(chip.clone());
+    tap_then_enter(&mut off, chip.clone());
     assert_eq!(off.status, "Host off — /host on");
     assert!(!off.running);
 
@@ -1227,7 +1237,7 @@ fn shell_chip_stays_off_a_run_when_host_is_blocked() {
     ask.cfg.project_dir = project_dir;
     ask.permission_mode = grokhub_core::wire::PermissionMode::Ask;
     ask.running = false;
-    ask.apply_chip(chip);
+    tap_then_enter(&mut ask, chip);
     assert!(
         !ask.running,
         "running became true; the command was inside the project"
