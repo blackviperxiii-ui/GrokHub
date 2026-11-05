@@ -302,6 +302,8 @@ pub struct CompactOutput {
 pub enum StreamEvent {
     TextDelta(String),
     ReasoningDelta(String),
+    /// xAI asked to slow down: the call waits this long, then tries again.
+    RateWait(Duration),
 }
 
 /// What xAI's hosted search did in one reply (`usage.server_side_tool_usage_details`).
@@ -390,6 +392,10 @@ pub enum ClientError {
     Transport(String),
     IdleTimeout,
     Disconnect,
+    /// A retryable failure after part of the reply already showed in the chat.
+    /// Not retried: a second attempt would show the text twice and bill again,
+    /// so the turn stops with what was shown. Holds the first error's text.
+    CutOff(String),
     Cancelled,
     Protocol(String),
 }
@@ -410,6 +416,12 @@ impl std::fmt::Display for ClientError {
             ClientError::Transport(msg) => write!(f, "transport: {msg}"),
             ClientError::IdleTimeout => write!(f, "model stopped responding"),
             ClientError::Disconnect => write!(f, "stream disconnected before it completed"),
+            ClientError::CutOff(cause) => {
+                write!(
+                    f,
+                    "the reply was cut off partway ({cause}); what showed is kept"
+                )
+            }
             ClientError::Cancelled => write!(f, "cancelled"),
             ClientError::Protocol(msg) => write!(f, "{msg}"),
         }
@@ -866,6 +878,8 @@ pub struct XaiClient {
     /// the endpoint's docs, so from then on this client sends only `model` and
     /// `input` there.
     compact_key_refused: AtomicBool,
+    /// The base idle clock for a stream; see [`idle_for`].
+    idle: Duration,
 }
 
 /// One Batch API call on api.x.ai: the root, or a batch id with `/requests`,
@@ -920,10 +934,11 @@ impl XaiClient {
     pub fn new(bearer: impl Into<String>, auth_kind: AuthKind, idle: Duration) -> Self {
         let agent = grokhub_core::http::agent(grokhub_core::http::Opts {
             connect: Duration::from_secs(20),
-            read: Some(idle),
+            read: Some(socket_read_timeout(idle)),
             ..Default::default()
         });
         Self {
+            idle,
             agent,
             bearer: bearer.into(),
             auth_kind,
@@ -1095,14 +1110,25 @@ impl XaiClient {
         }
         let _ = crate::sse::take_served_model();
         let body = crate::timing::time("client:body", || responses_body(req));
-        let response = self.post_guarded(
-            &self.url,
-            &req.conversation_id,
-            "text/event-stream",
-            req.call_timeout,
-            body,
-        )?;
-        let mut turn = read_sse(response.into_reader(), cancel, sink)?;
+        if !crate::pace::take(&req.model, cancel) {
+            return Err(ClientError::Cancelled);
+        }
+        let response = self
+            .post_guarded(
+                &self.url,
+                &req.conversation_id,
+                "text/event-stream",
+                req.call_timeout,
+                body,
+            )
+            .inspect_err(|err| {
+                if matches!(err, ClientError::RateLimited { .. }) {
+                    crate::pace::note_limited(&req.model);
+                }
+            })?;
+        crate::pace::note_ok(&req.model);
+        let idle = idle_for(req.effort.as_deref(), self.idle);
+        let mut turn = read_sse(response.into_reader(), cancel, idle, sink)?;
         let wrote = req.model.trim();
         let wrote = if wrote.is_empty() {
             DEFAULT_MODEL
@@ -1164,7 +1190,17 @@ impl XaiClient {
     fn with_retries<T>(
         cancel: &CancelToken,
         deadline: Option<std::time::Instant>,
+        call: impl FnMut(Option<Duration>) -> Result<T, ClientError>,
+    ) -> Result<T, ClientError> {
+        Self::with_retries_noting(cancel, deadline, call, &mut |_, _| {})
+    }
+
+    /// [`Self::with_retries`], telling `on_wait` about each wait before it starts.
+    fn with_retries_noting<T>(
+        cancel: &CancelToken,
+        deadline: Option<std::time::Instant>,
         mut call: impl FnMut(Option<Duration>) -> Result<T, ClientError>,
+        on_wait: &mut dyn FnMut(&ClientError, Duration),
     ) -> Result<T, ClientError> {
         let left = || deadline.map(|d| d.saturating_duration_since(std::time::Instant::now()));
         let mut retry_count = 0u32;
@@ -1182,6 +1218,7 @@ impl XaiClient {
                         Some(wait) if left().is_some_and(|l| wait >= l) => return Err(err),
                         Some(wait) => {
                             retry_count = retry_count.saturating_add(1);
+                            on_wait(&err, wait);
                             if !sleep_cancellable(wait, cancel) {
                                 return Err(ClientError::Cancelled);
                             }
@@ -1193,6 +1230,44 @@ impl XaiClient {
             }
         }
     }
+}
+
+/// Runs `once` under the retry policy, but never retries once reply text has
+/// reached `sink`: the chat already shows it, so a retry would show it twice
+/// and bill the request again. That failure comes back as
+/// [`ClientError::CutOff`] and the turn stops with what was shown.
+fn stream_once_shown(
+    cancel: &CancelToken,
+    mut once: impl FnMut(&mut dyn FnMut(StreamEvent)) -> Result<TurnOutput, ClientError>,
+    sink: &mut dyn FnMut(StreamEvent),
+) -> Result<TurnOutput, ClientError> {
+    let sink = std::cell::RefCell::new(sink);
+    let mut shown = false;
+    XaiClient::with_retries_noting(
+        cancel,
+        None,
+        |_| {
+            once(&mut |ev: StreamEvent| {
+                if matches!(&ev, StreamEvent::TextDelta(t) if !t.is_empty()) {
+                    shown = true;
+                }
+                (*sink.borrow_mut())(ev)
+            })
+            .map_err(|err| {
+                if shown && err.is_retryable() {
+                    ClientError::CutOff(err.to_string())
+                } else {
+                    err
+                }
+            })
+        },
+        // A 429's wait shows in the chat, so a pause isn't a hang.
+        &mut |err, wait| {
+            if matches!(err, ClientError::RateLimited { .. }) {
+                (*sink.borrow_mut())(StreamEvent::RateWait(wait));
+            }
+        },
+    )
 }
 
 impl std::fmt::Debug for XaiClient {
@@ -1231,7 +1306,7 @@ impl ModelClient for XaiClient {
                 crate::batch::Deferred::Fallback(_) => {}
             }
         }
-        Self::with_retries(cancel, None, |_| self.once(req, cancel, sink))
+        stream_once_shown(cancel, |sink| self.once(req, cancel, sink), sink)
     }
 
     fn compacts_server_side(&self) -> bool {
@@ -1429,25 +1504,84 @@ fn take_utf8(pending: &mut Vec<u8>) -> String {
     String::from_utf8(whole).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
 }
 
-fn read_sse<R: Read>(
-    mut reader: R,
+/// How often a stream that is waiting on xAI checks for Stop.
+const READ_POLL: Duration = Duration::from_millis(250);
+
+/// How long a stream may go quiet before it counts as stalled. High and
+/// xhigh effort can think in silence for minutes, so they get two and a half
+/// times the base (120 s becomes 300 s).
+fn idle_for(effort: Option<&str>, base: Duration) -> Duration {
+    match effort.map(str::trim) {
+        Some("high" | "xhigh") => base.saturating_mul(5) / 2,
+        _ => base,
+    }
+}
+
+/// The socket's own read timeout: a backstop past the longest idle clock, so
+/// the clock in [`read_sse`] is what ends a quiet stream.
+fn socket_read_timeout(base: Duration) -> Duration {
+    idle_for(Some("xhigh"), base) + Duration::from_secs(5)
+}
+
+/// Reads the body on its own thread, so Stop and the idle clock are checked
+/// every [`READ_POLL`] even while a read is blocked.
+fn pump(
+    mut reader: impl Read + Send + 'static,
+) -> std::sync::mpsc::Receiver<std::io::Result<Vec<u8>>> {
+    let (tx, rx) = std::sync::mpsc::sync_channel(16);
+    let spawned = std::thread::Builder::new().name("sse-read".into()).spawn({
+        let tx = tx.clone();
+        move || {
+            let mut buf = [0u8; 4096];
+            loop {
+                let sent = match reader.read(&mut buf) {
+                    Ok(0) => {
+                        let _ = tx.send(Ok(Vec::new()));
+                        break;
+                    }
+                    Ok(n) => tx.send(Ok(buf[..n].to_vec())),
+                    Err(e) => {
+                        let _ = tx.send(Err(e));
+                        break;
+                    }
+                };
+                // The stream was dropped (Stop, a stall, an error): stop reading.
+                if sent.is_err() {
+                    break;
+                }
+            }
+        }
+    });
+    if let Err(e) = spawned {
+        let _ = tx.send(Err(e));
+    }
+    rx
+}
+
+fn read_sse(
+    reader: impl Read + Send + 'static,
     cancel: &CancelToken,
+    idle: Duration,
     sink: &mut dyn FnMut(StreamEvent),
 ) -> Result<TurnOutput, ClientError> {
+    use std::sync::mpsc::RecvTimeoutError;
+    let chunks = pump(reader);
     let mut parser = SseParser::new();
-    let mut buf = [0u8; 4096];
     let mut out = TurnOutput::default();
     // Bytes of a character that a read cut in half, kept for the next read.
     let mut pending: Vec<u8> = Vec::new();
+    let mut last = std::time::Instant::now();
+    let mut longest = Duration::ZERO;
+    let gap_done = |longest: Duration| crate::timing::record("stream:longest_gap", longest);
     loop {
         if cancel.is_cancelled() {
-            drop(reader);
             return Err(ClientError::Cancelled);
         }
-        let n = match reader.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => n,
-            Err(e) => {
+        let buf = match chunks.recv_timeout(READ_POLL.min(idle)) {
+            Ok(Ok(buf)) if buf.is_empty() => break,
+            Ok(Ok(buf)) => buf,
+            Ok(Err(e)) => {
+                gap_done(longest.max(last.elapsed()));
                 let msg = e.to_string();
                 let lower = msg.to_ascii_lowercase();
                 if lower.contains("timed out") || lower.contains("timeout") {
@@ -1455,7 +1589,20 @@ fn read_sse<R: Read>(
                 }
                 return Err(ClientError::Transport(msg));
             }
+            Err(RecvTimeoutError::Timeout) => {
+                if last.elapsed() >= idle {
+                    gap_done(last.elapsed());
+                    return Err(ClientError::IdleTimeout);
+                }
+                continue;
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err(ClientError::Transport("the stream reader stopped".into()));
+            }
         };
+        longest = longest.max(last.elapsed());
+        last = std::time::Instant::now();
+        let n = buf.len();
         pending.extend_from_slice(&buf[..n]);
         let chunk = take_utf8(&mut pending);
         fold_events(parser.push(&chunk), sink, &mut out)?;
@@ -1465,6 +1612,7 @@ fn read_sse<R: Read>(
         fold_events(parser.push(&tail), sink, &mut out)?;
     }
     fold_events(parser.finish()?, sink, &mut out)?;
+    gap_done(longest);
     Ok(out)
 }
 
@@ -1634,11 +1782,16 @@ mod tests {
         let cuts = [&body[..e + 1], &body[e + 1..crab + 2], &body[crab + 2..]];
         let reader = Cuts(cuts.iter().map(|c| c.to_vec()).collect());
         let mut shown = String::new();
-        let out = read_sse(reader, &CancelToken::new(), &mut |ev| {
-            if let StreamEvent::TextDelta(t) = ev {
-                shown.push_str(&t);
-            }
-        })
+        let out = read_sse(
+            reader,
+            &CancelToken::new(),
+            Duration::from_secs(5),
+            &mut |ev| {
+                if let StreamEvent::TextDelta(t) = ev {
+                    shown.push_str(&t);
+                }
+            },
+        )
         .unwrap();
         assert_eq!(out.text, "café 🦀");
         assert_eq!(shown, "café 🦀");
@@ -1701,6 +1854,119 @@ mod tests {
         assert!(grand.is_cancelled());
         let later = CancelToken::child_of(&parent);
         assert!(!later.is_cancelled());
+    }
+
+    /// A body that never sends another byte, like xAI thinking in silence.
+    struct Quiet;
+    impl Read for Quiet {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            std::thread::sleep(Duration::from_secs(30));
+            Ok(0)
+        }
+    }
+
+    #[test]
+    fn stop_ends_a_quiet_stream_at_once_and_the_idle_clock_follows_effort() {
+        let cancel = CancelToken::new();
+        let stopper = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            stopper.cancel();
+        });
+        let began = std::time::Instant::now();
+        let out = read_sse(Quiet, &cancel, Duration::from_secs(120), &mut |_| {});
+        assert!(matches!(out, Err(ClientError::Cancelled)));
+        assert!(
+            began.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            began.elapsed()
+        );
+
+        let began = std::time::Instant::now();
+        let out = read_sse(
+            Quiet,
+            &CancelToken::new(),
+            Duration::from_millis(400),
+            &mut |_| {},
+        );
+        assert!(matches!(out, Err(ClientError::IdleTimeout)));
+        assert!(
+            began.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            began.elapsed()
+        );
+
+        let base = Duration::from_secs(120);
+        assert_eq!(idle_for(None, base), base);
+        assert_eq!(idle_for(Some("low"), base), base);
+        assert_eq!(idle_for(Some("medium"), base), base);
+        assert_eq!(idle_for(Some("high"), base), Duration::from_secs(300));
+        assert_eq!(idle_for(Some("xhigh"), base), Duration::from_secs(300));
+        assert!(socket_read_timeout(base) > Duration::from_secs(300));
+    }
+
+    #[test]
+    fn a_reply_cut_off_after_it_showed_stops_instead_of_showing_twice() {
+        let cancel = CancelToken::new();
+        let mut shown = Vec::new();
+        let mut calls = 0;
+        let out = stream_once_shown(
+            &cancel,
+            |sink| {
+                calls += 1;
+                sink(StreamEvent::TextDelta("Here is the plan".into()));
+                Err(ClientError::Disconnect)
+            },
+            &mut |ev| shown.push(ev),
+        );
+        assert_eq!(calls, 1, "a reply that showed text is never sent again");
+        assert!(matches!(out, Err(ClientError::CutOff(_))));
+        assert!(!out.unwrap_err().is_retryable());
+        assert_eq!(
+            shown,
+            vec![StreamEvent::TextDelta("Here is the plan".into())]
+        );
+
+        // Thinking alone showed nothing in the reply, so the call still retries.
+        let mut calls = 0;
+        let out = stream_once_shown(
+            &cancel,
+            |sink| {
+                calls += 1;
+                sink(StreamEvent::ReasoningDelta("hmm".into()));
+                if calls == 1 {
+                    return Err(ClientError::Disconnect);
+                }
+                sink(StreamEvent::TextDelta("done".into()));
+                Ok(TurnOutput {
+                    text: "done".into(),
+                    ..TurnOutput::default()
+                })
+            },
+            &mut |_| {},
+        );
+        assert_eq!(calls, 2);
+        assert_eq!(out.unwrap().text, "done");
+
+        // A 429's wait shows before it starts, and the call then goes through.
+        let mut seen = Vec::new();
+        let mut calls = 0;
+        let out = stream_once_shown(
+            &cancel,
+            |_| {
+                calls += 1;
+                if calls == 1 {
+                    return Err(ClientError::RateLimited {
+                        retry_after_secs: Some(1),
+                        message: "slow down".into(),
+                    });
+                }
+                Ok(TurnOutput::default())
+            },
+            &mut |ev| seen.push(ev),
+        );
+        assert!(out.is_ok());
+        assert_eq!(seen, vec![StreamEvent::RateWait(Duration::from_secs(1))]);
     }
 
     #[test]

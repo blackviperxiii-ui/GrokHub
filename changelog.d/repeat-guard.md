@@ -1,0 +1,1 @@
+- The same tool call with the same arguments now runs at most twice in a row before Loadout asks the model to change course, and the refusal shows in the chat. An edit to a file resets the count, so edit-then-check loops keep going.
