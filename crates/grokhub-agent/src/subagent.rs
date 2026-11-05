@@ -478,7 +478,7 @@ fn run_child(job: &ChildJob, tx: &Option<Sender<ChildNote>>) -> ChildDone {
     let _fork = job
         .fork
         .as_ref()
-        .map(|_| ForkScope::enter(&job.conversation_id, &job.parent_session));
+        .map(|parent| ForkScope::enter(&job.conversation_id, &job.parent_session, parent));
     let mut history = job
         .fork
         .as_ref()
@@ -996,6 +996,9 @@ fn forget_steer(id: &str) {
 struct ParentRequest {
     model: String,
     input: Vec<InputItem>,
+    /// The tools array as it went out, so a fork sends the same bytes and its
+    /// first request hits the chat's cached prefix past the tool list.
+    tools: Vec<Value>,
 }
 
 /// Root chats whose last request is kept. Each entry is one chat's context.
@@ -1009,11 +1012,17 @@ fn parent_requests() -> &'static Mutex<ParentRequests> {
     LIST.get_or_init(|| Mutex::new(std::collections::VecDeque::new()))
 }
 
-/// Keeps a root chat's request input as it went out, newest chat first.
-pub fn remember_request(conversation_id: &str, model: &str, input: &[InputItem]) {
+/// Keeps a root chat's request input and tools as they went out, newest chat first.
+pub fn remember_request(
+    conversation_id: &str,
+    model: &str,
+    input: Vec<InputItem>,
+    tools: Vec<Value>,
+) {
     let entry = Arc::new(ParentRequest {
         model: model.to_string(),
-        input: input.to_vec(),
+        input,
+        tools,
     });
     let mut list = parent_requests()
         .lock()
@@ -1032,9 +1041,12 @@ fn parent_request(conversation_id: &str) -> Option<Arc<ParentRequest>> {
         .map(|(_, req)| Arc::clone(req))
 }
 
-/// Fork conversation ids and the parent chat whose cache key they share.
-fn forks() -> &'static Mutex<HashMap<String, String>> {
-    static MAP: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+/// Fork conversation ids, the parent chat whose cache key they share, and the
+/// parent request they started from.
+type Forks = HashMap<String, (String, Arc<ParentRequest>)>;
+
+fn forks() -> &'static Mutex<Forks> {
+    static MAP: OnceLock<Mutex<Forks>> = OnceLock::new();
     MAP.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -1045,8 +1057,20 @@ pub fn cache_key(conversation_id: &str) -> String {
         .lock()
         .unwrap_or_else(|err| err.into_inner())
         .get(conversation_id)
-        .cloned()
+        .map(|(parent, _)| parent.clone())
         .unwrap_or_else(|| conversation_id.to_string())
+}
+
+/// A running fork's tool list: its parent's last one, byte for byte, so the
+/// fork's requests share the parent's cached prefix past the tools. The fork
+/// runs under the parent's own gate, so the list offers it nothing new.
+pub fn fork_tools(conversation_id: &str) -> Option<Vec<Value>> {
+    forks()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .get(conversation_id)
+        .map(|(_, parent)| parent.tools.clone())
+        .filter(|tools| !tools.is_empty())
 }
 
 #[cfg(test)]
@@ -1061,11 +1085,11 @@ fn is_fork(conversation_id: &str) -> bool {
 struct ForkScope(String);
 
 impl ForkScope {
-    fn enter(child: &str, parent: &str) -> Self {
+    fn enter(child: &str, parent: &str, request: &Arc<ParentRequest>) -> Self {
         forks()
             .lock()
             .unwrap_or_else(|err| err.into_inner())
-            .insert(child.to_string(), parent.to_string());
+            .insert(child.to_string(), (parent.to_string(), Arc::clone(request)));
         Self(child.to_string())
     }
 }
@@ -1761,15 +1785,18 @@ mod tests {
         let dir = scratch("fork");
         let sid = session("fork");
         let parent_id = sid.clone();
-        // (depth, input, cache key) of every request, in order.
-        type Seen = Vec<(usize, Vec<InputItem>, String)>;
+        // (depth, input, cache key, tools) of every request, in order.
+        type Seen = Vec<(usize, Vec<InputItem>, String, Vec<Value>)>;
         let seen: Arc<Mutex<Seen>> = Arc::new(Mutex::new(Vec::new()));
         let log = Arc::clone(&seen);
         let client = fake(&sid, move |req, _cancel, n| {
             let depth = depth_of(&parent_id, &req.conversation_id);
-            log.lock()
-                .unwrap()
-                .push((depth, req.input.clone(), cache_key(&req.conversation_id)));
+            log.lock().unwrap().push((
+                depth,
+                req.input.clone(),
+                cache_key(&req.conversation_id),
+                req.tools.clone(),
+            ));
             match (depth, n) {
                 (0, 0) => Ok(calls_turn(
                     vec![
@@ -1818,11 +1845,12 @@ mod tests {
         assert!(joined_outputs(&history).contains("child-done"));
 
         let seen = seen.lock().unwrap();
-        let parent = &seen.iter().find(|(d, _, _)| *d == 0).unwrap().1;
-        let firsts: Vec<_> = seen.iter().filter(|(d, _, _)| *d == 1).collect();
+        let first = seen.iter().find(|(d, _, _, _)| *d == 0).unwrap();
+        let (parent, parent_tools) = (&first.1, &first.3);
+        let firsts: Vec<_> = seen.iter().filter(|(d, _, _, _)| *d == 1).collect();
         let fork = firsts
             .iter()
-            .find(|(_, input, _)| input.starts_with(parent))
+            .find(|(_, input, _, _)| input.starts_with(parent))
             .expect("the general child's first request starts with the chat's last one");
         assert!(fork.1.len() > parent.len());
         let task = crate::compact::message_text(fork.1.last().unwrap());
@@ -1831,10 +1859,20 @@ mod tests {
             "{task}"
         );
         assert_eq!(fork.2, sid, "a fork shares the chat's cache key");
+        assert_eq!(
+            serde_json::to_string(&fork.3).unwrap(),
+            serde_json::to_string(parent_tools).unwrap(),
+            "a fork sends the chat's tool list byte for byte"
+        );
+        let fork_steps: Vec<_> = seen
+            .iter()
+            .filter(|(d, input, _, _)| *d == 1 && input.starts_with(parent))
+            .collect();
+        assert!(fork_steps.iter().all(|step| &step.3 == parent_tools));
 
         let explore = firsts
             .iter()
-            .find(|(_, input, _)| {
+            .find(|(_, input, _, _)| {
                 input
                     .iter()
                     .any(|item| crate::compact::message_text(item).contains("list files"))
@@ -1849,7 +1887,7 @@ mod tests {
         // The fork's own child is a plain subagent: fresh context, own cache key.
         let grand = seen
             .iter()
-            .find(|(d, _, _)| *d == 2)
+            .find(|(d, _, _, _)| *d == 2)
             .expect("the fork can start a child");
         assert!(!grand.1.starts_with(parent));
         assert_ne!(grand.2, sid);
