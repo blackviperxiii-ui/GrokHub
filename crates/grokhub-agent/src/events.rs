@@ -330,6 +330,8 @@ impl NativeEngine {
     /// Replace the in-memory transcript with a session file. The next prompt continues it.
     pub fn resume(&mut self, items: Vec<InputItem>, usage: Usage) {
         self.history = items;
+        // A chat saved mid-batch by an older build heals here.
+        crate::client::pair_orphan_calls(&mut self.history);
         self.usage = usage;
     }
 }

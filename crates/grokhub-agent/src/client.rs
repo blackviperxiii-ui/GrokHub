@@ -153,6 +153,65 @@ pub enum InputItem {
     },
 }
 
+/// The output a tool call gets when the turn ended before it ran.
+pub const NOT_RUN: &str = "Not run: the turn stopped before this call ran.";
+
+/// Give every tool call in `history` an output, so no provider sees a call
+/// with no answer. A call left without one (Stop, Halt or a denied step
+/// partway through a batch, or a chat saved like that) gets [`NOT_RUN`],
+/// placed after the run of calls and outputs it belongs to. Returns how many
+/// outputs it added.
+pub fn pair_orphan_calls(history: &mut Vec<InputItem>) -> usize {
+    let answered: std::collections::HashSet<String> = history
+        .iter()
+        .filter_map(|item| match item {
+            InputItem::FunctionCallOutput { call_id, .. } => Some(call_id.clone()),
+            _ => None,
+        })
+        .collect();
+    let mut added = 0;
+    let mut i = 0;
+    while i < history.len() {
+        if !matches!(history[i], InputItem::FunctionCall { .. }) {
+            i += 1;
+            continue;
+        }
+        // One batch: the calls and the outputs that follow them.
+        let start = i;
+        let mut end = i;
+        while end < history.len()
+            && matches!(
+                history[end],
+                InputItem::FunctionCall { .. } | InputItem::FunctionCallOutput { .. }
+            )
+        {
+            end += 1;
+        }
+        let missing: Vec<String> = history[start..end]
+            .iter()
+            .filter_map(|item| match item {
+                InputItem::FunctionCall { call_id, .. } if !answered.contains(call_id) => {
+                    Some(call_id.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        let count = missing.len();
+        for (k, call_id) in missing.into_iter().enumerate() {
+            history.insert(
+                end + k,
+                InputItem::FunctionCallOutput {
+                    call_id,
+                    output: NOT_RUN.to_string(),
+                },
+            );
+        }
+        added += count;
+        i = end + count;
+    }
+    added
+}
+
 impl InputItem {
     /// A [`InputItem::Reasoning`] from one item's JSON text, or `None` when it is
     /// neither a JSON object of type `reasoning` with a non-empty
@@ -1744,6 +1803,67 @@ pub(crate) fn fold_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fc(id: &str) -> InputItem {
+        InputItem::FunctionCall {
+            call_id: id.into(),
+            name: "read_file".into(),
+            arguments: "{}".into(),
+        }
+    }
+
+    fn fco(id: &str, out: &str) -> InputItem {
+        InputItem::FunctionCallOutput {
+            call_id: id.into(),
+            output: out.into(),
+        }
+    }
+
+    fn user_text(text: &str) -> InputItem {
+        InputItem::Message {
+            role: "user".into(),
+            content: vec![ContentPart::InputText(text.into())],
+        }
+    }
+
+    #[test]
+    fn a_stopped_batch_gets_an_output_for_every_call_in_order() {
+        let mut history = vec![
+            user_text("go"),
+            fc("a"),
+            fc("b"),
+            fc("c"),
+            fco("a", "ran"),
+            user_text("next"),
+        ];
+        assert_eq!(pair_orphan_calls(&mut history), 2);
+        assert_eq!(
+            history,
+            vec![
+                user_text("go"),
+                fc("a"),
+                fc("b"),
+                fc("c"),
+                fco("a", "ran"),
+                fco("b", NOT_RUN),
+                fco("c", NOT_RUN),
+                user_text("next"),
+            ]
+        );
+        assert_eq!(
+            pair_orphan_calls(&mut history),
+            0,
+            "a second pass changes nothing"
+        );
+    }
+
+    #[test]
+    fn answered_calls_are_left_alone() {
+        let mut history = vec![fc("a"), fco("a", "ok"), fc("b"), fco("b", "ok")];
+        let before = history.clone();
+        assert_eq!(pair_orphan_calls(&mut history), 0);
+        assert_eq!(history, before);
+    }
 
     fn format_request(model: &str, format: TextFormat) -> ResponsesRequest {
         ResponsesRequest {
