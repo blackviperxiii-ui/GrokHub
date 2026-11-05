@@ -1089,7 +1089,7 @@ fn chip_apply_mode_and_help_stay_off_a_run() {
     let mut mode = super::Cabin::quiet_for_test();
     let before = mode.status.clone();
     let turns = mode.messages.len();
-    mode.apply_chip(chip("mode-fast", "__mode:fast", super::ChipKind::Mode));
+    mode.apply_chip(chip("mode-fast", "__mode:fast", super::ChipKind::Nav));
     // The router alone picks the model: an old mode chip does nothing at all.
     assert_eq!(mode.status, before);
     assert_eq!(mode.messages.len(), turns);

@@ -782,6 +782,9 @@ pub struct Cabin {
     /// exactly that, a second chip swaps it; once the person edits it, chips
     /// add to it instead.
     composer_chip_text: String,
+    /// Per row surface, a hash of the chip ids last written to the chip log,
+    /// so a repaint that shows the same row does no log work.
+    chips_logged: Vec<(&'static str, u64)>,
     settings_sec: SettingsSec,
     /// Settings → Connectors tab and Marketplace view state.
     market: marketplace_ui::MarketState,
@@ -1408,6 +1411,7 @@ impl Cabin {
             imagine_want_focus: false,
             composer_want_focus: false,
             composer_chip_text: String::new(),
+            chips_logged: Vec::new(),
             settings_sec: SettingsSec::Account,
             market: Default::default(),
             picker: personality_ui::first_picker(),
@@ -1902,6 +1906,7 @@ impl Cabin {
             imagine_want_focus: false,
             composer_want_focus: false,
             composer_chip_text: String::new(),
+            chips_logged: Vec::new(),
             settings_sec: SettingsSec::Account,
             market: Default::default(),
             picker: Default::default(),

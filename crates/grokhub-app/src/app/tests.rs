@@ -2199,6 +2199,7 @@ fn quiet_cabin() -> Cabin {
         imagine_want_focus: false,
         composer_want_focus: false,
         composer_chip_text: String::new(),
+        chips_logged: Vec::new(),
         settings_sec: super::SettingsSec::Account,
         market: Default::default(),
         picker: Default::default(),

@@ -3157,6 +3157,7 @@ impl Cabin {
                         } else {
                             self.composer_chips()
                         };
+                        self.note_chips_shown("composer", &chips);
                         if let Some(act) = crate::cards::quick_chip_row(ui, &chips) {
                             self.take_chip_act(act, &chips);
                         }

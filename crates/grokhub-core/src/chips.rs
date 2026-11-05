@@ -17,7 +17,8 @@ pub const CHIP_LLM_DEBOUNCE_MS: u64 = 1200;
 pub const CHIP_LLM_SPEND_MS: u64 = 30 * 60 * 1000;
 pub const CHIP_LLM_MODE: &str = "fast";
 /// On-disk `chips.json` schema. v1 embedded raw chat in keys; v2 uses opaque hashes.
-pub const CHIP_MEMORY_VERSION: u32 = 2;
+/// 3: retired mode kind dropped, replay-unsafe text scrubbed, local chip log.
+pub const CHIP_MEMORY_VERSION: u32 = 3;
 const CHIP_SCAN_CAP: usize = 4096;
 const MAX_HITS: usize = 80;
 const MAX_TRANSITIONS: usize = 12;
@@ -30,10 +31,16 @@ const VALUE_KEY_HASH_HEX: usize = 16;
 pub enum ChipKind {
     Chat,
     Shell,
+    /// `mode` is the retired model/effort chip kind. Chip memory written
+    /// before still reads (as a nav hit) and the load prune drops it: no chip
+    /// changes the model or effort, the router alone picks them.
+    #[serde(alias = "mode")]
     Nav,
-    /// Retired: mode chips are gone (the router alone picks the model and
-    /// effort). Kept so chip memory written before still reads; never offered.
-    Mode,
+}
+
+/// A chip value from the retired model/effort chips (`__mode:think`).
+pub fn retired_mode_value(value: &str) -> bool {
+    value.trim_start().starts_with("__mode:")
 }
 
 impl ChipKind {
@@ -41,7 +48,6 @@ impl ChipKind {
         match s.to_ascii_lowercase().as_str() {
             "shell" => Self::Shell,
             "nav" => Self::Nav,
-            "mode" => Self::Mode,
             _ => Self::Chat,
         }
     }
@@ -185,6 +191,10 @@ pub struct ChipMemory {
     /// by its text, so chat-built chips and typed asks teach too (#1057).
     #[serde(default)]
     pub intents: BTreeMap<String, IntentHit>,
+    /// Local log of shown rows and what happened (no chip text), newest last.
+    /// See [`crate::chip_store`].
+    #[serde(default)]
+    pub events: Vec<crate::chip_store::ChipEvent>,
 }
 
 /// How often one intent was used, by local hour and weekday.
@@ -219,6 +229,7 @@ impl Default for ChipMemory {
             total_events: 0,
             updated_at: 0,
             intents: BTreeMap::new(),
+            events: Vec::new(),
         }
     }
 }
@@ -424,7 +435,6 @@ fn kind_key_prefix(kind: ChipKind) -> &'static str {
         ChipKind::Chat => "chat",
         ChipKind::Shell => "shell",
         ChipKind::Nav => "nav",
-        ChipKind::Mode => "mode",
     }
 }
 
@@ -2119,7 +2129,7 @@ pub fn local_lessons(memory: &ChipMemory) -> Vec<LocalLesson> {
             || hit.uses < 2
             || hit.successes < 1
             || hit.label.trim().is_empty()
-            || hit.kind == ChipKind::Mode
+            || retired_mode_value(&hit.value)
         {
             continue;
         }
@@ -2639,7 +2649,8 @@ fn retired_host_copy(id: &str, label: &str, value: &str) -> bool {
 
 /// Drop leftover desk/host habits so chips.json cannot resurrect them.
 pub fn prune_retired_chip_memory(mem: &mut ChipMemory) -> bool {
-    let retired = prune_retired_host_hits(mem);
+    let modes = prune_retired_mode_hits(mem);
+    let retired = prune_retired_host_hits(mem) || modes;
     let scrubbed = scrub_chat_text_chip_keys(mem);
     let unsafe_text = scrub_replay_unsafe_text(mem);
     retired || scrubbed || unsafe_text
@@ -2661,6 +2672,24 @@ fn scrub_replay_unsafe_text(mem: &mut ChipMemory) -> bool {
         }
     }
     changed
+}
+
+/// Drop old model/effort chip habits. Their keys were `mode:…` (learned) or
+/// `id:mode-…`/`id:route-…` (row chips); their values `__mode:…`.
+fn prune_retired_mode_hits(mem: &mut ChipMemory) -> bool {
+    let gone =
+        |k: &str| k.starts_with("mode:") || k.starts_with("id:mode-") || k.starts_with("id:route-");
+    let before = mem.hits.len();
+    mem.hits
+        .retain(|h| !gone(&h.key) && !retired_mode_value(&h.value));
+    mem.transitions.retain(|from, dests| {
+        dests.retain(|to, _| !gone(to));
+        !gone(from) && !dests.is_empty()
+    });
+    if mem.last_chip_key.as_deref().is_some_and(gone) {
+        mem.last_chip_key = None;
+    }
+    mem.hits.len() != before
 }
 
 fn prune_retired_host_hits(mem: &mut ChipMemory) -> bool {
@@ -2992,7 +3021,7 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
             && !family_quiet_this_hour(input.memory, &c.id, &c.value, &c.label, input.hour)
             && is_plain_text(&c.value)
             && !is_desk_takeover_chip(c)
-            && c.kind != ChipKind::Mode
+            && !retired_mode_value(&c.value)
     });
     if input.grok_connected {
         chips.retain(|c| !is_stale_connect_chip(c));
@@ -3008,7 +3037,7 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
 
     if stage != ChipStage::Empty && input.chat.len() >= 2 {
         for c in &mut chips {
-            if matches!(c.kind, ChipKind::Nav | ChipKind::Mode) {
+            if c.kind == ChipKind::Nav {
                 c.score -= 16.0;
             }
         }
@@ -3047,7 +3076,6 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
         ChipKind::Chat => 0,
         ChipKind::Shell => 1,
         ChipKind::Nav => 2,
-        ChipKind::Mode => 3,
     };
     for c in &chips {
         if picked.len() >= max {
@@ -3058,9 +3086,6 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
             continue;
         }
         if c.kind == ChipKind::Nav && n >= 1 && max <= 5 && stage != ChipStage::Empty {
-            continue;
-        }
-        if c.kind == ChipKind::Mode && n >= 1 {
             continue;
         }
         picked.push(c.clone());
@@ -3387,12 +3412,12 @@ pub fn parse_llm_chips(raw: &str) -> Vec<QuickChip> {
                 if !cabin_chip_copy_ok(&label, &value, "") {
                     continue;
                 }
-                let mut kind =
-                    ChipKind::from_str(row.get("kind").and_then(|v| v.as_str()).unwrap_or("chat"));
+                let raw_kind = row.get("kind").and_then(|v| v.as_str()).unwrap_or("chat");
                 // No chip changes the model or effort: the router alone picks them.
-                if kind == ChipKind::Mode {
+                if raw_kind.eq_ignore_ascii_case("mode") || retired_mode_value(&value) {
                     continue;
                 }
+                let mut kind = ChipKind::from_str(raw_kind);
                 if kind == ChipKind::Shell && !value.starts_with('$') && !value.starts_with("/sh") {
                     kind = ChipKind::Chat;
                 }
@@ -3745,9 +3770,7 @@ mod tests {
             assert!(!chips.is_empty(), "{mode}");
             assert!(chips.len() <= CHIP_VISIBLE_MAX);
             assert!(
-                chips
-                    .iter()
-                    .all(|c| c.kind != ChipKind::Mode && !c.value.starts_with("__mode:")),
+                chips.iter().all(|c| !c.value.starts_with("__mode:")),
                 "{mode}: {:?}",
                 labels(&chips)
             );
@@ -3760,12 +3783,12 @@ mod tests {
             "llm-0-Think",
             "Think Harder",
             "__mode:think",
-            ChipKind::Mode,
+            ChipKind::Nav,
             99.0,
             "",
         );
         let chips = build_quick_chips(input(&chat, "", &mem, &[], std::slice::from_ref(&old)));
-        assert!(!chips.iter().any(|c| c.kind == ChipKind::Mode));
+        assert!(!chips.iter().any(|c| c.value.starts_with("__mode:")));
     }
 
     #[test]
@@ -4141,7 +4164,7 @@ mod tests {
             "route-think",
             "Think Harder",
             "__mode:think",
-            ChipKind::Mode,
+            ChipKind::Nav,
             10.0,
             "",
         );

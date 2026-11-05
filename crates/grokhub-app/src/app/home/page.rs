@@ -229,6 +229,7 @@ impl Cabin {
             });
         } else {
             let chips = self.home_chips.clone();
+            self.note_chips_shown("home", &chips);
             if let Some(act) = crate::cards::quick_chip_row(ui, &chips) {
                 self.take_home_chip_act(act, &chips);
             }

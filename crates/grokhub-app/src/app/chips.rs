@@ -63,8 +63,6 @@ fn mark_first_primary(chips: &mut [QuickChip]) {
 fn chip_action_tip(chip: &QuickChip, composer_draft: &str) -> String {
     match chip.kind {
         ChipKind::Nav => "Opens this page — nothing is sent".into(),
-        // Retired: never offered (old chip memory only). Nothing happens.
-        ChipKind::Mode => "Nothing is sent".into(),
         ChipKind::Shell => "Puts the command in the box — check it, then press Enter to run".into(),
         ChipKind::Chat => {
             if chip_chat_runs_immediately(chip, composer_draft) {
@@ -614,18 +612,62 @@ impl Cabin {
                 self.composer.clear();
             }
         }
-        self.take_chip_act(act, chips);
+        self.take_chip_act_on("home", act, chips);
     }
 
     pub(super) fn take_chip_act(&mut self, act: crate::cards::ChipRowAct, chips: &[QuickChip]) {
+        self.take_chip_act_on("composer", act, chips);
+    }
+
+    /// Note a shown row in the local chip log (no chip text, see
+    /// `grokhub_core::chip_store`). Same ids as last time on this surface:
+    /// nothing to do, so a repaint costs one hash.
+    pub(super) fn note_chips_shown(&mut self, surface: &'static str, chips: &[QuickChip]) {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for c in chips {
+            c.id.hash(&mut h);
+        }
+        let sig = h.finish();
+        match self.chips_logged.iter_mut().find(|(s, _)| *s == surface) {
+            Some((_, last)) if *last == sig => return,
+            Some((_, last)) => *last = sig,
+            None => self.chips_logged.push((surface, sig)),
+        }
+        grokhub_core::log_chips_shown(&mut self.chip_memory, surface, chips, now_ms());
+    }
+
+    fn take_chip_act_on(
+        &mut self,
+        surface: &'static str,
+        act: crate::cards::ChipRowAct,
+        chips: &[QuickChip],
+    ) {
         match act {
             crate::cards::ChipRowAct::Apply(i) => {
                 if let Some(c) = chips.get(i).cloned() {
+                    grokhub_core::log_chip_outcome(
+                        &mut self.chip_memory,
+                        surface,
+                        &c,
+                        true,
+                        now_ms(),
+                    );
+                    // A shown row that was acted on is closed: the next showing is new.
+                    self.chips_logged.retain(|(s, _)| *s != surface);
                     self.apply_chip(c);
                 }
             }
             crate::cards::ChipRowAct::Dismiss(i) => {
                 if let Some(c) = chips.get(i).cloned() {
+                    grokhub_core::log_chip_outcome(
+                        &mut self.chip_memory,
+                        surface,
+                        &c,
+                        false,
+                        now_ms(),
+                    );
+                    self.chips_logged.retain(|(s, _)| *s != surface);
                     self.dismiss_chip(c);
                     self.refresh_chips();
                 }
@@ -634,6 +676,11 @@ impl Cabin {
     }
 
     pub(super) fn apply_chip(&mut self, chip: QuickChip) {
+        // A retired model/effort chip from old memory does nothing at all:
+        // the router alone picks the model and effort.
+        if grokhub_core::retired_mode_value(&chip.value) {
+            return;
+        }
         // One-shot chips act here and are not learned: replayed later they would mean nothing.
         // The tidy review chip opens a window; it is not sent or learned either.
         if self.take_tidy_chip(&chip)
@@ -675,8 +722,6 @@ impl Cabin {
                     }
                 }
             }
-            // No chip changes the model or effort: the router alone picks them.
-            ChipKind::Mode => {}
             // A shell chip never runs on tap: it puts the command in the box
             // so the person sees it, and Enter runs it through the same path
             // (and the same destructive-command confirm) as a typed `/sh`.
@@ -1589,5 +1634,37 @@ mod chip_apply_tests {
         chips[1].score = 95.0;
         super::super::glance::bias_chips_for_lane(&mut chips, super::super::CabinLane::Coding);
         assert_eq!(chips[0].id, "ship", "inside one band the lane decides");
+    }
+
+    #[test]
+    fn a_shown_row_and_its_outcome_reach_the_chip_log() {
+        let mut cabin = Cabin::quiet_for_test();
+        let row = vec![
+            chip_of("pred-a", ChipKind::Nav, 2.0),
+            chip_of("learn-b", ChipKind::Nav, 1.0),
+        ];
+        cabin.note_chips_shown("composer", &row);
+        cabin.note_chips_shown("composer", &row);
+        assert_eq!(
+            cabin.chip_memory.events.len(),
+            1,
+            "a repaint is one showing"
+        );
+        cabin.take_chip_act(crate::cards::ChipRowAct::Dismiss(1), &row);
+        assert!(matches!(
+            cabin.chip_memory.events[0].outcome,
+            Some(grokhub_core::ChipOutcome::Dismissed { slot: 1, .. })
+        ));
+        cabin.note_chips_shown("composer", &row);
+        assert_eq!(
+            cabin.chip_memory.events.len(),
+            2,
+            "after an act the next showing is new"
+        );
+        let json = serde_json::to_string(&cabin.chip_memory.events).expect("json");
+        assert!(
+            !json.contains("pred-a") && !json.contains("learn-b"),
+            "{json}"
+        );
     }
 }
