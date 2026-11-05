@@ -549,7 +549,8 @@ pub struct Capped {
     budget_ticks: i64,
     spent: AtomicI64,
     over: AtomicBool,
-    usage: Mutex<Usage>,
+    /// The current try's usage and its model calls.
+    usage: Mutex<(Usage, u32)>,
     billed_errors: AtomicI64,
 }
 
@@ -576,7 +577,7 @@ impl Capped {
             budget_ticks,
             spent: AtomicI64::new(0),
             over: AtomicBool::new(false),
-            usage: Mutex::new(Usage::default()),
+            usage: Mutex::new((Usage::default(), 0)),
             billed_errors: AtomicI64::new(0),
         }
     }
@@ -621,7 +622,9 @@ impl Capped {
         usage.cost_in_usd_ticks = self.price_of(model, &usage);
         self.spent
             .fetch_add(usage.cost_in_usd_ticks - reserved, Ordering::SeqCst);
-        let mut total = self.usage.lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = self.usage.lock().unwrap_or_else(|e| e.into_inner());
+        guard.1 += 1;
+        let total = &mut guard.0;
         total.input_tokens += usage.input_tokens;
         total.cached_tokens += usage.cached_tokens;
         total.output_tokens += usage.output_tokens;
@@ -675,7 +678,8 @@ impl Capped {
         self.over.load(Ordering::SeqCst)
     }
 
-    fn take_usage(&self) -> Usage {
+    /// The try's usage and model calls so far, reset for the next try.
+    fn take_usage(&self) -> (Usage, u32) {
         std::mem::take(&mut *self.usage.lock().unwrap_or_else(|e| e.into_inner()))
     }
 }
@@ -746,6 +750,10 @@ pub struct LiveOpts {
     pub provider: Provider,
     /// Run every task with this switch on and then off (one of [`AB_FLAGS`]).
     pub ab: Option<String>,
+    /// With `--ab`: the smallest change in cost per try, as a share, the run
+    /// is meant to detect. Set before the run; a run too noisy to see it
+    /// gets no verdict.
+    pub mde: f64,
 }
 
 impl LiveOpts {
@@ -758,6 +766,7 @@ impl LiveOpts {
             only: None,
             provider: Provider::Grok,
             ab: None,
+            mde: super::paired::DEFAULT_MDE,
         }
     }
 }
@@ -775,6 +784,9 @@ pub struct Attempt {
     /// How many times the Auto gate stopped to ask.
     pub asks: u32,
     pub compactions: u32,
+    /// Model calls the try made (subagents' included), so a change that
+    /// adds turns shows even when each turn got cheaper.
+    pub calls: u32,
 }
 
 pub struct LiveReport {
@@ -782,6 +794,8 @@ pub struct LiveReport {
     pub provider: Provider,
     /// The `--ab` switch, when there was one.
     pub ab: Option<String>,
+    /// The minimum detectable effect the `--ab` run was set to see.
+    pub mde: f64,
     pub k: u32,
     pub attempts: Vec<Attempt>,
     pub spent_ticks: i64,
@@ -934,7 +948,7 @@ fn one_try(
     crate::set_plan_session(&conversation_id, false);
     let wall_ms = start.elapsed().as_millis();
     let pass = error.is_none() && check(task, &reply, &ws) && check_trace(task, &trace);
-    let usage = capped.take_usage();
+    let (usage, calls) = capped.take_usage();
     let _ = std::fs::remove_dir_all(&dir);
     Attempt {
         task: task.id,
@@ -947,6 +961,7 @@ fn one_try(
         arm: arm.map(|(_, on)| on),
         asks: permits.asked(),
         compactions: trace.compactions,
+        calls,
     }
 }
 
@@ -993,6 +1008,7 @@ pub fn run_live(
         model: opts.model.clone(),
         provider: opts.provider,
         ab: flag.map(|f| f.name.to_string()),
+        mde: opts.mde,
         k: opts.k.max(1),
         attempts,
         spent_ticks: capped.spent_ticks(),
@@ -1104,18 +1120,18 @@ pub fn render_live(report: &LiveReport) -> String {
         report.billed_errors,
     );
     if let Some(flag) = &report.ab {
-        out.push_str(&render_ab(flag, a));
+        out.push_str(&render_ab(flag, a, report.mde));
     }
     out.push_str(
-        "| task | set | arm | try | pass | in | cached | out | cost | ms | asks | compactions | error |\n\
-         |---|---|---|---|---|---|---|---|---|---|---|---|---|\n",
+        "| task | set | arm | try | pass | in | cached | out | cost | calls | ms | asks | compactions | error |\n\
+         |---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n",
     );
     let mut tries: std::collections::BTreeMap<(&str, Option<bool>), u32> = Default::default();
     for x in a {
         let n = tries.entry((x.task, x.arm)).or_default();
         *n += 1;
         out.push_str(&format!(
-            "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
+            "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
             x.task,
             if x.set == TaskSet::Capability {
                 "cap"
@@ -1129,6 +1145,7 @@ pub fn render_live(report: &LiveReport) -> String {
             x.usage.cached_tokens,
             x.usage.output_tokens + x.usage.reasoning_tokens,
             usd(x.usage.cost_in_usd_ticks),
+            x.calls,
             x.wall_ms,
             x.asks,
             x.compactions,
@@ -1146,23 +1163,51 @@ fn arm_label(arm: Option<bool>) -> &'static str {
     }
 }
 
-/// One row per arm: pass rate, cost, cached share and p50 wall, so the switch's
-/// effect reads at a glance. Only tasks that got a try in both arms count.
-fn render_ab(flag: &str, a: &[Attempt]) -> String {
+/// One paired metric row: its name, its interval, and how a value prints.
+type MetricRow<'a> = (
+    &'a str,
+    Option<super::paired::Interval>,
+    &'a dyn Fn(f64) -> String,
+);
+
+/// One row per arm (pass rate, cost, cost per solved task, cached share,
+/// model calls, p50 wall), then the paired per-task comparison and what the
+/// run supports saying. Only tasks that got a try in both arms count.
+fn render_ab(flag: &str, a: &[Attempt], mde: f64) -> String {
+    use super::paired::{cost_per_solved, summarize, verdict_line, ArmTally, Pair};
     let both = |task: &str| {
         a.iter().any(|x| x.task == task && x.arm == Some(true))
             && a.iter().any(|x| x.task == task && x.arm == Some(false))
     };
     let mut out = format!(
-        "## A/B: {flag}\n\n| arm | pass@1 | cost | cached share | p50 wall | gate asks |\n|---|---|---|---|---|---|\n"
+        "## A/B: {flag}\n\n| arm | pass@1 | cost | cost per solved task | cached share | model calls per try | p50 wall | gate asks |\n|---|---|---|---|---|---|---|---|\n"
     );
-    for on in [true, false] {
+    let mut pairs: Vec<Pair> = Vec::new();
+    for x in a.iter().filter(|x| x.arm.is_some() && both(x.task)) {
+        let at = match pairs.iter().position(|p| p.task == x.task) {
+            Some(at) => at,
+            None => {
+                pairs.push(Pair {
+                    task: x.task.to_string(),
+                    on: ArmTally::default(),
+                    off: ArmTally::default(),
+                });
+                pairs.len() - 1
+            }
+        };
+        let arm = if x.arm == Some(true) {
+            &mut pairs[at].on
+        } else {
+            &mut pairs[at].off
+        };
+        arm.add(x.pass, x.usage.cost_in_usd_ticks, x.calls);
+    }
+    let summary = summarize(pairs, mde);
+    for (on, tally) in [(true, &summary.on), (false, &summary.off)] {
         let rows: Vec<&Attempt> = a
             .iter()
             .filter(|x| x.arm == Some(on) && both(x.task))
             .collect();
-        let pass = rows.iter().filter(|x| x.pass).count();
-        let cost: i64 = rows.iter().map(|x| x.usage.cost_in_usd_ticks).sum();
         let input: u64 = rows.iter().map(|x| x.usage.input_tokens).sum();
         let cached: u64 = rows.iter().map(|x| x.usage.cached_tokens).sum();
         let mut walls: Vec<u128> = rows.iter().map(|x| x.wall_ms).collect();
@@ -1174,13 +1219,62 @@ fn render_ab(flag: &str, a: &[Attempt]) -> String {
             format!("{:.1}%", cached as f64 * 100.0 / input as f64)
         };
         out.push_str(&format!(
-            "| {} | {} | {} | {} | {} ms | {} |\n",
+            "| {} | {} | {} | {} | {} | {:.1} | {} ms | {} |\n",
             arm_label(Some(on)),
-            share(pass, rows.len()),
-            usd(cost),
+            share(tally.solved as usize, tally.tries as usize),
+            usd(tally.cost_ticks),
+            cost_per_solved(tally)
+                .map(|t| usd(t.round() as i64))
+                .unwrap_or_else(|| "n/a".into()),
             cached_share,
+            tally.calls_per_try(),
             p50,
             rows.iter().map(|x| x.asks).sum::<u32>(),
+        ));
+    }
+    out.push_str(&format!(
+        "\n**Verdict:** {}\n\nPaired per task, on minus off, over {} task(s); minimum detectable effect {:.0}% of cost per try.\n\n| metric | mean | 95% CI |\n|---|---|---|\n",
+        verdict_line(&summary.verdict),
+        summary.pairs.len(),
+        mde * 100.0
+    ));
+    let ticks = |t: f64| {
+        let sign = if t < 0.0 { "-" } else { "+" };
+        format!("{sign}{}", usd(t.abs().round() as i64))
+    };
+    let rows: [MetricRow<'_>; 3] = [
+        ("solve rate", summary.solve, &|v| {
+            format!("{:+.1} pts", v * 100.0)
+        }),
+        ("cost per try", summary.cost, &ticks),
+        ("model calls per try", summary.calls, &|v| {
+            format!("{v:+.2}")
+        }),
+    ];
+    for (name, interval, fmt) in rows {
+        match interval {
+            Some(i) => out.push_str(&format!(
+                "| {name} | {} | {} to {} |\n",
+                fmt(i.mean),
+                fmt(i.low),
+                fmt(i.high)
+            )),
+            None => out.push_str(&format!("| {name} | n/a | n/a |\n")),
+        }
+    }
+    out.push_str("\n| task | solved on | solved off | cost on | cost off | calls on | calls off |\n|---|---|---|---|---|---|---|\n");
+    for p in &summary.pairs {
+        out.push_str(&format!(
+            "| {} | {}/{} | {}/{} | {} | {} | {} | {} |\n",
+            p.task,
+            p.on.solved,
+            p.on.tries,
+            p.off.solved,
+            p.off.tries,
+            usd(p.on.cost_ticks),
+            usd(p.off.cost_ticks),
+            p.on.calls,
+            p.off.calls,
         ));
     }
     out.push('\n');

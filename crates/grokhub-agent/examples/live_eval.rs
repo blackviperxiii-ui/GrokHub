@@ -3,12 +3,17 @@
 //!
 //! GROKHUB_EVAL_API_KEY=... cargo run -p grokhub-agent --example live_eval -- \
 //!     --budget-usd 1.00 [--k 3] [--model grok-4.3] [--effort low] [--only recall] \
-//!     [--ab prefix_cache] [--provider grok|openrouter|local] [--out report.md]
+//!     [--ab prefix_cache] [--mde 10] [--provider grok|openrouter|local] [--out report.md]
 //!
 //! `--provider openrouter` sends every call to `--provider-model` (an OpenRouter
 //! model id) with the key in GROKHUB_EVAL_OPENROUTER_KEY. `--provider local`
 //! sends them to the model server at GROKHUB_EVAL_LOCAL_URL (loopback only),
 //! model `--provider-model`, token GROKHUB_EVAL_LOCAL_TOKEN.
+//!
+//! `--ab` compares the switch on and off task by task and reports billed
+//! dollars per solved task with 95% intervals. `--mde` is the smallest cost
+//! change, in percent, the run is meant to see (default 10); a run too small
+//! or too noisy to see it says so instead of giving a verdict.
 //!
 //! Run it before changing a default; it is never part of pull-request CI.
 //! It runs against a throwaway config folder, so your own rules, grants,
@@ -45,6 +50,15 @@ fn main() {
             "--ab" => {
                 ab_flag(&value).unwrap_or_else(|e| fail(&e));
                 opts.ab = Some(value);
+            }
+            "--mde" => {
+                let pct: f64 = value
+                    .parse()
+                    .unwrap_or_else(|_| fail("--mde takes a percent, like 10"));
+                if !(pct > 0.0 && pct < 100.0) {
+                    fail("--mde must be between 0 and 100");
+                }
+                opts.mde = pct / 100.0;
             }
             "--provider" => opts.provider = Provider::parse(&value).unwrap_or_else(|e| fail(&e)),
             "--provider-model" => provider_model = Some(value),
