@@ -689,3 +689,28 @@ fn other_providers_get_the_digest_and_xai_gets_only_the_sealed_item() {
     let open = openai_body("m", None, &bare);
     assert_eq!(open["messages"].as_array().unwrap().len(), 1);
 }
+
+#[test]
+fn stop_during_a_hung_compaction_call_returns_at_once() {
+    let (_dir, _guard) = config("stop");
+    let server = mock(Reply::Hang(Duration::from_secs(8)), summary_reply());
+    let client = server.client();
+    let cancel = CancelToken::new();
+    let stopper = cancel.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(200));
+        stopper.cancel();
+    });
+    let req = CompactRequest {
+        model: "grok-4.7".into(),
+        input: history(),
+        conversation_id: "conv-stop".into(),
+        timeout: Duration::from_secs(60),
+    };
+    let started = Instant::now();
+    let out = client.compact(&req, &cancel).expect("server compaction");
+    let took = started.elapsed();
+    assert!(matches!(out, Err(ClientError::Cancelled)), "{out:?}");
+    assert!(took < Duration::from_secs(1), "took {took:?}");
+    assert_eq!(server.paths(), vec!["/v1/responses/compact"]);
+}

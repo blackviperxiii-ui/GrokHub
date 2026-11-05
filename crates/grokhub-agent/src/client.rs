@@ -776,6 +776,13 @@ fn refused_body(err: &ClientError) -> bool {
 /// Largest compaction reply read (the opaque item grows with the conversation).
 const COMPACT_REPLY_CAP: u64 = 64 * 1024 * 1024;
 
+/// What the compaction thread hands back: the body of a 2xx, or any other
+/// answer (an error status, or none) for [`XaiClient::answered`] to map.
+enum CompactReply {
+    Body(std::io::Result<String>),
+    Answer(Result<grokhub_core::http::Response, grokhub_core::http::Error>),
+}
+
 /// A `response.compaction` reply: its `output` items as the exact JSON text
 /// they came in, `usage`, and `dropped_message_count`.
 pub fn parse_compact_reply(body: &str) -> Result<CompactOutput, ClientError> {
@@ -1099,6 +1106,23 @@ impl XaiClient {
         call_timeout: Option<Duration>,
         body: Value,
     ) -> Result<grokhub_core::http::Response, ClientError> {
+        let call = self.guarded_post(url, conversation_id, accept, call_timeout)?;
+        let sent = crate::timing::lap("client:to_headers");
+        let response = call.send_json(body);
+        drop(sent);
+        self.answered(response)
+    }
+
+    /// The POST [`Self::post_guarded`] sends, built and checked but not sent:
+    /// only an xAI model endpoint, a batch call or a loopback test server, and
+    /// only once the egress guard lets it go.
+    fn guarded_post(
+        &self,
+        url: &str,
+        conversation_id: &str,
+        accept: &str,
+        call_timeout: Option<Duration>,
+    ) -> Result<grokhub_core::http::Request, ClientError> {
         // Only the listed xAI endpoints, a batch call, or a loopback test server.
         if !loopback_http(url) && !XAI_MODEL_ENDPOINTS.contains(&url) && !batch_url(url) {
             return Err(ClientError::Protocol(format!(
@@ -1130,10 +1154,7 @@ impl XaiClient {
         if let Some(limit) = call_timeout {
             call = call.timeout(limit);
         }
-        let sent = crate::timing::lap("client:to_headers");
-        let response = call.send_json(body);
-        drop(sent);
-        self.answered(response)
+        Ok(call)
     }
 
     /// The Batch API's reads (status and results): batch URLs only, then the
@@ -1290,6 +1311,10 @@ impl XaiClient {
         }
     }
 
+    /// One compaction call. The endpoint answers only when it is done, so the
+    /// call runs on its own thread and Stop is checked every [`READ_POLL`]: a
+    /// Stop returns at once instead of after up to [`crate::compact`]'s 90 s cap.
+    /// The abandoned call ends on its own when its timeout runs out.
     fn compact_once(
         &self,
         url: &str,
@@ -1298,33 +1323,74 @@ impl XaiClient {
         limit: Option<Duration>,
         keyed: bool,
     ) -> Result<CompactOutput, ClientError> {
+        use std::sync::mpsc::RecvTimeoutError;
         if cancel.is_cancelled() {
             return Err(ClientError::Cancelled);
         }
-        let response = self.post_guarded(
-            url,
-            &req.conversation_id,
-            "application/json",
-            limit,
-            if keyed {
-                keyed_compact_body(req)
-            } else {
-                compact_body(req)
-            },
-        )?;
-        let mut text = String::new();
-        response
-            .into_reader()
-            .take(COMPACT_REPLY_CAP)
-            .read_to_string(&mut text)
-            .map_err(|e| {
-                let msg = e.to_string();
-                if msg.to_ascii_lowercase().contains("timed out") {
-                    ClientError::IdleTimeout
-                } else {
-                    ClientError::Transport(msg)
+        let call = self.guarded_post(url, &req.conversation_id, "application/json", limit)?;
+        let body = if keyed {
+            keyed_compact_body(req)
+        } else {
+            compact_body(req)
+        };
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let spawned = std::thread::Builder::new()
+            .name("compact-read".into())
+            .spawn(move || {
+                let reply = match call.send_json(body) {
+                    Ok(resp) if resp.status() < 400 => {
+                        let mut text = String::new();
+                        CompactReply::Body(
+                            resp.into_reader()
+                                .take(COMPACT_REPLY_CAP)
+                                .read_to_string(&mut text)
+                                .map(|_| text),
+                        )
+                    }
+                    other => CompactReply::Answer(other),
+                };
+                let _ = tx.send(reply);
+            });
+        if let Err(e) = spawned {
+            return Err(ClientError::Transport(e.to_string()));
+        }
+        let reply = loop {
+            if cancel.is_cancelled() {
+                return Err(ClientError::Cancelled);
+            }
+            match rx.recv_timeout(READ_POLL) {
+                Ok(reply) => break reply,
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err(ClientError::Transport(
+                        "the compaction call stopped without an answer".into(),
+                    ))
                 }
-            })?;
+            }
+        };
+        let text = match reply {
+            CompactReply::Body(read) => {
+                grokhub_core::connectivity::note_global_transport_success(grokhub_core::now_ms());
+                read.map_err(|e| {
+                    let msg = e.to_string();
+                    if msg.to_ascii_lowercase().contains("timed out") {
+                        ClientError::IdleTimeout
+                    } else {
+                        ClientError::Transport(msg)
+                    }
+                })?
+            }
+            CompactReply::Answer(answer) => {
+                // Only an error status or no answer lands here.
+                let resp = self.answered(answer)?;
+                let mut text = String::new();
+                resp.into_reader()
+                    .take(COMPACT_REPLY_CAP)
+                    .read_to_string(&mut text)
+                    .map_err(|e| ClientError::Transport(e.to_string()))?;
+                text
+            }
+        };
         if cancel.is_cancelled() {
             return Err(ClientError::Cancelled);
         }
