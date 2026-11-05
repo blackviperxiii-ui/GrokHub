@@ -453,6 +453,8 @@ fn run_compact_pass(
                 input.depth,
                 input.agent_id,
             ));
+            // Item 34: a compaction is a boundary where the route may move.
+            crate::route::boundary::note_compaction(input.conversation_id);
             usage.add(&done.usage);
             on_event(LoopEvent::Compact {
                 started: false,

@@ -105,10 +105,18 @@ pub fn drain_side_events() -> Vec<SideEvent> {
 }
 
 pub fn spawn_schema() -> Value {
+    let mut description = String::from(
+        "Run a child agent. type is explore (read-only) or general (same permissions as the parent). isolation worktree uses git worktree add. background returns a task id.",
+    );
+    if crate::route::boundary::enabled(&crate::perm::config_dir()) {
+        description.push_str(
+            " A general helper's prompt needs a brief, one labeled line each: Goal:, Constraints:, Edge cases:, Done when:, Files:.",
+        );
+    }
     json!({
         "type": "function",
         "name": "spawn_subagent",
-        "description": "Run a child agent. type is explore (read-only) or general (same permissions as the parent). isolation worktree uses git worktree add. background returns a task id.",
+        "description": description,
         "parameters": {
             "type": "object",
             "properties": {
@@ -203,6 +211,21 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         Ok(spec) => spec,
         Err(err) => return (ToolOutput::err(err), Usage::default()),
     };
+    // Item 34: with boundary routing on, a general helper needs a brief and
+    // runs fresh on the cheap lane rather than forking the chat.
+    let briefed = !spec.explore
+        && !spec.worktree
+        && spec.persona.trim().is_empty()
+        && crate::route::boundary::enabled(&crate::perm::config_dir());
+    if briefed {
+        let missing = crate::route::boundary::missing_brief(&spec.prompt);
+        if !missing.is_empty() {
+            return (
+                ToolOutput::err(crate::route::boundary::brief_refusal(&missing)),
+                Usage::default(),
+            );
+        }
+    }
     let child_cancel = CancelToken::child_of(call.cancel);
     let steer = SteerQueue::new();
     let wt_cell: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
@@ -265,11 +288,14 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
     // A plain general child of the chat forks it: same system, tools and
     // history, so its first request reuses the chat's cached prefix. An
     // explore child (other tools), a persona or a worktree starts fresh.
-    let fork =
-        (call.depth == 0 && !spec.explore && spec.persona.trim().is_empty() && worktree.is_none())
-            .then(|| parent_request(call.session))
-            .flatten()
-            .filter(|req| req.model == call.model);
+    let fork = (call.depth == 0
+        && !briefed
+        && !spec.explore
+        && spec.persona.trim().is_empty()
+        && worktree.is_none())
+    .then(|| parent_request(call.session))
+    .flatten()
+    .filter(|req| req.model == call.model);
     let job = ChildJob {
         client: Arc::clone(&client),
         permits: call
@@ -315,6 +341,7 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         origin: crate::harness::current_origin(),
         fork,
         config: crate::perm::pinned_config(),
+        class: briefed.then_some(crate::route::boundary::HELPER_CLASS),
     };
     if spec.background {
         thread::spawn(move || run_job(job, None));
@@ -406,6 +433,8 @@ struct ChildJob {
     fork: Option<Arc<ParentRequest>>,
     /// The parent thread's pinned config folder: the child reads the same rules and grants.
     config: Option<PathBuf>,
+    /// Item 34: the route class a briefed helper runs under.
+    class: Option<&'static str>,
 }
 
 struct ChildDone {
@@ -479,6 +508,7 @@ fn run_child(job: &ChildJob, tx: &Option<Sender<ChildNote>>) -> ChildDone {
         hub: Arc::clone(&job.tasks),
     };
     let agent_id = job.agent_id.clone();
+    let _class = job.class.map(crate::route::live::ClassScope::enter);
     let _fork = job
         .fork
         .as_ref()
@@ -2080,6 +2110,70 @@ mod tests {
         for (depth, dir_seen) in &seen {
             assert_eq!(dir_seen, &cfg, "depth {depth} read another config folder");
         }
+        let _ = drain_side_events();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn with_boundary_routing_a_general_helper_needs_a_brief_and_starts_fresh() {
+        let dir = scratch("briefed");
+        let cfg = dir.join("cfg");
+        std::fs::create_dir_all(&cfg).unwrap();
+        std::fs::write(cfg.join(crate::route::boundary::CONFIG), "enabled = true\n").unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        let sid = session("briefed");
+        let parent_id = sid.clone();
+        let brief = "Goal: find the bug\nConstraints: read only\nEdge cases: none\n\
+                     Done when: the cause is named\nFiles: src/lib.rs";
+        // (depth, input, class) of every request.
+        type Seen = Vec<(usize, Vec<InputItem>, &'static str)>;
+        let seen: Arc<Mutex<Seen>> = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::clone(&seen);
+        let brief_args = spawn_args(brief, "general", false, "none");
+        let client = fake(&sid, move |req, _cancel, n| {
+            let depth = depth_of(&parent_id, &req.conversation_id);
+            log.lock().unwrap().push((
+                depth,
+                req.input.clone(),
+                crate::route::live::current_class(),
+            ));
+            match (depth, n) {
+                (0, 0) => Ok(calls_turn(
+                    vec![call(
+                        "bare",
+                        "spawn_subagent",
+                        &spawn_args("find the bug", "general", false, "none"),
+                    )],
+                    Usage::default(),
+                )),
+                (0, 1) => Ok(calls_turn(
+                    vec![call("briefed", "spawn_subagent", &brief_args)],
+                    Usage::default(),
+                )),
+                (1, _) => Ok(text_turn("child-done", Usage::default())),
+                _ => Ok(text_turn("parent-done", Usage::default())),
+            }
+        });
+        let (out, history) = run_parent(
+            &client,
+            &dir,
+            &sid,
+            chat(PermMode::Always, false, true),
+            &closed(),
+            &CancelToken::new(),
+            &mut |_| {},
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        let outputs = joined_outputs(&history);
+        assert!(outputs.contains("needs a brief"), "{outputs}");
+        assert!(outputs.contains("child-done"), "{outputs}");
+        let seen = seen.lock().unwrap();
+        let parent = &seen.iter().find(|(d, _, _)| *d == 0).unwrap().1;
+        let children: Vec<_> = seen.iter().filter(|(d, _, _)| *d == 1).collect();
+        assert_eq!(children.len(), 1, "only the briefed helper ran");
+        let (_, input, class) = children[0];
+        assert!(!input.starts_with(parent), "a briefed helper starts fresh");
+        assert_eq!(*class, crate::route::boundary::HELPER_CLASS);
         let _ = drain_side_events();
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -12,6 +12,7 @@ pub mod ask;
 pub mod ask_set;
 pub mod attention;
 pub mod bandit;
+pub mod boundary;
 pub mod budget;
 pub mod cabin;
 pub mod capabilities;
