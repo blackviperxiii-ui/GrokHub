@@ -372,8 +372,6 @@ fn run_technique_arm(
     let cfg = scratch(&format!("tech-{}", technique.id()))?;
     arm_settings(technique, &cfg)?;
     let _guard = ConfigGuard::set(&cfg);
-    // Clear test overrides so on-disk arm_settings win.
-    crate::compact::set_tool_output_compact_for_tests(None);
     let mut metrics = ArmMetrics::default();
     let mut tasks = Vec::with_capacity(fixtures.len());
     for task in fixtures {

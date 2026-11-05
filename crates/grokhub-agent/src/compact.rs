@@ -40,6 +40,7 @@ pub enum CompactBackend {
 /// compaction falls back to the summary, so a slow endpoint can't hold the turn.
 pub const SERVER_COMPACT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
 
+#[cfg(test)]
 static SERVER_COMPACT_TIMEOUT_TEST: std::sync::Mutex<Option<std::time::Duration>> =
     std::sync::Mutex::new(None);
 
@@ -51,10 +52,14 @@ fn set_server_compact_timeout_for_tests(limit: Option<std::time::Duration>) {
 }
 
 fn server_compact_timeout() -> std::time::Duration {
-    SERVER_COMPACT_TIMEOUT_TEST
+    #[cfg(test)]
+    if let Some(limit) = *SERVER_COMPACT_TIMEOUT_TEST
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .unwrap_or(SERVER_COMPACT_TIMEOUT)
+    {
+        return limit;
+    }
+    SERVER_COMPACT_TIMEOUT
 }
 
 /// True when `{config_dir}/compaction.toml` sets `backend = "summary"`.
@@ -131,10 +136,12 @@ impl Default for ToolOutputCompactSettings {
     }
 }
 
+#[cfg(test)]
 static TOOL_OUTPUT_COMPACT_TEST: std::sync::Mutex<Option<ToolOutputCompactSettings>> =
     std::sync::Mutex::new(None);
 
 /// Test hook: `Some(settings)` overrides the on-disk file; `None` reads the file again.
+#[cfg(test)]
 pub fn set_tool_output_compact_for_tests(settings: Option<ToolOutputCompactSettings>) {
     *TOOL_OUTPUT_COMPACT_TEST
         .lock()
@@ -142,6 +149,7 @@ pub fn set_tool_output_compact_for_tests(settings: Option<ToolOutputCompactSetti
 }
 
 pub fn tool_output_compact_settings(config_dir: &Path) -> ToolOutputCompactSettings {
+    #[cfg(test)]
     if let Some(settings) = *TOOL_OUTPUT_COMPACT_TEST
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -806,10 +814,14 @@ pub fn eval_tool_output_compact_native() -> (&'static str, u32) {
         return ("failed: scratch", 0);
     }
     let _guard = crate::perm::ConfigGuard::set(&dir);
-    set_tool_output_compact_for_tests(Some(ToolOutputCompactSettings {
-        enabled: true,
-        min_bytes: 100,
-    }));
+    if std::fs::write(
+        dir.join(TOOL_OUTPUT_COMPACT_CONFIG),
+        "enabled = true\nmin_bytes = 100\n",
+    )
+    .is_err()
+    {
+        return ("failed: scratch", 0);
+    }
     let big = "LINE\n".repeat(80);
     let script = EvalToolOutputScript {
         summary: "errors: none; lines: 80".into(),
@@ -828,7 +840,6 @@ pub fn eval_tool_output_compact_native() -> (&'static str, u32) {
         "run_terminal_command",
         &big,
     );
-    set_tool_output_compact_for_tests(None);
     let turns = script.turns();
     let ok = match outcome {
         Ok(ToolOutputCompactOutcome::Replaced { text, .. }) => {

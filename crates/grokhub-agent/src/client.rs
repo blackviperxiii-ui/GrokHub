@@ -895,6 +895,15 @@ pub fn responses_body(req: &ResponsesRequest) -> Value {
         // History is managed here, so xAI never needs to keep a copy of a
         // request or its reply, reasoning or not.
         body["store"] = json!(false);
+        if body["tools"]
+            .as_array()
+            .is_some_and(|tools| tools.iter().any(|t| t["type"] == "function"))
+        {
+            // Said outright, so a batch of read-only calls in one reply never
+            // hangs on a server default changing. Hosted search alone runs
+            // server-side and needs no say.
+            body["parallel_tool_calls"] = json!(true);
+        }
         if returns_encrypted_reasoning(model) {
             // Ask for the reasoning back and pass it in on the next request
             // ([`InputItem::Reasoning`]).
@@ -2235,6 +2244,7 @@ mod tests {
             "prompt_cache_key",
             "include",
             "text",
+            "parallel_tool_calls",
         ];
         const NEVER: &[&str] = &[
             "context_management",
@@ -2317,6 +2327,7 @@ mod tests {
         assert_eq!(body["store"], false);
         assert_eq!(body["include"], json!(["reasoning.encrypted_content"]));
         assert_eq!(body["prompt_cache_key"], "c");
+        assert_eq!(body["parallel_tool_calls"], true);
         let tools = body["tools"].as_array().unwrap();
         assert!(tools
             .iter()
