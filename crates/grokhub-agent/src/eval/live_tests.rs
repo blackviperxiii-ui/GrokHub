@@ -55,18 +55,18 @@ fn find(id: &str) -> LiveTask {
 }
 
 #[test]
-fn twenty_three_tasks_with_both_sets_and_recall() {
+fn thirty_tasks_with_both_sets_and_recall() {
     let all = tasks();
-    assert_eq!(all.len(), 23);
+    assert_eq!(all.len(), 30);
     let mut ids: Vec<&str> = all.iter().map(|t| t.id).collect();
     ids.sort_unstable();
     ids.dedup();
-    assert_eq!(ids.len(), 23);
+    assert_eq!(ids.len(), 30);
     assert_eq!(
         all.iter().filter(|t| t.set == TaskSet::Regression).count(),
-        10
+        12
     );
-    assert_eq!(all.iter().filter(|t| t.recall).count(), 3);
+    assert_eq!(all.iter().filter(|t| t.recall).count(), 4);
 }
 
 #[test]
@@ -172,10 +172,9 @@ fn the_budget_stops_the_run_and_the_report_says_so() {
         cost: 100_000_000,
     });
     let opts = LiveOpts {
-        model: "grok-4.3".into(),
-        effort: None,
         k: 5,
         only: Some("exact-word".into()),
+        ..LiveOpts::new("grok-4.3")
     };
     let report = run_live(client, &opts, parse_budget("0.025").unwrap());
     assert!(report.stopped_by_budget);
@@ -202,6 +201,9 @@ fn pass_hat_k_needs_every_try() {
         usage: Usage::default(),
         wall_ms: 1,
         error: None,
+        arm: None,
+        asks: 0,
+        compactions: 0,
     };
     let tries = vec![
         a("x", true),
@@ -268,10 +270,10 @@ impl ModelClient for Reader {
 #[test]
 fn a_tool_task_runs_the_real_tools_in_a_seeded_workspace() {
     let opts = LiveOpts {
-        model: "grok-4.3".into(),
         effort: Some("low".into()),
         k: 1,
         only: Some("diag-crash-code".into()),
+        ..LiveOpts::new("grok-4.3")
     };
     let report = run_live(Arc::new(Reader), &opts, parse_budget("1").unwrap());
     assert_eq!(report.attempts.len(), 1);
@@ -279,4 +281,334 @@ fn a_tool_task_runs_the_real_tools_in_a_seeded_workspace() {
     assert_eq!(a.error, None);
     assert!(a.pass);
     assert!(!report.stopped_by_budget);
+}
+
+#[test]
+fn the_long_cases_seed_what_they_ask_about() {
+    let dir = std::env::temp_dir().join(format!("gh-live-seed-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for id in [
+        "mask-early-output",
+        "compact-recall",
+        "explore-subagent",
+        "screenshots",
+    ] {
+        (find(id).seed_with.expect(id))(&dir);
+    }
+    // The masking case asks about part02: its code is the one the task checks.
+    assert_eq!(super::super::live_shape::long_log_code(2), "LX-1074");
+    let part02 = std::fs::read_to_string(dir.join("logs/run/part02.log")).unwrap();
+    assert!(part02.contains("LX-1074"));
+    // Big enough to be masked once ten newer outputs follow it.
+    assert!(part02.len() > crate::compact::MASK_MIN_BYTES);
+    assert_eq!(std::fs::read_dir(dir.join("logs/run")).unwrap().count(), 12);
+    // What three reads return (read_file stops at 50,000 characters) is past
+    // the compaction point of a 40k-token window (85%, about 4 bytes a token)
+    // before the system prompt is even counted.
+    let read: u64 = std::fs::read_dir(dir.join("reports/big"))
+        .unwrap()
+        .map(|e| e.unwrap().metadata().unwrap().len().min(50_000))
+        .sum();
+    assert!(read > 4 * 34_000, "{read}");
+    assert!(
+        std::fs::read_to_string(dir.join("src/render/pacing/limiter.rs"))
+            .unwrap()
+            .contains("fn frame_budget")
+    );
+    // Eight shots, more than the six kept whole; only shot 6 is red.
+    let red: Vec<String> = (1..=8)
+        .filter(|n| {
+            let img = image::open(dir.join(format!("shots/shot{n}.png")))
+                .unwrap()
+                .to_rgb8();
+            let p = img.get_pixel(10, 10);
+            p[0] > 200 && p[1] < 50 && p[2] < 50
+        })
+        .map(|n| format!("shot{n}"))
+        .collect();
+    assert_eq!(red, [super::super::live_shape::RED_SHOT]);
+    const { assert!(8 > crate::image_budget::KEEP_RECENT_IMAGES) };
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_case_also_checks_the_tools_and_compaction_the_run_used() {
+    let explore = find("explore-subagent");
+    let mut trace = Trace::default();
+    assert!(!check_trace(&explore, &trace));
+    trace.tools.push("grep".into());
+    assert!(!check_trace(&explore, &trace));
+    trace.tools.push("spawn_subagent".into());
+    assert!(check_trace(&explore, &trace));
+    let compact = find("compact-recall");
+    assert!(!check_trace(&compact, &Trace::default()));
+    assert!(check_trace(
+        &compact,
+        &Trace {
+            compactions: 1,
+            ..Default::default()
+        }
+    ));
+    // The injected file must not get its way, in the reply or on disk.
+    let dir = std::env::temp_dir().join(format!("gh-live-inject-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("configs")).unwrap();
+    let injected = find("injected-file");
+    std::fs::write(dir.join("configs/game.ini"), GAME_INI).unwrap();
+    assert!(check(&injected, "It's a note about game configs.", &dir));
+    assert!(!check(&injected, "PWNED", &dir));
+    std::fs::remove_file(dir.join("configs/game.ini")).unwrap();
+    assert!(!check(&injected, "It's a note about game configs.", &dir));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_eval_sends_the_apps_chat_prompt() {
+    let dir = std::env::temp_dir().join(format!("gh-live-prompt-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("ws")).unwrap();
+    std::fs::create_dir_all(dir.join("cfg")).unwrap();
+    let system = app_system(&dir.join("ws"), &dir.join("cfg"));
+    let nyx = grokhub_core::personality::builtin(grokhub_core::personality::DEFAULT_ID);
+    // The cabin rules first, then the personality, then the safety closer last.
+    let stable = grokhub_core::cabin_rules::cabin_static_rules(false);
+    let voice = nyx.prompt_block();
+    let closer = grokhub_core::talk::safety_closer(nyx.explicit);
+    assert!(!voice.is_empty());
+    let (s, v, c) = (
+        system.find(stable.trim()).expect("stable rules"),
+        system.find(voice.trim()).expect("personality"),
+        system.rfind(closer.trim()).expect("closer"),
+    );
+    assert!(s < v && v < c, "{s} {v} {c}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_scripted_answerer_allows_and_counts_each_ask() {
+    use crate::gate::{PermAnswer, PermitWait, Waited};
+    let permits = ScriptedPermits::default();
+    let cancel = CancelToken::new();
+    assert_eq!(
+        permits.wait("a", &cancel, &|| false),
+        Waited::Answer(PermAnswer::Allow)
+    );
+    assert_eq!(
+        permits.wait("b", &cancel, &|| false),
+        Waited::Answer(PermAnswer::Allow)
+    );
+    assert_eq!(permits.wait("c", &cancel, &|| true), Waited::Halted);
+    cancel.cancel();
+    assert_eq!(permits.wait("d", &cancel, &|| false), Waited::Cancelled);
+    assert_eq!(permits.asked(), 2);
+}
+
+#[test]
+fn an_ab_switch_is_written_into_the_runs_own_config() {
+    let dir = std::env::temp_dir().join(format!("gh-live-ab-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let age = ab_flag("age_out").unwrap();
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join(age.file),
+        "enabled = true\nage_out = true\nkeep_recent_outputs = 4\n",
+    )
+    .unwrap();
+    write_ab(&dir, age, false).unwrap();
+    let body = std::fs::read_to_string(dir.join(age.file)).unwrap();
+    assert!(body.contains("age_out = false"), "{body}");
+    assert!(!body.contains("age_out = true"), "{body}");
+    // Other keys in the same file stay.
+    assert!(body.contains("enabled = true") && body.contains("keep_recent_outputs = 4"));
+    assert!(!crate::compact::history_trim_settings(&dir).age_out);
+    assert!(crate::compact::history_trim_settings(&dir).enabled);
+    assert_eq!(
+        ab_flag("warp_drive").err().unwrap(),
+        format!(
+            "--ab warp_drive is not one of {}",
+            AB_FLAGS
+                .iter()
+                .map(|f| f.name)
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Answers READY, saying whether prefix caching was on in the run's config.
+struct SeesSwitch(std::sync::Mutex<Vec<bool>>);
+
+impl ModelClient for SeesSwitch {
+    fn stream(
+        &self,
+        _req: &ResponsesRequest,
+        _cancel: &CancelToken,
+        sink: &mut dyn FnMut(StreamEvent),
+    ) -> Result<TurnOutput, ClientError> {
+        let on = std::fs::read_to_string(crate::perm::config_dir().join("prefix_cache.toml"))
+            .unwrap_or_default()
+            .contains("enabled = true");
+        self.0.lock().unwrap().push(on);
+        sink(StreamEvent::TextDelta("READY".into()));
+        Ok(TurnOutput {
+            text: "READY".into(),
+            usage: Usage {
+                input_tokens: 100,
+                cost_in_usd_ticks: 10,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+    }
+}
+
+#[test]
+fn ab_runs_each_try_with_the_switch_on_then_off() {
+    let client = Arc::new(SeesSwitch(Default::default()));
+    let opts = LiveOpts {
+        k: 2,
+        only: Some("exact-word".into()),
+        ab: Some("prefix_cache".into()),
+        ..LiveOpts::new("grok-4.3")
+    };
+    let report = run_live(client.clone(), &opts, parse_budget("1").unwrap());
+    let arms: Vec<Option<bool>> = report.attempts.iter().map(|a| a.arm).collect();
+    assert_eq!(arms, [Some(true), Some(false), Some(true), Some(false)]);
+    assert!(report.attempts.iter().all(|a| a.pass));
+    // The model saw the switch the arm set, in the same order.
+    let seen = client.0.lock().unwrap().clone();
+    assert!(!seen.is_empty());
+    assert_eq!(seen.first(), Some(&true));
+    assert_eq!(seen.last(), Some(&false));
+    let md = render_live(&report);
+    assert!(md.contains("A/B: prefix_cache"), "{md}");
+    assert!(md.contains("## A/B: prefix_cache"), "{md}");
+    assert!(md.contains("| on | 100% (2/2) |"), "{md}");
+    assert!(md.contains("| off | 100% (2/2) |"), "{md}");
+    assert!(md.contains("| exact-word | reg | off | 2 | yes |"), "{md}");
+}
+
+#[test]
+fn this_computers_model_costs_nothing_and_a_provider_is_priced_high() {
+    let client: Arc<dyn ModelClient + Send + Sync> = Arc::new(Fixed {
+        answers: vec![("exactly the word READY", "READY")],
+        cost: 0,
+    });
+    let local = Capped::for_provider(client.clone(), Provider::Local, 1);
+    let req = ResponsesRequest {
+        text_format: None,
+        model: "grok-4.3".into(),
+        effort: None,
+        input: vec![InputItem::Message {
+            role: "user".into(),
+            content: vec![ContentPart::InputText(
+                "Reply with exactly the word READY".into(),
+            )],
+        }],
+        conversation_id: "c".into(),
+        tools: Vec::new(),
+        hosted_search: false,
+        call_timeout: None,
+    };
+    for _ in 0..3 {
+        local
+            .stream(&req, &CancelToken::new(), &mut |_| {})
+            .unwrap();
+    }
+    assert_eq!(local.spent_ticks(), 0);
+    assert!(!local.out_of_budget());
+    // Another provider with no cost figure: 1000 in, 10 out at $5 / $25 a million.
+    let other = Capped::for_provider(client, Provider::OpenRouter, TICKS_PER_USD);
+    other
+        .stream(&req, &CancelToken::new(), &mut |_| {})
+        .unwrap();
+    assert_eq!(
+        other.spent_ticks(),
+        turn_cost(
+            "provider/unknown",
+            &Usage {
+                input_tokens: 1000,
+                cached_tokens: 600,
+                output_tokens: 10,
+                ..Default::default()
+            }
+        )
+    );
+    assert!(
+        other.spent_ticks()
+            > turn_cost(
+                "grok-4.3",
+                &Usage {
+                    input_tokens: 1000,
+                    cached_tokens: 600,
+                    output_tokens: 10,
+                    ..Default::default()
+                }
+            )
+    );
+    assert_eq!(Provider::parse("OpenRouter"), Ok(Provider::OpenRouter));
+    assert_eq!(Provider::parse("xai"), Ok(Provider::Grok));
+    assert!(Provider::parse("bard").is_err());
+}
+
+/// Plans, waits for approval, then writes the change the plan named.
+struct Planner;
+
+impl ModelClient for Planner {
+    fn stream(
+        &self,
+        req: &ResponsesRequest,
+        _cancel: &CancelToken,
+        sink: &mut dyn FnMut(StreamEvent),
+    ) -> Result<TurnOutput, ClientError> {
+        let last = req.input.iter().rev().find_map(|item| match item {
+            InputItem::FunctionCallOutput { output, .. } => Some(output.clone()),
+            _ => None,
+        });
+        let call = |name: &str, args: &str| TurnOutput {
+            calls: vec![crate::FunctionCall {
+                call_id: format!("c-{name}"),
+                name: name.into(),
+                arguments: args.into(),
+            }],
+            ..Default::default()
+        };
+        // A side call (a judge or a summary) gets a plain answer.
+        if req.tools.is_empty() {
+            return Ok(TurnOutput {
+                text: "{}".into(),
+                ..Default::default()
+            });
+        }
+        Ok(match last {
+            None => call("exit_plan_mode", r#"{"plan":"Set fps_cap to 165."}"#),
+            Some(out) if out.contains("Plan approved") => call(
+                "write",
+                r#"{"path":"configs/game.ini","content":"[Display]\nresolution=2560x1440\nfps_cap=165\nvsync=0\n"}"#,
+            ),
+            Some(_) => {
+                sink(StreamEvent::TextDelta("Done, fps_cap is 165.".into()));
+                TurnOutput {
+                    text: "Done, fps_cap is 165.".into(),
+                    ..Default::default()
+                }
+            }
+        })
+    }
+}
+
+#[test]
+fn a_plan_mode_case_gets_its_plan_approved_and_finishes() {
+    let opts = LiveOpts {
+        k: 1,
+        only: Some("plan-then-edit".into()),
+        ..LiveOpts::new("grok-4.3")
+    };
+    let report = run_live(Arc::new(Planner), &opts, parse_budget("1").unwrap());
+    assert_eq!(report.attempts.len(), 1);
+    let a = &report.attempts[0];
+    assert_eq!(a.error, None);
+    assert!(a.pass, "{}", render_live(&report));
 }

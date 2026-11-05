@@ -475,46 +475,21 @@ impl Cabin {
 
     fn chat_prompt_parts_for(&self, session_id: &str) -> (String, String) {
         let stable = grokhub_core::cabin_rules::cabin_static_rules(self.cfg.desktop_control);
-        let mut parts: Vec<String> = Vec::new();
-        let mut needs_safety_closer = false;
         let personality = self.chat_personality();
-        let voice = personality.prompt_block();
-        if !voice.is_empty() {
-            parts.push(voice);
-            needs_safety_closer = true;
-        }
-        let notes = self.tuned_notes();
-        if !notes.is_empty() {
-            parts.push(notes);
-            needs_safety_closer = true;
-        }
-        let learned = grokhub_core::cabin_rules::cabin_learned_tail(&grokhub_core::brief_for(
-            &self.learning,
-            "chat",
-        ));
-        if !learned.is_empty() {
-            parts.push(learned);
-        }
-        let identity = grokhub_agent::identity_blocks(&crate::config::config_dir());
-        if !identity.is_empty() {
-            parts.push(identity);
-            needs_safety_closer = true;
-        }
-        let intentions = grokhub_core::intentions_block(&grokhub_core::load_intentions(
-            &crate::config::config_dir(),
-            session_id,
-        ));
-        if !intentions.is_empty() {
-            parts.push(intentions);
-            needs_safety_closer = true;
-        }
-        // Closes the volatile voice/notes tail so cabin safety (earlier, in the
-        // stable prefix) still outranks a custom personality or tuned note that
-        // lands last. The agent puts each turn's talk style just before it.
-        if needs_safety_closer {
-            parts.push(grokhub_core::talk::safety_closer(personality.explicit).to_string());
-        }
-        (stable, parts.join("\n\n"))
+        let config_dir = crate::config::config_dir();
+        // The join lives in the agent so the live eval sends this same tail.
+        let tail = grokhub_agent::chat_volatile_tail(&grokhub_agent::ChatTail {
+            voice: personality.prompt_block(),
+            notes: self.tuned_notes(),
+            learned: grokhub_core::brief_for(&self.learning, "chat"),
+            identity: grokhub_agent::identity_blocks(&config_dir),
+            intentions: grokhub_core::intentions_block(&grokhub_core::load_intentions(
+                &config_dir,
+                session_id,
+            )),
+            explicit: personality.explicit,
+        });
+        (stable, tail)
     }
 
     fn native_gate(&self) -> Gate {
