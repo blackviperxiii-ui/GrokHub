@@ -137,7 +137,32 @@ pub const AB_FLAGS: &[AbFlag] = &[
         file: crate::diet::CONFIG_NAME,
         key: "sparse_line_numbers",
     },
+    // Not a setting: the on arm gets a copy of the user's own dream lessons,
+    // shown in its throwaway folder; the off arm gets none.
+    AbFlag {
+        name: DREAM_LESSONS,
+        file: "skills",
+        key: crate::dream_gate::LESSON_SKILL,
+    },
 ];
+
+/// The `--ab` arm that tests the user's dream lessons (round 3 item 39).
+pub const DREAM_LESSONS: &str = "dream_lessons";
+
+/// Seed `config_dir` for one `--ab dream_lessons` arm: on copies the lessons
+/// from `from` (the user's own folder) and shows them there; off adds none.
+pub fn seed_lessons(config_dir: &Path, from: Option<&Path>, on: bool) -> Result<(), String> {
+    if !on {
+        return Ok(());
+    }
+    let from = from.ok_or("no dream-lessons folder was given")?;
+    let body = std::fs::read_to_string(from.join("SKILL.md"))
+        .map_err(|_| "there are no dream lessons to test yet".to_string())?;
+    let dir = crate::dream_gate::skill_dir(config_dir);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join("SKILL.md"), body).map_err(|e| e.to_string())?;
+    crate::dream_gate::mark_passed(&dir)
+}
 
 /// The switch named `name`, or a message listing the ones there are.
 pub fn ab_flag(name: &str) -> Result<&'static AbFlag, String> {
@@ -152,6 +177,9 @@ pub fn ab_flag(name: &str) -> Result<&'static AbFlag, String> {
 
 /// Turn `flag` on or off in `config_dir`, keeping any other key in its file.
 pub fn write_ab(config_dir: &Path, flag: &AbFlag, on: bool) -> Result<(), String> {
+    if flag.name == DREAM_LESSONS {
+        return Err("dream_lessons is seeded with seed_lessons, not written".into());
+    }
     std::fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
     let path = config_dir.join(flag.file);
     let old = std::fs::read_to_string(&path).unwrap_or_default();

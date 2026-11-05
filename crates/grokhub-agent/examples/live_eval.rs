@@ -15,9 +15,16 @@
 //! change, in percent, the run is meant to see (default 10); a run too small
 //! or too noisy to see it says so instead of giving a verdict.
 //!
+//! `--ab dream_lessons` tests the lessons the nightly dream wrote: the on arm
+//! gets a copy of them, the off arm none. The app keeps those lessons out of
+//! chats until a run like this passes them (on costs less solving no fewer,
+//! or solves more), so a pass is the one thing this eval writes to your own
+//! config: a `PASSED` mark beside the lessons, for exactly the lessons it
+//! tested. A lesson added during the run means no mark.
+//!
 //! Run it before changing a default; it is never part of pull-request CI.
-//! It runs against a throwaway config folder, so your own rules, grants,
-//! memory and logs are never read or written.
+//! Apart from that mark it runs against a throwaway config folder, so your
+//! own rules, grants, memory and logs are never read or written.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -28,6 +35,8 @@ use grokhub_agent::{
 };
 
 fn main() {
+    // Read before the scratch folder takes over GROKHUB_CONFIG.
+    let lessons = grokhub_agent::dream_gate::skill_dir(&grokhub_agent::perm::config_dir());
     let scratch = scratch_config();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut budget = None;
@@ -96,7 +105,25 @@ fn main() {
             ))
         }
     };
+    let tested = std::fs::read_to_string(lessons.join("SKILL.md")).ok();
+    if opts.ab.as_deref() == Some("dream_lessons") {
+        if tested.is_none() {
+            fail("--ab dream_lessons: there are no dream lessons to test yet");
+        }
+        opts.lessons = Some(lessons.clone());
+    }
     let report = grokhub_agent::run_live(client, &opts, budget);
+    if grokhub_agent::dream_lessons_passed(&report) {
+        let now = std::fs::read_to_string(lessons.join("SKILL.md")).ok();
+        if now.is_some() && now == tested {
+            match grokhub_agent::dream_gate::mark_passed(&lessons) {
+                Ok(()) => eprintln!("dream lessons passed: they now show in chats"),
+                Err(err) => eprintln!("dream lessons passed but the mark failed: {err}"),
+            }
+        } else {
+            eprintln!("dream lessons passed, but they changed during the run: not marked");
+        }
+    }
     let md = grokhub_agent::render_live(&report);
     if let Some(path) = out {
         if let Err(err) = std::fs::write(&path, md.as_bytes()) {

@@ -151,15 +151,21 @@ impl Cabin {
         } else {
             self.take_bg_results_follow(&notes_thread)
         };
-        let matched = match_skill(&text, &self.skill_list).cloned().map(|sk| {
-            let follow = self.trial_follow(&sk);
-            (
-                sk.name.clone(),
-                self.policy()
-                    .injects_skill()
-                    .then(|| skill_follow_block(&follow)),
-            )
-        });
+        // Unproven dream lessons are never auto-followed (round 3 item 39).
+        let matched = match_skill(&text, &self.skill_list)
+            .filter(|sk| {
+                grokhub_agent::dream_gate::may_follow(&sk.name, &crate::config::config_dir())
+            })
+            .cloned()
+            .map(|sk| {
+                let follow = self.trial_follow(&sk);
+                (
+                    sk.name.clone(),
+                    self.policy()
+                        .injects_skill()
+                        .then(|| skill_follow_block(&follow)),
+                )
+            });
         if let Some((skill_ran, follow)) = matched {
             self.skill_name = skill_ran.clone();
             self.engine_note("skills", &format!("ran:{skill_ran}"), &skill_ran);
@@ -348,7 +354,9 @@ impl Cabin {
         self.halt_in_flight();
         self.bg.results_follow = results;
         self.active_skill_follow = None;
-        if let Some(sk) = match_skill(&t, &self.skill_list) {
+        if let Some(sk) = match_skill(&t, &self.skill_list).filter(|sk| {
+            grokhub_agent::dream_gate::may_follow(&sk.name, &crate::config::config_dir())
+        }) {
             if self.policy().injects_skill() {
                 self.active_skill_follow = Some(skill_follow_block(sk));
             }

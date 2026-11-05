@@ -16,7 +16,7 @@ use grokhub_core::{automation_done_card, skill_dir_name, UpdateCard};
 use crate::client::{CancelToken, ContentPart, InputItem, ModelClient, ResponsesRequest};
 use crate::harness::{lesson_checks, record_skill_change, Origin};
 
-const LESSON_SKILL: &str = "dream-lessons";
+use crate::dream_gate::LESSON_SKILL;
 
 /// Deterministic dream, then at most one model call when `model_opts.enabled`.
 pub struct SleepDreamOut {

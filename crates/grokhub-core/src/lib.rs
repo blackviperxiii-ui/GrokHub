@@ -43,6 +43,7 @@ pub mod diagnostics;
 pub mod doctor;
 pub mod downloads_tidy;
 pub mod driver_check;
+pub mod env_facts;
 pub mod eso_addon;
 pub mod export;
 pub mod factorio_mod;

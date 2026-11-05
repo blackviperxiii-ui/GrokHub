@@ -388,6 +388,20 @@ pub fn system_prompt_with(
     )
 }
 
+/// Checked environment facts for `workspace` (round 3 item 39). Tests only
+/// see them under a pinned config, so a test never writes the real one.
+fn facts_block(workspace: &Path) -> String {
+    #[cfg(test)]
+    let Some(config) = crate::perm::pinned_config() else {
+        return String::new();
+    };
+    #[cfg(not(test))]
+    let config = crate::perm::config_dir();
+    let facts =
+        grokhub_core::env_facts::observe_workspace(&config, workspace, grokhub_core::now_ms());
+    grokhub_core::env_facts::prompt_block(&facts)
+}
+
 fn compose(
     stable_rules: &str,
     volatile_tail: &str,
@@ -407,6 +421,11 @@ fn compose(
         out.push_str("\n\n<agents>\n");
         out.push_str(&agents);
         out.push_str("\n</agents>");
+    }
+    let facts = facts_block(workspace);
+    if !facts.is_empty() {
+        out.push_str("\n\n");
+        out.push_str(&facts);
     }
     if profile.want_skills(need) {
         let skills =
@@ -668,6 +687,24 @@ mod tests {
         assert!(text.contains("Never invent a permanent \"read-only phase\""));
         assert!(text.contains("sealed Installed-app learnings"));
         assert!(!text.contains("You are Grok, a read-only coding assistant"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn checked_facts_follow_agents_and_stay_out_of_unpinned_tests() {
+        let dir = fixture_workspace("facts");
+        std::fs::write(dir.join("Cargo.toml"), "[package]\n").unwrap();
+        // No pinned config: a test never reads or writes the real one.
+        assert!(!system_prompt("", &dir).contains("<facts>"));
+        let cfg = dir.join("cfg");
+        let _pin = crate::perm::ConfigGuard::set(&cfg);
+        let text = system_prompt("", &dir);
+        let at = |needle: &str| text.find(needle).unwrap_or_else(|| panic!("{needle}"));
+        assert!(at("</agents>") < at("<facts>"));
+        assert!(text.contains("- Tests: `cargo test` (from Cargo.toml)"));
+        // Same facts, same bytes: the cached prefix holds.
+        assert_eq!(text, system_prompt("", &dir));
+        assert!(cfg.join(grokhub_core::env_facts::FILE).is_file());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
