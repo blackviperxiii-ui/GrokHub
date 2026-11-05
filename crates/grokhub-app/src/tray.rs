@@ -302,12 +302,31 @@ fn linux_stat_is_live_cabin(stat: &str, own: &str) -> bool {
     }
 }
 
+/// A pid read from a file can belong to any process by now, a game included.
+/// It counts as our cabin only when a handle-free snapshot names it with our
+/// own exe name; only then is it opened, and only to read its exit code.
+#[cfg(any(windows, test))]
+fn snapshot_names_us(snapshot_name: Option<&str>, own_name: Option<&str>) -> bool {
+    match (snapshot_name, own_name) {
+        (Some(name), Some(own)) => !own.is_empty() && name.eq_ignore_ascii_case(own),
+        _ => false,
+    }
+}
+
 #[cfg(windows)]
 fn windows_pid_alive(pid: u32) -> bool {
     use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
     use windows_sys::Win32::System::Threading::{
         GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
     };
+    let own = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.file_name().map(|n| n.to_string_lossy().into_owned()));
+    let named = grokhub_desktop::game_guard::exe_name_of(pid);
+    if !snapshot_names_us(named.as_deref(), own.as_deref()) {
+        return false;
+    }
+    // SAFETY: the handle is checked and closed here.
     unsafe {
         let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
         if h.is_null() {
@@ -821,6 +840,18 @@ impl Drop for TrayHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reused_pid_with_another_name_is_not_our_cabin() {
+        assert!(snapshot_names_us(Some("loadout.exe"), Some("Loadout.exe")));
+        assert!(!snapshot_names_us(
+            Some("valorant-win64-shipping.exe"),
+            Some("Loadout.exe")
+        ));
+        assert!(!snapshot_names_us(None, Some("Loadout.exe")));
+        assert!(!snapshot_names_us(Some("loadout.exe"), None));
+        assert!(!snapshot_names_us(Some(""), Some("")));
+    }
 
     #[test]
     fn hide_needs_a_live_tray() {
