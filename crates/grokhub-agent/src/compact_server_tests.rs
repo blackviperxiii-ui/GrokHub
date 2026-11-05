@@ -204,6 +204,11 @@ fn compact_with(client: &XaiClient, model: &str, items: &mut Vec<InputItem>) -> 
     .expect("compaction")
 }
 
+/// What the pinned safety rules add to the estimate after a compaction.
+fn pin_tokens() -> u64 {
+    super::estimate_input_tokens(&[super::standing_rules_message(&[])])
+}
+
 #[test]
 fn server_compaction_folds_all_but_the_tail_and_keeps_the_item_verbatim() {
     let (_dir, _guard) = config("ok");
@@ -231,6 +236,8 @@ fn server_compaction_folds_all_but_the_tail_and_keeps_the_item_verbatim() {
             raw: ITEM.to_string(),
             digest: "User: OLD_TOPIC\nAssistant: old answer".into(),
         },
+        // The safety rules come back word for word after the folded part.
+        super::standing_rules_message(&[]),
     ];
     want.extend(history()[3..].iter().cloned());
     assert_eq!(items, want);
@@ -252,7 +259,8 @@ fn server_compaction_folds_all_but_the_tail_and_keeps_the_item_verbatim() {
             // Before: 95 bytes; after: 9 + 72 (the item) + 14 + 26 + 14 bytes. 4 bytes a token.
             server: Some(grokhub_core::wire::CompactDetail {
                 tokens_before: 23,
-                tokens_after: 33,
+                // What's left, pinned safety rules included.
+                tokens_after: super::estimate_input_tokens(&want),
                 dropped_message_count: 2,
             }),
         }
@@ -288,6 +296,7 @@ fn a_compacted_history_compacts_again_with_the_old_item_first() {
                 // The older digest first, then what this compaction folded.
                 digest: "User: first ask\nAssistant: middle".into(),
             },
+            super::standing_rules_message(&[]),
             msg("user", "now")
         ]
     );
@@ -547,8 +556,12 @@ fn auto_compact_at_the_threshold_uses_the_server_path() {
         turn["input"][0],
         json!({"type": "compaction", "id": "cmp_9", "encrypted_content": "E"})
     );
-    assert_eq!(turn["input"][1]["role"], "user");
-    assert_eq!(turn["input"][1]["content"][0]["text"], "go");
+    assert!(turn["input"][1]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .starts_with("<standing_rules>"));
+    assert_eq!(turn["input"][2]["role"], "user");
+    assert_eq!(turn["input"][2]["content"][0]["text"], "go");
     assert_eq!(out.usage.input_tokens, 903);
     assert_eq!(out.usage.output_tokens, 11);
     assert_eq!(
@@ -557,7 +570,7 @@ fn auto_compact_at_the_threshold_uses_the_server_path() {
             None,
             Some(grokhub_core::wire::CompactDetail {
                 tokens_before: 905,
-                tokens_after: 16,
+                tokens_after: 16 + pin_tokens(),
                 dropped_message_count: 1,
             })
         )]

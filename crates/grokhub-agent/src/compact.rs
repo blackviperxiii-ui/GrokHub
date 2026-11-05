@@ -1221,6 +1221,7 @@ fn server_compact(
     }
     let mut rebuilt = head.to_vec();
     rebuilt.extend(items_out);
+    rebuilt.push(standing_rules_message(&rest[..tail_at]));
     rebuilt.extend_from_slice(&rest[tail_at..]);
     crate::image_budget::apply_image_budget(&mut rebuilt);
     let detail = grokhub_core::wire::CompactDetail {
@@ -1480,8 +1481,205 @@ pub fn build_compacted_history(
     if let Some(files) = modified_files_message(modified_paths) {
         out.push(files);
     }
+    let last_user = rest
+        .iter()
+        .rposition(|item| matches!(item, InputItem::Message { role, .. } if role == "user"))
+        .unwrap_or(rest.len());
+    out.push(standing_rules_message(&rest[..last_user]));
     out.extend(recent_tail(rest));
     out
+}
+
+const CABIN_NOTE_OPEN: &str = "<cabin-note>\n";
+const CABIN_NOTE_CLOSE: &str = "\n</cabin-note>";
+const STANDING_OPEN: &str = "<standing_rules>\n";
+const STANDING_CLOSE: &str = "</standing_rules>";
+const STANDING_HEAD: &str =
+    "The person's instructions from earlier in this chat still apply, word for word:";
+const SAFETY_HEAD: &str = "The safety rules still apply, word for word:";
+/// Characters of pinned instructions kept after a compaction; the newest win.
+pub const STANDING_RULES_MAX_CHARS: usize = 2_000;
+/// Characters kept from one pinned sentence.
+const STANDING_LINE_CHARS: usize = 300;
+
+/// The text of a note the app adds to the chat for the model, tagged so
+/// compaction never reads it as the person's own words.
+pub(crate) fn cabin_note_text(text: &str) -> String {
+    format!("{CABIN_NOTE_OPEN}{}{CABIN_NOTE_CLOSE}", text.trim())
+}
+
+/// The words inside a note from [`cabin_note_text`]; `None` for anything else.
+#[cfg(test)]
+pub(crate) fn cabin_note_body(text: &str) -> Option<&str> {
+    text.strip_prefix(CABIN_NOTE_OPEN)?
+        .strip_suffix(CABIN_NOTE_CLOSE)
+}
+
+/// True for a sentence that sets a lasting rule: an order that opens with
+/// never, always, don't, avoid, make sure, stop, only, keep, from now on or no
+/// more (after a "please" or "also"), or one that says "you must", "from now
+/// on" or "under no circumstances" anywhere. A question never counts, and
+/// neither does talk like "I don't know".
+fn sets_a_rule(sentence: &str) -> bool {
+    let lower = sentence.trim().to_lowercase().replace('’', "'");
+    if lower.ends_with('?') {
+        return false;
+    }
+    let words: Vec<&str> = lower
+        .split(|c: char| !(c.is_alphanumeric() || c == '\''))
+        .filter(|w| !w.is_empty())
+        .collect();
+    let lead = words
+        .iter()
+        .position(|w| {
+            !matches!(
+                *w,
+                "please" | "also" | "and" | "but" | "so" | "just" | "ok" | "okay"
+            )
+        })
+        .unwrap_or(words.len());
+    let opens = |phrase: &[&str]| words[lead..].starts_with(phrase);
+    let anywhere = |phrase: &[&str]| words.windows(phrase.len()).any(|w| w == phrase);
+    [
+        &["never"][..],
+        &["always"],
+        &["don't"],
+        &["dont"],
+        &["do", "not"],
+        &["avoid"],
+        &["make", "sure"],
+        &["stop"],
+        &["only"],
+        &["keep"],
+        &["no", "more"],
+        &["from", "now", "on"],
+    ]
+    .iter()
+    .any(|p| opens(p))
+        || [
+            &["from", "now", "on"][..],
+            &["you", "must"],
+            &["must", "not"],
+            &["mustn't"],
+            &["you", "should", "never"],
+            &["you", "should", "always"],
+            &["under", "no", "circumstances"],
+            &["want", "you", "to", "always"],
+            &["want", "you", "to", "never"],
+        ]
+        .iter()
+        .any(|p| anywhere(p))
+}
+
+/// One sentence per line: split on line breaks and sentence ends.
+fn sentences(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let mut cur = String::new();
+        for c in line.chars() {
+            cur.push(c);
+            if matches!(c, '.' | '!' | '?') {
+                out.push(std::mem::take(&mut cur));
+            }
+        }
+        out.push(cur);
+    }
+    out.into_iter()
+        .map(|s| {
+            s.trim()
+                .trim_start_matches(['-', '*', '•'])
+                .trim()
+                .to_string()
+        })
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// The lines an earlier pin carried, so a second compaction keeps them.
+fn pinned_lines(text: &str) -> Vec<String> {
+    let Some(body) = text.strip_prefix(STANDING_OPEN) else {
+        return Vec::new();
+    };
+    let body = body.split(SAFETY_HEAD).next().unwrap_or("");
+    body.lines()
+        .filter_map(|line| line.strip_prefix("- "))
+        .map(str::to_string)
+        .collect()
+}
+
+/// The person's rule-setting sentences from `folded`, word for word, oldest
+/// first, plus what an earlier pin carried. The app's own notes, summaries and
+/// lists never count: only what the person typed.
+pub fn standing_rules(folded: &[InputItem]) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    for item in folded {
+        let InputItem::Message { role, .. } = item else {
+            continue;
+        };
+        if role != "user" {
+            continue;
+        }
+        let text = message_text(item);
+        let said = crate::prefix_cache::visible_user_text(&text).trim();
+        if said.starts_with(STANDING_OPEN.trim_end()) {
+            found.extend(pinned_lines(said));
+            continue;
+        }
+        // Tagged blocks (<cabin-note>, <todos>, <background-notice>, a summary)
+        // are the app's, not the person's.
+        if said.starts_with('<') || said.starts_with("This session is being continued") {
+            continue;
+        }
+        found.extend(
+            sentences(said)
+                .into_iter()
+                .filter(|s| sets_a_rule(s))
+                .map(|s| clip_line(&s, STANDING_LINE_CHARS)),
+        );
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut kept: Vec<String> = Vec::new();
+    let mut used = 0usize;
+    for line in found.into_iter().rev() {
+        if !seen.insert(line.to_lowercase()) {
+            continue;
+        }
+        let cost = line.chars().count() + 3;
+        if used + cost > STANDING_RULES_MAX_CHARS {
+            break;
+        }
+        used += cost;
+        kept.push(line);
+    }
+    kept.reverse();
+    kept
+}
+
+/// The message pinned right after a compaction: the person's standing
+/// instructions and the safety rules, re-sent word for word. Summaries drop
+/// constraints far more often than facts; pinning brings that back to zero.
+pub fn standing_rules_message(folded: &[InputItem]) -> InputItem {
+    let mut body = String::from(STANDING_OPEN);
+    let rules = standing_rules(folded);
+    if !rules.is_empty() {
+        body.push_str(STANDING_HEAD);
+        body.push('\n');
+        for rule in &rules {
+            body.push_str("- ");
+            body.push_str(rule);
+            body.push('\n');
+        }
+        body.push('\n');
+    }
+    body.push_str(SAFETY_HEAD);
+    body.push('\n');
+    body.push_str(crate::prompt::safety_rules());
+    body.push('\n');
+    body.push_str(STANDING_CLOSE);
+    InputItem::Message {
+        role: "user".into(),
+        content: vec![ContentPart::InputText(body)],
+    }
 }
 
 /// Prior compaction body for merge-anchored re-summaries, if any.
@@ -1780,7 +1978,7 @@ Think through the conversation in your private reasoning before writing; do NOT 
 3. Files and Code Sections: Every file examined, created, or modified. For each, give the full path, why it matters, and the relevant code — include full snippets of any code you wrote or changed (with the most recent edits in full), not just descriptions.
 4. Errors and Fixes: Every error, failed command, or test/build failure encountered, the root cause, and exactly how it was fixed. Note any fix that came from user feedback verbatim.
 5. Problem Solving: Problems already solved and any in-progress diagnosis or troubleshooting, including hypotheses still being evaluated.
-6. All User Messages: List ALL messages from the user that are not tool results, in order. These are critical for understanding intent and how it evolved. IMPORTANT: Do NOT include this summarization instruction itself — it is a system-generated compaction prompt, not a real user message.
+6. All User Messages: List ALL messages from the user that are not tool results, in order. Messages wrapped in <cabin-note>, <background-notice> or <standing_rules> come from the app, not the user: leave them out. These are critical for understanding intent and how it evolved. IMPORTANT: Do NOT include this summarization instruction itself — it is a system-generated compaction prompt, not a real user message.
 7. Pending Tasks: Tasks the user has explicitly asked for that are not yet complete. Do not invent tasks the user never requested.
 8. Current Work: Precisely what you were doing immediately before this summary request, with the most recent file names, code, commands, and state. Be specific enough that work can resume mid-stream.
 9. Work in Progress: The step that was under way when the conversation was cut, strictly in line with the user's latest explicit request, with a direct verbatim quote from the most recent messages showing exactly what you were doing and where you left off, so the task is interpreted without drift. If the prior task was finished, write "None": do not invent a next step or a question for the user.
@@ -1915,6 +2113,103 @@ mod tests {
         let overhead = estimate_input_tokens(&[text_message("user", "")]);
         let extra = target.saturating_sub(overhead);
         "x".repeat((extra.saturating_mul(tokens::BYTES_PER_TOKEN)) as usize)
+    }
+
+    fn pin_of(items: &[InputItem]) -> String {
+        items
+            .iter()
+            .map(message_text)
+            .find(|t| t.starts_with("<standing_rules>"))
+            .expect("a pinned rules message after the summary")
+    }
+
+    #[test]
+    fn your_rules_and_the_safety_rules_come_back_word_for_word_after_compaction() {
+        let history = vec![
+            text_message("system", "sys"),
+            text_message(
+                "user",
+                "Never push to main. Fix the login bug. I don't know why it fails.",
+            ),
+            text_message("assistant", "On it."),
+            text_message(
+                "user",
+                &cabin_note_text("Not done yet. Don't add checklist items you don't need."),
+            ),
+            text_message("user", "<todos>\n[open] 1: never mind\n</todos>"),
+            text_message("user", "Also, always run cargo fmt first.\nWhy is CI red?"),
+            text_message("assistant", "Looking."),
+            text_message("user", "Only touch the beta branch, keep it that way"),
+        ];
+        let out = build_compacted_history(&history, "the summary", &[]);
+        let pin = pin_of(&out);
+        assert!(pin.contains("- Never push to main."), "{pin}");
+        assert!(pin.contains("- Also, always run cargo fmt first."), "{pin}");
+        assert!(!pin.contains("don't know"), "talk isn't a rule: {pin}");
+        assert!(
+            !pin.contains("checklist"),
+            "the app's notes aren't the person's: {pin}"
+        );
+        assert!(!pin.contains("never mind"), "{pin}");
+        assert!(!pin.contains("Why is CI red"), "{pin}");
+        // The newest turn stays verbatim in the tail, so it isn't pinned twice.
+        assert!(!pin.contains("Only touch"), "{pin}");
+        assert!(pin.contains(crate::prompt::safety_rules()));
+        assert!(crate::prompt::safety_rules().starts_with("<dangerous_actions>"));
+        assert!(crate::prompt::safety_rules().ends_with("</dangerous_actions>"));
+        // The pin sits after the summary and before the kept tail.
+        let at = |needle: &str| {
+            out.iter()
+                .position(|i| message_text(i).contains(needle))
+                .unwrap()
+        };
+        assert!(at("<conversation_summary>") < at("<standing_rules>"));
+        assert!(at("<standing_rules>") < at("Only touch the beta branch"));
+
+        // A second compaction keeps what the first one pinned, plus new rules.
+        let mut again = out.clone();
+        again.push(text_message("assistant", "Done."));
+        again.push(text_message(
+            "user",
+            "From now on, run the tests before each commit.",
+        ));
+        again.push(text_message("assistant", "Will do."));
+        again.push(text_message("user", "next"));
+        let pin = pin_of(&build_compacted_history(&again, "summary two", &[]));
+        // Only the person's section: the safety rules follow it, once.
+        let (theirs, safety) = pin.split_once(SAFETY_HEAD).unwrap();
+        assert_eq!(safety.matches("<dangerous_actions>").count(), 1);
+        let rules: Vec<&str> = theirs.lines().filter(|l| l.starts_with("- ")).collect();
+        assert_eq!(
+            rules,
+            vec![
+                "- Never push to main.",
+                "- Also, always run cargo fmt first.",
+                "- Only touch the beta branch, keep it that way",
+                "- From now on, run the tests before each commit.",
+            ]
+        );
+    }
+
+    #[test]
+    fn pinned_rules_stay_under_their_cap_and_the_newest_win() {
+        let mut history = vec![text_message("system", "sys")];
+        for n in 0..200 {
+            history.push(text_message(
+                "user",
+                &format!("Never touch file number {n}."),
+            ));
+            history.push(text_message("assistant", "ok"));
+        }
+        history.push(text_message("user", "go"));
+        let rules = standing_rules(&history);
+        let used: usize = rules.iter().map(|r| r.chars().count() + 3).sum();
+        assert!(used <= STANDING_RULES_MAX_CHARS, "{used}");
+        assert_eq!(
+            rules.last().map(String::as_str),
+            Some("Never touch file number 199.")
+        );
+        assert!(!rules.iter().any(|r| r == "Never touch file number 0."));
     }
 
     #[test]

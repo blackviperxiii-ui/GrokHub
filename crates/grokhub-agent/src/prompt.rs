@@ -10,6 +10,18 @@ use std::time::{Instant, SystemTime};
 use crate::episode::clip_bytes;
 
 const TEMPLATE: &str = include_str!("prompt_template.md");
+
+/// The prompt's `<dangerous_actions>` block, word for word, tags included.
+/// Compaction pins it after the summary so the safety rules stay fresh.
+pub(crate) fn safety_rules() -> &'static str {
+    const OPEN: &str = "<dangerous_actions>";
+    const CLOSE: &str = "</dangerous_actions>";
+    let start = TEMPLATE.find(OPEN).unwrap_or(0);
+    let end = TEMPLATE[start..]
+        .find(CLOSE)
+        .map_or(start, |at| start + at + CLOSE.len());
+    &TEMPLATE[start..end]
+}
 pub(crate) const AGENTS_CAP: usize = 64 * 1024;
 
 /// Per-run tracker for just-in-time nested `AGENTS.md` / `CLAUDE.md` notes.
