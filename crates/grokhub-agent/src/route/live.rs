@@ -1178,6 +1178,7 @@ pub fn route_record(
         },
         // Set by `route_log`, from the request this call just sent.
         prefix_break: None,
+        request: crate::harness::replay::last_request(),
     }
 }
 
@@ -1464,6 +1465,7 @@ pub fn stream_routed(
     class: &str,
 ) -> Result<TurnOutput, ClientError> {
     let entered = std::time::Instant::now();
+    crate::harness::replay::clear_last();
     let dir = crate::perm::config_dir();
     // Playbooks 8: a banned ask never leaves the computer, this turn or a later one.
     let mut sent = req.clone();

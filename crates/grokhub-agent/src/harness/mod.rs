@@ -76,6 +76,8 @@ mod park;
 mod path_d;
 mod proactive;
 pub mod provenance;
+pub mod replay;
+pub mod safety_events;
 mod self_improve;
 mod self_manage;
 mod span;

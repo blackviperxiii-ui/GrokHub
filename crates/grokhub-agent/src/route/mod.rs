@@ -269,6 +269,7 @@ pub fn call_model(
     }
     let started = std::time::Instant::now();
     let on_device = decision.on_device();
+    crate::harness::replay::clear_last();
     let out = if on_device {
         local::serve(&call.class, &text, cancel)
     } else if on_provider {

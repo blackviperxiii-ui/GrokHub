@@ -1225,6 +1225,8 @@ impl XaiClient {
         }
         let _ = crate::sse::take_served_model();
         let body = crate::timing::time("client:body", || responses_body(req));
+        // Round 3 item 28: kept sealed by hash, so this exact request can be replayed.
+        crate::harness::replay::note_request(&crate::perm::config_dir(), &body);
         if !crate::pace::take(&req.model, cancel) {
             return Err(ClientError::Cancelled);
         }
@@ -1333,6 +1335,7 @@ impl XaiClient {
         } else {
             compact_body(req)
         };
+        crate::harness::replay::note_request(&crate::perm::config_dir(), &body);
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let spawned = std::thread::Builder::new()
             .name("compact-read".into())

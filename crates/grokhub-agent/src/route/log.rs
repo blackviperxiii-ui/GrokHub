@@ -137,6 +137,11 @@ pub struct RouteRecord {
     /// cache share drops with it, so the cause sits next to the numbers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefix_break: Option<BreakNote>,
+    /// The exact request this call sent, by hash (`harness::replay`); empty
+    /// when none was stored (no learned-tier key, the store switched off, or
+    /// an on-device step).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub request: String,
 }
 
 /// Where a request first stopped repeating the one before it, and why
