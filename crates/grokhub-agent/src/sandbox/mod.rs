@@ -81,7 +81,11 @@ pub fn settings(config_dir: &Path) -> Settings {
 }
 
 fn parse_file(text: &str, home: Option<&Path>) -> Settings {
-    let file = crate::config_file::parse(CONFIG_NAME, text);
+    let file = crate::config_file::parse(
+        CONFIG_NAME,
+        text,
+        &["writable", "enabled", "network_guard", "auto_allow"],
+    );
     let defaults = Settings::default();
     let writable = file
         .get("writable")

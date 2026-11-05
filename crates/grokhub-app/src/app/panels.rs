@@ -28,22 +28,7 @@ pub fn apply_generative_ui_setting(config_dir: &Path) {
 }
 
 fn read_generative_ui_enabled(config_dir: &Path) -> bool {
-    let Ok(text) = std::fs::read_to_string(config_dir.join("generative_ui.toml")) else {
-        return false;
-    };
-    for line in text.lines() {
-        let line = line.split('#').next().unwrap_or("").trim();
-        if line.is_empty() {
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        if key.trim().eq_ignore_ascii_case("enabled") && value.trim().eq_ignore_ascii_case("true") {
-            return true;
-        }
-    }
-    false
+    grokhub_agent::generative_ui_enabled(config_dir)
 }
 
 /// User intent from a panel control; the host runs tools after approval.

@@ -43,6 +43,13 @@ impl Cabin {
             self.last_receipt_ok,
             self.skill_list.len(),
         ));
+        // A config file line the app couldn't use: shown, so a typo never
+        // quietly keeps a default.
+        lines.extend(
+            grokhub_agent::config_warnings()
+                .into_iter()
+                .map(|text| grokhub_core::DoctorLine { ok: false, text }),
+        );
         lines
     }
 
@@ -456,6 +463,11 @@ impl Cabin {
             HUB_KIND,
         );
         self.mark_stale_auth(&mut doctor);
+        doctor.extend(
+            grokhub_agent::config_warnings()
+                .into_iter()
+                .map(|text| grokhub_core::DoctorLine { ok: false, text }),
+        );
         let mut lines: Vec<String> = doctor
             .into_iter()
             .map(|l| {

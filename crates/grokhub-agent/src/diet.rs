@@ -20,7 +20,8 @@ pub fn settings(config_dir: &Path) -> Settings {
     let Ok(text) = std::fs::read_to_string(config_dir.join(CONFIG_NAME)) else {
         return Settings::default();
     };
-    let file = crate::config_file::parse(CONFIG_NAME, &text);
+    let file =
+        crate::config_file::parse(CONFIG_NAME, &text, &["lean_prompt", "sparse_line_numbers"]);
     Settings {
         lean_prompt: file.flag("lean_prompt", false),
         sparse_line_numbers: file.flag("sparse_line_numbers", false),

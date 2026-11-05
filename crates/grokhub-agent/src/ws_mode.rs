@@ -64,7 +64,9 @@ const READ_POLL: Duration = Duration::from_millis(250);
 /// `enabled = false`).
 pub fn enabled_at(config_dir: &Path) -> bool {
     std::fs::read_to_string(config_dir.join(CONFIG_NAME))
-        .map(|text| crate::config_file::parse(CONFIG_NAME, &text).flag("enabled", true))
+        .map(|text| {
+            crate::config_file::parse(CONFIG_NAME, &text, &["enabled"]).flag("enabled", true)
+        })
         .unwrap_or(true)
 }
 

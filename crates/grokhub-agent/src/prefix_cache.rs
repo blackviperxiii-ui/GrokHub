@@ -40,8 +40,14 @@ pub fn old_notes(config_dir: &Path) -> OldNotes {
 }
 
 fn parse_old_notes(text: &str) -> OldNotes {
-    match crate::config_file::parse(CONFIG_NAME, text).get("old_notes") {
-        Some(value) if value.eq_ignore_ascii_case("every_turn") => OldNotes::EveryTurn,
+    // `enabled` is a switch older versions read; it is still taken, and ignored.
+    let file = crate::config_file::parse(CONFIG_NAME, text, &["old_notes", "enabled"]);
+    match file.one_of(
+        "old_notes",
+        &["every_turn", "at_compaction"],
+        "at_compaction",
+    ) {
+        Some("every_turn") => OldNotes::EveryTurn,
         _ => OldNotes::AtCompaction,
     }
 }

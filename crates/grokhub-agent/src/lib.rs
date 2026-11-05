@@ -66,6 +66,7 @@ pub use client::{
     TurnOutput, Usage, XaiClient, DEFAULT_MODEL, RESPONSES_URL, USER_AGENT,
 };
 pub use compact::{estimate_input_tokens, message_text};
+pub use config_file::config_warnings;
 pub use dream_model::sleep_dream;
 pub use eval::efficiency::{render_bench, run_bench, BenchRow};
 pub use eval::live::{
@@ -154,9 +155,9 @@ pub use tools::control::{take_automation_changes, AutomationChange};
 pub use tools::mods::{set_host as set_mods_host, ModsOps};
 pub use tools::{
     brave_key_present, deferred_tools_enabled, deferred_tools_settings, dispatch_for_job, execute,
-    imagine_client, is_readonly, public_only_resolve, run_media_tool, schemas_for, schemas_for_job,
-    seal_brave_key, tool_schemas, tool_set_for_kind, tool_set_refusal, DeferredToolsSettings,
-    DesktopOps, ImagineApi, ToolOutput, ToolSet, WebSearchBackend, WebSearchSettings,
-    READ_ONLY_PHASE, TOOL_SET_OUTSIDE,
+    generative_ui_enabled, imagine_client, is_readonly, public_only_resolve, run_media_tool,
+    schemas_for, schemas_for_job, seal_brave_key, tool_schemas, tool_set_for_kind,
+    tool_set_refusal, DeferredToolsSettings, DesktopOps, ImagineApi, ToolOutput, ToolSet,
+    WebSearchBackend, WebSearchSettings, READ_ONLY_PHASE, TOOL_SET_OUTSIDE,
 };
 pub use unattended::{run_unattended, UnattendedDone, UnattendedRun};
