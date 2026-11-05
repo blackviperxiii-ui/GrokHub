@@ -100,8 +100,11 @@ fn bound_job_tool_set(session: &str) -> Option<ToolSet> {
     None
 }
 
-const REPEAT_LIMIT: u32 = 3;
-/// What a call repeated [`REPEAT_LIMIT`] times gets back instead of running.
+/// How many times the same call (name and arguments) may run before the next
+/// one is refused. Refused calls don't count, and a successful edit starts the
+/// count over, so "edit, test, edit, test, edit, test" keeps going.
+const REPEAT_LIMIT: u32 = 2;
+/// What a call that already ran [`REPEAT_LIMIT`] times gets back instead of running.
 pub const REPEAT_REPLAN: &str = "not run: the same call already ran twice. Stop repeating it. \
 Re-read the goal, say in one line what you tried, then pick a different approach \
 (another tool, another route or a smaller sub-step) and go on.";
@@ -717,13 +720,19 @@ pub fn run_loop(
         if let Some(t) = step_ended {
             crate::timing::record("loop:step_gap", t.elapsed());
         }
+        // What the chat showed of this reply, kept if the reply fails partway.
+        let mut shown = String::new();
         let turn = match crate::route::live::stream_routed(
             input.client,
             &req,
             input.cancel,
             &mut |ev| match ev {
-                StreamEvent::TextDelta(text) => on_event(LoopEvent::Text(text)),
+                StreamEvent::TextDelta(text) => {
+                    shown.push_str(&text);
+                    on_event(LoopEvent::Text(text))
+                }
                 StreamEvent::ReasoningDelta(text) => on_event(LoopEvent::Thought(text)),
+                StreamEvent::RateWait(wait) => on_event(LoopEvent::Thought(rate_wait_note(wait))),
             },
             class,
         ) {
@@ -783,6 +792,16 @@ pub fn run_loop(
                 }
             }
             Err(err) => {
+                // A reply cut off partway stays as the chat showed it, so the
+                // next turn knows what was already said.
+                if !shown.trim().is_empty() {
+                    history.push(InputItem::Message {
+                        role: "assistant".into(),
+                        content: vec![ContentPart::InputText(grokhub_core::strip_turn_labels(
+                            &shown,
+                        ))],
+                    });
+                }
                 return finish(
                     input,
                     StopReason::Error(err.to_string()),
@@ -1048,11 +1067,13 @@ pub fn run_loop(
                     }
                 }
             }
-            let key = format!("{}\\n{}", call.name, call.arguments);
-            let seen = repeats.entry(key).or_insert(0);
-            *seen = seen.saturating_add(1);
-            if *seen >= REPEAT_LIMIT {
+            let key = repeat_key(call);
+            if repeats.get(&key).copied().unwrap_or(0) >= REPEAT_LIMIT {
                 let output = ToolOutput::err(REPEAT_REPLAN);
+                let id = tool_id(call);
+                // Shown in the chat too, so a stalled step isn't silent.
+                emit_tool(on_event, &id, call, "in_progress", &call.arguments, None);
+                emit_tool(on_event, &id, call, "failed", &output.text, None);
                 push_refusal(history, input.conversation_id, call, output);
                 call_i += 1;
                 continue;
@@ -1235,6 +1256,9 @@ pub fn run_loop(
             }
             let cancelled = input.cancel.is_cancelled();
             let halted = stop_for_halt(input);
+            if !refused {
+                note_repeat(&mut repeats, call, &output);
+            }
             if !output.failed && !crate::drive::is_session_tool(&call.name) {
                 evidence += 1;
                 fresh.note(
@@ -1456,6 +1480,22 @@ pub(crate) fn push_refusal(
     push_result(history, conversation_id, call, output);
 }
 
+fn repeat_key(call: &FunctionCall) -> String {
+    format!("{}\n{}", call.name, call.arguments)
+}
+
+/// Count a call that ran. A successful edit clears every count: the next test
+/// run checks new code, so it isn't a repeat.
+fn note_repeat(repeats: &mut HashMap<String, u32>, call: &FunctionCall, output: &ToolOutput) {
+    if !output.failed && crate::compact::path_from_write_call(&call.name, &call.arguments).is_some()
+    {
+        repeats.clear();
+        return;
+    }
+    let seen = repeats.entry(repeat_key(call)).or_insert(0);
+    *seen = seen.saturating_add(1);
+}
+
 fn push_result(
     history: &mut Vec<InputItem>,
     conversation_id: &str,
@@ -1477,6 +1517,12 @@ fn push_result(
             ],
         });
     }
+}
+
+/// The thinking line while a 429 waits.
+fn rate_wait_note(wait: std::time::Duration) -> String {
+    let secs = wait.as_secs_f64().ceil().max(1.0) as u64;
+    format!("\n\nGrok is busy right now, trying again in {secs} s.\n\n")
 }
 
 /// Trail span for a length-truncated model reply (`turn_truncated`).
@@ -1684,9 +1730,13 @@ fn run_readonly_tool_batch(
 ) -> ReadonlyBatchOutcome {
     let mut prepared = Vec::with_capacity(calls.len());
     for call in calls {
-        let key = format!("{}\\n{}", call.name, call.arguments);
-        let seen = repeats.entry(key).or_insert(0);
-        if *seen >= REPEAT_LIMIT {
+        let key = repeat_key(call);
+        let queued = prepared
+            .iter()
+            .filter(|(c, _, _): &&(&FunctionCall, String, _)| repeat_key(c) == key)
+            .count() as u32;
+        if repeats.get(&key).copied().unwrap_or(0) + queued >= REPEAT_LIMIT {
+            // One at a time, so the refusal shows like any other.
             return ReadonlyBatchOutcome::Fallback;
         }
         let id = tool_id(call);
@@ -1742,7 +1792,6 @@ fn run_readonly_tool_batch(
         drop(gate_lap);
         match constrained.decision {
             Decision::Run => {
-                *seen = seen.saturating_add(1);
                 prepared.push((call, id, constrained.context));
             }
             Decision::Refuse(_) | Decision::Ask => return ReadonlyBatchOutcome::Fallback,
@@ -1821,6 +1870,7 @@ fn run_readonly_tool_batch(
         if !output.failed && call.name == "report_findings" {
             fresh.note_findings();
         }
+        note_repeat(repeats, call, &output);
         push_output(history, input.conversation_id, call, output);
     }
 
@@ -2114,8 +2164,19 @@ mod tests {
         steer: &SteerQueue,
         halt: &dyn HaltCheck,
     ) -> (LoopOut, Vec<InputItem>, Vec<LoopEvent>) {
+        run_with(script, dir, max_turns, cancel, steer, halt)
+    }
+
+    fn run_with(
+        client: &dyn ModelClient,
+        dir: &std::path::Path,
+        max_turns: u32,
+        cancel: &CancelToken,
+        steer: &SteerQueue,
+        halt: &dyn HaltCheck,
+    ) -> (LoopOut, Vec<InputItem>, Vec<LoopEvent>) {
         let input = LoopIn {
-            client: script,
+            client,
             workspace: dir,
             model: "grok-4.7",
             effort: Some("low"),
@@ -2185,6 +2246,48 @@ mod tests {
         assert_eq!(bound_job_tool_set(&child).as_ref(), Some(&set));
         assert!(!set.allows("write"));
         clear_job_tool_set(&child);
+    }
+
+    struct CutAfterText;
+    impl ModelClient for CutAfterText {
+        fn stream(
+            &self,
+            _req: &ResponsesRequest,
+            _cancel: &CancelToken,
+            sink: &mut dyn FnMut(StreamEvent),
+        ) -> Result<crate::TurnOutput, ClientError> {
+            sink(StreamEvent::TextDelta("First, the config ".into()));
+            sink(StreamEvent::TextDelta("lives in".into()));
+            Err(ClientError::CutOff("stream disconnected".into()))
+        }
+    }
+
+    #[test]
+    fn a_reply_cut_off_partway_keeps_what_the_chat_showed() {
+        let dir = workspace("cut-off");
+        let (out, history, events) = run_with(
+            &CutAfterText,
+            &dir,
+            4,
+            &CancelToken::new(),
+            &SteerQueue::new(),
+            &NeverHalt,
+        );
+        assert!(matches!(&out.stop, StopReason::Error(e) if e.contains("cut off")));
+        let shown: String = events
+            .iter()
+            .filter_map(|e| match e {
+                LoopEvent::Text(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(shown, "First, the config lives in");
+        assert!(matches!(
+            history.last(),
+            Some(InputItem::Message { role, content })
+                if role == "assistant"
+                    && content == &vec![ContentPart::InputText(shown.clone())]
+        ));
     }
 
     #[test]
@@ -2573,6 +2676,79 @@ mod tests {
         let out = run_loop(&input, &mut history, "task", None, &mut |_| {});
         assert_eq!(out.stop, StopReason::MaxTurns);
         assert_eq!(client.calls.load(Ordering::SeqCst), 3);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn edit_then_check_loops_keep_going_and_a_real_repeat_shows_in_the_chat() {
+        let dir = workspace("repeat-edit");
+        std::fs::write(dir.join("note.txt"), "x").unwrap();
+        let read = |id: &str| call(id, "read_file", r#"{"target_file":"note.txt"}"#);
+        let write = |id: &str, n: u32| {
+            call(
+                id,
+                "write",
+                &format!(r#"{{"path":"a.rs","content":"v{n}"}}"#),
+            )
+        };
+        let mut turns: Vec<ScriptTurn> = Vec::new();
+        for n in 0..3 {
+            turns.push(ScriptTurn::calls(
+                vec![write(&format!("w{n}"), n)],
+                Usage::default(),
+            ));
+            turns.push(ScriptTurn::calls(
+                vec![read(&format!("r{n}"))],
+                Usage::default(),
+            ));
+        }
+        // Then the same check three times with no edit between.
+        for n in 3..6 {
+            turns.push(ScriptTurn::calls(
+                vec![read(&format!("r{n}"))],
+                Usage::default(),
+            ));
+        }
+        turns.push(ScriptTurn::text("done"));
+        let script = Script {
+            turns: Mutex::new(turns),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+        let permits = Answer {
+            answer: PermAnswer::Allow,
+            asks: AtomicUsize::new(0),
+        };
+        let (out, history, events) = once_for(
+            &script,
+            &dir,
+            chat(gate::PermMode::Always, true, false),
+            None,
+            &permits,
+            20,
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        let refused: Vec<String> = history
+            .iter()
+            .filter_map(|item| match item {
+                InputItem::FunctionCallOutput { call_id, output }
+                    if output.contains(REPEAT_REPLAN) =>
+                {
+                    Some(call_id.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        // r0, r1 and r2 each follow an edit, so none is a repeat. With no edit
+        // after w2, r2 and r3 are two runs of the same check; r4 and r5 are
+        // refused (a refusal doesn't count as a run).
+        assert_eq!(refused, ["r4", "r5"]);
+        assert!(events.iter().any(|ev| matches!(ev,
+            LoopEvent::Tool { name, status, detail, .. }
+                if name == "read_file" && status == "failed" && detail.contains("Stop repeating it")
+        )));
+        assert_eq!(std::fs::read_to_string(dir.join("a.rs")).unwrap(), "v2");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2994,6 +3170,18 @@ mod tests {
         desktop: Option<&dyn DesktopOps>,
         permits: &dyn PermitWait,
     ) -> (LoopOut, Vec<InputItem>, Vec<LoopEvent>) {
+        once_for(script, dir, gate, desktop, permits, 4)
+    }
+
+    /// [`once`] with its own turn cap.
+    fn once_for(
+        script: &Script,
+        dir: &std::path::Path,
+        gate: Gate,
+        desktop: Option<&dyn DesktopOps>,
+        permits: &dyn PermitWait,
+        max_turns: u32,
+    ) -> (LoopOut, Vec<InputItem>, Vec<LoopEvent>) {
         let input = LoopIn {
             client: script,
             workspace: dir,
@@ -3001,7 +3189,7 @@ mod tests {
             effort: None,
             system: "",
             conversation_id: "conv",
-            max_turns: 4,
+            max_turns,
             usage_base: Usage::default(),
             cancel: &CancelToken::new(),
             steer: &SteerQueue::new(),

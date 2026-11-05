@@ -1595,7 +1595,8 @@ pub fn stream_routed(
     } else {
         let mut streamed = false;
         let out = client.stream(&sent, cancel, &mut |ev: StreamEvent| {
-            if !streamed {
+            // A 429's wait note isn't xAI answering: a stand-in can still take the turn.
+            if !streamed && !matches!(ev, StreamEvent::RateWait(_)) {
                 streamed = true;
                 if let Some(note) = &note {
                     sink(StreamEvent::TextDelta(format!("{note}\n\n")));
