@@ -55,9 +55,13 @@ pub struct ShownChip {
     pub source: String,
     /// 0 = first slot.
     pub slot: u8,
-    /// The chance the ranker gave this chip this slot. The ranker is fixed
-    /// today, so it is 1.0; a learning ranker writes its real odds.
+    /// The chance the ranker gave this chip this slot: 1.0 while it has no
+    /// history to explore with, its real odds after.
     pub p: f32,
+    /// The ranker's features for this chip (numbers only), so a pick or a
+    /// hide can teach it later. Empty for a row the ranker did not build.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub x: Vec<f32>,
 }
 
 /// What the person did with a shown row.
@@ -202,11 +206,16 @@ pub fn log_chips_shown(mem: &mut ChipMemory, surface: &str, chips: &[QuickChip],
     let shown: Vec<ShownChip> = chips
         .iter()
         .enumerate()
-        .map(|(slot, c)| ShownChip {
-            key: chip_log_key(c),
-            source: chip_source(c),
-            slot: u8::try_from(slot).unwrap_or(u8::MAX),
-            p: 1.0,
+        .map(|(slot, c)| {
+            let key = chip_log_key(c);
+            let note = crate::chip_rank::ranked_note(mem, surface, &key);
+            ShownChip {
+                source: chip_source(c),
+                slot: u8::try_from(slot).unwrap_or(u8::MAX),
+                p: note.as_ref().map_or(1.0, |n| n.p),
+                x: note.map(|n| n.x).unwrap_or_default(),
+                key,
+            }
         })
         .collect();
     let same = |e: &ChipEvent| {
@@ -217,6 +226,17 @@ pub fn log_chips_shown(mem: &mut ChipMemory, surface: &str, chips: &[QuickChip],
     };
     if mem.events.last().is_some_and(same) {
         return;
+    }
+    // The last open row on this surface was passed over for this one.
+    if let Some(prev) = mem
+        .events
+        .iter()
+        .rev()
+        .find(|e| e.surface == surface)
+        .filter(|e| e.outcome.is_none())
+    {
+        let shown = prev.shown.clone();
+        crate::chip_rank::learn_from_row(&mut mem.ranker, &shown, None);
     }
     mem.events.push(ChipEvent {
         at: now,
@@ -250,11 +270,14 @@ pub fn log_chip_outcome(
         .iter()
         .find(|s| s.key == key)
         .map_or(0, |s| s.slot);
-    event.outcome = Some(if picked {
+    let outcome = if picked {
         ChipOutcome::Picked { key, slot, at: now }
     } else {
         ChipOutcome::Dismissed { key, slot, at: now }
-    });
+    };
+    let shown = event.shown.clone();
+    event.outcome = Some(outcome.clone());
+    crate::chip_rank::learn_from_row(&mut mem.ranker, &shown, Some(&outcome));
 }
 
 #[cfg(test)]

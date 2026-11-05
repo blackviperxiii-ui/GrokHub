@@ -4,7 +4,7 @@ use super::*;
 use grokhub_core::ChipSignals;
 
 /// Chips on Home's row.
-pub(super) const HOME_CHIP_MAX: usize = 4;
+pub(super) const HOME_CHIP_MAX: usize = grokhub_core::CHIP_ROW_MAX;
 
 /// The plain chip signals, kept apart so they join the paint key: chips
 /// redraw when a game starts or the day turns, not every frame.
@@ -503,7 +503,8 @@ impl Cabin {
             last_failed,
             hour,
             now_ms: now_ms(),
-            max: CHIP_VISIBLE_MAX,
+            // The engine gathers a pool; the ranker picks the row from it.
+            max: grokhub_core::CHIP_HARD_MAX,
             other_threads: &others,
             first_run,
             last_slash: &last_slash,
@@ -532,12 +533,37 @@ impl Cabin {
             draft: "",
             thread_title: "",
             last_failed: false,
-            max: HOME_CHIP_MAX,
+            max: grokhub_core::CHIP_HARD_MAX,
             ..input.clone()
         };
-        self.home_chips = build_quick_chips(home);
         // Chips are local only: no model ask, cloud or local (LO-28).
-        self.visible_chips = build_quick_chips(input);
+        let home_pool = build_quick_chips(home);
+        let pool = build_quick_chips(input);
+        // One draw per boundary (thread, turn, hour), never per keystroke,
+        // so the row holds still while the person types.
+        let seed = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            (self.thread_idx, n, last, hour).hash(&mut h);
+            h.finish()
+        };
+        let ctx = |surface, max| grokhub_core::RankCtx {
+            surface,
+            hour,
+            now_ms: now_ms(),
+            seed,
+            max,
+        };
+        self.home_chips = grokhub_core::rank_quick_chips(
+            &mut self.chip_memory,
+            home_pool,
+            ctx("home", HOME_CHIP_MAX),
+        );
+        self.visible_chips = grokhub_core::rank_quick_chips(
+            &mut self.chip_memory,
+            pool,
+            ctx("composer", grokhub_core::CHIP_ROW_MAX),
+        );
     }
 
     /// Ranked composer chips. Empty home and mid-thread share `visible_chips`
@@ -584,6 +610,7 @@ impl Cabin {
         if !self.composer.trim().is_empty() {
             chips.retain(|c| c.kind != ChipKind::Shell);
         }
+        chips.truncate(grokhub_core::CHIP_ROW_MAX);
         mark_first_primary(&mut chips);
         chips
     }

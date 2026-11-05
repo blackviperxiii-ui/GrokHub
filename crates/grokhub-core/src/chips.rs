@@ -195,6 +195,9 @@ pub struct ChipMemory {
     /// See [`crate::chip_store`].
     #[serde(default)]
     pub events: Vec<crate::chip_store::ChipEvent>,
+    /// The learned chip ranker. See [`crate::chip_rank`].
+    #[serde(default)]
+    pub ranker: crate::chip_rank::ChipRanker,
 }
 
 /// How often one intent was used, by local hour and weekday.
@@ -230,6 +233,7 @@ impl Default for ChipMemory {
             updated_at: 0,
             intents: BTreeMap::new(),
             events: Vec::new(),
+            ranker: crate::chip_rank::ChipRanker::default(),
         }
     }
 }
