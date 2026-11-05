@@ -327,7 +327,10 @@ fn spawn(
         .current_dir(cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        // Round 3 item 38: `npx` and `uvx` servers skip brand-new releases.
+        // The server's own env below wins.
+        .envs(crate::package_age::env());
     for (key, value) in env {
         cmd.env(key, value);
     }
