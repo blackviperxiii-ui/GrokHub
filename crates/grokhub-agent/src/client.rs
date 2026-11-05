@@ -630,6 +630,22 @@ pub fn compact_body(req: &CompactRequest) -> Value {
     json!({"model": model, "input": input_wire(&req.input, Some(model)).0})
 }
 
+/// [`compact_body`] plus the chat's cache key (a fork's is its chat's), so the
+/// fold reaches the server that holds the chat's cached prefix. Grok models only.
+pub fn keyed_compact_body(req: &CompactRequest) -> Value {
+    let mut body = compact_body(req);
+    let key = crate::subagent::cache_key(req.conversation_id.trim());
+    if !key.is_empty() && body["model"].as_str().is_some_and(is_grok_model) {
+        body["prompt_cache_key"] = json!(key);
+    }
+    body
+}
+
+/// A refusal that a field we added could cause: HTTP 400 or 422.
+fn refused_body(err: &ClientError) -> bool {
+    matches!(err, ClientError::Protocol(m) if m.starts_with("HTTP 400") || m.starts_with("HTTP 422"))
+}
+
 /// Largest compaction reply read (the opaque item grows with the conversation).
 const COMPACT_REPLY_CAP: u64 = 64 * 1024 * 1024;
 
@@ -768,6 +784,11 @@ pub struct XaiClient {
     url: String,
     /// Set by [`XaiClient::deferrable`]: eligible asks go through the Batch API.
     batch: Option<crate::batch::BatchPolicy>,
+    /// Set once the compact endpoint answered 400 or 422 to a body with
+    /// `prompt_cache_key` and took the same body without it: that key is not in
+    /// the endpoint's docs, so from then on this client sends only `model` and
+    /// `input` there.
+    compact_key_refused: AtomicBool,
 }
 
 /// One Batch API call on api.x.ai: the root, or a batch id with `/requests`,
@@ -831,6 +852,7 @@ impl XaiClient {
             auth_kind,
             url: RESPONSES_URL.to_string(),
             batch: None,
+            compact_key_refused: AtomicBool::new(false),
         }
     }
 
@@ -912,7 +934,11 @@ impl XaiClient {
                 format!("Bearer {bearer}")
             })
             .header("User-Agent", USER_AGENT)
-            .header("x-grok-conv-id", conversation_id)
+            // A fork rides its chat's conversation, as its cache key does.
+            .header(
+                "x-grok-conv-id",
+                &crate::subagent::cache_key(conversation_id.trim()),
+            )
             .header("Accept", accept)
             .any_status();
         if let Some(limit) = call_timeout {
@@ -1020,6 +1046,7 @@ impl XaiClient {
         req: &CompactRequest,
         cancel: &CancelToken,
         limit: Option<Duration>,
+        keyed: bool,
     ) -> Result<CompactOutput, ClientError> {
         if cancel.is_cancelled() {
             return Err(ClientError::Cancelled);
@@ -1029,7 +1056,11 @@ impl XaiClient {
             &req.conversation_id,
             "application/json",
             limit,
-            compact_body(req),
+            if keyed {
+                keyed_compact_body(req)
+            } else {
+                compact_body(req)
+            },
         )?;
         let mut text = String::new();
         response
@@ -1141,9 +1172,26 @@ impl ModelClient for XaiClient {
     ) -> Option<Result<CompactOutput, ClientError>> {
         let url = self.compact_url()?;
         let deadline = std::time::Instant::now() + req.timeout;
-        Some(Self::with_retries(cancel, Some(deadline), |limit| {
-            self.compact_once(&url, req, cancel, limit)
-        }))
+        let call = |keyed: bool| {
+            Self::with_retries(cancel, Some(deadline), |limit| {
+                self.compact_once(&url, req, cancel, limit, keyed)
+            })
+        };
+        let keyed = !self.compact_key_refused.load(Ordering::Relaxed)
+            && keyed_compact_body(req).get("prompt_cache_key").is_some();
+        let first = call(keyed);
+        if !(keyed && first.as_ref().is_err_and(refused_body)) {
+            return Some(first);
+        }
+        // The endpoint may not take the key: once more with the documented body.
+        let again = call(false);
+        if again.is_ok() {
+            self.compact_key_refused.store(true, Ordering::Relaxed);
+            eprintln!(
+                "grokhub compact: the compact endpoint refused prompt_cache_key; sending model and input only"
+            );
+        }
+        Some(again)
     }
 }
 
@@ -1873,6 +1921,18 @@ mod tests {
                 {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
             ]})
         );
+        // The keyed body adds only the chat's cache key, and only for Grok.
+        let mut keyed = keyed_compact_body(&req);
+        assert_eq!(keyed["prompt_cache_key"], "c");
+        keyed.as_object_mut().unwrap().remove("prompt_cache_key");
+        assert_eq!(keyed, compact_body(&req));
+        let other_model = CompactRequest {
+            model: "gpt-5".into(),
+            ..req.clone()
+        };
+        assert!(keyed_compact_body(&other_model)
+            .get("prompt_cache_key")
+            .is_none());
     }
 
     fn grok_req(model: &str, effort: Option<&str>) -> ResponsesRequest {
