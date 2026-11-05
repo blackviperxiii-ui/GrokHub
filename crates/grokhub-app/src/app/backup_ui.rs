@@ -138,7 +138,7 @@ impl Cabin {
                 let shown = self.focus.backup.reminder.take();
                 self.set_chip_undo(
                     &chip.label,
-                    super::chips::UndoKind::BackupSnooze(before, shown),
+                    super::chips::UndoKind::BackupSnooze(Box::new(before), shown),
                 );
             }
             // The one-taps stay so the snooze can be tried again.

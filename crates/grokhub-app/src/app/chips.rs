@@ -47,9 +47,10 @@ pub(super) struct ChipUndo {
 
 #[derive(Debug, Clone)]
 pub(super) enum UndoKind {
-    /// The backup state and reminder from before the snooze.
+    /// The backup state and reminder from before the snooze. The state is
+    /// boxed so the undo stays small.
     BackupSnooze(
-        grokhub_core::backup_nudge::NudgeState,
+        Box<grokhub_core::backup_nudge::NudgeState>,
         Option<grokhub_core::backup_nudge::Reminder>,
     ),
     /// The game whose release-day reminder was just added.
@@ -598,7 +599,7 @@ impl Cabin {
             return;
         };
         match u.kind {
-            UndoKind::BackupSnooze(state, reminder) => self.undo_backup_snooze(state, reminder),
+            UndoKind::BackupSnooze(state, reminder) => self.undo_backup_snooze(*state, reminder),
             UndoKind::RadarRemind(id) => self.undo_radar_remind(id),
         }
         self.chip_paint_key.clear();
