@@ -1345,12 +1345,7 @@ fn flatten(slots: &BTreeMap<String, std::sync::Arc<Mutex<SlotInner>>>) -> Vec<To
     out
 }
 
-fn clip_chars(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        return text.to_string();
-    }
-    text.chars().take(max).collect()
-}
+use crate::skills::clip_chars;
 
 fn clip_err(err: &str) -> String {
     clip_chars(err.trim(), 300)

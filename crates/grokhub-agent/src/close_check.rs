@@ -438,9 +438,7 @@ fn step_label(step: &str) -> String {
     label.trim().to_string()
 }
 
-fn clip_chars(text: &str, max_chars: usize) -> String {
-    text.chars().take(max_chars).collect()
-}
+use crate::skills::clip_chars;
 
 #[cfg(test)]
 mod tests {

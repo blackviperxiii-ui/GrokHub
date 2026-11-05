@@ -81,20 +81,9 @@ pub fn settings(config_dir: &Path) -> Settings {
 }
 
 fn parse_file(text: &str) -> Settings {
-    let mut enabled = true;
-    for line in text.lines() {
-        let line = line.split('#').next().unwrap_or("").trim();
-        if line.is_empty() {
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        if key.trim().eq_ignore_ascii_case("enabled") {
-            enabled = !value.trim().eq_ignore_ascii_case("false");
-        }
+    Settings {
+        enabled: crate::config_file::parse(CONFIG_NAME, text).flag("enabled", true),
     }
-    Settings { enabled }
 }
 
 /// Bind the conversation id for deferred schema state on this thread.
@@ -605,6 +594,8 @@ mod tests {
     /// eager read `know_me_tags` (the agent's only view of Know me) 184.
     /// Eager `web_search` (OpenRouter / local always see the schema) added 472
     /// to Chat/Agent (10_503 → 10_975) and background (9_323 → 9_795).
+    /// Grep's `-i` and `output_mode` args (R2-30: ask for paths or counts
+    /// instead of 200 lines) added 143 to Chat/Agent and background, 146 to Plan/Ask.
     #[test]
     fn eager_schema_payload_stays_within_budget_per_profile() {
         use super::super::set::ToolSet;
@@ -614,21 +605,21 @@ mod tests {
                 "chat",
                 profile(PermMode::Ask, false, true),
                 full.clone(),
-                // +150 for the shell's outside_sandbox arg (HX-11).
-                11_125,
+                // +150 for the shell's outside_sandbox arg (HX-11), +143 for grep's modes.
+                11_268,
             ),
             (
                 "agent",
                 profile(PermMode::Always, false, true),
                 full.clone(),
-                11_125,
+                11_268,
             ),
-            ("plan/ask", profile(PermMode::Ask, true, true), full, 6_824),
+            ("plan/ask", profile(PermMode::Ask, true, true), full, 6_970),
             (
                 "background",
                 profile(PermMode::Auto, false, false),
                 ToolSet::background(),
-                9_945,
+                10_088,
             ),
         ];
         for (label, gate, set, budget) in cases {

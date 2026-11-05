@@ -82,14 +82,7 @@ fn read_capped(path: &Path, cap: usize) -> String {
 }
 
 fn clip_str(text: &str, max_bytes: usize) -> String {
-    if text.len() <= max_bytes {
-        return text.to_string();
-    }
-    let mut end = max_bytes;
-    while end > 0 && !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    text[..end].to_string()
+    crate::episode::clip_bytes(text, max_bytes).to_string()
 }
 
 #[cfg(test)]
