@@ -39,6 +39,9 @@ pub enum HardClass {
     /// A change to a file that runs code later (a build script, a package
     /// script, an editor task), made after the run read outside text.
     RunsLater,
+    /// An install of a hardware tool whose kernel driver Microsoft's
+    /// vulnerable driver blocklist names (anti-cheats won't start with it).
+    FlaggedDriver,
 }
 
 impl HardClass {
@@ -52,6 +55,7 @@ impl HardClass {
             Self::AgentConfig => "agent_config",
             Self::OutsideValue => "outside_value",
             Self::RunsLater => "runs_later",
+            Self::FlaggedDriver => "flagged_driver",
         }
     }
 
@@ -65,6 +69,7 @@ impl HardClass {
             Self::AgentConfig => "Agent instructions and settings",
             Self::OutsideValue => "Value from outside text",
             Self::RunsLater => "File that runs code later",
+            Self::FlaggedDriver => "Driver anti-cheats block",
         }
     }
 
@@ -78,6 +83,7 @@ impl HardClass {
             "agent_config" => Some(Self::AgentConfig),
             "outside_value" => Some(Self::OutsideValue),
             "runs_later" => Some(Self::RunsLater),
+            "flagged_driver" => Some(Self::FlaggedDriver),
             _ => None,
         }
     }
@@ -1652,6 +1658,13 @@ pub const GB_DENY_GAPS: &[(&str, &str)] = &[
     ("cp linux.efi /boot/efi/EFI/Linux/", "a copy, move or write into /boot or the ESP (the target path, not the head)"),
 ];
 
+/// An install of a tool whose driver Microsoft's cached vulnerable driver
+/// blocklist names (round 3 item 36).
+fn flagged_driver(cmd: &str) -> Option<HardClass> {
+    let list = grokhub_core::driver_check::cached(&crate::perm::config_dir());
+    grokhub_core::driver_check::flag(cmd, &list).map(|_| HardClass::FlaggedDriver)
+}
+
 /// Floor for shell commands: host_safety paths, rm -rf /, fork bomb, mkfs, dd to a disk,
 /// curl|sh as root.
 pub fn hard_floor(name: &str, arguments: &str) -> Option<HardFloor> {
@@ -1694,6 +1707,9 @@ fn ledger_write(name: &str, arguments: &str) -> bool {
 fn command_floor(cmd: &str) -> Option<String> {
     if let Some(why) = host_safety::forbidden_reason(cmd) {
         return Some(why.to_string());
+    }
+    if let Some(why) = grokhub_core::driver_check::input_driver_install(cmd) {
+        return Some(why);
     }
     if cmd.to_ascii_lowercase().contains("consent.jsonl") {
         return Some(LEDGER_FLOOR.into());
@@ -1969,7 +1985,9 @@ pub fn hard_class(name: &str, arguments: &str) -> Option<HardClass> {
         let cmd = command_arg(arguments)
             .unwrap_or_default()
             .to_ascii_lowercase();
-        return command_class(&cmd).or_else(|| asks_outside_sandbox(arguments));
+        return command_class(&cmd)
+            .or_else(|| flagged_driver(&cmd))
+            .or_else(|| asks_outside_sandbox(arguments));
     }
     if let Some(class) =
         crate::self_manage::self_class(name, &serde_json::from_str(arguments).unwrap_or_default())
@@ -4047,5 +4065,41 @@ mod tests {
             assert_eq!(hard_class(name, &args), None, "{name} {args}");
         }
         assert_eq!(HardClass::AgentConfig.as_str(), "agent_config");
+    }
+
+    #[test]
+    fn input_drivers_hit_the_floor_and_flagged_drivers_get_a_card() {
+        let floor = hard_floor("run_terminal_command", &sh("winget install interception"))
+            .expect("an input driver is refused");
+        assert!(floor.reason.contains("Interception"), "{}", floor.reason);
+        assert_eq!(
+            HardClass::parse(HardClass::FlaggedDriver.as_str()),
+            Some(HardClass::FlaggedDriver)
+        );
+        let dir = crate::harness::test_dir("flagged-driver");
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let install = sh("winget install -e --id Rem0o.FanControl");
+        // No cached blocklist: no flag.
+        assert_eq!(hard_class("run_terminal_command", &install), None);
+        grokhub_core::driver_check::save(
+            &dir,
+            &grokhub_core::driver_check::Blocklist {
+                fetched_at: 1,
+                names: ["winring0x64.sys".to_string()].into_iter().collect(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            hard_class("run_terminal_command", &install),
+            Some(HardClass::FlaggedDriver)
+        );
+        assert_eq!(
+            hard_class(
+                "run_terminal_command",
+                &sh("winget install Mozilla.Firefox")
+            ),
+            None
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

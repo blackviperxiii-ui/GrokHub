@@ -90,6 +90,7 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("src-tauri/src/pulse_feed.rs", 2, "Pulse feed: guard_quiet + public_only_resolve; LoopbackNet is loopback only"),
     ("crates/grokhub-app/src/github.rs", 1, "GitHub tool: egress_ok"),
     ("crates/grokhub-app/src/mods_fetch.rs", 1, "mod sources: offline::refuse + egress_ok on every hop"),
+    ("crates/grokhub-app/src/driver_blocklist.rs", 1, "Microsoft's driver blocklist (Windows, monthly): offline::refuse + egress_ok on every hop, public_only"),
     ("crates/grokhub-agent/src/plugins.rs", 2, "marketplace index: egress guard; plugin git clone: offline::check_url"),
     ("crates/grokhub-app/src/app/library_ui/game_art.rs", 1, "store art: egress_ok"),
     ("src-tauri/src/library.rs", 1, "Library store art: guard_quiet + public_only resolve, no redirects; Play only spawns the OS opener for steam://rungameid/<digits>"),
