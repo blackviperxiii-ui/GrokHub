@@ -329,6 +329,38 @@ fn finish(
     }
 }
 
+/// Chats that have carried recalled memory lines. Kept small: the least
+/// recently used chat goes first, so the open one keeps its mark.
+const MAX_RECALLED_CHATS: usize = 256;
+
+fn recalled_chats() -> std::sync::MutexGuard<'static, crate::lru_map::LruMap<()>> {
+    static RECALLED: std::sync::Mutex<crate::lru_map::LruMap<()>> =
+        std::sync::Mutex::new(crate::lru_map::LruMap::new(MAX_RECALLED_CHATS));
+    RECALLED.lock().unwrap_or_else(|err| err.into_inner())
+}
+
+/// Whether this step may carry xAI's hosted search. `recalled` sticks for the
+/// chat: once it has seen recalled memory lines, hosted search stays off for
+/// the rest of that chat, even after a compaction folds the lines away or a
+/// later turn recalls nothing. So the tool list flips at most once per chat,
+/// and only toward the safe side. An empty `chat` sticks for this run only.
+fn hosted_for_step(
+    gate: &Gate,
+    workspace: &Path,
+    history: &[InputItem],
+    chat: &str,
+    recalled: &mut bool,
+) -> bool {
+    if !*recalled {
+        *recalled = !crate::memory::recall_lines(history).is_empty()
+            || (!chat.is_empty() && recalled_chats().get(chat).is_some());
+    }
+    if *recalled && !chat.is_empty() {
+        recalled_chats().insert(chat, ());
+    }
+    crate::perm::hosted_search_allowed(gate, &crate::perm::Policy::load(workspace).rules, *recalled)
+}
+
 enum CompactPass {
     Ok,
     Cancelled,
@@ -518,6 +550,10 @@ fn run_turn(
     // ROPE / PACT: which addresses, sites and numbers came from you.
     let _trace =
         crate::harness::provenance::begin(history, &recall_lines, input.workspace, input.depth);
+    // Hosted search stays off for the rest of the chat once recalled lines
+    // were in it, so a compaction that folds them away can't flip the tool
+    // list back.
+    let mut recalled = !recall_lines.is_empty();
     let _recall = crate::harness::RecallScope::enter(recall_lines);
     input.permits.drain();
     let mut usage = input.usage_base.clone();
@@ -684,10 +720,12 @@ fn run_turn(
             input: wire,
             conversation_id: input.conversation_id.to_string(),
             tools,
-            hosted_search: crate::perm::hosted_search_allowed(
+            hosted_search: hosted_for_step(
                 &gate,
-                &crate::perm::Policy::load(input.workspace).rules,
-                !crate::memory::recall_lines(history).is_empty(),
+                input.workspace,
+                history,
+                input.conversation_id,
+                &mut recalled,
             ),
             call_timeout: None,
         };
@@ -3339,6 +3377,43 @@ mod tests {
             self.has_cabin_search.lock().unwrap().push(cabin);
             self.script.stream(req, cancel, sink)
         }
+    }
+
+    #[test]
+    fn once_recall_was_in_the_run_hosted_search_stays_off() {
+        let _online = grokhub_core::offline::force_for_thread(false);
+        let dir = workspace("hosted-sticky");
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let gate = chat(gate::PermMode::Ask, true, false);
+        let plain = vec![InputItem::Message {
+            role: "user".into(),
+            content: vec![ContentPart::InputText("look it up".into())],
+        }];
+        let mut fresh = false;
+        assert!(hosted_for_step(&gate, &dir, &plain, "", &mut fresh));
+        let mut recalled = true;
+        assert!(
+            !hosted_for_step(&gate, &dir, &plain, "", &mut recalled),
+            "no recall left in the history, but the run saw some"
+        );
+        assert!(recalled);
+
+        // The mark outlives the run: a later turn of the same chat that
+        // recalls nothing still keeps hosted search off.
+        let chat = "hosted-sticky-chat";
+        let mut first = true;
+        assert!(!hosted_for_step(&gate, &dir, &plain, chat, &mut first));
+        let mut later = false;
+        assert!(
+            !hosted_for_step(&gate, &dir, &plain, chat, &mut later),
+            "the chat saw recalled lines in an earlier turn"
+        );
+        assert!(later);
+        let mut other = false;
+        assert!(
+            hosted_for_step(&gate, &dir, &plain, "hosted-sticky-other", &mut other),
+            "another chat is not marked"
+        );
     }
 
     #[test]
