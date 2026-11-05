@@ -137,7 +137,8 @@ pub(crate) fn run_adoptable(
                 .ok()
                 .and_then(|o| crate::sandbox::network_note(plan.as_ref(), o.failed, &o.text))
                 .map(str::to_string)
-        });
+        })
+        .or_else(|| crate::package_age::lockfile_hint(&command, &cwd));
     match (result, note) {
         (Ok(mut output), Some(note)) => {
             output.text = format!("{}\n{note}", output.text);
@@ -378,6 +379,7 @@ fn bash(
         .env_remove("BASH_ENV")
         .env_remove("ENV")
         .envs(crate::sudo_pass::shell_env())
+        .envs(crate::package_age::env())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -1319,6 +1321,11 @@ mod win {
     }
 
     fn env_wide(extra: &[(String, String)]) -> Vec<u16> {
+        // Round 3 item 38: the package cooldown, under the sandbox's own env.
+        let extra: Vec<(String, String)> = crate::package_age::env()
+            .into_iter()
+            .chain(extra.iter().cloned())
+            .collect();
         // Windows names are case-insensitive and the block is sorted that way:
         // key by upper case so an extra `HTTPS_PROXY` replaces `https_proxy`.
         let mut map = std::collections::BTreeMap::new();
@@ -1326,7 +1333,7 @@ mod win {
             for (key, value) in std::env::vars() {
                 map.insert(key.to_uppercase(), (key, value));
             }
-            for (key, value) in extra {
+            for (key, value) in &extra {
                 if key.contains('=') || key.contains('\0') || value.contains('\0') {
                     continue;
                 }
