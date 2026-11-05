@@ -3148,6 +3148,7 @@ impl Cabin {
                     ComposerStackSlot::ScreenshotOffer => {
                         self.ui_screenshot_offer_chip(ui);
                     }
+                    ComposerStackSlot::Chips if !self.cfg.suggestions => {}
                     ComposerStackSlot::Chips => {
                         ui.add_space(6.0);
                         // While a reply streams the row's chips are for the

@@ -3791,8 +3791,10 @@ mod tests {
 
     #[test]
     fn chip_cluster_lead_centers_within_a_pixel() {
-        assert_eq!(chip_cluster_w(&[100.0, 80.0, 60.0], 2, CHIP_GAP), 186.0);
-        assert_eq!(chip_cluster_w(&[100.0, 80.0, 60.0], 3, CHIP_GAP), 252.0);
+        // Chips sit one 8 px gap apart.
+        assert_eq!(CHIP_GAP, 8.0);
+        assert_eq!(chip_cluster_w(&[100.0, 80.0, 60.0], 2, CHIP_GAP), 188.0);
+        assert_eq!(chip_cluster_w(&[100.0, 80.0, 60.0], 3, CHIP_GAP), 256.0);
         assert_eq!(chip_cluster_w(&[100.0], 5, CHIP_GAP), 100.0);
         assert_eq!(chip_cluster_w(&[], 0, CHIP_GAP), 0.0);
         assert_eq!(chip_cluster_lead(600.0, 252.0, 1.0), 174.0);
@@ -3816,6 +3818,70 @@ mod tests {
                 assert_eq!((lead * ppp).fract(), 0.0, "lead lands on a physical pixel");
             }
         }
+    }
+
+    /// One pass of the row with these key presses; what the row returned.
+    fn chip_row_keys(
+        ctx: &egui::Context,
+        chips: &[grokhub_core::QuickChip],
+        keys: &[(egui::Key, egui::Modifiers)],
+    ) -> Option<ChipRowAct> {
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1200.0, 400.0),
+            )),
+            events: keys
+                .iter()
+                .map(|&(key, modifiers)| egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let mut act = None;
+        let _ = crate::theme::test_pass(ctx, raw, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                act = quick_chip_row(ui, chips);
+            });
+        });
+        act
+    }
+
+    #[test]
+    fn the_keyboard_picks_chips_too() {
+        let chips = vec![
+            sample_chip("Continue", true),
+            sample_chip("Fix the failing test", false),
+            sample_chip("Plan", false),
+        ];
+        let ctx = egui::Context::default();
+        install_chip_fonts(&ctx);
+        let none = egui::Modifiers::NONE;
+        assert_eq!(chip_row_keys(&ctx, &chips, &[]), None);
+        // Alt and a number pick that slot.
+        let alt2 = [(egui::Key::Num2, egui::Modifiers::ALT)];
+        assert_eq!(
+            chip_row_keys(&ctx, &chips, &alt2),
+            Some(ChipRowAct::Apply(1))
+        );
+        // A slot past the row picks nothing.
+        let alt9 = [(egui::Key::Num9, egui::Modifiers::ALT)];
+        assert_eq!(chip_row_keys(&ctx, &chips, &alt9), None);
+        // Tab reaches the first chip, Right moves on, Enter picks it.
+        assert_eq!(chip_row_keys(&ctx, &chips, &[(egui::Key::Tab, none)]), None);
+        assert_eq!(
+            chip_row_keys(&ctx, &chips, &[(egui::Key::ArrowRight, none)]),
+            None
+        );
+        assert_eq!(
+            chip_row_keys(&ctx, &chips, &[(egui::Key::Enter, none)]),
+            Some(ChipRowAct::Apply(1))
+        );
     }
 
     fn chip_pills_in_column(

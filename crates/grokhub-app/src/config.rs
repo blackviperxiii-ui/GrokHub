@@ -433,6 +433,10 @@ pub struct AppConfig {
     /// Inline sentence autocomplete in the chat composer (ghost text). Off by default.
     #[serde(default)]
     pub composer_autocomplete: bool,
+    /// Settings → Behavior: quick chips (suggested next steps) under the
+    /// composer, on Home and after replies. The one chip setting; on by default.
+    #[serde(default = "default_suggestions")]
+    pub suggestions: bool,
     /// Settings → Behavior: suggest help for the app the user was just in,
     /// from its process name only. Off by default.
     #[serde(default)]
@@ -773,6 +777,10 @@ fn default_imagine_wall() -> bool {
     true
 }
 
+fn default_suggestions() -> bool {
+    true
+}
+
 fn default_budget_pause() -> bool {
     true
 }
@@ -876,6 +884,7 @@ impl Default for AppConfig {
             imagine_wall: default_imagine_wall(),
             composer_glow: false,
             composer_autocomplete: false,
+            suggestions: true,
             focus_help: false,
             resume_code: false,
             downloads_tidy: false,
@@ -1725,6 +1734,21 @@ mod tests {
         fs::write(root.join("app.json"), r#"{"deviceName":"cabin"}"#).unwrap();
         assert!(!load().composer_glow);
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn suggestions_default_on_and_round_trip_off() {
+        assert!(AppConfig::default().suggestions);
+        let absent: AppConfig = serde_json::from_str(r#"{"deviceName":"cabin"}"#).unwrap();
+        assert!(
+            absent.suggestions,
+            "a config from before the switch keeps chips on"
+        );
+        let off: AppConfig =
+            serde_json::from_str(r#"{"deviceName":"cabin","suggestions":false}"#).unwrap();
+        assert!(!off.suggestions);
+        let text = serde_json::to_string(&off).unwrap();
+        assert!(text.contains("\"suggestions\":false"), "{text}");
     }
 
     #[test]

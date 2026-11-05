@@ -685,8 +685,8 @@ pub struct Cabin {
     goal_step: u32,
     followup_step: u32,
     stream_buf: String,
-    /// The reply's own chips and the filter keeping their block off screen.
-    reply_chips: chips::ReplyChips,
+    /// The reply chips' stream filter and the last Do chip's undo.
+    chip_live: chips::ChipLive,
     thought_buf: String,
     chat_views: Vec<ChatView>,
     /// Fold key per `chat_views` row (0 for non-thoughts). Built with the views.
@@ -1335,7 +1335,7 @@ impl Cabin {
             goal_step,
             followup_step: 0,
             stream_buf: String::new(),
-            reply_chips: Default::default(),
+            chip_live: Default::default(),
             thought_buf: String::new(),
             chat_views: vec![],
             chat_view_keys: vec![],
@@ -1831,7 +1831,7 @@ impl Cabin {
             goal_step: 0,
             followup_step: 0,
             stream_buf: String::new(),
-            reply_chips: Default::default(),
+            chip_live: Default::default(),
             thought_buf: String::new(),
             chat_views: Vec::new(),
             chat_view_keys: Vec::new(),

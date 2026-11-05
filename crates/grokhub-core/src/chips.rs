@@ -34,6 +34,48 @@ pub enum ChipKind {
     Nav,
 }
 
+/// What a tap does. One rule per kind, the same on every surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChipAction {
+    /// Sends a message when the box is empty; with a draft typed, it is
+    /// added to the draft and nothing is sent.
+    Ask,
+    /// Opens a page, a guide or a link.
+    Go,
+    /// Runs a small app action right away, with an Undo after it.
+    Do,
+    /// Shows what would happen first (a command, a cleanup, a note) and
+    /// waits for the person to run it.
+    Review,
+}
+
+/// The id of the Undo chip that follows a `Do` chip for a short while.
+pub const UNDO_CHIP_ID: &str = "undo";
+
+/// The tap rule for a chip. Feature one-taps are told apart by their id.
+pub fn chip_action(chip: &QuickChip) -> ChipAction {
+    let id = chip.id.as_str();
+    if id == crate::backup_nudge::SNOOZE_ID
+        || id == UNDO_CHIP_ID
+        || id.starts_with(crate::release_radar::REMIND_PREFIX)
+    {
+        return ChipAction::Do;
+    }
+    if id.starts_with(crate::game_companion::GUIDES_PREFIX) {
+        return ChipAction::Go;
+    }
+    if id == crate::downloads_tidy::REVIEW_CHIP
+        || id.starts_with(crate::game_companion::NOTE_PREFIX)
+    {
+        return ChipAction::Review;
+    }
+    match chip.kind {
+        ChipKind::Chat => ChipAction::Ask,
+        ChipKind::Nav => ChipAction::Go,
+        ChipKind::Shell => ChipAction::Review,
+    }
+}
+
 /// A chip value from the retired model/effort chips (`__mode:think`).
 pub fn retired_mode_value(value: &str) -> bool {
     value.trim_start().starts_with("__mode:")
@@ -3332,6 +3374,25 @@ pub fn nav_from_chip_value(value: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_chip_kind_gets_one_tap_rule() {
+        let c = |id: &str, kind: ChipKind| chip(id, "Label here", "value", kind, 1.0, "");
+        assert_eq!(chip_action(&c("chat-x", ChipKind::Chat)), ChipAction::Ask);
+        assert_eq!(chip_action(&c("nav-x", ChipKind::Nav)), ChipAction::Go);
+        // A shell line is never run on tap: it is shown first.
+        assert_eq!(chip_action(&c("sh-x", ChipKind::Shell)), ChipAction::Review);
+        let snooze = c(crate::backup_nudge::SNOOZE_ID, ChipKind::Chat);
+        assert_eq!(chip_action(&snooze), ChipAction::Do);
+        let remind = format!("{}42", crate::release_radar::REMIND_PREFIX);
+        assert_eq!(chip_action(&c(&remind, ChipKind::Chat)), ChipAction::Do);
+        let guides = format!("{}42", crate::game_companion::GUIDES_PREFIX);
+        assert_eq!(chip_action(&c(&guides, ChipKind::Chat)), ChipAction::Go);
+        let note = format!("{}42", crate::game_companion::NOTE_PREFIX);
+        assert_eq!(chip_action(&c(&note, ChipKind::Chat)), ChipAction::Review);
+        let tidy = c(crate::downloads_tidy::REVIEW_CHIP, ChipKind::Chat);
+        assert_eq!(chip_action(&tidy), ChipAction::Review);
+    }
 
     fn msg(role: &str, content: &str) -> (String, String) {
         (role.into(), content.into())

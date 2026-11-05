@@ -331,15 +331,16 @@ pub use chip_trailer::{
     ChipTrailerFilter, CHIP_TRAILER_RULE,
 };
 pub use chips::{
-    build_quick_chips, cabin_pace, chip_dismissed_for_good, chip_intent, chip_key_embeds_chat_text,
-    chip_memory_key, chip_scan, chip_thread_from_messages, context_fingerprint,
-    detect_chip_context, detect_chip_stage, disk_is_low, empty_chip_memory, home_slash_cmd,
-    home_surface_from_nav, idea_talk_chips, local_lessons, nav_from_chip_value, predict_intents,
-    prune_retired_chip_memory, remember_chip_click, remember_chip_dismiss, remember_chip_outcome,
-    remember_chip_turn_outcome, remember_home_slash, remember_home_surface, remember_intent,
-    remember_typed_prompt, retired_mode_value, scrub_chat_text_chip_keys, skill_offer_chip,
-    top_habit_labels, CabinPace, ChipInput, ChipKind, ChipMemory, ChipSignals, ChipStage,
-    ChipThread, PredictedIntent, QuickChip, CHIP_HARD_MAX, CHIP_MEMORY_VERSION, CHIP_VISIBLE_MAX,
+    build_quick_chips, cabin_pace, chip_action, chip_dismissed_for_good, chip_intent,
+    chip_key_embeds_chat_text, chip_memory_key, chip_scan, chip_thread_from_messages,
+    context_fingerprint, detect_chip_context, detect_chip_stage, disk_is_low, empty_chip_memory,
+    home_slash_cmd, home_surface_from_nav, idea_talk_chips, local_lessons, nav_from_chip_value,
+    predict_intents, prune_retired_chip_memory, remember_chip_click, remember_chip_dismiss,
+    remember_chip_outcome, remember_chip_turn_outcome, remember_home_slash, remember_home_surface,
+    remember_intent, remember_typed_prompt, retired_mode_value, scrub_chat_text_chip_keys,
+    skill_offer_chip, top_habit_labels, CabinPace, ChipAction, ChipInput, ChipKind, ChipMemory,
+    ChipSignals, ChipStage, ChipThread, PredictedIntent, QuickChip, CHIP_HARD_MAX,
+    CHIP_MEMORY_VERSION, CHIP_VISIBLE_MAX, UNDO_CHIP_ID,
 };
 pub use connector::{
     connector_url_allowed, extract_connector_cmds, github_api_path, map_website_connector_name,
