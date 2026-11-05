@@ -419,6 +419,23 @@ pub fn run_loop(
     image: Option<&str>,
     on_event: &mut dyn FnMut(LoopEvent),
 ) -> LoopOut {
+    // Every way out of a turn (Stop, Halt, a denied step, an error) can leave
+    // calls of the last batch unanswered. Pair them on the way in, for chats
+    // saved like that, and on the way out, so no provider ever sees a call
+    // without its output.
+    crate::client::pair_orphan_calls(history);
+    let out = run_turn(input, history, user_text, image, on_event);
+    crate::client::pair_orphan_calls(history);
+    out
+}
+
+fn run_turn(
+    input: &LoopIn<'_>,
+    history: &mut Vec<InputItem>,
+    user_text: &str,
+    image: Option<&str>,
+    on_event: &mut dyn FnMut(LoopEvent),
+) -> LoopOut {
     let first_turn = history.is_empty();
     // A fork starts with its chat's history. Its budget counts what it adds
     // on top, until a compaction turns that history into its own.
@@ -2999,9 +3016,61 @@ mod tests {
             &HaltAfter(AtomicUsize::new(0)),
         );
         assert_eq!(out.stop, StopReason::Halted);
-        assert!(!history
+        // The halted call still gets an output, so the next request is valid.
+        let outputs: Vec<(&str, &str)> = history
             .iter()
-            .any(|item| matches!(item, InputItem::FunctionCallOutput { .. })));
+            .filter_map(|item| match item {
+                InputItem::FunctionCallOutput { call_id, output } => {
+                    Some((call_id.as_str(), output.as_str()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(outputs, vec![("h", crate::client::NOT_RUN)]);
+
+        let halt_batch = Script {
+            turns: Mutex::new(vec![ScriptTurn {
+                text: String::new(),
+                calls: vec![
+                    call("h1", "read_file", r#"{"target_file":"note.txt"}"#),
+                    call("h2", "read_file", r#"{"target_file":"note.txt"}"#),
+                    call("h3", "read_file", r#"{"target_file":"note.txt"}"#),
+                ],
+                usage: Usage::default(),
+                truncated: false,
+            }]),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+        let (out, history, _) = run(
+            &halt_batch,
+            &dir,
+            4,
+            &CancelToken::new(),
+            &SteerQueue::new(),
+            &HaltAfter(AtomicUsize::new(0)),
+        );
+        assert_eq!(out.stop, StopReason::Halted);
+        let calls: Vec<&str> = history
+            .iter()
+            .filter_map(|item| match item {
+                InputItem::FunctionCall { call_id, .. } => Some(call_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        let answered: Vec<&str> = history
+            .iter()
+            .filter_map(|item| match item {
+                InputItem::FunctionCallOutput { call_id, .. } => Some(call_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(calls, vec!["h1", "h2", "h3"]);
+        assert_eq!(
+            answered, calls,
+            "every call of a halted batch is answered, in order"
+        );
 
         let cap_client = AlwaysTool {
             calls: AtomicUsize::new(0),
