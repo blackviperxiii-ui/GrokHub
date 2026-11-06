@@ -793,65 +793,14 @@ pub(super) fn frame_rate_text(
     presenter: Option<&str>,
 ) -> TileText {
     use grokhub_agent::indexers::display_fps::FpsBlock;
-    let Some(state) = reading else {
-        return TileText {
-            big: "Not read".into(),
-            caption: "Loadout never hooks into games".into(),
-            detail: Some("Xbox Game Bar (Win+G) or Steam's in-game counter show FPS safely".into()),
-            tone: Tone::Quiet,
-        };
-    };
-    match state {
-        FpsState::Rate(r) if windows => TileText {
-            big: format!("{} FPS", r.round() as u32),
-            caption: match presenter {
-                Some(p) => format!("From {}", p.strip_suffix(".exe").unwrap_or(p)),
-                None => "Nothing is drawing frames".into(),
-            },
-            detail: Some("Counted by Windows, never inside the game".into()),
-            tone: if presenter.is_some() {
-                Tone::Normal
-            } else {
-                Tone::Quiet
-            },
-        },
-        FpsState::Rate(r) => TileText {
-            big: format!("{} FPS", r.round() as u32),
-            caption: "Frames on screen".into(),
-            detail: Some("Counted by the kernel, never inside the game".into()),
-            tone: Tone::Normal,
-        },
-        FpsState::Starting => TileText {
-            big: "...".into(),
-            caption: "Counting frames on screen".into(),
-            detail: None,
-            tone: Tone::Quiet,
-        },
-        FpsState::Blocked(FpsBlock::NeedsPermission) if windows => TileText {
-            big: "Not read".into(),
-            caption: "Needs a one-time admin setup".into(),
-            detail: Some("Copy setup, read it, run it in an admin PowerShell".into()),
-            tone: Tone::Warn,
-        },
-        FpsState::Blocked(FpsBlock::NeedsPermission) => TileText {
-            big: "Not read".into(),
-            caption: "Needs a sudo setup first".into(),
-            detail: Some("Copy setup, read it, run it in a terminal".into()),
-            tone: Tone::Warn,
-        },
-        FpsState::Blocked(_) if windows => TileText {
-            big: "Not read".into(),
-            caption: "Windows didn't start the frame trace".into(),
-            detail: Some("Xbox Game Bar (Win+G) or Steam's counter show FPS safely".into()),
-            tone: Tone::Quiet,
-        },
-        FpsState::Blocked(_) => TileText {
-            big: "Not read".into(),
-            caption: "This driver doesn't report screen frames".into(),
-            detail: Some("Steam's in-game FPS counter shows it safely".into()),
-            tone: Tone::Quiet,
-        },
-    }
+    use grokhub_core::home::text::FpsRead;
+    let read = reading.map(|state| match state {
+        FpsState::Starting => FpsRead::Starting,
+        FpsState::Rate(r) => FpsRead::Rate(r),
+        FpsState::Blocked(FpsBlock::NeedsPermission) => FpsRead::NeedsSetup,
+        FpsState::Blocked(_) => FpsRead::NoTrace,
+    });
+    grokhub_core::home::text::frame_rate_text(read, windows, presenter)
 }
 
 /// The Windows account the setup adds to Performance Log Users.

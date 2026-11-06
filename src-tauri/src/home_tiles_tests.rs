@@ -97,3 +97,20 @@ fn disk_scanning_tiles_are_kept_for_their_refresh_time_only() {
         "small reads stay fresh"
     );
 }
+
+#[test]
+fn frame_rate_reads_the_os_count_and_never_the_game() {
+    use grokhub_core::home::text::FpsRead;
+    let live = frame_rate_view(Some(FpsRead::Rate(143.6)), false, None);
+    assert_eq!(live.text.big, "144 FPS");
+    assert_eq!(live.tag.as_deref(), Some("LIVE"));
+    assert!(live.buttons.is_empty());
+    let win = frame_rate_view(Some(FpsRead::Rate(239.7)), true, Some("cs2.exe"));
+    assert_eq!(win.text.caption, "From cs2");
+    let none = frame_rate_view(None, false, None);
+    assert_eq!(none.text.big, "Not read");
+    assert!(none.text.caption.ends_with("never hooks into games"));
+    assert_eq!(none.buttons.len(), 1);
+    let setup = frame_rate_view(Some(FpsRead::NeedsSetup), true, None);
+    assert_eq!(setup.text.caption, "Needs a one-time admin setup");
+}
