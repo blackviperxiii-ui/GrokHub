@@ -12,6 +12,7 @@ const api = vi.hoisted(() => ({
   libraryPlay: vi.fn<(appId: number) => Promise<string>>(),
   homeOpenClip: vi.fn<(index: number) => Promise<void>>(),
   libraryFriends: vi.fn<() => Promise<void>>(),
+  homeTurnOn: vi.fn<(feature: string) => Promise<void>>(),
   openUrl: vi.fn<(url: string) => Promise<void>>(),
 }));
 
@@ -161,6 +162,7 @@ describe("Home", () => {
     api.libraryPlay.mockReset().mockResolvedValue("Starting");
     api.homeOpenClip.mockReset().mockResolvedValue();
     api.libraryFriends.mockReset().mockResolvedValue();
+    api.homeTurnOn.mockReset().mockResolvedValue();
     api.openUrl.mockReset().mockResolvedValue();
   });
 
@@ -249,6 +251,35 @@ describe("Home", () => {
     render(<Home {...routes()} remote={false} />);
     await userEvent.click(await screen.findByRole("button", { name: /Clutch/ }));
     expect(api.homeOpenClip).toHaveBeenCalledWith(1);
+  });
+
+  it("Turn on switches the internet log in place and reads Home again", async () => {
+    const offPage = {
+      ...PAGE,
+      slots: [
+        slot({
+          slot: "medium-1",
+          size: "medium",
+          module: "speeds",
+          name: "Speeds",
+          tile: {
+            kind: "view",
+            view: view({
+              state: "off",
+              text: { big: "Off", caption: "Turn on the internet log", detail: null, tone: "quiet" },
+              buttons: [{ label: "Turn on", action: { kind: "turnOn", feature: "net_log" }, primary: true }],
+            }),
+          },
+        }),
+      ],
+    };
+    api.getHome.mockResolvedValue(offPage);
+    const go = routes();
+    render(<Home {...go} remote={false} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Turn on" }));
+    expect(api.homeTurnOn).toHaveBeenCalledWith("net_log");
+    await vi.waitFor(() => expect(api.getHome.mock.calls.length).toBeGreaterThan(1));
+    expect(go.onSettings).not.toHaveBeenCalled();
   });
 
   it("the Squad tile opens Steam's friends list on the PC only", async () => {

@@ -55,7 +55,7 @@ fn offset_of(clock: Clock, now_ms: u64) -> i32 {
         .unwrap_or(guess)
 }
 
-fn utc_offset() -> Option<i32> {
+pub fn utc_offset() -> Option<i32> {
     *UTC_OFFSET.lock().unwrap_or_else(|e| e.into_inner())
 }
 

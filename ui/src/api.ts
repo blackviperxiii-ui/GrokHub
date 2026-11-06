@@ -1927,6 +1927,11 @@ export function libraryPlay(appId: number): Promise<string> {
   return invoke<string>("library_play", { appId });
 }
 
+/** A Home tile's Turn on, for a switch that needs nothing else. */
+export function homeTurnOn(feature: string): Promise<void> {
+  return invoke<void>("home_turn_on", { feature });
+}
+
 /** Opens Steam's own friends list, for Home's Squad tile. */
 export function libraryFriends(): Promise<void> {
   return invoke<void>("library_friends");

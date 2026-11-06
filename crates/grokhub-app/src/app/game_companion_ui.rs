@@ -335,6 +335,20 @@ impl Cabin {
         grokhub_core::game_watch_pick::settings_line(games)
     }
 
+    /// Switch the game launch companion on or off and save it.
+    pub(super) fn set_game_companion(&mut self, on: bool) {
+        self.cfg.game_companion = on;
+        // The game watcher keeps what the last sample saw, so its
+        // listener doesn't drop mid-match.
+        let seen = std::mem::take(&mut self.focus.game.watch);
+        self.focus.game = GameUi::default();
+        if self.cfg.game_watch {
+            self.focus.game.watch = seen;
+        }
+        self.chip_paint_key.clear();
+        self.persist_cfg();
+    }
+
     pub(super) fn ui_game_companion_row(&mut self, ui: &mut egui::Ui) {
         let mut on = self.cfg.game_companion;
         if crate::cards::settings_toggle(
@@ -343,16 +357,7 @@ impl Cabin {
             "When you start a game from your Steam library, the Feed shows what changed since you last played, a link to top guides, and your note from last time. It only reads what Steam reports as running: no screen capture, nothing drawn over the game, nothing a game's anti-cheat would see.",
             &mut on,
         ) {
-            self.cfg.game_companion = on;
-            // The game watcher keeps what the last sample saw, so its
-            // listener doesn't drop mid-match.
-            let seen = std::mem::take(&mut self.focus.game.watch);
-            self.focus.game = GameUi::default();
-            if self.cfg.game_watch {
-                self.focus.game.watch = seen;
-            }
-            self.chip_paint_key.clear();
-            self.persist_cfg();
+            self.set_game_companion(on);
             self.status = "Saved".into();
         }
         let line = self.game_watch_first_line(now_ms());

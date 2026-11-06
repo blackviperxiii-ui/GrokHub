@@ -1043,6 +1043,7 @@ mod tests {
             "library_play",
             "home_open_clip",
             "library_friends",
+            "home_turn_on",
             "set_mission_done",
         ] {
             assert!(!web_command(name), "{name}");
