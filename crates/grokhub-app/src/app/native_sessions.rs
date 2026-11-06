@@ -370,22 +370,23 @@ impl Cabin {
         }
     }
 
-    fn export_native_history(&mut self, id: &str) {
-        let md = match grokhub_agent::export_markdown(id) {
-            Ok(md) => md,
-            Err(err) => {
-                self.status = format!("Export failed: {err}");
-                return;
-            }
-        };
-        let (dest, make_dir) = self.chat_export_dest(&format!("{id}.md"));
-        if let Some(parent) = dest.parent().filter(|_| make_dir) {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        match std::fs::write(&dest, md) {
-            Ok(()) => self.status = format!("Exported {}", dest.display()),
-            Err(err) => self.status = format!("Export failed: {err}"),
-        }
+    /// Export a History session into the Chats folder, off the UI thread,
+    /// named after its title and never over an earlier export.
+    pub(super) fn export_native_history(&mut self, id: &str) {
+        let title = self
+            .threads
+            .iter()
+            .find(|t| t.native && t.grok_session.as_deref() == Some(id))
+            .map(|t| t.title.clone())
+            .unwrap_or_else(|| id.to_string());
+        let name =
+            Self::stamped_export_name(&format!("{}.md", grokhub_core::export_file_stem(&title)));
+        let session = id.to_string();
+        self.spawn_export(
+            name,
+            super::saved_file::ExportRetry::Native(id.to_string()),
+            move || grokhub_agent::export_markdown(&session).map_err(|e| e.to_string()),
+        );
     }
 
     fn rename_native_history(&mut self, id: &str, title: &str) {

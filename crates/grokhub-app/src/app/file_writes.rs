@@ -1,13 +1,11 @@
 //! Background file writes whose outcome lands on the status line.
 //!
-//! `/export`, `/remember` and Memory Save used to set "Wrote <path>" before a
-//! worker thread ran and dropped its error. Each write now runs off the UI
-//! thread and reports back here: "Wrote <path>" once it is on disk, or
-//! "Couldn't write <path>: <error>".
+//! `/remember` and Memory Save run off the UI thread and report back here:
+//! "Wrote <path>" once it is on disk, or "Couldn't write <path>: <error>".
+//! Chat exports ride the same queue but land on the saved-file card
+//! (`saved_file.rs`), which says where the file went and links to it.
 
 use super::*;
-use std::io::Write as _;
-use std::path::{Path, PathBuf};
 
 /// One finished background write.
 pub(super) struct FileWriteDone {
@@ -17,6 +15,8 @@ pub(super) struct FileWriteDone {
     result: Result<String, String>,
     /// Autosaves stay quiet on success and only speak up when they fail.
     quiet_ok: bool,
+    /// A chat export: its result goes to the saved-file card instead.
+    export: Option<super::saved_file::ExportRetry>,
 }
 
 impl FileWriteDone {
@@ -26,6 +26,7 @@ impl FileWriteDone {
             target,
             result,
             quiet_ok: true,
+            export: None,
         }
     }
 }
@@ -39,6 +40,25 @@ impl Cabin {
         quiet_ok: bool,
         work: impl FnOnce() -> Result<String, String> + Send + 'static,
     ) {
+        self.spawn_write_done(target, quiet_ok, None, work);
+    }
+
+    /// A chat export's write: same worker, reported on the saved-file card.
+    pub(super) fn spawn_export_write(
+        &mut self,
+        retry: super::saved_file::ExportRetry,
+        work: impl FnOnce() -> Result<String, String> + Send + 'static,
+    ) {
+        self.spawn_write_done(String::new(), false, Some(retry), work);
+    }
+
+    fn spawn_write_done(
+        &mut self,
+        target: String,
+        quiet_ok: bool,
+        export: Option<super::saved_file::ExportRetry>,
+        work: impl FnOnce() -> Result<String, String> + Send + 'static,
+    ) {
         let (tx, rx) = mpsc::channel();
         self.file_writes.push(rx);
         std::thread::spawn(move || {
@@ -47,6 +67,7 @@ impl Cabin {
                 target,
                 result,
                 quiet_ok,
+                export,
             });
         });
     }
@@ -66,6 +87,10 @@ impl Cabin {
             Err(mpsc::TryRecvError::Disconnected) => false,
         });
         for d in done {
+            if let Some(retry) = d.export {
+                self.finish_export(d.result, retry);
+                continue;
+            }
             match d.result {
                 Ok(shown) if !d.quiet_ok => self.status = format!("Wrote {shown}"),
                 Ok(_) => {}
@@ -106,48 +131,6 @@ pub(super) fn stamp_file_name(file: &str, day: &str, hour: u32, minute: u32) -> 
     }
 }
 
-/// Write `body` to `dest`, or to `dest` with `-2`, `-3`, … before the
-/// extension when that name is taken. Never overwrites. Returns the path used.
-/// `make_dir` creates the folder first (our own config folder); a bound
-/// project folder that is missing is reported instead.
-pub(super) fn write_new_file(dest: &Path, body: &[u8], make_dir: bool) -> std::io::Result<PathBuf> {
-    let dir = dest.parent().unwrap_or_else(|| Path::new("."));
-    if make_dir {
-        std::fs::create_dir_all(dir)?;
-    }
-    let name = dest
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let (stem, ext) = match name.rsplit_once('.') {
-        Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
-        _ => (name.clone(), String::new()),
-    };
-    for n in 1..=99u32 {
-        let path = if n == 1 {
-            dest.to_path_buf()
-        } else {
-            dir.join(format!("{stem}-{n}{ext}"))
-        };
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-        {
-            Ok(mut f) => {
-                f.write_all(body)?;
-                return Ok(path);
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(e),
-        }
-    }
-    Err(std::io::Error::new(
-        std::io::ErrorKind::AlreadyExists,
-        "too many exports with this name",
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,29 +149,5 @@ mod tests {
             stamp_file_name("notes", "2026-10-31", 9, 41),
             "notes-20261031-0941"
         );
-    }
-
-    #[test]
-    fn write_new_file_never_clobbers() {
-        let dir = std::env::temp_dir().join(format!("gh-write-new-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let dest = dir.join("export-20261031-2005.md");
-        let first = write_new_file(&dest, b"first", false).unwrap();
-        let second = write_new_file(&dest, b"second", false).unwrap();
-        assert_eq!(first, dest);
-        assert_eq!(second, dir.join("export-20261031-2005-2.md"));
-        assert_eq!(std::fs::read_to_string(&first).unwrap(), "first");
-        assert_eq!(std::fs::read_to_string(&second).unwrap(), "second");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn write_new_file_reports_a_missing_folder() {
-        let dest = std::env::temp_dir()
-            .join(format!("gh-no-such-dir-{}", std::process::id()))
-            .join("export.md");
-        let err = write_new_file(&dest, b"x", false).unwrap_err();
-        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
     }
 }

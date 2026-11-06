@@ -69,17 +69,29 @@ fn run_slash_help_export_and_clear() {
     cabin.messages = std::sync::Arc::new(vec![("user".into(), "harbor export line".into())]);
     cabin.cfg.project_dir.clear();
     cabin.run_slash(grokhub_core::Slash::Export);
-    assert!(
-        cabin.status.starts_with("Exporting to "),
-        " /export must not claim Wrote before the file exists, got {}",
-        cabin.status
+    assert_eq!(
+        cabin.status, "Saving the chat…",
+        " /export must not claim Saved before the file exists"
     );
+    assert!(cabin.saved_file.is_none());
     wait_file_writes(cabin);
-    let path = cabin
-        .status
-        .strip_prefix("Wrote ")
-        .unwrap_or("")
-        .to_string();
+    let path = exported_path(cabin);
+    assert!(
+        path.contains("Chats"),
+        " /export lands in the Chats folder, got {path}"
+    );
+    let name = std::path::Path::new(&path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    assert_eq!(cabin.status, format!("Saved {name} to Chats"));
+    assert_eq!(cabin.notices.items[0].text, cabin.status);
+    assert_eq!(
+        cabin.notices.items[0].action,
+        Some(super::notices::NoticeAction::ShowInFolder(
+            std::path::PathBuf::from(&path)
+        ))
+    );
     let name = std::path::Path::new(&path)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -100,28 +112,28 @@ fn run_slash_help_export_and_clear() {
     // A second export never clobbers the first.
     cabin.run_slash(grokhub_core::Slash::Export);
     wait_file_writes(cabin);
-    let second = cabin
-        .status
-        .strip_prefix("Wrote ")
-        .unwrap_or("")
-        .to_string();
+    let second = exported_path(cabin);
     assert_ne!(second, path, "second export must get its own file");
     assert!(std::path::Path::new(&path).exists() && std::path::Path::new(&second).exists());
 
-    // A folder that isn't there: the status says so instead of "Wrote".
-    cabin.cfg.project_dir = std::env::temp_dir()
-        .join(format!("gh-export-missing-{}", std::process::id()))
-        .join("nope")
-        .display()
-        .to_string();
+    // Every folder refuses: the card and status say why, nothing is claimed.
+    let blocker = std::env::temp_dir().join(format!("gh-export-blocker-{}", std::process::id()));
+    std::fs::write(&blocker, "x").unwrap();
+    let pinned = crate::config::config_dir();
+    let _pin = crate::config::TestConfigDir::set(blocker.join("cfg"));
     cabin.run_slash(grokhub_core::Slash::Export);
     wait_file_writes(cabin);
     assert!(
-        cabin.status.starts_with("Couldn't write ") && cabin.status.contains("nope"),
+        cabin.status.starts_with("Couldn't save the chat: ")
+            && cabin.status.ends_with("Nothing was saved."),
         "a failed export must say so, got {}",
         cabin.status
     );
-    cabin.cfg.project_dir.clear();
+    let card = cabin.saved_file.clone().expect("failure card");
+    assert!(card.path.is_none() && card.error.is_some());
+    drop(_pin);
+    assert_eq!(crate::config::config_dir(), pinned);
+    let _ = std::fs::remove_file(&blocker);
 
     cabin.run_slash(grokhub_core::Slash::Clear);
     assert!(
@@ -449,7 +461,7 @@ fn export_writes_a_chat_and_empty_video_does_not_send() {
     cabin.run_slash_line("/export");
     wait_file_writes(&mut cabin);
     assert!(
-        cabin.status.starts_with("Wrote ") && cabin.status.ends_with(".md"),
+        cabin.status.starts_with("Saved ") && exported_path(&cabin).ends_with(".md"),
         "export status was {}",
         cabin.status
     );
@@ -1125,16 +1137,17 @@ fn context_slash_counts_an_empty_chat() {
 }
 
 /// The export the user asked for: the whole chat, thoughts and tool rows
-/// included, on the Desktop.
+/// included, in the Chats folder (not pulled off by a Desktop or a bound
+/// project folder).
 #[test]
-fn export_puts_the_whole_chat_on_the_desktop() {
+fn export_puts_the_whole_chat_in_the_chats_folder() {
     let mut quiet = QuietCabin::boot("slash-export-desktop");
     let cabin = &mut quiet.cabin;
     let desktop = std::env::temp_dir().join(format!("gh-export-desktop-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&desktop);
     std::fs::create_dir_all(&desktop).unwrap();
     super::slash::set_test_desktop(Some(desktop.clone()));
-    // A bound project folder doesn't pull the export off the Desktop.
+    // Neither the Desktop nor a bound project folder pull the export away.
     cabin.cfg.project_dir = std::env::temp_dir()
         .join("gh-export-elsewhere")
         .display()
@@ -1146,8 +1159,15 @@ fn export_puts_the_whole_chat_on_the_desktop() {
     ]);
     cabin.run_slash(grokhub_core::Slash::Export);
     wait_file_writes(cabin);
-    let path = std::path::PathBuf::from(cabin.status.strip_prefix("Wrote ").unwrap_or(""));
-    assert_eq!(path.parent(), Some(desktop.as_path()), "{}", cabin.status);
+    let path = std::path::PathBuf::from(exported_path(cabin));
+    assert_eq!(
+        path.parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str()),
+        Some("Chats"),
+        "{}",
+        cabin.status
+    );
     let md = std::fs::read_to_string(&path).unwrap_or_default();
     for line in [
         "check my pc",

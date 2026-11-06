@@ -1458,26 +1458,21 @@ fn chat_side_effects_keep_the_origin_thread() {
         "/project clear must drop the sidebar selection: {unbound}"
     );
     let export = src
-        .split("Slash::Export =>")
+        .split("fn export_thread_as(")
         .nth(1)
-        .and_then(|s| s.split("Slash::Recall").next())
-        .expect("Export");
+        .and_then(|s| s.split("fn dispatch_native_slash").next())
+        .expect("export_thread_as");
     let flushed = export.find("self.persist()").expect("export persist");
     let wrote = export.find("export_markdown").expect("export_markdown");
     assert!(
         flushed < wrote,
         "/export must flush the live pane before writing the thread file: {export}"
     );
-    assert!(
-        export.contains("expand_home"),
-        "/export must expand ~ in the bound project or it writes a literal tilde folder: {export}"
-    );
     let export_spawn = export
-        .find("spawn_file_write")
+        .find("spawn_export(")
         .expect("export write must leave the UI thread");
-    let export_write = export.find("write_new_file").expect("export.md");
     assert!(
-        export_spawn < export_write && export_spawn < wrote,
+        export_spawn < wrote,
         "/export must not freeze the cabin formatting an 8MB thread into markdown: {export}"
     );
     let recall = src

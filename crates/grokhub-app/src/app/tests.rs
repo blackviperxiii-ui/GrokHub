@@ -2223,6 +2223,7 @@ fn quiet_cabin() -> Cabin {
         imagine_native: super::imagine::ImagineNative::default(),
         imagine_save_rx: None,
         file_writes: Vec::new(),
+        saved_file: None,
         goal_rx: None,
         goal_busy: false,
         goal_stale: false,
@@ -2492,11 +2493,7 @@ fn export_writes_html_and_json_next_to_export_md() {
 
     cabin.run_slash_line("/export html");
     wait_file_writes(cabin);
-    let html_path = cabin
-        .status
-        .strip_prefix("Wrote ")
-        .unwrap_or("")
-        .to_string();
+    let html_path = exported_path(cabin);
     assert!(
         html_path.contains("export-") && html_path.ends_with(".html"),
         "{}",
@@ -2510,11 +2507,7 @@ fn export_writes_html_and_json_next_to_export_md() {
 
     cabin.run_slash_line("/export json");
     wait_file_writes(cabin);
-    let json_path = cabin
-        .status
-        .strip_prefix("Wrote ")
-        .unwrap_or("")
-        .to_string();
+    let json_path = exported_path(cabin);
     assert!(
         json_path.contains("export-") && json_path.ends_with(".json"),
         "{}",
@@ -2529,7 +2522,7 @@ fn export_writes_html_and_json_next_to_export_md() {
 
     cabin.run_slash_line("/export md");
     wait_file_writes(cabin);
-    assert!(cabin.status.ends_with(".md"), "{}", cabin.status);
+    assert!(exported_path(cabin).ends_with(".md"), "{}", cabin.status);
     cabin.run_slash_line("/export pdf");
     assert_eq!(cabin.status, grokhub_core::EXPORT_FORMATS_HINT);
     assert!(!cabin.running);

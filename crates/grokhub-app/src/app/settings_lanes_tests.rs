@@ -440,33 +440,29 @@ fn fallback_cabin_name_defaults_to_you() {
     assert_eq!(from_md, "Tester");
 }
 
-// Folded from PR #417.
+// Folded from PR #417; exports now land in your Chats folder first.
 #[test]
-fn export_dest_joins_under_config_or_project() {
-    let _g = crate::config::hold_test_config();
-    let root = crate::config::test_config_root("export-dest");
-    let _ = std::fs::remove_dir_all(&root);
-    let _pin = crate::config::TestConfigDir::set(root.clone());
-    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
-
-    let mut cabin = Cabin::quiet_for_test();
-    cabin.cfg.project_dir.clear();
+fn chat_exports_try_chats_then_desktop_then_app_data() {
+    use super::saved_file::SaveDir;
+    use grokhub_core::user_files::UserFolder;
+    super::slash::set_test_desktop(None);
     assert_eq!(
-        cabin.export_dest("export.md"),
-        crate::config::config_dir().join("export.md"),
-        "empty project_dir lands under config_dir"
+        Cabin::chat_export_dirs(),
+        vec![SaveDir::User(UserFolder::Chats), SaveDir::AppData]
     );
-
-    let project = root.join("harbor-work");
-    cabin.cfg.project_dir = project.display().to_string();
+    let desktop = std::env::temp_dir().join(format!("gh-export-order-{}", std::process::id()));
+    std::fs::create_dir_all(&desktop).unwrap();
+    super::slash::set_test_desktop(Some(desktop.clone()));
     assert_eq!(
-        cabin.export_dest("export.html"),
-        project.join("export.html"),
-        "a bound project_dir joins under that path"
+        Cabin::chat_export_dirs(),
+        vec![
+            SaveDir::User(UserFolder::Chats),
+            SaveDir::Existing(desktop.clone()),
+            SaveDir::AppData
+        ]
     );
-
-    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
-    let _ = std::fs::remove_dir_all(&root);
+    super::slash::set_test_desktop(None);
+    let _ = std::fs::remove_dir_all(&desktop);
 }
 
 // Folded from PR #418.

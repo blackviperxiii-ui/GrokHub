@@ -248,6 +248,7 @@ mod repair_ui;
 mod rhythm_ui;
 mod rl_ui;
 mod router_ui;
+mod saved_file;
 mod scope_ui;
 mod screen_record_ui;
 mod screenshot_offer_ui;
@@ -824,6 +825,8 @@ pub struct Cabin {
     imagine_save_rx: Option<mpsc::Receiver<Result<String, String>>>,
     /// Background writes (/export, /remember, Memory Save) not yet reported.
     file_writes: Vec<mpsc::Receiver<file_writes::FileWriteDone>>,
+    /// The last chat export's card above the composer (until closed).
+    saved_file: Option<saved_file::SavedFile>,
     goal_rx: Option<mpsc::Receiver<(String, String)>>,
     goal_busy: bool,
     goal_stale: bool,
@@ -1448,6 +1451,7 @@ impl Cabin {
             imagine_native: imagine::ImagineNative::default(),
             imagine_save_rx: None,
             file_writes: Vec::new(),
+            saved_file: None,
             goal_rx: None,
             goal_busy: false,
             goal_stale: false,
@@ -1946,6 +1950,7 @@ impl Cabin {
             imagine_native: imagine::ImagineNative::default(),
             imagine_save_rx: None,
             file_writes: Vec::new(),
+            saved_file: None,
             goal_rx: None,
             goal_busy: false,
             goal_stale: false,
