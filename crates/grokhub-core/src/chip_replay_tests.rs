@@ -194,9 +194,10 @@ fn ranking_two_hundred_chips_fits_in_a_frame_and_memory_stays_small() {
     times.sort();
     let p99 = times[times.len() * 99 / 100];
     // An optimized build must stay under a millisecond; a test build is far
-    // slower, so it gets room without hiding a real slowdown.
+    // slower, so it gets room without hiding a real slowdown. A shared
+    // Windows runner has gone past 40 ms in a test build, so it gets 100.
     let budget = if cfg!(debug_assertions) {
-        std::time::Duration::from_millis(40)
+        std::time::Duration::from_millis(100)
     } else {
         std::time::Duration::from_millis(1)
     };

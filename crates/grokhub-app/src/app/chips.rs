@@ -756,12 +756,18 @@ impl Cabin {
         bias_chips_for_lane(&mut pool, cabin_lane(&self.cfg.cabin_lane));
         // One draw per boundary (thread, turn, hour), never per keystroke,
         // so the row holds still while the person types.
-        let seed = {
+        let mut seed = {
             use std::hash::{Hash, Hasher};
             let mut h = std::collections::hash_map::DefaultHasher::new();
             (self.thread_idx, n, last, hour).hash(&mut h);
             h.finish()
         };
+        // The seed takes the hour, so 1 boundary in 20 lands in the holdout
+        // at some hours and not others. Tests here need a row every time;
+        // the holdout itself is proven in core's chip health tests.
+        while cfg!(test) && grokhub_core::chip_health::in_holdout(seed) {
+            seed = seed.wrapping_add(1);
+        }
         let ctx = |surface, max| grokhub_core::RankCtx {
             surface,
             hour,
