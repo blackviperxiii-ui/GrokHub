@@ -520,6 +520,27 @@ pub struct FeedItem {
     pub link: Option<String>,
 }
 
+/// The Pulse cards a feed tile lists: those its source posted, not
+/// dismissed. Game companion cards are told by their id.
+pub fn feed_items(cards: &[crate::UpdateCard], module: &str) -> Vec<FeedItem> {
+    let ours = |c: &crate::UpdateCard| match module {
+        "achievements" => {
+            c.pulse.source_name.as_deref() == Some(crate::steam_achievements::SOURCE_NAME)
+        }
+        "deals" => c.pulse.source_name.as_deref() == Some(crate::steam_wishlist::SOURCE_NAME),
+        _ => c.source_id.starts_with("source:game-companion:"),
+    };
+    cards
+        .iter()
+        .filter(|c| ours(c) && c.status != crate::UpdateStatus::Dismissed)
+        .map(|c| FeedItem {
+            title: c.title.clone(),
+            at_ms: c.created_at,
+            link: c.citations.first().cloned(),
+        })
+        .collect()
+}
+
 /// Achievements, Deals and Patch Notes: the cards their opt-in Pulse
 /// source posted (games close to 100%, wishlist sales, what changed since
 /// you last played). `on` is whether that source is switched on.
@@ -577,19 +598,6 @@ pub fn feed_view(module: &str, on: bool, items: &[FeedItem], now: u64) -> TileVi
         .rows(rows)
         .primary("Open", open(top))
         .button("Open Pulse", TileAction::nav("pulse"))
-}
-
-/// Modules whose own data comes next; until then they show the library
-/// they'll draw from and one way in.
-pub fn soon_view(module: &str, games: usize) -> TileView {
-    let sentence = match module {
-        "achievements" => "New unlocks for your games show here",
-        "patch_notes" => "The latest patch for your games shows here",
-        _ => "Sales on your wishlist show here",
-    };
-    let mut v = TileView::empty(sentence, "Open Library", TileAction::nav("library"));
-    v.text.big = format!("{games} games");
-    v
 }
 
 /// Modules with nothing to read yet: what they'll show and one way in.
@@ -776,7 +784,6 @@ mod tests {
         let v = waiting_view();
         assert_eq!(v.state, TileState::Empty);
         assert_eq!(v.buttons.len(), 1);
-        assert_eq!(soon_view("deals", 12).text.big, "12 games");
     }
 
     #[test]

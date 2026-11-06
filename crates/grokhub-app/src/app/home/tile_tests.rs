@@ -440,7 +440,7 @@ fn home_redraws_at_its_fastest_tile_but_never_faster_than_five_seconds() {
 
 #[test]
 fn feed_tiles_list_only_their_own_live_cards() {
-    use super::views::feed_items;
+    use grokhub_core::home::tiles::feed_items;
     use grokhub_core::update_feed::digest_card;
     let mut ach = digest_card(
         "source:steam-achievements:620:48",
@@ -502,5 +502,83 @@ fn turn_on_switches_a_plain_feature_in_place_and_leaves_the_rest_to_settings() {
         "a model needs its own setup"
     );
     assert!(!cabin.turn_on_from_home("steam_wishlist"));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Every module, painted at every size it offers on the Streamer grid (all
+/// seven slots filled) at a wide and a narrow window: each one draws words,
+/// none says "soon", and no line runs out past its tile's sides.
+#[test]
+fn every_module_paints_inside_its_tile_at_every_size() {
+    use crate::app::Cabin;
+    use eframe::egui;
+    use grokhub_core::home::{place_slots, HomeLayout, HomePreset, ModuleSize, REGISTRY};
+
+    let root = crate::config::test_config_root("home-paint");
+    let _ = std::fs::remove_dir_all(&root);
+    let _pin = crate::config::TestConfigDir::set(root.clone());
+    let mut cabin = Cabin::quiet_for_test();
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_on(&ctx);
+    let grid = HomeLayout::preset(HomePreset::Streamer);
+
+    fn texts(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+        match shape {
+            egui::Shape::Text(t) => out.push((t.galley.job.text.clone(), t.visual_bounding_rect())),
+            egui::Shape::Vec(v) => v.iter().for_each(|s| texts(s, out)),
+            _ => {}
+        }
+    }
+
+    let mut painted = 0;
+    for width in [1600.0, 900.0] {
+        let slots = place_slots((0.0, 0.0, width, 470.0), &grid);
+        for size in [ModuleSize::Large, ModuleSize::Medium, ModuleSize::Small] {
+            let Some(slot) = slots.iter().find(|s| s.size == size) else {
+                continue;
+            };
+            let rect =
+                egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(slot.w, slot.h));
+            for m in REGISTRY.iter().filter(|m| m.supports(size)) {
+                let raw = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width + 40.0, 600.0),
+                    )),
+                    ..Default::default()
+                };
+                let out = crate::theme::test_pass(&ctx, raw, |ui| {
+                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                    child.set_clip_rect(rect);
+                    child.set_min_size(rect.size());
+                    let _ = super::paint::paint_module(&mut cabin, &mut child, m.id, size);
+                });
+                let mut found = Vec::new();
+                out.shapes.iter().for_each(|c| texts(&c.shape, &mut found));
+                let words: Vec<&str> = found
+                    .iter()
+                    .map(|(t, _)| t.as_str())
+                    .filter(|t| t.chars().any(char::is_alphanumeric))
+                    .collect();
+                let at = format!("{} at {} in a {width} window", m.id, size.label());
+                assert!(!words.is_empty(), "{at} drew no words");
+                assert!(
+                    !words.iter().any(|t| *t == "SOON" || *t == "Coming soon"),
+                    "{at} says soon: {words:?}"
+                );
+                for (t, r) in found
+                    .iter()
+                    .filter(|(t, _)| t.chars().any(char::is_alphanumeric))
+                {
+                    assert!(
+                        r.min.x >= rect.min.x - 1.0 && r.max.x <= rect.max.x + 1.0,
+                        "{at}: {t:?} runs out of the tile ({r:?} in {rect:?})"
+                    );
+                }
+                painted += 1;
+            }
+        }
+    }
+    assert!(painted > REGISTRY.len(), "{painted}");
     let _ = std::fs::remove_dir_all(&root);
 }

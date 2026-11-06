@@ -100,6 +100,11 @@ pub(super) fn live_facts() -> LiveFacts {
     let Ok(mut slot) = SLOT.lock() else {
         return LiveFacts::default();
     };
+    // Tests never read this machine's drives, mic or Steam: what a test
+    // paints must not leak into another test's chips.
+    if cfg!(test) {
+        return slot.facts.clone();
+    }
     if !slot.reading && slot.at.is_none_or(|t| t.elapsed() >= REFRESH) {
         slot.reading = true;
         let dir = crate::config::config_dir();
