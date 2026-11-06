@@ -282,7 +282,7 @@ fn device_row(kind: &str, d: &AudioDevice) -> TileRow {
 /// away.
 pub fn audio_view(f: &AudioFacts) -> TileView {
     if f.is_empty() {
-        return waiting_view("audio_check");
+        return waiting_view();
     }
     if f.outputs.is_empty() && f.inputs.is_empty() {
         let bad: Vec<&str> = f
@@ -593,24 +593,94 @@ pub fn soon_view(module: &str, games: usize) -> TileView {
 }
 
 /// Modules with nothing to read yet: what they'll show and one way in.
-pub fn waiting_view(module: &str) -> TileView {
-    match module {
-        "squad" => TileView::empty(
-            "Friends online show here once Steam friends are linked",
+/// How far ahead the Tonight tile looks.
+pub const TONIGHT_HOURS: u64 = 12;
+
+fn until(at: u64, now: u64) -> String {
+    match at.saturating_sub(now) / 60_000 {
+        0 => "now".into(),
+        m if m < 60 => format!("in {m} min"),
+        m => format!("in {} h", m / 60),
+    }
+}
+
+/// The automations due in the next [`TONIGHT_HOURS`], soonest first, from
+/// `(name, next run in unix ms)` pairs of the ones switched on.
+pub fn tonight_view(due: &[(String, u64)], now: u64) -> TileView {
+    let end = now + TONIGHT_HOURS * 3_600_000;
+    let mut soon: Vec<&(String, u64)> = due
+        .iter()
+        .filter(|(_, at)| *at >= now && *at <= end)
+        .collect();
+    soon.sort_by_key(|(name, at)| (*at, name.clone()));
+    let Some((first, first_at)) = soon.first() else {
+        return TileView::empty(
+            "Nothing scheduled for the next 12 hours",
+            "Plan my week",
+            TileAction::ask(HOME_CHIPS[3]),
+        )
+        .on_tap(TileAction::nav("automations"));
+    };
+    let rows = soon
+        .iter()
+        .take(ROWS)
+        .map(|(name, at)| {
+            TileRow::new(name.clone(), until(*at, now), Tone::Normal)
+                .on_tap(TileAction::nav("automations"))
+        })
+        .collect();
+    let big = match soon.len() {
+        1 => "1 tonight".to_string(),
+        n => format!("{n} tonight"),
+    };
+    TileView::ready(TileText::new(
+        big,
+        format!("Next: {first} {}", until(*first_at, now)),
+        Tone::Normal,
+    ))
+    .rows(rows)
+    .primary("Plan my week", TileAction::ask(HOME_CHIPS[3]))
+    .button("Open Automations", TileAction::nav("automations"))
+    .on_tap(TileAction::nav("automations"))
+}
+
+/// The Squad tile from the Steam friends saved on this PC (`None` when
+/// Steam isn't here). Who is online lives in Steam itself, so the tile
+/// opens Steam's friends list rather than guess.
+pub fn squad_view(friends: Option<usize>) -> TileView {
+    match friends {
+        None => TileView::empty(
+            "Your Steam friends show here once Steam is installed",
             "Find a duo",
             TileAction::ask(HOME_CHIPS[1]),
         ),
-        "tonight" => TileView::empty(
-            "Your evening's sessions and events show here once a calendar is linked",
-            "Plan my week",
-            TileAction::ask(HOME_CHIPS[3]),
+        Some(0) => TileView::empty(
+            "No Steam friends saved on this PC yet",
+            "Friends list",
+            TileAction::SteamFriends,
         ),
-        _ => TileView::empty(
-            "Your mic and output device show here",
-            "Voice settings",
-            TileAction::settings("general"),
-        ),
+        Some(n) => TileView::ready(TileText::new(
+            if n == 1 {
+                "1 friend".to_string()
+            } else {
+                format!("{n} friends")
+            },
+            "On Steam · open the list to see who's on",
+            Tone::Normal,
+        ))
+        .primary("Friends list", TileAction::SteamFriends)
+        .button("Find a duo", TileAction::ask(HOME_CHIPS[1]))
+        .on_tap(TileAction::SteamFriends),
     }
+}
+
+/// The Audio tile before the first read of this PC's devices.
+pub fn waiting_view() -> TileView {
+    TileView::empty(
+        "Your mic and output device show here",
+        "Voice settings",
+        TileAction::settings("general"),
+    )
 }
 
 #[cfg(test)]
@@ -702,13 +772,50 @@ mod tests {
     }
 
     #[test]
-    fn waiting_tiles_say_what_they_will_show_and_offer_one_way_in() {
-        for m in ["squad", "tonight", "audio_check", "stream_check"] {
-            let v = waiting_view(m);
-            assert_eq!(v.state, TileState::Empty, "{m}");
-            assert_eq!(v.buttons.len(), 1, "{m}");
-        }
+    fn the_waiting_audio_tile_offers_one_way_in() {
+        let v = waiting_view();
+        assert_eq!(v.state, TileState::Empty);
+        assert_eq!(v.buttons.len(), 1);
         assert_eq!(soon_view("deals", 12).text.big, "12 games");
+    }
+
+    #[test]
+    fn tonight_lists_the_next_12_hours_soonest_first() {
+        let hour = 3_600_000;
+        let due = vec![
+            ("Patch notes digest".to_string(), NOW + 3 * hour),
+            ("Raid reminder".to_string(), NOW + 30 * 60_000),
+            ("Weekly report".to_string(), NOW + 30 * hour),
+            ("Missed".to_string(), NOW - hour),
+        ];
+        let v = tonight_view(&due, NOW);
+        assert_eq!(v.text.big, "2 tonight");
+        assert_eq!(v.text.caption, "Next: Raid reminder in 30 min");
+        let names: Vec<&str> = v.rows.iter().map(|r| r.label.as_str()).collect();
+        assert_eq!(names, ["Raid reminder", "Patch notes digest"]);
+        assert_eq!(v.rows[1].value, "in 3 h");
+        assert!(v.buttons[0].primary);
+        let empty = tonight_view(&due[2..], NOW);
+        assert_eq!(empty.state, TileState::Empty);
+        assert_eq!(empty.buttons.len(), 1);
+        assert_eq!(empty.buttons[0].action, TileAction::ask(HOME_CHIPS[3]));
+        assert_eq!(empty.tap, Some(TileAction::nav("automations")));
+    }
+
+    #[test]
+    fn squad_opens_steam_friends_and_never_guesses_who_is_online() {
+        let v = squad_view(Some(14));
+        assert_eq!(v.text.big, "14 friends");
+        assert_eq!(v.tap, Some(TileAction::SteamFriends));
+        assert_eq!(v.buttons[0].action, TileAction::SteamFriends);
+        assert_eq!(squad_view(Some(1)).text.big, "1 friend");
+        assert_eq!(squad_view(None).state, TileState::Empty);
+        assert_eq!(squad_view(None).buttons.len(), 1);
+        assert_eq!(squad_view(Some(0)).buttons.len(), 1);
+        assert_eq!(
+            squad_view(Some(0)).buttons[0].action,
+            TileAction::SteamFriends
+        );
     }
 
     #[test]

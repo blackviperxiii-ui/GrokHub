@@ -324,6 +324,9 @@ impl Cabin {
             TileAction::Play { app_id } => {
                 let _ = crate::desktop::open_path(&super::super::library_ui::play_link(app_id));
             }
+            TileAction::SteamFriends => {
+                let _ = crate::desktop::open_path(super::super::library_ui::FRIENDS_LINK);
+            }
             TileAction::OpenClip { index } => {
                 if let Some(path) = super::views::clip_path(index) {
                     let _ = crate::desktop::open_path(&path.to_string_lossy());

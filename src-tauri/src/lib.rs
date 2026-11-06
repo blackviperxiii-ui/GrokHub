@@ -1772,6 +1772,13 @@ async fn library_play(app_id: u32) -> Result<String, String> {
     off_main(move || library::play(grokhub_core::steam::detect_root().as_deref(), app_id)).await?
 }
 
+/// Home's Squad tile: open Steam's own friends list.
+#[tauri::command]
+async fn library_friends() -> Result<(), String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(move || library::open_friends(grokhub_core::steam::detect_root().as_deref())).await?
+}
+
 /// Home's Clips tile: play the clip at this place in its list.
 #[tauri::command]
 async fn home_open_clip(index: usize) -> Result<(), String> {
@@ -2976,6 +2983,7 @@ pub fn run() {
             library_cover,
             library_play,
             home_open_clip,
+            library_friends,
             open_url
         ])
         .run(tauri::generate_context!());

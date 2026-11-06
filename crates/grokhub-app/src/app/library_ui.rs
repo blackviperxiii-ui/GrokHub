@@ -215,6 +215,9 @@ pub(super) fn last_played_label(last_played: u64, now_secs: u64) -> String {
     }
 }
 
+/// Steam's own friends list, where Steam shows who is online.
+pub(super) const FRIENDS_LINK: &str = "steam://open/friends";
+
 /// Steam's own launch link for a game.
 pub(super) fn play_link(app_id: u32) -> String {
     format!("steam://rungameid/{app_id}")

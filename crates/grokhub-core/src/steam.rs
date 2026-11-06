@@ -575,6 +575,35 @@ pub fn merge_stats(vdf: &Vdf, out: &mut BTreeMap<u32, (u64, u64)>) {
     }
 }
 
+/// How many friends one parsed `localconfig.vdf` lists. Steam saves each
+/// friend under their numeric account id with a `name`; other keys in that
+/// block are settings. Only the count is read.
+pub fn count_friends(vdf: &Vdf) -> usize {
+    vdf.at(&["UserLocalConfigStore", "friends"])
+        .map(|f| {
+            f.entries()
+                .iter()
+                .filter(|(k, v)| k.parse::<u64>().is_ok() && v.get("name").is_some())
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+/// The most friends any Steam account on this PC has saved, or `None`
+/// when there is no Steam account here to read.
+pub fn friend_count(root: &Path) -> Option<usize> {
+    let users = std::fs::read_dir(root.join("userdata")).ok()?;
+    let mut best = None;
+    for user in users.flatten() {
+        let file = user.path().join("config").join("localconfig.vdf");
+        if let Ok(text) = std::fs::read_to_string(&file) {
+            let n = count_friends(&parse_vdf(&text));
+            best = Some(best.unwrap_or(0).max(n));
+        }
+    }
+    best
+}
+
 /// Active games first: most recently played, then most played, then the rest
 /// by name. Never-played installs sink to the bottom.
 pub fn rank_games(mut games: Vec<SteamGame>) -> Vec<SteamGame> {
@@ -767,6 +796,23 @@ pub fn status_line(games: &[SteamGame], prefs: &SteamPrefs, found: bool) -> Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn counts_saved_friends_and_skips_the_friends_settings() {
+        let text = r#""UserLocalConfigStore"
+        {
+            "friends"
+            {
+                "PersonaName" "me"
+                "11111" { "name" "Ally" }
+                "22222" { "name" "Bo" "NameHistory" { "0" "Bob" } }
+                "33333" { "avatar" "x" }
+                "communitypreferences" "x"
+            }
+        }"#;
+        assert_eq!(count_friends(&parse_vdf(text)), 2);
+        assert_eq!(count_friends(&parse_vdf("\"a\" {}")), 0);
+    }
 
     #[test]
     fn workshop_acf_lists_installed_items_newest_first() {

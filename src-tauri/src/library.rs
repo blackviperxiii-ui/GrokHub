@@ -414,12 +414,17 @@ pub fn play_url(app_id: u32) -> Result<String, String> {
     Ok(format!("steam://rungameid/{app_id}"))
 }
 
-/// The program and arguments that hand a Play URL to Steam on this OS, or
-/// `None` where there is no Steam client.
+/// Steam's own friends list, where Steam shows who is online.
+pub const FRIENDS_URL: &str = "steam://open/friends";
+
+/// The program and arguments that hand a Play URL (or the friends list) to
+/// Steam on this OS, or `None` where there is no Steam client.
 pub fn launcher(os: &str, url: &str) -> Option<(&'static str, Vec<String>)> {
-    let digits = url.strip_prefix("steam://rungameid/")?;
-    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
+    if url != FRIENDS_URL {
+        let digits = url.strip_prefix("steam://rungameid/")?;
+        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
     }
     match os {
         // `start`'s first quoted argument is the window title.
@@ -435,16 +440,10 @@ pub fn launcher(os: &str, url: &str) -> Option<(&'static str, Vec<String>)> {
     }
 }
 
-/// Play: start a game that is in this computer's library through Steam.
-pub fn play(steam_root: Option<&Path>, app_id: u32) -> Result<String, String> {
-    let game = page(steam_root)
-        .games
-        .into_iter()
-        .find(|g| g.app_id == app_id)
-        .ok_or("That game isn't in this computer's Steam library.")?;
-    let url = play_url(game.app_id)?;
-    let (program, args) = launcher(std::env::consts::OS, &url)
-        .ok_or("Steam games can't be started on this device.")?;
+/// Hand a checked Steam link to the Steam client.
+fn hand_to_steam(url: &str, what: &str) -> Result<(), String> {
+    let (program, args) =
+        launcher(std::env::consts::OS, url).ok_or("Steam can't be opened on this device.")?;
     let mut cmd = std::process::Command::new(program);
     cmd.args(&args)
         .stdin(std::process::Stdio::null())
@@ -458,12 +457,35 @@ pub fn play(steam_root: Option<&Path>, app_id: u32) -> Result<String, String> {
     }
     let mut child = cmd
         .spawn()
-        .map_err(|e| format!("Couldn't ask Steam to start {}: {e}", game.name))?;
-    // Reap the opener so it never lingers; the game is Steam's from here.
+        .map_err(|e| format!("Couldn't ask Steam to open {what}: {e}"))?;
+    // Reap the opener so it never lingers; the rest is Steam's.
     std::thread::spawn(move || {
         let _ = child.wait();
     });
+    Ok(())
+}
+
+/// Play: start a game that is in this computer's library through Steam.
+pub fn play(steam_root: Option<&Path>, app_id: u32) -> Result<String, String> {
+    let game = page(steam_root)
+        .games
+        .into_iter()
+        .find(|g| g.app_id == app_id)
+        .ok_or("That game isn't in this computer's Steam library.")?;
+    let url = play_url(game.app_id)?;
+    if launcher(std::env::consts::OS, &url).is_none() {
+        return Err("Steam games can't be started on this device.".into());
+    }
+    hand_to_steam(&url, &game.name)?;
     Ok(format!("Asked Steam to start {}.", game.name))
+}
+
+/// Home's Squad tile: open Steam's friends list.
+pub fn open_friends(steam_root: Option<&Path>) -> Result<(), String> {
+    if steam_root.is_none() {
+        return Err("Steam isn't installed on this computer.".into());
+    }
+    hand_to_steam(FRIENDS_URL, "your friends list")
 }
 
 #[cfg(test)]
@@ -760,9 +782,19 @@ mod tests {
             "steam://rungameid/",
             "steam://rungameid/620&calc",
             "steam://install/620",
+            "steam://open/friends&calc",
+            "steam://open/console",
         ] {
             assert_eq!(launcher("linux", bad), None, "{bad}");
         }
+        assert_eq!(
+            launcher("macos", FRIENDS_URL),
+            Some(("open", vec![FRIENDS_URL.to_string()]))
+        );
+        assert_eq!(
+            open_friends(None),
+            Err("Steam isn't installed on this computer.".to_string())
+        );
     }
 
     #[test]

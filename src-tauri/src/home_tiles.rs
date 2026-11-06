@@ -104,7 +104,11 @@ pub fn view(module: &str, src: &Sources<'_>) -> Option<TileView> {
         "hype_line" => tiles::hype_line_view(Some(&crate::home::personality_name(src)), now),
         "audio_check" => pc_only(&|| tiles::audio_view(&audio())),
         "stream_check" => pc_only(&|| tiles::stream_view(&stream_facts(src.config_dir))),
-        "squad" | "tonight" => tiles::waiting_view(module),
+        "squad" => pc_only(&|| tiles::squad_view(steam_friends())),
+        "tonight" => match crate::automations::load(src.config_dir) {
+            Ok(list) => tiles::tonight_view(&tonight_due(&list), now),
+            Err(message) => TileView::error(&message),
+        },
         _ => return None,
     };
     Some(v)
@@ -169,6 +173,31 @@ fn session(game: Option<u32>, now: u64) -> tiles::SessionClock {
 fn recent_clips() -> Vec<grokhub_core::clips::Clip> {
     let roots = grokhub_core::clips::roots(grokhub_core::steam::detect_root().as_deref());
     grokhub_core::clips::recent(&roots, ROWS)
+}
+
+/// `(name, next run)` for each automation that is on and scheduled.
+fn tonight_due(list: &[grokhub_core::automation::Automation]) -> Vec<(String, u64)> {
+    list.iter()
+        .filter(|a| a.enabled)
+        .filter_map(|a| a.next_run.map(|t| (a.name.clone(), t)))
+        .collect()
+}
+
+/// How many Steam friends this PC has saved, read again at most every
+/// five minutes (Steam's settings file can be large).
+fn steam_friends() -> Option<usize> {
+    static LAST: Mutex<Option<(Instant, Option<usize>)>> = Mutex::new(None);
+    let mut last = LAST.lock().ok()?;
+    if let Some((at, n)) = *last {
+        if at.elapsed() < Duration::from_secs(5 * 60) {
+            return n;
+        }
+    }
+    let n = grokhub_core::steam::detect_root()
+        .as_deref()
+        .and_then(grokhub_core::steam::friend_count);
+    *last = Some((Instant::now(), n));
+    n
 }
 
 /// Opens the clip at `index` in the Clips tile's list with the PC's own

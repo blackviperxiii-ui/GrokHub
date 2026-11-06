@@ -461,3 +461,25 @@ fn feed_tiles_list_only_their_own_live_cards() {
     assert_eq!(feed_items(&cards, "patch_notes")[0].title, "Back to Dota 2");
     assert!(feed_items(&cards, "deals").is_empty());
 }
+
+#[test]
+fn tonight_lists_only_automations_that_are_on_and_scheduled() {
+    let auto =
+        |name: &str, enabled: bool, next: Option<u64>| -> grokhub_core::automation::Automation {
+            serde_json::from_value(serde_json::json!({
+                "name": name,
+                "schedule": "daily",
+                "time": "20:00",
+                "instructions": "check",
+                "enabled": enabled,
+                "nextRun": next,
+            }))
+            .unwrap()
+        };
+    let due = super::views::tonight_due(&[
+        auto("Raid reminder", true, Some(1_000)),
+        auto("Paused", false, Some(2_000)),
+        auto("Not set", true, None),
+    ]);
+    assert_eq!(due, vec![("Raid reminder".to_string(), 1_000)]);
+}

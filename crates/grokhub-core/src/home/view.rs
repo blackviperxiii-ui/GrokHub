@@ -126,6 +126,8 @@ pub enum TileAction {
     /// Open the clip at this place in the Clips tile's list. The app finds
     /// the file again itself, so no path ever travels with the action.
     OpenClip { index: usize },
+    /// Open Steam's own friends list, where Steam shows who is online.
+    SteamFriends,
     /// Ask the tile for another pick.
     Reroll,
     /// Read the tile again.

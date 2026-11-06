@@ -115,10 +115,20 @@ pub(super) fn desktop_view(cabin: &mut Cabin, module: &str) -> Option<TileView> 
                 online: log.on.then(|| !log.down()),
             })
         }
-        "squad" | "tonight" => tiles::waiting_view(module),
+        "squad" => tiles::squad_view(live_facts().steam_friends),
+        "tonight" => tiles::tonight_view(&tonight_due(&cabin.automations), now),
         _ => return None,
     };
     Some(v.at(now))
+}
+
+/// `(name, next run)` for each automation that is on and scheduled.
+pub(super) fn tonight_due(autos: &[grokhub_core::automation::Automation]) -> Vec<(String, u64)> {
+    autos
+        .iter()
+        .filter(|a| a.enabled)
+        .filter_map(|a| a.next_run.map(|t| (a.name.clone(), t)))
+        .collect()
 }
 
 /// The Pulse cards a feed tile lists: those its source posted, not
