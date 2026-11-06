@@ -34,6 +34,7 @@ pub mod chip_store;
 pub mod chip_trailer;
 pub mod chips;
 pub mod cli_history;
+pub mod clips;
 pub mod code_resume;
 pub mod companion;
 pub mod connectivity;

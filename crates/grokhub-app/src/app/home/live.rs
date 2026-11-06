@@ -47,6 +47,8 @@ pub(super) struct LiveFacts {
     pub gpu_temp_c: Option<i32>,
     /// Each local drive's free and total bytes.
     pub drives: Vec<DiskUse>,
+    /// The newest clips and captures, newest first (names and times only).
+    pub clips: Vec<grokhub_core::clips::Clip>,
 }
 
 impl LiveFacts {
@@ -74,6 +76,7 @@ static SLOT: Mutex<Slot> = Mutex::new(Slot {
         local_installed: false,
         gpu_temp_c: None,
         drives: Vec::new(),
+        clips: Vec::new(),
     },
     at: None,
     reading: false,
@@ -98,6 +101,10 @@ pub(super) fn live_facts() -> LiveFacts {
                 facts.drives = system_state::local_drives(
                     &system_state::OsProbe,
                     &grokhub_agent::indexers::paths::PlatformDirs::from_env(),
+                );
+                facts.clips = grokhub_core::clips::recent(
+                    &grokhub_core::clips::roots(grokhub_core::steam::detect_root().as_deref()),
+                    8,
                 );
                 if let Ok(mut slot) = SLOT.lock() {
                     slot.facts = facts;

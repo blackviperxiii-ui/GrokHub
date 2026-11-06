@@ -1772,6 +1772,12 @@ async fn library_play(app_id: u32) -> Result<String, String> {
     off_main(move || library::play(grokhub_core::steam::detect_root().as_deref(), app_id)).await?
 }
 
+/// Home's Clips tile: play the clip at this place in its list.
+#[tauri::command]
+async fn home_open_clip(index: usize) -> Result<(), String> {
+    off_main(move || home_tiles::open_clip(index)).await?
+}
+
 #[tauri::command]
 async fn get_interests(state: State<'_, ShellState>) -> Result<interests::Page, String> {
     capabilities::needs(capabilities::current().pulse, "Pulse")?;
@@ -2969,6 +2975,7 @@ pub fn run() {
             get_library,
             library_cover,
             library_play,
+            home_open_clip,
             open_url
         ])
         .run(tauri::generate_context!());

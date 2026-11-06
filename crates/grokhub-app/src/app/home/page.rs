@@ -324,7 +324,13 @@ impl Cabin {
             TileAction::Play { app_id } => {
                 let _ = crate::desktop::open_path(&super::super::library_ui::play_link(app_id));
             }
-            TileAction::Reroll | TileAction::Retry => {}
+            TileAction::OpenClip { index } => {
+                if let Some(path) = super::views::clip_path(index) {
+                    let _ = crate::desktop::open_path(&path.to_string_lossy());
+                }
+            }
+            TileAction::Reroll => super::views::reroll(),
+            TileAction::Retry => {}
         }
     }
 

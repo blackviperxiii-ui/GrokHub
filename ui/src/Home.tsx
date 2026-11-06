@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   getHome,
+  homeOpenClip,
   libraryPlay,
   openUrl,
   pulseAct,
@@ -137,6 +138,9 @@ export function runAction(a: TileAction, go: HomeRoutes, remote: boolean, reload
       return;
     case "play":
       if (!remote) void libraryPlay(a.appId).catch(() => {});
+      return;
+    case "openClip":
+      if (!remote) void homeOpenClip(a.index).catch(() => {});
       return;
     case "reroll":
     case "retry":

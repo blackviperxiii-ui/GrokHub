@@ -1209,6 +1209,7 @@ export type TileAction =
   | { kind: "turnOn"; feature: string }
   | { kind: "openUrl"; url: string }
   | { kind: "play"; appId: number }
+  | { kind: "openClip"; index: number }
   | { kind: "reroll" }
   | { kind: "retry" };
 
@@ -1923,4 +1924,9 @@ export function libraryCover(appId: number, shape: CoverShape): Promise<string |
 /** Ask Steam to start the game. Resolves to a line to show. */
 export function libraryPlay(appId: number): Promise<string> {
   return invoke<string>("library_play", { appId });
+}
+
+/** Plays the clip at this place in Home's Clips tile with the PC's player. */
+export function homeOpenClip(index: number): Promise<void> {
+  return invoke<void>("home_open_clip", { index });
 }

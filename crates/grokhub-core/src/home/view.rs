@@ -123,6 +123,9 @@ pub enum TileAction {
     OpenUrl { url: String },
     /// Launch a Steam game through Steam.
     Play { app_id: u32 },
+    /// Open the clip at this place in the Clips tile's list. The app finds
+    /// the file again itself, so no path ever travels with the action.
+    OpenClip { index: usize },
     /// Ask the tile for another pick.
     Reroll,
     /// Read the tile again.
