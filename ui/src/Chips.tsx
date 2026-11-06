@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { chipOutcome, quickChips, type ChipSurface, type QuickChip, type SessionMode } from "./api";
 import { onArrowFocus, usePeek } from "./peek";
 
@@ -45,7 +45,8 @@ export function ChipRow({
   const row = useRef<HTMLDivElement>(null);
   const shown = chips.slice(0, CHIP_ROW_MAX);
   usePeek(row, "x", shown.length);
-  useEffect(() => {
+  // A layout effect, so Alt+N works from the moment the row is on screen.
+  useLayoutEffect(() => {
     if (!keys || busy || shown.length === 0) return;
     const onKey = (event: KeyboardEvent) => {
       const slot = chipSlotOf(event);
