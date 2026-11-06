@@ -415,6 +415,8 @@ enum JobOut {
     ),
     Voice(String),
     VoiceNote(String),
+    /// Someone started talking (over a reply, that's a barge-in).
+    VoiceHeard,
     HostLine(String),
     HostDone(String),
     UpdateProgress {

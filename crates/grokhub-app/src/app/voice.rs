@@ -61,7 +61,7 @@ pub(super) fn listen_turn(
         };
         match next {
             Heard::Started => {
-                let _ = notes.send(JobOut::VoiceNote("Listening… go on".into()));
+                let _ = notes.send(JobOut::VoiceHeard);
             }
             Heard::CheckIn => {
                 let _ = notes.send(JobOut::VoiceNote(CHECK_IN_NOTE.into()));
@@ -153,6 +153,11 @@ impl Cabin {
                 self.status = "Got it…".into();
                 return;
             }
+            // While it talks, a tap means "stop, my turn".
+            if self.voice_state == VoiceState::Speaking {
+                self.barge_in();
+                return;
+            }
             self.leave_voice();
             return;
         }
@@ -191,13 +196,18 @@ impl Cabin {
             Some((tap, news)) => (Some(tap), Some((news, mic.finisher()))),
             None => (None, None),
         };
+        // Over a reply still playing, the mic listens for someone talking over it.
+        let over_reply = self.voice_hold_rx.is_some();
+        mic.set_playing(over_reply);
         let heard = mic.listen(tap);
-        self.voice_orb = "listening".into();
-        self.voice_state = VoiceState::Listening;
         self.running = true;
         self.abandon_turn_card();
         self.chat_job_thread = None;
-        self.status = voice_mode_label(VoiceState::Listening).into();
+        if over_reply {
+            self.show_speaking();
+        } else {
+            self.show_listening();
+        }
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         std::thread::spawn(move || {
@@ -222,9 +232,71 @@ impl Cabin {
             return;
         };
         match rx.try_recv() {
-            Ok(()) | Err(mpsc::TryRecvError::Disconnected) => self.maybe_continue_ptt(),
-            Err(mpsc::TryRecvError::Empty) => self.voice_hold_rx = Some(rx),
+            Ok(()) | Err(mpsc::TryRecvError::Disconnected) => {
+                if let Some(mic) = &self.voice_mic {
+                    mic.set_playing(false);
+                }
+                if self.running && self.voice_state == VoiceState::Speaking {
+                    // Already listening over the reply: just say so.
+                    self.show_listening();
+                }
+                self.maybe_continue_ptt();
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.voice_hold_rx = Some(rx);
+                if self.voice_is_on() && !self.running {
+                    // Listen while it talks, so they can talk over it.
+                    self.start_ptt_listen();
+                }
+            }
         }
+    }
+
+    fn show_listening(&mut self) {
+        self.voice_orb = "listening".into();
+        self.voice_state = VoiceState::Listening;
+        self.status = voice_mode_label(VoiceState::Listening).into();
+    }
+
+    /// Stop the spoken reply now, and let the mic know it stopped.
+    pub(super) fn stop_speaking(&mut self) {
+        self.voice_spoken = None;
+        self.voice_hold_rx = None;
+        if let Some(mic) = &self.voice_mic {
+            mic.set_playing(false);
+        }
+    }
+
+    /// The mic heard someone start talking. Over a reply, they're talking
+    /// over it: stop the reply so they can be heard.
+    pub(super) fn heard_talking(&mut self) {
+        if self.voice_state == VoiceState::Speaking {
+            self.stop_speaking();
+        }
+        self.voice_orb = "listening".into();
+        self.voice_state = VoiceState::Listening;
+        self.status = "Listening… go on".into();
+    }
+
+    /// They want to talk while the reply is being spoken: stop it and listen.
+    fn barge_in(&mut self) {
+        if self.voice_hold_rx.is_some() {
+            // The reply is written and playing: stop it and listen now.
+            self.stop_speaking();
+            if self.running {
+                self.show_listening();
+            } else {
+                self.start_ptt_listen();
+            }
+            return;
+        }
+        // Still being written: say no more of it, and listen once it's done.
+        if let Some(spoken) = self.voice_spoken.as_mut() {
+            spoken.hush();
+        }
+        self.voice_state = VoiceState::Thinking;
+        self.voice_orb = "idle".into();
+        self.status = "Okay, I'll stop talking.".into();
     }
 
     pub(super) fn voice_is_on(&self) -> bool {
@@ -365,6 +437,7 @@ impl Cabin {
             VoiceState::Listening if self.voice_mic.as_ref().is_some_and(|m| m.talking()) => {
                 "Done talking"
             }
+            VoiceState::Speaking => "Stop and listen",
             _ if on => "Leave voice",
             _ => "Hey Grok",
         };
@@ -478,5 +551,63 @@ mod stream_tests {
         let shown = caption_note(&long);
         assert!(shown.starts_with("\u{201c}…"), "{shown}");
         assert!(shown.chars().count() <= 84, "{shown}");
+    }
+
+    fn speaking_cabin() -> Cabin {
+        let mut app = Cabin::quiet_for_test();
+        app.voice_state = VoiceState::Speaking;
+        app.voice_orb = "speaking".into();
+        app
+    }
+
+    #[test]
+    fn a_tap_while_a_reply_plays_stops_it_and_listens() {
+        let mut app = speaking_cabin();
+        let (_still_playing, done) = mpsc::channel::<()>();
+        app.voice_hold_rx = Some(done);
+        // Already listening over the reply.
+        app.running = true;
+        app.listen_voice();
+        assert!(app.voice_hold_rx.is_none(), "the reply stops");
+        assert!(app.voice_spoken.is_none());
+        assert_eq!(app.voice_state, VoiceState::Listening);
+        assert!(app.running, "the same listen carries on");
+    }
+
+    #[test]
+    fn talking_over_a_reply_stops_it() {
+        let mut app = speaking_cabin();
+        let (_still_playing, done) = mpsc::channel::<()>();
+        app.voice_hold_rx = Some(done);
+        app.running = true;
+        app.heard_talking();
+        assert!(app.voice_hold_rx.is_none());
+        assert_eq!(app.voice_state, VoiceState::Listening);
+        assert_eq!(app.status, "Listening… go on");
+    }
+
+    #[test]
+    fn a_tap_while_the_reply_is_still_being_written_says_no_more_of_it() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let played = std::sync::Arc::new(AtomicUsize::new(0));
+        let seen = played.clone();
+        let synth: crate::spoken::Synth = Box::new(|t| Ok(t.as_bytes().to_vec()));
+        let play: crate::spoken::Play = Box::new(move |_, _| {
+            seen.fetch_add(1, Ordering::SeqCst);
+        });
+        let mut app = speaking_cabin();
+        app.voice_spoken = Some(crate::spoken::SpokenReply::start(synth, play, None));
+        app.listen_voice();
+        assert_eq!(app.voice_state, VoiceState::Thinking);
+        let spoken = app
+            .voice_spoken
+            .as_mut()
+            .expect("kept until the reply ends");
+        assert!(!spoken.feed("More words. And more after that.\n"));
+        spoken.finish("");
+        let done = spoken.take_done().expect("done");
+        done.recv_timeout(std::time::Duration::from_secs(5))
+            .expect("a hushed reply still ends, so listening resumes");
+        assert_eq!(played.load(Ordering::SeqCst), 0, "nothing more is spoken");
     }
 }

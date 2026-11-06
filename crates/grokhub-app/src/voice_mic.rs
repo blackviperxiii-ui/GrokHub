@@ -39,6 +39,11 @@ struct Shared {
     out: Mutex<Option<Sender<Heard>>>,
     /// A copy of each block heard during the listen (streaming speech-to-text).
     tap: Mutex<Option<Sender<Vec<i16>>>>,
+    /// A reply is playing: only sustained speech over its echo starts a turn.
+    playing: AtomicBool,
+    /// Blocks heard over a reply, kept back from the tap until someone talks,
+    /// so the reply's own echo isn't sent to be transcribed.
+    held: Mutex<Vec<Vec<i16>>>,
     lost: Mutex<Option<String>>,
     child: Mutex<Option<Child>>,
 }
@@ -112,6 +117,7 @@ impl VoiceMic {
             return rx;
         }
         self.shared.finish.store(false, Ordering::SeqCst);
+        lock(&self.shared.held).clear();
         *self.shared.tap.lock().unwrap_or_else(|e| e.into_inner()) = tap;
         *self.shared.out.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
         self.shared.armed.store(true, Ordering::SeqCst);
@@ -126,6 +132,11 @@ impl VoiceMic {
     /// End the turn now (the person tapped to say they're done).
     pub fn finish(&self) {
         self.shared.finish.store(true, Ordering::SeqCst);
+    }
+
+    /// A reply is (or stopped) playing through the speakers.
+    pub fn set_playing(&self, playing: bool) {
+        self.shared.playing.store(playing, Ordering::SeqCst);
     }
 
     /// A handle that can end the current turn from another thread (the
@@ -279,13 +290,19 @@ fn step(shared: &Shared, det: &mut TurnDetector, was_armed: &mut bool, block: &[
         det.clear();
         *was_armed = true;
     }
-    if let Some(tap) = shared
-        .tap
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .as_ref()
-    {
-        let _ = tap.send(block.to_vec());
+    let playing = shared.playing.load(Ordering::SeqCst);
+    det.set_playing(playing);
+    if playing {
+        // A long reply is not a quiet minute.
+        det.reset_quiet();
+    }
+    let live = !playing || det.talking();
+    if live {
+        // Echo held over a reply that ended with nobody talking.
+        lock(&shared.held).clear();
+        tap_send(shared, block);
+    } else {
+        hold(shared, block);
     }
     if shared.finish.swap(false, Ordering::SeqCst) {
         det.push(block);
@@ -300,6 +317,13 @@ fn step(shared: &Shared, det: &mut TurnDetector, was_armed: &mut bool, block: &[
     for ev in det.push(block) {
         match ev {
             TurnEvent::SpeechStarted => {
+                if !live {
+                    // Talking over the reply: the stream gets the start too.
+                    let held = std::mem::take(&mut *lock(&shared.held));
+                    for b in held {
+                        tap_send(shared, &b);
+                    }
+                }
                 shared.talking.store(true, Ordering::SeqCst);
                 shared.send(Heard::Started);
             }
@@ -315,6 +339,31 @@ fn step(shared: &Shared, det: &mut TurnDetector, was_armed: &mut bool, block: &[
                 return;
             }
         }
+    }
+}
+
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn tap_send(shared: &Shared, block: &[i16]) {
+    if let Some(tap) = lock(&shared.tap).as_ref() {
+        let _ = tap.send(block.to_vec());
+    }
+}
+
+/// Keep the last moment of audio heard over a reply: enough for the
+/// detector's pre-roll plus the sustained speech that starts a barge-in.
+fn hold(shared: &Shared, block: &[i16]) {
+    if lock(&shared.tap).is_none() {
+        return;
+    }
+    let cap = ((vt::PRE_ROLL_MS + vt::BARGE_IN_WINDOW_MS) * vt::RATE / 1000) as usize;
+    let mut held = lock(&shared.held);
+    held.push(block.to_vec());
+    let mut total: usize = held.iter().map(Vec::len).sum();
+    while total > cap && held.len() > 1 {
+        total -= held.remove(0).len();
     }
 }
 
@@ -336,6 +385,60 @@ mod tests {
     fn hush(ms: u32) -> Vec<i16> {
         let n = (vt::RATE * ms / 1000) as usize;
         (0..n).map(|i| ((i * 7919 % 61) as i16) - 30).collect()
+    }
+
+    /// The reply's own echo: a steady tone (900 is about -34 dBFS).
+    fn steady(ms: u32, amp: f32) -> Vec<i16> {
+        let n = (vt::RATE * ms / 1000) as usize;
+        (0..n)
+            .map(|i| {
+                let t = i as f32 / vt::RATE as f32;
+                (amp * (2.0 * std::f32::consts::PI * 180.0 * t).sin()) as i16
+            })
+            .collect()
+    }
+
+    #[test]
+    fn talking_over_a_reply_starts_a_turn_and_the_stream_gets_its_start() {
+        let shared = Shared::default();
+        shared.playing.store(true, Ordering::SeqCst);
+        let mut det = TurnDetector::new();
+        let mut armed = false;
+        let rx = listen(&shared);
+        let (tap, copies) = mpsc::channel();
+        *shared.tap.lock().unwrap() = Some(tap);
+        feed(&shared, &mut det, &mut armed, &steady(2000, 900.0));
+        assert!(drain(&rx).is_empty(), "the reply's echo is not a turn");
+        assert!(
+            copies.try_iter().next().is_none(),
+            "the echo is not sent to be transcribed"
+        );
+        feed(&shared, &mut det, &mut armed, &tone(900, 16000.0));
+        assert!(matches!(drain(&rx).first(), Some(Heard::Started)));
+        let sent: usize = copies.try_iter().map(|b| b.len()).sum();
+        let ms = sent as u32 * 1000 / vt::RATE;
+        assert!(
+            ms >= 500,
+            "the start of what they said is streamed too: {ms} ms"
+        );
+    }
+
+    #[test]
+    fn a_long_reply_is_not_a_quiet_minute() {
+        let shared = Shared::default();
+        shared.playing.store(true, Ordering::SeqCst);
+        let mut det = TurnDetector::new();
+        let mut armed = false;
+        let rx = listen(&shared);
+        feed(&shared, &mut det, &mut armed, &steady(70_000, 900.0));
+        let heard = drain(&rx);
+        assert!(
+            !heard
+                .iter()
+                .any(|h| matches!(h, Heard::Pause | Heard::CheckIn)),
+            "{heard:?}"
+        );
+        assert!(shared.armed.load(Ordering::SeqCst));
     }
 
     fn feed(shared: &Shared, det: &mut TurnDetector, armed: &mut bool, audio: &[i16]) {

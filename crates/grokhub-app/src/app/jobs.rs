@@ -226,6 +226,10 @@ impl Cabin {
             }
             Ok(JobOut::Voice(t)) => {
                 self.running = false;
+                if !t.trim().is_empty() {
+                    // Their words win over whatever is still being said.
+                    self.stop_speaking();
+                }
                 let stt_ok = !is_voice_error(&t);
                 let voice_on = self.voice_is_on();
                 self.voice_state = voice_state_after_ptt_stt(voice_on, stt_ok);
@@ -269,6 +273,10 @@ impl Cabin {
             Ok(JobOut::VoiceNote(note)) => {
                 self.rx = Some(rx);
                 self.status = note;
+            }
+            Ok(JobOut::VoiceHeard) => {
+                self.rx = Some(rx);
+                self.heard_talking();
             }
             Ok(JobOut::UpdateProgress { pct, msg }) => {
                 self.rx = Some(rx);

@@ -192,6 +192,13 @@ impl SpokenReply {
         }
     }
 
+    /// Stop talking now, and say nothing more of this reply even as it keeps
+    /// streaming in. Finishing it still signals done.
+    pub fn hush(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        self.left = 0;
+    }
+
     /// Fires once the last piece has played (or the reply was stopped).
     pub fn take_done(&mut self) -> Option<Receiver<()>> {
         self.done.take()
