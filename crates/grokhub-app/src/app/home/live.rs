@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use grokhub_agent::harness::{self as hx, EgressRead};
 use grokhub_agent::indexers::system_state::{self, DiskUse};
+use grokhub_core::home::text::SendFacts;
 
 const REFRESH: Duration = Duration::from_secs(60);
 const DAY_MS: u64 = 86_400_000;
@@ -24,6 +25,17 @@ pub(super) struct LiveFacts {
     pub gpu_temp_c: Option<i32>,
     /// Each local drive's free and total bytes.
     pub drives: Vec<DiskUse>,
+}
+
+impl LiveFacts {
+    /// What the Connection tile says about sends and the local model.
+    pub(super) fn sends(&self) -> SendFacts {
+        SendFacts {
+            sends_24h: self.sends_24h,
+            top_dest: self.top_dest.clone(),
+            local_ready: self.local_ready,
+        }
+    }
 }
 
 struct Slot {

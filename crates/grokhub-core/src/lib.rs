@@ -46,6 +46,7 @@ pub mod desktop_entry;
 pub mod desktop_mcp;
 pub mod destiny_api;
 pub mod diagnostics;
+pub mod disk;
 pub mod doctor;
 pub mod downloads_tidy;
 pub mod driver_check;

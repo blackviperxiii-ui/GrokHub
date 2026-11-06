@@ -16,14 +16,7 @@ const COMMAND_TIMEOUT: Duration = Duration::from_secs(3);
 /// Most failed units named in one fact.
 const UNITS_MAX: usize = 10;
 
-/// Free and total bytes of one disk.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DiskUse {
-    /// `/`, `home`, or a Windows drive such as `C:`.
-    pub label: String,
-    pub total: u64,
-    pub free: u64,
-}
+pub use grokhub_core::disk::DiskUse;
 
 /// What the system looked like. `None` means "not available on this OS".
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

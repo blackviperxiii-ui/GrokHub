@@ -1,8 +1,10 @@
 //! Paint one Home module at a given size. Missing data → clean "coming soon".
 
-use grokhub_agent::indexers::system_state::DiskUse;
-use grokhub_core::home::{lookup, ModuleSize};
-use grokhub_core::local_profile::Thermal;
+use grokhub_core::home::text::{
+    connection_text, game_mode_text, gpu_temp_text, storage_rows, storage_text, updates_text,
+    usage_text,
+};
+use grokhub_core::home::{lookup, ModuleSize, TileText, Tone};
 use grokhub_core::mission::MissionView;
 
 use super::super::loadout_home::{
@@ -236,23 +238,6 @@ fn card_clicked(ui: &mut egui::Ui, resp: &egui::Response, salt: &str, tip: &str)
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .on_hover_text(tip)
         .clicked()
-}
-
-/// Big number, its caption, and an optional second line for one tile.
-#[derive(Debug, Clone, PartialEq)]
-pub(super) struct TileText {
-    pub big: String,
-    pub caption: String,
-    pub detail: Option<String>,
-    pub tone: Tone,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Tone {
-    Normal,
-    Warn,
-    Alert,
-    Quiet,
 }
 
 fn tone_color(t: Tone) -> egui::Color32 {
@@ -611,48 +596,6 @@ fn paint_pulse(
     });
 }
 
-/// The Small PC tile: the main GPU's °C when the OS reports it, else the
-/// PC's thermal reading.
-pub(super) fn gpu_temp_text(temp_c: Option<i32>, thermal: Option<Thermal>) -> TileText {
-    match (temp_c, thermal.unwrap_or(Thermal::Unknown)) {
-        (Some(c), _) => {
-            let (word, tone) = if c >= 85 {
-                ("hot", Tone::Alert)
-            } else if c >= 70 {
-                ("warm", Tone::Warn)
-            } else {
-                ("cool", Tone::Normal)
-            };
-            TileText {
-                big: format!("{c} °C"),
-                caption: format!("Main GPU · {word}"),
-                detail: None,
-                tone,
-            }
-        }
-        (None, Thermal::Unknown) => TileText {
-            big: "—".into(),
-            caption: "No temperature sensor found".into(),
-            detail: None,
-            tone: Tone::Quiet,
-        },
-        (None, th) => {
-            let (word, tone) = match th {
-                Thermal::Fair => ("Warm", Tone::Warn),
-                Thermal::Serious => ("Hot", Tone::Alert),
-                Thermal::Critical => ("Critical", Tone::Alert),
-                _ => ("Cool", Tone::Normal),
-            };
-            TileText {
-                big: word.into(),
-                caption: "PC sensors · no GPU sensor".into(),
-                detail: None,
-                tone,
-            }
-        }
-    }
-}
-
 fn paint_pc_loadout(ui: &mut egui::Ui, size: ModuleSize, actions: &mut Vec<ModuleAction>) {
     let profile = pc_profile();
     super::pc_sheet::show_pc_sheet(ui.ctx(), profile.as_ref());
@@ -742,6 +685,7 @@ fn paint_usage(
         cabin.harness.router.budget.week,
         cabin.cfg.weekly_spend_cap_usd,
         cabin.harness.router.budget.cache_pct,
+        grokhub_agent::cache_watch::FLOOR_PCT,
     );
     let resp = card(ui, |ui| {
         header(ui, false, "AI usage", "", crate::theme::fg());
@@ -756,121 +700,6 @@ fn paint_usage(
     }
 }
 
-/// Today's tokens against the daily cap, plus this week's spend and the last
-/// day's Grok cache share when known. A share under the cache floor is flagged.
-pub(super) fn usage_text(
-    used: u64,
-    cap: u64,
-    week: Option<crate::app::budget_ui::WeekSpend>,
-    week_cap_usd: u32,
-    cache_pct: Option<u8>,
-) -> TileText {
-    use grokhub_core::{budget_level, compact_tokens, BudgetLevel};
-    let caption = if cap == 0 {
-        "Tokens today · no daily cap".to_string()
-    } else {
-        let pct = used.saturating_mul(100) / cap.max(1);
-        format!("Tokens today · {pct}% of {}", compact_tokens(cap))
-    };
-    let tone = match budget_level(used, cap) {
-        Some(BudgetLevel::Over) => Tone::Alert,
-        Some(BudgetLevel::Near) => Tone::Warn,
-        _ if used == 0 => Tone::Quiet,
-        _ => Tone::Normal,
-    };
-    let spend = week.filter(|w| w.usd > 0.0 || w.pct.is_some()).map(|w| {
-        if week_cap_usd > 0 {
-            format!("${:.2} of ${week_cap_usd} this week", w.usd)
-        } else {
-            format!("${:.2} this week", w.usd)
-        }
-    });
-    let cache = cache_pct.map(|pct| {
-        if pct < grokhub_agent::cache_watch::FLOOR_PCT {
-            format!("cache {pct}% (low)")
-        } else {
-            format!("cache {pct}%")
-        }
-    });
-    let detail = match (spend, cache) {
-        (Some(s), Some(c)) => Some(format!("{s} · {c}")),
-        (s, c) => s.or(c),
-    };
-    TileText {
-        big: compact_tokens(used),
-        caption,
-        detail,
-        tone,
-    }
-}
-
-fn gb_bytes(bytes: u64) -> String {
-    let gb = bytes as f64 / 1_000_000_000.0;
-    if gb >= 1_000.0 {
-        format!("{:.1} TB", gb / 1_000.0)
-    } else {
-        format!("{gb:.0} GB")
-    }
-}
-
-fn free_tone(d: &DiskUse) -> Tone {
-    let pct_free = (d.free * 100).checked_div(d.total).unwrap_or(100);
-    if pct_free < 5 {
-        Tone::Alert
-    } else if pct_free < 15 {
-        Tone::Warn
-    } else {
-        Tone::Normal
-    }
-}
-
-/// One line per drive, fullest first: label, "120 GB free of 1.0 TB", tone.
-pub(super) fn storage_rows(drives: &[DiskUse]) -> Vec<(String, String, Tone)> {
-    let mut ds: Vec<&DiskUse> = drives.iter().filter(|d| d.total > 0).collect();
-    ds.sort_by_key(|d| (d.free * 1_000).checked_div(d.total).unwrap_or(1_000));
-    ds.iter()
-        .map(|d| {
-            (
-                d.label.clone(),
-                format!("{} free of {}", gb_bytes(d.free), gb_bytes(d.total)),
-                free_tone(d),
-            )
-        })
-        .collect()
-}
-
-/// The Small tile: the fullest drive, or the profile's free space before the first read.
-pub(super) fn storage_text(drives: &[DiskUse], fallback_free_mb: Option<u64>) -> TileText {
-    let fullest = drives
-        .iter()
-        .filter(|d| d.total > 0)
-        .min_by_key(|d| (d.free * 1_000).checked_div(d.total).unwrap_or(1_000));
-    match (fullest, fallback_free_mb) {
-        (Some(d), _) => {
-            let used = 100 - (d.free * 100).checked_div(d.total).unwrap_or(100);
-            let n = drives.iter().filter(|d| d.total > 0).count();
-            TileText {
-                big: format!("{} free", gb_bytes(d.free)),
-                caption: format!("{} · {used}% used of {}", d.label, gb_bytes(d.total)),
-                detail: (n > 1).then(|| format!("{n} drives · fullest shown")),
-                tone: free_tone(d),
-            }
-        }
-        (None, Some(mb)) if mb > 0 => TileText {
-            big: format!("{} free", gb_bytes(mb * 1_048_576)),
-            caption: "Home drive".into(),
-            detail: None,
-            tone: Tone::Normal,
-        },
-        _ => TileText {
-            big: "—".into(),
-            caption: "Reading drives…".into(),
-            detail: None,
-            tone: Tone::Quiet,
-        },
-    }
-}
-
 fn paint_storage(ui: &mut egui::Ui, size: ModuleSize, actions: &mut Vec<ModuleAction>) {
     let facts = super::live::live_facts();
     let fallback = pc_profile().map(|p| p.free_disk_mb);
@@ -881,19 +710,19 @@ fn paint_storage(ui: &mut egui::Ui, size: ModuleSize, actions: &mut Vec<ModuleAc
             paint_tile_text(ui, &storage_text(&facts.drives, fallback), size);
         } else {
             let cap = if size == ModuleSize::Medium { 3 } else { 6 };
-            for (label, value, tone) in rows.iter().take(cap) {
+            for row in rows.iter().take(cap) {
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new(label)
+                        RichText::new(&row.label)
                             .size(crate::theme::TYPE_CAPTION)
                             .color(crate::theme::muted()),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
-                            RichText::new(value)
+                            RichText::new(&row.value)
                                 .size(crate::theme::TYPE_BODY)
                                 .strong()
-                                .color(tone_color(*tone)),
+                                .color(tone_color(row.tone)),
                         );
                     });
                 });
@@ -908,60 +737,6 @@ fn paint_storage(ui: &mut egui::Ui, size: ModuleSize, actions: &mut Vec<ModuleAc
             ));
         }
     });
-}
-
-/// The Updates & Drivers tile in words: Loadout first, then games, the OS
-/// and the GPU driver.
-pub(super) fn updates_text(
-    loadout_update: bool,
-    f: &super::updates::UpdateFacts,
-    gpu_driver: Option<&str>,
-) -> TileText {
-    use super::updates::OsUpdates;
-    let mut waiting = Vec::new();
-    if loadout_update {
-        waiting.push("Loadout".to_string());
-    }
-    match f.steam.len() {
-        0 => {}
-        1 => waiting.push(f.steam[0].clone()),
-        n => waiting.push(format!("{n} Steam games")),
-    }
-    if let OsUpdates::Pending(n) = f.os {
-        if n > 0 {
-            waiting.push(format!(
-                "{n} system package{}",
-                if n == 1 { "" } else { "s" }
-            ));
-        }
-    }
-    let big = match waiting.len() {
-        0 => "Up to date".to_string(),
-        n => format!("{n} waiting"),
-    };
-    let caption = if waiting.is_empty() {
-        match f.os {
-            OsUpdates::NotAllowed => "Loadout and Steam checked · system checks off".into(),
-            OsUpdates::Unknown | OsUpdates::NoChecker => "Loadout and Steam checked".into(),
-            OsUpdates::Pending(_) => "Loadout, Steam and system checked".into(),
-        }
-    } else {
-        waiting.join(" · ")
-    };
-    let detail = gpu_driver
-        .map(str::trim)
-        .filter(|d| !d.is_empty())
-        .map(|d| format!("GPU driver {d}"));
-    TileText {
-        big,
-        caption,
-        detail,
-        tone: if loadout_update || !f.steam.is_empty() {
-            Tone::Warn
-        } else {
-            Tone::Normal
-        },
-    }
 }
 
 fn paint_updates(
@@ -1248,39 +1023,12 @@ fn paint_game_mode(
     }
 }
 
-/// What the game guard sees, in words. Never reads game data itself.
-pub(super) fn game_mode_text(
-    guard: grokhub_core::game_guard::GameGuard,
-    game: Option<&str>,
-    local_paused: bool,
-) -> TileText {
-    let playing = guard.gaming || guard.anticheat.is_some();
-    let big = match (playing, game) {
-        (true, Some(name)) => name.to_string(),
-        (true, None) => "Game running".to_string(),
-        (false, _) => "No game running".to_string(),
-    };
-    let caption = match (guard.anticheat, guard.idle_anticheat) {
-        (Some(ac), _) => format!("{ac} active · Loadout stays hands-off"),
-        (None, Some(ac)) => format!("{ac} installed · idle"),
-        (None, None) if playing => "Desktop control paused while you play".to_string(),
-        (None, None) => "Watching for games by process name only".to_string(),
-    };
-    let detail = local_paused.then(|| "Local AI paused to keep the GPU free".to_string());
-    TileText {
-        big,
-        caption,
-        detail,
-        tone: if playing { Tone::Warn } else { Tone::Quiet },
-    }
-}
-
 fn paint_connection(ui: &mut egui::Ui, size: ModuleSize, actions: &mut Vec<ModuleAction>) {
     let facts = super::live::live_facts();
     let t = connection_text(
-        grokhub_agent::route::connectivity::state(),
+        grokhub_agent::route::connectivity::state().link(),
         grokhub_agent::route::local::switched_on(),
-        &facts,
+        &facts.sends(),
     );
     let resp = card(ui, |ui| {
         header(ui, false, "Connection", "", crate::theme::fg());
@@ -1291,45 +1039,5 @@ fn paint_connection(ui: &mut egui::Ui, size: ModuleSize, actions: &mut Vec<Modul
     });
     if card_clicked(ui, &resp, "home-connection", "What left this PC") {
         actions.push(ModuleAction::Settings(SettingsSec::Privacy));
-    }
-}
-
-/// Online state, local model, and how many sends left this PC in a day.
-/// The log counts sends, not bytes, so the tile says sends.
-pub(super) fn connection_text(
-    net: grokhub_agent::route::connectivity::NetState,
-    local_on: bool,
-    facts: &super::live::LiveFacts,
-) -> TileText {
-    use grokhub_agent::route::connectivity::NetState;
-    let net_word = match net {
-        NetState::Online => "Online",
-        NetState::Degraded => "Spotty",
-        NetState::Offline => "Offline",
-    };
-    let local = match (local_on, facts.local_ready) {
-        (true, true) => "local AI ready",
-        (true, false) => "local AI not ready",
-        (false, _) => "local AI off",
-    };
-    let big = match facts.sends_24h {
-        Some(1) => "1 send".to_string(),
-        Some(n) => format!("{n} sends"),
-        None => "—".to_string(),
-    };
-    let detail = facts
-        .top_dest
-        .as_ref()
-        .filter(|_| facts.sends_24h.unwrap_or(0) > 0)
-        .map(|d| format!("Mostly to {d} · last 24 h"));
-    TileText {
-        big,
-        caption: format!("{net_word} · {local}"),
-        detail,
-        tone: match net {
-            NetState::Online => Tone::Normal,
-            NetState::Degraded => Tone::Warn,
-            NetState::Offline => Tone::Alert,
-        },
     }
 }
