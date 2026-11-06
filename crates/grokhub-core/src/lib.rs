@@ -141,6 +141,7 @@ pub mod paths;
 pub mod pc_health;
 pub mod pc_health_advice;
 pub mod personality;
+pub mod quips;
 pub mod pii;
 pub mod pkce;
 pub mod playbook;
