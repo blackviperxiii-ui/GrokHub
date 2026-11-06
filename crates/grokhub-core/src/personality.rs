@@ -34,6 +34,35 @@ pub const EXPLICIT_SAFETY_LINE: &str =
 /// adults-only is on ([`gated`]), which needs the one-time 18+ confirmation.
 pub const ADULT_PERMISSION: &str = "The user confirmed in Settings that they are 18 or older and opted in to adult roleplay and fantasy between fictional adults. Stay in character, with no moralizing or disclaimers. Hard limits, always: no minors or age-play, no non-consent, no sexual content about real or identifiable people, no bestiality, and if the user says stop, stop at once.";
 
+/// A prompt for a turn that runs on this computer's model with 18+ on: the
+/// online-only limits come off. "Jokes, not sex chat" becomes
+/// [`ADULT_PERMISSION`], the heat lines lose "never a sex scene", and the
+/// closer names only the hard limits. Nothing goes online, so only the hard
+/// limits stay ([`crate::adult_guard`]). A prompt without 18+ on is unchanged.
+pub fn unlocked_for_local(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.contains(ADULT_HUMOR) && !text.contains(ADULT_PERMISSION) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let mut out = if text.contains(ADULT_PERMISSION) {
+        text.replace(&format!(" {ADULT_HUMOR}"), "")
+            .replace(ADULT_HUMOR, "")
+    } else {
+        text.replace(ADULT_HUMOR, ADULT_PERMISSION)
+    };
+    for heat in Heat::DIAL {
+        out = out.replace(heat.line(), heat.local_line());
+    }
+    out = out.replace(
+        crate::talk::VOLATILE_SAFETY_CLOSER_ADULT,
+        crate::talk::VOLATILE_SAFETY_CLOSER,
+    );
+    out = out.replace(
+        crate::talk::VOLATILE_SAFETY_CLOSER,
+        crate::talk::VOLATILE_SAFETY_CLOSER_ADULT,
+    );
+    std::borrow::Cow::Owned(out)
+}
+
 /// What every voice gets while adults-only is on (see [`Personality::prompt_block_for`]):
 /// crude comedy, never sex chat, with the hard limits named once.
 pub const ADULT_HUMOR: &str = "18+ is on: the user confirmed they are 18 or older. Crude, raunchy jokes in this voice are welcome at the heat below: jokes, not sex chat. Never about minors, real people or non-consent, no slurs at groups, and drop the jokes for grief, health or real distress.";
@@ -71,6 +100,17 @@ impl Heat {
             Heat::Cheeky => "Heat: cheeky. Innuendo, double meanings and mild swearing; nothing graphic.",
             Heat::Spicy => "Heat: spicy. Raunchy punchlines, sex jokes and strong swearing are fine; keep it comedy, never a sex scene.",
             Heat::Filthy => "Heat: filthy. As crude as the joke wants, swearing freely; still comedy, never a sex scene or roleplay.",
+        }
+    }
+
+    /// [`Self::line`] on this computer's model with 18+ on: the same heat,
+    /// with no "never a sex scene" cap.
+    pub fn local_line(self) -> &'static str {
+        match self {
+            Heat::Clean => "",
+            Heat::Cheeky => "Heat: cheeky. Innuendo, double meanings and mild swearing.",
+            Heat::Spicy => "Heat: spicy. Raunchy talk, sex and strong swearing are all fine.",
+            Heat::Filthy => "Heat: filthy. As crude and explicit as they want, swearing freely.",
         }
     }
 
@@ -1127,5 +1167,42 @@ mod tests {
             );
             assert!(builtins().iter().any(|p| p.id == *new), "{new} is missing");
         }
+    }
+
+    #[test]
+    fn a_local_turn_with_18_plus_on_keeps_only_the_hard_limits() {
+        let nyx = builtin(DEFAULT_ID);
+        for heat in Heat::DIAL {
+            let block = format!(
+                "{}\n\n{}",
+                nyx.prompt_block_for(Some(heat)),
+                crate::talk::VOLATILE_SAFETY_CLOSER
+            );
+            let open = unlocked_for_local(&block);
+            assert!(!open.contains("not sex chat"), "{open}");
+            assert!(!open.contains("never a sex scene"), "{open}");
+            assert!(!open.contains("nothing graphic"), "{open}");
+            assert!(open.contains(ADULT_PERMISSION), "{open}");
+            assert!(open.contains(heat.local_line()), "{open}");
+            assert!(
+                open.ends_with(crate::talk::VOLATILE_SAFETY_CLOSER_ADULT),
+                "{open}"
+            );
+            assert_eq!(open.matches(ADULT_PERMISSION).count(), 1);
+            // The hard limits are still named.
+            assert!(open.contains("no minors or age-play"), "{open}");
+        }
+        // An adults-only voice already carries the grant: never doubled.
+        let whore = builtin("whore").prompt_block_for(Some(Heat::Spicy));
+        assert_eq!(
+            unlocked_for_local(&whore).matches(ADULT_PERMISSION).count(),
+            1
+        );
+        // With 18+ off nothing changes.
+        let plain = nyx.prompt_block();
+        assert!(matches!(
+            unlocked_for_local(&plain),
+            std::borrow::Cow::Borrowed(_)
+        ));
     }
 }

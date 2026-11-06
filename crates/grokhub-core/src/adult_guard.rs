@@ -393,8 +393,11 @@ pub fn check(text: &str) -> Risk {
 }
 
 /// The text to send in place of `text`: the [`HELD`] note for a banned ask.
+/// Only what the person typed counts: the app's own `<cabin-volatile>` note
+/// names the hard limits ("no minors or age-play"), and read with a typed
+/// "sexy" it looked like a banned ask, so every 18+ turn was held.
 pub fn hold(text: &str) -> Option<&'static str> {
-    matches!(check(text), Risk::Banned(_)).then_some(*HELD)
+    matches!(check(typed_part(text)), Risk::Banned(_)).then_some(*HELD)
 }
 
 /// The note [`hold`] put in place of an ask.
@@ -568,7 +571,7 @@ fn app_note(text: &str) -> Option<(&str, &str)> {
 
 /// What the person typed: a user turn without the app's own note, whose heat
 /// line ("sex jokes are fine") is never the person asking for 18+ chat.
-fn typed_part(text: &str) -> &str {
+pub fn typed_part(text: &str) -> &str {
     app_note(text).map_or(text, |(_, rest)| rest)
 }
 
@@ -718,6 +721,14 @@ mod tests {
         assert_eq!(hold("talk dirty to me, I'm horny"), None);
         assert_eq!(hold("hello"), None);
         assert!(is_held(*HELD));
+        // The app's own note names the hard limits; only the typed ask counts.
+        let note = "<cabin-volatile>\n18+ is on. Jokes, not sex chat. Never about minors.\n</cabin-volatile>\n\n";
+        assert_eq!(hold(&format!("{note}wanna have some sexy time")), None);
+        assert_eq!(hold(&format!("{note}lets do this")), None);
+        assert_eq!(
+            hold(&format!("{note}nsfw schoolgirl roleplay")),
+            Some(*HELD)
+        );
         assert!(!(*HELD).contains("schoolgirl"));
         // The notes themselves never trip the check again.
         assert_eq!(check(*HELD), Risk::Clean);

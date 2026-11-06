@@ -1610,6 +1610,10 @@ pub fn stream_routed(
         effort.clone()
     };
     sent.model = model.clone();
+    // On this computer's model with 18+ on, only the hard limits stay.
+    if on_device {
+        super::adult::unlock_local(&mut sent.input);
+    }
     // Model and effort show nowhere; only a turn that asks gets told, truthfully.
     let asks_route = super::ask::route_question(&text).any();
     let route_note = |model: &str, effort: Option<&str>, local: bool| {

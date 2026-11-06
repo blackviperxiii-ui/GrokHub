@@ -309,8 +309,28 @@ pub fn chat_transcript_markdown<'a>(
             }
             None => out.push_str(&format!("{content}\n\n")),
         }
+        if role == "assistant" {
+            if let Some(note) = app_answer_note(content) {
+                out.push_str(&format!("_{note}_\n\n"));
+            }
+        }
     }
     out
+}
+
+/// For a debug read of an export: a reply the app itself gave on this
+/// computer, so the turn has no thoughts or tool rows to show.
+fn app_answer_note(content: &str) -> Option<&'static str> {
+    use crate::adult_guard::{HELD_NOTICE, LOCAL_ONLY_MISSING, LOCAL_ONLY_PAUSED, REPLY_REPLACED};
+    let shown = crate::shown_text(content);
+    let shown = shown.trim();
+    if [HELD_NOTICE, LOCAL_ONLY_MISSING, LOCAL_ONLY_PAUSED].contains(&shown) {
+        Some("App note: the app's 18+ check answered this turn on this computer. No model ran, so it has no thoughts or tool calls.")
+    } else if shown.ends_with(REPLY_REPLACED) {
+        Some("App note: the model answered, and the app's hard-limit check hid the reply on this computer.")
+    } else {
+        None
+    }
 }
 
 /// A chat's title as a file name: letters, digits, spaces and dashes, short
@@ -496,5 +516,24 @@ mod tests {
         assert_eq!(v["messages"][1]["content"], "Findings from this run");
         // The user's own words stay exactly as typed.
         assert_eq!(v["messages"][0]["content"], "SLASH_RESULT: typed by hand");
+    }
+
+    #[test]
+    fn an_export_says_when_the_app_answered_a_turn_itself() {
+        let md = chat_transcript_markdown(
+            "Main",
+            [
+                ("user", "wanna have some sexy time"),
+                ("assistant", crate::adult_guard::HELD_NOTICE),
+                ("user", "hey"),
+                ("assistant", "Hey."),
+            ],
+        );
+        assert_eq!(
+            md.matches("App note: the app's 18+ check").count(),
+            1,
+            "{md}"
+        );
+        assert!(md.contains("No model ran"), "{md}");
     }
 }
