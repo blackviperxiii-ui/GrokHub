@@ -1,4 +1,4 @@
-import { Activity, lazy, Suspense, useCallback, useEffect, useState, type ReactNode } from "react";
+import { Activity, lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   CORE_ONLY,
   getCapabilities,
@@ -8,12 +8,28 @@ import {
   onAutomationRan,
   onChatEvent,
   onHalt,
+  onLocalEngineEvent,
+  onUpdateAvailable,
   shareSchedulerClock,
+  workboardSweepUndo,
+  type BoardSwept,
   type Capabilities,
 } from "./api";
 import { cardsByChat, chatActivity, pruneActivity, routineFinished, routineStarted, type ActivityItem } from "./activity";
 import { ActivityDock } from "./ActivityDock";
 import { Automations, resultLine, type RunNotice } from "./Automations";
+import { NoticeBell } from "./NoticeBell";
+import {
+  clearNotices,
+  markRead,
+  NO_NOTICES,
+  pushNotice,
+  spendAction,
+  type Notice,
+  type NoticeAction,
+  type NoticeKind,
+  type Notices,
+} from "./notices";
 import { Chat, newConversationId, type Prefill } from "./Chat";
 import { useChipRow } from "./Chips";
 import { HALT_DONE, HALT_FAILED, HaltButton, HaltNote, haltShown, isHaltKey } from "./Halt";
@@ -80,6 +96,25 @@ function Page({ shown, children }: { shown: boolean; children: ReactNode }) {
   );
 }
 
+
+/** How much of a run's reply its notification shows; Automations has the rest. */
+export const NOTICE_CHARS = 200;
+
+export function runNoticeText(run: RunNotice): string {
+  const text = run.text.length > NOTICE_CHARS ? `${run.text.slice(0, NOTICE_CHARS).trimEnd()}…` : run.text;
+  return `${run.name} ${run.ok ? "finished" : "failed"}${text ? `: ${text}` : ""}`;
+}
+
+export function runNoticeAction(run: RunNotice): NoticeAction {
+  return run.ok
+    ? { kind: "draft", label: "Ask about it", text: `About the "${run.name}" automation run: ` }
+    : {
+        kind: "draft",
+        label: "Find the cause",
+        text: `The "${run.name}" automation failed: ${run.text}. What went wrong and how do I fix it?`,
+      };
+}
+
 export function App() {
   const [view, setView] = useState<View>("chat");
   const [prefill, setPrefill] = useState<Prefill>();
@@ -89,7 +124,7 @@ export function App() {
   const paletteChips = useChipRow({ surface: "palette", active: palette });
   const [signedOut, setSignedOut] = useState(false);
   const [goTo, setGoTo] = useState<{ section: Section; n: number }>();
-  const [notice, setNotice] = useState<RunNotice & { n: number }>();
+  const [notices, setNotices] = useState<Notices>(NO_NOTICES);
   const [open, setOpen] = useState<{ id: string; n: number }>();
   const [deleted, setDeleted] = useState<{ id: string; n: number }>();
   /** The Chat tab's right-click menu, at the pointer; then its confirm; then the clear. */
@@ -116,6 +151,24 @@ export function App() {
   const [before, setBefore] = useState<View>("chat");
   if (view !== "settings" && before !== view) setBefore(view);
   useOverscroll();
+  const notify = useCallback((kind: NoticeKind, text: string, action?: NoticeAction) => {
+    setNotices((now) => pushNotice(now, kind, text, Date.now(), action));
+  }, []);
+  /** An automation run ended: its result, with a one-tap follow-up. */
+  const notifyRun = useCallback(
+    (run: RunNotice) => notify(run.ok ? "success" : "error", runNoticeText(run), runNoticeAction(run)),
+    [notify],
+  );
+  // A Workboard tidy, read at start and whenever the Workboard loads.
+  const swept = useRef<number>(undefined);
+  const noteSweep = useCallback(
+    (sweep: BoardSwept | null) => {
+      if (!sweep || swept.current === sweep.at) return;
+      swept.current = sweep.at;
+      notify("info", sweep.text, { kind: "undoSweep", label: "Undo" });
+    },
+    [notify],
+  );
   useEffect(() => {
     const idle = window.requestIdleCallback;
     if (idle) {
@@ -135,10 +188,13 @@ export function App() {
     );
     // A local read, so a chat's dock item can open its work card.
     getWorkboard().then(
-      (board) => setCardChats(cardsByChat(board)),
+      (board) => {
+        setCardChats(cardsByChat(board));
+        noteSweep(board.swept);
+      },
       () => {},
     );
-  }, []);
+  }, [noteSweep]);
   // Settings may have turned desktop control on or off; read it again when
   // the view changes (leaving Settings included).
   useEffect(() => {
@@ -173,6 +229,16 @@ export function App() {
     let dropped = false;
     void onChatEvent((envelope) => {
       setOpenChat(envelope.conversationId);
+      // While the window is in the background, what a reply did lands in the
+      // bell too, so it is there on return (the OS notification is the echo).
+      if (!document.hasFocus()) {
+        const { event } = envelope;
+        if (event.kind === "done" && event.stop !== "halted" && event.stop !== "cancelled")
+          notify("success", "Reply finished", { kind: "chat", label: "Open chat" });
+        else if (event.kind === "permission")
+          notify("info", `Needs your OK: ${event.title}`, { kind: "chat", label: "Review" });
+        else if (event.kind === "error") notify("error", event.message, { kind: "chat", label: "Open chat" });
+      }
       setActivity((now) => {
         const key = `chat:${envelope.conversationId}`;
         const next = chatActivity(now[key], envelope, Date.now());
@@ -190,7 +256,45 @@ export function App() {
       dropped = true;
       stop?.();
     };
-  }, []);
+  }, [notify]);
+  // A new update, the local engine finishing or failing, and a Workboard
+  // tidy land in the bell, whichever page is open.
+  useEffect(() => {
+    const stops: (() => void)[] = [];
+    let dropped = false;
+    const keep = (unlisten: () => void) => {
+      if (dropped) unlisten();
+      else stops.push(unlisten);
+    };
+    void onUpdateAvailable((update) => {
+      if (update.available)
+        notify("info", `Version ${update.available} is ready to install.`, {
+          kind: "settings",
+          label: "Open About",
+          section: "about",
+        });
+    }).then(keep);
+    let downloading = false;
+    void onLocalEngineEvent((event) => {
+      if (event.error) {
+        downloading = false;
+        notify("error", `Local AI: ${event.error}`, { kind: "settings", label: "Open Local AI", section: "localAi" });
+      } else if (event.state === "downloading") {
+        downloading = true;
+      } else if (event.state === "ready" && downloading) {
+        downloading = false;
+        notify("success", event.message ?? "Local AI is ready.", {
+          kind: "settings",
+          label: "Open Local AI",
+          section: "localAi",
+        });
+      }
+    }).then(keep);
+    return () => {
+      dropped = true;
+      for (const stop of stops) stop();
+    };
+  }, [notify]);
   const halt = useCallback(() => {
     haltDesktop().then(
       () => setHaltNote(HALT_DONE),
@@ -205,13 +309,14 @@ export function App() {
     const timer = window.setInterval(share, CLOCK_SHARE_MS);
     return () => window.clearInterval(timer);
   }, []);
-  // A scheduled run ended: chat says so and the Activity Dock shows it.
+  // A scheduled run ended: the bell keeps the result and the Activity Dock
+  // shows it for a while.
   useEffect(() => {
     let stop: (() => void) | undefined;
     let dropped = false;
     void onAutomationRan(({ id, name, result }) => {
       const run: RunNotice = { id, name, ok: !result.error, text: resultLine(result) };
-      setNotice((now) => ({ ...run, n: (now?.n ?? 0) + 1 }));
+      notifyRun(run);
       setActivity((now) => {
         const item = routineStarted(id, name, Date.now());
         return {
@@ -227,7 +332,7 @@ export function App() {
       dropped = true;
       stop?.();
     };
-  }, []);
+  }, [notifyRun]);
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       if (canHalt && isHaltKey(event)) {
@@ -291,6 +396,20 @@ export function App() {
       setView("settings");
     }
   }
+  function noticeAction(picked: Notice) {
+    const action = picked.action;
+    if (!action) return;
+    setNotices((now) => spendAction(now, picked.id));
+    if (action.kind === "draft") ask(action.text);
+    else if (action.kind === "chat") setView("chat");
+    else if (action.kind === "automations") setView("automations");
+    else if (action.kind === "settings") run({ kind: "settings", section: action.section });
+    else
+      workboardSweepUndo().then(
+        () => notify("success", "Put the archived cards back in Todo."),
+        (err) => notify("error", `Undo didn't go through: ${String(err)}`),
+      );
+  }
   return (
     <div className={barAway ? "app bar-away" : "app"}>
       <header className="topbar">
@@ -334,6 +453,12 @@ export function App() {
             setView("workboard");
           }}
         />
+        <NoticeBell
+          notices={notices}
+          onOpen={() => setNotices(markRead)}
+          onClear={() => setNotices(clearNotices)}
+          onAction={noticeAction}
+        />
         <button
           type="button"
           className="palette-open"
@@ -376,10 +501,8 @@ export function App() {
         <Chat
           onOpenSettings={() => setView("settings")}
           onSignIn={() => run({ kind: "settings", section: "account" })}
-          onOpenAutomations={() => setView("automations")}
           onOpenView={setView}
           prefill={prefill}
-          notice={notice}
           open={open}
           deleted={deleted}
           clear={clear}
@@ -398,7 +521,7 @@ export function App() {
             }))
           }
           onFinished={(run) => {
-            setNotice((now) => ({ ...run, n: (now?.n ?? 0) + 1 }));
+            notifyRun(run);
             setActivity((now) => {
               const key = `run:${run.id}`;
               const item = now[key] ?? routineStarted(run.id, run.name, Date.now());
@@ -447,6 +570,7 @@ export function App() {
             resumable={!caps.remote}
             openCard={openCard}
             onCards={setCardChats}
+            onSwept={noteSweep}
             onResume={({ prompt, conversationId }) => {
               setPrefill((now) => ({ text: prompt, n: (now?.n ?? 0) + 1, conversationId }));
               setView("chat");

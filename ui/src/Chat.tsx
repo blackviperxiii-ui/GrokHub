@@ -49,7 +49,6 @@ import {
   MessageMenu,
   withoutCut,
 } from "./DeleteMessage";
-import type { RunNotice } from "./Automations";
 import type { View } from "./Palette";
 import { Markdown } from "./Markdown";
 import { displayText } from "./md";
@@ -79,7 +78,6 @@ export type Item =
     }
   /** A saved chat's tool steps, named on one muted line instead of cards. */
   | { kind: "tools"; text: string }
-  | ({ kind: "notice" } & RunNotice)
   /** Halt stopped this reply. */
   | { kind: "halted" }
   /** What a slash command did. It stays in the log and never reaches the model. */
@@ -93,9 +91,6 @@ type Ended = "ended" | "halted";
 /** The stop reason of a turn Halt ended (`agent::HALTED`). */
 export const HALTED_STOP = "halted";
 export const HALTED_LINE = "Halted. This reply stopped, and nothing more ran.";
-
-/** How much of a run's reply its notice shows; Automations has the rest. */
-export const NOTICE_CHARS = 280;
 
 export interface Prefill {
   text: string;
@@ -346,8 +341,6 @@ function LogItem({
   onMenu,
   onAnswer,
   onAnswerCard,
-  onDraft,
-  onOpenAutomations,
   nyxUrl,
 }: {
   item: Item;
@@ -358,8 +351,6 @@ function LogItem({
   nyxUrl?: string;
   onAnswer: (id: string, answer: Answer) => void;
   onAnswerCard: (item: ElicitItem, action: ElicitAction, value: string) => void;
-  onDraft: (text: string) => void;
-  onOpenAutomations?: () => void;
 }) {
   "use memo";
   switch (item.kind) {
@@ -394,42 +385,6 @@ function LogItem({
           <ElicitCard item={item} onAnswer={(action, value) => onAnswerCard(item, action, value)} />
         </ViewTransition>
       );
-    case "notice":
-      return (
-        <div
-          className={item.ok ? "card notice" : "card notice warn"}
-          role="status"
-          aria-label={`${item.name} finished`}
-        >
-          <span className="card-title">{item.name}</span>
-          <span className="card-status">{item.ok ? "Finished" : "Failed"}</span>
-          <p className="card-detail-line plain">
-            {item.text.length > NOTICE_CHARS
-              ? `${item.text.slice(0, NOTICE_CHARS).trimEnd()}…`
-              : item.text}
-          </p>
-          <div className="card-buttons">
-            <button
-              type="button"
-              className="quiet"
-              onClick={() =>
-                onDraft(
-                  item.ok
-                    ? `About the "${item.name}" automation run: `
-                    : `The "${item.name}" automation failed: ${item.text}. What went wrong and how do I fix it?`,
-                )
-              }
-            >
-              {item.ok ? "Ask about it" : "Find the cause"}
-            </button>
-            {onOpenAutomations && (
-              <button type="button" className="link" onClick={onOpenAutomations}>
-                Open Automations
-              </button>
-            )}
-          </div>
-        </div>
-      );
     case "slash":
       return (
         <div className="card notice slash-notice" role="status" aria-label={`${item.command} result`}>
@@ -459,8 +414,8 @@ function LogItem({
  * sends it. With `conversationId` the chat moves to that conversation first,
  * like Start over, unless it is already there. `active`: the Chat tab is
  * showing, so the approvals chips read Settings again. `remote`: the web app,
- * where the approvals stay the computer's. `notice`: an automation run that
- * ended; a new `n` posts it in this chat. `open`: a saved chat History picked;
+ * where the approvals stay the computer's. Finished automation runs go to the
+ * Notifications menu, not this log. `open`: a saved chat History picked;
  * a new `n` shows it, and the next message carries it on. `deleted`: a chat
  * History deleted; if it is the open one, a new chat starts. `clear`: the
  * Chat tab's Clear chat, already confirmed; a new `n` deletes the open chat's
@@ -469,10 +424,8 @@ function LogItem({
 export function Chat({
   onOpenSettings,
   onSignIn = onOpenSettings,
-  onOpenAutomations,
   onOpenView,
   prefill,
-  notice,
   open,
   deleted,
   clear,
@@ -483,12 +436,10 @@ export function Chat({
   onOpenSettings: () => void;
   /** The signed-out card's button: Settings → Account. */
   onSignIn?: () => void;
-  onOpenAutomations?: () => void;
   /** `/memory`, `/connectors` and the like open their page, and so does a
    * chip that goes somewhere. */
   onOpenView?: (view: View) => void;
   prefill?: Prefill;
-  notice?: RunNotice & { n: number };
   open?: { id: string; n: number };
   deleted?: { id: string; n: number };
   clear?: { n: number };
@@ -681,13 +632,6 @@ export function Chat({
     if (prefill) applyPrefill(prefill);
   }, [prefill]);
 
-  // A new `n` posts the run's notice, once.
-  const [noticeN, setNoticeN] = useState<number>();
-  if (notice && notice.n !== noticeN) {
-    setNoticeN(notice.n);
-    const { n: _n, ...run } = notice;
-    setItems((now) => [...now, { kind: "notice", ...run }]);
-  }
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -974,8 +918,6 @@ export function Chat({
             nyxUrl={nyx?.url}
             onAnswer={answer}
             onAnswerCard={answerCard}
-            onDraft={setDraft}
-            onOpenAutomations={onOpenAutomations}
           />
         ))}
         {busy && waiting && (

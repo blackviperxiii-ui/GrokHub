@@ -2646,6 +2646,95 @@ label.toggle-row {
   }
 }
 
+/* The Notifications bell sits beside Activity: the record of what finished,
+   failed or wants a look. A number counts what is unread. */
+.notice-bell {
+  position: relative;
+  flex: none;
+  margin-left: auto;
+}
+
+.activity-dock + .notice-bell,
+.notice-bell + .palette-open {
+  margin-left: 8px;
+}
+
+.notice-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.notice-badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 0.72em;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+}
+
+.notice-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 6;
+  width: min(340px, calc(100vw - 32px));
+  padding: 10px 12px 12px;
+  max-height: 60vh;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+}
+
+.notice-menu-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.notice-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.notice-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 0;
+}
+
+.notice-item + .notice-item {
+  border-top: 1px solid var(--border);
+}
+
+.notice-item button {
+  align-self: flex-start;
+}
+
+.notice-item.error .notice-text {
+  color: var(--danger-text);
+}
+
 /* Phones: the bar is at the bottom, so the dock is a dot and a count and its
    list opens upward across the screen. */
 @media (max-width: 600px) {
@@ -2653,7 +2742,8 @@ label.toggle-row {
     display: none;
   }
 
-  .activity-list {
+  .activity-list,
+  .notice-menu {
     position: fixed;
     left: 8px;
     right: 8px;

@@ -318,42 +318,6 @@ describe("Chat", () => {
     expect(api.chipOutcome).toHaveBeenCalledWith("composer", "nav-1", true);
   });
 
-  it("posts a notice when an automation finishes, with a one-tap follow-up", async () => {
-    const onOpenAutomations = vi.fn();
-    const long = `${"x".repeat(300)} tail`;
-    const view = render(<Chat onOpenSettings={() => {}} onOpenAutomations={onOpenAutomations} />);
-    view.rerender(
-      <Chat
-        onOpenSettings={() => {}}
-        onOpenAutomations={onOpenAutomations}
-        notice={{ id: "auto-1", name: "summarize my inbox", ok: true, text: "3 new mails, none urgent.", n: 1 }}
-      />,
-    );
-    const done = screen.getByRole("status", { name: "summarize my inbox finished" });
-    expect(within(done).getByText("Finished")).toBeVisible();
-    expect(within(done).getByText("3 new mails, none urgent.")).toBeVisible();
-    await userEvent.click(within(done).getByRole("button", { name: "Ask about it" }));
-    expect(screen.getByLabelText("Message")).toHaveValue('About the "summarize my inbox" automation run: ');
-    await userEvent.click(within(done).getByRole("button", { name: "Open Automations" }));
-    expect(onOpenAutomations).toHaveBeenCalledTimes(1);
-
-    view.rerender(
-      <Chat
-        onOpenSettings={() => {}}
-        onOpenAutomations={onOpenAutomations}
-        notice={{ id: "auto-2", name: "board", ok: false, text: long, n: 2 }}
-      />,
-    );
-    const failed = screen.getByRole("status", { name: "board finished" });
-    expect(within(failed).getByText("Failed")).toBeVisible();
-    expect(within(failed).getByText(`${"x".repeat(280)}…`)).toBeVisible();
-    await userEvent.click(within(failed).getByRole("button", { name: "Find the cause" }));
-    expect(screen.getByLabelText("Message")).toHaveValue(
-      `The "board" automation failed: ${long}. What went wrong and how do I fix it?`,
-    );
-    expect(api.sendChat).not.toHaveBeenCalled();
-  });
-
   it("a reply without follow-ups and an empty row show no chips", async () => {
     const finish = holdTurn();
     render(<Chat onOpenSettings={() => {}} />);

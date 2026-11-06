@@ -3,7 +3,8 @@
 // the latest state of each one.
 import type { BoardPage, ChatEnvelope } from "./api";
 
-export type ActivityStatus = "running" | "waiting" | "done" | "failed";
+/** `queued`: lined up behind the running reply, in order. */
+export type ActivityStatus = "running" | "waiting" | "queued" | "done" | "failed";
 
 export interface ActivityItem {
   /** `chat:<conversation>` or `run:<automation id>`. */
@@ -122,7 +123,7 @@ export function routineFinished(
   return { ...item, status: ok ? "done" : "failed", detail: clip(text), at: now };
 }
 
-const RANK: Record<ActivityStatus, number> = { waiting: 0, running: 1, failed: 2, done: 3 };
+const RANK: Record<ActivityStatus, number> = { waiting: 0, running: 1, queued: 2, failed: 3, done: 4 };
 
 /** Still worth showing: unfinished, or finished less than `DONE_TTL_MS` ago. */
 function current(item: ActivityItem, now: number): boolean {
@@ -143,19 +144,28 @@ export function pruneActivity(items: Record<string, ActivityItem>, now: number):
   return kept.length === Object.keys(items).length ? items : Object.fromEntries(kept);
 }
 
-/** The collapsed dock's line, e.g. "1 waiting · 2 running". */
+/** The collapsed dock's line, e.g. "1 waiting · 1 of 3 running · 1 done".
+ * Anything queued reads as "x of y running", where y counts the running work
+ * plus what is lined up behind it. */
 export function dockSummary(items: ActivityItem[]): string {
   const count = (s: ActivityStatus) => items.filter((i) => i.status === s).length;
+  const running = count("running");
+  const queued = count("queued");
+  const work =
+    queued === 0
+      ? running > 0
+        ? `${running} running`
+        : ""
+      : running === 0
+        ? `${queued} queued`
+        : `${running} of ${running + queued} running`;
   const parts = [
-    [count("waiting"), "waiting"],
-    [count("running"), "running"],
-    [count("failed"), "failed"],
-    [count("done"), "done"],
-  ] as const;
-  return parts
-    .filter(([n]) => n > 0)
-    .map(([n, word]) => `${n} ${word}`)
-    .join(" · ");
+    count("waiting") > 0 ? `${count("waiting")} waiting` : "",
+    work,
+    count("failed") > 0 ? `${count("failed")} failed` : "",
+    count("done") > 0 ? `${count("done")} done` : "",
+  ];
+  return parts.filter(Boolean).join(" · ");
 }
 
 /** The progress line under a running chat. */

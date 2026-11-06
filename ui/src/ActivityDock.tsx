@@ -5,6 +5,7 @@ import { DOCK_MAX, dockItems, dockSummary, stepsLine, type ActivityItem } from "
 const STATUS_WORD: Record<ActivityItem["status"], string> = {
   running: "Running",
   waiting: "Waiting on you",
+  queued: "Queued",
   done: "Done",
   failed: "Failed",
 };
@@ -44,6 +45,7 @@ export function ActivityDock({
   const waiting = shown.some((i) => i.status === "waiting");
   const listed = shown.slice(0, DOCK_MAX);
   const more = shown.length - listed.length;
+  const summary = dockSummary(shown);
 
   return (
     <aside
@@ -55,11 +57,14 @@ export function ActivityDock({
         type="button"
         className="activity-toggle"
         aria-expanded={open}
+        aria-label={summary ? `Activity, ${summary}` : "Activity"}
         onClick={() => setOpen((o) => !o)}
       >
         <span className={`activity-dot ${shown[0].status}`} aria-hidden="true" />
         <span className="activity-label">Activity</span>
-        <span className="activity-summary">{dockSummary(shown)}</span>
+        <span className="activity-summary" aria-live="polite">
+          {summary}
+        </span>
       </button>
       {open && (
         <ul className="activity-list">
