@@ -1172,10 +1172,11 @@ pub fn release_project_chats(threads: &mut [ChatThread], project_id: &str) -> us
 pub fn export_markdown(t: &ChatThread) -> String {
     let mut out = format!("# {}\n\n", t.title);
     for (role, content) in t.messages.iter() {
-        // A saved turn's labels and thoughts are the app's own format; the
-        // export reads as the chat did. Save diagnostics keeps them raw.
+        // A saved turn's labels, thoughts and findings-card tag are the app's
+        // own format; the export reads as the chat did. Save diagnostics
+        // keeps them raw.
         let content = if role == "assistant" {
-            grokhub_core::strip_turn_labels(content)
+            grokhub_core::shown_text(content)
         } else {
             content.clone()
         };
@@ -1188,6 +1189,24 @@ pub fn export_markdown(t: &ChatThread) -> String {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn an_exported_chat_reads_as_the_chat_did_without_the_apps_tags() {
+        let mut t = ChatThread::new("tune-up", false);
+        t.messages = Arc::new(vec![
+            ("user".into(), "check the pc".into()),
+            (
+                "assistant".into(),
+                grokhub_core::mark_slash_result("Findings from this run\n- High: C: is 95% full."),
+            ),
+            ("assistant".into(), "ok TURN_SAY: Cleaned it up.".into()),
+        ]);
+        let md = export_markdown(&t);
+        assert!(!md.contains("SLASH_RESULT"), "{md}");
+        assert!(!md.contains("TURN_"), "{md}");
+        assert!(md.contains("Findings from this run\n- High: C: is 95% full."), "{md}");
+        assert!(md.contains("ok Cleaned it up."), "{md}");
+    }
 
     #[test]
     fn thread_roundtrip() {

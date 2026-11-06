@@ -271,7 +271,15 @@ pub fn chat_export_json<'a>(
 ) -> String {
     let messages: Vec<serde_json::Value> = messages
         .into_iter()
-        .map(|(role, content)| serde_json::json!({ "role": role, "content": content }))
+        .map(|(role, content)| {
+            // The words as the chat showed them, without the app's markers.
+            let content = if role == "assistant" {
+                crate::shown_text(content)
+            } else {
+                content.to_string()
+            };
+            serde_json::json!({ "role": role, "content": content })
+        })
         .collect();
     let doc = serde_json::json!({
         "app": crate::brand::product_name(),
@@ -361,5 +369,19 @@ mod tests {
         assert_eq!(v["messages"].as_array().unwrap().len(), 3);
         assert_eq!(v["messages"][0]["content"], "hi \"there\"");
         assert_eq!(v["messages"][2]["role"], "system");
+    }
+
+    #[test]
+    fn json_shows_a_findings_card_without_its_tag() {
+        let card = crate::mark_slash_result("Findings from this run");
+        let msgs = [
+            ("user", "SLASH_RESULT: typed by hand"),
+            ("assistant", card.as_str()),
+        ];
+        let v: serde_json::Value =
+            serde_json::from_str(&chat_export_json("T", "t1", msgs, 1)).expect("valid json");
+        assert_eq!(v["messages"][1]["content"], "Findings from this run");
+        // The user's own words stay exactly as typed.
+        assert_eq!(v["messages"][0]["content"], "SLASH_RESULT: typed by hand");
     }
 }
