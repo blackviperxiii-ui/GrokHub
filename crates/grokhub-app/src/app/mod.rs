@@ -5369,6 +5369,7 @@ impl eframe::App for Cabin {
                 .unwrap_or(1);
             ctx.request_repaint_after(Duration::from_secs(wait));
         }
+        self.tick_openrouter_sign_in(ctx);
         self.poll_imagine_auth(ctx);
         self.poll_oauth_photo(ctx);
         self.poll_profile_pick();

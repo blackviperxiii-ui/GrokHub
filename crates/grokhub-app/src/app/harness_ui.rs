@@ -883,6 +883,53 @@ impl Cabin {
         self.resolve_hard_park(approve, why);
     }
 
+    /// The first waiting hard card (0 is the card on screen, then the queue)
+    /// that `pick` matches.
+    pub(super) fn waiting_hard_park(
+        &self,
+        pick: impl Fn(&ParkSource) -> bool,
+    ) -> Option<(usize, HardParkUi)> {
+        self.harness
+            .park
+            .iter()
+            .chain(self.harness.queue.iter())
+            .enumerate()
+            .find(|(_, p)| pick(&p.source))
+            .map(|(i, p)| (i, p.clone()))
+    }
+
+    /// Settings covers the chat, so a card a Settings click parked would wait
+    /// there out of sight until it timed out. Paint the first waiting card
+    /// `note_for` names a note for here too: the same hard card, click only
+    /// (Esc closes Settings, never answers it), on the same answer path and spans.
+    pub(super) fn paint_parks_in_settings(
+        &mut self,
+        ui: &mut egui::Ui,
+        salt: &'static str,
+        note_for: impl Fn(&ParkSource) -> Option<&'static str>,
+    ) {
+        let Some((i, park)) = self.waiting_hard_park(|s| note_for(s).is_some()) else {
+            return;
+        };
+        let note = note_for(&park.source).unwrap_or(HARD_NOTE);
+        let title = park.class.label().to_string();
+        let text = CardText {
+            eyebrow: HARD_EYEBROW,
+            title: &title,
+            action: &park.action,
+            note,
+            primary: "Approve",
+            secondary: "Deny",
+            hard: true,
+        };
+        let id = (salt, format!("{}:{}", park.path, park.action));
+        match harness_card(ui, id, text, self.running) {
+            Some(true) => self.resolve_hard_park_at(i, true, ""),
+            Some(false) => self.resolve_hard_park_at(i, false, SOFT_DENY),
+            None => {}
+        }
+    }
+
     /// A ladder pause answered from its card or the inbox. Approve writes the
     /// same `resume` span as the user's next message, and approving the last
     /// pause with no reply running resumes the run; Deny drops the pause and
