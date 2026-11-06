@@ -15,6 +15,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use grokhub_core::home::text::{self as tt, NetLink, SendFacts};
+use grokhub_core::home::tiles;
 use grokhub_core::home::{
     TileAction, TileRow, TileText, TileView, Tone, FREE_STORAGE_ASK, HOME_CHIPS, TUNE_UP_ASK,
 };
@@ -66,9 +67,11 @@ pub fn view(module: &str, src: &Sources<'_>) -> Option<TileView> {
             grokhub_agent::route::local::installed(),
             grokhub_agent::route::local::available(),
         ),
-        "now_playing" => library_or(src, |games| now_playing_view(games, now)),
-        "game_library" => library_or(src, game_library_view),
-        "what_to_play" => library_or(src, |games| what_to_play_view(games, now, !src.web())),
+        "now_playing" => library_or(src, |games| tiles::now_playing_view(&played(games), now)),
+        "game_library" => library_or(src, |games| tiles::game_library_view(&played(games))),
+        "what_to_play" => library_or(src, |games| {
+            tiles::what_to_play_view(&played(games), now, !src.web())
+        }),
         "workboard" => match workboard::load(src.config_dir) {
             Ok(page) => workboard_view(&page),
             Err(e) => TileView::error(&e),
@@ -86,22 +89,14 @@ pub fn view(module: &str, src: &Sources<'_>) -> Option<TileView> {
             Ok(page) => daily_drop_view(&page),
             Err(e) => TileView::error(&e),
         },
-        "systems_brief" => pc_only(&|| systems_brief_view(&drives(), guard())),
-        "coach_tip" => pc_only(&|| coach_tip_view(&drives(), guard())),
-        "squad" => TileView::empty(
-            "Friends online show here once Steam friends are linked",
-            "Find a duo",
-            TileAction::ask(HOME_CHIPS[1]),
-        ),
-        "tonight" => TileView::empty(
-            "Your evening's sessions and events show here once a calendar is linked",
-            "Plan my week",
-            TileAction::ask(HOME_CHIPS[3]),
-        ),
+        "systems_brief" => pc_only(&|| tiles::systems_brief_view(&drives(), guard())),
+        "coach_tip" => pc_only(&|| tiles::coach_tip_view(&drives(), guard())),
         "clips" | "achievements" | "patch_notes" | "deals" => {
-            library_or(src, |games| soon_from_library(module, games))
+            library_or(src, |games| tiles::soon_view(module, games.len()))
         }
-        "audio_check" | "stream_check" | "session_timer" | "hype_line" => waiting_view(module),
+        "squad" | "tonight" | "audio_check" | "stream_check" | "session_timer" | "hype_line" => {
+            tiles::waiting_view(module)
+        }
         _ => return None,
     };
     Some(v)
@@ -123,6 +118,19 @@ fn guard() -> grokhub_core::game_guard::GameGuard {
 #[cfg(mobile)]
 fn guard() -> grokhub_core::game_guard::GameGuard {
     grokhub_core::game_guard::GameGuard::default()
+}
+
+fn played(games: &[library::Game]) -> Vec<tiles::PlayedGame> {
+    games
+        .iter()
+        .map(|g| tiles::PlayedGame {
+            app_id: g.app_id,
+            name: g.name.clone(),
+            installed: g.installed,
+            last_played: g.last_played,
+            playtime_min: g.playtime_min,
+        })
+        .collect()
 }
 
 /// The Steam library, or why there isn't one.
@@ -396,119 +404,6 @@ pub fn local_ai_view(cfg: &local_ai::LocalAiConfig, installed: bool, ready: bool
         .on_tap(TileAction::settings("localAi"))
 }
 
-fn hours(min: u64) -> String {
-    match min {
-        0 => "never played".into(),
-        m if m < 60 => format!("{m} min"),
-        m => format!("{:.1} h", m as f64 / 60.0),
-    }
-}
-
-pub fn now_playing_view(games: &[library::Game], now: u64) -> TileView {
-    let mut played: Vec<&library::Game> = games.iter().filter(|g| g.last_played > 0).collect();
-    played.sort_by_key(|g| std::cmp::Reverse(g.last_played));
-    let Some(top) = played.first() else {
-        return TileView::empty(
-            "Play a Steam game and it shows here",
-            "Open Library",
-            TileAction::nav("library"),
-        );
-    };
-    let ago = grokhub_core::pulse::ago_label(top.last_played * 1000, now);
-    let rows = played
-        .iter()
-        .take(ROWS)
-        .map(|g| {
-            TileRow::new(g.name.clone(), hours(g.playtime_min), Tone::Normal)
-                .on_tap(TileAction::Play { app_id: g.app_id })
-        })
-        .collect();
-    TileView::ready(TileText::new(
-        top.name.clone(),
-        format!("Last played {ago} · {} total", hours(top.playtime_min)),
-        Tone::Normal,
-    ))
-    .rows(rows)
-    .button("Library", TileAction::nav("library"))
-    .on_tap(TileAction::nav("library"))
-}
-
-pub fn game_library_view(games: &[library::Game]) -> TileView {
-    let installed = games.iter().filter(|g| g.installed).count();
-    if games.is_empty() {
-        return TileView::empty(
-            "No Steam games found yet",
-            "Open Library",
-            TileAction::nav("library"),
-        );
-    }
-    let rows = games
-        .iter()
-        .take(ROWS)
-        .map(|g| {
-            TileRow::new(
-                g.name.clone(),
-                if g.installed { "Installed" } else { "Updating" },
-                if g.installed {
-                    Tone::Normal
-                } else {
-                    Tone::Warn
-                },
-            )
-        })
-        .collect();
-    TileView::ready(TileText::new(
-        format!("{} games", games.len()),
-        format!("{installed} installed · Steam"),
-        Tone::Normal,
-    ))
-    .rows(rows)
-    .button("Open Library", TileAction::nav("library"))
-    .on_tap(TileAction::nav("library"))
-}
-
-/// One installed game for today: one you've played but not lately, picked
-/// by the day so it holds still until tomorrow.
-pub fn what_to_play_view(games: &[library::Game], now: u64, can_play: bool) -> TileView {
-    let day = now / 86_400_000;
-    let recent = (now / 1000).saturating_sub(3 * 86_400);
-    let mut pool: Vec<&library::Game> = games
-        .iter()
-        .filter(|g| g.installed && g.last_played > 0 && g.last_played < recent)
-        .collect();
-    if pool.is_empty() {
-        pool = games.iter().filter(|g| g.installed).collect();
-    }
-    pool.sort_by_key(|g| g.app_id);
-    let Some(pick) = (!pool.is_empty()).then(|| pool[(day as usize) % pool.len()]) else {
-        return TileView::empty(
-            "Install a Steam game and today's pick shows here",
-            "Open Library",
-            TileAction::nav("library"),
-        );
-    };
-    let caption = match pick.last_played {
-        0 => "Never played · installed".to_string(),
-        at => format!(
-            "Last played {} · {}",
-            grokhub_core::pulse::ago_label(at * 1000, now),
-            hours(pick.playtime_min)
-        ),
-    };
-    let v = TileView::ready(TileText::new(pick.name.clone(), caption, Tone::Normal));
-    if can_play {
-        v.primary(
-            "Play",
-            TileAction::Play {
-                app_id: pick.app_id,
-            },
-        )
-        .on_tap(TileAction::nav("library"))
-    } else {
-        v.on_tap(TileAction::nav("library"))
-    }
-}
-
 fn open_cards(
     page: &workboard::Page,
 ) -> impl Iterator<Item = (&workboard::Column, &workboard::Card)> {
@@ -694,100 +589,6 @@ pub fn daily_drop_view(page: &pulse::Page) -> TileView {
     .primary("Let's do it", TileAction::ask(&idea.action))
     .button("Open Pulse", TileAction::nav("pulse"))
     .on_tap(TileAction::nav("pulse"))
-}
-
-/// The state of this PC in a few lines: drives, the game guard.
-pub fn systems_brief_view(
-    drives: &[grokhub_core::disk::DiskUse],
-    guard: grokhub_core::game_guard::GameGuard,
-) -> TileView {
-    let storage = tt::storage_text(drives, None);
-    let game = tt::game_mode_text(guard, None, false);
-    let mut rows = vec![
-        TileRow::new("Storage", storage.big.clone(), storage.tone),
-        TileRow::new("Games", game.big.clone(), Tone::Normal),
-    ];
-    rows.extend(tt::storage_rows(drives).into_iter().skip(1));
-    let tone = storage.tone;
-    let big = match tone {
-        Tone::Alert => "Needs a look",
-        Tone::Warn => "Mostly fine",
-        _ => "All good",
-    };
-    TileView::ready(TileText::new(big, "This PC right now", tone))
-        .rows(rows)
-        .primary("Tune-up", TileAction::ask(TUNE_UP_ASK))
-}
-
-/// One tip from what this PC shows: a full drive first, then play state.
-pub fn coach_tip_view(
-    drives: &[grokhub_core::disk::DiskUse],
-    guard: grokhub_core::game_guard::GameGuard,
-) -> TileView {
-    let fullest = tt::storage_text(drives, None);
-    if matches!(fullest.tone, Tone::Alert | Tone::Warn) {
-        return TileView::ready(
-            TileText::new("Free some space", fullest.caption, Tone::Warn)
-                .detail("Games stutter while a full drive swaps and patches"),
-        )
-        .primary("Free up storage", TileAction::ask(FREE_STORAGE_ASK));
-    }
-    if let Some(ac) = guard.anticheat {
-        return TileView::ready(TileText::new(
-            "Hands off",
-            format!("{ac} is running, so {} stays out of the way", brand()),
-            Tone::Quiet,
-        ));
-    }
-    TileView::ready(
-        TileText::new(
-            "Warm up first",
-            "Ten minutes of aim or drills before ranked",
-            Tone::Normal,
-        )
-        .detail(format!("Tips get sharper as {} learns your games", brand())),
-    )
-    .button("Fix my stutter", TileAction::ask(HOME_CHIPS[0]))
-}
-
-/// Modules whose own data comes next; until then they show the library
-/// they'll draw from and one way in.
-fn soon_from_library(module: &str, games: &[library::Game]) -> TileView {
-    let sentence = match module {
-        "clips" => "Your latest clips and captures show here",
-        "achievements" => "New unlocks for your games show here",
-        "patch_notes" => "The latest patch for your games shows here",
-        _ => "Sales on your wishlist show here",
-    };
-    let mut v = TileView::empty(sentence, "Open Library", TileAction::nav("library"));
-    v.text.big = format!("{} games", games.len());
-    v
-}
-
-/// Modules with nothing to read yet: what they'll show and one way in.
-fn waiting_view(module: &str) -> TileView {
-    match module {
-        "audio_check" => TileView::empty(
-            "Your mic and output device show here",
-            "Voice settings",
-            TileAction::settings("general"),
-        ),
-        "stream_check" => TileView::empty(
-            "Mic, scene and upload readiness show here before you go live",
-            "Connectors",
-            TileAction::nav("connectors"),
-        ),
-        "session_timer" => TileView::empty(
-            "Track a play session and get a nudge to take a break",
-            "Objectives",
-            TileAction::nav("objectives"),
-        ),
-        _ => TileView::empty(
-            "A daily line from your companion shows here",
-            "Personality",
-            TileAction::settings("personality"),
-        ),
-    }
 }
 
 #[cfg(test)]

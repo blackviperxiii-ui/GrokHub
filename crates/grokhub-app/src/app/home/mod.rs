@@ -12,6 +12,7 @@ mod pc_sheet;
 #[cfg(test)]
 mod tile_tests;
 mod updates;
+mod views;
 
 use std::path::{Path, PathBuf};
 

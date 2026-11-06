@@ -7,22 +7,6 @@ use grokhub_core::home::TileState;
 
 const NOW: u64 = 1_800_000_000_000;
 
-fn game(
-    app_id: u32,
-    name: &str,
-    installed: bool,
-    last_played: u64,
-    playtime_min: u64,
-) -> library::Game {
-    library::Game {
-        app_id,
-        name: name.into(),
-        installed,
-        last_played,
-        playtime_min,
-    }
-}
-
 #[test]
 fn storage_lists_the_fullest_drive_first_with_a_free_up_button() {
     let drives = [
@@ -64,39 +48,6 @@ fn speeds_is_off_until_the_internet_log_is_on() {
 }
 
 #[test]
-fn now_playing_leads_with_the_last_game_played() {
-    let secs = NOW / 1000;
-    let games = [
-        game(10, "Old", true, secs - 30 * 86_400, 600),
-        game(20, "Fresh", true, secs - 3_600, 90),
-        game(30, "Never", true, 0, 0),
-    ];
-    let v = now_playing_view(&games, NOW);
-    assert_eq!(v.text.big, "Fresh");
-    assert_eq!(v.text.caption, "Last played 1h ago · 1.5 h total");
-    assert_eq!(v.rows.len(), 2, "a never-played game isn't now playing");
-    assert_eq!(v.rows[0].tap, Some(TileAction::Play { app_id: 20 }));
-    assert_eq!(now_playing_view(&[], NOW).state, TileState::Empty);
-}
-
-#[test]
-fn what_to_play_holds_one_pick_all_day_and_plays_only_on_the_pc() {
-    let secs = NOW / 1000;
-    let games = [
-        game(1, "A", true, secs - 10 * 86_400, 60),
-        game(2, "B", true, secs - 20 * 86_400, 60),
-        game(3, "Today", true, secs - 60, 60),
-        game(4, "Updating", false, secs - 30 * 86_400, 60),
-    ];
-    let a = what_to_play_view(&games, NOW, true);
-    let b = what_to_play_view(&games, NOW + 3_600_000, true);
-    assert_eq!(a.text.big, b.text.big, "the pick holds through the day");
-    assert!(["A", "B"].contains(&a.text.big.as_str()), "{}", a.text.big);
-    assert!(matches!(a.buttons[0].action, TileAction::Play { .. }));
-    assert!(what_to_play_view(&games, NOW, false).buttons.is_empty());
-}
-
-#[test]
 fn game_mode_tags_on_while_a_game_runs() {
     let idle = game_mode_view(GameGuard::default(), false);
     assert_eq!(idle.tag.as_deref(), Some("OFF"));
@@ -121,26 +72,4 @@ fn connection_and_usage_read_like_the_desktop_app() {
     assert_eq!(u.text.big, "$3.50");
     assert_eq!(u.text.detail.as_deref(), Some("Prompt cache 42% (low)"));
     assert_eq!(usage_from(0.0, None, 80).text.tone, Tone::Quiet);
-}
-
-#[test]
-fn coach_tip_puts_a_full_drive_first() {
-    let full = [DiskUse {
-        label: "C:".into(),
-        total: 1_000,
-        free: 20,
-    }];
-    let v = coach_tip_view(&full, GameGuard::default());
-    assert_eq!(v.text.big, "Free some space");
-    let ok = [DiskUse {
-        label: "C:".into(),
-        total: 1_000,
-        free: 600,
-    }];
-    let ac = GameGuard {
-        anticheat: Some("Vanguard"),
-        gaming: true,
-        idle_anticheat: None,
-    };
-    assert_eq!(coach_tip_view(&ok, ac).text.big, "Hands off");
 }
