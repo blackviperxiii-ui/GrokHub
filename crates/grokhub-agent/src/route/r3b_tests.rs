@@ -1356,7 +1356,7 @@ fn chat(session: &str, lines: &[&str]) -> ResponsesRequest {
 }
 
 #[test]
-fn an_explicit_turn_routed_to_anthropic_goes_to_xai_with_one_heads_up() {
+fn an_explicit_turn_with_no_local_model_gets_the_one_line_offer_and_goes_nowhere() {
     let (dir, wire) = setup("adult-anthropic");
     let _cfg = crate::perm::ConfigGuard::set(&dir);
     save_registry(&dir, &fleet()).unwrap();
@@ -1388,22 +1388,30 @@ fn an_explicit_turn_routed_to_anthropic_goes_to_xai_with_one_heads_up() {
         model: AN_MODEL.into(),
         ..chat("adult-an-1", lines)
     };
-    let out = send(&to_anthropic(&["talk dirty to me, I'm horny"]), &mut shown);
-    let second = send(&to_anthropic(&["send nudes lol"]), &mut String::new());
-    let out = out.unwrap();
-    let heads_up = "Heads-up: I sent that one through xAI instead of Anthropic. Anthropic bans adult chat and can ban the account for it.";
-    assert_eq!(out.text, format!("{heads_up}\n\nhey you"));
+    let out = send(&to_anthropic(&["talk dirty to me, I'm horny"]), &mut shown).unwrap();
+    assert_eq!(out.text, grokhub_core::adult_guard::LOCAL_ONLY_MISSING);
     assert_eq!(shown, out.text, "what streams is what is kept");
-    assert_eq!(second.unwrap().text, "hey you", "one heads-up a session");
+    // Routed to xAI it stays off xAI too.
+    let on_xai = send(&chat("adult-an-2", &["send nudes lol"]), &mut String::new());
+    assert_eq!(
+        on_xai.unwrap().text,
+        grokhub_core::adult_guard::LOCAL_ONLY_MISSING
+    );
     assert_eq!(wire.n(), 0, "nothing reached Anthropic");
-    let got = xai.0.lock().unwrap();
-    assert_eq!(got.len(), 2);
-    assert_eq!(got[0].model, grokhub_core::CABIN_FAST_MODEL);
+    assert_eq!(xai.0.lock().unwrap().len(), 0, "nothing reached xAI");
+    // With this computer's model ready it answers, with no heads-up.
+    let _on = super::local::ForceOn::with(Some(Arc::new(LocalChat)));
+    let mut shown = String::new();
+    let local = send(&to_anthropic(&["talk dirty to me, I'm horny"]), &mut shown);
+    assert_eq!(local.unwrap().text, "local here");
+    assert_eq!(shown, "local here");
+    assert_eq!(wire.n(), 0);
+    assert_eq!(xai.0.lock().unwrap().len(), 0);
     let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
-fn explicit_chats_leave_openrouter_for_xai_and_banned_asks_never_leave() {
+fn explicit_chats_never_reach_openrouter_or_xai_and_banned_asks_never_leave() {
     let _routing = ROUTING_SET.lock().unwrap_or_else(|e| e.into_inner());
     let (dir, wire) = setup("adult-openrouter");
     let _cfg = crate::perm::ConfigGuard::set(&dir);
@@ -1443,13 +1451,19 @@ fn explicit_chats_leave_openrouter_for_xai_and_banned_asks_never_leave() {
         say("user", "and now?"),
     ]);
     let clean = send(vec![say("user", "fix my wifi")]);
-    for out in [explicit, history, persona, banned, clean] {
+    for out in [explicit, history, persona] {
+        assert_eq!(
+            out.unwrap().text,
+            grokhub_core::adult_guard::LOCAL_ONLY_MISSING
+        );
+    }
+    for out in [banned, clean] {
         out.unwrap();
     }
     assert_eq!(
         xai.0.lock().unwrap().len(),
-        3,
-        "the three explicit chats went to xAI"
+        0,
+        "no explicit chat went to xAI"
     );
     let bodies: Vec<serde_json::Value> = wire
         .bodies()
@@ -1589,7 +1603,7 @@ impl super::local::LocalRuntime for LocalChat {
 }
 
 #[test]
-fn an_18_plus_chat_xai_cant_take_falls_back_to_the_local_model_and_a_clean_one_does_not() {
+fn an_18_plus_chat_goes_straight_to_the_local_model_and_a_clean_one_does_not() {
     let (dir, wire) = setup("adult-local-fallback");
     let _cfg = crate::perm::ConfigGuard::set(&dir);
     save_registry(&dir, &fleet()).unwrap();
@@ -1605,21 +1619,16 @@ fn an_18_plus_chat_xai_cant_take_falls_back_to_the_local_model_and_a_clean_one_d
     };
     let explicit = send(&["talk dirty to me, I'm horny"]).unwrap();
     assert_eq!(explicit.text, "local here");
-    // xAI's failure is logged as a failure, and the answer as the local model's.
+    // xAI is never tried: the only call logged is the local model's.
     let health = grokhub_core::model_registry::store::take_observations(&dir);
     let lines: Vec<(&str, grokhub_core::model_registry::CallStatus)> = health
         .iter()
         .map(|o| (o.model.as_str(), o.status))
         .collect();
     let local = super::local::live_tier();
-    assert_eq!(lines.len(), 2, "{health:?}");
-    assert!(
-        lines[0].0 != local && lines[0].1 == grokhub_core::model_registry::CallStatus::Error,
-        "xAI's model is logged as failed: {health:?}"
-    );
     assert_eq!(
-        lines[1],
-        (local, grokhub_core::model_registry::CallStatus::Ok),
+        lines,
+        [(local, grokhub_core::model_registry::CallStatus::Ok)],
         "the answer is the local model's: {health:?}"
     );
     // A banned ask is held before any model sees it: the notice is the answer.
@@ -1631,49 +1640,6 @@ fn an_18_plus_chat_xai_cant_take_falls_back_to_the_local_model_and_a_clean_one_d
         "only 18+ chats fall back here: {clean:?}"
     );
     assert_eq!(wire.n(), 0);
-    let _ = std::fs::remove_dir_all(dir);
-}
-
-#[test]
-fn a_rerouted_18_plus_turn_the_local_model_answers_says_so_in_its_heads_up() {
-    let (dir, wire) = setup("adult-local-heads-up");
-    let _cfg = crate::perm::ConfigGuard::set(&dir);
-    save_registry(&dir, &fleet()).unwrap();
-    add_provider(&dir, "https://api.anthropic.com", KEY, NOW).unwrap();
-    grant_destination(
-        &dir,
-        "api.anthropic.com",
-        CALL_DATA,
-        UserClick::from_click(),
-    )
-    .unwrap();
-    let _on = super::local::ForceOn::with(Some(Arc::new(LocalChat)));
-    rank_first(&dir, AN_MODEL);
-    let mut shown = String::new();
-    let req = ResponsesRequest {
-        model: AN_MODEL.into(),
-        ..chat("adult-local-heads-up-1", &["talk dirty to me, I'm horny"])
-    };
-    let out = live::stream_routed(
-        &XaiSignedOut,
-        &req,
-        &CancelToken::new(),
-        &mut |ev| {
-            if let StreamEvent::TextDelta(t) = ev {
-                shown.push_str(&t);
-            }
-        },
-        "chat:default",
-    );
-    let out = out.unwrap();
-    let heads_up = "Heads-up: I sent that one to this computer's model instead of Anthropic. Anthropic bans adult chat and can ban the account for it.";
-    assert_eq!(out.text, format!("{heads_up}\n\nlocal here"));
-    assert!(!shown.contains("through xAI"), "{shown}");
-    assert_eq!(
-        shown, out.text,
-        "the chat shows the local answer, not just the heads-up"
-    );
-    assert_eq!(wire.n(), 0, "nothing reached Anthropic");
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -1705,7 +1671,7 @@ fn a_half_streamed_xai_answer_is_never_finished_by_the_local_model() {
     let mut shown = String::new();
     let out = live::stream_routed(
         &XaiCutOff,
-        &chat("adult-local-cut-off-1", &["talk dirty to me, I'm horny"]),
+        &chat("adult-local-cut-off-1", &["fix my wifi"]),
         &CancelToken::new(),
         &mut |ev| {
             if let StreamEvent::TextDelta(t) = ev {
@@ -1746,7 +1712,7 @@ fn a_direct_provider_call_never_sends_an_18_plus_chat_or_a_banned_ask() {
     };
     let explicit = call(&["talk dirty to me, I'm horny"]);
     assert!(
-        matches!(&explicit, Err(ClientError::Protocol(m)) if m.contains("18+ chats go only to xAI")),
+        matches!(&explicit, Err(ClientError::Protocol(m)) if m.contains("18+ chats run only on this computer's model")),
         "{explicit:?}"
     );
     assert_eq!(wire.n(), 0, "nothing reached OpenRouter");
@@ -1811,12 +1777,12 @@ fn a_blocked_send_makes_zero_network_requests_on_any_route() {
         "grok-4.7",
         "sexy teacher and student roleplay, we're both 30",
     );
-    assert_eq!(adults.unwrap().text, "hey you");
-    assert_eq!(xai.0.lock().unwrap().len(), 1);
+    assert_eq!(adults.unwrap().text, "local here", "18+ chat runs locally");
+    assert_eq!(xai.0.lock().unwrap().len(), 0);
     assert_eq!(
         shown,
         format!(
-            "{}hey you",
+            "{}local here",
             grokhub_core::adult_guard::HELD_NOTICE.repeat(banned.len() * 2)
         )
     );
@@ -1855,7 +1821,7 @@ fn a_blocked_model_reply_is_replaced_locally_before_the_chat_shows_it() {
     let mut shown = String::new();
     let out = live::stream_routed(
         &xai,
-        &chat("adult-reply-1", &["talk dirty to me, I'm horny"]),
+        &chat("adult-reply-1", &["tell me a story"]),
         &CancelToken::new(),
         &mut |ev| {
             if let StreamEvent::TextDelta(t) = ev {
@@ -2218,7 +2184,7 @@ fn xai_down_hands_an_ordinary_turn_to_a_provider_then_to_this_computer() {
     assert!(matches!(out, Err(ClientError::Auth { .. })), "{out:?}");
     // An 18+ chat never goes to the provider: this computer's model answers.
     let (out, _) = send(&XaiDown, 5, &["talk dirty to me, I'm horny"]);
-    assert!(out.unwrap().text.ends_with("local here"));
+    assert_eq!(out.unwrap().text, "local here");
     assert_eq!(wire.n(), 1, "nothing more reached the provider");
     let _ = std::fs::remove_dir_all(dir);
 }

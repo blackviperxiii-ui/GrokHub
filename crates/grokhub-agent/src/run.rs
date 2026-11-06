@@ -6507,7 +6507,12 @@ mod tests {
             TalkStyle::Draft,
             TalkStyle::Natural,
         ];
-        let personalities = grokhub_core::personality::builtins();
+        // An 18+ voice only ever runs on this computer's model, never this
+        // scripted online one, so the others are checked here.
+        let personalities: Vec<_> = grokhub_core::personality::builtins()
+            .into_iter()
+            .filter(|p| !p.explicit)
+            .collect();
         assert!(personalities.len() > 10);
         let dir = workspace("talk-approval");
         let conv = format!("talk-approval-{}", std::process::id());

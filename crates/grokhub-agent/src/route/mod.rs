@@ -270,14 +270,29 @@ pub fn call_model(
     }
     sent.effort = decision.send_effort(call.effort.as_deref());
     sent.model = decision.send_model(&call.model);
-    // Explicit turns go only to xAI or this computer's model.
-    let on_provider =
-        decision.on_provider() && !adult::to_xai(&sent.input, providers::dest(&dir, &sent.model));
-    if decision.on_provider() && !on_provider {
-        sent.model = adult::xai_model(&call.model);
+    let mut on_device = decision.on_device();
+    let dest = if on_device {
+        grokhub_core::adult_guard::Dest::Local
+    } else if decision.on_provider() {
+        providers::dest(&dir, &sent.model)
+    } else {
+        grokhub_core::adult_guard::Dest::Xai
+    };
+    // 18+ chat runs on this computer's model only, never online.
+    if adult::to_local(&sent.input, dest) {
+        if let Some(notice) = adult::no_local_notice() {
+            let out = TurnOutput {
+                text: notice.into(),
+                ..TurnOutput::default()
+            };
+            let tokens = CallTokens::of(&sent, &out.usage);
+            return Ok(Routed { out, tokens });
+        }
+        on_device = true;
+        sent.model = local::live_tier().to_string();
     }
+    let on_provider = decision.on_provider() && !on_device;
     let started = std::time::Instant::now();
-    let on_device = decision.on_device();
     crate::harness::replay::clear_last();
     let out = if on_device {
         local::serve(&call.class, &text, cancel)

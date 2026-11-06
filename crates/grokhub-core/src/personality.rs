@@ -74,12 +74,6 @@ impl Heat {
         }
     }
 
-    /// Spicy and up mark the chat 18+ ([`crate::adult_guard::ADULT_VOICE`]), so
-    /// it only goes to providers that allow adult chat.
-    pub fn tags_adult(self) -> bool {
-        self >= Heat::Spicy
-    }
-
     /// One step hotter, capped at Filthy ("roast me harder").
     pub fn hotter(self) -> Heat {
         match self {
@@ -238,11 +232,10 @@ impl Personality {
             out.push_str(ADULT_PERMISSION);
         }
         if let Some(heat) = heat {
+            // Heat alone never marks a chat 18+: it's global, so it would send
+            // every chat to the local model. A chat is 18+ by what's in it or
+            // by an adults-only voice speaking.
             if !self.explicit {
-                if heat.tags_adult() {
-                    out.push(' ');
-                    out.push_str(crate::adult_guard::ADULT_VOICE);
-                }
                 out.push(' ');
                 out.push_str(ADULT_HUMOR);
             }
@@ -1066,7 +1059,7 @@ mod tests {
         assert!(cheeky.contains(Heat::Cheeky.line()));
         assert!(
             !cheeky.contains(crate::adult_guard::ADULT_VOICE),
-            "cheeky never tags 18+"
+            "heat never tags 18+"
         );
         assert!(
             !cheeky.contains(ADULT_PERMISSION),
@@ -1076,8 +1069,8 @@ mod tests {
         for heat in [Heat::Spicy, Heat::Filthy] {
             let block = professor.prompt_block_for(Some(heat));
             assert!(
-                block.contains(crate::adult_guard::ADULT_VOICE),
-                "{heat:?} tags 18+"
+                !block.contains(crate::adult_guard::ADULT_VOICE),
+                "{heat:?} alone never tags the chat 18+"
             );
             assert!(block.contains(heat.line()));
             assert!(!block.contains(ADULT_PERMISSION));
@@ -1115,7 +1108,6 @@ mod tests {
         assert_eq!(Heat::Filthy.hotter(), Heat::Filthy);
         assert_eq!(Heat::Filthy.milder(), Heat::Spicy);
         assert_eq!(Heat::Cheeky.milder(), Heat::Cheeky);
-        assert!(!Heat::Cheeky.tags_adult() && Heat::Spicy.tags_adult());
         let toml: Heat = serde_json::from_str("\"filthy\"").unwrap();
         assert_eq!(toml, Heat::Filthy);
     }

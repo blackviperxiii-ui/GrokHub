@@ -239,16 +239,10 @@ impl Session {
                 self.cfg.home.name.trim(),
                 voice.prompt_block_for(self.heat)
             ));
-        } else if self.heat.is_some_and(|h| h.tags_adult())
-            && self.cfg.adult.is_none_or(|h| !h.tags_adult())
-        {
-            // Turned up in chat past the chat's own setting: the system prompt
-            // doesn't carry the 18+ tag yet, so this turn's note does.
-            lines.push(format!(
-                "{} {}",
-                grokhub_core::adult_guard::ADULT_VOICE,
-                self.heat.map(Heat::line).unwrap_or_default()
-            ));
+        } else if let Some(h) = self.heat.filter(|h| Some(*h) != self.cfg.adult) {
+            // Moved in chat off the setting the system prompt carries: this
+            // turn's note has the heat now. Heat alone never tags a chat 18+.
+            lines.push(h.line().to_string());
         }
         if moved.switched {
             lines.push(voice_flow::handoff_line(voice.name.trim()));
@@ -364,9 +358,10 @@ mod tests {
         let note = step(id, view("roast me harder", "chat", "calm"));
         assert_eq!(heat(id), Some(Heat::Spicy));
         assert!(note.contains("Heat for this chat is now spicy."), "{note}");
+        assert!(note.contains(Heat::Spicy.line()), "{note}");
         assert!(
-            note.contains(grokhub_core::adult_guard::ADULT_VOICE),
-            "a chat turned up to spicy is tagged 18+: {note}"
+            !note.contains(grokhub_core::adult_guard::ADULT_VOICE),
+            "heat alone never tags a chat 18+: {note}"
         );
         step(id, view("go harder", "chat", "calm"));
         step(id, view("go harder", "chat", "calm"));
@@ -427,21 +422,18 @@ mod tests {
     }
 
     #[test]
-    fn a_tagged_turn_note_routes_the_chat_as_18_plus() {
+    fn a_chat_turned_up_in_chat_still_routes_anywhere() {
         let id = "vs-route";
         register(id, cfg("nyx", Some(Heat::Cheeky)));
-        let calm = step(id, view("hey", "chat", "calm"));
-        let turn = crate::prefix_cache::user_message_text(&calm, "hey");
-        assert!(
-            !grokhub_core::adult_guard::explicit_conversation([("user", turn.as_str())]),
-            "cheeky routes anywhere"
-        );
-        let note = step(id, view("roast me harder", "chat", "calm"));
-        let turn = crate::prefix_cache::user_message_text(&note, "roast me harder");
-        assert!(grokhub_core::adult_guard::explicit_conversation([(
-            "user",
-            turn.as_str()
-        )]));
+        for text in ["hey", "roast me harder", "go harder"] {
+            let note = step(id, view(text, "chat", "calm"));
+            let turn = crate::prefix_cache::user_message_text(&note, text);
+            assert!(
+                !grokhub_core::adult_guard::explicit_conversation([("user", turn.as_str())]),
+                "{text}: heat alone keeps the chat on its usual model"
+            );
+        }
+        assert_eq!(heat(id), Some(Heat::Filthy));
         forget(id);
     }
 }

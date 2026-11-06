@@ -8,9 +8,10 @@
 //!   history goes out as the [`hold`] note instead.
 //! - A reply that drifts into one of the four is replaced here with
 //!   [`REPLY_REPLACED`] before the chat shows it ([`ReplyGuard`]).
-//! - Explicit adult turns go only to xAI or this computer's model. Every other
-//!   provider's turn reroutes to xAI ([`route`]), OpenRouter included, since its
-//!   pick can land on a model whose maker bans adult chat.
+//! - Explicit adult turns run only on this computer's model, an abliterated
+//!   build with no refusals: never xAI, OpenRouter or any online provider
+//!   ([`route`]). With no local model ready the chat says so
+//!   ([`LOCAL_ONLY_MISSING`], [`LOCAL_ONLY_PAUSED`]) and nothing is sent.
 //! - A turn is explicit when the conversation is ([`explicit_conversation`]): an
 //!   adults-only voice in the system prompt, or any explicit user or assistant
 //!   turn, not just the newest ask.
@@ -57,8 +58,8 @@ pub enum Dest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Route {
     Send,
-    /// The provider bans adult chat: xAI takes the turn instead.
-    ToXai,
+    /// 18+ chat runs on this computer's model only, never an online one.
+    ToLocal,
 }
 
 /// The line an adults-only voice adds to the system prompt
@@ -533,8 +534,8 @@ pub fn dest_of(base_url: &str) -> Dest {
 /// The per-provider table for one turn.
 pub fn route(risk: Risk, dest: Dest) -> Route {
     match (risk, dest) {
-        (Risk::Explicit, Dest::Xai | Dest::Local) => Route::Send,
-        (Risk::Explicit, _) => Route::ToXai,
+        (Risk::Explicit, Dest::Local) => Route::Send,
+        (Risk::Explicit, _) => Route::ToLocal,
         _ => Route::Send,
     }
 }
@@ -546,7 +547,7 @@ pub fn route(risk: Risk, dest: Dest) -> Route {
 pub fn explicit_conversation<'a>(turns: impl IntoIterator<Item = (&'a str, &'a str)>) -> bool {
     turns.into_iter().any(|(role, text)| match role {
         "system" | "developer" => text.contains(ADULT_VOICE),
-        "user" => app_note_tags_adult(text) || check(text) != Risk::Clean,
+        "user" => app_note_tags_adult(text) || check(typed_part(text)) != Risk::Clean,
         "assistant" => check(text) != Risk::Clean,
         _ => false,
     })
@@ -556,23 +557,28 @@ pub fn explicit_conversation<'a>(turns: impl IntoIterator<Item = (&'a str, &'a s
 /// carries the 18+ tag: a chat turned up to Spicy in chat, or a guest voice at
 /// that heat. Words the person typed never count.
 fn app_note_tags_adult(text: &str) -> bool {
+    app_note(text).is_some_and(|(note, _)| note.contains(ADULT_VOICE))
+}
+
+/// A user turn split into the app's note and what follows it.
+fn app_note(text: &str) -> Option<(&str, &str)> {
     text.strip_prefix("<cabin-volatile>\n")
         .and_then(|rest| rest.split_once("\n</cabin-volatile>"))
-        .is_some_and(|(note, _)| note.contains(ADULT_VOICE))
 }
 
-/// The plain heads-up, once a session, after an explicit turn left a provider.
-pub fn heads_up_rerouted(name: &str) -> String {
-    format!("Heads-up: I sent that one through xAI instead of {name}. {name} bans adult chat and can ban the account for it.")
+/// What the person typed: a user turn without the app's own note, whose heat
+/// line ("sex jokes are fine") is never the person asking for 18+ chat.
+fn typed_part(text: &str) -> &str {
+    app_note(text).map_or(text, |(_, rest)| rest)
 }
 
-/// The heads-up when xAI couldn't take a rerouted explicit turn and this
-/// computer's model answered it instead.
-pub fn heads_up_local(name: &str) -> String {
-    format!("Heads-up: I sent that one to this computer's model instead of {name}. {name} bans adult chat and can ban the account for it.")
-}
+/// An 18+ chat with no local model to answer it: nothing is sent online.
+pub const LOCAL_ONLY_MISSING: &str = "18+ chats run only on this computer's model, and none is set up yet. Turn on Local AI in Settings to download one.";
 
-/// A provider's name for the heads-up.
+/// An 18+ chat while the local model is paused (a game, low battery, heat).
+pub const LOCAL_ONLY_PAUSED: &str = "18+ chats run only on this computer's model, and it's paused while a game or low battery needs the PC. Try again in a bit.";
+
+/// A provider's name, for messages.
 pub fn dest_name(dest: Dest) -> &'static str {
     match dest {
         Dest::Xai => "xAI",
@@ -588,6 +594,22 @@ pub fn dest_name(dest: Dest) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_apps_heat_note_never_makes_a_turn_18_plus_but_typed_words_do() {
+        let note = |typed: &str| {
+            format!(
+                "<cabin-volatile>\n{}\n</cabin-volatile>\n{typed}",
+                crate::personality::Heat::Spicy.line()
+            )
+        };
+        let clean = note("roast me harder");
+        assert!(!explicit_conversation([("user", clean.as_str())]));
+        let typed = note("talk dirty to me, I'm horny");
+        assert!(explicit_conversation([("user", typed.as_str())]));
+        let tagged = format!("<cabin-volatile>\n{ADULT_VOICE}\n</cabin-volatile>\nhey");
+        assert!(explicit_conversation([("user", tagged.as_str())]));
+    }
 
     #[test]
     fn everyday_lines_and_plain_swearing_stay_clean() {
@@ -822,22 +844,19 @@ mod tests {
         assert_eq!(dest_of("https://api.groq.com/openai/v1"), Dest::Other);
         assert_eq!(dest_of("https://notanthropic.com"), Dest::Other);
 
-        assert_eq!(route(Risk::Explicit, Dest::Xai), Route::Send);
         assert_eq!(route(Risk::Explicit, Dest::Local), Route::Send);
+        assert_eq!(route(Risk::Clean, Dest::Xai), Route::Send);
         for dest in [
+            Dest::Xai,
             Dest::OpenRouter,
             Dest::Anthropic,
             Dest::Gemini,
             Dest::OpenAi,
             Dest::Other,
         ] {
-            assert_eq!(route(Risk::Explicit, dest), Route::ToXai, "{dest:?}");
+            assert_eq!(route(Risk::Explicit, dest), Route::ToLocal, "{dest:?}");
             assert_eq!(route(Risk::Clean, dest), Route::Send, "{dest:?}");
         }
-        assert_eq!(
-            heads_up_rerouted("Anthropic"),
-            "Heads-up: I sent that one through xAI instead of Anthropic. Anthropic bans adult chat and can ban the account for it."
-        );
     }
 
     #[test]

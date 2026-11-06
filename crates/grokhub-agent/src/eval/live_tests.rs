@@ -100,8 +100,8 @@ fn the_adult_cases_score_a_friend_not_a_lecture_and_run_with_heat() {
     assert!(on.contains(grokhub_core::personality::ADULT_HUMOR), "{on}");
     assert!(on.contains(grokhub_core::personality::Heat::Filthy.line()));
     assert!(
-        on.contains(grokhub_core::adult_guard::ADULT_VOICE),
-        "a filthy run routes as 18+"
+        !on.contains(grokhub_core::adult_guard::ADULT_VOICE),
+        "a filthy roast is comedy: heat alone keeps the run on its usual model"
     );
 }
 
