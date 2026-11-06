@@ -371,6 +371,12 @@ impl Cabin {
             }
             record_turn(&mut self.learning);
             self.absorb_turn_learning(&text);
+            let said = here
+                .then(|| self.messages.iter().rev().find(|(r, _)| r == "user"))
+                .flatten()
+                .map(|(_, t)| t.clone())
+                .unwrap_or_default();
+            self.read_turn_goals(&said, &text);
         }
         bump_usage(&mut self.usage, "message");
         if self.session_mode == SessionMode::Plan {

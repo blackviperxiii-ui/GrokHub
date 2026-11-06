@@ -4,6 +4,7 @@
 //! row and the trophy shelf). Goals live in `objectives.json`, shared with
 //! the shell, web and phone.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use grokhub_core::mission::{MissionCheckStatus, MissionView};
@@ -26,6 +27,9 @@ pub(in crate::app) const TODAY_EMPTY: &str =
 const MINE_EMPTY: &str =
     "No goals yet. Type one above, like \"99 Fishing in OSRS\" or \"finish Elden Ring\".";
 const SHELF_EMPTY: &str = "Goals you finish land here.";
+/// Set when a finished chat turn changed the goals, so the page and the XP
+/// bar read them again on the next frame instead of in up to 30s.
+static GOALS_CHANGED: AtomicBool = AtomicBool::new(false);
 
 fn muted_line(ui: &mut egui::Ui, text: &str) {
     ui.label(
@@ -102,12 +106,26 @@ fn suggestion_row(ui: &mut egui::Ui, g: &Goal, acts: &mut Vec<GoalAct>) {
     });
 }
 
+fn known_games(games: &[(String, Option<u32>)]) -> Vec<KnownGame<'_>> {
+    games
+        .iter()
+        .map(|(name, app_id)| KnownGame {
+            name,
+            steam_app_id: *app_id,
+            source: None,
+        })
+        .collect()
+}
+
 impl Cabin {
     /// The saved goals, read again every [`GOALS_REFRESH`] or after a change.
     pub(in crate::app) fn dock_goals(&self, ctx: &egui::Context) -> Objectives {
         type Cached = (Instant, Objectives);
         let id = egui::Id::new(GOALS_ID);
-        if let Some((at, o)) = ctx.data(|d| d.get_temp::<Cached>(id)) {
+        let changed = GOALS_CHANGED.swap(false, Ordering::Relaxed);
+        if changed {
+            super::super::loadout_home::forget_xp(ctx);
+        } else if let Some((at, o)) = ctx.data(|d| d.get_temp::<Cached>(id)) {
             if at.elapsed() < GOALS_REFRESH {
                 return o;
             }
@@ -117,26 +135,45 @@ impl Cabin {
         o
     }
 
+    /// Goals from a finished chat turn, as in the shell: a goal the player
+    /// asked to track, one the reply noticed (it waits in the tray) and
+    /// progress the player said. Most turns stop at the first look.
+    pub(in crate::app) fn read_turn_goals(&mut self, said: &str, reply: &str) {
+        if !objectives::worth_a_look(said, reply) {
+            return;
+        }
+        let chat = self
+            .chat_job_thread
+            .clone()
+            .unwrap_or_else(|| self.trace_id());
+        let now = now_ms();
+        let games = self.library_names(now);
+        let known = known_games(&games);
+        let read = objectives::change(&crate::config::config_dir(), |o| {
+            objectives::read_turn(o, &chat, said, reply, &known, now)
+        });
+        if read.is_ok_and(|(_, t)| t.changed()) {
+            GOALS_CHANGED.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// The Steam library's names and app ids, for linking a goal to its game.
+    fn library_names(&mut self, now: u64) -> Vec<(String, Option<u32>)> {
+        self.steam_library(now)
+            .1
+            .iter()
+            .map(|g| (g.name.clone(), Some(g.app_id)))
+            .collect()
+    }
+
     /// Applies the presses from this frame and refreshes the goals and XP.
     pub(in crate::app) fn apply_goal_acts(&mut self, ctx: &egui::Context, acts: Vec<GoalAct>) {
         if acts.is_empty() {
             return;
         }
         let now = now_ms();
-        let games: Vec<(String, Option<u32>)> = self
-            .steam_library(now)
-            .1
-            .iter()
-            .map(|g| (g.name.clone(), Some(g.app_id)))
-            .collect();
-        let known: Vec<KnownGame<'_>> = games
-            .iter()
-            .map(|(name, app_id)| KnownGame {
-                name,
-                steam_app_id: *app_id,
-                source: None,
-            })
-            .collect();
+        let games = self.library_names(now);
+        let known = known_games(&games);
         let result = objectives::change(&crate::config::config_dir(), |o| {
             objectives::apply(o, &acts, &known, now)
         });
@@ -335,7 +372,7 @@ impl Cabin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use grokhub_core::objectives::{GameRef, GoalKind, NewGoal, Origin};
+    use grokhub_core::objectives::{GameRef, GoalKind, GoalState, NewGoal, Origin};
 
     fn goal(kind: GoalKind, game: &str, current: u32, target: u32) -> Goal {
         let mut o = Objectives::default();
@@ -370,5 +407,24 @@ mod tests {
         assert_eq!(goal_title(&g), "99 Fishing");
         assert_eq!(goal_detail(&g), "Not finished yet");
         assert!(!steps_by_one(&g), "a finish goal has no +1");
+    }
+
+    #[test]
+    fn a_finished_turn_tracks_an_asked_goal_and_skips_small_talk() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("goals-turn");
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::create_dir_all(&root);
+        let _pin = crate::config::TestConfigDir::set(root.clone());
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.read_turn_goals("what's the weather like", "Sunny all day.");
+        assert!(!root.join(objectives::OBJECTIVES_FILE).exists());
+        cabin.read_turn_goals("add this goal: 99 fishing in osrs", "On it.");
+        let o = objectives::load(&root);
+        assert_eq!(o.goals.len(), 1);
+        assert_eq!(o.goals[0].state, GoalState::Tracking);
+        assert_eq!(goal_title(&o.goals[0]), "Old School RuneScape · 99 fishing");
+        assert!(GOALS_CHANGED.swap(false, Ordering::Relaxed));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

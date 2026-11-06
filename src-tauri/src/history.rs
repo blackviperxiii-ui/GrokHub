@@ -166,7 +166,9 @@ pub fn lines(info: &SessionInfo) -> Vec<Line> {
             (None, false) if assistant => out.push(Line {
                 role: Role::Assistant,
                 // The reply's chips block was never shown.
-                text: grokhub_core::split_chip_trailer(&text).0,
+                text: grokhub_core::objectives::without_markers(
+                    &grokhub_core::split_chip_trailer(&text).0,
+                ),
             }),
             (None, false) => out.push(Line {
                 role: Role::User,

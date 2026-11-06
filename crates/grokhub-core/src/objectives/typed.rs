@@ -48,20 +48,20 @@ const COUNT: [&str; 12] = [
     "kills", "raids",
 ];
 
-fn words(s: &str) -> Vec<String> {
+pub(super) fn words(s: &str) -> Vec<String> {
     s.split(|c: char| !c.is_alphanumeric() && c != '%')
         .filter(|w| !w.is_empty())
         .map(str::to_lowercase)
         .collect()
 }
 
-fn number(w: &str) -> Option<u32> {
+pub(super) fn number(w: &str) -> Option<u32> {
     w.trim_end_matches('%').parse().ok().filter(|n| *n > 0)
 }
 
 /// The game named in `text`: an alias, or the longest library name found in
 /// it as whole words.
-fn find_game<'a>(text: &str, games: &[KnownGame<'a>]) -> Option<(GameRef, String)> {
+pub(super) fn find_game<'a>(text: &str, games: &[KnownGame<'a>]) -> Option<(GameRef, String)> {
     let lower = format!(" {} ", words(text).join(" "));
     for (alias, full) in ALIASES {
         if lower.contains(&format!(" {alias} ")) {
