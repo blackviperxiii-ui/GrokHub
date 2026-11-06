@@ -129,6 +129,7 @@ pub mod mods;
 pub mod net_log;
 pub mod nudge_watchers;
 pub mod oauth;
+pub mod objectives;
 pub mod offline;
 pub mod openclaw;
 pub mod organs;
