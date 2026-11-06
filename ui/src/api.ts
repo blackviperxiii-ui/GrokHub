@@ -1199,7 +1199,7 @@ export interface MissionPage {
 }
 
 export type HomeTile =
-  | { kind: "objectives"; mission: Mission | null; xp: Xp }
+  | { kind: "objectives"; mission: Mission | null; xp: Xp; followUp?: FollowUp }
   | { kind: "streak"; xp: Xp }
   | { kind: "recentChats"; chats: { id: string; title: string; updated: number }[] }
   | { kind: "automations"; active: number; next: { id: string; name: string; summary: string }[] }
@@ -1318,11 +1318,25 @@ export interface GoalCard {
   doneOn?: string;
 }
 
+/** A gentle follow-up on a goal left a few days (grokhub-core objectives::FollowUp). */
+export interface FollowUp {
+  id: string;
+  /** "Elden Ring · Finish". */
+  title: string;
+  /** "Want to pick a night for your next Elden Ring session?", or the last line. */
+  line: string;
+  /** What "Plan it" puts in the chat box. Empty on the last line. */
+  prompt: string;
+  /** "I'll stop asking about …": a note with no button. */
+  stop: boolean;
+}
+
 export interface GoalBoard {
   today: GoalCard[];
   mine: GoalCard[];
   suggested: GoalCard[];
   season: { label: string; done: number; trophies: GoalCard[] };
+  followUp?: FollowUp;
 }
 
 export type GoalAct =

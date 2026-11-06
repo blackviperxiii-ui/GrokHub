@@ -431,6 +431,7 @@ export function App() {
             remote={Boolean(caps.remote)}
             onOpenChat={openSaved}
             onHome={() => setView("home")}
+            onAsk={ask}
           />
         </Page>
       )}

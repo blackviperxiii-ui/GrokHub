@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use grokhub_core::objectives::{self, Board, GoalAct, GoalCard, KnownGame, TurnGoals};
+use grokhub_core::objectives::{self, Board, FollowUp, GoalAct, GoalCard, KnownGame, TurnGoals};
 use serde::Serialize;
 
 /// The page after a press, with the words to show when an Add was refused.
@@ -21,9 +21,23 @@ pub type Library = Vec<(String, u32)>;
 
 /// The page, after game data the player allowed (OSRS hiscores, Steam
 /// achievements) moved any goal it reads.
+/// A follow-up due on a goal left a few days is written as gone out and
+/// shows on the page and Home, since the shell shows instead of sending.
 pub fn board(config_dir: &Path, now_ms: u64, offset_min: i32) -> Board {
     objectives::refresh_from_games(config_dir, now_ms);
-    objectives::board(&objectives::load(config_dir), now_ms, offset_min)
+    let o = objectives::change(config_dir, |o| {
+        objectives::take_follow_up(o, now_ms);
+    })
+    .map(|(o, ())| o)
+    .unwrap_or_else(|_| objectives::load(config_dir));
+    objectives::board(&o, now_ms, offset_min)
+}
+
+/// The follow-up for Home's objectives tile, as on the page.
+pub fn follow_up(config_dir: &Path, now_ms: u64) -> Option<FollowUp> {
+    objectives::change(config_dir, |o| objectives::take_follow_up(o, now_ms))
+        .ok()
+        .and_then(|(_, f)| f)
 }
 
 pub fn act(
@@ -103,6 +117,7 @@ mod tests {
 
     /// Monday 2 Nov 2026, 12:00 UTC.
     const NOW: u64 = 1_793_620_800_000;
+    const DAY: u64 = 86_400_000;
 
     fn dir(tag: &str) -> std::path::PathBuf {
         let d = std::env::temp_dir().join(format!("shell-goals-{tag}-{}", std::process::id()));
@@ -211,5 +226,31 @@ mod tests {
         let row = &board(&d, NOW + 1, 0).mine[0];
         assert_eq!(row.detail, "93 / 99 · 6 levels to 99 · Checked");
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_goal_left_a_few_days_shows_one_follow_up_on_the_page_and_home() {
+        let d = dir("follow-up");
+        let lib = vec![("Elden Ring".to_string(), 1_245_620)];
+        let add = GoalAct::Add {
+            text: "finish elden ring".into(),
+        };
+        act(&d, &[add], &lib, NOW, 0).unwrap();
+        assert_eq!(board(&d, NOW + DAY, 0).follow_up, None, "too soon");
+        let later = NOW + 4 * DAY;
+        let f = board(&d, later, 0).follow_up.expect("one follow-up");
+        assert_eq!(
+            f.line,
+            "Want to pick a night for your next Elden Ring session?"
+        );
+        assert_eq!(
+            follow_up(&d, later + 1).as_ref(),
+            Some(&f),
+            "Home shows the same"
+        );
+        let saved = objectives::load(&d);
+        assert_eq!(saved.goals[0].nudges.len(), 1, "written once");
+        let json = serde_json::to_value(board(&d, later + 2, 0)).unwrap();
+        assert_eq!(json["followUp"]["stop"], false);
     }
 }

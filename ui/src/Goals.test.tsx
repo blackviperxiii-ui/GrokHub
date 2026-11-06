@@ -11,7 +11,7 @@ const api = vi.hoisted(() => ({
 
 vi.mock("./api", () => api);
 
-import { doneLine, GoalAsk, Goals, MINE_EMPTY, SHELF_EMPTY, TODAY_EMPTY } from "./Goals";
+import { doneLine, FollowUpRow, GoalAsk, Goals, MINE_EMPTY, PLAN_IT, SHELF_EMPTY, TODAY_EMPTY } from "./Goals";
 
 const EMPTY: GoalBoard = { today: [], mine: [], suggested: [], season: { label: "Oct to Dec 2026", done: 0, trophies: [] } };
 
@@ -29,6 +29,29 @@ describe("Goals", () => {
   beforeEach(() => {
     api.getGoals.mockReset();
     api.goalAct.mockReset();
+  });
+
+  it("shows a follow-up on Today whose Plan it puts the ask in the chat box", async () => {
+    const ask = "Help me pick a night this week for my next Elden Ring session. My goal there: Finish.";
+    api.getGoals.mockResolvedValue({
+      ...EMPTY,
+      mine: [ELDEN],
+      followUp: { id: "g2", title: ELDEN.title, line: "Want to pick a night for your next Elden Ring session?", prompt: ask, stop: false },
+    });
+    const onAsk = vi.fn();
+    render(<Goals onAsk={onAsk} />);
+    expect(await screen.findByText("Want to pick a night for your next Elden Ring session?")).toBeInTheDocument();
+    expect(screen.queryByText(TODAY_EMPTY)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: PLAN_IT }));
+    expect(onAsk).toHaveBeenCalledWith(ask);
+    expect(api.goalAct).not.toHaveBeenCalled();
+  });
+
+  it("shows the last follow-up as a note with no button", () => {
+    const line = "I'll stop asking about Elden Ring, just say the word.";
+    render(<FollowUpRow followUp={{ id: "g2", title: ELDEN.title, line, prompt: "", stop: true }} onAsk={vi.fn()} />);
+    expect(screen.getByText(line)).toBeInTheDocument();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 
   it("says what to do when there are no goals yet", async () => {

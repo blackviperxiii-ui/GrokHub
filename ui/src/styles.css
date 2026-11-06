@@ -4116,6 +4116,10 @@ label.toggle-row {
 }
 
 /* "Track this goal?" under a reply that noticed a game goal. */
+.goal-follow-up p {
+  margin: 0 0 0.25rem;
+}
+
 .goal-ask {
   display: flex;
   flex-wrap: wrap;

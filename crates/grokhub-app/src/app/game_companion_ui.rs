@@ -147,6 +147,11 @@ impl Cabin {
         self.focus.game.watch.current
     }
 
+    #[cfg(test)]
+    pub(super) fn set_game_running_for_test(&mut self, id: Option<u32>) {
+        self.focus.game.watch.current = id;
+    }
+
     /// One sample. A launch of a library game fetches its news off the UI thread.
     pub(super) fn note_running(&mut self, running: Option<u32>, now: u64) {
         super::home::note_session(

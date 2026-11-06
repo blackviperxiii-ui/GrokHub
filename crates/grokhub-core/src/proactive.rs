@@ -57,6 +57,8 @@ pub enum CandidateSource {
     SystemState,
     Spans,
     UserModel,
+    /// A goal on Objectives left for a few days.
+    Objectives,
 }
 
 impl CandidateSource {
@@ -125,6 +127,11 @@ pub struct Candidate {
     /// Hard candidates only: what GrokHub prepares (a draft, a filled form).
     #[serde(default)]
     pub prepared: Option<String>,
+    /// A kind question that is the card's title instead of "I can …"
+    /// ("Want to pick a night for your next Elden Ring session?"). The card
+    /// is then a one-tap suggestion and `action` is what the tap asks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ask: Option<String>,
 }
 
 impl Candidate {
@@ -150,6 +157,7 @@ impl Candidate {
             tool: "run_task".into(),
             due_at: None,
             prepared: None,
+            ask: None,
         }
     }
 
@@ -233,7 +241,7 @@ pub fn route(candidate: &Candidate, unsure: bool) -> Option<ProactiveRoute> {
     if candidate.class == CandidateClass::Hard {
         return Some(ProactiveRoute::Prepare);
     }
-    Some(if unsure {
+    Some(if unsure || candidate.ask.is_some() {
         ProactiveRoute::Suggest
     } else {
         ProactiveRoute::ICan
@@ -270,6 +278,9 @@ pub fn proactive_card(candidate: &Candidate, route: ProactiveRoute, now_ms: u64)
     );
     let step = candidate.prepare_step();
     let title = match route {
+        ProactiveRoute::Suggest if candidate.ask.is_some() => {
+            candidate.ask.clone().unwrap_or_default()
+        }
         ProactiveRoute::Suggest => {
             upper_first(candidate.action.trim().trim_end_matches(['.', '?']))
         }
