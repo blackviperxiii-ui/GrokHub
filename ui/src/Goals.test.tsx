@@ -11,9 +11,9 @@ const api = vi.hoisted(() => ({
 
 vi.mock("./api", () => api);
 
-import { doneLine, FollowUpRow, GoalAsk, Goals, MINE_EMPTY, PLAN_IT, SHELF_EMPTY, TODAY_EMPTY } from "./Goals";
+import { doneLine, FollowUpRow, GoalAsk, Goals, MINE_EMPTY, PLAN_IT, SHELF_EMPTY, TODAY_EMPTY, YOUR_WEEK } from "./Goals";
 
-const EMPTY: GoalBoard = { today: [], mine: [], suggested: [], season: { label: "Oct to Dec 2026", done: 0, trophies: [] } };
+const EMPTY: GoalBoard = { today: [], mine: [], suggested: [], season: { label: "Oct to Dec 2026", done: 0, trophies: [], badges: [] } };
 
 const FISHING: GoalCard = {
   id: "g1",
@@ -107,7 +107,7 @@ describe("Goals", () => {
       today: [FISHING, { ...ELDEN, prompt: "Pick up Elden Ring tonight?" }],
       mine: [FISHING, ELDEN],
       suggested: [{ id: "g3", title: "Hades · 50 achievements", detail: "", frac: 0, plusOne: true }],
-      season: { label: "Oct to Dec 2026", done: 1, trophies: [{ ...ELDEN, id: "g4", doneOn: "Nov 2" }] },
+      season: { label: "Oct to Dec 2026", done: 1, trophies: [{ ...ELDEN, id: "g4", doneOn: "Nov 2" }], badges: [] },
     });
     api.goalAct.mockResolvedValue({ board: EMPTY });
     render(<Goals />);
@@ -119,6 +119,31 @@ describe("Goals", () => {
     expect(tray).toHaveTextContent("Track goal: Hades · 50 achievements?");
     await userEvent.click(within(tray).getByRole("button", { name: "Not now" }));
     expect(api.goalAct).toHaveBeenCalledWith([{ act: "notNow", id: "g3" }]);
+  });
+
+  it("shows Monday's week, its Track, and the season badge, line and bonus", async () => {
+    api.getGoals.mockResolvedValue({
+      ...EMPTY,
+      week: { lines: ["Reached level 5 · Regular", "Goal done: Hades · Finish"], suggestion: { ...FISHING, id: "g7" } },
+      season: {
+        label: "Oct to Dec 2026",
+        done: 1,
+        trophies: [],
+        badges: ["Jul to Sep 2026"],
+        badgeLine: "2 more goals for the Oct to Dec 2026 badge",
+        bonus: "First goal this season: +50 bonus XP",
+      },
+    });
+    api.goalAct.mockResolvedValue({ board: EMPTY });
+    render(<Goals />);
+    const week = await screen.findByLabelText(YOUR_WEEK);
+    expect(within(week).getByText("Reached level 5 · Regular")).toBeInTheDocument();
+    expect(screen.queryByText(TODAY_EMPTY)).not.toBeInTheDocument();
+    expect(screen.getByText("2 more goals for the Oct to Dec 2026 badge")).toBeInTheDocument();
+    expect(screen.getByText("First goal this season: +50 bonus XP")).toBeInTheDocument();
+    expect(screen.getByText("Jul to Sep 2026 badge")).toBeInTheDocument();
+    await userEvent.click(within(week).getByRole("button", { name: "Track" }));
+    expect(api.goalAct).toHaveBeenCalledWith([{ act: "track", id: "g7" }]);
   });
 
   it("counts goals in plain words", () => {

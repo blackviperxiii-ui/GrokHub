@@ -8,7 +8,7 @@ const api = vi.hoisted(() => ({
   getMission: vi.fn<(conversationId?: string) => Promise<MissionPage>>(),
   setMissionDone: vi.fn<(done: boolean, conversationId?: string) => Promise<MissionPage>>(),
   getGoals: vi.fn(() =>
-    Promise.resolve({ today: [], mine: [], suggested: [], season: { label: "Oct to Dec 2026", done: 0, trophies: [] } }),
+    Promise.resolve({ today: [], mine: [], suggested: [], season: { label: "Oct to Dec 2026", done: 0, trophies: [], badges: [] } }),
   ),
   goalAct: vi.fn(),
 }));

@@ -5,8 +5,9 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    done_this_season, parse_goal, pick_up_line, season_label, short_date, shown_follow_up,
-    today_picks, FollowUp, Goal, GoalKind, KnownGame, Objectives, Pick, TurnGoals,
+    badges, done_this_season, parse_goal, pick_up_line, season_bonus_note, season_label,
+    short_date, shown_follow_up, today_picks, FollowUp, Goal, GoalKind, KnownGame, Objectives,
+    Pick, TurnGoals, YourWeek, BADGE_GOALS,
 };
 
 /// How many finished goals the trophy shelf shows.
@@ -147,6 +148,21 @@ pub struct Season {
     pub label: String,
     pub done: usize,
     pub trophies: Vec<GoalCard>,
+    /// Seasons whose badge was earned (three goals done), newest first.
+    pub badges: Vec<String>,
+    /// "1 more goal for the Oct to Dec 2026 badge"; None once it's earned.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub badge_line: Option<String>,
+    /// "First goal this season: +50 bonus XP", for a week after it landed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bonus: Option<String>,
+}
+
+/// "2 more goals for the Oct to Dec 2026 badge", or None once earned.
+pub fn badge_line(done: usize, label: &str) -> Option<String> {
+    let left = BADGE_GOALS.checked_sub(done).filter(|n| *n > 0)?;
+    let goals = if left == 1 { "goal" } else { "goals" };
+    Some(format!("{left} more {goals} for the {label} badge"))
 }
 
 /// The page's goals: Today's picks, tracked goals, suggestions and the season.
@@ -160,6 +176,9 @@ pub struct Board {
     /// The follow-up that went out in the last day, while its goal hasn't moved.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub follow_up: Option<FollowUp>,
+    /// Monday's "Your week": filled by the caller, which has the XP ledger.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub week: Option<YourWeek>,
 }
 
 pub fn board(o: &Objectives, now_ms: u64, offset_min: i32) -> Board {
@@ -192,12 +211,20 @@ pub fn board(o: &Objectives, now_ms: u64, offset_min: i32) -> Board {
             .into_iter()
             .map(GoalCard::of)
             .collect(),
-        season: Season {
-            label: season_label(now_ms, offset_min),
-            done: done_this_season(o, now_ms, offset_min),
-            trophies,
+        season: {
+            let label = season_label(now_ms, offset_min);
+            let done = done_this_season(o, now_ms, offset_min);
+            Season {
+                badge_line: badge_line(done, &label),
+                label,
+                done,
+                trophies,
+                badges: badges(o, offset_min),
+                bonus: season_bonus_note(o, now_ms, offset_min),
+            }
         },
         follow_up: shown_follow_up(o, now_ms),
+        week: None,
     }
 }
 

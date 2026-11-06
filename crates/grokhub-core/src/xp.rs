@@ -181,11 +181,17 @@ impl XpLedger {
         self.earned != before
     }
 
-    /// Folds in what the goals paid. Goals keep their own payments, so this
-    /// only ever adds. True when anything changed.
+    /// Folds in what the goals paid, and each season's surprise bonus for
+    /// its first goal done. Goals keep their own payments, so this only ever
+    /// adds. True when anything changed.
     pub fn ingest_goals(&mut self, goals: &[crate::objectives::Goal], offset_min: i32) -> bool {
         let mut changed = false;
-        for (key, line) in goals.iter().flat_map(|g| g.earned(offset_min)) {
+        let firsts = crate::objectives::season_firsts(goals, offset_min);
+        for (key, line) in goals
+            .iter()
+            .flat_map(|g| g.earned(offset_min))
+            .chain(firsts)
+        {
             if let std::collections::btree_map::Entry::Vacant(slot) = self.earned.entry(key) {
                 slot.insert(line);
                 changed = true;
@@ -780,11 +786,13 @@ mod tests {
             o.set_progress(&id, 99, true, MON);
         })
         .unwrap();
-        // A milestone (50) and done (300), uncapped, plus the active day.
+        // A milestone (50), done (300) and the season's first goal (50),
+        // uncapped, plus the active day.
+        let paid = 50 + 300 + objectives::XP_SEASON_FIRST + 10;
         let s = refresh(&dir, None, MON, 0);
-        assert_eq!(s.today, 50 + 300 + 10);
+        assert_eq!(s.today, paid);
         std::fs::remove_file(ledger_path(&dir)).unwrap();
-        assert_eq!(refresh(&dir, None, MON, 0).today, 360);
+        assert_eq!(refresh(&dir, None, MON, 0).today, paid);
         assert!(XP_HOW.contains("200 or more when it's done"));
         let _ = std::fs::remove_dir_all(&dir);
     }
