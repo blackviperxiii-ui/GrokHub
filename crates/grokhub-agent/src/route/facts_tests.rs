@@ -319,6 +319,44 @@ fn a_model_at_its_request_limit_is_busy_and_failover_takes_the_next() {
 }
 
 #[test]
+fn a_model_that_was_at_capacity_is_routed_around_for_a_minute() {
+    let dir = crate::harness::test_dir("facts-cool");
+    let reg = std::sync::Arc::new(grok_fleet());
+    let code = |reg: &Registry| {
+        Router::choose(
+            &ask("code:multi-file", "grok-4.3", 0),
+            reg,
+            &none(),
+            &RoutingTable::default(),
+            NOW,
+        )
+        .model
+    };
+    assert_eq!(code(&reg), "grok-4.3");
+    live::cool_down(&dir, "grok-4.3", NOW);
+    let view = live::paced(&dir, reg.clone(), NOW + 1_000);
+    let rec = view.get("grok-4.3").unwrap();
+    assert_eq!(
+        (rec.state, rec.reason.as_str()),
+        (
+            ModelState::Degraded,
+            "It was too busy to answer a moment ago."
+        )
+    );
+    // The resumed step goes to the next model, not the same wall.
+    assert_eq!(code(&view), "grok-4.7");
+    // A minute on it is back in the running.
+    assert_eq!(
+        live::paced(&dir, reg.clone(), NOW + live::OUTAGE_COOL_MS)
+            .get("grok-4.3")
+            .unwrap()
+            .state,
+        ModelState::Live
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn grok_4_7_fast_swaps_in_only_on_a_grok_build_sign_in() {
     let fleet_with_fast = |cred| {
         let mut reg = Registry::default();

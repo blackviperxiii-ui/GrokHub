@@ -563,7 +563,73 @@ pub fn map_http_status(
             message,
             retry_after_secs,
         },
+        other if overload_message(&message) => ClientError::Server {
+            status: other,
+            message,
+            retry_after_secs,
+        },
         other => ClientError::Protocol(format!("HTTP {other}: {message}")),
+    }
+}
+
+/// The provider is busy, not refusing this request: at capacity, overloaded,
+/// briefly unavailable. Worth a retry and then another route. Quota and
+/// billing text is never this: those don't clear by waiting.
+pub fn overload_message(message: &str) -> bool {
+    let l = message.to_ascii_lowercase();
+    if billing_message(&l) {
+        return false;
+    }
+    [
+        "at capacity",
+        "high demand",
+        "overloaded",
+        "over capacity",
+        "temporarily unavailable",
+        "service unavailable",
+        "server is busy",
+        "try again later",
+        "try again in a few",
+        "internal server error",
+        "server_error",
+    ]
+    .iter()
+    .any(|needle| l.contains(needle))
+}
+
+fn rate_limit_message(lower: &str) -> bool {
+    !billing_message(lower)
+        && (lower.contains("rate limit")
+            || lower.contains("rate_limit")
+            || lower.contains("too many requests"))
+}
+
+fn billing_message(lower: &str) -> bool {
+    lower.contains("quota")
+        || lower.contains("credit")
+        || lower.contains("billing")
+        || lower.contains("spending limit")
+        || lower.contains("payment")
+}
+
+/// An error the model stream sent mid-reply (`error`, `response.failed`).
+/// A busy or rate-limited provider is retried and failed over like the same
+/// answer over HTTP; anything else ends the call as it says.
+pub fn stream_error(message: String) -> ClientError {
+    let lower = message.to_ascii_lowercase();
+    if rate_limit_message(&lower) {
+        ClientError::RateLimited {
+            retry_after_secs: None,
+            message,
+        }
+    } else if overload_message(&message) {
+        ClientError::Server {
+            status: 503,
+            message,
+            retry_after_secs: None,
+        }
+    } else {
+        ClientError::Protocol(message)
     }
 }
 
@@ -1883,7 +1949,7 @@ pub(crate) fn fold_events(
                     }
                 }
             }
-            SseEvent::Error(message) => return Err(ClientError::Protocol(message)),
+            SseEvent::Error(message) => return Err(stream_error(message)),
         }
     }
     Ok(())
@@ -2277,6 +2343,46 @@ mod tests {
         assert!(overflow.is_context_length());
         assert!(!overflow.is_retryable());
         assert!(!ClientError::Protocol("disk full".into()).is_context_length());
+    }
+
+    #[test]
+    fn a_busy_model_mid_stream_is_retried_and_billing_is_not() {
+        let busy = "The model is currently at capacity due to high demand. Please try again in a few minutes, or use a higher service tier for priority processing";
+        let err = stream_error(busy.into());
+        assert!(
+            matches!(err, ClientError::Server { status: 503, .. }),
+            "{err:?}"
+        );
+        assert!(err.is_retryable());
+        assert!(matches!(
+            stream_error("Rate limit reached for requests".into()),
+            ClientError::RateLimited {
+                retry_after_secs: None,
+                ..
+            }
+        ));
+        let quota = stream_error("You exceeded your current quota, please check billing".into());
+        assert!(matches!(&quota, ClientError::Protocol(m) if m.contains("quota")));
+        assert!(!quota.is_retryable());
+        assert!(matches!(
+            stream_error("boom".into()),
+            ClientError::Protocol(m) if m == "boom"
+        ));
+        // The same text on an odd HTTP status is still a busy provider.
+        assert!(matches!(
+            map_http_status(400, busy, None, AuthKind::ApiKey),
+            ClientError::Server { status: 400, .. }
+        ));
+        assert!(matches!(
+            map_http_status(400, "bad tool schema", None, AuthKind::ApiKey),
+            ClientError::Protocol(m) if m == "HTTP 400: bad tool schema"
+        ));
+        let mut out = TurnOutput::default();
+        let folded = fold_events(vec![SseEvent::Error(busy.into())], &mut |_| {}, &mut out);
+        assert!(
+            matches!(folded, Err(ClientError::Server { status: 503, .. })),
+            "{folded:?}"
+        );
     }
 
     /// 2.10.87: native path. A saved `minimal` goes out as `low`; `off` sends none.

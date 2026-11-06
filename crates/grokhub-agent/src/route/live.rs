@@ -315,27 +315,63 @@ static PACE: Mutex<BTreeMap<PathBuf, health::Pacer>> = Mutex::new(BTreeMap::new(
 /// limit this second reads as busy (degraded), so failover takes the next one.
 pub(super) fn paced(config_dir: &Path, reg: Arc<Registry>, now_ms: u64) -> Arc<Registry> {
     let pace = PACE.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(p) = pace.get(config_dir) else {
-        return reg;
-    };
-    let busy: Vec<String> = reg
+    let p = pace.get(config_dir);
+    // (model, cooling after an outage rather than at its pace limit)
+    let busy: Vec<(String, bool)> = reg
         .models
         .iter()
-        .filter(|(id, r)| {
-            r.state == grokhub_core::model_registry::ModelState::Live && p.at_limit(id, now_ms)
+        .filter(|(_, r)| r.state == grokhub_core::model_registry::ModelState::Live)
+        .filter_map(|(id, _)| {
+            if p.is_some_and(|p| p.at_limit(id, now_ms)) {
+                Some((id.clone(), false))
+            } else if cooling(config_dir, id, now_ms) {
+                Some((id.clone(), true))
+            } else {
+                None
+            }
         })
-        .map(|(id, _)| id.clone())
         .collect();
     if busy.is_empty() {
         return reg;
     }
     let mut view = (*reg).clone();
-    for id in busy {
+    for (id, cooled) in busy {
         if let Some(r) = view.models.get_mut(&id) {
             health::mark_busy(r);
+            if cooled {
+                r.reason = "It was too busy to answer a moment ago.".into();
+            }
         }
     }
     Arc::new(view)
+}
+
+/// Models that just failed with an outage (at capacity, overloaded, down),
+/// per config dir, until when (ms). They read as busy so the next pick, the
+/// resumed step included, goes to another model instead of the same wall.
+static COOLING: Mutex<BTreeMap<PathBuf, BTreeMap<String, u64>>> = Mutex::new(BTreeMap::new());
+
+/// How long a model that failed with an outage is routed around.
+pub(crate) const OUTAGE_COOL_MS: u64 = 60_000;
+
+/// `model` just failed with an outage at `now_ms`.
+pub(crate) fn cool_down(config_dir: &Path, model: &str, now_ms: u64) {
+    COOLING
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .entry(config_dir.to_path_buf())
+        .or_default()
+        .insert(model.to_string(), now_ms.saturating_add(OUTAGE_COOL_MS));
+}
+
+/// True while `model` is cooling after an outage.
+pub(crate) fn cooling(config_dir: &Path, model: &str, now_ms: u64) -> bool {
+    COOLING
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(config_dir)
+        .and_then(|m| m.get(model))
+        .is_some_and(|until| now_ms < *until)
 }
 
 /// One request to `model` goes out now.
@@ -1649,17 +1685,29 @@ pub fn stream_routed(
         }
         out
     } else {
+        // `heard`: xAI sent anything (the heads-up goes out then). `streamed`:
+        // reply text reached the chat. Thinking alone isn't an answer, so a
+        // stand-in can still take a turn xAI only thought about.
+        let mut heard = false;
         let mut streamed = false;
         let out = client.stream(&sent, cancel, &mut |ev: StreamEvent| {
             // A 429's wait note isn't xAI answering: a stand-in can still take the turn.
-            if !streamed && !matches!(ev, StreamEvent::RateWait(_)) {
-                streamed = true;
+            if !heard && !matches!(ev, StreamEvent::RateWait(_)) {
+                heard = true;
                 if let Some(note) = &note {
                     sink(StreamEvent::TextDelta(format!("{note}\n\n")));
                 }
             }
+            if matches!(&ev, StreamEvent::TextDelta(t) if !t.is_empty()) {
+                streamed = true;
+            }
             super::adult::guard(&mut reply, &mut *sink, ev)
         });
+        if let Err(err) = &out {
+            if xai_outage(err) {
+                cool_down(&dir, &model, now);
+            }
+        }
         // xAI down for an ordinary turn: a provider you set up answers, and
         // failing that this computer's model (below). Only when xAI showed
         // nothing yet, and never an 18+ chat, which no provider takes.
@@ -1746,7 +1794,7 @@ pub fn stream_routed(
             }
             out => {
                 // xAI answered without a single event: the heads-up still shows.
-                if !streamed && out.is_ok() {
+                if !heard && out.is_ok() {
                     if let Some(note) = &note {
                         sink(StreamEvent::TextDelta(format!("{note}\n\n")));
                     }
