@@ -92,6 +92,8 @@ impl Cabin {
             }
         }
         self.touch();
+        // How long the row stood before this step (chip_health).
+        grokhub_core::log_chip_next_action(&mut self.chip_memory, "composer", now_ms());
         // A chip's send was learned on its click; a typed ask teaches its
         // kind (never its words) and leaves no chip to credit.
         self.chip_turn_key = self.chip_send_key.take();

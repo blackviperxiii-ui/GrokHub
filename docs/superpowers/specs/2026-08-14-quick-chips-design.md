@@ -1,5 +1,7 @@
 # Predictive quick chips
 
+> **Superseded** on Nov 5, 2026 by `docs/design/quick-chips/SPEC.md`. Kept for history: the model-call chips, mode chips and caps below are gone.
+
 **Date:** 2026-08-14  
 **Version:** 2.0.0 (do not bump)  
 **Override:** Native Rust only. Steal the Electron chip *mechanism*, not grok.com.

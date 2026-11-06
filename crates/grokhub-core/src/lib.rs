@@ -26,7 +26,10 @@ pub mod chat;
 pub mod chat_bubble;
 pub mod chat_job;
 pub mod chat_view;
+pub mod chip_health;
 pub mod chip_rank;
+#[cfg(test)]
+mod chip_replay_tests;
 pub mod chip_store;
 pub mod chip_trailer;
 pub mod chips;
@@ -320,6 +323,10 @@ pub use chat_view::{
     CHAT_TAIL_FRAMES, CHAT_TAIL_SLACK, SKILL_SAVED_MARK, SKILL_SAVED_NOTE, THOUGHT_CLUSTER_GAP,
     THOUGHT_ROW_LABEL,
 };
+pub use chip_health::{
+    chip_health, chip_health_lines, in_holdout, log_chip_next_action, ChipHealth, SourceHealth,
+    HOLDOUT_PERCENT,
+};
 pub use chip_rank::{rank_quick_chips, ChipRanker, RankCtx, CHIP_ROW_MAX};
 pub use chip_store::{
     chip_log_key, chip_store_path, load_chip_memory, log_chip_outcome, log_chips_shown,
@@ -334,13 +341,13 @@ pub use chips::{
     build_quick_chips, cabin_pace, chip_action, chip_dismissed_for_good, chip_intent,
     chip_key_embeds_chat_text, chip_memory_key, chip_scan, chip_thread_from_messages,
     context_fingerprint, detect_chip_context, detect_chip_stage, disk_is_low, empty_chip_memory,
-    home_slash_cmd, home_surface_from_nav, idea_talk_chips, local_lessons, nav_from_chip_value,
-    predict_intents, prune_retired_chip_memory, remember_chip_click, remember_chip_dismiss,
-    remember_chip_outcome, remember_chip_turn_outcome, remember_home_slash, remember_home_surface,
-    remember_intent, remember_typed_prompt, retired_mode_value, scrub_chat_text_chip_keys,
-    skill_offer_chip, top_habit_labels, CabinPace, ChipAction, ChipInput, ChipKind, ChipMemory,
-    ChipSignals, ChipStage, ChipThread, PredictedIntent, QuickChip, CHIP_HARD_MAX,
-    CHIP_MEMORY_VERSION, CHIP_VISIBLE_MAX, UNDO_CHIP_ID,
+    home_slash_cmd, home_surface_from_nav, idea_talk_chips, nav_from_chip_value, predict_intents,
+    prune_retired_chip_memory, remember_chip_click, remember_chip_dismiss,
+    remember_chip_turn_outcome, remember_home_slash, remember_home_surface, remember_intent,
+    remember_typed_prompt, retired_mode_value, scrub_chat_text_chip_keys, skill_offer_chip,
+    top_habit_labels, CabinPace, ChipAction, ChipInput, ChipKind, ChipMemory, ChipSignals,
+    ChipStage, ChipThread, PredictedIntent, QuickChip, CHIP_HARD_MAX, CHIP_MEMORY_VERSION,
+    CHIP_VISIBLE_MAX, UNDO_CHIP_ID,
 };
 pub use connector::{
     connector_url_allowed, extract_connector_cmds, github_api_path, map_website_connector_name,
@@ -497,10 +504,10 @@ pub use journal::{
 };
 pub use know_me::{load_tags, tag_topics, tags_mention, KnowMeTag};
 pub use learning::{
-    apply_local_lessons, extract_insights, insight_key_for_fact, insight_pin, is_actionable_need,
-    is_durable_fact, is_greeting_chitchat, looks_like_user_pref, prune_ephemeral_insights,
-    record_turn, review_worth_tokens, serve_brief, upsert_insight, user_pref_facts,
-    LearningInsight, LearningState,
+    extract_insights, insight_key_for_fact, insight_pin, is_actionable_need, is_durable_fact,
+    is_greeting_chitchat, looks_like_user_pref, prune_ephemeral_insights, record_turn,
+    review_worth_tokens, serve_brief, upsert_insight, user_pref_facts, LearningInsight,
+    LearningState,
 };
 pub use md::{
     code_tokens, md_blocks, md_link_ok, md_plain, md_spans, md_table_cells, md_wants_full_width,

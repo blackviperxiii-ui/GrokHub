@@ -43,6 +43,12 @@ pub struct ChipEvent {
     pub shown: Vec<ShownChip>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<ChipOutcome>,
+    /// A row held back to compare: nothing was shown.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub holdout: bool,
+    /// Unix ms of the person's first step (a message) after the row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_at: Option<u64>,
 }
 
 /// One chip in a shown row. No text: the key is a hash.
@@ -242,7 +248,7 @@ pub fn log_chips_shown(mem: &mut ChipMemory, surface: &str, chips: &[QuickChip],
         at: now,
         surface: surface.to_string(),
         shown,
-        outcome: None,
+        ..ChipEvent::default()
     });
     if mem.events.len() > CHIP_LOG_MAX {
         let cut = mem.events.len() - CHIP_LOG_MAX;

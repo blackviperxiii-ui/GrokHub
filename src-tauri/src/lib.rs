@@ -345,6 +345,18 @@ async fn send_chat(
 ) -> Result<String, String> {
     let mode = mode.unwrap_or_default();
     set_last_chat(&state, &conversation_id);
+    // How long the composer's chip row stood before this message; off the
+    // send's path.
+    let timing = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = timing.state::<ShellState>();
+        chips::next_step(
+            &state.config_dir,
+            &state.chip_rows,
+            chips::COMPOSER,
+            grokhub_core::now_ms(),
+        );
+    });
     let turn = Turn {
         text,
         mode,

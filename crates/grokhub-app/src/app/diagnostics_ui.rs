@@ -103,6 +103,11 @@ impl Cabin {
             if self.diagnostics.last_zip.is_some() && crate::cards::ghost_pill(ui, "Open folder") {
                 self.open_diagnostics_folder();
             }
+            // Read from the chip log already in memory: no disk read per paint.
+            let health = grokhub_core::chip_health(&self.chip_memory);
+            for line in grokhub_core::chip_health_lines(&health) {
+                crate::cards::settings_note(ui, &line);
+            }
         }
     }
 

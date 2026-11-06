@@ -385,6 +385,7 @@ mod tests {
             surface: "composer".into(),
             shown,
             outcome,
+            ..ChipEvent::default()
         }
     }
 
