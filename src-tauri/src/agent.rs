@@ -258,6 +258,10 @@ pub struct Route {
     pub session: SessionMode,
     /// Settings → Personality's block for the system prompt, or empty.
     pub voice: String,
+    /// The chat's voice settings for the agent's per-turn voice flow (dynamic
+    /// chat, quips, heat), registered under the chat's id before the turn.
+    /// `None` leaves whatever the chat had.
+    pub voice_session: Option<grokhub_agent::voice_session::VoiceConfig>,
     /// Settings → Behavior → Suggestions: follow-ups after each reply.
     pub suggestions: bool,
 }
@@ -549,6 +553,10 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
         // prompt doesn't change with the mode; a btw reply's chips are dropped.
         let chips_on =
             crate::chips::trailer_on(&config_dir, route.suggestions, grokhub_core::now_ms());
+        // The agent steps the voice per turn by this chat's id once it is registered.
+        if let Some(voice) = route.voice_session {
+            grokhub_agent::voice_session::register(&conversation_id, voice);
+        }
         let system = system_prompt_for(
             &route.workspace,
             route.desktop,
@@ -855,6 +863,7 @@ mod tests {
             desktop,
             session: chip,
             voice: String::new(),
+            voice_session: None,
             suggestions: true,
         };
         let runner = Arc::clone(&session);
@@ -1312,6 +1321,59 @@ mod tests {
     }
 
     #[test]
+    fn the_safety_closer_appears_once_with_a_real_voice() {
+        let cfg = temp_dir("closer-once");
+        let _guard = grokhub_agent::perm::ConfigGuard::set(&cfg);
+        let ws = std::path::Path::new("/tmp");
+        let closer = grokhub_core::talk::VOLATILE_SAFETY_CLOSER;
+        for stored in ["", "pirate"] {
+            let settings = crate::settings::ShellSettings {
+                personality: stored.into(),
+                ..crate::settings::ShellSettings::default()
+            };
+            let voice = crate::personality::voice(&cfg, &settings);
+            assert!(!voice.is_empty());
+            let prompt = system_prompt(ws, false, &voice);
+            assert_eq!(prompt.matches(closer).count(), 1, "{prompt}");
+            assert!(prompt.trim_end().ends_with(closer), "{prompt}");
+        }
+    }
+
+    #[test]
+    fn a_chat_turn_registers_its_voice_settings() {
+        let (workspace, config) = (temp_dir("voice-reg-ws"), temp_dir("voice-reg"));
+        let id = "shell-voice-register-test";
+        grokhub_agent::voice_session::forget(id);
+        let client = Arc::new(Answers {
+            requests: Mutex::new(Vec::new()),
+        });
+        let session = Session::spawn_with(id, config.clone(), fake_desktop);
+        let settings = crate::settings::ShellSettings {
+            personality: "pirate".into(),
+            ..crate::settings::ShellSettings::default()
+        };
+        let route = Route {
+            client: Arc::clone(&client) as Arc<dyn ModelClient + Send + Sync>,
+            auth_kind: AuthKind::ApiKey,
+            workspace,
+            mode: PermMode::Ask,
+            desktop: false,
+            session: SessionMode::Chat,
+            voice: crate::personality::voice(&config, &settings),
+            voice_session: Some(crate::personality::voice_config(&config, &settings, 0)),
+            suggestions: true,
+        };
+        assert_eq!(grokhub_agent::voice_session::active_voice(id), None);
+        let result = session.prompt("hello", Vec::new(), route, Box::new(|_| {}));
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(
+            grokhub_agent::voice_session::active_voice(id).as_deref(),
+            Some("pirate")
+        );
+        grokhub_agent::voice_session::forget(id);
+    }
+
+    #[test]
     fn soul_and_user_ride_before_the_safety_closer() {
         let cfg = temp_dir("soul-cfg");
         let _guard = grokhub_agent::perm::ConfigGuard::set(&cfg);
@@ -1552,6 +1614,7 @@ mod tests {
             desktop: false,
             session: SessionMode::Chat,
             voice: String::new(),
+            voice_session: None,
             suggestions: true,
         };
         let result = session.prompt(text, files, route, Box::new(|_| {}));

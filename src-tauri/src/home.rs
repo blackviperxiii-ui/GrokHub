@@ -676,7 +676,7 @@ fn pulse_tile(src: &Sources<'_>) -> Tile {
 /// The name of the personality every chat uses by default.
 pub(crate) fn personality_name(src: &Sources<'_>) -> String {
     let (dir, s) = (src.config_dir, src.settings);
-    let page = personality::load(dir, &s.personality, s.explicit_personalities);
+    let page = personality::load(dir, s);
     page.presets
         .iter()
         .find(|p| p.id == page.current)
@@ -690,7 +690,7 @@ fn personality_tile(src: &Sources<'_>) -> Tile {
     let picture = nyx::look(
         dir,
         &s.personality,
-        s.explicit_personalities,
+        s.adults_on(),
         grokhub_core::companion::Mood::HangingOut,
     )
     .and_then(|look| look.poses.into_iter().next());

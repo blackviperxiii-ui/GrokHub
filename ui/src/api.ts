@@ -1693,9 +1693,19 @@ export interface PersonalityPage {
   current: string;
   /** Custom files that could not be used. */
   problems: string[];
-  /** Adults-only personalities: off leaves the explicit presets out. */
+  /** Adults-only personalities: off leaves the explicit presets out. On only
+   * once the 18+ check was answered yes. */
   explicit: boolean;
+  /** The switch was turned on before the 18+ check: nothing changed; ask it. */
+  ageCheck: boolean;
+  /** How crude the jokes get while adults-only is on. */
+  heat: Heat;
+  /** Another voice can step in while the topic calls for it. */
+  dynamicChat: boolean;
 }
+
+/** A stop on the Heat dial (src-tauri `set_quip_heat`); "clean" reads as cheeky. */
+export type Heat = "clean" | "cheeky" | "spicy" | "filthy";
 
 export interface PersonalityEdit {
   id: string;
@@ -1716,6 +1726,19 @@ export function setPersonality(id: string): Promise<PersonalityPage> {
 
 export function setExplicitPersonalities(on: boolean): Promise<PersonalityPage> {
   return invoke<PersonalityPage>("set_explicit_personalities", { on });
+}
+
+/** The one-time 18+ check's yes: remembered, and adults-only turns on. */
+export function confirmAdult(): Promise<PersonalityPage> {
+  return invoke<PersonalityPage>("confirm_adult");
+}
+
+export function setQuipHeat(heat: Heat): Promise<PersonalityPage> {
+  return invoke<PersonalityPage>("set_quip_heat", { heat });
+}
+
+export function setDynamicChat(on: boolean): Promise<PersonalityPage> {
+  return invoke<PersonalityPage>("set_dynamic_chat", { on });
 }
 
 /** The copy's id, then the page. */
