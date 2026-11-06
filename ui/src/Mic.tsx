@@ -1,5 +1,8 @@
 // Push to talk (LO-17j): hold the mic (or Ctrl+G) to record, let go to turn
-// it into words in the draft. It never sends; the person presses Send.
+// it into words in the draft. It never sends; the person presses Send. The mic
+// stays open for a couple of minutes after a hold, so the next one starts at
+// once and keeps the half second before the press; letting go keeps a short
+// tail so the last word is not cut off.
 import { useEffect, useRef, useState } from "react";
 import { transcribe } from "./api";
 import { PRODUCT_NAME } from "./brand";
@@ -20,42 +23,127 @@ export function appendDraft(draft: string, words: string): string {
   return typed ? `${typed} ${said}` : said;
 }
 
-interface Recording {
-  /** Stops the mic and hands back the WAV. */
-  stop: () => Promise<Uint8Array>;
-}
+/** Kept from just before the press, so a word that starts with it isn't clipped. */
+export const PRE_ROLL_MS = 500;
+/** Kept after letting go, so the last word isn't cut off. */
+export const TAIL_MS = 300;
+/** How long the mic stays open after a hold, so the next one starts at once. */
+export const WARM_MS = 120_000;
 
 type AudioCtor = typeof AudioContext;
 
-async function record(): Promise<Recording> {
+/** One open mic, shared by every hold until it has been idle for a while. */
+interface Warm {
+  stream: MediaStream;
+  ctx: AudioContext;
+  stop: () => void;
+  /** The last moment before a press. */
+  ring: Float32Array[];
+  /** The hold under way, if any. */
+  taking: Float32Array[] | null;
+  idle?: ReturnType<typeof setTimeout>;
+}
+
+let warm: Promise<Warm> | null = null;
+
+function onChunk(w: Warm, chunk: Float32Array) {
+  if (w.taking) {
+    w.taking.push(chunk);
+    return;
+  }
+  w.ring.push(chunk);
+  const keep = (w.ctx.sampleRate * PRE_ROLL_MS) / 1000;
+  let total = w.ring.reduce((n, c) => n + c.length, 0);
+  while (w.ring.length > 1 && total - w.ring[0].length >= keep) total -= w.ring.shift()!.length;
+}
+
+/** Copy the mic's samples off the audio thread when the webview can; the
+ * older processor otherwise (and in tests). */
+async function tap(ctx: AudioContext, source: MediaStreamAudioSourceNode, take: (c: Float32Array) => void) {
+  if (ctx.audioWorklet) {
+    try {
+      await ctx.audioWorklet.addModule("/mic-worklet.js");
+      const node = new AudioWorkletNode(ctx, "mic-tap", { numberOfOutputs: 0 });
+      node.port.onmessage = (e: MessageEvent<Float32Array>) => take(e.data);
+      source.connect(node);
+      return () => {
+        node.port.onmessage = null;
+        node.disconnect();
+      };
+    } catch {
+      // Fall through to the processor.
+    }
+  }
+  const node = ctx.createScriptProcessor(4096, 1, 1);
+  node.onaudioprocess = (event) => take(new Float32Array(event.inputBuffer.getChannelData(0)));
+  source.connect(node);
+  node.connect(ctx.destination);
+  return () => {
+    node.onaudioprocess = null;
+    node.disconnect();
+  };
+}
+
+async function openWarm(): Promise<Warm> {
   const Ctx: AudioCtor | undefined =
     window.AudioContext ?? (window as unknown as { webkitAudioContext?: AudioCtor }).webkitAudioContext;
   if (!navigator.mediaDevices?.getUserMedia || !Ctx) throw new Error(CANT_RECORD);
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } });
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+  });
   const ctx = new Ctx();
   const source = ctx.createMediaStreamSource(stream);
-  const node = ctx.createScriptProcessor(4096, 1, 1);
-  const chunks: Float32Array[] = [];
-  node.onaudioprocess = (event) => {
-    chunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
+  const w: Warm = { stream, ctx, stop: () => {}, ring: [], taking: null };
+  const untap = await tap(ctx, source, (c) => onChunk(w, c));
+  w.stop = () => {
+    untap();
+    source.disconnect();
   };
-  source.connect(node);
-  node.connect(ctx.destination);
+  return w;
+}
+
+/** Close the mic now (idle long enough, or the chat went away). */
+export async function closeMic() {
+  const open = warm;
+  warm = null;
+  if (!open) return;
+  const w = await open.catch(() => null);
+  if (!w) return;
+  clearTimeout(w.idle);
+  w.stop();
+  for (const track of w.stream.getTracks()) track.stop();
+  await w.ctx.close();
+}
+
+interface Recording {
+  /** Stops taking (after the tail) and hands back the WAV. */
+  stop: () => Promise<Uint8Array>;
+}
+
+async function record(): Promise<Recording> {
+  if (!warm) {
+    warm = openWarm();
+    warm.catch(() => {
+      warm = null;
+    });
+  }
+  const w = await warm;
+  clearTimeout(w.idle);
+  w.taking = w.ring;
+  w.ring = [];
   return {
     stop: async () => {
-      node.onaudioprocess = null;
-      node.disconnect();
-      source.disconnect();
-      for (const track of stream.getTracks()) track.stop();
-      const rate = ctx.sampleRate;
-      await ctx.close();
+      await new Promise((done) => setTimeout(done, TAIL_MS));
+      const chunks = w.taking ?? [];
+      w.taking = null;
+      w.idle = setTimeout(() => void closeMic(), WARM_MS);
       const all = new Float32Array(chunks.reduce((n, c) => n + c.length, 0));
       let at = 0;
       for (const c of chunks) {
         all.set(c, at);
         at += c.length;
       }
-      return encodeWav(downsample(all, rate));
+      return encodeWav(downsample(all, w.ctx.sampleRate));
     },
   };
 }
@@ -143,7 +231,13 @@ export function Mic({
     };
   }, []);
 
-  useEffect(() => () => clearTimeout(timer.current), []);
+  useEffect(
+    () => () => {
+      clearTimeout(timer.current);
+      void closeMic();
+    },
+    [],
+  );
 
   const label =
     state === "recording" ? "Listening… let go to stop" : state === "transcribing" ? "Turning speech into text" : "Hold to talk (Ctrl+G)";
@@ -157,11 +251,13 @@ export function Mic({
       disabled={busy || state === "transcribing"}
       onPointerDown={(e) => {
         e.preventDefault();
+        // A finger that slides off the button while talking keeps the hold.
+        e.currentTarget.setPointerCapture?.(e.pointerId);
         start();
       }}
       onPointerUp={() => void finish()}
-      onPointerLeave={() => void finish()}
       onPointerCancel={() => void finish()}
+      onLostPointerCapture={() => void finish()}
     >
       {state === "transcribing" ? (
         "…"
