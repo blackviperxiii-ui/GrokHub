@@ -17,7 +17,7 @@ use crate::titlebar::{
     ChromeBtn,
 };
 use crate::update::{remember_source, resolve_source};
-use crate::xai::{grok_chat, grok_imagine_opts, grok_stt, grok_tts};
+use crate::xai::{grok_chat, grok_imagine_opts, grok_stt};
 use eframe::egui::{self, Color32, ColorImage, RichText, TextureHandle, TextureOptions};
 use global_hotkey::{
     hotkey::{Code, HotKey, Modifiers},
@@ -706,6 +706,7 @@ pub struct Cabin {
     /// Labs: the companion's own desktop window, while she is popped out.
     desktop_nyx: Option<desktop_nyx::DesktopNyx>,
     voice_hold_rx: Option<mpsc::Receiver<()>>,
+    voice_spoken: Option<crate::spoken::SpokenReply>,
     /// The reply being spoken, for the desktop companion's mouth.
     lips: crate::lipsync::LipSlot,
     cmd_line: String,
@@ -1352,6 +1353,7 @@ impl Cabin {
             voice_mic: None,
             desktop_nyx: None,
             voice_hold_rx: None,
+            voice_spoken: None,
             lips: Default::default(),
             cmd_line: String::new(),
             cmd_hist: vec![],
@@ -1849,6 +1851,7 @@ impl Cabin {
             voice_mic: None,
             desktop_nyx: None,
             voice_hold_rx: None,
+            voice_spoken: None,
             lips: Default::default(),
             cmd_line: String::new(),
             cmd_hist: Vec::new(),
@@ -2261,6 +2264,7 @@ impl Cabin {
         }
         self.rx = None;
         self.voice_hold_rx = None;
+        self.voice_spoken = None;
         self.running = false;
         self.turn_retried = false;
         self.imagine_pending = false;
@@ -2566,6 +2570,9 @@ impl Cabin {
             _ => append_say(&mut self.turn_log, &added),
         }
         self.paint_text_delta(kind, &added);
+        if kind == LiveKind::Say {
+            self.speak_stream(&added);
+        }
         true
     }
 

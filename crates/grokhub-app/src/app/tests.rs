@@ -932,16 +932,14 @@ fn grok_login_powers_history_and_imagine() {
 fn speak_reply_does_not_clone_an_8mb_complete() {
     let src = cabin_src();
     let speak = fn_src(&src, "speak_reply");
-    let clone = speak.find("to_string()").expect("tts clone");
+    // The spoken reply caps what it takes (TEXT_FILE_CAP) on its own side.
     assert!(
-        speak[..clone].contains("TEXT_FILE_CAP")
-            || speak[..clone].contains("chip_scan")
-            || speak[..clone].contains("take_ui"),
+        !speak.contains("to_string()") && !speak.contains("to_owned()"),
         "voice speak must not clone an 8MB complete onto the UI thread: {speak}"
     );
     assert!(
         speak.contains("voice_tts_script"),
-        "TTS must strip THINKING: / thoughts before grok_tts: {speak}"
+        "TTS must strip THINKING: / thoughts before speech: {speak}"
     );
 }
 
@@ -2132,6 +2130,7 @@ fn quiet_cabin() -> Cabin {
         voice_mic: None,
         desktop_nyx: None,
         voice_hold_rx: None,
+        voice_spoken: None,
         lips: Default::default(),
         cmd_line: String::new(),
         cmd_hist: Vec::new(),

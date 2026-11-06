@@ -4,6 +4,7 @@
 //! voice is at the time since playback began. The decode is a few ms for
 //! a sentence; the envelope is one `f32` per 20 ms.
 
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -152,17 +153,13 @@ pub fn mouth_now(slot: &LipSlot) -> Option<Mouth> {
     slot.lock().ok()?.as_ref().map(Speaking::mouth_now)
 }
 
-/// Speak an mp3 reply: write it to the temp file the player reads,
-/// decode its envelope, publish it in `slot` as playback starts, and clear
-/// the slot when the player returns. A clip that won't decode still plays,
-/// with the mouth closed.
-pub fn speak_mp3(bytes: Vec<u8>, slot: &LipSlot) {
-    let Ok(path) = crate::desktop::private_temp("speak.mp3") else {
-        return;
-    };
-    if std::fs::write(&path, &bytes).is_err() {
-        return;
-    }
+/// Speak an mp3 piece: write it to the temp file the player reads, decode its
+/// envelope, publish it in `slot` as playback starts, and clear the slot when
+/// the player returns or `stop` cuts it off. A clip that won't decode still
+/// plays, with the mouth closed.
+pub fn speak_mp3(bytes: Vec<u8>, slot: &LipSlot, stop: &AtomicBool) -> Result<(), String> {
+    let path = crate::desktop::private_temp("speak.mp3")?;
+    std::fs::write(&path, &bytes).map_err(|e| format!("speech file: {e}"))?;
     let env = envelope_from_mp3(&bytes).unwrap_or_default();
     if let Ok(mut s) = slot.lock() {
         *s = Some(Speaking {
@@ -170,10 +167,11 @@ pub fn speak_mp3(bytes: Vec<u8>, slot: &LipSlot) {
             env,
         });
     }
-    let _ = crate::desktop::play_audio(&path);
+    let played = crate::desktop::play_speech(&path, stop);
     if let Ok(mut s) = slot.lock() {
         *s = None;
     }
+    played
 }
 
 #[cfg(test)]

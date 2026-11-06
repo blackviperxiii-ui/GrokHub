@@ -423,6 +423,9 @@ impl Cabin {
         if here && self.speak_next {
             self.speak_next = false;
             self.speak_reply(&text);
+        } else if self.voice_spoken.as_ref().is_some_and(|s| s.is_open()) {
+            // Spoken while streaming, but no longer the chat in view.
+            self.voice_spoken = None;
         }
         if let Some(p) = extract_imagine_prompt(&text) {
             self.chat_job_thread = origin.clone();

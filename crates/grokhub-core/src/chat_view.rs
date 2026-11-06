@@ -578,7 +578,7 @@ fn emit_turn(out: &mut Vec<ChatView>, parts: Vec<crate::turn_timeline::TurnPart>
     flush(out, &mut tools);
 }
 
-fn is_protocol_line(line: &str) -> bool {
+pub(crate) fn is_protocol_line(line: &str) -> bool {
     let t = line.trim();
     t.starts_with("HOST_CMD")
         || t.starts_with("COMPUTER_CMD")
@@ -772,7 +772,7 @@ fn strip_untrusted_fences(text: &str) -> String {
 }
 
 /// `HOST_CMD: cat <<'EOF'` hides the script until `EOF`.
-fn host_cmd_heredoc_delim(line: &str) -> Option<String> {
+pub(crate) fn host_cmd_heredoc_delim(line: &str) -> Option<String> {
     let t = line.trim();
     let idx = t.find("<<")?;
     let rest = t[idx + 2..].trim_start();

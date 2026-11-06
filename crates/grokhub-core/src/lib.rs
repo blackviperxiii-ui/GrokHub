@@ -730,6 +730,7 @@ pub use voice::{
     voice_transcript_sends_chat, voice_tts_script, CabinEyesState, HeyGrokAction, HeyGrokRoute,
     PttLine, TranscribeRoute, VoiceEvent, VoiceRole, VoiceState, DEFAULT_VOICE,
     DEFAULT_VOICE_MODEL, RECORDERS, TRANSCRIBERS, TTS_VOICES, VOICE_PAUSED, VOICE_READY_HIDE_MS,
+    VOICE_TALK_STYLE,
 };
 pub use windshield::{
     build_windshield, control_at, filter_atspi_rows, is_interactive_role, keep_atspi_row,

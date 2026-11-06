@@ -226,6 +226,11 @@ pub fn hey_grok_route(has_api_key: bool, has_speech_auth: bool, has_local: bool)
     }
 }
 
+/// Rides in front of a turn whose reply will be spoken aloud.
+pub const VOICE_TALK_STYLE: &str = "This reply will be spoken aloud. Open with one short \
+sentence that answers. Keep it brief and conversational, like talking across the room. \
+No lists, tables, headings, code, markdown or links; say numbers and times plainly.";
+
 /// TTS script for a chat complete. Thinking / `THINKING:` / protocol stay off the speaker.
 pub fn voice_tts_script(complete: &str) -> String {
     assistant_prose(complete)

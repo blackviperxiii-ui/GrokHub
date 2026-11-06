@@ -402,3 +402,35 @@ fn every_mic_recorder_streams_raw_16k_mono_without_a_time_limit() {
     assert!(mic_argv("arecord").unwrap().contains(&"raw"));
     assert!(mic_argv("whisper").is_none());
 }
+
+#[test]
+fn thoughts_and_commands_never_reach_the_speaker_in_any_split() {
+    let text = "THINKING:\nCheck the weather tool first, then answer briefly.\n\n\
+                I'll look that up for you.\n\
+                HOST_CMD: cat > /tmp/w.txt <<EOF\nsecret plan, do not say\nEOF\n\
+                <think>quiet thought, hidden too</think>\n\
+                It's sunny, with a high of 72.";
+    let whole = chunks(&[text]);
+    assert_eq!(
+        whole,
+        vec![
+            "I'll look that up for you.",
+            "It's sunny, with a high of 72."
+        ]
+    );
+    let split: Vec<String> = text.chars().map(|c| c.to_string()).collect();
+    let refs: Vec<&str> = split.iter().map(String::as_str).collect();
+    assert_eq!(
+        chunks(&refs),
+        whole,
+        "a partial line is held until it is known to be prose"
+    );
+}
+
+#[test]
+fn a_reply_opening_in_capitals_is_still_spoken() {
+    assert_eq!(
+        chunks(&["OK, sure. NASA says yes."]),
+        vec!["OK, sure.", "NASA says yes."]
+    );
+}

@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Media::Audio::{
     waveInAddBuffer, waveInClose, waveInOpen, waveInPrepareHeader, waveInReset, waveInStart,
-    waveInStop, waveInUnprepareHeader, PlaySoundW, CALLBACK_NULL, HWAVEIN, SND_FILENAME,
-    SND_NODEFAULT, SND_SYNC, WAVEFORMATEX, WAVEHDR, WAVE_FORMAT_PCM, WAVE_MAPPER, WHDR_DONE,
+    waveInStop, waveInUnprepareHeader, CALLBACK_NULL, HWAVEIN, WAVEFORMATEX, WAVEHDR,
+    WAVE_FORMAT_PCM, WAVE_MAPPER, WHDR_DONE,
 };
 use windows_sys::Win32::Media::Multimedia::mciSendStringW;
 
@@ -203,35 +203,51 @@ fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-pub fn play_file(path: &Path) -> Result<(), String> {
+/// Play a file until it ends or `stop` is set. MCI plays without `wait`
+/// and is polled, so an interruption closes it mid-sentence.
+pub fn play_file_until(path: &Path, stop: &std::sync::atomic::AtomicBool) -> Result<(), String> {
     let dest = path.to_str().ok_or("audio path")?;
-    let bytes = std::fs::read(path).unwrap_or_default();
-    if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WAVE" {
-        let w = wide(dest);
-        let flags = SND_FILENAME | SND_NODEFAULT | SND_SYNC;
-        let ok = unsafe { PlaySoundW(w.as_ptr(), ptr::null_mut(), flags) };
-        if ok != 0 {
-            return Ok(());
+    let alias = format!("grokhubspeak{}", std::process::id());
+    let send = |cmd: &str, out: &mut [u16]| -> u32 {
+        let w = wide(cmd);
+        unsafe {
+            mciSendStringW(
+                w.as_ptr(),
+                if out.is_empty() {
+                    ptr::null_mut()
+                } else {
+                    out.as_mut_ptr()
+                },
+                out.len() as u32,
+                ptr::null_mut(),
+            )
+        }
+    };
+    if send(&format!("open \"{dest}\" alias {alias}"), &mut []) != 0 {
+        return Err("Windows media play failed".into());
+    }
+    if send(&format!("play {alias}"), &mut []) != 0 {
+        send(&format!("close {alias}"), &mut []);
+        return Err("Windows media play failed".into());
+    }
+    let deadline = Instant::now() + Duration::from_secs(600);
+    let mut mode = [0u16; 64];
+    loop {
+        std::thread::sleep(Duration::from_millis(30));
+        if stop.load(std::sync::atomic::Ordering::SeqCst) || Instant::now() >= deadline {
+            break;
+        }
+        mode.fill(0);
+        if send(&format!("status {alias} mode"), &mut mode) != 0 {
+            break;
+        }
+        let end = mode.iter().position(|&c| c == 0).unwrap_or(mode.len());
+        if String::from_utf16_lossy(&mode[..end]) != "playing" {
+            break;
         }
     }
-    let alias = format!("grokhubplay{}", std::process::id());
-    let open = wide(&format!("open \"{dest}\" alias {alias}"));
-    let play = wide(&format!("play {alias} wait"));
-    let close = wide(&format!("close {alias}"));
-    unsafe {
-        let mut err = [0u16; 128];
-        if mciSendStringW(
-            open.as_ptr(),
-            err.as_mut_ptr(),
-            err.len() as u32,
-            ptr::null_mut(),
-        ) != 0
-        {
-            return Err("Windows media play failed (need a microphone-capable audio stack)".into());
-        }
-        let _ = mciSendStringW(play.as_ptr(), ptr::null_mut(), 0, ptr::null_mut());
-        let _ = mciSendStringW(close.as_ptr(), ptr::null_mut(), 0, ptr::null_mut());
-    }
+    send(&format!("stop {alias}"), &mut []);
+    send(&format!("close {alias}"), &mut []);
     Ok(())
 }
 

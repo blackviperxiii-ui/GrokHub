@@ -40,6 +40,7 @@ mod release_update;
 mod secrets;
 mod self_mcp;
 mod skills;
+mod spoken;
 mod startup;
 mod store;
 mod theme;
