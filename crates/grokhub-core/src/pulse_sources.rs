@@ -1351,14 +1351,36 @@ impl SourceCache {
 
     /// Spend one summary call. False when today's budget is used up.
     pub fn take_summary_call(&mut self, now_ms: u64) -> bool {
-        let used = self.calls_today(now_ms);
+        self.take_call_on(now_ms / DAY_MS)
+    }
+
+    /// Calls made on `day` (a [`local_day`] number).
+    pub fn calls_on(&self, day: u64) -> u32 {
+        if self.summary_day == day {
+            self.summary_calls
+        } else {
+            0
+        }
+    }
+
+    /// Spend one call on `day` (a [`local_day`] number). False when that
+    /// day's budget is used up.
+    pub fn take_call_on(&mut self, day: u64) -> bool {
+        let used = self.calls_on(day);
         if used >= SUMMARY_CALLS_PER_DAY {
             return false;
         }
-        self.summary_day = now_ms / DAY_MS;
+        self.summary_day = day;
         self.summary_calls = used + 1;
         true
     }
+}
+
+/// The person's local day number: midnight is theirs, not UTC's. With no
+/// known offset it is the UTC day.
+pub fn local_day(now_ms: u64, utc_offset_min: Option<i32>) -> u64 {
+    let shift = i64::from(utc_offset_min.unwrap_or(0)) * 60_000;
+    (now_ms as i64).saturating_add(shift).max(0) as u64 / DAY_MS
 }
 
 pub fn load_cache(path: &std::path::Path) -> SourceCache {
@@ -2568,6 +2590,19 @@ mod tests {
         assert_eq!(cache.calls_today(tomorrow), 0);
         assert!(cache.take_summary_call(tomorrow));
         assert_eq!(cache.calls_today(tomorrow), 1);
+    }
+
+    #[test]
+    fn the_budget_counts_the_persons_own_day() {
+        // NOW is 08:00 UTC on Oct 11.
+        assert_eq!(local_day(NOW, None), 20_737);
+        assert_eq!(local_day(NOW, Some(-600)), 20_736);
+        assert_eq!(local_day(NOW, Some(300)), 20_737);
+        assert_eq!(local_day(NOW + 12 * 3_600_000, Some(300)), 20_738);
+        let mut cache = SourceCache::default();
+        assert!(cache.take_call_on(20_736));
+        assert_eq!(cache.calls_on(20_736), 1);
+        assert_eq!(cache.calls_on(20_737), 0);
     }
 
     #[test]
