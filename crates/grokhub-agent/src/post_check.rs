@@ -10,7 +10,12 @@
 //! - counts: "N passed" and "N files changed" are read against the last test
 //!   run's summary and git's own line;
 //! - coverage: "the tests pass", "committed", "pushed" and "updated `path`"
-//!   each need a call this run that did it.
+//!   each need a call this run that did it;
+//! - results: "verified", "gone" or "empty" and "N GB freed" are read against
+//!   what the commands printed: the last command's error and its `KEY=VALUE`
+//!   facts (`EXISTS=True`, `COUNT=3`), and every `FREED=` this run. Like a
+//!   tool receipt (arXiv 2603.10060), the facts come from the output, never
+//!   from the model's words about it.
 //!
 //! A finding sends the model one note naming what doesn't match. It never
 //! blocks the turn and never edits the reply.
@@ -30,6 +35,10 @@ pub struct Ran {
     pub ok: bool,
     pub output: String,
 }
+
+/// Notes one run can get from these checks: one per new round of calls, so a
+/// reply can't loop on them.
+pub const NOTES_PER_RUN: usize = 3;
 
 /// Calls kept for one run; the oldest go first.
 const RAN_CAP: usize = 400;
@@ -122,6 +131,9 @@ pub const FILES_CHANGED: &str = "files_changed";
 pub const NOT_COMMITTED: &str = "not_committed";
 pub const NOT_PUSHED: &str = "not_pushed";
 pub const FILE_NOT_WRITTEN: &str = "file_not_written";
+pub const CHECK_FAILED: &str = "check_failed";
+pub const STILL_THERE: &str = "still_there";
+pub const FREED_MISMATCH: &str = "freed_mismatch";
 
 /// Every check for a reply that ends a run.
 pub fn check(reply: &str, ran: &[Ran]) -> Vec<Finding> {
@@ -130,6 +142,7 @@ pub fn check(reply: &str, ran: &[Ran]) -> Vec<Finding> {
     if !ran.is_empty() && !ran.iter().any(Ran::opaque) {
         out.extend(coverage(reply, ran));
     }
+    out.extend(results(reply, ran));
     out
 }
 
@@ -863,6 +876,262 @@ fn wrote(ran: &[Ran], path: &str) -> bool {
     })
 }
 
+// --- Results -------------------------------------------------------------
+
+/// `KEY=VALUE` facts a command printed, keys upper-cased. A key is letters,
+/// digits and `_`, so `$a=1` in an echoed script and `a==b` are left out.
+fn facts(output: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for token in output.split(|c: char| c.is_whitespace() || c == ';' || c == ',') {
+        let Some((key, value)) = token.split_once('=') else {
+            continue;
+        };
+        let value = value.trim_matches(['"', '\'']);
+        if key.is_empty()
+            || value.is_empty()
+            || value.starts_with('=')
+            || !key.starts_with(|c: char| c.is_ascii_alphabetic())
+            || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            continue;
+        }
+        out.push((key.to_ascii_uppercase(), value.to_string()));
+    }
+    out
+}
+
+fn truthy(value: &str) -> Option<bool> {
+    match value.to_ascii_lowercase().as_str() {
+        "true" | "yes" | "1" => Some(true),
+        "false" | "no" | "0" => Some(false),
+        _ => None,
+    }
+}
+
+fn is_existence_key(key: &str) -> bool {
+    matches!(
+        key,
+        "EXISTS" | "EXIST" | "FOUND" | "PRESENT" | "STILL_THERE"
+    ) || key.ends_with("_EXISTS")
+        || key.ends_with("_FOUND")
+        || key.ends_with("_PRESENT")
+}
+
+fn is_count_key(key: &str) -> bool {
+    matches!(key, "COUNT" | "REMAINING" | "LEFT" | "ITEMS" | "FILES")
+        || key.ends_with("_COUNT")
+        || key.ends_with("_REMAINING")
+        || key.ends_with("_LEFT")
+}
+
+/// The first line of an output that shows the command itself went wrong.
+/// "Cannot find path" and "No such file" are left out: for a check that
+/// something is gone, they are the answer.
+fn error_line(output: &str) -> Option<String> {
+    const MARKS: [&str; 10] = [
+        "ParserError",
+        "FullyQualifiedErrorId",
+        "Unexpected token",
+        "is not recognized as",
+        "Traceback (most recent call last)",
+        ": command not found",
+        "Access is denied",
+        "UnauthorizedAccessException",
+        "Missing closing",
+        "syntax error",
+    ];
+    output
+        .lines()
+        .map(str::trim)
+        .find(|l| {
+            MARKS.iter().any(|m| l.contains(m))
+                || l.starts_with("error:")
+                || l.starts_with("error[")
+                || l.starts_with("Error:")
+        })
+        .map(clip)
+}
+
+fn says_verified(sentence: &str) -> bool {
+    let lower = sentence.to_lowercase();
+    let w = words(sentence);
+    w.iter().any(|w| {
+        matches!(
+            w.as_str(),
+            "verified" | "confirmed" | "succeeded" | "double'checked"
+        )
+    }) || [
+        "double-checked",
+        "checked and",
+        "error gone",
+        "error is gone",
+        "errors are gone",
+        "works again",
+        "working again",
+        "all good",
+    ]
+    .iter()
+    .any(|p| lower.contains(p))
+}
+
+/// "Error gone" is about an error, not about a file, so it's read by
+/// [`says_verified`] instead.
+fn says_gone(sentence: &str) -> bool {
+    let mut lower = sentence.to_lowercase();
+    for p in ["errors are gone", "error is gone", "error gone"] {
+        lower = lower.replace(p, "");
+    }
+    words(&lower)
+        .iter()
+        .any(|w| matches!(w.as_str(), "gone" | "removed" | "deleted"))
+        || lower.contains("no longer exist")
+}
+
+fn says_empty(sentence: &str) -> bool {
+    words(sentence)
+        .iter()
+        .any(|w| matches!(w.as_str(), "empty" | "emptied" | "cleared"))
+}
+
+/// "33 GB free" is how much is free now, not what was freed, so it isn't here.
+const FREE_WORDS: [&str; 4] = ["freed", "reclaimed", "recovered", "cleared"];
+
+/// Bytes in one `value unit` pair: the decimal and binary reading, since
+/// "GB" is often a GiB. The check uses the lower one, so a GiB never flags.
+fn bytes(value: f64, unit: &str) -> Option<(f64, f64)> {
+    let u = unit.to_ascii_lowercase();
+    let (dec, bin) = match u.trim_end_matches('s').trim_end_matches('b') {
+        "" => return None,
+        "k" | "ki" | "kilo" | "kilobyte" => (1e3, 1024f64),
+        "m" | "mi" | "mega" | "megabyte" => (1e6, 1024f64.powi(2)),
+        "g" | "gi" | "giga" | "gigabyte" => (1e9, 1024f64.powi(3)),
+        "t" | "ti" | "tera" | "terabyte" => (1e12, 1024f64.powi(4)),
+        _ => return None,
+    };
+    Some((value * dec, value * bin))
+}
+
+/// A size the sentence says was freed, as the low and high byte reading.
+fn stated_freed(sentence: &str) -> Option<(f64, f64)> {
+    let w: Vec<String> = sentence
+        .to_lowercase()
+        .split(|c: char| c.is_whitespace() || matches!(c, ',' | ':' | '(' | ')' | '*'))
+        .filter(|w| !w.is_empty())
+        .map(|w| w.trim_end_matches(['.', '!', ';']).to_string())
+        .collect();
+    if !w.iter().any(|t| FREE_WORDS.contains(&t.as_str())) {
+        return None;
+    }
+    for i in 0..w.len() {
+        // "12.8 GB" and "12.8GB".
+        let (num, unit) = match w[i].find(|c: char| c.is_ascii_alphabetic()) {
+            Some(at) if at > 0 => (w[i][..at].to_string(), w[i][at..].to_string()),
+            _ => (w[i].clone(), w.get(i + 1).cloned().unwrap_or_default()),
+        };
+        let Ok(value) = num.replace(',', "").parse::<f64>() else {
+            continue;
+        };
+        if let Some(b) = bytes(value, &unit) {
+            return Some(b);
+        }
+    }
+    None
+}
+
+/// Bytes this run's commands say they freed: `FREED=` style facts, in bytes
+/// unless a unit follows the number.
+fn run_freed(ran: &[Ran]) -> Option<f64> {
+    let mut total = None;
+    for r in ran.iter().filter(|r| !r.command.is_empty()) {
+        for (key, value) in facts(&r.output) {
+            if !(key.contains("FREED") || key.contains("RECLAIM")) {
+                continue;
+            }
+            let at = value
+                .find(|c: char| c.is_ascii_alphabetic())
+                .unwrap_or(value.len());
+            let Ok(n) = value[..at].replace(',', "").parse::<f64>() else {
+                continue;
+            };
+            let b = if at == value.len() {
+                n
+            } else {
+                bytes(n, &value[at..]).map_or(n, |(dec, _)| dec)
+            };
+            *total.get_or_insert(0.0) += b.max(0.0);
+        }
+    }
+    total
+}
+
+fn gb(b: f64) -> String {
+    format!("{:.2} GB", b / 1e9)
+}
+
+/// What a reply says the checks found, read against what they printed.
+fn results(reply: &str, ran: &[Ran]) -> Vec<Finding> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    let last = ran.iter().rev().find(|r| !r.command.is_empty());
+    let last_error = last.and_then(|r| {
+        error_line(&r.output).or_else(|| (!r.ok).then(|| "it ended with an error".to_string()))
+    });
+    let last_facts = last.map(|r| facts(&r.output)).unwrap_or_default();
+    let still_there = last_facts.iter().rev().find_map(|(k, v)| {
+        if is_existence_key(k) && truthy(v) == Some(true) {
+            Some((format!("{k}={v}"), true))
+        } else if is_count_key(k) && v.parse::<u64>().is_ok_and(|n| n > 0) {
+            Some((format!("{k}={v}"), false))
+        } else {
+            None
+        }
+    });
+    let freed = run_freed(ran);
+    for sentence in sentences(reply) {
+        if hedged(&sentence) {
+            continue;
+        }
+        if let (Some(r), Some(err)) = (last, &last_error) {
+            if says_verified(&sentence) && seen.insert(CHECK_FAILED) {
+                out.push(Finding {
+                    kind: CHECK_FAILED,
+                    detail: format!(
+                        "Your reply says \"{}\", but the last command (`{}`) didn't work: {err}.",
+                        clip(&sentence),
+                        clip(&r.command)
+                    ),
+                });
+            }
+        }
+        if let Some((fact, exists)) = &still_there {
+            // A folder that exists can still be empty; only a count says it isn't.
+            let claimed = says_gone(&sentence) || (!exists && says_empty(&sentence));
+            if claimed && seen.insert(STILL_THERE) {
+                out.push(Finding {
+                    kind: STILL_THERE,
+                    detail: format!(
+                        "Your reply says \"{}\", but the last check printed `{fact}`.",
+                        clip(&sentence)
+                    ),
+                });
+            }
+        }
+        if let (Some(total), Some((low, _))) = (freed, stated_freed(&sentence)) {
+            if low > total * 1.05 + 1e7 && seen.insert(FREED_MISMATCH) {
+                out.push(Finding {
+                    kind: FREED_MISMATCH,
+                    detail: format!(
+                        "Your reply says \"{}\", but this run's commands freed {} in all.",
+                        clip(&sentence),
+                        gb(total)
+                    ),
+                });
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1058,5 +1327,115 @@ mod tests {
         );
         let r = shell("cargo test", true, &long);
         assert!(r.output.ends_with("7 passed; 0 failed") && r.output.chars().count() < 16_100);
+    }
+
+    // --- Results: the PC tune-up chat log, Nov 6 ---
+
+    const WINRE_CHECK: &str = "$winre = 'C:\\$WinREAgent'; $e = Test-Path $winre; \"EXISTS=$e\"";
+
+    #[test]
+    fn verified_empty_after_a_check_that_failed_and_says_exists_is_caught() {
+        let ran = [shell(
+            WINRE_CHECK,
+            true,
+            "EXISTS=True CURRENT_FREE=33257828352\nAt line:1 char:40\nUnexpected token 'if' in expression or statement.\n    + FullyQualifiedErrorId : UnexpectedToken",
+        )];
+        let f = check(
+            "Recovery verified empty. Error gone, space works again. Task complete.",
+            &ran,
+        );
+        assert_eq!(kinds(&f), vec![CHECK_FAILED]);
+        assert!(f[0].detail.contains("Unexpected token"), "{}", f[0].detail);
+        assert!(note(&f).is_some());
+    }
+
+    #[test]
+    fn gone_against_exists_true_is_caught_but_an_empty_folder_that_exists_is_not() {
+        let ran = [shell(
+            WINRE_CHECK,
+            true,
+            "EXISTS=True CURRENT_FREE=33257828352",
+        )];
+        assert_eq!(
+            kinds(&check("The recovery leftovers are gone.", &ran)),
+            vec![STILL_THERE]
+        );
+        assert!(check("The recovery folder is empty.", &ran).is_empty());
+        let counted = [shell(WINRE_CHECK, true, "EXISTS=True COUNT=4")];
+        assert_eq!(
+            kinds(&check("The recovery folder is empty.", &counted)),
+            vec![STILL_THERE]
+        );
+    }
+
+    #[test]
+    fn a_check_that_backs_the_claim_passes() {
+        let ran = [shell(
+            WINRE_CHECK,
+            true,
+            "EXISTS=False CURRENT_FREE=33257828352",
+        )];
+        assert!(check("Recovery leftovers verified gone. Task complete.", &ran).is_empty());
+        let missing = [shell(
+            "Get-ChildItem C:\\old",
+            false,
+            "Get-ChildItem : Cannot find path 'C:\\old' because it does not exist.",
+        )];
+        assert!(check("The old folder is gone.", &missing).is_empty());
+    }
+
+    #[test]
+    fn a_failed_check_with_no_error_text_still_counts() {
+        let ran = [shell("Test-Path C:\\x", false, "")];
+        assert_eq!(
+            kinds(&check("Verified, the folder is clean.", &ran)),
+            vec![CHECK_FAILED]
+        );
+    }
+
+    #[test]
+    fn hedged_and_honest_replies_are_left_alone() {
+        let ran = [shell(WINRE_CHECK, false, "Unexpected token 'if'")];
+        assert!(check("The check failed, so I couldn't confirm it.", &ran).is_empty());
+        assert!(check("I'll check again once it's verified.", &ran).is_empty());
+        assert!(check("Recovery cleanup: the check hit a syntax error.", &ran).is_empty());
+    }
+
+    #[test]
+    fn freed_more_than_the_commands_printed_is_caught() {
+        let ran = [
+            shell(
+                "Remove-Item target",
+                true,
+                "BEFORE_FREE=20466192384 AFTER_FREE=33258516480 FREED=12792324096 DELETED",
+            ),
+            shell("Remove-Item $winre", true, "FREED=0"),
+        ];
+        let f = check("Rust and recovery cleaned. 28.41 GB freed total.", &ran);
+        assert_eq!(kinds(&f), vec![FREED_MISMATCH]);
+        assert!(f[0].detail.contains("12.79 GB"), "{}", f[0].detail);
+        assert!(check("The Rust target was deleted, freeing 12.79 GB.", &ran).is_empty());
+        assert!(check("That freed 11.9 GiB.", &ran).is_empty());
+        assert!(check(
+            "28.41 GB freed in all, with the VM cleanup from earlier.",
+            &ran
+        )
+        .is_empty());
+        assert!(check("You now have 33.26 GB free.", &ran).is_empty());
+        assert!(
+            check("Freed 28 GB.", &[shell("dir", true, "nothing")]).is_empty(),
+            "no FREED fact, nothing to read against"
+        );
+    }
+
+    #[test]
+    fn facts_skip_script_text_and_comparisons() {
+        assert_eq!(
+            facts("$e=1 a==b EXISTS=True Count=3 'x'"),
+            vec![
+                ("EXISTS".to_string(), "True".to_string()),
+                ("COUNT".to_string(), "3".to_string())
+            ]
+        );
     }
 }

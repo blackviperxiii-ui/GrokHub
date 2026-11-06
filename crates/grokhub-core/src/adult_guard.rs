@@ -25,7 +25,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Risk {
     Clean,
-    /// Adult sexual content: fine for xAI and local models, banned by others.
+    /// Adult sexual content: runs only on this computer's model.
     Explicit,
     /// Banned everywhere: never sent.
     Banned(Ban),

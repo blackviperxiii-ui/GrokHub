@@ -256,3 +256,4 @@ tone_rules = "Whore mode: an adults-only, flirty, crude and raunchy voice for ad
 emoji = "light"
 verbosity = "normal"
 explicit = true
+topics = ["adult"]

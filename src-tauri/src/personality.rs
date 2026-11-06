@@ -165,7 +165,12 @@ pub fn voice_config(
     let (all, _) = personality::load_all(&dir(config_dir));
     VoiceConfig {
         home: home(config_dir, settings),
-        roster: all.into_iter().filter(|p| !p.explicit).collect(),
+        // Adults-only voices join only with adults-only on, and then speak
+        // only for 18+ turns.
+        roster: all
+            .into_iter()
+            .filter(|p| settings.adult_heat().is_some() || !p.explicit)
+            .collect(),
         dynamic: settings.dynamic_chat,
         pinned: false,
         adult: settings.adult_heat(),
@@ -332,7 +337,7 @@ mod tests {
     }
 
     #[test]
-    fn the_voice_config_hands_only_to_regular_voices() {
+    fn the_voice_config_brings_adults_only_voices_only_with_adults_only_on() {
         let cfg = scratch("session");
         let settings = ShellSettings {
             personality: "viper".into(),
@@ -344,7 +349,8 @@ mod tests {
         let on = voice_config(&cfg, &settings, 120);
         assert_eq!(on.home.id, "viper");
         assert!(!on.roster.is_empty());
-        assert!(on.roster.iter().all(|p| !p.explicit));
+        // Adults-only on: the adults-only voice can take an 18+ turn.
+        assert!(on.roster.iter().any(|p| p.id == "whore" && p.explicit));
         assert!(on.roster.iter().any(|p| p.id == "pirate"));
         assert!(on.dynamic && !on.pinned);
         assert_eq!(on.adult, Some(Heat::Spicy));
@@ -362,6 +368,10 @@ mod tests {
         assert_eq!(off.home.id, "nyx");
         assert_eq!(off.adult, None);
         assert!(!off.dynamic);
+        assert!(
+            off.roster.iter().all(|p| !p.explicit),
+            "no 18+ voice with it off"
+        );
         let _ = std::fs::remove_dir_all(&cfg);
     }
 
