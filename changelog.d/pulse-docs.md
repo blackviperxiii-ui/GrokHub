@@ -1,0 +1,1 @@
+- Docs: the Pulse section of the reference describes the new idea groups, today's set, three-day post expiry, the plain why line, how likes and Not this teach the ranking, and the notification gate.

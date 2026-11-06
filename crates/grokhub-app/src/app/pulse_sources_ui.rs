@@ -412,7 +412,7 @@ impl Cabin {
             .map(|c| c.title.clone())
             .collect();
         let picks = ps::pick_new(&ranked, &cache, &posted_urls, &posted_titles);
-        let Some(messages) = ps::summary_messages(&picks) else {
+        let Some(messages) = ps::summary_messages_with(&picks, &self.cfg.feed_instructions) else {
             return self.finish_source_run(run, picks, None);
         };
         if !self.llm_ready() {

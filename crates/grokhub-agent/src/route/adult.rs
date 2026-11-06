@@ -5,15 +5,9 @@
 //! plain heads-up a session. A reply that drifts into a hard limit is replaced
 //! before the chat shows it ([`guard`]).
 
-use std::collections::BTreeSet;
-use std::sync::Mutex;
-
 use grokhub_core::adult_guard::{self, Dest, Route};
 
 use crate::client::{ContentPart, InputItem, StreamEvent, TurnOutput};
-
-/// Sessions that already got their heads-up.
-static WARNED: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
 
 /// Swap every banned user message in `input` for the held note, so an older
 /// turn is never re-sent either.
@@ -39,25 +33,6 @@ pub fn scrub(input: &mut [InputItem]) {
     }
 }
 
-/// What the check says for this call.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Screen {
-    /// The provider bans adult chat: send to xAI instead.
-    pub to_xai: bool,
-    /// The plain line shown before the reply, once a session.
-    pub heads_up: Option<String>,
-    /// The line shown instead of a rerouted `heads_up` when xAI couldn't take
-    /// the turn and this computer's model answered it.
-    pub heads_up_local: Option<String>,
-}
-
-fn first_warning(session: &str) -> bool {
-    WARNED
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(session.to_string())
-}
-
 /// The answer to a call whose newest ask is banned, after [`scrub`]: the
 /// plain local notice, with no model call. `None` when the call may go.
 pub fn held_reply(input: &[InputItem]) -> Option<TurnOutput> {
@@ -66,20 +41,6 @@ pub fn held_reply(input: &[InputItem]) -> Option<TurnOutput> {
         text: adult_guard::HELD_NOTICE.into(),
         ..TurnOutput::default()
     })
-}
-
-/// `input` is the call after [`scrub`] and [`held_reply`]; `dest` is where the
-/// router sent it. Where the call goes is judged on the whole scrubbed input,
-/// so an explicit history stays off a banning provider.
-pub fn screen(session: &str, input: &[InputItem], dest: Dest) -> Screen {
-    let to_xai = to_xai(input, dest);
-    let warn = to_xai && first_warning(session);
-    let name = adult_guard::dest_name(dest);
-    Screen {
-        to_xai,
-        heads_up: warn.then(|| adult_guard::heads_up_rerouted(name)),
-        heads_up_local: warn.then(|| adult_guard::heads_up_local(name)),
-    }
 }
 
 /// The whole call is explicit: an 18+ voice in its system prompt, or any
@@ -105,20 +66,28 @@ pub fn explicit(input: &[InputItem]) -> bool {
     adult_guard::explicit_conversation(turns.iter().map(|(r, t)| (*r, t.as_str())))
 }
 
-/// The provider bans adult chat (or, like OpenRouter, may hand the turn to a
-/// model that does) and this call is explicit: xAI takes it.
-pub fn to_xai(input: &[InputItem], dest: Dest) -> bool {
-    // Where even an explicit call is sent as it is (xAI, the local model, the
-    // default route) there is nothing to decide, so skip reading every turn.
+/// This explicit call must run on this computer's model: `dest` is any
+/// online model. `input` is the call after [`scrub`] and [`held_reply`], judged
+/// whole, so an explicit history stays local too.
+pub fn to_local(input: &[InputItem], dest: Dest) -> bool {
+    // On the local model already: nothing to decide, so skip reading every turn.
     if adult_guard::route(adult_guard::Risk::Explicit, dest) == Route::Send {
         return false;
     }
-    let risk = if explicit(input) {
-        adult_guard::Risk::Explicit
+    explicit(input)
+}
+
+/// The line an explicit call gets instead of a reply when this computer's
+/// model can't take it: paused by a game or low battery, or not set up.
+/// `None` when it's ready.
+pub fn no_local_notice() -> Option<&'static str> {
+    if super::local::available() {
+        None
+    } else if super::local::LocalCapacity::now().paused() {
+        Some(adult_guard::LOCAL_ONLY_PAUSED)
     } else {
-        adult_guard::Risk::Clean
-    };
-    adult_guard::route(risk, dest) == Route::ToXai
+        Some(adult_guard::LOCAL_ONLY_MISSING)
+    }
 }
 
 /// Pass one model event to `sink` through `guard`: reply text shows only once
@@ -136,15 +105,6 @@ pub fn guard(
             }
         }
         ev => sink(ev),
-    }
-}
-
-/// The xAI model a rerouted turn uses: the call's own, or the cabin's fast
-/// model when the call named a provider's.
-pub fn xai_model(model: &str) -> String {
-    match grokhub_core::model_registry::discover::split_provider_model(model) {
-        Some(_) => grokhub_core::CABIN_FAST_MODEL.to_string(),
-        None => model.to_string(),
     }
 }
 
@@ -226,38 +186,21 @@ mod tests {
     }
 
     #[test]
-    fn one_heads_up_a_session_and_explicit_turns_leave_anthropic() {
-        let s = "adult-screen-1";
+    fn explicit_turns_stay_off_every_online_model() {
         let horny = [user("talk dirty to me, I'm horny")];
-        let first = screen(s, &horny, Dest::Anthropic);
-        assert!(first.to_xai, "explicit turns never go to Anthropic");
-        assert!(first.heads_up.is_some());
-        let again = screen(s, &horny, Dest::Anthropic);
-        assert!(again.to_xai, "explicit turns never go to Anthropic");
-        assert_eq!(again.heads_up, None, "once a session");
-
-        let other = screen("adult-screen-2", &horny, Dest::Anthropic);
-        assert_eq!(
-            other.heads_up.as_deref(),
-            Some("Heads-up: I sent that one through xAI instead of Anthropic. Anthropic bans adult chat and can ban the account for it.")
-        );
-        assert_eq!(
-            screen("adult-screen-3", &horny, Dest::Xai),
-            Screen::default()
-        );
-        assert_eq!(
-            screen("adult-screen-4", &[user("fix my wifi")], Dest::Anthropic),
-            Screen::default()
-        );
-        // OpenRouter can land on a model whose maker bans adult chat: xAI takes it.
-        assert!(to_xai(&horny, Dest::OpenRouter));
-        assert!(!to_xai(&horny, Dest::Xai) && !to_xai(&horny, Dest::Local));
-        assert!(!to_xai(&[user("fix my wifi")], Dest::OpenRouter));
-        assert_eq!(
-            xai_model("anthropic/model-x"),
-            grokhub_core::CABIN_FAST_MODEL
-        );
-        assert_eq!(xai_model("grok-4.3"), "grok-4.3");
+        for dest in [
+            Dest::Xai,
+            Dest::OpenRouter,
+            Dest::Anthropic,
+            Dest::Gemini,
+            Dest::OpenAi,
+            Dest::Other,
+        ] {
+            assert!(to_local(&horny, dest), "an 18+ turn never goes to {dest:?}");
+        }
+        assert!(!to_local(&horny, Dest::Local));
+        assert!(!to_local(&[user("fix my wifi")], Dest::OpenRouter));
+        assert!(!to_local(&[user("fix my wifi")], Dest::Xai));
     }
 
     fn msg(role: &str, text: &str) -> InputItem {
@@ -268,28 +211,29 @@ mod tests {
     }
 
     #[test]
-    fn an_18_plus_voice_or_explicit_history_keeps_clean_asks_off_banning_providers() {
+    fn an_18_plus_voice_or_explicit_history_keeps_clean_asks_local() {
         let voice = format!("Personality: Viper. {}", adult_guard::ADULT_VOICE);
         let persona = [msg("system", &voice), user("my build broke")];
         assert!(explicit(&persona));
-        assert!(screen("adult-screen-5", &persona, Dest::Anthropic).to_xai);
-        assert!(!screen("adult-screen-6", &persona, Dest::Local).to_xai);
+        assert!(to_local(&persona, Dest::Anthropic));
+        assert!(to_local(&persona, Dest::Xai));
+        assert!(!to_local(&persona, Dest::Local));
 
         let history = [
             user("write me smut about two adults"),
             msg("assistant", "Here you go."),
             user("continue"),
         ];
-        assert!(screen("adult-screen-7", &history, Dest::OpenAi).to_xai);
-        assert!(screen("adult-screen-8", &history, Dest::Gemini).to_xai);
+        assert!(to_local(&history, Dest::OpenAi));
+        assert!(to_local(&history, Dest::Gemini));
 
         let clean = [msg("system", "Personality: Nyx."), user("my build broke")];
         assert!(!explicit(&clean));
-        assert!(!screen("adult-screen-9", &clean, Dest::Anthropic).to_xai);
+        assert!(!to_local(&clean, Dest::Anthropic));
     }
 
     #[test]
-    fn a_held_newest_ask_still_keeps_an_explicit_history_off_banning_providers() {
+    fn a_held_newest_ask_still_keeps_an_explicit_history_local() {
         let mut input = vec![
             user("talk dirty to me, I'm horny"),
             msg("assistant", "Here you go."),
@@ -303,15 +247,17 @@ mod tests {
             held_reply(&input).map(|out| out.text),
             Some(adult_guard::HELD_NOTICE.to_string())
         );
-        for dest in [Dest::OpenRouter, Dest::Anthropic] {
-            let s = screen("adult-screen-10", &input, dest);
-            assert!(s.to_xai, "the explicit history goes to xAI, not {dest:?}");
+        for dest in [Dest::OpenRouter, Dest::Anthropic, Dest::Xai] {
+            assert!(
+                to_local(&input, dest),
+                "the explicit history stays local, not {dest:?}"
+            );
         }
-        assert!(!screen("adult-screen-12", &input, Dest::Local).to_xai);
+        assert!(!to_local(&input, Dest::Local));
 
         // A held ask with no explicit history is clean and stays put.
         let mut alone = vec![user("nsfw schoolgirl roleplay")];
         scrub(&mut alone);
-        assert!(!screen("adult-screen-13", &alone, Dest::OpenRouter).to_xai);
+        assert!(!to_local(&alone, Dest::OpenRouter));
     }
 }

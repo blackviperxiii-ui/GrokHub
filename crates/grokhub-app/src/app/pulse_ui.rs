@@ -995,7 +995,33 @@ pub(super) fn post_source(card: &UpdateCard) -> String {
     }
 }
 
+/// Today's Pulse pings, for the one gate in core.
+static PULSE_PINGS: std::sync::Mutex<pc::PingGate> = std::sync::Mutex::new(pc::PingGate::new());
+
 impl Cabin {
+    /// Every Pulse-origin OS notification goes through here: only
+    /// time-sensitive ones, never while a game runs or in quiet hours, at
+    /// most [`pc::PINGS_PER_DAY`] a day. The rest wait on the page. True
+    /// when the ping went out.
+    pub(super) fn pulse_ping(&mut self, time_sensitive: bool, line: &str) -> bool {
+        let day = Self::local_day();
+        let ask = pc::PingAsk {
+            time_sensitive,
+            game_running: self.game_running().is_some()
+                || grokhub_desktop::game_guard::peek().gaming,
+            quiet_hours: self.quiet_now(),
+            day: &day,
+        };
+        let sent = PULSE_PINGS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take(&ask);
+        if sent && !cfg!(test) {
+            crate::notify::ping(grokhub_core::brand::product_name(), line);
+        }
+        sent
+    }
+
     /// The Pulse page: the header, then one centered column where ideas and
     /// feed posts share a single stream at every width.
     pub(super) fn ui_pulse(&mut self, ui: &mut egui::Ui) {
@@ -1473,16 +1499,26 @@ impl Cabin {
         if cfg!(test) || self.pulse_view.image_rx.is_some() {
             return;
         }
-        let tried = &self.pulse_view.image_tried;
-        let next = posts.iter().find(|c| {
-            !tried.contains(&c.id)
-                && (c
-                    .pulse
-                    .image_urls
-                    .iter()
-                    .any(|u| !pulse_image_path(u).exists())
-                    || (c.pulse.image_urls.is_empty() && !c.citations.is_empty()))
-        });
+        // Each post is checked on disk once: a post whose images are all
+        // cached counts as tried too, so later frames never stat its files.
+        let tried = &mut self.pulse_view.image_tried;
+        let mut next = None;
+        for c in posts {
+            if tried.contains(&c.id) {
+                continue;
+            }
+            let wants = c
+                .pulse
+                .image_urls
+                .iter()
+                .any(|u| !pulse_image_path(u).exists())
+                || (c.pulse.image_urls.is_empty() && !c.citations.is_empty());
+            if wants {
+                next = Some(c);
+                break;
+            }
+            tried.insert(c.id.clone());
+        }
         let Some(card) = next else {
             return;
         };

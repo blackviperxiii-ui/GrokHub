@@ -354,11 +354,20 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
         .and_then(|s| s.split("fn apply_feed_act(").next())
         .expect("release_situation_ping");
     assert!(
-        ping.contains("notify::ping")
-            && ping.contains("quiet_now")
-            && ping.contains("window_focused")
-            && ping.contains("brand::product_name()"),
-        "only the situation card pings, and only when the window is away and quiet hours are off: {ping}"
+        ping.contains("self.pulse_ping(true, &line)") && ping.contains("window_focused"),
+        "only the situation card pings, only when the window is away, through the Pulse gate: {ping}"
+    );
+    let gate = include_str!("pulse_ui.rs")
+        .split("fn pulse_ping(")
+        .nth(1)
+        .and_then(|s| s.split("\n    }\n").next())
+        .expect("pulse_ping");
+    assert!(
+        gate.contains("notify::ping")
+            && gate.contains("quiet_hours: self.quiet_now()")
+            && gate.contains("game_running")
+            && gate.contains("brand::product_name()"),
+        "the Pulse gate keeps quiet hours and never pings mid-game: {gate}"
     );
     assert!(
         !pulse.contains("No updates") && !pulse.contains("Nothing queued"),

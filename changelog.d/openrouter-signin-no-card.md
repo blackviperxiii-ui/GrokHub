@@ -1,0 +1,2 @@
+- Signing in with OpenRouter now finishes on its own: the key is saved and openrouter.ai is allowed the moment the browser sends you back, with no approval card in Settings or the chat.
+- The OpenRouter row's Allow button allows it on that click, without a second card.
