@@ -586,7 +586,7 @@ pub use project::{
 pub use recipe::{
     act_window_search_bin, bin_on_path, computer_cmd_line, computer_drive, computer_drive_for,
     default_bin_extra_dirs, empty_hands_steps_error, extract_computer_ops, hands_backend_name,
-    hands_blocked_by_lock, hands_protocol, hands_step_label, lock_blocks_hands, needs_reshoot,
+    hands_blocked_by_lock, hands_step_label, lock_blocks_hands, needs_reshoot,
     parse_computer_cmd_loose, parse_computer_op, parse_recipe, parse_screen, pick_hands_backend,
     pointer_op_blocked_on_lock, recipe_from_cmds, recipe_from_json, recipe_to_json,
     relative_move_steps, replay_ops, screen_from_extents, see_drive_attach,
