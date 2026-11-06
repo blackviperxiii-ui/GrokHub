@@ -92,6 +92,8 @@ export type ChatEvent =
   | { kind: "plan"; text: string }
   /** One-tap follow-ups for the reply that just ended; most replies get none. */
   | { kind: "suggestions"; items: QuickChip[] }
+  /** A game goal the reply noticed, to Track or leave with Not now. */
+  | { kind: "goal"; id: string; title: string }
   | {
       kind: "elicit";
       id: string;

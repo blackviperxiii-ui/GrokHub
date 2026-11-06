@@ -94,6 +94,7 @@ export function chatActivity(
     case "error":
       return { ...restart, status: "failed", detail: clip(event.message), at: now };
     case "suggestions":
+    case "goal":
       return prev;
   }
 }

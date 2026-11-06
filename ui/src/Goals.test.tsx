@@ -11,7 +11,7 @@ const api = vi.hoisted(() => ({
 
 vi.mock("./api", () => api);
 
-import { doneLine, Goals, MINE_EMPTY, SHELF_EMPTY, TODAY_EMPTY } from "./Goals";
+import { doneLine, GoalAsk, Goals, MINE_EMPTY, SHELF_EMPTY, TODAY_EMPTY } from "./Goals";
 
 const EMPTY: GoalBoard = { today: [], mine: [], suggested: [], season: { label: "Oct to Dec 2026", done: 0, trophies: [] } };
 
@@ -101,5 +101,14 @@ describe("Goals", () => {
   it("counts goals in plain words", () => {
     expect(doneLine(0)).toBe("0 goals done this season");
     expect(doneLine(1)).toBe("1 goal done this season");
+  });
+
+  it("Not now under a reply hides the goal and closes the ask", async () => {
+    api.goalAct.mockResolvedValue({ board: EMPTY });
+    const done = vi.fn();
+    render(<GoalAsk id="g2" title={ELDEN.title} onDone={done} />);
+    await userEvent.click(screen.getByRole("button", { name: "Not now" }));
+    expect(api.goalAct).toHaveBeenCalledWith([{ act: "notNow", id: "g2" }]);
+    expect(done).toHaveBeenCalled();
   });
 });

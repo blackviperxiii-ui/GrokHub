@@ -836,6 +836,7 @@ impl Cabin {
             FEATURE_SCORE,
             "Downloads cleanup",
         ));
+        out.extend(scored(self.goal_chips(), FEATURE_SCORE + 1.0, "Your goal"));
         out.extend(scored(self.game_chips(), FEATURE_SCORE, "Your game"));
         out.extend(scored(
             self.radar_chips(),
@@ -1000,6 +1001,7 @@ impl Cabin {
         if self.take_tidy_chip(&chip)
             || self.take_backup_chip(&chip)
             || self.take_radar_chip(&chip)
+            || self.take_goal_chip(&chip)
             || self.take_game_chip(&chip)
         {
             return;

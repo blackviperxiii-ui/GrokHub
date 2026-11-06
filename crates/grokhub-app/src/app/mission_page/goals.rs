@@ -5,6 +5,7 @@
 //! the shell, web and phone.
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use grokhub_core::mission::{MissionCheckStatus, MissionView};
@@ -30,6 +31,9 @@ const SHELF_EMPTY: &str = "Goals you finish land here.";
 /// Set when a finished chat turn changed the goals, so the page and the XP
 /// bar read them again on the next frame instead of in up to 30s.
 static GOALS_CHANGED: AtomicBool = AtomicBool::new(false);
+/// The "Track goal" one-tap for the goal the last reply noticed, with the
+/// chat it belongs to. Gone once tapped or after the chat's next turn.
+static ASK: Mutex<Option<(String, QuickChip)>> = Mutex::new(None);
 
 fn muted_line(ui: &mut egui::Ui, text: &str) {
     ui.label(
@@ -139,22 +143,67 @@ impl Cabin {
     /// asked to track, one the reply noticed (it waits in the tray) and
     /// progress the player said. Most turns stop at the first look.
     pub(in crate::app) fn read_turn_goals(&mut self, said: &str, reply: &str) {
-        if !objectives::worth_a_look(said, reply) {
-            return;
-        }
         let chat = self
             .chat_job_thread
             .clone()
             .unwrap_or_else(|| self.trace_id());
+        let mut ask = ASK.lock().unwrap_or_else(|e| e.into_inner());
+        if ask.as_ref().is_some_and(|(c, _)| *c == chat) {
+            *ask = None;
+        }
+        drop(ask);
+        if !objectives::worth_a_look(said, reply) {
+            return;
+        }
         let now = now_ms();
         let games = self.library_names(now);
         let known = known_games(&games);
         let read = objectives::change(&crate::config::config_dir(), |o| {
             objectives::read_turn(o, &chat, said, reply, &known, now)
         });
-        if read.is_ok_and(|(_, t)| t.changed()) {
+        let Ok((o, t)) = read else { return };
+        if t.changed() {
             GOALS_CHANGED.store(true, Ordering::Relaxed);
         }
+        let asked = t
+            .ask
+            .and_then(|id| o.goals.into_iter().find(|g| g.id == id));
+        if let Some(g) = asked {
+            let chip = objectives::track_chip(&g);
+            *ASK.lock().unwrap_or_else(|e| e.into_inner()) = Some((chat, chip));
+        }
+    }
+
+    /// The "Track goal" one-tap under this chat's reply, when the reply
+    /// noticed a goal.
+    pub(in crate::app) fn goal_chips(&self) -> Vec<QuickChip> {
+        let chat = self.trace_id();
+        ASK.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .filter(|(c, chip)| *c == chat && !self.chip_dismissed.iter().any(|d| d == &chip.id))
+            .map(|(_, chip)| vec![chip.clone()])
+            .unwrap_or_default()
+    }
+
+    /// The "Track goal" one-tap: the goal moves to My goals. True when
+    /// `chip` was one.
+    pub(in crate::app) fn take_goal_chip(&mut self, chip: &QuickChip) -> bool {
+        let Some(id) = chip.id.strip_prefix(objectives::TRACK_CHIP_PREFIX) else {
+            return false;
+        };
+        *ASK.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        let track = [GoalAct::Track { id: id.to_string() }];
+        let saved = objectives::change(&crate::config::config_dir(), |o| {
+            objectives::apply(o, &track, &[], now_ms())
+        });
+        self.status = match saved {
+            Ok(_) => "Tracking it. It's on Objectives under My goals.".into(),
+            Err(e) => format!("Couldn't save your goals: {e}"),
+        };
+        GOALS_CHANGED.store(true, Ordering::Relaxed);
+        self.chip_paint_key.clear();
+        true
     }
 
     /// The Steam library's names and app ids, for linking a goal to its game.
@@ -425,6 +474,30 @@ mod tests {
         assert_eq!(o.goals[0].state, GoalState::Tracking);
         assert_eq!(goal_title(&o.goals[0]), "Old School RuneScape · 99 fishing");
         assert!(GOALS_CHANGED.swap(false, Ordering::Relaxed));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_noticed_goal_leaves_a_track_chip_that_tracks_it() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("goals-ask");
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::create_dir_all(&root);
+        let _pin = crate::config::TestConfigDir::set(root.clone());
+        let mut cabin = Cabin::quiet_for_test();
+        let reply = "Nice.\nGAME_GOAL: osrs | 99 fishing | skill | 99";
+        cabin.read_turn_goals("fishing is relaxing", reply);
+        let chips = cabin.goal_chips();
+        assert_eq!(chips.len(), 1);
+        assert_eq!(chips[0].label, "Track goal: 99 fishing");
+        assert!(cabin.take_goal_chip(&chips[0]));
+        assert!(cabin.goal_chips().is_empty());
+        let o = objectives::load(&root);
+        assert_eq!(o.goals[0].state, GoalState::Tracking);
+        // The same goal is not asked about again in this chat.
+        cabin.read_turn_goals("still fishing", reply);
+        assert!(cabin.goal_chips().is_empty());
+        GOALS_CHANGED.store(false, Ordering::Relaxed);
         let _ = std::fs::remove_dir_all(&root);
     }
 }

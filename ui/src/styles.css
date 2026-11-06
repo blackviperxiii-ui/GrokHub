@@ -4114,3 +4114,12 @@ label.toggle-row {
   font-size: 0.75rem;
   font-style: italic;
 }
+
+/* "Track this goal?" under a reply that noticed a game goal. */
+.goal-ask {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.25rem 0 0.5rem;
+}

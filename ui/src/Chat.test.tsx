@@ -39,6 +39,7 @@ const api = vi.hoisted(() => ({
   runSlash: vi.fn(),
   quickChips: vi.fn<(surface: string, id?: string, draft?: string, mode?: SessionMode) => Promise<QuickChip[]>>(),
   chipOutcome: vi.fn<(surface: string, id: string, picked: boolean) => Promise<boolean>>(),
+  goalAct: vi.fn(() => Promise.resolve({ board: { today: [], mine: [], suggested: [], season: { label: "", done: 0, trophies: [] } } })),
 }));
 
 vi.mock("./api", () => ({
@@ -57,6 +58,7 @@ vi.mock("./api", () => ({
   runSlash: api.runSlash,
   quickChips: api.quickChips,
   chipOutcome: api.chipOutcome,
+  goalAct: api.goalAct,
   onChatEvent: (handler: (envelope: ChatEnvelope) => void) => {
     api.handler = handler;
     return Promise.resolve(() => {});
@@ -87,6 +89,7 @@ import {
   OPEN_BUSY,
   type Item,
 } from "./Chat";
+import { ASK_TRACKED } from "./Goals";
 
 const SAVED: Transcript = {
   id: "shell-saved",
@@ -224,6 +227,21 @@ describe("Chat", () => {
     expect(screen.getByText("hello")).toBeVisible();
     finish();
     await waitFor(() => expect(api.sendChat).toHaveBeenCalledWith(id, "hello", "chat"));
+  });
+
+  it("a goal the reply noticed is asked about under it, and Track puts it on My goals", async () => {
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("fishing is so relaxing");
+    emit(id, { kind: "text", text: "Nice, go for 99!" });
+    emit(id, { kind: "goal", id: "g7", title: "Old School RuneScape · 99 fishing" });
+    emit(id, { kind: "done", stop: "end_turn" });
+    finish();
+    const ask = await screen.findByRole("group", { name: "Track this goal?" });
+    expect(ask).toHaveTextContent("Old School RuneScape · 99 fishing");
+    await userEvent.click(within(ask).getByRole("button", { name: "Track" }));
+    expect(api.goalAct).toHaveBeenCalledWith([{ act: "track", id: "g7" }]);
+    expect(await screen.findByText(ASK_TRACKED)).toBeInTheDocument();
   });
 
   it("a reply's follow-ups join the row under the box, and a tap sends one in its reply's mode", async () => {
