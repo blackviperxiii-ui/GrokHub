@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { getMission, setMissionDone, type MissionPage, type StepStatus } from "./api";
+import { Goals } from "./Goals";
 import { NO_STEPS, Weeks, XpBar } from "./Home";
 
 /** The tag at the end of a step's row, as the cabin's Objectives writes it. */
@@ -126,6 +127,13 @@ export function Objectives({
           <Weeks week={page.xp.week} />
           {page.xp.today > 0 && <p className="home-muted">+{page.xp.today.toLocaleString("en-US")} XP today</p>}
         </div>
+      )}
+      {page && (
+        <Goals
+          onChange={() => {
+            getMission(conversationId).then(setPage, (err) => setNote(String(err)));
+          }}
+        />
       )}
       <button type="button" className="quiet objectives-back" onClick={onHome}>
         Back to Home

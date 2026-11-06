@@ -1300,6 +1300,47 @@ export function setMissionDone(done: boolean, conversationId?: string): Promise<
   return invoke<MissionPage>("set_mission_done", { clock: wallClock(), conversationId, done });
 }
 
+/** One goal row on Objectives (grokhub-core objectives::GoalCard). */
+export interface GoalCard {
+  id: string;
+  /** "Old School RuneScape · 99 Fishing". */
+  title: string;
+  /** "93 / 99 · 6 levels to 99". */
+  detail: string;
+  frac: number;
+  /** True when the goal moves one step at a time and gets a +1. */
+  plusOne: boolean;
+  /** "Pick up Elden Ring tonight?" on a Today row. */
+  prompt?: string;
+  /** "Nov 2" on a finished goal. */
+  doneOn?: string;
+}
+
+export interface GoalBoard {
+  today: GoalCard[];
+  mine: GoalCard[];
+  suggested: GoalCard[];
+  season: { label: string; done: number; trophies: GoalCard[] };
+}
+
+export type GoalAct =
+  | { act: "add"; text: string }
+  | { act: "bump" | "done" | "drop" | "track" | "notNow"; id: string };
+
+export interface GoalsSaved {
+  board: GoalBoard;
+  /** Why an added goal was refused. */
+  note?: string;
+}
+
+export function getGoals(): Promise<GoalBoard> {
+  return invoke<GoalBoard>("get_goals", { clock: wallClock() });
+}
+
+export function goalAct(acts: GoalAct[]): Promise<GoalsSaved> {
+  return invoke<GoalsSaved>("goal_act", { clock: wallClock(), acts });
+}
+
 /** Settings → Local AI (src-tauri/src/local_ai.rs). */
 export type LocalMode = "auto" | "manual";
 

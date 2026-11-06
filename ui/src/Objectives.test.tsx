@@ -7,6 +7,10 @@ import type { Mission, MissionPage, Xp } from "./api";
 const api = vi.hoisted(() => ({
   getMission: vi.fn<(conversationId?: string) => Promise<MissionPage>>(),
   setMissionDone: vi.fn<(done: boolean, conversationId?: string) => Promise<MissionPage>>(),
+  getGoals: vi.fn(() =>
+    Promise.resolve({ today: [], mine: [], suggested: [], season: { label: "Oct to Dec 2026", done: 0, trophies: [] } }),
+  ),
+  goalAct: vi.fn(),
 }));
 
 vi.mock("./api", () => api);

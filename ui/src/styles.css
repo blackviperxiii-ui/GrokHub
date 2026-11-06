@@ -4004,6 +4004,46 @@ label.toggle-row {
   color: var(--muted);
 }
 
+.goal-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.goal-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+
+.goal-row > p {
+  margin: 0;
+  width: 100%;
+}
+
+.goal-summary {
+  display: flex;
+  flex: 1 1 240px;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.goal-add {
+  display: flex;
+  gap: 8px;
+}
+
+.goal-add input {
+  flex: 1;
+  min-width: 0;
+}
+
 .objectives-back {
   align-self: center;
   width: auto;

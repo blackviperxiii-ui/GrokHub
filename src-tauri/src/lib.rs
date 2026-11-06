@@ -14,6 +14,7 @@ pub mod capabilities;
 pub mod chips;
 pub mod connectors;
 pub mod credential;
+pub mod goals;
 pub mod history;
 pub mod home;
 #[cfg(desktop)]
@@ -1149,6 +1150,41 @@ async fn set_mission_done(
     let args = home_args(&state, clock, conversation_id, None);
     home_read(args, move |src| {
         home::toggle_for(src, done, src.clock.now_ms)
+    })
+    .await?
+}
+
+/// Objectives → My goals, Today's picks and This season.
+#[tauri::command]
+async fn get_goals(
+    state: State<'_, ShellState>,
+    clock: automations::Clock,
+) -> Result<grokhub_core::objectives::Board, String> {
+    let dir = state.config_dir.clone();
+    let now = grokhub_core::now_ms();
+    off_main(move || goals::board(&dir, now, clock.at(now).utc_offset_min())).await
+}
+
+/// Objectives → add a goal, +1, Done, Drop, Track or Not now. A paired
+/// phone may do these too: goals are the player's own list.
+#[tauri::command]
+async fn goal_act(
+    state: State<'_, ShellState>,
+    clock: automations::Clock,
+    acts: Vec<grokhub_core::objectives::GoalAct>,
+) -> Result<goals::Saved, String> {
+    let dir = state.config_dir.clone();
+    let now = grokhub_core::now_ms();
+    off_main(move || {
+        let library = if acts
+            .iter()
+            .any(|a| matches!(a, grokhub_core::objectives::GoalAct::Add { .. }))
+        {
+            goals::library()
+        } else {
+            Vec::new()
+        };
+        goals::act(&dir, &acts, &library, now, clock.at(now).utc_offset_min())
     })
     .await?
 }
@@ -3020,6 +3056,8 @@ pub fn run() {
             get_home,
             get_mission,
             set_mission_done,
+            get_goals,
+            goal_act,
             get_library,
             library_cover,
             library_play,
