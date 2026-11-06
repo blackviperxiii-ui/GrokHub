@@ -154,6 +154,7 @@ pub mod pulse;
 pub mod pulse_ideas;
 pub mod pulse_sources;
 pub mod pulse_writer;
+pub mod quips;
 pub mod reactions;
 pub mod recipe;
 pub mod recovered;
