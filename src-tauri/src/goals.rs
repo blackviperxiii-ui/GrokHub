@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use grokhub_core::objectives::{self, Board, GoalAct, KnownGame};
+use grokhub_core::objectives::{self, Board, GoalAct, KnownGame, TurnGoals};
 use serde::Serialize;
 
 /// The page after a press, with the words to show when an Add was refused.
@@ -30,14 +30,7 @@ pub fn act(
     now_ms: u64,
     offset_min: i32,
 ) -> Result<Saved, String> {
-    let known: Vec<KnownGame<'_>> = library
-        .iter()
-        .map(|(name, app_id)| KnownGame {
-            name,
-            steam_app_id: Some(*app_id),
-            source: None,
-        })
-        .collect();
+    let known = known(library);
     let (o, refused) =
         objectives::change(config_dir, |o| objectives::apply(o, acts, &known, now_ms))
             .map_err(|e| format!("Couldn't save your goals: {e}"))?;
@@ -45,6 +38,44 @@ pub fn act(
         board: objectives::board(&o, now_ms, offset_min),
         note: refused.map(str::to_string),
     })
+}
+
+/// Goals from one finished chat turn: an asked-for goal is tracked, a goal
+/// the reply noticed waits in the tray, and progress the player said moves
+/// a tracked goal. Nothing is written when the turn holds no goal.
+pub fn read_chat_turn(config_dir: &Path, chat: &str, said: &str, reply: &str) -> TurnGoals {
+    let now = grokhub_core::now_ms();
+    if !objectives::worth_a_look(said, reply) {
+        return TurnGoals::default();
+    }
+    read_turn_with(config_dir, chat, said, reply, &library(), now)
+}
+
+fn read_turn_with(
+    config_dir: &Path,
+    chat: &str,
+    said: &str,
+    reply: &str,
+    library: &Library,
+    now: u64,
+) -> TurnGoals {
+    let known = known(library);
+    objectives::change(config_dir, |o| {
+        objectives::read_turn(o, chat, said, reply, &known, now)
+    })
+    .map(|(_, t)| t)
+    .unwrap_or_default()
+}
+
+fn known(library: &Library) -> Vec<KnownGame<'_>> {
+    library
+        .iter()
+        .map(|(name, app_id)| KnownGame {
+            name,
+            steam_app_id: Some(*app_id),
+            source: None,
+        })
+        .collect()
 }
 
 /// The installed Steam library, or nothing when Steam isn't found.
@@ -99,6 +130,38 @@ mod tests {
         );
         // A second reader sees the same file.
         assert_eq!(board(&d, NOW, 0), saved.board);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_chat_turn_suggests_tracks_and_moves_goals() {
+        let d = dir("chat");
+        let lib = vec![("Elden Ring".to_string(), 1_245_620)];
+        // Small talk writes nothing.
+        let t = read_turn_with(&d, "c1", "hey, what's up", "Not much!", &lib, NOW);
+        assert!(!t.changed());
+        assert!(!objectives::objectives_path(&d).exists());
+        // A noticed goal waits in the tray.
+        let reply = "Love it.\nGAME_GOAL: Elden Ring | finish | finish | 1";
+        let t = read_turn_with(&d, "c1", "i want to beat it", reply, &lib, NOW);
+        assert!(t.ask.is_some());
+        let b = board(&d, NOW, 0);
+        assert_eq!(b.suggested[0].title, "Elden Ring · Finish");
+        assert!(b.mine.is_empty());
+        // Asked to track: on the list at once.
+        let reply = "GAME_GOAL: osrs | 99 fishing | skill | 99";
+        let t = read_turn_with(&d, "c2", "add a goal: 99 fishing in osrs", reply, &lib, NOW);
+        assert_eq!(t.tracked.len(), 1);
+        // Progress the player said moves it.
+        let reply = "GAME_PROGRESS: osrs | 99 fishing | 80";
+        let t = read_turn_with(&d, "c2", "hit 80 fishing today", reply, &lib, NOW + 1);
+        assert_eq!(t.moved.len(), 1);
+        assert_eq!(
+            board(&d, NOW + 1, 0).mine[0].detail,
+            "80 / 99 · 19 levels to 99"
+        );
+        assert!(objectives::worth_a_look("trying to finish hades", ""));
+        assert!(!objectives::worth_a_look("what's the weather", ""));
         let _ = std::fs::remove_dir_all(&d);
     }
 

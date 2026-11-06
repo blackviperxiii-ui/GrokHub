@@ -604,6 +604,9 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
         // The reply's chips block is held back from the page and the saved
         // chat's view (`history::lines` strips it there).
         let mut trailer = grokhub_core::ChipTrailerFilter::default();
+        // Game goal lines are read at the end and never shown.
+        let mut markers = grokhub_core::objectives::MarkerFilter::default();
+        let mut raw = String::new();
         let ran = engine.prompt(&message.text, message.image.as_deref(), &mut |event| {
             let Some(mut ui) = ui_event(event) else {
                 return;
@@ -617,6 +620,8 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
             match &mut ui {
                 UiEvent::Text { text } => {
                     *text = trailer.feed(text);
+                    raw.push_str(text);
+                    *text = markers.feed(text);
                     if text.is_empty() {
                         return;
                     }
@@ -625,6 +630,9 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                 UiEvent::Done { stop: s } => {
                     stop = s.clone();
                     let (tail, block) = trailer.finish();
+                    raw.push_str(&tail);
+                    let mut tail = markers.feed(&tail);
+                    tail.push_str(&markers.finish());
                     if !tail.is_empty() {
                         reply.push_str(&tail);
                         emit(UiEvent::Text { text: tail });
@@ -646,6 +654,14 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                         if let Some(card) = ups.as_ref().and_then(suggestions_for) {
                             emit(card);
                         }
+                    }
+                    if !btw && s != "error" && error.is_none() {
+                        // Off the turn's path: the library read can take a moment.
+                        let (dir, chat) = (config_dir.clone(), conversation_id.clone());
+                        let (said, raw) = (text.clone(), std::mem::take(&mut raw));
+                        std::thread::spawn(move || {
+                            crate::goals::read_chat_turn(&dir, &chat, &said, &raw);
+                        });
                     }
                 }
                 UiEvent::Error { message } => error = Some(message.clone()),

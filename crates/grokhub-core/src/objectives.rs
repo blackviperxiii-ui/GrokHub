@@ -22,12 +22,17 @@ use serde::{Deserialize, Serialize};
 use crate::xp::{local_day, Earned, XpKind};
 
 mod board;
+mod chat;
 mod season;
 mod typed;
 
 pub use board::{
     apply, board, goal_detail, goal_title, steps_by_one, Board, GoalAct, GoalCard, Season,
     SHELF_MAX,
+};
+pub use chat::{
+    detect, is_marker_line, markers, read_turn, wants_tracking, without_markers, worth_a_look,
+    Marker, MarkerFilter, TurnGoals, GOAL_MARKER_RULE,
 };
 pub use season::{done_this_season, pick_up_line, season_label, short_date, today_picks, Pick};
 pub use typed::{parse_goal, KnownGame};

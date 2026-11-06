@@ -592,6 +592,7 @@ fn is_protocol_line(line: &str) -> bool {
         || t.starts_with("IMAGINE_PROMPT:")
         || t.starts_with("USER_FACT:")
         || t.starts_with("BACKGROUND_TASK:")
+        || crate::objectives::is_marker_line(t)
 }
 
 /// User-visible assistant prose. Thinking, protocol, replayed transcripts, and tool dumps do not count.
