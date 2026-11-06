@@ -1210,6 +1210,7 @@ export type TileAction =
   | { kind: "openUrl"; url: string }
   | { kind: "play"; appId: number }
   | { kind: "openClip"; index: number }
+  | { kind: "steamFriends" }
   | { kind: "reroll" }
   | { kind: "retry" };
 
@@ -1924,6 +1925,11 @@ export function libraryCover(appId: number, shape: CoverShape): Promise<string |
 /** Ask Steam to start the game. Resolves to a line to show. */
 export function libraryPlay(appId: number): Promise<string> {
   return invoke<string>("library_play", { appId });
+}
+
+/** Opens Steam's own friends list, for Home's Squad tile. */
+export function libraryFriends(): Promise<void> {
+  return invoke<void>("library_friends");
 }
 
 /** Plays the clip at this place in Home's Clips tile with the PC's player. */

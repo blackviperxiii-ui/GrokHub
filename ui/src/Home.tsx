@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   getHome,
   homeOpenClip,
+  libraryFriends,
   libraryPlay,
   openUrl,
   pulseAct,
@@ -141,6 +142,9 @@ export function runAction(a: TileAction, go: HomeRoutes, remote: boolean, reload
       return;
     case "openClip":
       if (!remote) void homeOpenClip(a.index).catch(() => {});
+      return;
+    case "steamFriends":
+      if (!remote) void libraryFriends().catch(() => {});
       return;
     case "reroll":
     case "retry":

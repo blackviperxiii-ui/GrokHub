@@ -53,6 +53,8 @@ pub(super) struct LiveFacts {
     pub audio: grokhub_core::audio_check::AudioFacts,
     /// The streaming app open, by its process name.
     pub stream_app: Option<&'static str>,
+    /// Steam friends saved on this PC; `None` with no Steam account here.
+    pub steam_friends: Option<usize>,
 }
 
 impl LiveFacts {
@@ -87,6 +89,7 @@ static SLOT: Mutex<Slot> = Mutex::new(Slot {
             devices: Vec::new(),
         },
         stream_app: None,
+        steam_friends: None,
     },
     at: None,
     reading: false,
@@ -112,10 +115,10 @@ pub(super) fn live_facts() -> LiveFacts {
                     &system_state::OsProbe,
                     &grokhub_agent::indexers::paths::PlatformDirs::from_env(),
                 );
-                facts.clips = grokhub_core::clips::recent(
-                    &grokhub_core::clips::roots(grokhub_core::steam::detect_root().as_deref()),
-                    8,
-                );
+                let steam = grokhub_core::steam::detect_root();
+                facts.clips =
+                    grokhub_core::clips::recent(&grokhub_core::clips::roots(steam.as_deref()), 8);
+                facts.steam_friends = steam.as_deref().and_then(grokhub_core::steam::friend_count);
                 facts.audio = grokhub_core::audio_check::read_facts();
                 facts.stream_app = grokhub_core::home::tiles::stream_app(
                     &grokhub_desktop::game_guard::running_names(),

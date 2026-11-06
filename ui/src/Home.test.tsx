@@ -11,6 +11,7 @@ const api = vi.hoisted(() => ({
   chipOutcome: vi.fn<(surface: string, id: string, picked: boolean) => Promise<boolean>>(),
   libraryPlay: vi.fn<(appId: number) => Promise<string>>(),
   homeOpenClip: vi.fn<(index: number) => Promise<void>>(),
+  libraryFriends: vi.fn<() => Promise<void>>(),
   openUrl: vi.fn<(url: string) => Promise<void>>(),
 }));
 
@@ -159,6 +160,7 @@ describe("Home", () => {
     api.chipOutcome.mockReset().mockResolvedValue(true);
     api.libraryPlay.mockReset().mockResolvedValue("Starting");
     api.homeOpenClip.mockReset().mockResolvedValue();
+    api.libraryFriends.mockReset().mockResolvedValue();
     api.openUrl.mockReset().mockResolvedValue();
   });
 
@@ -247,6 +249,35 @@ describe("Home", () => {
     render(<Home {...routes()} remote={false} />);
     await userEvent.click(await screen.findByRole("button", { name: /Clutch/ }));
     expect(api.homeOpenClip).toHaveBeenCalledWith(1);
+  });
+
+  it("the Squad tile opens Steam's friends list on the PC only", async () => {
+    const squadPage = {
+      ...PAGE,
+      slots: [
+        slot({
+          slot: "medium-1",
+          size: "medium",
+          module: "squad",
+          name: "Squad",
+          tile: {
+            kind: "view",
+            view: view({
+              text: { big: "14 friends", caption: "On Steam · open the list to see who's on", detail: null, tone: "normal" },
+              buttons: [{ label: "Friends list", action: { kind: "steamFriends" }, primary: true }],
+            }),
+          },
+        }),
+      ],
+    };
+    api.getHome.mockResolvedValue(squadPage);
+    const { unmount } = render(<Home {...routes()} remote={false} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Friends list" }));
+    expect(api.libraryFriends).toHaveBeenCalledTimes(1);
+    unmount();
+    render(<Home {...routes()} remote />);
+    await userEvent.click(await screen.findByRole("button", { name: "Friends list" }));
+    expect(api.libraryFriends).toHaveBeenCalledTimes(1);
   });
 
   it("a tile this device can't read draws quiet, and Play never starts a game from a browser", async () => {
