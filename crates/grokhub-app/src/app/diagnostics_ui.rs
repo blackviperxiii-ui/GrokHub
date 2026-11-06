@@ -1,12 +1,11 @@
-//! Settings → Labs → Diagnostics mode: one-click Desktop debug bundle.
+//! Settings → Labs → Diagnostics mode: one-click debug bundle in Diagnostics.
 
 use super::*;
 use grokhub_core::{
     content_level_label, diagnostics_markdown, diagnostics_preview_lines,
-    diagnostics_redaction_summary, diagnostics_saved_status, diagnostics_zip_path,
-    redact_for_diagnostics, redact_turn, turn_says, why_chat_vs_task, write_diagnostics_zip,
-    DiagnosticsClassifier, DiagnosticsExport, DiagnosticsPlaybook, DiagnosticsPolicy,
-    DiagnosticsToolCall, DiagnosticsTurn,
+    diagnostics_redaction_summary, diagnostics_saved_status, redact_for_diagnostics, redact_turn,
+    turn_says, why_chat_vs_task, write_diagnostics_zip, DiagnosticsClassifier, DiagnosticsExport,
+    DiagnosticsPlaybook, DiagnosticsPolicy, DiagnosticsToolCall, DiagnosticsTurn,
 };
 use std::time::SystemTime;
 
@@ -78,7 +77,7 @@ impl Cabin {
         if crate::cards::settings_toggle(
             ui,
             "Diagnostics mode",
-            "Off by default. When on, chat and message actions can Save a redacted debug bundle to your Desktop (JSON + Markdown in one zip). Nothing leaves this machine unless you copy or share the file.",
+            "Off by default. When on, chat and message actions can Save a redacted debug bundle to the Diagnostics folder in Documents/Loadout (JSON + Markdown in one zip). Nothing leaves this machine unless you copy or share the file.",
             &mut on,
         ) {
             self.set_diagnostics_mode(on);
@@ -95,7 +94,7 @@ impl Cabin {
             if crate::cards::settings_action(
                 ui,
                 "Save diagnostics for this chat",
-                "Shows the redacted bundle first; Save there writes loadout-diagnostics-DATE-TIME.zip to your Desktop, or to a local folder when the Desktop syncs to the cloud.",
+                "Shows the redacted bundle first; Save there writes loadout-diagnostics-DATE-TIME.zip to Documents/Loadout/Diagnostics, or to a local folder when that syncs to the cloud.",
                 "Save",
             ) {
                 self.save_chat_diagnostics(None);
@@ -355,7 +354,8 @@ impl Cabin {
         let Some(pending) = self.diagnostics.pending.take() else {
             return;
         };
-        let path = match diagnostics_zip_path(SystemTime::now()) {
+        let config = crate::config::config_dir();
+        let path = match grokhub_core::diagnostics_zip_path_in(&config, SystemTime::now()) {
             Ok(p) => p,
             Err(e) => {
                 self.status = e;
@@ -364,8 +364,8 @@ impl Cabin {
         };
         match write_diagnostics_zip(&path, &pending.export) {
             Ok(path) => {
-                let on_desktop = path.parent() == grokhub_core::desktop_dir().as_deref();
-                self.status = diagnostics_saved_status(&path, on_desktop);
+                let place = grokhub_core::diagnostics_place(&config, &path);
+                self.status = diagnostics_saved_status(&path, place);
                 self.notify(
                     super::notices::NoticeKind::Success,
                     self.status.clone(),
@@ -675,7 +675,8 @@ mod tests {
         cabin.threads = vec![thread];
         cabin.thread_idx = 0;
         cabin.set_diagnostics_mode(true);
-        let zips = || std::fs::read_dir(&desk).unwrap().count();
+        let saved_to = home.join("Loadout").join("Diagnostics");
+        let zips = || std::fs::read_dir(&saved_to).map_or(0, |d| d.count());
 
         cabin.save_chat_diagnostics(None);
         let pending = cabin.diagnostics.pending.as_ref().expect("preview is open");
@@ -862,7 +863,7 @@ mod tests {
         cabin.confirm_diagnostics_save();
         let path = cabin.diagnostics.last_zip.clone().expect("zip path");
         let name = path.file_name().unwrap().to_str().unwrap().to_string();
-        assert_eq!(cabin.status, format!("Saved {name} to your Desktop"));
+        assert_eq!(cabin.status, format!("Saved {name} to Diagnostics"));
         assert_eq!(
             cabin.notices.items[0].action,
             Some(super::super::notices::NoticeAction::ShowInFolder(
@@ -870,7 +871,11 @@ mod tests {
             ))
         );
         assert_eq!(cabin.notices.items[0].text, cabin.status);
-        assert!(path.starts_with(&desk), "{path:?}");
+        assert_eq!(
+            path.parent(),
+            Some(home.join("Loadout").join("Diagnostics").as_path()),
+            "with no Documents folder your files sit in home/Loadout"
+        );
         assert!(
             name.starts_with("loadout-diagnostics-") && name.ends_with(".zip"),
             "{name}"
@@ -888,7 +893,7 @@ mod tests {
 
         // A second Save never replaces the first bundle.
         let at = SystemTime::now();
-        let same = grokhub_core::diagnostics_zip_path(at).unwrap();
+        let same = grokhub_core::diagnostics_zip_path_in(&config::config_dir(), at).unwrap();
         std::fs::write(&same, b"earlier").unwrap();
         cabin.save_chat_diagnostics(Some(2));
         cabin.confirm_diagnostics_save();

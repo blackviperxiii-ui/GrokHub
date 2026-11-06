@@ -1654,10 +1654,11 @@ fn run_ok(bin: &str, args: &[&str]) -> Result<(), String> {
     }
 }
 
-pub fn imagine_save_path_ext(slug: &str, ext: &str) -> PathBuf {
+/// `slug.ext` for an Imagine save (`png` when the type is unknown).
+pub fn imagine_save_name(slug: &str, ext: &str) -> String {
     let ext = ext.trim().trim_start_matches('.').to_ascii_lowercase();
     let ext = if ext.is_empty() { "png".into() } else { ext };
-    crate::config::imagine_dir().join(format!("{slug}.{ext}"))
+    format!("{slug}.{ext}")
 }
 
 /// Second frame for a wall cover when the second Imagine call fails.
@@ -2772,7 +2773,7 @@ mod tests {
         let run_ok = src
             .split("fn run_ok(")
             .nth(1)
-            .and_then(|s| s.split("\npub fn imagine_save_path_ext(").next())
+            .and_then(|s| s.split("\n/// `slug.ext` for an Imagine save").next())
             .expect("run_ok");
         assert!(
             run_ok.contains("run_limited("),

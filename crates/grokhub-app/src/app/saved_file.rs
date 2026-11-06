@@ -1,5 +1,5 @@
-//! Files the app saves for you (chat exports): where they land, and the card
-//! that says so.
+//! Files the app saves for you (chat exports, reports): where they land, and
+//! the toast, bell row and card that say so.
 //!
 //! An export goes to the Chats folder in your files (`Documents/Loadout/Chats`
 //! by default), then the Desktop, then the app's own folder when the one
@@ -44,18 +44,6 @@ pub(super) enum SaveDir {
     AppData,
 }
 
-/// Your files' folder for `kind` under `config`. Tests that pinned nothing
-/// get a folder inside their own config root, never the real Documents.
-pub(super) fn user_folder_in(config: &Path, kind: UserFolder) -> std::io::Result<PathBuf> {
-    #[cfg(test)]
-    if !config.join(user_files::FOLDERS_FILE).exists() {
-        let dir = config.join("test-files").join(kind.name());
-        std::fs::create_dir_all(&dir)?;
-        return Ok(dir);
-    }
-    user_files::folder(config, kind)
-}
-
 /// Write `body` as `name` into the first of `dirs` that takes it. Never
 /// overwrites (`-2`, `-3`, … when the name is taken). On success returns the
 /// path; on failure the plain reason from the first folder (the one the user
@@ -69,7 +57,7 @@ pub(super) fn save_into(
     let mut first_err: Option<String> = None;
     for dir in dirs {
         let found = match dir {
-            SaveDir::User(kind) => user_folder_in(config, *kind),
+            SaveDir::User(kind) => crate::config::user_folder_in(config, *kind),
             SaveDir::Existing(p) if p.is_dir() => Ok(p.clone()),
             SaveDir::Existing(_) => continue,
             SaveDir::AppData => std::fs::create_dir_all(config).map(|_| config.to_path_buf()),
@@ -127,19 +115,7 @@ impl Cabin {
         match result {
             Ok(shown) => {
                 let path = PathBuf::from(shown);
-                let name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                let line = format!("Saved {name} to {}", folder_label(&path));
-                // Bell first with its action, so the status mirror sees the
-                // same line already logged and doesn't add a bare copy.
-                self.notify(
-                    super::notices::NoticeKind::Success,
-                    line.clone(),
-                    Some(super::notices::NoticeAction::ShowInFolder(path.clone())),
-                );
-                self.status = line.clone();
+                let line = self.announce_saved(&path);
                 self.saved_file = Some(SavedFile {
                     path: Some(path),
                     line,
@@ -158,6 +134,27 @@ impl Cabin {
                 });
             }
         }
+    }
+
+    /// "Saved <file> to <folder>" as a toast, a bell row with Show in folder,
+    /// and the status line. Returns the line.
+    pub(super) fn announce_saved(&mut self, path: &Path) -> String {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let line = format!("Saved {name} to {}", folder_label(path));
+        // Bell first with its action, so the status mirror sees the same
+        // line already logged and doesn't add a bare copy.
+        self.notify(
+            super::notices::NoticeKind::Success,
+            line.clone(),
+            Some(super::notices::NoticeAction::ShowInFolder(
+                path.to_path_buf(),
+            )),
+        );
+        self.status = line.clone();
+        line
     }
 
     /// Redo the export the card names.

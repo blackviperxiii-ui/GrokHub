@@ -1639,7 +1639,11 @@ page_body(ui, "history", |ui| {
                 .collect();
             crate::cards::section_label(ui, grokhub_core::brand::filled("{product} skills"));
             ui.label(
-                RichText::new(grokhub_core::brand::filled("SKILL.md under ~/.config/GrokHub/skills. {product} follows these on a matching ask and writes new ones after a hard host run."))
+                RichText::new(format!(
+                    "SKILL.md under {}. {} follows these on a matching ask and writes new ones after a hard host run.",
+                    crate::config::config_dir().join("skills").display(),
+                    grokhub_core::brand::product_name()
+                ))
                     .size(crate::theme::TYPE_CAPTION)
                     .color(crate::theme::muted()),
             );

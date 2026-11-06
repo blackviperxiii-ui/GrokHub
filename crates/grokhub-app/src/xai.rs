@@ -467,11 +467,15 @@ fn save_media(url: &str, prompt: &str, ext: &str, key: &str) -> Result<String, S
         }
     };
     let ext = media_ext_from_bytes(&buf, ext);
-    let path = crate::desktop::imagine_save_path_ext(&imagine_slug(prompt), ext);
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
-    std::fs::write(&path, buf).map_err(|e| e.to_string())?;
+    let name = crate::desktop::imagine_save_name(&imagine_slug(prompt), ext);
+    let plain = |e: std::io::Error| grokhub_core::user_files::plain_io_error(&e);
+    let dir = crate::config::user_folder_in(
+        &crate::config::config_dir(),
+        grokhub_core::user_files::UserFolder::Images,
+    )
+    .map_err(plain)?;
+    // A second image from the same prompt gets `-2`, never replacing the first.
+    let path = grokhub_core::user_files::write_new_file(&dir, &name, &buf).map_err(plain)?;
     Ok(path.display().to_string())
 }
 
