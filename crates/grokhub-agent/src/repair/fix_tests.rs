@@ -340,6 +340,29 @@ fn apply_writes_the_restore_point_span_before_the_first_mutating_span() {
 }
 
 #[test]
+fn the_apps_own_windows_restore_point_goes_out_but_a_drafted_admin_step_asks() {
+    let dir = test_dir("fix-win-restore");
+    let p = plan(vec![DraftStep::new(
+        "Start-Process powershell -Verb RunAs -ArgumentList 'Set-MpPreference -DisableRealtimeMonitoring $true'",
+        "Turn off Defender.",
+    )]);
+    let ctx = ApplyCtx {
+        os: Os::Windows,
+        ..ctx(&dir, true, AccessMode::Full, &none)
+    };
+    let mut run = ApplyRun::begin(&ctx, p).unwrap();
+    let Action::Gb { command, .. } = run.next_action() else {
+        panic!("the app's own restore point step is not parked")
+    };
+    assert!(command.contains("Checkpoint-Computer"), "{command}");
+    assert!(run.step_finished("STEP_OK"));
+    let Action::Park { class, .. } = run.next_action() else {
+        panic!("a drafted admin step asks first")
+    };
+    assert_eq!(class, HardClass::SystemAdmin);
+}
+
+#[test]
 fn a_hard_step_parks_under_always_and_full() {
     let dir = test_dir("fix-hard-full");
     let disk = finding(
