@@ -675,6 +675,8 @@ fn run_turn(
     }
     let mut step_ended: Option<std::time::Instant> = None;
     let mut turns = 0u32;
+    // Steps sent again after a busy or dropped model, this turn.
+    let mut resumes = 0u32;
     // Item 33: a step budget learned from past runs of this kind, and one
     // redirect before the token budget pauses the run.
     let mut turn_budget = crate::turn_budget::TurnBudget::new(
@@ -959,9 +961,26 @@ fn run_turn(
                         ))],
                     });
                 }
+                // A busy, stalled or dropped model doesn't end the turn: the
+                // same step goes again on the next route (the failed model
+                // cools down), with every tool result so far, and no "continue"
+                // from them.
+                if resumes < MAX_RESUMES && resumable(&err) {
+                    resumes += 1;
+                    if !shown.trim().is_empty() {
+                        history.push(cabin_note(RESUME_NOTE));
+                    }
+                    on_event(LoopEvent::Thought(resume_thought(resumes)));
+                    if !resume_wait(resumes, input.cancel) {
+                        return finish(input, StopReason::Cancelled, usage, compacted_once, true);
+                    }
+                    turns = turns.saturating_sub(1);
+                    run_tokens = run_tokens.saturating_sub(req_tokens);
+                    continue;
+                }
                 return finish(
                     input,
-                    StopReason::Error(err.to_string()),
+                    StopReason::Error(final_error(&err)),
                     usage,
                     compacted_once,
                     true,
@@ -1760,6 +1779,62 @@ fn push_result(
 }
 
 /// The thinking line while a 429 waits.
+/// Times one turn picks itself back up after a busy or dropped model.
+const MAX_RESUMES: u32 = 2;
+
+/// Told to the model when its reply was cut off and the step goes again.
+const RESUME_NOTE: &str = "Your last reply was cut off by a connection problem. Carry on from where it stopped: do not repeat what you already said, and do not redo steps whose tool results are above.";
+
+/// The model couldn't answer for a reason that clears: busy, rate limited,
+/// stalled, dropped or cut off. A refused key, a bad request, a cancel or a
+/// prompt too long never resumes.
+fn resumable(err: &ClientError) -> bool {
+    !err.is_context_length()
+        && (err.is_retryable() || matches!(err, ClientError::IdleTimeout | ClientError::CutOff(_)))
+}
+
+/// The error the chat shows once the turn has stopped. A model still busy
+/// after its resumes reads as a plain sentence, not the provider's raw body,
+/// and never as a retry still under way (the chat would wait on it forever).
+fn final_error(err: &ClientError) -> String {
+    match err {
+        ClientError::RateLimited { .. } | ClientError::Server { .. } if resumable(err) => {
+            BUSY_GAVE_UP.into()
+        }
+        _ => err.to_string(),
+    }
+}
+
+/// Shown when a busy model still couldn't answer after the turn's resumes.
+pub const BUSY_GAVE_UP: &str = "The model is too busy to answer right now, so I stopped after several tries. Send it again in a minute, or pick another model.";
+
+fn resume_thought(attempt: u32) -> String {
+    if attempt <= 1 {
+        "The model was busy, so I'm picking this back up where it stopped.".into()
+    } else {
+        "Still busy, so I'm trying another route.".into()
+    }
+}
+
+/// A short, cancellable pause before the step goes again: 2 s, then 5 s.
+fn resume_wait(attempt: u32, cancel: &CancelToken) -> bool {
+    let secs = if attempt <= 1 { 2 } else { 5 };
+    let wait = if cfg!(test) {
+        std::time::Duration::from_millis(5)
+    } else {
+        std::time::Duration::from_secs(secs)
+    };
+    let slice = std::time::Duration::from_millis(50);
+    let start = std::time::Instant::now();
+    while start.elapsed() < wait {
+        if cancel.is_cancelled() {
+            return false;
+        }
+        std::thread::sleep(slice.min(wait));
+    }
+    !cancel.is_cancelled()
+}
+
 fn rate_wait_note(wait: std::time::Duration) -> String {
     let secs = wait.as_secs_f64().ceil().max(1.0) as u64;
     format!("\n\nGrok is busy right now, trying again in {secs} s.\n\n")
@@ -2518,6 +2593,7 @@ mod tests {
             &SteerQueue::new(),
             &NeverHalt,
         );
+        // A stream that keeps dropping is sent again twice, then stops plainly.
         assert!(matches!(&out.stop, StopReason::Error(e) if e.contains("cut off")));
         let shown: String = events
             .iter()
@@ -2526,13 +2602,205 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(shown, "First, the config lives in");
+        assert_eq!(shown, "First, the config lives in".repeat(3));
+        let shown = "First, the config lives in".to_string();
         assert!(matches!(
             history.last(),
             Some(InputItem::Message { role, content })
                 if role == "assistant"
                     && content == &vec![ContentPart::InputText(shown.clone())]
         ));
+    }
+
+    /// Fails the first `fails` requests with `err`, showing `before` first, then
+    /// answers "All done." Keeps every request's input.
+    struct BusyThen {
+        fails: usize,
+        before: &'static str,
+        err: fn() -> ClientError,
+        seen: Mutex<Vec<Vec<InputItem>>>,
+    }
+    impl ModelClient for BusyThen {
+        fn stream(
+            &self,
+            req: &ResponsesRequest,
+            _cancel: &CancelToken,
+            sink: &mut dyn FnMut(StreamEvent),
+        ) -> Result<crate::TurnOutput, ClientError> {
+            let n = {
+                let mut seen = self.seen.lock().unwrap();
+                seen.push(req.input.clone());
+                seen.len()
+            };
+            if n <= self.fails {
+                if !self.before.is_empty() {
+                    sink(StreamEvent::TextDelta(self.before.into()));
+                }
+                return Err((self.err)());
+            }
+            sink(StreamEvent::TextDelta("All done.".into()));
+            Ok(crate::TurnOutput {
+                text: "All done.".into(),
+                ..Default::default()
+            })
+        }
+    }
+
+    fn at_capacity() -> ClientError {
+        crate::client::stream_error(
+            "The model is currently at capacity due to high demand. Please try again in a few minutes."
+                .into(),
+        )
+    }
+
+    fn thoughts(events: &[LoopEvent]) -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                LoopEvent::Thought(t) => Some(t.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_busy_model_picks_the_turn_back_up_without_a_continue() {
+        let dir = workspace("busy-resume");
+        let client = BusyThen {
+            fails: 1,
+            before: "",
+            err: at_capacity,
+            seen: Mutex::new(Vec::new()),
+        };
+        let (out, history, events) = run_with(
+            &client,
+            &dir,
+            4,
+            &CancelToken::new(),
+            &SteerQueue::new(),
+            &NeverHalt,
+        );
+        assert!(matches!(out.stop, StopReason::EndTurn), "{:?}", out.stop);
+        let seen = client.seen.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        // The same step went again: nothing was added to what the model sees.
+        assert_eq!(seen[0], seen[1]);
+        assert!(thoughts(&events).iter().any(|t| t.contains("busy")));
+        assert!(matches!(
+            history.last(),
+            Some(InputItem::Message { role, content })
+                if role == "assistant"
+                    && content == &vec![ContentPart::InputText("All done.".into())]
+        ));
+    }
+
+    #[test]
+    fn a_reply_cut_off_by_a_busy_model_carries_on_from_where_it_stopped() {
+        let dir = workspace("busy-carry-on");
+        let client = BusyThen {
+            fails: 1,
+            before: "Cleaning the temp folder now",
+            err: at_capacity,
+            seen: Mutex::new(Vec::new()),
+        };
+        let (out, _history, _events) = run_with(
+            &client,
+            &dir,
+            4,
+            &CancelToken::new(),
+            &SteerQueue::new(),
+            &NeverHalt,
+        );
+        assert!(matches!(out.stop, StopReason::EndTurn), "{:?}", out.stop);
+        let seen = client.seen.lock().unwrap();
+        let resent = &seen[1];
+        let n = resent.len();
+        assert!(n >= 2);
+        // What showed is kept, then the model is told to carry on, not repeat.
+        assert!(matches!(
+            &resent[n - 2],
+            InputItem::Message { role, content }
+                if role == "assistant"
+                    && content
+                        == &vec![ContentPart::InputText("Cleaning the temp folder now".into())]
+        ));
+        let note = match &resent[n - 1] {
+            InputItem::Message { role, content } if role == "user" => match &content[..] {
+                [ContentPart::InputText(t)] => t.clone(),
+                _ => String::new(),
+            },
+            _ => String::new(),
+        };
+        assert_eq!(
+            crate::compact::cabin_note_body(&note),
+            Some(RESUME_NOTE),
+            "{note}"
+        );
+    }
+
+    #[test]
+    fn a_model_that_stays_busy_stops_after_two_resumes_with_the_plain_error() {
+        let dir = workspace("busy-gives-up");
+        let client = BusyThen {
+            fails: 10,
+            before: "",
+            err: at_capacity,
+            seen: Mutex::new(Vec::new()),
+        };
+        let (out, _history, events) = run_with(
+            &client,
+            &dir,
+            8,
+            &CancelToken::new(),
+            &SteerQueue::new(),
+            &NeverHalt,
+        );
+        assert!(
+            matches!(&out.stop, StopReason::Error(e) if e == BUSY_GAVE_UP),
+            "{:?}",
+            out.stop
+        );
+        // The chat shows it as the turn's end, not as a retry still running.
+        assert_eq!(
+            grokhub_core::wire::classify_stream_error(BUSY_GAVE_UP),
+            grokhub_core::wire::StreamErrorKind::Fatal
+        );
+        assert_eq!(client.seen.lock().unwrap().len(), 1 + MAX_RESUMES as usize);
+        assert_eq!(thoughts(&events).len(), MAX_RESUMES as usize);
+    }
+
+    #[test]
+    fn a_refused_key_or_bad_request_never_resumes() {
+        for err in [
+            (|| ClientError::Auth {
+                status: 401,
+                message: "bad key".into(),
+            }) as fn() -> ClientError,
+            || ClientError::Protocol("invalid argument".into()),
+            || {
+                crate::client::stream_error(
+                    "You have run out of credits for this billing period.".into(),
+                )
+            },
+        ] {
+            let dir = workspace("no-resume");
+            let client = BusyThen {
+                fails: 10,
+                before: "",
+                err,
+                seen: Mutex::new(Vec::new()),
+            };
+            let (out, _h, _e) = run_with(
+                &client,
+                &dir,
+                4,
+                &CancelToken::new(),
+                &SteerQueue::new(),
+                &NeverHalt,
+            );
+            assert!(matches!(out.stop, StopReason::Error(_)), "{:?}", out.stop);
+            assert_eq!(client.seen.lock().unwrap().len(), 1);
+        }
     }
 
     #[test]
