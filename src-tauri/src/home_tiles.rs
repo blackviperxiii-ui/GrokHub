@@ -48,7 +48,7 @@ pub fn view(module: &str, src: &Sources<'_>) -> Option<TileView> {
         "updates" => updates_view(&crate::shell_update::version()),
         "game_mode" => pc_only(&|| {
             game_mode_view(
-                grokhub_desktop::game_guard::peek(),
+                guard(),
                 grokhub_agent::route::local::switched_on()
                     && grokhub_agent::route::local_gov::paused(),
             )
@@ -80,10 +80,8 @@ pub fn view(module: &str, src: &Sources<'_>) -> Option<TileView> {
             Ok(page) => daily_drop_view(&page),
             Err(e) => TileView::error(&e),
         },
-        "systems_brief" => {
-            pc_only(&|| systems_brief_view(&drives(), grokhub_desktop::game_guard::peek()))
-        }
-        "coach_tip" => pc_only(&|| coach_tip_view(&drives(), grokhub_desktop::game_guard::peek())),
+        "systems_brief" => pc_only(&|| systems_brief_view(&drives(), guard())),
+        "coach_tip" => pc_only(&|| coach_tip_view(&drives(), guard())),
         "squad" => TileView::empty(
             "Friends online show here once Steam friends are linked",
             "Find a duo",
@@ -107,6 +105,18 @@ impl Sources<'_> {
     fn web(&self) -> bool {
         matches!(self.viewer, crate::home::Viewer::Web(_))
     }
+}
+
+/// What the game guard sees. Phones run no games beside the app and don't
+/// build the desktop crate, so they see none.
+#[cfg(desktop)]
+fn guard() -> grokhub_core::game_guard::GameGuard {
+    grokhub_desktop::game_guard::peek()
+}
+
+#[cfg(mobile)]
+fn guard() -> grokhub_core::game_guard::GameGuard {
+    grokhub_core::game_guard::GameGuard::default()
 }
 
 /// The Steam library, or why there isn't one.
