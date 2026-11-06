@@ -156,6 +156,12 @@ pub enum UiEvent {
     Suggestions {
         items: Vec<crate::chips::Chip>,
     },
+    /// A game goal the reply noticed, to Track or leave with Not now. Sent
+    /// once per goal per chat, before `Done`.
+    Goal {
+        id: String,
+        title: String,
+    },
     /// The plan Grok wrote, before it asks to leave plan mode.
     Plan {
         text: String,
@@ -656,12 +662,19 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                         }
                     }
                     if !btw && s != "error" && error.is_none() {
-                        // Off the turn's path: the library read can take a moment.
-                        let (dir, chat) = (config_dir.clone(), conversation_id.clone());
-                        let (said, raw) = (text.clone(), std::mem::take(&mut raw));
-                        std::thread::spawn(move || {
-                            crate::goals::read_chat_turn(&dir, &chat, &said, &raw);
-                        });
+                        let raw = std::mem::take(&mut raw);
+                        let ask = crate::goals::read_chat_turn(
+                            &config_dir,
+                            &conversation_id,
+                            &text,
+                            &raw,
+                        );
+                        if let Some(card) = ask {
+                            emit(UiEvent::Goal {
+                                id: card.id,
+                                title: card.title,
+                            });
+                        }
                     }
                 }
                 UiEvent::Error { message } => error = Some(message.clone()),

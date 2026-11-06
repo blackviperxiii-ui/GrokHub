@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     done_this_season, parse_goal, pick_up_line, season_label, short_date, today_picks, Goal,
-    GoalKind, KnownGame, Objectives, Pick,
+    GoalKind, KnownGame, Objectives, Pick, TurnGoals,
 };
 
 /// How many finished goals the trophy shelf shows.
@@ -115,6 +115,28 @@ impl GoalCard {
             prompt: None,
             done_on: None,
         }
+    }
+}
+
+/// The id start of the one-tap chip that tracks a goal the reply noticed.
+pub const TRACK_CHIP_PREFIX: &str = "goal:track:";
+
+/// The goal a finished turn asks about, as a row, from the goals after it.
+pub fn ask_card(o: &Objectives, turn: &TurnGoals) -> Option<GoalCard> {
+    let id = turn.ask.as_deref()?;
+    o.goals.iter().find(|g| g.id == id).map(GoalCard::of)
+}
+
+/// "Track goal: 99 fishing", the one-tap under the reply in the desktop app.
+pub fn track_chip(g: &Goal) -> crate::QuickChip {
+    crate::QuickChip {
+        id: format!("{TRACK_CHIP_PREFIX}{}", g.id),
+        label: format!("Track goal: {}", g.text),
+        value: format!("{TRACK_CHIP_PREFIX}{}", g.id),
+        kind: crate::ChipKind::Chat,
+        score: 1.0,
+        hint: format!("Adds {} to My goals on Objectives", goal_title(g)),
+        primary: false,
     }
 }
 
@@ -257,5 +279,20 @@ mod tests {
         let json = serde_json::to_value(&card).unwrap();
         assert_eq!(json["plusOne"], false);
         assert!(json.get("prompt").is_none());
+    }
+
+    #[test]
+    fn a_noticed_goal_becomes_a_one_tap_track_chip() {
+        let mut o = Objectives::default();
+        let reply = "Nice!\nGAME_GOAL: osrs | 99 fishing | skill | 99";
+        let t = super::super::read_turn(&mut o, "c1", "i'm on fishing", reply, &[], NOW);
+        let card = ask_card(&o, &t).expect("a goal to ask about");
+        assert_eq!(card.title, "Old School RuneScape · 99 fishing");
+        let chip = track_chip(&o.goals[0]);
+        assert_eq!(chip.label, "Track goal: 99 fishing");
+        assert!(chip.id.starts_with(TRACK_CHIP_PREFIX));
+        assert_eq!(crate::chip_action(&chip), crate::ChipAction::Do);
+        let quiet = super::super::TurnGoals::default();
+        assert_eq!(ask_card(&o, &quiet), None);
     }
 }

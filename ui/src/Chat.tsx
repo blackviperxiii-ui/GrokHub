@@ -36,6 +36,7 @@ import {
   type Transcript,
 } from "./api";
 import { ChipRow, useChipRow } from "./Chips";
+import { GoalAsk } from "./Goals";
 import { ATTACH_MAX, AttachButton, AttachChips, useAttachments } from "./AttachChips";
 import {
   type Cut,
@@ -504,6 +505,8 @@ export function Chat({
   const [mode, setMode] = useState<SessionMode>("chat");
   /** A reply's follow-ups landed: the chip row is asked for again. */
   const [followed, setFollowed] = useState(0);
+  /** The game goal the last reply noticed, asked about under it. */
+  const [goalAsk, setGoalAsk] = useState<{ id: string; title: string } | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
   const attach = useAttachments(conversationId, { remote, active });
   const slashRows = useSlashHits(draft);
@@ -568,6 +571,7 @@ export function Chat({
   /** A new conversation; the old one stays saved for History. */
   function startFresh() {
     touched.current = true;
+    setGoalAsk(null);
     setItems([]);
     setEarlier(0);
     setError(null);
@@ -575,6 +579,7 @@ export function Chat({
   }
 
   function show(transcript: Transcript) {
+    setGoalAsk(null);
     setConversationId(transcript.id);
     setItems(itemsFrom(transcript));
     setEarlier(transcript.earlier);
@@ -657,6 +662,7 @@ export function Chat({
       }
       touched.current = true;
       void closeChat(conversationId);
+      setGoalAsk(null);
       setItems([]);
       setEarlier(0);
       setError(null);
@@ -686,6 +692,7 @@ export function Chat({
       if (id !== conversationId || !busyRef.current) return;
       if (event.kind === "error") setError(event.message);
       else if (event.kind === "suggestions") setFollowed((n) => n + 1);
+      else if (event.kind === "goal") setGoalAsk({ id: event.id, title: event.title });
       else if (event.kind === "done") setItems(event.stop === HALTED_STOP ? settleHalted : settle);
       else if (event.kind === "text") setItems((now) => applyEvent(now, event));
       // A card is a transition, so the webview can fade it in; text streams as is.
@@ -727,6 +734,7 @@ export function Chat({
   ) {
     if ((!text && files.length === 0) || busy) return;
     touched.current = true;
+    setGoalAsk(null);
     const unread = files.find((f) => f.status);
     if (unread) {
       setError(`${unread.name}: ${unread.status}`);
@@ -1035,6 +1043,9 @@ export function Chat({
           New chat
         </button>
       </form>
+      {goalAsk && !busy ? (
+        <GoalAsk key={goalAsk.id} id={goalAsk.id} title={goalAsk.title} onDone={() => setGoalAsk(null)} />
+      ) : null}
       <ChipRow chips={row.chips} busy={busy} keys={active} onTap={tapChip} onHide={row.hide} />
     </section>
   );

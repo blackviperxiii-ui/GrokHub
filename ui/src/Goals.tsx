@@ -26,6 +26,49 @@ function Summary({ goal }: { goal: GoalCard }) {
   );
 }
 
+export const ASK_TRACKED = "Tracking it. It's on Objectives under My goals.";
+
+/** Under a reply that noticed a game goal: Track puts it on My goals, Not
+ * now hides it for 30 days. Left alone, it waits in the suggested tray. */
+export function GoalAsk({ id, title, onDone }: { id: string; title: string; onDone: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [said, setSaid] = useState<string | null>(null);
+
+  async function press(act: "track" | "notNow") {
+    setBusy(true);
+    try {
+      await goalAct([{ act, id }]);
+      if (act === "track") setSaid(ASK_TRACKED);
+      else onDone();
+    } catch (err) {
+      setSaid(String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (said) {
+    return (
+      <p className="goal-ask home-muted" role="status">
+        {said}
+      </p>
+    );
+  }
+  return (
+    <div className="goal-ask" role="group" aria-label="Track this goal?">
+      <span>
+        Track this goal? <strong>{title}</strong>
+      </span>
+      <button type="button" disabled={busy} onClick={() => void press("track")}>
+        Track
+      </button>
+      <button type="button" className="quiet" disabled={busy} onClick={() => void press("notNow")}>
+        Not now
+      </button>
+    </div>
+  );
+}
+
 /** "N goals done this season". */
 export function doneLine(n: number): string {
   return `${n} ${n === 1 ? "goal" : "goals"} done this season`;

@@ -58,6 +58,7 @@ pub fn chip_action(chip: &QuickChip) -> ChipAction {
     if id == crate::backup_nudge::SNOOZE_ID
         || id == UNDO_CHIP_ID
         || id.starts_with(crate::release_radar::REMIND_PREFIX)
+        || id.starts_with(crate::objectives::TRACK_CHIP_PREFIX)
     {
         return ChipAction::Do;
     }

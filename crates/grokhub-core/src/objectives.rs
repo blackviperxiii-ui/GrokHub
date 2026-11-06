@@ -27,8 +27,8 @@ mod season;
 mod typed;
 
 pub use board::{
-    apply, board, goal_detail, goal_title, steps_by_one, Board, GoalAct, GoalCard, Season,
-    SHELF_MAX,
+    apply, ask_card, board, goal_detail, goal_title, steps_by_one, track_chip, Board, GoalAct,
+    GoalCard, Season, SHELF_MAX, TRACK_CHIP_PREFIX,
 };
 pub use chat::{
     detect, is_marker_line, markers, read_turn, wants_tracking, without_markers, worth_a_look,

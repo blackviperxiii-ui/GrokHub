@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use grokhub_core::objectives::{self, Board, GoalAct, KnownGame, TurnGoals};
+use grokhub_core::objectives::{self, Board, GoalAct, GoalCard, KnownGame, TurnGoals};
 use serde::Serialize;
 
 /// The page after a press, with the words to show when an Add was refused.
@@ -42,13 +42,14 @@ pub fn act(
 
 /// Goals from one finished chat turn: an asked-for goal is tracked, a goal
 /// the reply noticed waits in the tray, and progress the player said moves
-/// a tracked goal. Nothing is written when the turn holds no goal.
-pub fn read_chat_turn(config_dir: &Path, chat: &str, said: &str, reply: &str) -> TurnGoals {
-    let now = grokhub_core::now_ms();
+/// a tracked goal. Returns the noticed goal to ask about under the reply.
+/// Nothing is read or written when the turn holds no goal.
+pub fn read_chat_turn(config_dir: &Path, chat: &str, said: &str, reply: &str) -> Option<GoalCard> {
     if !objectives::worth_a_look(said, reply) {
-        return TurnGoals::default();
+        return None;
     }
-    read_turn_with(config_dir, chat, said, reply, &library(), now)
+    let now = grokhub_core::now_ms();
+    read_turn_with(config_dir, chat, said, reply, &library(), now).1
 }
 
 fn read_turn_with(
@@ -58,12 +59,15 @@ fn read_turn_with(
     reply: &str,
     library: &Library,
     now: u64,
-) -> TurnGoals {
+) -> (TurnGoals, Option<GoalCard>) {
     let known = known(library);
     objectives::change(config_dir, |o| {
         objectives::read_turn(o, chat, said, reply, &known, now)
     })
-    .map(|(_, t)| t)
+    .map(|(o, t)| {
+        let ask = objectives::ask_card(&o, &t);
+        (t, ask)
+    })
     .unwrap_or_default()
 }
 
@@ -138,23 +142,23 @@ mod tests {
         let d = dir("chat");
         let lib = vec![("Elden Ring".to_string(), 1_245_620)];
         // Small talk writes nothing.
-        let t = read_turn_with(&d, "c1", "hey, what's up", "Not much!", &lib, NOW);
-        assert!(!t.changed());
+        let (t, ask) = read_turn_with(&d, "c1", "hey, what's up", "Not much!", &lib, NOW);
+        assert!(!t.changed() && ask.is_none());
         assert!(!objectives::objectives_path(&d).exists());
         // A noticed goal waits in the tray.
         let reply = "Love it.\nGAME_GOAL: Elden Ring | finish | finish | 1";
-        let t = read_turn_with(&d, "c1", "i want to beat it", reply, &lib, NOW);
-        assert!(t.ask.is_some());
+        let (_, ask) = read_turn_with(&d, "c1", "i want to beat it", reply, &lib, NOW);
+        assert_eq!(ask.map(|c| c.title).as_deref(), Some("Elden Ring · Finish"));
         let b = board(&d, NOW, 0);
         assert_eq!(b.suggested[0].title, "Elden Ring · Finish");
         assert!(b.mine.is_empty());
         // Asked to track: on the list at once.
         let reply = "GAME_GOAL: osrs | 99 fishing | skill | 99";
-        let t = read_turn_with(&d, "c2", "add a goal: 99 fishing in osrs", reply, &lib, NOW);
-        assert_eq!(t.tracked.len(), 1);
+        let (t, ask) = read_turn_with(&d, "c2", "add a goal: 99 fishing in osrs", reply, &lib, NOW);
+        assert_eq!((t.tracked.len(), ask), (1, None));
         // Progress the player said moves it.
         let reply = "GAME_PROGRESS: osrs | 99 fishing | 80";
-        let t = read_turn_with(&d, "c2", "hit 80 fishing today", reply, &lib, NOW + 1);
+        let (t, _) = read_turn_with(&d, "c2", "hit 80 fishing today", reply, &lib, NOW + 1);
         assert_eq!(t.moved.len(), 1);
         assert_eq!(
             board(&d, NOW + 1, 0).mine[0].detail,
