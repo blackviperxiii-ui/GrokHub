@@ -383,3 +383,22 @@ fn timings_print_one_line_and_percentiles() {
     assert_eq!(p[0], (None, None));
     assert_eq!(p[3], (Some(1100), Some(1900)));
 }
+
+#[test]
+fn every_mic_recorder_streams_raw_16k_mono_without_a_time_limit() {
+    for bin in MIC_RECORDERS {
+        let argv = mic_argv(bin).expect("every listed recorder has argv");
+        let joined = argv.join(" ");
+        assert!(
+            joined.contains("16000"),
+            "{bin} must ask for 16 kHz: {joined}"
+        );
+        assert!(
+            !argv.contains(&"-d") && !argv.contains(&"-t ") && !joined.contains("trim"),
+            "{bin} must stream until stopped: {joined}"
+        );
+    }
+    assert!(mic_argv("ffmpeg").unwrap().contains(&"s16le"));
+    assert!(mic_argv("arecord").unwrap().contains(&"raw"));
+    assert!(mic_argv("whisper").is_none());
+}

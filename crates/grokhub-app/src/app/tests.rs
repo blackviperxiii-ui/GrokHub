@@ -931,11 +931,7 @@ fn grok_login_powers_history_and_imagine() {
 #[test]
 fn speak_reply_does_not_clone_an_8mb_complete() {
     let src = cabin_src();
-    let speak = src
-        .split("fn speak_reply(")
-        .nth(1)
-        .and_then(|s| s.split("fn poll_eyes_cap(").next())
-        .expect("speak_reply");
+    let speak = fn_src(&src, "speak_reply");
     let clone = speak.find("to_string()").expect("tts clone");
     assert!(
         speak[..clone].contains("TEXT_FILE_CAP")
@@ -2133,6 +2129,7 @@ fn quiet_cabin() -> Cabin {
         presence_ring: Vec::new(),
         voice_state: grokhub_core::VoiceState::Idle,
         voice_ready_at: None,
+        voice_mic: None,
         desktop_nyx: None,
         voice_hold_rx: None,
         lips: Default::default(),

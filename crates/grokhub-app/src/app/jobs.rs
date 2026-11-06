@@ -243,10 +243,19 @@ impl Cabin {
                         self.status = t;
                         self.maybe_continue_ptt();
                     }
+                    PttLine::Hold if t == VOICE_PAUSED => {
+                        self.leave_voice();
+                        self.status = t.trim_start_matches("VOICE_RECEIPT:").trim().into();
+                    }
                     PttLine::Hold => {
                         self.voice_orb = "idle".into();
                         self.voice_ready_at = Some(Instant::now());
                         self.status = t;
+                    }
+                    PttLine::Chat if t.trim().is_empty() => {
+                        // Nothing worth sending was heard: keep listening.
+                        self.voice_ready_at = None;
+                        self.start_ptt_listen();
                     }
                     PttLine::Chat => {
                         self.voice_ready_at = None;
@@ -256,6 +265,10 @@ impl Cabin {
                         self.maybe_continue_ptt();
                     }
                 }
+            }
+            Ok(JobOut::VoiceNote(note)) => {
+                self.rx = Some(rx);
+                self.status = note;
             }
             Ok(JobOut::UpdateProgress { pct, msg }) => {
                 self.rx = Some(rx);

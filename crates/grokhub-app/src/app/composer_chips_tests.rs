@@ -448,11 +448,7 @@ fn voice_mode_has_indicator_and_stop() {
             && voice_job.contains("maybe_continue_ptt"),
         "PTT must not idle after one listen: {voice_job}"
     );
-    let speak = src
-        .split("fn speak_reply(")
-        .nth(1)
-        .and_then(|s| s.split("fn poll_eyes_cap(").next())
-        .expect("speak_reply");
+    let speak = fn_src(&src, "speak_reply");
     assert!(
         speak.contains("voice_hold_rx") && speak.contains("maybe_continue_ptt"),
         "TTS done must re-arm listen while the line is open: {speak}"
