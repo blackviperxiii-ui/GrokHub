@@ -1,0 +1,1 @@
+- CI: release binary size ceiling raised to 74.6 MB (measured 64.8 MB plus 15%), so beta pre-releases publish again.
