@@ -219,6 +219,16 @@ pub(super) fn wait_within(
 }
 
 /// Poll background file writes until each has reported to the status line.
+/// The path the last export's card names ("" when it failed).
+pub(super) fn exported_path(cabin: &Cabin) -> String {
+    cabin
+        .saved_file
+        .as_ref()
+        .and_then(|s| s.path.as_ref())
+        .map(|p| p.display().to_string())
+        .unwrap_or_default()
+}
+
 pub(super) fn wait_file_writes(cabin: &mut Cabin) {
     wait_within(
         FILE_WRITE_BUDGET,

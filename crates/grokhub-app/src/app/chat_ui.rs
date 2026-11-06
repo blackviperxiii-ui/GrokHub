@@ -19,6 +19,8 @@ pub(super) enum ComposerStackSlot {
     LiveWork,
     SlashPalette,
     ScreenshotOffer,
+    /// The last export's card: where it went, Open, Show in folder.
+    SavedFile,
     Chips,
     Attach,
     Voice,
@@ -188,6 +190,7 @@ pub(super) fn composer_stack_order() -> &'static [ComposerStackSlot] {
         ComposerStackSlot::SessionTools,
         ComposerStackSlot::LiveWork,
         ComposerStackSlot::SlashPalette,
+        ComposerStackSlot::SavedFile,
         ComposerStackSlot::ScreenshotOffer,
         ComposerStackSlot::Attach,
         ComposerStackSlot::Voice,
@@ -204,6 +207,7 @@ fn hangout_composer_stack_order() -> &'static [ComposerStackSlot] {
         ComposerStackSlot::LiveWork,
         ComposerStackSlot::SlashPalette,
         ComposerStackSlot::Chips,
+        ComposerStackSlot::SavedFile,
         ComposerStackSlot::ScreenshotOffer,
         ComposerStackSlot::Attach,
         ComposerStackSlot::Pill,
@@ -3182,6 +3186,7 @@ impl Cabin {
                     ComposerStackSlot::ScreenshotOffer => {
                         self.ui_screenshot_offer_chip(ui);
                     }
+                    ComposerStackSlot::SavedFile => self.ui_saved_file_card(ui),
                     ComposerStackSlot::Chips if !self.cfg.suggestions => {}
                     ComposerStackSlot::Chips => {
                         ui.add_space(6.0);
