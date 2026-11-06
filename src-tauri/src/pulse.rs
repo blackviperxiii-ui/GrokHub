@@ -596,6 +596,7 @@ pub fn why(config_dir: &Path, id: &str) -> Result<String, String> {
     let because = card
         .why
         .clone()
+        .or_else(|| grokhub_core::pulse::plain_why(&card).map(|w| format!("{w}.")))
         .or_else(|| {
             card.pulse
                 .because
@@ -604,7 +605,7 @@ pub fn why(config_dir: &Path, id: &str) -> Result<String, String> {
         })
         .unwrap_or_else(|| "It came from your Pulse sources.".into());
     Ok(match learned {
-        Some(line) => format!("{because} {line}."),
+        Some(line) => format!("{because} {line}"),
         None => because,
     })
 }
@@ -807,7 +808,7 @@ mod tests {
         assert_eq!(learned.score("productivity ideas"), 5, "{learned:?}");
         assert_eq!(
             why(&d.config, "idea-1").expect("why"),
-            "It came from your Pulse sources. From Pulse ideas · productivity ideas +5."
+            "It came from your Pulse sources. From Pulse ideas. You've liked productivity ideas before, so they rank higher."
         );
         act(&d.config, "idea-1", Act::Snooze, &day(), NOW).expect("snooze");
         let learned = reactions::load(&d.config.join(reactions::FILE_NAME));

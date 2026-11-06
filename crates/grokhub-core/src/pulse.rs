@@ -1072,6 +1072,33 @@ fn post_source(card: &UpdateCard) -> &str {
         .unwrap_or(card.source_id.as_str())
 }
 
+/// Why a fetched post is in the feed, in plain words: "You play Helldivers 2",
+/// "Matches your interest in Rust", "From r/buildapc, a source you follow".
+/// None for cards that are not fetched posts.
+pub fn plain_why(card: &UpdateCard) -> Option<String> {
+    if !crate::pulse_sources::is_source_post(card) {
+        return None;
+    }
+    let source = card
+        .pulse
+        .source_name
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("");
+    let because = card
+        .pulse
+        .because
+        .as_deref()
+        .map(str::trim)
+        .filter(|b| !b.is_empty());
+    Some(match because {
+        Some(game) if source == format!("{game} on Steam") => format!("You play {game}"),
+        Some(topic) => format!("Matches your interest in {topic}"),
+        None if !source.is_empty() => format!("From {source}, a source you follow"),
+        None => "From a source you follow".to_string(),
+    })
+}
+
 /// The Feed view split in two: today's set (posted in the last
 /// `TODAY_WINDOW_MS`, newest first, at most `TODAY_PER_SOURCE` per source and
 /// `TODAY_MAX` in all), then everything else, newest first. Retired posts are
@@ -2227,6 +2254,32 @@ mod tests {
             .map(|c| c.id)
             .collect();
         assert_eq!(ids, vec!["old".to_string()], "only the loved copy is left");
+    }
+
+    #[test]
+    fn plain_why_says_it_in_words() {
+        let mut steam = source_post("p", "Helldivers 2 on Steam", 1);
+        steam.pulse.because = Some("Helldivers 2".into());
+        assert_eq!(plain_why(&steam).as_deref(), Some("You play Helldivers 2"));
+        let mut topic = source_post("t", "Hacker News", 1);
+        topic.pulse.because = Some("Rust".into());
+        assert_eq!(
+            plain_why(&topic).as_deref(),
+            Some("Matches your interest in Rust")
+        );
+        let followed = source_post("f", "r/buildapc", 1);
+        assert_eq!(
+            plain_why(&followed).as_deref(),
+            Some("From r/buildapc, a source you follow")
+        );
+        let mut nameless = source_post("n", "", 1);
+        nameless.pulse.source_name = None;
+        assert_eq!(
+            plain_why(&nameless).as_deref(),
+            Some("From a source you follow")
+        );
+        let report = automation_done_card("backup", "Nightly backup", "ok", 1);
+        assert_eq!(plain_why(&report), None);
     }
 
     #[test]

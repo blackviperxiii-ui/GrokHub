@@ -259,7 +259,7 @@ mod tests {
         let card = cabin.pulse_card("a").unwrap();
         assert_eq!(
             cabin.reaction_why(&card).as_deref(),
-            Some("From Dota 2 on Steam · game news -3")
+            Some("From Dota 2 on Steam. You've passed on some game news, so they show a little less.")
         );
     }
 

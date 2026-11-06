@@ -947,9 +947,10 @@ pub(super) fn paint_post_body(
             3,
         );
     }
-    if let Some(topic) = card.pulse.because.as_deref() {
+    let why = pc::plain_why(card).or_else(|| card.pulse.because.as_deref().map(why_line));
+    if let Some(why) = why {
         ui.label(
-            RichText::new(why_line(topic))
+            RichText::new(why)
                 .size(crate::theme::FONT_TIP)
                 .color(crate::theme::subtle()),
         );
