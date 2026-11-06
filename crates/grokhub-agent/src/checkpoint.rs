@@ -581,7 +581,11 @@ fn named(items: &[&TodoItem]) -> String {
         .map(|t| mid_sentence(&clip(&t.content)))
         .collect();
     if items.len() > PROGRESS_ITEMS {
-        out.push(format!("{} others", items.len() - PROGRESS_ITEMS));
+        let rest = items.len() - PROGRESS_ITEMS;
+        out.push(format!(
+            "{rest} {}",
+            if rest == 1 { "other" } else { "others" }
+        ));
     }
     match out.split_last() {
         Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
@@ -1060,6 +1064,16 @@ mod tests {
         assert_eq!(
             Progress::default().check(&many, 3).as_deref(),
             Some("Finished a, b, c and 2 others. Now on f.")
+        );
+        // One more than three reads "1 other", never "1 others".
+        let four: Vec<TodoItem> = ["a", "b", "c", "d"]
+            .iter()
+            .map(|n| todo(n, "completed"))
+            .chain([todo("f", "pending")])
+            .collect();
+        assert_eq!(
+            Progress::default().check(&four, 3).as_deref(),
+            Some("Finished a, b, c and 1 other. Now on f.")
         );
         let pair = [
             todo("DNS lookups", "completed"),

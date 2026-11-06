@@ -34,6 +34,9 @@ pub struct SseParser {
     completed: bool,
     errored: bool,
     seen: HashSet<String>,
+    /// Reasoning text so far, per stream kind. A provider that sends the same thought as
+    /// both raw reasoning and a summary would otherwise show it twice, back to back.
+    reasoning: Vec<(String, String)>,
 }
 
 impl SseParser {
@@ -43,6 +46,7 @@ impl SseParser {
             completed: false,
             errored: false,
             seen: HashSet::new(),
+            reasoning: Vec::new(),
         }
     }
 
@@ -54,6 +58,25 @@ impl SseParser {
             out.extend(self.parse_frame(&frame));
         }
         out
+    }
+
+    /// Whether a reasoning delta is new, not a repeat of what another reasoning kind
+    /// already sent.
+    fn new_reasoning(&mut self, kind: &str, delta: &str) -> bool {
+        let at = match self.reasoning.iter().position(|(k, _)| k == kind) {
+            Some(at) => at,
+            None => {
+                self.reasoning.push((kind.to_string(), String::new()));
+                self.reasoning.len() - 1
+            }
+        };
+        self.reasoning[at].1.push_str(delta);
+        let mine = &self.reasoning[at].1;
+        !self
+            .reasoning
+            .iter()
+            .enumerate()
+            .any(|(i, (_, text))| i != at && text.starts_with(mine.as_str()))
     }
 
     /// A stream that ends without `response.completed` or an error event is a disconnect.
@@ -98,6 +121,7 @@ impl SseParser {
         if is_reasoning_delta(kind) {
             return text_delta(&v)
                 .into_iter()
+                .filter(|delta| self.new_reasoning(kind, delta))
                 .map(SseEvent::ReasoningDelta)
                 .collect();
         }
@@ -398,6 +422,28 @@ mod tests {
 
     fn frame(json: &str) -> String {
         format!("data: {json}\n\n")
+    }
+
+    #[test]
+    fn a_thought_sent_as_both_reasoning_and_summary_shows_once() {
+        let mut p = SseParser::new();
+        let line = "The findings card is posted.";
+        let mut got = p.push(&frame(&format!(
+            r#"{{"type":"response.reasoning_text.delta","delta":"{line}"}}"#
+        )));
+        got.extend(p.push(&frame(&format!(
+            r#"{{"type":"response.reasoning_summary_text.delta","delta":"{line}"}}"#
+        ))));
+        got.extend(p.push(&frame(
+            r#"{"type":"response.reasoning_text.delta","delta":" Next."}"#,
+        )));
+        assert_eq!(
+            got,
+            vec![
+                SseEvent::ReasoningDelta(line.into()),
+                SseEvent::ReasoningDelta(" Next.".into()),
+            ]
+        );
     }
 
     #[test]

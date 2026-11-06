@@ -1126,11 +1126,9 @@ fn run_turn(
                                 .then(|| crate::drive::unbacked_done(&last_assistant, evidence))
                                 .flatten()
                             {
-                                on_event(LoopEvent::Text(format!("\n\n{text}")));
-                                history.push(InputItem::Message {
-                                    role: "assistant".into(),
-                                    content: vec![ContentPart::InputText(text.into())],
-                                });
+                                // The app's check, shown as status: it doesn't
+                                // speak in the model's voice or join its words.
+                                on_event(LoopEvent::Thought(text.into()));
                             }
                         }
                     }
@@ -1578,8 +1576,10 @@ fn run_turn(
                 evidence,
             )
         }) {
-            // Shown in the reply, not sent back to the model.
-            on_event(LoopEvent::Text(format!("\n\n{note}\n\n")));
+            // A status line from the app, not the model's words: it shows as a
+            // thought, stays out of the saved reply and never goes back to the
+            // model.
+            on_event(LoopEvent::Thought(note));
         }
         for note in input.steer.drain() {
             note_steer(input, &note);
@@ -6080,16 +6080,21 @@ mod tests {
         assert_eq!(out.stop, StopReason::EndTurn);
         assert_eq!(script.seen.lock().unwrap().len(), 1);
         let line = "That isn't done yet: nothing ran this turn to make or check the change.";
+        // The app's check shows as status, once, and never as the model's words.
         assert_eq!(
             events
                 .iter()
-                .filter(|ev| matches!(ev, LoopEvent::Text(t) if t == &format!("\n\n{line}")))
+                .filter(|ev| matches!(ev, LoopEvent::Thought(t) if t == line))
                 .count(),
             1
         );
-        assert!(
-            matches!(history.last(), Some(InputItem::Message { role, content }) if role == "assistant" && content.first() == Some(&ContentPart::InputText(line.into())))
-        );
+        assert!(!events
+            .iter()
+            .any(|ev| matches!(ev, LoopEvent::Text(t) if t.contains(line))));
+        assert!(!history.iter().any(|item| matches!(
+            item,
+            InputItem::Message { content, .. } if content.first() == Some(&ContentPart::InputText(line.into()))
+        )));
         crate::session_tools::invalidate_todos(&conv);
         // A plain question with the same words gets no extra line.
         let conv = format!("claim-done-q-{}", std::process::id());
@@ -6399,7 +6404,8 @@ mod tests {
         ]);
         let (out, history, events) = run_drive(&script, &dir, &conv);
         assert_eq!(out.stop, StopReason::EndTurn);
-        let notes: Vec<&str> = events
+        // Progress notes show as status lines; the reply is the model's alone.
+        let texts: Vec<&str> = events
             .iter()
             .filter_map(|e| {
                 if let LoopEvent::Text(t) = e {
@@ -6409,12 +6415,19 @@ mod tests {
                 }
             })
             .collect();
+        assert_eq!(texts, ["All three checked."]);
+        let notes: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                LoopEvent::Thought(t) if t.starts_with("Finished ") => Some(t.as_str()),
+                _ => None,
+            })
+            .collect();
         assert_eq!(
             notes,
             [
-                "\n\nFinished check services. Now on check packages.\n\n",
-                "\n\nFinished check packages. Now on boot errors.\n\n",
-                "All three checked."
+                "Finished check services. Now on check packages.",
+                "Finished check packages. Now on boot errors.",
             ]
         );
         // The notes are for the person, not sent back to the model.
