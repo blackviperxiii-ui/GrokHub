@@ -160,4 +160,29 @@ describe("routines and the dock list", () => {
     const fresh = Object.fromEntries(shown.map((i) => [i.key, i]));
     expect(pruneActivity(fresh, now)).toBe(fresh);
   });
+
+  it("a queue reads as x of y running", () => {
+    const item = (key: string, status: ActivityItem["status"]): ActivityItem => ({
+      key,
+      kind: "chat",
+      title: key,
+      status,
+      detail: "",
+      steps: 0,
+      at: 1,
+    });
+    expect(dockSummary([item("a", "running"), item("q1", "queued")])).toBe("1 of 2 running");
+    expect(dockSummary([item("q1", "queued"), item("q2", "queued")])).toBe("2 queued");
+    expect(
+      dockSummary([item("w", "waiting"), item("a", "running"), item("q1", "queued"), item("q2", "queued"), item("d", "done")]),
+    ).toBe("1 waiting · 1 of 3 running · 1 done");
+    expect(dockSummary([item("a", "running")])).toBe("1 running");
+    expect(dockSummary([])).toBe("");
+    // Queued sits after running and before results in the list.
+    expect(dockItems([item("d", "done"), item("q", "queued"), item("a", "running")], 1).map((i) => i.key)).toEqual([
+      "a",
+      "q",
+      "d",
+    ]);
+  });
 });

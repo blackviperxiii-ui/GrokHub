@@ -39,6 +39,9 @@ vi.mock("./api", () => ({
   onEventGap: () => Promise.resolve(() => {}),
   // The scheduler has its own tests (App.test.tsx, Automations.test.tsx).
   onAutomationRan: () => Promise.resolve(() => {}),
+  onUpdateAvailable: () => Promise.resolve(() => {}),
+  onLocalEngineEvent: () => Promise.resolve(() => {}),
+  workboardSweepUndo: () => Promise.resolve({}),
   shareSchedulerClock: () => Promise.resolve(),
   onFileDrop: () => Promise.resolve(() => {}),
   // The turn stays open, so its events keep landing.
