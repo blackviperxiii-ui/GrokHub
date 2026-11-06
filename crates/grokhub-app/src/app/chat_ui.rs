@@ -1934,6 +1934,7 @@ impl Cabin {
                         self.paint_inbox_only(ui);
                     }
                     self.paint_try_again(ui);
+                    self.paint_get_local_model(ui);
                     if pin_tail {
                         // The transcript is laid out now, so the bottom is a real place.
                         ui.scroll_to_cursor(Some(egui::Align::BOTTOM));
@@ -2749,6 +2750,38 @@ impl Cabin {
         });
     }
 
+    /// The last reply says an 18+ chat needs this computer's model and none is
+    /// set up: one pill under the chat opens Local AI to download one.
+    pub(super) fn needs_local_for_adult(&self) -> bool {
+        !self.running
+            && self.messages.last().is_some_and(|(role, text)| {
+                role == "assistant" && text.trim() == grokhub_core::adult_guard::LOCAL_ONLY_MISSING
+            })
+    }
+
+    pub(super) fn paint_get_local_model(&mut self, ui: &mut egui::Ui) {
+        if !self.needs_local_for_adult() {
+            return;
+        }
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new("18+ chats need this PC's model")
+                    .size(13.0)
+                    .color(crate::theme::muted()),
+            );
+            if crate::cards::white_pill(ui, "Get a local model") {
+                self.open_local_ai();
+            }
+        });
+    }
+
+    /// Settings → AI models, where Local AI is turned on and a model downloaded.
+    pub(super) fn open_local_ai(&mut self) {
+        self.nav = Nav::Settings;
+        self.settings_sec = SettingsSec::AiModels;
+    }
+
     pub(super) fn ui_empty_home(&mut self, ui: &mut egui::Ui) {
         let greet_on = should_paint_greeting(self.messages.is_empty(), self.scratch())
             && !self.greeting.is_empty();
@@ -2825,6 +2858,7 @@ impl Cabin {
                         self.paint_inbox_only(ui);
                     }
                     self.paint_try_again(ui);
+                    self.paint_get_local_model(ui);
                     if pulse_on && device_on {
                         let gap = ui.available_height();
                         ui.add_space(((gap - device_h) * 0.5).max(0.0));
