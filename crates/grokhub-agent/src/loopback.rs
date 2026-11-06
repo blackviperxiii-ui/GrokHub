@@ -16,7 +16,7 @@ pub(crate) fn bind() -> Result<(TcpListener, String), String> {
 }
 
 fn close_page() -> Vec<u8> {
-    let body = b"<p>Signed in. You can close this tab.</p>";
+    let body = b"<p>Signed in. You can close this tab and go back to the app.</p>";
     let mut out = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()

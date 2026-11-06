@@ -356,20 +356,27 @@ pub fn key_page(base_url: &str) -> Option<&'static str> {
     .map(|(_, page)| *page)
 }
 
+/// The name the new key gets on OpenRouter's keys page.
+const OPENROUTER_KEY_LABEL: &str = "Loadout";
+
 /// OpenRouter's browser sign-in page (its OAuth PKCE flow) with our loopback.
-pub fn openrouter_auth_url(callback: &str, challenge: &str) -> String {
+/// OpenRouter hands `state` back unchanged on the callback.
+pub fn openrouter_auth_url(callback: &str, challenge: &str, state: &str) -> String {
     let query = grokhub_core::pkce::form(&[
         ("callback_url", callback),
         ("code_challenge", challenge),
         ("code_challenge_method", "S256"),
+        ("state", state),
+        ("key_label", OPENROUTER_KEY_LABEL),
     ]);
     format!("{OPENROUTER_AUTH}?{query}")
 }
 
 /// Sign in to OpenRouter in the browser `open` launches and come back with a
 /// new key. Nothing is saved here: the cabin asks you on a credentials card
-/// first. OpenRouter sends no `state`; the code only buys a key together with
-/// this verifier (PKCE), and the exchange carries no user data.
+/// first. The callback must carry this sign-in's `state`, and the code only
+/// buys a key together with this verifier (PKCE). The exchange carries no
+/// user data.
 pub fn openrouter_key(
     config_dir: &Path,
     open: &dyn Fn(&str) -> Result<(), String>,
@@ -377,11 +384,13 @@ pub fn openrouter_key(
 ) -> Result<Zeroizing<String>, String> {
     let (listener, redirect) = crate::loopback::bind()?;
     let verifier = grokhub_core::pkce::pkce_verifier();
+    let state = grokhub_core::pkce::oauth_nonce();
     open(&openrouter_auth_url(
         &redirect,
         &grokhub_core::pkce::pkce_challenge(&verifier),
+        &state,
     ))?;
-    let code = crate::loopback::wait_code(&listener, "", "OpenRouter sign-in", wait)?;
+    let code = crate::loopback::wait_code(&listener, &state, "OpenRouter sign-in", wait)?;
     crate::harness::guard_quiet(config_dir, &EgressReq::new(OPENROUTER_KEYS, &[]))?;
     let body = json!({"code": code, "code_verifier": verifier, "code_challenge_method": "S256"})
         .to_string();
