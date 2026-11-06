@@ -15,6 +15,7 @@ import {
   cancelChat,
   closeChat,
   deleteChat,
+  exportChat,
   forgetMessage,
   getLastChat,
   getSettings,
@@ -28,6 +29,7 @@ import {
   type Approvals,
   type ChatEvent,
   type ElicitAction,
+  type SavedFile,
   type SessionMode,
   type Settings,
   type SlashEffect,
@@ -59,6 +61,7 @@ import { activityOf, useNyx } from "./nyx";
 import { PRODUCT_NAME } from "./brand";
 import { isSlashCommand, SlashMenu, useSlashHits } from "./SlashMenu";
 import { needsSettings } from "./ui";
+import { SavedCard } from "./SavedCard";
 
 export type Item =
   | { kind: "user"; text: string }
@@ -81,6 +84,8 @@ export type Item =
   | { kind: "halted" }
   /** What a slash command did. It stays in the log and never reaches the model. */
   | { kind: "slash"; command: string; text: string }
+  /** `/export` saved this chat; the card opens or shows the file. */
+  | { kind: "saved"; saved: SavedFile }
   | ElicitItem;
 
 type Ended = "ended" | "halted";
@@ -432,6 +437,8 @@ function LogItem({
           <p className="card-detail-line plain">{item.text}</p>
         </div>
       );
+    case "saved":
+      return <SavedCard saved={item.saved} />;
     case "halted":
       return (
         <p className="halted-line" role="status">
@@ -827,6 +834,14 @@ export function Chat({
         break;
       case "notice":
         setItems((now) => [...now, { kind: "slash", command, text: effect.text }]);
+        break;
+      case "export":
+        try {
+          const saved = await exportChat(conversationId);
+          setItems((now) => [...now, { kind: "saved", saved }]);
+        } catch (err) {
+          setError(String(err));
+        }
         break;
     }
   }

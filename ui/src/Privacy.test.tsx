@@ -7,11 +7,13 @@ const api = vi.hoisted(() => ({
   getPrivacy: vi.fn<() => Promise<PrivacyPage>>(),
   setOfflineOnly: vi.fn<(on: boolean) => Promise<PrivacyPage>>(),
   openDataFolder: vi.fn<() => Promise<void>>(),
+  openFilesFolder: vi.fn<() => Promise<void>>(),
+  changeFilesFolder: vi.fn<() => Promise<PrivacyPage>>(),
 }));
 
 vi.mock("./api", () => api);
 
-import { OFFLINE_NOT_READY, Privacy } from "./Privacy";
+import { FILES_NOTE, OFFLINE_NOT_READY, Privacy } from "./Privacy";
 
 function page(over: Partial<PrivacyPage> = {}): PrivacyPage {
   return {
@@ -25,6 +27,7 @@ function page(over: Partial<PrivacyPage> = {}): PrivacyPage {
     encrypted: true,
     encryptedNote: "Personal memory and the logs are sealed with your keyring.",
     dataFolder: "/home/user/.config/GrokHub",
+    filesFolder: "/home/user/Documents/Loadout",
     canOpenFolder: true,
     ...over,
   };
@@ -57,6 +60,33 @@ describe("Privacy", () => {
     expect(screen.getByLabelText("Offline only")).toBeChecked();
     await userEvent.click(screen.getByRole("button", { name: "Open data folder" }));
     expect(api.openDataFolder).toHaveBeenCalledTimes(1);
+  });
+
+  it("Your files shows the folder, opens it, and Change says when it moved", async () => {
+    api.openFilesFolder.mockResolvedValue();
+    api.changeFilesFolder.mockResolvedValueOnce(page());
+    api.changeFilesFolder.mockResolvedValueOnce(page({ filesFolder: "/mnt/games/Loadout" }));
+    render(<Privacy />);
+    expect(await screen.findByText("/home/user/Documents/Loadout")).toBeInTheDocument();
+    expect(screen.getByText(FILES_NOTE)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Open" }));
+    expect(api.openFilesFolder).toHaveBeenCalledTimes(1);
+    // The picker was closed: nothing changes and nothing is said.
+    await userEvent.click(screen.getByRole("button", { name: "Change…" }));
+    expect(screen.queryByText("Your files go to the new folder from now on.")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Change…" }));
+    expect(await screen.findByText("/mnt/games/Loadout")).toBeInTheDocument();
+    expect(screen.getByText("Your files go to the new folder from now on.")).toBeInTheDocument();
+  });
+
+  it("a folder that can't be used says why", async () => {
+    api.changeFilesFolder.mockRejectedValue("Can't use that folder: can't save files there (read-only)");
+    render(<Privacy />);
+    await userEvent.click(await screen.findByRole("button", { name: "Change…" }));
+    expect(
+      await screen.findByText("Can't use that folder: can't save files there (read-only)"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("/home/user/Documents/Loadout")).toBeInTheDocument();
   });
 
   it("asks first when no local model is ready, and Cancel leaves it off", async () => {

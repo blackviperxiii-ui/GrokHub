@@ -37,6 +37,9 @@ const api = vi.hoisted(() => ({
   loadChat: vi.fn<(id: string, limit?: number) => Promise<Transcript>>(),
   slashHits: vi.fn(() => Promise.resolve([])),
   runSlash: vi.fn(),
+  exportChat: vi.fn(),
+  openSaved: vi.fn(),
+  revealSaved: vi.fn(),
   quickChips: vi.fn<(surface: string, id?: string, draft?: string, mode?: SessionMode) => Promise<QuickChip[]>>(),
   chipOutcome: vi.fn<(surface: string, id: string, picked: boolean) => Promise<boolean>>(),
   goalAct: vi.fn(() => Promise.resolve({ board: { today: [], mine: [], suggested: [], season: { label: "", done: 0, trophies: [], badges: [] } } })),
@@ -56,6 +59,9 @@ vi.mock("./api", () => ({
   loadChat: api.loadChat,
   slashHits: api.slashHits,
   runSlash: api.runSlash,
+  exportChat: api.exportChat,
+  openSaved: api.openSaved,
+  revealSaved: api.revealSaved,
   quickChips: api.quickChips,
   chipOutcome: api.chipOutcome,
   goalAct: api.goalAct,
@@ -358,6 +364,39 @@ describe("Chat", () => {
     await waitFor(() => expect(screen.getByLabelText("Message")).toBeEnabled());
     expect(screen.getByText("There are 12 files.")).toBeVisible();
     expect(screen.queryByRole("group", { name: "Suggestions" })).toBeNull();
+  });
+
+  it("/export saves this chat and leaves a card that opens or shows the file", async () => {
+    api.runSlash.mockReset().mockResolvedValue({ kind: "export" });
+    api.exportChat.mockReset().mockResolvedValue({
+      token: "saved-1",
+      name: "hello-20261106-1415.md",
+      folder: "Chats",
+      path: "/home/user/Documents/Loadout/Chats/hello-20261106-1415.md",
+      line: "Saved hello-20261106-1415.md to Chats",
+      revealLabel: "Show in folder",
+    });
+    api.revealSaved.mockReset().mockResolvedValue(undefined);
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("hello");
+    await act(async () => finish());
+    await userEvent.type(screen.getByLabelText("Message"), "/export{Enter}");
+    expect(api.runSlash).toHaveBeenCalledWith("/export");
+    expect(api.exportChat).toHaveBeenCalledWith(id);
+    const card = await screen.findByRole("status", { name: "Saved hello-20261106-1415.md to Chats" });
+    await userEvent.click(within(card).getByRole("button", { name: "Show in folder" }));
+    expect(api.revealSaved).toHaveBeenCalledWith("saved-1");
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("a failed /export says why and saves no card", async () => {
+    api.runSlash.mockReset().mockResolvedValue({ kind: "export" });
+    api.exportChat.mockReset().mockRejectedValue("There's nothing in this chat to save yet.");
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "/export{Enter}");
+    expect(await screen.findByText("There's nothing in this chat to save yet.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Show in folder" })).toBeNull();
   });
 
   it("sends the text and streams its own conversation's reply", async () => {

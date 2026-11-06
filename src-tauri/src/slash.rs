@@ -10,6 +10,8 @@ pub const IN_THE_CABIN: &str = "In the cabin";
 /// A row the paired browser can't run.
 pub const ON_YOUR_COMPUTER: &str = "On your computer";
 pub const NOT_YET: &str = "Not in this app yet";
+pub const EXPORT_MARKDOWN_ONLY: &str =
+    "This window saves chats as Markdown. HTML and JSON exports are in the cabin.";
 
 /// One command the shell runs.
 pub struct ShellCmd {
@@ -56,6 +58,10 @@ pub const SHELL_SLASH: &[ShellCmd] = &[
     row("/automations", "Open Automations", "/automations"),
     row("/connectors", "Open Connectors", "/connectors"),
     ShellCmd {
+        desktop_only: true,
+        ..row("/export", "Save this chat to your Chats folder", "/export")
+    },
+    ShellCmd {
         ready: false,
         ..row("/history", "Past chats", "/history")
     },
@@ -88,6 +94,8 @@ pub enum Effect {
     Open { view: &'static str },
     /// A line to show in the chat log: help or a saved note.
     Notice { text: String },
+    /// `/export`: the chat saves this conversation and shows where it went.
+    Export,
 }
 
 /// What `run` needs done outside this module.
@@ -213,6 +221,10 @@ pub fn parse(line: &str, remote: bool) -> Result<Action, String> {
             view: "automations",
         },
         "/connectors" => Effect::Open { view: "connectors" },
+        "/export" => match text.as_deref().map(str::to_ascii_lowercase).as_deref() {
+            None | Some("md" | "markdown") => Effect::Export,
+            Some(_) => return Err(EXPORT_MARKDOWN_ONLY.into()),
+        },
         "/remember" => {
             return match text {
                 Some(note) => Ok(Action::Remember(note)),
@@ -349,6 +361,32 @@ mod tests {
             assert_eq!(cmds(&hits(draft, false)), Vec::<&str>::new(), "{draft}");
         }
         assert!(!help().contains("/model"));
+    }
+
+    #[test]
+    fn export_runs_here_in_markdown_and_not_in_the_browser() {
+        for line in ["/export", "/export md", "/EXPORT Markdown"] {
+            assert_eq!(
+                parse(line, false),
+                Ok(Action::Effect(Effect::Export)),
+                "{line}"
+            );
+        }
+        assert_eq!(
+            parse("/export html", false),
+            Err(EXPORT_MARKDOWN_ONLY.into())
+        );
+        assert_eq!(
+            parse("/export", true),
+            Err("/export works on your computer.".into())
+        );
+        let hit = hits("/exp", false)
+            .into_iter()
+            .find(|h| h.cmd == "/export")
+            .expect("export row");
+        assert_eq!(hit.disabled, None);
+        assert!(hit.run_on_pick);
+        assert!(help().contains("/export — Save this chat"));
     }
 
     #[test]

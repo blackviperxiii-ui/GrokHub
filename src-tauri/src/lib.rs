@@ -14,6 +14,7 @@ pub mod capabilities;
 pub mod chips;
 pub mod connectors;
 pub mod credential;
+pub mod export;
 pub mod goals;
 pub mod history;
 pub mod home;
@@ -87,6 +88,8 @@ struct ShellState {
     /// The chip rows the page was shown, for the tap that follows.
     chip_rows: Mutex<chips::Rows>,
     sign_in: Arc<oauth::SignIn>,
+    /// Chat exports this window wrote; Open and Show in folder take their tokens.
+    saves: export::Saves,
     /// Asks whose notifications are out (os_extras.rs).
     #[cfg(desktop)]
     notified: os_extras::Pending,
@@ -2248,6 +2251,70 @@ fn open_data_folder(state: State<'_, ShellState>) -> Result<(), String> {
     privacy::open_data_folder(&state.config_dir)
 }
 
+#[tauri::command]
+fn open_files_folder(state: State<'_, ShellState>) -> Result<(), String> {
+    privacy::open_files_folder(&state.config_dir)
+}
+
+/// Settings → Privacy & data → Your files → Change…: the system folder
+/// picker, then the page again. Nothing changes when the picker is closed.
+#[tauri::command]
+async fn change_files_folder(app: AppHandle) -> Result<privacy::Page, String> {
+    #[cfg(desktop)]
+    {
+        use tauri_plugin_dialog::DialogExt;
+        let picked = app
+            .dialog()
+            .file()
+            .set_title("Where should your files go?")
+            .blocking_pick_folder()
+            .and_then(|p| p.into_path().ok());
+        let dir = app.state::<ShellState>().config_dir.clone();
+        off_main(move || {
+            if let Some(folder) = picked {
+                privacy::set_files_folder(&dir, &folder)?;
+            }
+            Ok(privacy::page(
+                &dir,
+                privacy::keyring(&dir),
+                grokhub_core::now_ms(),
+            ))
+        })
+        .await?
+    }
+    #[cfg(mobile)]
+    {
+        let _ = app;
+        Err("Changing where your files go works on your computer.".into())
+    }
+}
+
+/// `/export` and History's Export: the chat as Markdown in your Chats
+/// folder. The card that follows opens the file by its token only.
+#[tauri::command]
+async fn export_chat(
+    state: State<'_, ShellState>,
+    id: String,
+    clock: automations::Clock,
+) -> Result<export::Saved, String> {
+    capabilities::needs(cfg!(desktop), "Saving a chat")?;
+    let dir = state.config_dir.clone();
+    let now = grokhub_core::now_ms();
+    let offset = clock.at(now).utc_offset_min();
+    let path = off_main(move || export::export_to_chats(&dir, &id, now, offset)).await??;
+    Ok(export::saved(&state.saves, path))
+}
+
+#[tauri::command]
+fn open_saved(state: State<'_, ShellState>, token: String) -> Result<(), String> {
+    export::open(&state.saves, &token)
+}
+
+#[tauri::command]
+fn reveal_saved(state: State<'_, ShellState>, token: String) -> Result<(), String> {
+    export::reveal(&state.saves, &token)
+}
+
 /// Settings → Background: who fires automations, and when each runs.
 #[tauri::command]
 fn get_background(state: State<'_, ShellState>) -> Result<background::Page, String> {
@@ -2916,6 +2983,7 @@ pub fn run() {
                 trays: attach::Trays::default(),
                 chip_rows: Mutex::new(chips::Rows::default()),
                 sign_in: Arc::default(),
+                saves: export::Saves::default(),
                 #[cfg(desktop)]
                 notified: os_extras::Pending::default(),
             });
@@ -3112,6 +3180,11 @@ pub fn run() {
             get_privacy,
             set_offline_only,
             open_data_folder,
+            open_files_folder,
+            change_files_folder,
+            export_chat,
+            open_saved,
+            reveal_saved,
             get_background,
             get_home,
             get_mission,

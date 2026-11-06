@@ -541,6 +541,39 @@ mod tests {
     }
 
     #[test]
+    fn a_saved_chat_exports_as_markdown_and_never_over_an_older_file() {
+        let (config, workspace) = (temp_dir("export-cfg"), temp_dir("export-ws"));
+        let out = temp_dir("export-out");
+        let id = "shell-history-export";
+        turn(
+            id,
+            &config,
+            &workspace,
+            Model::new("Blue suits it.", true),
+            "pick a colour",
+        );
+        let first = crate::export::export_into(&config, id, &out, 0, 0).expect("export");
+        let again = crate::export::export_into(&config, id, &out, 0, 0).expect("export again");
+        assert_eq!(
+            first.file_name().and_then(|n| n.to_str()),
+            Some("pick a colour-19700101-0000.md")
+        );
+        assert_eq!(
+            again.file_name().and_then(|n| n.to_str()),
+            Some("pick a colour-19700101-0000-2.md")
+        );
+        let md = std::fs::read_to_string(&first).expect("read");
+        for part in [
+            "# pick a colour",
+            "pick a colour",
+            "Used read_file",
+            "Blue suits it.",
+        ] {
+            assert!(md.contains(part), "{part} missing from {md}");
+        }
+    }
+
+    #[test]
     fn tool_steps_fold_into_one_muted_line() {
         let (config, workspace) = (temp_dir("tools-cfg"), temp_dir("tools-ws"));
         std::fs::write(workspace.join("a.txt"), "alpha").expect("seed");

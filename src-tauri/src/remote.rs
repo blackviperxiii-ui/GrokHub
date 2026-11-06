@@ -1097,7 +1097,16 @@ mod tests {
             "save_defaults",
             "set_offline_only",
             "open_data_folder",
+            "open_files_folder",
+            "change_files_folder",
         ] {
+            assert!(!web_command(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn saving_and_opening_chat_files_stay_on_this_computer() {
+        for name in ["export_chat", "open_saved", "reveal_saved"] {
             assert!(!web_command(name), "{name}");
         }
     }
