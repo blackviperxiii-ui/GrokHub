@@ -5343,7 +5343,7 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             title: "Cheaper groceries this week".into(),
             description: "I can plan meals around this week's grocery sales.".into(),
             emoji: "🛒".into(),
-            category: crate::pulse::PulseCategory::Shopping,
+            category: crate::pulse::PulseCategory::Deals,
             action: "plan a week of meals from this week's grocery sales".into(),
         };
         rows.push((

@@ -322,8 +322,13 @@ pub fn category_words(category: &str) -> String {
         "youtube posts" => "YouTube videos".into(),
         "rss posts" | "feed posts" => "posts from sites you follow".into(),
         "web posts" => "web finds".into(),
-        other => match other.strip_suffix(" ideas") {
-            Some(key) => format!("{} ideas", key.replace('_', " ")),
+        other => match other
+            .strip_suffix(" ideas")
+            .and_then(crate::pulse::PulseCategory::parse)
+        {
+            Some(crate::pulse::PulseCategory::More) => "other ideas".into(),
+            Some(crate::pulse::PulseCategory::Pc) => "ideas about your PC".into(),
+            Some(cat) => format!("ideas about {}", cat.label().to_lowercase()),
             None => other.to_string(),
         },
     }
@@ -608,7 +613,13 @@ mod tests {
             "From Hacker News. You've passed on some Hacker News posts, so they show a little less."
         );
         assert_eq!(category_words("rss posts"), "posts from sites you follow");
-        assert_eq!(category_words("productivity ideas"), "productivity ideas");
+        assert_eq!(
+            category_words("automations ideas"),
+            "ideas about automations"
+        );
+        assert_eq!(category_words("mods ideas"), "ideas about mods & builds");
+        assert_eq!(category_words("pc ideas"), "ideas about your PC");
+        assert_eq!(category_words("more ideas"), "other ideas");
     }
 
     #[test]

@@ -211,6 +211,12 @@ impl Cabin {
             .collect()
     }
 
+    /// Played games that feed Pulse, most recent first, from what was last
+    /// read. Never reads Steam.
+    pub(super) fn steam_played_names(&self, max: usize) -> Vec<String> {
+        steam::played_names(&self.sources.steam.games, &self.sources.steam.prefs, max)
+    }
+
     /// A library game's name from what was last read. Never reads Steam.
     pub(super) fn steam_cached_name(&self, app_id: u32) -> Option<&str> {
         self.sources
