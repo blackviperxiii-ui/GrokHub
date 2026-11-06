@@ -188,7 +188,6 @@ describe("routines and the dock list", () => {
       "d",
     ]);
   });
-<<<<<<< HEAD
 
   it("queued rows keep their order and say where they stand", () => {
     const rows = queuedItems("shell-c1", ["then deploy\nwith care", "  ", "x".repeat(60)]);
@@ -208,6 +207,4 @@ describe("routines and the dock list", () => {
       "23rd in line",
     ]);
   });
-=======
->>>>>>> origin/beta
 });
