@@ -790,6 +790,8 @@ pub const SCORE_DUE: i64 = 500;
 pub const SCORE_UNFINISHED: i64 = 250;
 pub const SCORE_REPEAT: i64 = 120;
 pub const SCORE_LEARN_BOOST: i64 = 80;
+/// A Like on a card with the same title or topic.
+pub const SCORE_LIKED: i64 = 60;
 pub const PENALTY_NOT_THIS: i64 = 400;
 pub const PENALTY_DISMISS: i64 = 200;
 /// A card below this is Quiet: nothing is shown for it.
@@ -905,8 +907,8 @@ fn score_with(card: &UpdateCard, inputs: &PulseInputs, topics: &InputTopics) -> 
     if card.runs >= 3 || card.kind == UpdateKind::AutomateOffer {
         score += SCORE_REPEAT;
     }
-    // 5 and 6. The ledger: accepted Learn cards lift a topic, Not this and
-    // unused Dismiss push it down. Used-then-dismissed is neutral. Dismiss only
+    // 5 and 6. The ledger: accepted Learn cards and likes lift a topic, Not
+    // this and unused Dismiss push it down. Used-then-dismissed is neutral. Dismiss only
     // buries ideas: a dismissed Feed post is gone, but tomorrow's run report or
     // quiet digest with that title still posts.
     let idea = is_idea_card(card);
@@ -918,9 +920,10 @@ fn score_with(card: &UpdateCard, inputs: &PulseInputs, topics: &InputTopics) -> 
         }
         score += match entry.reason {
             LedgerReason::Accepted => SCORE_LEARN_BOOST,
+            LedgerReason::Liked => SCORE_LIKED,
             LedgerReason::NotThis | LedgerReason::Wrong => -PENALTY_NOT_THIS,
             LedgerReason::Dismiss if idea => -PENALTY_DISMISS,
-            LedgerReason::Dismiss | LedgerReason::Used | LedgerReason::Liked => 0,
+            LedgerReason::Dismiss | LedgerReason::Used => 0,
         };
     }
     // 7. A proactive offer's help (value × confidence × reversibility, × 1000).
@@ -2225,6 +2228,23 @@ mod tests {
         assert_eq!(IDEAS_LOADING, "Looking for ideas in your recent work…");
         assert_eq!(IDEAS_SIGN_IN, "Sign in to Grok to get ideas.");
         assert_eq!(PulseCategory::More.label(), "More for you");
+    }
+
+    #[test]
+    fn a_like_lifts_the_same_topic() {
+        let card = idea("idea-1", "Watch Helldivers 2 patch notes", "", 40);
+        let liked = parse_ledger(&ledger_line(
+            "2026-11-06",
+            "Watch Helldivers 2 patch notes",
+            LedgerReason::Liked,
+        ));
+        let inputs = PulseInputs {
+            ledger: &liked,
+            now_ms: 5_000,
+            ..Default::default()
+        };
+        assert_eq!(pulse_score(&card, &inputs), 150 + SCORE_LIKED);
+        assert_eq!(SCORE_LIKED, 60);
     }
 
     #[test]
