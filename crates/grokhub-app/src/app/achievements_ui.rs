@@ -111,7 +111,7 @@ fn games_to_check() -> Vec<(u32, String)> {
 }
 
 impl Cabin {
-    fn ach_now(&mut self) -> &mut Tracker {
+    pub(super) fn ach_now(&mut self) -> &mut Tracker {
         self.sources
             .ach
             .tracker
