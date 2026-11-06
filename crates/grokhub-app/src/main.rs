@@ -42,6 +42,7 @@ mod self_mcp;
 mod skills;
 mod spoken;
 mod startup;
+mod stt_stream;
 mod store;
 mod theme;
 mod threads;
