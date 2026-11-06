@@ -356,15 +356,25 @@ delete, overwrite or send something: Delete old journal logs.",
             ]
         );
         assert_eq!(cabin.status, "Do all: 1 of 3 running");
-        // Each waiting fix paints as its own Queued row while the run works.
-        let texts = painted(|ui| cabin.paint_live_work(ui));
+        // Each waiting fix is its own Queued row in Activity while the run works.
+        let titles: Vec<String> = cabin
+            .activity_items()
+            .into_iter()
+            .filter(|i| i.status == super::super::activity_dock::ActivityStatus::Queued)
+            .map(|i| i.title)
+            .collect();
+        assert_eq!(
+            titles,
+            [
+                "Do all 2/3 · Reinstall 6 packages: Reinstall th…",
+                "Do all 3/3 · Explain all: Explain each finding…",
+                "Do all summary · End with the Finished recap, o…",
+            ],
+            "{titles:?}"
+        );
         assert!(
-            texts.contains(
-                &"Do all 2/3 · Reinstall 6 packages: Reinstall the 6 packages with".to_string()
-            ) && texts.contains(
-                &"Do all 3/3 · Explain all: Explain each finding in plain words.".to_string()
-            ),
-            "{texts:?}"
+            painted(|ui| cabin.paint_live_work(ui)).is_empty(),
+            "nothing about the queue sits above the chat box"
         );
         // When the turn ends, the next fix goes out and leaves the queue.
         cabin.running = false;
