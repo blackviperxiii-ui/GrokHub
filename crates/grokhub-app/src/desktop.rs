@@ -1745,6 +1745,93 @@ pub fn open_path(path: &str) -> Result<(), String> {
     }
 }
 
+/// What the "show this file in its folder" button says on this OS.
+pub fn reveal_label() -> &'static str {
+    if cfg!(windows) {
+        "Show in File Explorer"
+    } else if cfg!(target_os = "macos") {
+        "Show in Finder"
+    } else {
+        "Show in folder"
+    }
+}
+
+/// Open the folder holding `path` with the file selected. Windows asks
+/// Explorer to select it; macOS uses `open -R`; Linux asks the file manager
+/// over D-Bus (`org.freedesktop.FileManager1.ShowItems`) and opens the folder
+/// when no file manager answers. A file that is gone opens its folder.
+pub fn reveal_file(path: &std::path::Path) -> Result<(), String> {
+    if !path.exists() {
+        return match path.parent().filter(|p| p.is_dir()) {
+            Some(dir) => open_path(&dir.to_string_lossy()),
+            None => Err("the file and its folder are gone".into()),
+        };
+    }
+    #[cfg(windows)]
+    {
+        crate::win_native::reveal_file(&path.to_string_lossy())
+            .or_else(|_| open_folder_holding(path))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        spawn_reaped(std::process::Command::new("open").arg("-R").arg(path))
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let uri = file_uri(path);
+        let fallback = path.to_path_buf();
+        // The call can wait on a file manager starting up: keep it off the UI thread.
+        std::thread::spawn(move || {
+            if show_items_over_dbus(&uri).is_err() {
+                let _ = open_folder_holding(&fallback);
+            }
+        });
+        Ok(())
+    }
+}
+
+/// Open the folder that holds `path` (no selection).
+fn open_folder_holding(path: &std::path::Path) -> Result<(), String> {
+    let dir = if path.is_dir() {
+        path
+    } else {
+        path.parent().ok_or("no folder")?
+    };
+    open_path(&dir.to_string_lossy())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn show_items_over_dbus(uri: &str) -> Result<(), String> {
+    let conn = zbus::blocking::Connection::session().map_err(|e| e.to_string())?;
+    conn.call_method(
+        Some("org.freedesktop.FileManager1"),
+        "/org/freedesktop/FileManager1",
+        Some("org.freedesktop.FileManager1"),
+        "ShowItems",
+        &(vec![uri], ""),
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
+/// `file://` URI for an absolute path, every byte outside the unreserved set
+/// percent-encoded (spaces, `#`, `%`, non-ASCII names).
+#[cfg(all(unix, not(target_os = "macos")))]
+pub(crate) fn file_uri(path: &std::path::Path) -> String {
+    use std::os::unix::ffi::OsStrExt as _;
+    let mut out = String::from("file://");
+    for &b in path.as_os_str().as_bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'/' | b'-' | b'_' | b'.' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
 /// Caret, pipe, backtick, backslash, braces, and quotes, plus whitespace or control.
 /// Ampersand, question mark, equals, percent, and hash stay: one argument, never cmd.
 fn url_shell_meta(url: &str) -> bool {
@@ -2068,6 +2155,26 @@ pub fn clipboard_once() -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn file_uri_percent_encodes_spaces_and_unicode() {
+        assert_eq!(
+            super::file_uri(std::path::Path::new(
+                "/home/user/Documents/Loadout/Chats/my chat #1-é.md"
+            )),
+            "file:///home/user/Documents/Loadout/Chats/my%20chat%20%231-%C3%A9.md"
+        );
+    }
+
+    #[test]
+    fn reveal_of_a_missing_file_with_no_folder_says_so() {
+        let gone = std::env::temp_dir().join("no-such-dir-for-reveal-test/x/y.md");
+        assert_eq!(
+            super::reveal_file(&gone),
+            Err("the file and its folder are gone".to_string())
+        );
+    }
+
     use super::*;
 
     #[test]

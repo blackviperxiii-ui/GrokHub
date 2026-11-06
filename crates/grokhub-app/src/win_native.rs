@@ -446,6 +446,44 @@ pub fn open_path(path: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Open the folder that holds `path` with the file selected, the way
+/// Explorer's own "Open file location" does. `SHOpenFolderAndSelectItems`
+/// takes the path as an item, so commas, quotes and non-Latin names work
+/// (`explorer /select,` breaks on them and returns 1 even on success).
+pub fn reveal_file(path: &str) -> Result<(), String> {
+    use windows_sys::Win32::System::Com::{
+        CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED,
+    };
+    use windows_sys::Win32::UI::Shell::{ILCreateFromPathW, ILFree, SHOpenFolderAndSelectItems};
+    let target = wide(path);
+    // COM must be up on the calling thread; a thread of our own keeps the
+    // UI thread's apartment untouched.
+    std::thread::spawn(move || unsafe {
+        let init = CoInitializeEx(ptr::null(), COINIT_APARTMENTTHREADED as u32);
+        let pidl = ILCreateFromPathW(target.as_ptr());
+        let rc = if pidl.is_null() {
+            -1
+        } else {
+            let hr = SHOpenFolderAndSelectItems(pidl, 0, ptr::null(), 0);
+            ILFree(pidl);
+            hr
+        };
+        if init >= 0 {
+            CoUninitialize();
+        }
+        rc
+    })
+    .join()
+    .map_err(|_| "Explorer didn't answer".to_string())
+    .and_then(|hr| {
+        if hr < 0 {
+            Err(format!("Explorer couldn't show it (0x{:08X})", hr as u32))
+        } else {
+            Ok(())
+        }
+    })
+}
+
 /// Local wall clock. `date` is a cmd builtin on Windows, not a binary the cabin can run.
 pub fn local_wall_clock() -> grokhub_core::WallClock {
     let mut st = SYSTEMTIME {

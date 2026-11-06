@@ -55,23 +55,7 @@ pub fn config_dir() -> PathBuf {
     if let Some(dir) = OVERRIDE.with(|slot| slot.borrow().clone()) {
         return dir;
     }
-    if let Ok(raw) = std::env::var("GROKHUB_CONFIG") {
-        let raw = raw.trim();
-        if !raw.is_empty() {
-            return PathBuf::from(raw);
-        }
-    }
-    if cfg!(windows) {
-        if let Ok(app) = std::env::var("APPDATA") {
-            if !app.trim().is_empty() {
-                return PathBuf::from(app).join("GrokHub");
-            }
-        }
-    }
-    if let Some(home) = grokhub_core::user_home() {
-        return home.join(".config").join("GrokHub");
-    }
-    PathBuf::from(".grokhub")
+    grokhub_core::paths::config_dir()
 }
 
 pub fn project_key(workspace: &Path) -> String {

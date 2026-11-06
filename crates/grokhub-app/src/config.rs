@@ -1022,8 +1022,8 @@ pub fn config_dir() -> PathBuf {
     if let Some(dir) = TEST_CONFIG_DIR.with(|slot| slot.borrow().clone()) {
         return dir;
     }
-    if let Ok(p) = std::env::var("GROKHUB_CONFIG") {
-        return PathBuf::from(p);
+    if let Some(p) = grokhub_core::paths::env_config_dir() {
+        return p;
     }
     unpinned_fallback()
 }
@@ -1049,17 +1049,7 @@ pub fn cabin_grok_home() -> PathBuf {
 
 #[cfg(not(test))]
 fn dirs_fallback() -> PathBuf {
-    if cfg!(windows) {
-        if let Ok(app) = std::env::var("APPDATA") {
-            if !app.trim().is_empty() {
-                return PathBuf::from(app).join("GrokHub");
-            }
-        }
-    }
-    if let Some(home) = grokhub_core::user_home() {
-        return home.join(".config/GrokHub");
-    }
-    PathBuf::from(".grokhub")
+    grokhub_core::paths::default_config_dir()
 }
 
 pub fn memory_dir() -> PathBuf {

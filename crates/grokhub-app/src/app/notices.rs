@@ -2,7 +2,7 @@
 //!
 //! Archive / unarchive, diagnostics saves and the status lines that raise a
 //! toast land here instead of strips above the composer. Each row can carry
-//! one action (Undo, Open folder). Nothing is written to disk.
+//! one action (Undo, Show in folder). Nothing is written to disk.
 
 use super::*;
 
@@ -26,8 +26,8 @@ pub(super) enum NoticeAction {
     Unarchive(String),
     /// Undo an unarchive: archive the chat again.
     Archive(String),
-    /// Open the folder that holds this file.
-    OpenFolder(std::path::PathBuf),
+    /// Open the folder that holds this file, with the file selected.
+    ShowInFolder(std::path::PathBuf),
     /// Turn this recording folder's stills into a skill draft.
     SaveAsSkill(std::path::PathBuf),
     /// Undo the board sweep: put these archived cards back.
@@ -42,7 +42,7 @@ impl NoticeAction {
     pub(super) fn label(&self) -> &'static str {
         match self {
             NoticeAction::Unarchive(_) | NoticeAction::Archive(_) => "Undo",
-            NoticeAction::OpenFolder(_) => "Open folder",
+            NoticeAction::ShowInFolder(_) => crate::desktop::reveal_label(),
             NoticeAction::SaveAsSkill(_) => "Save as skill",
             NoticeAction::RestoreCards(_) => "Undo",
             NoticeAction::OpenCard(_) => "Open card",
@@ -171,7 +171,7 @@ impl Cabin {
                     }
                 }
             }
-            NoticeAction::OpenFolder(path) => self.open_folder_of(&path),
+            NoticeAction::ShowInFolder(path) => self.show_in_folder(&path),
             NoticeAction::RestoreCards(ids) => {
                 let now = now_ms();
                 let mut back = 0;

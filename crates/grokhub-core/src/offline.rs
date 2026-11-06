@@ -81,23 +81,7 @@ fn env_forced() -> bool {
 /// The config dir this switch lives in: `GROKHUB_CONFIG`, else the platform
 /// default (the same folder the cabin and the agent use).
 pub fn config_dir() -> PathBuf {
-    if let Ok(raw) = std::env::var("GROKHUB_CONFIG") {
-        let raw = raw.trim();
-        if !raw.is_empty() {
-            return PathBuf::from(raw);
-        }
-    }
-    if cfg!(windows) {
-        if let Ok(app) = std::env::var("APPDATA") {
-            if !app.trim().is_empty() {
-                return PathBuf::from(app).join("GrokHub");
-            }
-        }
-    }
-    match crate::user_home() {
-        Some(home) => home.join(".config").join("GrokHub"),
-        None => PathBuf::from(".grokhub"),
-    }
+    crate::paths::config_dir()
 }
 
 /// What `{dir}/offline.toml` says. A missing or broken file is off.

@@ -6,6 +6,42 @@ pub fn user_home() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+/// `GROKHUB_CONFIG` when it names a folder (blank counts as unset).
+pub fn env_config_dir() -> Option<PathBuf> {
+    let raw = std::env::var("GROKHUB_CONFIG").ok()?;
+    let raw = raw.trim();
+    (!raw.is_empty()).then(|| PathBuf::from(raw))
+}
+
+/// The app's own data folder when nothing pins another one:
+/// `%APPDATA%\GrokHub` on Windows, else `<home>/.config/GrokHub`, else
+/// `.grokhub`. Every crate's `config_dir()` falls back to this, so the cabin,
+/// the agent, the shell and the hub all land in the same folder.
+pub fn default_config_dir() -> PathBuf {
+    default_config_dir_in(cfg!(windows), std::env::var_os("APPDATA"), user_home())
+}
+
+fn default_config_dir_in(
+    windows: bool,
+    appdata: Option<std::ffi::OsString>,
+    home: Option<PathBuf>,
+) -> PathBuf {
+    if windows {
+        if let Some(app) = appdata.filter(|a| !a.to_string_lossy().trim().is_empty()) {
+            return PathBuf::from(app).join(crate::brand::INTERNAL_ID);
+        }
+    }
+    match home {
+        Some(home) => home.join(".config").join(crate::brand::INTERNAL_ID),
+        None => PathBuf::from(".grokhub"),
+    }
+}
+
+/// `GROKHUB_CONFIG`, else [`default_config_dir`].
+pub fn config_dir() -> PathBuf {
+    env_config_dir().unwrap_or_else(default_config_dir)
+}
+
 fn nonempty(value: Option<&str>) -> Option<String> {
     value
         .map(str::trim)
@@ -120,6 +156,31 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
     static LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn default_config_dir_is_appdata_on_windows_and_dot_config_elsewhere() {
+        let home = Some(PathBuf::from("/home/user"));
+        assert_eq!(
+            default_config_dir_in(
+                true,
+                Some(r"C:\Users\user\AppData\Roaming".into()),
+                home.clone()
+            ),
+            PathBuf::from(r"C:\Users\user\AppData\Roaming").join("GrokHub")
+        );
+        assert_eq!(
+            default_config_dir_in(true, Some("  ".into()), home.clone()),
+            PathBuf::from("/home/user").join(".config").join("GrokHub")
+        );
+        assert_eq!(
+            default_config_dir_in(false, Some("/ignored".into()), home),
+            PathBuf::from("/home/user").join(".config").join("GrokHub")
+        );
+        assert_eq!(
+            default_config_dir_in(false, None, None),
+            PathBuf::from(".grokhub")
+        );
+    }
 
     #[test]
     fn user_home_prefers_home_then_userprofile() {
