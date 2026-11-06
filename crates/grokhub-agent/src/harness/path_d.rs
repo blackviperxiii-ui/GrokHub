@@ -144,6 +144,7 @@ pub fn unasked_title(class: HardClass) -> String {
         HardClass::OutsideValue => "use a value it only read in outside text",
         HardClass::RunsLater => "change a file that runs code later",
         HardClass::FlaggedDriver => "install a driver that anti-cheats block",
+        HardClass::SystemAdmin => "use admin rights or change system protection",
     };
     format!(
         "{} tried to {what} without asking",

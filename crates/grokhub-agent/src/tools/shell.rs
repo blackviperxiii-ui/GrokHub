@@ -473,20 +473,42 @@ pub(crate) fn spawn_background(
 }
 
 /// Windows PowerShell writes a piped stderr as CLIXML (`#< CLIXML` then
-/// XML records). The model and the chat need the error text itself: this
-/// keeps each record's text, decoded, and drops progress records. Any other
-/// stderr comes back as it was.
+/// XML records), and a nested `powershell` writes the same into the middle
+/// of the output. The model and the chat need the error text itself: each
+/// block keeps its records' text, decoded, and drops progress records. Text
+/// around the blocks, and output with none, comes back as it was.
 fn plain_stderr(stderr: Vec<u8>) -> Vec<u8> {
+    const HEAD: &str = "#< CLIXML";
     let text = String::from_utf8_lossy(&stderr);
-    if !text
-        .trim_start_matches('\u{feff}')
-        .trim_start()
-        .starts_with("#< CLIXML")
-    {
+    if !text.contains(HEAD) {
         return stderr;
     }
     let mut out = String::new();
-    let mut rest = text.as_ref();
+    let mut rest = text.trim_start_matches('\u{feff}');
+    while let Some(at) = rest.find(HEAD) {
+        let before = &rest[..at];
+        // A block at the very start owns the stream; elsewhere keep what came before.
+        if !before.trim().is_empty() {
+            out.push_str(before);
+            if !before.ends_with('\n') {
+                out.push('\n');
+            }
+        }
+        let block = &rest[at..];
+        let end = block
+            .find("</Objs>")
+            .map_or(block.len(), |e| e + "</Objs>".len());
+        out.push_str(&clixml_records(&block[..end]));
+        rest = block[end..].trim_start_matches(['\r', '\n']);
+    }
+    out.push_str(rest);
+    out.into_bytes()
+}
+
+/// The decoded text of every `<S S="...">` record in one CLIXML block.
+fn clixml_records(block: &str) -> String {
+    let mut out = String::new();
+    let mut rest = block;
     while let Some(at) = rest.find("<S S=\"") {
         rest = &rest[at..];
         let Some(open_end) = rest.find('>') else {
@@ -498,7 +520,7 @@ fn plain_stderr(stderr: Vec<u8>) -> Vec<u8> {
         out.push_str(&clixml_unescape(&rest[open_end + 1..open_end + close]));
         rest = &rest[open_end + close + 4..];
     }
-    out.into_bytes()
+    out
 }
 
 /// XML entities, then CLIXML's `_xHHHH_` UTF-16 code units (`_x000D__x000A_`
@@ -534,6 +556,7 @@ fn clixml_unescape(raw: &str) -> String {
 }
 
 fn merge_output(stdout: Vec<u8>, stderr: Vec<u8>) -> Vec<u8> {
+    let stdout = plain_stderr(stdout);
     let stderr = plain_stderr(stderr);
     if stderr.is_empty() {
         return stdout;
@@ -1239,6 +1262,12 @@ mod tests {
         assert_eq!(
             super::plain_stderr(b"oops _x0041_\n".to_vec()),
             b"oops _x0041_\n".to_vec()
+        );
+        // A nested powershell's block in the middle of the output.
+        let mid = format!("FREE=5713272832\r\n{progress}\r\nEXISTS=True\n");
+        assert_eq!(
+            String::from_utf8(super::plain_stderr(mid.into_bytes())).unwrap(),
+            "FREE=5713272832\r\nEXISTS=True\n"
         );
         let merged = super::merge_output(b"out".to_vec(), raw.as_bytes().to_vec());
         assert!(String::from_utf8(merged)

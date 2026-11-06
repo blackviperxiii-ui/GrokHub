@@ -42,6 +42,11 @@ pub enum HardClass {
     /// An install of a hardware tool whose kernel driver Microsoft's
     /// vulnerable driver blocklist names (anti-cheats won't start with it).
     FlaggedDriver,
+    /// A Windows admin prompt (`-Verb RunAs`, `runas`, `gsudo`), or a change
+    /// to the machine's own protection: System Restore and shadow copies,
+    /// machine-wide registry keys, the script execution policy, Defender
+    /// or the firewall.
+    SystemAdmin,
 }
 
 impl HardClass {
@@ -56,6 +61,7 @@ impl HardClass {
             Self::OutsideValue => "outside_value",
             Self::RunsLater => "runs_later",
             Self::FlaggedDriver => "flagged_driver",
+            Self::SystemAdmin => "system_admin",
         }
     }
 
@@ -70,6 +76,7 @@ impl HardClass {
             Self::OutsideValue => "Value from outside text",
             Self::RunsLater => "File that runs code later",
             Self::FlaggedDriver => "Driver anti-cheats block",
+            Self::SystemAdmin => "Admin rights or system protection",
         }
     }
 
@@ -84,6 +91,7 @@ impl HardClass {
             "outside_value" => Some(Self::OutsideValue),
             "runs_later" => Some(Self::RunsLater),
             "flagged_driver" => Some(Self::FlaggedDriver),
+            "system_admin" => Some(Self::SystemAdmin),
             _ => None,
         }
     }
@@ -1986,6 +1994,7 @@ pub fn hard_class(name: &str, arguments: &str) -> Option<HardClass> {
             .unwrap_or_default()
             .to_ascii_lowercase();
         return command_class(&cmd)
+            .or_else(|| system_admin(&cmd))
             .or_else(|| flagged_driver(&cmd))
             .or_else(|| asks_outside_sandbox(arguments));
     }
@@ -2016,6 +2025,73 @@ pub fn hard_class(name: &str, arguments: &str) -> Option<HardClass> {
         return Some(HardClass::Credentials);
     }
     name_class(name)
+}
+
+/// A step that raises a Windows admin prompt or changes how the machine
+/// protects itself always asks first: the agent never works its way around
+/// an access-denied or the admin prompt on its own. `cmd` is lower case.
+fn system_admin(cmd: &str) -> Option<HardClass> {
+    let squashed: String = cmd.split_whitespace().collect::<Vec<_>>().join(" ");
+    let c = squashed.as_str();
+    let words: Vec<&str> = c
+        .split(|ch: char| {
+            ch.is_whitespace() || matches!(ch, ';' | '|' | '&' | '(' | ')' | '{' | '}')
+        })
+        .filter(|w| !w.is_empty())
+        .collect();
+    let elevates = c.contains("-verb runas")
+        || c.contains("-verb:runas")
+        || c.contains("-verb 'runas'")
+        || c.contains("-verb \"runas\"")
+        || words
+            .iter()
+            .any(|w| matches!(*w, "runas" | "runas.exe" | "gsudo" | "gsudo.exe"));
+    let machine_key = [
+        "hklm:",
+        "hkey_local_machine",
+        "registry::hkey_local_machine",
+    ]
+    .iter()
+    .any(|k| c.contains(k));
+    let writes_key = [
+        "set-itemproperty",
+        "new-itemproperty",
+        "remove-itemproperty",
+        "rename-itemproperty",
+        "new-item ",
+        "remove-item ",
+        "set-item ",
+    ]
+    .iter()
+    .any(|v| c.contains(v));
+    let reg_write = words.windows(3).any(|w| {
+        matches!(w[0], "reg" | "reg.exe")
+            && matches!(w[1], "add" | "import" | "restore" | "copy")
+            && (w[2].starts_with("hklm") || w[2].starts_with("hkey_local_machine"))
+    }) || words
+        .windows(2)
+        .any(|w| matches!(w[0], "reg" | "reg.exe") && matches!(w[1], "import" | "restore"));
+    let protection = [
+        "enable-computerrestore",
+        "disable-computerrestore",
+        "systemrestorepointcreationfrequency",
+        "disablesr",
+        "set-executionpolicy",
+        "set-mppreference",
+        "add-mppreference",
+        "remove-mppreference",
+        "set-netfirewallprofile",
+        "advfirewall set",
+        "netsh firewall",
+    ]
+    .iter()
+    .any(|p| c.contains(p))
+        || words.windows(2).any(|w| {
+            w[0].trim_end_matches(".exe") == "vssadmin"
+                && matches!(w[1], "resize" | "delete" | "add")
+        });
+    (elevates || (machine_key && writes_key) || reg_write || protection)
+        .then_some(HardClass::SystemAdmin)
 }
 
 /// HX-11: a shell call that asks to run on the whole machine, outside the
@@ -2333,6 +2409,49 @@ fn command_class(cmd: &str) -> Option<HardClass> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_admin_prompt_or_a_system_protection_change_always_asks_first() {
+        let shell = |cmd: &str| {
+            hard_class(
+                "run_terminal_command",
+                &serde_json::json!({ "command": cmd }).to_string(),
+            )
+        };
+        // The steps from a tune-up that worked around access-denied on its own.
+        for cmd in [
+            "Start-Process powershell -Verb RunAs -Wait -ArgumentList '-Command Checkpoint-Computer'",
+            "Start-Process cmd -Verb:RunAs",
+            "runas /user:Administrator cmd",
+            "gsudo sfc /scannow",
+            "Enable-ComputerRestore -Drive 'C:\\'",
+            "Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SystemRestore' -Name SystemRestorePointCreationFrequency -Value 0",
+            "New-ItemProperty -Path HKLM:\\SOFTWARE\\Policies\\X -Name Y -Value 1",
+            "reg add HKLM\\SOFTWARE\\X /v Y /d 1 /f",
+            "reg import tweaks.reg",
+            "vssadmin resize shadowstorage /for=C: /on=C: /maxsize=1GB",
+            "Set-ExecutionPolicy Bypass -Scope LocalMachine",
+            "Add-MpPreference -ExclusionPath C:\\Tools",
+            "netsh advfirewall set allprofiles state off",
+        ] {
+            assert_eq!(shell(cmd), Some(HardClass::SystemAdmin), "{cmd}");
+        }
+        // Reading the same places is a scan step.
+        for cmd in [
+            "Get-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SystemRestore'",
+            "Get-ComputerRestorePoint",
+            "reg query HKLM\\SOFTWARE\\X",
+            "vssadmin list shadowstorage",
+            "Get-ExecutionPolicy -List",
+            "Get-Service | Where-Object Status -ne Running",
+        ] {
+            assert_eq!(shell(cmd), None, "{cmd}");
+        }
+        assert_eq!(
+            HardClass::parse(HardClass::SystemAdmin.as_str()),
+            Some(HardClass::SystemAdmin)
+        );
+    }
 
     #[test]
     fn desk_typing_is_checked_like_a_shell() {

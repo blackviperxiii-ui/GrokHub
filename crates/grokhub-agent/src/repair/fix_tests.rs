@@ -263,7 +263,9 @@ fn every_fix_card_has_what_why_undo_and_risk() {
             ("I'll finish setting up the apps that were left half-installed.", "soft"),
             ("I'll reinstall the apps with missing files: gtk3, firefox.", "soft"),
             ("I'll turn your network connection off and on again.", "soft"),
-            ("I'll restart the background service that stopped: Spooler.", "soft"),
+            // A Windows admin prompt asks in the app first: on an admin
+            // account UAC is one click, not a password.
+            ("I'll restart the background service that stopped: Spooler.", "hard"),
             ("I'll delete files your computer doesn't need to run anything, to free up space.", "hard"),
             ("I'll restart your computer to finish installing Windows updates.", "hard"),
         ]
