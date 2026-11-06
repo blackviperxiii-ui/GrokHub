@@ -294,6 +294,18 @@ impl Cabin {
     }
 
     /// What a shared-model tile's button, row or tap does in the desktop app.
+    /// A tile's Turn on, done in place for a switch that needs nothing else
+    /// (no key, no download). `false` sends the user to its Settings row.
+    pub(super) fn turn_on_from_home(&mut self, feature: &str) -> bool {
+        match feature {
+            "net_log" => self.set_net_log(true),
+            "game_companion" => self.set_game_companion(true),
+            _ => return false,
+        }
+        self.status = "Turned on".into();
+        true
+    }
+
     fn run_tile_action(&mut self, a: TileAction) {
         use super::views::{feature_sec, settings_sec};
         let settings = |cabin: &mut Self, sec: SettingsSec| {
@@ -313,6 +325,7 @@ impl Cabin {
             TileAction::Settings { section } => settings(self, settings_sec(&section)),
             TileAction::RunPlaybook { .. } => settings(self, SettingsSec::Playbooks),
             TileAction::Review { .. } => self.set_nav_id("workboard"),
+            TileAction::TurnOn { feature } if self.turn_on_from_home(&feature) => {}
             TileAction::Toggle { feature, .. } | TileAction::TurnOn { feature } => {
                 settings(self, feature_sec(&feature))
             }

@@ -4,13 +4,10 @@
 //! the cabin says when it is back online and why it was offline, and a daily
 //! Feed card names the pattern. Off, nothing is sent at all.
 
-use std::net::{SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
 
 use super::*;
 use grokhub_core::net_log::{self as nl, Change, NetLog};
-
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Default)]
 pub(super) struct NetState {
@@ -50,17 +47,6 @@ pub(in crate::app) fn jitter_ms(samples: &[u32]) -> Option<u32> {
         .map(|w| u64::from(w[0].abs_diff(w[1])))
         .sum();
     Some((total / (samples.len() as u64 - 1)) as u32)
-}
-
-/// The connect time to the first resolver that answers, or `None`.
-fn probe() -> Option<u32> {
-    grokhub_core::offline::refuse().ok()?;
-    nl::PROBE_HOSTS.iter().find_map(|host| {
-        let addr: SocketAddr = host.parse().ok()?;
-        let start = Instant::now();
-        TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT).ok()?;
-        Some(u32::try_from(start.elapsed().as_millis()).unwrap_or(u32::MAX))
-    })
 }
 
 /// Bytes read and milliseconds taken for one speed-test download.
@@ -136,6 +122,11 @@ impl Cabin {
         if !self.cfg.net_log {
             return;
         }
+        if !self.net_now().on {
+            // Turned on before the log file carried the switch.
+            self.net_now().on = true;
+            self.save_net();
+        }
         if let Some(rx) = self.focus.net.speed_rx.take() {
             match rx.try_recv() {
                 Ok(result) => self.finish_speed_test(result, now_ms()),
@@ -167,7 +158,7 @@ impl Cabin {
         let (tx, rx) = mpsc::channel();
         self.focus.net.probe_rx = Some(rx);
         std::thread::spawn(move || {
-            let _ = tx.send(probe());
+            let _ = tx.send(nl::probe());
         });
     }
 
@@ -282,6 +273,17 @@ impl Cabin {
         };
     }
 
+    /// Switch the internet log on or off and save it. Starting fresh drops
+    /// any probe still in flight.
+    pub(super) fn set_net_log(&mut self, on: bool) {
+        self.cfg.net_log = on;
+        self.focus.net = NetState::default();
+        self.persist_cfg();
+        // The log file carries the switch too, so the shell's tiles see it.
+        self.net_now().on = on;
+        self.save_net();
+    }
+
     /// Settings → Behavior: the toggle, the drops-by-hour chart, a speed
     /// test and the CSV export.
     pub(super) fn ui_net_log_row(&mut self, ui: &mut egui::Ui) {
@@ -292,9 +294,7 @@ impl Cabin {
             "About once a minute, check that the internet answers (a quick connection to two public DNS servers) and log drops and slow minutes on this computer. Export the log for your ISP any time.",
             &mut on,
         ) {
-            self.cfg.net_log = on;
-            self.focus.net = NetState::default();
-            self.persist_cfg();
+            self.set_net_log(on);
             self.status = "Saved".into();
         }
         if !self.cfg.net_log {

@@ -28,6 +28,8 @@ pub mod local_engine;
 #[cfg(test)]
 mod md_fixtures;
 pub mod memory;
+#[cfg(desktop)]
+mod net_watch;
 pub mod nyx;
 pub mod oauth;
 pub mod opener;
@@ -1774,6 +1776,21 @@ async fn library_play(app_id: u32) -> Result<String, String> {
     off_main(move || library::play(grokhub_core::steam::detect_root().as_deref(), app_id)).await?
 }
 
+/// A Home tile's Turn on, for a switch that needs nothing else. The rest
+/// open their Settings row instead.
+#[tauri::command]
+async fn home_turn_on(state: State<'_, ShellState>, feature: String) -> Result<(), String> {
+    let dir = state.config_dir.clone();
+    match feature.as_str() {
+        #[cfg(desktop)]
+        "net_log" => off_main(move || net_watch::turn_on(&dir)).await?,
+        _ => {
+            let _ = dir;
+            Err("That switch is in Settings.".into())
+        }
+    }
+}
+
 /// Home's Squad tile: open Steam's own friends list.
 #[tauri::command]
 async fn library_friends() -> Result<(), String> {
@@ -2806,6 +2823,9 @@ pub fn run() {
             });
             #[cfg(desktop)]
             start_scheduler(app);
+            // The internet log, when it's on and the cabin isn't running.
+            #[cfg(desktop)]
+            net_watch::start(app.state::<ShellState>().config_dir.clone());
             // The Workboard's local tidy, while the cabin is closed. No model.
             #[cfg(desktop)]
             workboard::start_sweeper(app.state::<ShellState>().config_dir.clone());
@@ -2986,6 +3006,7 @@ pub fn run() {
             library_play,
             home_open_clip,
             library_friends,
+            home_turn_on,
             open_url
         ])
         .run(tauri::generate_context!());

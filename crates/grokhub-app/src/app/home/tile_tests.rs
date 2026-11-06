@@ -483,3 +483,24 @@ fn tonight_lists_only_automations_that_are_on_and_scheduled() {
     ]);
     assert_eq!(due, vec![("Raid reminder".to_string(), 1_000)]);
 }
+
+#[test]
+fn turn_on_switches_a_plain_feature_in_place_and_leaves_the_rest_to_settings() {
+    let root = crate::config::test_config_root("home-turn-on");
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::create_dir_all(&root);
+    let _pin = crate::config::TestConfigDir::set(root.clone());
+    let mut cabin = crate::app::Cabin::quiet_for_test();
+    cabin.cfg.net_log = false;
+    cabin.cfg.game_companion = false;
+    assert!(cabin.turn_on_from_home("net_log"));
+    assert!(cabin.cfg.net_log);
+    assert!(cabin.turn_on_from_home("game_companion"));
+    assert!(cabin.cfg.game_companion);
+    assert!(
+        !cabin.turn_on_from_home("local_ai"),
+        "a model needs its own setup"
+    );
+    assert!(!cabin.turn_on_from_home("steam_wishlist"));
+    let _ = std::fs::remove_dir_all(&root);
+}

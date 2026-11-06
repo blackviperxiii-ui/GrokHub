@@ -15,6 +15,8 @@ pub const FILE_NAME: &str = "net-log.json";
 /// The public resolvers each probe tries, in order.
 pub const PROBE_HOSTS: [&str; 2] = ["1.1.1.1:443", "9.9.9.9:443"];
 pub const PROBE_EVERY_MS: u64 = 60_000;
+/// How long one probe waits for a resolver to answer.
+pub const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 /// Failed probes in a row before an outage starts.
 pub const FAILS_TO_DROP: u32 = 2;
 /// A connect slower than this counts as a slow minute.
@@ -265,6 +267,18 @@ pub fn iso_utc(ms: u64) -> String {
         rem % 3600 / 60,
         rem % 60
     )
+}
+
+/// One probe: the connect time to the first resolver that answers, or
+/// `None` when none does (or the app is in offline mode).
+pub fn probe() -> Option<u32> {
+    crate::offline::refuse().ok()?;
+    PROBE_HOSTS.iter().find_map(|host| {
+        let addr: std::net::SocketAddr = host.parse().ok()?;
+        let start = std::time::Instant::now();
+        std::net::TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT).ok()?;
+        Some(u32::try_from(start.elapsed().as_millis()).unwrap_or(u32::MAX))
+    })
 }
 
 pub fn load(config_dir: &Path) -> NetLog {

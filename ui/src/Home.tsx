@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   getHome,
   homeOpenClip,
+  homeTurnOn,
   libraryFriends,
   libraryPlay,
   openUrl,
@@ -103,8 +104,11 @@ const VIEWS: readonly string[] = [
   "workboard",
 ];
 
-/** Where a feature's switch lives until it can be turned on from the tile. */
+/** Where a feature's switch lives when the tile can't turn it on itself. */
 const FEATURE_SECTION: Record<string, Section> = { net_log: "privacy", local_ai: "localAi" };
+
+/** Switches a tile turns on in place on the PC (they need nothing else). */
+const TURN_ON_HERE = new Set(["net_log"]);
 
 /** How much of a tile each size shows (core's `fit`). */
 const FIT: Record<SlotSize, { rows: number; buttons: number }> = {
@@ -130,8 +134,13 @@ export function runAction(a: TileAction, go: HomeRoutes, remote: boolean, reload
       return go.onSettings("playbooks");
     case "review":
       return go.onOpen("workboard");
-    case "toggle":
     case "turnOn":
+      if (!remote && TURN_ON_HERE.has(a.feature)) {
+        void homeTurnOn(a.feature).then(reload, () => go.onSettings(FEATURE_SECTION[a.feature] ?? "general"));
+        return;
+      }
+      return go.onSettings(FEATURE_SECTION[a.feature] ?? "general");
+    case "toggle":
       return go.onSettings(FEATURE_SECTION[a.feature] ?? "general");
     case "openUrl":
       if (remote) window.open(a.url, "_blank", "noopener");
