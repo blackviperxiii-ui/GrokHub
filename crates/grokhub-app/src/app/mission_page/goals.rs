@@ -1,0 +1,374 @@
+//! The Objectives page's goal cards: Today (the chat's next step and the
+//! goals worth a look), My goals (the add box, tracked goals with +1, Done
+//! and Drop, and the suggested tray) and This season (goals done, weeks in a
+//! row and the trophy shelf). Goals live in `objectives.json`, shared with
+//! the shell, web and phone.
+
+use std::time::{Duration, Instant};
+
+use grokhub_core::mission::{MissionCheckStatus, MissionView};
+use grokhub_core::objectives::{
+    self, goal_detail, goal_title, steps_by_one, Goal, GoalAct, KnownGame, Objectives, Pick,
+    SHELF_MAX,
+};
+
+use super::super::loadout_home::{caption, card, diamond, header, paint_weeks};
+use super::super::*;
+
+/// How often the goals are read again from disk (the other app may write).
+const GOALS_REFRESH: Duration = Duration::from_secs(30);
+const GOALS_ID: &str = "loadout-goals";
+const DRAFT_ID: &str = "objectives-add-draft";
+const ADD_ERROR_ID: &str = "objectives-add-error";
+pub(in crate::app) const ADD_HINT: &str = "What do you want to do?";
+pub(in crate::app) const TODAY_EMPTY: &str =
+    "Nothing for today yet. Add a goal below and it shows up here.";
+const MINE_EMPTY: &str =
+    "No goals yet. Type one above, like \"99 Fishing in OSRS\" or \"finish Elden Ring\".";
+const SHELF_EMPTY: &str = "Goals you finish land here.";
+
+fn muted_line(ui: &mut egui::Ui, text: &str) {
+    ui.label(
+        RichText::new(text)
+            .size(crate::theme::TYPE_BODY)
+            .color(crate::theme::muted()),
+    );
+}
+
+/// A thin amber bar filled to `frac`.
+pub(in crate::app) fn goal_bar(ui: &mut egui::Ui, frac: f32) {
+    let (bar, _) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 6.0), egui::Sense::hover());
+    ui.painter().rect_filled(bar, 3.0, crate::theme::selected());
+    let mut fill = bar;
+    fill.set_width(bar.width() * frac.clamp(0.0, 1.0));
+    ui.painter().rect_filled(fill, 3.0, crate::theme::amber());
+}
+
+/// The goal's title, bar and detail line.
+pub(in crate::app) fn goal_summary(ui: &mut egui::Ui, g: &Goal) {
+    ui.label(
+        RichText::new(goal_title(g))
+            .size(crate::theme::TYPE_LABEL)
+            .color(crate::theme::fg()),
+    );
+    ui.add_space(4.0);
+    goal_bar(ui, g.frac());
+    ui.add_space(2.0);
+    ui.label(
+        RichText::new(goal_detail(g))
+            .size(crate::theme::TYPE_CAPTION)
+            .color(crate::theme::muted()),
+    );
+}
+
+fn goal_row(ui: &mut egui::Ui, g: &Goal, acts: &mut Vec<GoalAct>) {
+    egui::Frame::NONE
+        .corner_radius(6.0)
+        .inner_margin(egui::Margin::symmetric(10, 8))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            goal_summary(ui, g);
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if steps_by_one(g) && crate::cards::ghost_pill(ui, "+1") {
+                    acts.push(GoalAct::Bump { id: g.id.clone() });
+                }
+                if crate::cards::ghost_pill(ui, "Done") {
+                    acts.push(GoalAct::Done { id: g.id.clone() });
+                }
+                if crate::cards::ghost_pill(ui, "Drop") {
+                    acts.push(GoalAct::Drop { id: g.id.clone() });
+                }
+            });
+        });
+}
+
+fn suggestion_row(ui: &mut egui::Ui, g: &Goal, acts: &mut Vec<GoalAct>) {
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new(format!("Track goal: {}?", goal_title(g)))
+                .size(crate::theme::TYPE_BODY)
+                .color(crate::theme::fg()),
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if crate::cards::ghost_pill(ui, "Not now") {
+                acts.push(GoalAct::NotNow { id: g.id.clone() });
+            }
+            if crate::cards::ghost_pill(ui, "Track") {
+                acts.push(GoalAct::Track { id: g.id.clone() });
+            }
+        });
+    });
+}
+
+impl Cabin {
+    /// The saved goals, read again every [`GOALS_REFRESH`] or after a change.
+    pub(in crate::app) fn dock_goals(&self, ctx: &egui::Context) -> Objectives {
+        type Cached = (Instant, Objectives);
+        let id = egui::Id::new(GOALS_ID);
+        if let Some((at, o)) = ctx.data(|d| d.get_temp::<Cached>(id)) {
+            if at.elapsed() < GOALS_REFRESH {
+                return o;
+            }
+        }
+        let o = objectives::load(&crate::config::config_dir());
+        ctx.data_mut(|d| d.insert_temp::<Cached>(id, (Instant::now(), o.clone())));
+        o
+    }
+
+    /// Applies the presses from this frame and refreshes the goals and XP.
+    pub(in crate::app) fn apply_goal_acts(&mut self, ctx: &egui::Context, acts: Vec<GoalAct>) {
+        if acts.is_empty() {
+            return;
+        }
+        let now = now_ms();
+        let games: Vec<(String, Option<u32>)> = self
+            .steam_library(now)
+            .1
+            .iter()
+            .map(|g| (g.name.clone(), Some(g.app_id)))
+            .collect();
+        let known: Vec<KnownGame<'_>> = games
+            .iter()
+            .map(|(name, app_id)| KnownGame {
+                name,
+                steam_app_id: *app_id,
+                source: None,
+            })
+            .collect();
+        let result = objectives::change(&crate::config::config_dir(), |o| {
+            objectives::apply(o, &acts, &known, now)
+        });
+        let error = match result {
+            Ok((o, refused)) => {
+                ctx.data_mut(|d| {
+                    d.insert_temp::<(Instant, Objectives)>(
+                        egui::Id::new(GOALS_ID),
+                        (Instant::now(), o),
+                    )
+                });
+                super::super::loadout_home::forget_xp(ctx);
+                refused.map(str::to_string)
+            }
+            Err(e) => Some(format!("Couldn't save your goals: {e}")),
+        };
+        ctx.data_mut(|d| match error {
+            Some(e) => {
+                d.insert_temp(egui::Id::new(ADD_ERROR_ID), e);
+            }
+            None => d.remove::<String>(egui::Id::new(ADD_ERROR_ID)),
+        });
+    }
+
+    /// Today: the chat's next step and up to two goal rows.
+    pub(super) fn objectives_today(
+        &mut self,
+        ui: &mut egui::Ui,
+        mission: Option<&MissionView>,
+        goals: &Objectives,
+    ) {
+        let now = now_ms();
+        card(ui, |ui| {
+            header(ui, true, "Today", "", crate::theme::amber());
+            let mut any = false;
+            let next = mission.and_then(|m| {
+                m.checklist.iter().find(|i| {
+                    i.status != MissionCheckStatus::Verified
+                        && i.status != MissionCheckStatus::Cancelled
+                })
+            });
+            if let Some(step) = next {
+                any = true;
+                ui.horizontal(|ui| {
+                    diamond(ui, true);
+                    ui.label(
+                        RichText::new(&step.text)
+                            .size(crate::theme::TYPE_LABEL)
+                            .color(crate::theme::fg()),
+                    );
+                });
+                ui.label(caption("This chat's next step"));
+                ui.add_space(8.0);
+            }
+            for pick in objectives::today_picks(goals, now) {
+                let Some(g) = goals.goals.iter().find(|g| g.id == pick.id()) else {
+                    continue;
+                };
+                any = true;
+                match pick {
+                    Pick::Closest(_) => goal_summary(ui, g),
+                    Pick::PickUp(_) => {
+                        ui.label(
+                            RichText::new(objectives::pick_up_line(g))
+                                .size(crate::theme::TYPE_LABEL)
+                                .color(crate::theme::fg()),
+                        );
+                        ui.label(
+                            RichText::new(goal_detail(g))
+                                .size(crate::theme::TYPE_CAPTION)
+                                .color(crate::theme::muted()),
+                        );
+                    }
+                }
+                ui.add_space(8.0);
+            }
+            if !any {
+                muted_line(ui, TODAY_EMPTY);
+            }
+            if let Some(m) = mission.filter(|m| !m.checklist.is_empty()) {
+                ui.add_space(4.0);
+                ui.separator();
+                ui.add_space(4.0);
+                ui.label(caption("This chat's steps"));
+                super::objective_rows(ui, m);
+            }
+        });
+    }
+
+    /// My goals: the add box, tracked goals and the suggested tray.
+    pub(super) fn objectives_mine(&mut self, ui: &mut egui::Ui, goals: &Objectives) {
+        let now = now_ms();
+        let mut acts = Vec::new();
+        let tracking = goals.tracking();
+        let suggested = goals.suggestions(now);
+        card(ui, |ui| {
+            let count = if tracking.is_empty() {
+                String::new()
+            } else {
+                tracking.len().to_string()
+            };
+            header(ui, true, "My goals", &count, crate::theme::amber());
+            let draft_id = egui::Id::new(DRAFT_ID);
+            let mut draft: String = ui.ctx().data(|d| d.get_temp(draft_id)).unwrap_or_default();
+            let mut submit = false;
+            ui.horizontal(|ui| {
+                let add_w = 64.0;
+                let edit = ui.add_sized(
+                    egui::vec2((ui.available_width() - add_w - 8.0).max(120.0), 28.0),
+                    egui::TextEdit::singleline(&mut draft).hint_text(ADD_HINT),
+                );
+                submit |= edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                submit |= crate::cards::ghost_pill(ui, "Add");
+            });
+            if submit && !draft.trim().is_empty() {
+                acts.push(GoalAct::Add {
+                    text: std::mem::take(&mut draft),
+                });
+            }
+            ui.ctx().data_mut(|d| d.insert_temp(draft_id, draft));
+            if let Some(e) = ui
+                .ctx()
+                .data(|d| d.get_temp::<String>(egui::Id::new(ADD_ERROR_ID)))
+            {
+                ui.label(
+                    RichText::new(e)
+                        .size(crate::theme::TYPE_CAPTION)
+                        .color(crate::theme::signal_red()),
+                );
+            }
+            ui.add_space(6.0);
+            if tracking.is_empty() {
+                muted_line(ui, MINE_EMPTY);
+            }
+            for g in &tracking {
+                goal_row(ui, g, &mut acts);
+            }
+            if !suggested.is_empty() {
+                ui.add_space(4.0);
+                ui.separator();
+                ui.add_space(4.0);
+                ui.label(caption("Suggested"));
+                for g in &suggested {
+                    suggestion_row(ui, g, &mut acts);
+                }
+            }
+        });
+        self.apply_goal_acts(ui.ctx(), acts);
+    }
+
+    /// This season: goals done, weeks in a row and the trophy shelf.
+    pub(super) fn objectives_season(&mut self, ui: &mut egui::Ui, goals: &Objectives) {
+        let now = now_ms();
+        let offset = Self::local_clock().utc_offset_min();
+        let week = self.dock_xp(ui.ctx()).week;
+        card(ui, |ui| {
+            header(
+                ui,
+                true,
+                "This season",
+                &objectives::season_label(now, offset),
+                crate::theme::amber(),
+            );
+            let done = objectives::done_this_season(goals, now, offset);
+            let s = if done == 1 { "" } else { "s" };
+            muted_line(ui, &format!("{done} goal{s} done this season"));
+            ui.add_space(8.0);
+            paint_weeks(ui, &week);
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(4.0);
+            ui.label(caption("Trophy shelf"));
+            let trophies = goals.trophies();
+            if trophies.is_empty() {
+                muted_line(ui, SHELF_EMPTY);
+            }
+            for g in trophies.iter().take(SHELF_MAX) {
+                ui.horizontal(|ui| {
+                    diamond(ui, false);
+                    ui.label(
+                        RichText::new(goal_title(g))
+                            .size(crate::theme::TYPE_BODY)
+                            .color(crate::theme::fg()),
+                    );
+                    if let Some(at) = g.done_ms {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(caption(&objectives::short_date(at, offset)));
+                        });
+                    }
+                });
+            }
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use grokhub_core::objectives::{GameRef, GoalKind, NewGoal, Origin};
+
+    fn goal(kind: GoalKind, game: &str, current: u32, target: u32) -> Goal {
+        let mut o = Objectives::default();
+        o.add(
+            NewGoal {
+                game: GameRef {
+                    name: game.into(),
+                    ..GameRef::default()
+                },
+                text: "99 Fishing".into(),
+                kind,
+                current,
+                target,
+                origin: Origin::Typed,
+                chat: None,
+            },
+            1,
+        )
+        .unwrap();
+        o.goals.remove(0)
+    }
+
+    #[test]
+    fn rows_name_the_game_and_say_what_is_left() {
+        let mut g = goal(GoalKind::Skill, "Old School RuneScape", 93, 99);
+        assert_eq!(goal_title(&g), "Old School RuneScape · 99 Fishing");
+        assert_eq!(goal_detail(&g), "93 / 99 · 6 levels to 99");
+        assert!(steps_by_one(&g));
+        g.checked = true;
+        assert_eq!(goal_detail(&g), "93 / 99 · 6 levels to 99 · Checked");
+        let g = goal(GoalKind::Finish, "", 0, 1);
+        assert_eq!(goal_title(&g), "99 Fishing");
+        assert_eq!(goal_detail(&g), "Not finished yet");
+        assert!(!steps_by_one(&g), "a finish goal has no +1");
+    }
+}
