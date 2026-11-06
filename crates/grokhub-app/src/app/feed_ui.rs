@@ -435,7 +435,7 @@ impl Cabin {
         let Some((title, body)) = self.situation_ping.take() else {
             return;
         };
-        if self.quiet_now() || self.window_focused {
+        if self.window_focused {
             return;
         }
         let line = if body.is_empty() {
@@ -443,7 +443,7 @@ impl Cabin {
         } else {
             format!("{title} {body}")
         };
-        crate::notify::ping(grokhub_core::brand::product_name(), &line);
+        self.pulse_ping(true, &line);
     }
 
     #[cfg(test)]

@@ -1152,6 +1152,66 @@ pub fn feed_posts(cards: &[UpdateCard], inputs: &PulseInputs) -> Vec<UpdateCard>
     today
 }
 
+// pings
+
+/// Pulse may raise at most this many OS notifications a day; the rest wait
+/// on the page.
+pub const PINGS_PER_DAY: u32 = 3;
+
+/// What a Pulse ping asks about the moment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PingAsk<'a> {
+    /// Due within the hour, or a watch that just hit. Anything else waits on
+    /// the page.
+    pub time_sensitive: bool,
+    /// A game is running: never interrupt it.
+    pub game_running: bool,
+    pub quiet_hours: bool,
+    /// The person's local day, like "2026-11-06".
+    pub day: &'a str,
+}
+
+/// The one gate every Pulse-origin OS notification goes through.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PingGate {
+    day: String,
+    sent: u32,
+}
+
+impl PingGate {
+    pub const fn new() -> Self {
+        Self {
+            day: String::new(),
+            sent: 0,
+        }
+    }
+
+    pub fn sent_on(&self, day: &str) -> u32 {
+        if self.day == day {
+            self.sent
+        } else {
+            0
+        }
+    }
+
+    pub fn may_ping(&self, ask: &PingAsk) -> bool {
+        ask.time_sensitive
+            && !ask.game_running
+            && !ask.quiet_hours
+            && self.sent_on(ask.day) < PINGS_PER_DAY
+    }
+
+    /// Count a ping that the gate lets through. False means stay quiet.
+    pub fn take(&mut self, ask: &PingAsk) -> bool {
+        if !self.may_ping(ask) {
+            return false;
+        }
+        self.sent = self.sent_on(ask.day) + 1;
+        self.day = ask.day.to_string();
+        true
+    }
+}
+
 // buttons
 
 /// Run: the idea's own action as a background task. Never the composer.
@@ -2616,5 +2676,27 @@ mod tests {
         let mut huge = vec![0x89, b'P', b'N', b'G'];
         huge.resize(IMAGE_MAX_BYTES + 1, 0);
         assert!(!image_bytes_ok(&huge));
+    }
+
+    #[test]
+    fn pulse_pings_only_when_time_sensitive_never_in_game_and_three_a_day() {
+        let ask = |time_sensitive, game_running, quiet_hours, day| PingAsk {
+            time_sensitive,
+            game_running,
+            quiet_hours,
+            day,
+        };
+        let mut gate = PingGate::default();
+        assert!(!gate.take(&ask(false, false, false, "2026-11-06")));
+        assert!(!gate.take(&ask(true, true, false, "2026-11-06")));
+        assert!(!gate.take(&ask(true, false, true, "2026-11-06")));
+        assert_eq!(gate.sent_on("2026-11-06"), 0);
+        for _ in 0..3 {
+            assert!(gate.take(&ask(true, false, false, "2026-11-06")));
+        }
+        assert!(!gate.take(&ask(true, false, false, "2026-11-06")));
+        assert_eq!(gate.sent_on("2026-11-06"), 3);
+        assert!(gate.take(&ask(true, false, false, "2026-11-07")));
+        assert_eq!(gate.sent_on("2026-11-07"), 1);
     }
 }

@@ -62,6 +62,9 @@ const OPENROUTER_KEY_WAIT: &str =
     "OpenRouter sent a key. Approve the card below to finish signing in.";
 /// Signed in: the key is in the keyring.
 const OPENROUTER_IN_ROW: &str = "OpenRouter: signed in";
+/// The status line once a sign-in has saved its key and allowed openrouter.ai.
+const OPENROUTER_SIGNED_IN: &str =
+    "Signed in to OpenRouter. Auto can use its models. Revoke it in Settings → Permissions.";
 const OPENROUTER_ALLOW_HINT: &str = "Allow sending to openrouter.ai so Auto can use its models.";
 const OPENROUTER_ALLOW_WAIT: &str = "Approve the card below so Auto can use OpenRouter's models.";
 const OPENROUTER_IN_HINT: &str = "Auto can use its models. Sign in again for a new key.";
@@ -338,16 +341,16 @@ impl Cabin {
 
     /// Every frame while "Sign in with OpenRouter" waits: its callback lands
     /// while you're in the browser, so it can't wait for a background beat.
-    /// When the key comes back, the window comes forward to its card.
+    /// When the key comes back, the window comes forward, signed in.
     pub(super) fn tick_openrouter_sign_in(&mut self, ctx: &egui::Context) {
         if self.harness.router.providers.signin_rx.is_none() {
             return;
         }
-        self.poll_openrouter_sign_in();
+        let signed_in = self.poll_openrouter_sign_in();
         if self.harness.router.providers.signin_rx.is_some() {
             ctx.request_repaint_after(Duration::from_millis(250));
         } else {
-            if self.window_visible && self.harness.router.providers.pending.is_some() {
+            if self.window_visible && signed_in {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
             ctx.request_repaint();
@@ -407,7 +410,8 @@ impl Cabin {
                     OPENROUTER_ALLOW_HINT,
                     "Allow",
                 ) {
-                    self.ask_provider(&id);
+                    // This click is the approval: no second card for it.
+                    self.grant_provider_click(&id);
                 }
             }
             OpenRouterSignIn::SignedIn => {
@@ -460,10 +464,12 @@ impl Cabin {
         self.status = "Finish signing in to OpenRouter in your browser.".into();
     }
 
-    /// The sign-in's key goes to the same credentials card as a pasted one.
-    pub(super) fn poll_openrouter_sign_in(&mut self) {
+    /// The sign-in's key is saved and openrouter.ai allowed, with no card:
+    /// clicking Sign in and finishing it in the browser was the approval.
+    /// True once a key was saved.
+    pub(super) fn poll_openrouter_sign_in(&mut self) -> bool {
         let Some(rx) = self.harness.router.providers.signin_rx.take() else {
-            return;
+            return false;
         };
         loop {
             match rx.try_recv() {
@@ -473,24 +479,53 @@ impl Cabin {
                 }
                 Ok(SignInMsg::Done(got)) => {
                     self.harness.router.providers.by_hand = None;
-                    match got {
-                        Ok(key) => {
-                            self.hold_provider_key(providers::OPENROUTER_BASE.into(), None, key)
-                        }
+                    return match got {
+                        Ok(key) => self.finish_openrouter_sign_in(&key),
                         Err(e) => {
                             self.harness.router.providers.signin_note = Some(e.clone());
                             self.status = e;
+                            false
                         }
-                    }
-                    return;
+                    };
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
                     self.harness.router.providers.signin_rx = Some(rx);
-                    return;
+                    return false;
                 }
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => return false,
             }
         }
+    }
+
+    /// Key into the keyring, then the grant for openrouter.ai, unless it is
+    /// already allowed (Sign in again). True once the key is saved.
+    fn finish_openrouter_sign_in(&mut self, key: &str) -> bool {
+        let dir = crate::config::config_dir();
+        let args = serde_json::json!({ "dest": "openrouter.ai", "via": "sign-in" }).to_string();
+        // Recorded as approved: the sign-in itself was the click.
+        self.write_span(
+            hx::Span::hard_approve(&self.trace_id(), KEY_TOOL, &args, HardClass::Credentials),
+            "route",
+        );
+        let p =
+            match providers::add_provider_as(&dir, providers::OPENROUTER_BASE, key, None, now_ms())
+            {
+                Ok(p) => p,
+                Err(e) => {
+                    self.harness.router.providers.signin_note = Some(e.clone());
+                    self.status = e;
+                    return false;
+                }
+            };
+        self.invalidate_providers();
+        let ledger = self.consent().clone();
+        if providers::provider_state(&dir, &ledger, &p) != providers::ProviderState::Ready {
+            self.grant_provider_click(&p.id);
+        } else {
+            self.refresh_models_now();
+        }
+        self.status = OPENROUTER_SIGNED_IN.into();
+        true
     }
 
     pub(super) fn remove_provider_click(&mut self, id: &str) {
@@ -938,42 +973,46 @@ mod tests {
     }
 
     #[test]
-    fn an_openrouter_sign_in_key_waits_on_the_same_credentials_card() {
+    fn an_openrouter_sign_in_key_is_saved_and_allowed_with_no_card() {
         let (_pin, root) = pinned("r3b-openrouter-card");
         let mut app = Cabin::quiet_for_test();
         let (tx, rx) = std::sync::mpsc::channel();
         app.harness.router.providers.signin_rx = Some(rx);
-        app.poll_openrouter_sign_in();
+        assert!(!app.poll_openrouter_sign_in());
         assert!(
             app.harness.router.providers.signin_rx.is_some(),
             "still waiting on the browser"
         );
         tx.send(SignInMsg::Done(Ok(KEY.to_string()))).unwrap();
-        app.poll_openrouter_sign_in();
+        assert!(app.poll_openrouter_sign_in(), "the key was saved");
         assert!(app.harness.router.providers.signin_rx.is_none());
-        let card = app.harness.park.clone().expect("a hard credentials card");
-        assert_eq!(
-            (card.class, card.action.as_str()),
-            (
-                HardClass::Credentials,
-                "Save your key for openrouter.ai to your keyring"
-            )
-        );
         assert!(
-            !providers::has_key(&root, "openrouter"),
-            "nothing saved before Approve"
+            app.harness.park.is_none() && app.harness.queue.is_empty(),
+            "finishing the sign-in was the approval: no card"
         );
-        app.resolve_hard_park(true, "");
+        assert!(app.harness.router.providers.pending.is_none());
         assert_eq!(
             providers::provider(&root, "openrouter").map(|p| p.base_url),
             Some("https://openrouter.ai/api/v1".to_string())
         );
         assert!(providers::has_key(&root, "openrouter"));
+        assert_eq!(app.openrouter_sign_in_state(), OpenRouterSignIn::SignedIn);
+        assert_eq!(app.status, OPENROUTER_SIGNED_IN);
+
+        // Sign in again: a new key, the same grant, still no card.
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.harness.router.providers.signin_rx = Some(rx);
+        tx.send(SignInMsg::Done(Ok(format!("{KEY}-2")))).unwrap();
+        assert!(app.poll_openrouter_sign_in());
+        assert!(app.harness.park.is_none() && app.harness.queue.is_empty());
+        assert_eq!(app.openrouter_sign_in_state(), OpenRouterSignIn::SignedIn);
+        assert_eq!(providers::load_providers(&root).len(), 1);
+
         let (tx, rx) = std::sync::mpsc::channel();
         app.harness.router.providers.signin_rx = Some(rx);
         tx.send(SignInMsg::Done(Err("OpenRouter sign-in timed out".into())))
             .unwrap();
-        app.poll_openrouter_sign_in();
+        assert!(!app.poll_openrouter_sign_in());
         assert_eq!(app.status, "OpenRouter sign-in timed out");
         assert_eq!(
             app.harness.router.providers.signin_note.as_deref(),
@@ -1104,25 +1143,6 @@ mod tests {
             .collect()
     }
 
-    /// Click the text `label` in the provider rows, the way a pointer does.
-    fn click_rows(ctx: &egui::Context, app: &mut Cabin, label: &str) {
-        let texts = paint_rows(ctx, app, Vec::new());
-        let at = texts
-            .iter()
-            .find(|(t, _)| t == label)
-            .map(|(_, at)| *at)
-            .unwrap_or_else(|| panic!("no {label:?} in {texts:?}"));
-        let press = |pressed| egui::Event::PointerButton {
-            pos: at,
-            button: egui::PointerButton::Primary,
-            pressed,
-            modifiers: egui::Modifiers::NONE,
-        };
-        paint_rows(ctx, app, vec![egui::Event::PointerMoved(at)]);
-        paint_rows(ctx, app, vec![press(true)]);
-        paint_rows(ctx, app, vec![press(false)]);
-    }
-
     fn row_texts(ctx: &egui::Context, app: &mut Cabin) -> Vec<String> {
         paint_rows(ctx, app, Vec::new())
             .into_iter()
@@ -1132,7 +1152,7 @@ mod tests {
 
     /// The bug: the key came back, but its card painted only in the chat,
     /// under Settings, and timed out there. Now the callback ends signed in
-    /// from Settings alone, without a model beat.
+    /// on its own: no card anywhere, no model beat.
     #[test]
     fn the_openrouter_callback_ends_signed_in_from_settings() {
         let _paint = crate::theme::hold_paint_test();
@@ -1160,47 +1180,9 @@ mod tests {
             wire.0.lock().unwrap().as_slice(),
             ["https://openrouter.ai/api/v1/auth/keys".to_string()]
         );
-        assert_eq!(app.openrouter_sign_in_state(), OpenRouterSignIn::KeyCard);
-
-        // The key's card is right under the OpenRouter row in Settings.
-        let texts = row_texts(&ctx, &mut app);
-        for want in [
-            OPENROUTER_KEY_WAIT,
-            "Save your key for openrouter.ai to your keyring",
-            KEY_CARD_NOTE_SETTINGS,
-            "Approve",
-            "Deny",
-        ] {
-            assert!(
-                texts.iter().any(|t| t == want),
-                "missing {want:?} in {texts:?}"
-            );
-        }
-        assert!(
-            !providers::has_key(&root, "openrouter"),
-            "nothing saved before Approve"
-        );
-        click_rows(&ctx, &mut app, "Approve");
-        assert!(providers::has_key(&root, "openrouter"));
-        assert_eq!(
-            app.openrouter_sign_in_state(),
-            OpenRouterSignIn::NotAllowed("openrouter".into())
-        );
-
-        // Then the allow card, also right there.
-        let texts = row_texts(&ctx, &mut app);
-        for want in [
-            OPENROUTER_ALLOW_WAIT,
-            "Send your chats and memory to openrouter.ai when Auto uses one of its models",
-            PROVIDER_CARD_NOTE_SETTINGS,
-        ] {
-            assert!(
-                texts.iter().any(|t| t == want),
-                "missing {want:?} in {texts:?}"
-            );
-        }
-        click_rows(&ctx, &mut app, "Approve");
+        // Finishing the sign-in was the approval: saved, allowed, no card.
         assert_eq!(app.openrouter_sign_in_state(), OpenRouterSignIn::SignedIn);
+        assert!(providers::has_key(&root, "openrouter"));
         assert!(app.harness.park.is_none() && app.harness.queue.is_empty());
         let texts = row_texts(&ctx, &mut app);
         for want in [OPENROUTER_IN_ROW, OPENROUTER_IN_HINT, "Sign in again"] {
@@ -1386,18 +1368,9 @@ mod tests {
             ["https://openrouter.ai/api/v1/auth/keys".to_string()]
         );
         assert!(app.harness.router.providers.by_hand.is_none());
-        let card = app.harness.park.clone().expect("the credentials card");
-        assert_eq!(
-            (card.class, card.action.as_str()),
-            (
-                HardClass::Credentials,
-                "Save your key for openrouter.ai to your keyring"
-            )
-        );
-        assert!(
-            !providers::has_key(&root, "openrouter"),
-            "nothing saved before Approve"
-        );
+        assert!(app.harness.park.is_none(), "no card after a sign-in");
+        assert!(providers::has_key(&root, "openrouter"));
+        assert_eq!(app.openrouter_sign_in_state(), OpenRouterSignIn::SignedIn);
         let _ = std::fs::remove_dir_all(root);
     }
 
