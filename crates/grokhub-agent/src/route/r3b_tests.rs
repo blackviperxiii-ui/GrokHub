@@ -1154,7 +1154,8 @@ impl ProviderTransport for KeyWire {
     }
 }
 
-/// The browser: approve at once by calling the `callback_url` with `code`.
+/// The browser: approve at once by calling the `callback_url` with `code`,
+/// echoing the `state` the link carried, as OpenRouter does.
 fn approving_browser(
     code: &'static str,
     seen: Arc<Mutex<String>>,
@@ -1168,6 +1169,11 @@ fn approving_browser(
             .unwrap_or("")
             .replace("%3A", ":")
             .replace("%2F", "/");
+        let state = query
+            .split('&')
+            .find_map(|p| p.strip_prefix("state="))
+            .unwrap_or("")
+            .to_string();
         let target = callback.trim_start_matches("http://").to_string();
         let (host, path) = target
             .split_once('/')
@@ -1178,7 +1184,7 @@ fn approving_browser(
             let mut sock = std::net::TcpStream::connect(&host).unwrap();
             let _ = write!(
                 sock,
-                "GET /{path}?code={code} HTTP/1.1\r\nHost: {host}\r\n\r\n"
+                "GET /{path}?code={code}&state={state} HTTP/1.1\r\nHost: {host}\r\n\r\n"
             );
             let mut sink = String::new();
             let _ = sock.read_to_string(&mut sink);
@@ -1208,7 +1214,8 @@ fn openrouter_sign_in_buys_a_key_with_pkce_and_saves_nothing_itself() {
     );
     assert!(
         link.contains("%2Fcallback&code_challenge=")
-            && link.ends_with("&code_challenge_method=S256"),
+            && link.contains("&code_challenge_method=S256&state=")
+            && link.ends_with("&key_label=Loadout"),
         "{link}"
     );
     let sent = wire.0.lock().unwrap().clone();
