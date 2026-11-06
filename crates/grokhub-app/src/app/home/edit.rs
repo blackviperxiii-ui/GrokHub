@@ -17,6 +17,8 @@ pub(in crate::app) struct HomeEditDraft {
     pub category: Option<Category>,
     pub fits_only: bool,
     pub confirm_reset: bool,
+    /// Why the last Save didn't stick, shown beside the buttons.
+    pub save_error: Option<String>,
 }
 
 impl HomeEditDraft {
@@ -28,6 +30,7 @@ impl HomeEditDraft {
             category: None,
             fits_only: true,
             confirm_reset: false,
+            save_error: None,
         }
     }
 
@@ -410,6 +413,11 @@ impl Cabin {
                                 } else if ui.button("Reset to default").clicked() {
                                     draft.confirm_reset = true;
                                 }
+                                if let Some(err) = &draft.save_error {
+                                    ui.label(
+                                        egui::RichText::new(err).color(crate::theme::signal_red()),
+                                    );
+                                }
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
@@ -436,10 +444,18 @@ impl Cabin {
             });
 
         if save {
-            let layout = draft.layout.sanitize();
-            let _ = save_home_layout(&crate::config::config_dir(), &layout);
-            self.home_layout = layout;
-            self.home_edit = None;
+            let layout = draft.layout.clone().sanitize();
+            match save_home_layout(&crate::config::config_dir(), &layout) {
+                Ok(()) => {
+                    self.home_layout = layout;
+                    self.home_edit = None;
+                }
+                Err(_) => {
+                    // Keep the dialog open so the picks aren't lost.
+                    draft.save_error = Some("Couldn't save Home. Try again.".into());
+                    self.home_edit = Some(draft);
+                }
+            }
         } else if close {
             self.home_edit = None;
         } else {
