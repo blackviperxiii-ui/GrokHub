@@ -1695,8 +1695,8 @@ mod tests {
         cabin.set_quip_heat(personality::Heat::Spicy);
         let (_, tail) = cabin.chat_prompt_parts();
         assert!(
-            tail.contains(grokhub_core::adult_guard::ADULT_VOICE),
-            "{tail}"
+            !tail.contains(grokhub_core::adult_guard::ADULT_VOICE),
+            "heat alone never makes a chat 18+: {tail}"
         );
         assert!(tail.contains(personality::Heat::Spicy.line()), "{tail}");
         cabin.set_quip_heat(personality::Heat::Clean);

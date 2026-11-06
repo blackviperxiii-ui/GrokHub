@@ -222,7 +222,7 @@ pub(super) const LOCAL_ROUTING: [&str; 5] = [
     "Offline, this PC's model takes what it can. Work that needs the cloud waits for the network.",
     "Sensitive data you haven't allowed to the cloud stays on this PC.",
     "The model loads only when it's needed and unloads when it sits idle.",
-    "Explicit 18+ chats go only to xAI or this PC's model.",
+    "Explicit 18+ chats run only on this PC's model.",
 ];
 
 /// The lines under the On-device model switch: only while it can run.
@@ -752,7 +752,7 @@ mod tests {
                 "Offline, this PC's model takes what it can. Work that needs the cloud waits for the network.",
                 "Sensitive data you haven't allowed to the cloud stays on this PC.",
                 "The model loads only when it's needed and unloads when it sits idle.",
-                "Explicit 18+ chats go only to xAI or this PC's model.",
+                "Explicit 18+ chats run only on this PC's model.",
             ]
         );
         assert!(local_notes(true, false).is_empty());

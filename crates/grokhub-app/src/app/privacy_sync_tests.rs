@@ -1432,10 +1432,7 @@ fn local_model_routing_lines_match_the_privacy_docs() {
         lines[0],
         "Online, the cloud takes every step while any cloud model answers. This PC's model is the last resort, never for hard or long work."
     );
-    assert_eq!(
-        lines[4],
-        "Explicit 18+ chats go only to xAI or this PC's model."
-    );
+    assert_eq!(lines[4], "Explicit 18+ chats run only on this PC's model.");
     for (name, doc) in [
         ("PRIVACY.md", include_str!("../../../../PRIVACY.md")),
         (

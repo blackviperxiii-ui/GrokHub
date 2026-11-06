@@ -1509,9 +1509,9 @@ pub fn call_model(
         return Ok(held);
     }
     let to = dest(config_dir, model);
-    if super::adult::to_xai(&req.input, to) {
+    if super::adult::to_local(&req.input, to) {
         return Err(ClientError::Protocol(format!(
-            "18+ chats go only to xAI or this computer's model, so this chat was not sent to {}",
+            "18+ chats run only on this computer's model, so this chat was not sent to {}",
             grokhub_core::adult_guard::dest_name(to)
         )));
     }

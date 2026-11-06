@@ -1584,11 +1584,21 @@ pub fn stream_routed(
     } else {
         grokhub_core::adult_guard::Dest::Xai
     };
-    // Explicit turns go only to xAI or this computer's model.
-    let screen = super::adult::screen(&req.conversation_id, &sent.input, dest);
-    let mut on_provider = decision.on_provider() && !screen.to_xai;
-    let model = if screen.to_xai {
-        super::adult::xai_model(&req.model)
+    // 18+ chat runs on this computer's model only, never online. With none
+    // ready the chat says so and nothing is sent.
+    if super::adult::to_local(&sent.input, dest) {
+        if let Some(notice) = super::adult::no_local_notice() {
+            sink(StreamEvent::TextDelta(notice.into()));
+            return Ok(TurnOutput {
+                text: notice.into(),
+                ..TurnOutput::default()
+            });
+        }
+        on_device = true;
+    }
+    let mut on_provider = decision.on_provider() && !on_device;
+    let model = if on_device && !decision.on_device() {
+        super::local::live_tier().to_string()
     } else {
         decision.send_model(&req.model)
     };
@@ -1631,15 +1641,6 @@ pub fn stream_routed(
     };
     // Reply text passes the hard-limit check before the chat shows it.
     let mut reply = grokhub_core::adult_guard::ReplyGuard::default();
-    let streams_xai = !on_device && !on_provider;
-    // On xAI the heads-up waits for xAI's first event, so a local fallback can
-    // still say where the turn really went.
-    let mut note = screen.heads_up.clone();
-    if !streams_xai {
-        if let Some(note) = &note {
-            sink(StreamEvent::TextDelta(format!("{note}\n\n")));
-        }
-    }
     // xAI's error and how long it took, when another model answered instead.
     let mut xai_failed: Option<(ClientError, Duration)> = None;
     // The provider model that answered when xAI was down.
@@ -1685,19 +1686,10 @@ pub fn stream_routed(
         }
         out
     } else {
-        // `heard`: xAI sent anything (the heads-up goes out then). `streamed`:
-        // reply text reached the chat. Thinking alone isn't an answer, so a
-        // stand-in can still take a turn xAI only thought about.
-        let mut heard = false;
+        // `streamed`: reply text reached the chat. Thinking alone isn't an
+        // answer, so a stand-in can still take a turn xAI only thought about.
         let mut streamed = false;
         let out = client.stream(&sent, cancel, &mut |ev: StreamEvent| {
-            // A 429's wait note isn't xAI answering: a stand-in can still take the turn.
-            if !heard && !matches!(ev, StreamEvent::RateWait(_)) {
-                heard = true;
-                if let Some(note) = &note {
-                    sink(StreamEvent::TextDelta(format!("{note}\n\n")));
-                }
-            }
             if matches!(&ev, StreamEvent::TextDelta(t) if !t.is_empty()) {
                 streamed = true;
             }
@@ -1710,11 +1702,9 @@ pub fn stream_routed(
         }
         // xAI down for an ordinary turn: a provider you set up answers, and
         // failing that this computer's model (below). Only when xAI showed
-        // nothing yet, and never an 18+ chat, which no provider takes.
+        // nothing yet.
         let stand_in = match &out {
-            Err(err) if !streamed && xai_outage(err) && !super::adult::explicit(&sent.input) => {
-                outage_stand_in(&dir, &call, now)
-            }
+            Err(err) if !streamed && xai_outage(err) => outage_stand_in(&dir, &call, now),
             _ => None,
         };
         match out {
@@ -1738,9 +1728,6 @@ pub fn stream_routed(
                     cancel,
                 );
                 if let Ok(turn) = &out {
-                    if let Some(note) = &note {
-                        sink(StreamEvent::TextDelta(format!("{note}\n\n")));
-                    }
                     if !turn.text.is_empty() {
                         super::adult::guard(
                             &mut reply,
@@ -1752,34 +1739,25 @@ pub fn stream_routed(
                 stood_in = Some(m);
                 out
             }
-            // An 18+ chat xAI couldn't take (signed out, down) falls back to this
-            // computer's model, never to a provider that bans adult chat; an
-            // ordinary turn does too when xAI is down and no provider could
-            // take it. Only when xAI showed nothing yet: a half-streamed xAI
-            // answer is never finished by another model.
+            // An ordinary turn falls back to this computer's model when xAI is
+            // down and no provider could take it. Only when xAI showed nothing
+            // yet: a half-streamed xAI answer is never finished by another model.
             Err(err)
                 if !streamed
                     && !matches!(err, ClientError::Cancelled)
                     && super::local::available()
-                    && (super::adult::explicit(&sent.input)
-                        || xai_outage(&err)
+                    && (xai_outage(&err)
                         || matches!(&err, ClientError::Transport(m)
                             if grokhub_core::offline::is_refusal(m))) =>
             {
                 xai_failed = Some((err, started.elapsed()));
                 on_device = true;
-                if screen.heads_up_local.is_some() {
-                    note = screen.heads_up_local.clone();
-                }
                 if asks_route {
                     let n = route_note(super::local::live_tier(), sent.effort.as_deref(), true);
                     super::ask::add_route_note(&mut sent.input, &n);
                 }
                 let out = super::local::serve_request(class, &sent, cancel);
                 if let Ok(turn) = &out {
-                    if let Some(note) = &note {
-                        sink(StreamEvent::TextDelta(format!("{note}\n\n")));
-                    }
                     // The chat shows streamed text, so the local answer goes out
                     // as one delta, like a provider's.
                     if !turn.text.is_empty() {
@@ -1792,15 +1770,7 @@ pub fn stream_routed(
                 }
                 out
             }
-            out => {
-                // xAI answered without a single event: the heads-up still shows.
-                if !heard && out.is_ok() {
-                    if let Some(note) = &note {
-                        sink(StreamEvent::TextDelta(format!("{note}\n\n")));
-                    }
-                }
-                out
-            }
+            out => out,
         }
     };
     // The held rest of the reply, or the line that replaced it; what the chat
@@ -1817,13 +1787,6 @@ pub fn stream_routed(
         };
         turn
     });
-    let out = match (out, &note) {
-        (Ok(mut turn), Some(note)) => {
-            turn.text = format!("{note}\n\n{}", turn.text);
-            Ok(turn)
-        }
-        (out, _) => out,
-    };
     timing::record("send:model_call", started.elapsed());
     call.effort = effort.as_deref();
     call.model = &model;
@@ -1865,7 +1828,8 @@ pub fn compact_routed(
     // Playbooks 8: a banned ask never leaves the computer, here either.
     let mut sent = req.clone();
     super::adult::scrub(&mut sent.input);
-    if super::adult::held_reply(&sent.input).is_some() {
+    // An 18+ history is never summarized online either.
+    if super::adult::held_reply(&sent.input).is_some() || super::adult::explicit(&sent.input) {
         return None;
     }
     let (text, needs_image) = last_user_text(&sent.input);
