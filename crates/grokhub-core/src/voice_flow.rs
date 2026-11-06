@@ -6,7 +6,9 @@
 //! and a switch holds for a few turns. A low mood moves to a support voice at
 //! once. The chat's own voice comes back when the talk drifts home.
 //!
-//! Explicit voices are never picked here: they only speak when chosen by hand.
+//! An 18+ turn (the app sets [`Signals::adult`] only with adults-only on)
+//! hands the chat to an adults-only voice at once. Explicit voices speak for
+//! nothing else unless chosen by hand.
 
 use std::collections::BTreeMap;
 
@@ -27,10 +29,12 @@ pub enum Topic {
     Hype,
     WindDown,
     Hangout,
+    /// 18+ chat, from an adult who turned adults-only on.
+    Adult,
 }
 
 impl Topic {
-    pub const ALL: [Topic; 9] = [
+    pub const ALL: [Topic; 10] = [
         Topic::Support,
         Topic::Teach,
         Topic::Fix,
@@ -40,6 +44,7 @@ impl Topic {
         Topic::Hype,
         Topic::WindDown,
         Topic::Hangout,
+        Topic::Adult,
     ];
 }
 
@@ -56,6 +61,8 @@ pub struct Signals<'a> {
     /// Sad, low or venting.
     pub low_mood: bool,
     pub frustrated: bool,
+    /// An 18+ ask with adults-only on. Only the app sets it; words alone never do.
+    pub adult: bool,
     /// Local hour, 0-23.
     pub hour: u8,
 }
@@ -209,6 +216,7 @@ pub fn score(s: &Signals) -> BTreeMap<Topic, f32> {
         hits(STORY) + if s.creative { 1.0 } else { 0.0 },
     );
     add(Topic::Hype, hits(HYPE));
+    add(Topic::Adult, if s.adult { 4.0 } else { 0.0 });
     add(
         Topic::WindDown,
         hits(WIND_DOWN) + if (0..5).contains(&s.hour) { 0.5 } else { 0.0 },
@@ -291,7 +299,9 @@ impl Flow {
             return self.finish(before);
         }
         let leader = self.leader();
-        let urgent = signals.low_mood && leader == Topic::Support;
+        // A low mood or an 18+ ask moves at once: waiting a turn reads as a refusal.
+        let urgent = (signals.low_mood && leader == Topic::Support)
+            || (signals.adult && leader == Topic::Adult);
         if leader == self.topic {
             self.challenger = None;
         } else if urgent {
@@ -347,7 +357,8 @@ impl Flow {
 
 /// The voice for `topic`: home when home covers it (or it's plain hangout),
 /// else the first non-explicit voice that leads with it, else the first that
-/// lists it, else home.
+/// lists it, else home. An 18+ turn goes to an adults-only voice that lists
+/// [`Topic::Adult`], and explicit voices speak for nothing else.
 pub fn voice_for(topic: Topic, home: &str, roster: &[Personality]) -> String {
     let home_covers = roster
         .iter()
@@ -356,7 +367,11 @@ pub fn voice_for(topic: Topic, home: &str, roster: &[Personality]) -> String {
     if topic == Topic::Hangout || home_covers {
         return home.to_string();
     }
-    let open = || roster.iter().filter(|p| !p.explicit);
+    let open = || {
+        roster
+            .iter()
+            .filter(move |p| p.explicit == (topic == Topic::Adult))
+    };
     open()
         .find(|p| p.topics.first() == Some(&topic))
         .or_else(|| open().find(|p| p.topics.contains(&topic)))
@@ -483,7 +498,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_voices_are_never_picked() {
+    fn explicit_voices_speak_only_for_18_plus_turns() {
         let mut roster = builtins();
         for p in roster.iter_mut().filter(|p| p.explicit) {
             p.topics = Topic::ALL.to_vec();
@@ -491,10 +506,51 @@ mod tests {
         for p in roster.iter_mut().filter(|p| !p.explicit) {
             p.topics.clear();
         }
-        for t in Topic::ALL {
+        for t in Topic::ALL.into_iter().filter(|t| *t != Topic::Adult) {
             let v = voice_for(t, "nyx", &roster);
             assert_eq!(v, "nyx", "{t:?}");
         }
+        // No clean voice ever takes an 18+ turn, even one that lists it.
+        let mut clean: Vec<_> = builtins().into_iter().filter(|p| !p.explicit).collect();
+        for p in clean.iter_mut() {
+            p.topics = vec![Topic::Adult];
+        }
+        assert_eq!(voice_for(Topic::Adult, "nyx", &clean), "nyx");
+    }
+
+    #[test]
+    fn an_18_plus_turn_hands_the_chat_to_the_adults_only_voice_at_once() {
+        let roster = builtins();
+        assert_eq!(voice_for(Topic::Adult, "nyx", &roster), "whore");
+        let mut flow = Flow::new("nyx");
+        for t in ["lol hey", "what's up"] {
+            assert_eq!(flow.step(&chat(t), &roster, false).voice, "nyx");
+        }
+        let adult = Signals {
+            adult: true,
+            ..chat("talk dirty to me")
+        };
+        let s = flow.step(&adult, &roster, false);
+        assert_eq!((s.voice.as_str(), s.topic), ("whore", Topic::Adult));
+        assert!(s.switched, "no second turn of refusals first");
+        assert_eq!(flow.step(&adult, &roster, false).voice, "whore");
+        // Words alone never do it: only the app's own adult signal.
+        let mut words = Flow::new("nyx");
+        for _ in 0..4 {
+            let s = words.step(&chat("talk dirty to me"), &roster, false);
+            assert_eq!(s.voice, "nyx");
+        }
+        // A hand-picked voice holds, and so does a roster without the voice.
+        let mut pinned = Flow::new("nyx");
+        assert_eq!(pinned.step(&adult, &roster, true).voice, "nyx");
+        let clean: Vec<_> = builtins().into_iter().filter(|p| !p.explicit).collect();
+        let mut off = Flow::new("nyx");
+        assert_eq!(off.step(&adult, &clean, false).voice, "nyx");
+        // Back to plain chat: home again once the talk moves on.
+        let voices: Vec<String> = (0..8)
+            .map(|_| flow.step(&chat("haha ok cool"), &roster, false).voice)
+            .collect();
+        assert_eq!(voices.last().map(String::as_str), Some("nyx"), "{voices:?}");
     }
 
     #[test]

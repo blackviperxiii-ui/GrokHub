@@ -476,10 +476,13 @@ impl Cabin {
             .threads
             .get(idx)
             .is_some_and(|t| !t.personality.trim().is_empty());
+        // Adults-only voices join only with adults-only on, and then speak
+        // only for 18+ turns.
+        let adult = self.adult_heat().is_some();
         let roster = self
             .presets_now()
             .into_iter()
-            .filter(|p| !p.explicit)
+            .filter(|p| adult || !p.explicit)
             .collect();
         grokhub_agent::voice_session::VoiceConfig {
             home: self.thread_personality(idx),
