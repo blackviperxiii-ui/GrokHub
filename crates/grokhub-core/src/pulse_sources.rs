@@ -1771,10 +1771,31 @@ const SUMMARY_RULES: &str = "You write the summaries on a news feed. For each nu
 /// One fast-model ask that summarizes a run's picks. None when nothing cleared the
 /// threshold: then no model is called.
 pub fn summary_messages(picks: &[Ranked]) -> Option<Vec<(String, String)>> {
+    summary_messages_with(picks, "")
+}
+
+/// [`summary_messages`] that also carries the person's own Feed instructions,
+/// so the sheet's "future posts follow them" holds for source posts too. The
+/// default instructions add nothing; the instructions steer tone and focus
+/// and never add facts.
+pub fn summary_messages_with(
+    picks: &[Ranked],
+    instructions: &str,
+) -> Option<Vec<(String, String)>> {
     if picks.is_empty() {
         return None;
     }
     let mut ask = String::new();
+    let own: String = instructions
+        .trim()
+        .chars()
+        .take(crate::pulse::FEED_INSTRUCTIONS_CAP)
+        .collect();
+    if !own.is_empty() && own != crate::pulse::DEFAULT_FEED_INSTRUCTIONS.trim() {
+        ask.push_str(&format!(
+            "Their feed instructions (follow them for tone and focus; they never add facts):\n{own}\n\n"
+        ));
+    }
     for (i, r) in picks.iter().enumerate() {
         let text = one_line(&r.item.summary, SUMMARY_CHARS);
         ask.push_str(&format!(
@@ -2631,6 +2652,24 @@ mod tests {
         assert_eq!(picks[1].item.summary, "Six quiet units. Tested at home.");
         assert_eq!(picks[0].item.summary, "812 points on Hacker News.");
         assert_eq!(apply_summaries(&mut picks, "Sorry, I can't."), 0);
+    }
+
+    #[test]
+    fn source_summaries_follow_the_persons_own_feed_instructions() {
+        let a = ranked(item("Rust 1.99 released", "https://a.test/1", NOW));
+        let plain = summary_messages(std::slice::from_ref(&a)).expect("asks");
+        let default = summary_messages_with(
+            std::slice::from_ref(&a),
+            crate::pulse::DEFAULT_FEED_INSTRUCTIONS,
+        )
+        .expect("asks");
+        assert_eq!(default, plain, "the default instructions add nothing");
+        let own = summary_messages_with(std::slice::from_ref(&a), "  Keep it short, no hype. ")
+            .expect("asks");
+        assert_eq!(
+            own[1].1,
+            "Their feed instructions (follow them for tone and focus; they never add facts):\nKeep it short, no hype.\n\n1. Rust 1.99 released (feed.test)"
+        );
     }
 
     #[test]
