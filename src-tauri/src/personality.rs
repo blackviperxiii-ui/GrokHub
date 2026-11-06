@@ -368,7 +368,10 @@ mod tests {
         assert_eq!(off.home.id, "nyx");
         assert_eq!(off.adult, None);
         assert!(!off.dynamic);
-        assert!(off.roster.iter().all(|p| !p.explicit), "no 18+ voice with it off");
+        assert!(
+            off.roster.iter().all(|p| !p.explicit),
+            "no 18+ voice with it off"
+        );
         let _ = std::fs::remove_dir_all(&cfg);
     }
 
