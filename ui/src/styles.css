@@ -4120,6 +4120,20 @@ label.toggle-row {
   margin: 0 0 0.25rem;
 }
 
+/* Monday's "Your week" on Today. */
+.goal-week ul {
+  margin: 0.25rem 0;
+  padding-left: 1.25rem;
+}
+
+/* "First goal this season: +50 bonus XP". */
+.goal-bonus {
+  margin: 0.25rem 0;
+  padding-left: 0.5rem;
+  border-left: 3px solid var(--amber);
+  font-weight: 600;
+}
+
 .goal-ask {
   display: flex;
   flex-wrap: wrap;

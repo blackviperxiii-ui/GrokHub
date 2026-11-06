@@ -1335,8 +1335,25 @@ export interface GoalBoard {
   today: GoalCard[];
   mine: GoalCard[];
   suggested: GoalCard[];
-  season: { label: string; done: number; trophies: GoalCard[] };
+  season: {
+    label: string;
+    done: number;
+    trophies: GoalCard[];
+    /** Seasons whose badge was earned (three goals done), newest first. */
+    badges: string[];
+    /** "1 more goal for the Oct to Dec 2026 badge"; absent once earned. */
+    badgeLine?: string;
+    /** "First goal this season: +50 bonus XP", for a week after it landed. */
+    bonus?: string;
+  };
   followUp?: FollowUp;
+  /** Monday's "Your week": up to three real changes and one goal to try. */
+  week?: YourWeek;
+}
+
+export interface YourWeek {
+  lines: string[];
+  suggestion?: GoalCard;
 }
 
 export type GoalAct =

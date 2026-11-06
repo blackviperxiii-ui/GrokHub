@@ -30,7 +30,14 @@ pub fn board(config_dir: &Path, now_ms: u64, offset_min: i32) -> Board {
     })
     .map(|(o, ())| o)
     .unwrap_or_else(|_| objectives::load(config_dir));
-    objectives::board(&o, now_ms, offset_min)
+    page(config_dir, &o, now_ms, offset_min)
+}
+
+/// The page's rows plus Monday's "Your week", which needs the XP ledger.
+fn page(config_dir: &Path, o: &objectives::Objectives, now_ms: u64, offset_min: i32) -> Board {
+    let mut b = objectives::board(o, now_ms, offset_min);
+    b.week = objectives::week_from_disk(config_dir, now_ms, offset_min);
+    b
 }
 
 /// The follow-up for Home's objectives tile, as on the page.
@@ -52,7 +59,7 @@ pub fn act(
         objectives::change(config_dir, |o| objectives::apply(o, acts, &known, now_ms))
             .map_err(|e| format!("Couldn't save your goals: {e}"))?;
     Ok(Saved {
-        board: objectives::board(&o, now_ms, offset_min),
+        board: page(config_dir, &o, now_ms, offset_min),
         note: refused.map(str::to_string),
     })
 }
@@ -252,5 +259,42 @@ mod tests {
         assert_eq!(saved.goals[0].nudges.len(), 1, "written once");
         let json = serde_json::to_value(board(&d, later + 2, 0)).unwrap();
         assert_eq!(json["followUp"]["stop"], false);
+    }
+
+    #[test]
+    fn monday_shows_your_week_and_three_goals_earn_the_season_badge() {
+        let d = dir("week");
+        let lib = vec![("Hades".to_string(), 1_145_360)];
+        let last_week = NOW - 4 * DAY;
+        for game in ["hades", "celeste", "hollow knight"] {
+            let add = GoalAct::Add {
+                text: format!("finish {game}"),
+            };
+            act(&d, &[add], &lib, last_week - DAY, 0).unwrap();
+        }
+        let ids: Vec<String> = objectives::load(&d)
+            .goals
+            .iter()
+            .map(|g| g.id.clone())
+            .collect();
+        let done: Vec<GoalAct> = ids
+            .iter()
+            .map(|id| GoalAct::Done { id: id.clone() })
+            .collect();
+        act(&d, &done, &lib, last_week, 0).unwrap();
+        let b = board(&d, NOW, 0);
+        let week = b.week.expect("Monday recap");
+        assert!(
+            week.lines.contains(&"3 goals done".to_string()),
+            "{:?}",
+            week.lines
+        );
+        assert_eq!(b.season.badges, vec!["Oct to Dec 2026".to_string()]);
+        assert_eq!(b.season.badge_line, None);
+        assert_eq!(
+            b.season.bonus.as_deref(),
+            Some("First goal this season: +50 bonus XP")
+        );
+        assert_eq!(board(&d, NOW + DAY, 0).week, None, "Mondays only");
     }
 }

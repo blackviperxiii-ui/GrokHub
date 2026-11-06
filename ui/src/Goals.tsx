@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { getGoals, goalAct, type FollowUp, type GoalAct, type GoalBoard, type GoalCard } from "./api";
+import { getGoals, goalAct, type FollowUp, type GoalAct, type GoalBoard, type GoalCard, type YourWeek } from "./api";
 
 export const ADD_HINT = "What do you want to do?";
 export const TODAY_EMPTY = "Nothing for today yet. Add a goal below and it shows up here.";
@@ -96,6 +96,30 @@ export function FollowUpRow({ followUp, onAsk }: { followUp: FollowUp; onAsk?: (
   );
 }
 
+export const YOUR_WEEK = "Your week";
+
+/** Monday's recap on Today: what changed last week and one goal to try. */
+export function YourWeekRow({ week, busy, onTrack }: { week: YourWeek; busy: boolean; onTrack: (id: string) => void }) {
+  return (
+    <div className="goal-row goal-week" aria-label={YOUR_WEEK}>
+      <strong>{YOUR_WEEK}</strong>
+      <ul>
+        {week.lines.map((line) => (
+          <li key={line}>{line}</li>
+        ))}
+      </ul>
+      {week.suggestion && (
+        <div className="card-buttons">
+          <span>Try next: {week.suggestion.title}</span>
+          <button type="button" className="quiet" disabled={busy} onClick={() => onTrack(week.suggestion!.id)}>
+            Track
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Goals({ onChange, onAsk }: { onChange?: () => void; onAsk?: (text: string) => void }) {
   const [board, setBoard] = useState<GoalBoard | null>(null);
   const [draft, setDraft] = useState("");
@@ -138,9 +162,10 @@ export function Goals({ onChange, onAsk }: { onChange?: () => void; onAsk?: (tex
     <>
       <div className="card objectives-card" aria-label="Today">
         <span className="xp-level">Today</span>
+        {board.week && <YourWeekRow week={board.week} busy={busy} onTrack={(id) => void press([{ act: "track", id }])} />}
         {board.followUp && <FollowUpRow followUp={board.followUp} onAsk={onAsk} />}
         {board.today.length === 0 ? (
-          !board.followUp && <p className="home-muted">{TODAY_EMPTY}</p>
+          !board.followUp && !board.week && <p className="home-muted">{TODAY_EMPTY}</p>
         ) : (
           board.today.map((g) => (
             <div key={g.id} className="goal-row">
@@ -220,6 +245,17 @@ export function Goals({ onChange, onAsk }: { onChange?: () => void; onAsk?: (tex
           <span className="xp-amount">{board.season.label}</span>
         </div>
         <p className="home-muted">{doneLine(board.season.done)}</p>
+        {board.season.badgeLine && <p className="home-muted">{board.season.badgeLine}</p>}
+        {board.season.bonus && <p className="goal-bonus">{board.season.bonus}</p>}
+        {board.season.badges.length > 0 && (
+          <ul className="goal-list" aria-label="Badges">
+            {board.season.badges.map((b) => (
+              <li key={b} className="goal-row">
+                <strong>{b} badge</strong>
+              </li>
+            ))}
+          </ul>
+        )}
         {board.season.trophies.length === 0 ? (
           <p className="home-muted">{SHELF_EMPTY}</p>
         ) : (

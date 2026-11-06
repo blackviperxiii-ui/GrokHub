@@ -39,7 +39,7 @@ const api = vi.hoisted(() => ({
   runSlash: vi.fn(),
   quickChips: vi.fn<(surface: string, id?: string, draft?: string, mode?: SessionMode) => Promise<QuickChip[]>>(),
   chipOutcome: vi.fn<(surface: string, id: string, picked: boolean) => Promise<boolean>>(),
-  goalAct: vi.fn(() => Promise.resolve({ board: { today: [], mine: [], suggested: [], season: { label: "", done: 0, trophies: [] } } })),
+  goalAct: vi.fn(() => Promise.resolve({ board: { today: [], mine: [], suggested: [], season: { label: "", done: 0, trophies: [], badges: [] } } })),
 }));
 
 vi.mock("./api", () => ({

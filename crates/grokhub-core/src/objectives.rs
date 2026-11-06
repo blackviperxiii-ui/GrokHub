@@ -27,10 +27,11 @@ mod follow_up;
 mod game_data;
 mod season;
 mod typed;
+mod week;
 
 pub use board::{
-    apply, ask_card, board, goal_detail, goal_title, steps_by_one, track_chip, Board, GoalAct,
-    GoalCard, Season, SHELF_MAX, TRACK_CHIP_PREFIX,
+    apply, ask_card, badge_line, board, goal_detail, goal_title, steps_by_one, track_chip, Board,
+    GoalAct, GoalCard, Season, SHELF_MAX, TRACK_CHIP_PREFIX,
 };
 pub use chat::{
     detect, is_marker_line, markers, read_turn, wants_tracking, without_markers, worth_a_look,
@@ -43,8 +44,12 @@ pub use follow_up::{
 pub use game_data::{
     apply_game_data, goal_steam_games, match_finished, refresh_from_games, GameData,
 };
-pub use season::{done_this_season, pick_up_line, season_label, short_date, today_picks, Pick};
+pub use season::{
+    badges, done_this_season, pick_up_line, season_bonus_note, season_firsts, season_label,
+    short_date, today_picks, Pick, BADGE_GOALS, XP_SEASON_FIRST,
+};
 pub use typed::{parse_goal, KnownGame};
+pub use week::{week_from_disk, your_week, YourWeek, WEEK_LINES};
 
 pub const OBJECTIVES_FILE: &str = "objectives.json";
 

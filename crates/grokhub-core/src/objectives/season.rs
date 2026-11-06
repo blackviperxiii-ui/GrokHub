@@ -1,7 +1,18 @@
 //! Seasons (calendar quarters) and the Today rows picked from the goals.
+//! Three goals done in a season earn its badge, and the first goal done in a
+//! season pays a surprise bonus. Goals carry over; nothing expires.
+
+use std::collections::BTreeMap;
 
 use super::{Goal, GoalState, Objectives};
-use crate::xp::local_day;
+use crate::xp::{local_day, Earned, XpKind};
+
+/// Goals done in a season for its badge.
+pub const BADGE_GOALS: usize = 3;
+/// The surprise bonus for the first goal done in a season.
+pub const XP_SEASON_FIRST: u32 = 50;
+/// How long the page says the bonus landed.
+const BONUS_NOTE_MS: u64 = 7 * DAY_MS;
 
 const DAY_MS: u64 = 86_400_000;
 /// A tracked goal untouched this long gets a "pick it up" row.
@@ -38,11 +49,70 @@ pub fn season_of(day: i64) -> (i32, u32) {
     (y, (m - 1) / 3)
 }
 
-/// "Oct to Dec 2026".
-pub fn season_label(now_ms: u64, offset_min: i32) -> String {
-    let (y, q) = season_of(local_day(now_ms, offset_min));
+fn label_of((y, q): (i32, u32)) -> String {
     let first = (q * 3) as usize;
     format!("{} to {} {y}", MONTHS[first], MONTHS[first + 2])
+}
+
+/// "Oct to Dec 2026".
+pub fn season_label(now_ms: u64, offset_min: i32) -> String {
+    label_of(season_of(local_day(now_ms, offset_min)))
+}
+
+/// Finished goals by season, each season's goals oldest first.
+fn done_by_season(goals: &[Goal], offset_min: i32) -> BTreeMap<(i32, u32), Vec<&Goal>> {
+    let mut out: BTreeMap<(i32, u32), Vec<&Goal>> = BTreeMap::new();
+    for g in goals.iter().filter(|g| g.state == GoalState::Done) {
+        if let Some(at) = g.done_ms {
+            out.entry(season_of(local_day(at, offset_min)))
+                .or_default()
+                .push(g);
+        }
+    }
+    for list in out.values_mut() {
+        list.sort_by(|a, b| a.done_ms.cmp(&b.done_ms).then(a.id.cmp(&b.id)));
+    }
+    out
+}
+
+/// Seasons whose badge was earned, newest first: "Oct to Dec 2026".
+pub fn badges(o: &Objectives, offset_min: i32) -> Vec<String> {
+    done_by_season(&o.goals, offset_min)
+        .into_iter()
+        .rev()
+        .filter(|(_, list)| list.len() >= BADGE_GOALS)
+        .map(|(season, _)| label_of(season))
+        .collect()
+}
+
+/// The surprise bonus lines, one per season, keyed `season-first:2026-q4`.
+/// The XP ledger folds them in with the goals' own payments.
+pub fn season_firsts(goals: &[Goal], offset_min: i32) -> Vec<(String, Earned)> {
+    done_by_season(goals, offset_min)
+        .into_iter()
+        .filter_map(|((y, q), list)| {
+            let at = list.first()?.done_ms?;
+            Some((
+                format!("season-first:{y}-q{}", q + 1),
+                Earned {
+                    day: local_day(at, offset_min),
+                    xp: XP_SEASON_FIRST,
+                    kind: XpKind::GoalDone,
+                },
+            ))
+        })
+        .collect()
+}
+
+/// "First goal this season: +50 bonus XP", for a week after it landed.
+pub fn season_bonus_note(o: &Objectives, now_ms: u64, offset_min: i32) -> Option<String> {
+    let season = season_of(local_day(now_ms, offset_min));
+    let at = done_by_season(&o.goals, offset_min)
+        .get(&season)?
+        .first()?
+        .done_ms?;
+    (now_ms < at + BONUS_NOTE_MS)
+        .then(|| format!("First goal this season: +{XP_SEASON_FIRST} bonus XP"))
 }
 
 /// Goals done this season.
@@ -198,5 +268,39 @@ mod tests {
         let g = &o.goals[0];
         assert_eq!(pick_up_line(g), "Pick up Learn to parry tonight?");
         assert_eq!(Pick::PickUp(only.clone()).id(), only);
+    }
+
+    fn finish(o: &mut Objectives, id: &str, at: u64) {
+        assert!(o.done(id, at));
+    }
+
+    #[test]
+    fn three_done_in_a_season_earn_its_badge_and_the_first_pays_a_surprise_once() {
+        let mut o = Objectives::default();
+        let ids: Vec<String> = (0..4)
+            .map(|i| goal(&mut o, "Hades", &format!("win {i}"), 0, 10, NOW))
+            .collect();
+        assert!(badges(&o, 0).is_empty());
+        assert!(season_firsts(&o.goals, 0).is_empty());
+        finish(&mut o, &ids[1], NOW + DAY_MS);
+        let firsts = season_firsts(&o.goals, 0);
+        assert_eq!(firsts.len(), 1);
+        assert_eq!(firsts[0].0, "season-first:2026-q4");
+        assert_eq!(firsts[0].1.xp, XP_SEASON_FIRST);
+        assert_eq!(
+            season_bonus_note(&o, NOW + 2 * DAY_MS, 0).as_deref(),
+            Some("First goal this season: +50 bonus XP")
+        );
+        assert_eq!(season_bonus_note(&o, NOW + 9 * DAY_MS, 0), None);
+        finish(&mut o, &ids[0], NOW + 2 * DAY_MS);
+        assert_eq!(season_firsts(&o.goals, 0), firsts, "still the first one");
+        assert!(badges(&o, 0).is_empty());
+        finish(&mut o, &ids[2], NOW + 3 * DAY_MS);
+        assert_eq!(badges(&o, 0), vec!["Oct to Dec 2026".to_string()]);
+        // Next season: its own first, and the old badge stays.
+        let jan = NOW + 70 * DAY_MS;
+        finish(&mut o, &ids[3], jan);
+        assert_eq!(season_firsts(&o.goals, 0).len(), 2);
+        assert_eq!(badges(&o, 0), vec!["Oct to Dec 2026".to_string()]);
     }
 }

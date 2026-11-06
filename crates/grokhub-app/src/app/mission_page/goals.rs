@@ -20,6 +20,9 @@ use super::super::*;
 /// How often the goals are read again from disk (the other app may write).
 const GOALS_REFRESH: Duration = Duration::from_secs(30);
 const GOALS_ID: &str = "loadout-goals";
+const WEEK_ID: &str = "objectives-your-week";
+/// The caption over Monday's recap on Today.
+pub(in crate::app) const YOUR_WEEK: &str = "Your week";
 const DRAFT_ID: &str = "objectives-add-draft";
 const ADD_ERROR_ID: &str = "objectives-add-error";
 pub(in crate::app) const ADD_HINT: &str = "What do you want to do?";
@@ -121,6 +124,26 @@ fn known_games(games: &[(String, Option<u32>)]) -> Vec<KnownGame<'_>> {
             source: None,
         })
         .collect()
+}
+
+type CachedWeek = (Instant, Option<objectives::YourWeek>);
+
+/// Monday's "Your week", read again every [`GOALS_REFRESH`].
+fn dock_your_week(ctx: &egui::Context) -> Option<objectives::YourWeek> {
+    let id = egui::Id::new(WEEK_ID);
+    if let Some((at, w)) = ctx.data(|d| d.get_temp::<CachedWeek>(id)) {
+        if at.elapsed() < GOALS_REFRESH {
+            return w;
+        }
+    }
+    let clock = Cabin::local_clock();
+    let w = objectives::week_from_disk(
+        &crate::config::config_dir(),
+        clock.now_ms,
+        clock.utc_offset_min(),
+    );
+    ctx.data_mut(|d| d.insert_temp::<CachedWeek>(id, (Instant::now(), w.clone())));
+    w
 }
 
 impl Cabin {
@@ -304,9 +327,34 @@ impl Cabin {
     ) {
         let now = now_ms();
         let mut plan = None;
+        let mut track = None;
+        let week = dock_your_week(ui.ctx());
         card(ui, |ui| {
             header(ui, true, "Today", "", crate::theme::amber());
             let mut any = false;
+            if let Some(w) = &week {
+                any = true;
+                ui.label(caption(YOUR_WEEK));
+                for line in &w.lines {
+                    ui.horizontal(|ui| {
+                        diamond(ui, false);
+                        ui.label(
+                            RichText::new(line)
+                                .size(crate::theme::TYPE_BODY)
+                                .color(crate::theme::fg()),
+                        );
+                    });
+                }
+                if let Some(g) = &w.suggestion {
+                    ui.horizontal(|ui| {
+                        muted_line(ui, &format!("Try next: {}", g.title));
+                        if crate::cards::ghost_pill(ui, "Track") {
+                            track = Some(g.id.clone());
+                        }
+                    });
+                }
+                ui.add_space(8.0);
+            }
             if let Some(f) = objectives::shown_follow_up(goals, now) {
                 any = true;
                 ui.label(
@@ -374,6 +422,11 @@ impl Cabin {
         if let Some(prompt) = plan {
             self.nav = Nav::Chat;
             self.send_chat(prompt);
+        }
+        if let Some(id) = track {
+            self.apply_goal_acts(ui.ctx(), vec![GoalAct::Track { id }]);
+            ui.ctx()
+                .data_mut(|d| d.remove::<CachedWeek>(egui::Id::new(WEEK_ID)));
         }
     }
 
@@ -451,15 +504,36 @@ impl Cabin {
                 &objectives::season_label(now, offset),
                 crate::theme::amber(),
             );
+            let label = objectives::season_label(now, offset);
             let done = objectives::done_this_season(goals, now, offset);
             let s = if done == 1 { "" } else { "s" };
             muted_line(ui, &format!("{done} goal{s} done this season"));
+            if let Some(line) = objectives::badge_line(done, &label) {
+                muted_line(ui, &line);
+            }
+            if let Some(bonus) = objectives::season_bonus_note(goals, now, offset) {
+                ui.label(
+                    RichText::new(bonus)
+                        .size(crate::theme::TYPE_LABEL)
+                        .color(crate::theme::amber()),
+                );
+            }
             ui.add_space(8.0);
             paint_weeks(ui, &week);
             ui.add_space(8.0);
             ui.separator();
             ui.add_space(4.0);
             ui.label(caption("Trophy shelf"));
+            for badge in objectives::badges(goals, offset) {
+                ui.horizontal(|ui| {
+                    diamond(ui, true);
+                    ui.label(
+                        RichText::new(format!("{badge} badge"))
+                            .size(crate::theme::TYPE_BODY)
+                            .color(crate::theme::amber()),
+                    );
+                });
+            }
             let trophies = goals.trophies();
             if trophies.is_empty() {
                 muted_line(ui, SHELF_EMPTY);
