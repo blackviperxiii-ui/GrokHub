@@ -159,12 +159,36 @@ enum StoreRead {
     Missing,
     Text(String),
     Unusable,
+    /// Held by another handle (a Windows replace, a scanner) past every retry.
+    /// Not the same as missing or broken: it is never quarantined.
+    Busy,
 }
 
+/// Waits between reads of a store another handle is holding: about half a
+/// second in all, the time a Windows replace or a scanner usually takes.
+const READ_BACKOFF_MS: [u64; 6] = [10, 20, 40, 80, 160, 190];
+
 fn read_store(path: &Path, cap: usize) -> StoreRead {
+    let mut got = read_store_once(path, cap);
+    for wait_ms in READ_BACKOFF_MS {
+        if !matches!(got, StoreRead::Busy) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(wait_ms));
+        got = read_store_once(path, cap);
+    }
+    got
+}
+
+/// One try. Only "not found" is missing; any other open or read error is a
+/// busy file, since a reader racing a replace sees access denied or a
+/// sharing violation, and quarantining a live store over that loses it.
+fn read_store_once(path: &Path, cap: usize) -> StoreRead {
+    let gone = |e: &std::io::Error| e.kind() == std::io::ErrorKind::NotFound;
     let meta = match fs::metadata(path) {
         Ok(m) => m,
-        Err(_) => return StoreRead::Missing,
+        Err(e) if gone(&e) => return StoreRead::Missing,
+        Err(_) => return StoreRead::Busy,
     };
     if meta.len() > cap as u64 {
         return StoreRead::Unusable;
@@ -174,10 +198,13 @@ fn read_store(path: &Path, cap: usize) -> StoreRead {
             let mut raw = String::new();
             match f.read_to_string(&mut raw) {
                 Ok(_) => StoreRead::Text(raw),
-                Err(_) => StoreRead::Unusable,
+                // Not UTF-8: the bytes themselves are broken.
+                Err(e) if e.kind() == std::io::ErrorKind::InvalidData => StoreRead::Unusable,
+                Err(_) => StoreRead::Busy,
             }
         }
-        Err(_) => StoreRead::Missing,
+        Err(e) if gone(&e) => StoreRead::Missing,
+        Err(_) => StoreRead::Busy,
     }
 }
 
@@ -198,7 +225,7 @@ where
     F: FnOnce() -> T,
 {
     let raw = match read_store(path, cap) {
-        StoreRead::Missing => return fallback(),
+        StoreRead::Missing | StoreRead::Busy => return fallback(),
         StoreRead::Unusable => {
             quarantine(path);
             return fallback();
@@ -2628,6 +2655,36 @@ mod tests {
         );
         let names: Vec<_> = fs::read_dir(&root).expect("dir").flatten().collect();
         assert_eq!(names.len(), 2);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_store_that_cannot_be_read_right_now_is_never_quarantined() {
+        let root = test_config_root("busy-store");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("root");
+        // Open succeeds or is refused, and the read fails without the bytes
+        // being broken: what a reader racing a Windows replace sees.
+        let held = root.join("updates.json");
+        fs::create_dir_all(&held).expect("held");
+        let loaded: Vec<String> = load_json(&held, JSON_STORE_CAP);
+        assert!(loaded.is_empty());
+        assert!(held.is_dir(), "a store that is only busy stays where it is");
+        assert_eq!(peek_json::<Vec<String>>(&held, JSON_STORE_CAP), None);
+
+        // Bytes that are not UTF-8 are broken, and that store is moved aside.
+        let broken = root.join("ideas.json");
+        fs::write(&broken, [0xFF, 0xFE, 0x00, 0x5B]).expect("write");
+        let loaded: Vec<String> = load_json(&broken, JSON_STORE_CAP);
+        assert!(loaded.is_empty());
+        assert!(!broken.exists(), "a broken store is quarantined");
+        let junk: Vec<_> = fs::read_dir(&root)
+            .expect("dir")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(".corrupt-"))
+            .collect();
+        assert_eq!(junk.len(), 1, "only the broken store moved: {junk:?}");
         let _ = fs::remove_dir_all(&root);
     }
 
