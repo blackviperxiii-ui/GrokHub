@@ -100,7 +100,9 @@ impl Cabin {
             ) {
                 self.save_chat_diagnostics(None);
             }
-            if self.diagnostics.last_zip.is_some() && crate::cards::ghost_pill(ui, "Open folder") {
+            if self.diagnostics.last_zip.is_some()
+                && crate::cards::ghost_pill(ui, crate::desktop::reveal_label())
+            {
                 self.open_diagnostics_folder();
             }
             // Read from the chip log already in memory: no disk read per paint.
@@ -111,20 +113,20 @@ impl Cabin {
         }
     }
 
-    /// Open the Desktop folder that holds the last diagnostics zip.
+    /// Show the last diagnostics zip in its folder.
     pub(super) fn open_diagnostics_folder(&mut self) {
         let Some(path) = self.diagnostics.last_zip.clone() else {
             self.status = "No diagnostics file yet".into();
             return;
         };
-        self.open_folder_of(&path);
+        self.show_in_folder(&path);
     }
 
-    /// Open the folder that holds `path` (the bell's Open folder).
-    pub(super) fn open_folder_of(&mut self, path: &std::path::Path) {
-        let dir = path.parent().unwrap_or(path);
-        if let Err(e) = crate::desktop::open_path(&dir.display().to_string()) {
-            self.status = format!("Couldn't open folder: {e}");
+    /// Open the folder that holds `path` with the file selected (the bell's
+    /// Show in folder).
+    pub(super) fn show_in_folder(&mut self, path: &std::path::Path) {
+        if let Err(e) = crate::desktop::reveal_file(path) {
+            self.status = format!("Couldn't open the folder: {e}");
         }
     }
 
@@ -367,7 +369,7 @@ impl Cabin {
                 self.notify(
                     super::notices::NoticeKind::Success,
                     self.status.clone(),
-                    Some(super::notices::NoticeAction::OpenFolder(path.clone())),
+                    Some(super::notices::NoticeAction::ShowInFolder(path.clone())),
                 );
                 self.diagnostics.last_zip = Some(path);
             }
@@ -863,7 +865,7 @@ mod tests {
         assert_eq!(cabin.status, format!("Saved {name} to your Desktop"));
         assert_eq!(
             cabin.notices.items[0].action,
-            Some(super::super::notices::NoticeAction::OpenFolder(
+            Some(super::super::notices::NoticeAction::ShowInFolder(
                 path.clone()
             ))
         );

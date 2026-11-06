@@ -223,12 +223,22 @@ pub fn desktop_dir() -> Option<PathBuf> {
 }
 
 /// The user's Downloads folder, found the same way as [`desktop_dir`].
-fn downloads_dir() -> Option<PathBuf> {
+pub fn downloads_dir() -> Option<PathBuf> {
     let home = user_home()?;
     let platform = dirs::download_dir()
         .filter(|_| dirs::home_dir().as_deref() == Some(home.as_path()))
         .filter(|d| d != &home);
     Some(platform.unwrap_or_else(|| home.join("Downloads")))
+}
+
+/// The user's Documents folder, found the same way as [`desktop_dir`]
+/// (OneDrive's when Windows moved it there; the translated name on Linux).
+pub fn documents_dir() -> Option<PathBuf> {
+    let home = user_home()?;
+    let platform = dirs::document_dir()
+        .filter(|_| dirs::home_dir().as_deref() == Some(home.as_path()))
+        .filter(|d| d != &home);
+    Some(platform.unwrap_or_else(|| home.join("Documents")))
 }
 
 /// Folders a sync client uploads: the OneDrive roots Windows names in the
@@ -240,6 +250,12 @@ fn sync_roots_from_env() -> Vec<PathBuf> {
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
         .collect()
+}
+
+/// True when `dir` sits inside a folder a sync client uploads (OneDrive,
+/// Dropbox, Google Drive, iCloud Drive).
+pub fn dir_is_cloud_synced(dir: &Path) -> bool {
+    is_cloud_synced(dir, &sync_roots_from_env())
 }
 
 /// True when `dir` sits inside a cloud-synced folder: one of `sync_roots`,
