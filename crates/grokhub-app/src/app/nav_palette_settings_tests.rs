@@ -1134,7 +1134,7 @@ fn labs_beta_channel_toggle_is_wired() {
         diag.contains("Diagnostics mode")
             && diag.contains("save_chat_diagnostics")
             && diag.contains("loadout-diagnostics"),
-        "Labs Diagnostics UI must wire the mode toggle and Desktop zip export"
+        "Labs Diagnostics UI must wire the mode toggle and zip export"
     );
     let app = include_str!("mod.rs");
     assert!(

@@ -1353,11 +1353,34 @@ pub fn wall_dir() -> PathBuf {
     config_dir().join("imagine-wall")
 }
 
-pub fn imagine_dir() -> PathBuf {
-    if let Ok(home) = std::env::var("HOME") {
-        return PathBuf::from(home).join("GrokHub-Work/imagine");
+/// Where your files' folder for `kind` is, without making it. Tests that
+/// pinned no `folders.json` get a folder inside their own config root, never
+/// the real Documents.
+pub fn user_folder_path_in(config: &Path, kind: grokhub_core::user_files::UserFolder) -> PathBuf {
+    #[cfg(test)]
+    if !config.join(grokhub_core::user_files::FOLDERS_FILE).exists() {
+        return config.join("test-files").join(kind.name());
     }
-    config_dir().join("imagine")
+    grokhub_core::user_files::folder_path(config, kind)
+}
+
+/// [`user_folder_path_in`], made (and the files root remembered) on first use.
+pub fn user_folder_in(
+    config: &Path,
+    kind: grokhub_core::user_files::UserFolder,
+) -> std::io::Result<PathBuf> {
+    #[cfg(test)]
+    if !config.join(grokhub_core::user_files::FOLDERS_FILE).exists() {
+        let dir = user_folder_path_in(config, kind);
+        std::fs::create_dir_all(&dir)?;
+        return Ok(dir);
+    }
+    grokhub_core::user_files::folder(config, kind)
+}
+
+/// Imagine saves: the Images folder in your files (`Documents/Loadout/Images`).
+pub fn imagine_dir() -> PathBuf {
+    user_folder_path_in(&config_dir(), grokhub_core::user_files::UserFolder::Images)
 }
 
 pub fn save_chat(msgs: &[(String, String)]) -> Result<(), String> {

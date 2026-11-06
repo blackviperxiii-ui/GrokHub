@@ -273,7 +273,7 @@ fn row_desktop() -> &'static str {
 }
 const ROW_DESKTOP_TEST: &str = "Desktop control";
 const ROW_SCREEN_RECORD: &str = "Screen recording";
-const SCREEN_RECORD_HINT: &str = "Lets /record take a still every 2 seconds for up to 2 minutes, with a red indicator and Stop. Recordings stay in ~/GrokHub/recordings; a few stills go to the cloud model only for the diagnosis.";
+const SCREEN_RECORD_HINT: &str = "Lets /record take a still every 2 seconds for up to 2 minutes, with a red indicator and Stop. Recordings stay in Documents/Loadout/Recordings; a few stills go to the cloud model only for the diagnosis.";
 const ROW_SESSION: &str = "Session mode";
 const ROW_COLLAPSE: &str = "Always collapse";
 
