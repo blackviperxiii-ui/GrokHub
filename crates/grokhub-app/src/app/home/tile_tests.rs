@@ -4,12 +4,36 @@ use grokhub_agent::route::connectivity::NetState;
 use grokhub_core::game_guard::GameGuard;
 
 use super::live::{summarize_sends, LiveFacts};
-use super::paint::{
-    connection_text, frame_rate_text, game_mode_text, gpu_temp_text, speeds_text, storage_rows,
-    storage_text, updates_text, usage_text, Tone,
-};
+use super::paint::{frame_rate_text, speeds_text};
 use crate::app::budget_ui::WeekSpend;
 use grokhub_agent::indexers::system_state::DiskUse;
+use grokhub_core::home::text::{
+    game_mode_text, gpu_temp_text, storage_rows, storage_text, updates_text,
+};
+use grokhub_core::home::{TileText, Tone};
+
+/// The usage tile as the desktop app calls it, with the real cache floor.
+fn usage_text(
+    used: u64,
+    cap: u64,
+    week: Option<WeekSpend>,
+    week_cap_usd: u32,
+    cache_pct: Option<u8>,
+) -> TileText {
+    grokhub_core::home::text::usage_text(
+        used,
+        cap,
+        week,
+        week_cap_usd,
+        cache_pct,
+        grokhub_agent::cache_watch::FLOOR_PCT,
+    )
+}
+
+/// The Connection tile as the desktop app calls it.
+fn connection_text(net: NetState, local_on: bool, facts: &LiveFacts) -> TileText {
+    grokhub_core::home::text::connection_text(net.link(), local_on, &facts.sends())
+}
 
 #[test]
 fn usage_tile_shows_tokens_against_the_cap_and_week_spend() {
@@ -187,7 +211,10 @@ fn storage_tile_shows_the_fullest_drive_and_lists_the_rest() {
     assert_eq!(t.caption, "Games · 97% used of 2.0 TB");
     assert_eq!(t.detail.as_deref(), Some("2 drives · fullest shown"));
     assert_eq!(t.tone, Tone::Alert);
-    let rows = storage_rows(&drives);
+    let rows: Vec<_> = storage_rows(&drives)
+        .into_iter()
+        .map(|r| (r.label, r.value, r.tone))
+        .collect();
     assert_eq!(
         rows,
         [
@@ -213,7 +240,7 @@ fn storage_tile_shows_the_fullest_drive_and_lists_the_rest() {
 
 #[test]
 fn updates_tile_names_what_is_waiting() {
-    use super::updates::{OsUpdates, UpdateFacts};
+    use grokhub_core::home::text::{OsUpdates, UpdateFacts};
     let none = UpdateFacts {
         os: OsUpdates::NotAllowed,
         steam: vec![],

@@ -7,6 +7,8 @@
 mod config;
 mod layout;
 mod registry;
+pub mod text;
+mod view;
 
 pub use config::{HomeLayout, HomePreset, HOME_LAYOUT_FILE, HOME_LAYOUT_VERSION};
 pub use layout::{
@@ -15,6 +17,10 @@ pub use layout::{
 };
 pub use registry::{
     lookup, modules_fitting, modules_for_category, Category, DataStatus, ModuleEntry, REGISTRY,
+};
+pub use view::{
+    fit, is_stale, refresh_secs, Fit, TileAction, TileButton, TileRow, TileState, TileText,
+    TileView, Tone,
 };
 
 /// The PC tile's Tune-up button.

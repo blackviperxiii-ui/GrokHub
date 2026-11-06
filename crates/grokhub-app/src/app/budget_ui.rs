@@ -106,11 +106,7 @@ pub(super) enum BudgetCard {
 pub(super) type Tally = (Budget, NudgeFacts, f64, Option<u8>);
 
 /// The minute tally Home's AI usage tile reads.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct WeekSpend {
-    pub usd: f64,
-    pub pct: Option<u8>,
-}
+pub(super) use grokhub_core::home::text::WeekSpend;
 
 #[derive(Debug, Default)]
 pub(super) struct BudgetUi {

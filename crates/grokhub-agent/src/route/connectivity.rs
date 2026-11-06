@@ -36,6 +36,16 @@ impl NetState {
         }
     }
 
+    /// The same state in the words Home tiles use.
+    pub fn link(self) -> grokhub_core::home::text::NetLink {
+        use grokhub_core::home::text::NetLink;
+        match self {
+            Self::Online => NetLink::Online,
+            Self::Degraded => NetLink::Spotty,
+            Self::Offline => NetLink::Offline,
+        }
+    }
+
     /// Route on-device when the network is down (or a test forces offline).
     pub fn prefer_local(self) -> bool {
         matches!(self, Self::Offline) || test_offline()

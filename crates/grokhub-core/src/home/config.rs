@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+use super::layout::ModuleSize;
 use super::registry::lookup;
 
 pub const HOME_LAYOUT_FILE: &str = "home_layout.json";
@@ -119,10 +120,12 @@ impl HomeLayout {
         }
     }
 
-    /// Replace unknown / removed ids with the matching default-slot module.
+    /// Replace unknown or removed ids, and a module placed in a size it
+    /// doesn't draw at, with the matching default-slot module.
     pub fn sanitize(mut self) -> Self {
+        let fits = |id: &str, size: ModuleSize| lookup(id).is_some_and(|m| m.supports(size));
         let fallback = HomeLayout::default();
-        if lookup(&self.large).is_none() {
+        if !fits(&self.large, ModuleSize::Large) {
             self.large = fallback.large.clone();
         }
         while self.medium.len() < 2 {
@@ -133,13 +136,13 @@ impl HomeLayout {
             if slot.is_empty() {
                 continue;
             }
-            if lookup(slot).is_none() {
+            if !fits(slot, ModuleSize::Medium) {
                 *slot = fallback.medium.get(i).cloned().unwrap_or_default();
             }
         }
         for (i, slot) in self.small.iter_mut().enumerate() {
             if let Some(id) = slot.as_ref() {
-                if lookup(id).is_none() {
+                if !fits(id, ModuleSize::Small) {
                     *slot = fallback.small[i].clone();
                 }
             }
@@ -229,6 +232,40 @@ mod tests {
         assert_eq!(fixed.large, "objectives");
         // Mission Control hides S3; unknown ids fall back to the preset slot (None).
         assert_eq!(fixed.small[2], None);
+    }
+
+    #[test]
+    fn sanitize_moves_a_module_out_of_a_size_it_cannot_draw() {
+        let small_only = super::super::REGISTRY
+            .iter()
+            .find(|m| !m.supports(ModuleSize::Large))
+            .expect("some module has no Large look");
+        let bad = HomeLayout {
+            large: small_only.id.into(),
+            ..HomeLayout::default()
+        };
+        assert_eq!(bad.sanitize().large, HomeLayout::default().large);
+    }
+
+    #[test]
+    fn every_preset_survives_sanitize_unchanged() {
+        for kind in [
+            HomePreset::MissionControl,
+            HomePreset::Streamer,
+            HomePreset::Performance,
+        ] {
+            let p = HomeLayout::preset(kind);
+            let s = p.clone().sanitize();
+            let filled = |m: &[String]| {
+                m.iter()
+                    .filter(|x| !x.is_empty())
+                    .cloned()
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(s.large, p.large, "{kind:?}");
+            assert_eq!(filled(&s.medium), filled(&p.medium), "{kind:?}");
+            assert_eq!(s.small, p.small, "{kind:?}");
+        }
     }
 
     #[test]

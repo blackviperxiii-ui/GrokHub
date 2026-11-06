@@ -18,33 +18,7 @@ const OS_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 /// shows within a minute without a new read on every repaint.
 const NOT_ALLOWED_EVERY: Duration = Duration::from_secs(60);
 
-/// What the OS package check found.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum OsUpdates {
-    /// Not read yet.
-    Unknown,
-    /// System checks are off in Settings, so nothing ran.
-    NotAllowed,
-    /// No package manager this checks (Windows Update handles itself, or an unknown distro).
-    NoChecker,
-    Pending(usize),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct UpdateFacts {
-    pub os: OsUpdates,
-    /// Installed Steam games with an update waiting, by name.
-    pub steam: Vec<String>,
-}
-
-impl Default for UpdateFacts {
-    fn default() -> Self {
-        Self {
-            os: OsUpdates::Unknown,
-            steam: Vec::new(),
-        }
-    }
-}
+pub(super) use grokhub_core::home::text::{OsUpdates, UpdateFacts};
 
 struct Slot {
     facts: UpdateFacts,
