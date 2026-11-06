@@ -105,7 +105,8 @@ pub(super) fn desktop_view(cabin: &mut Cabin, module: &str) -> Option<TileView> 
                 .map(|p| p.name);
             tiles::hype_line_view(name.as_deref(), now)
         }
-        "squad" | "tonight" | "audio_check" | "stream_check" => tiles::waiting_view(module),
+        "audio_check" => tiles::audio_view(&live_facts().audio),
+        "squad" | "tonight" | "stream_check" => tiles::waiting_view(module),
         _ => return None,
     };
     Some(v.at(now))
