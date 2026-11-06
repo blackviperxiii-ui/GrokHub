@@ -418,6 +418,8 @@ impl Cabin {
         let effort =
             grokhub_agent::route::live::start_effort(grokhub_agent::route::live::DEFAULT_CLASS);
         let (mut stable, volatile) = self.chat_prompt_parts_for(session_id);
+        // Dynamic chat and quips step per turn from this chat's voice settings.
+        grokhub_agent::voice_session::register(session_id, self.chat_voice_config());
         // Fixed text in the cached prefix: on or off, it changes rarely.
         if self.reply_chips_on() {
             stable = format!("{stable}\n\n{}", grokhub_core::CHIP_TRAILER_RULE);
@@ -483,7 +485,8 @@ impl Cabin {
         let config_dir = crate::config::config_dir();
         // The join lives in the agent so the live eval sends this same tail.
         let tail = grokhub_agent::chat_volatile_tail(&grokhub_agent::ChatTail {
-            voice: personality.prompt_block(),
+            // With 18+ on, every voice jokes at the chosen heat.
+            voice: personality.prompt_block_for(self.adult_heat()),
             notes: self.tuned_notes(),
             learned: grokhub_core::brief_for(&self.learning, "chat"),
             identity: grokhub_agent::identity_blocks(&config_dir),
