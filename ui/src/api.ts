@@ -1191,10 +1191,37 @@ export type HomeTile =
   | { kind: "personality"; name: string; picture: string | null }
   | { kind: "upNext"; games: { appId: number; name: string }[] }
   | { kind: "error"; message: string }
-  /** Only the cabin paints it. */
-  | { kind: "cabin" }
-  /** A paired browser can't read it. */
-  | { kind: "desktop" };
+  /** Any other module, in the shared tile model. */
+  | { kind: "view"; view: TileView };
+
+export type TileTone = "normal" | "warn" | "alert" | "quiet";
+export type TileState = "ready" | "empty" | "off" | "error" | "offline" | "unsupported";
+
+/** What a tile, row or button does; Home maps it onto its routes. */
+export type TileAction =
+  | { kind: "ask"; ask: string }
+  | { kind: "openChat"; id: string }
+  | { kind: "nav"; page: string }
+  | { kind: "settings"; section: string }
+  | { kind: "runPlaybook"; id: string }
+  | { kind: "review"; id: string }
+  | { kind: "toggle"; feature: string; on: boolean }
+  | { kind: "turnOn"; feature: string }
+  | { kind: "openUrl"; url: string }
+  | { kind: "play"; appId: number }
+  | { kind: "reroll" }
+  | { kind: "retry" };
+
+export interface TileView {
+  state: TileState;
+  tag: string | null;
+  text: { big: string; caption: string; detail: string | null; tone: TileTone };
+  rows: { label: string; value: string; tone: TileTone; tap: TileAction | null }[];
+  progress: number | null;
+  buttons: { label: string; action: TileAction; primary: boolean }[];
+  tap: TileAction | null;
+  updatedMs: number | null;
+}
 
 export type SlotSize = "large" | "medium" | "small";
 

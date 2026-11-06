@@ -3993,3 +3993,52 @@ label.toggle-row {
     grid-row: auto;
   }
 }
+
+/* Shared-model Home tiles. */
+.home-big {
+  font-size: 1.4em;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.tone-warn {
+  color: var(--amber);
+}
+
+.tone-alert {
+  color: var(--danger-text);
+}
+
+.tone-quiet {
+  color: var(--muted);
+}
+
+.home-pair {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.home-pair > :first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-pair > :last-child {
+  flex: none;
+  font-weight: 600;
+}
+
+.home-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.home-tag {
+  margin-left: 8px;
+  color: var(--amber);
+}

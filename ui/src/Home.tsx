@@ -1,13 +1,24 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { getHome, pulseAct, type HomePage, type HomeSlot, type HomeTile, type QuickChip, type Xp } from "./api";
+import {
+  getHome,
+  libraryPlay,
+  openUrl,
+  pulseAct,
+  type HomePage,
+  type HomeSlot,
+  type HomeTile,
+  type QuickChip,
+  type SlotSize,
+  type TileAction,
+  type TileView,
+  type Xp,
+} from "./api";
 import { ChipRow, useChipRow } from "./Chips";
 import { COMPANION_NAME } from "./brand";
 import { artUrl } from "./nyx";
 import type { View } from "./Palette";
 import type { Section } from "./sections";
 
-export const CABIN_NOTE = "Open in the cabin";
-export const DESKTOP_NOTE = "Open on your computer";
 export const EDIT_NOTE = "Edit Home in the cabin to change these tiles.";
 export const NO_STEPS = `Nothing on the list yet. Ask ${COMPANION_NAME} to plan something.`;
 
@@ -76,6 +87,141 @@ export interface HomeRoutes {
   onSettings: (section: Section) => void;
 }
 
+/** The pages a tile may open; anything else stays put. */
+const VIEWS: readonly string[] = [
+  "objectives",
+  "chat",
+  "history",
+  "pulse",
+  "journal",
+  "automations",
+  "memory",
+  "connectors",
+  "library",
+  "workboard",
+];
+
+/** Where a feature's switch lives until it can be turned on from the tile. */
+const FEATURE_SECTION: Record<string, Section> = { net_log: "privacy", local_ai: "localAi" };
+
+/** How much of a tile each size shows (core's `fit`). */
+const FIT: Record<SlotSize, { rows: number; buttons: number }> = {
+  small: { rows: 0, buttons: 0 },
+  medium: { rows: 4, buttons: 2 },
+  large: { rows: 8, buttons: 3 },
+};
+
+/** Runs a tile action through Home's routes. On a paired browser nothing
+ * starts on the computer (Play), and links open in the browser itself. */
+export function runAction(a: TileAction, go: HomeRoutes, remote: boolean, reload: () => void) {
+  switch (a.kind) {
+    case "ask":
+      return go.onAsk(a.ask);
+    case "openChat":
+      return go.onOpenChat(a.id);
+    case "nav":
+      if (VIEWS.includes(a.page)) go.onOpen(a.page as View);
+      return;
+    case "settings":
+      return go.onSettings(a.section as Section);
+    case "runPlaybook":
+      return go.onSettings("playbooks");
+    case "review":
+      return go.onOpen("workboard");
+    case "toggle":
+    case "turnOn":
+      return go.onSettings(FEATURE_SECTION[a.feature] ?? "general");
+    case "openUrl":
+      if (remote) window.open(a.url, "_blank", "noopener");
+      else void openUrl(a.url).catch(() => {});
+      return;
+    case "play":
+      if (!remote) void libraryPlay(a.appId).catch(() => {});
+      return;
+    case "reroll":
+    case "retry":
+      return reload();
+  }
+}
+
+/** Any module in the shared tile model, cut to what its size holds. */
+function ViewBody({
+  view,
+  size,
+  go,
+  remote,
+  reload,
+}: {
+  view: TileView;
+  size: SlotSize;
+  go: HomeRoutes;
+  remote: boolean;
+  reload: () => void;
+}) {
+  const fit = FIT[size];
+  const run = (a: TileAction) => runAction(a, go, remote, reload);
+  const rows = view.rows.slice(0, fit.rows);
+  const buttons = view.buttons.slice(0, fit.buttons);
+  const head = (
+    <>
+      <span className={`home-big tone-${view.text.tone}`}>{view.text.big}</span>
+      <span className="home-muted">{view.text.caption}</span>
+      {size !== "small" && view.text.detail && <span>{view.text.detail}</span>}
+      {size !== "small" && view.progress !== null && (
+        <span className="xp-track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={view.progress}>
+          <span className="xp-fill" style={{ width: `${view.progress}%` }} />
+        </span>
+      )}
+    </>
+  );
+  // A Small tile is one tap; so is any tile whose state wants its one button.
+  const tap = view.tap ?? (size === "small" ? (view.buttons[0]?.action ?? null) : null);
+  return (
+    <div className={`home-stack state-${view.state}`}>
+      {tap ? (
+        <Go label={view.text.big} onClick={() => run(tap)}>
+          {head}
+        </Go>
+      ) : (
+        head
+      )}
+      {rows.length > 0 && (
+        <ul className="home-rows home-list">
+          {rows.map((r, i) => (
+            <li key={`${r.label}-${i}`}>
+              {r.tap ? (
+                <button type="button" className="home-row home-pair" onClick={() => run(r.tap!)}>
+                  <span>{r.label}</span>
+                  <span className={`tone-${r.tone}`}>{r.value}</span>
+                </button>
+              ) : (
+                <span className="home-pair">
+                  <span>{r.label}</span>
+                  <span className={`tone-${r.tone}`}>{r.value}</span>
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {buttons.length > 0 && (
+        <div className="home-buttons">
+          {buttons.map((b) => (
+            <button key={b.label} type="button" className={b.primary ? undefined : "quiet"} onClick={() => run(b.action)}>
+              {b.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A tile this device can't read draws quieter. */
+function away(tile: HomeTile): boolean {
+  return tile.kind === "view" && tile.view.state === "unsupported";
+}
+
 /** A tile's body, a button where the tile goes somewhere. */
 function Go({ label, onClick, children }: { label: string; onClick: () => void; children: ReactNode }) {
   return (
@@ -85,7 +231,7 @@ function Go({ label, onClick, children }: { label: string; onClick: () => void; 
   );
 }
 
-function body(tile: HomeTile, slot: HomeSlot, go: HomeRoutes, remote: boolean): ReactNode {
+function body(tile: HomeTile, slot: HomeSlot, go: HomeRoutes, remote: boolean, reload: () => void): ReactNode {
   switch (tile.kind) {
     case "objectives": {
       const steps = tile.mission?.steps.filter((s) => s.status !== "cancelled") ?? [];
@@ -211,21 +357,14 @@ function body(tile: HomeTile, slot: HomeSlot, go: HomeRoutes, remote: boolean): 
       );
     case "error":
       return <span className="home-muted">{tile.message}</span>;
-    case "desktop":
-      return <span className="home-muted">{DESKTOP_NOTE}</span>;
-    case "cabin":
-      return (
-        <>
-          <span className="home-muted">{slot.purpose}</span>
-          <span className="home-cabin">{CABIN_NOTE}</span>
-        </>
-      );
+    case "view":
+      return <ViewBody view={tile.view} size={slot.size} go={go} remote={remote} reload={reload} />;
   }
 }
 
-/** Home: the cabin's tile grid from the same home_layout.json, showing what
- * this app knows. Tiles only the cabin can fill say so. Read only: Edit
- * Home stays in the cabin. */
+/** Home: the cabin's tile grid from the same home_layout.json, every tile
+ * filled with what this computer knows. Read only: Edit Home stays in the
+ * cabin. */
 export function Home({
   conversationId,
   remote,
@@ -241,15 +380,24 @@ export function Home({
     else go.onAsk(chip.value);
   }
 
+  const [reads, setReads] = useState(0);
+  const reload = () => setReads((n) => n + 1);
+
   useEffect(() => {
+    let live = true;
     getHome(conversationId).then(
       (p) => {
+        if (!live) return;
         setPage(p);
         setNote(null);
       },
-      (err) => setNote(String(err)),
+      (err) => live && setNote(String(err)),
     );
-  }, [conversationId]);
+    // A slow answer for an older read never overwrites a newer one.
+    return () => {
+      live = false;
+    };
+  }, [conversationId, reads]);
 
   return (
     <section className="home" aria-label="Home">
@@ -270,11 +418,14 @@ export function Home({
             {page.slots.map((slot) => (
               <li
                 key={slot.slot}
-                className={`home-tile ${slot.size}${slot.tile.kind === "cabin" || slot.tile.kind === "desktop" ? " away" : ""}`}
+                className={`home-tile ${slot.size}${away(slot.tile) ? " away" : ""}`}
                 aria-label={slot.name}
               >
-                <h3>{slot.name}</h3>
-                {body(slot.tile, slot, go, remote)}
+                <h3>
+                  {slot.name}
+                  {slot.tile.kind === "view" && slot.tile.view.tag && <span className="home-tag">{slot.tile.view.tag}</span>}
+                </h3>
+                {body(slot.tile, slot, go, remote, reload)}
               </li>
             ))}
           </ul>

@@ -1,6 +1,7 @@
 //! Home and Objectives in the shell (LO-17n). Home draws the cabin's tile
-//! grid from the same `{config}/home_layout.json`, filling the tiles the
-//! shell knows about and leaving the rest to the cabin. Objectives is the
+//! grid from the same `{config}/home_layout.json` and fills every tile:
+//! the ones below have their own look, the rest come from `home_tiles` in
+//! the shared tile model. Objectives is the
 //! open chat's checklist with level, XP and the weekly streak.
 //!
 //! The layout, the catalog and the mission and XP sums are the cabin's own
@@ -13,7 +14,8 @@
 use std::path::Path;
 
 use grokhub_core::home::{
-    lookup, place_slots, HomeLayout, ModuleSize, SlotId, HOME_LAYOUT_FILE, HOME_LAYOUT_VERSION,
+    lookup, place_slots, HomeLayout, ModuleSize, SlotId, TileView, HOME_LAYOUT_FILE,
+    HOME_LAYOUT_VERSION,
 };
 use grokhub_core::mission::{MissionCheckStatus, MissionSeed, MissionView};
 use grokhub_core::outcome::{self as oc, OutcomeResult, OutcomeSignals, TaskOutcome};
@@ -350,8 +352,7 @@ pub struct GameLine {
     pub name: String,
 }
 
-/// What one tile shows. `Cabin` is a tile only the cabin paints; `Desktop`
-/// one a paired browser can't read.
+/// What one tile shows. `View` is any module in the shared tile model.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Tile {
@@ -391,8 +392,9 @@ pub enum Tile {
     Error {
         message: String,
     },
-    Cabin,
-    Desktop,
+    View {
+        view: TileView,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -459,8 +461,17 @@ pub fn visible_slots(layout: &HomeLayout) -> Vec<(SlotId, String)> {
         .collect()
 }
 
-/// The shell's half of the catalog: which modules it fills itself.
-pub fn shell_fills(module: &str) -> bool {
+/// A shared-model tile, stamped with when it was read.
+fn module_view(module: &str, src: &Sources<'_>, now: u64) -> TileView {
+    let mut view = crate::home_tiles::view(module, src)
+        .unwrap_or_else(|| TileView::unsupported("This tile isn't in this version"));
+    view.updated_ms.get_or_insert(now);
+    view
+}
+
+/// The modules with a look of their own here; every other one is a
+/// shared-model tile.
+pub fn own_look(module: &str) -> bool {
     matches!(
         module,
         "objectives"
@@ -555,7 +566,9 @@ fn automations_tile(src: &Sources<'_>) -> Tile {
 
 fn pulse_tile(src: &Sources<'_>) -> Tile {
     if !src.caps.pulse {
-        return Tile::Cabin;
+        return Tile::View {
+            view: TileView::unsupported("Pulse isn't on this device"),
+        };
     }
     match pulse::peek(src.config_dir, src.clock.now_ms) {
         Ok(page) => Tile::Pulse {
@@ -600,11 +613,10 @@ fn personality_tile(src: &Sources<'_>) -> Tile {
 }
 
 fn up_next_tile(src: &Sources<'_>) -> Tile {
-    if src.viewer.web() {
-        return Tile::Desktop;
-    }
-    if !src.caps.library {
-        return Tile::Cabin;
+    if src.viewer.web() || !src.caps.library {
+        return Tile::View {
+            view: TileView::unsupported(crate::home_tiles::ON_PC),
+        };
     }
     let page = library::page(grokhub_core::steam::detect_root().as_deref());
     Tile::UpNext {
@@ -637,7 +649,7 @@ fn glance(src: &Sources<'_>) -> Glance {
     }
 }
 
-/// Home: the layout's visible slots, each filled or left to the cabin.
+/// Home: the layout's visible slots, every one filled.
 pub fn page(src: &Sources<'_>) -> Page {
     let layout = load_layout(src.config_dir);
     let now = src.clock.now_ms;
@@ -659,7 +671,9 @@ pub fn page(src: &Sources<'_>) -> Page {
                 "pulse" => pulse_tile(src),
                 "personality" => personality_tile(src),
                 "up_next" => up_next_tile(src),
-                _ => Tile::Cabin,
+                other => Tile::View {
+                    view: module_view(other, src, now),
+                },
             };
             Slot {
                 slot: slot_key(slot),
@@ -795,7 +809,8 @@ mod tests {
     }
 
     #[test]
-    fn the_shell_fills_its_tiles_and_leaves_the_rest_to_the_cabin() {
+    fn every_catalog_module_gets_a_real_tile() {
+        use grokhub_core::home::{TileState, REGISTRY};
         for id in [
             "objectives",
             "recent_chats",
@@ -803,12 +818,43 @@ mod tests {
             "pulse",
             "up_next",
         ] {
-            assert!(shell_fills(id), "{id}");
+            assert!(own_look(id), "{id}");
             assert!(lookup(id).is_some(), "{id} is not in the catalog");
         }
-        for id in ["pc_loadout", "storage", "game_mode", "frame_rate", "clips"] {
-            assert!(!shell_fills(id), "{id}");
+        let d = dir("every-tile");
+        let settings = ShellSettings::default();
+        let src = Sources {
+            config_dir: &d,
+            workspace: &d,
+            settings: &settings,
+            caps: crate::capabilities::current(),
+            clock: LocalClock {
+                now_ms: NOW,
+                weekday: 1,
+                hour: 9,
+                minute: 0,
+            },
+            viewer: Viewer::Desktop,
+            conversation_id: None,
+        };
+        for m in REGISTRY.iter().filter(|m| !own_look(m.id)) {
+            let view = crate::home_tiles::view(m.id, &src)
+                .unwrap_or_else(|| panic!("{} has no tile", m.id));
+            assert!(!view.text.caption.is_empty(), "{} says nothing", m.id);
+            if matches!(
+                view.state,
+                TileState::Empty | TileState::Off | TileState::Error
+            ) {
+                assert_eq!(view.buttons.len(), 1, "{} needs one way forward", m.id);
+            }
+            let tile = Tile::View {
+                view: module_view(m.id, &src, NOW),
+            };
+            let json = serde_json::to_value(&tile).unwrap();
+            assert_eq!(json["kind"], "view", "{}", m.id);
+            assert!(json["view"]["updatedMs"].is_u64(), "{}", m.id);
         }
+        let _ = fs::remove_dir_all(&d);
     }
 
     fn outcome(task: &str, result: OutcomeResult, finished_at: u64) -> TaskOutcome {

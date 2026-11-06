@@ -16,6 +16,7 @@ pub mod connectors;
 pub mod credential;
 pub mod history;
 pub mod home;
+pub mod home_tiles;
 pub mod imagine;
 pub mod interests;
 pub mod journal;
