@@ -191,6 +191,19 @@ pub fn strip_slash_result(text: &str) -> &str {
         .unwrap_or(text)
 }
 
+/// A saved message as the chat shows it: no findings-card tag and no turn
+/// labels. Exports and search read this, so a copied chat never carries the
+/// app's own markers.
+pub fn shown_text(text: &str) -> String {
+    let trimmed = text.trim_start();
+    let body = if trimmed.starts_with(SLASH_RESULT_PREFIX) {
+        strip_slash_result(trimmed)
+    } else {
+        text
+    };
+    crate::strip_turn_labels(body)
+}
+
 /// Help / recall dumps (and model catalogs saved by older builds) stay on the
 /// pane and out of the next model kick.
 pub fn is_cabin_slash_turn(role: &str, content: &str) -> bool {

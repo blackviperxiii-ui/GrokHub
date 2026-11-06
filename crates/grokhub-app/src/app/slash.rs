@@ -612,11 +612,12 @@ impl Cabin {
                 self.persist();
                 if let Some(t) = self.threads.get(self.thread_idx) {
                     let t = t.clone();
-                    // A stamped name per export: a second /export never
-                    // clobbers the first. expand_home lives in export_dest.
-                    let dest = self.export_dest(&Self::stamped_export_name("export.md"));
+                    // The chat's name, stamped: a second /export never
+                    // clobbers the first. It lands on the Desktop; with no
+                    // Desktop, expand_home in export_dest picks the folder.
+                    let file = format!("{}.md", grokhub_core::export_file_stem(&t.title));
+                    let (dest, make_dir) = self.chat_export_dest(&Self::stamped_export_name(&file));
                     let status_path = dest.display().to_string();
-                    let make_dir = self.cfg.project_dir.trim().is_empty();
                     self.status = format!("Exporting to {status_path}…");
                     self.spawn_file_write(status_path, false, move || {
                         let md = threads::export_markdown(&t);
@@ -749,13 +750,48 @@ impl Cabin {
     }
 }
 
+/// The user's Desktop when it is there. Tests set their own with
+/// [`set_test_desktop`] so a run never writes to the real one.
+fn export_desktop() -> Option<std::path::PathBuf> {
+    #[cfg(test)]
+    let desktop = TEST_DESKTOP.with(|d| d.borrow().clone());
+    #[cfg(not(test))]
+    let desktop = grokhub_core::desktop_dir();
+    desktop.filter(|d| d.is_dir())
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_DESKTOP: std::cell::RefCell<Option<std::path::PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(super) fn set_test_desktop(dir: Option<std::path::PathBuf>) {
+    TEST_DESKTOP.with(|d| *d.borrow_mut() = dir);
+}
+
 impl Cabin {
-    /// `/export html` and `/export json` land next to `export.md`.
+    /// Where exports go when there is no Desktop: the bound project folder,
+    /// else the app's own folder.
     pub(super) fn export_dest(&self, file: &str) -> std::path::PathBuf {
         if self.cfg.project_dir.trim().is_empty() {
             config::config_dir().join(file)
         } else {
             std::path::PathBuf::from(expand_home(&self.cfg.project_dir)).join(file)
+        }
+    }
+
+    /// Where a chat export lands: the user's Desktop (the OneDrive one when
+    /// Windows moved it there), else [`Self::export_dest`]. The flag says
+    /// whether the folder may be created.
+    pub(super) fn chat_export_dest(&self, file: &str) -> (std::path::PathBuf, bool) {
+        match export_desktop() {
+            Some(desktop) => (desktop.join(file), false),
+            None => (
+                self.export_dest(file),
+                self.cfg.project_dir.trim().is_empty(),
+            ),
         }
     }
 
@@ -766,7 +802,11 @@ impl Cabin {
             self.status = "Nothing to export".into();
             return;
         };
-        let dest = self.export_dest(&Self::stamped_export_name(format.file_name()));
+        let file = match format.file_name().rsplit_once('.') {
+            Some((_, ext)) => format!("{}.{ext}", grokhub_core::export_file_stem(&t.title)),
+            None => format.file_name().to_string(),
+        };
+        let (dest, make_dir) = self.chat_export_dest(&Self::stamped_export_name(&file));
         let status_path = dest.display().to_string();
         let footer = format!(
             "Exported from {} {}",
@@ -774,7 +814,6 @@ impl Cabin {
             env!("CARGO_PKG_VERSION")
         );
         let now = now_ms();
-        let make_dir = self.cfg.project_dir.trim().is_empty();
         self.status = format!("Exporting to {status_path}…");
         self.spawn_file_write(status_path, false, move || {
             let msgs = t.messages.iter().map(|m| (m.0.as_str(), m.1.as_str()));

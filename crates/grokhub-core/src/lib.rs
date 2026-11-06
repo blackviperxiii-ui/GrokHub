@@ -384,7 +384,8 @@ pub use doctor::{
     hub_kind_from_health, xai_auth_stale_line, DoctorLine,
 };
 pub use export::{
-    chat_export_html, chat_export_json, html_escape, md_to_html, ChatExport, EXPORT_FORMATS_HINT,
+    chat_export_html, chat_export_json, chat_transcript_markdown, export_file_stem, html_escape,
+    md_to_html, ChatExport, EXPORT_FORMATS_HINT,
 };
 pub use feel::{
     clamp_rect_to_slot, feel_lift, feel_scale, felt_inside_slot, felt_rect, hover_alpha, hover_mix,
@@ -633,9 +634,9 @@ pub use skill::{
 };
 pub use slash::{
     filter_slash_commands, filter_slash_hits, grok_command_hits, is_cabin_slash_turn,
-    mark_slash_result, parse_slash, slash_effect, slash_help, slash_kind, strip_slash_result,
-    unknown_cabin_slash, Slash, SlashDef, SlashEffect, SlashHit, WorkflowVerb, SLASH_COMMANDS,
-    SLASH_RESULT_PREFIX, SLASH_SAMPLES,
+    mark_slash_result, parse_slash, shown_text, slash_effect, slash_help, slash_kind,
+    strip_slash_result, unknown_cabin_slash, Slash, SlashDef, SlashEffect, SlashHit, WorkflowVerb,
+    SLASH_COMMANDS, SLASH_RESULT_PREFIX, SLASH_SAMPLES,
 };
 pub use ssrf::{
     guard_mcp_registry_url, host_name_blocked, ip_blocked, public_only_resolve, MCP_REGISTRY_HOST,
