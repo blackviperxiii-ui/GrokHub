@@ -355,6 +355,35 @@ export function deleteChat(id: string): Promise<void> {
   return invoke<void>("delete_chat", { id });
 }
 
+/** A chat export on disk (src-tauri/src/export.rs). Open and Show in folder
+ * take its token, never a path. */
+export interface SavedFile {
+  token: string;
+  /** "trip-plan-20261106-1415.md" */
+  name: string;
+  /** "Chats" */
+  folder: string;
+  /** The whole path, for Copy path. */
+  path: string;
+  /** "Saved trip-plan-20261106-1415.md to Chats" */
+  line: string;
+  /** "Show in File Explorer", "Show in Finder" or "Show in folder". */
+  revealLabel: string;
+}
+
+/** `/export` and History's Export: the chat as Markdown in your Chats folder. */
+export function exportChat(id: string): Promise<SavedFile> {
+  return invoke<SavedFile>("export_chat", { id, clock: wallClock() });
+}
+
+export function openSaved(token: string): Promise<void> {
+  return invoke<void>("open_saved", { token });
+}
+
+export function revealSaved(token: string): Promise<void> {
+  return invoke<void>("reveal_saved", { token });
+}
+
 /** Takes one message out of a saved chat after the page asked: the ask
  * `text`, or with `reply` the reply to it (no `text`: the reply before any
  * ask). False when the saved chat had no copy. A running reply refuses. */
@@ -558,7 +587,8 @@ export type SlashEffect =
   | { kind: "newChat" }
   | { kind: "mode"; mode: SessionMode; text: string | null }
   | { kind: "open"; view: "settings" | "memory" | "automations" | "connectors" }
-  | { kind: "notice"; text: string };
+  | { kind: "notice"; text: string }
+  | { kind: "export" };
 
 export function slashHits(draft: string): Promise<SlashHit[]> {
   return invoke<SlashHit[]>("slash_hits", { draft });
@@ -2006,6 +2036,8 @@ export interface PrivacyPage {
   encrypted: boolean;
   encryptedNote: string;
   dataFolder: string;
+  /** Where exports and the cabin's other files go (Documents/Loadout). */
+  filesFolder: string;
   canOpenFolder: boolean;
 }
 
@@ -2019,6 +2051,15 @@ export function setOfflineOnly(on: boolean): Promise<PrivacyPage> {
 
 export function openDataFolder(): Promise<void> {
   return invoke<void>("open_data_folder");
+}
+
+export function openFilesFolder(): Promise<void> {
+  return invoke<void>("open_files_folder");
+}
+
+/** The folder picker; the page as it is after (unchanged when closed). */
+export function changeFilesFolder(): Promise<PrivacyPage> {
+  return invoke<PrivacyPage>("change_files_folder");
 }
 
 /** Settings → Background (src-tauri/src/background.rs). */

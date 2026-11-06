@@ -1,5 +1,14 @@
 import { useEffect, useEffectEvent, useRef, useState, type FormEvent } from "react";
-import { deleteChat, listChats, renameChat, searchChats, type ChatRow } from "./api";
+import {
+  deleteChat,
+  exportChat,
+  listChats,
+  renameChat,
+  searchChats,
+  type ChatRow,
+  type SavedFile,
+} from "./api";
+import { SavedCard } from "./SavedCard";
 import { ConfirmRow, StatusLine, useDismiss, useNote } from "./ui";
 
 /** A search waits this long after the last key, like the cabin's History. */
@@ -42,10 +51,12 @@ export function whenLabel(updated: number, now: Date = new Date()): string {
 function ChatMenu({
   title,
   onRename,
+  onExport,
   onDelete,
 }: {
   title: string;
   onRename: () => void;
+  onExport: () => void;
   onDelete: () => void;
 }) {
   const [menu, setMenu] = useState(false);
@@ -77,6 +88,16 @@ function ChatMenu({
           <button
             type="button"
             role="menuitem"
+            onClick={() => {
+              setMenu(false);
+              onExport();
+            }}
+          >
+            Export
+          </button>
+          <button
+            type="button"
+            role="menuitem"
             className="danger"
             onClick={() => {
               setMenu(false);
@@ -92,7 +113,8 @@ function ChatMenu({
 }
 
 /** The shell's saved chats, newest first, with search. A click opens one in
- * Chat; the menu renames or deletes it (Delete asks first). */
+ * Chat; the menu renames, exports (to your Chats folder, with a card that
+ * opens or shows the file) or deletes it (Delete asks first). */
 export function History({
   onOpen,
   onDeleted,
@@ -105,6 +127,7 @@ export function History({
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
   const [asking, setAsking] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState<SavedFile | null>(null);
   const { note, fail, clear } = useNote();
   // Only the newest search may fill the page.
   const asked = useRef(0);
@@ -155,6 +178,16 @@ export function History({
     void act(() => renameChat(id, title));
   }
 
+  async function saveCopy(id: string) {
+    clear();
+    setSaved(null);
+    try {
+      setSaved(await exportChat(id));
+    } catch (err) {
+      fail(err);
+    }
+  }
+
   function remove(id: string) {
     setAsking(null);
     void act(async () => {
@@ -173,6 +206,7 @@ export function History({
         onChange={(e) => setQuery(e.target.value)}
       />
       <StatusLine note={note} />
+      {saved && <SavedCard saved={saved} onClose={() => setSaved(null)} />}
       {rows === null && !note && <p className="empty">Loading chats…</p>}
       {rows?.length === 0 && <p className="empty">{query.trim() ? HISTORY_NO_HITS : HISTORY_EMPTY}</p>}
       {rows &&
@@ -211,6 +245,7 @@ export function History({
                       <ChatMenu
                         title={row.title}
                         onRename={() => setRenaming({ id: row.id, title: row.title })}
+                        onExport={() => void saveCopy(row.id)}
                         onDelete={() => setAsking(row.id)}
                       />
                     </div>

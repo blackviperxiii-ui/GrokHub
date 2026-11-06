@@ -2,13 +2,16 @@ import "@testing-library/jest-dom/vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChatRow } from "./api";
+import type { ChatRow, SavedFile } from "./api";
 
 const api = vi.hoisted(() => ({
   listChats: vi.fn<() => Promise<ChatRow[]>>(),
   searchChats: vi.fn<(query: string) => Promise<ChatRow[]>>(),
   renameChat: vi.fn<(id: string, title: string) => Promise<void>>(),
   deleteChat: vi.fn<(id: string) => Promise<void>>(),
+  exportChat: vi.fn<(id: string) => Promise<SavedFile>>(),
+  openSaved: vi.fn<(token: string) => Promise<void>>(),
+  revealSaved: vi.fn<(token: string) => Promise<void>>(),
 }));
 
 vi.mock("./api", () => api);
@@ -153,5 +156,39 @@ describe("History", () => {
     expect(await screen.findByText("disk full")).toHaveClass("status--error");
     expect(onDeleted).not.toHaveBeenCalled();
     expect(screen.getByText("Fix the build")).toBeVisible();
+  });
+  it("Export saves the chat and the card opens or shows the file by its token", async () => {
+    api.exportChat.mockResolvedValue({
+      token: "saved-1",
+      name: "Plan-a-trip-20261028-1500.md",
+      folder: "Chats",
+      path: "/home/user/Documents/Loadout/Chats/Plan-a-trip-20261028-1500.md",
+      line: "Saved Plan-a-trip-20261028-1500.md to Chats",
+      revealLabel: "Show in folder",
+    });
+    api.openSaved.mockResolvedValue();
+    api.revealSaved.mockResolvedValue();
+    render(<History onOpen={() => {}} onDeleted={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: "More for Plan a trip" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Export" }));
+    expect(api.exportChat).toHaveBeenCalledWith("shell-b");
+    const card = await screen.findByRole("status", { name: "Saved Plan-a-trip-20261028-1500.md to Chats" });
+    await userEvent.click(within(card).getByRole("button", { name: "Open" }));
+    expect(api.openSaved).toHaveBeenCalledWith("saved-1");
+    await userEvent.click(within(card).getByRole("button", { name: "Show in folder" }));
+    expect(api.revealSaved).toHaveBeenCalledWith("saved-1");
+    await userEvent.click(within(card).getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("status", { name: /Saved Plan-a-trip/ })).toBeNull();
+  });
+
+  it("a failed export says why and leaves no card", async () => {
+    api.exportChat.mockRejectedValue("Couldn't save the chat: the disk is full. Nothing was saved.");
+    render(<History onOpen={() => {}} onDeleted={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: "More for Fix the build" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Export" }));
+    expect(
+      await screen.findByText("Couldn't save the chat: the disk is full. Nothing was saved."),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open" })).toBeNull();
   });
 });
