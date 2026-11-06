@@ -548,6 +548,19 @@ pub struct SpeechChunker {
     line_spoken: usize,
     sent_first: bool,
     in_code: bool,
+    /// Inside text that never reaches the speaker (a thought, a command's body).
+    hidden: Option<Hidden>,
+}
+
+/// Lines the speaker skips until the block ends.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Hidden {
+    /// A `THINKING:` block, up to the next blank line.
+    Thought,
+    /// A `<think>` block, up to `</think>`.
+    ThinkTag,
+    /// A command's here-document, up to its end word.
+    Until(String),
 }
 
 impl SpeechChunker {
@@ -580,6 +593,7 @@ impl SpeechChunker {
         self.end_line(false);
         let piece = clean_piece(&std::mem::take(&mut self.buf));
         self.in_code = false;
+        self.hidden = None;
         if piece.is_empty() {
             None
         } else {
@@ -590,7 +604,11 @@ impl SpeechChunker {
 
     /// The streaming line's speakable text not yet spoken.
     fn line_rest(&self) -> String {
-        if self.in_code || self.line.trim_start().starts_with("```") {
+        if self.in_code
+            || self.hidden.is_some()
+            || self.line.trim_start().starts_with("```")
+            || may_be_hidden(&self.line)
+        {
             return String::new();
         }
         let visible = speakable_line(&self.line);
@@ -604,6 +622,9 @@ impl SpeechChunker {
     fn end_line(&mut self, newline: bool) {
         let line = std::mem::take(&mut self.line);
         let spoken = std::mem::take(&mut self.line_spoken);
+        if self.skip_hidden(&line) {
+            return;
+        }
         if line.trim_start().starts_with("```") {
             self.in_code = !self.in_code;
             return;
@@ -621,6 +642,51 @@ impl SpeechChunker {
         if newline && !visible.is_empty() && !self.buf.is_empty() && !ends_sentence(&self.buf) {
             self.buf.push('.');
         }
+    }
+
+    /// True when `line` stays off the speaker: inside or opening a thought,
+    /// or a command line (and its here-document).
+    fn skip_hidden(&mut self, line: &str) -> bool {
+        let t = line.trim();
+        match &self.hidden {
+            Some(Hidden::Thought) => {
+                if t.is_empty() {
+                    self.hidden = None;
+                }
+                return true;
+            }
+            Some(Hidden::ThinkTag) => {
+                if t.contains("</think>") {
+                    self.hidden = None;
+                }
+                return true;
+            }
+            Some(Hidden::Until(end)) => {
+                if t == end {
+                    self.hidden = None;
+                }
+                return true;
+            }
+            None => {}
+        }
+        if self.in_code {
+            return false;
+        }
+        if t.starts_with("THINKING:") {
+            self.hidden = Some(Hidden::Thought);
+            return true;
+        }
+        if t.starts_with("<think>") {
+            if !t.contains("</think>") {
+                self.hidden = Some(Hidden::ThinkTag);
+            }
+            return true;
+        }
+        if crate::chat_view::is_protocol_line(t) {
+            self.hidden = crate::chat_view::host_cmd_heredoc_delim(t).map(Hidden::Until);
+            return true;
+        }
+        false
     }
 
     /// Hand out every ready piece. With `partial`, the streaming line counts too.
@@ -680,6 +746,21 @@ impl SpeechChunker {
         }
         None
     }
+}
+
+/// A line still streaming that may yet turn out to be a thought or a command:
+/// one of those, or a first word in capitals that has not ended yet.
+fn may_be_hidden(line: &str) -> bool {
+    let t = line.trim_start();
+    if t.starts_with("THINKING") || t.starts_with('<') || crate::chat_view::is_protocol_line(t) {
+        return true;
+    }
+    let first = t.split_whitespace().next().unwrap_or("");
+    !first.is_empty()
+        && first
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c == '_' || c == ':')
+        && (first.len() > 2 || !t.contains(' '))
 }
 
 fn join_piece(buf: &mut String, piece: &str) {

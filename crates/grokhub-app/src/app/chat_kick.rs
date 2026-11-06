@@ -310,7 +310,10 @@ impl Cabin {
         let with_notes = apply_skill_follow(&with_resume, self.card_notes_follow.as_deref());
         let with_bg = apply_skill_follow(&with_notes, self.bg.results_follow.as_deref());
         let with_skill = apply_skill_follow(&with_bg, self.active_skill_follow.as_deref());
-        let last_user = apply_skill_follow(&with_skill, self.idea_talk_brief().as_deref());
+        let with_idea = apply_skill_follow(&with_skill, self.idea_talk_brief().as_deref());
+        // A reply that will be spoken is shaped for the ear.
+        let voice_style = self.speak_next.then_some(grokhub_core::VOICE_TALK_STYLE);
+        let last_user = apply_skill_follow(&with_idea, voice_style);
         if self.grok_p_rx.is_some() {
             return;
         }
@@ -318,6 +321,8 @@ impl Cabin {
         self.kick_skip = false;
         self.eyes_attach = false;
         self.hands_attach = false;
+        // A new turn's reply replaces one still being spoken.
+        self.voice_spoken = None;
         self.stream_buf.clear();
         self.begin_reply_chips();
         self.thought_buf.clear();

@@ -734,6 +734,14 @@ fn chat_side_effects_keep_the_origin_thread() {
         "Stop must cancel a pending voice speak: {halt_flight}"
     );
     assert!(
+        halt_flight.contains("voice_spoken = None"),
+        "Stop must stop a reply that is being spoken: {halt_flight}"
+    );
+    assert!(
+        src.contains("self.speak_next.then_some(grokhub_core::VOICE_TALK_STYLE)"),
+        "a turn whose reply will be spoken asks for an answer shaped for the ear"
+    );
+    assert!(
         halt_flight.contains("scheduled_perm = false"),
         "Stop must drop scheduled_perm so the next typed Ask uses ACP: {halt_flight}"
     );

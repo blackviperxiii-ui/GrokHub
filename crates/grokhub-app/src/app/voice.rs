@@ -23,7 +23,13 @@ pub(super) fn listen_turn(
             }
             Ok(Heard::Turn(samples)) => {
                 let _ = notes.send(JobOut::VoiceNote("Got it…".into()));
-                return heard_text(api_key, &samples);
+                let ended = std::time::Instant::now();
+                let text = heard_text(api_key, &samples);
+                crate::spoken::note_turn(crate::spoken::TurnClock {
+                    ended,
+                    words_ms: ended.elapsed().as_millis() as u64,
+                });
+                return text;
             }
             Ok(Heard::Nothing) => return String::new(),
             Ok(Heard::Pause) => return VOICE_PAUSED.into(),
@@ -136,6 +142,7 @@ impl Cabin {
     }
 
     pub(super) fn poll_voice_hold(&mut self) {
+        self.poll_spoken();
         let Some(rx) = self.voice_hold_rx.take() else {
             return;
         };
@@ -151,6 +158,8 @@ impl Cabin {
 
     pub(super) fn leave_voice(&mut self) {
         self.voice_hold_rx = None;
+        // Stops a reply mid-sentence.
+        self.voice_spoken = None;
         self.voice_ready_at = None;
         // Closes the mic.
         self.voice_mic = None;
@@ -164,42 +173,73 @@ impl Cabin {
         }
     }
 
-    pub(super) fn speak_reply(&mut self, text: &str) {
-        let text = voice_tts_script(text);
-        if text.is_empty() {
-            self.maybe_continue_ptt();
-            return;
-        }
+    /// A new spoken reply in the chosen voice. Times count from the voice
+    /// turn it answers, when there is one.
+    fn new_spoken(&mut self) -> crate::spoken::SpokenReply {
+        let turn = self.voice_is_on().then(crate::spoken::take_turn).flatten();
+        crate::spoken::SpokenReply::xai(self.bearer(), self.speech_voice(), self.lips.clone(), turn)
+    }
+
+    fn show_speaking(&mut self) {
         if self.voice_is_on() {
             self.voice_state = VoiceState::Speaking;
             self.voice_orb = "speaking".into();
             self.status = voice_mode_label(VoiceState::Speaking).into();
         }
-        let key = self.bearer();
-        let cap = TEXT_FILE_CAP;
-        let mut end = cap.min(text.len());
-        while end > 0 && !text.is_char_boundary(end) {
-            end -= 1;
+    }
+
+    /// Speak a reply's text while it streams, so the first sentence plays
+    /// before the reply is done.
+    pub(super) fn speak_stream(&mut self, added: &str) {
+        if !self.speak_next || !self.stream_here() {
+            return;
         }
-        let text = text[..end].to_string();
-        let hold = self.voice_is_on();
-        let voice = self.speech_voice();
-        let tx = if hold {
-            let (tx, rx) = mpsc::channel();
-            self.voice_hold_rx = Some(rx);
-            Some(tx)
-        } else {
-            None
+        if !self.voice_spoken.as_ref().is_some_and(|s| s.is_open()) {
+            self.voice_spoken = Some(self.new_spoken());
+        }
+        if self.voice_spoken.as_mut().is_some_and(|s| s.feed(added)) {
+            self.show_speaking();
+        }
+    }
+
+    /// The reply is complete: speak what has not been spoken yet, then
+    /// listen again once the last piece has played.
+    pub(super) fn speak_reply(&mut self, text: &str) {
+        let text = voice_tts_script(text);
+        let streamed = self.voice_spoken.take().filter(|s| s.is_open());
+        if text.is_empty() && !streamed.as_ref().is_some_and(|s| s.started()) {
+            self.maybe_continue_ptt();
+            return;
+        }
+        self.show_speaking();
+        let mut spoken = match streamed {
+            Some(s) => s,
+            None => self.new_spoken(),
         };
-        let lips = self.lips.clone();
-        std::thread::spawn(move || {
-            if let Ok(bytes) = grok_tts(&key, &text, voice) {
-                crate::lipsync::speak_mp3(bytes, &lips);
+        // Capped inside: never more than TEXT_FILE_CAP goes to speech.
+        spoken.finish(&text);
+        if self.voice_is_on() {
+            self.voice_hold_rx = spoken.take_done();
+        }
+        self.voice_spoken = Some(spoken);
+    }
+
+    /// A spoken reply's errors go to the status line; a finished one is
+    /// let go and its timings kept.
+    fn poll_spoken(&mut self) {
+        let Some(spoken) = &self.voice_spoken else {
+            return;
+        };
+        if let Some(e) = spoken.error() {
+            let e: String = e.chars().take(120).collect();
+            self.status = format!("Couldn't speak the reply: {e}");
+        }
+        if spoken.finished() {
+            if let Some(t) = spoken.timings() {
+                crate::spoken::log_timings(t);
             }
-            if let Some(tx) = tx {
-                let _ = tx.send(());
-            }
-        });
+            self.voice_spoken = None;
+        }
     }
 
     pub(super) fn paint_voice_mode_row(&mut self, ui: &mut egui::Ui) {

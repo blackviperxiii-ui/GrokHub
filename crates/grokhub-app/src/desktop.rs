@@ -1472,31 +1472,56 @@ pub fn transcribe_local(wav: &Path) -> Result<String, String> {
     transcribe(wav)
 }
 
-pub fn play_audio(path: &Path) -> Result<(), String> {
+/// Longest one spoken piece may play before it's treated as a stuck player.
+const SPEECH_PLAY_CAP: Duration = Duration::from_secs(600);
+
+/// Play one spoken piece to the end, or until `stop` is set (the person
+/// interrupted). No short player timeout: a long sentence plays whole.
+pub fn play_speech(path: &Path, stop: &AtomicBool) -> Result<(), String> {
     #[cfg(windows)]
     {
-        if crate::win_audio::play_file(path).is_ok() {
+        if crate::win_audio::play_file_until(path, stop).is_ok() {
             return Ok(());
         }
     }
     let dest = path.to_str().ok_or("audio path")?;
-    match first_bin(PLAYERS).as_deref() {
-        Some("ffplay") => run_ok(
+    let (bin, args): (&str, Vec<&str>) = match first_bin(PLAYERS).as_deref() {
+        Some("ffplay") => (
             "ffplay",
-            &["-nodisp", "-autoexit", "-loglevel", "error", dest],
+            vec!["-nodisp", "-autoexit", "-loglevel", "error", dest],
         ),
-        Some("mpv") => run_ok("mpv", &["--no-video", "--really-quiet", dest]),
-        Some("paplay") => run_ok("paplay", &[dest]),
-        _ => {
-            #[cfg(windows)]
-            {
-                crate::win_audio::play_file(path)
-            }
-            #[cfg(not(windows))]
-            {
-                Err("no ffplay/mpv/paplay to speak".into())
-            }
+        Some("mpv") => ("mpv", vec!["--no-video", "--really-quiet", dest]),
+        Some("paplay") => ("paplay", vec![dest]),
+        _ => return Err("no ffplay/mpv/paplay to speak".into()),
+    };
+    let mut cmd = spawn_bin(bin);
+    cmd.args(&args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    crate::host::hide_windows_console(&mut cmd);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("{bin} didn't start: {e}"))?;
+    let deadline = Instant::now() + SPEECH_PLAY_CAP;
+    loop {
+        match child.try_wait() {
+            Ok(Some(st)) if st.success() => return Ok(()),
+            Ok(Some(_)) => return Err(format!("{bin} failed")),
+            Ok(None) => {}
+            Err(e) => return Err(format!("{bin}: {e}")),
         }
+        if stop.load(Ordering::SeqCst) || Instant::now() >= deadline {
+            kill_limited(&mut child);
+            let _ = child.wait();
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(30));
     }
 }
 

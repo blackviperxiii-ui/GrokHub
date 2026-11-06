@@ -528,8 +528,19 @@ pub fn http_err(e: http::Error) -> String {
     }
 }
 
-/// Speak `text` in `voice` (an id from `grokhub_core::TTS_VOICES`).
-pub fn grok_tts(api_key: &str, text: &str, voice: &str) -> Result<Vec<u8>, String> {
+/// One agent for a whole spoken reply: its pieces reuse one warm connection.
+pub fn speech_agent() -> http::Agent {
+    xai_agent(60)
+}
+
+/// Speak `text` in `voice` (an id from `grokhub_core::TTS_VOICES`) on the
+/// caller's [`speech_agent`], so a reply's pieces share a connection.
+pub fn grok_tts_on(
+    agent: &http::Agent,
+    api_key: &str,
+    text: &str,
+    voice: &str,
+) -> Result<Vec<u8>, String> {
     let key = api_key.trim();
     if key.is_empty() {
         return Err("Connect Grok in Settings".into());
@@ -540,7 +551,7 @@ pub fn grok_tts(api_key: &str, text: &str, voice: &str) -> Result<Vec<u8>, Strin
     }
     egress_ok(&tts_url(), &[hx::DataClass::Chat])?;
     let body = serde_json::to_vec(&tts_request_body(text, voice)).map_err(|e| e.to_string())?;
-    let resp = xai_agent(60)
+    let resp = agent
         .post(&tts_url())
         .header("authorization", &format!("Bearer {key}"))
         .header("content-type", "application/json")
@@ -611,10 +622,10 @@ mod tests {
             "Imagine download must not slurp a huge body: {save}"
         );
         let tts = src
-            .split("pub fn grok_tts(")
+            .split("pub fn grok_tts_on(")
             .nth(1)
             .and_then(|s| s.split("#[cfg(test)]").next())
-            .expect("grok_tts");
+            .expect("grok_tts_on");
         let tts_take = tts.find(".take(").expect("capped tts");
         let tts_read = tts.find("read_to_end").expect("tts read");
         assert!(
@@ -635,7 +646,7 @@ mod tests {
         let err = src
             .split("pub fn http_err(")
             .nth(1)
-            .and_then(|s| s.split("pub fn grok_tts(").next())
+            .and_then(|s| s.split("pub fn speech_agent(").next())
             .expect("http_err");
         assert!(
             err.contains("http::Error::Status { code, body, .. }")

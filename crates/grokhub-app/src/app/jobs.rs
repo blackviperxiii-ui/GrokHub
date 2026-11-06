@@ -333,6 +333,7 @@ impl Cabin {
                 self.finish_hub_dispatch(&e, false);
                 self.interrupt_turn_card(InterruptCause::from_failure(&e));
                 self.chat_job_thread = None;
+                self.voice_spoken = None;
                 self.stream_buf.clear();
                 self.thought_buf.clear();
                 self.persist();
@@ -348,6 +349,7 @@ impl Cabin {
                 self.finish_hub_dispatch(worker_gone_status(), false);
                 self.interrupt_turn_card(InterruptCause::WorkerGone);
                 self.chat_job_thread = None;
+                self.voice_spoken = None;
                 self.stream_buf.clear();
                 self.thought_buf.clear();
                 self.persist();
