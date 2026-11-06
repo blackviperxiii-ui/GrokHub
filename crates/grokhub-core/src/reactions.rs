@@ -215,6 +215,7 @@ pub fn source_category(source: CandidateSource) -> &'static str {
         CandidateSource::SystemState => "system",
         CandidateSource::Spans => "unfinished turns",
         CandidateSource::UserModel => "your routines",
+        CandidateSource::Objectives => "goal follow-ups",
     }
 }
 

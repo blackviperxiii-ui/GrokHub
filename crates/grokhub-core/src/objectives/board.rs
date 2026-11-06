@@ -5,8 +5,8 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    done_this_season, parse_goal, pick_up_line, season_label, short_date, today_picks, Goal,
-    GoalKind, KnownGame, Objectives, Pick, TurnGoals,
+    done_this_season, parse_goal, pick_up_line, season_label, short_date, shown_follow_up,
+    today_picks, FollowUp, Goal, GoalKind, KnownGame, Objectives, Pick, TurnGoals,
 };
 
 /// How many finished goals the trophy shelf shows.
@@ -157,6 +157,9 @@ pub struct Board {
     pub mine: Vec<GoalCard>,
     pub suggested: Vec<GoalCard>,
     pub season: Season,
+    /// The follow-up that went out in the last day, while its goal hasn't moved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub follow_up: Option<FollowUp>,
 }
 
 pub fn board(o: &Objectives, now_ms: u64, offset_min: i32) -> Board {
@@ -194,6 +197,7 @@ pub fn board(o: &Objectives, now_ms: u64, offset_min: i32) -> Board {
             done: done_this_season(o, now_ms, offset_min),
             trophies,
         },
+        follow_up: shown_follow_up(o, now_ms),
     }
 }
 

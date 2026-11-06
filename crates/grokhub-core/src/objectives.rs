@@ -23,6 +23,7 @@ use crate::xp::{local_day, Earned, XpKind};
 
 mod board;
 mod chat;
+mod follow_up;
 mod game_data;
 mod season;
 mod typed;
@@ -34,6 +35,10 @@ pub use board::{
 pub use chat::{
     detect, is_marker_line, markers, read_turn, wants_tracking, without_markers, worth_a_look,
     Marker, MarkerFilter, TurnGoals, GOAL_MARKER_RULE,
+};
+pub use follow_up::{
+    due_follow_ups, follow_up_candidate, followed_up, shown_follow_up, take_follow_up, FollowUp,
+    FOLLOW_UPS_PER_WEEK, FOLLOW_UP_IDLE_MS, FOLLOW_UP_SHOWN_MS, IGNORED_BEFORE_STOP,
 };
 pub use game_data::{
     apply_game_data, goal_steam_games, match_finished, refresh_from_games, GameData,
@@ -161,6 +166,17 @@ pub struct Goal {
     pub history: Vec<Mark>,
     #[serde(default)]
     pub paid: Vec<Paid>,
+    /// Follow-ups that went out about this goal, newest last.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nudges: Vec<Nudge>,
+}
+
+/// One follow-up about a goal. `stop` is the last one: "I'll stop asking".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Nudge {
+    pub at: u64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stop: bool,
 }
 
 /// A goal to add or suggest.
@@ -358,6 +374,7 @@ impl Objectives {
                 value: current,
             }],
             paid: Vec::new(),
+            nudges: Vec::new(),
         })
     }
 

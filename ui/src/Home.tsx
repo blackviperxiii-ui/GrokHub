@@ -18,6 +18,7 @@ import {
   type Xp,
 } from "./api";
 import { ChipRow, useChipRow } from "./Chips";
+import { FollowUpRow } from "./Goals";
 import { HomeEdit } from "./HomeEdit";
 import { COMPANION_NAME } from "./brand";
 import { artUrl } from "./nyx";
@@ -286,26 +287,29 @@ function body(tile: HomeTile, slot: HomeSlot, go: HomeRoutes, remote: boolean, r
     case "objectives": {
       const steps = tile.mission?.steps.filter((s) => s.status !== "cancelled") ?? [];
       return (
-        <Go label="Open Objectives" onClick={() => go.onOpen("objectives")}>
-          {tile.mission && steps.length > 0 ? (
-            <>
-              <span className="home-count">
-                {tile.mission.done} / {tile.mission.total}
-              </span>
-              {tile.mission.title && <span className="home-strong">{tile.mission.title}</span>}
-              <span className="home-steps">
-                {steps.slice(0, slot.size === "small" ? 2 : 4).map((s) => (
-                  <span key={s.id} className={s.status === "verified" ? "done" : ""}>
-                    {s.text}
-                  </span>
-                ))}
-              </span>
-            </>
-          ) : (
-            <span className="home-muted">{NO_STEPS}</span>
-          )}
-          <XpBar xp={tile.xp} />
-        </Go>
+        <>
+          <Go label="Open Objectives" onClick={() => go.onOpen("objectives")}>
+            {tile.mission && steps.length > 0 ? (
+              <>
+                <span className="home-count">
+                  {tile.mission.done} / {tile.mission.total}
+                </span>
+                {tile.mission.title && <span className="home-strong">{tile.mission.title}</span>}
+                <span className="home-steps">
+                  {steps.slice(0, slot.size === "small" ? 2 : 4).map((s) => (
+                    <span key={s.id} className={s.status === "verified" ? "done" : ""}>
+                      {s.text}
+                    </span>
+                  ))}
+                </span>
+              </>
+            ) : (
+              <span className="home-muted">{NO_STEPS}</span>
+            )}
+            <XpBar xp={tile.xp} />
+          </Go>
+          {tile.followUp && <FollowUpRow followUp={tile.followUp} onAsk={go.onAsk} />}
+        </>
       );
     }
     case "streak":

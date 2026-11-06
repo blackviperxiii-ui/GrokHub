@@ -37,7 +37,25 @@ pub(super) fn proactive_key(topic: &str) -> String {
     )
 }
 
+/// Candidates the cabin already worked out, read as one source.
+struct Listed(pro::CandidateSource, Vec<Candidate>);
+
+impl pro::GrantedSource for Listed {
+    fn source(&self) -> pro::CandidateSource {
+        self.0
+    }
+
+    fn read(&self) -> Vec<Candidate> {
+        self.1.clone()
+    }
+}
+
 impl Cabin {
+    /// A library game is running, or the game guard says you're playing.
+    fn gaming_now(&self) -> bool {
+        self.game_running().is_some() || grokhub_desktop::game_guard::peek().gaming
+    }
+
     pub(super) fn save_proactive(&self) {
         let dir = crate::config::config_dir();
         if let Ok(json) = serde_json::to_string(&self.proactive) {
@@ -105,9 +123,10 @@ impl Cabin {
             failed: &[],
             needs: &[],
         };
+        let goals = Listed(pro::CandidateSource::Objectives, self.goal_follow_ups(now));
         let ranked = pro::ProactiveEngine::new(std::sync::Arc::new(move || now)).gather(
             &watch,
-            &[],
+            &[&goals],
             &granted,
         );
         self.weigh_candidates(ranked)
@@ -118,6 +137,8 @@ impl Cabin {
     /// up, the Anticipate act is spent through `heartbeat_may` and the card
     /// budget picks what surfaces.
     pub(super) fn tick_proactive(&mut self, now: u64, quiet: bool, busy: bool) {
+        // A game running counts as busy: nothing proactive goes up mid-game.
+        let busy = busy || self.gaming_now();
         if busy || now.saturating_sub(self.last_proactive_ms) < PROACTIVE_EVERY_MS {
             return;
         }
@@ -179,6 +200,9 @@ impl Cabin {
                 );
             }
             grokhub_core::post_update(&mut self.updates, card);
+            if c.source == pro::CandidateSource::Objectives {
+                self.note_goal_follow_up(&c.topic, now);
+            }
             posted += 1;
         }
         if posted > 0 {
@@ -690,5 +714,47 @@ mod tests {
             "an existing Pulse card kind"
         );
         assert!(grokhub_core::pulse::is_idea_card(&card));
+    }
+
+    #[test]
+    fn a_goal_left_a_few_days_gets_one_question_card_and_never_mid_game() {
+        let (_pin, root) = pinned("proactive-goal-follow-up");
+        let mut o = grokhub_core::objectives::Objectives::default();
+        o.add(
+            grokhub_core::objectives::parse_goal(
+                "finish elden ring",
+                &[grokhub_core::objectives::KnownGame {
+                    name: "Elden Ring",
+                    steam_app_id: Some(1_245_620),
+                    source: None,
+                }],
+            ),
+            T0,
+        )
+        .unwrap();
+        grokhub_core::objectives::save(&root, &o).unwrap();
+        let mut cabin = Cabin::quiet_for_test();
+        let later = T0 + 4 * grokhub_core::proactive::DAY_MS;
+        cabin.set_game_running_for_test(Some(1_245_620));
+        cabin.tick_proactive(later, false, false);
+        assert!(proactive_cards(&cabin).is_empty(), "a game running is busy");
+        cabin.set_game_running_for_test(None);
+        cabin.tick_proactive(later, false, false);
+        let cards = proactive_cards(&cabin);
+        assert_eq!(cards.len(), 1);
+        assert_eq!(
+            cards[0].title,
+            "Want to pick a night for your next Elden Ring session?"
+        );
+        assert!(cards[0].idea_action().starts_with("Help me pick a night"));
+        let saved = grokhub_core::objectives::load(&root);
+        assert_eq!(saved.goals[0].nudges.len(), 1, "written as gone out");
+        assert_eq!(
+            grokhub_core::objectives::shown_follow_up(&saved, later).map(|f| f.line),
+            Some(cards[0].title.clone()),
+            "and it shows on Today"
+        );
+        cabin.tick_proactive(later + PROACTIVE_EVERY_MS, false, false);
+        assert_eq!(proactive_cards(&cabin).len(), 1, "one a week");
     }
 }

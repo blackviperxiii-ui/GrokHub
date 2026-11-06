@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { getGoals, goalAct, type GoalAct, type GoalBoard, type GoalCard } from "./api";
+import { getGoals, goalAct, type FollowUp, type GoalAct, type GoalBoard, type GoalCard } from "./api";
 
 export const ADD_HINT = "What do you want to do?";
 export const TODAY_EMPTY = "Nothing for today yet. Add a goal below and it shows up here.";
@@ -77,8 +77,26 @@ export function doneLine(n: number): string {
 /** Objectives' goal cards, the same as the cabin's: Today (the goal closest
  * to done and one left a week), My goals (type a goal, +1, Done, Drop and
  * the suggested tray) and This season (goals done and the trophy shelf).
- * `onChange` runs after a press so the XP bar can catch up. */
-export function Goals({ onChange }: { onChange?: () => void }) {
+ * `onChange` runs after a press so the XP bar can catch up; `onAsk` puts a
+ * follow-up's ask in the chat box. */
+/** The button under a follow-up: puts its ask in the chat box. */
+export const PLAN_IT = "Plan it";
+
+/** A follow-up on a goal left a few days, with Plan it unless it's the last line. */
+export function FollowUpRow({ followUp, onAsk }: { followUp: FollowUp; onAsk?: (text: string) => void }) {
+  return (
+    <div className="goal-row goal-follow-up">
+      <p>{followUp.line}</p>
+      {!followUp.stop && onAsk && (
+        <button type="button" className="quiet" onClick={() => onAsk(followUp.prompt)}>
+          {PLAN_IT}
+        </button>
+      )}
+    </div>
+  );
+}
+
+export function Goals({ onChange, onAsk }: { onChange?: () => void; onAsk?: (text: string) => void }) {
   const [board, setBoard] = useState<GoalBoard | null>(null);
   const [draft, setDraft] = useState("");
   const [note, setNote] = useState<string | null>(null);
@@ -120,8 +138,9 @@ export function Goals({ onChange }: { onChange?: () => void }) {
     <>
       <div className="card objectives-card" aria-label="Today">
         <span className="xp-level">Today</span>
+        {board.followUp && <FollowUpRow followUp={board.followUp} onAsk={onAsk} />}
         {board.today.length === 0 ? (
-          <p className="home-muted">{TODAY_EMPTY}</p>
+          !board.followUp && <p className="home-muted">{TODAY_EMPTY}</p>
         ) : (
           board.today.map((g) => (
             <div key={g.id} className="goal-row">

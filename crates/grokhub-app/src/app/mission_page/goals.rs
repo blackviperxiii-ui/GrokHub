@@ -28,6 +28,8 @@ pub(in crate::app) const TODAY_EMPTY: &str =
 const MINE_EMPTY: &str =
     "No goals yet. Type one above, like \"99 Fishing in OSRS\" or \"finish Elden Ring\".";
 const SHELF_EMPTY: &str = "Goals you finish land here.";
+/// The button under a follow-up on Today: asks for help in chat.
+pub(in crate::app) const PLAN_IT: &str = "Plan it";
 /// Set when a finished chat turn changed the goals, so the page and the XP
 /// bar read them again on the next frame instead of in up to 30s.
 static GOALS_CHANGED: AtomicBool = AtomicBool::new(false);
@@ -143,6 +145,46 @@ impl Cabin {
         let o = objectives::load(&dir);
         ctx.data_mut(|d| d.insert_temp::<Cached>(id, (Instant::now(), o.clone())));
         o
+    }
+
+    /// Follow-ups due now as proactive cards. A last "I'll stop asking" line
+    /// is no offer: it is written as gone out and shows on Today instead.
+    pub(in crate::app) fn goal_follow_ups(
+        &self,
+        now: u64,
+    ) -> Vec<grokhub_core::proactive::Candidate> {
+        let dir = crate::config::config_dir();
+        let due = objectives::due_follow_ups(&objectives::load(&dir), now);
+        let mut out = Vec::new();
+        for f in due {
+            match objectives::follow_up_candidate(&f) {
+                Some(c) => out.push(c),
+                None => {
+                    if objectives::change(&dir, |o| objectives::followed_up(o, &f.id, true, now))
+                        .is_ok_and(|(_, wrote)| wrote)
+                    {
+                        GOALS_CHANGED.store(true, Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// A follow-up card about the goal titled `topic` went up.
+    pub(in crate::app) fn note_goal_follow_up(&self, topic: &str, now: u64) {
+        let dir = crate::config::config_dir();
+        let wrote = objectives::change(&dir, |o| {
+            let id = o
+                .tracking()
+                .into_iter()
+                .find(|g| goal_title(g) == topic)
+                .map(|g| g.id.clone());
+            id.is_some_and(|id| objectives::followed_up(o, &id, false, now))
+        });
+        if wrote.is_ok_and(|(_, w)| w) {
+            GOALS_CHANGED.store(true, Ordering::Relaxed);
+        }
     }
 
     /// Goals from a finished chat turn, as in the shell: a goal the player
@@ -261,9 +303,22 @@ impl Cabin {
         goals: &Objectives,
     ) {
         let now = now_ms();
+        let mut plan = None;
         card(ui, |ui| {
             header(ui, true, "Today", "", crate::theme::amber());
             let mut any = false;
+            if let Some(f) = objectives::shown_follow_up(goals, now) {
+                any = true;
+                ui.label(
+                    RichText::new(&f.line)
+                        .size(crate::theme::TYPE_LABEL)
+                        .color(crate::theme::fg()),
+                );
+                if !f.stop && crate::cards::ghost_pill(ui, PLAN_IT) {
+                    plan = Some(f.prompt);
+                }
+                ui.add_space(8.0);
+            }
             let next = mission.and_then(|m| {
                 m.checklist.iter().find(|i| {
                     i.status != MissionCheckStatus::Verified
@@ -316,6 +371,10 @@ impl Cabin {
                 super::objective_rows(ui, m);
             }
         });
+        if let Some(prompt) = plan {
+            self.nav = Nav::Chat;
+            self.send_chat(prompt);
+        }
     }
 
     /// My goals: the add box, tracked goals and the suggested tray.

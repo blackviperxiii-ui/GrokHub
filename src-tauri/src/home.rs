@@ -395,6 +395,9 @@ pub enum Tile {
     Objectives {
         mission: Option<Mission>,
         xp: Xp,
+        /// A follow-up on a goal left a few days, with "Plan it" under it.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        follow_up: Option<grokhub_core::objectives::FollowUp>,
     },
     #[serde(rename_all = "camelCase")]
     Streak {
@@ -744,6 +747,7 @@ pub fn page(src: &Sources<'_>) -> Page {
                 "objectives" => Tile::Objectives {
                     mission: objectives.mission.clone(),
                     xp: objectives.xp.clone(),
+                    follow_up: crate::goals::follow_up(src.config_dir, now),
                 },
                 "streak" => Tile::Streak {
                     xp: objectives.xp.clone(),

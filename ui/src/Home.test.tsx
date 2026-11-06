@@ -412,6 +412,26 @@ describe("Home", () => {
     expect(go.onSettings).toHaveBeenCalledWith("personality");
   });
 
+  it("the objectives tile shows a goal follow-up whose Plan it fills the box", async () => {
+    const followUp = {
+      id: "g2",
+      title: "Elden Ring · Finish",
+      line: "Want to pick a night for your next Elden Ring session?",
+      prompt: "Help me pick a night this week for my next Elden Ring session. My goal there: Finish.",
+      stop: false,
+    };
+    api.getHome.mockResolvedValue({
+      ...PAGE,
+      slots: [slot({ slot: "large", size: "large", module: "objectives", name: "Objectives", tile: { kind: "objectives", mission: null, xp: XP, followUp } })],
+    });
+    const go = routes();
+    render(<Home {...go} remote={false} />);
+    expect(await screen.findByText(followUp.line)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Plan it" }));
+    expect(go.onAsk).toHaveBeenCalledWith(followUp.prompt);
+    expect(go.onOpen).not.toHaveBeenCalled();
+  });
+
   it("Home's chip row fills the box or opens a page, and teaches what was picked", async () => {
     api.getHome.mockResolvedValue(PAGE);
     api.quickChips.mockResolvedValue([

@@ -37,11 +37,14 @@ export function Objectives({
   remote,
   onOpenChat,
   onHome,
+  onAsk,
 }: {
   conversationId?: string;
   remote: boolean;
   onOpenChat: (id: string) => void;
   onHome: () => void;
+  /** Puts a goal follow-up's ask in the chat box. */
+  onAsk?: (text: string) => void;
 }) {
   const [page, setPage] = useState<MissionPage | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -130,6 +133,7 @@ export function Objectives({
       )}
       {page && (
         <Goals
+          onAsk={onAsk}
           onChange={() => {
             getMission(conversationId).then(setPage, (err) => setNote(String(err)));
           }}
