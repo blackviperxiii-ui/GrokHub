@@ -35,6 +35,11 @@ pub(super) struct LiveRecording {
     rx: mpsc::Receiver<RecordDone>,
 }
 
+/// The recording's clock as one Activity line.
+pub(super) fn recording_dock_line(live: &LiveRecording) -> String {
+    sr::indicator_line(live.started.elapsed().as_secs().min(sr::MAX_SECS))
+}
+
 /// `(title, folder, chat, reply or error)` from the diagnosis thread.
 pub(super) type DiagDone = (String, PathBuf, String, Result<String, String>);
 
