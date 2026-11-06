@@ -52,10 +52,29 @@ fn load_state() -> BriefFile {
         .unwrap_or_default()
 }
 
+/// The live brief's one-taps as last saved, so the Pulse page paints them
+/// without reading the file every frame. Keyed by the state file's path.
+static TAPS: std::sync::Mutex<Option<(std::path::PathBuf, Vec<TapRow>)>> =
+    std::sync::Mutex::new(None);
+
 fn save_state(s: &BriefFile) {
     if let Ok(text) = serde_json::to_string_pretty(s) {
         let _ = std::fs::write(state_path(), text);
     }
+    *TAPS.lock().unwrap_or_else(|e| e.into_inner()) = Some((state_path(), s.latest_taps.clone()));
+}
+
+fn latest_taps() -> Vec<TapRow> {
+    let path = state_path();
+    let mut held = TAPS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((at, taps)) = held.as_ref() {
+        if *at == path {
+            return taps.clone();
+        }
+    }
+    let taps = load_state().latest_taps;
+    *held = Some((path, taps.clone()));
+    taps
 }
 
 impl Cabin {
@@ -127,8 +146,7 @@ impl Cabin {
     /// One-taps stored for the live start-my-day card, if any:
     /// (`label`, `prompt`, the source card id).
     pub(super) fn day_brief_taps(&self) -> Vec<(String, String, Option<String>)> {
-        load_state()
-            .latest_taps
+        latest_taps()
             .into_iter()
             .map(|t| (t.label, t.prompt, t.card))
             .collect()
