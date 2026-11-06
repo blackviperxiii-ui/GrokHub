@@ -154,9 +154,6 @@ impl HomeEditDraft {
     }
 }
 
-/// Catalog note for a module whose data isn't wired up yet.
-const NOT_BUILT: &str = "Preview: not built yet, shows a placeholder card for now";
-
 /// Catalog row text in plain words: what's in the slot, or which sizes fit.
 fn catalog_title(name: &str, sizes: &[ModuleSize], in_slot: bool) -> String {
     if in_slot {
@@ -390,14 +387,6 @@ impl Cabin {
                                                                 .size(crate::theme::TYPE_CAPTION)
                                                                 .color(crate::theme::muted()),
                                                         );
-                                                    } else if super::paint::module_kind(m.id)
-                                                        == super::paint::ModuleKind::Preview
-                                                    {
-                                                        ui.label(
-                                                            RichText::new(NOT_BUILT)
-                                                                .size(crate::theme::TYPE_CAPTION)
-                                                                .color(crate::theme::muted()),
-                                                        );
                                                     }
                                                 }
                                                 let _ = modules_fitting(size);
@@ -477,10 +466,6 @@ mod tests {
         assert_eq!(
             catalog_title("Storage", &all, true),
             "Storage · in this slot"
-        );
-        assert_eq!(
-            NOT_BUILT,
-            "Preview: not built yet, shows a placeholder card for now"
         );
     }
 }

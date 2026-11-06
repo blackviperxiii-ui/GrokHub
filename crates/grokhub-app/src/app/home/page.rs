@@ -9,6 +9,7 @@ use super::super::mission_page::{day_caption, greeting};
 use super::super::*;
 use super::edit::HomeEditDraft;
 use super::paint::{paint_module, ModuleAction};
+use grokhub_core::home::TileAction;
 
 const PAGE_PAD: f32 = 24.0;
 /// Chips + composer height before the first frame measures it.
@@ -142,6 +143,7 @@ impl Cabin {
                     self.set_nav_id("settings");
                     self.settings_sec = sec;
                 }
+                ModuleAction::Tile(a) => self.run_tile_action(a),
             }
         }
     }
@@ -283,6 +285,41 @@ impl Cabin {
         self.new_thread(false);
         self.nav = Nav::Chat;
         self.send_from_composer(text);
+    }
+
+    /// What a shared-model tile's button, row or tap does in the desktop app.
+    fn run_tile_action(&mut self, a: TileAction) {
+        use super::views::{feature_sec, settings_sec};
+        let settings = |cabin: &mut Self, sec: SettingsSec| {
+            cabin.set_nav_id("settings");
+            cabin.settings_sec = sec;
+        };
+        match a {
+            TileAction::Ask { ask } => self.send_home_to_chat(ask),
+            TileAction::OpenChat { id } => match self.threads.iter().position(|t| t.id == id) {
+                Some(idx) => {
+                    self.switch_thread(idx);
+                    self.nav = Nav::Chat;
+                }
+                None => self.set_nav_id("history"),
+            },
+            TileAction::Nav { page } => self.set_nav_id(&page),
+            TileAction::Settings { section } => settings(self, settings_sec(&section)),
+            TileAction::RunPlaybook { .. } => settings(self, SettingsSec::Playbooks),
+            TileAction::Review { .. } => self.set_nav_id("workboard"),
+            TileAction::Toggle { feature, .. } | TileAction::TurnOn { feature } => {
+                settings(self, feature_sec(&feature))
+            }
+            TileAction::OpenUrl { url } => {
+                if url.starts_with("https://") {
+                    let _ = crate::desktop::open_path(&url);
+                }
+            }
+            TileAction::Play { app_id } => {
+                let _ = crate::desktop::open_path(&super::super::library_ui::play_link(app_id));
+            }
+            TileAction::Reroll | TileAction::Retry => {}
+        }
     }
 
     pub(in crate::app) fn open_mission_home(&mut self) {

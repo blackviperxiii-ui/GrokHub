@@ -357,43 +357,69 @@ fn frame_rate_tile_on_windows_names_the_app_it_counts() {
 }
 
 #[test]
-fn every_home_module_is_live_a_link_or_a_labelled_preview() {
-    use super::paint::{module_kind, LinkTarget, ModuleKind, LIVE_MODULES};
-    use grokhub_core::home::{lookup, DataStatus, REGISTRY};
-    // Every live painter is a real registry module, and none is flagged New:
-    // a painted module must never sit in the picker as "not built".
+fn every_home_module_has_a_painter_or_a_real_tile() {
+    use super::paint::LIVE_MODULES;
+    use super::views::{
+        automations_view, daily_drop_view, decisions_view, journal_view, local_ai_view,
+        personality_view, playbooks_view, recent_chats_view,
+    };
+    use grokhub_core::home::{lookup, tiles, DataStatus, TileState, REGISTRY};
+    // Every painter is a real registry module, and none is flagged New.
     for id in LIVE_MODULES {
         let m = lookup(id).unwrap_or_else(|| panic!("{id} painted but not in the registry"));
         assert_ne!(m.data, DataStatus::New, "{id} is painted but flagged New");
     }
-    let mut previews = Vec::new();
-    for m in REGISTRY {
-        match module_kind(m.id) {
-            ModuleKind::Live => {}
-            ModuleKind::Link { cta, to } => {
-                assert!(cta.starts_with("Open "), "{}: {cta}", m.id);
-                if let LinkTarget::Page(page) = to {
-                    assert!(
-                        ["library", "journal", "automations"].contains(&page),
-                        "{} links to {page}",
-                        m.id
-                    );
-                }
-            }
-            ModuleKind::Preview => previews.push(m.id),
-        }
+    // The rest draw from the shared model; with nothing to show, each says
+    // what it will show and gives one way forward. No placeholder is left.
+    let now = 1_800_000_000_000;
+    let empties = [
+        recent_chats_view(&[], now),
+        local_ai_view(false, false, false),
+        local_ai_view(false, true, false),
+        playbooks_view(std::iter::empty(), 0),
+        automations_view(&[], now),
+        journal_view(&[]),
+        daily_drop_view(None),
+        tiles::now_playing_view(&[], now),
+        tiles::game_library_view(&[]),
+        tiles::what_to_play_view(&[], now, true),
+    ];
+    for v in &empties {
+        assert!(
+            matches!(v.state, TileState::Empty | TileState::Off),
+            "{:?}",
+            v.text
+        );
+        assert_eq!(v.buttons.len(), 1, "{:?}", v.text);
+        assert!(!v.text.caption.is_empty());
     }
-    // The modules the old READY stub covered that do have a home in the app
-    // now open it instead of showing an empty "ready" card.
-    for id in [
-        "local_ai",
-        "personality",
-        "playbooks",
-        "automations",
-        "journal",
-        "game_library",
-    ] {
-        assert!(matches!(module_kind(id), ModuleKind::Link { .. }), "{id}");
-    }
-    assert!(previews.contains(&"deals") && previews.contains(&"now_playing"));
+    assert_eq!(decisions_view(&[]).text.big, "All clear");
+    assert_eq!(personality_view("").text.caption, "Your companion's voice");
+    let painted = REGISTRY
+        .iter()
+        .filter(|m| !LIVE_MODULES.contains(&m.id))
+        .count();
+    assert_eq!(painted, 23, "every other module goes through views.rs");
+}
+
+#[test]
+fn recent_chats_lead_with_the_latest_and_open_it() {
+    use super::views::recent_chats_view;
+    use grokhub_core::home::TileAction;
+    let mk = |id: &str, title: &str, at: u64| {
+        let mut t = crate::threads::ChatThread::new(title, false);
+        t.id = id.into();
+        t.last_active_ms = at;
+        t.messages = std::sync::Arc::new(vec![("user".into(), "hi".into())]);
+        t
+    };
+    let now = 1_800_000_000_000;
+    let threads = [
+        mk("a", "Old", now - 86_400_000),
+        mk("b", "Fresh", now - 60_000),
+    ];
+    let v = recent_chats_view(&threads, now);
+    assert_eq!(v.text.big, "Fresh");
+    assert_eq!(v.rows.len(), 2);
+    assert_eq!(v.tap, Some(TileAction::OpenChat { id: "b".into() }));
 }

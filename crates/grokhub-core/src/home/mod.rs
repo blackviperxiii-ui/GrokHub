@@ -8,6 +8,7 @@ mod config;
 mod layout;
 mod registry;
 pub mod text;
+pub mod tiles;
 mod view;
 
 pub use config::{HomeLayout, HomePreset, HOME_LAYOUT_FILE, HOME_LAYOUT_VERSION};
