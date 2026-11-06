@@ -25,6 +25,8 @@ pub const WHY_CHARS: usize = 240;
 pub const TASTE_CHARS: usize = 1200;
 /// Taste events kept for the next rebuild, newest last.
 pub const TASTE_EVENTS_MAX: usize = 30;
+/// Most chat lines the ring keeps, so a chatty day never pushes loves out.
+pub const TASTE_CHAT_MAX: usize = 10;
 /// Characters kept from one taste event's text.
 pub const TASTE_EVENT_CHARS: usize = 200;
 pub const DEFAULT_ICON: &str = "📰";
@@ -104,6 +106,8 @@ pub enum TasteKind {
     Discuss,
     /// Something the person said in the main chat.
     Chat,
+    /// Not this or Dismiss on a post: less of this.
+    Less,
     /// Opened or scrolled past a post. Never a taste signal.
     Read,
 }
@@ -184,6 +188,22 @@ impl WriterState {
             text,
             at_ms: now_ms,
         });
+        if kind == TasteKind::Chat {
+            let chats = self
+                .taste_events
+                .iter()
+                .filter(|e| e.kind == TasteKind::Chat)
+                .count();
+            if chats > TASTE_CHAT_MAX {
+                if let Some(oldest) = self
+                    .taste_events
+                    .iter()
+                    .position(|e| e.kind == TasteKind::Chat)
+                {
+                    self.taste_events.remove(oldest);
+                }
+            }
+        }
         let over = self.taste_events.len().saturating_sub(TASTE_EVENTS_MAX);
         self.taste_events.drain(..over);
         self.taste_event_ms = self.taste_event_ms.max(now_ms);
@@ -232,6 +252,7 @@ pub fn taste_messages(current: &str, events: &[TasteEvent]) -> Option<Vec<(Strin
             TasteKind::Love => "Loved a post",
             TasteKind::Discuss => "Asked to discuss",
             TasteKind::Chat => "Said in chat",
+            TasteKind::Less => "Passed on a post",
             TasteKind::Read => continue,
         };
         lines.push_str(&format!("- {label}: {}\n", e.text));
@@ -772,6 +793,32 @@ mod tests {
         assert_eq!(s.taste_events.len(), TASTE_EVENTS_MAX);
         assert_eq!(s.taste_events[0].text, "post 5");
         assert_eq!(s.taste_event_ms, NOW + 34);
+    }
+
+    #[test]
+    fn chat_lines_keep_ten_slots_so_loves_and_passes_stay() {
+        let mut s = WriterState::default();
+        assert!(s.note_taste(TasteKind::Love, "Helldivers 2 patch", NOW));
+        assert!(s.note_taste(TasteKind::Less, "Crypto prices jump", NOW + 1));
+        for n in 0..40u64 {
+            s.note_taste(TasteKind::Chat, &format!("chat line {n}"), NOW + 2 + n);
+        }
+        let chats: Vec<&str> = s
+            .taste_events
+            .iter()
+            .filter(|e| e.kind == TasteKind::Chat)
+            .map(|e| e.text.as_str())
+            .collect();
+        assert_eq!(chats.len(), 10);
+        assert_eq!(chats[0], "chat line 30");
+        assert_eq!(s.taste_events.len(), 12);
+        assert_eq!(s.taste_events[0].text, "Helldivers 2 patch");
+        assert_eq!(s.taste_events[1].kind, TasteKind::Less);
+        let msgs = taste_messages("", &s.taste_events[..2]).expect("call");
+        assert_eq!(
+            msgs[1].1,
+            "Current note:\n(none yet)\n\nWhat they did:\n- Loved a post: Helldivers 2 patch\n- Passed on a post: Crypto prices jump\n"
+        );
     }
 
     #[test]

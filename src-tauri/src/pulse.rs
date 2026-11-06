@@ -413,6 +413,17 @@ pub fn load(config_dir: &Path, day: Option<&Day>, now_ms: u64) -> Result<Page, S
     Ok(page(config_dir, &cards, now_ms))
 }
 
+/// Not this or Dismiss on a feed post tells the writer's taste note "less
+/// of this". Ideas learn through their own state instead.
+fn note_less(config_dir: &Path, card: &UpdateCard, now_ms: u64) -> Result<(), String> {
+    if card.kind == UpdateKind::Idea {
+        return Ok(());
+    }
+    pulse_feed::with_state(config_dir, |s| {
+        s.note_taste(TasteKind::Less, &card.title, now_ms);
+    })
+}
+
 /// Dismiss and Not this take the card off the page (an idea leaves the
 /// store; an event leaves a tombstone so a repeat stays hidden for a day).
 /// Like marks it. Snooze hides it until the next 09:00. Accept only notes it.
@@ -451,10 +462,14 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
                 .unwrap_or(pc::DismissKind::NotInterested)
                 .ledger_reason();
             note(&card.title, reason, &day.date)?;
+            if dismiss != Some(pc::DismissKind::UsedDone) {
+                note_less(config_dir, &card, now_ms)?;
+            }
             remove(&mut cards)
         }
         Act::NotThis => {
             note(&card.title, LedgerReason::NotThis, &day.date)?;
+            note_less(config_dir, &card, now_ms)?;
             remove(&mut cards)
         }
         Act::Love => {
@@ -991,6 +1006,22 @@ mod tests {
             discuss(&d.config, "post-1", NOW),
             Err("That card is gone. The page now shows what is left.".to_string())
         );
+    }
+
+    #[test]
+    fn not_this_on_a_post_tells_the_writer_less_of_this_and_an_idea_does_not() {
+        let d = dirs("less", &sample());
+        act(&d.config, "idea-1", Act::NotThis, &day(), NOW).expect("idea");
+        assert!(pulse_feed::state(&d.config).taste_events.is_empty());
+        act(&d.config, "post-1", Act::NotThis, &day(), NOW + 1).expect("post");
+        let state = pulse_feed::state(&d.config);
+        let kinds: Vec<(TasteKind, &str)> = state
+            .taste_events
+            .iter()
+            .map(|e| (e.kind, e.text.as_str()))
+            .collect();
+        assert_eq!(kinds, vec![(TasteKind::Less, "Board")]);
+        assert!(state.taste_stale());
     }
 
     #[test]
