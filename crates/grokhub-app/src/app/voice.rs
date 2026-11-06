@@ -7,36 +7,107 @@ const CHECK_IN_NOTE: &str = "Still listening. Talk when you're ready, or tap the
 
 /// Wait for the next turn from the open mic and turn it into words. Silence
 /// keeps listening; an empty transcript (a cough, a door) listens again.
+/// With a speech stream, live captions show while they talk, Smart Turn can
+/// end the turn as soon as they've clearly finished, and the words are ready
+/// when the mic's own detector ends it; the upload is the fallback.
 pub(super) fn listen_turn(
     api_key: &str,
     heard: mpsc::Receiver<crate::voice_mic::Heard>,
+    mut stt: Option<(
+        mpsc::Receiver<crate::stt_stream::SttNews>,
+        crate::voice_mic::MicFinisher,
+    )>,
     notes: &mpsc::Sender<JobOut>,
 ) -> String {
+    use crate::stt_stream::SttNews;
     use crate::voice_mic::Heard;
+    let tick = std::time::Duration::from_millis(30);
+    let mut noise_only = false;
     loop {
-        match heard.recv() {
-            Ok(Heard::Started) => {
+        if let Some((news, finisher)) = stt.as_ref() {
+            match news.try_recv() {
+                Ok(SttNews::Caption(c)) => {
+                    let _ = notes.send(JobOut::VoiceNote(caption_note(&c)));
+                }
+                Ok(SttNews::Ended(words)) if !words.is_empty() => {
+                    // Clearly finished: don't wait out the silence.
+                    finisher.finish();
+                    let _ = notes.send(JobOut::VoiceNote("Got it…".into()));
+                    crate::spoken::note_turn(crate::spoken::TurnClock {
+                        ended: std::time::Instant::now(),
+                        words_ms: 0,
+                    });
+                    return words;
+                }
+                // Only noise, and the mic's own end is on its way.
+                Ok(SttNews::Ended(_)) => noise_only = true,
+                Ok(SttNews::Failed(_)) | Err(mpsc::TryRecvError::Disconnected) => stt = None,
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        let next = if stt.is_some() {
+            match heard.recv_timeout(tick) {
+                Ok(h) => h,
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    return "VOICE_RECEIPT: voice stopped".into();
+                }
+            }
+        } else {
+            match heard.recv() {
+                Ok(h) => h,
+                Err(_) => return "VOICE_RECEIPT: voice stopped".into(),
+            }
+        };
+        match next {
+            Heard::Started => {
                 let _ = notes.send(JobOut::VoiceNote("Listening… go on".into()));
             }
-            Ok(Heard::CheckIn) => {
+            Heard::CheckIn => {
                 let _ = notes.send(JobOut::VoiceNote(CHECK_IN_NOTE.into()));
             }
-            Ok(Heard::Turn(samples)) => {
+            Heard::Turn(samples) => {
                 let _ = notes.send(JobOut::VoiceNote("Got it…".into()));
                 let ended = std::time::Instant::now();
-                let text = heard_text(api_key, &samples);
+                let streamed = if noise_only {
+                    Some(String::new())
+                } else {
+                    stt.and_then(|(news, _)| final_words(&news))
+                };
+                let text = streamed.unwrap_or_else(|| heard_text(api_key, &samples));
                 crate::spoken::note_turn(crate::spoken::TurnClock {
                     ended,
                     words_ms: ended.elapsed().as_millis() as u64,
                 });
                 return text;
             }
-            Ok(Heard::Nothing) => return String::new(),
-            Ok(Heard::Pause) => return VOICE_PAUSED.into(),
-            Ok(Heard::Lost(e)) => return format!("VOICE_RECEIPT: {e}"),
-            Err(_) => return "VOICE_RECEIPT: voice stopped".into(),
+            Heard::Nothing => return String::new(),
+            Heard::Pause => return VOICE_PAUSED.into(),
+            Heard::Lost(e) => return format!("VOICE_RECEIPT: {e}"),
         }
     }
+}
+
+/// The stream's words once the mic has ended the turn, or `None` to upload.
+fn final_words(news: &mpsc::Receiver<crate::stt_stream::SttNews>) -> Option<String> {
+    use crate::stt_stream::SttNews;
+    let by = std::time::Instant::now() + std::time::Duration::from_millis(2500);
+    loop {
+        let left = by.checked_duration_since(std::time::Instant::now())?;
+        match news.recv_timeout(left) {
+            Ok(SttNews::Ended(words)) => return Some(words),
+            Ok(SttNews::Caption(_)) => {}
+            Ok(SttNews::Failed(_)) | Err(_) => return None,
+        }
+    }
+}
+
+/// A live caption: the last few words, so the line never wraps.
+fn caption_note(heard: &str) -> String {
+    let chars: Vec<char> = heard.chars().collect();
+    let tail: String = chars[chars.len().saturating_sub(80)..].iter().collect();
+    let lead = if chars.len() > 80 { "…" } else { "" };
+    format!("\u{201c}{lead}{}\u{201d}", tail.trim())
 }
 
 /// Words for one heard turn: xAI first, local whisper as the fallback.
@@ -113,10 +184,14 @@ impl Cabin {
         }
         let speech = self.bearer();
         // One open mic for the whole session: no first word lost to a device opening.
-        let heard = self
+        let mic = self
             .voice_mic
-            .get_or_insert_with(crate::voice_mic::VoiceMic::open)
-            .listen();
+            .get_or_insert_with(crate::voice_mic::VoiceMic::open);
+        let (tap, stt) = match crate::stt_stream::open(&speech) {
+            Some((tap, news)) => (Some(tap), Some((news, mic.finisher()))),
+            None => (None, None),
+        };
+        let heard = mic.listen(tap);
         self.voice_orb = "listening".into();
         self.voice_state = VoiceState::Listening;
         self.running = true;
@@ -126,7 +201,7 @@ impl Cabin {
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         std::thread::spawn(move || {
-            let text = listen_turn(&speech, heard, &tx);
+            let text = listen_turn(&speech, heard, stt, &tx);
             let _ = tx.send(JobOut::Voice(text));
         });
     }
@@ -300,5 +375,108 @@ impl Cabin {
             self.listen_voice();
         }
         resp.rect
+    }
+}
+
+#[cfg(test)]
+mod stream_tests {
+    use super::*;
+    use crate::stt_stream::SttNews;
+    use crate::voice_mic::{Heard, MicFinisher};
+
+    fn notes() -> (mpsc::Sender<JobOut>, mpsc::Receiver<JobOut>) {
+        mpsc::channel()
+    }
+
+    fn captions(rx: &mpsc::Receiver<JobOut>) -> Vec<String> {
+        rx.try_iter()
+            .filter_map(|j| match j {
+                JobOut::VoiceNote(n) => Some(n),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_clearly_finished_sentence_is_sent_without_waiting_for_silence() {
+        let (_mic, heard) = mpsc::channel::<Heard>();
+        let (news_tx, news) = mpsc::channel();
+        news_tx
+            .send(SttNews::Caption("remind me to call".into()))
+            .unwrap();
+        news_tx
+            .send(SttNews::Ended("Remind me to call Sam.".into()))
+            .unwrap();
+        let finisher = MicFinisher::detached();
+        let (tx, rx) = notes();
+        let text = listen_turn(
+            "sk-abcdefghijklmnopqrstuv",
+            heard,
+            Some((news, finisher.clone())),
+            &tx,
+        );
+        assert_eq!(text, "Remind me to call Sam.");
+        assert!(finisher.asked(), "the mic stops listening for this turn");
+        let shown = captions(&rx);
+        assert!(
+            shown.iter().any(|n| n.contains("remind me to call")),
+            "the caption shows while they talk: {shown:?}"
+        );
+    }
+
+    #[test]
+    fn when_the_mic_ends_the_turn_the_streamed_words_are_used() {
+        let (mic, heard) = mpsc::channel();
+        let (news_tx, news) = mpsc::channel();
+        mic.send(Heard::Turn(vec![0; 160])).unwrap();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            let _ = news_tx.send(SttNews::Ended("buy milk".into()));
+        });
+        let (tx, _rx) = notes();
+        let text = listen_turn(
+            "sk-abcdefghijklmnopqrstuv",
+            heard,
+            Some((news, MicFinisher::detached())),
+            &tx,
+        );
+        assert_eq!(text, "buy milk");
+    }
+
+    #[test]
+    fn noise_alone_listens_again() {
+        let (mic, heard) = mpsc::channel();
+        let (news_tx, news) = mpsc::channel();
+        // Mid-listen the stream never reports an empty end, only after the mic's.
+        mic.send(Heard::Turn(vec![0; 160])).unwrap();
+        news_tx.send(SttNews::Ended(String::new())).unwrap();
+        let (tx, _rx) = notes();
+        let text = listen_turn(
+            "sk-abcdefghijklmnopqrstuv",
+            heard,
+            Some((news, MicFinisher::detached())),
+            &tx,
+        );
+        assert_eq!(text, "");
+    }
+
+    #[test]
+    fn a_failed_stream_falls_back_to_the_upload() {
+        let (news_tx, news) = mpsc::channel();
+        news_tx.send(SttNews::Caption("half".into())).unwrap();
+        news_tx.send(SttNews::Failed("closed".into())).unwrap();
+        assert_eq!(final_words(&news), None);
+        let (_keep, quiet) = mpsc::channel::<SttNews>();
+        drop(_keep);
+        assert_eq!(final_words(&quiet), None);
+    }
+
+    #[test]
+    fn a_long_caption_shows_only_its_end() {
+        assert_eq!(caption_note("hi there"), "\u{201c}hi there\u{201d}");
+        let long = "word ".repeat(40);
+        let shown = caption_note(&long);
+        assert!(shown.starts_with("\u{201c}…"), "{shown}");
+        assert!(shown.chars().count() <= 84, "{shown}");
     }
 }

@@ -37,6 +37,8 @@ struct Shared {
     stop: AtomicBool,
     talking: AtomicBool,
     out: Mutex<Option<Sender<Heard>>>,
+    /// A copy of each block heard during the listen (streaming speech-to-text).
+    tap: Mutex<Option<Sender<Vec<i16>>>>,
     lost: Mutex<Option<String>>,
     child: Mutex<Option<Child>>,
 }
@@ -52,6 +54,8 @@ impl Shared {
     fn disarm_with(&self, heard: Heard) {
         self.armed.store(false, Ordering::SeqCst);
         self.talking.store(false, Ordering::SeqCst);
+        // Closing the copy tells the stream the turn is over.
+        self.tap.lock().unwrap_or_else(|e| e.into_inner()).take();
         let tx = self.out.lock().unwrap_or_else(|e| e.into_inner()).take();
         if let Some(tx) = tx {
             let _ = tx.send(heard);
@@ -93,8 +97,9 @@ impl VoiceMic {
     }
 
     /// Listen for the next turn. Messages arrive on the returned channel until
-    /// a turn, a pause or a lost mic ends the listen.
-    pub fn listen(&self) -> Receiver<Heard> {
+    /// a turn, a pause or a lost mic ends the listen. With a `tap`, a copy of
+    /// every block heard goes there too, until the listen ends.
+    pub fn listen(&self, tap: Option<Sender<Vec<i16>>>) -> Receiver<Heard> {
         let (tx, rx) = mpsc::channel();
         let lost = self
             .shared
@@ -107,6 +112,7 @@ impl VoiceMic {
             return rx;
         }
         self.shared.finish.store(false, Ordering::SeqCst);
+        *self.shared.tap.lock().unwrap_or_else(|e| e.into_inner()) = tap;
         *self.shared.out.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
         self.shared.armed.store(true, Ordering::SeqCst);
         rx
@@ -121,6 +127,33 @@ impl VoiceMic {
     pub fn finish(&self) {
         self.shared.finish.store(true, Ordering::SeqCst);
     }
+
+    /// A handle that can end the current turn from another thread (the
+    /// stream's Smart Turn decided the person is done).
+    pub fn finisher(&self) -> MicFinisher {
+        MicFinisher(self.shared.clone())
+    }
+}
+
+/// Ends the mic's current turn; see [`VoiceMic::finisher`].
+#[derive(Clone)]
+pub struct MicFinisher(Arc<Shared>);
+
+impl MicFinisher {
+    pub fn finish(&self) {
+        self.0.finish.store(true, Ordering::SeqCst);
+    }
+
+    /// One tied to no mic, and whether it was asked to finish.
+    #[cfg(test)]
+    pub fn detached() -> Self {
+        Self(Arc::default())
+    }
+
+    #[cfg(test)]
+    pub fn asked(&self) -> bool {
+        self.0.finish.load(Ordering::SeqCst)
+    }
 }
 
 impl Drop for VoiceMic {
@@ -129,6 +162,11 @@ impl Drop for VoiceMic {
         self.shared.armed.store(false, Ordering::SeqCst);
         self.shared
             .out
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        self.shared
+            .tap
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .take();
@@ -240,6 +278,14 @@ fn step(shared: &Shared, det: &mut TurnDetector, was_armed: &mut bool, block: &[
         // A fresh listen: the room's noise floor carries over, the turn doesn't.
         det.clear();
         *was_armed = true;
+    }
+    if let Some(tap) = shared
+        .tap
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+    {
+        let _ = tap.send(block.to_vec());
     }
     if shared.finish.swap(false, Ordering::SeqCst) {
         det.push(block);
@@ -376,6 +422,29 @@ mod tests {
     }
 
     #[test]
+    fn the_stream_gets_every_block_of_the_listen_and_hears_when_it_ends() {
+        let shared = Shared::default();
+        let mut det = TurnDetector::new();
+        let mut armed = false;
+        let (tap, copies) = mpsc::channel();
+        // Before the listen: nothing is copied.
+        feed(&shared, &mut det, &mut armed, &tone(500, 9000.0));
+        *shared.tap.lock().unwrap() = Some(tap);
+        let rx = listen(&shared);
+        let mut audio = hush(500);
+        audio.extend(tone(1500, 9000.0));
+        audio.extend(hush(2500));
+        feed(&shared, &mut det, &mut armed, &audio);
+        assert!(matches!(drain(&rx).last(), Some(Heard::Turn(_))));
+        let copied: usize = copies.try_iter().map(|b| b.len()).sum();
+        assert!(copied > 0 && copied <= audio.len(), "{copied}");
+        assert!(
+            copies.recv().is_err(),
+            "the copy channel closes with the turn, so the stream finalizes"
+        );
+    }
+
+    #[test]
     fn a_quiet_minute_checks_in_then_pauses() {
         let shared = Shared::default();
         let mut det = TurnDetector::new();
@@ -408,6 +477,6 @@ mod tests {
         let mic = VoiceMic {
             shared: shared.clone(),
         };
-        assert!(matches!(mic.listen().try_recv(), Ok(Heard::Lost(_))));
+        assert!(matches!(mic.listen(None).try_recv(), Ok(Heard::Lost(_))));
     }
 }

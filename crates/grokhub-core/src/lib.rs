@@ -184,6 +184,7 @@ pub mod steam;
 pub mod steam_achievements;
 pub mod steam_wishlist;
 pub mod stream;
+pub mod stt_stream;
 pub mod systems_brief;
 pub mod talk;
 pub mod task;

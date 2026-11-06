@@ -43,6 +43,7 @@ mod skills;
 mod spoken;
 mod startup;
 mod store;
+mod stt_stream;
 mod theme;
 mod threads;
 mod titlebar;
