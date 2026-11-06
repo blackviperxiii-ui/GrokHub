@@ -986,10 +986,6 @@ pub struct Cabin {
     composer_ghost: ghost::ComposerGhost,
     /// U7f: egui_dock layout when `cfg.dock_panels` is on (persisted in dock.json).
     dock_state: egui_dock::DockState<dock_ui::DockTab>,
-    /// In-app toasts (egui-notify) for Saved / finished / error status.
-    toasts: egui_notify::Toasts,
-    /// Last `status` already mirrored into `toasts` (dedupe).
-    status_toasted: status_toasts::StatusToastState,
     /// Activity Dock (running / waiting / recent), titlebar chrome.
     activity: activity_dock::DockState,
     /// Labs Diagnostics: the preview waiting for Save, and the last zip.
@@ -1574,8 +1570,6 @@ impl Cabin {
             composer_geom: None,
             composer_ghost: ghost::ComposerGhost::default(),
             dock_state: dock_ui::load_dock_state(),
-            toasts: status_toasts::cabin_toasts(),
-            status_toasted: Default::default(),
             activity: Default::default(),
             diagnostics: Default::default(),
             home_layout: home::ensure_home_layout(&crate::config::config_dir()),
@@ -2071,8 +2065,6 @@ impl Cabin {
             composer_geom: None,
             composer_ghost: ghost::ComposerGhost::default(),
             dock_state: dock_ui::default_dock_state(),
-            toasts: status_toasts::cabin_toasts(),
-            status_toasted: Default::default(),
             activity: Default::default(),
             diagnostics: Default::default(),
             home_layout: grokhub_core::home::HomeLayout::default(),
@@ -5257,11 +5249,9 @@ impl eframe::App for Cabin {
         }
         #[cfg(feature = "fx")]
         {
-            let glow_line = crate::fx::on_frame();
-            if self.status.is_empty() {
-                if let Some(line) = glow_line {
-                    self.status = line.to_string();
-                }
+            // The GPU fallback line pings the OS once; the bell keeps it.
+            if let Some(line) = crate::fx::on_frame() {
+                self.notify(notices::NoticeKind::Info, line.to_string(), None);
             }
         }
         self.poll_job();
@@ -5576,9 +5566,7 @@ impl eframe::App for Cabin {
                 });
         }
         self.sync_idea_card_actions();
-        status_toasts::sync_status_toasts(&mut self.toasts, &mut self.status_toasted, &self.status);
         self.mirror_status_notice();
-        self.toasts.show(&ctx);
         // The pass after this one grabs the hotkeys in `logic`, which runs
         // even while the window is covered or minimized.
         #[cfg(not(test))]

@@ -347,10 +347,7 @@ impl Cabin {
         w.logging = Some(on);
         if !on && !w.nudged {
             w.nudged = true;
-            self.toasts
-                .info(LOG_NUDGE)
-                .duration(Some(std::time::Duration::from_secs(20)))
-                .closable(true);
+            self.notify(super::notices::NoticeKind::Info, LOG_NUDGE.into(), None);
         }
     }
 

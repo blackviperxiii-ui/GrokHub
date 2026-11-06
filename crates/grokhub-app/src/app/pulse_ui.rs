@@ -1016,8 +1016,12 @@ impl Cabin {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .take(&ask);
-        if sent && !cfg!(test) {
-            crate::notify::ping(grokhub_core::brand::product_name(), line);
+        if sent {
+            // Whatever pings the OS is kept in the bell too.
+            self.notify(super::notices::NoticeKind::Info, line.to_string(), None);
+            if !cfg!(test) {
+                crate::notify::ping(grokhub_core::brand::product_name(), line);
+            }
         }
         sent
     }
