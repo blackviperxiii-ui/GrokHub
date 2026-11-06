@@ -24,11 +24,20 @@ import { Home, NO_STEPS, grouped, pollSecs, staleLabel } from "./Home";
 
 const XP: Xp = {
   level: 3,
+  title: "Rookie",
   xp: 1240,
   nextLevelXp: 1500,
   frac: 0.48,
   today: 110,
-  streak: [false, true, false, false, true, false, true],
+  week: {
+    days: [false, true, false, false, true, false, true],
+    today: 6,
+    active: 3,
+    target: 4,
+    inARow: 5,
+    played: 7,
+    freezes: 2,
+  },
 };
 
 function view(over: Partial<TileView>): TileView {
@@ -187,7 +196,7 @@ describe("Home", () => {
     expect(within(objectives).getByText("Read the logs")).toHaveClass("done");
     expect(within(objectives).getByText("Restart the service")).not.toHaveClass("done");
     expect(within(objectives).queryByText("Skip it")).toBeNull();
-    expect(objectives).toHaveTextContent("Lvl 3");
+    expect(objectives).toHaveTextContent("Lvl 3 · Rookie");
     expect(objectives).toHaveTextContent("1,240 XP");
 
     expect(within(tile("Recent Chats")).getByRole("button", { name: "Untitled chat" })).toBeInTheDocument();
@@ -381,7 +390,7 @@ describe("Home", () => {
     expect(go.onOpen).toHaveBeenLastCalledWith("connectors");
   });
 
-  it("an empty checklist asks for a plan, and the streak tile counts its days", async () => {
+  it("an empty checklist asks for a plan, and the streak tile shows weeks in a row", async () => {
     api.getHome.mockResolvedValue({
       ...PAGE,
       xpBar: false,
@@ -394,7 +403,9 @@ describe("Home", () => {
     const go = routes();
     render(<Home {...go} remote={false} />);
     expect(await screen.findByText(NO_STEPS)).toBeInTheDocument();
-    expect(tile("Streak & XP")).toHaveTextContent("3 DAYS");
+    expect(tile("Streak & XP")).toHaveTextContent("Weeks in a row5");
+    expect(tile("Streak & XP")).toHaveTextContent("This week: 3 of 4 days");
+    expect(tile("Streak & XP")).toHaveTextContent("Lvl 3 · Rookie");
     // xp_bar off in the layout: no bar over the grid.
     expect(screen.queryByText("1,240 / 1,500 XP")).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Open Personality settings" }));

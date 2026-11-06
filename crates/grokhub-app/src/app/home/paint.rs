@@ -10,8 +10,8 @@ use grokhub_core::home::{
 use grokhub_core::mission::MissionView;
 
 use super::super::loadout_home::{
-    caption, header, objective_progress, pc_profile, pc_reading, pc_tile_grid, pc_tile_list,
-    pulse_lines,
+    caption, header, objective_progress, paint_weeks, pc_profile, pc_reading, pc_tile_grid,
+    pc_tile_list, pulse_lines,
 };
 use super::super::mission_page::{paint_streak, up_next, up_next_tile};
 use super::super::*;
@@ -228,20 +228,6 @@ fn paint_tile_text(ui: &mut egui::Ui, t: &TileText, size: ModuleSize) {
     }
 }
 
-/// Shown under empty streak tiles so seven grey boxes explain themselves.
-const STREAK_EMPTY: &str = "Finish an objective today to start your streak.";
-
-fn streak_hint(ui: &mut egui::Ui, days: usize) {
-    if days == 0 {
-        ui.add_space(4.0);
-        ui.label(
-            RichText::new(STREAK_EMPTY)
-                .size(crate::theme::TYPE_CAPTION)
-                .color(crate::theme::muted()),
-        );
-    }
-}
-
 fn coming_soon_card(ui: &mut egui::Ui, name: &str, detail: &str) {
     card(ui, |ui| {
         header(ui, false, name, "SOON", crate::theme::muted());
@@ -320,8 +306,7 @@ fn paint_objectives(
     actions: &mut Vec<ModuleAction>,
 ) {
     let mission = cabin.dock_mission(ui.ctx());
-    let now = now_ms();
-    let streak = cabin.mission_streak(ui.ctx(), now);
+    let week = cabin.dock_xp(ui.ctx()).week;
     card(ui, |ui| {
         let items = mission.as_ref().map_or(&[][..], |m| &m.checklist[..]);
         let (done, total) = objective_progress(items);
@@ -369,22 +354,7 @@ fn paint_objectives(
                 ui.add_space(8.0);
                 ui.separator();
                 ui.add_space(4.0);
-                let days = streak.iter().filter(|d| **d).count();
-                ui.horizontal(|ui| {
-                    ui.label(caption("Weekly streak"));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let unit = if days == 1 { "DAY" } else { "DAYS" };
-                        ui.label(
-                            RichText::new(format!("{days} {unit}"))
-                                .size(crate::theme::TYPE_CAPTION)
-                                .extra_letter_spacing(1.5)
-                                .strong()
-                                .color(crate::theme::amber()),
-                        );
-                    });
-                });
-                paint_streak(ui, &streak);
-                streak_hint(ui, days);
+                paint_weeks(ui, &week);
             }
         }
     });
@@ -578,25 +548,23 @@ fn paint_pc_loadout(ui: &mut egui::Ui, size: ModuleSize, actions: &mut Vec<Modul
 }
 
 fn paint_streak_mod(cabin: &mut Cabin, ui: &mut egui::Ui, size: ModuleSize) {
-    let now = now_ms();
-    let streak = cabin.mission_streak(ui.ctx(), now);
-    let days = streak.iter().filter(|d| **d).count();
+    let week = cabin.dock_xp(ui.ctx()).week;
     card(ui, |ui| {
-        header(ui, false, "Streak", "", crate::theme::amber());
+        header(ui, false, "Weeks in a row", "", crate::theme::amber());
         ui.label(
-            RichText::new(format!("{days}"))
+            RichText::new(week.in_a_row.to_string())
                 .size(crate::theme::TYPE_TITLE)
                 .strong()
                 .color(crate::theme::fg()),
         );
         ui.label(
-            RichText::new(if days == 1 { "DAY" } else { "DAYS" })
+            RichText::new(grokhub_core::xp::week_target_line(&week))
                 .size(crate::theme::TYPE_CAPTION)
                 .color(crate::theme::muted()),
         );
         if size != ModuleSize::Small {
-            paint_streak(ui, &streak);
-            streak_hint(ui, days);
+            ui.add_space(4.0);
+            paint_streak(ui, &week);
         }
     });
 }

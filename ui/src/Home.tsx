@@ -14,6 +14,7 @@ import {
   type SlotSize,
   type TileAction,
   type TileView,
+  type WeekView,
   type Xp,
 } from "./api";
 import { ChipRow, useChipRow } from "./Chips";
@@ -36,13 +37,15 @@ export function grouped(n: number): string {
   return n.toLocaleString("en-US");
 }
 
-/** "Lvl 3" and "1,240 XP" over a bar filled to the level's progress. */
+/** "Lvl 3 · Rookie" and "1,240 XP" over a bar filled to the level's progress. */
 export function XpBar({ xp, full }: { xp: Xp; full?: boolean }) {
   const pct = Math.round(Math.min(1, Math.max(0, xp.frac)) * 100);
   return (
     <div className="xp-bar">
       <div className="xp-line">
-        <span className="xp-level">Lvl {xp.level}</span>
+        <span className="xp-level">
+          Lvl {xp.level} · {xp.title}
+        </span>
         <span className="xp-amount">
           {full ? `${grouped(xp.xp)} / ${grouped(xp.nextLevelXp)} XP` : `${grouped(xp.xp)} XP`}
         </span>
@@ -62,22 +65,26 @@ export function XpBar({ xp, full }: { xp: Xp; full?: boolean }) {
   );
 }
 
-/** Seven boxes, today last: filled for a day that finished a task. */
-export function Streak({ days }: { days: boolean[] }) {
-  const count = days.filter(Boolean).length;
+/** "This week: 2 of 3 days", as the cabin writes it. */
+export function weekTargetLine(w: WeekView): string {
+  return `This week: ${Math.min(w.active, w.target)} of ${w.target} ${w.target === 1 ? "day" : "days"}`;
+}
+
+/** Weeks in a row over this week's seven boxes, Monday first: filled for a
+ * day with XP, dashed for today until it has some. */
+export function Weeks({ week }: { week: WeekView }) {
   return (
     <div className="home-streak">
       <div className="xp-line">
-        <span className="xp-level">Weekly streak</span>
-        <span className="xp-amount">
-          {count} {count === 1 ? "DAY" : "DAYS"}
-        </span>
+        <span className="xp-level">Weeks in a row</span>
+        <span className="xp-amount">{week.inARow}</span>
       </div>
-      <ol className="streak-days" aria-label={`${count} of the last 7 days finished a task`}>
-        {days.map((on, i) => (
-          <li key={i} className={on ? "on" : i === days.length - 1 ? "today" : ""} />
+      <ol className="streak-days" aria-label={`${week.active} days with XP this week`}>
+        {week.days.map((on, i) => (
+          <li key={i} className={on ? "on" : i === week.today ? "today" : ""} />
         ))}
       </ol>
+      <span className="home-muted">{weekTargetLine(week)}</span>
     </div>
   );
 }
@@ -305,7 +312,7 @@ function body(tile: HomeTile, slot: HomeSlot, go: HomeRoutes, remote: boolean, r
       return (
         <Go label="Open Objectives" onClick={() => go.onOpen("objectives")}>
           <XpBar xp={tile.xp} />
-          <Streak days={tile.xp.streak} />
+          <Weeks week={tile.xp.week} />
         </Go>
       );
     case "recentChats":

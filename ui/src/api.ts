@@ -1162,15 +1162,33 @@ export interface Mission {
   accepted: boolean;
 }
 
+/** This week on the local clock, Monday first. */
+export interface WeekView {
+  /** Monday to Sunday: true for a day with any XP. */
+  days: boolean[];
+  /** Today's place in `days`. */
+  today: number;
+  /** Days with XP so far this week. */
+  active: number;
+  /** Active days the week asks for, tuned from the weeks before. */
+  target: number;
+  inARow: number;
+  /** Weeks with any XP, ever. */
+  played: number;
+  freezes: number;
+}
+
 export interface Xp {
   level: number;
+  /** "Rookie", "Grinder" and so on, a new one every five levels. */
+  title: string;
   xp: number;
+  /** Total XP at which the next level starts. */
   nextLevelXp: number;
   /** Progress into the level, 0 to 1. */
   frac: number;
   today: number;
-  /** The last seven days, today last: true when a task finished. */
-  streak: boolean[];
+  week: WeekView;
 }
 
 export interface MissionPage {

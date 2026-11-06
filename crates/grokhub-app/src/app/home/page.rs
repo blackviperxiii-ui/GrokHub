@@ -2,9 +2,7 @@
 
 use grokhub_core::home::{place_slots, GAP};
 
-use super::super::loadout_home::{
-    caption, grouped, level_xp, objective_progress, xp_hover, XP_PER_LEVEL,
-};
+use super::super::loadout_home::{caption, paint_level_bar};
 use super::super::mission_page::{day_caption, greeting};
 use super::super::*;
 use super::edit::HomeEditDraft;
@@ -29,11 +27,7 @@ impl Cabin {
             .inner_margin(egui::Margin::same(PAGE_PAD as i8))
             .show(ui, |ui| {
                 ui.set_min_size(ui.available_size());
-                let mission = self.dock_mission(ui.ctx());
-                let done = mission
-                    .as_ref()
-                    .map_or(0, |m| objective_progress(&m.checklist).0);
-                self.home_header(ui, done);
+                self.home_header(ui);
                 ui.add_space(GAP);
                 let w = ui.available_width();
                 let compose_id = egui::Id::new(COMPOSE_H_ID);
@@ -154,7 +148,7 @@ impl Cabin {
         }
     }
 
-    fn home_header(&mut self, ui: &mut egui::Ui, done: usize) {
+    fn home_header(&mut self, ui: &mut egui::Ui) {
         let name = greeting_name(
             &self.greeting_user_md,
             self.secrets
@@ -180,42 +174,14 @@ impl Cabin {
                 );
             });
             if show_xp {
-                let xp_tally = self.dock_xp(ui.ctx());
-                let (level, xp, frac) = level_xp(xp_tally, done);
+                let xp = self.dock_xp(ui.ctx());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                     ui.allocate_ui_with_layout(
                         egui::vec2(280.0_f32.min(ui.available_width()), 48.0),
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
                             ui.add_space(14.0);
-                            ui.horizontal(|ui| {
-                                ui.label(caption(&format!("Lvl {level}")));
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        ui.label(
-                                            RichText::new(format!(
-                                                "{} / {} XP",
-                                                grouped(xp),
-                                                grouped(level * XP_PER_LEVEL)
-                                            ))
-                                            .size(crate::theme::TYPE_CAPTION)
-                                            .extra_letter_spacing(1.0)
-                                            .strong()
-                                            .color(crate::theme::amber()),
-                                        );
-                                    },
-                                );
-                            });
-                            let (bar, bar_resp) = ui.allocate_exact_size(
-                                egui::vec2(ui.available_width(), 6.0),
-                                egui::Sense::hover(),
-                            );
-                            bar_resp.on_hover_text(xp_hover(xp_tally));
-                            ui.painter().rect_filled(bar, 3.0, crate::theme::selected());
-                            let mut fill = bar;
-                            fill.set_width(bar.width() * frac);
-                            ui.painter().rect_filled(fill, 3.0, crate::theme::amber());
+                            paint_level_bar(ui, &xp, true);
                         },
                     );
                 });
