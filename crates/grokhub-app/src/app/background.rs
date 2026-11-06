@@ -611,6 +611,15 @@ impl Cabin {
                 BgEnd::Failed(_) => "Background task failed",
                 BgEnd::Stopped => "Background task stopped",
             };
+            // The bell keeps every finished task, the same words the OS ping says.
+            if end != BgEnd::Stopped {
+                let kind = if matches!(end, BgEnd::Failed(_)) {
+                    super::notices::NoticeKind::Error
+                } else {
+                    super::notices::NoticeKind::Success
+                };
+                self.notify(kind, format!("{head} · {}", run.title), None);
+            }
             if run.thread_id == vis {
                 self.status = format!("{head} · {}", run.title);
             }

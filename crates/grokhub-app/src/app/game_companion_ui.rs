@@ -206,6 +206,8 @@ impl Cabin {
         let card = companion.companion_card(now_ms());
         if self.cfg.game_companion_ping && !self.window_focused && !self.quiet_now() {
             crate::notify::ping(&card.title, card.body.as_deref().unwrap_or_default());
+            // Whatever pings the OS is kept in the bell too.
+            self.notify(super::notices::NoticeKind::Info, card.title.clone(), None);
         }
         // One card per game: the latest launch replaces the last one.
         self.updates.retain(|c| c.source_id != card.source_id);
