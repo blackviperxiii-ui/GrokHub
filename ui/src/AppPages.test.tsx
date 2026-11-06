@@ -24,6 +24,8 @@ const api = vi.hoisted(() => ({
 vi.mock("./api", () => ({
   // No chat saved from an earlier launch.
   getLastChat: () => Promise.resolve(null),
+  quickChips: () => Promise.resolve([]),
+  chipOutcome: () => Promise.resolve(true),
   loadChat: vi.fn(),
   CORE_ONLY: api.CORE_ONLY,
   getCapabilities: api.getCapabilities,

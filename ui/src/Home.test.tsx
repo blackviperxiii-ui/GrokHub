@@ -2,10 +2,13 @@ import "@testing-library/jest-dom/vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { HomePage, HomeSlot, Xp } from "./api";
+import type { HomePage, HomeSlot, PulseAct, PulsePage, QuickChip, Xp } from "./api";
 
 const api = vi.hoisted(() => ({
   getHome: vi.fn<(conversationId?: string) => Promise<HomePage>>(),
+  pulseAct: vi.fn<(id: string, act: PulseAct) => Promise<PulsePage>>(),
+  quickChips: vi.fn<(surface: string) => Promise<QuickChip[]>>(),
+  chipOutcome: vi.fn<(surface: string, id: string, picked: boolean) => Promise<boolean>>(),
 }));
 
 vi.mock("./api", () => api);
@@ -116,6 +119,9 @@ const tile = (name: string) => screen.getByRole("listitem", { name });
 describe("Home", () => {
   beforeEach(() => {
     api.getHome.mockReset();
+    api.pulseAct.mockReset().mockResolvedValue({} as PulsePage);
+    api.quickChips.mockReset().mockResolvedValue([]);
+    api.chipOutcome.mockReset().mockResolvedValue(true);
   });
 
   it("renders the layout's tiles in order from the fixture", async () => {
@@ -186,6 +192,7 @@ describe("Home", () => {
     expect(go.onOpenChat).toHaveBeenCalledWith("shell-a");
     await userEvent.click(screen.getByRole("button", { name: "I can tidy your downloads" }));
     expect(go.onAsk).toHaveBeenCalledWith("tidy my downloads folder");
+    expect(api.pulseAct).toHaveBeenCalledWith("i1", "accept");
     await userEvent.click(screen.getByRole("button", { name: /^Memory/ }));
     expect(go.onOpen).toHaveBeenLastCalledWith("memory");
     await userEvent.click(screen.getByRole("button", { name: /^Connectors/ }));
@@ -210,6 +217,23 @@ describe("Home", () => {
     expect(screen.queryByText("1,240 / 1,500 XP")).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Open Personality settings" }));
     expect(go.onSettings).toHaveBeenCalledWith("personality");
+  });
+
+  it("Home's chip row fills the box or opens a page, and teaches what was picked", async () => {
+    api.getHome.mockResolvedValue(PAGE);
+    api.quickChips.mockResolvedValue([
+      { id: "pred-1", label: "Plan my day", value: "Plan my day", action: "ask", hint: "You often start here", primary: true },
+      { id: "nav-1", label: "Automations", value: "__nav:night", action: "go", hint: "", primary: false, view: "automations" },
+    ]);
+    const go = routes();
+    render(<Home {...go} remote={false} />);
+    const row = await screen.findByRole("group", { name: "Suggestions" });
+    expect(api.quickChips).toHaveBeenCalledWith("home", undefined, "", undefined);
+    await userEvent.click(within(row).getByRole("button", { name: "Plan my day" }));
+    expect(go.onAsk).toHaveBeenCalledWith("Plan my day");
+    expect(api.chipOutcome).toHaveBeenCalledWith("home", "pred-1", true);
+    await userEvent.click(await screen.findByRole("button", { name: "Automations" }));
+    expect(go.onOpen).toHaveBeenCalledWith("automations");
   });
 
   it("says why when Home can't load", async () => {

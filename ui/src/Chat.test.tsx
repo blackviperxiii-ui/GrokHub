@@ -8,6 +8,7 @@ import type {
   ChatEnvelope,
   ChatEvent,
   ElicitAction,
+  QuickChip,
   SessionMode,
   Settings,
   Transcript,
@@ -36,6 +37,8 @@ const api = vi.hoisted(() => ({
   loadChat: vi.fn<(id: string, limit?: number) => Promise<Transcript>>(),
   slashHits: vi.fn(() => Promise.resolve([])),
   runSlash: vi.fn(),
+  quickChips: vi.fn<(surface: string, id?: string, draft?: string, mode?: SessionMode) => Promise<QuickChip[]>>(),
+  chipOutcome: vi.fn<(surface: string, id: string, picked: boolean) => Promise<boolean>>(),
 }));
 
 vi.mock("./api", () => ({
@@ -52,6 +55,8 @@ vi.mock("./api", () => ({
   loadChat: api.loadChat,
   slashHits: api.slashHits,
   runSlash: api.runSlash,
+  quickChips: api.quickChips,
+  chipOutcome: api.chipOutcome,
   onChatEvent: (handler: (envelope: ChatEnvelope) => void) => {
     api.handler = handler;
     return Promise.resolve(() => {});
@@ -107,6 +112,18 @@ const SETTINGS: Settings = {
   notifications: true,
 };
 
+function chip(id: string, label: string, value: string, over: Partial<QuickChip> = {}): QuickChip {
+  return {
+    id,
+    label,
+    value,
+    action: "ask",
+    hint: id.startsWith("reply-") ? "Suggested in the reply" : "",
+    primary: false,
+    ...over,
+  };
+}
+
 /** Holds sendChat open until `finish` is called, like a turn in flight. */
 function holdTurn() {
   let finish: (stop?: string) => void = () => {};
@@ -140,6 +157,8 @@ describe("Chat", () => {
       fn.mockReset();
     }
     api.getLastChat.mockReset().mockResolvedValue(null);
+    api.quickChips.mockReset().mockResolvedValue([]);
+    api.chipOutcome.mockReset().mockResolvedValue(true);
     api.getSettings.mockReset().mockResolvedValue(SETTINGS);
     api.handler = null;
     api.gap = null;
@@ -207,39 +226,72 @@ describe("Chat", () => {
     await waitFor(() => expect(api.sendChat).toHaveBeenCalledWith(id, "hello", "chat"));
   });
 
-  it("shows at most three suggestions under a reply, and a tap sends one", async () => {
+  it("a reply's follow-ups join the row under the box, and a tap sends one in its reply's mode", async () => {
     let finish = holdTurn();
     render(<Chat onOpenSettings={() => {}} />);
     const id = await startTurn("the build failed");
     emit(id, { kind: "text", text: "TypeError in parse_row." });
-    emit(id, {
-      kind: "suggestions",
-      items: [
-        { label: "Fix the cause", prompt: "Fix the root cause in parse_row." },
-        { label: "Root cause + fix", prompt: "Diagnose the error." },
-        { label: "Add a test", prompt: "Add a test for parse_row." },
-        { label: "Fourth", prompt: "Never shown." },
-      ],
-    });
+    expect(screen.queryByRole("group", { name: "Suggestions" })).toBeNull();
+    api.quickChips.mockResolvedValue([
+      chip("reply-0", "Fix the cause", "Fix the root cause in parse_row.", { mode: "plan" }),
+      chip("reply-1", "Add a test", "Add a test for parse_row."),
+      chip("pred-1", "Explain it", "Explain the error."),
+      chip("pred-2", "Fourth", "Never shown."),
+    ]);
+    emit(id, { kind: "suggestions", items: [] });
     emit(id, { kind: "done", stop: "end_turn" });
     finish();
-    const card = await screen.findByRole("group", { name: "Suggestions" });
-    expect(within(card).getAllByRole("button").map((b) => b.textContent)).toEqual([
-      "Fix the cause",
-      "Root cause + fix",
-      "Add a test",
-    ]);
-    await waitFor(() => expect(within(card).getByRole("button", { name: "Fix the cause" })).toBeEnabled());
-    await userEvent.type(screen.getByLabelText("Message"), "half typed");
+    const row = await screen.findByRole("group", { name: "Suggestions" });
+    expect(api.quickChips).toHaveBeenLastCalledWith("composer", id, "", "chat");
+    const taps = () =>
+      within(row)
+        .getAllByRole("button")
+        .filter((b) => !b.getAttribute("aria-label")?.startsWith("Hide"));
+    expect(taps().map((b) => b.textContent)).toEqual(["Fix the cause", "Add a test", "Explain it"]);
+    expect(taps()[0]).toHaveAttribute("title", "Why this? Suggested in the reply  (Alt+1)");
     finish = holdTurn();
-    await userEvent.click(within(card).getByRole("button", { name: "Fix the cause" }));
+    await userEvent.click(within(row).getByRole("button", { name: "Fix the cause" }));
+    expect(api.chipOutcome).toHaveBeenCalledWith("composer", "reply-0", true);
     await waitFor(() =>
-      expect(api.sendChat).toHaveBeenLastCalledWith(id, "Fix the root cause in parse_row.", "chat"),
+      expect(api.sendChat).toHaveBeenLastCalledWith(id, "Fix the root cause in parse_row.", "plan"),
     );
     expect(screen.getByText("Fix the root cause in parse_row.")).toHaveAttribute("data-role", "user");
     expect(screen.queryByRole("group", { name: "Suggestions" })).toBeNull();
-    expect(screen.getByLabelText("Message")).toHaveValue("half typed");
     finish();
+  });
+
+  it("a chip adds to what is typed, Go opens its page, and × hides one", async () => {
+    const onOpenView = vi.fn();
+    api.quickChips.mockResolvedValue([
+      chip("pred-1", "Explain it", "Explain the error."),
+      { ...chip("nav-1", "Automations", "__nav:night"), action: "go", view: "automations" },
+    ]);
+    render(<Chat onOpenSettings={() => {}} onOpenView={onOpenView} />);
+    const row = await screen.findByRole("group", { name: "Suggestions" });
+    await userEvent.type(screen.getByLabelText("Message"), "half typed");
+    await userEvent.click(within(row).getByRole("button", { name: "Explain it" }));
+    expect(screen.getByLabelText("Message")).toHaveValue("half typed Explain the error.");
+    expect(api.sendChat).not.toHaveBeenCalled();
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Automations" })).toBeVisible());
+    await userEvent.click(screen.getByRole("button", { name: "Automations" }));
+    expect(onOpenView).toHaveBeenCalledWith("automations");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Hide Explain it" }));
+    expect(api.chipOutcome).toHaveBeenLastCalledWith("composer", "pred-1", false);
+  });
+
+  it("Alt+2 taps the second chip", async () => {
+    const onOpenView = vi.fn();
+    api.quickChips.mockResolvedValue([
+      chip("pred-1", "Explain it", "Explain the error."),
+      { ...chip("nav-1", "Automations", "__nav:night"), action: "go", view: "automations" },
+    ]);
+    render(<Chat onOpenSettings={() => {}} onOpenView={onOpenView} />);
+    await screen.findByRole("group", { name: "Suggestions" });
+    fireEvent.keyDown(window, { key: "™", code: "Digit2", altKey: true });
+    expect(onOpenView).toHaveBeenCalledWith("automations");
+    expect(api.chipOutcome).toHaveBeenCalledWith("composer", "nav-1", true);
   });
 
   it("posts a notice when an automation finishes, with a one-tap follow-up", async () => {
@@ -278,12 +330,11 @@ describe("Chat", () => {
     expect(api.sendChat).not.toHaveBeenCalled();
   });
 
-  it("a reply without suggestions shows no suggestion card", async () => {
+  it("a reply without follow-ups and an empty row show no chips", async () => {
     const finish = holdTurn();
     render(<Chat onOpenSettings={() => {}} />);
     const id = await startTurn("list the files");
     emit(id, { kind: "text", text: "There are 12 files." });
-    emit(id, { kind: "suggestions", items: [] });
     emit(id, { kind: "done", stop: "end_turn" });
     finish();
     await waitFor(() => expect(screen.getByLabelText("Message")).toBeEnabled());

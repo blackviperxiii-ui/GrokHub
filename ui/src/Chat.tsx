@@ -32,9 +32,10 @@ import {
   type Settings,
   type SlashEffect,
   type SlashHit,
-  type Suggestion,
+  type QuickChip,
   type Transcript,
 } from "./api";
+import { ChipRow, useChipRow } from "./Chips";
 import { ATTACH_MAX, AttachButton, AttachChips, useAttachments } from "./AttachChips";
 import {
   type Cut,
@@ -46,6 +47,7 @@ import {
   withoutCut,
 } from "./DeleteMessage";
 import type { RunNotice } from "./Automations";
+import type { View } from "./Palette";
 import { Markdown } from "./Markdown";
 import { displayText } from "./md";
 import { appendDraft, Mic } from "./Mic";
@@ -54,7 +56,6 @@ import { NyxDock } from "./NyxDock";
 import { NyxFace } from "./NyxFace";
 import { activityOf, useNyx } from "./nyx";
 import { PRODUCT_NAME } from "./brand";
-import { onArrowFocus, usePeek } from "./peek";
 import { isSlashCommand, SlashMenu, useSlashHits } from "./SlashMenu";
 import { needsSettings } from "./ui";
 
@@ -72,7 +73,6 @@ export type Item =
        * "halted": Halt stopped it. */
       answer: Answer | Ended | null;
     }
-  | { kind: "suggest"; items: Suggestion[] }
   /** A saved chat's tool steps, named on one muted line instead of cards. */
   | { kind: "tools"; text: string }
   | ({ kind: "notice" } & RunNotice)
@@ -90,42 +90,6 @@ export const HALTED_LINE = "Halted. This reply stopped, and nothing more ran.";
 
 /** How much of a run's reply its notice shows; Automations has the rest. */
 export const NOTICE_CHARS = 280;
-
-/** At most this many follow-ups show under a reply. */
-export const SUGGESTIONS_MAX = 3;
-
-/** The next steps under a reply: one row that scrolls sideways when it runs
- * out of room, with the next chip peeking in. Left and Right move along it. */
-function SuggestRow({
-  items,
-  busy,
-  onPick,
-}: {
-  items: Suggestion[];
-  busy: boolean;
-  onPick: (prompt: string) => void;
-}) {
-  const row = useRef<HTMLDivElement>(null);
-  usePeek(row, "x", items.length);
-  return (
-    <div className="card suggest" role="group" aria-label="Suggestions">
-      <div ref={row} className="card-buttons" onKeyDown={(e) => onArrowFocus(e, "x")}>
-        {items.map((s) => (
-          <button
-            key={s.label}
-            type="button"
-            className="quiet"
-            title={s.prompt}
-            disabled={busy}
-            onClick={() => onPick(s.prompt)}
-          >
-            {s.label}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 export interface Prefill {
   text: string;
@@ -222,9 +186,7 @@ export function applyEvent(items: Item[], event: ChatEvent): Item[] {
     // The plan comes again on its approval card; one copy is enough.
     case "elicit":
       return [...items, { ...event, answer: null }];
-    case "suggestions":
-      if (event.items.length === 0) return items;
-      return [...items, { kind: "suggest", items: event.items.slice(0, SUGGESTIONS_MAX) }];
+    // A reply's follow-ups join the chip row under the box (`useChipRow`).
     default:
       return items;
   }
@@ -378,7 +340,6 @@ function LogItem({
   onMenu,
   onAnswer,
   onAnswerCard,
-  onPick,
   onDraft,
   onOpenAutomations,
   nyxUrl,
@@ -391,7 +352,6 @@ function LogItem({
   nyxUrl?: string;
   onAnswer: (id: string, answer: Answer) => void;
   onAnswerCard: (item: ElicitItem, action: ElicitAction, value: string) => void;
-  onPick: (prompt: string) => void;
   onDraft: (text: string) => void;
   onOpenAutomations?: () => void;
 }) {
@@ -483,8 +443,6 @@ function LogItem({
           Tools ran: {item.text}
         </p>
       );
-    case "suggest":
-      return <SuggestRow items={item.items} busy={busy} onPick={onPick} />;
   }
 }
 
@@ -518,8 +476,9 @@ export function Chat({
   /** The signed-out card's button: Settings → Account. */
   onSignIn?: () => void;
   onOpenAutomations?: () => void;
-  /** `/memory`, `/connectors` and the like open their page. */
-  onOpenView?: (view: Extract<SlashEffect, { kind: "open" }>["view"]) => void;
+  /** `/memory`, `/connectors` and the like open their page, and so does a
+   * chip that goes somewhere. */
+  onOpenView?: (view: View) => void;
   prefill?: Prefill;
   notice?: RunNotice & { n: number };
   open?: { id: string; n: number };
@@ -543,6 +502,8 @@ export function Chat({
   const [error, setError] = useState<string | null>(null);
   const busyRef = useRef(false);
   const [mode, setMode] = useState<SessionMode>("chat");
+  /** A reply's follow-ups landed: the chip row is asked for again. */
+  const [followed, setFollowed] = useState(0);
   const [settings, setSettings] = useState<Settings | null>(null);
   const attach = useAttachments(conversationId, { remote, active });
   const slashRows = useSlashHits(draft);
@@ -551,6 +512,15 @@ export function Chat({
   const [slashShut, setSlashShut] = useState<string | null>(null);
   const slashOpen = slashRows.length > 0 && slashShut !== draft;
   const slashPick = Math.min(slashAt, slashRows.length - 1);
+  const row = useChipRow({
+    surface: "composer",
+    conversationId,
+    draft,
+    mode,
+    turn: followed,
+    busy,
+    active,
+  });
   // Nyx's pose follows what the chat does, not each chunk of text.
   const nyx = useNyx(activityOf(items, busy), active);
 
@@ -715,6 +685,7 @@ export function Chat({
       // An event that lands after the turn ended must not reopen it.
       if (id !== conversationId || !busyRef.current) return;
       if (event.kind === "error") setError(event.message);
+      else if (event.kind === "suggestions") setFollowed((n) => n + 1);
       else if (event.kind === "done") setItems(event.stop === HALTED_STOP ? settleHalted : settle);
       else if (event.kind === "text") setItems((now) => applyEvent(now, event));
       // A card is a transition, so the webview can fade it in; text streams as is.
@@ -747,7 +718,7 @@ export function Chat({
   }
 
   /** Sends `text` and `files` in the current mode, or in `as` (`/plan <text>`).
-   * `fromDraft` empties the box and its files; a picked suggestion leaves them. */
+   * `fromDraft` empties the box and its files; a tapped chip leaves them. */
   async function deliver(
     text: string,
     files: typeof attach.files,
@@ -762,8 +733,7 @@ export function Chat({
       return;
     }
     const said = [text, ...files.map((f) => f.label)].filter(Boolean).join("\n");
-    // Suggestions belong to the reply they followed.
-    setItems((now) => [...now.filter((item) => item.kind !== "suggest"), { kind: "user", text: said }]);
+    setItems((now) => [...now, { kind: "user", text: said }]);
     if (fromDraft) {
       setDraft("");
       attach.clear();
@@ -866,23 +836,38 @@ export function Chat({
 
   // Declared after what they call: React Compiler skips a component that
   // calls a function declared further down.
-  /** Sends the draft, or `picked` from a suggestion (the draft stays).
-   * A slash line runs instead of going to the model. */
-  async function send(event?: FormEvent, picked?: string) {
+  /** Sends the draft. A slash line runs instead of going to the model. */
+  async function send(event?: FormEvent) {
     event?.preventDefault();
-    const text = (picked ?? draft).trim();
-    const files = picked === undefined ? attach.files : [];
+    const text = draft.trim();
+    const files = attach.files;
     if ((!text && files.length === 0) || busy) return;
     touched.current = true;
-    if (picked === undefined && isSlashCommand(text)) {
+    if (isSlashCommand(text)) {
       await slash(text);
       return;
     }
-    await deliver(text, files, picked === undefined);
+    await deliver(text, files, true);
   }
 
-  function pick(prompt: string) {
-    void send(undefined, prompt);
+  /** One tap rule per chip (`grokhub_core::ChipAction`): Go opens its page;
+   * Ask sends its text when the box is empty and adds it to what is typed
+   * otherwise. A follow-up puts its reply's mode back first. */
+  function tapChip(chip: QuickChip) {
+    row.picked(chip);
+    if (chip.action === "go") {
+      if (chip.view) onOpenView?.(chip.view as View);
+      return;
+    }
+    const as = chip.mode && chip.mode !== "btw" ? chip.mode : mode;
+    if (as !== mode) setMode(as);
+    if (draft.trim()) {
+      setDraft(appendDraft(draft, chip.value));
+      return;
+    }
+    touched.current = true;
+    if (isSlashCommand(chip.value)) void slash(chip.value);
+    else void deliver(chip.value, [], false, as);
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -966,7 +951,6 @@ export function Chat({
             nyxUrl={nyx?.url}
             onAnswer={answer}
             onAnswerCard={answerCard}
-            onPick={pick}
             onDraft={setDraft}
             onOpenAutomations={onOpenAutomations}
           />
@@ -1051,6 +1035,7 @@ export function Chat({
           New chat
         </button>
       </form>
+      <ChipRow chips={row.chips} busy={busy} keys={active} onTap={tapChip} onHide={row.hide} />
     </section>
   );
 }

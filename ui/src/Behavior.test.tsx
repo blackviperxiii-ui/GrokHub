@@ -10,10 +10,11 @@ const api = vi.hoisted(() => ({
 
 vi.mock("./api", () => api);
 
-import { Behavior, SCHEDULE_NOTE } from "./Behavior";
+import { Behavior, SCHEDULE_NOTE, SUGGESTIONS_NOTE } from "./Behavior";
 
 const OFF: Shape = {
   autocomplete: false,
+  suggestions: true,
   quietStart: "",
   quietEnd: "",
   dailyTokenBudget: 0,
@@ -45,6 +46,17 @@ describe("Behavior", () => {
     expect(screen.getByLabelText("Quiet hours end")).toHaveValue("");
     expect(screen.queryByLabelText("Pause scheduled work over budget")).toBeNull();
     expect(screen.getByText(SCHEDULE_NOTE)).toBeInTheDocument();
+  });
+
+  it("suggestions start on, and turning them off saves at once", async () => {
+    api.saveBehavior.mockResolvedValueOnce(page({ suggestions: false }));
+    render(<Behavior tray />);
+    const toggle = await screen.findByLabelText("Suggestions");
+    expect(toggle).toBeChecked();
+    expect(screen.getByText(SUGGESTIONS_NOTE)).toBeInTheDocument();
+    await userEvent.click(toggle);
+    expect(api.saveBehavior).toHaveBeenLastCalledWith(true, { ...OFF, suggestions: false });
+    expect(await screen.findByLabelText("Suggestions")).not.toBeChecked();
   });
 
   it("each toggle saves at once", async () => {

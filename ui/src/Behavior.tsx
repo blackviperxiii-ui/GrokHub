@@ -5,6 +5,8 @@ import { Toggle } from "./Toggle";
 
 export const AUTOCOMPLETE_NOTE =
   "Muted ghost text finishes your line in the composer; Tab accepts. Saved for this app's composer, which doesn't show it yet.";
+export const SUGGESTIONS_NOTE =
+  "A few next steps to tap, under the box, on Home and after replies. They learn from what you pick.";
 export const QUIET_NOTE = "Leave both empty for no quiet hours.";
 export const SCHEDULE_NOTE = `Quiet hours and the budget are saved for scheduled work in this app. Automations here run only when you choose Run now, so nothing waits on them yet. The ${PRODUCT_NAME} cabin keeps its own quiet hours and budget.`;
 export const PAUSE_NOTE = "Scheduled work waits until tomorrow once today is over budget. Chat still sends.";
@@ -55,6 +57,8 @@ export function Behavior({
             <dd>{loaded.closeToTray ? "On" : "Off"}</dd>
           </>
         )}
+        <dt>Suggestions</dt>
+        <dd>{b.suggestions ? "On" : "Off"}</dd>
         <dt>Sentence autocomplete</dt>
         <dd>{b.autocomplete ? "On" : "Off"}</dd>
         <dt>Quiet hours</dt>
@@ -102,6 +106,10 @@ export function Behavior({
           Closing the window keeps {PRODUCT_NAME} in the tray
         </Toggle>
       )}
+      <Toggle checked={b.suggestions} onChange={(on) => change({ suggestions: on })}>
+        Suggestions
+      </Toggle>
+      <p className="note">{SUGGESTIONS_NOTE}</p>
       <Toggle checked={b.autocomplete} onChange={(on) => change({ autocomplete: on })}>
         Sentence autocomplete
       </Toggle>

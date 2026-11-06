@@ -80,12 +80,17 @@ pub struct ShellSettings {
 }
 
 /// Settings → Behavior: the composer and the limits on scheduled work.
-/// Everything starts off, and empty quiet hours are none.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// Everything but Suggestions starts off, and empty quiet hours are none.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Behavior {
     /// Sentence autocomplete in the composer.
     pub autocomplete: bool,
+    /// A few next steps to tap, under the box, on Home and after replies.
+    /// On until the person turns it off; off, no chip shows and the reply's
+    /// chips block leaves the chat's rules.
+    #[serde(default = "on")]
+    pub suggestions: bool,
     /// Quiet hours for automations, as `HH:MM`. Both empty is none.
     pub quiet_start: String,
     pub quiet_end: String,
@@ -93,6 +98,23 @@ pub struct Behavior {
     pub daily_token_budget: u64,
     /// Pause scheduled work over the daily budget.
     pub pause_over_budget: bool,
+}
+
+fn on() -> bool {
+    true
+}
+
+impl Default for Behavior {
+    fn default() -> Self {
+        Self {
+            autocomplete: false,
+            suggestions: true,
+            quiet_start: String::new(),
+            quiet_end: String::new(),
+            daily_token_budget: 0,
+            pause_over_budget: false,
+        }
+    }
 }
 
 impl Behavior {
@@ -144,6 +166,10 @@ fn lenient_behavior<'de, D: Deserializer<'de>>(d: D) -> Result<Behavior, D::Erro
         quiet_hours(text("quietStart"), text("quietEnd")).unwrap_or_default();
     Ok(Behavior {
         autocomplete: flag("autocomplete"),
+        suggestions: raw
+            .get("suggestions")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
         quiet_start,
         quiet_end,
         daily_token_budget: raw
@@ -320,6 +346,8 @@ mod tests {
             last_chat: "shell-abc-123".into(),
             behavior: Behavior {
                 autocomplete: true,
+                // Off round-trips, though a missing value reads as on.
+                suggestions: false,
                 quiet_start: "22:00".into(),
                 quiet_end: "07:00".into(),
                 daily_token_budget: 1_000_000,
@@ -439,13 +467,14 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("dir");
         std::fs::write(
             path(&dir),
-            r#"{"model":"grok-5","behavior":{"autocomplete":"yes","quietStart":"bedtime","quietEnd":"07:00","dailyTokenBudget":123,"pauseOverBudget":1}}"#,
+            r#"{"model":"grok-5","behavior":{"autocomplete":"yes","suggestions":"nope","quietStart":"bedtime","quietEnd":"07:00","dailyTokenBudget":123,"pauseOverBudget":1}}"#,
         )
         .expect("write");
         assert_eq!(
             load(&dir).behavior,
             Behavior {
                 autocomplete: false,
+                suggestions: true,
                 quiet_start: String::new(),
                 quiet_end: String::new(),
                 daily_token_budget: 0,
@@ -457,13 +486,14 @@ mod tests {
         // One bad field leaves the good ones alone.
         std::fs::write(
             path(&dir),
-            r#"{"behavior":{"autocomplete":true,"quietStart":"23:00","quietEnd":"6:30","dailyTokenBudget":"lots"}}"#,
+            r#"{"behavior":{"autocomplete":true,"suggestions":false,"quietStart":"23:00","quietEnd":"6:30","dailyTokenBudget":"lots"}}"#,
         )
         .expect("write");
         assert_eq!(
             load(&dir).behavior,
             Behavior {
                 autocomplete: true,
+                suggestions: false,
                 quiet_start: "23:00".into(),
                 quiet_end: "06:30".into(),
                 daily_token_budget: 0,

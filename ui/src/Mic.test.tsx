@@ -9,6 +9,8 @@ const api = vi.hoisted(() => ({
 }));
 
 vi.mock("./api", () => ({
+  quickChips: () => Promise.resolve([]),
+  chipOutcome: () => Promise.resolve(true),
   // No chat saved from an earlier launch.
   getLastChat: () => Promise.resolve(null),
   loadChat: vi.fn(),

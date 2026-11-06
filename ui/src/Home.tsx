@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { getHome, type HomePage, type HomeSlot, type HomeTile, type Xp } from "./api";
+import { getHome, pulseAct, type HomePage, type HomeSlot, type HomeTile, type QuickChip, type Xp } from "./api";
+import { ChipRow, useChipRow } from "./Chips";
 import { COMPANION_NAME } from "./brand";
 import { artUrl } from "./nyx";
 import type { View } from "./Palette";
@@ -163,7 +164,15 @@ function body(tile: HomeTile, slot: HomeSlot, go: HomeRoutes, remote: boolean): 
             <span className="home-muted">All quiet. New finds land here.</span>
           )}
           {idea && (
-            <button type="button" className="home-row" onClick={() => go.onAsk(idea.action)}>
+            <button
+              type="button"
+              className="home-row"
+              onClick={() => {
+                // Taking the idea is its accept, as in Pulse; the box still waits on Send.
+                void pulseAct(idea.id, "accept").catch(() => {});
+                go.onAsk(idea.action);
+              }}
+            >
               {idea.title}
             </button>
           )}
@@ -224,6 +233,13 @@ export function Home({
 }: HomeRoutes & { conversationId?: string; remote: boolean }) {
   const [page, setPage] = useState<HomePage | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const row = useChipRow({ surface: "home" });
+
+  function tapChip(chip: QuickChip) {
+    row.picked(chip);
+    if (chip.action === "go" && chip.view) go.onOpen(chip.view as View);
+    else go.onAsk(chip.value);
+  }
 
   useEffect(() => {
     getHome(conversationId).then(
@@ -241,6 +257,7 @@ export function Home({
         <h2>Home</h2>
         {page?.xpBar && <XpBar xp={page.xp} full />}
       </div>
+      <ChipRow chips={row.chips} onTap={tapChip} onHide={row.hide} />
       {note && (
         <p className="note" role="status">
           {note}

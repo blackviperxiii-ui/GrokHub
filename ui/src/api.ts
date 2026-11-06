@@ -91,7 +91,7 @@ export type ChatEvent =
   | { kind: "done"; stop: string }
   | { kind: "plan"; text: string }
   /** One-tap follow-ups for the reply that just ended; most replies get none. */
-  | { kind: "suggestions"; items: Suggestion[] }
+  | { kind: "suggestions"; items: QuickChip[] }
   | {
       kind: "elicit";
       id: string;
@@ -107,8 +107,41 @@ export type ChatEvent =
       options?: ElicitChoice[];
     };
 
-/** A follow-up to send with one tap: `prompt` becomes the next message. */
-export type Suggestion = { label: string; prompt: string };
+/** A quick chip: the cabin's engine picked it for this moment (`chips.rs`).
+ * Ask puts `value` in the box, or sends it when the box is empty; Go opens
+ * `view`. Only these two cross from the shell. */
+export interface QuickChip {
+  id: string;
+  label: string;
+  value: string;
+  action: "ask" | "go";
+  /** Why it is here, for the chip's tip. */
+  hint: string;
+  primary: boolean;
+  view?: string;
+  /** A follow-up's reply mode, put back on tap. */
+  mode?: SessionMode;
+}
+
+/** The composer's row, Home's row and the empty palette's, as the log names them. */
+export type ChipSurface = "composer" | "home" | "palette";
+
+/** The row for the open chat and its draft, or Home's. Empty with Settings →
+ * Behavior → Suggestions off. */
+export function quickChips(
+  surface: ChipSurface,
+  conversationId?: string,
+  draft?: string,
+  mode?: SessionMode,
+): Promise<QuickChip[]> {
+  return invoke<QuickChip[]>("quick_chips", { surface, conversationId, draft, mode, clock: wallClock() });
+}
+
+/** A tap (`picked`) or a hide on a chip of that row; it teaches the ranker.
+ * The page acts on the tap itself. */
+export function chipOutcome(surface: ChipSurface, id: string, picked: boolean): Promise<boolean> {
+  return invoke<boolean>("chip_outcome", { surface, id, picked, clock: wallClock() });
+}
 
 /** One answer on a question card; the label is what gets sent. */
 export type ElicitChoice = { label: string; description: string; recommended: boolean };
@@ -1759,6 +1792,8 @@ export function stopTask(conversationId: string, taskId?: string): Promise<Queue
 /** Settings → Behavior, saved in shell.json. Everything starts off. */
 export interface Behavior {
   autocomplete: boolean;
+  /** A few next steps to tap, under the box, on Home and after replies. */
+  suggestions: boolean;
   /** Quiet hours for automations as HH:MM; both empty is none. */
   quietStart: string;
   quietEnd: string;
