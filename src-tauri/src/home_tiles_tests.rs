@@ -73,3 +73,27 @@ fn connection_and_usage_read_like_the_desktop_app() {
     assert_eq!(u.text.detail.as_deref(), Some("Prompt cache 42% (low)"));
     assert_eq!(usage_from(0.0, None, 80).text.tone, Tone::Quiet);
 }
+
+#[test]
+fn disk_scanning_tiles_are_kept_for_their_refresh_time_only() {
+    let v = storage_view(&[DiskUse {
+        label: "C:".into(),
+        total: 1_000,
+        free: 600,
+    }])
+    .at(NOW);
+    keep("storage", false, &v);
+    assert_eq!(cached("storage", false, NOW + 30_000), Some(v.clone()));
+    assert_eq!(
+        cached("storage", true, NOW + 30_000),
+        None,
+        "web asks keep their own"
+    );
+    assert_eq!(cached("storage", false, NOW + 61_000), None);
+    keep("workboard", false, &v);
+    assert_eq!(
+        cached("workboard", false, NOW),
+        None,
+        "small reads stay fresh"
+    );
+}

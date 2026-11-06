@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HomePage, HomeSlot, PulseAct, PulsePage, QuickChip, TileView, Xp } from "./api";
@@ -15,7 +15,7 @@ const api = vi.hoisted(() => ({
 
 vi.mock("./api", () => api);
 
-import { Home, NO_STEPS, grouped } from "./Home";
+import { Home, NO_STEPS, grouped, pollSecs, staleLabel } from "./Home";
 
 const XP: Xp = {
   level: 3,
@@ -59,7 +59,7 @@ const SQUAD: TileView = view({
 });
 
 function slot(over: Partial<HomeSlot> & Pick<HomeSlot, "slot" | "module" | "name" | "tile">): HomeSlot {
-  return { size: "small", purpose: "", ...over };
+  return { size: "small", purpose: "", refreshSecs: null, ...over };
 }
 
 /** The Mission Control layout with every tile the shell fills, and two it doesn't. */
@@ -316,10 +316,49 @@ describe("Home", () => {
     expect(go.onOpen).toHaveBeenCalledWith("automations");
   });
 
-  it("says why when Home can't load", async () => {
+  it("says why when Home can't load, and tries again on a tap", async () => {
     api.getHome.mockRejectedValue("home_layout.json: no access");
     render(<Home {...routes()} remote />);
-    expect(await screen.findByRole("status")).toHaveTextContent("home_layout.json: no access");
+    const status = await screen.findByRole("status");
+    expect(status).toHaveTextContent("home_layout.json: no access");
+    api.getHome.mockResolvedValue(PAGE);
+    await userEvent.click(within(status).getByRole("button", { name: "Try again" }));
+    expect(await screen.findByRole("listitem", { name: "PC Loadout" })).toBeInTheDocument();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("asks again at its fastest tile's pace and keeps the last read when offline", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      api.getHome.mockResolvedValue({
+        ...PAGE,
+        slots: PAGE.slots.map((s) => (s.module === "pc_loadout" ? { ...s, refreshSecs: 30 } : s)),
+      });
+      render(<Home {...routes()} remote={false} />);
+      await screen.findByRole("listitem", { name: "PC Loadout" });
+      expect(api.getHome).toHaveBeenCalledTimes(1);
+      api.getHome.mockRejectedValue("offline");
+      await vi.advanceTimersByTimeAsync(29_000);
+      expect(api.getHome).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await waitFor(() => expect(api.getHome).toHaveBeenCalledTimes(2));
+      expect(await screen.findByRole("status")).toHaveTextContent("show what Home last read");
+      expect(screen.getByRole("listitem", { name: "PC Loadout" })).toHaveTextContent("RTX 4070");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("polls no faster than ten seconds and marks data past twice its age", () => {
+    const at = (refreshSecs: number | null) => slot({ slot: "small-1", module: "x", name: "X", tile: { kind: "view", view: PC }, refreshSecs });
+    expect(pollSecs([at(2), at(60)])).toBe(10);
+    expect(pollSecs([at(60), at(null)])).toBe(60);
+    expect(pollSecs([at(null)])).toBeNull();
+    const now = 10_000_000;
+    expect(staleLabel(now - 100_000, 60, now)).toBeNull();
+    expect(staleLabel(now - 300_000, 60, now)).toBe("Updated 5 min ago");
+    expect(staleLabel(now - 3 * 3_600_000, 60, now)).toBe("Updated 3 h ago");
+    expect(staleLabel(null, 60, now)).toBeNull();
   });
 
   it("groups XP as the cabin does", () => {

@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   getHome,
   libraryPlay,
@@ -145,18 +145,43 @@ export function runAction(a: TileAction, go: HomeRoutes, remote: boolean, reload
 }
 
 /** Any module in the shared tile model, cut to what its size holds. */
+/** Home asks again no faster than this, whatever its fastest tile. */
+export const MIN_POLL_SECS = 10;
+
+/** Seconds until Home should ask again: its fastest tile's cadence, never
+ * under {@link MIN_POLL_SECS}. `null` when no tile changes on its own. */
+export function pollSecs(slots: HomeSlot[]): number | null {
+  const all = slots.map((s) => s.refreshSecs).filter((n): n is number => typeof n === "number" && n > 0);
+  return all.length === 0 ? null : Math.max(MIN_POLL_SECS, Math.min(...all));
+}
+
+/** "Updated 5 min ago" once a tile's data is past twice its normal age;
+ * `null` while it is fresh. */
+export function staleLabel(updatedMs: number | null, refreshSecs: number | null | undefined, now: number): string | null {
+  if (updatedMs === null || !refreshSecs) return null;
+  const age = now - updatedMs;
+  if (age <= refreshSecs * 2000) return null;
+  const min = Math.floor(age / 60_000);
+  if (min < 1) return "Updated just now";
+  if (min < 60) return `Updated ${min} min ago`;
+  const h = Math.floor(min / 60);
+  return h < 24 ? `Updated ${h} h ago` : `Updated ${Math.floor(h / 24)} d ago`;
+}
+
 function ViewBody({
   view,
   size,
   go,
   remote,
   reload,
+  stale,
 }: {
   view: TileView;
   size: SlotSize;
   go: HomeRoutes;
   remote: boolean;
   reload: () => void;
+  stale: string | null;
 }) {
   const fit = FIT[size];
   const run = (a: TileAction) => runAction(a, go, remote, reload);
@@ -204,6 +229,7 @@ function ViewBody({
           ))}
         </ul>
       )}
+      {stale && <span className="home-muted home-stale">{stale}</span>}
       {buttons.length > 0 && (
         <div className="home-buttons">
           {buttons.map((b) => (
@@ -231,7 +257,7 @@ function Go({ label, onClick, children }: { label: string; onClick: () => void; 
   );
 }
 
-function body(tile: HomeTile, slot: HomeSlot, go: HomeRoutes, remote: boolean, reload: () => void): ReactNode {
+function body(tile: HomeTile, slot: HomeSlot, go: HomeRoutes, remote: boolean, reload: () => void, now: number): ReactNode {
   switch (tile.kind) {
     case "objectives": {
       const steps = tile.mission?.steps.filter((s) => s.status !== "cancelled") ?? [];
@@ -358,7 +384,16 @@ function body(tile: HomeTile, slot: HomeSlot, go: HomeRoutes, remote: boolean, r
     case "error":
       return <span className="home-muted">{tile.message}</span>;
     case "view":
-      return <ViewBody view={tile.view} size={slot.size} go={go} remote={remote} reload={reload} />;
+      return (
+        <ViewBody
+          view={tile.view}
+          size={slot.size}
+          go={go}
+          remote={remote}
+          reload={reload}
+          stale={staleLabel(tile.view.updatedMs, slot.refreshSecs, now)}
+        />
+      );
   }
 }
 
@@ -382,22 +417,56 @@ export function Home({
 
   const [reads, setReads] = useState(0);
   const reload = () => setReads((n) => n + 1);
+  // When the last read was tried, so tiles can say how old their data is.
+  const [now, setNow] = useState(() => Date.now());
+  // Home has shown data before, so a failed read keeps it and says so.
+  const [offline, setOffline] = useState(false);
+  const shown = useRef(false);
 
   useEffect(() => {
     let live = true;
     getHome(conversationId).then(
       (p) => {
         if (!live) return;
+        shown.current = true;
         setPage(p);
         setNote(null);
+        setOffline(false);
+        setNow(Date.now());
       },
-      (err) => live && setNote(String(err)),
+      (err) => {
+        if (!live) return;
+        setNow(Date.now());
+        if (shown.current) setOffline(true);
+        else setNote(String(err));
+      },
     );
     // A slow answer for an older read never overwrites a newer one.
     return () => {
       live = false;
     };
   }, [conversationId, reads]);
+
+  // Ask again at the fastest tile's cadence, only while Home can be seen.
+  const every = page ? pollSecs(page.slots) : null;
+  useEffect(() => {
+    if (every === null) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const arm = () => {
+      clearTimeout(timer);
+      if (document.visibilityState !== "hidden") timer = setTimeout(() => setReads((n) => n + 1), every * 1000);
+    };
+    const onShow = () => {
+      if (document.visibilityState === "hidden") clearTimeout(timer);
+      else setReads((n) => n + 1);
+    };
+    arm();
+    document.addEventListener("visibilitychange", onShow);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onShow);
+    };
+  }, [every, reads]);
 
   return (
     <section className="home" aria-label="Home">
@@ -408,7 +477,18 @@ export function Home({
       <ChipRow chips={row.chips} onTap={tapChip} onHide={row.hide} />
       {note && (
         <p className="note" role="status">
-          {note}
+          {note}{" "}
+          <button type="button" className="quiet" onClick={reload}>
+            Try again
+          </button>
+        </p>
+      )}
+      {offline && (
+        <p className="note" role="status">
+          Can't connect right now, so these tiles show what Home last read.{" "}
+          <button type="button" className="quiet" onClick={reload}>
+            Try again
+          </button>
         </p>
       )}
       {page === null && !note && <p className="empty">Loading Home…</p>}
@@ -425,7 +505,7 @@ export function Home({
                   {slot.name}
                   {slot.tile.kind === "view" && slot.tile.view.tag && <span className="home-tag">{slot.tile.view.tag}</span>}
                 </h3>
-                {body(slot.tile, slot, go, remote, reload)}
+                {body(slot.tile, slot, go, remote, reload, now)}
               </li>
             ))}
           </ul>

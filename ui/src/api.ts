@@ -1233,6 +1233,8 @@ export interface HomeSlot {
   name: string;
   purpose: string;
   tile: HomeTile;
+  /** How often this tile's data changes, in seconds; `null` if it doesn't on its own. */
+  refreshSecs: number | null;
 }
 
 export interface HomePage {

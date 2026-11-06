@@ -4042,3 +4042,8 @@ label.toggle-row {
   margin-left: 8px;
   color: var(--amber);
 }
+
+.home-stale {
+  font-size: 0.75rem;
+  font-style: italic;
+}

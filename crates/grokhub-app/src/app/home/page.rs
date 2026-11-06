@@ -108,6 +108,12 @@ impl Cabin {
                                     egui::Sense::hover(),
                                 );
                                 let base = area.min;
+                                super::live::paint_in(ui.ctx());
+                                if let Some(every) = repaint_every(
+                                    placed.iter().filter_map(|p| p.module_id.as_deref()),
+                                ) {
+                                    ui.ctx().request_repaint_after(every);
+                                }
                                 for slot in &placed {
                                     let rect = egui::Rect::from_min_size(
                                         egui::pos2(base.x + slot.x, base.y + slot.y),
@@ -325,4 +331,17 @@ impl Cabin {
     pub(in crate::app) fn open_mission_home(&mut self) {
         self.nav = Nav::Home;
     }
+}
+
+/// How often Home redraws while it is up: the fastest cadence among the
+/// modules on it, never under five seconds (the frame-rate tile keeps its
+/// own one-second beat while it has a reading). `None` with nothing placed.
+pub(super) fn repaint_every<'a>(
+    modules: impl IntoIterator<Item = &'a str>,
+) -> Option<std::time::Duration> {
+    modules
+        .into_iter()
+        .filter_map(grokhub_core::home::refresh_secs)
+        .min()
+        .map(|s| std::time::Duration::from_secs(s.max(5)))
 }

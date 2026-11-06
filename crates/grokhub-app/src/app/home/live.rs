@@ -2,6 +2,7 @@
 //! only while Home is painted (nothing reads them while the window is hidden or
 //! another page is up).
 
+use eframe::egui;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -10,6 +11,26 @@ use grokhub_agent::indexers::system_state::{self, DiskUse};
 use grokhub_core::home::text::SendFacts;
 
 const REFRESH: Duration = Duration::from_secs(60);
+
+/// The window Home last painted in, so a reader that finishes off the UI
+/// thread can ask for a frame instead of waiting for the next input.
+static WINDOW: Mutex<Option<egui::Context>> = Mutex::new(None);
+
+/// Remember the window Home paints in. Cheap: a context is a handle.
+pub(super) fn paint_in(ctx: &egui::Context) {
+    if let Ok(mut w) = WINDOW.lock() {
+        if w.as_ref() != Some(ctx) {
+            *w = Some(ctx.clone());
+        }
+    }
+}
+
+/// Ask Home's window for a frame: a background read just landed.
+pub(super) fn wake() {
+    if let Some(ctx) = WINDOW.lock().ok().and_then(|w| w.clone()) {
+        ctx.request_repaint();
+    }
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct LiveFacts {
@@ -83,6 +104,7 @@ pub(super) fn live_facts() -> LiveFacts {
                     slot.at = Some(Instant::now());
                     slot.reading = false;
                 }
+                wake();
             });
         if spawned.is_err() {
             slot.reading = false;
