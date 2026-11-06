@@ -1,0 +1,447 @@
+//! Per-chat voice state: which voice speaks this turn (dynamic chat), whether
+//! the reply gets a quip slot, and the chat's heat. The cabin and the shell
+//! register each chat's voice settings; the Brief step ([`step`]) works out the
+//! turn and leaves one note for the turn's volatile block ([`turn_block`]), so
+//! the cached system prefix never changes from turn to turn.
+//!
+//! Background runs never move the voice or quip.
+
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+use grokhub_core::personality::{Heat, Personality};
+use grokhub_core::quips::{self, Moment, Planner, Trigger};
+use grokhub_core::voice_flow::{self, Flow, Signals};
+
+/// A chat's voice settings, as its app publishes them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VoiceConfig {
+    /// The chat's own voice (its system prompt already carries it).
+    pub home: Personality,
+    /// Voices dynamic chat may hand the conversation to (the visible presets).
+    pub roster: Vec<Personality>,
+    /// Dynamic chat on (Settings → Personality).
+    pub dynamic: bool,
+    /// The chat's voice was picked by hand for this chat: it never moves.
+    pub pinned: bool,
+    /// Adults-only on, at this heat; `None` with it off.
+    pub adult: Option<Heat>,
+    /// Minutes east of UTC on this computer, for late-night quips.
+    pub utc_offset_min: i32,
+}
+
+impl VoiceConfig {
+    /// Local hour (0-23) at `now_ms`.
+    pub fn local_hour(&self, now_ms: u64) -> u8 {
+        let min = (now_ms / 60_000) as i64 + i64::from(self.utc_offset_min);
+        (min.rem_euclid(1440) / 60) as u8
+    }
+}
+
+struct Session {
+    cfg: VoiceConfig,
+    flow: Flow,
+    quips: Planner,
+    heat: Option<Heat>,
+    /// "Talk like a pirate" style asks pin the voice for the rest of the chat.
+    asked_style: bool,
+}
+
+/// Chats kept at once; the oldest registration goes first past this.
+const CAP: usize = 64;
+
+static SESSIONS: Mutex<Vec<(String, Session)>> = Mutex::new(Vec::new());
+static TURN: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+
+fn seed_of(id: &str) -> u64 {
+    // FNV-1a: stable across runs, no dependency.
+    id.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3)
+    })
+}
+
+/// Registers or updates a chat's voice settings. Flow and quip timing carry
+/// over while the home voice stays the same; a new home voice starts fresh.
+pub fn register(conversation_id: &str, cfg: VoiceConfig) {
+    if conversation_id.is_empty() {
+        return;
+    }
+    let mut all = SESSIONS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, s)) = all.iter_mut().find(|(id, _)| id == conversation_id) {
+        if s.cfg.home.id != cfg.home.id {
+            s.flow = Flow::new(&cfg.home.id);
+            s.asked_style = false;
+        }
+        if s.cfg.adult != cfg.adult {
+            s.heat = cfg.adult;
+        }
+        s.cfg = cfg;
+        return;
+    }
+    if all.len() >= CAP {
+        all.remove(0);
+    }
+    let session = Session {
+        flow: Flow::new(&cfg.home.id),
+        quips: Planner::new(seed_of(conversation_id)),
+        heat: cfg.adult,
+        asked_style: false,
+        cfg,
+    };
+    all.push((conversation_id.to_string(), session));
+}
+
+/// Drops a chat's voice state (the chat closed or was deleted).
+pub fn forget(conversation_id: &str) {
+    SESSIONS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .retain(|(id, _)| id != conversation_id);
+    if let Some(m) = TURN.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+        m.remove(conversation_id);
+    }
+}
+
+/// The voice speaking in a chat right now, for the chat's chip and avatar.
+pub fn active_voice(conversation_id: &str) -> Option<String> {
+    SESSIONS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .find(|(id, _)| id == conversation_id)
+        .map(|(_, s)| s.flow.voice().to_string())
+}
+
+/// The chat's heat now ("roast me harder" moves it inside the dial).
+pub fn heat(conversation_id: &str) -> Option<Heat> {
+    SESSIONS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .find(|(id, _)| id == conversation_id)
+        .and_then(|(_, s)| s.heat)
+}
+
+/// What the Brief says about the turn, in plain values.
+#[derive(Debug, Clone, Copy)]
+pub struct TurnView<'a> {
+    pub text: &'a str,
+    /// The Brief's intent (`chat`, `question`, `task`, `repair`, ...).
+    pub intent: &'a str,
+    /// The Brief's care (`casual`, `careful`, `critical`).
+    pub care: &'a str,
+    /// The Brief's mood (`calm`, `urgent`, `frustrated`, `low`).
+    pub mood: &'a str,
+    pub background: bool,
+    /// Local hour, 0-23; `None` reads it from the chat's clock.
+    pub hour: Option<u8>,
+}
+
+/// "Talk like a pirate", "be more like Gandalf": the user picked a style
+/// in words, so the voice holds still.
+fn asks_for_a_style(text: &str) -> bool {
+    let low = text.to_lowercase();
+    [
+        "talk like",
+        "speak like",
+        "act like",
+        "pretend to be",
+        "be more like",
+        "sound like",
+    ]
+    .iter()
+    .any(|w| low.contains(w))
+}
+
+/// Steps the chat's voice for one user turn and stores the turn's note for
+/// [`turn_block`]. Returns the note (empty when nothing applies).
+pub fn step(conversation_id: &str, view: TurnView) -> String {
+    let block = {
+        let mut all = SESSIONS.lock().unwrap_or_else(|e| e.into_inner());
+        match all.iter_mut().find(|(id, _)| id == conversation_id) {
+            Some((_, s)) if !view.background => s.step(view),
+            _ => String::new(),
+        }
+    };
+    let mut turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    let m = turn.get_or_insert_with(HashMap::new);
+    if block.is_empty() {
+        m.remove(conversation_id);
+    } else {
+        if m.len() >= CAP && !m.contains_key(conversation_id) {
+            m.clear();
+        }
+        m.insert(conversation_id.to_string(), block.clone());
+    }
+    block
+}
+
+/// The note [`step`] left for this chat's current turn.
+pub fn turn_block(conversation_id: &str) -> Option<String> {
+    TURN.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .and_then(|m| m.get(conversation_id).cloned())
+}
+
+impl Session {
+    fn step(&mut self, view: TurnView) -> String {
+        let hour = view
+            .hour
+            .unwrap_or_else(|| self.cfg.local_hour(grokhub_core::now_ms()));
+        let mut lines: Vec<String> = Vec::new();
+        // Heat moves only inside the dial, and only with adults-only on.
+        if let (Some(heat), Some(nudge)) = (self.heat, quips::nudge(view.text)) {
+            let next = match nudge {
+                quips::Nudge::Hotter => heat.hotter(),
+                quips::Nudge::Milder => heat.milder(),
+            };
+            if next != heat {
+                self.heat = Some(next);
+                lines.push(format!(
+                    "Heat for this chat is now {}.",
+                    next.label().to_lowercase()
+                ));
+            }
+        }
+        if asks_for_a_style(view.text) {
+            self.asked_style = true;
+        }
+        let low_mood = view.mood == "low";
+        let frustrated = view.mood == "frustrated";
+        let signals = Signals {
+            text: view.text,
+            repair: view.intent == "repair",
+            task: matches!(view.intent, "task" | "research" | "repair"),
+            question: view.intent == "question",
+            creative: view.intent == "creative",
+            low_mood,
+            frustrated,
+            hour,
+        };
+        let pinned = self.cfg.pinned || !self.cfg.dynamic || self.asked_style;
+        let moved = self.flow.step(&signals, &self.cfg.roster, pinned);
+        let home = moved.voice == self.cfg.home.id;
+        let voice = if home {
+            self.cfg.home.clone()
+        } else {
+            self.cfg
+                .roster
+                .iter()
+                .find(|p| p.id == moved.voice)
+                .cloned()
+                .unwrap_or_else(|| self.cfg.home.clone())
+        };
+        if !home {
+            lines.push(format!(
+                "For this part of the chat speak as {} instead of {}. {}",
+                voice.name.trim(),
+                self.cfg.home.name.trim(),
+                voice.prompt_block_for(self.heat)
+            ));
+        } else if self.heat.is_some_and(|h| h.tags_adult())
+            && self.cfg.adult.is_none_or(|h| !h.tags_adult())
+        {
+            // Turned up in chat past the chat's own setting: the system prompt
+            // doesn't carry the 18+ tag yet, so this turn's note does.
+            lines.push(format!(
+                "{} {}",
+                grokhub_core::adult_guard::ADULT_VOICE,
+                self.heat.map(Heat::line).unwrap_or_default()
+            ));
+        }
+        if moved.switched {
+            lines.push(voice_flow::handoff_line(voice.name.trim()));
+        }
+        lines.push(voice_flow::depth_note(&voice));
+        let serious = view.intent == "repair"
+            || view.care == "critical"
+            || low_mood
+            || frustrated
+            || view.mood == "urgent";
+        let moment = Moment {
+            serious,
+            casual: view.intent == "chat",
+            trigger: Trigger::detect(view.text, hour),
+            landed: quips::landed(view.text),
+        };
+        if let Some(slot) = self
+            .quips
+            .step(moment, self.heat.unwrap_or(Heat::Clean), voice.roast)
+        {
+            lines.push(slot.note());
+        }
+        lines.join("\n")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use grokhub_core::personality::{builtin, builtins};
+
+    fn cfg(home: &str, adult: Option<Heat>) -> VoiceConfig {
+        VoiceConfig {
+            home: builtin(home),
+            roster: builtins().into_iter().filter(|p| !p.explicit).collect(),
+            dynamic: true,
+            pinned: false,
+            adult,
+            utc_offset_min: 0,
+        }
+    }
+
+    fn view<'a>(text: &'a str, intent: &'a str, mood: &'a str) -> TurnView<'a> {
+        TurnView {
+            text,
+            intent,
+            care: "casual",
+            mood,
+            background: false,
+            hour: Some(20),
+        }
+    }
+
+    #[test]
+    fn an_unregistered_chat_or_a_background_run_gets_no_note() {
+        assert_eq!(step("vs-none", view("hey", "chat", "calm")), "");
+        assert_eq!(turn_block("vs-none"), None);
+        register("vs-bg", cfg("nyx", None));
+        let mut bg = view("still broken error crash", "repair", "frustrated");
+        bg.background = true;
+        assert_eq!(step("vs-bg", bg), "");
+        forget("vs-bg");
+    }
+
+    #[test]
+    fn every_turn_carries_the_depth_note_and_a_switch_brings_the_guest_voice() {
+        let id = "vs-flow";
+        register(id, cfg("nyx", None));
+        let first = step(id, view("lol what's up", "chat", "calm"));
+        assert!(first.contains("Stay in voice:"), "{first}");
+        assert_eq!(turn_block(id).as_deref(), Some(first.as_str()));
+        step(id, view("game crashed with an error", "repair", "calm"));
+        let fix = step(
+            id,
+            view("still broken, driver error again", "repair", "calm"),
+        );
+        assert_eq!(active_voice(id).as_deref(), Some("chief-engineer"));
+        assert!(fix.contains("speak as Chief Engineer instead of"), "{fix}");
+        assert!(fix.contains("no announcement"), "{fix}");
+        assert!(!fix.contains("Quip slot"), "no jokes while fixing: {fix}");
+        forget(id);
+        assert_eq!(active_voice(id), None);
+    }
+
+    #[test]
+    fn a_pin_or_dynamic_off_or_a_style_ask_holds_the_voice() {
+        for (id, pinned, dynamic, text) in [
+            ("vs-pin", true, true, "error crash broken"),
+            ("vs-off", false, false, "error crash broken"),
+            (
+                "vs-style",
+                false,
+                true,
+                "talk like a pirate, the build has an error",
+            ),
+        ] {
+            let mut c = cfg("nyx", None);
+            c.pinned = pinned;
+            c.dynamic = dynamic;
+            register(id, c);
+            for _ in 0..5 {
+                step(id, view(text, "repair", "calm"));
+            }
+            assert_eq!(active_voice(id).as_deref(), Some("nyx"), "{id}");
+            forget(id);
+        }
+    }
+
+    #[test]
+    fn roast_me_harder_moves_heat_inside_the_dial_only_with_adults_only_on() {
+        let id = "vs-heat";
+        register(id, cfg("nyx", Some(Heat::Cheeky)));
+        let note = step(id, view("roast me harder", "chat", "calm"));
+        assert_eq!(heat(id), Some(Heat::Spicy));
+        assert!(note.contains("Heat for this chat is now spicy."), "{note}");
+        assert!(
+            note.contains(grokhub_core::adult_guard::ADULT_VOICE),
+            "a chat turned up to spicy is tagged 18+: {note}"
+        );
+        step(id, view("go harder", "chat", "calm"));
+        step(id, view("go harder", "chat", "calm"));
+        assert_eq!(heat(id), Some(Heat::Filthy));
+        step(id, view("ok ease off", "chat", "calm"));
+        assert_eq!(heat(id), Some(Heat::Spicy));
+        forget(id);
+
+        let id = "vs-heat-off";
+        register(id, cfg("nyx", None));
+        let note = step(id, view("roast me harder", "chat", "calm"));
+        assert_eq!(heat(id), None);
+        assert!(!note.contains("Heat for this chat"));
+        assert!(!note.contains(grokhub_core::adult_guard::ADULT_VOICE));
+        forget(id);
+    }
+
+    #[test]
+    fn quips_come_in_casual_chat_and_never_on_a_frustrated_turn() {
+        let id = "vs-quips";
+        register(id, cfg("nyx", Some(Heat::Spicy)));
+        let mut slots = 0;
+        for _ in 0..20 {
+            if step(id, view("lol we died again", "chat", "calm")).contains("Quip slot") {
+                slots += 1;
+            }
+        }
+        assert!((2..=5).contains(&slots), "{slots}");
+        for _ in 0..20 {
+            let note = step(id, view("ugh this keeps failing", "chat", "frustrated"));
+            assert!(!note.contains("Quip slot"), "{note}");
+        }
+        forget(id);
+    }
+
+    #[test]
+    fn a_new_home_voice_starts_the_flow_fresh() {
+        let id = "vs-home";
+        register(id, cfg("nyx", None));
+        step(id, view("error", "repair", "calm"));
+        step(id, view("error again", "repair", "calm"));
+        assert_eq!(active_voice(id).as_deref(), Some("chief-engineer"));
+        register(id, cfg("pirate", None));
+        assert_eq!(active_voice(id).as_deref(), Some("pirate"));
+        forget(id);
+    }
+
+    #[test]
+    fn the_local_hour_follows_the_offset() {
+        let mut c = cfg("nyx", None);
+        // 2026-01-01 00:30 UTC.
+        let now = 1_767_227_400_000;
+        assert_eq!(c.local_hour(now), 0);
+        c.utc_offset_min = -6 * 60;
+        assert_eq!(c.local_hour(now), 18);
+        c.utc_offset_min = 5 * 60 + 30;
+        assert_eq!(c.local_hour(now), 6);
+    }
+
+    #[test]
+    fn a_tagged_turn_note_routes_the_chat_as_18_plus() {
+        let id = "vs-route";
+        register(id, cfg("nyx", Some(Heat::Cheeky)));
+        let calm = step(id, view("hey", "chat", "calm"));
+        let turn = crate::prefix_cache::user_message_text(&calm, "hey");
+        assert!(
+            !grokhub_core::adult_guard::explicit_conversation([("user", turn.as_str())]),
+            "cheeky routes anywhere"
+        );
+        let note = step(id, view("roast me harder", "chat", "calm"));
+        let turn = crate::prefix_cache::user_message_text(&note, "roast me harder");
+        assert!(grokhub_core::adult_guard::explicit_conversation([(
+            "user",
+            turn.as_str()
+        )]));
+        forget(id);
+    }
+}

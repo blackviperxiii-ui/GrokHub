@@ -59,6 +59,9 @@ pub struct TurnVolatile {
     pub playbook: Option<String>,
     pub memory: Option<String>,
     pub intentions: Option<String>,
+    /// The turn's voice note: a guest voice, the depth note, a quip slot
+    /// ([`crate::voice_session`]).
+    pub voice: Option<String>,
 }
 
 impl TurnVolatile {
@@ -90,11 +93,21 @@ impl TurnVolatile {
             playbook,
             memory,
             intentions,
+            voice: None,
         }
+    }
+
+    /// The same notes plus the turn's voice note, if there is one.
+    pub fn with_voice(mut self, voice: Option<String>) -> Self {
+        self.voice = voice.filter(|v| !v.trim().is_empty());
+        self
     }
 
     pub fn format(&self) -> String {
         let mut parts: Vec<String> = Vec::new();
+        if let Some(v) = &self.voice {
+            parts.push(v.clone());
+        }
         if let Some(s) = &self.style {
             parts.push(s.clone());
         }
@@ -304,12 +317,14 @@ mod tests {
             playbook: None,
             memory: None,
             intentions: None,
+            voice: None,
         };
         let v_b = TurnVolatile {
             style: Some("Talk style for this turn: concise.".into()),
             playbook: Some("Playbook for this turn: files.".into()),
             memory: None,
             intentions: None,
+            voice: None,
         };
         let mut history_a: Vec<InputItem> = Vec::new();
         push_stable_system(&mut history_a, "STABLE_RULES");
@@ -346,6 +361,7 @@ mod tests {
                 playbook: None,
                 memory: None,
                 intentions: None,
+                voice: None,
             },
             "turn two",
             None,

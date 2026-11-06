@@ -61,6 +61,7 @@ pub mod tokens;
 mod tools;
 mod turn_budget;
 mod unattended;
+pub mod voice_session;
 mod ws_mode;
 
 pub use client::{
