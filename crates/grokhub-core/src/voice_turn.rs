@@ -466,6 +466,70 @@ pub fn wav(samples: &[i16], rate: u32) -> Vec<u8> {
     out
 }
 
+/// Recorders that can stream the default mic as endless raw 16 kHz mono s16le,
+/// best first (PulseAudio and PipeWire keep the system's own input choice).
+pub const MIC_RECORDERS: &[&str] = &["parecord", "pw-record", "ffmpeg", "arecord", "rec"];
+
+/// Arguments for `bin` to stream the default mic to stdout until stopped.
+pub fn mic_argv(bin: &str) -> Option<&'static [&'static str]> {
+    match bin {
+        "parecord" => Some(&[
+            "--raw",
+            "--format=s16le",
+            "--rate=16000",
+            "--channels=1",
+            "--latency-msec=20",
+        ]),
+        "pw-record" => Some(&[
+            "--rate",
+            "16000",
+            "--channels",
+            "1",
+            "--format",
+            "s16",
+            "--latency",
+            "20ms",
+            "-",
+        ]),
+        "ffmpeg" => Some(&[
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-fflags",
+            "nobuffer",
+            "-f",
+            "pulse",
+            "-i",
+            "default",
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-f",
+            "s16le",
+            "-",
+        ]),
+        "arecord" => Some(&[
+            "-q", "-t", "raw", "-f", "S16_LE", "-r", "16000", "-c", "1", "-B", "100000",
+        ]),
+        "rec" => Some(&[
+            "-q",
+            "-t",
+            "raw",
+            "-r",
+            "16000",
+            "-c",
+            "1",
+            "-b",
+            "16",
+            "-e",
+            "signed-integer",
+            "-",
+        ]),
+        _ => None,
+    }
+}
+
 /// The first spoken piece goes out at a clause break once it has this many words.
 pub const FIRST_CHUNK_WORDS: usize = 6;
 /// No spoken piece is longer than this (split at the last comma or space).

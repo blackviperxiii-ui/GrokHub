@@ -12,7 +12,7 @@ use grokhub_core::{
     session_is_wayland, tab_list_from_rows, take_text_body, virtual_desktop_size, x11_grab_size,
     ydotool_socket_path, AtspiRow, BrowserTab, CaptureKind, ComputerDrive, ComputerOp,
     DisplayOutput, HandsBackend, HandsDown, TabAction, ATSPI_PY, CDP_DOWN, CDP_PORTS,
-    IMAGE_FILE_CAP, RECORDERS, TEXT_FILE_CAP, TRANSCRIBERS,
+    IMAGE_FILE_CAP, TEXT_FILE_CAP, TRANSCRIBERS,
 };
 use grokhub_desktop::game_guard::{GameGuard, Guarded};
 use image::GenericImageView;
@@ -58,7 +58,7 @@ fn capture_temp(kind: &str, ext: &str) -> PathBuf {
 /// Local whisper on a worker thread — still must not hang halt forever.
 const DESK_TRANSCRIBE_TIMEOUT: Duration = Duration::from_secs(20);
 
-fn kill_limited(child: &mut Child) {
+pub(crate) fn kill_limited(child: &mut Child) {
     #[cfg(unix)]
     {
         let pid = child.id() as i32;
@@ -559,7 +559,7 @@ pub fn first_bin(names: &[&str]) -> Option<String> {
     names.iter().find(|n| which(n)).map(|s| (*s).to_string())
 }
 
-fn spawn_bin(name: &str) -> Command {
+pub(crate) fn spawn_bin(name: &str) -> Command {
     match resolve_bin(name) {
         Some(p) => Command::new(p),
         None => Command::new(name),
@@ -1468,12 +1468,6 @@ pub(crate) fn private_temp(name: &str) -> Result<PathBuf, String> {
 
 pub const PLAYERS: &[&str] = &["ffplay", "mpv", "paplay"];
 
-pub fn record_once() -> Result<PathBuf, String> {
-    let wav = private_temp("voice.wav")?;
-    record_wav(&wav)?;
-    Ok(wav)
-}
-
 pub fn transcribe_local(wav: &Path) -> Result<String, String> {
     transcribe(wav)
 }
@@ -1503,46 +1497,6 @@ pub fn play_audio(path: &Path) -> Result<(), String> {
                 Err("no ffplay/mpv/paplay to speak".into())
             }
         }
-    }
-}
-
-fn record_wav(path: &Path) -> Result<(), String> {
-    #[cfg(windows)]
-    {
-        match crate::win_audio::record_wav(path, 4) {
-            Ok(()) => return Ok(()),
-            Err(e) => {
-                if first_bin(RECORDERS).is_none() {
-                    return Err(e);
-                }
-            }
-        }
-    }
-    let dest = path.to_str().ok_or("wav path")?;
-    match first_bin(RECORDERS).as_deref() {
-        Some("arecord") => run_ok("arecord", &["-q", "-d", "4", "-f", "cd", "-t", "wav", dest]),
-        Some("ffmpeg") => run_ok(
-            "ffmpeg",
-            &[
-                "-y",
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-f",
-                "pulse",
-                "-i",
-                "default",
-                "-t",
-                "4",
-                "-ac",
-                "1",
-                "-ar",
-                "16000",
-                dest,
-            ],
-        ),
-        Some("sox") | Some("rec") => run_ok("rec", &[dest, "trim", "0", "4"]),
-        _ => Err("no arecord/ffmpeg/sox — install alsa-utils or ffmpeg".into()),
     }
 }
 
@@ -1626,30 +1580,30 @@ pub fn record_clip(device: Option<&str>) -> Result<(u32, Vec<u8>), String> {
     Ok((ac::CLIP_RATE, pcm))
 }
 
+/// Local whisper on a 16 kHz mono WAV. The transcript lands next to the WAV
+/// (`voice.txt` beside `voice.wav`) and is read back from there.
 fn transcribe(wav: &Path) -> Result<String, String> {
     let dest = wav.to_str().ok_or("wav")?;
     let bin = first_bin(TRANSCRIBERS).ok_or("install whisper (openai-whisper or whisper.cpp)")?;
-    let out_dir = std::env::temp_dir();
-    let mut cmd = Command::new(&bin);
+    let txt = wav.with_extension("txt");
+    let dir = wav.parent().and_then(Path::to_str).ok_or("wav folder")?;
+    let stem = wav.with_extension("");
+    let stem = stem.to_str().ok_or("wav path")?;
+    let _ = std::fs::remove_file(&txt);
+    let mut cmd = spawn_bin(&bin);
     match bin.as_str() {
         "whisper-cli" | "whisper.cpp" => {
-            cmd.args([
-                dest,
-                "-otxt",
-                "-of",
-                out_dir
-                    .join("grokhub-voice")
-                    .to_str()
-                    .unwrap_or("/tmp/grokhub-voice"),
-            ]);
+            cmd.args(["-l", "en", "-nt", "-otxt", "-of", stem, "-f", dest]);
         }
         _ => {
             cmd.args([
                 dest,
+                "--language",
+                "en",
                 "--output_format",
                 "txt",
                 "--output_dir",
-                out_dir.to_str().unwrap_or("/tmp"),
+                dir,
             ]);
         }
     }
@@ -1660,9 +1614,9 @@ fn transcribe(wav: &Path) -> Result<String, String> {
     if !out.status.success() {
         return Err(format!("{bin} failed"));
     }
-    let txt = wav.with_extension("txt");
-    let alt = out_dir.join("grokhub-voice.txt");
-    read_text_capped(&txt).or_else(|_| read_text_capped(&alt))
+    let text = read_text_capped(&txt);
+    let _ = std::fs::remove_file(&txt);
+    text
 }
 
 fn run_ok(bin: &str, args: &[&str]) -> Result<(), String> {
@@ -2156,7 +2110,6 @@ mod tests {
 
     #[test]
     fn bins_are_named() {
-        assert!(RECORDERS.contains(&"arecord"));
         assert!(TRANSCRIBERS.contains(&"whisper"));
         assert!(PLAYERS.contains(&"ffplay"));
         assert!(VIDEO_PLAYERS.contains(&"mpv") && VIDEO_PLAYERS.contains(&"ffplay"));

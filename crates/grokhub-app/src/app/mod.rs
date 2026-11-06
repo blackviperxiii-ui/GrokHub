@@ -1,7 +1,7 @@
 use crate::config::{self, AppConfig};
 use crate::desktop::{
     capture_data_url, capture_webcam, clipboard_image, collect_rows, first_bin,
-    load_image_data_url, lock_titles, pick_file, read_text_capped, record_once,
+    load_image_data_url, lock_titles, pick_file, private_temp, read_text_capped,
     run_computer_op_cancel, transcribe_local,
 };
 use crate::helpers::{
@@ -117,7 +117,7 @@ use grokhub_core::{
     HEARTBEAT_MS, HUB_KIND, IDLE_REFLECT_MS, IMAGE_FILE_CAP, IMAGINE_ASPECTS, IMAGINE_STYLES,
     IMAGINE_WALL_GAP, LOOP_MAX, PRESENCE_RING_MS, RESULT_TRIM_KEEP_HOPS, SKILL_SAVED_MARK,
     SKILL_SAVED_NOTE, TEXT_FILE_CAP, THOUGHT_ROW_LABEL, TRANSCRIBERS, UPDATE_CHECK_EVERY,
-    WALL_GIF_EVERY_MS, WALL_GIF_MAX,
+    VOICE_PAUSED, WALL_GIF_EVERY_MS, WALL_GIF_MAX,
 };
 use grokhub_hub::serve_lan;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -414,6 +414,7 @@ enum JobOut {
         Option<grokhub_core::ImagineTokens>,
     ),
     Voice(String),
+    VoiceNote(String),
     HostLine(String),
     HostDone(String),
     UpdateProgress {
@@ -701,6 +702,7 @@ pub struct Cabin {
     presence_ring: Vec<(u64, String)>,
     voice_state: VoiceState,
     voice_ready_at: Option<Instant>,
+    voice_mic: Option<crate::voice_mic::VoiceMic>,
     /// Labs: the companion's own desktop window, while she is popped out.
     desktop_nyx: Option<desktop_nyx::DesktopNyx>,
     voice_hold_rx: Option<mpsc::Receiver<()>>,
@@ -1347,6 +1349,7 @@ impl Cabin {
             presence_ring: vec![],
             voice_state: VoiceState::Idle,
             voice_ready_at: None,
+            voice_mic: None,
             desktop_nyx: None,
             voice_hold_rx: None,
             lips: Default::default(),
@@ -1843,6 +1846,7 @@ impl Cabin {
             presence_ring: Vec::new(),
             voice_state: VoiceState::Idle,
             voice_ready_at: None,
+            voice_mic: None,
             desktop_nyx: None,
             voice_hold_rx: None,
             lips: Default::default(),
@@ -4773,44 +4777,6 @@ impl Cabin {
                 self.status = "Recipe replay failed".into();
             }
         }
-    }
-
-    fn speak_reply(&mut self, text: &str) {
-        let text = voice_tts_script(text);
-        if text.is_empty() {
-            self.maybe_continue_ptt();
-            return;
-        }
-        if self.voice_is_on() {
-            self.voice_state = VoiceState::Speaking;
-            self.voice_orb = "speaking".into();
-            self.status = voice_mode_label(VoiceState::Speaking).into();
-        }
-        let key = self.bearer();
-        let cap = TEXT_FILE_CAP;
-        let mut end = cap.min(text.len());
-        while end > 0 && !text.is_char_boundary(end) {
-            end -= 1;
-        }
-        let text = text[..end].to_string();
-        let hold = self.voice_is_on();
-        let voice = self.speech_voice();
-        let tx = if hold {
-            let (tx, rx) = mpsc::channel();
-            self.voice_hold_rx = Some(rx);
-            Some(tx)
-        } else {
-            None
-        };
-        let lips = self.lips.clone();
-        std::thread::spawn(move || {
-            if let Ok(bytes) = grok_tts(&key, &text, voice) {
-                crate::lipsync::speak_mp3(bytes, &lips);
-            }
-            if let Some(tx) = tx {
-                let _ = tx.send(());
-            }
-        });
     }
 
     fn poll_eyes_cap(&mut self) -> Option<Result<String, String>> {

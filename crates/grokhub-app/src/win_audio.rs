@@ -19,6 +19,8 @@ use windows_sys::Win32::Media::Multimedia::mciSendStringW;
 
 pub(crate) const RATE: u32 = 24_000;
 const FRAME: usize = 4800; // 100 ms s16le mono
+/// Queued capture buffers: 800 ms of slack before a busy moment drops audio.
+const BUFS: usize = 8;
 const MMSYSERR_NOERROR: u32 = 0;
 
 fn pcm_fmt() -> WAVEFORMATEX {
@@ -47,9 +49,9 @@ fn empty_hdr() -> WAVEHDR {
 }
 
 struct WaveInInner {
-    bufs: [Vec<u8>; 2],
-    hdrs: [WAVEHDR; 2],
-    prepared: [bool; 2],
+    bufs: [Vec<u8>; BUFS],
+    hdrs: [WAVEHDR; BUFS],
+    prepared: [bool; BUFS],
     next: usize,
 }
 
@@ -70,13 +72,13 @@ impl WaveIn {
         let mut mic = Self {
             handle,
             inner: Box::new(WaveInInner {
-                bufs: [vec![0u8; FRAME], vec![0u8; FRAME]],
-                hdrs: [empty_hdr(), empty_hdr()],
-                prepared: [false, false],
+                bufs: std::array::from_fn(|_| vec![0u8; FRAME]),
+                hdrs: std::array::from_fn(|_| empty_hdr()),
+                prepared: [false; BUFS],
                 next: 0,
             }),
         };
-        for i in 0..2 {
+        for i in 0..BUFS {
             if !mic.queue(i) {
                 return None;
             }
@@ -138,7 +140,7 @@ impl WaveIn {
                 if !self.queue(i) {
                     return None;
                 }
-                self.inner.next = 1 - i;
+                self.inner.next = (i + 1) % BUFS;
                 return Some(pcm);
             }
             if Instant::now() >= deadline {
@@ -155,7 +157,7 @@ impl Drop for WaveIn {
         unsafe {
             let _ = waveInStop(self.handle);
             let _ = waveInReset(self.handle);
-            for i in 0..2 {
+            for i in 0..BUFS {
                 if self.inner.prepared[i] {
                     let _ = waveInUnprepareHeader(
                         self.handle,
@@ -170,7 +172,7 @@ impl Drop for WaveIn {
     }
 }
 
-/// Capture `secs` of 24 kHz s16le mono for push-to-talk.
+/// Capture `secs` of 24 kHz s16le mono (the audio check's clip).
 pub fn record_pcm_secs(secs: u32) -> Result<Vec<u8>, String> {
     let mut mic = WaveIn::start().ok_or_else(|| {
         format!(
@@ -195,33 +197,6 @@ pub fn record_pcm_secs(secs: u32) -> Result<Vec<u8>, String> {
         return Err("empty recording".into());
     }
     Ok(out)
-}
-
-pub fn write_wav_s16le_24k(path: &Path, pcm: &[u8]) -> Result<(), String> {
-    let mut out = Vec::with_capacity(44 + pcm.len());
-    out.extend_from_slice(b"RIFF");
-    out.extend_from_slice(&(36u32 + pcm.len() as u32).to_le_bytes());
-    out.extend_from_slice(b"WAVE");
-    out.extend_from_slice(b"fmt ");
-    out.extend_from_slice(&16u32.to_le_bytes());
-    out.extend_from_slice(&1u16.to_le_bytes());
-    out.extend_from_slice(&1u16.to_le_bytes());
-    out.extend_from_slice(&RATE.to_le_bytes());
-    out.extend_from_slice(&(RATE * 2).to_le_bytes());
-    out.extend_from_slice(&2u16.to_le_bytes());
-    out.extend_from_slice(&16u16.to_le_bytes());
-    out.extend_from_slice(b"data");
-    out.extend_from_slice(&(pcm.len() as u32).to_le_bytes());
-    out.extend_from_slice(pcm);
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
-    std::fs::write(path, out).map_err(|e| e.to_string())
-}
-
-pub fn record_wav(path: &Path, secs: u32) -> Result<(), String> {
-    let pcm = record_pcm_secs(secs)?;
-    write_wav_s16le_24k(path, &pcm)
 }
 
 fn wide(s: &str) -> Vec<u16> {
@@ -263,21 +238,6 @@ pub fn play_file(path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn wav_header_is_s16le_24k_mono() {
-        let dir = std::env::temp_dir().join(format!("grokhub-wav-{}", std::process::id()));
-        let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join("t.wav");
-        write_wav_s16le_24k(&path, b"PCM!").unwrap();
-        let b = std::fs::read(&path).unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
-        assert!(b.starts_with(b"RIFF"));
-        assert_eq!(&b[8..12], b"WAVE");
-        assert_eq!(&b[22..24], &1u16.to_le_bytes());
-        assert_eq!(&b[24..28], &24000u32.to_le_bytes());
-        assert_eq!(&b[44..], b"PCM!");
-    }
 
     #[test]
     fn wave_headers_live_on_the_heap() {

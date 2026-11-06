@@ -729,7 +729,7 @@ pub use voice::{
     voice_session_url, voice_state_after_ptt_stt, voice_stream_token, voice_strip_visible,
     voice_transcript_sends_chat, voice_tts_script, CabinEyesState, HeyGrokAction, HeyGrokRoute,
     PttLine, TranscribeRoute, VoiceEvent, VoiceRole, VoiceState, DEFAULT_VOICE,
-    DEFAULT_VOICE_MODEL, RECORDERS, TRANSCRIBERS, TTS_VOICES, VOICE_READY_HIDE_MS,
+    DEFAULT_VOICE_MODEL, RECORDERS, TRANSCRIBERS, TTS_VOICES, VOICE_PAUSED, VOICE_READY_HIDE_MS,
 };
 pub use windshield::{
     build_windshield, control_at, filter_atspi_rows, is_interactive_role, keep_atspi_row,

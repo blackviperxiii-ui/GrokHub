@@ -48,6 +48,7 @@ mod titlebar;
 mod tray;
 mod ui_kit;
 mod update;
+mod voice_mic;
 #[cfg(windows)]
 mod win_acl;
 #[cfg(windows)]

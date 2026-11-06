@@ -26,11 +26,11 @@ fn chat_side_effects_keep_the_origin_thread() {
         .nth(1)
         .and_then(|s| s.split("fn fit_rail_label").next())
         .expect("listen_turn");
-    let wav_read = listen.find("std::fs::read(&wav)").expect("wav read");
+    let upload = listen.find("grok_stt(").expect("STT upload");
     assert!(
         listen.contains("IMAGE_FILE_CAP")
-            && listen.find("IMAGE_FILE_CAP").expect("wav cap") < wav_read,
-        "voice STT must not slurp a huge wav: {listen}"
+            && listen.find("IMAGE_FILE_CAP").expect("wav cap") < upload,
+        "voice STT must not upload a huge wav: {listen}"
     );
     let queue = fn_src(&src, "ui_agents");
     let queued = fn_src(&src, "start_queued_job");
@@ -661,7 +661,7 @@ fn chat_side_effects_keep_the_origin_thread() {
     let replay = src
         .split("fn replay_recipe(")
         .nth(1)
-        .and_then(|s| s.split("fn speak_reply").next())
+        .and_then(|s| s.split("fn poll_eyes_cap(").next())
         .expect("replay_recipe");
     assert!(
         replay.contains("run_cmds") && !replay.contains("run_computer_op("),
