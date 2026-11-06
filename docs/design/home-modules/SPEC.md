@@ -24,8 +24,8 @@ Repo sources: `local_governor` + `app/local_signals.rs` (thermal, memory, power,
 | 10 | Up Next | Next games to play as cover cards | L (hero + 2) · M (3 stacked, slide 9) · S (1 cover) | PARTIAL: installed apps EXISTS; cover art + ordering NEW | Card → Play/launch; Library | Gradient covers with title when no art; "No games found · Scan" |
 | 11 | Games · Now Playing | Current/recent games, session & weekly time | L · M (recent list) · S | PARTIAL: game process detection EXISTS; playtime log NEW | Tap → game page | "Nothing playing · last: X" |
 | 12 | Game Library | Grid of installed games, store counts | L (4 covers + store chips) · M (2×2) · S (count) | PARTIAL (installed apps; covers/store split NEW) | Search, filter, launch | "Scan library" CTA |
-| 13 | Objectives | Today's objectives w/ progress, streak + coach (L) | L (slide 9) · M (top 3) · S (top 1 + bar) | NEW (objective store; seed from mission_ui todos) | Check off, tap → Chat, add via chat bar ("Assign an objective…") | "No objectives · Assign one below" |
-| 14 | Streak & XP | Level, XP bar, 7-day streak | M · S | NEW (XP ledger) | Tap → XP history | Day-1 blocks empty, "Start a streak today" |
+| 13 | Objectives | Today's objectives w/ progress, streak + coach (L) | L (slide 9) · M (top 3) · S (top 1 + bar) | EXISTS (core `objectives`, Objectives page; goals from chat and allowed game data) | Check off, tap → Chat, add via chat bar ("Assign an objective…") | "No objectives · Assign one below" |
+| 14 | Streak & XP | Level, XP bar, 7-day streak | M · S | EXISTS (core `xp` ledger, levels, weeks in a row) | Tap → XP history | Day-1 blocks empty, "Start a streak today" |
 | 15 | Achievements | Progress, new unlocks | M · S | NEW (Steam/Xbox APIs) | Tap → list | "Connect a store" |
 | 16 | Coach Tip | One stat-backed tip | M · S | PARTIAL (proactive cards; stats NEW) | Add as objective; dismiss (counts toward proactive dismiss streak) | Hidden tip → "No tip today" |
 | 17 | Patch Notes | Latest patch for your games, impact line | M · S | PARTIAL (Pulse feed sources) | Open → Pulse post; "new build?" → Chat | "No new patches" |
