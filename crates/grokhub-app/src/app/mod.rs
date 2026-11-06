@@ -263,6 +263,7 @@ mod slash;
 mod stardew_ui;
 mod status_toasts;
 mod steam_ui;
+mod storage_ui;
 mod systems_brief_ui;
 #[cfg(test)]
 mod tests;
@@ -827,6 +828,7 @@ pub struct Cabin {
     file_writes: Vec<mpsc::Receiver<file_writes::FileWriteDone>>,
     /// The last chat export's card above the composer (until closed).
     saved_file: Option<saved_file::SavedFile>,
+    storage: storage_ui::StorageState,
     goal_rx: Option<mpsc::Receiver<(String, String)>>,
     goal_busy: bool,
     goal_stale: bool,
@@ -1452,6 +1454,7 @@ impl Cabin {
             imagine_save_rx: None,
             file_writes: Vec::new(),
             saved_file: None,
+            storage: Default::default(),
             goal_rx: None,
             goal_busy: false,
             goal_stale: false,
@@ -1951,6 +1954,7 @@ impl Cabin {
             imagine_save_rx: None,
             file_writes: Vec::new(),
             saved_file: None,
+            storage: Default::default(),
             goal_rx: None,
             goal_busy: false,
             goal_stale: false,

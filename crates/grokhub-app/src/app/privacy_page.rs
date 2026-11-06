@@ -656,6 +656,8 @@ impl Cabin {
             );
         }
         ui.add_space(14.0);
+        self.ui_storage_block(ui);
+        ui.add_space(14.0);
         paint_ledger(ui, week, now);
     }
 }

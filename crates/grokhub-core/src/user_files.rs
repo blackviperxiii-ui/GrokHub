@@ -259,9 +259,293 @@ pub fn plain_io_error(e: &std::io::Error) -> String {
     }
 }
 
+/// What [`bring_over`] did, counted by item (a file, or a folder such as one
+/// recording).
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct BringOver {
+    /// Moved on the same drive (a rename: nothing copied, nothing lost).
+    pub moved: usize,
+    /// Copied to another drive and checked; the originals were kept.
+    pub copied: usize,
+    /// Already there from an earlier run (same name and size).
+    pub already: usize,
+    /// Items that couldn't be brought over, in plain words.
+    pub failed: Vec<String>,
+}
+
+impl BringOver {
+    /// One line for the Storage block.
+    pub fn summary(&self) -> String {
+        let n = |k: usize| {
+            if k == 1 {
+                "1 item".to_string()
+            } else {
+                format!("{k} items")
+            }
+        };
+        let mut parts = Vec::new();
+        if self.moved > 0 {
+            parts.push(format!("Moved {}", n(self.moved)));
+        }
+        if self.copied > 0 {
+            parts.push(format!(
+                "Copied {} (the originals are still in the old folder)",
+                n(self.copied)
+            ));
+        }
+        if self.already > 0 {
+            parts.push(format!("{} already there", n(self.already)));
+        }
+        if !self.failed.is_empty() {
+            parts.push(format!(
+                "{} couldn't be brought over: {}",
+                n(self.failed.len()),
+                self.failed.join("; ")
+            ));
+        }
+        if parts.is_empty() {
+            "Nothing to bring over".into()
+        } else {
+            parts.join(". ") + "."
+        }
+    }
+}
+
+/// Bring every item directly inside `from` into `to`. On the same drive each
+/// item is renamed into place. Across drives it is copied, every file's size
+/// is checked, and the original stays where it was. A name already taken in
+/// `to` gets `-2`, `-3`, …; an item already there with the same size counts
+/// as done, so running it again copies nothing twice. Links are skipped.
+/// Nothing is ever deleted.
+pub fn bring_over(from: &Path, to: &Path) -> BringOver {
+    bring_over_with(from, to, |a, b| std::fs::rename(a, b))
+}
+
+fn bring_over_with(
+    from: &Path,
+    to: &Path,
+    rename: impl Fn(&Path, &Path) -> std::io::Result<()>,
+) -> BringOver {
+    let mut done = BringOver::default();
+    if from == to || to.starts_with(from) || from.starts_with(to) {
+        return done;
+    }
+    let Ok(entries) = std::fs::read_dir(from) else {
+        return done;
+    };
+    if let Err(e) = std::fs::create_dir_all(to) {
+        done.failed.push(plain_io_error(&e));
+        return done;
+    }
+    let mut entries: Vec<_> = entries.flatten().collect();
+    entries.sort_by_key(|e| e.file_name());
+    for entry in entries {
+        let src = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Ok(meta) = std::fs::symlink_metadata(&src) else {
+            continue;
+        };
+        if meta.file_type().is_symlink() || name.starts_with('.') {
+            continue;
+        }
+        let same = to.join(&name);
+        if same.exists() && tree_size(&same) == tree_size(&src) {
+            done.already += 1;
+            continue;
+        }
+        let Some(dest) = free_name(to, &name) else {
+            done.failed
+                .push(format!("{name}: too many items with this name"));
+            continue;
+        };
+        match rename(&src, &dest) {
+            Ok(()) => done.moved += 1,
+            Err(e) if e.kind() == std::io::ErrorKind::CrossesDevices => {
+                match copy_checked(&src, &dest) {
+                    Ok(()) => done.copied += 1,
+                    Err(e) => {
+                        // Only our half-made copy goes; the original stays.
+                        let _ = if dest.is_dir() {
+                            std::fs::remove_dir_all(&dest)
+                        } else {
+                            std::fs::remove_file(&dest)
+                        };
+                        done.failed.push(format!("{name}: {}", plain_io_error(&e)));
+                    }
+                }
+            }
+            Err(e) => done.failed.push(format!("{name}: {}", plain_io_error(&e))),
+        }
+    }
+    done
+}
+
+/// How many items in `from` [`bring_over`] would still bring into `to`
+/// (hidden files, links and items already there with the same size don't
+/// count).
+pub fn waiting_to_bring_over(from: &Path, to: &Path) -> usize {
+    if from == to || to.starts_with(from) || from.starts_with(to) {
+        return 0;
+    }
+    let Ok(entries) = std::fs::read_dir(from) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter(|e| {
+            let name = e.file_name();
+            let src = e.path();
+            !name.to_string_lossy().starts_with('.')
+                && e.file_type().is_ok_and(|t| !t.is_symlink())
+                && !(to.join(&name).exists() && tree_size(&to.join(&name)) == tree_size(&src))
+        })
+        .count()
+}
+
+/// `dir/name`, or with `-2` … `-99` before the extension when taken.
+fn free_name(dir: &Path, name: &str) -> Option<PathBuf> {
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
+        _ => (name.to_string(), String::new()),
+    };
+    (1..=99u32)
+        .map(|n| {
+            if n == 1 {
+                dir.join(name)
+            } else {
+                dir.join(format!("{stem}-{n}{ext}"))
+            }
+        })
+        .find(|p| std::fs::symlink_metadata(p).is_err())
+}
+
+/// Bytes in a file, or in every file under a folder (links not followed).
+fn tree_size(path: &Path) -> u64 {
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return 0;
+    };
+    if meta.is_file() {
+        return meta.len();
+    }
+    if !meta.is_dir() {
+        return 0;
+    }
+    std::fs::read_dir(path)
+        .map(|rd| rd.flatten().map(|e| tree_size(&e.path())).sum())
+        .unwrap_or(0)
+}
+
+/// Copy `src` (file or folder) to `dest`, checking each file's size.
+fn copy_checked(src: &Path, dest: &Path) -> std::io::Result<()> {
+    let meta = std::fs::symlink_metadata(src)?;
+    if meta.is_dir() {
+        std::fs::create_dir(dest)?;
+        for entry in std::fs::read_dir(src)?.flatten() {
+            let ty = entry.file_type()?;
+            if ty.is_symlink() {
+                continue;
+            }
+            copy_checked(&entry.path(), &dest.join(entry.file_name()))?;
+        }
+        return Ok(());
+    }
+    let wrote = std::fs::copy(src, dest)?;
+    let on_disk = std::fs::metadata(dest)?.len();
+    if wrote != meta.len() || on_disk != meta.len() {
+        return Err(std::io::Error::other("the copy came out a different size"));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tree(root: &Path) {
+        std::fs::create_dir_all(root.join("2026-10-01-1")).unwrap();
+        std::fs::write(root.join("2026-10-01-1/frame-001.png"), b"png-one").unwrap();
+        std::fs::write(root.join("cat.png"), b"meow").unwrap();
+        std::fs::write(root.join(".hidden"), b"x").unwrap();
+    }
+
+    #[test]
+    fn bring_over_on_one_drive_renames_and_a_taken_name_gets_a_number() {
+        let root = temp("bring-same");
+        let (from, to) = (root.join("old"), root.join("new"));
+        tree(&from);
+        std::fs::create_dir_all(&to).unwrap();
+        std::fs::write(to.join("cat.png"), b"a different cat").unwrap();
+        let done = bring_over(&from, &to);
+        assert_eq!(
+            (done.moved, done.copied, done.already),
+            (2, 0, 0),
+            "{done:?}"
+        );
+        assert!(done.failed.is_empty());
+        assert_eq!(
+            std::fs::read(to.join("cat.png")).unwrap(),
+            b"a different cat"
+        );
+        assert_eq!(std::fs::read(to.join("cat-2.png")).unwrap(), b"meow");
+        assert_eq!(
+            std::fs::read(to.join("2026-10-01-1/frame-001.png")).unwrap(),
+            b"png-one"
+        );
+        assert!(from.join(".hidden").exists(), "hidden files stay put");
+        assert_eq!(done.summary(), "Moved 2 items.");
+        assert_eq!(waiting_to_bring_over(&from, &to), 0);
+        assert_eq!(bring_over(&to, &to.join("inner")), BringOver::default());
+        assert!(
+            !to.join("inner").exists(),
+            "overlapping folders are left alone"
+        );
+        assert_eq!(bring_over(&from, &to).summary(), "Nothing to bring over");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn bring_over_across_drives_copies_keeps_originals_and_never_repeats() {
+        let root = temp("bring-cross");
+        let (from, to) = (root.join("old"), root.join("new"));
+        tree(&from);
+        let cross = |_: &Path, _: &Path| Err(std::io::ErrorKind::CrossesDevices.into());
+        assert_eq!(waiting_to_bring_over(&from, &to), 2);
+        let done = bring_over_with(&from, &to, cross);
+        assert_eq!(
+            waiting_to_bring_over(&from, &to),
+            0,
+            "copied items no longer count as waiting though the originals stay"
+        );
+        assert_eq!((done.moved, done.copied), (0, 2), "{done:?}");
+        assert!(from.join("cat.png").exists() && from.join("2026-10-01-1").exists());
+        assert_eq!(std::fs::read(to.join("cat.png")).unwrap(), b"meow");
+        assert_eq!(
+            done.summary(),
+            "Copied 2 items (the originals are still in the old folder)."
+        );
+        let again = bring_over_with(&from, &to, cross);
+        assert_eq!((again.copied, again.already), (0, 2), "{again:?}");
+        assert!(!to.join("cat-2.png").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn bring_over_from_a_missing_folder_does_nothing_and_a_failed_rename_is_reported() {
+        let root = temp("bring-missing");
+        let done = bring_over(&root.join("never"), &root.join("new"));
+        assert_eq!(done, BringOver::default());
+        assert!(!root.join("new").exists(), "nothing made for nothing");
+        let from = root.join("old");
+        tree(&from);
+        let denied = |_: &Path, _: &Path| Err(std::io::ErrorKind::PermissionDenied.into());
+        let done = bring_over_with(&from, &root.join("new"), denied);
+        assert_eq!(done.failed.len(), 2);
+        assert!(done
+            .summary()
+            .starts_with("2 items couldn't be brought over: "));
+        assert!(from.join("cat.png").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     fn temp(tag: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("user-files-{tag}-{}", std::process::id()));

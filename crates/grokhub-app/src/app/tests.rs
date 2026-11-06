@@ -2224,6 +2224,7 @@ fn quiet_cabin() -> Cabin {
         imagine_save_rx: None,
         file_writes: Vec::new(),
         saved_file: None,
+        storage: Default::default(),
         goal_rx: None,
         goal_busy: false,
         goal_stale: false,
