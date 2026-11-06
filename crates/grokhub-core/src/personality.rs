@@ -139,6 +139,10 @@ pub struct Personality {
     /// Profanity allowed; the picker tags it Explicit.
     #[serde(default)]
     pub explicit: bool,
+    /// What this voice is best at, first one leading. Dynamic chat
+    /// ([`crate::voice_flow`]) hands it the conversation when that topic takes over.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub topics: Vec<crate::voice_flow::Topic>,
     /// Loaded from the user's `{config}/personalities/`, not shipped with the build.
     #[serde(skip)]
     pub custom: bool,
@@ -297,6 +301,7 @@ fn neutral() -> Personality {
         voice_hint: None,
         roast: false,
         explicit: false,
+        topics: Vec::new(),
         custom: false,
     }
 }
