@@ -1707,7 +1707,9 @@ mod tests {
         );
         cabin.set_quip_heat(personality::Heat::Filthy);
         assert_eq!(cabin.status, "Heat: Filthy");
-        crate::config::save(&cabin.cfg).unwrap();
+        // set_quip_heat saves on the persist worker; wait for it, or a
+        // write still in flight can land after a direct save and win.
+        cabin.persist_svc.flush();
         let back = crate::config::load();
         assert_eq!(
             back.quip_heat,
