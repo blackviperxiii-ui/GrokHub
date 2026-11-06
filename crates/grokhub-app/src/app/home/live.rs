@@ -10,7 +10,6 @@ use grokhub_agent::indexers::system_state::{self, DiskUse};
 use grokhub_core::home::text::SendFacts;
 
 const REFRESH: Duration = Duration::from_secs(60);
-const DAY_MS: u64 = 86_400_000;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct LiveFacts {
@@ -102,20 +101,10 @@ pub(super) fn summarize_sends(read: &EgressRead, now_ms: u64) -> LiveFacts {
     if read.locked.is_some() {
         return LiveFacts::default();
     }
-    let since = now_ms.saturating_sub(DAY_MS);
-    let mut counts: Vec<(&str, usize)> = Vec::new();
-    let mut total = 0;
-    for line in read.lines.iter().filter(|l| l.ts_ms >= since) {
-        total += 1;
-        match counts.iter_mut().find(|(d, _)| *d == line.dest) {
-            Some((_, n)) => *n += 1,
-            None => counts.push((&line.dest, 1)),
-        }
-    }
-    let top_dest = counts
-        .iter()
-        .max_by_key(|(_, n)| *n)
-        .map(|(d, _)| (*d).to_string());
+    let (total, top_dest) = grokhub_core::home::text::count_sends(
+        read.lines.iter().map(|l| (l.ts_ms, l.dest.as_str())),
+        now_ms,
+    );
     LiveFacts {
         sends_24h: Some(total),
         top_dest,

@@ -300,3 +300,44 @@ pub fn connection_text(net: NetLink, local_on: bool, facts: &SendFacts) -> TileT
         },
     }
 }
+
+/// Sends in the last day and the destination most of them went to, from
+/// the egress log's `(time, destination)` lines.
+pub fn count_sends<'a>(
+    lines: impl IntoIterator<Item = (u64, &'a str)>,
+    now_ms: u64,
+) -> (usize, Option<String>) {
+    let since = now_ms.saturating_sub(86_400_000);
+    let mut counts: Vec<(&str, usize)> = Vec::new();
+    let mut total = 0;
+    for (_, dest) in lines.into_iter().filter(|(ts, _)| *ts >= since) {
+        total += 1;
+        match counts.iter_mut().find(|(d, _)| *d == dest) {
+            Some((_, n)) => *n += 1,
+            None => counts.push((dest, 1)),
+        }
+    }
+    let top = counts
+        .iter()
+        .max_by_key(|(_, n)| *n)
+        .map(|(d, _)| (*d).to_string());
+    (total, top)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn count_sends_keeps_the_last_day_and_names_the_busiest_place() {
+        let now = 10 * 86_400_000;
+        let lines = [
+            (now - 86_400_001, "old.example"),
+            (now - 5_000, "api.example"),
+            (now - 4_000, "cdn.example"),
+            (now - 3_000, "api.example"),
+        ];
+        assert_eq!(count_sends(lines, now), (3, Some("api.example".into())));
+        assert_eq!(count_sends([], now), (0, None));
+    }
+}

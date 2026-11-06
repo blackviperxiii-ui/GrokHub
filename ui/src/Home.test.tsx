@@ -2,18 +2,20 @@ import "@testing-library/jest-dom/vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { HomePage, HomeSlot, PulseAct, PulsePage, QuickChip, Xp } from "./api";
+import type { HomePage, HomeSlot, PulseAct, PulsePage, QuickChip, TileView, Xp } from "./api";
 
 const api = vi.hoisted(() => ({
   getHome: vi.fn<(conversationId?: string) => Promise<HomePage>>(),
   pulseAct: vi.fn<(id: string, act: PulseAct) => Promise<PulsePage>>(),
   quickChips: vi.fn<(surface: string) => Promise<QuickChip[]>>(),
   chipOutcome: vi.fn<(surface: string, id: string, picked: boolean) => Promise<boolean>>(),
+  libraryPlay: vi.fn<(appId: number) => Promise<string>>(),
+  openUrl: vi.fn<(url: string) => Promise<void>>(),
 }));
 
 vi.mock("./api", () => api);
 
-import { CABIN_NOTE, DESKTOP_NOTE, Home, NO_STEPS, grouped } from "./Home";
+import { Home, NO_STEPS, grouped } from "./Home";
 
 const XP: Xp = {
   level: 3,
@@ -23,6 +25,38 @@ const XP: Xp = {
   today: 110,
   streak: [false, true, false, false, true, false, true],
 };
+
+function view(over: Partial<TileView>): TileView {
+  return {
+    state: "ready",
+    tag: null,
+    text: { big: "", caption: "", detail: null, tone: "normal" },
+    rows: [],
+    progress: null,
+    buttons: [],
+    tap: null,
+    updatedMs: 1,
+    ...over,
+  };
+}
+
+const PC: TileView = view({
+  text: { big: "RTX 4070", caption: "12 GB VRAM · 32 GB RAM", detail: null, tone: "normal" },
+  rows: ["GPU driver", "Memory", "Free for models", "Fan", "Extra"].map((label) => ({
+    label,
+    value: `${label} value`,
+    tone: label === "Free for models" ? "warn" : "normal",
+    tap: null,
+  })),
+  buttons: [{ label: "Tune-up", action: { kind: "ask", ask: "Check this PC and suggest a tune-up." }, primary: true }],
+});
+
+const SQUAD: TileView = view({
+  state: "empty",
+  text: { big: "—", caption: "Friends online show here once Steam friends are linked", detail: null, tone: "quiet" },
+  buttons: [{ label: "Find a duo", action: { kind: "ask", ask: "Find a duo tonight" }, primary: true }],
+  tap: { kind: "ask", ask: "Find a duo tonight" },
+});
 
 function slot(over: Partial<HomeSlot> & Pick<HomeSlot, "slot" | "module" | "name" | "tile">): HomeSlot {
   return { size: "small", purpose: "", ...over };
@@ -65,7 +99,7 @@ const PAGE: HomePage = {
       module: "pc_loadout",
       name: "PC Loadout",
       purpose: "Health at a glance: score, temps, storage, RAM, startup apps",
-      tile: { kind: "cabin" },
+      tile: { kind: "view", view: PC },
     }),
     slot({
       slot: "medium-2",
@@ -106,7 +140,7 @@ const PAGE: HomePage = {
       name: "Up Next",
       tile: { kind: "upNext", games: [{ appId: 10, name: "Portal 2" }] },
     }),
-    slot({ slot: "small-4", module: "squad", name: "Squad", tile: { kind: "desktop" } }),
+    slot({ slot: "small-4", module: "squad", name: "Squad", tile: { kind: "view", view: SQUAD } }),
   ],
 };
 
@@ -122,6 +156,8 @@ describe("Home", () => {
     api.pulseAct.mockReset().mockResolvedValue({} as PulsePage);
     api.quickChips.mockReset().mockResolvedValue([]);
     api.chipOutcome.mockReset().mockResolvedValue(true);
+    api.libraryPlay.mockReset().mockResolvedValue("Starting");
+    api.openUrl.mockReset().mockResolvedValue();
   });
 
   it("renders the layout's tiles in order from the fixture", async () => {
@@ -161,19 +197,63 @@ describe("Home", () => {
     expect(screen.getByText(/Mission Control layout\. Edit Home in the cabin/)).toBeInTheDocument();
   });
 
-  it("shows the cabin's note on a tile the shell can't fill, and the computer's on the web", async () => {
+  it("draws every other module from the shared tile model, cut to its size", async () => {
     api.getHome.mockResolvedValue(PAGE);
-    render(<Home {...routes()} remote={false} />);
+    const go = routes();
+    render(<Home {...go} remote={false} />);
     const pc = await screen.findByRole("listitem", { name: "PC Loadout" });
-    expect(pc).toHaveClass("away");
-    expect(within(pc).getByText(CABIN_NOTE)).toBeInTheDocument();
-    expect(pc).toHaveTextContent("Health at a glance");
-    expect(within(pc).queryByRole("button")).toBeNull();
+    expect(pc).not.toHaveClass("away");
+    expect(pc).toHaveTextContent("RTX 4070");
+    expect(pc).toHaveTextContent("12 GB VRAM · 32 GB RAM");
+    // Medium holds four rows; the fifth waits for a Large slot.
+    expect(within(pc).getAllByRole("listitem")).toHaveLength(4);
+    expect(pc).not.toHaveTextContent("Extra");
+    expect(within(pc).getByText("Free for models value")).toHaveClass("tone-warn");
+    await userEvent.click(within(pc).getByRole("button", { name: "Tune-up" }));
+    expect(go.onAsk).toHaveBeenLastCalledWith("Check this PC and suggest a tune-up.");
+    // A Small empty tile says what it will show and is one tap.
     const squad = tile("Squad");
-    expect(within(squad).getByText(DESKTOP_NOTE)).toBeInTheDocument();
-    expect(within(squad).queryByText(CABIN_NOTE)).toBeNull();
-    // Filled tiles carry no note.
-    expect(within(tile("Automations")).queryByText(CABIN_NOTE)).toBeNull();
+    expect(squad).toHaveTextContent("Friends online show here");
+    expect(within(squad).queryByRole("button", { name: "Find a duo" })).toBeNull();
+    await userEvent.click(within(squad).getByRole("button"));
+    expect(go.onAsk).toHaveBeenLastCalledWith("Find a duo tonight");
+    expect(screen.queryByText(/cabin\b(?! to change)/)).toBeNull();
+  });
+
+  it("a tile this device can't read draws quiet, and Play never starts a game from a browser", async () => {
+    api.getHome.mockResolvedValue({
+      ...PAGE,
+      slots: [
+        slot({
+          slot: "medium-1",
+          size: "medium",
+          module: "storage",
+          name: "Storage",
+          tile: { kind: "view", view: view({ state: "unsupported", text: { big: "—", caption: "Shows on the PC that runs Loadout", detail: null, tone: "quiet" } }) },
+        }),
+        slot({
+          slot: "medium-2",
+          size: "medium",
+          module: "what_to_play",
+          name: "What To Play",
+          tile: {
+            kind: "view",
+            view: view({
+              text: { big: "Portal 2", caption: "Last played 9d ago", detail: null, tone: "normal" },
+              buttons: [{ label: "Play", action: { kind: "play", appId: 620 }, primary: true }],
+            }),
+          },
+        }),
+      ],
+    });
+    const { unmount } = render(<Home {...routes()} remote />);
+    expect(await screen.findByRole("listitem", { name: "Storage" })).toHaveClass("away");
+    await userEvent.click(within(tile("What To Play")).getByRole("button", { name: "Play" }));
+    expect(api.libraryPlay).not.toHaveBeenCalled();
+    unmount();
+    render(<Home {...routes()} remote={false} />);
+    await userEvent.click(within(await screen.findByRole("listitem", { name: "What To Play" })).getByRole("button", { name: "Play" }));
+    expect(api.libraryPlay).toHaveBeenCalledWith(620);
   });
 
   it("a tile click opens its page, a chat row its chat, and an idea fills the chat box", async () => {
