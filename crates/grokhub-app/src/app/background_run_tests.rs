@@ -464,7 +464,7 @@ fn a_cabin_wide_grok_command_still_queues_instead_of_steering() {
 }
 
 #[test]
-fn the_live_work_strip_offers_steer_queue_and_background_stop() {
+fn the_live_work_strip_offers_steer_and_queue_and_activity_holds_the_rest() {
     let _g = crate::config::hold_test_config();
     let (root, mut cabin) = isolated_cabin("bg-strip");
     cabin.threads = vec![crate::threads::ChatThread::new("Chat", false)];
@@ -514,19 +514,48 @@ fn the_live_work_strip_offers_steer_queue_and_background_stop() {
         automation: None,
     });
     let shown = paint(&mut cabin);
-    for want in [
-        "Steer",
-        "Queue",
-        "Queued",
-        "then deploy",
-        "Steer now",
-        "Remove",
-        "Background · run the checks",
-        "0s · cargo test",
-        "Stop",
-    ] {
-        assert!(shown.contains(want), "missing {want:?}: {shown}");
-    }
+    assert!(
+        shown.ends_with("is still working.|Steer|Queue")
+            && !shown.contains("Queued")
+            && !shown.contains("then deploy")
+            && !shown.contains("Background")
+            && !shown.contains("Stop"),
+        "only the choice for the text being typed sits above the box: {shown}"
+    );
+    // The queued message and the background run are Activity rows instead.
+    let items = cabin.activity_items();
+    let queued = items
+        .iter()
+        .find(|i| i.key == "queue:0")
+        .expect("queued message row");
+    assert_eq!(queued.title, "then deploy");
+    assert_eq!(queued.detail, "Next up");
+    assert_eq!(
+        super::activity_dock::row_buttons(queued, cabin.can_steer_live_turn())
+            .iter()
+            .map(|(l, _)| *l)
+            .collect::<Vec<_>>(),
+        ["Steer now", "Remove"]
+    );
+    let run = items
+        .iter()
+        .find(|i| i.key == "bg:7")
+        .expect("background row");
+    assert_eq!(run.title, "run the checks");
+    assert_eq!(run.detail, "0s · cargo test");
+    assert_eq!(
+        super::activity_dock::row_buttons(run, true)
+            .iter()
+            .map(|(l, _)| *l)
+            .collect::<Vec<_>>(),
+        ["Open chat", "Stop"]
+    );
+    cabin.composer.clear();
+    assert_eq!(
+        paint(&mut cabin),
+        "",
+        "no typed text, nothing above the box"
+    );
     cabin.grok_p_rx = None;
     cabin.running = false;
     cabin.bg.runs.clear();

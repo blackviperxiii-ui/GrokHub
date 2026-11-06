@@ -12,8 +12,8 @@ use super::*;
 use grokhub_agent::harness as hx;
 use grokhub_agent::Engine;
 use grokhub_core::{
-    bg_elapsed_label, bg_result_note, bg_result_post, bg_results_follow, bg_task_prompt,
-    bg_task_title, chat_run_dot_alpha, extract_background_tasks, BgEnd, BgOrigin, BG_TASK_MAX,
+    bg_result_note, bg_result_post, bg_results_follow, bg_task_prompt, bg_task_title,
+    extract_background_tasks, BgEnd, BgOrigin, BG_TASK_MAX,
 };
 
 /// `/bg` and a model `BACKGROUND_TASK:` line while Ask is on. A background run
@@ -139,9 +139,6 @@ impl BgWork {
 enum LiveWorkAct {
     Steer,
     Queue,
-    SteerQueued(usize),
-    DropQueued(usize),
-    StopRun(u64),
 }
 
 impl Cabin {
@@ -861,131 +858,79 @@ impl Cabin {
         self.send_chat(text);
     }
 
-    /// Typed text during a run (Steer / Queue), queued messages, and this chat's
-    /// background runs. Nothing paints when there is nothing to act on.
-    pub(super) fn paint_live_work(&mut self, ui: &mut egui::Ui) {
-        let vis = self.visible_thread_id();
-        let typing = self.can_steer_live_turn() && !self.composer.trim().is_empty();
-        let here: Vec<usize> = self
-            .bg
-            .runs
-            .iter()
-            .enumerate()
-            .filter(|(_, r)| r.thread_id == vis && r.origin != BgOrigin::Scheduled)
-            .map(|(i, _)| i)
-            .collect();
-        let queued = if self.running {
-            self.followup_queue.len()
-        } else {
-            0
-        };
-        if !typing && here.is_empty() && queued == 0 {
+    /// Activity's Steer now: the queued message joins the live reply at its
+    /// next step instead of waiting for it to end.
+    pub(super) fn steer_queued(&mut self, i: usize) {
+        if i < self.followup_queue.len() && self.can_steer_live_turn() {
+            let text = self.followup_queue.remove(i);
+            self.bg.queue_next = false;
+            self.send_from_composer(text);
+        }
+    }
+
+    /// Activity's Remove: the message leaves the line. An empty chat box gets
+    /// the text back, so nothing typed is lost.
+    pub(super) fn drop_queued(&mut self, i: usize) {
+        if i >= self.followup_queue.len() {
             return;
         }
-        let steerable = self.can_steer_live_turn();
+        let text = self.followup_queue.remove(i);
+        self.status = self.restore_to_composer(text);
+    }
+
+    /// Activity's Remove on a waiting side question.
+    pub(super) fn drop_side_question(&mut self, i: usize) {
+        if i >= self.side_ask_queue.len() {
+            return;
+        }
+        let text = self.side_ask_queue.remove(i);
+        self.status = self.restore_to_composer(text);
+    }
+
+    fn restore_to_composer(&mut self, text: String) -> String {
+        if self.composer.trim().is_empty() {
+            self.composer = text;
+            self.composer_want_focus = true;
+            "Removed from the queue and put back in the chat box".into()
+        } else {
+            "Removed from the queue".into()
+        }
+    }
+
+    /// Text typed during a run gets the Steer / Queue choice right above the
+    /// box. Everything lined up or running elsewhere (queued messages,
+    /// background tasks) lives in the Activity menu, not here.
+    pub(super) fn paint_live_work(&mut self, ui: &mut egui::Ui) {
+        let typing = self.can_steer_live_turn() && !self.composer.trim().is_empty();
+        if !typing {
+            return;
+        }
         let mut act = None;
-        let t = ui.ctx().input(|i| i.time) as f32;
-        let pulse = chat_run_dot_alpha(t);
-        let live = crate::theme::live();
-        let dot =
-            Color32::from_rgba_unmultiplied(live.r(), live.g(), live.b(), (pulse * 255.0) as u8);
         let meta = |ui: &mut egui::Ui, s: &str, c: Color32| {
             ui.label(RichText::new(s).size(crate::theme::FONT_META).color(c));
         };
-        ui.vertical(|ui| {
-            ui.spacing_mut().item_spacing.y = 4.0;
-            if typing {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    meta(
-                        ui,
-                        grokhub_core::brand::filled("{product} is still working."),
-                        crate::theme::muted(),
-                    );
-                    if crate::cards::ghost_pill(ui, "Steer") {
-                        act = Some(LiveWorkAct::Steer);
-                    }
-                    if crate::cards::ghost_pill(ui, "Queue") {
-                        act = Some(LiveWorkAct::Queue);
-                    }
-                })
-                .response
-                .on_hover_text("Enter steers: the turn stops where it is and carries on with your message. Alt+Enter queues it for after this reply.");
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            meta(
+                ui,
+                grokhub_core::brand::filled("{product} is still working."),
+                crate::theme::muted(),
+            );
+            if crate::cards::ghost_pill(ui, "Steer") {
+                act = Some(LiveWorkAct::Steer);
             }
-            for (i, q) in self.followup_queue.iter().enumerate().take(queued) {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    meta(ui, "Queued", crate::theme::subtle());
-                    let line: String = q.lines().next().unwrap_or("").chars().take(64).collect();
-                    meta(ui, &line, crate::theme::muted());
-                    if steerable && crate::cards::ghost_pill(ui, "Steer now") {
-                        act = Some(LiveWorkAct::SteerQueued(i));
-                    }
-                    if crate::cards::ghost_pill(ui, "Remove") {
-                        act = Some(LiveWorkAct::DropQueued(i));
-                    }
-                });
+            if crate::cards::ghost_pill(ui, "Queue") {
+                act = Some(LiveWorkAct::Queue);
             }
-            for i in &here {
-                let Some(run) = self.bg.runs.get(*i) else {
-                    continue;
-                };
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
-                    if run.live() {
-                        ui.painter().circle_filled(rect.center(), 4.0, dot);
-                    } else {
-                        ui.painter().circle_filled(rect.center(), 4.0, crate::theme::subtle());
-                    }
-                    meta(ui, &format!("Background · {}", run.title), crate::theme::fg());
-                    let mut line = bg_elapsed_label(run.started.elapsed().as_millis() as u64);
-                    if !run.live() {
-                        line = "waiting for this reply to finish".into();
-                    } else if !run.action.is_empty() {
-                        let action: String = run.action.chars().take(40).collect();
-                        line = format!("{line} · {action}");
-                    }
-                    meta(ui, &line, crate::theme::subtle());
-                    if run.live() && crate::cards::ghost_pill(ui, "Stop") {
-                        act = Some(LiveWorkAct::StopRun(run.id));
-                    }
-                });
-            }
-        });
+        })
+        .response
+        .on_hover_text("Enter steers: the turn stops where it is and carries on with your message. Alt+Enter queues it for after this reply.");
         ui.add_space(4.0);
-        if !here.is_empty() {
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(500));
-        }
-        match act {
-            Some(LiveWorkAct::Steer) => {
-                let text = std::mem::take(&mut self.composer);
-                self.bg.queue_next = false;
-                self.send_from_composer(text);
-                self.composer_want_focus = true;
-            }
-            Some(LiveWorkAct::Queue) => {
-                let text = std::mem::take(&mut self.composer);
-                self.bg.queue_next = true;
-                self.send_from_composer(text);
-                self.composer_want_focus = true;
-            }
-            Some(LiveWorkAct::SteerQueued(i)) => {
-                if i < self.followup_queue.len() {
-                    let text = self.followup_queue.remove(i);
-                    self.bg.queue_next = false;
-                    self.send_from_composer(text);
-                }
-            }
-            Some(LiveWorkAct::DropQueued(i)) => {
-                if i < self.followup_queue.len() {
-                    self.followup_queue.remove(i);
-                    self.status = "Removed from the queue".into();
-                }
-            }
-            Some(LiveWorkAct::StopRun(id)) => self.stop_bg_run(id),
-            None => {}
+        if let Some(act) = act {
+            let text = std::mem::take(&mut self.composer);
+            self.bg.queue_next = matches!(act, LiveWorkAct::Queue);
+            self.send_from_composer(text);
+            self.composer_want_focus = true;
         }
     }
 }

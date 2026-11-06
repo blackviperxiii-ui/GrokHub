@@ -11,6 +11,8 @@ pub(super) const DONE_TTL_MS: u64 = 10 * 60 * 1000;
 pub(super) const DOCK_MAX: usize = 6;
 pub(super) const CHAT_TITLE: &str = "Chat reply";
 const DETAIL_MAX: usize = 90;
+/// A queued message's first line in its row.
+const QUEUED_TITLE_MAX: usize = 48;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ActivityStatus {
@@ -18,6 +20,8 @@ pub(super) enum ActivityStatus {
     Waiting,
     Done,
     Failed,
+    /// Lined up behind the live reply: a queued message or side question.
+    Queued,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,6 +30,14 @@ pub(super) enum ActivityKind {
     Routine,
     /// A `/bg` run you started; key `bg:{run id}`.
     Background,
+    /// A message typed while a reply ran; key `queue:{index}`.
+    QueuedMessage,
+    /// A side question waiting for the reply; key `side:{index}`.
+    SideQuestion,
+    /// A local model download; key `dl:model`.
+    Download,
+    /// The screen recording; key `rec:screen`.
+    Recording,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,10 +61,14 @@ pub(super) struct DockState {
 }
 
 fn clip(text: &str) -> String {
+    clip_to(text, DETAIL_MAX)
+}
+
+fn clip_to(text: &str, max: usize) -> String {
     let one = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if one.chars().count() > DETAIL_MAX {
-        let cut: String = one.chars().take(DETAIL_MAX.saturating_sub(1)).collect();
-        format!("{cut}…")
+    if one.chars().count() > max {
+        let cut: String = one.chars().take(max.saturating_sub(1)).collect();
+        format!("{}…", cut.trim_end())
     } else {
         one
     }
@@ -64,6 +80,7 @@ fn status_word(status: ActivityStatus) -> &'static str {
         ActivityStatus::Waiting => "Waiting on you",
         ActivityStatus::Done => "Done",
         ActivityStatus::Failed => "Failed",
+        ActivityStatus::Queued => "Queued",
     }
 }
 
@@ -71,8 +88,9 @@ fn status_rank(status: ActivityStatus) -> u8 {
     match status {
         ActivityStatus::Waiting => 0,
         ActivityStatus::Running => 1,
-        ActivityStatus::Failed => 2,
-        ActivityStatus::Done => 3,
+        ActivityStatus::Queued => 2,
+        ActivityStatus::Failed => 3,
+        ActivityStatus::Done => 4,
     }
 }
 
@@ -95,21 +113,64 @@ pub(super) fn dock_items(items: &[ActivityItem], now: u64) -> Vec<ActivityItem> 
     out
 }
 
-/// The collapsed dock's line, e.g. "1 waiting · 2 running".
+/// The collapsed dock's line, e.g. "1 waiting · 2 running". With anything
+/// queued the running part counts the line: "1 of 3 running".
 pub(super) fn dock_summary(items: &[ActivityItem]) -> String {
     let count = |s: ActivityStatus| items.iter().filter(|i| i.status == s).count();
-    let parts = [
-        (count(ActivityStatus::Waiting), "waiting"),
-        (count(ActivityStatus::Running), "running"),
-        (count(ActivityStatus::Failed), "failed"),
-        (count(ActivityStatus::Done), "done"),
-    ];
-    parts
-        .into_iter()
-        .filter(|(n, _)| *n > 0)
-        .map(|(n, word)| format!("{n} {word}"))
-        .collect::<Vec<_>>()
-        .join(" · ")
+    let running = count(ActivityStatus::Running);
+    let queued = count(ActivityStatus::Queued);
+    let line = match (running, queued) {
+        (0, 0) => String::new(),
+        (n, 0) => format!("{n} running"),
+        (0, q) => format!("{q} queued"),
+        (n, q) => format!("{n} of {} running", n + q),
+    };
+    let waiting = count(ActivityStatus::Waiting);
+    let failed = count(ActivityStatus::Failed);
+    let done = count(ActivityStatus::Done);
+    [
+        (waiting > 0).then(|| format!("{waiting} waiting")),
+        (!line.is_empty()).then_some(line),
+        (failed > 0).then(|| format!("{failed} failed")),
+        (done > 0).then(|| format!("{done} done")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" · ")
+}
+
+/// A queued row's place in line, in plain words.
+pub(super) fn queue_place(i: usize) -> String {
+    match i {
+        0 => "Next up".into(),
+        1 => "2nd in line".into(),
+        2 => "3rd in line".into(),
+        n => format!("{}th in line", n + 1),
+    }
+}
+
+/// The rows for messages typed during a reply, in order. `at` falls by one
+/// per place so newest-first sorting keeps the line in order.
+pub(super) fn queued_items(
+    queue: &[String],
+    kind: ActivityKind,
+    prefix: &str,
+    now: u64,
+) -> Vec<ActivityItem> {
+    queue
+        .iter()
+        .enumerate()
+        .map(|(i, text)| ActivityItem {
+            key: format!("{prefix}:{i}"),
+            kind,
+            title: clip_to(text.lines().next().unwrap_or(""), QUEUED_TITLE_MAX),
+            status: ActivityStatus::Queued,
+            detail: queue_place(i),
+            steps: 0,
+            at: now.saturating_sub(i as u64),
+        })
+        .collect()
 }
 
 /// The progress line under a running chat.
@@ -160,6 +221,59 @@ fn item_chat_id(runs: &[super::background::BgRun], item: &ActivityItem) -> Strin
         .and_then(|id| runs.iter().find(|r| r.id.to_string() == id))
         .map(|r| r.thread_id.clone())
         .unwrap_or_default()
+}
+
+/// What a click in the Activity list asks for. Applied after painting.
+enum DockAct {
+    Open {
+        kind: ActivityKind,
+        chat_id: String,
+        waiting: bool,
+    },
+    SteerQueued(usize),
+    DropQueued(usize),
+    DropSide(usize),
+    StopRun(u64),
+    StopRecording,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RowPick {
+    Open,
+    SteerNow,
+    Remove,
+    Stop,
+}
+
+/// A queued row's place from its `queue:{i}` / `side:{i}` key.
+fn queue_index(key: &str) -> usize {
+    key.split_once(':')
+        .and_then(|(_, i)| i.parse().ok())
+        .unwrap_or(0)
+}
+
+/// The buttons under one Activity row, left to right.
+pub(super) fn row_buttons(item: &ActivityItem, steerable: bool) -> Vec<(&'static str, RowPick)> {
+    match (item.kind, item.status) {
+        (ActivityKind::QueuedMessage, _) if steerable => {
+            vec![
+                ("Steer now", RowPick::SteerNow),
+                ("Remove", RowPick::Remove),
+            ]
+        }
+        (ActivityKind::QueuedMessage | ActivityKind::SideQuestion, _) => {
+            vec![("Remove", RowPick::Remove)]
+        }
+        (ActivityKind::Recording, _) => vec![("Stop", RowPick::Stop)],
+        (ActivityKind::Download, _) => vec![("Open", RowPick::Open)],
+        (ActivityKind::Chat, ActivityStatus::Waiting) => vec![("Review", RowPick::Open)],
+        (ActivityKind::Chat, _) => vec![("Open chat", RowPick::Open)],
+        (ActivityKind::Routine, _) => vec![("Open result", RowPick::Open)],
+        (ActivityKind::Background, ActivityStatus::Running) => {
+            vec![("Open chat", RowPick::Open), ("Stop", RowPick::Stop)]
+        }
+        (ActivityKind::Background, _) => vec![("Open chat", RowPick::Open)],
+    }
 }
 
 fn upsert(map: &mut HashMap<String, ActivityItem>, item: ActivityItem) {
@@ -348,10 +462,12 @@ impl Cabin {
             };
             match &run.end {
                 None => {
+                    let elapsed =
+                        grokhub_core::bg_elapsed_label(run.started.elapsed().as_millis() as u64);
                     let detail = if !run.action.is_empty() {
-                        clip(&run.action)
+                        clip(&format!("{elapsed} · {}", run.action))
                     } else {
-                        "Running now…".into()
+                        format!("{elapsed} · Running now…")
                     };
                     upsert(&mut map, item(ActivityStatus::Running, detail));
                 }
@@ -409,6 +525,61 @@ impl Cabin {
                 }
                 Some(grokhub_core::BgEnd::Stopped) => {}
             }
+        }
+
+        // Messages and side questions typed during a reply wait their turn
+        // here, and only here: the chat box above shows none of them.
+        if self.running {
+            let queued = queued_items(
+                &self.followup_queue,
+                ActivityKind::QueuedMessage,
+                "queue",
+                now,
+            );
+            let side = queued_items(
+                &self.side_ask_queue,
+                ActivityKind::SideQuestion,
+                "side",
+                now,
+            );
+            for item in queued.into_iter().chain(side) {
+                upsert(&mut map, item);
+            }
+        }
+
+        if let Some(dl) = &self.setup.dl {
+            let detail = if dl.verifying {
+                "Checking the file…".to_string()
+            } else {
+                super::model_download_ui::dock_progress_line(dl.done, dl.total)
+            };
+            upsert(
+                &mut map,
+                ActivityItem {
+                    key: "dl:model".into(),
+                    kind: ActivityKind::Download,
+                    title: format!("Downloading {}", dl.model.name),
+                    status: ActivityStatus::Running,
+                    detail,
+                    steps: 0,
+                    at: now,
+                },
+            );
+        }
+
+        if let Some(live) = &self.screen_rec {
+            upsert(
+                &mut map,
+                ActivityItem {
+                    key: "rec:screen".into(),
+                    kind: ActivityKind::Recording,
+                    title: "Screen recording".into(),
+                    status: ActivityStatus::Running,
+                    detail: super::screen_record_ui::recording_dock_line(live),
+                    steps: 0,
+                    at: now,
+                },
+            );
         }
 
         dock_items(&map.into_values().collect::<Vec<_>>(), now)
@@ -473,7 +644,7 @@ impl Cabin {
             let color = match first.status {
                 ActivityStatus::Waiting | ActivityStatus::Failed => crate::theme::signal_red(),
                 ActivityStatus::Running => crate::theme::amber(),
-                ActivityStatus::Done => crate::theme::muted(),
+                ActivityStatus::Done | ActivityStatus::Queued => crate::theme::muted(),
             };
             let c = egui::pos2(top.left() + 8.0, top.center().y);
             ui.painter().circle_filled(c, 3.5, color);
@@ -485,7 +656,8 @@ impl Cabin {
         let total = items.len();
         let listed: Vec<ActivityItem> = items.into_iter().take(DOCK_MAX).collect();
         let more = total.saturating_sub(listed.len());
-        let mut act: Option<(ActivityKind, String, bool)> = None;
+        let mut act: Option<DockAct> = None;
+        let steerable = self.can_steer_live_turn();
         let mut open_card: Option<String> = None;
         let list = egui::Area::new(egui::Id::new("activity-dock-list"))
             .order(egui::Order::Foreground)
@@ -569,12 +741,6 @@ impl Cabin {
                                     crate::theme::amber().gamma_multiply(0.35),
                                 );
                             }
-                            let btn = match (item.kind, item.status) {
-                                (ActivityKind::Chat, ActivityStatus::Waiting) => "Review",
-                                (ActivityKind::Chat, _) => "Open chat",
-                                (ActivityKind::Routine, _) => "Open result",
-                                (ActivityKind::Background, _) => "Open chat",
-                            };
                             let chat_id = item_chat_id(&self.bg.runs, item);
                             // A run that works a Workboard card can open it too.
                             let card = super::board_ui::board_card_for_chat(&self.board, &chat_id);
@@ -588,13 +754,36 @@ impl Cabin {
                                 )
                                 .clicked()
                             };
+                            let place = queue_index(&item.key);
                             ui.horizontal(|ui| {
-                                if row_btn(ui, btn) {
-                                    act = Some((
-                                        item.kind,
-                                        chat_id.clone(),
-                                        item.status == ActivityStatus::Waiting,
-                                    ));
+                                for (label, pick) in row_buttons(item, steerable) {
+                                    if row_btn(ui, label) {
+                                        act = Some(match pick {
+                                            RowPick::Open => DockAct::Open {
+                                                kind: item.kind,
+                                                chat_id: chat_id.clone(),
+                                                waiting: item.status == ActivityStatus::Waiting,
+                                            },
+                                            RowPick::SteerNow => DockAct::SteerQueued(place),
+                                            RowPick::Remove
+                                                if item.kind == ActivityKind::SideQuestion =>
+                                            {
+                                                DockAct::DropSide(place)
+                                            }
+                                            RowPick::Remove => DockAct::DropQueued(place),
+                                            RowPick::Stop
+                                                if item.kind == ActivityKind::Recording =>
+                                            {
+                                                DockAct::StopRecording
+                                            }
+                                            RowPick::Stop => DockAct::StopRun(
+                                                item.key
+                                                    .strip_prefix("bg:")
+                                                    .and_then(|id| id.parse().ok())
+                                                    .unwrap_or(0),
+                                            ),
+                                        });
+                                    }
                                 }
                                 if let Some(card) = card {
                                     if row_btn(ui, "Open card") {
@@ -626,27 +815,47 @@ impl Cabin {
             self.activity.open = false;
             self.open_board_card(&id);
         }
-        if let Some((kind, chat_id, waiting)) = act {
-            self.activity.open = false;
-            match kind {
-                ActivityKind::Chat | ActivityKind::Background => {
-                    self.select_main_nav("chat");
-                    if !chat_id.is_empty() && chat_id != self.visible_thread_id() {
-                        if let Some(idx) = self.threads.iter().position(|t| t.id == chat_id) {
-                            self.switch_thread(idx);
+        match act {
+            None => {}
+            Some(DockAct::Open {
+                kind,
+                chat_id,
+                waiting,
+            }) => {
+                self.activity.open = false;
+                match kind {
+                    ActivityKind::Chat | ActivityKind::Background => {
+                        self.select_main_nav("chat");
+                        if !chat_id.is_empty() && chat_id != self.visible_thread_id() {
+                            if let Some(idx) = self.threads.iter().position(|t| t.id == chat_id) {
+                                self.switch_thread(idx);
+                            }
+                        }
+                        if waiting {
+                            self.harness.jump = Some("ask");
+                            // The chat no longer prints a count line; open the
+                            // rows when there is more than the one card.
+                            self.harness.inbox_open = self.decisions_waiting() > 1;
                         }
                     }
-                    if waiting {
-                        self.harness.jump = Some("ask");
-                        // The chat no longer prints a count line; open the
-                        // rows when there is more than the one card.
-                        self.harness.inbox_open = self.decisions_waiting() > 1;
+                    ActivityKind::Routine => {
+                        self.select_main_nav("automations");
                     }
-                }
-                ActivityKind::Routine => {
-                    self.select_main_nav("automations");
+                    ActivityKind::Download => {
+                        self.nav = Nav::Settings;
+                        self.settings_sec = SettingsSec::AiModels;
+                    }
+                    ActivityKind::QueuedMessage
+                    | ActivityKind::SideQuestion
+                    | ActivityKind::Recording => {}
                 }
             }
+            // Queue edits keep the list open so the next row is one click away.
+            Some(DockAct::SteerQueued(i)) => self.steer_queued(i),
+            Some(DockAct::DropQueued(i)) => self.drop_queued(i),
+            Some(DockAct::DropSide(i)) => self.drop_side_question(i),
+            Some(DockAct::StopRun(id)) => self.stop_bg_run(id),
+            Some(DockAct::StopRecording) => self.stop_screen_recording(),
         }
     }
 
@@ -813,7 +1022,7 @@ mod tests {
             .expect("the run is listed");
         assert_eq!(item.key, format!("bg:{}", run.id));
         assert_eq!(item.status, ActivityStatus::Running);
-        assert_eq!(item.detail, "Reading notes.md");
+        assert_eq!(item.detail, "0s · Reading notes.md");
         assert_eq!(item_chat_id(&cabin.bg.runs, item), run.thread_id);
         cabin.bg.runs[0].end = Some(grokhub_core::BgEnd::Done);
         assert!(
@@ -844,5 +1053,125 @@ mod tests {
         assert_eq!(shown[0].status, ActivityStatus::Waiting);
         assert!(shown[0].detail.contains("Run npm test"));
         assert_eq!(dock_summary(&shown), "1 waiting");
+    }
+
+    #[test]
+    fn a_queue_reads_as_x_of_y_running() {
+        let now = 100 * DONE_TTL_MS;
+        let mut items = vec![item("run", ActivityStatus::Running, 1, now)];
+        items.extend(queued_items(
+            &["then deploy".into()],
+            ActivityKind::QueuedMessage,
+            "queue",
+            now,
+        ));
+        assert_eq!(dock_summary(&items), "1 of 2 running");
+        items.push(item("wait", ActivityStatus::Waiting, 1, now));
+        items.push(item("done", ActivityStatus::Done, 1, now));
+        items.extend(queued_items(
+            &["a side question".into()],
+            ActivityKind::SideQuestion,
+            "side",
+            now,
+        ));
+        assert_eq!(dock_summary(&items), "1 waiting · 1 of 3 running · 1 done");
+        let only_queued = queued_items(&["x".into()], ActivityKind::QueuedMessage, "queue", now);
+        assert_eq!(dock_summary(&only_queued), "1 queued");
+        assert_eq!(dock_summary(&[]), "");
+    }
+
+    #[test]
+    fn queued_rows_keep_their_order_and_place() {
+        let now = 100 * DONE_TTL_MS;
+        let queue = vec![
+            "first thing\nmore".to_string(),
+            "second".into(),
+            "third".into(),
+            "fourth".into(),
+        ];
+        let mut items = queued_items(&queue, ActivityKind::QueuedMessage, "queue", now);
+        items.push(item("run", ActivityStatus::Running, 5, now));
+        let shown = dock_items(&items, now);
+        assert_eq!(
+            shown.iter().map(|i| i.key.as_str()).collect::<Vec<_>>(),
+            ["run", "queue:0", "queue:1", "queue:2", "queue:3"]
+        );
+        assert_eq!(shown[1].title, "first thing");
+        assert_eq!(
+            shown[1..]
+                .iter()
+                .map(|i| i.detail.as_str())
+                .collect::<Vec<_>>(),
+            ["Next up", "2nd in line", "3rd in line", "4th in line"]
+        );
+        assert_eq!(status_word(ActivityStatus::Queued), "Queued");
+    }
+
+    #[test]
+    fn queued_rows_offer_steer_now_only_when_the_reply_can_take_it() {
+        let now = 1_000;
+        let q = &queued_items(&["x".into()], ActivityKind::QueuedMessage, "queue", now)[0];
+        let labels = |steer| {
+            row_buttons(q, steer)
+                .iter()
+                .map(|(l, _)| *l)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(labels(true), ["Steer now", "Remove"]);
+        assert_eq!(labels(false), ["Remove"]);
+        let side = &queued_items(&["y".into()], ActivityKind::SideQuestion, "side", now)[0];
+        assert_eq!(row_buttons(side, true), [("Remove", RowPick::Remove)]);
+        assert_eq!(queue_index("queue:3"), 3);
+        assert_eq!(queue_index("side:0"), 0);
+    }
+
+    #[test]
+    fn the_cabin_lists_queued_messages_only_while_a_reply_runs() {
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.followup_queue = vec!["then deploy".into(), "and tell me".into()];
+        assert!(
+            cabin.activity_items().is_empty(),
+            "nothing runs, so nothing waits on it"
+        );
+        cabin.running = true;
+        cabin.chat_job_thread = Some(cabin.visible_thread_id());
+        let shown = cabin.activity_items();
+        assert_eq!(
+            shown.iter().map(|i| i.key.as_str()).collect::<Vec<_>>(),
+            [
+                "chat:".to_string() + &cabin.visible_thread_id(),
+                "queue:0".into(),
+                "queue:1".into()
+            ]
+        );
+        assert_eq!(dock_summary(&shown), "1 of 3 running");
+    }
+
+    #[test]
+    fn remove_puts_the_text_back_in_an_empty_chat_box() {
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.followup_queue = vec!["then deploy".into(), "and tell me".into()];
+        cabin.drop_queued(0);
+        assert_eq!(cabin.followup_queue, vec!["and tell me".to_string()]);
+        assert_eq!(cabin.composer, "then deploy");
+        assert_eq!(
+            cabin.status,
+            "Removed from the queue and put back in the chat box"
+        );
+        // A box with your words in it keeps them; the removed text just goes.
+        cabin.drop_queued(0);
+        assert!(cabin.followup_queue.is_empty());
+        assert_eq!(cabin.composer, "then deploy");
+        assert_eq!(cabin.status, "Removed from the queue");
+        cabin.side_ask_queue = vec!["btw what time is it".into()];
+        cabin.composer.clear();
+        cabin.drop_side_question(0);
+        assert!(cabin.side_ask_queue.is_empty());
+        assert_eq!(cabin.composer, "btw what time is it");
+        cabin.drop_queued(5);
+        assert_eq!(
+            cabin.composer, "btw what time is it",
+            "a stale index changes nothing"
+        );
     }
 }

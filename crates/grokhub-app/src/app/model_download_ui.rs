@@ -40,6 +40,11 @@ pub(super) struct ModelDl {
     drafter: bool,
 }
 
+/// A download's progress as one Activity line.
+pub(super) fn dock_progress_line(done: u64, total: Option<u64>) -> String {
+    md::progress_line(done, total)
+}
+
 /// Where draft models download.
 pub(super) fn drafters_dir() -> std::path::PathBuf {
     models_dir().join(ld::DRAFTERS_DIR)
