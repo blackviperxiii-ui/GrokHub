@@ -51,6 +51,8 @@ pub(super) struct LiveFacts {
     pub clips: Vec<grokhub_core::clips::Clip>,
     /// The mic and speakers as the OS lists them.
     pub audio: grokhub_core::audio_check::AudioFacts,
+    /// The streaming app open, by its process name.
+    pub stream_app: Option<&'static str>,
 }
 
 impl LiveFacts {
@@ -84,6 +86,7 @@ static SLOT: Mutex<Slot> = Mutex::new(Slot {
             inputs: Vec::new(),
             devices: Vec::new(),
         },
+        stream_app: None,
     },
     at: None,
     reading: false,
@@ -114,6 +117,9 @@ pub(super) fn live_facts() -> LiveFacts {
                     8,
                 );
                 facts.audio = grokhub_core::audio_check::read_facts();
+                facts.stream_app = grokhub_core::home::tiles::stream_app(
+                    &grokhub_desktop::game_guard::running_names(),
+                );
                 if let Ok(mut slot) = SLOT.lock() {
                     slot.facts = facts;
                     slot.at = Some(Instant::now());
