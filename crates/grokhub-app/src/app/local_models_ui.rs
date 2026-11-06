@@ -346,6 +346,31 @@ mod tests {
     }
 
     #[test]
+    fn an_18_plus_chat_with_no_local_model_offers_one_pill_to_get_it() {
+        let _g = crate::config::hold_test_config();
+        let mut cabin = Cabin::quiet_for_test();
+        assert!(!cabin.needs_local_for_adult());
+        std::sync::Arc::make_mut(&mut cabin.messages).push((
+            "assistant".into(),
+            grokhub_core::adult_guard::LOCAL_ONLY_MISSING.into(),
+        ));
+        assert!(cabin.needs_local_for_adult());
+        cabin.open_local_ai();
+        assert_eq!(
+            (cabin.nav, cabin.settings_sec),
+            (Nav::Settings, SettingsSec::AiModels)
+        );
+        // Any later reply, or the paused line, shows no pill.
+        std::sync::Arc::make_mut(&mut cabin.messages).push(("assistant".into(), "hey".into()));
+        assert!(!cabin.needs_local_for_adult());
+        std::sync::Arc::make_mut(&mut cabin.messages).push((
+            "assistant".into(),
+            grokhub_core::adult_guard::LOCAL_ONLY_PAUSED.into(),
+        ));
+        assert!(!cabin.needs_local_for_adult());
+    }
+
+    #[test]
     fn the_upgrade_link_opens_the_picker_on_that_model() {
         let _g = crate::config::hold_test_config();
         let mut cabin = Cabin::quiet_for_test();
