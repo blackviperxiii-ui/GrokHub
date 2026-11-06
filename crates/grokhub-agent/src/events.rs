@@ -1468,8 +1468,10 @@ mod tests {
                     "chat-1".into(),
                     2,
                     vec![
-                        "Brief: repair × critical, done = services, packages, boot errors, ports"
-                            .into(),
+                        format!(
+                            "Brief: repair × critical, done = {}",
+                            crate::brain::SYSTEM_DONE_TEXT
+                        ),
                         "Policy: repair × critical, goal quality (mistakes can break the system)"
                             .into(),
                         "Talk: findings card, reply under 80 words".into(),

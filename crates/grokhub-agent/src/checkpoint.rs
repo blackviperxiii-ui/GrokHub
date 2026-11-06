@@ -307,9 +307,44 @@ pub struct Fresh {
     backed_up: bool,
     /// This run posted a findings card.
     findings: bool,
+    /// The chat this run belongs to, so a backup covers its later turns too.
+    conversation: String,
+}
+
+/// How long one backup covers a chat: Windows makes at most one restore
+/// point a day, so each Do all step asking for its own got skipped anyway.
+const BACKUP_COVERS_MS: u64 = 24 * 60 * 60 * 1000;
+
+static BACKED_UP: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, u64>>> =
+    std::sync::LazyLock::new(Default::default);
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
+}
+
+/// A backup or restore point ran in this chat within the last day.
+fn backed_up_lately(conversation: &str) -> bool {
+    !conversation.is_empty()
+        && BACKED_UP
+            .lock()
+            .ok()
+            .and_then(|m| m.get(conversation).copied())
+            .is_some_and(|at| now_ms().saturating_sub(at) < BACKUP_COVERS_MS)
 }
 
 impl Fresh {
+    /// A run in `conversation`: a backup an earlier turn of the chat took
+    /// (a Do all batch's first step) still covers this one's changes.
+    pub fn for_conversation(conversation: &str) -> Self {
+        Self {
+            backed_up: backed_up_lately(conversation),
+            conversation: conversation.to_string(),
+            ..Self::default()
+        }
+    }
+
     /// Note one tool call that ran without failing.
     pub fn note(&mut self, name: &str, args: &Value) {
         let file = matches!(name, "write" | "search_replace");
@@ -345,6 +380,11 @@ impl Fresh {
                 Step::Backup => {
                     self.backed_up = true;
                     self.unbacked = None;
+                    if !self.conversation.is_empty() {
+                        if let Ok(mut m) = BACKED_UP.lock() {
+                            m.insert(self.conversation.clone(), now_ms());
+                        }
+                    }
                 }
                 Step::Other => {}
             }
@@ -883,6 +923,21 @@ mod tests {
         // Writing a .bak in the workspace is not a system backup.
         h.note("write", &json!({ "path": "fstab.bak" }));
         assert!(Gaps::of(Some(&critical), &[], 3, &h).unbacked.is_some());
+        // A backup an earlier turn of the same chat took covers this run too.
+        let conv = format!("backup-covers-{}", std::process::id());
+        let mut first = Fresh::for_conversation(&conv);
+        first.note(
+            "run_terminal_command",
+            &serde_json::json!({"command": "Checkpoint-Computer -Description before"}),
+        );
+        let mut next = Fresh::for_conversation(&conv);
+        next.note(
+            "run_terminal_command",
+            &serde_json::json!({"command": "sudo sed -i x /etc/fstab"}),
+        );
+        assert_eq!(Gaps::of(Some(&critical), &[], 2, &next).unbacked, None);
+        let other = Fresh::for_conversation("another-chat");
+        assert!(!other.backed_up);
         // Backed up first: the change never counts as unbacked.
         let mut g = Fresh::default();
         g.note("run_terminal_command", &shell("timeshift --create"));

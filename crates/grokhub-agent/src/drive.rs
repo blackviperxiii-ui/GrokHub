@@ -221,10 +221,27 @@ If {product} has no way to do it, mark it cancelled, say so once in plain words 
 /// The line a change request's reply gets when it claims the work is done
 /// but no tool ran this run: nothing backs the claim, so the turn says so.
 pub fn unbacked_done(reply: &str, evidence: usize) -> Option<&'static str> {
-    if evidence > 0 {
+    // A Finished recap sums up earlier turns' work, and the line would also
+    // break the recap card. A reply that says nothing needed doing claims
+    // no change at all.
+    if evidence > 0 || grokhub_core::recap::split_recap(reply).is_some() {
         return None;
     }
     let text = reply.to_lowercase();
+    if [
+        "no fix needed",
+        "no fix is needed",
+        "nothing to fix",
+        "no change needed",
+        "no changes needed",
+        "nothing needed",
+        "no action needed",
+    ]
+    .iter()
+    .any(|p| text.contains(p))
+    {
+        return None;
+    }
     let words: Vec<&str> = text
         .split(|c: char| !(c.is_alphanumeric() || c == '\''))
         .filter(|w| !w.is_empty())
@@ -426,6 +443,14 @@ mod tests {
         );
         // "undone" is not "done".
         assert_eq!(unbacked_done("That change is undone.", 0), None);
+        // A Do all summary recaps earlier turns, and a no-op says nothing changed.
+        let recap = "All four fixes are through.\n\nFinished\n- Done: Restart stopped services\n- Done: Clear temp files";
+        assert!(grokhub_core::recap::split_recap(recap).is_some());
+        assert_eq!(unbacked_done(recap, 0), None);
+        assert_eq!(
+            unbacked_done("No fix needed: those warnings are harmless. Done.", 0),
+            None
+        );
     }
 
     #[test]
