@@ -329,11 +329,9 @@ fn route(
         mode: settings.approvals.mode(),
         desktop: settings.desktop_control && capabilities::current().desktop_control,
         session,
-        voice: personality::voice(
-            config_dir,
-            &settings.personality,
-            settings.explicit_personalities,
-        ),
+        voice: personality::voice(config_dir, settings),
+        // A chat turn adds its voice settings (`chat_turn`); automations have none.
+        voice_session: None,
         suggestions: settings.behavior.suggestions,
     })
 }
@@ -420,7 +418,11 @@ async fn chat_turn(
         pulse_feed::note_chat(&config_dir, &text, grokhub_core::now_ms());
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let route = route(&settings, mode, &config_dir)?;
+        let mut route = route(&settings, mode, &config_dir)?;
+        // Dynamic chat and quips step per turn from this chat's voice settings,
+        // at the page's local hour (UTC when the page sent no clock).
+        let offset = clock.map_or(0, |c| c.at(grokhub_core::now_ms()).utc_offset_min());
+        route.voice_session = Some(personality::voice_config(&config_dir, &settings, offset));
         let id = conversation_id.clone();
         let stop = session.prompt(
             &text,
@@ -1616,17 +1618,14 @@ async fn forget_grant(
 #[tauri::command]
 async fn get_personalities(state: State<'_, ShellState>) -> Result<personality::Page, String> {
     let (dir, now) = (state.config_dir.clone(), current(&state));
-    off_main(move || personality::load(&dir, &now.personality, now.explicit_personalities)).await
+    off_main(move || personality::load(&dir, &now)).await
 }
 
 /// The default voice for every chat; applies to the next message.
 #[tauri::command]
 fn set_personality(state: State<'_, ShellState>, id: String) -> Result<personality::Page, String> {
     let now = current(&state);
-    let picked = personality::allowed(
-        personality::pick(&state.config_dir, &id)?,
-        now.explicit_personalities,
-    )?;
+    let picked = personality::allowed(personality::pick(&state.config_dir, &id)?, now.adults_on())?;
     let next = ShellSettings {
         personality: personality::stored_id(&picked.id),
         ..now
@@ -1636,28 +1635,70 @@ fn set_personality(state: State<'_, ShellState>, id: String) -> Result<personali
     Ok(personalities(&state))
 }
 
-/// Settings → Personality → Adults-only personalities.
+/// Settings → Personality → Adults-only personalities. The first time it
+/// turns on, nothing changes and the page comes back with `ageCheck`, so the
+/// one-time 18+ check comes first ([`confirm_adult`]).
 #[tauri::command]
 fn set_explicit_personalities(
     state: State<'_, ShellState>,
     on: bool,
 ) -> Result<personality::Page, String> {
-    let next = ShellSettings {
-        explicit_personalities: on,
-        ..current(&state)
-    };
+    match current(&state).adults_only(on) {
+        Some(next) => save_shell(&state, next),
+        None => Ok(personality::Page {
+            age_check: true,
+            ..personalities(&state)
+        }),
+    }
+}
+
+/// The 18+ check's yes: remembered for good, with when it was given (never a
+/// birth date), and adults-only turns on.
+#[tauri::command]
+fn confirm_adult(state: State<'_, ShellState>) -> Result<personality::Page, String> {
+    save_shell(
+        &state,
+        current(&state).confirm_adult(grokhub_core::now_ms()),
+    )
+}
+
+/// Settings → Personality → Heat. Clean is not a stop on the dial, so it reads
+/// as Cheeky. Applies to the next message.
+#[tauri::command]
+fn set_quip_heat(
+    state: State<'_, ShellState>,
+    heat: grokhub_core::personality::Heat,
+) -> Result<personality::Page, String> {
+    save_shell(
+        &state,
+        ShellSettings {
+            quip_heat: settings::dial_heat(heat),
+            ..current(&state)
+        },
+    )
+}
+
+/// Settings → Personality → Dynamic chat. Applies to the next message.
+#[tauri::command]
+fn set_dynamic_chat(state: State<'_, ShellState>, on: bool) -> Result<personality::Page, String> {
+    save_shell(
+        &state,
+        ShellSettings {
+            dynamic_chat: on,
+            ..current(&state)
+        },
+    )
+}
+
+/// Saves the shell's settings and returns the Personality page they make.
+fn save_shell(state: &ShellState, next: ShellSettings) -> Result<personality::Page, String> {
     settings::save(&state.config_dir, &next)?;
     *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next;
-    Ok(personalities(&state))
+    Ok(personalities(state))
 }
 
 fn personalities(state: &ShellState) -> personality::Page {
-    let now = current(state);
-    personality::load(
-        &state.config_dir,
-        &now.personality,
-        now.explicit_personalities,
-    )
+    personality::load(&state.config_dir, &current(state))
 }
 
 /// Returns the copy's id with the page, so the editor can open it.
@@ -1709,7 +1750,7 @@ fn nyx_look(
     nyx::look(
         &state.config_dir,
         voice.as_deref().unwrap_or(&now.personality),
-        now.explicit_personalities,
+        now.adults_on(),
         nyx::activity(mood, tool.as_deref()),
     )
 }
@@ -1717,7 +1758,7 @@ fn nyx_look(
 /// Settings → Personality's pictures, by preset id.
 #[tauri::command]
 fn nyx_tiles(state: State<'_, ShellState>, ids: Vec<String>) -> HashMap<String, String> {
-    nyx::tiles(&ids, current(&state).explicit_personalities)
+    nyx::tiles(&ids, current(&state).adults_on())
 }
 
 #[tauri::command]
@@ -2991,6 +3032,9 @@ pub fn run() {
             get_personalities,
             set_personality,
             set_explicit_personalities,
+            confirm_adult,
+            set_quip_heat,
+            set_dynamic_chat,
             duplicate_personality,
             save_personality,
             delete_personality,

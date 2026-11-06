@@ -365,6 +365,7 @@ mod tests {
             desktop: false,
             session: SessionMode::Chat,
             voice: String::new(),
+            voice_session: None,
             suggestions: true,
         };
         assert_eq!(
@@ -472,6 +473,7 @@ mod tests {
             desktop: false,
             session: SessionMode::Plan,
             voice: String::new(),
+            voice_session: None,
             suggestions: true,
         };
         let events = Arc::new(Mutex::new(Vec::new()));

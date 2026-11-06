@@ -29,6 +29,9 @@ vi.mock("./api", () => ({
   getPersonalities: api.getPersonalities,
   setPersonality: vi.fn(),
   setExplicitPersonalities: vi.fn(),
+  confirmAdult: vi.fn(),
+  setQuipHeat: vi.fn(),
+  setDynamicChat: vi.fn(),
   duplicatePersonality: vi.fn(),
   savePersonality: vi.fn(),
   deletePersonality: vi.fn(),
@@ -249,6 +252,9 @@ describe("Personality tiles", () => {
       presets: [preset("nyx", "Nyx"), preset("pirate", "Pirate"), preset("pirate-copy", "Pirate copy", true)],
       problems: [],
       explicit: false,
+      ageCheck: false,
+      heat: "cheeky",
+      dynamicChat: true,
     });
     desktop.call.mockReset().mockImplementation((command, args) => {
       expect(command).toBe("nyx_tiles");
