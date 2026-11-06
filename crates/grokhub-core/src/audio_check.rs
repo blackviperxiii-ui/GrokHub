@@ -633,6 +633,27 @@ pub fn read_facts() -> AudioFacts {
     }
 }
 
+/// [`read_facts`], kept for `max_age` so tiles that ask often (the stream
+/// check every few seconds) don't start a reader each time.
+pub fn read_facts_within(max_age: std::time::Duration) -> AudioFacts {
+    use std::sync::Mutex;
+    use std::time::Instant;
+    static KEPT: Mutex<Option<(Instant, AudioFacts)>> = Mutex::new(None);
+    let fresh = KEPT.lock().ok().and_then(|kept| {
+        kept.as_ref()
+            .filter(|(at, _)| at.elapsed() < max_age)
+            .map(|(_, facts)| facts.clone())
+    });
+    if let Some(facts) = fresh {
+        return facts;
+    }
+    let facts = read_facts();
+    if let Ok(mut kept) = KEPT.lock() {
+        *kept = Some((Instant::now(), facts.clone()));
+    }
+    facts
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

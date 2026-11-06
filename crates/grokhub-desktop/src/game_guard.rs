@@ -222,6 +222,27 @@ pub fn windows_game_label() -> Option<String> {
         .map(|exe| grokhub_core::game_guard::game_label(&exe))
 }
 
+/// Every running process's name (the exe file name on Windows, `comm` on
+/// Linux), for Home's stream check. Empty where it can't be read.
+pub fn running_names() -> Vec<String> {
+    #[cfg(windows)]
+    {
+        exe_names()
+    }
+    #[cfg(target_os = "linux")]
+    {
+        processes()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(comm, _)| comm)
+            .collect()
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
+    {
+        Vec::new()
+    }
+}
+
 /// Every running process's exe file name, for the live-match check
 /// (`grokhub_core::game_profile::set_exe_probe`). Empty when the snapshot fails.
 #[cfg(windows)]

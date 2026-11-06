@@ -106,7 +106,16 @@ pub(super) fn desktop_view(cabin: &mut Cabin, module: &str) -> Option<TileView> 
             tiles::hype_line_view(name.as_deref(), now)
         }
         "audio_check" => tiles::audio_view(&live_facts().audio),
-        "squad" | "tonight" | "stream_check" => tiles::waiting_view(module),
+        "stream_check" => {
+            let f = live_facts();
+            let log = grokhub_core::net_log::load(&crate::config::config_dir());
+            tiles::stream_view(&tiles::StreamFacts {
+                app: f.stream_app,
+                audio: f.audio,
+                online: log.on.then(|| !log.down()),
+            })
+        }
+        "squad" | "tonight" => tiles::waiting_view(module),
         _ => return None,
     };
     Some(v.at(now))

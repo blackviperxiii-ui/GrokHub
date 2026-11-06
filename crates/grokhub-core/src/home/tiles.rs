@@ -354,6 +354,80 @@ pub fn audio_view(f: &AudioFacts) -> TileView {
         .button("Voice settings", TileAction::settings("general"))
 }
 
+/// The streaming app open on this PC, from its process name.
+pub fn stream_app(process_names: &[String]) -> Option<&'static str> {
+    process_names.iter().find_map(|n| {
+        let n = n.to_ascii_lowercase();
+        let n = n.strip_suffix(".exe").unwrap_or(&n);
+        match n {
+            "obs" | "obs64" | "obs32" | "obs-studio" => Some("OBS Studio"),
+            "streamlabs obs" | "streamlabs desktop" => Some("Streamlabs"),
+            "xsplit.core" | "xsplit" => Some("XSplit"),
+            "twitchstudio" | "twitch studio" => Some("Twitch Studio"),
+            _ => None,
+        }
+    })
+}
+
+/// What the stream check reads: all of it already on this PC.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StreamFacts {
+    pub app: Option<&'static str>,
+    pub audio: AudioFacts,
+    /// `Some(false)` when the internet log saw the link drop; `None` while
+    /// the log is off.
+    pub online: Option<bool>,
+}
+
+/// A go-live checklist: streaming app open, mic live, internet up.
+pub fn stream_view(f: &StreamFacts) -> TileView {
+    let app = match f.app {
+        Some(name) => TileRow::new("Streaming app", format!("{name} open"), Tone::Normal),
+        None => TileRow::new("Streaming app", "Not open", Tone::Warn),
+    };
+    let mic = pick(&f.audio.inputs);
+    let mic_row = match (mic, f.audio.devices.iter().any(|(_, ok)| !ok)) {
+        (Some(m), _) if m.muted => TileRow::new("Mic", "Muted", Tone::Alert),
+        (Some(m), _) => TileRow::new("Mic", m.label().to_string(), Tone::Normal),
+        (None, true) => TileRow::new("Mic", "A sound device reports a problem", Tone::Alert),
+        (None, false) if !f.audio.devices.is_empty() => {
+            TileRow::new("Mic", "Sound devices working", Tone::Normal)
+        }
+        (None, false) => TileRow::new("Mic", "Not found", Tone::Warn),
+    };
+    let net = match f.online {
+        Some(true) => TileRow::new("Internet", "Up", Tone::Normal),
+        Some(false) => TileRow::new("Internet", "Down", Tone::Alert),
+        None => TileRow::new("Internet", "Not watched", Tone::Quiet),
+    };
+    let rows = vec![app, mic_row, net];
+    let issues = rows
+        .iter()
+        .filter(|r| matches!(r.tone, Tone::Warn | Tone::Alert))
+        .count();
+    let worst = if rows.iter().any(|r| r.tone == Tone::Alert) {
+        Tone::Alert
+    } else if issues > 0 {
+        Tone::Warn
+    } else {
+        Tone::Normal
+    };
+    let text = match issues {
+        0 => TileText::new(
+            "Ready to go live",
+            "Streaming app, mic and internet look good",
+            worst,
+        ),
+        1 => TileText::new("1 thing to check", "Before you go live", worst),
+        n => TileText::new(format!("{n} things to check"), "Before you go live", worst),
+    };
+    let mut v = TileView::ready(text).rows(rows);
+    if f.online.is_none() {
+        v = v.button("Watch internet", TileAction::turn_on("net_log"));
+    }
+    v.button("Voice settings", TileAction::settings("general"))
+}
+
 /// Minutes of play before the Session Timer suggests a break.
 pub const BREAK_MIN: u64 = 90;
 
@@ -531,15 +605,10 @@ pub fn waiting_view(module: &str) -> TileView {
             "Plan my week",
             TileAction::ask(HOME_CHIPS[3]),
         ),
-        "audio_check" => TileView::empty(
+        _ => TileView::empty(
             "Your mic and output device show here",
             "Voice settings",
             TileAction::settings("general"),
-        ),
-        _ => TileView::empty(
-            "Mic, scene and upload readiness show here before you go live",
-            "Connectors",
-            TileAction::nav("connectors"),
         ),
     }
 }
@@ -735,6 +804,41 @@ mod tests {
         };
         assert_eq!(audio_view(&win).text.caption, "USB DAC reports a problem");
         assert_eq!(audio_view(&AudioFacts::default()).state, TileState::Empty);
+    }
+
+    #[test]
+    fn the_stream_check_counts_what_stands_between_you_and_live() {
+        assert_eq!(stream_app(&["OBS64.EXE".into()]), Some("OBS Studio"));
+        assert_eq!(stream_app(&["chrome.exe".into()]), None);
+        let mic = AudioDevice {
+            name: "mic".into(),
+            description: "Headset mic".into(),
+            muted: false,
+            volume_pct: Some(80),
+            is_default: true,
+        };
+        let ready = StreamFacts {
+            app: Some("OBS Studio"),
+            audio: AudioFacts {
+                inputs: vec![mic.clone()],
+                ..AudioFacts::default()
+            },
+            online: Some(true),
+        };
+        assert_eq!(stream_view(&ready).text.big, "Ready to go live");
+        let muted = StreamFacts {
+            app: None,
+            audio: AudioFacts {
+                inputs: vec![AudioDevice { muted: true, ..mic }],
+                ..AudioFacts::default()
+            },
+            online: None,
+        };
+        let v = stream_view(&muted);
+        assert_eq!(v.text.big, "2 things to check");
+        assert_eq!(v.text.tone, Tone::Alert);
+        assert_eq!(v.rows[1].value, "Muted");
+        assert_eq!(v.buttons[0].label, "Watch internet");
     }
 
     #[test]

@@ -102,8 +102,9 @@ pub fn view(module: &str, src: &Sources<'_>) -> Option<TileView> {
             tiles::session_timer_view(None, clock.started_ms, now)
         }),
         "hype_line" => tiles::hype_line_view(Some(&crate::home::personality_name(src)), now),
-        "audio_check" => pc_only(&|| tiles::audio_view(&grokhub_core::audio_check::read_facts())),
-        "squad" | "tonight" | "stream_check" => tiles::waiting_view(module),
+        "audio_check" => pc_only(&|| tiles::audio_view(&audio())),
+        "stream_check" => pc_only(&|| tiles::stream_view(&stream_facts(src.config_dir))),
+        "squad" | "tonight" => tiles::waiting_view(module),
         _ => return None,
     };
     Some(v)
@@ -125,6 +126,27 @@ fn guard() -> grokhub_core::game_guard::GameGuard {
 #[cfg(mobile)]
 fn guard() -> grokhub_core::game_guard::GameGuard {
     grokhub_core::game_guard::GameGuard::default()
+}
+
+/// The mic and speakers, read at most once a minute.
+fn audio() -> grokhub_core::audio_check::AudioFacts {
+    grokhub_core::audio_check::read_facts_within(Duration::from_secs(60))
+}
+
+/// The streaming app, the mic and the internet, for the stream check.
+#[cfg(desktop)]
+fn stream_facts(config_dir: &Path) -> tiles::StreamFacts {
+    let log = grokhub_core::net_log::load(config_dir);
+    tiles::StreamFacts {
+        app: tiles::stream_app(&grokhub_desktop::game_guard::running_names()),
+        audio: audio(),
+        online: log.on.then(|| !log.down()),
+    }
+}
+
+#[cfg(mobile)]
+fn stream_facts(_config_dir: &Path) -> tiles::StreamFacts {
+    tiles::StreamFacts::default()
 }
 
 static SESSION: Mutex<tiles::SessionClock> = Mutex::new(tiles::SessionClock {
