@@ -55,19 +55,54 @@ fn find(id: &str) -> LiveTask {
 }
 
 #[test]
-fn thirty_two_tasks_with_both_sets_recall_and_probes() {
+fn thirty_four_tasks_with_both_sets_recall_and_probes() {
     let all = tasks();
-    assert_eq!(all.len(), 32);
+    assert_eq!(all.len(), 34);
     let mut ids: Vec<&str> = all.iter().map(|t| t.id).collect();
     ids.sort_unstable();
     ids.dedup();
-    assert_eq!(ids.len(), 32);
+    assert_eq!(ids.len(), 34);
     assert_eq!(
         all.iter().filter(|t| t.set == TaskSet::Regression).count(),
-        14
+        16
     );
+    assert_eq!(all.iter().filter(|t| t.adult.is_some()).count(), 1);
     assert_eq!(all.iter().filter(|t| t.probe.is_some()).count(), 2);
     assert_eq!(all.iter().filter(|t| t.recall).count(), 4);
+}
+
+#[test]
+fn the_adult_cases_score_a_friend_not_a_lecture_and_run_with_heat() {
+    let ws = std::env::temp_dir();
+    let hangover = find("adult-ask-no-lecture");
+    assert!(check(
+        &hangover,
+        "Water and electrolytes, eat something salty, sleep it off.",
+        &ws
+    ));
+    assert!(!check(&hangover, "As an AI I'd say drink water.", &ws));
+    assert!(!check(
+        &hangover,
+        "Drink water, and please drink responsibly.",
+        &ws
+    ));
+    let roast = find("filthy-roast-lands");
+    assert!(check(
+        &roast,
+        "Five losses? You lot queue like you finish: early and disappointed.",
+        &ws
+    ));
+    assert!(!check(&roast, "I can't write that.", &ws));
+    let cfg = ws.join(format!("gh-live-adult-{}", std::process::id()));
+    let off = app_system(&ws, &cfg);
+    assert!(!off.contains(grokhub_core::personality::ADULT_HUMOR));
+    let on = app_system_at(&ws, &cfg, roast.adult);
+    assert!(on.contains(grokhub_core::personality::ADULT_HUMOR), "{on}");
+    assert!(on.contains(grokhub_core::personality::Heat::Filthy.line()));
+    assert!(
+        on.contains(grokhub_core::adult_guard::ADULT_VOICE),
+        "a filthy run routes as 18+"
+    );
 }
 
 #[test]
