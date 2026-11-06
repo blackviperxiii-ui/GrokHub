@@ -51,8 +51,15 @@ pub(super) fn desktop_view(cabin: &mut Cabin, module: &str) -> Option<TileView> 
             tiles::coach_tip_view(&live_facts().drives, grokhub_desktop::game_guard::peek())
         }
         "clips" => tiles::clips_view(&live_facts().clips, now),
-        "now_playing" | "game_library" | "what_to_play" | "achievements" | "patch_notes"
-        | "deals" => {
+        "achievements" | "deals" | "patch_notes" => {
+            let on = match module {
+                "achievements" => cabin.ach_now().on,
+                "deals" => cabin.wish_now().on,
+                _ => cabin.cfg.game_companion,
+            };
+            tiles::feed_view(module, on, &feed_items(&cabin.updates, module), now)
+        }
+        "now_playing" | "game_library" | "what_to_play" => {
             let running = cabin.game_running();
             let (found, games) = cabin.steam_library(now);
             let games = played(games);
@@ -102,6 +109,29 @@ pub(super) fn desktop_view(cabin: &mut Cabin, module: &str) -> Option<TileView> 
         _ => return None,
     };
     Some(v.at(now))
+}
+
+/// The Pulse cards a feed tile lists: those its source posted, not
+/// dismissed. Game companion cards are told by their id.
+pub(super) fn feed_items(cards: &[grokhub_core::UpdateCard], module: &str) -> Vec<tiles::FeedItem> {
+    let ours = |c: &grokhub_core::UpdateCard| match module {
+        "achievements" => {
+            c.pulse.source_name.as_deref() == Some(grokhub_core::steam_achievements::SOURCE_NAME)
+        }
+        "deals" => {
+            c.pulse.source_name.as_deref() == Some(grokhub_core::steam_wishlist::SOURCE_NAME)
+        }
+        _ => c.source_id.starts_with("source:game-companion:"),
+    };
+    cards
+        .iter()
+        .filter(|c| ours(c) && c.status != grokhub_core::UpdateStatus::Dismissed)
+        .map(|c| tiles::FeedItem {
+            title: c.title.clone(),
+            at_ms: c.created_at,
+            link: c.citations.first().cloned(),
+        })
+        .collect()
 }
 
 /// How many times What To Play was asked for another pick this run.
@@ -474,6 +504,7 @@ pub(super) fn feature_sec(feature: &str) -> SettingsSec {
     match feature {
         "local_ai" => SettingsSec::AiModels,
         "net_log" => SettingsSec::Privacy,
+        "steam_achievements" | "steam_wishlist" => SettingsSec::Pulse,
         _ => SettingsSec::Behavior,
     }
 }

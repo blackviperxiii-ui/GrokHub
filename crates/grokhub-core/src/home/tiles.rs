@@ -345,6 +345,74 @@ pub fn hype_line_view(personality: Option<&str>, now: u64) -> TileView {
         .button("Personality", TileAction::settings("personality"))
 }
 
+/// One Pulse card a feed tile lists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FeedItem {
+    pub title: String,
+    pub at_ms: u64,
+    /// The card's first source link, when it has one.
+    pub link: Option<String>,
+}
+
+/// Achievements, Deals and Patch Notes: the cards their opt-in Pulse
+/// source posted (games close to 100%, wishlist sales, what changed since
+/// you last played). `on` is whether that source is switched on.
+pub fn feed_view(module: &str, on: bool, items: &[FeedItem], now: u64) -> TileView {
+    let (feature, off, none, every) = match module {
+        "achievements" => (
+            "steam_achievements",
+            "Turn on achievement nudges and games close to 100% show here",
+            "No game is close to 100% right now",
+            "Checked weekly from your Steam profile",
+        ),
+        "deals" => (
+            "steam_wishlist",
+            "Turn on wishlist alerts and sales on your wishlist show here",
+            "No wishlist sales right now",
+            "Checked daily from your Steam wishlist",
+        ),
+        _ => (
+            "game_companion",
+            "Turn on the game companion and what changed since you last played shows here",
+            "Launch a game and what changed since last time shows here",
+            "Read when you start a game",
+        ),
+    };
+    if !on {
+        return TileView::off(feature, off);
+    }
+    let mut items: Vec<&FeedItem> = items.iter().collect();
+    items.sort_by_key(|i| std::cmp::Reverse(i.at_ms));
+    let Some(top) = items.first() else {
+        return TileView::ready(TileText::new("All caught up", none, Tone::Quiet).detail(every))
+            .button("Open Pulse", TileAction::nav("pulse"));
+    };
+    let open = |i: &FeedItem| match &i.link {
+        Some(url) if url.starts_with("https://") => TileAction::OpenUrl { url: url.clone() },
+        _ => TileAction::nav("pulse"),
+    };
+    let rows = items
+        .iter()
+        .take(ROWS)
+        .map(|i| {
+            TileRow::new(
+                i.title.clone(),
+                crate::pulse::ago_label(i.at_ms, now),
+                Tone::Normal,
+            )
+            .on_tap(open(i))
+        })
+        .collect();
+    let caption = match items.len() {
+        1 => format!("{} · {every}", crate::pulse::ago_label(top.at_ms, now)),
+        n => format!("{} · {n} in Pulse", crate::pulse::ago_label(top.at_ms, now)),
+    };
+    TileView::ready(TileText::new(top.title.clone(), caption, Tone::Normal))
+        .rows(rows)
+        .primary("Open", open(top))
+        .button("Open Pulse", TileAction::nav("pulse"))
+}
+
 /// Modules whose own data comes next; until then they show the library
 /// they'll draw from and one way in.
 pub fn soon_view(module: &str, games: usize) -> TileView {
@@ -510,6 +578,41 @@ mod tests {
         assert_eq!(a.text.big, b.text.big);
         assert_eq!(a.text.caption, "Today's line · Coach");
         assert_ne!(hype_line_view(None, NOW + 86_400_000).text.big, a.text.big);
+    }
+
+    #[test]
+    fn feed_tiles_are_off_until_their_source_is_on_then_list_its_cards() {
+        let off = feed_view("deals", false, &[], NOW);
+        assert_eq!(off.state, TileState::Off);
+        assert_eq!(
+            off.buttons[0].action,
+            TileAction::TurnOn {
+                feature: "steam_wishlist".into()
+            }
+        );
+        let quiet = feed_view("achievements", true, &[], NOW);
+        assert_eq!(quiet.text.big, "All caught up");
+        let items = [
+            FeedItem {
+                title: "Hades: 2 to 100%".into(),
+                at_ms: NOW - 3_600_000,
+                link: Some("https://steamcommunity.com/app/1145360/guides/".into()),
+            },
+            FeedItem {
+                title: "Older".into(),
+                at_ms: NOW - 86_400_000 * 2,
+                link: Some("javascript:alert(1)".into()),
+            },
+        ];
+        let v = feed_view("achievements", true, &items, NOW);
+        assert_eq!(v.text.big, "Hades: 2 to 100%");
+        assert_eq!(v.text.caption, "1h ago · 2 in Pulse");
+        assert!(matches!(v.buttons[0].action, TileAction::OpenUrl { .. }));
+        assert_eq!(
+            v.rows[1].tap,
+            Some(TileAction::nav("pulse")),
+            "only https links open"
+        );
     }
 
     #[test]

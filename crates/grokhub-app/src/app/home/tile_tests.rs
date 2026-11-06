@@ -437,3 +437,27 @@ fn home_redraws_at_its_fastest_tile_but_never_faster_than_five_seconds() {
     assert_eq!(repaint_every(["frame_rate"]), Some(Duration::from_secs(5)));
     assert_eq!(repaint_every(std::iter::empty()), None);
 }
+
+#[test]
+fn feed_tiles_list_only_their_own_live_cards() {
+    use super::views::feed_items;
+    use grokhub_core::update_feed::digest_card;
+    let mut ach = digest_card(
+        "source:steam-achievements:620:48",
+        "Portal 2: 2 to go",
+        "",
+        5,
+    );
+    ach.pulse.source_name = Some(grokhub_core::steam_achievements::SOURCE_NAME.into());
+    ach.citations = vec!["https://steamcommunity.com/app/620/guides/".into()];
+    let mut gone = ach.clone();
+    gone.source_id = "source:steam-achievements:620:47".into();
+    gone.status = grokhub_core::UpdateStatus::Dismissed;
+    let news = digest_card("source:game-companion:570", "Back to Dota 2", "", 6);
+    let cards = [ach, gone, news];
+    let a = feed_items(&cards, "achievements");
+    assert_eq!(a.len(), 1, "a dismissed card stays off Home");
+    assert_eq!(a[0].title, "Portal 2: 2 to go");
+    assert_eq!(feed_items(&cards, "patch_notes")[0].title, "Back to Dota 2");
+    assert!(feed_items(&cards, "deals").is_empty());
+}
