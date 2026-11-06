@@ -408,8 +408,10 @@ pub fn dbfs(samples: &[i16]) -> f32 {
 /// Interleaved little-endian s16 bytes to samples (a trailing odd byte is dropped).
 pub fn s16le(bytes: &[u8]) -> Vec<i16> {
     bytes
-        .chunks_exact(2)
-        .map(|b| i16::from_le_bytes([b[0], b[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&b| i16::from_le_bytes(b))
         .collect()
 }
 
