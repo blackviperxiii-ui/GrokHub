@@ -263,7 +263,9 @@ fn every_fix_card_has_what_why_undo_and_risk() {
             ("I'll finish setting up the apps that were left half-installed.", "soft"),
             ("I'll reinstall the apps with missing files: gtk3, firefox.", "soft"),
             ("I'll turn your network connection off and on again.", "soft"),
-            ("I'll restart the background service that stopped: Spooler.", "soft"),
+            // A Windows admin prompt asks in the app first: on an admin
+            // account UAC is one click, not a password.
+            ("I'll restart the background service that stopped: Spooler.", "hard"),
             ("I'll delete files your computer doesn't need to run anything, to free up space.", "hard"),
             ("I'll restart your computer to finish installing Windows updates.", "hard"),
         ]
@@ -335,6 +337,29 @@ fn apply_writes_the_restore_point_span_before_the_first_mutating_span() {
         std::fs::read(backup_dir(&dir, &run.id).join("0.bak")).unwrap(),
         b"[Resolve]\nDNS=1.1.1.1\n"
     );
+}
+
+#[test]
+fn the_apps_own_windows_restore_point_goes_out_but_a_drafted_admin_step_asks() {
+    let dir = test_dir("fix-win-restore");
+    let p = plan(vec![DraftStep::new(
+        "Start-Process powershell -Verb RunAs -ArgumentList 'Set-MpPreference -DisableRealtimeMonitoring $true'",
+        "Turn off Defender.",
+    )]);
+    let ctx = ApplyCtx {
+        os: Os::Windows,
+        ..ctx(&dir, true, AccessMode::Full, &none)
+    };
+    let mut run = ApplyRun::begin(&ctx, p).unwrap();
+    let Action::Gb { command, .. } = run.next_action() else {
+        panic!("the app's own restore point step is not parked")
+    };
+    assert!(command.contains("Checkpoint-Computer"), "{command}");
+    assert!(run.step_finished("STEP_OK"));
+    let Action::Park { class, .. } = run.next_action() else {
+        panic!("a drafted admin step asks first")
+    };
+    assert_eq!(class, HardClass::SystemAdmin);
 }
 
 #[test]

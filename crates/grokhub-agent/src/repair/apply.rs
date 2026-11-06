@@ -243,7 +243,16 @@ impl ApplyRun {
         while let Some(q) = self.queue.get(self.cursor).cloned() {
             let n = self.cursor + 1;
             let args = json!({ "step": n, "command": q.command }).to_string();
-            match harness::decide(harness::Step::Repair { command: &q.gate }) {
+            let outcome = match harness::decide(harness::Step::Repair { command: &q.gate }) {
+                // The app's own snapshot step, made from no model text: the admin prompt
+                // Windows shows for it is the ask, so it does not park on a second one.
+                GateOutcome::Park {
+                    hard: Some(HardClass::SystemAdmin),
+                    ..
+                } if q.restore => GateOutcome::Allow,
+                outcome => outcome,
+            };
+            match outcome {
                 GateOutcome::Refuse { reason } => {
                     self.write(Span::deny(
                         &self.session_id,
