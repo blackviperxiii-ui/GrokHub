@@ -633,7 +633,9 @@ fn run_turn(
     let mut evidence = 0usize;
     // This run's tool calls, for the checks before the turn ends.
     let mut ran: Vec<crate::post_check::Ran> = Vec::new();
-    let mut post_checked = false;
+    // Where `ran` stood at the last check, and how many notes it sent.
+    let mut post_mark: Option<(usize, Option<crate::post_check::Ran>)> = None;
+    let mut post_notes = 0usize;
     let mut close_continued = false;
     let mut close_steps: Vec<String> = Vec::new();
     let mut close_surfaced = false;
@@ -1077,11 +1079,18 @@ fn run_turn(
         if turn.calls.is_empty() {
             let notes = input.steer.drain();
             if notes.is_empty() {
-                // Item 24: once per run, the reply's totals, test counts and
-                // claimed commits, pushes and edits meet this run's results.
-                if !std::mem::replace(&mut post_checked, true) {
+                // Item 24: the reply's totals, test counts, claimed commits,
+                // pushes and edits, and what it says the checks found meet
+                // this run's results. Again after more calls ran, so a reply
+                // after a checkpoint's extra check is read too.
+                let mark = (ran.len(), ran.last().cloned());
+                if post_notes < crate::post_check::NOTES_PER_RUN
+                    && post_mark.as_ref() != Some(&mark)
+                {
+                    post_mark = Some(mark);
                     let findings = crate::post_check::check(&last_assistant, &ran);
                     if let Some(note) = crate::post_check::note(&findings) {
+                        post_notes += 1;
                         history.push(cabin_note(&note));
                         continue;
                     }
