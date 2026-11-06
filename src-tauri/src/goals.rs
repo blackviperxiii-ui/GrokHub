@@ -19,7 +19,10 @@ pub struct Saved {
 /// Steam games by name and app id, for linking a typed goal to its game.
 pub type Library = Vec<(String, u32)>;
 
+/// The page, after game data the player allowed (OSRS hiscores, Steam
+/// achievements) moved any goal it reads.
 pub fn board(config_dir: &Path, now_ms: u64, offset_min: i32) -> Board {
+    objectives::refresh_from_games(config_dir, now_ms);
     objectives::board(&objectives::load(config_dir), now_ms, offset_min)
 }
 
@@ -179,6 +182,34 @@ mod tests {
             Some("Say what you want to do first.")
         );
         assert!(!objectives::objectives_path(&d).exists());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn the_page_shows_osrs_levels_the_player_allowed_as_checked() {
+        use grokhub_core::osrs_hiscores::{self as osrs, OsrsSaved, OsrsStats, Skill};
+        let d = dir("osrs");
+        let add = GoalAct::Add {
+            text: "99 fishing in osrs".into(),
+        };
+        act(&d, &[add], &Library::new(), NOW, 0).unwrap();
+        let mut saved = OsrsSaved {
+            name: "player".into(),
+            ..OsrsSaved::default()
+        };
+        saved.push(OsrsStats {
+            skills: vec![Skill {
+                name: "Fishing".into(),
+                rank: Some(1),
+                level: Some(93),
+                xp: Some(1),
+            }],
+            activities: Vec::new(),
+            fetched_ms: NOW,
+        });
+        osrs::save(&d, &saved).unwrap();
+        let row = &board(&d, NOW + 1, 0).mine[0];
+        assert_eq!(row.detail, "93 / 99 · 6 levels to 99 · Checked");
         let _ = std::fs::remove_dir_all(&d);
     }
 }

@@ -134,7 +134,13 @@ impl Cabin {
                 return o;
             }
         }
-        let o = objectives::load(&crate::config::config_dir());
+        let dir = crate::config::config_dir();
+        // Game data the player allowed (OSRS hiscores, Steam achievements)
+        // moves goals before they are shown.
+        if !objectives::refresh_from_games(&dir, now_ms()).is_empty() {
+            super::super::loadout_home::forget_xp(ctx);
+        }
+        let o = objectives::load(&dir);
         ctx.data_mut(|d| d.insert_temp::<Cached>(id, (Instant::now(), o.clone())));
         o
     }

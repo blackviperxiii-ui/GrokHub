@@ -213,6 +213,11 @@ impl Cabin {
             match news {
                 MatchNews::Pointer(text) => self.toast_pointer(text, now),
                 MatchNews::End { recap, pointers } => {
+                    // "Win 10 matches" and the like on Objectives move too.
+                    let won = recap.won > recap.lost;
+                    let _ = grokhub_core::objectives::change(&crate::config::config_dir(), |o| {
+                        grokhub_core::objectives::match_finished(o, game, won, recap.kills, now)
+                    });
                     let card = gw::recap_card(game, &recap, &pointers, now);
                     if grokhub_core::post_update(&mut self.updates, card) {
                         self.persist_updates();
@@ -629,6 +634,14 @@ mod tests {
         let (mut cabin, root, _cfg_dir, _pin) = watch_cabin("game-watch-recap");
         cabin.cfg.game_watch = true;
         let tx = fake_feed(&mut cabin);
+        let dir = crate::config::config_dir();
+        let add = [grokhub_core::objectives::GoalAct::Add {
+            text: "win 10 matches in cs2".into(),
+        }];
+        grokhub_core::objectives::change(&dir, |o| {
+            grokhub_core::objectives::apply(o, &add, &[], 1)
+        })
+        .unwrap();
         tx.send(cs2(1, gw::EventKind::Kill)).unwrap();
         tx.send(round(2, 1, true)).unwrap();
         tx.send(round(3, 2, true)).unwrap();
@@ -666,6 +679,9 @@ mod tests {
                 ),
             ]
         );
+        // One win of the two moved the goal, checked by the game's own feed.
+        let goal = grokhub_core::objectives::load(&dir).goals.remove(0);
+        assert_eq!((goal.current, goal.checked), (1, true));
         let _ = std::fs::remove_dir_all(&root);
     }
 

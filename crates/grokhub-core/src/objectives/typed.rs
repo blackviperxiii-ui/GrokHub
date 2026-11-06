@@ -43,9 +43,9 @@ const RATING: [&str; 8] = [
     "gear score",
     "trophies",
 ];
-const COUNT: [&str; 12] = [
+const COUNT: [&str; 15] = [
     "win", "wins", "match", "matches", "game", "games", "run", "runs", "session", "sessions",
-    "kills", "raids",
+    "kill", "kills", "kc", "times", "raids",
 ];
 
 pub(super) fn words(s: &str) -> Vec<String> {
@@ -156,6 +156,8 @@ pub fn parse_goal(text: &str, games: &[KnownGame<'_>]) -> NewGoal {
             Some(n) if !w.iter().any(|x| x.ends_with('%')) => (GoalKind::Achievements, n),
             _ => (GoalKind::Custom, 1),
         }
+    } else if let (true, Some(n)) = (has("total level"), first_number) {
+        (GoalKind::Skill, n)
     } else if let Some(n) = level_number {
         (GoalKind::Skill, n)
     } else if w.iter().any(|x| x == "99") {
