@@ -258,15 +258,23 @@ async function click(s, css) {
 
 /** A top tab by its label, so adding a tab moves no test. */
 // Waits for the tab, since Pulse shows only once the capability report loads.
+// Right after a turn ends the window can still be moving (the reply settles,
+// a card leaves), and WebKitGTK then refuses the click as "not interactable".
+// So click only once the tab sits still, and click again until it is pressed.
 async function tab(s, label) {
-  const el = await waitFor(`the ${label} tab`, () =>
-    wd("POST", `${s}/element`, {
+  const button = `//nav[contains(@class,'tabs')]/button[normalize-space()='${label}']`;
+  await waitFor(`the ${label} view`, async () => {
+    const [on] = await wd("POST", `${s}/elements`, {
       using: "xpath",
-      value: `//nav[contains(@class,'tabs')]/button[normalize-space()='${label}']`,
-    }),
-  );
-  await wd("POST", `${s}/element/${el[ELEMENT]}/click`, {});
-  await onView(s, label);
+      value: `${button}[@aria-pressed='true']`,
+    });
+    if (on) return true;
+    const [el] = await wd("POST", `${s}/elements`, { using: "xpath", value: button });
+    if (el && (await settled(s, el[ELEMENT]))) {
+      await wd("POST", `${s}/element/${el[ELEMENT]}/click`, {});
+    }
+    return null;
+  });
 }
 
 /** Waits until the top tab `label` is the one pressed. A page stays mounted
@@ -812,11 +820,7 @@ async function plan(s, workspace) {
 // name says its safety training was removed only after the notice is read,
 // and Reset to Auto puts local_ai.json back.
 async function localAi(s, config) {
-  const settingsTab = await wd("POST", `${s}/element`, {
-    using: "xpath",
-    value: "//nav[contains(@class,'tabs')]/button[normalize-space()='Settings']",
-  });
-  await wd("POST", `${s}/element/${settingsTab[ELEMENT]}/click`, {});
+  await tab(s, "Settings");
   await section(s, "Local AI");
   const status = await waitFor("the local AI status line", async () => {
     const t = await textOf(s, ".local-ai .local-status");
