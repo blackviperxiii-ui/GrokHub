@@ -1,24 +1,21 @@
 //! The Objectives page on the rail, and the details behind Home's objectives
-//! card: the open mission's full checklist with the weekly streak of days that
-//! finished a task. Home is the one "Ready up" page; this one does not repeat
+//! card: the open mission's full checklist with weeks in a row and this
+//! week's active days. Home is the one "Ready up" page; this one does not repeat
 //! its PC or Up next cards. Workboards stays one click away.
-
-use std::time::{Duration, Instant};
 
 use grokhub_core::mission::{MissionCheckStatus, MissionView};
 use grokhub_core::steam::SteamGame;
+use grokhub_core::xp::WeekView;
 
 use super::library_ui::paint_cover_at;
 use super::loadout_home::{
-    caption, card, diamond, grouped, header, level_xp, objective_progress, xp_hover, XP_PER_LEVEL,
+    caption, card, diamond, header, objective_progress, paint_level_bar, paint_weeks,
 };
 use super::*;
 
-const DAY_MS: u64 = 86_400_000;
 const PAGE_PAD: f32 = 24.0;
 const GAP: f32 = 16.0;
 const UP_NEXT_GAMES: usize = 3;
-const STREAK_REFRESH: Duration = Duration::from_secs(30);
 /// Width of the level bar in the header.
 const XP_W: f32 = 360.0;
 /// The checklist reads as one column, not a stretched banner.
@@ -72,19 +69,6 @@ pub(super) fn day_caption(ymd: &str) -> String {
     format!("{} · {} {d}", DAYS[weekday], MONTHS[(m - 1) as usize])
 }
 
-/// Which of the last seven days (oldest first, today last) finished a task.
-pub(super) fn streak_days(finished_at: &[u64], now: u64) -> [bool; 7] {
-    let today = now / DAY_MS;
-    let mut out = [false; 7];
-    for &ts in finished_at {
-        let day = ts / DAY_MS;
-        if day <= today && today - day < 7 {
-            out[6 - (today - day) as usize] = true;
-        }
-    }
-    out
-}
-
 /// The tag at the end of an objective row.
 pub(super) fn step_tag(status: MissionCheckStatus) -> &'static str {
     match status {
@@ -110,16 +94,12 @@ pub(super) fn up_next(games: &[SteamGame]) -> Vec<SteamGame> {
 
 impl Cabin {
     pub(super) fn ui_mission_control(&mut self, ui: &mut egui::Ui) {
-        let now = now_ms();
         let mission = self.dock_mission(ui.ctx());
         egui::Frame::NONE
             .fill(crate::theme::bg())
             .inner_margin(egui::Margin::same(PAGE_PAD as i8))
             .show(ui, |ui| {
                 ui.set_min_size(ui.available_size());
-                let done = mission
-                    .as_ref()
-                    .map_or(0, |m| objective_progress(&m.checklist).0);
                 // Same width as the checklist, so the XP bar sits above its right edge.
                 // The column is centered on wide windows, and its scroll area is the
                 // column's own width, so no stray scrollbar sits at the window edge.
@@ -133,14 +113,14 @@ impl Cabin {
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
                             ui.set_width(width);
-                            self.mission_header(ui, done);
+                            self.mission_header(ui);
                             ui.add_space(GAP);
                             egui::ScrollArea::vertical()
                                 .id_salt("mission-control-body")
                                 .auto_shrink([false, false])
                                 .show(ui, |ui| {
                                     ui.set_max_width(width);
-                                    self.mission_objectives(ui, mission.as_ref(), now)
+                                    self.mission_objectives(ui, mission.as_ref())
                                 });
                         },
                     );
@@ -148,7 +128,7 @@ impl Cabin {
             });
     }
 
-    fn mission_header(&mut self, ui: &mut egui::Ui, done: usize) {
+    fn mission_header(&mut self, ui: &mut egui::Ui) {
         let show_xp = self.home_layout.xp_bar;
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
@@ -162,41 +142,13 @@ impl Cabin {
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                 if show_xp {
-                    let xp_tally = self.dock_xp(ui.ctx());
-                    let (level, xp, frac) = level_xp(xp_tally, done);
+                    let xp = self.dock_xp(ui.ctx());
                     ui.allocate_ui_with_layout(
                         egui::vec2(XP_W.min(ui.available_width()), 48.0),
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
                             ui.add_space(14.0);
-                            ui.horizontal(|ui| {
-                                ui.label(caption(&format!("Lvl {level}")));
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        ui.label(
-                                            RichText::new(format!(
-                                                "{} / {} XP",
-                                                grouped(xp),
-                                                grouped(level * XP_PER_LEVEL)
-                                            ))
-                                            .size(crate::theme::TYPE_CAPTION)
-                                            .extra_letter_spacing(1.0)
-                                            .strong()
-                                            .color(crate::theme::amber()),
-                                        );
-                                    },
-                                );
-                            });
-                            let (bar, bar_resp) = ui.allocate_exact_size(
-                                egui::vec2(ui.available_width(), 6.0),
-                                egui::Sense::hover(),
-                            );
-                            bar_resp.on_hover_text(xp_hover(xp_tally));
-                            ui.painter().rect_filled(bar, 3.0, crate::theme::selected());
-                            let mut fill = bar;
-                            fill.set_width(bar.width() * frac);
-                            ui.painter().rect_filled(fill, 3.0, crate::theme::amber());
+                            paint_level_bar(ui, &xp, true);
                         },
                     );
                     ui.add_space(GAP);
@@ -208,8 +160,8 @@ impl Cabin {
         });
     }
 
-    fn mission_objectives(&mut self, ui: &mut egui::Ui, mission: Option<&MissionView>, now: u64) {
-        let streak = self.mission_streak(ui.ctx(), now);
+    fn mission_objectives(&mut self, ui: &mut egui::Ui, mission: Option<&MissionView>) {
+        let week = self.dock_xp(ui.ctx()).week;
         mission_card_fill(ui, |ui| {
             let items = mission.map_or(&[][..], |m| &m.checklist[..]);
             let (done, total) = objective_progress(items);
@@ -241,41 +193,8 @@ impl Cabin {
             ui.add_space(8.0);
             ui.separator();
             ui.add_space(4.0);
-            let days = streak.iter().filter(|d| **d).count();
-            ui.horizontal(|ui| {
-                ui.label(caption("Weekly streak"));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let unit = if days == 1 { "DAY" } else { "DAYS" };
-                    ui.label(
-                        RichText::new(format!("{days} {unit}"))
-                            .size(crate::theme::TYPE_CAPTION)
-                            .extra_letter_spacing(1.5)
-                            .strong()
-                            .color(crate::theme::amber()),
-                    );
-                });
-            });
-            paint_streak(ui, &streak);
+            paint_weeks(ui, &week);
         });
-    }
-
-    /// Days of the last week that finished a task, re-read every [`STREAK_REFRESH`].
-    pub(super) fn mission_streak(&self, ctx: &egui::Context, now: u64) -> [bool; 7] {
-        type Cached = (Instant, [bool; 7]);
-        let id = egui::Id::new("mission-control-streak");
-        if let Some((at, days)) = ctx.data(|d| d.get_temp::<Cached>(id)) {
-            if at.elapsed() < STREAK_REFRESH {
-                return days;
-            }
-        }
-        let finished: Vec<u64> = grokhub_core::outcome::read_outcomes(&crate::config::config_dir())
-            .iter()
-            .filter(|o| o.effective(now) == grokhub_core::outcome::OutcomeResult::Success)
-            .map(|o| o.finished_at)
-            .collect();
-        let days = streak_days(&finished, now);
-        ctx.data_mut(|d| d.insert_temp::<Cached>(id, (Instant::now(), days)));
-        days
     }
 }
 
@@ -349,22 +268,22 @@ fn objective_rows(ui: &mut egui::Ui, m: &MissionView) {
     }
 }
 
-/// Seven boxes, today last: amber for a day that finished a task, grey for
-/// one that didn't, and a dashed outline for today until it does.
-pub(super) fn paint_streak(ui: &mut egui::Ui, days: &[bool; 7]) {
-    let w = ui.available_width();
+/// This week's seven boxes, Monday first: amber for a day you earned XP, a
+/// dashed outline for today until you do, grey for the rest.
+pub(super) fn paint_streak(ui: &mut egui::Ui, w: &WeekView) {
+    let width = ui.available_width();
     let gap = 8.0;
-    let box_w = (w - gap * 6.0) / 7.0;
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(w, 40.0), egui::Sense::hover());
+    let box_w = (width - gap * 6.0) / 7.0;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 40.0), egui::Sense::hover());
     let p = ui.painter_at(rect);
-    for (i, on) in days.iter().enumerate() {
+    for (i, on) in w.days.iter().enumerate() {
         let r = egui::Rect::from_min_size(
             rect.min + egui::vec2(i as f32 * (box_w + gap), 0.0),
             egui::vec2(box_w, 40.0),
         );
         if *on {
             p.rect_filled(r, 4.0, crate::theme::amber());
-        } else if i == 6 {
+        } else if i == w.today {
             let dash = egui::Stroke::new(1.0, crate::theme::signal_red());
             for side in [
                 [r.left_top(), r.right_top()],
@@ -408,8 +327,6 @@ pub(super) fn up_next_tile(ui: &mut egui::Ui, g: &SteamGame, size: egui::Vec2) -
 mod tests {
     use super::*;
 
-    const NOW: u64 = 20_754 * DAY_MS + 5 * 3_600_000;
-
     fn game(app_id: u32, name: &str, last_played: u64, playtime_min: u64) -> SteamGame {
         SteamGame {
             app_id,
@@ -427,23 +344,6 @@ mod tests {
         assert_eq!(day_caption("2024-02-29"), "THURSDAY · FEB 29");
         assert_eq!(day_caption("1970-01-01"), "THURSDAY · JAN 1");
         assert_eq!(day_caption("not a day"), "NOT A DAY");
-    }
-
-    #[test]
-    fn the_streak_marks_days_that_finished_a_task() {
-        let finished = [
-            NOW,
-            NOW - 1_000,
-            NOW - 2 * DAY_MS,
-            NOW - 6 * DAY_MS,
-            NOW - 7 * DAY_MS,
-            NOW + DAY_MS,
-        ];
-        assert_eq!(
-            streak_days(&finished, NOW),
-            [true, false, false, false, true, false, true]
-        );
-        assert_eq!(streak_days(&[], NOW), [false; 7]);
     }
 
     #[test]

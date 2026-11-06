@@ -243,8 +243,8 @@ fn fresh_home_fits_without_clipping_at_both_qa_sizes() {
         );
         fully_shown(&texts, "UP NEXT", h);
         fully_shown(&texts, "Games you play with Steam show up here.", h);
-        fully_shown(&texts, "WEEKLY STREAK", h);
-        fully_shown(&texts, "Finish an objective today to start your streak.", h);
+        fully_shown(&texts, "WEEKS IN A ROW", h);
+        fully_shown(&texts, "This week: 0 of 2 days", h);
         let pc = fully_shown(&texts, "PC LOADOUT", h);
         // The grid fits, so the wheel has nothing to scroll (no stray scrollbar).
         let scrolled = home_texts(w, h, true);
