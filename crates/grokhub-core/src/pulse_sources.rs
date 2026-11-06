@@ -1457,11 +1457,15 @@ pub struct Ranked {
 pub const RANK_MIN: u32 = 12;
 /// What a followed source's item that names no interest is worth: you chose the source.
 pub const FOLLOWED_RELEVANCE: u32 = 35;
+/// What news for a library game you play is worth when it names no interest:
+/// more than a followed source, because it is your game.
+pub const PLAYED_RELEVANCE: u32 = 60;
 /// Titles this alike (shared-word ratio, in percent) are the same story.
 pub const SAME_STORY_PCT: u32 = 60;
 
 /// How well an item fits: the strongest interest it names (pinned counts as 100), else
-/// half the weight of the interest its search was for, else the followed-source floor.
+/// half the weight of the interest its search was for, at least the played-game floor
+/// for a Steam game's own news, else the followed-source floor. A muted topic is 0.
 fn relevance(
     item: &SourceItem,
     profile: &crate::interests::InterestProfile,
@@ -1475,12 +1479,16 @@ fn relevance(
     {
         return (weight(t), Some(t.topic.clone()));
     }
-    match item.topic.as_deref() {
-        Some(topic) => match profile.find(topic).filter(|t| !t.muted) {
-            Some(t) => (weight(t) / 2, Some(t.topic.clone())),
-            None => (0, None),
-        },
-        None => (FOLLOWED_RELEVANCE, None),
+    let Some(topic) = item.topic.as_deref() else {
+        return (FOLLOWED_RELEVANCE, None);
+    };
+    let played = item.source_name == format!("{topic} on Steam");
+    match profile.find(topic) {
+        Some(t) if t.muted => (0, None),
+        Some(t) if played => ((weight(t) / 2).max(PLAYED_RELEVANCE), Some(t.topic.clone())),
+        Some(t) => (weight(t) / 2, Some(t.topic.clone())),
+        None if played => (PLAYED_RELEVANCE, Some(topic.to_string())),
+        None => (0, None),
     }
 }
 
@@ -2308,6 +2316,50 @@ mod tests {
             });
         }
         p
+    }
+
+    #[test]
+    fn news_for_a_game_you_play_ranks_without_an_interest() {
+        const H: u64 = 3_600_000;
+        let steam = |game: &str, title: &str| {
+            let mut i = item(title, &format!("https://store.test/{title}"), NOW - H);
+            i.source_name = format!("{game} on Steam");
+            i.topic = Some(game.into());
+            i
+        };
+        let p = profile(&[
+            ("Deep Rock Galactic", 30, false, false),
+            ("Rust", 80, false, true),
+        ]);
+        let got: Vec<(String, u32, Option<String>)> = rank(
+            &[
+                steam("Helldivers 2", "Patch 1.004 notes"),
+                steam("Deep Rock Galactic", "Season 6 roadmap"),
+                steam("Rust", "Monthly update"),
+            ],
+            &p,
+            NOW,
+        )
+        .into_iter()
+        .map(|r| (r.item.title, r.score, r.because))
+        .collect();
+        assert_eq!(PLAYED_RELEVANCE, 60);
+        assert_eq!(
+            got,
+            vec![
+                ("Patch 1.004 notes".into(), 60, Some("Helldivers 2".into())),
+                (
+                    "Season 6 roadmap".into(),
+                    60,
+                    Some("Deep Rock Galactic".into())
+                ),
+            ],
+            "a played game lifts to 60 (×100% fresh ×100% source); a muted one stays out"
+        );
+        // A web search for a topic that is not an interest still scores nothing.
+        let mut search = item("Patch notes roundup", "https://s.test", NOW - H);
+        search.topic = Some("Helldivers 2".into());
+        assert!(rank(&[search], &p, NOW).is_empty());
     }
 
     #[test]

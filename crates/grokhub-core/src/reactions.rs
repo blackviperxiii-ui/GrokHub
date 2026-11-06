@@ -313,11 +313,32 @@ fn feed_kind(source_id: &str) -> Option<&str> {
     rest.split(':').next().filter(|k| !k.is_empty())
 }
 
-/// The "Why am I seeing this?" line: source tag, category and its score.
+/// A reaction category in words: "hn posts" → "Hacker News posts".
+pub fn category_words(category: &str) -> String {
+    match category {
+        "hn posts" => "Hacker News posts".into(),
+        "reddit posts" => "Reddit posts".into(),
+        "github posts" => "GitHub releases".into(),
+        "youtube posts" => "YouTube videos".into(),
+        "rss posts" | "feed posts" => "posts from sites you follow".into(),
+        "web posts" => "web finds".into(),
+        other => match other.strip_suffix(" ideas") {
+            Some(key) => format!("{} ideas", key.replace('_', " ")),
+            None => other.to_string(),
+        },
+    }
+}
+
+/// The "Why am I seeing this?" line, in words: where it came from, then what
+/// your reactions to its kind changed.
 pub fn why_line(reactions: &Reactions, category: &str, tag: &str) -> String {
-    let score = reactions.score(category);
-    let sign = if score > 0 { "+" } else { "" };
-    format!("From {tag} · {category} {sign}{score}")
+    let what = category_words(category);
+    let learned = match reactions.score(category) {
+        s if s > 0 => format!(" You've liked {what} before, so they rank higher."),
+        s if s < 0 => format!(" You've passed on some {what}, so they show a little less."),
+        _ => String::new(),
+    };
+    format!("From {tag}.{learned}")
 }
 
 pub fn load(path: &Path) -> Reactions {
@@ -565,22 +586,29 @@ mod tests {
     }
 
     #[test]
-    fn why_line_names_the_tag_category_and_score() {
+    fn why_line_names_the_source_and_what_reactions_changed_in_words() {
         let mut r = Reactions::default();
         assert_eq!(
             why_line(&r, "game news", "Dota 2 on Steam"),
-            "From Dota 2 on Steam · game news 0"
+            "From Dota 2 on Steam."
         );
         r.record(Outcome::Accepted, "game news", "Dota 2 on Steam", T0);
         assert_eq!(
             why_line(&r, "game news", "Dota 2 on Steam"),
-            "From Dota 2 on Steam · game news +2"
+            "From Dota 2 on Steam. You've liked game news before, so they rank higher."
         );
         r.less("game news");
+        r.less("hn posts");
         assert_eq!(
             why_line(&r, "game news", "Dota 2 on Steam"),
-            "From Dota 2 on Steam · game news -1"
+            "From Dota 2 on Steam. You've passed on some game news, so they show a little less."
         );
+        assert_eq!(
+            why_line(&r, "hn posts", "Hacker News"),
+            "From Hacker News. You've passed on some Hacker News posts, so they show a little less."
+        );
+        assert_eq!(category_words("rss posts"), "posts from sites you follow");
+        assert_eq!(category_words("productivity ideas"), "productivity ideas");
     }
 
     #[test]
