@@ -1,9 +1,10 @@
 //! Level, XP and weeks in a row, worked out from what the user already did.
 //!
 //! Every point is one line in a small ledger (`xp-ledger.json`) under a
-//! unique key: a finished task, a checked step, a Home card run or finished.
-//! The ledger is filled from the outcome log and the card signal log each
-//! time it is read, so it can't drift from what really happened, and it
+//! unique key: a finished task, a checked step, a Home card run or finished,
+//! a goal milestone or a goal done. The ledger is filled from the outcome
+//! log, the card signal log and the goals (`objectives.json`) each time it
+//! is read, so it can't drift from what really happened, and it
 //! keeps a line after those logs rotate, so XP never goes down on its own.
 //! Only an undo (a newer failure line for the same task) takes a task back.
 //!
@@ -63,8 +64,9 @@ const MISSES_TO_LOWER: u32 = 2;
 
 /// What earns XP and the daily soft cap, in one line for a hover or a tip.
 pub const XP_HOW: &str = "XP comes from what you do: 100 per finished task, 25 per checked step, \
-25 per Home card you run and 50 when its work finishes, 10 for each day you're active, and 100 or \
-more when you reach your days for the week. Past 150 a day, card and day XP counts half.";
+50 for each quarter of the way to one of your goals and 200 or more when it's done, 25 per Home \
+card you run and 50 when its work finishes, 10 for each day you're active, and 100 or more when \
+you reach your days for the week. Past 150 a day, card and day XP counts half.";
 
 const MINUTE_MS: u64 = 60_000;
 const DAY_MIN: i64 = 1440;
@@ -77,6 +79,10 @@ pub enum XpKind {
     Step,
     CardRan,
     CardDone,
+    /// A goal's 25, 50 or 75% milestone.
+    Milestone,
+    /// A goal done.
+    GoalDone,
 }
 
 impl XpKind {
@@ -175,6 +181,19 @@ impl XpLedger {
         self.earned != before
     }
 
+    /// Folds in what the goals paid. Goals keep their own payments, so this
+    /// only ever adds. True when anything changed.
+    pub fn ingest_goals(&mut self, goals: &[crate::objectives::Goal], offset_min: i32) -> bool {
+        let mut changed = false;
+        for (key, line) in goals.iter().flat_map(|g| g.earned(offset_min)) {
+            if let std::collections::btree_map::Entry::Vacant(slot) = self.earned.entry(key) {
+                slot.insert(line);
+                changed = true;
+            }
+        }
+        changed
+    }
+
     /// Banks a chat's checked steps, so switching chats never changes XP.
     /// A step is banked once and stays banked.
     pub fn bank_steps(
@@ -239,6 +258,7 @@ pub fn refresh(dir: &Path, open: Option<OpenChat<'_>>, now_ms: u64, offset_min: 
         &crate::card_signals::read_signals(dir),
         offset_min,
     );
+    changed |= ledger.ingest_goals(&crate::objectives::load(dir).goals, offset_min);
     if let Some(c) = open {
         changed |= ledger.bank_steps(c.id, c.items, now_ms, offset_min);
     }
@@ -734,6 +754,38 @@ mod tests {
         assert_eq!(load_ledger(&dir), l);
         std::fs::write(ledger_path(&dir), "{nope").unwrap();
         assert_eq!(load_ledger(&dir), XpLedger::default());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn goal_payments_reach_the_summary_and_survive_a_lost_ledger() {
+        use crate::objectives::{self, GameRef, GoalKind, NewGoal, Origin};
+        let dir = std::env::temp_dir().join(format!("grokhub-xp-goals-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let new = NewGoal {
+            game: GameRef {
+                name: "Old School RuneScape".into(),
+                ..GameRef::default()
+            },
+            text: "99 Fishing".into(),
+            kind: GoalKind::Skill,
+            current: 91,
+            target: 99,
+            origin: Origin::Typed,
+            chat: None,
+        };
+        objectives::change(&dir, |o| {
+            let id = o.add(new, MON).unwrap();
+            o.set_progress(&id, 93, true, MON);
+            o.set_progress(&id, 99, true, MON);
+        })
+        .unwrap();
+        // A milestone (50) and done (300), uncapped, plus the active day.
+        let s = refresh(&dir, None, MON, 0);
+        assert_eq!(s.today, 50 + 300 + 10);
+        std::fs::remove_file(ledger_path(&dir)).unwrap();
+        assert_eq!(refresh(&dir, None, MON, 0).today, 360);
+        assert!(XP_HOW.contains("200 or more when it's done"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
