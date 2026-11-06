@@ -348,6 +348,7 @@ async fn send_chat(
     text: String,
     mode: Option<agent::SessionMode>,
     attachments: Option<Vec<String>>,
+    clock: Option<automations::Clock>,
 ) -> Result<String, String> {
     let mode = mode.unwrap_or_default();
     set_last_chat(&state, &conversation_id);
@@ -367,6 +368,7 @@ async fn send_chat(
         text,
         mode,
         attachments: attachments.unwrap_or_default(),
+        clock,
     };
     chat_turn(app, &state, conversation_id, turn, current(&state)).await
 }
@@ -377,6 +379,8 @@ struct Turn {
     text: String,
     mode: agent::SessionMode,
     attachments: Vec<String>,
+    /// The page's local clock, for the day a finished step's XP lands on.
+    clock: Option<automations::Clock>,
 }
 
 /// The chat the window has open, reopened at the next launch; empty for none.
@@ -406,6 +410,7 @@ async fn chat_turn(
         text,
         mode,
         attachments,
+        clock,
     } = turn;
     let files = state.trays.take(&conversation_id, &attachments)?;
     let session = session(state, &conversation_id);
@@ -417,7 +422,7 @@ async fn chat_turn(
     tauri::async_runtime::spawn_blocking(move || {
         let route = route(&settings, mode, &config_dir)?;
         let id = conversation_id.clone();
-        session.prompt(
+        let stop = session.prompt(
             &text,
             files,
             route,
@@ -432,7 +437,17 @@ async fn chat_turn(
                     },
                 );
             }),
-        )
+        );
+        if stop
+            .as_deref()
+            .is_ok_and(|s| s != agent::HALTED && s != "error")
+        {
+            // A chat's finished checklist moves the XP bar here too.
+            let now = grokhub_core::now_ms();
+            let offset = clock.map_or(0, |c| c.at(now).utc_offset_min());
+            home::turn_done_for(&config_dir, &conversation_id, now, offset);
+        }
+        stop
     })
     .await
     .map_err(|e| e.to_string())?
@@ -2248,6 +2263,7 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
                 text: arg(args, "text")?,
                 mode: arg::<Option<agent::SessionMode>>(args, "mode")?.unwrap_or_default(),
                 attachments: arg::<Option<Vec<String>>>(args, "attachments")?.unwrap_or_default(),
+                clock: arg::<Option<automations::Clock>>(args, "clock")?,
             };
             out(block_on(chat_turn(
                 app.clone(),

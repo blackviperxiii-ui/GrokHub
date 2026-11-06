@@ -217,7 +217,7 @@ export function sendChat(
   mode: SessionMode = "chat",
   attachments: string[] = [],
 ): Promise<string> {
-  return invoke<string>("send_chat", { conversationId, text, mode, attachments });
+  return invoke<string>("send_chat", { conversationId, text, mode, attachments, clock: wallClock() });
 }
 
 /** A file waiting on the composer (src-tauri/src/attach.rs). */
