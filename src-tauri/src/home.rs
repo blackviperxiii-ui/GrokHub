@@ -526,6 +526,34 @@ pub fn own_look(module: &str) -> bool {
     )
 }
 
+/// At the end of a chat turn: banks the chat's checked steps, and once
+/// every step is closed (what Accept as done asks for), the finished task counts for
+/// XP as a pending line on the chat, as the cabin's turn-end review writes
+/// one. Accept as done later writes on the same chat, so nothing pays twice;
+/// a chat with any outcome line already (accepted, undone) is left alone.
+/// True when a line was written.
+pub fn turn_done(config_dir: &Path, chat: Chat<'_>, now: u64, offset_min: i32) -> bool {
+    let (id, title, _) = chat;
+    let title = title.to_string();
+    let page = mission_page(config_dir, Some(chat), now, offset_min);
+    let Some(m) = page.mission else { return false };
+    if !m.can_accept {
+        return false;
+    }
+    if chat_outcome(&oc::read_outcomes(config_dir), id).is_some() {
+        return false;
+    }
+    let sig = oc::topic_signature(&title);
+    let line = TaskOutcome::finished(id, &sig, &OutcomeSignals::default(), now);
+    oc::append_outcome(config_dir, &line).is_ok()
+}
+
+/// [`turn_done`] for a chat by id, with its saved title and to-dos.
+pub fn turn_done_for(config_dir: &Path, id: &str, now: u64, offset_min: i32) -> bool {
+    let (title, todos) = chat_todos(config_dir, id);
+    turn_done(config_dir, (id, &title, todos), now, offset_min)
+}
+
 /// The open chat's title and to-dos, for its mission.
 fn chat_todos(config_dir: &Path, id: &str) -> (String, Todos) {
     let title = history::load(config_dir, id, 1)
@@ -1041,6 +1069,44 @@ mod tests {
         assert_eq!((m.done, m.total), (0, 2));
         assert!(m.can_accept && !m.accepted);
         assert_eq!(undone.xp.xp, 0);
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_turn_that_closes_the_checklist_counts_the_task_once() {
+        let d = dir("turn");
+        let open = || {
+            vec![
+                todo("1", "Write it", "completed"),
+                todo("2", "Ship it", "in_progress"),
+            ]
+        };
+        let closed = || {
+            vec![
+                todo("1", "Write it", "completed"),
+                todo("2", "Ship it", "completed"),
+            ]
+        };
+        assert!(!turn_done(&d, ("shell-t", "Ship", open()), NOW, 0));
+        assert!(!turn_done(&d, ("shell-n", "Ship", Vec::new()), NOW, 0));
+        assert!(oc::read_outcome_lines(&d).is_empty());
+
+        assert!(turn_done(&d, ("shell-t", "Ship", closed()), NOW, 0));
+        let lines = oc::read_outcome_lines(&d);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].task, "shell-t");
+        assert_eq!(lines[0].result, OutcomeResult::Pending);
+        assert_eq!(lines[0].signature, oc::topic_signature("Ship"));
+        let page = mission_page(&d, Some(("shell-t", "Ship", closed())), NOW, 0);
+        // One task and one active day; the steps wait for Accept as done.
+        assert_eq!(page.xp.xp, 100 + 10);
+        assert!(page.mission.expect("mission").can_accept);
+
+        // The next turn writes nothing more, and Accept as done pays no second task.
+        assert!(!turn_done(&d, ("shell-t", "Ship", closed()), NOW + 1, 0));
+        set_mission_done(&d, ("shell-t", "Ship", closed()), true, NOW + 2, 0).unwrap();
+        let page = mission_page(&d, Some(("shell-t", "Ship", closed())), NOW + 2, 0);
+        assert_eq!(page.xp.xp, 100 + 50 + 10);
         let _ = fs::remove_dir_all(&d);
     }
 

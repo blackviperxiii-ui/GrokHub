@@ -14,6 +14,7 @@ pub mod capabilities;
 pub mod chips;
 pub mod connectors;
 pub mod credential;
+pub mod goals;
 pub mod history;
 pub mod home;
 #[cfg(desktop)]
@@ -347,6 +348,7 @@ async fn send_chat(
     text: String,
     mode: Option<agent::SessionMode>,
     attachments: Option<Vec<String>>,
+    clock: Option<automations::Clock>,
 ) -> Result<String, String> {
     let mode = mode.unwrap_or_default();
     set_last_chat(&state, &conversation_id);
@@ -366,6 +368,7 @@ async fn send_chat(
         text,
         mode,
         attachments: attachments.unwrap_or_default(),
+        clock,
     };
     chat_turn(app, &state, conversation_id, turn, current(&state)).await
 }
@@ -376,6 +379,8 @@ struct Turn {
     text: String,
     mode: agent::SessionMode,
     attachments: Vec<String>,
+    /// The page's local clock, for the day a finished step's XP lands on.
+    clock: Option<automations::Clock>,
 }
 
 /// The chat the window has open, reopened at the next launch; empty for none.
@@ -405,6 +410,7 @@ async fn chat_turn(
         text,
         mode,
         attachments,
+        clock,
     } = turn;
     let files = state.trays.take(&conversation_id, &attachments)?;
     let session = session(state, &conversation_id);
@@ -416,7 +422,7 @@ async fn chat_turn(
     tauri::async_runtime::spawn_blocking(move || {
         let route = route(&settings, mode, &config_dir)?;
         let id = conversation_id.clone();
-        session.prompt(
+        let stop = session.prompt(
             &text,
             files,
             route,
@@ -431,7 +437,17 @@ async fn chat_turn(
                     },
                 );
             }),
-        )
+        );
+        if stop
+            .as_deref()
+            .is_ok_and(|s| s != agent::HALTED && s != "error")
+        {
+            // A chat's finished checklist moves the XP bar here too.
+            let now = grokhub_core::now_ms();
+            let offset = clock.map_or(0, |c| c.at(now).utc_offset_min());
+            home::turn_done_for(&config_dir, &conversation_id, now, offset);
+        }
+        stop
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1149,6 +1165,41 @@ async fn set_mission_done(
     let args = home_args(&state, clock, conversation_id, None);
     home_read(args, move |src| {
         home::toggle_for(src, done, src.clock.now_ms)
+    })
+    .await?
+}
+
+/// Objectives → My goals, Today's picks and This season.
+#[tauri::command]
+async fn get_goals(
+    state: State<'_, ShellState>,
+    clock: automations::Clock,
+) -> Result<grokhub_core::objectives::Board, String> {
+    let dir = state.config_dir.clone();
+    let now = grokhub_core::now_ms();
+    off_main(move || goals::board(&dir, now, clock.at(now).utc_offset_min())).await
+}
+
+/// Objectives → add a goal, +1, Done, Drop, Track or Not now. A paired
+/// phone may do these too: goals are the player's own list.
+#[tauri::command]
+async fn goal_act(
+    state: State<'_, ShellState>,
+    clock: automations::Clock,
+    acts: Vec<grokhub_core::objectives::GoalAct>,
+) -> Result<goals::Saved, String> {
+    let dir = state.config_dir.clone();
+    let now = grokhub_core::now_ms();
+    off_main(move || {
+        let library = if acts
+            .iter()
+            .any(|a| matches!(a, grokhub_core::objectives::GoalAct::Add { .. }))
+        {
+            goals::library()
+        } else {
+            Vec::new()
+        };
+        goals::act(&dir, &acts, &library, now, clock.at(now).utc_offset_min())
     })
     .await?
 }
@@ -2212,6 +2263,7 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
                 text: arg(args, "text")?,
                 mode: arg::<Option<agent::SessionMode>>(args, "mode")?.unwrap_or_default(),
                 attachments: arg::<Option<Vec<String>>>(args, "attachments")?.unwrap_or_default(),
+                clock: arg::<Option<automations::Clock>>(args, "clock")?,
             };
             out(block_on(chat_turn(
                 app.clone(),
@@ -3020,6 +3072,8 @@ pub fn run() {
             get_home,
             get_mission,
             set_mission_done,
+            get_goals,
+            goal_act,
             get_library,
             library_cover,
             library_play,

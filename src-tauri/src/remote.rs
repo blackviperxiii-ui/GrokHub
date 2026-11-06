@@ -129,6 +129,9 @@ pub const WEB_COMMANDS: &[&str] = &[
     // is only which tiles show, so a paired phone may edit it.
     "get_home",
     "get_mission",
+    // Goals are the player's own list; a paired phone may add and move them.
+    "get_goals",
+    "goal_act",
     "home_catalog",
     "set_home_layout",
     // Chips read and teach chip memory only; a tap acts on the page.
@@ -1098,7 +1101,14 @@ mod tests {
 
     #[test]
     fn the_web_reads_home_and_objectives_but_never_accepts_a_mission() {
-        for name in ["get_home", "get_mission", "home_catalog", "set_home_layout"] {
+        for name in [
+            "get_home",
+            "get_mission",
+            "get_goals",
+            "goal_act",
+            "home_catalog",
+            "set_home_layout",
+        ] {
             assert!(web_command(name), "{name}");
         }
         assert!(!web_command("set_mission_done"));
