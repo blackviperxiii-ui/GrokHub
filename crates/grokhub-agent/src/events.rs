@@ -280,6 +280,19 @@ impl NativeEngine {
         crate::route::goal::set_goal(&self.conversation_id, goal);
         // Brain 2: the run's checkpoints read the done list and care.
         crate::checkpoint::set_turn_brief(&self.conversation_id, brief.clone());
+        // The chat's voice for this turn (dynamic chat, quips, heat): a note
+        // for the turn's volatile block, never the cached prefix.
+        crate::voice_session::step(
+            &self.conversation_id,
+            crate::voice_session::TurnView {
+                text,
+                intent: brief.intent.as_str(),
+                care: brief.care.as_str(),
+                mood: &brief.mood,
+                background,
+                hour: None,
+            },
+        );
         // An unclear ask (no rule, no sure local sort, no model) is only a
         // guess at chat: it gets no playbook and no talk style, so a guess
         // never turns a real ask into small talk. The model reads the ask as is.

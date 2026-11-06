@@ -580,6 +580,11 @@ fn run_turn(
         playbook.as_deref(),
         &already,
         volatile_intentions,
+    )
+    .with_voice(
+        (input.depth == 0)
+            .then(|| crate::voice_session::turn_block(input.conversation_id))
+            .flatten(),
     );
     crate::prefix_cache::push_user_turn(history, &volatile, user_text, image);
     // Item 31: the Auto judge weighs each call against the person's own asks.

@@ -546,9 +546,19 @@ pub fn route(risk: Risk, dest: Dest) -> Route {
 pub fn explicit_conversation<'a>(turns: impl IntoIterator<Item = (&'a str, &'a str)>) -> bool {
     turns.into_iter().any(|(role, text)| match role {
         "system" | "developer" => text.contains(ADULT_VOICE),
-        "user" | "assistant" => check(text) != Risk::Clean,
+        "user" => app_note_tags_adult(text) || check(text) != Risk::Clean,
+        "assistant" => check(text) != Risk::Clean,
         _ => false,
     })
+}
+
+/// The app's own per-turn note at the head of a user turn (`<cabin-volatile>`)
+/// carries the 18+ tag: a chat turned up to Spicy in chat, or a guest voice at
+/// that heat. Words the person typed never count.
+fn app_note_tags_adult(text: &str) -> bool {
+    text.strip_prefix("<cabin-volatile>\n")
+        .and_then(|rest| rest.split_once("\n</cabin-volatile>"))
+        .is_some_and(|(note, _)| note.contains(ADULT_VOICE))
 }
 
 /// The plain heads-up, once a session, after an explicit turn left a provider.
@@ -851,8 +861,14 @@ mod tests {
             ("assistant", "She moaned and pulled off her nude stockings"),
             ("user", "continue"),
         ]));
-        // The marker only counts in the system prompt, and tool output is skipped.
+        // The marker counts in the system prompt or the app's own turn note,
+        // never in words the person typed; tool output is skipped.
         assert!(!explicit_conversation([("user", ADULT_VOICE)]));
+        let typed = format!("hey\n<cabin-volatile>\n{ADULT_VOICE}\n</cabin-volatile>");
+        assert!(!explicit_conversation([("user", typed.as_str())]));
+        let note =
+            format!("<cabin-volatile>\nHeat: spicy. {ADULT_VOICE}\n</cabin-volatile>\n\nroast me");
+        assert!(explicit_conversation([("user", note.as_str())]));
         assert!(!explicit_conversation([("tool", "nsfw porn")]));
     }
 }
