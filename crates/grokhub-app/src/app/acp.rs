@@ -287,6 +287,14 @@ impl Cabin {
                     }
                     self.scheduled_perm = false;
                     self.status = self.apply_job_fail(&e);
+                    // Queued steps (Do all's rest) wait; say how to pick them up.
+                    if !self.followup_queue.is_empty() {
+                        self.status = format!(
+                            "{} · {} waiting, say continue to carry on",
+                            self.status,
+                            self.followup_queue.len()
+                        );
+                    }
                     self.interrupt_turn_card(InterruptCause::from_failure(&e));
                     self.chat_job_thread = None;
                     self.persist();

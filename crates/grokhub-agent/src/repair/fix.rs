@@ -493,6 +493,9 @@ fn safe_name(raw: &str) -> Option<String> {
 }
 
 /// First words of the finding's detail lines (unit, service or package names).
+/// Most services one restart fix starts.
+const SERVICES_CAP: usize = 12;
+
 fn detail_names(finding: &Finding, cap: usize) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for line in finding.detail.lines() {
@@ -578,34 +581,51 @@ fn plan_for(f: &Finding, os: Os, has_bin: &dyn Fn(&str) -> bool) -> Option<FixPl
             )
         }
         ProbeId::FailedServices | ProbeId::ServicesStoppedAuto => {
-            let names = detail_names(f, 3);
+            // Every service the check flagged, not the first few.
+            let names = detail_names(f, SERVICES_CAP);
             if names.is_empty() {
                 return None;
             }
-            let steps = names
-                .iter()
-                .map(|n| match os {
-                    Os::Linux => DraftStep::new(
-                        format!("systemctl restart {n}"),
-                        format!(
-                            "Restart the background service {}.",
-                            n.trim_end_matches(".service")
-                        ),
+            let steps = match os {
+                Os::Linux => names
+                    .iter()
+                    .map(|n| {
+                        DraftStep::new(
+                            format!("systemctl restart {n}"),
+                            format!(
+                                "Restart the background service {}.",
+                                n.trim_end_matches(".service")
+                            ),
+                        )
+                    })
+                    .collect(),
+                // One admin prompt starts them all.
+                Os::Windows => vec![DraftStep::new(
+                    elevate(os, &format!("Start-Service -Name {}", names.join(","))),
+                    format!(
+                        "Start the background {} {}.",
+                        if names.len() == 1 {
+                            "service"
+                        } else {
+                            "services"
+                        },
+                        names.join(", ")
                     ),
-                    Os::Windows => DraftStep::new(
-                        elevate(os, &format!("Start-Service -Name {n}")),
-                        format!("Start the background service {n}."),
-                    )
-                    .elevated(),
-                })
-                .collect();
+                )
+                .elevated()],
+            };
             let shown: Vec<&str> = names
                 .iter()
                 .map(|n| n.trim_end_matches(".service"))
                 .collect();
             plan(
                 &format!(
-                    "I'll restart the background service that stopped: {}.",
+                    "I'll restart the background {} that stopped: {}.",
+                    if shown.len() == 1 {
+                        "service"
+                    } else {
+                        "services"
+                    },
                     shown.join(", ")
                 ),
                 "A service that crashed often works again after a restart.",

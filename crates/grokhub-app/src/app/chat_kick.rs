@@ -32,6 +32,14 @@ impl Cabin {
         if self.try_diagnose_intent(&text) {
             return;
         }
+        // A bare "continue" after a run stopped early (a provider error left
+        // Do all's next steps waiting) sends the next waiting step, not a
+        // new turn that re-reads the whole chat to guess what was meant.
+        let mut resumed_step = false;
+        if !self.running && is_bare_continue(&text) && !self.followup_queue.is_empty() {
+            text = self.followup_queue.remove(0);
+            resumed_step = true;
+        }
         self.begin_turn_origin();
         if self.apply_unparsed_native_slash(&text) {
             return;
@@ -116,6 +124,10 @@ impl Cabin {
             self.speak_next = false;
             self.status = self.no_agent_note().into();
             // Signed out: hand the typed text back and offer sign-in inline.
+            // A waiting step it would have sent keeps its place.
+            if resumed_step {
+                self.followup_queue.insert(0, text);
+            }
             if self.composer.trim().is_empty() {
                 self.composer = typed;
             }
@@ -398,6 +410,68 @@ impl Cabin {
                 self.pending_kick = None;
                 self.kick_model(consume);
             }
+        }
+    }
+}
+
+/// "continue", "go on", "keep going", "try again" and the like, alone.
+pub(super) fn is_bare_continue(text: &str) -> bool {
+    let t: String = text
+        .trim()
+        .trim_end_matches(['.', '!', '?'])
+        .to_ascii_lowercase();
+    matches!(
+        t.as_str(),
+        "continue"
+            | "cont"
+            | "go on"
+            | "go ahead"
+            | "keep going"
+            | "carry on"
+            | "resume"
+            | "try again"
+            | "retry"
+            | "next"
+            | "proceed"
+    )
+}
+
+#[cfg(test)]
+mod continue_tests {
+    use super::*;
+
+    #[test]
+    fn a_bare_continue_is_told_apart_from_a_real_ask() {
+        for t in [
+            "Continue",
+            "continue.",
+            " go on ",
+            "Keep going!",
+            "try again",
+        ] {
+            assert!(is_bare_continue(t), "{t}");
+        }
+        for t in [
+            "continue with the disk cleanup",
+            "next week",
+            "go on then, delete it",
+        ] {
+            assert!(!is_bare_continue(t), "{t}");
+        }
+    }
+
+    #[test]
+    fn continue_never_loses_a_waiting_do_all_step() {
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.followup_queue = vec!["Fix 2: Clear temp files".into(), "Do all summary".into()];
+        cabin.send_chat("Continue".into());
+        if cabin.signin_card {
+            // Signed out: nothing ran, so the step keeps its place.
+            assert_eq!(cabin.followup_queue.len(), 2);
+            assert_eq!(cabin.followup_queue[0], "Fix 2: Clear temp files");
+        } else {
+            // Signed in: the step went instead of a bare "Continue".
+            assert_eq!(cabin.followup_queue, ["Do all summary"]);
         }
     }
 }

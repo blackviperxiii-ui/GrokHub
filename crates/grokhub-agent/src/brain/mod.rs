@@ -9,6 +9,8 @@ mod local_sort;
 pub mod playbook;
 mod policy;
 
+#[cfg(test)]
+pub(crate) use brief::SYSTEM_DONE_TEXT;
 pub use brief::{
     brief_for_turn, classify, classify_effort, effort_word, is_follow_up, read_briefs,
     record_brief, rules, AskModel, Brief, BriefInput, BriefLine, Care, Intent, BRIEF_CLASS,

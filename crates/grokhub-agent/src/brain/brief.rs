@@ -622,8 +622,19 @@ fn system_change(t: &str, ws: &[&str]) -> bool {
     any_word(ws, SYSTEM_WORDS) || t.contains("/etc/")
 }
 
+/// A system repair's done-list as its brief label reads, on this OS.
+#[cfg(test)]
+pub(crate) const SYSTEM_DONE_TEXT: &str = if cfg!(windows) {
+    "services, boot errors"
+} else {
+    "services, packages, boot errors, ports"
+};
+
 fn done_for(intent: Intent, domain: &str) -> Vec<String> {
     let list: &[&str] = match (intent, domain) {
+        // Windows has no packages or ports check, so a run there could only
+        // cancel those items.
+        (Intent::Repair, "system") if cfg!(windows) => &["services", "boot errors"],
         (Intent::Repair, "system") => &["services", "packages", "boot errors", "ports"],
         (Intent::Repair, "pc-health") => &[
             "read-only check run first",
@@ -1413,7 +1424,7 @@ mod tests {
         let repair = rules(&input("the printer service won't start after the update")).unwrap();
         assert_eq!(
             repair.label(),
-            "repair × critical, done = services, packages, boot errors, ports"
+            format!("repair × critical, done = {SYSTEM_DONE_TEXT}")
         );
         assert_eq!(
             rules(&input("hi there")).unwrap().label(),

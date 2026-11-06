@@ -599,10 +599,30 @@ fn a_snapshot_is_the_first_step_and_its_guidance_names_it() {
         backend: SnapshotBackend::SystemRestore,
         label: "grokhub-repair-1".into(),
     };
-    assert_eq!(
-        cp.create_step().unwrap(),
-        "Start-Process powershell -Verb RunAs -Wait -ArgumentList '-NoProfile -Command Checkpoint-Computer -Description grokhub-repair-1 -RestorePointType MODIFY_SETTINGS'"
+    let step = cp.create_step().unwrap();
+    assert!(
+        step.starts_with("$p = Start-Process powershell -Verb RunAs -Wait -PassThru -ArgumentList '-NoProfile -Command "),
+        "{step}"
     );
+    assert!(step.contains(
+        "Checkpoint-Computer -Description grokhub-repair-1 -RestorePointType MODIFY_SETTINGS"
+    ));
+    // It says what Windows did, and never turns System Restore on.
+    assert!(step.contains("Windows skipped the restore point"), "{step}");
+    assert!(step.contains("System Restore is off"), "{step}");
+    assert!(
+        !step.to_ascii_lowercase().contains("enable-computerrestore"),
+        "{step}"
+    );
+    // The elevated window's script stays inside its single quotes.
+    let inner = step
+        .split("-Command ")
+        .nth(1)
+        .unwrap()
+        .split("'; switch")
+        .next()
+        .unwrap();
+    assert!(!inner.contains('\''), "{inner}");
     assert_eq!(
         detect_backends(Os::Linux, &none),
         Vec::<SnapshotBackend>::new()

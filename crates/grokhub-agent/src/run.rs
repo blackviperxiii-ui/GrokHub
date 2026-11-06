@@ -641,7 +641,7 @@ fn run_turn(
     let brief = drive
         .as_ref()
         .and_then(|_| crate::checkpoint::turn_brief(input.conversation_id));
-    let mut fresh = crate::checkpoint::Fresh::default();
+    let mut fresh = crate::checkpoint::Fresh::for_conversation(input.conversation_id);
     let (mut checkpoint_at, mut checkpoint_due) = (0usize, Vec::<String>::new());
     // Brain 5: a long run in a progress style gets a note at each phase boundary.
     let mut progress = drive
