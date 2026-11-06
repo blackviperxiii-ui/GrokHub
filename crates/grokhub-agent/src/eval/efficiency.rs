@@ -856,9 +856,6 @@ mod tests {
         }
     }
 
-    /// First-request system prompt bytes on every row before KB-04.
-    const SYSTEM_BYTES_BEFORE_KB04: usize = 10_943;
-
     /// KB-04: the token gate for the Workboard. A board full of cards costs a
     /// normal turn 0 bytes; a resume turn pays one capped note, in its input,
     /// once; the request after it adds nothing new.
@@ -891,13 +888,12 @@ mod tests {
         assert_eq!(idle.request_bytes, off.request_bytes, "0 B per turn");
         assert_eq!(idle.stable_prefix_pct, off.stable_prefix_pct);
 
-        // The board sentence (156 B) left the cabin rules: the system prompt
-        // was 10,943 B before KB-04.
-        assert!(
-            off.first_system_bytes <= SYSTEM_BYTES_BEFORE_KB04 - 156,
-            "{} system bytes",
-            off.first_system_bytes
-        );
+        // The board sentence left the cabin rules (KB-04). Checked by text,
+        // not a byte count, so other rules can grow without hiding it.
+        let rules = grokhub_core::cabin_rules::cabin_static_rules(false);
+        for board in ["Workboard", "workboard", "WORK_PIN", "WORK_UPDATE"] {
+            assert!(!rules.contains(board), "{board} is back in the cabin rules");
+        }
 
         // Nothing about the board in the system prompt or the tool list.
         assert_eq!(resume.requests, off.requests);
