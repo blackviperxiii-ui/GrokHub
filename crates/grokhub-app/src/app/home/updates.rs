@@ -93,6 +93,7 @@ pub(super) fn update_facts() -> UpdateFacts {
                 if let Ok(mut slot) = SLOT.lock() {
                     record(&mut slot, steam, os, Instant::now());
                 }
+                super::live::wake();
             });
         if spawned.is_err() {
             slot.reading = false;

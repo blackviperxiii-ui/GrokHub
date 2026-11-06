@@ -423,3 +423,15 @@ fn recent_chats_lead_with_the_latest_and_open_it() {
     assert_eq!(v.rows.len(), 2);
     assert_eq!(v.tap, Some(TileAction::OpenChat { id: "b".into() }));
 }
+
+#[test]
+fn home_redraws_at_its_fastest_tile_but_never_faster_than_five_seconds() {
+    use super::page::repaint_every;
+    use std::time::Duration;
+    assert_eq!(
+        repaint_every(["pulse", "storage", "game_mode"]),
+        Some(Duration::from_secs(10))
+    );
+    assert_eq!(repaint_every(["frame_rate"]), Some(Duration::from_secs(5)));
+    assert_eq!(repaint_every(std::iter::empty()), None);
+}

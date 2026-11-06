@@ -408,6 +408,8 @@ pub struct Slot {
     pub name: String,
     pub purpose: String,
     pub tile: Tile,
+    /// How often this tile's data changes, so the screen asks again on time.
+    pub refresh_secs: Option<u64>,
 }
 
 /// The two counts no layout slot holds: learned memory and connectors.
@@ -463,9 +465,14 @@ pub fn visible_slots(layout: &HomeLayout) -> Vec<(SlotId, String)> {
 
 /// A shared-model tile, stamped with when it was read.
 fn module_view(module: &str, src: &Sources<'_>, now: u64) -> TileView {
+    let web = matches!(src.viewer, Viewer::Web(_));
+    if let Some(v) = crate::home_tiles::cached(module, web, now) {
+        return v;
+    }
     let mut view = crate::home_tiles::view(module, src)
         .unwrap_or_else(|| TileView::unsupported("This tile isn't in this version"));
     view.updated_ms.get_or_insert(now);
+    crate::home_tiles::keep(module, web, &view);
     view
 }
 
@@ -680,6 +687,7 @@ pub fn page(src: &Sources<'_>) -> Page {
                 size: size_key(slot.size()),
                 name: entry.map(|e| e.name.to_string()).unwrap_or_default(),
                 purpose: entry.map(|e| e.purpose.to_string()).unwrap_or_default(),
+                refresh_secs: grokhub_core::home::refresh_secs(&module),
                 module,
                 tile,
             }

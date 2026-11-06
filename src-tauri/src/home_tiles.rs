@@ -133,6 +133,57 @@ fn played(games: &[library::Game]) -> Vec<tiles::PlayedGame> {
         .collect()
 }
 
+/// Tiles that scan the disk (the Steam library, drives) are kept for their
+/// refresh time, so a screen asking every few seconds doesn't rescan.
+/// Everything else is a small file read and is built fresh each ask.
+fn scans_disk(module: &str) -> bool {
+    matches!(
+        module,
+        "now_playing"
+            | "game_library"
+            | "what_to_play"
+            | "clips"
+            | "achievements"
+            | "patch_notes"
+            | "deals"
+            | "storage"
+            | "systems_brief"
+            | "coach_tip"
+    )
+}
+
+type Kept = Vec<((String, bool), TileView)>;
+static KEPT: Mutex<Kept> = Mutex::new(Vec::new());
+
+/// A kept tile still inside its refresh time, for a web or local viewer.
+pub fn cached(module: &str, web: bool, now: u64) -> Option<TileView> {
+    if !scans_disk(module) {
+        return None;
+    }
+    let secs = grokhub_core::home::refresh_secs(module)?;
+    let kept = KEPT.lock().ok()?;
+    kept.iter()
+        .find(|((m, w), _)| m == module && *w == web)
+        .map(|(_, v)| v)
+        .filter(|v| {
+            v.updated_ms
+                .is_some_and(|at| now.saturating_sub(at) < secs * 1000)
+        })
+        .cloned()
+}
+
+/// Keep a freshly built disk-scanning tile. Error tiles aren't kept, so the
+/// next ask tries again.
+pub fn keep(module: &str, web: bool, view: &TileView) {
+    if !scans_disk(module) || view.state == grokhub_core::home::TileState::Error {
+        return;
+    }
+    if let Ok(mut kept) = KEPT.lock() {
+        kept.retain(|((m, w), _)| !(m == module && *w == web));
+        kept.push(((module.to_string(), web), view.clone()));
+    }
+}
+
 /// The Steam library, or why there isn't one.
 fn library_or(src: &Sources<'_>, build: impl Fn(&[library::Game]) -> TileView) -> TileView {
     if cfg!(mobile) {
