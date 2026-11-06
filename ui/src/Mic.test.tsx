@@ -45,7 +45,7 @@ vi.mock("./api", () => ({
 }));
 
 import { Chat } from "./Chat";
-import { appendDraft, MIC_DENIED } from "./Mic";
+import { appendDraft, closeMic, MIC_DENIED } from "./Mic";
 
 /** A fake mic at 48 kHz: `feed` plays samples into the open recording. */
 function fakeMic() {
@@ -58,6 +58,7 @@ function fakeMic() {
     },
   };
   const stream = { getTracks: () => [{ stop: () => (mic.stopped += 1) }] };
+  const getUserMedia = vi.fn((_: MediaStreamConstraints) => Promise.resolve(stream));
   class FakeContext {
     sampleRate = 48000;
     destination = {};
@@ -77,9 +78,9 @@ function fakeMic() {
   vi.stubGlobal("AudioContext", FakeContext);
   Object.defineProperty(navigator, "mediaDevices", {
     configurable: true,
-    value: { getUserMedia: vi.fn(() => Promise.resolve(stream)) },
+    value: { getUserMedia },
   });
-  return mic;
+  return Object.assign(mic, { getUserMedia });
 }
 
 function decode(base64: string): DataView {
@@ -96,7 +97,8 @@ describe("push to talk", () => {
     api.transcribe.mockReset();
     api.sendChat.mockReset();
   });
-  afterEach(() => {
+  afterEach(async () => {
+    await closeMic();
     vi.unstubAllGlobals();
   });
 
@@ -120,9 +122,67 @@ describe("push to talk", () => {
     expect(wav.getUint32(40, true)).toBe(3200);
     expect(wav.getInt16(44, true)).toBe(8191);
     await waitFor(() => expect(screen.getByLabelText("Message")).toHaveValue("please open the build log"));
+    expect(api.sendChat).not.toHaveBeenCalled();
+    // The mic stays open for the next hold, and closes with the chat.
+    expect(mic.stopped).toBe(0);
+    await closeMic();
     expect(mic.stopped).toBe(1);
     expect(mic.closed).toBe(1);
-    expect(api.sendChat).not.toHaveBeenCalled();
+  });
+
+  it("asks for echo cancellation, noise suppression and level control", async () => {
+    const mic = fakeMic();
+    api.transcribe.mockResolvedValue("hi");
+    render(<Chat onOpenSettings={() => {}} />);
+    const button = screen.getByRole("button", { name: MIC });
+    fireEvent.pointerDown(button);
+    await waitFor(() => expect(mic.processor).not.toBeNull());
+    expect(mic.getUserMedia.mock.calls[0][0]).toEqual({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+    mic.feed(new Float32Array(480).fill(0.1));
+    fireEvent.pointerUp(button);
+    await waitFor(() => expect(api.transcribe).toHaveBeenCalledTimes(1));
+  });
+
+  it("the next hold starts at once and keeps the moment before the press", async () => {
+    const mic = fakeMic();
+    api.transcribe.mockResolvedValue("one");
+    render(<Chat onOpenSettings={() => {}} />);
+    const button = screen.getByRole("button", { name: MIC });
+    fireEvent.pointerDown(button);
+    await waitFor(() => expect(mic.processor).not.toBeNull());
+    mic.feed(new Float32Array(4800).fill(0.25));
+    fireEvent.pointerUp(button);
+    await waitFor(() => expect(api.transcribe).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(button).not.toBeDisabled());
+
+    // Talking just before the second press: the first word starts early.
+    mic.feed(new Float32Array(4800).fill(0.5));
+    fireEvent.pointerDown(button);
+    await waitFor(() => expect(button).toHaveAttribute("aria-pressed", "true"));
+    mic.feed(new Float32Array(4800).fill(0.25));
+    fireEvent.pointerUp(button);
+    await waitFor(() => expect(api.transcribe).toHaveBeenCalledTimes(2));
+    expect(mic.getUserMedia).toHaveBeenCalledTimes(1);
+    const wav = decode(api.transcribe.mock.calls[1][0]);
+    expect(wav.getUint32(40, true)).toBe(6400);
+    expect(wav.getInt16(44, true)).toBe(16383);
+  });
+
+  it("the last word, said as you let go, is kept", async () => {
+    const mic = fakeMic();
+    api.transcribe.mockResolvedValue("done");
+    render(<Chat onOpenSettings={() => {}} />);
+    const button = screen.getByRole("button", { name: MIC });
+    fireEvent.pointerDown(button);
+    await waitFor(() => expect(mic.processor).not.toBeNull());
+    mic.feed(new Float32Array(4800).fill(0.25));
+    fireEvent.pointerUp(button);
+    // Still arriving just after the release.
+    mic.feed(new Float32Array(4800).fill(0.25));
+    await waitFor(() => expect(api.transcribe).toHaveBeenCalledTimes(1));
+    expect(decode(api.transcribe.mock.calls[0][0]).getUint32(40, true)).toBe(6400);
   });
 
   it("Ctrl+G holds to talk too", async () => {
