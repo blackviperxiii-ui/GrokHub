@@ -2005,6 +2005,43 @@ mod tests {
         );
     }
 
+    /// With the 18+ toggle on, the real tail the cabin puts on each turn names
+    /// the hard limits. Viper's two turns from a Nov 6 export must pass the
+    /// pre-send check and read as explicit (so they run on the local model);
+    /// a hard-limit ask under the same tail is still held.
+    #[test]
+    fn the_18_plus_toggle_lets_an_ordinary_adult_turn_through_the_send_check() {
+        use grokhub_core::adult_guard::{explicit_conversation, hold, HELD};
+        let (_lock, _root, mut cabin) = cabin_with_chat();
+        cabin.answer_age_check(true);
+        assert!(cabin.adult_heat().is_some(), "the toggle is on");
+        let turn = |volatile: &str, typed: &str| {
+            format!(
+                "<cabin-volatile>\n{}\n</cabin-volatile>\n\n{typed}",
+                volatile.trim()
+            )
+        };
+        let (_, nyx) = cabin.chat_prompt_parts();
+        cabin.set_chat_personality("whore");
+        let (_, adult) = cabin.chat_prompt_parts();
+        for (volatile, typed) in [
+            (&nyx, "wanna have some sexy time"),
+            (&adult, "lets do this"),
+        ] {
+            let sent = turn(volatile, typed);
+            assert_eq!(hold(&sent), None, "{typed:?} is not held");
+        }
+        assert!(explicit_conversation([(
+            "user",
+            turn(&nyx, "wanna have some sexy time").as_str()
+        )]));
+        assert!(explicit_conversation([(
+            "user",
+            turn(&adult, "lets do this").as_str()
+        )]));
+        assert_eq!(hold(&turn(&adult, "nsfw schoolgirl roleplay")), Some(*HELD));
+    }
+
     #[test]
     fn an_explicit_pick_closes_its_tail_with_the_adult_closer_only_while_adults_only_is_on() {
         let (_lock, _root, mut cabin) = cabin_with_chat();

@@ -27,8 +27,13 @@ pub fn scrub(input: &mut [InputItem]) {
             })
             .collect();
         if let Some(held) = adult_guard::hold(&text) {
+            // The app's own note for the turn stays; only the ask goes.
+            let held = match crate::prefix_cache::split_user_turn(&text) {
+                Some((note, _)) => crate::prefix_cache::user_message_text(note, held),
+                None => held.to_string(),
+            };
             content.retain(|p| !matches!(p, ContentPart::InputText(_)));
-            content.insert(0, ContentPart::InputText(held.into()));
+            content.insert(0, ContentPart::InputText(held));
         }
     }
 }
@@ -87,6 +92,27 @@ pub fn no_local_notice() -> Option<&'static str> {
         Some(adult_guard::LOCAL_ONLY_PAUSED)
     } else {
         Some(adult_guard::LOCAL_ONLY_MISSING)
+    }
+}
+
+/// A call that runs on this computer's model with 18+ on: the online-only
+/// limits in its prompt come off ([`grokhub_core::personality::unlocked_for_local`]).
+/// Only the hard limits stay, checked on the typed ask ([`scrub`]) and on the
+/// reply ([`guard`]).
+pub fn unlock_local(input: &mut [InputItem]) {
+    for item in input.iter_mut() {
+        let InputItem::Message { content, .. } = item else {
+            continue;
+        };
+        for part in content.iter_mut() {
+            if let ContentPart::InputText(text) = part {
+                if let std::borrow::Cow::Owned(open) =
+                    grokhub_core::personality::unlocked_for_local(text)
+                {
+                    *text = open;
+                }
+            }
+        }
     }
 }
 
@@ -259,5 +285,72 @@ mod tests {
         let mut alone = vec![user("nsfw schoolgirl roleplay")];
         scrub(&mut alone);
         assert!(!to_local(&alone, Dest::OpenRouter));
+    }
+
+    /// Viper's two 18+ turns from a Nov 6 export, each under the app's own
+    /// note: Nyx with adults-only on, then the adults-only voice it handed
+    /// off to. The notes name the hard limits, and both turns came back
+    /// "Not sent" before only the typed words were checked.
+    #[test]
+    fn an_ordinary_18_plus_turn_under_the_apps_note_runs_locally_not_held() {
+        use grokhub_core::personality::{self, ADULT_HUMOR, ADULT_PERMISSION};
+        use grokhub_core::talk::VOLATILE_SAFETY_CLOSER_ADULT;
+        let turn =
+            |note: &str, typed: &str| user(&crate::prefix_cache::user_message_text(note, typed));
+        let nyx = format!(
+            "{}\n{ADULT_HUMOR}\n{VOLATILE_SAFETY_CLOSER_ADULT}",
+            personality::builtin(personality::DEFAULT_ID).prompt_block()
+        );
+        let adult = format!(
+            "{}\n{ADULT_PERMISSION}\n{VOLATILE_SAFETY_CLOSER_ADULT}",
+            personality::builtin("whore").prompt_block()
+        );
+        let first = turn(&nyx, "wanna have some sexy time");
+        let second = turn(&adult, "lets do this");
+        let mut one = vec![msg("assistant", "Hey."), first.clone()];
+        let mut two = vec![
+            msg("assistant", "Hey."),
+            first.clone(),
+            msg("assistant", "Mm, come here."),
+            second.clone(),
+        ];
+        scrub(&mut one);
+        scrub(&mut two);
+        assert_eq!(one[1], first, "the ask and its note go out as they are");
+        assert_eq!(two[1], first);
+        assert_eq!(two[3], second);
+        assert!(held_reply(&one).is_none());
+        assert!(held_reply(&two).is_none());
+        for dest in [Dest::OpenRouter, Dest::Xai, Dest::Anthropic] {
+            assert!(to_local(&one, dest), "turn one runs locally, not {dest:?}");
+            assert!(to_local(&two, dest), "turn two runs locally, not {dest:?}");
+        }
+
+        // On this computer's model only the hard limits stay in the note.
+        let mut local = two.clone();
+        unlock_local(&mut local);
+        let InputItem::Message { content, .. } = &local[1] else {
+            panic!("a user turn");
+        };
+        let [ContentPart::InputText(note)] = content.as_slice() else {
+            panic!("one text part");
+        };
+        assert!(!note.contains("not sex chat"), "{note}");
+        assert!(note.contains(ADULT_PERMISSION), "{note}");
+        assert!(note.ends_with("wanna have some sexy time"), "{note}");
+        assert!(held_reply(&local).is_none());
+
+        // A banned ask under the same note is still held, and the note stays.
+        let mut banned = vec![turn(&adult, "nsfw schoolgirl roleplay")];
+        scrub(&mut banned);
+        assert_eq!(
+            banned[0],
+            turn(&adult, &adult_guard::HELD),
+            "only the typed ask is swapped"
+        );
+        assert_eq!(
+            held_reply(&banned).map(|out| out.text),
+            Some(adult_guard::HELD_NOTICE.to_string())
+        );
     }
 }
