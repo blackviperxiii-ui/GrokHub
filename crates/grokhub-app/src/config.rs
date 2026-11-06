@@ -1132,6 +1132,10 @@ pub fn load() -> AppConfig {
     if cfg.personality.trim() == grokhub_core::personality::LEGACY_DEFAULT_ID {
         cfg.personality = grokhub_core::personality::DEFAULT_ID.into();
         rewrite_personality = true;
+    } else if let Some(new) = grokhub_core::personality::retired(&cfg.personality) {
+        // A voice that left the roster: speak as its nearest built-in.
+        cfg.personality = new.into();
+        rewrite_personality = true;
     }
     // Adults-only already on from before the 18+ check: that was the user's own opt-in.
     if cfg.explicit_personalities {

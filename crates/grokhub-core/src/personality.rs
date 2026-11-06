@@ -436,9 +436,25 @@ pub fn find(presets: &[Personality], id: &str) -> Personality {
     presets
         .iter()
         .find(|p| p.id == id)
+        .or_else(|| retired(id).and_then(|new| presets.iter().find(|p| p.id == new)))
         .or_else(|| presets.iter().find(|p| p.id == DEFAULT_ID))
         .cloned()
         .unwrap_or_else(neutral)
+}
+
+/// Built-in voices that left the roster, and the voice a stored pick of each
+/// now speaks as. A user's own copy keeps working: it has its own id.
+pub const RETIRED: &[(&str, &str)] = &[
+    ("lawyer-precise", "concise-pro"),
+    ("friendly-neighbor", DEFAULT_ID),
+];
+
+/// The voice a retired built-in id now speaks as.
+pub fn retired(id: &str) -> Option<&'static str> {
+    RETIRED
+        .iter()
+        .find(|(old, _)| *old == id.trim())
+        .map(|(_, new)| *new)
 }
 
 /// The presets a picker offers: every one when adults-only personalities are on,
@@ -506,9 +522,9 @@ mod tests {
     }
 
     #[test]
-    fn the_builtins_are_nyx_and_the_twenty_one_styles() {
+    fn the_builtins_are_nyx_and_the_twenty_three_styles() {
         let all = parse(BUILTIN).expect("assets/personalities.toml parses");
-        assert_eq!(all.len(), 22);
+        assert_eq!(all.len(), 24);
         assert_eq!(all[0].id, DEFAULT_ID);
         assert!(
             all[0].tone_rules.contains("not sycophantic"),
@@ -533,14 +549,16 @@ mod tests {
                 "Professor",
                 "Drill Sergeant (lite)",
                 "Chief Engineer",
-                "Lawyer-precise",
                 "Zen Mentor",
                 "Concise Pro",
-                "Friendly Neighbor",
                 "Southern Mechanic",
                 "Space Mission Control",
                 "Retro 80s Hacker",
                 "Gentle Listener",
+                "Theorycrafter",
+                "Gremlin",
+                "Dungeon Master",
+                "Esports Caster",
                 "Viper",
                 "Whore",
             ]
@@ -552,13 +570,13 @@ mod tests {
                 p.id
             );
         }
-        // Only Nyx, Sarcastic Sidekick and Viper may roast; only Viper and Whore are explicit.
+        // Only Nyx, Sarcastic Sidekick, Gremlin and Viper may roast; only Viper and Whore are explicit.
         let roasts: Vec<&str> = all
             .iter()
             .filter(|p| p.roast)
             .map(|p| p.id.as_str())
             .collect();
-        assert_eq!(roasts, ["nyx", "sarcastic-sidekick", "viper"]);
+        assert_eq!(roasts, ["nyx", "sarcastic-sidekick", "gremlin", "viper"]);
         let explicit: Vec<&str> = all
             .iter()
             .filter(|p| p.explicit)
@@ -829,7 +847,7 @@ mod tests {
         let (all, problems) = load_all(&dir);
         assert_eq!(
             (all.len(), problems.len()),
-            (22, 0),
+            (24, 0),
             "no folder yet: built-ins only"
         );
         let mut mine = duplicate(&builtin("butler"), &all);
@@ -846,7 +864,7 @@ mod tests {
 
         let (all, problems) = load_all(&dir);
         assert!(problems.is_empty(), "{problems:?}");
-        assert_eq!(all.len(), 23);
+        assert_eq!(all.len(), 25);
         let back = find(&all, "butler-copy");
         assert_eq!(back, mine, "the saved file reads back field for field");
         assert_eq!(lookup(&dir, "butler-copy").name, "Jeeves");
@@ -856,7 +874,7 @@ mod tests {
         assert_eq!(duplicate(&builtin("butler"), &all).id, "butler-copy-2");
 
         delete_custom(&dir, "butler-copy").expect("deletes");
-        assert_eq!(load_all(&dir).0.len(), 22);
+        assert_eq!(load_all(&dir).0.len(), 24);
         assert_eq!(
             lookup(&dir, "butler-copy").id,
             DEFAULT_ID,
@@ -876,7 +894,7 @@ mod tests {
         std::fs::write(dir.join("a.toml"), "[[preset]]\nid = \"genie\"\nname = \"G\"\ndescription = \"d\"\ntone_rules = \"x\"\nemoji = \"none\"\nverbosity = \"terse\"\n").unwrap();
         std::fs::write(dir.join("b.toml"), "not toml [").unwrap();
         let (all, problems) = load_all(&dir);
-        assert_eq!(all.len(), 22);
+        assert_eq!(all.len(), 24);
         assert_eq!(problems.len(), 2, "{problems:?}");
         assert_eq!(problems[0], "a.toml: the id genie is already taken.");
         assert!(
@@ -1100,5 +1118,22 @@ mod tests {
         assert!(!Heat::Cheeky.tags_adult() && Heat::Spicy.tags_adult());
         let toml: Heat = serde_json::from_str("\"filthy\"").unwrap();
         assert_eq!(toml, Heat::Filthy);
+    }
+
+    #[test]
+    fn retired_voices_speak_as_their_nearest_voice() {
+        assert_eq!(builtin("lawyer-precise").id, "concise-pro");
+        assert_eq!(builtin("friendly-neighbor").id, DEFAULT_ID);
+        assert_eq!(
+            lookup(std::path::Path::new("/nonexistent"), "lawyer-precise").id,
+            "concise-pro"
+        );
+        for (old, new) in RETIRED {
+            assert!(
+                builtins().iter().all(|p| p.id != *old),
+                "{old} is still built in"
+            );
+            assert!(builtins().iter().any(|p| p.id == *new), "{new} is missing");
+        }
     }
 }
