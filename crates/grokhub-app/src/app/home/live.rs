@@ -49,6 +49,8 @@ pub(super) struct LiveFacts {
     pub drives: Vec<DiskUse>,
     /// The newest clips and captures, newest first (names and times only).
     pub clips: Vec<grokhub_core::clips::Clip>,
+    /// The mic and speakers as the OS lists them.
+    pub audio: grokhub_core::audio_check::AudioFacts,
 }
 
 impl LiveFacts {
@@ -77,6 +79,11 @@ static SLOT: Mutex<Slot> = Mutex::new(Slot {
         gpu_temp_c: None,
         drives: Vec::new(),
         clips: Vec::new(),
+        audio: grokhub_core::audio_check::AudioFacts {
+            outputs: Vec::new(),
+            inputs: Vec::new(),
+            devices: Vec::new(),
+        },
     },
     at: None,
     reading: false,
@@ -106,6 +113,7 @@ pub(super) fn live_facts() -> LiveFacts {
                     &grokhub_core::clips::roots(grokhub_core::steam::detect_root().as_deref()),
                     8,
                 );
+                facts.audio = grokhub_core::audio_check::read_facts();
                 if let Ok(mut slot) = SLOT.lock() {
                     slot.facts = facts;
                     slot.at = Some(Instant::now());

@@ -5,6 +5,7 @@
 use super::text;
 use super::view::{TileAction, TileRow, TileText, TileView, Tone};
 use super::{FREE_STORAGE_ASK, HOME_CHIPS, TUNE_UP_ASK};
+use crate::audio_check::{AudioDevice, AudioFacts};
 use crate::clips::Clip;
 use crate::disk::DiskUse;
 use crate::game_guard::GameGuard;
@@ -260,6 +261,97 @@ pub fn clips_view(clips: &[Clip], now: u64) -> TileView {
     ))
     .rows(rows)
     .primary("Watch", TileAction::OpenClip { index: 0 })
+}
+
+fn pick(list: &[AudioDevice]) -> Option<&AudioDevice> {
+    list.iter().find(|d| d.is_default).or(list.first())
+}
+
+fn device_row(kind: &str, d: &AudioDevice) -> TileRow {
+    let (value, tone) = match (d.muted, d.volume_pct) {
+        (true, _) => ("Muted".to_string(), Tone::Alert),
+        (false, Some(0)) => ("Volume 0%".to_string(), Tone::Warn),
+        (false, Some(v)) => (format!("{} · {v}%", d.label()), Tone::Normal),
+        (false, None) => (d.label().to_string(), Tone::Normal),
+    };
+    TileRow::new(kind, value, tone)
+}
+
+/// The mic and speakers in use and anything that would keep a squad from
+/// hearing you. Read only; the full check (a short recording) is a button
+/// away.
+pub fn audio_view(f: &AudioFacts) -> TileView {
+    if f.is_empty() {
+        return waiting_view("audio_check");
+    }
+    if f.outputs.is_empty() && f.inputs.is_empty() {
+        let bad: Vec<&str> = f
+            .devices
+            .iter()
+            .filter(|(_, ok)| !ok)
+            .map(|(n, _)| n.as_str())
+            .collect();
+        let rows = f
+            .devices
+            .iter()
+            .take(ROWS)
+            .map(|(n, ok)| {
+                let (v, t) = if *ok {
+                    ("Working", Tone::Normal)
+                } else {
+                    ("Problem", Tone::Alert)
+                };
+                TileRow::new(n.clone(), v, t)
+            })
+            .collect();
+        let text = match bad.first() {
+            Some(name) => TileText::new(
+                "Needs a look",
+                format!("{name} reports a problem"),
+                Tone::Alert,
+            ),
+            None => TileText::new(
+                "Sound ready",
+                match f.devices.len() {
+                    1 => "1 sound device working".to_string(),
+                    n => format!("{n} sound devices working"),
+                },
+                Tone::Normal,
+            ),
+        };
+        return TileView::ready(text)
+            .rows(rows)
+            .button("Voice settings", TileAction::settings("general"));
+    }
+    let mic = pick(&f.inputs);
+    let out = pick(&f.outputs);
+    let text = match mic {
+        None => TileText::new(
+            "No mic found",
+            "Plug one in to talk to your squad",
+            Tone::Warn,
+        ),
+        Some(m) if m.muted => TileText::new("Mic muted", m.label().to_string(), Tone::Alert),
+        Some(m) if m.volume_pct == Some(0) => {
+            TileText::new("Mic at 0%", m.label().to_string(), Tone::Warn)
+        }
+        Some(m) => TileText::new("Mic ready", m.label().to_string(), Tone::Normal),
+    };
+    let tone = match out {
+        Some(o) if o.muted => Tone::Alert,
+        _ => text.tone,
+    };
+    let text = TileText { tone, ..text };
+    let mut rows = Vec::new();
+    if let Some(m) = mic {
+        rows.push(device_row("Mic", m));
+    }
+    if let Some(o) = out {
+        rows.push(device_row("Speakers", o));
+    }
+    TileView::ready(text)
+        .rows(rows)
+        .button("Voice settings", TileAction::settings("general"))
 }
 
 /// Minutes of play before the Session Timer suggests a break.
@@ -613,6 +705,36 @@ mod tests {
             Some(TileAction::nav("pulse")),
             "only https links open"
         );
+    }
+
+    #[test]
+    fn the_audio_tile_puts_a_muted_mic_first() {
+        let dev = |name: &str, muted: bool, def: bool| AudioDevice {
+            name: name.into(),
+            description: name.into(),
+            muted,
+            volume_pct: Some(70),
+            is_default: def,
+        };
+        let f = AudioFacts {
+            outputs: vec![dev("Headset", false, true)],
+            inputs: vec![
+                dev("Webcam mic", false, false),
+                dev("Headset mic", true, true),
+            ],
+            devices: Vec::new(),
+        };
+        let v = audio_view(&f);
+        assert_eq!(v.text.big, "Mic muted");
+        assert_eq!(v.text.caption, "Headset mic");
+        assert_eq!(v.rows[0].value, "Muted");
+        assert_eq!(v.rows[1].value, "Headset · 70%");
+        let win = AudioFacts {
+            devices: vec![("Realtek".into(), true), ("USB DAC".into(), false)],
+            ..AudioFacts::default()
+        };
+        assert_eq!(audio_view(&win).text.caption, "USB DAC reports a problem");
+        assert_eq!(audio_view(&AudioFacts::default()).state, TileState::Empty);
     }
 
     #[test]

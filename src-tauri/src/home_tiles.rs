@@ -102,7 +102,8 @@ pub fn view(module: &str, src: &Sources<'_>) -> Option<TileView> {
             tiles::session_timer_view(None, clock.started_ms, now)
         }),
         "hype_line" => tiles::hype_line_view(Some(&crate::home::personality_name(src)), now),
-        "squad" | "tonight" | "audio_check" | "stream_check" => tiles::waiting_view(module),
+        "audio_check" => pc_only(&|| tiles::audio_view(&grokhub_core::audio_check::read_facts())),
+        "squad" | "tonight" | "stream_check" => tiles::waiting_view(module),
         _ => return None,
     };
     Some(v)
@@ -172,8 +173,9 @@ fn played(games: &[library::Game]) -> Vec<tiles::PlayedGame> {
         .collect()
 }
 
-/// Tiles that scan the disk (the Steam library, drives) are kept for their
-/// refresh time, so a screen asking every few seconds doesn't rescan.
+/// Tiles that scan the disk or ask the OS (the Steam library, drives, audio
+/// devices) are kept for their refresh time, so a screen asking every few
+/// seconds doesn't rescan.
 /// Everything else is a small file read and is built fresh each ask.
 fn scans_disk(module: &str) -> bool {
     matches!(
@@ -186,6 +188,7 @@ fn scans_disk(module: &str) -> bool {
             | "patch_notes"
             | "deals"
             | "storage"
+            | "audio_check"
             | "systems_brief"
             | "coach_tip"
     )
