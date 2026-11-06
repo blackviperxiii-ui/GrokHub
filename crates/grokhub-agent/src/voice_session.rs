@@ -217,6 +217,9 @@ impl Session {
             creative: view.intent == "creative",
             low_mood,
             frustrated,
+            adult: self.heat.is_some()
+                && grokhub_core::adult_guard::check(view.text)
+                    == grokhub_core::adult_guard::Risk::Explicit,
             hour,
         };
         let pinned = self.cfg.pinned || !self.cfg.dynamic || self.asked_style;
@@ -419,6 +422,33 @@ mod tests {
         assert_eq!(c.local_hour(now), 18);
         c.utc_offset_min = 5 * 60 + 30;
         assert_eq!(c.local_hour(now), 6);
+    }
+
+    #[test]
+    fn an_18_plus_turn_with_adults_only_on_hands_off_to_the_adults_only_voice() {
+        let with_adult = |adult: Option<Heat>| VoiceConfig {
+            roster: builtins(),
+            ..cfg("nyx", adult)
+        };
+        let id = "vs-adult";
+        register(id, with_adult(Some(Heat::Cheeky)));
+        step(id, view("hey", "chat", "calm"));
+        let note = step(id, view("talk dirty to me, I'm horny", "chat", "calm"));
+        assert_eq!(active_voice(id).as_deref(), Some("whore"));
+        assert!(note.contains("speak as Whore instead of Nyx"), "{note}");
+        // The guest note tags the turn 18+, so it runs on the local model.
+        let turn = crate::prefix_cache::user_message_text(&note, "hey");
+        assert!(grokhub_core::adult_guard::explicit_conversation([(
+            "user",
+            turn.as_str()
+        )]));
+        forget(id);
+        // Adults-only off: no hand-off.
+        let id = "vs-adult-off";
+        register(id, with_adult(None));
+        step(id, view("talk dirty to me, I'm horny", "chat", "calm"));
+        assert_eq!(active_voice(id).as_deref(), Some("nyx"));
+        forget(id);
     }
 
     #[test]
