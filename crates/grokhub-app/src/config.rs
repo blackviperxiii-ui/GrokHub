@@ -519,6 +519,14 @@ pub struct AppConfig {
     /// from before it was recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adult_confirmed_at_ms: Option<u64>,
+    /// Settings → Personality → Dynamic chat: another voice can step in while the
+    /// topic calls for it (a build error, venting), then hand back. On by default.
+    #[serde(default = "default_dynamic_chat")]
+    pub dynamic_chat: bool,
+    /// Settings → Personality → Heat: how crude the jokes get, shown and used only
+    /// while adults-only is on. Cheeky until the user moves it.
+    #[serde(default)]
+    pub quip_heat: grokhub_core::personality::Heat,
     /// Settings → Labs → Diagnostics mode. Off by default. When on, chat and
     /// message actions can Save a redacted debug bundle to the Desktop.
     #[serde(default)]
@@ -724,6 +732,10 @@ fn default_close_to_tray() -> bool {
     true
 }
 
+fn default_dynamic_chat() -> bool {
+    true
+}
+
 pub fn default_quiet_start() -> String {
     "22:00".into()
 }
@@ -908,6 +920,8 @@ impl Default for AppConfig {
             explicit_personalities: false,
             adult_confirmed: false,
             adult_confirmed_at_ms: None,
+            dynamic_chat: true,
+            quip_heat: grokhub_core::personality::Heat::Cheeky,
             diagnostics_mode: false,
             diagnostics_include_logs: false,
             desktop_nyx: false,
@@ -2377,6 +2391,32 @@ mod tests {
         let text = serde_json::to_string(&cfg).unwrap();
         let back: AppConfig = serde_json::from_str(&text).unwrap();
         assert!(back.proactive_reminders);
+    }
+
+    #[test]
+    fn dynamic_chat_starts_on_and_heat_starts_cheeky_even_in_an_old_file() {
+        let fresh = AppConfig::default();
+        assert!(fresh.dynamic_chat);
+        assert_eq!(fresh.quip_heat, grokhub_core::personality::Heat::Cheeky);
+        let old: AppConfig = serde_json::from_str("{}").expect("an empty file loads");
+        assert!(
+            old.dynamic_chat,
+            "a file from before the setting keeps it on"
+        );
+        assert_eq!(old.quip_heat, grokhub_core::personality::Heat::Cheeky);
+        let cfg = AppConfig {
+            dynamic_chat: false,
+            quip_heat: grokhub_core::personality::Heat::Filthy,
+            ..AppConfig::default()
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(
+            json.contains("\"dynamicChat\":false") && json.contains("\"quipHeat\":\"filthy\""),
+            "{json}"
+        );
+        let back: AppConfig = serde_json::from_str(&json).unwrap();
+        assert!(!back.dynamic_chat);
+        assert_eq!(back.quip_heat, grokhub_core::personality::Heat::Filthy);
     }
 
     #[test]
