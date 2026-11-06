@@ -100,6 +100,26 @@ pub struct Tracker {
     /// until the user unlocks another.
     #[serde(default)]
     pub nudged: BTreeMap<u32, usize>,
+    /// Unlocked and in all per game at the last check, for goals on
+    /// Objectives ("30 achievements in Hades").
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub counts: BTreeMap<u32, Count>,
+}
+
+/// One game's achievements at the last check.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Count {
+    pub done: usize,
+    pub total: usize,
+}
+
+impl Count {
+    pub fn of(list: &[Achievement]) -> Self {
+        Self {
+            done: list.iter().filter(|a| a.unlocked).count(),
+            total: list.len(),
+        }
+    }
 }
 
 pub fn path(config_dir: &Path) -> PathBuf {

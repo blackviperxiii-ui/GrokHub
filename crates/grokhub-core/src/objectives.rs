@@ -23,6 +23,7 @@ use crate::xp::{local_day, Earned, XpKind};
 
 mod board;
 mod chat;
+mod game_data;
 mod season;
 mod typed;
 
@@ -33,6 +34,9 @@ pub use board::{
 pub use chat::{
     detect, is_marker_line, markers, read_turn, wants_tracking, without_markers, worth_a_look,
     Marker, MarkerFilter, TurnGoals, GOAL_MARKER_RULE,
+};
+pub use game_data::{
+    apply_game_data, goal_steam_games, match_finished, refresh_from_games, GameData,
 };
 pub use season::{done_this_season, pick_up_line, season_label, short_date, today_picks, Pick};
 pub use typed::{parse_goal, KnownGame};
