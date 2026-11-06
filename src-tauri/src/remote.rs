@@ -1041,6 +1041,7 @@ mod tests {
             "get_library",
             "library_cover",
             "library_play",
+            "home_open_clip",
             "set_mission_done",
         ] {
             assert!(!web_command(name), "{name}");

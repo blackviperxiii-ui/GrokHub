@@ -5,6 +5,7 @@
 use super::text;
 use super::view::{TileAction, TileRow, TileText, TileView, Tone};
 use super::{FREE_STORAGE_ASK, HOME_CHIPS, TUNE_UP_ASK};
+use crate::clips::Clip;
 use crate::disk::DiskUse;
 use crate::game_guard::GameGuard;
 
@@ -30,9 +31,33 @@ fn hours(min: u64) -> String {
     }
 }
 
-pub fn now_playing_view(games: &[PlayedGame], now: u64) -> TileView {
-    let mut played: Vec<&PlayedGame> = games.iter().filter(|g| g.last_played > 0).collect();
-    played.sort_by_key(|g| std::cmp::Reverse(g.last_played));
+/// The game running now when the app can tell (`running`, a Steam app id),
+/// else the last one played.
+pub fn now_playing_view(games: &[PlayedGame], now: u64, running: Option<u32>) -> TileView {
+    let mut played: Vec<&PlayedGame> = games
+        .iter()
+        .filter(|g| g.last_played > 0 || Some(g.app_id) == running)
+        .collect();
+    played.sort_by_key(|g| (Some(g.app_id) != running, std::cmp::Reverse(g.last_played)));
+    if let Some(live) = played.first().filter(|g| Some(g.app_id) == running) {
+        let rows = played
+            .iter()
+            .skip(1)
+            .take(ROWS)
+            .map(|g| TileRow::new(g.name.clone(), hours(g.playtime_min), Tone::Normal))
+            .collect();
+        return TileView::ready(TileText::new(
+            live.name.clone(),
+            match live.playtime_min {
+                0 => "Playing now".to_string(),
+                m => format!("Playing now · {} total", hours(m)),
+            },
+            Tone::Normal,
+        ))
+        .tag("LIVE")
+        .rows(rows)
+        .on_tap(TileAction::nav("library"));
+    }
     let Some(top) = played.first() else {
         return TileView::empty(
             "Play a Steam game and it shows here",
@@ -94,8 +119,14 @@ pub fn game_library_view(games: &[PlayedGame]) -> TileView {
 }
 
 /// One installed game for today: one you've played but not lately, picked
-/// by the day so it holds still until tomorrow.
-pub fn what_to_play_view(games: &[PlayedGame], now: u64, can_play: bool) -> TileView {
+/// by the day so it holds still until tomorrow. `skip` moves along the list
+/// when the player asks for another; `None` where there's no way to ask.
+pub fn what_to_play_view(
+    games: &[PlayedGame],
+    now: u64,
+    can_play: bool,
+    skip: Option<usize>,
+) -> TileView {
     let day = now / 86_400_000;
     let recent = (now / 1000).saturating_sub(3 * 86_400);
     let mut pool: Vec<&PlayedGame> = games
@@ -106,7 +137,8 @@ pub fn what_to_play_view(games: &[PlayedGame], now: u64, can_play: bool) -> Tile
         pool = games.iter().filter(|g| g.installed).collect();
     }
     pool.sort_by_key(|g| g.app_id);
-    let Some(pick) = (!pool.is_empty()).then(|| pool[(day as usize) % pool.len()]) else {
+    let at = (day as usize).wrapping_add(skip.unwrap_or(0));
+    let Some(pick) = (!pool.is_empty()).then(|| pool[at % pool.len()]) else {
         return TileView::empty(
             "Install a Steam game and today's pick shows here",
             "Open Library",
@@ -121,7 +153,10 @@ pub fn what_to_play_view(games: &[PlayedGame], now: u64, can_play: bool) -> Tile
             hours(pick.playtime_min)
         ),
     };
-    let v = TileView::ready(TileText::new(pick.name.clone(), caption, Tone::Normal));
+    let mut v = TileView::ready(TileText::new(pick.name.clone(), caption, Tone::Normal));
+    if skip.is_some() && pool.len() > 1 {
+        v = v.button("Another", TileAction::Reroll);
+    }
     if can_play {
         v.primary(
             "Play",
@@ -189,11 +224,48 @@ pub fn coach_tip_view(drives: &[DiskUse], guard: GameGuard) -> TileView {
     .button("Fix my stutter", TileAction::ask(HOME_CHIPS[0]))
 }
 
+/// The newest clips and captures on this PC; a tap opens one.
+pub fn clips_view(clips: &[Clip], now: u64) -> TileView {
+    let Some(top) = clips.first() else {
+        return TileView::empty(
+            "Save a clip with your capture tool and it shows here",
+            "Open Library",
+            TileAction::nav("library"),
+        );
+    };
+    let rows = clips
+        .iter()
+        .take(ROWS)
+        .enumerate()
+        .map(|(index, c)| {
+            TileRow::new(
+                c.name.clone(),
+                crate::pulse::ago_label(c.modified_ms, now),
+                Tone::Normal,
+            )
+            .on_tap(TileAction::OpenClip { index })
+        })
+        .collect();
+    let week = clips
+        .iter()
+        .filter(|c| c.modified_ms + 7 * 86_400_000 >= now)
+        .count();
+    TileView::ready(TileText::new(
+        top.name.clone(),
+        format!(
+            "Newest clip · {} · {week} this week",
+            crate::pulse::ago_label(top.modified_ms, now)
+        ),
+        Tone::Normal,
+    ))
+    .rows(rows)
+    .primary("Watch", TileAction::OpenClip { index: 0 })
+}
+
 /// Modules whose own data comes next; until then they show the library
 /// they'll draw from and one way in.
 pub fn soon_view(module: &str, games: usize) -> TileView {
     let sentence = match module {
-        "clips" => "Your latest clips and captures show here",
         "achievements" => "New unlocks for your games show here",
         "patch_notes" => "The latest patch for your games shows here",
         _ => "Sales on your wishlist show here",
@@ -270,12 +342,17 @@ mod tests {
             game(20, "Fresh", true, secs - 3_600, 90),
             game(30, "Never", true, 0, 0),
         ];
-        let v = now_playing_view(&games, NOW);
+        let v = now_playing_view(&games, NOW, None);
         assert_eq!(v.text.big, "Fresh");
         assert_eq!(v.text.caption, "Last played 1h ago · 1.5 h total");
         assert_eq!(v.rows.len(), 2, "a never-played game isn't now playing");
         assert_eq!(v.rows[0].tap, Some(TileAction::Play { app_id: 20 }));
-        assert_eq!(now_playing_view(&[], NOW).state, TileState::Empty);
+        assert_eq!(now_playing_view(&[], NOW, None).state, TileState::Empty);
+        let live = now_playing_view(&games, NOW, Some(30));
+        assert_eq!(live.text.big, "Never", "the running game leads");
+        assert_eq!(live.text.caption, "Playing now");
+        assert_eq!(live.tag.as_deref(), Some("LIVE"));
+        assert_eq!(live.rows[0].label, "Fresh");
     }
 
     #[test]
@@ -287,12 +364,17 @@ mod tests {
             game(3, "Today", true, secs - 60, 60),
             game(4, "Updating", false, secs - 30 * 86_400, 60),
         ];
-        let a = what_to_play_view(&games, NOW, true);
-        let b = what_to_play_view(&games, NOW + 3_600_000, true);
+        let a = what_to_play_view(&games, NOW, true, None);
+        let b = what_to_play_view(&games, NOW + 3_600_000, true, None);
         assert_eq!(a.text.big, b.text.big, "the pick holds through the day");
         assert!(["A", "B"].contains(&a.text.big.as_str()), "{}", a.text.big);
         assert!(matches!(a.buttons[0].action, TileAction::Play { .. }));
-        assert!(what_to_play_view(&games, NOW, false).buttons.is_empty());
+        assert!(what_to_play_view(&games, NOW, false, None)
+            .buttons
+            .is_empty());
+        let next = what_to_play_view(&games, NOW, true, Some(1));
+        assert_ne!(next.text.big, a.text.big, "Another moves to the other pick");
+        assert!(next.buttons.iter().any(|b| b.action == TileAction::Reroll));
     }
 
     #[test]
@@ -332,5 +414,20 @@ mod tests {
             assert_eq!(v.buttons.len(), 1, "{m}");
         }
         assert_eq!(soon_view("deals", 12).text.big, "12 games");
+    }
+
+    #[test]
+    fn clips_lead_with_the_newest_and_open_by_place_in_the_list() {
+        let clip = |name: &str, ago_h: u64| Clip {
+            name: name.into(),
+            path: std::path::PathBuf::from(format!("/fake/{name}.mp4")),
+            modified_ms: NOW - ago_h * 3_600_000,
+        };
+        let v = clips_view(&[clip("Ace", 2), clip("Old one", 24 * 30)], NOW);
+        assert_eq!(v.text.big, "Ace");
+        assert_eq!(v.text.caption, "Newest clip · 2h ago · 1 this week");
+        assert_eq!(v.rows[1].tap, Some(TileAction::OpenClip { index: 1 }));
+        assert_eq!(v.buttons[0].action, TileAction::OpenClip { index: 0 });
+        assert_eq!(clips_view(&[], NOW).state, TileState::Empty);
     }
 }

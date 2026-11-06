@@ -10,6 +10,7 @@ const api = vi.hoisted(() => ({
   quickChips: vi.fn<(surface: string) => Promise<QuickChip[]>>(),
   chipOutcome: vi.fn<(surface: string, id: string, picked: boolean) => Promise<boolean>>(),
   libraryPlay: vi.fn<(appId: number) => Promise<string>>(),
+  homeOpenClip: vi.fn<(index: number) => Promise<void>>(),
   openUrl: vi.fn<(url: string) => Promise<void>>(),
 }));
 
@@ -157,6 +158,7 @@ describe("Home", () => {
     api.quickChips.mockReset().mockResolvedValue([]);
     api.chipOutcome.mockReset().mockResolvedValue(true);
     api.libraryPlay.mockReset().mockResolvedValue("Starting");
+    api.homeOpenClip.mockReset().mockResolvedValue();
     api.openUrl.mockReset().mockResolvedValue();
   });
 
@@ -218,6 +220,33 @@ describe("Home", () => {
     await userEvent.click(within(squad).getByRole("button"));
     expect(go.onAsk).toHaveBeenLastCalledWith("Find a duo tonight");
     expect(screen.queryByText(/cabin\b(?! to change)/)).toBeNull();
+  });
+
+  it("a clip row plays that clip on the PC, by its place in the list", async () => {
+    api.getHome.mockResolvedValue({
+      ...PAGE,
+      slots: [
+        slot({
+          slot: "large",
+          size: "large",
+          module: "clips",
+          name: "Clips",
+          tile: {
+            kind: "view",
+            view: view({
+              text: { big: "Ace", caption: "Newest clip · 2h ago · 2 this week", detail: null, tone: "normal" },
+              rows: [
+                { label: "Ace", value: "2h ago", tone: "normal", tap: { kind: "openClip", index: 0 } },
+                { label: "Clutch", value: "1d ago", tone: "normal", tap: { kind: "openClip", index: 1 } },
+              ],
+            }),
+          },
+        }),
+      ],
+    });
+    render(<Home {...routes()} remote={false} />);
+    await userEvent.click(await screen.findByRole("button", { name: /Clutch/ }));
+    expect(api.homeOpenClip).toHaveBeenCalledWith(1);
   });
 
   it("a tile this device can't read draws quiet, and Play never starts a game from a browser", async () => {

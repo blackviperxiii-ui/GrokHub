@@ -67,10 +67,12 @@ pub fn view(module: &str, src: &Sources<'_>) -> Option<TileView> {
             grokhub_agent::route::local::installed(),
             grokhub_agent::route::local::available(),
         ),
-        "now_playing" => library_or(src, |games| tiles::now_playing_view(&played(games), now)),
+        "now_playing" => library_or(src, |games| {
+            tiles::now_playing_view(&played(games), now, None)
+        }),
         "game_library" => library_or(src, |games| tiles::game_library_view(&played(games))),
         "what_to_play" => library_or(src, |games| {
-            tiles::what_to_play_view(&played(games), now, !src.web())
+            tiles::what_to_play_view(&played(games), now, !src.web(), None)
         }),
         "workboard" => match workboard::load(src.config_dir) {
             Ok(page) => workboard_view(&page),
@@ -91,7 +93,8 @@ pub fn view(module: &str, src: &Sources<'_>) -> Option<TileView> {
         },
         "systems_brief" => pc_only(&|| tiles::systems_brief_view(&drives(), guard())),
         "coach_tip" => pc_only(&|| tiles::coach_tip_view(&drives(), guard())),
-        "clips" | "achievements" | "patch_notes" | "deals" => {
+        "clips" => pc_only(&|| tiles::clips_view(&recent_clips(), now)),
+        "achievements" | "patch_notes" | "deals" => {
             library_or(src, |games| tiles::soon_view(module, games.len()))
         }
         "squad" | "tonight" | "audio_check" | "stream_check" | "session_timer" | "hype_line" => {
@@ -118,6 +121,24 @@ fn guard() -> grokhub_core::game_guard::GameGuard {
 #[cfg(mobile)]
 fn guard() -> grokhub_core::game_guard::GameGuard {
     grokhub_core::game_guard::GameGuard::default()
+}
+
+/// The newest clips and captures on this PC, newest first. Names and times
+/// only; no file is opened.
+fn recent_clips() -> Vec<grokhub_core::clips::Clip> {
+    let roots = grokhub_core::clips::roots(grokhub_core::steam::detect_root().as_deref());
+    grokhub_core::clips::recent(&roots, ROWS)
+}
+
+/// Opens the clip at `index` in the Clips tile's list with the PC's own
+/// player. The list is read again here, so only a place in it travels from
+/// the screen, never a path.
+pub fn open_clip(index: usize) -> Result<(), String> {
+    let clip = recent_clips()
+        .into_iter()
+        .nth(index)
+        .ok_or_else(|| "That clip isn't there any more.".to_string())?;
+    crate::skills::open_folder(&clip.path)
 }
 
 fn played(games: &[library::Game]) -> Vec<tiles::PlayedGame> {

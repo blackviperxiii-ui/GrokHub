@@ -50,8 +50,10 @@ pub(super) fn desktop_view(cabin: &mut Cabin, module: &str) -> Option<TileView> 
         "coach_tip" => {
             tiles::coach_tip_view(&live_facts().drives, grokhub_desktop::game_guard::peek())
         }
-        "now_playing" | "game_library" | "what_to_play" | "clips" | "achievements"
-        | "patch_notes" | "deals" => {
+        "clips" => tiles::clips_view(&live_facts().clips, now),
+        "now_playing" | "game_library" | "what_to_play" | "achievements" | "patch_notes"
+        | "deals" => {
+            let running = cabin.game_running();
             let (found, games) = cabin.steam_library(now);
             let games = played(games);
             if cabin.sources.steam.reading() {
@@ -64,9 +66,9 @@ pub(super) fn desktop_view(cabin: &mut Cabin, module: &str) -> Option<TileView> 
                 )
             } else {
                 match module {
-                    "now_playing" => tiles::now_playing_view(&games, now),
+                    "now_playing" => tiles::now_playing_view(&games, now, running),
                     "game_library" => tiles::game_library_view(&games),
-                    "what_to_play" => tiles::what_to_play_view(&games, now, true),
+                    "what_to_play" => tiles::what_to_play_view(&games, now, true, Some(rerolls())),
                     _ => tiles::soon_view(module, games.len()),
                 }
             }
@@ -77,6 +79,23 @@ pub(super) fn desktop_view(cabin: &mut Cabin, module: &str) -> Option<TileView> 
         _ => return None,
     };
     Some(v.at(now))
+}
+
+/// How many times What To Play was asked for another pick this run.
+static REROLLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn rerolls() -> usize {
+    REROLLS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// What To Play's Another: move to the next pick.
+pub(super) fn reroll() {
+    REROLLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The clip at `index` in the Clips tile's list, as last read.
+pub(super) fn clip_path(index: usize) -> Option<std::path::PathBuf> {
+    live_facts().clips.get(index).map(|c| c.path.clone())
 }
 
 /// The library reads installed games only.
