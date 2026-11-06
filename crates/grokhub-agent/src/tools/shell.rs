@@ -18,19 +18,11 @@ const OUTPUT_CHARS: usize = 20_000;
 const MARKER: &str = "\n\n... (output truncated) ...\n\n";
 const POLL: Duration = Duration::from_millis(20);
 
-/// Names only the shell this build really runs, so a Windows chat never
-/// reaches for bash (which on Windows can be WSL's Linux, not this PC).
-const SHELL_DESCRIPTION: &str = if cfg!(windows) {
-    "Run a Windows PowerShell command in the workspace on this Windows PC (not bash or WSL). timeout is milliseconds (default 120000, max 300000). Timeout may move it to the background; halt kills it."
-} else {
-    "Run a bash command in the workspace. timeout is milliseconds (default 120000, max 300000). Timeout may move it to the background; halt kills it."
-};
-
 pub fn schema() -> Value {
     json!({
         "type": "function",
         "name": "run_terminal_command",
-        "description": SHELL_DESCRIPTION,
+        "description": "Run a shell command in the workspace. Bash on Linux, PowerShell on Windows. timeout is milliseconds (default 120000, max 300000). Timeout may move it to the background; halt kills it.",
         "parameters": {
             "type": "object",
             "properties": {
