@@ -24,7 +24,13 @@ use crate::home::Sources;
 use crate::{journal, library, local_ai, playbooks, pulse, workboard};
 
 /// Shown on a phone for a tile that reads the PC itself.
-pub const ON_PC: &str = "Shows on the PC that runs Loadout";
+fn brand() -> &'static str {
+    grokhub_core::brand::product_name()
+}
+
+pub fn on_pc() -> String {
+    format!("Shows on the PC that runs {}", brand())
+}
 /// Rows a list tile builds; each size shows as many as fit.
 const ROWS: usize = 8;
 /// GPU and RAM barely change; read them again after this.
@@ -35,7 +41,7 @@ pub fn view(module: &str, src: &Sources<'_>) -> Option<TileView> {
     let now = src.clock.now_ms;
     let pc_only = |build: &dyn Fn() -> TileView| {
         if cfg!(mobile) {
-            TileView::unsupported(ON_PC)
+            TileView::unsupported(&on_pc())
         } else {
             build()
         }
@@ -122,7 +128,7 @@ fn guard() -> grokhub_core::game_guard::GameGuard {
 /// The Steam library, or why there isn't one.
 fn library_or(src: &Sources<'_>, build: impl Fn(&[library::Game]) -> TileView) -> TileView {
     if cfg!(mobile) {
-        return TileView::unsupported(ON_PC);
+        return TileView::unsupported(&on_pc());
     }
     if !src.caps.library {
         return TileView::unsupported("The game library isn't on this computer");
@@ -259,8 +265,12 @@ pub fn speeds_view(log: &grokhub_core::net_log::NetLog, now: u64) -> TileView {
 
 pub fn frame_rate_view() -> TileView {
     TileView::ready(
-        TileText::new("Not read", "Loadout never hooks into games", Tone::Quiet)
-            .detail("Xbox Game Bar (Win+G) or Steam's in-game counter show FPS safely"),
+        TileText::new(
+            "Not read",
+            format!("{} never hooks into games", brand()),
+            Tone::Quiet,
+        )
+        .detail("Xbox Game Bar (Win+G) or Steam's in-game counter show FPS safely"),
     )
     .button("Fix my stutter", TileAction::ask(HOME_CHIPS[0]))
 }
@@ -276,7 +286,7 @@ pub fn storage_view(drives: &[grokhub_core::disk::DiskUse]) -> TileView {
 
 pub fn updates_view(version: &str) -> TileView {
     TileView::ready(TileText::new(
-        format!("Loadout {version}"),
+        format!("{} {version}", brand()),
         "Settings → About checks for a newer one",
         Tone::Normal,
     ))
@@ -725,7 +735,7 @@ pub fn coach_tip_view(
     if let Some(ac) = guard.anticheat {
         return TileView::ready(TileText::new(
             "Hands off",
-            format!("{ac} is running, so Loadout stays out of the way"),
+            format!("{ac} is running, so {} stays out of the way", brand()),
             Tone::Quiet,
         ));
     }
@@ -735,7 +745,7 @@ pub fn coach_tip_view(
             "Ten minutes of aim or drills before ranked",
             Tone::Normal,
         )
-        .detail("Tips get sharper as Loadout learns your games"),
+        .detail(format!("Tips get sharper as {} learns your games", brand())),
     )
     .button("Fix my stutter", TileAction::ask(HOME_CHIPS[0]))
 }

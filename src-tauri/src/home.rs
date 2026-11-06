@@ -615,7 +615,7 @@ fn personality_tile(src: &Sources<'_>) -> Tile {
 fn up_next_tile(src: &Sources<'_>) -> Tile {
     if src.viewer.web() || !src.caps.library {
         return Tile::View {
-            view: TileView::unsupported(crate::home_tiles::ON_PC),
+            view: TileView::unsupported(&crate::home_tiles::on_pc()),
         };
     }
     let page = library::page(grokhub_core::steam::detect_root().as_deref());
