@@ -15,7 +15,16 @@ import {
   type BoardSwept,
   type Capabilities,
 } from "./api";
-import { cardsByChat, chatActivity, pruneActivity, routineFinished, routineStarted, type ActivityItem } from "./activity";
+import {
+  cardsByChat,
+  chatActivity,
+  pruneActivity,
+  queuedItems,
+  queueSpot,
+  routineFinished,
+  routineStarted,
+  type ActivityItem,
+} from "./activity";
 import { ActivityDock } from "./ActivityDock";
 import { Automations, resultLine, type RunNotice } from "./Automations";
 import { NoticeBell } from "./NoticeBell";
@@ -30,7 +39,7 @@ import {
   type NoticeKind,
   type Notices,
 } from "./notices";
-import { Chat, newConversationId, type Prefill } from "./Chat";
+import { Chat, newConversationId, type Prefill, type QueueAct } from "./Chat";
 import { useChipRow } from "./Chips";
 import { HALT_DONE, HALT_FAILED, HaltButton, HaltNote, haltShown, isHaltKey } from "./Halt";
 import { NO_SOURCES, Palette, VIEW_LABELS, views, type PaletteAction, type View } from "./Palette";
@@ -132,6 +141,16 @@ export function App() {
   const [askClear, setAskClear] = useState(false);
   const [clear, setClear] = useState<{ n: number }>();
   const [activity, setActivity] = useState<Record<string, ActivityItem>>({});
+  // Messages lined up behind the open chat's reply, as the chat reports them.
+  const [queued, setQueued] = useState<{ conversationId: string; texts: string[] }>();
+  const [queueAct, setQueueAct] = useState<QueueAct>();
+  const onQueue = useCallback((conversationId: string, texts: string[]) => {
+    setQueued((now) =>
+      now && now.conversationId === conversationId && now.texts.join("\u0000") === texts.join("\u0000")
+        ? now
+        : { conversationId, texts },
+    );
+  }, []);
   // Which work card each chat works, from the Workboard's last load.
   const [cardChats, setCardChats] = useState<Record<string, string>>({});
   const [openCard, setOpenCard] = useState<{ id: string; n: number }>();
@@ -444,7 +463,22 @@ export function App() {
         </nav>
         {canHalt && haltShown(desktopOn, busy) && <HaltButton onHalt={halt} />}
         <ActivityDock
-          items={Object.values(activity)}
+          items={[
+            ...Object.values(activity),
+            ...(queued ? queuedItems(queued.conversationId, queued.texts) : []),
+          ]}
+          canSteer={(item) => {
+            const spot = queueSpot(item.key);
+            return Boolean(spot && activity[`chat:${spot.conversationId}`]?.status === "running");
+          }}
+          onSteer={(item) => {
+            const spot = queueSpot(item.key);
+            if (spot) setQueueAct((now) => ({ op: "steer", index: spot.index, n: (now?.n ?? 0) + 1 }));
+          }}
+          onRemove={(item) => {
+            const spot = queueSpot(item.key);
+            if (spot) setQueueAct((now) => ({ op: "remove", index: spot.index, n: (now?.n ?? 0) + 1 }));
+          }}
           onOpenChat={() => setView("chat")}
           onOpenAutomations={() => setView("automations")}
           cardFor={(chat) => cardChats[chat]}
@@ -502,6 +536,8 @@ export function App() {
           onOpenSettings={() => setView("settings")}
           onSignIn={() => run({ kind: "settings", section: "account" })}
           onOpenView={setView}
+          onQueue={onQueue}
+          queueAct={queueAct}
           prefill={prefill}
           open={open}
           deleted={deleted}

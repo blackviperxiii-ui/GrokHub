@@ -69,6 +69,7 @@ pub const WEB_COMMANDS: &[&str] = &[
     "answer_permission",
     "answer_elicit",
     "cancel_chat",
+    "steer_chat",
     "close_chat",
     // Pasted or dropped files only; the picker and paths stay on the computer.
     "stage_attachment",

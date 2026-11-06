@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  queuedItems,
+  queuePlace,
+  queueSpot,
   CHAT_TITLE,
   DONE_TTL_MS,
   chatActivity,
@@ -183,6 +186,25 @@ describe("routines and the dock list", () => {
       "a",
       "q",
       "d",
+    ]);
+  });
+
+  it("queued rows keep their order and say where they stand", () => {
+    const rows = queuedItems("shell-c1", ["then deploy\nwith care", "  ", "x".repeat(60)]);
+    expect(rows.map((r) => r.detail)).toEqual(["Next up", "2nd in line", "3rd in line"]);
+    expect(rows[0].title).toBe("then deploy");
+    expect(rows[2].title).toBe(`${"x".repeat(47)}…`);
+    expect(dockItems([...rows].reverse(), 1).map((r) => r.key)).toEqual(rows.map((r) => r.key));
+    expect(queueSpot(rows[2].key)).toEqual({ conversationId: "shell-c1", index: 2 });
+    expect(queueSpot("chat:shell-c1")).toBeNull();
+    expect([10, 11, 12, 13, 21, 22, 23].map((n) => queuePlace(n - 1))).toEqual([
+      "10th in line",
+      "11th in line",
+      "12th in line",
+      "13th in line",
+      "21st in line",
+      "22nd in line",
+      "23rd in line",
     ]);
   });
 });

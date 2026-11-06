@@ -2581,6 +2581,11 @@ label.toggle-row {
   align-self: flex-start;
 }
 
+.activity-buttons {
+  display: flex;
+  gap: 8px;
+}
+
 .activity-head {
   display: flex;
   gap: 8px;

@@ -9,7 +9,8 @@ export type ActivityStatus = "running" | "waiting" | "queued" | "done" | "failed
 export interface ActivityItem {
   /** `chat:<conversation>` or `run:<automation id>`. */
   key: string;
-  kind: "chat" | "routine";
+  /** `queued`: a message sent while a reply ran, waiting its turn. */
+  kind: "chat" | "routine" | "queued";
   title: string;
   status: ActivityStatus;
   /** The latest step, the approval it waits on, or how it ended. */
@@ -166,6 +167,42 @@ export function dockSummary(items: ActivityItem[]): string {
     count("done") > 0 ? `${count("done")} done` : "",
   ];
   return parts.filter(Boolean).join(" · ");
+}
+
+/** Where a queued message stands: "Next up", "2nd in line", … */
+export function queuePlace(index: number): string {
+  if (index === 0) return "Next up";
+  const n = index + 1;
+  const teen = n % 100 >= 11 && n % 100 <= 13;
+  const suffix = teen ? "th" : (["th", "st", "nd", "rd"][n % 10] ?? "th");
+  return `${n}${suffix} in line`;
+}
+
+const QUEUED_TITLE_MAX = 48;
+
+/** One row per message waiting behind `conversationId`'s reply, in order:
+ * its first line, and where it stands. Keys are `queue:<chat>:<index>`. */
+export function queuedItems(conversationId: string, texts: readonly string[]): ActivityItem[] {
+  return texts.map((text, i) => {
+    const first = (text.split("\n").find((line) => line.trim()) ?? "").replace(/\s+/g, " ").trim();
+    const title = first.length > QUEUED_TITLE_MAX ? `${first.slice(0, QUEUED_TITLE_MAX - 1).trimEnd()}…` : first;
+    return {
+      key: `queue:${conversationId}:${i}`,
+      kind: "queued",
+      title,
+      status: "queued",
+      detail: queuePlace(i),
+      steps: 0,
+      // Order within the queue: the first in line sorts first.
+      at: -i,
+    };
+  });
+}
+
+/** The chat and place of a queued row's key. */
+export function queueSpot(key: string): { conversationId: string; index: number } | null {
+  const match = /^queue:(.+):(\d+)$/.exec(key);
+  return match ? { conversationId: match[1], index: Number(match[2]) } : null;
 }
 
 /** The progress line under a running chat. */

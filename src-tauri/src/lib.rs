@@ -544,6 +544,18 @@ fn cancel_chat(state: State<'_, ShellState>, conversation_id: String) {
     }
 }
 
+/// Steer now from the Activity menu: the queued words join the running
+/// reply at its next step. False when that chat has no reply running.
+#[tauri::command]
+fn steer_chat(state: State<'_, ShellState>, conversation_id: String, text: String) -> bool {
+    state
+        .chats
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&conversation_id)
+        .is_some_and(|session| session.steer(&text))
+}
+
 /// Halt from the top bar, Ctrl+Alt+H, the tray or Super+Shift+Esc: stops
 /// desktop control and every running prompt (`agent::halt`), then tells the
 /// window, which shows it.
@@ -2429,6 +2441,7 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             cancel_chat(state, own(args)?);
             Ok(Value::Null)
         }
+        "steer_chat" => out(steer_chat(state, own(args)?, arg(args, "text")?)),
         "close_chat" => {
             close_chat(state, own(args)?);
             Ok(Value::Null)
@@ -3046,6 +3059,7 @@ pub fn run() {
             answer_permission,
             answer_elicit,
             cancel_chat,
+            steer_chat,
             halt_desktop,
             get_halt_keys,
             close_chat,

@@ -29,6 +29,7 @@ const api = vi.hoisted(() => ({
     >(),
   answerPermission: vi.fn<(id: string, callId: string, answer: Answer) => Promise<void>>(),
   cancelChat: vi.fn<(id: string) => Promise<void>>(),
+  steerChat: vi.fn<(id: string, text: string) => Promise<boolean>>(),
   closeChat: vi.fn<(id: string) => Promise<void>>(),
   deleteChat: vi.fn<(id: string) => Promise<void>>(),
   forgetMessage:
@@ -52,6 +53,7 @@ vi.mock("./api", () => ({
   saveSettings: api.saveSettings,
   answerPermission: api.answerPermission,
   cancelChat: api.cancelChat,
+  steerChat: api.steerChat,
   closeChat: api.closeChat,
   deleteChat: api.deleteChat,
   forgetMessage: api.forgetMessage,
@@ -94,6 +96,7 @@ import {
   MISSION_BUSY,
   OPEN_BUSY,
   type Item,
+  type QueueAct,
 } from "./Chat";
 import { ASK_TRACKED } from "./Goals";
 
@@ -1001,5 +1004,98 @@ describe("Chat history", () => {
     expect(api.loadChat).toHaveBeenCalledWith("shell-saved", 3 + EARLIER_STEP);
     expect(await screen.findByText("the very first ask")).toBeVisible();
     expect(screen.queryByRole("button", { name: /Show earlier/ })).toBeNull();
+  });
+});
+
+describe("Chat queue", () => {
+  /** Each sendChat waits until its `end(stop)` is called. */
+  function turns() {
+    const ends: ((stop: string) => void)[] = [];
+    api.sendChat.mockReset().mockImplementation(() => new Promise<string>((resolve) => ends.push(resolve)));
+    return ends;
+  }
+
+  beforeEach(() => {
+    api.getLastChat.mockReset().mockResolvedValue(null);
+    api.quickChips.mockReset().mockResolvedValue([]);
+    api.chipOutcome.mockReset().mockResolvedValue(true);
+    api.getSettings.mockReset().mockResolvedValue(SETTINGS);
+    api.cancelChat.mockReset().mockResolvedValue();
+    api.steerChat.mockReset();
+  });
+
+  it("lines up messages sent during a reply, reports them, and sends the next when it ends", async () => {
+    const ends = turns();
+    const onQueue = vi.fn();
+    render(<Chat onOpenSettings={() => {}} onQueue={onQueue} />);
+    await userEvent.type(screen.getByLabelText("Message"), "first{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    const box = screen.getByLabelText("Message");
+    await userEvent.type(box, "then deploy");
+    expect(screen.getByRole("button", { name: "Queue" })).toBeVisible();
+    await userEvent.type(box, "{Enter}");
+    await userEvent.type(box, "and tell me{Enter}");
+    expect(box).toHaveValue("");
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
+    // Queued messages are not in the chat log until they send.
+    expect(screen.queryByText("then deploy")).toBeNull();
+    const id = api.sendChat.mock.calls[0][0];
+    expect(onQueue).toHaveBeenLastCalledWith(id, ["then deploy", "and tell me"]);
+    await act(async () => ends[0]("end_turn"));
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(2));
+    expect(api.sendChat.mock.calls[1][1]).toBe("then deploy");
+    expect(onQueue).toHaveBeenLastCalledWith(id, ["and tell me"]);
+    await act(async () => ends[1]("end_turn"));
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(3));
+    expect(api.sendChat.mock.calls[2][1]).toBe("and tell me");
+    await act(async () => ends[2]("end_turn"));
+    expect(onQueue).toHaveBeenLastCalledWith(id, []);
+  });
+
+  it("Stop puts what waited back in the box instead of sending it", async () => {
+    const ends = turns();
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "first{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    await userEvent.type(screen.getByLabelText("Message"), "then deploy{Enter}");
+    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+    expect(api.cancelChat).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("Message")).toHaveValue("then deploy");
+    await act(async () => ends[0]("cancelled"));
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("Remove puts the words back in an empty box; Steer now hands them to the reply", async () => {
+    const ends = turns();
+    api.steerChat.mockResolvedValue(true);
+    const onQueue = vi.fn();
+    const chat = (queueAct?: QueueAct) => <Chat onOpenSettings={() => {}} onQueue={onQueue} queueAct={queueAct} />;
+    const { rerender } = render(chat());
+    await userEvent.type(screen.getByLabelText("Message"), "first{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    const id = api.sendChat.mock.calls[0][0];
+    await userEvent.type(screen.getByLabelText("Message"), "then deploy{Enter}");
+    await userEvent.type(screen.getByLabelText("Message"), "use staging{Enter}");
+    rerender(chat({ op: "remove", index: 0, n: 1 }));
+    await waitFor(() => expect(screen.getByLabelText("Message")).toHaveValue("then deploy"));
+    expect(onQueue).toHaveBeenLastCalledWith(id, ["use staging"]);
+    rerender(chat({ op: "steer", index: 0, n: 2 }));
+    await waitFor(() => expect(api.steerChat).toHaveBeenCalledWith(id, "use staging"));
+    await waitFor(() => expect(onQueue).toHaveBeenLastCalledWith(id, []));
+    // Steered words show as sent; nothing more goes when the reply ends.
+    expect(screen.getByText("use staging")).toBeVisible();
+    await act(async () => ends[0]("end_turn"));
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("a Halt puts the queue back in the box", async () => {
+    const ends = turns();
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "first{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    await userEvent.type(screen.getByLabelText("Message"), "then deploy{Enter}");
+    await act(async () => ends[0]("halted"));
+    expect(screen.getByLabelText("Message")).toHaveValue("then deploy");
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
   });
 });
