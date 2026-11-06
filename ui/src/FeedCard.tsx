@@ -168,8 +168,11 @@ export function fullDate(ms: number): string {
 export interface FeedCardProps {
   post: PulsePost;
   busy: boolean;
+  /** Love, or Unlove when the post is already loved. */
   onLove: () => void;
   onDiscuss: () => void;
+  /** Open the post's source page. */
+  onOpen?: () => void;
   onDelete: () => void;
   onWhy: () => Promise<string>;
   /** Hide it until tomorrow 9 AM. */
@@ -180,8 +183,9 @@ export interface FeedCardProps {
   onNotThis?: () => void;
 }
 
-/** One Feed post: icon, title, verdict, cited snippet, media; its two buttons
- * below, Discuss (the main one) and Love;
+/** One Feed post: icon, title, where it is from and why, verdict, cited
+ * snippet, media; its buttons below, Discuss (the main one), Love (pressed
+ * again it unloves) and Read it when it has a source page;
  * time and a menu (date, why, snooze, dismiss, not this, delete) top right.
  * Delete asks first. */
 export function FeedCard({
@@ -189,6 +193,7 @@ export function FeedCard({
   busy,
   onLove,
   onDiscuss,
+  onOpen,
   onDelete,
   onWhy,
   onSnooze,
@@ -262,6 +267,10 @@ export function FeedCard({
           )}
         </div>
       </div>
+      <p className="feed-source">
+        {post.source}
+        {post.because && ` · ${post.because}`}
+      </p>
       <VerdictLine verdict={post.verdict} />
       {post.summary && <Snippet text={post.summary} />}
       <Media post={post} />
@@ -292,11 +301,16 @@ export function FeedCard({
           className="quiet"
           aria-label="Love"
           aria-pressed={post.loved}
-          disabled={busy || post.loved}
+          disabled={busy}
           onClick={onLove}
         >
           <span aria-hidden="true">{post.loved ? "♥" : "♡"}</span> Love
         </button>
+        {post.link && onOpen && (
+          <button type="button" className="quiet" disabled={busy} onClick={onOpen}>
+            Read it
+          </button>
+        )}
       </div>
     </li>
   );

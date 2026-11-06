@@ -2313,6 +2313,27 @@ label.toggle-row {
   margin-right: 2px;
 }
 
+.feed-source {
+  margin: 0;
+  font-size: 0.85em;
+  color: var(--muted);
+}
+
+.pulse .day-end {
+  list-style: none;
+  text-align: center;
+  font-size: 0.85em;
+  color: var(--muted);
+  padding: 8px 0;
+}
+
+.feed-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
 .feed-foot button[aria-pressed="true"] span {
   color: var(--danger-text);
 }

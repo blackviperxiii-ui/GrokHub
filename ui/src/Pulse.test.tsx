@@ -11,6 +11,7 @@ const api = vi.hoisted(() => ({
   pulseImage: vi.fn<(name: string) => Promise<string>>(),
   pulseFix: vi.fn<(id: string) => Promise<FixView>>(),
   getFeedPrompt: vi.fn<() => Promise<FeedPrompt>>(),
+  openUrl: vi.fn<(url: string) => Promise<void>>(),
   saveFeedPrompt: vi.fn<(text: string) => Promise<FeedPrompt>>(),
 }));
 
@@ -18,11 +19,14 @@ vi.mock("./api", () => api);
 
 import { emojiImage, Snippet } from "./FeedCard";
 import {
+  ADD_INTERESTS,
+  DAY_END,
   FEED_EMPTY,
   MORE_LIKE_NOTE,
   NOT_INTERESTED_NOTE,
   PAGE_SIZE,
   Pulse,
+  REFRESH_MS,
   SAVED_NOTE,
 } from "./Pulse";
 
@@ -61,7 +65,9 @@ const IDEA: PulseIdea = {
 
 const PAGE: PulsePage = {
   feed: [post()],
+  today: 1,
   ideas: [{ label: "Productivity", ideas: [IDEA] }],
+  note: "",
 };
 
 describe("Pulse", () => {
@@ -205,7 +211,7 @@ describe("Pulse", () => {
     expect(screen.getByText(FEED_EMPTY)).toBeInTheDocument();
   });
 
-  it("Love toggles on once and Discuss hands the post to chat", async () => {
+  it("Love toggles on and off and Discuss hands the post to chat", async () => {
     api.getPulse.mockResolvedValue(PAGE);
     api.pulseAct.mockResolvedValue({ ...PAGE, feed: [post({ loved: true })] });
     api.pulseDiscuss.mockResolvedValue("Let's talk about this post from my Pulse feed.");
@@ -226,11 +232,93 @@ describe("Pulse", () => {
         "true",
       ),
     );
-    expect(within(card).getByRole("button", { name: "Love" })).toBeDisabled();
+    api.pulseAct.mockResolvedValue(PAGE);
+    await userEvent.click(within(card).getByRole("button", { name: "Love" }));
+    expect(api.pulseAct).toHaveBeenLastCalledWith("post-1", "unlove");
+    await vi.waitFor(() =>
+      expect(within(card).getByRole("button", { name: "Love" })).toHaveAttribute(
+        "aria-pressed",
+        "false",
+      ),
+    );
 
     await userEvent.click(within(card).getByRole("button", { name: "Discuss" }));
     expect(api.pulseDiscuss).toHaveBeenCalledWith("post-1");
     expect(onRun).toHaveBeenCalledWith("Let's talk about this post from my Pulse feed.");
+  });
+
+  it("a card says where it is from and why, and Read it opens the source", async () => {
+    api.getPulse.mockResolvedValue({
+      ...PAGE,
+      feed: [post({ source: "Helldivers 2 on Steam", because: "You play Helldivers 2" })],
+    });
+    api.openUrl.mockResolvedValue();
+    render(<Pulse onRun={() => {}} />);
+
+    const card = await screen.findByRole("listitem", { name: TITLE });
+    expect(card.querySelector(".feed-source")).toHaveTextContent(
+      "Helldivers 2 on Steam · You play Helldivers 2",
+    );
+    await userEvent.click(within(card).getByRole("button", { name: "Read it" }));
+    expect(api.openUrl).toHaveBeenCalledWith("https://blog.rust-lang.org/1.99.html");
+  });
+
+  it("a post with no source page has no Read it", async () => {
+    api.getPulse.mockResolvedValue({ ...PAGE, feed: [post({ link: "" })] });
+    render(<Pulse onRun={() => {}} />);
+    const card = await screen.findByRole("listitem", { name: TITLE });
+    expect(card.querySelector(".feed-source")).toHaveTextContent("Rust Blog");
+    expect(within(card).queryByRole("button", { name: "Read it" })).not.toBeInTheDocument();
+  });
+
+  it("today's set ends with That's all for today, then the older posts", async () => {
+    api.getPulse.mockResolvedValue({
+      ...PAGE,
+      feed: [post(), post({ id: "old", title: "Older post" })],
+      today: 1,
+    });
+    render(<Pulse onRun={() => {}} />);
+    await screen.findByRole("listitem", { name: "Older post" });
+    const items = screen.getAllByRole("listitem").map((li) => li.getAttribute("aria-label"));
+    expect(items).toEqual([TITLE, "Older post"]);
+    const end = screen.getByRole("separator");
+    expect(end).toHaveTextContent(DAY_END);
+    expect(end.previousElementSibling).toHaveAttribute("aria-label", TITLE);
+  });
+
+  it("an empty feed says what the writer found and offers interests", async () => {
+    api.getPulse.mockResolvedValue({
+      ...PAGE,
+      feed: [],
+      today: 0,
+      note: "Nothing to look into yet. Add an interest in Settings → Pulse → Interests.",
+    });
+    const onOpenInterests = vi.fn();
+    render(<Pulse onRun={() => {}} onOpenInterests={onOpenInterests} />);
+    expect(
+      await screen.findByText(
+        "Nothing to look into yet. Add an interest in Settings → Pulse → Interests.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(FEED_EMPTY)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: ADD_INTERESTS }));
+    expect(onOpenInterests).toHaveBeenCalled();
+  });
+
+  it("looks for new posts once a minute while open", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      api.getPulse
+        .mockResolvedValueOnce(PAGE)
+        .mockResolvedValue({ ...PAGE, feed: [post({ id: "new", title: "Fresh post" }), post()] });
+      render(<Pulse onRun={() => {}} />);
+      await screen.findByRole("listitem", { name: TITLE });
+      expect(screen.queryByRole("listitem", { name: "Fresh post" })).not.toBeInTheDocument();
+      await vi.advanceTimersByTimeAsync(REFRESH_MS);
+      expect(await screen.findByRole("listitem", { name: "Fresh post" })).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("feed instructions open from the sliders, save, and look for the new post", async () => {
@@ -307,6 +395,7 @@ describe("Pulse", () => {
   it("an idea shows the same two buttons as every card, with More like this in its menu", async () => {
     const written = { ...IDEA, id: "idea-2", title: "Rust 1.99 upgrade plan", icon: "🦀" };
     const page: PulsePage = {
+      ...PAGE,
       feed: [],
       ideas: [
         { label: "", ideas: [written] },
@@ -354,7 +443,7 @@ describe("Pulse", () => {
       verdict: { tone: "watch", line: "Warmer than usual: GPU peaked at 88°C." },
       fix: "Fix it",
     };
-    const page: PulsePage = { feed: [], ideas: [{ label: "", ideas: [health] }] };
+    const page: PulsePage = { ...PAGE, feed: [], ideas: [{ label: "", ideas: [health] }] };
     api.getPulse.mockResolvedValue(page);
     api.pulseAct.mockResolvedValue(page);
     api.pulseFix.mockResolvedValue({
@@ -405,7 +494,7 @@ describe("Pulse", () => {
     api.getPulse
       .mockResolvedValueOnce(PAGE)
       .mockResolvedValueOnce(PAGE)
-      .mockResolvedValueOnce({ feed: [], ideas: [] });
+      .mockResolvedValueOnce({ ...PAGE, feed: [], ideas: [] });
     api.pulseAct.mockRejectedValue("That card is gone. The page now shows what is left.");
     const onRun = vi.fn();
     render(<Pulse onRun={onRun} />);
