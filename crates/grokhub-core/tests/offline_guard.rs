@@ -73,6 +73,7 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("crates/grokhub-agent/src/ws_mode.rs", 2, "WsPool::turn (TCP connect, then the WebSocket upgrade): XaiClient::over_socket runs the egress guard (api.x.ai) first; a refusal is Protocol, never retried"),
     ("crates/grokhub-agent/src/route/providers.rs", 1, "providers you added: guard_provider / provider_or_park"),
     ("crates/grokhub-app/src/xai.rs", 1, "cabin Grok calls (STT, TTS, Imagine): egress_ok"),
+    ("crates/grokhub-app/src/stt_stream.rs", 1, "voice mode streaming speech-to-text (api.x.ai WebSocket): egress_ok before the TCP connect; also off behind a proxy"),
     // Model registry, probes, connectivity.
     ("crates/grokhub-agent/src/route/sources.rs", 1, "model listing: egress guard; token probe: offline::check_url"),
     ("crates/grokhub-core/src/connectivity.rs", 1, "default_http_client (facade agent) for the re-probe: run_probe_if_due sends nothing while on; the net log speed test calls offline::refuse first"),
