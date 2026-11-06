@@ -149,6 +149,16 @@ pub fn run_once(
     outcome
 }
 
+/// The Steam games that feed Pulse and were played, most recent first.
+fn played_games(config_dir: &Path, steam_root: Option<&Path>) -> Vec<String> {
+    let Some(root) = steam_root else {
+        return Vec::new();
+    };
+    let games = grokhub_core::steam::read_library(root);
+    let prefs = grokhub_core::steam::load_prefs(config_dir);
+    grokhub_core::steam::played_names(&games, &prefs, 8)
+}
+
 /// One idea run behind its six-hour gate. With nothing personal to go on
 /// there is no call and the gate stays open; once asked, the run counts even
 /// when it posts nothing. More like this is spent once a reply comes back.
@@ -182,7 +192,11 @@ pub fn run_ideas(
         .filter(|c| c.kind == grokhub_core::UpdateKind::Idea)
         .map(|c| c.title.clone())
         .collect();
+    let games = played_games(config_dir, grokhub_core::steam::detect_root().as_deref());
+    let pc = pi::pc_lines(&cards);
     let Some(messages) = pi::idea_messages(&pi::IdeaInput {
+        games: &games,
+        pc: &pc,
         goals: &goals,
         topics: &profile.prompt_section(),
         chats: &chats,

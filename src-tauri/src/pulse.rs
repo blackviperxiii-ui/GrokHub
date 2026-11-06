@@ -805,14 +805,14 @@ mod tests {
         act(&d.config, "idea-1", Act::MoreLike, &day(), NOW).expect("more");
         let learned = reactions::load(&d.config.join(reactions::FILE_NAME));
         // Accepted (+2) and More like this (+3).
-        assert_eq!(learned.score("productivity ideas"), 5, "{learned:?}");
+        assert_eq!(learned.score("automations ideas"), 5, "{learned:?}");
         assert_eq!(
             why(&d.config, "idea-1").expect("why"),
-            "It came from your Pulse sources. From Pulse ideas. You've liked productivity ideas before, so they rank higher."
+            "It came from your Pulse sources. From Pulse ideas. You've liked ideas about automations before, so they rank higher."
         );
         act(&d.config, "idea-1", Act::Snooze, &day(), NOW).expect("snooze");
         let learned = reactions::load(&d.config.join(reactions::FILE_NAME));
-        assert_eq!(learned.score("productivity ideas"), 4);
+        assert_eq!(learned.score("automations ideas"), 4);
         // A post Pulse has no category for leaves nothing behind.
         act(&d.config, "post-1", Act::Love, &day(), NOW).expect("love");
         let learned = reactions::load(&d.config.join(reactions::FILE_NAME));

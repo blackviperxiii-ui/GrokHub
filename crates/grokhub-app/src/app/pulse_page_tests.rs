@@ -155,8 +155,8 @@ fn pulse_ideas_group_by_category_in_a_fixed_order() {
     ));
     cabin.updates.push(pulse_idea(
         "idea-gym",
-        "Gym",
-        "book a gym session for Tuesday",
+        "Shader preset",
+        "check my ReShade preset for Cyberpunk",
         4,
     ));
     cabin.updates.push(pulse_idea(
@@ -197,9 +197,9 @@ fn pulse_ideas_group_by_category_in_a_fixed_order() {
                     "idea-dinner".to_string()
                 ]
             ),
-            (Some("Productivity"), vec!["idea-auto".to_string()]),
-            (Some("Shopping"), vec!["idea-stand".to_string()]),
-            (Some("Health & Fitness"), vec!["idea-gym".to_string()]),
+            (Some("Mods & builds"), vec!["idea-gym".to_string()]),
+            (Some("Deals"), vec!["idea-stand".to_string()]),
+            (Some("Automations"), vec!["idea-auto".to_string()]),
             (Some("More for you"), vec!["idea-photos".to_string()]),
         ],
         "the three strongest lead, then the categories in their fixed order"
@@ -464,7 +464,7 @@ fn pulse_migrates_old_home_and_ideas_data_once() {
   {"id":"idea-board","kind":"idea","title":"Draft the standup","createdAt":101,"status":"opened","prompt":"draft my standup","ideaKind":"try","modified":true,"draft":"draft my standup from git log"},
   {"id":"digest-1","kind":"digest","title":"Rust 1.92 ships","body":"Faster builds.","createdAt":102,"status":"unread","citations":["https://www.rust-lang.org/news/1-92"],"reaction":"up"},
   {"id":"run-1","kind":"automation_done","title":"Backup ran","body":"All good","createdAt":103,"status":"unread","sourceId":"loop-backup","runs":3},
-  {"id":"idea-gone","kind":"idea","title":"Gym plan","createdAt":104,"status":"dismissed"}
+  {"id":"idea-gone","kind":"idea","title":"Watch the Steam sale","createdAt":104,"status":"dismissed"}
 ]"#;
     std::fs::write(crate::feed::path(), old).expect("old updates.json");
     cabin.updates = crate::feed::load();
@@ -490,9 +490,9 @@ fn pulse_migrates_old_home_and_ideas_data_once() {
             .find(|c| c.id == id)
             .and_then(|c| c.pulse.category.clone())
     };
-    assert_eq!(cat("idea-pin").as_deref(), Some("financial"));
-    assert_eq!(cat("idea-board").as_deref(), Some("productivity"));
-    assert_eq!(cat("idea-gone").as_deref(), Some("health"));
+    assert_eq!(cat("idea-pin").as_deref(), Some("more"));
+    assert_eq!(cat("idea-board").as_deref(), Some("more"));
+    assert_eq!(cat("idea-gone").as_deref(), Some("deals"));
     assert_eq!(cat("digest-1"), None, "feed posts have no category header");
     let pinned = cabin.updates.iter().find(|c| c.id == "idea-pin").unwrap();
     assert!(pinned.feed_pin, "the Home pin is kept");
@@ -529,7 +529,7 @@ fn pulse_migrates_old_home_and_ideas_data_once() {
             .find(|c| c.id == "idea-pin")
             .and_then(|c| c.pulse.category.clone())
             .as_deref(),
-        Some("financial")
+        Some("more")
     );
     let cfg = crate::config::load();
     assert!(cfg.feed_pulse.pulse_v1);

@@ -130,169 +130,188 @@ pub fn ago_label(at_ms: u64, now_ms: u64) -> String {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PulseCategory {
-    Financial,
-    Productivity,
-    Relationships,
-    Health,
-    Shopping,
+    Games,
+    Pc,
+    Mods,
+    Deals,
+    Automations,
     More,
 }
 
 impl PulseCategory {
-    /// Header order on the Ideas view. More holds older cards whose words
-    /// match no category; written ideas always take one of the first five.
+    /// Header order on the Ideas view: a player's own things first. More
+    /// holds cards whose words match no category.
     pub const ORDER: [PulseCategory; 6] = [
-        Self::Productivity,
-        Self::Financial,
-        Self::Shopping,
-        Self::Relationships,
-        Self::Health,
+        Self::Games,
+        Self::Pc,
+        Self::Mods,
+        Self::Deals,
+        Self::Automations,
         Self::More,
     ];
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Financial => "Financial Management",
-            Self::Productivity => "Productivity",
-            Self::Relationships => "Relationships",
-            Self::Health => "Health & Fitness",
-            Self::Shopping => "Shopping",
+            Self::Games => "Games",
+            Self::Pc => "PC",
+            Self::Mods => "Mods & builds",
+            Self::Deals => "Deals",
+            Self::Automations => "Automations",
             Self::More => "More for you",
         }
     }
 
     pub fn key(self) -> &'static str {
         match self {
-            Self::Financial => "financial",
-            Self::Productivity => "productivity",
-            Self::Relationships => "relationships",
-            Self::Health => "health",
-            Self::Shopping => "shopping",
+            Self::Games => "games",
+            Self::Pc => "pc",
+            Self::Mods => "mods",
+            Self::Deals => "deals",
+            Self::Automations => "automations",
             Self::More => "more",
         }
     }
 
+    /// A stored key. Keys from the older consumer categories map over:
+    /// shopping is Deals, productivity is Automations, the rest are More.
     pub fn parse(key: &str) -> Option<Self> {
-        Self::ORDER.into_iter().find(|c| c.key() == key.trim())
+        let key = key.trim();
+        Self::ORDER
+            .into_iter()
+            .find(|c| c.key() == key)
+            .or(match key {
+                "shopping" => Some(Self::Deals),
+                "productivity" => Some(Self::Automations),
+                "financial" | "relationships" | "health" => Some(Self::More),
+                _ => None,
+            })
     }
 }
 
-const FINANCIAL: &[&str] = &[
-    "bill",
-    "bills",
-    "budget",
-    "invoice",
-    "invoices",
-    "payment",
-    "pay ",
-    "paycheck",
-    "payday",
-    "subscription",
-    "subscriptions",
-    "renewal",
-    "renews",
-    "insurance",
-    "tax",
-    "taxes",
-    "bank",
-    "rent",
-    "mortgage",
-    "loan",
-    "refund",
-    "expense",
-    "expenses",
-    "spending",
-    "savings",
-    "price drop",
+const MODS: &[&str] = &[
+    "mod",
+    "mods",
+    "modded",
+    "modding",
+    "modlist",
+    "mod list",
+    "load order",
+    "nexus",
+    "workshop",
+    "shader",
+    "shaders",
+    "reshade",
+    "texture pack",
+    "loadout",
+    "loadouts",
+    "build guide",
+    "builds",
 ];
-const HEALTH: &[&str] = &[
-    "workout",
-    "exercise",
-    "gym",
-    "run ",
-    "running",
-    "steps",
-    "sleep",
-    "doctor",
-    "dentist",
-    "meal",
-    "meals",
-    "calorie",
-    "calories",
-    "habit",
-    "health",
-    "fitness",
-    "stretch",
-    "water",
-    "medication",
-    "dinner plan",
-    "grocery plan",
+const PC: &[&str] = &[
+    "pc",
+    "gpu",
+    "cpu",
+    "driver",
+    "drivers",
+    "fps",
+    "temps",
+    "temperature",
+    "fan",
+    "fans",
+    "overclock",
+    "benchmark",
+    "ssd",
+    "disk",
+    "drive space",
+    "ram",
+    "memory leak",
+    "crash",
+    "crashes",
+    "stutter",
+    "windows update",
+    "startup",
+    "backup",
+    "backups",
+    "health check",
 ];
-const RELATIONSHIPS: &[&str] = &[
-    "family",
-    "friend",
-    "friends",
-    "birthday",
-    "anniversary",
-    "mom",
-    "dad",
-    "partner",
-    "wife",
-    "husband",
-    "kids",
-    "invite",
-    "catch up",
-    "reunion",
-    "pet ",
-    "dog",
-    "cat ",
+const GAMES: &[&str] = &[
+    "game",
+    "games",
+    "gaming",
+    "steam",
+    "patch",
+    "patch notes",
+    "season",
+    "raid",
+    "ranked",
+    "match",
+    "matches",
+    "achievement",
+    "achievements",
+    "playtime",
+    "speedrun",
+    "boss",
+    "quest",
+    "dlc",
+    "server",
+    "servers",
+    "squad",
+    "co-op",
+    "spoiler-free",
 ];
-const SHOPPING: &[&str] = &[
-    "buy",
-    "shopping",
+const DEALS: &[&str] = &[
+    "sale",
+    "sales",
     "deal",
     "deals",
+    "discount",
     "price",
     "prices",
+    "price drop",
+    "cheaper",
+    "wishlist",
+    "bundle",
+    "free weekend",
+    "coupon",
+    "buy",
+    "shopping",
     "compare",
-    "order",
-    "marketplace",
-    "best-reviewed",
     "cart",
-    "gift",
-    "laptop stand",
+    "order",
 ];
-const PRODUCTIVITY: &[&str] = &[
-    "resume",
-    "job",
-    "jobs",
-    "interview",
-    "calendar",
-    "meeting",
-    "email",
-    "inbox",
-    "workboard",
-    "report",
-    "review",
-    "notes",
-    "plan",
+const AUTOMATIONS: &[&str] = &[
+    "every",
+    "daily",
+    "weekly",
+    "weekday",
+    "weekdays",
+    "morning",
+    "nightly",
     "schedule",
-    "build",
-    "release",
-    "repo",
-    "pull request",
-    "deploy",
+    "remind",
+    "reminder",
+    "automate",
+    "automation",
+    "watch",
+    "notify",
+    "track",
     "summarize",
     "summary",
     "brief",
-    "draft",
+    "tidy",
+    "organize",
+    "workboard",
+    "inbox",
+    "email",
+    "calendar",
     "folder",
     "files",
-    "backup",
 ];
 
 /// Category from the card's words. Fixed keyword table, first match in this
-/// order: Financial, Health, Relationships, Shopping, Productivity, else More.
+/// order: Mods, PC, Deals, Games, Automations, else More. The narrower lists
+/// go first so a mod for a game is a mod, a GPU driver for a game is PC and a
+/// Steam sale is a deal.
 pub fn categorize(text: &str) -> PulseCategory {
     let lower = text.to_ascii_lowercase();
     let words: Vec<&str> = lower
@@ -309,19 +328,16 @@ pub fn categorize(text: &str) -> PulseCategory {
             }
         })
     };
-    if hit(FINANCIAL) {
-        PulseCategory::Financial
-    } else if hit(HEALTH) {
-        PulseCategory::Health
-    } else if hit(RELATIONSHIPS) {
-        PulseCategory::Relationships
-    } else if hit(SHOPPING) {
-        PulseCategory::Shopping
-    } else if hit(PRODUCTIVITY) {
-        PulseCategory::Productivity
-    } else {
-        PulseCategory::More
-    }
+    [
+        (MODS, PulseCategory::Mods),
+        (PC, PulseCategory::Pc),
+        (DEALS, PulseCategory::Deals),
+        (GAMES, PulseCategory::Games),
+        (AUTOMATIONS, PulseCategory::Automations),
+    ]
+    .into_iter()
+    .find(|(list, _)| hit(list))
+    .map_or(PulseCategory::More, |(_, cat)| cat)
 }
 
 /// The stored category, or the keyword pick for a card that has none yet.
@@ -1570,53 +1586,74 @@ mod tests {
 
     #[test]
     fn categories_follow_the_keyword_table_and_the_fixed_order() {
-        assert_eq!(
-            categorize("I can stage your $287.63 power bill before October 5"),
-            PulseCategory::Financial
-        );
-        assert_eq!(
-            categorize("I can find and cancel subscriptions you forgot"),
-            PulseCategory::Financial
-        );
-        assert_eq!(
-            categorize("Name a habit you want to break; I'll nudge you"),
-            PulseCategory::Health
-        );
-        assert_eq!(
-            categorize("Gather the family for a trivia night"),
-            PulseCategory::Relationships
-        );
-        assert_eq!(
-            categorize("Tell me the item and I'll compare prices"),
-            PulseCategory::Shopping
-        );
-        assert_eq!(
-            categorize("I can tailor your resume for entry-level jobs"),
-            PulseCategory::Productivity
-        );
-        assert_eq!(
-            categorize("I can map a spoiler-free path through Witcher 3"),
-            PulseCategory::More
-        );
+        let cases = [
+            (
+                "I can watch Helldivers 2 patch notes for you",
+                PulseCategory::Games,
+            ),
+            (
+                "I can map a spoiler-free path through Witcher 3",
+                PulseCategory::Games,
+            ),
+            (
+                "I can check your GPU temps after each session",
+                PulseCategory::Pc,
+            ),
+            (
+                "I can find the newest Nvidia driver for your game",
+                PulseCategory::Pc,
+            ),
+            (
+                "I can check your Skyrim load order for mod conflicts",
+                PulseCategory::Mods,
+            ),
+            ("I can watch your wishlist for a sale", PulseCategory::Deals),
+            (
+                "I can tell you when the Steam sale starts",
+                PulseCategory::Deals,
+            ),
+            (
+                "Tell me the item and I'll compare prices",
+                PulseCategory::Deals,
+            ),
+            (
+                "I can tidy your workboard every Friday",
+                PulseCategory::Automations,
+            ),
+            (
+                "I can tailor your resume for entry-level jobs",
+                PulseCategory::More,
+            ),
+        ];
+        for (text, want) in cases {
+            assert_eq!(categorize(text), want, "{text}");
+        }
         let labels: Vec<&str> = PulseCategory::ORDER.iter().map(|c| c.label()).collect();
         assert_eq!(
             labels,
             vec![
-                "Productivity",
-                "Financial Management",
-                "Shopping",
-                "Relationships",
-                "Health & Fitness",
+                "Games",
+                "PC",
+                "Mods & builds",
+                "Deals",
+                "Automations",
                 "More for you"
             ]
         );
         let mut stored = idea("i1", "Witcher 3 route", "", 1);
-        stored.pulse.category = Some("shopping".into());
+        stored.pulse.category = Some("deals".into());
         assert_eq!(
             card_category(&stored),
-            PulseCategory::Shopping,
+            PulseCategory::Deals,
             "a stored category wins"
         );
+        let old = |key: &str| PulseCategory::parse(key);
+        assert_eq!(old("shopping"), Some(PulseCategory::Deals));
+        assert_eq!(old("productivity"), Some(PulseCategory::Automations));
+        assert_eq!(old("financial"), Some(PulseCategory::More));
+        assert_eq!(old("relationships"), Some(PulseCategory::More));
+        assert_eq!(old("health"), Some(PulseCategory::More));
+        assert_eq!(old("fun"), None);
     }
 
     #[test]
@@ -1884,17 +1921,17 @@ mod tests {
             c.pulse.category = Some(cat.into());
             c
         };
-        let mut bill = at("bill", "I can stage your power bill", "financial", 90);
+        let mut bill = at("bill", "I can sum up the Helldivers 2 patch", "games", 90);
         bill.modified = true;
         let cards = vec![
             bill,
-            at("groc", "I can plan groceries", "shopping", 80),
-            at("subs", "I can cancel subscriptions", "financial", 70),
-            at("resume", "I can tailor your resume", "productivity", 60),
-            at("gym", "I can plan a workout", "health", 50),
+            at("groc", "I can watch your wishlist", "deals", 80),
+            at("subs", "I can check your GPU temps", "pc", 70),
+            at("resume", "I can tidy your workboard", "automations", 60),
+            at("gym", "I can check your load order", "mods", 50),
             at("trivia", "I can plan a trivia night", "relationships", 40),
             at("deals", "I can watch for deals", "shopping", 30),
-            at("route", "I can map a route", "productivity", 20),
+            at("route", "I can map a route", "games", 20),
             automation_done_card("a", "Nightly backup", "ok", now - 10),
         ];
         let groups: Vec<(Option<&str>, Vec<String>)> = group_ideas(
@@ -1917,13 +1954,13 @@ mod tests {
             groups,
             vec![
                 (None, ids(&["bill", "route", "deals"])),
-                (Some("Productivity"), ids(&["resume"])),
-                (Some("Financial Management"), ids(&["subs"])),
-                (Some("Shopping"), ids(&["groc"])),
-                (Some("Relationships"), ids(&["trivia"])),
-                (Some("Health & Fitness"), ids(&["gym"])),
+                (Some("PC"), ids(&["subs"])),
+                (Some("Mods & builds"), ids(&["gym"])),
+                (Some("Deals"), ids(&["groc"])),
+                (Some("Automations"), ids(&["resume"])),
+                (Some("More for you"), ids(&["trivia"])),
             ],
-            "the edited idea and the two newest lead, with no header"
+            "the edited idea and the two newest lead, with no header; an older key maps over"
         );
     }
 
@@ -1934,7 +1971,7 @@ mod tests {
             title: "Cheaper groceries".into(),
             description: "I can plan meals around the sales.".into(),
             emoji: "🛒".into(),
-            category: PulseCategory::Shopping,
+            category: PulseCategory::Deals,
             action: "plan meals from this week's sales".into(),
         };
         let mut old = crate::pulse_ideas::muse_idea_card(&idea, posted);

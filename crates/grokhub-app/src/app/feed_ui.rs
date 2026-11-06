@@ -646,6 +646,21 @@ impl Cabin {
             .chain(self.grok_loops.iter().map(|l| l.prompt.clone()))
             .collect();
         let skills: Vec<String> = self.skill_list.iter().map(|s| s.name.clone()).collect();
+        // Games and interests: what an idea about their games may stand on.
+        // The cached library only; this never reads Steam.
+        let games = self.steam_played_names(8);
+        let interests: Vec<String> = self
+            .interests
+            .profile
+            .as_ref()
+            .map(|p| {
+                p.ranked()
+                    .into_iter()
+                    .take(8)
+                    .map(|t| t.topic.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
         let existing: Vec<String> = self
             .updates
             .iter()
@@ -676,6 +691,8 @@ impl Cabin {
                 skills: &skills,
                 existing: &existing,
                 rejected: &rejected,
+                games: &games,
+                interests: &interests,
                 hour: clock.hour as u8,
                 weekday,
             })
@@ -691,6 +708,8 @@ impl Cabin {
         sources.extend(memory_lines.iter().cloned());
         let mut lasting = memory_lines;
         lasting.extend(open_cards);
+        lasting.extend(games);
+        lasting.extend(interests);
         let mut taken = existing;
         taken.extend(rejected);
         taken.extend(automations);

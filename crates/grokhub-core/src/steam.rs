@@ -735,6 +735,17 @@ pub fn feeding<'a>(games: &'a [SteamGame], prefs: &SteamPrefs) -> Vec<&'a SteamG
     games.iter().filter(|g| !prefs.is_muted(g.app_id)).collect()
 }
 
+/// Names of the games that feed Pulse and have been played, most recent
+/// first, for idea prompts. Never-played library games are left out.
+pub fn played_names(games: &[SteamGame], prefs: &SteamPrefs, max: usize) -> Vec<String> {
+    feeding(games, prefs)
+        .into_iter()
+        .filter(|g| g.last_played > 0)
+        .take(max)
+        .map(|g| g.name.clone())
+        .collect()
+}
+
 /// This check's Steam news fetches. Each one carries its game as the topic,
 /// so Pulse's interest ranking and feedback apply to it.
 pub fn requests(games: &[SteamGame], prefs: &SteamPrefs, max: usize) -> Vec<SourceReq> {
@@ -1200,6 +1211,18 @@ mod tests {
             last_played: last,
             playtime_min: minutes,
         }
+    }
+
+    #[test]
+    fn played_names_skip_muted_and_never_played_games() {
+        let games = vec![
+            game(1, "Helldivers 2", 30, 90),
+            game(2, "Muted", 20, 60),
+            game(3, "Never", 0, 0),
+        ];
+        let mut prefs = SteamPrefs::default();
+        prefs.set_muted(2, true);
+        assert_eq!(played_names(&games, &prefs, 8), vec!["Helldivers 2"]);
     }
 
     #[test]

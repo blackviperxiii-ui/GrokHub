@@ -202,20 +202,17 @@ enum Glyph {
     Loop,
     Moon,
     Coin,
-    People,
-    Heart,
-    Bag,
     Star,
     List,
 }
 
 fn category_tint(cat: PulseCategory) -> egui::Color32 {
     match cat {
-        PulseCategory::Financial => egui::Color32::from_rgb(0x3f, 0xb3, 0x7f),
-        PulseCategory::Productivity => egui::Color32::from_rgb(0x4a, 0x90, 0xe2),
-        PulseCategory::Relationships => egui::Color32::from_rgb(0xe4, 0x6f, 0xa1),
-        PulseCategory::Health => egui::Color32::from_rgb(0xf0, 0x6a, 0x4a),
-        PulseCategory::Shopping => egui::Color32::from_rgb(0xe5, 0xa2, 0x3b),
+        PulseCategory::Games => egui::Color32::from_rgb(0x3f, 0xb3, 0x7f),
+        PulseCategory::Pc => egui::Color32::from_rgb(0x4a, 0x90, 0xe2),
+        PulseCategory::Mods => egui::Color32::from_rgb(0xe4, 0x6f, 0xa1),
+        PulseCategory::Deals => egui::Color32::from_rgb(0xe5, 0xa2, 0x3b),
+        PulseCategory::Automations => egui::Color32::from_rgb(0xf0, 0x6a, 0x4a),
         PulseCategory::More => egui::Color32::from_rgb(0x9b, 0x7b, 0xea),
     }
 }
@@ -234,11 +231,11 @@ pub(super) fn type_color(kind: PulseType) -> egui::Color32 {
 
 fn category_glyph(cat: PulseCategory) -> Glyph {
     match cat {
-        PulseCategory::Financial => Glyph::Coin,
-        PulseCategory::Productivity => Glyph::List,
-        PulseCategory::Relationships => Glyph::People,
-        PulseCategory::Health => Glyph::Heart,
-        PulseCategory::Shopping => Glyph::Bag,
+        PulseCategory::Games => Glyph::Play,
+        PulseCategory::Pc => Glyph::Eye,
+        PulseCategory::Mods => Glyph::Spark,
+        PulseCategory::Deals => Glyph::Coin,
+        PulseCategory::Automations => Glyph::Loop,
         PulseCategory::More => Glyph::Star,
     }
 }
@@ -357,45 +354,6 @@ fn paint_glyph(painter: &egui::Painter, rect: egui::Rect, glyph: Glyph, tint: eg
                     stroke,
                 );
             }
-        }
-        Glyph::People => {
-            for dx in [-0.24, 0.26] {
-                let head = c + egui::vec2(dx * s, -0.20 * s);
-                painter.circle_stroke(head, 0.15 * s, stroke);
-                let body = c + egui::vec2(dx * s, 0.42 * s);
-                painter.add(egui::Shape::line(
-                    ring(body, 0.26 * s, 0.24 * s, std::f32::consts::PI, tau, 12),
-                    stroke,
-                ));
-            }
-        }
-        Glyph::Heart => {
-            painter.circle_filled(c + egui::vec2(-0.20 * s, -0.12 * s), 0.22 * s, tint);
-            painter.circle_filled(c + egui::vec2(0.20 * s, -0.12 * s), 0.22 * s, tint);
-            let pts = vec![
-                c + egui::vec2(-0.41 * s, -0.04 * s),
-                c + egui::vec2(0.41 * s, -0.04 * s),
-                c + egui::vec2(0.0, 0.46 * s),
-            ];
-            painter.add(egui::Shape::convex_polygon(pts, tint, egui::Stroke::NONE));
-        }
-        Glyph::Bag => {
-            let body = egui::Rect::from_center_size(
-                c + egui::vec2(0.0, 0.14 * s),
-                egui::vec2(0.84 * s, 0.62 * s),
-            );
-            painter.rect_stroke(body, 3.0, stroke, egui::StrokeKind::Middle);
-            painter.add(egui::Shape::line(
-                ring(
-                    c + egui::vec2(0.0, -0.17 * s),
-                    0.22 * s,
-                    0.24 * s,
-                    std::f32::consts::PI,
-                    tau,
-                    12,
-                ),
-                stroke,
-            ));
         }
         Glyph::Star => {
             let pts: Vec<egui::Pos2> = (0..10)
