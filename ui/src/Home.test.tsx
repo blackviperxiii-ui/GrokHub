@@ -13,6 +13,8 @@ const api = vi.hoisted(() => ({
   homeOpenClip: vi.fn<(index: number) => Promise<void>>(),
   libraryFriends: vi.fn<() => Promise<void>>(),
   homeTurnOn: vi.fn<(feature: string) => Promise<void>>(),
+  homeCatalog: vi.fn(),
+  setHomeLayout: vi.fn(),
   openUrl: vi.fn<(url: string) => Promise<void>>(),
 }));
 
@@ -200,7 +202,7 @@ describe("Home", () => {
     expect(screen.getByText("1,240 / 1,500 XP")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Memory · 12 (2 to review)" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Connectors · 2 / 3 connected · 1 failing" })).toBeInTheDocument();
-    expect(screen.getByText(/Mission Control layout\. Edit Home in the cabin/)).toBeInTheDocument();
+    expect(screen.getByText(/Mission Control layout\./)).toBeInTheDocument();
   });
 
   it("draws every other module from the shared tile model, cut to its size", async () => {
@@ -280,6 +282,15 @@ describe("Home", () => {
     expect(api.homeTurnOn).toHaveBeenCalledWith("net_log");
     await vi.waitFor(() => expect(api.getHome.mock.calls.length).toBeGreaterThan(1));
     expect(go.onSettings).not.toHaveBeenCalled();
+  });
+
+  it("Edit Home opens the editor under the layout name", async () => {
+    api.getHome.mockResolvedValue(PAGE);
+    api.homeCatalog.mockReturnValue(new Promise(() => {}));
+    render(<Home {...routes()} remote={false} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Home" }));
+    expect(screen.getByRole("region", { name: "Edit Home" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit Home" })).not.toBeInTheDocument();
   });
 
   it("the Squad tile opens Steam's friends list on the PC only", async () => {

@@ -11,7 +11,9 @@ pub mod text;
 pub mod tiles;
 mod view;
 
-pub use config::{HomeLayout, HomePreset, HOME_LAYOUT_FILE, HOME_LAYOUT_VERSION};
+pub use config::{
+    HomeLayout, HomePick, HomePreset, HOME_LAYOUT_FILE, HOME_LAYOUT_VERSION, HOME_PRESETS,
+};
 pub use layout::{
     place_slots, Breakpoint, ModuleSize, PlacedSlot, SlotId, GAP, MEDIUM_MIN_W, NARROW_L_AS_M,
     WIDE_MIN_W,
