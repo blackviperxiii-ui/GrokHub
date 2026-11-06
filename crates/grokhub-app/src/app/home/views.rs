@@ -73,9 +73,32 @@ pub(super) fn desktop_view(cabin: &mut Cabin, module: &str) -> Option<TileView> 
                 }
             }
         }
-        "squad" | "tonight" | "audio_check" | "stream_check" | "session_timer" | "hype_line" => {
-            tiles::waiting_view(module)
+        "session_timer" => {
+            let running = cabin.game_running();
+            let game = running.or(grokhub_desktop::game_guard::peek().gaming.then_some(0));
+            let clock = note_session(game, now);
+            let name = running.and_then(|id| {
+                cabin
+                    .steam_library(now)
+                    .1
+                    .iter()
+                    .find(|g| g.app_id == id)
+                    .map(|g| g.name.clone())
+            });
+            tiles::session_timer_view(name.as_deref(), clock.started_ms, now)
         }
+        "hype_line" => {
+            let id = match cabin.cfg.personality.trim() {
+                "" => grokhub_core::personality::DEFAULT_ID,
+                id => id,
+            };
+            let name = grokhub_core::personality::builtins()
+                .into_iter()
+                .find(|p| p.id == id)
+                .map(|p| p.name);
+            tiles::hype_line_view(name.as_deref(), now)
+        }
+        "squad" | "tonight" | "audio_check" | "stream_check" => tiles::waiting_view(module),
         _ => return None,
     };
     Some(v.at(now))
@@ -91,6 +114,23 @@ fn rerolls() -> usize {
 /// What To Play's Another: move to the next pick.
 pub(super) fn reroll() {
     REROLLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+static SESSION: std::sync::Mutex<tiles::SessionClock> =
+    std::sync::Mutex::new(tiles::SessionClock {
+        game: None,
+        started_ms: None,
+    });
+
+/// One play sample for the Session Timer: the running game, or 0 for a game
+/// seen by process name only. The game watch feeds it too, so the clock
+/// runs while Home is out of sight.
+pub(in crate::app) fn note_session(game: Option<u32>, now: u64) -> tiles::SessionClock {
+    let Ok(mut clock) = SESSION.lock() else {
+        return tiles::SessionClock::default();
+    };
+    clock.note(game, now);
+    *clock
 }
 
 /// The clip at `index` in the Clips tile's list, as last read.
