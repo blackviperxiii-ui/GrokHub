@@ -1251,6 +1251,28 @@ export function getHome(conversationId?: string): Promise<HomePage> {
   return invoke<HomePage>("get_home", { clock: wallClock(), conversationId });
 }
 
+/** Which module sits in each slot. "" or null hides a Medium or Small slot. */
+export interface HomePick {
+  preset: string;
+  large: string;
+  medium: string[];
+  small: (string | null)[];
+}
+
+export interface HomeCatalog {
+  current: HomePick;
+  modules: { id: string; name: string; category: string; sizes: SlotSize[]; purpose: string }[];
+  presets: { id: string; label: string; pick: HomePick }[];
+}
+
+export function homeCatalog(): Promise<HomeCatalog> {
+  return invoke<HomeCatalog>("home_catalog");
+}
+
+export function setHomeLayout(pick: HomePick): Promise<void> {
+  return invoke<void>("set_home_layout", { pick });
+}
+
 export function getMission(conversationId?: string): Promise<MissionPage> {
   return invoke<MissionPage>("get_mission", { clock: wallClock(), conversationId });
 }

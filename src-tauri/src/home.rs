@@ -5,17 +5,17 @@
 //! open chat's checklist with level, XP and the weekly streak.
 //!
 //! The layout, the catalog and the mission and XP sums are the cabin's own
-//! (`grokhub_core::home`, `mission`, `xp`, `outcome`). The shell only reads
-//! the layout: a missing or broken file shows the default and is never
-//! rewritten, so editing Home stays in the cabin. The one write here is
+//! (`grokhub_core::home`, `mission`, `xp`, `outcome`). A missing or broken
+//! layout shows the default and is left alone until Edit Home saves one
+//! ([`save_pick`]), the same file the cabin writes. The other write here is
 //! Accept as done (and its Undo) on Objectives, an `accepted` or `undo` line
 //! in the cabin's outcome log, as the cabin's own self-review writes them.
 
 use std::path::Path;
 
 use grokhub_core::home::{
-    lookup, place_slots, HomeLayout, ModuleSize, SlotId, TileView, HOME_LAYOUT_FILE,
-    HOME_LAYOUT_VERSION,
+    lookup, place_slots, HomeLayout, HomePick, ModuleSize, SlotId, TileView, HOME_LAYOUT_FILE,
+    HOME_LAYOUT_VERSION, HOME_PRESETS, REGISTRY,
 };
 use grokhub_core::mission::{MissionCheckStatus, MissionSeed, MissionView};
 use grokhub_core::outcome::{self as oc, OutcomeResult, OutcomeSignals, TaskOutcome};
@@ -65,6 +65,69 @@ pub fn load_layout(config_dir: &Path) -> HomeLayout {
     serde_json::from_value::<HomeLayout>(value)
         .map(HomeLayout::sanitize)
         .unwrap_or_default()
+}
+
+/// One module Edit Home can place, with the sizes it draws at.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogModule {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub category: &'static str,
+    pub sizes: Vec<&'static str>,
+    pub purpose: &'static str,
+}
+
+/// A named layout Edit Home offers as a starting point.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogPreset {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub pick: HomePick,
+}
+
+/// What Edit Home needs: today's slots, every module and the presets.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Catalog {
+    pub current: HomePick,
+    pub modules: Vec<CatalogModule>,
+    pub presets: Vec<CatalogPreset>,
+}
+
+pub fn catalog(config_dir: &Path) -> Catalog {
+    Catalog {
+        current: load_layout(config_dir).pick(),
+        modules: REGISTRY
+            .iter()
+            .map(|m| CatalogModule {
+                id: m.id,
+                name: m.name,
+                category: m.category.label(),
+                sizes: m.sizes.iter().map(|s| size_key(*s)).collect(),
+                purpose: m.purpose,
+            })
+            .collect(),
+        presets: HOME_PRESETS
+            .iter()
+            .map(|kind| CatalogPreset {
+                id: kind.id(),
+                label: kind.label(),
+                pick: HomeLayout::preset(*kind).pick(),
+            })
+            .collect(),
+    }
+}
+
+/// Edit Home → Save: the picked slots into `home_layout.json`, keeping the
+/// XP bar and each module's settings. Written whole through a temp file, so
+/// the cabin never reads half a layout.
+pub fn save_pick(config_dir: &Path, pick: &HomePick) -> Result<(), String> {
+    let layout = load_layout(config_dir).with_pick(pick);
+    let text = serde_json::to_string_pretty(&layout).map_err(|e| e.to_string())?;
+    grokhub_core::pulse_writer::write_atomic(&config_dir.join(HOME_LAYOUT_FILE), &text)
+        .map_err(|_| "Couldn't save Home. Try again.".to_string())
 }
 
 /// Who is looking: this computer's window, or a paired browser that may see
@@ -1056,5 +1119,34 @@ mod tests {
             toggle_for(&src(Viewer::Web(&owns), Some("shell-web")), true, NOW),
             Err(crate::remote::refused())
         );
+    }
+
+    #[test]
+    fn edit_home_saves_the_picked_slots_and_keeps_the_rest() {
+        let d = dir("edit");
+        let cat = catalog(&d);
+        assert_eq!(cat.current, HomeLayout::default().pick());
+        assert_eq!(cat.presets.len(), 3);
+        assert!(cat.modules.iter().all(|m| !m.sizes.is_empty()));
+        assert!(!d.join(HOME_LAYOUT_FILE).exists(), "reading writes nothing");
+
+        let base = HomeLayout {
+            xp_bar: false,
+            ..HomeLayout::default()
+        };
+        fs::write(
+            d.join(HOME_LAYOUT_FILE),
+            serde_json::to_string(&base).unwrap(),
+        )
+        .unwrap();
+        let streamer = cat.presets.iter().find(|p| p.id == "streamer").unwrap();
+        save_pick(&d, &streamer.pick).unwrap();
+        let saved = load_layout(&d);
+        assert_eq!(saved.large, "clips");
+        assert_eq!(saved.preset, "streamer");
+        assert!(!saved.xp_bar);
+        let slots: Vec<String> = visible_slots(&saved).into_iter().map(|(_, m)| m).collect();
+        assert!(slots.contains(&"squad".to_string()), "{slots:?}");
+        let _ = fs::remove_dir_all(&d);
     }
 }

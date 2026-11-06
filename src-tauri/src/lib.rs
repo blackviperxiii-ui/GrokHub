@@ -1099,8 +1099,25 @@ async fn home_read<T: Send + 'static>(
     .await
 }
 
+/// Edit Home: today's slots, every module and the presets.
+#[tauri::command]
+async fn home_catalog(state: State<'_, ShellState>) -> Result<home::Catalog, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || home::catalog(&dir)).await
+}
+
+/// Edit Home → Save. The same `home_layout.json` the cabin reads.
+#[tauri::command]
+async fn set_home_layout(
+    state: State<'_, ShellState>,
+    pick: grokhub_core::home::HomePick,
+) -> Result<(), String> {
+    let dir = state.config_dir.clone();
+    off_main(move || home::save_pick(&dir, &pick)).await?
+}
+
 /// Home: the cabin's tiles from `home_layout.json`, filled where the shell
-/// can. Read only; Edit Home stays in the cabin.
+/// can.
 #[tauri::command]
 async fn get_home(
     state: State<'_, ShellState>,
@@ -2356,6 +2373,8 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
                 }))?)
             }
         }
+        "home_catalog" => out(block_on(home_catalog(state))?),
+        "set_home_layout" => out(block_on(set_home_layout(state, arg(args, "pick")?))?),
         "get_workboard" => out(block_on(get_workboard(state))?),
         "workboard_add" => out(block_on(workboard_add(
             state,
@@ -3007,6 +3026,8 @@ pub fn run() {
             home_open_clip,
             library_friends,
             home_turn_on,
+            home_catalog,
+            set_home_layout,
             open_url
         ])
         .run(tauri::generate_context!());

@@ -17,12 +17,12 @@ import {
   type Xp,
 } from "./api";
 import { ChipRow, useChipRow } from "./Chips";
+import { HomeEdit } from "./HomeEdit";
 import { COMPANION_NAME } from "./brand";
 import { artUrl } from "./nyx";
 import type { View } from "./Palette";
 import type { Section } from "./sections";
 
-export const EDIT_NOTE = "Edit Home in the cabin to change these tiles.";
 export const NO_STEPS = `Nothing on the list yet. Ask ${COMPANION_NAME} to plan something.`;
 
 const PRESETS: Record<string, string> = {
@@ -415,8 +415,7 @@ function body(tile: HomeTile, slot: HomeSlot, go: HomeRoutes, remote: boolean, r
 }
 
 /** Home: the cabin's tile grid from the same home_layout.json, every tile
- * filled with what this computer knows. Read only: Edit Home stays in the
- * cabin. */
+ * filled with what this computer knows. Edit Home saves that same file. */
 export function Home({
   conversationId,
   remote,
@@ -434,6 +433,7 @@ export function Home({
 
   const [reads, setReads] = useState(0);
   const reload = () => setReads((n) => n + 1);
+  const [editing, setEditing] = useState(false);
   // When the last read was tried, so tiles can say how old their data is.
   const [now, setNow] = useState(() => Date.now());
   // Home has shown data before, so a failed read keeps it and says so.
@@ -509,6 +509,14 @@ export function Home({
         </p>
       )}
       {page === null && !note && <p className="empty">Loading Home…</p>}
+      {editing && (
+        <HomeEdit
+          onDone={(saved) => {
+            setEditing(false);
+            if (saved) reload();
+          }}
+        />
+      )}
       {page && (
         <>
           <ul className="home-grid" aria-label="Tiles">
@@ -537,7 +545,12 @@ export function Home({
             </button>
           </div>
           <p className="home-muted home-foot">
-            {PRESETS[page.preset] ?? page.preset} layout. {EDIT_NOTE}
+            {PRESETS[page.preset] ?? "Your own"} layout.{" "}
+            {!editing && (
+              <button type="button" className="quiet" onClick={() => setEditing(true)}>
+                Edit Home
+              </button>
+            )}
           </p>
         </>
       )}

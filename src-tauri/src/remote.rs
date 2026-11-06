@@ -125,9 +125,12 @@ pub const WEB_COMMANDS: &[&str] = &[
     "get_behavior",
     "get_privacy",
     "get_background",
-    // Read only; Accept as done (`set_mission_done`) stays on the computer.
+    // Accept as done (`set_mission_done`) stays on the computer; the layout
+    // is only which tiles show, so a paired phone may edit it.
     "get_home",
     "get_mission",
+    "home_catalog",
+    "set_home_layout",
     // Chips read and teach chip memory only; a tap acts on the page.
     "quick_chips",
     "chip_outcome",
@@ -1095,7 +1098,7 @@ mod tests {
 
     #[test]
     fn the_web_reads_home_and_objectives_but_never_accepts_a_mission() {
-        for name in ["get_home", "get_mission"] {
+        for name in ["get_home", "get_mission", "home_catalog", "set_home_layout"] {
             assert!(web_command(name), "{name}");
         }
         assert!(!web_command("set_mission_done"));

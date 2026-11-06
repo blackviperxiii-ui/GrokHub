@@ -45,6 +45,28 @@ impl HomePreset {
     }
 }
 
+/// Every preset, in the order Edit Home offers them.
+pub const HOME_PRESETS: [HomePreset; 3] = [
+    HomePreset::MissionControl,
+    HomePreset::Streamer,
+    HomePreset::Performance,
+];
+
+/// What Edit Home picked: the module in each slot. An empty or missing
+/// Medium or Small slot is hidden; Large always shows something.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HomePick {
+    #[serde(default)]
+    pub preset: String,
+    #[serde(default)]
+    pub large: String,
+    #[serde(default)]
+    pub medium: Vec<String>,
+    #[serde(default)]
+    pub small: Vec<Option<String>>,
+}
+
 /// On-disk Home layout (v2). Unknown module ids fall back to the default slot.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HomeLayout {
@@ -120,6 +142,47 @@ impl HomeLayout {
         }
     }
 
+    /// The slots as Edit Home shows them.
+    pub fn pick(&self) -> HomePick {
+        HomePick {
+            preset: self.preset.clone(),
+            large: self.large.clone(),
+            medium: (0..2)
+                .map(|i| self.medium.get(i).cloned().unwrap_or_default())
+                .collect(),
+            small: self.small.to_vec(),
+        }
+    }
+
+    /// This layout with `pick`'s slots. A module shows once (its first slot
+    /// wins), one in a size it can't draw falls back like any bad id, and
+    /// the XP bar and module settings are kept. The preset name stays only
+    /// while the slots still match that preset.
+    pub fn with_pick(mut self, pick: &HomePick) -> Self {
+        let mut seen: Vec<String> = Vec::new();
+        let mut take = |id: Option<&str>| -> Option<String> {
+            let id = id.map(str::trim).filter(|s| !s.is_empty())?;
+            if seen.iter().any(|s| s == id) {
+                return None;
+            }
+            seen.push(id.to_string());
+            Some(id.to_string())
+        };
+        self.large = take(Some(&pick.large)).unwrap_or_default();
+        self.medium = (0..2)
+            .map(|i| take(pick.medium.get(i).map(String::as_str)).unwrap_or_default())
+            .collect();
+        for (i, slot) in self.small.iter_mut().enumerate() {
+            *slot = take(pick.small.get(i).and_then(|s| s.as_deref()));
+        }
+        self.version = HOME_LAYOUT_VERSION;
+        let mut out = self.sanitize();
+        let named = HomePreset::parse(&pick.preset)
+            .filter(|kind| HomeLayout::preset(*kind).pick().slots_eq(&out.pick()));
+        out.preset = named.map_or("custom".into(), |kind| kind.id().into());
+        out
+    }
+
     /// Replace unknown or removed ids, and a module placed in a size it
     /// doesn't draw at, with the matching default-slot module.
     pub fn sanitize(mut self) -> Self {
@@ -184,6 +247,20 @@ impl HomeLayout {
         }
         out.version = HOME_LAYOUT_VERSION;
         out.sanitize()
+    }
+}
+
+impl HomePick {
+    fn slots_eq(&self, other: &HomePick) -> bool {
+        let med = |p: &HomePick| -> Vec<String> {
+            (0..2)
+                .map(|i| p.medium.get(i).cloned().unwrap_or_default())
+                .collect()
+        };
+        let small = |p: &HomePick| -> Vec<Option<String>> {
+            (0..4).map(|i| p.small.get(i).cloned().flatten()).collect()
+        };
+        self.large == other.large && med(self) == med(other) && small(self) == small(other)
     }
 }
 
@@ -282,5 +359,35 @@ mod tests {
         assert_eq!(layout.version, 2);
         assert!(!layout.xp_bar);
         assert_eq!(layout.small[3].as_deref(), Some("streak"));
+    }
+
+    #[test]
+    fn a_pick_keeps_each_module_once_and_names_the_preset_only_while_it_matches() {
+        let base = HomeLayout {
+            xp_bar: false,
+            ..HomeLayout::default()
+        };
+        let streamer = HomeLayout::preset(HomePreset::Streamer).pick();
+        let same = base.clone().with_pick(&streamer);
+        assert_eq!(same.preset, "streamer");
+        assert_eq!(same.large, "clips");
+        assert!(!same.xp_bar, "the XP bar setting is kept");
+
+        let mut changed = streamer.clone();
+        changed.small[3] = None;
+        let custom = base.clone().with_pick(&changed);
+        assert_eq!(custom.preset, "custom");
+        assert_eq!(custom.small[3], None);
+
+        let twice = HomePick {
+            preset: "custom".into(),
+            large: "pc_loadout".into(),
+            medium: vec!["speeds".into(), "speeds".into()],
+            small: vec![Some("speeds".into()), Some("  ".into())],
+        };
+        let once = base.with_pick(&twice);
+        assert_eq!(once.medium, vec!["speeds".to_string(), String::new()]);
+        assert_eq!(once.small, [None, None, None, None]);
+        assert_eq!(once.version, HOME_LAYOUT_VERSION);
     }
 }
