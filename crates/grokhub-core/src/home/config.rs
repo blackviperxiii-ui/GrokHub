@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use super::layout::ModuleSize;
-use super::registry::lookup;
+use super::registry::{lookup, REGISTRY};
 
 pub const HOME_LAYOUT_FILE: &str = "home_layout.json";
 pub const HOME_LAYOUT_VERSION: u32 = 2;
@@ -189,7 +189,16 @@ impl HomeLayout {
         let fits = |id: &str, size: ModuleSize| lookup(id).is_some_and(|m| m.supports(size));
         let fallback = HomeLayout::default();
         if !fits(&self.large, ModuleSize::Large) {
-            self.large = fallback.large.clone();
+            // Prefer the default Large, but never one already shown in
+            // another slot, so a tile doesn't appear twice.
+            let used = |id: &str| {
+                self.medium.iter().any(|m| m == id) || self.small.iter().flatten().any(|s| s == id)
+            };
+            self.large = std::iter::once(fallback.large.as_str())
+                .chain(REGISTRY.iter().map(|m| m.id))
+                .find(|id| fits(id, ModuleSize::Large) && !used(id))
+                .unwrap_or(fallback.large.as_str())
+                .to_string();
         }
         while self.medium.len() < 2 {
             self.medium.push(String::new());
@@ -309,6 +318,19 @@ mod tests {
         assert_eq!(fixed.large, "objectives");
         // Mission Control hides S3; unknown ids fall back to the preset slot (None).
         assert_eq!(fixed.small[2], None);
+    }
+
+    #[test]
+    fn a_missing_large_never_doubles_a_tile_shown_elsewhere() {
+        let default_large = HomeLayout::default().large;
+        let bad = HomeLayout {
+            large: String::new(),
+            medium: vec![default_large.clone(), String::new()],
+            ..HomeLayout::default()
+        };
+        let fixed = bad.sanitize();
+        assert_ne!(fixed.large, default_large);
+        assert!(lookup(&fixed.large).is_some_and(|m| m.supports(ModuleSize::Large)));
     }
 
     #[test]
