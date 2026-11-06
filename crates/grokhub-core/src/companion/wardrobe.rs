@@ -42,10 +42,16 @@ const MOOD_EXTRAS: &[(Mood, &[&str])] = &[
     ),
     (Mood::Doctor, poses!("actions/fixing": 2, 3, 4, 5)),
     (Mood::Gaming, poses!("actions/gaming": 2, 3, 4, 5)),
-    (Mood::Reading, poses!("actions/reading": 2, 3, 4, 5)),
+    (
+        Mood::Reading,
+        poses!("actions/reading": 2, 3, 4, 5; "defaults/lawyer-precise": 1, 2, 3, 4, 5),
+    ),
     (Mood::Thinking, poses!("actions/thinking": 2, 3, 4, 5)),
     (Mood::Writing, poses!("actions/writing": 2, 3, 4, 5)),
-    (Mood::HangingOut, poses!("defaults/nyx": 4, 5)),
+    (
+        Mood::HangingOut,
+        poses!("defaults/nyx": 4, 5; "defaults/friendly-neighbor": 1, 2, 3, 4, 5),
+    ),
     (Mood::Viper, poses!("defaults/viper": 2, 3, 4, 5)),
     (Mood::Raunchy, poses!("defaults/whore": 1, 2, 3, 4, 5)),
 ];
@@ -64,20 +70,12 @@ const OUTFITS: &[(&str, &[&str])] = &[
         "drill-sergeant",
         poses!("defaults/drill-sergeant": 1, 2, 3, 4, 5),
     ),
-    (
-        "friendly-neighbor",
-        poses!("defaults/friendly-neighbor": 1, 2, 3, 4, 5),
-    ),
     ("genie", poses!("defaults/genie": 1, 2, 3, 4, 5)),
     (
         "gentle-listener",
         poses!("defaults/gentle-listener": 1, 2, 3, 4, 5),
     ),
     ("hype-coach", poses!("defaults/hype-coach": 1, 2, 3, 4, 5)),
-    (
-        "lawyer-precise",
-        poses!("defaults/lawyer-precise": 1, 2, 3, 4, 5),
-    ),
     (
         "mission-control",
         poses!("defaults/mission-control": 1, 2, 3, 4, 5),
@@ -102,6 +100,16 @@ const OUTFITS: &[(&str, &[&str])] = &[
     ),
     ("surfer", poses!("defaults/surfer": 1, 2, 3, 4, 5)),
     ("zen-mentor", poses!("defaults/zen-mentor": 1, 2, 3, 4, 5)),
+];
+
+/// Built-in voices whose own outfit isn't drawn yet. Until it is they look
+/// like Nyx herself: her mood sets on the dock, her hanging-out picture in
+/// the picker.
+pub const AWAITING_ART: &[&str] = &[
+    "theorycrafter",
+    "gremlin",
+    "dungeon-master",
+    "esports-caster",
 ];
 
 /// A set of poses and what it is called. `set` keys the pose rotation: a
@@ -172,7 +180,7 @@ pub fn voice_outfit(id: &str, explicit: bool, adults_only: bool) -> Option<Mood>
 pub fn dock_look(id: &str, mood: Mood, explicit_ok: bool) -> Option<Look> {
     let look = if is_explicit(mood) {
         mood_look(mood)
-    } else if id != DEFAULT_ID && !has_outfit(id) {
+    } else if id != DEFAULT_ID && !has_outfit(id) && !AWAITING_ART.contains(&id) {
         return None;
     } else {
         outfit_look(id).unwrap_or_else(|| mood_look(mood))
@@ -186,7 +194,7 @@ pub fn dock_look(id: &str, mood: Mood, explicit_ok: bool) -> Option<Look> {
 /// off.
 pub fn thumbnail(id: &str, explicit_ok: bool) -> Option<&'static str> {
     let explicit = EXPLICIT_VOICES.iter().find(|(v, _)| *v == id);
-    let look = if id == DEFAULT_ID {
+    let look = if id == DEFAULT_ID || AWAITING_ART.contains(&id) {
         mood_look(Mood::HangingOut)
     } else if let Some((_, mood)) = explicit {
         mood_look(*mood)
@@ -329,7 +337,7 @@ mod tests {
                 paths.push(*path);
             }
         }
-        // 49 mood poses (Viper's and the raunchy set among them) and 95
+        // 59 mood poses (Viper's and the raunchy set among them) and 85
         // outfit poses, the cabin's count.
         assert_eq!(paths.len(), 144);
         paths.sort_unstable();
@@ -349,8 +357,8 @@ mod tests {
                 (Mood::Working, 10),
                 (Mood::Gaming, 5),
                 (Mood::Doctor, 5),
-                (Mood::Reading, 5),
-                (Mood::HangingOut, 3),
+                (Mood::Reading, 10),
+                (Mood::HangingOut, 8),
                 (Mood::Viper, 5),
                 (Mood::Thinking, 5),
                 (Mood::Writing, 5),
@@ -372,7 +380,12 @@ mod tests {
             vec![
                 "brand/nyx-hanging-out.jpg",
                 "brand/nyx/defaults/nyx/4.jpg",
-                "brand/nyx/defaults/nyx/5.jpg"
+                "brand/nyx/defaults/nyx/5.jpg",
+                "brand/nyx/defaults/friendly-neighbor/1.jpg",
+                "brand/nyx/defaults/friendly-neighbor/2.jpg",
+                "brand/nyx/defaults/friendly-neighbor/3.jpg",
+                "brand/nyx/defaults/friendly-neighbor/4.jpg",
+                "brand/nyx/defaults/friendly-neighbor/5.jpg",
             ]
         );
         assert!(mood_look(Mood::Viper).explicit);
@@ -455,9 +468,18 @@ mod tests {
     #[test]
     fn every_built_in_voice_but_nyx_has_an_outfit() {
         let builtins = personality::builtins();
-        assert_eq!(builtins.len(), 22);
+        assert_eq!(builtins.len(), 24);
+        for id in AWAITING_ART {
+            let p = builtins.iter().find(|p| p.id == *id).expect("a built-in");
+            assert!(!p.explicit && !has_outfit(id), "{id}");
+            assert_eq!(
+                dock_look(id, Mood::Gaming, false).map(|l| l.set),
+                Some("gaming")
+            );
+            assert_eq!(thumbnail(id, false), Some("brand/nyx-hanging-out.jpg"));
+        }
         for p in &builtins {
-            if p.id == DEFAULT_ID {
+            if p.id == DEFAULT_ID || AWAITING_ART.contains(&p.id.as_str()) {
                 assert!(!has_outfit(&p.id));
                 continue;
             }

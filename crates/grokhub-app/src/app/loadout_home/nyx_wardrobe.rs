@@ -66,10 +66,16 @@ const MOOD_EXTRAS: &[(Mood, &[Pose])] = &[
     ),
     (Mood::Doctor, poses!("actions/fixing": 2, 3, 4, 5)),
     (Mood::Gaming, poses!("actions/gaming": 2, 3, 4, 5)),
-    (Mood::Reading, poses!("actions/reading": 2, 3, 4, 5)),
+    (
+        Mood::Reading,
+        poses!("actions/reading": 2, 3, 4, 5; "defaults/lawyer-precise": 1, 2, 3, 4, 5),
+    ),
     (Mood::Thinking, poses!("actions/thinking": 2, 3, 4, 5)),
     (Mood::Writing, poses!("actions/writing": 2, 3, 4, 5)),
-    (Mood::HangingOut, poses!("defaults/nyx": 4, 5)),
+    (
+        Mood::HangingOut,
+        poses!("defaults/nyx": 4, 5; "defaults/friendly-neighbor": 1, 2, 3, 4, 5),
+    ),
     (Mood::Viper, poses!("defaults/viper": 2, 3, 4, 5)),
     (Mood::Raunchy, poses!("defaults/whore": 1, 2, 3, 4, 5)),
 ];
@@ -104,10 +110,6 @@ const OUTFITS: &[Outfit] = &[
         poses: poses!("defaults/drill-sergeant": 1, 2, 3, 4, 5),
     },
     Outfit {
-        id: "friendly-neighbor",
-        poses: poses!("defaults/friendly-neighbor": 1, 2, 3, 4, 5),
-    },
-    Outfit {
         id: "genie",
         poses: poses!("defaults/genie": 1, 2, 3, 4, 5),
     },
@@ -118,10 +120,6 @@ const OUTFITS: &[Outfit] = &[
     Outfit {
         id: "hype-coach",
         poses: poses!("defaults/hype-coach": 1, 2, 3, 4, 5),
-    },
-    Outfit {
-        id: "lawyer-precise",
-        poses: poses!("defaults/lawyer-precise": 1, 2, 3, 4, 5),
     },
     Outfit {
         id: "mission-control",
@@ -202,6 +200,12 @@ fn outfit_look(id: &str) -> Option<Look> {
     })
 }
 
+/// Built-in voices whose own outfit isn't drawn yet: they look like Nyx
+/// herself ([`grokhub_core::companion::wardrobe::AWAITING_ART`]).
+fn awaiting_art(id: &str) -> bool {
+    grokhub_core::companion::wardrobe::AWAITING_ART.contains(&id)
+}
+
 /// The voice is drawn as Nyx in its own outfit.
 pub(in crate::app) fn has_outfit(id: &str) -> bool {
     EXPLICIT_VOICES.iter().any(|(v, _)| *v == id) || OUTFITS.iter().any(|o| o.id == id)
@@ -221,7 +225,7 @@ pub(in crate::app) fn dock_look(
 ) -> Option<Look> {
     let look = if is_explicit(mood) {
         mood_look(mood)
-    } else if id != NYX_ID && !has_outfit(id) {
+    } else if id != NYX_ID && !has_outfit(id) && !awaiting_art(id) {
         return None;
     } else {
         match outfit_look(id) {
@@ -238,7 +242,7 @@ pub(in crate::app) fn dock_look(
 /// off.
 pub(in crate::app) fn thumbnail(id: &str, explicit_ok: bool) -> Option<Pose> {
     let explicit = EXPLICIT_VOICES.iter().find(|(v, _)| *v == id);
-    let look = if id == NYX_ID {
+    let look = if id == NYX_ID || awaiting_art(id) {
         mood_look(Mood::HangingOut)
     } else if let Some((_, mood)) = explicit {
         mood_look(*mood)
@@ -498,10 +502,10 @@ mod tests {
                 (Mood::Working, 10),
                 (Mood::Gaming, 5),
                 (Mood::Doctor, 5),
-                (Mood::Reading, 5),
+                (Mood::Reading, 10),
                 (Mood::Thinking, 5),
                 (Mood::Writing, 5),
-                (Mood::HangingOut, 3),
+                (Mood::HangingOut, 8),
                 (Mood::Viper, 5),
                 (Mood::Raunchy, 6),
             ]
@@ -544,7 +548,7 @@ mod tests {
                 bytes.push(pose.jpg.as_ptr());
             }
         }
-        // 49 mood poses (Viper's and the raunchy set among them) and 95
+        // 59 mood poses (Viper's and the raunchy set among them) and 85
         // outfit poses.
         assert_eq!(keys.len(), 144);
         keys.sort();
@@ -559,9 +563,9 @@ mod tests {
     fn every_built_in_voice_but_nyx_has_an_outfit_and_explicit_ones_wear_a_gated_mood() {
         assert_eq!(NYX_ID, personality::DEFAULT_ID);
         let builtins = personality::builtins();
-        assert_eq!(builtins.len(), 22);
+        assert_eq!(builtins.len(), 24);
         for p in &builtins {
-            if p.id == personality::DEFAULT_ID {
+            if p.id == personality::DEFAULT_ID || awaiting_art(&p.id) {
                 assert!(!has_outfit(&p.id));
                 continue;
             }

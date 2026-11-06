@@ -76,5 +76,9 @@ fn every_voice_wears_the_same_outfit_in_both() {
             outfits += 1;
         }
     }
-    assert_eq!(outfits, 19, "every non-explicit built-in voice but Nyx");
+    assert_eq!(
+        outfits + core::AWAITING_ART.len(),
+        21,
+        "every non-explicit built-in voice but Nyx, drawn or awaiting art"
+    );
 }
