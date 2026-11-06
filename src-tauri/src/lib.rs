@@ -16,6 +16,8 @@ pub mod connectors;
 pub mod credential;
 pub mod history;
 pub mod home;
+#[cfg(desktop)]
+mod home_fps;
 pub mod home_tiles;
 pub mod imagine;
 pub mod interests;

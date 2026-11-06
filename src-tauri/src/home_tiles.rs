@@ -50,7 +50,7 @@ pub fn view(module: &str, src: &Sources<'_>) -> Option<TileView> {
     let v = match module {
         "pc_loadout" => pc_only(&|| pc_view(&machine(src.config_dir))),
         "speeds" => speeds_view(&grokhub_core::net_log::load(src.config_dir), now),
-        "frame_rate" => frame_rate_view(),
+        "frame_rate" => frame_rate(),
         "storage" => pc_only(&|| storage_view(&drives())),
         "updates" => updates_view(&crate::shell_update::version()),
         "game_mode" => pc_only(&|| {
@@ -415,16 +415,34 @@ pub fn speeds_view(log: &grokhub_core::net_log::NetLog, now: u64) -> TileView {
     v
 }
 
-pub fn frame_rate_view() -> TileView {
-    TileView::ready(
-        TileText::new(
-            "Not read",
-            format!("{} never hooks into games", brand()),
-            Tone::Quiet,
-        )
-        .detail("Xbox Game Bar (Win+G) or Steam's in-game counter show FPS safely"),
-    )
-    .button("Fix my stutter", TileAction::ask(HOME_CHIPS[0]))
+/// Frames on screen, as the OS counts them. Where it can't, the tile says
+/// so and points at a safe counter, never a hook into the game.
+pub fn frame_rate_view(
+    read: Option<tt::FpsRead>,
+    windows: bool,
+    presenter: Option<&str>,
+) -> TileView {
+    let text = tt::frame_rate_text(read, windows, presenter);
+    match read {
+        Some(tt::FpsRead::Rate(_)) => TileView::ready(text).tag("LIVE"),
+        Some(tt::FpsRead::Starting) => TileView::ready(text),
+        _ => TileView::ready(text).button("Fix my stutter", TileAction::ask(HOME_CHIPS[0])),
+    }
+}
+
+#[cfg(desktop)]
+fn frame_rate() -> TileView {
+    let windows = cfg!(windows);
+    if !(windows || cfg!(target_os = "linux")) {
+        return frame_rate_view(None, false, None);
+    }
+    let (read, presenter) = crate::home_fps::read();
+    frame_rate_view(Some(read), windows, presenter.as_deref())
+}
+
+#[cfg(mobile)]
+fn frame_rate() -> TileView {
+    TileView::unsupported(&on_pc())
 }
 
 pub fn storage_view(drives: &[grokhub_core::disk::DiskUse]) -> TileView {

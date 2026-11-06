@@ -324,6 +324,74 @@ pub fn count_sends<'a>(
     (total, top)
 }
 
+/// What the frame counter last said, for the Frame Rate tile. The counter
+/// reads the OS (display flips on Linux, present events on Windows), never
+/// the game.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FpsRead {
+    /// Opening the counter or waiting for the first second.
+    Starting,
+    Rate(f32),
+    /// The counter needs the one-time setup.
+    NeedsSetup,
+    /// The OS or driver doesn't report frames.
+    NoTrace,
+}
+
+/// The Frame Rate tile in words. `None` where frames can't be read on this
+/// OS at all; `presenter` is the Windows app the rate came from.
+pub fn frame_rate_text(read: Option<FpsRead>, windows: bool, presenter: Option<&str>) -> TileText {
+    let brand = crate::brand::product_name();
+    let Some(read) = read else {
+        return TileText::new(
+            "Not read",
+            format!("{brand} never hooks into games"),
+            Tone::Quiet,
+        )
+        .detail("Xbox Game Bar (Win+G) or Steam's in-game counter show FPS safely");
+    };
+    match read {
+        FpsRead::Rate(r) if windows => TileText::new(
+            format!("{} FPS", r.round() as u32),
+            match presenter {
+                Some(p) => format!("From {}", p.strip_suffix(".exe").unwrap_or(p)),
+                None => "Nothing is drawing frames".into(),
+            },
+            if presenter.is_some() {
+                Tone::Normal
+            } else {
+                Tone::Quiet
+            },
+        )
+        .detail("Counted by Windows, never inside the game"),
+        FpsRead::Rate(r) => TileText::new(
+            format!("{} FPS", r.round() as u32),
+            "Frames on screen",
+            Tone::Normal,
+        )
+        .detail("Counted by the kernel, never inside the game"),
+        FpsRead::Starting => TileText::new("...", "Counting frames on screen", Tone::Quiet),
+        FpsRead::NeedsSetup if windows => {
+            TileText::new("Not read", "Needs a one-time admin setup", Tone::Warn)
+                .detail("Copy setup, read it, run it in an admin PowerShell")
+        }
+        FpsRead::NeedsSetup => TileText::new("Not read", "Needs a sudo setup first", Tone::Warn)
+            .detail("Copy setup, read it, run it in a terminal"),
+        FpsRead::NoTrace if windows => TileText::new(
+            "Not read",
+            "Windows didn't start the frame trace",
+            Tone::Quiet,
+        )
+        .detail("Xbox Game Bar (Win+G) or Steam's counter show FPS safely"),
+        FpsRead::NoTrace => TileText::new(
+            "Not read",
+            "This driver doesn't report screen frames",
+            Tone::Quiet,
+        )
+        .detail("Steam's in-game FPS counter shows it safely"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
