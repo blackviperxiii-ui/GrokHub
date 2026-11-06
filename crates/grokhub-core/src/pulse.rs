@@ -1035,17 +1035,78 @@ pub fn group_ideas(
     groups
 }
 
-/// The Feed view: every visible post, newest first. No score gate: the
-/// writer already chose what is worth posting, and Delete takes one away.
-pub fn feed_posts(cards: &[UpdateCard], inputs: &PulseInputs) -> Vec<UpdateCard> {
+/// A fetched or written post leaves the feed this long after it was posted,
+/// unless it was kept: news is stale in a day or two, patch notes in about three.
+pub const POST_TTL_MS: u64 = 3 * 24 * 60 * 60 * 1000;
+/// Posts newer than this make up today's set.
+pub const TODAY_WINDOW_MS: u64 = 24 * 60 * 60 * 1000;
+/// Today's set holds at most this many posts.
+pub const TODAY_MAX: usize = 12;
+/// And at most this many from one source (one game, one subreddit, one site).
+pub const TODAY_PER_SOURCE: usize = 2;
+
+/// Loved, saved, pinned, edited or discussed: the person wants it kept.
+pub fn card_kept(card: &UpdateCard) -> bool {
+    card.modified
+        || card.feed_pin
+        || card.feed_kept
+        || card.reaction == Some(crate::update_feed::CardReaction::Up)
+        || card.discuss_thread.is_some()
+}
+
+/// A post from a followed source or the writer, older than `POST_TTL_MS`
+/// and not kept. Run reports, digests and other feed cards keep their own rules.
+pub fn post_retired(card: &UpdateCard, now_ms: u64) -> bool {
+    let fetched = card.source_id.starts_with("source:")
+        || card
+            .source_id
+            .starts_with(crate::pulse_writer::WRITER_SOURCE);
+    fetched && !card_kept(card) && now_ms >= card.created_at.saturating_add(POST_TTL_MS)
+}
+
+fn post_source(card: &UpdateCard) -> &str {
+    card.pulse
+        .source_name
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or(card.source_id.as_str())
+}
+
+/// The Feed view split in two: today's set (posted in the last
+/// `TODAY_WINDOW_MS`, newest first, at most `TODAY_PER_SOURCE` per source and
+/// `TODAY_MAX` in all), then everything else, newest first. Retired posts are
+/// left out. No score gate: the writer already chose what is worth posting.
+pub fn feed_day(cards: &[UpdateCard], inputs: &PulseInputs) -> (Vec<UpdateCard>, Vec<UpdateCard>) {
+    let now = inputs.now_ms;
     let mut posts: Vec<UpdateCard> = cards
         .iter()
-        .filter(|c| is_feed_card(c) && pulse_visible(c, inputs.now_ms))
+        .filter(|c| is_feed_card(c) && pulse_visible(c, now) && !post_retired(c, now))
         .filter(|c| !reaction_quiet(c, inputs))
         .cloned()
         .collect();
     posts.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(a.id.cmp(&b.id)));
-    posts
+    let mut today = Vec::new();
+    let mut older = Vec::new();
+    for card in posts {
+        let fresh = now < card.created_at.saturating_add(TODAY_WINDOW_MS);
+        let from_source = today
+            .iter()
+            .filter(|t: &&UpdateCard| post_source(t) == post_source(&card))
+            .count();
+        if fresh && today.len() < TODAY_MAX && from_source < TODAY_PER_SOURCE {
+            today.push(card);
+        } else {
+            older.push(card);
+        }
+    }
+    (today, older)
+}
+
+/// The Feed view as one list: today's set first, then the older posts.
+pub fn feed_posts(cards: &[UpdateCard], inputs: &PulseInputs) -> Vec<UpdateCard> {
+    let (mut today, older) = feed_day(cards, inputs);
+    today.extend(older);
+    today
 }
 
 // buttons
@@ -2116,6 +2177,89 @@ mod tests {
         // An idea with that title still drops below the line.
         let idea = idea("i", "Nightly backup", "", 10);
         assert_eq!(pulse_score(&idea, &inputs), 150 - 200);
+    }
+
+    fn source_post(id: &str, source: &str, at: u64) -> UpdateCard {
+        let mut c = automation_done_card(id, id, "", at);
+        c.id = id.into();
+        c.source_id = format!("source:rss:https://example.test/{id}");
+        c.pulse.source_name = Some(source.into());
+        c
+    }
+
+    #[test]
+    fn posts_retire_after_three_days_unless_kept() {
+        const DAY: u64 = 24 * 60 * 60 * 1000;
+        assert_eq!(POST_TTL_MS, 259_200_000, "3 days");
+        let posted = 10 * DAY;
+        let old = source_post("old", "r/buildapc", posted);
+        assert!(!post_retired(&old, posted + POST_TTL_MS - 1));
+        assert!(post_retired(&old, posted + POST_TTL_MS));
+        let mut loved = old.clone();
+        loved.reaction = Some(crate::update_feed::CardReaction::Up);
+        assert!(
+            !post_retired(&loved, posted + 30 * DAY),
+            "a loved post keeps"
+        );
+        let mut saved = old.clone();
+        saved.feed_kept = true;
+        assert!(
+            !post_retired(&saved, posted + 30 * DAY),
+            "a saved post keeps"
+        );
+        let mut writer = old.clone();
+        writer.source_id = "pulse:writer:1".into();
+        assert!(
+            post_retired(&writer, posted + POST_TTL_MS),
+            "written briefings too"
+        );
+        let report = automation_done_card("backup", "Nightly backup", "ok", posted);
+        assert!(
+            !post_retired(&report, posted + 30 * DAY),
+            "run reports keep their own rules"
+        );
+        let inputs = PulseInputs {
+            now_ms: posted + POST_TTL_MS,
+            ..Default::default()
+        };
+        let ids: Vec<String> = feed_posts(&[old, loved], &inputs)
+            .into_iter()
+            .map(|c| c.id)
+            .collect();
+        assert_eq!(ids, vec!["old".to_string()], "only the loved copy is left");
+    }
+
+    #[test]
+    fn todays_set_caps_each_source_and_the_total_then_lists_the_rest() {
+        const HOUR: u64 = 60 * 60 * 1000;
+        let now = 100 * HOUR;
+        let mut cards = vec![
+            source_post("h1", "Helldivers 2 on Steam", now - HOUR),
+            source_post("h2", "Helldivers 2 on Steam", now - 2 * HOUR),
+            source_post("h3", "Helldivers 2 on Steam", now - 3 * HOUR),
+            source_post("y", "Yesterday's news", now - 30 * HOUR),
+        ];
+        for i in 0..14 {
+            cards.push(source_post(
+                &format!("s{i:02}"),
+                &format!("site {i}"),
+                now - 4 * HOUR - i,
+            ));
+        }
+        let inputs = PulseInputs {
+            now_ms: now,
+            ..Default::default()
+        };
+        let (today, older) = feed_day(&cards, &inputs);
+        let today: Vec<&str> = today.iter().map(|c| c.id.as_str()).collect();
+        let older: Vec<&str> = older.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(TODAY_MAX, 12);
+        assert_eq!(
+            today,
+            vec!["h1", "h2", "s00", "s01", "s02", "s03", "s04", "s05", "s06", "s07", "s08", "s09"]
+        );
+        assert_eq!(older, vec!["h3", "s10", "s11", "s12", "s13", "y"]);
+        assert_eq!(feed_posts(&cards, &inputs).len(), 18, "nothing is lost");
     }
 
     #[test]

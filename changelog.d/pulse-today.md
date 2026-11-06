@@ -1,0 +1,2 @@
+- Pulse's feed opens with today's set: posts from the last day, at most two from one game or source and twelve in all, with the rest listed after them.
+- Fetched and written Pulse posts leave the feed three days after they were posted, unless you loved, saved, pinned or edited them.
