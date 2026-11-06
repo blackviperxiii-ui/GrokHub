@@ -44,6 +44,7 @@ const PULSE_LINES: usize = 2;
 /// Listening waveform at rest, bar heights as a share of the row.
 const WAVE: [f32; 9] = [0.35, 0.7, 1.0, 0.5, 0.85, 0.4, 0.95, 0.6, 0.3];
 pub(super) use grokhub_core::xp::objective_progress;
+const XP_SUMMARY_ID: &str = "loadout-xp-summary";
 use grokhub_core::xp::{WeekView, XpSummary, XP_HOW};
 
 /// What Nyx is doing, shown in the corner box. The modes and her outfits
@@ -271,6 +272,12 @@ pub(super) fn xp_hover(s: &XpSummary) -> String {
     } else {
         XP_HOW.to_string()
     }
+}
+
+/// Drops the cached XP so the next frame reads the ledger again (after a
+/// goal paid XP).
+pub(super) fn forget_xp(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.remove::<(Instant, XpSummary)>(egui::Id::new(XP_SUMMARY_ID)));
 }
 
 /// "Lvl 14 · Grinder", the line over every XP bar.
@@ -1511,7 +1518,7 @@ impl Cabin {
     /// [`XP_REFRESH`]. The open chat's checked steps are banked on the way.
     pub(super) fn dock_xp(&self, ctx: &egui::Context) -> XpSummary {
         type Cached = (Instant, XpSummary);
-        let id = egui::Id::new("loadout-xp-summary");
+        let id = egui::Id::new(XP_SUMMARY_ID);
         if let Some((at, s)) = ctx.data(|d| d.get_temp::<Cached>(id)) {
             if at.elapsed() < XP_REFRESH {
                 return s;

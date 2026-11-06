@@ -21,6 +21,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::xp::{local_day, Earned, XpKind};
 
+mod board;
+mod season;
+mod typed;
+
+pub use board::{
+    apply, board, goal_detail, goal_title, steps_by_one, Board, GoalAct, GoalCard, Season,
+    SHELF_MAX,
+};
+pub use season::{done_this_season, pick_up_line, season_label, short_date, today_picks, Pick};
+pub use typed::{parse_goal, KnownGame};
+
 pub const OBJECTIVES_FILE: &str = "objectives.json";
 
 /// XP for each of the 25, 50 and 75% milestones.

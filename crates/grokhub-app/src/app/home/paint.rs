@@ -13,7 +13,7 @@ use super::super::loadout_home::{
     caption, header, objective_progress, paint_weeks, pc_profile, pc_reading, pc_tile_grid,
     pc_tile_list, pulse_lines,
 };
-use super::super::mission_page::{paint_streak, up_next, up_next_tile};
+use super::super::mission_page::{goal_summary, paint_streak, up_next, up_next_tile};
 use super::super::*;
 use super::fps::FpsState;
 
@@ -345,6 +345,15 @@ fn paint_objectives(
                     actions.push(ModuleAction::Nav("objectives"));
                 }
                 ui.add_space(4.0);
+                // The goal closest to done, over the chat's steps.
+                let goals = cabin.dock_goals(ui.ctx());
+                let top = grokhub_core::objectives::today_picks(&goals, now_ms())
+                    .into_iter()
+                    .find_map(|p| goals.goals.iter().find(|g| g.id == p.id()).cloned());
+                if let Some(g) = top {
+                    goal_summary(ui, &g);
+                    ui.add_space(8.0);
+                }
                 let cap = if size == ModuleSize::Medium {
                     3
                 } else {

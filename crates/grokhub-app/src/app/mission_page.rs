@@ -1,6 +1,6 @@
 //! The Objectives page on the rail, and the details behind Home's objectives
-//! card: the open mission's full checklist with weeks in a row and this
-//! week's active days. Home is the one "Ready up" page; this one does not repeat
+//! card: Today (the open chat's next step and the goals worth a look), My
+//! goals and This season (see [`goals`]). Home is the one "Ready up" page; this one does not repeat
 //! its PC or Up next cards. Workboards stays one click away.
 
 use grokhub_core::mission::{MissionCheckStatus, MissionView};
@@ -8,10 +8,12 @@ use grokhub_core::steam::SteamGame;
 use grokhub_core::xp::WeekView;
 
 use super::library_ui::paint_cover_at;
-use super::loadout_home::{
-    caption, card, diamond, header, objective_progress, paint_level_bar, paint_weeks,
-};
+use super::loadout_home::{caption, diamond, paint_level_bar};
 use super::*;
+
+mod goals;
+
+pub(super) use goals::goal_summary;
 
 const PAGE_PAD: f32 = 24.0;
 const GAP: f32 = 16.0;
@@ -160,52 +162,15 @@ impl Cabin {
         });
     }
 
+    /// Today, My goals and This season, one card under the other.
     fn mission_objectives(&mut self, ui: &mut egui::Ui, mission: Option<&MissionView>) {
-        let week = self.dock_xp(ui.ctx()).week;
-        mission_card_fill(ui, |ui| {
-            let items = mission.map_or(&[][..], |m| &m.checklist[..]);
-            let (done, total) = objective_progress(items);
-            let right = if total > 0 {
-                format!("{done} / {total}")
-            } else {
-                String::new()
-            };
-            header(
-                ui,
-                true,
-                "Today's objectives",
-                &right,
-                crate::theme::amber(),
-            );
-            match mission.filter(|_| total > 0) {
-                None => {
-                    ui.label(
-                        RichText::new(format!(
-                            "Nothing on the list yet. Ask {} to plan something.",
-                            grokhub_core::brand::companion_name()
-                        ))
-                        .size(crate::theme::TYPE_BODY)
-                        .color(crate::theme::muted()),
-                    );
-                }
-                Some(m) => objective_rows(ui, m),
-            }
-            ui.add_space(8.0);
-            ui.separator();
-            ui.add_space(4.0);
-            paint_weeks(ui, &week);
-        });
+        let goals = self.dock_goals(ui.ctx());
+        self.objectives_today(ui, mission, &goals);
+        ui.add_space(GAP);
+        self.objectives_mine(ui, &goals);
+        ui.add_space(GAP);
+        self.objectives_season(ui, &goals);
     }
-}
-
-fn mission_card_fill(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
-    let h = ui.available_height();
-    card(ui, |ui| {
-        if h.is_finite() && h > 0.0 {
-            ui.set_min_height(h);
-        }
-        add(ui);
-    });
 }
 
 /// One row per open step; the first one not done is the highlighted one.
