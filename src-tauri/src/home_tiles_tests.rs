@@ -114,3 +114,37 @@ fn frame_rate_reads_the_os_count_and_never_the_game() {
     let setup = frame_rate_view(Some(FpsRead::NeedsSetup), true, None);
     assert_eq!(setup.text.caption, "Needs a one-time admin setup");
 }
+
+#[test]
+fn feed_tiles_read_their_pulse_cards_and_say_where_the_switch_is() {
+    let d = std::env::temp_dir().join(format!(
+        "grokhub-shell-feed-{}-{}",
+        std::process::id(),
+        grokhub_core::now_ms()
+    ));
+    std::fs::create_dir_all(&d).unwrap();
+    let off = feed("achievements", &d, NOW);
+    assert_eq!(off.state, TileState::Off);
+    assert_eq!(off.buttons.len(), 1);
+    assert_eq!(off.buttons[0].action, TileAction::nav("pulse"));
+    assert!(off.text.detail.as_deref().unwrap().contains("Pulse"));
+
+    std::fs::write(
+        d.join("app.json"),
+        r#"{"game_companion":true,"theme":"dark"}"#,
+    )
+    .unwrap();
+    let mut card = grokhub_core::update_feed::digest_card(
+        "source:game-companion:570",
+        "Back to Dota 2",
+        "",
+        6,
+    );
+    card.created_at = NOW - 60_000;
+    crate::pulse::add_post(&d, card).unwrap();
+    let on = feed("patch_notes", &d, NOW);
+    assert_eq!(on.state, TileState::Ready);
+    assert_eq!(on.text.big, "Back to Dota 2");
+    assert_eq!(feed("deals", &d, NOW).state, TileState::Off);
+    let _ = std::fs::remove_dir_all(&d);
+}

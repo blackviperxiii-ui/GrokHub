@@ -17,7 +17,8 @@ use std::time::{Duration, Instant};
 use grokhub_core::home::text::{self as tt, NetLink, SendFacts};
 use grokhub_core::home::tiles;
 use grokhub_core::home::{
-    TileAction, TileRow, TileText, TileView, Tone, FREE_STORAGE_ASK, HOME_CHIPS, TUNE_UP_ASK,
+    TileAction, TileRow, TileState, TileText, TileView, Tone, FREE_STORAGE_ASK, HOME_CHIPS,
+    TUNE_UP_ASK,
 };
 use grokhub_core::local_profile::Gpu;
 
@@ -94,9 +95,7 @@ pub fn view(module: &str, src: &Sources<'_>) -> Option<TileView> {
         "systems_brief" => pc_only(&|| tiles::systems_brief_view(&drives(), guard())),
         "coach_tip" => pc_only(&|| tiles::coach_tip_view(&drives(), guard())),
         "clips" => pc_only(&|| tiles::clips_view(&recent_clips(), now)),
-        "achievements" | "patch_notes" | "deals" => {
-            library_or(src, |games| tiles::soon_view(module, games.len()))
-        }
+        "achievements" | "patch_notes" | "deals" => feed(module, src.config_dir, now),
         "session_timer" => pc_only(&|| {
             let clock = session(guard().gaming.then_some(0), now);
             tiles::session_timer_view(None, clock.started_ms, now)
@@ -224,6 +223,46 @@ fn played(games: &[library::Game]) -> Vec<tiles::PlayedGame> {
         .collect()
 }
 
+/// Achievements, Deals and Patch Notes: the cards their Pulse source posted
+/// on this computer. Their switches live in the desktop app's Pulse
+/// settings, so an Off tile here says where and opens Pulse.
+fn feed(module: &str, config_dir: &Path, now: u64) -> TileView {
+    let on = match module {
+        "achievements" => grokhub_core::steam_achievements::load(config_dir).on,
+        "deals" => grokhub_core::steam_wishlist::load(config_dir).on,
+        _ => desktop_flag(config_dir, "game_companion"),
+    };
+    let cards = match pulse::cards(config_dir) {
+        Ok(cards) => cards,
+        Err(e) => return TileView::error(&e),
+    };
+    let view = tiles::feed_view(module, on, &tiles::feed_items(&cards, module), now);
+    if view.state != TileState::Off {
+        return view;
+    }
+    let mut off = view.on_tap(TileAction::nav("pulse"));
+    off.buttons.clear();
+    off.text.detail = Some(format!(
+        "Switch it on under Pulse in the {} desktop app",
+        grokhub_core::brand::product_name()
+    ));
+    off.primary("Open Pulse", TileAction::nav("pulse"))
+}
+
+/// One on/off setting from the desktop app's own settings file, read only.
+/// Missing, unreadable or oversized reads as off.
+fn desktop_flag(config_dir: &Path, key: &str) -> bool {
+    let path = config_dir.join("app.json");
+    if !std::fs::metadata(&path).is_ok_and(|m| m.is_file() && m.len() <= 1024 * 1024) {
+        return false;
+    }
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|v| v.get(key).and_then(serde_json::Value::as_bool))
+        .unwrap_or(false)
+}
+
 /// Tiles that scan the disk or ask the OS (the Steam library, drives, audio
 /// devices) are kept for their refresh time, so a screen asking every few
 /// seconds doesn't rescan.
@@ -235,9 +274,6 @@ fn scans_disk(module: &str) -> bool {
             | "game_library"
             | "what_to_play"
             | "clips"
-            | "achievements"
-            | "patch_notes"
-            | "deals"
             | "storage"
             | "audio_check"
             | "systems_brief"

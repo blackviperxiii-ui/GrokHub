@@ -57,7 +57,7 @@ pub(super) fn desktop_view(cabin: &mut Cabin, module: &str) -> Option<TileView> 
                 "deals" => cabin.wish_now().on,
                 _ => cabin.cfg.game_companion,
             };
-            tiles::feed_view(module, on, &feed_items(&cabin.updates, module), now)
+            tiles::feed_view(module, on, &tiles::feed_items(&cabin.updates, module), now)
         }
         "now_playing" | "game_library" | "what_to_play" => {
             let running = cabin.game_running();
@@ -74,9 +74,8 @@ pub(super) fn desktop_view(cabin: &mut Cabin, module: &str) -> Option<TileView> 
             } else {
                 match module {
                     "now_playing" => tiles::now_playing_view(&games, now, running),
-                    "game_library" => tiles::game_library_view(&games),
                     "what_to_play" => tiles::what_to_play_view(&games, now, true, Some(rerolls())),
-                    _ => tiles::soon_view(module, games.len()),
+                    _ => tiles::game_library_view(&games),
                 }
             }
         }
@@ -128,29 +127,6 @@ pub(super) fn tonight_due(autos: &[grokhub_core::automation::Automation]) -> Vec
         .iter()
         .filter(|a| a.enabled)
         .filter_map(|a| a.next_run.map(|t| (a.name.clone(), t)))
-        .collect()
-}
-
-/// The Pulse cards a feed tile lists: those its source posted, not
-/// dismissed. Game companion cards are told by their id.
-pub(super) fn feed_items(cards: &[grokhub_core::UpdateCard], module: &str) -> Vec<tiles::FeedItem> {
-    let ours = |c: &grokhub_core::UpdateCard| match module {
-        "achievements" => {
-            c.pulse.source_name.as_deref() == Some(grokhub_core::steam_achievements::SOURCE_NAME)
-        }
-        "deals" => {
-            c.pulse.source_name.as_deref() == Some(grokhub_core::steam_wishlist::SOURCE_NAME)
-        }
-        _ => c.source_id.starts_with("source:game-companion:"),
-    };
-    cards
-        .iter()
-        .filter(|c| ours(c) && c.status != grokhub_core::UpdateStatus::Dismissed)
-        .map(|c| tiles::FeedItem {
-            title: c.title.clone(),
-            at_ms: c.created_at,
-            link: c.citations.first().cloned(),
-        })
         .collect()
 }
 
