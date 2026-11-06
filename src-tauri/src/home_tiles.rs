@@ -97,9 +97,12 @@ pub fn view(module: &str, src: &Sources<'_>) -> Option<TileView> {
         "achievements" | "patch_notes" | "deals" => {
             library_or(src, |games| tiles::soon_view(module, games.len()))
         }
-        "squad" | "tonight" | "audio_check" | "stream_check" | "session_timer" | "hype_line" => {
-            tiles::waiting_view(module)
-        }
+        "session_timer" => pc_only(&|| {
+            let clock = session(guard().gaming.then_some(0), now);
+            tiles::session_timer_view(None, clock.started_ms, now)
+        }),
+        "hype_line" => tiles::hype_line_view(Some(&crate::home::personality_name(src)), now),
+        "squad" | "tonight" | "audio_check" | "stream_check" => tiles::waiting_view(module),
         _ => return None,
     };
     Some(v)
@@ -121,6 +124,21 @@ fn guard() -> grokhub_core::game_guard::GameGuard {
 #[cfg(mobile)]
 fn guard() -> grokhub_core::game_guard::GameGuard {
     grokhub_core::game_guard::GameGuard::default()
+}
+
+static SESSION: Mutex<tiles::SessionClock> = Mutex::new(tiles::SessionClock {
+    game: None,
+    started_ms: None,
+});
+
+/// The play session as of this sample. The guard sees a game by process
+/// name only, so the shell times "a game" rather than naming it.
+fn session(game: Option<u32>, now: u64) -> tiles::SessionClock {
+    let Ok(mut clock) = SESSION.lock() else {
+        return tiles::SessionClock::default();
+    };
+    clock.note(game, now);
+    *clock
 }
 
 /// The newest clips and captures on this PC, newest first. Names and times

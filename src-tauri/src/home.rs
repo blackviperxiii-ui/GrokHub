@@ -600,15 +600,20 @@ fn pulse_tile(src: &Sources<'_>) -> Tile {
     }
 }
 
-fn personality_tile(src: &Sources<'_>) -> Tile {
+/// The name of the personality every chat uses by default.
+pub(crate) fn personality_name(src: &Sources<'_>) -> String {
     let (dir, s) = (src.config_dir, src.settings);
     let page = personality::load(dir, &s.personality, s.explicit_personalities);
-    let name = page
-        .presets
+    page.presets
         .iter()
         .find(|p| p.id == page.current)
         .map(|p| p.name.clone())
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
+
+fn personality_tile(src: &Sources<'_>) -> Tile {
+    let (dir, s) = (src.config_dir, src.settings);
+    let name = personality_name(src);
     let picture = nyx::look(
         dir,
         &s.personality,

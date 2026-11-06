@@ -384,6 +384,7 @@ fn every_home_module_has_a_painter_or_a_real_tile() {
         tiles::game_library_view(&[]),
         tiles::what_to_play_view(&[], now, true, None),
         tiles::clips_view(&[], now),
+        tiles::session_timer_view(None, None, now),
     ];
     for v in &empties {
         assert!(

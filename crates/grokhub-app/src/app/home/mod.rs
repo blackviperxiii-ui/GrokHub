@@ -22,6 +22,7 @@ use crate::config::{atomic_write, load_json_or, peek_json, JSON_STORE_CAP};
 
 pub(in crate::app) use edit::HomeEditDraft;
 pub(in crate::app) use live::cached_drives;
+pub(in crate::app) use views::note_session;
 
 pub fn home_layout_path(dir: &Path) -> PathBuf {
     dir.join(HOME_LAYOUT_FILE)

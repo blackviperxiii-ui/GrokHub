@@ -149,6 +149,10 @@ impl Cabin {
 
     /// One sample. A launch of a library game fetches its news off the UI thread.
     pub(super) fn note_running(&mut self, running: Option<u32>, now: u64) {
+        super::home::note_session(
+            running.or(grokhub_desktop::game_guard::peek().gaming.then_some(0)),
+            now,
+        );
         let events = self.focus.game.watch.note(running);
         if events.is_empty() || !self.cfg.game_companion {
             return;

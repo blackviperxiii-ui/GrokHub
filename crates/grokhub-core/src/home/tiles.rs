@@ -262,6 +262,89 @@ pub fn clips_view(clips: &[Clip], now: u64) -> TileView {
     .primary("Watch", TileAction::OpenClip { index: 0 })
 }
 
+/// Minutes of play before the Session Timer suggests a break.
+pub const BREAK_MIN: u64 = 90;
+
+/// When the current play session started. Fed one sample at a time with
+/// the running game (a Steam app id, or 0 for a game the guard sees by
+/// process name only); a change of game starts the clock again.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SessionClock {
+    pub game: Option<u32>,
+    pub started_ms: Option<u64>,
+}
+
+impl SessionClock {
+    pub fn note(&mut self, game: Option<u32>, now: u64) {
+        if game != self.game {
+            self.game = game;
+            self.started_ms = game.map(|_| now);
+        }
+    }
+}
+
+fn span(min: u64) -> String {
+    match min {
+        0 => "Just started".into(),
+        m if m < 60 => format!("{m} min"),
+        m if m % 60 == 0 => format!("{} h", m / 60),
+        m => format!("{} h {} min", m / 60, m % 60),
+    }
+}
+
+/// How long this session has run, and a nudge to stretch past
+/// [`BREAK_MIN`]. `name` is the game when the app knows it.
+pub fn session_timer_view(name: Option<&str>, started: Option<u64>, now: u64) -> TileView {
+    let Some(at) = started else {
+        return TileView::empty(
+            "Start a game and this times your session on its own",
+            "Open Library",
+            TileAction::nav("library"),
+        );
+    };
+    let min = now.saturating_sub(at) / 60_000;
+    let game = name.unwrap_or("Game running");
+    let pct = (min.min(BREAK_MIN) * 100 / BREAK_MIN) as u8;
+    let text = if min >= BREAK_MIN {
+        TileText::new(span(min), format!("{game} · break time"), Tone::Warn)
+            .detail("Stand up, drink some water, rest your eyes for a minute")
+    } else {
+        TileText::new(span(min), format!("{game} · this session"), Tone::Normal).detail(format!(
+            "Break nudge in {}",
+            span(BREAK_MIN - min).to_lowercase()
+        ))
+    };
+    TileView::ready(text).progress(pct).tag("LIVE")
+}
+
+/// Short lines the Hype Line tile turns over once a day. Free to show: no
+/// model is asked.
+const HYPE: [&str; 12] = [
+    "Warm hands, cool head. Let's go.",
+    "One more game? Make it the good one.",
+    "Aim small, miss small.",
+    "Today's the day that clutch finally lands.",
+    "Hydrate, then dominate.",
+    "Every pro was a bronze once.",
+    "Play the objective. Collect the dubs.",
+    "Comms clear, crosshair steady.",
+    "Losses are just free lessons.",
+    "Fresh day, fresh MMR.",
+    "Breathe before the big fight.",
+    "You vs. yesterday's you. Win that one.",
+];
+
+/// Today's line, held all day, in the voice of the active personality.
+pub fn hype_line_view(personality: Option<&str>, now: u64) -> TileView {
+    let day = (now / 86_400_000) as usize;
+    let caption = match personality {
+        Some(name) if !name.trim().is_empty() => format!("Today's line · {name}"),
+        _ => "Today's line".to_string(),
+    };
+    TileView::ready(TileText::new(HYPE[day % HYPE.len()], caption, Tone::Normal))
+        .button("Personality", TileAction::settings("personality"))
+}
+
 /// Modules whose own data comes next; until then they show the library
 /// they'll draw from and one way in.
 pub fn soon_view(module: &str, games: usize) -> TileView {
@@ -293,20 +376,10 @@ pub fn waiting_view(module: &str) -> TileView {
             "Voice settings",
             TileAction::settings("general"),
         ),
-        "stream_check" => TileView::empty(
+        _ => TileView::empty(
             "Mic, scene and upload readiness show here before you go live",
             "Connectors",
             TileAction::nav("connectors"),
-        ),
-        "session_timer" => TileView::empty(
-            "Track a play session and get a nudge to take a break",
-            "Objectives",
-            TileAction::nav("objectives"),
-        ),
-        _ => TileView::empty(
-            "A daily line from your companion shows here",
-            "Personality",
-            TileAction::settings("personality"),
         ),
     }
 }
@@ -401,19 +474,42 @@ mod tests {
 
     #[test]
     fn waiting_tiles_say_what_they_will_show_and_offer_one_way_in() {
-        for m in [
-            "squad",
-            "tonight",
-            "audio_check",
-            "stream_check",
-            "session_timer",
-            "hype_line",
-        ] {
+        for m in ["squad", "tonight", "audio_check", "stream_check"] {
             let v = waiting_view(m);
             assert_eq!(v.state, TileState::Empty, "{m}");
             assert_eq!(v.buttons.len(), 1, "{m}");
         }
         assert_eq!(soon_view("deals", 12).text.big, "12 games");
+    }
+
+    #[test]
+    fn the_session_clock_starts_with_a_game_and_nudges_a_break() {
+        let mut clock = SessionClock::default();
+        clock.note(None, NOW);
+        assert_eq!(clock.started_ms, None);
+        clock.note(Some(570), NOW);
+        clock.note(Some(570), NOW + 60_000);
+        assert_eq!(clock.started_ms, Some(NOW), "the same game keeps its start");
+        let v = session_timer_view(Some("Dota 2"), clock.started_ms, NOW + 45 * 60_000);
+        assert_eq!(v.text.big, "45 min");
+        assert_eq!(v.text.caption, "Dota 2 · this session");
+        assert_eq!(v.text.detail.as_deref(), Some("Break nudge in 45 min"));
+        assert_eq!(v.progress, Some(50));
+        let late = session_timer_view(None, Some(NOW), NOW + 125 * 60_000);
+        assert_eq!(late.text.big, "2 h 5 min");
+        assert_eq!(late.text.tone, Tone::Warn);
+        clock.note(None, NOW + 2);
+        assert_eq!(clock.started_ms, None, "stopping clears the clock");
+        assert_eq!(session_timer_view(None, None, NOW).state, TileState::Empty);
+    }
+
+    #[test]
+    fn the_hype_line_holds_all_day_and_names_the_voice() {
+        let a = hype_line_view(Some("Coach"), NOW);
+        let b = hype_line_view(Some("Coach"), NOW + 3_600_000);
+        assert_eq!(a.text.big, b.text.big);
+        assert_eq!(a.text.caption, "Today's line · Coach");
+        assert_ne!(hype_line_view(None, NOW + 86_400_000).text.big, a.text.big);
     }
 
     #[test]
