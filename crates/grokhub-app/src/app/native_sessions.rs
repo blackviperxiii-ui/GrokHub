@@ -378,8 +378,8 @@ impl Cabin {
                 return;
             }
         };
-        let dest = self.export_dest(&format!("{id}.md"));
-        if let Some(parent) = dest.parent() {
+        let (dest, make_dir) = self.chat_export_dest(&format!("{id}.md"));
+        if let Some(parent) = dest.parent().filter(|_| make_dir) {
             let _ = std::fs::create_dir_all(parent);
         }
         match std::fs::write(&dest, md) {

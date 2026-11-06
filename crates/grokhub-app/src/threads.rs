@@ -1170,19 +1170,13 @@ pub fn release_project_chats(threads: &mut [ChatThread], project_id: &str) -> us
 }
 
 pub fn export_markdown(t: &ChatThread) -> String {
-    let mut out = format!("# {}\n\n", t.title);
-    for (role, content) in t.messages.iter() {
-        // A saved turn's labels, thoughts and findings-card tag are the app's
-        // own format; the export reads as the chat did. Save diagnostics
-        // keeps them raw.
-        let content = if role == "assistant" {
-            grokhub_core::shown_text(content)
-        } else {
-            content.clone()
-        };
-        out.push_str(&format!("## {role}\n\n{content}\n\n"));
-    }
-    out
+    // The whole chat, thoughts and tool rows included, in the order they
+    // happened. The app's own tags are left out so it reads as the chat did.
+    // Save diagnostics keeps them raw.
+    grokhub_core::chat_transcript_markdown(
+        &t.title,
+        t.messages.iter().map(|(r, c)| (r.as_str(), c.as_str())),
+    )
 }
 
 #[cfg(test)]
@@ -1204,7 +1198,10 @@ mod tests {
         let md = export_markdown(&t);
         assert!(!md.contains("SLASH_RESULT"), "{md}");
         assert!(!md.contains("TURN_"), "{md}");
-        assert!(md.contains("Findings from this run\n- High: C: is 95% full."), "{md}");
+        assert!(
+            md.contains("Findings from this run\n- High: C: is 95% full."),
+            "{md}"
+        );
         assert!(md.contains("ok Cleaned it up."), "{md}");
     }
 

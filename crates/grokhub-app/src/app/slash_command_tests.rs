@@ -84,9 +84,10 @@ fn run_slash_help_export_and_clear() {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
+    let stem = grokhub_core::export_file_stem(&cabin.threads[cabin.thread_idx].title);
     assert!(
-        name.starts_with("export-") && name.ends_with(".md"),
-        " /export must name a stamped export-*.md, got {}",
+        name.starts_with(&format!("{stem}-")) && name.ends_with(".md"),
+        " /export must name a stamped <chat title>-*.md, got {}",
         cabin.status
     );
     assert!(
@@ -1121,4 +1122,45 @@ fn context_slash_counts_an_empty_chat() {
     assert_eq!(cabin.status, "0 turns · 0 tokens · 0% · pin none");
     assert!(!cabin.running);
     assert!(cabin.messages.is_empty());
+}
+
+/// The export the user asked for: the whole chat, thoughts and tool rows
+/// included, on the Desktop.
+#[test]
+fn export_puts_the_whole_chat_on_the_desktop() {
+    let mut quiet = QuietCabin::boot("slash-export-desktop");
+    let cabin = &mut quiet.cabin;
+    let desktop = std::env::temp_dir().join(format!("gh-export-desktop-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&desktop);
+    std::fs::create_dir_all(&desktop).unwrap();
+    super::slash::set_test_desktop(Some(desktop.clone()));
+    // A bound project folder doesn't pull the export off the Desktop.
+    cabin.cfg.project_dir = std::env::temp_dir()
+        .join("gh-export-elsewhere")
+        .display()
+        .to_string();
+    let turn = "TURN_THOUGHT:\nChecking disk space first.\nTURN_TOOL: done\tRun terminal command\tFREE=5713272832\nTURN_SAY:\nYour C: drive has 5 GB free.";
+    cabin.messages = std::sync::Arc::new(vec![
+        ("user".into(), "check my pc".into()),
+        ("assistant".into(), turn.into()),
+    ]);
+    cabin.run_slash(grokhub_core::Slash::Export);
+    wait_file_writes(cabin);
+    let path = std::path::PathBuf::from(cabin.status.strip_prefix("Wrote ").unwrap_or(""));
+    assert_eq!(path.parent(), Some(desktop.as_path()), "{}", cabin.status);
+    let md = std::fs::read_to_string(&path).unwrap_or_default();
+    for line in [
+        "check my pc",
+        "Checking disk space first.",
+        "Tool: Run terminal command",
+        "FREE=5713272832",
+        "5 GB free",
+    ] {
+        assert!(md.contains(line), "export is missing {line:?}: {md}");
+    }
+    assert!(!md.contains("TURN_"), "{md}");
+    super::slash::set_test_desktop(None);
+    cabin.cfg.project_dir.clear();
+    let _ = std::fs::remove_dir_all(&desktop);
+    quiet.settle();
 }

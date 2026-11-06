@@ -384,7 +384,8 @@ pub use doctor::{
     hub_kind_from_health, xai_auth_stale_line, DoctorLine,
 };
 pub use export::{
-    chat_export_html, chat_export_json, html_escape, md_to_html, ChatExport, EXPORT_FORMATS_HINT,
+    chat_export_html, chat_export_json, chat_transcript_markdown, export_file_stem, html_escape,
+    md_to_html, ChatExport, EXPORT_FORMATS_HINT,
 };
 pub use feel::{
     clamp_rect_to_slot, feel_lift, feel_scale, felt_inside_slot, felt_rect, hover_alpha, hover_mix,
