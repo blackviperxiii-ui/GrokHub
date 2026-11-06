@@ -707,6 +707,7 @@ export interface PulsePost {
   source: string;
   title: string;
   summary: string;
+  /** Why a fetched post is here, in words ("You play Helldivers 2"). */
   because: string;
   /** A written post's topic emoji. Empty on older posts. */
   icon: string;
@@ -787,6 +788,10 @@ export interface FixView {
 
 export interface PulsePage {
   feed: PulsePost[];
+  /** How many of `feed` are today's set; "That's all for today" follows them. */
+  today: number;
+  /** What the feed writer's last run did, shown on an empty feed. */
+  note: string;
   /** An empty label is the unlabeled top group. */
   ideas: { label: string; ideas: PulseIdea[] }[];
 }
@@ -795,6 +800,7 @@ export type PulseAct =
   | "dismiss"
   | "notThis"
   | "love"
+  | "unlove"
   | "delete"
   | "snooze"
   | "accept"

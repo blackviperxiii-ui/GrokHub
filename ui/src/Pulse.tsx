@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import {
   getFeedPrompt,
   getPulse,
+  openUrl,
   pulseAct,
   pulseDiscuss,
   pulseWhy,
@@ -21,6 +22,10 @@ export const SAVED_NOTE = "Saved. A new post is on its way.";
 export const MORE_LIKE_NOTE = "Got it. More ideas like this next time.";
 export const NOT_INTERESTED_NOTE = "Got it. Fewer ideas like this.";
 export const FOR_YOU_LABEL = "For You";
+export const DAY_END = "That's all for today";
+export const ADD_INTERESTS = "Add interests";
+/** While Pulse is open, how often it looks for new posts. */
+export const REFRESH_MS = 60_000;
 /** Posts shown at first, and added each time the list's end scrolls into view. */
 export const PAGE_SIZE = 10;
 /** After a save, how often and how many times to look for the new post. */
@@ -86,7 +91,14 @@ function Instructions({ onClose, onSaved }: { onClose: () => void; onSaved: () =
 /** The cabin's Pulse: Feed first, Ideas second. `onRun` puts text in the
  * chat box (an idea's action, or a post to discuss); nothing runs until it
  * is sent there. */
-export function Pulse({ onRun }: { onRun: (text: string) => void }) {
+export function Pulse({
+  onRun,
+  onOpenInterests,
+}: {
+  onRun: (text: string) => void;
+  /** Settings → Pulse, where interests are added. */
+  onOpenInterests?: () => void;
+}) {
   const [page, setPage] = useState<PulsePage | null>(null);
   const [tab, setTab] = useState<Tab>("feed");
   const { note, ok, fail, clear } = useNote();
@@ -97,6 +109,8 @@ export function Pulse({ onRun }: { onRun: (text: string) => void }) {
   const [fixing, setFixing] = useState<PulseIdea | null>(null);
   const end = useRef<HTMLLIElement>(null);
   const polls = useRef<ReturnType<typeof setTimeout>[]>([]);
+  /** A tap in flight: a background look must not overwrite its page. */
+  const acting = useRef(false);
 
   useEffect(() => {
     getPulse().then(setPage, fail);
@@ -104,7 +118,22 @@ export function Pulse({ onRun }: { onRun: (text: string) => void }) {
     return () => timers.forEach(clearTimeout);
   }, [fail]);
 
+  // New posts land in the background; look once a minute while Pulse is open.
+  useEffect(() => {
+    const every = setInterval(() => {
+      if (acting.current || document.visibilityState === "hidden") return;
+      getPulse().then(
+        (next) => {
+          if (!acting.current) setPage(next);
+        },
+        () => {},
+      );
+    }, REFRESH_MS);
+    return () => clearInterval(every);
+  }, []);
+
   const total = page?.feed.length ?? 0;
+  const today = page?.today ?? 0;
   // Without IntersectionObserver nothing can tell when the end is in view, so every post shows.
   const shown = typeof IntersectionObserver === "undefined" ? total : paged;
   const more = tab === "feed" && shown < total;
@@ -120,6 +149,7 @@ export function Pulse({ onRun }: { onRun: (text: string) => void }) {
 
   async function act(id: string, what: PulseAct, done?: string) {
     setBusy(true);
+    acting.current = true;
     try {
       setPage(await pulseAct(id, what));
       ok(done ?? null);
@@ -131,6 +161,7 @@ export function Pulse({ onRun }: { onRun: (text: string) => void }) {
       await getPulse().then(setPage, () => {});
       return false;
     } finally {
+      acting.current = false;
       setBusy(false);
     }
   }
@@ -231,19 +262,26 @@ export function Pulse({ onRun }: { onRun: (text: string) => void }) {
       {tab === "feed" && (
         <ul className="rows feed" aria-busy={page === null}>
           {page === null && !note && <SkeletonRows />}
-          {page?.feed.slice(0, shown).map((post) => (
-            <FeedCard
-              key={post.id}
-              post={post}
-              busy={busy}
-              onLove={() => void act(post.id, "love")}
-              onDiscuss={() => void discuss(post.id)}
-              onDelete={() => void act(post.id, "delete", "Deleted.")}
-              onWhy={() => pulseWhy(post.id)}
-              onSnooze={() => void act(post.id, "snooze", "Snoozed until 9 AM.")}
-              onDismiss={() => void act(post.id, "dismiss", "Dismissed.")}
-              onNotThis={() => void act(post.id, "notThis", "Got it. Fewer posts like that.")}
-            />
+          {page?.feed.slice(0, shown).map((post, i) => (
+            <Fragment key={post.id}>
+              <FeedCard
+                post={post}
+                busy={busy}
+                onLove={() => void act(post.id, post.loved ? "unlove" : "love")}
+                onDiscuss={() => void discuss(post.id)}
+                onOpen={() => void openUrl(post.link).catch(fail)}
+                onDelete={() => void act(post.id, "delete", "Deleted.")}
+                onWhy={() => pulseWhy(post.id)}
+                onSnooze={() => void act(post.id, "snooze", "Snoozed until 9 AM.")}
+                onDismiss={() => void act(post.id, "dismiss", "Dismissed.")}
+                onNotThis={() => void act(post.id, "notThis", "Got it. Fewer posts like that.")}
+              />
+              {i === today - 1 && i < total - 1 && (
+                <li className="day-end" role="separator">
+                  {DAY_END}
+                </li>
+              )}
+            </Fragment>
           ))}
           {more && (
             <li ref={end} className="card post feed-card skeleton" aria-hidden="true">
@@ -253,7 +291,16 @@ export function Pulse({ onRun }: { onRun: (text: string) => void }) {
           )}
         </ul>
       )}
-      {page && tab === "feed" && total === 0 && <p className="empty">{FEED_EMPTY}</p>}
+      {page && tab === "feed" && total === 0 && (
+        <div className="feed-empty">
+          <p className="empty">{page.note || FEED_EMPTY}</p>
+          {onOpenInterests && (
+            <button type="button" className="quiet" onClick={onOpenInterests}>
+              {ADD_INTERESTS}
+            </button>
+          )}
+        </div>
+      )}
       {page && tab === "ideas" && (
         <>
           {ideaCount === 0 && <p className="empty">{IDEAS_EMPTY}</p>}

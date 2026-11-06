@@ -45,7 +45,8 @@ pub struct Post {
     pub source: String,
     pub title: String,
     pub summary: String,
-    /// "Why: …" when a source post matched an interest.
+    /// Why a fetched post is here, in words ("You play Helldivers 2").
+    /// Empty on other posts.
     pub because: String,
     /// A written post's topic emoji. Empty on older posts.
     pub icon: String,
@@ -126,7 +127,11 @@ pub struct Group {
 #[serde(rename_all = "camelCase")]
 pub struct Page {
     pub feed: Vec<Post>,
+    /// How many of `feed` are today's set; "That's all for today" follows.
+    pub today: usize,
     pub ideas: Vec<Group>,
+    /// What the feed writer's last run did, for an empty feed.
+    pub note: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -137,6 +142,8 @@ pub enum Act {
     /// Older pages still send "like".
     #[serde(alias = "like")]
     Love,
+    /// Love pressed again: the heart goes. Writes no ledger line.
+    Unlove,
     /// Takes the post away. Not a taste signal: nothing is noted.
     Delete,
     Snooze,
@@ -280,7 +287,7 @@ fn post(config_dir: &Path, card: &UpdateCard, now_ms: u64) -> Post {
         source,
         title: card.title.trim().to_string(),
         summary: card.body.clone().unwrap_or_default().trim().to_string(),
-        because: card.pulse.because.clone().unwrap_or_default(),
+        because: pc::plain_why(card).unwrap_or_default(),
         icon: card.pulse.icon.clone().unwrap_or_default(),
         why: card.why.clone().unwrap_or_default(),
         images: card
@@ -378,11 +385,15 @@ fn build(
         ..Default::default()
     };
     let by_id = |id: &str| cards.iter().find(|c| c.id == id);
+    let (today, older) = pc::feed_day(cards, &inputs);
     Page {
-        feed: pc::feed_posts(cards, &inputs)
+        today: today.len(),
+        feed: today
             .iter()
+            .chain(older.iter())
             .map(|c| post(config_dir, c, now_ms))
             .collect(),
+        note: pulse_feed::state(config_dir).note,
         ideas: pc::group_ideas(cards, &inputs)
             .into_iter()
             .map(|(cat, rows)| Group {
@@ -446,6 +457,7 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
         Act::Dismiss | Act::Delete => (Some(Outcome::Dismissed), None),
         Act::NotThis | Act::NotInterested => (Some(Outcome::Dismissed), Some(false)),
         Act::Love | Act::Accept => (Some(Outcome::Accepted), None),
+        Act::Unlove => (None, None),
         Act::MoreLike => (Some(Outcome::Accepted), Some(true)),
         Act::Snooze => (Some(Outcome::Snoozed), None),
     };
@@ -485,6 +497,22 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
                     saved.reaction = Some(CardReaction::Up);
                 }
                 true
+            }
+        }
+        Act::Unlove => {
+            let loved = cards
+                .iter_mut()
+                .find(|c| c.id == id && c.reaction == Some(CardReaction::Up));
+            match loved {
+                Some(saved) => {
+                    saved.reaction = None;
+                    pulse_feed::with_state(config_dir, |s| {
+                        s.taste_events
+                            .retain(|e| !(e.kind == TasteKind::Love && e.text == card.title));
+                    })?;
+                    true
+                }
+                None => false,
             }
         }
         Act::Delete => {
@@ -750,6 +778,9 @@ mod tests {
         assert_eq!(post.ago, "2h ago");
         assert_eq!(post.link, "https://example.com/board");
         assert!(!post.loved);
+        assert_eq!(post.because, "", "an automation's post has no fetched why");
+        assert_eq!(page.today, 1, "two hours old is today's set");
+        assert_eq!(page.note, "");
 
         let ideas: Vec<&Idea> = page.ideas.iter().flat_map(|g| &g.ideas).collect();
         assert_eq!(ideas.len(), 1, "{page:?}");
@@ -968,7 +999,9 @@ mod tests {
             load(&d.config, None, NOW),
             Ok(Page {
                 feed: Vec::new(),
-                ideas: Vec::new()
+                today: 0,
+                ideas: Vec::new(),
+                note: String::new(),
             })
         );
     }
@@ -1006,6 +1039,21 @@ mod tests {
             discuss(&d.config, "post-1", NOW),
             Err("That card is gone. The page now shows what is left.".to_string())
         );
+    }
+
+    #[test]
+    fn love_pressed_again_takes_the_heart_and_its_taste_line_away() {
+        let d = dirs("unlove", &sample());
+        let page = act(&d.config, "post-1", Act::Love, &day(), NOW).expect("love");
+        assert!(page.feed[0].loved);
+        let before = memory();
+        let page = act(&d.config, "post-1", Act::Unlove, &day(), NOW + 1).expect("unlove");
+        assert!(!page.feed[0].loved);
+        assert_eq!(memory(), before, "Unlove writes no ledger line");
+        assert!(pulse_feed::state(&d.config).taste_events.is_empty());
+        // Pressed on a post that isn't loved, nothing changes.
+        let again = act(&d.config, "post-1", Act::Unlove, &day(), NOW + 2).expect("again");
+        assert_eq!(again, page);
     }
 
     #[test]
