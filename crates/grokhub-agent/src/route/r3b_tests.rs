@@ -2824,3 +2824,151 @@ fn an_openrouter_long_context_step_reaches_the_ceiling_and_the_cost() {
         "every token at the long rates: $2.50/M in, $15/M out"
     );
 }
+
+/// A wire that answers every call 402: the account is out of credit.
+#[derive(Default)]
+struct BrokeWire(Mutex<Vec<Sent>>);
+
+impl BrokeWire {
+    fn calls(&self) -> usize {
+        self.0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(url, _, _)| url.contains("chat/completions"))
+            .count()
+    }
+}
+
+impl ProviderTransport for BrokeWire {
+    fn get(&self, url: &str, headers: &[(String, String)]) -> Result<HttpReply, String> {
+        self.0
+            .lock()
+            .unwrap()
+            .push((url.into(), headers.to_vec(), String::new()));
+        Ok(HttpReply {
+            status: 200,
+            body: OR_LIST.into(),
+        })
+    }
+    fn post(
+        &self,
+        url: &str,
+        headers: &[(String, String)],
+        body: &str,
+    ) -> Result<HttpReply, String> {
+        self.0
+            .lock()
+            .unwrap()
+            .push((url.into(), headers.to_vec(), body.into()));
+        Ok(HttpReply {
+            status: 402,
+            body: r#"{"error":{"message":"Insufficient credits"}}"#.into(),
+        })
+    }
+}
+
+/// Grok answers, and remembers the model it was asked for.
+struct GrokOk(Mutex<String>);
+
+impl ModelClient for GrokOk {
+    fn stream(
+        &self,
+        r: &ResponsesRequest,
+        _c: &CancelToken,
+        s: &mut dyn FnMut(StreamEvent),
+    ) -> Result<TurnOutput, ClientError> {
+        *self.0.lock().unwrap() = r.model.clone();
+        s(StreamEvent::TextDelta("hello from grok".into()));
+        Ok(TurnOutput {
+            text: "hello from grok".into(),
+            ..TurnOutput::default()
+        })
+    }
+}
+
+#[test]
+fn a_provider_out_of_credit_cools_it_and_grok_takes_the_turn() {
+    let dir = test_dir("r3b-402-fallback");
+    providers::use_vault_for(&dir, Arc::new(MemoryVault::default()));
+    let wire = Arc::new(BrokeWire::default());
+    providers::use_transport_for(&dir, wire.clone());
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    save_registry(&dir, &fleet()).unwrap();
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    grant_destination(&dir, OR_DEST, CALL_DATA, UserClick::from_click()).unwrap();
+    rank_first(&dir, OR_MODEL);
+    let grok = GrokOk(Mutex::new(String::new()));
+    let mut shown = String::new();
+    let out = live::stream_routed(
+        &grok,
+        &chat("chat-402", &["say hello"]),
+        &CancelToken::new(),
+        &mut |ev| {
+            if let StreamEvent::TextDelta(t) = ev {
+                shown.push_str(&t);
+            }
+        },
+        "chat:default",
+    )
+    .expect("Grok takes the turn the provider couldn't pay for");
+    assert_eq!(out.text, "hello from grok");
+    assert_eq!(shown, "hello from grok");
+    assert_eq!(grok.0.lock().unwrap().as_str(), "grok-4.7");
+    // The provider was tried once, then cooled: the next pick skips it.
+    assert_eq!(wire.calls(), 1);
+    assert!(live::cooling(&dir, OR_MODEL, grokhub_core::now_ms()));
+    // The route record names Grok as the route that answered.
+    let (_, rec) = route_records(&dir, ROUTE_TAIL_LINES)
+        .pop()
+        .expect("a route record");
+    assert_eq!(
+        (rec.used.provider.as_str(), rec.used.model.as_str()),
+        ("xai", "grok-4.7")
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn provider_fallible_covers_limits_credit_and_outages_only() {
+    let fallible = [
+        ClientError::RateLimited {
+            retry_after_secs: None,
+            message: "slow down".into(),
+        },
+        ClientError::PaymentRequired {
+            status: 402,
+            message: "Insufficient credits".into(),
+        },
+        ClientError::Server {
+            status: 502,
+            message: "bad gateway".into(),
+            retry_after_secs: None,
+        },
+        ClientError::Auth {
+            status: 401,
+            message: "bad key".into(),
+        },
+        ClientError::Transport("connection reset".into()),
+        ClientError::Disconnect,
+        ClientError::IdleTimeout,
+    ];
+    for err in &fallible {
+        assert!(live::provider_fallible(err), "{err:?}");
+    }
+    let not_fallible = [
+        ClientError::Cancelled,
+        // A refusal about the prompt: the next route would refuse it too.
+        ClientError::Protocol("Blocked by content safety".into()),
+        // Too long for this model is the run loop's compaction retry, and
+        // the app's own offline mode blocks every cloud route alike.
+        ClientError::Protocol("HTTP 400: maximum context length exceeded".into()),
+        ClientError::Transport(
+            "Offline only is on, so Loadout can't reach the internet. Turn it off in Settings → AI models to use this."
+                .into(),
+        ),
+    ];
+    for err in &not_fallible {
+        assert!(!live::provider_fallible(err), "{err:?}");
+    }
+}
