@@ -1,12 +1,24 @@
 //! Composer send and the native turn kick.
 
 use super::*;
+use grokhub_agent::route::intent::{self, TurnCx, TurnRead, TurnRoute};
 use grokhub_core::{live_send, LiveSend};
+
+/// `/btw <question>` or `/plan <task>`: a one-shot route typed with its words.
+/// A bare `/btw` or `/plan` is still a slash command.
+pub(super) fn typed_route_with_words(text: &str) -> bool {
+    let t = text.trim_start();
+    ["/btw", "/plan", "/side"].iter().any(|cmd| {
+        t.strip_prefix(cmd)
+            .is_some_and(|rest| rest.starts_with(char::is_whitespace) && !rest.trim().is_empty())
+    })
+}
 
 impl Cabin {
     pub(super) fn send_chat(&mut self, text: String) {
         // Alt+Enter or `/queue`: wait for the live reply instead of steering it.
-        let queue_asked = std::mem::take(&mut self.bg.queue_next);
+        let mut queue_asked = std::mem::take(&mut self.bg.queue_next);
+        let forced = self.forced_route.take();
         self.turn_retried = false;
         // A typed turn is never a resume turn: the resume block went once (KB-03).
         self.work_resume.follow = None;
@@ -21,11 +33,14 @@ impl Cabin {
             self.status = "The idea talk is still going".into();
             return;
         }
-        if let Some(slash) = parse_slash(&text) {
-            self.run_slash(slash);
-            return;
+        let typed_route = typed_route_with_words(&text);
+        if !typed_route {
+            if let Some(slash) = parse_slash(&text) {
+                self.run_slash(slash);
+                return;
+            }
         }
-        if unknown_cabin_slash(&text) {
+        if !typed_route && unknown_cabin_slash(&text) {
             self.status = "Unknown command — /help".into();
             return;
         }
@@ -40,20 +55,46 @@ impl Cabin {
             text = self.followup_queue.remove(0);
             resumed_step = true;
         }
+        // The app reads what the message is for: a side question, a
+        // correction, stop, or a new job while a reply runs; plan first or
+        // just answer while nothing does. No pill or mode to pick.
+        let running_here = matches!(
+            chat_send_kind(
+                self.chat_job_thread.as_deref(),
+                &self.visible_thread_id(),
+                self.running,
+            ),
+            ChatSendKind::Redirect
+        );
+        if !(resumed_step || queue_asked && running_here) {
+            let read = self.read_turn_for(&text, running_here, forced);
+            text = read.text;
+            if running_here {
+                match read.route {
+                    TurnRoute::Side => {
+                        self.status = match self.start_side_run(text) {
+                            Ok(()) => TurnRoute::Side.ack().into(),
+                            Err(err) => err,
+                        };
+                        return;
+                    }
+                    TurnRoute::Stop => {
+                        self.halt_work(TurnRoute::Stop.ack());
+                        return;
+                    }
+                    TurnRoute::Queue => queue_asked = true,
+                    _ => {}
+                }
+            } else {
+                self.settle_turn_mode(&typed, read.route);
+            }
+        }
         self.begin_turn_origin();
         if self.apply_unparsed_native_slash(&text) {
             return;
         }
         if let Some(recipe) = grokhub_agent::native_deep_research_prompt(&text) {
             text = recipe;
-        }
-        if btw_queues_without_interrupt(self.session_mode == SessionMode::Ask, self.running) {
-            self.side_ask_queue.push(text);
-            self.status = format!(
-                "btw queued ({}) — main run continues",
-                self.side_ask_queue.len()
-            );
-            return;
         }
         match chat_send_kind(
             self.chat_job_thread.as_deref(),
@@ -71,7 +112,10 @@ impl Cabin {
                     ) {
                         LiveSend::Queue => {
                             self.followup_queue.push(text);
-                            self.status = format!("Queued ({})", self.followup_queue.len());
+                            self.status = match self.followup_queue.len() {
+                                1 => TurnRoute::Queue.ack().into(),
+                                n => format!("{} ({n})", TurnRoute::Queue.ack()),
+                            };
                             return;
                         }
                         LiveSend::Steer => {
@@ -434,6 +478,70 @@ pub(super) fn is_bare_continue(text: &str) -> bool {
             | "next"
             | "proceed"
     )
+}
+
+impl Cabin {
+    /// Read one typed message for its route. A forced route (Tell the main
+    /// task) skips the read; a learned nudge from the user's own corrections
+    /// can flip the rules' answer.
+    fn read_turn_for(&self, text: &str, running: bool, forced: Option<TurnRoute>) -> TurnRead {
+        match forced {
+            Some(route) => TurnRead {
+                route,
+                confidence: 1.0,
+                text: text.to_string(),
+                rules: vec![format!("turn:{}:forced", route.id())],
+            },
+            None => intent::read_turn_learned(
+                &crate::config::config_dir(),
+                text,
+                &TurnCx {
+                    running,
+                    prior: None,
+                },
+            ),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn settle_turn_mode_for_test(&mut self, typed: &str) {
+        let read = self.read_turn_for(typed, false, None);
+        self.settle_turn_mode(typed, read.route);
+    }
+
+    /// Nothing runs: this turn plans first or is answered straight away. A
+    /// plan still waiting on approval keeps planning; "no, just answer" or
+    /// "make a plan first" right after a turn fixes it and teaches the reader.
+    fn settle_turn_mode(&mut self, typed: &str, route: TurnRoute) {
+        let fix = intent::correction_of_previous(typed);
+        if let (Some(fix), Some((prev, was))) = (fix, self.last_turn_read.take()) {
+            if fix != was {
+                intent::note_correction(&crate::config::config_dir(), &prev, false, fix);
+            }
+        }
+        let route = fix.unwrap_or(route);
+        let pending_plan = self.session_mode == SessionMode::Plan && fix != Some(TurnRoute::Chat);
+        let plan = std::mem::take(&mut self.plan_next) || route == TurnRoute::Plan || pending_plan;
+        let mode = if plan {
+            SessionMode::Plan
+        } else {
+            SessionMode::Chat
+        };
+        if mode != self.session_mode {
+            self.set_session_mode(mode);
+        }
+        if plan && !pending_plan {
+            self.status = TurnRoute::Plan.ack().into();
+        }
+        self.last_turn_read = Some((
+            typed.to_string(),
+            if plan {
+                TurnRoute::Plan
+            } else {
+                TurnRoute::Chat
+            },
+        ));
+    }
 }
 
 #[cfg(test)]

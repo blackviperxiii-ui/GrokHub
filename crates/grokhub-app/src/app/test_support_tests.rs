@@ -147,8 +147,7 @@ impl QuietCabin {
             .unwrap_or_else(|| std::sync::Arc::new(Vec::new()));
         cabin.threads = threads;
         cabin.thread_idx = 0;
-        cabin.session_mode = grokhub_core::wire::SessionMode::parse(&cfg.session_mode)
-            .unwrap_or(grokhub_core::wire::SessionMode::Chat);
+        cabin.session_mode = grokhub_core::wire::SessionMode::Chat;
         cabin.permission_mode = grokhub_core::wire::PermissionMode::parse(&cfg.permission_mode)
             .unwrap_or(grokhub_core::wire::PermissionMode::Ask);
         cabin.cfg = cfg.clone();

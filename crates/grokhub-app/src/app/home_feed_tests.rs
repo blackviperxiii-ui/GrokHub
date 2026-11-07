@@ -228,32 +228,13 @@ fn empty_home_pulse_stays_off_scratch_and_off_about() {
         "Last you must scroll a reserved off-screen row: {reserved}"
     );
     let auto = src
-        .split("Slash::AutoPerm =>")
+        .split("Slash::AlwaysApprove | Slash::AutoPerm =>")
         .nth(1)
         .and_then(|s| s.split("Slash::Sessions =>").next())
         .expect("AutoPerm");
     assert!(
-        auto.contains("self.confirm = None"),
-        "/auto must drop a session Always overlay: {auto}"
-    );
-    // rustfmt may break `let row = crate::cards::session_row(...)` across lines.
-    let row = src
-        .split("crate::cards::session_row(")
-        .nth(1)
-        .and_then(|s| s.split("ui.allocate_ui_with_layout").next())
-        .expect("session_row");
-    let perm = row
-        .split("if let Some(perm) = row.perm")
-        .nth(1)
-        .and_then(|s| s.split("if row.why").next())
-        .expect("perm pills");
-    let ask_auto = perm
-        .split("self.arm_session_always();")
-        .nth(1)
-        .expect("Ask/Auto after Always");
-    assert!(
-        ask_auto.contains("self.confirm = None"),
-        "Auto/Ask must disarm the session Always overlay: {ask_auto}"
+        auto.contains("SettingsSec::Defaults") && !auto.contains("set_permission_mode"),
+        "/auto and /always-approve open Settings and change nothing: {auto}"
     );
 }
 

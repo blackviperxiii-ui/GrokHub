@@ -180,7 +180,6 @@ impl Cabin {
     ) -> bool {
         // `ensure_native_engine` publishes the config (with the episode seed) once.
         let ready = self.ensure_native_engine();
-        self.side_ask_kick = false;
         if let Err(err) = ready {
             self.fail_turn_start(&err);
             return true;
@@ -425,11 +424,9 @@ impl Cabin {
             stable = format!("{stable}\n\n{}", grokhub_core::CHIP_TRAILER_RULE);
         }
         let system = grokhub_agent::system_prompt_parts(&stable, &volatile, &workspace);
-        // A side question stays read-only even in plan mode, so it never gets plan approval.
         grokhub_agent::set_plan_session(
             session_id,
-            matches!(self.session_mode, grokhub_core::wire::SessionMode::Plan)
-                && !self.side_ask_kick,
+            matches!(self.session_mode, grokhub_core::wire::SessionMode::Plan),
         );
         let cabin_thread_id = self
             .chat_job_thread
@@ -500,11 +497,10 @@ impl Cabin {
     }
 
     fn native_gate(&self) -> Gate {
-        let readonly = self.side_ask_kick
-            || matches!(
-                self.session_mode,
-                grokhub_core::wire::SessionMode::Plan | grokhub_core::wire::SessionMode::Ask
-            );
+        let readonly = matches!(
+            self.session_mode,
+            grokhub_core::wire::SessionMode::Plan | grokhub_core::wire::SessionMode::Ask
+        );
         let mode = match self.permission_mode {
             grokhub_core::wire::PermissionMode::Ask => PermMode::Ask,
             grokhub_core::wire::PermissionMode::Auto => PermMode::Auto,

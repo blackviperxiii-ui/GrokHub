@@ -395,9 +395,6 @@ pub struct AppConfig {
     /// Settings → AI models → Local AI: how the on-device model runs.
     #[serde(default, skip_serializing_if = "LocalTuning::is_default")]
     pub local_tuning: LocalTuning,
-    /// Composer session pill — chat / plan / ask.
-    #[serde(default = "default_session_mode")]
-    pub session_mode: String,
     /// Composer permission pill — ask / auto / always-approve. Survives restart.
     #[serde(default = "default_permission_mode")]
     pub permission_mode: String,
@@ -861,10 +858,6 @@ fn default_theme() -> String {
     "ops-dark".into()
 }
 
-fn default_session_mode() -> String {
-    "chat".into()
-}
-
 fn default_permission_mode() -> String {
     "ask".into()
 }
@@ -902,7 +895,6 @@ impl Default for AppConfig {
             brief_model_fallback: false,
             provider_routing: Default::default(),
             local_tuning: LocalTuning::default(),
-            session_mode: default_session_mode(),
             permission_mode: default_permission_mode(),
             always_confirmed: false,
             always_collapse_thoughts: false,
@@ -1180,10 +1172,6 @@ pub fn load() -> AppConfig {
     }
     drop_saved_effort(&mut cfg, &config_dir());
     migrate_theme(&mut cfg);
-    cfg.session_mode = grokhub_core::wire::SessionMode::parse(&cfg.session_mode)
-        .unwrap_or(grokhub_core::wire::SessionMode::Chat)
-        .as_str()
-        .to_string();
     // Ask / Auto / Always stick until the user changes them.
     cfg.permission_mode = persistable_permission_mode(&cfg.permission_mode);
     cfg.cabin_lane = match cfg.cabin_lane.trim().to_ascii_lowercase().as_str() {
@@ -2050,20 +2038,17 @@ mod tests {
     }
 
     #[test]
-    fn composer_pills_including_always_survive_a_restart() {
+    fn permission_setting_including_always_survives_a_restart() {
         let _g = hold_test_config();
         let root = test_config_root("pills");
         let _ = fs::remove_dir_all(&root);
         unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let mut cfg = AppConfig::default();
-        assert_eq!(cfg.session_mode, "chat");
         assert_eq!(cfg.permission_mode, "ask");
         assert!(!cfg.always_confirmed);
-        cfg.session_mode = "plan".into();
         cfg.permission_mode = "auto".into();
         save(&cfg).expect("save");
         let loaded = load();
-        assert_eq!(loaded.session_mode, "plan");
         assert_eq!(loaded.permission_mode, "auto");
         cfg.permission_mode = "always-approve".into();
         cfg.always_confirmed = true;
@@ -2078,11 +2063,9 @@ mod tests {
         let always = load();
         assert_eq!(always.permission_mode, "always-approve");
         assert!(always.always_confirmed);
-        cfg.session_mode = "nonsense".into();
         cfg.permission_mode = "nonsense".into();
         save(&cfg).expect("save");
         let fallback = load();
-        assert_eq!(fallback.session_mode, "chat");
         assert_eq!(fallback.permission_mode, "ask");
         let _ = fs::remove_dir_all(&root);
         unsafe { std::env::remove_var("GROKHUB_CONFIG") };
@@ -2098,18 +2081,15 @@ mod tests {
         assert!(!cfg.always_collapse_thoughts);
         assert!(!cfg.close_to_tray_tip_seen);
         cfg.permission_mode = persistable_permission_mode("auto");
-        cfg.session_mode = "plan".into();
         cfg.always_collapse_thoughts = true;
         cfg.close_to_tray_tip_seen = true;
         save(&cfg).expect("save");
         let loaded = load();
         assert_eq!(loaded.permission_mode, "auto");
-        assert_eq!(loaded.session_mode, "plan");
         assert!(loaded.always_collapse_thoughts);
         assert!(loaded.close_to_tray_tip_seen);
         cfg.permission_mode = persistable_permission_mode("always-approve");
         cfg.always_confirmed = true;
-        cfg.session_mode = "ask".into();
         cfg.always_collapse_thoughts = false;
         cfg.close_to_tray_tip_seen = false;
         assert_eq!(cfg.permission_mode, "always-approve");
@@ -2134,7 +2114,6 @@ mod tests {
         let loaded = load();
         assert_eq!(loaded.permission_mode, "always-approve");
         assert!(loaded.always_confirmed);
-        assert_eq!(loaded.session_mode, "ask");
         assert!(!loaded.always_collapse_thoughts);
         assert!(!loaded.close_to_tray_tip_seen);
         let mut raw: serde_json::Value = serde_json::from_str(&body).unwrap();
@@ -2142,7 +2121,8 @@ mod tests {
         raw["alwaysConfirmed"] = serde_json::json!(true);
         raw["alwaysCollapseThoughts"] = serde_json::json!(true);
         raw["reasoningEffort"] = serde_json::json!("minimal");
-        raw["sessionMode"] = serde_json::json!("chat");
+        // A saved Chat / Plan / btw pill from before the app read each message.
+        raw["sessionMode"] = serde_json::json!("plan");
         fs::write(
             config_dir().join("app.json"),
             serde_json::to_string_pretty(&raw).unwrap(),
@@ -2159,8 +2139,13 @@ mod tests {
             loaded.legacy_reasoning_effort, None,
             "R1: a saved effort is dropped on load"
         );
-        assert_eq!(loaded.session_mode, "chat");
         assert!(loaded.always_collapse_thoughts);
+        save(&loaded).expect("save migrated");
+        let body = fs::read_to_string(config_dir().join("app.json")).expect("app.json");
+        assert!(
+            !body.contains("sessionMode"),
+            "the old session pill is dropped on the next save: {body}"
+        );
         fs::write(config_dir().join("app.json"), r#"{"closeToTray":true}"#).expect("bare");
         assert!(
             !load().close_to_tray_tip_seen,

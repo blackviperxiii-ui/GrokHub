@@ -26,6 +26,8 @@ mod pulse_page_tests;
 
 #[path = "background_run_tests.rs"]
 mod background_run_tests;
+#[path = "side_run_tests.rs"]
+mod side_run_tests;
 
 #[path = "self_work_tests.rs"]
 mod self_work_tests;
@@ -1687,16 +1689,17 @@ fn plan_and_empty_video_stay_off_a_run() {
     }
 
     cabin.run_slash(super::Slash::Plan);
-    assert_eq!(cabin.status, "Plan mode — Loadout will plan first");
-    assert!(matches!(cabin.session_mode, super::SessionMode::Plan));
-    assert_eq!(cabin.cfg.session_mode, "plan");
-    assert!(cabin.acp.is_none());
+    assert_eq!(cabin.status, super::slash::PLAN_NEXT_NOTE);
+    assert!(
+        cabin.plan_next,
+        "bare /plan makes the next message plan first"
+    );
     let session = cabin
         .threads
         .get(cabin.thread_idx)
         .and_then(|t| t.grok_session.as_deref())
         .unwrap_or("");
-    assert!(session.is_empty());
+    assert_eq!(session, "sess", "the chat keeps its session");
     assert!(!cabin.running);
 
     cabin.run_slash(super::Slash::ImagineVideo(String::new()));
@@ -1830,33 +1833,6 @@ fn goal_pin_sets_and_clears() {
     assert_eq!(cabin.status, "No goal pin");
     assert!(cabin.cfg.goal_pin.is_empty());
     assert!(!cabin.running);
-}
-
-// Landed from PR #186.
-#[test]
-fn btw_sets_a_side_ask() {
-    let _g = crate::config::hold_test_config();
-    let root = crate::config::test_config_root("btw-side-ask");
-    let _ = std::fs::remove_dir_all(&root);
-    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
-
-    let mut cabin = Cabin::quiet_for_test();
-    assert!(!cabin.running);
-    cabin.run_slash(Slash::Btw);
-
-    assert!(matches!(cabin.session_mode, SessionMode::Ask));
-    assert_eq!(cabin.cfg.session_mode, "ask");
-    assert!(!cabin.running);
-    assert_eq!(cabin.status, "btw — look-safe side ask");
-    assert_eq!(cabin_default_session_id(&cabin.cfg.session_mode), "ask");
-    let persisted = cabin
-        .cfg_slot
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .cfg
-        .session_mode
-        .clone();
-    assert_eq!(persisted, "ask");
 }
 
 // Landed from PR #188.
@@ -2286,9 +2262,11 @@ fn quiet_cabin() -> Cabin {
         grok_commands: Vec::new(),
         grok_tasks: Vec::new(),
         followup_queue: Vec::new(),
-        side_ask_queue: Vec::new(),
+        side: Default::default(),
+        forced_route: None,
+        last_turn_read: None,
+        plan_next: false,
         bg: super::background::BgWork::default(),
-        side_ask_kick: false,
         plan_open: false,
         tool_cards: Vec::new(),
         panels: super::panels::PanelStore::default(),
@@ -2419,28 +2397,6 @@ fn busy_update_stays_queued() {
     assert!(cabin.running);
     assert!(matches!(cabin.nav, Nav::Settings));
     assert!(matches!(cabin.settings_sec, SettingsSec::Update));
-}
-
-// Landed from PR #221.
-#[test]
-fn plan_pill_stays_off_a_run() {
-    let _hold = crate::config::hold_test_config();
-    let root = crate::config::test_config_root("plan-pill");
-    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
-    let mut cabin = Cabin::quiet_for_test();
-    if cabin.threads.is_empty() {
-        cabin.new_thread(false);
-    }
-    assert_eq!(cabin.threads[cabin.thread_idx].title, "Chat");
-    assert!(!cabin.threads[cabin.thread_idx].title_locked);
-    cabin.select_plan_without_rename();
-    assert_eq!(cabin.status, "Session plan");
-    assert!(matches!(cabin.session_mode, SessionMode::Plan));
-    assert_eq!(cabin.cfg.session_mode, "plan");
-    assert_eq!(cabin.threads[cabin.thread_idx].title, "Chat");
-    assert!(!cabin.threads[cabin.thread_idx].title_locked);
-    assert!(cabin.acp.is_none());
-    assert!(!cabin.running);
 }
 
 #[test]

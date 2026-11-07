@@ -469,55 +469,13 @@ pub fn felt_segment(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Res
     felt_segment_styled(ui, label, selected, None, false, crate::theme::FONT_BODY)
 }
 
-/// Idle Always matches Ask/Auto. Selected Always settles in 140ms: fill α 0→1, scale 0.98→1.0, 2px white ring — then stops.
-pub fn permission_risk_stroke_w(id: &str, selected: bool) -> f32 {
-    if selected && id == "always-approve" {
-        2.0
-    } else {
-        1.0
-    }
-}
-
-pub fn permission_risk_stroke_color(id: &str, selected: bool) -> Color32 {
-    if selected && id == "always-approve" {
-        crate::theme::always_amber()
-    } else if selected {
-        crate::theme::border_strong()
-    } else {
-        crate::theme::border()
-    }
-}
-
-pub fn permission_risk_strong(id: &str, selected: bool) -> bool {
-    selected && id == "always-approve"
-}
-
-pub fn permission_risk_fill(selected: bool) -> Color32 {
+/// Fill under a selected segment.
+pub fn segment_fill(selected: bool) -> Color32 {
     if selected {
         crate::theme::nav_active()
     } else {
         Color32::TRANSPARENT
     }
-}
-
-pub fn felt_perm_segment(
-    ui: &mut egui::Ui,
-    label: &str,
-    selected: bool,
-    id: &str,
-) -> egui::Response {
-    let stroke = Stroke::new(
-        permission_risk_stroke_w(id, selected),
-        permission_risk_stroke_color(id, selected),
-    );
-    felt_segment_styled(
-        ui,
-        label,
-        selected,
-        Some(stroke),
-        permission_risk_strong(id, selected),
-        crate::theme::FONT_CHROME,
-    )
 }
 
 fn felt_segment_styled(
@@ -546,8 +504,7 @@ fn felt_segment_styled(
         grokhub_core::SELECT_SECS
     };
     let on_t = crate::theme::animate_selection_secs(ui, resp.id.with("seg"), selected, settle);
-    let base_fill =
-        crate::theme::blend_color(Color32::TRANSPARENT, permission_risk_fill(true), on_t);
+    let base_fill = crate::theme::blend_color(Color32::TRANSPARENT, segment_fill(true), on_t);
     let text_color = crate::theme::blend_color(crate::theme::muted(), crate::theme::fg(), on_t);
     let (resp, rect, _) = crate::theme::feel_response(ui, resp, Color32::TRANSPARENT);
     // Always: scale 0.98 → 1.0 as it settles (no perpetual pulse).
@@ -754,167 +711,6 @@ pub fn framed_preview(
             .rect;
     });
     image_rect
-}
-
-pub fn composer_modes() -> &'static [(&'static str, &'static str)] {
-    &[
-        ("chat", "Chat"),
-        ("plan", "Plan"),
-        ("ask", grokhub_core::BTW_LABEL),
-    ]
-}
-
-pub fn permission_modes() -> &'static [(&'static str, &'static str)] {
-    &[
-        ("ask", "Ask"),
-        ("auto", "Auto"),
-        ("always-approve", "Always"),
-    ]
-}
-
-/// Hover copy for the Chat / Plan / btw session pills. Unknown ids stay silent.
-pub fn composer_session_tip(id: &str) -> Option<(&'static str, &'static str)> {
-    use grokhub_core::brand::filled;
-    match id {
-        "chat" => Some((
-            "Chat",
-            filled("Normal chat. {product} can edit files and use tools in the bound project. Everyday work."),
-        )),
-        "plan" => Some((
-            "Plan",
-            filled("{product} writes a plan before changing things. Use this for bigger or riskier work. /plan is the same."),
-        )),
-        "ask" => Some((grokhub_core::BTW_TIP_TITLE, grokhub_core::BTW_TIP_BODY)),
-        _ => None,
-    }
-}
-
-/// Hover copy for the Ask / Auto / Always permission pills. Unknown ids stay silent.
-pub fn composer_perm_tip(id: &str) -> Option<(&'static str, &'static str)> {
-    match id {
-        "ask" => Some((
-            "Ask",
-            "You approve each tool. Allow / Deny shows in chat. If ACP is down the turn is denied.",
-        )),
-        "auto" => Some((
-            "Auto",
-            "Safe tools run on their own. Use this when you trust the turn. /auto is the same.",
-        )),
-        "always-approve" => Some((
-            "Always",
-            "Skip every tool prompt except money, sending, deleting, credentials and irreversible changes. Stays until Ask or Auto. /always-approve.",
-        )),
-        _ => None,
-    }
-}
-
-fn show_composer_tip(ui: &mut egui::Ui, title: &str, body: &str) {
-    ui.set_max_width(240.0);
-    ui.spacing_mut().item_spacing.y = 4.0;
-    ui.visuals_mut().window_fill = crate::theme::hover();
-    ui.visuals_mut().widgets.noninteractive.bg_fill = crate::theme::hover();
-    ui.label(
-        RichText::new(title)
-            .size(crate::theme::FONT_BODY)
-            .strong()
-            .color(crate::theme::fg()),
-    );
-    ui.label(
-        RichText::new(body)
-            .size(crate::theme::FONT_TIP)
-            .color(crate::theme::muted()),
-    );
-}
-
-fn with_composer_tip(resp: egui::Response, title: &str, body: &str) -> egui::Response {
-    resp.on_hover_ui_at_pointer(|ui| show_composer_tip(ui, title, body))
-}
-
-pub struct SessionRowOut {
-    pub mode: Option<String>,
-    pub perm: Option<String>,
-}
-
-/// Chat / Plan / btw and Ask / Auto / Always above the composer. No model or
-/// effort shows here: the router picks both and only a chat question is told.
-pub fn session_row(ui: &mut egui::Ui, mode: &str, perm: &str) -> SessionRowOut {
-    let mut out = SessionRowOut {
-        mode: None,
-        perm: None,
-    };
-    // Wrapped so a narrow pane drops the permission group to a second line instead of clipping it.
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing.x = 3.0;
-        crate::theme::glide_paint(ui, "session-mode");
-        let mut mode_hover = None;
-        let mut mode_on = None;
-        for (id, label) in composer_modes() {
-            let on = *id == mode;
-            let mut resp = felt_segment(ui, label, on);
-            if resp.hovered() {
-                mode_hover = Some(resp.rect);
-            }
-            if on {
-                mode_on = Some(resp.rect);
-            }
-            if let Some((title, body)) = composer_session_tip(id) {
-                resp = with_composer_tip(resp, title, body);
-            }
-            if resp.clicked() && !on {
-                out.mode = Some((*id).to_string());
-            }
-        }
-        crate::theme::glide_candidate(
-            ui,
-            "session-mode",
-            mode_hover.or(mode_on).unwrap_or(egui::Rect::NOTHING),
-            mode_hover.is_some(),
-            mode_on.is_some(),
-        );
-        crate::theme::glide_aim(ui, "session-mode");
-        session_row_divider(ui);
-        crate::theme::glide_paint(ui, "session-perm");
-        let mut perm_hover = None;
-        let mut perm_on = None;
-        for (id, label) in permission_modes() {
-            let on = *id == perm;
-            let mut resp = felt_perm_segment(ui, label, on, id);
-            if resp.hovered() {
-                perm_hover = Some(resp.rect);
-            }
-            if on {
-                perm_on = Some(resp.rect);
-            }
-            if let Some((title, body)) = composer_perm_tip(id) {
-                resp = with_composer_tip(resp, title, body);
-            }
-            if resp.clicked() && !on {
-                out.perm = Some((*id).to_string());
-            }
-        }
-        crate::theme::glide_candidate(
-            ui,
-            "session-perm",
-            perm_hover.or(perm_on).unwrap_or(egui::Rect::NOTHING),
-            perm_hover.is_some(),
-            perm_on.is_some(),
-        );
-        crate::theme::glide_aim(ui, "session-perm");
-    });
-    ui.add_space(8.0);
-    out
-}
-
-/// Hairline between the session and permission groups.
-const SESSION_DIVIDER_W: f32 = 9.0;
-
-fn session_row_divider(ui: &mut egui::Ui) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(SESSION_DIVIDER_W, 16.0), Sense::hover());
-    ui.painter().vline(
-        rect.center().x,
-        rect.y_range(),
-        Stroke::new(1.0_f32, crate::theme::border_strong()),
-    );
 }
 
 /// Live Voice strip: state label + Stop. Caller hides this when idle.
@@ -3156,24 +2952,7 @@ mod tests {
     }
 
     #[test]
-    fn composer_hover_copy_covers_the_real_pills() {
-        let modes: Vec<_> = composer_modes().iter().map(|(id, _)| *id).collect();
-        assert_eq!(modes, ["chat", "plan", "ask"]);
-        for id in modes {
-            let (title, body) = composer_session_tip(id).expect(id);
-            assert!(!title.is_empty(), "{id}");
-            assert!(body.len() < 160, "{id} tip too long: {body}");
-        }
-        let (chat_title, chat) = composer_session_tip("chat").unwrap();
-        assert_eq!(chat_title, "Chat");
-        assert!(chat.contains("Normal chat"), "{chat}");
-        let (plan_title, plan) = composer_session_tip("plan").unwrap();
-        assert_eq!(plan_title, "Plan");
-        assert!(plan.contains("plan") && plan.contains("/plan"), "{plan}");
-        let (look_title, look) = composer_session_tip("ask").unwrap();
-        assert_eq!(look_title, "btw");
-        assert_eq!(composer_modes()[2], ("ask", "btw"));
-        assert_ne!(composer_modes()[2].1, permission_modes()[0].1);
+    fn segments_size_to_their_label() {
         const { assert!(SEG_INSET_X >= 8.0) };
         const { assert!(SEG_INSET_Y >= 6.0) };
         let styled = include_str!("cards.rs")
@@ -3185,145 +2964,25 @@ mod tests {
             styled.contains("SEG_INSET_X")
                 && styled.contains("layout_no_wrap")
                 && styled.contains("galley"),
-            "Questions must size to the label plus inset, not a 52px jam: {styled}"
+            "segments size to the label plus inset, not a 52px jam: {styled}"
         );
-        assert!(look.contains("does not stop"), "{look}");
-        assert!(look.contains("/btw"), "{look}");
-        assert!(look.contains("look-safe"), "{look}");
-        assert!(!look.contains("Ask"), "{look}");
-        assert!(!look_title.contains("Read"), "{look_title}");
-        assert!(composer_session_tip("always-approve").is_none());
-        assert!(composer_session_tip("auto").is_none());
-
-        let perms: Vec<_> = permission_modes().iter().map(|(id, _)| *id).collect();
-        assert_eq!(perms, ["ask", "auto", "always-approve"]);
-        for id in perms {
-            let (title, body) = composer_perm_tip(id).expect(id);
-            assert!(!title.is_empty(), "{id}");
-            assert!(body.len() < 160, "{id} tip too long: {body}");
-        }
-        let (ask_p, ask_body) = composer_perm_tip("ask").unwrap();
-        assert_eq!(ask_p, "Ask");
-        assert!(
-            ask_body.contains("Allow / Deny") && ask_body.contains("denied"),
-            "{ask_body}"
-        );
-        let (auto_t, auto) = composer_perm_tip("auto").unwrap();
-        assert_eq!(auto_t, "Auto");
-        assert!(
-            auto.contains("Safe tools") && auto.contains("/auto"),
-            "{auto}"
-        );
-        let (always_t, always) = composer_perm_tip("always-approve").unwrap();
-        assert_eq!(always_t, "Always");
-        assert!(
-            always.contains("Skip every tool") && always.contains("/always-approve"),
-            "{always}"
-        );
-        assert!(composer_perm_tip("chat").is_none());
-        assert!(composer_perm_tip("plan").is_none());
     }
 
     #[test]
-    fn mode_pill_fits_the_composer_cluster() {
+    fn composer_has_no_mode_or_permission_pills() {
         assert_eq!(composer_go_cluster_w(), 22.0 + 28.0 + 8.0 * 3.0 + 12.0);
-        assert_eq!(composer_modes().len(), 3);
-        assert_eq!(permission_modes().len(), 3);
-        let session = include_str!("cards.rs")
-            .split("pub fn session_row(")
-            .nth(1)
-            .and_then(|s| s.split("pub fn voice_mode_row(").next())
-            .expect("session_row");
-        assert!(
-            session.contains("felt_segment")
-                && session.contains("felt_perm_segment")
-                && !session.contains("auto_chip")
-                && !session.contains("effort"),
-            "composer session row holds the session and permission groups, no Auto chip: {session}"
-        );
-        assert_eq!(
-            permission_risk_stroke_w("always-approve", false),
-            permission_risk_stroke_w("ask", false)
-        );
-        assert_eq!(
-            permission_risk_stroke_w("always-approve", false),
-            permission_risk_stroke_w("auto", false)
-        );
-        assert_eq!(
-            permission_risk_stroke_color("always-approve", false),
-            permission_risk_stroke_color("ask", false)
-        );
-        assert_eq!(
-            permission_risk_stroke_color("always-approve", false),
-            crate::theme::border()
-        );
-        let _paint = crate::theme::hold_paint_test();
-        crate::theme::set_paint_dark(true);
-        assert_eq!(
-            permission_risk_stroke_color("always-approve", true),
-            crate::theme::ALWAYS_AMBER_DARK
-        );
-        crate::theme::set_paint_dark(false);
-        assert_eq!(
-            permission_risk_stroke_color("always-approve", true),
-            crate::theme::ALWAYS_AMBER_LIGHT
-        );
-        crate::theme::set_paint_dark(true);
-        assert_ne!(
-            permission_risk_stroke_color("always-approve", true),
-            crate::theme::setup()
-        );
-        assert_ne!(
-            permission_risk_stroke_color("always-approve", false),
-            crate::theme::always_amber()
-        );
-        assert_eq!(permission_risk_stroke_w("always-approve", true), 2.0);
-        assert_eq!(permission_risk_stroke_w("auto", true), 1.0);
-        assert_eq!(permission_risk_stroke_w("ask", true), 1.0);
-        assert_eq!(permission_risk_fill(true), crate::theme::nav_active());
-        assert_eq!(permission_risk_fill(false), Color32::TRANSPARENT);
-        assert_ne!(permission_risk_fill(true), crate::theme::always_amber());
-        assert!(permission_risk_strong("always-approve", true));
-        assert!(!permission_risk_strong("always-approve", false));
-        assert!(!permission_risk_strong("ask", true));
-        assert!(!permission_risk_strong("auto", true));
-
-        let styled = include_str!("cards.rs")
-            .split("fn felt_segment_styled(")
-            .nth(1)
-            .and_then(|t| t.split("pub fn felt_tab(").next())
-            .expect("felt_segment_styled");
-        assert!(
-            styled.contains("0.98 + 0.02 * on_t")
-                && styled.contains("ALWAYS_SETTLE_SECS")
-                && styled.contains("idle.width + (stroke.width - idle.width) * on_t"),
-            "Always must settle scale+stroke over ALWAYS_SETTLE_SECS: {styled}"
-        );
-
-        assert!(
-            session.contains("composer_session_tip")
-                && session.contains("composer_perm_tip")
-                && session.contains("with_composer_tip"),
-            "composer pills must show hover help: {session}"
-        );
-        let seg = include_str!("cards.rs")
-            .split("pub fn felt_segment(")
-            .nth(1)
-            .and_then(|s| s.split("pub fn permission_risk_stroke_w(").next())
-            .expect("felt_segment");
-        assert!(
-            seg.contains("FONT_BODY") && seg.contains("None"),
-            "session pills stay quieter than permission: {seg}"
-        );
-        let perm_seg = include_str!("cards.rs")
-            .split("pub fn felt_perm_segment(")
-            .nth(1)
-            .and_then(|s| s.split("fn felt_segment_styled(").next())
-            .expect("felt_perm_segment");
-        assert!(
-            perm_seg.contains("FONT_CHROME") && perm_seg.contains("permission_risk_stroke_w"),
-            "permission row keeps a designed stroke: {perm_seg}"
-        );
+        let src = include_str!("cards.rs");
+        for gone in [
+            "session_row",
+            "composer_modes",
+            "permission_modes",
+            "felt_perm_segment",
+        ] {
+            let def = format!("pub fn {gone}(");
+            assert!(!src.contains(&def), "{gone} came back");
+        }
+        assert_eq!(segment_fill(true), crate::theme::nav_active());
+        assert_eq!(segment_fill(false), Color32::TRANSPARENT);
         let voice = include_str!("cards.rs")
             .split("pub fn voice_mode_row(")
             .nth(1)

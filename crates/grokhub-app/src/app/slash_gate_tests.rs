@@ -77,17 +77,13 @@ const GATES: &[GateRow] = &[
     },
     GateRow {
         variant: "AlwaysApprove",
-        route: "self.arm_session_always()",
-        rails: &[(
-            include_str!("confirm.rs"),
-            "arm_session_always",
-            "ConfirmKind::AlwaysSession",
-        )],
+        route: "SettingsSec::Defaults",
+        rails: &[],
     },
     GateRow {
         variant: "AutoPerm",
-        route: "self.set_permission_mode(PermissionMode::Auto)",
-        rails: &[(MOD_RS, "set_permission_mode", "self.permission_mode")],
+        route: "SettingsSec::Defaults",
+        rails: &[],
     },
     GateRow {
         variant: "Record",

@@ -135,12 +135,6 @@ impl BgWork {
     }
 }
 
-/// What a click on the live-work strip asks for. Applied after painting.
-enum LiveWorkAct {
-    Steer,
-    Queue,
-}
-
 impl Cabin {
     /// A message onto `thread_id`, visible tab or not. A new message is activity.
     pub(super) fn push_msg_on(&mut self, thread_id: &str, role: &str, content: String) {
@@ -887,15 +881,6 @@ impl Cabin {
         self.status = self.restore_to_composer(text);
     }
 
-    /// Activity's Remove on a waiting side question.
-    pub(super) fn drop_side_question(&mut self, i: usize) {
-        if i >= self.side_ask_queue.len() {
-            return;
-        }
-        let text = self.side_ask_queue.remove(i);
-        self.status = self.restore_to_composer(text);
-    }
-
     fn restore_to_composer(&mut self, text: String) -> String {
         if self.composer.trim().is_empty() {
             self.composer = text;
@@ -906,53 +891,23 @@ impl Cabin {
         }
     }
 
-    /// Text typed during a run gets the Steer / Queue choice right above the
-    /// box. Everything lined up or running elsewhere (queued messages,
-    /// background tasks) lives in the Activity menu, not here.
+    /// Right above the box: side answers for the chat on screen. Typing
+    /// during a reply needs no choice: the app reads what the message is for.
+    /// Everything lined up or running elsewhere lives in the Activity menu.
     pub(super) fn paint_live_work(&mut self, ui: &mut egui::Ui) {
-        let typing = self.can_steer_live_turn() && !self.composer.trim().is_empty();
-        if !typing {
-            return;
-        }
-        let mut act = None;
-        let meta = |ui: &mut egui::Ui, s: &str, c: Color32| {
-            ui.label(RichText::new(s).size(crate::theme::FONT_META).color(c));
-        };
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 6.0;
-            meta(
-                ui,
-                grokhub_core::brand::filled("{product} is still working."),
-                crate::theme::muted(),
-            );
-            if crate::cards::ghost_pill(ui, "Steer") {
-                act = Some(LiveWorkAct::Steer);
-            }
-            if crate::cards::ghost_pill(ui, "Queue") {
-                act = Some(LiveWorkAct::Queue);
-            }
-        })
-        .response
-        .on_hover_text("Enter steers: the turn stops where it is and carries on with your message. Alt+Enter queues it for after this reply.");
-        ui.add_space(4.0);
-        if let Some(act) = act {
-            let text = std::mem::take(&mut self.composer);
-            self.bg.queue_next = matches!(act, LiveWorkAct::Queue);
-            self.send_from_composer(text);
-            self.composer_want_focus = true;
-        }
+        self.paint_side_answers(ui);
     }
 }
 
 /// The model client for a native `/bg` run, with the credential kind so usage is
 /// labelled "SuperGrok pool" or "API credits" like the foreground engine.
-type BgModel = (
+pub(super) type BgModel = (
     std::sync::Arc<dyn grokhub_agent::ModelClient + Send + Sync>,
     grokhub_agent::AuthKind,
     String,
 );
 
-fn native_bg_model(cabin: &mut Cabin) -> Result<BgModel, String> {
+pub(super) fn native_bg_model(cabin: &mut Cabin) -> Result<BgModel, String> {
     #[cfg(test)]
     {
         let _ = cabin;
@@ -990,7 +945,7 @@ fn log_job_tool_schemas(job_kind: &str, gate: &grokhub_agent::Gate, set: &grokhu
     );
 }
 
-fn run_native_bg(
+pub(super) fn run_native_bg(
     session: String,
     workspace: std::path::PathBuf,
     client: std::sync::Arc<dyn grokhub_agent::ModelClient + Send + Sync>,

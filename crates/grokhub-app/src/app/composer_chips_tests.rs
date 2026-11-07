@@ -284,8 +284,8 @@ fn composer_stack_drops_approve_slots() {
     );
     let send = fn_src(&src, "send_chat");
     assert!(
-        send.contains("btw_queues_without_interrupt") && send.contains("side_ask_queue"),
-        "btw must queue a side ask instead of halting the live run: {send}"
+        send.contains("read_turn_for") && send.contains("start_side_run"),
+        "a side question gets its own answer instead of halting the live run: {send}"
     );
     let order = super::composer_stack_order();
     assert_eq!(
@@ -998,22 +998,6 @@ fn attach_sets_the_chip_and_paste_lands_in_the_composer() {
     assert!(cabin.messages.is_empty());
 }
 
-// Landed from PR #141.
-#[test]
-fn session_pills_save_chat_and_ask() {
-    let _lock = crate::config::hold_test_config();
-    let root = crate::config::test_config_root("session-pills");
-    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
-    let mut cabin = Cabin::quiet_for_test();
-    cabin.set_session_mode(SessionMode::Chat);
-    assert_eq!(cabin.session_mode, SessionMode::Chat);
-    assert_eq!(cabin.cfg.session_mode, "chat");
-    cabin.set_session_mode(SessionMode::Ask);
-    assert_eq!(cabin.session_mode, SessionMode::Ask);
-    assert_eq!(cabin.cfg.session_mode, "ask");
-    assert!(!cabin.running);
-}
-
 // Landed from PR #145.
 #[test]
 fn bubble_reply_quotes_into_the_composer() {
@@ -1585,9 +1569,6 @@ fn a_block_in_the_final_text_is_stripped_too() {
 fn the_reply_chips_rule_follows_the_chat() {
     let mut cabin = Cabin::quiet_for_test();
     assert!(cabin.reply_chips_on());
-    cabin.side_ask_kick = true;
-    assert!(!cabin.reply_chips_on());
-    cabin.side_ask_kick = false;
     cabin.scheduled_perm = true;
     assert!(!cabin.reply_chips_on());
     cabin.scheduled_perm = false;

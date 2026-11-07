@@ -267,19 +267,19 @@ pub(super) fn settings_save_visible(sec: SettingsSec) -> bool {
 /// Account keeps your name and picture; the Grok sign-in moved to AI models.
 pub(super) const ACCOUNT_SIGN_IN_MOVED: &str =
     "Sign in with Grok, OpenRouter and API keys are in Settings → AI models.";
-const ROW_PERMISSION: &str = "Permission";
+const ROW_PERMISSION: &str = "When the AI wants to change things";
+const PERMISSION_HINT: &str = "The one place this is set. A permission prompt in chat can also loosen it with Stop asking me.";
 fn row_desktop() -> &'static str {
     *grokhub_core::desktop_mcp::DESKTOP_CONTROL_ROW
 }
 const ROW_DESKTOP_TEST: &str = "Desktop control";
 const ROW_SCREEN_RECORD: &str = "Screen recording";
 const SCREEN_RECORD_HINT: &str = "Lets /record take a still every 2 seconds for up to 2 minutes, with a red indicator and Stop. Recordings stay in Documents/Loadout/Recordings; a few stills go to the cloud model only for the diagnosis.";
-const ROW_SESSION: &str = "Session mode";
 const ROW_COLLAPSE: &str = "Always collapse";
 
 /// Settings → Defaults, in order. There is no effort row: effort is automatic (Router R1).
 #[cfg(test)]
-pub(super) fn defaults_rows() -> [&'static str; 8] {
+pub(super) fn defaults_rows() -> [&'static str; 7] {
     [
         super::budget_ui::CAP_ROW,
         super::budget_ui::CEILING_ROW,
@@ -287,31 +287,25 @@ pub(super) fn defaults_rows() -> [&'static str; 8] {
         row_desktop(),
         ROW_DESKTOP_TEST,
         ROW_SCREEN_RECORD,
-        ROW_SESSION,
         ROW_COLLAPSE,
     ]
 }
 
+/// Ask / Auto / Always in plain words. This row is the one place the
+/// setting lives; the permission prompt's Stop asking me moves it a step.
 pub(super) fn cabin_default_permissions() -> &'static [(&'static str, &'static str)] {
-    &[("ask", "Ask"), ("auto", "Auto")]
+    &[
+        ("ask", "Ask me first"),
+        ("auto", "Only ask for risky things"),
+        ("always-approve", "Don't ask"),
+    ]
 }
 
-/// Settings dropdown is Ask or Auto. Always stays on the composer pill.
 pub(super) fn cabin_default_permission_id(raw: &str) -> String {
-    match grokhub_core::wire::PermissionMode::parse(raw) {
-        Some(grokhub_core::wire::PermissionMode::Auto) => "auto".into(),
-        _ => "ask".into(),
-    }
-}
-
-pub(super) fn cabin_default_sessions() -> &'static [(&'static str, &'static str)] {
-    crate::cards::composer_modes()
-}
-
-pub(super) fn cabin_default_session_id(raw: &str) -> &'static str {
-    SessionMode::parse(raw)
-        .unwrap_or(SessionMode::Chat)
+    grokhub_core::wire::PermissionMode::parse(raw)
+        .unwrap_or(grokhub_core::wire::PermissionMode::Ask)
         .as_str()
+        .to_string()
 }
 
 fn choice_label(choices: &[(&str, &str)], id: &str, fallback: &str) -> String {
@@ -1077,7 +1071,7 @@ impl Cabin {
                                                             self.ui_web_search_rows(ui);
                                                             crate::ui_kit::section_header(
                                                                 ui,
-                                                                "Permissions & session",
+                                                                "Permissions",
                                                                 None,
                                                             );
                                                             let perms = cabin_default_permissions();
@@ -1089,11 +1083,11 @@ impl Cabin {
                                                                 &self.cfg.permission_mode,
                                                             );
                                                             let perm_selected =
-                                                                choice_label(perms, &perm_id, "Ask");
+                                                                choice_label(perms, &perm_id, "Ask me first");
                                                             if let Some(i) = settings_dropdown(
                                                                 ui,
                                                                 ROW_PERMISSION,
-                                                                "Ask or Auto. Always is on the composer and sticks until you change it.",
+                                                                PERMISSION_HINT,
                                                                 &perm_selected,
                                                                 &perm_labels,
                                                             ) {
@@ -1101,14 +1095,7 @@ impl Cabin {
                                                                     let next = cabin_default_permission_id(id);
                                                                     if let Some(mode) = PermissionMode::parse(&next)
                                                                     {
-                                                                        if mode != PermissionMode::AlwaysApprove
-                                                                            && (self.permission_mode != mode
-                                                                                || self.cfg.permission_mode != next)
-                                                                        {
-                                                                            self.drop_turn_for_pin();
-                                                                            self.set_permission_mode(mode);
-                                                                            self.status = "Saved".into();
-                                                                        }
+                                                                        self.pick_permission_mode(mode);
                                                                     }
                                                                 }
                                                             }
@@ -1146,34 +1133,6 @@ impl Cabin {
                                                             ) {
                                                                 self.persist_cfg();
                                                                 self.status = "Saved".into();
-                                                            }
-                                                            let sessions = cabin_default_sessions();
-                                                            let session_labels: Vec<String> = sessions
-                                                                .iter()
-                                                                .map(|(_, label)| (*label).to_string())
-                                                                .collect();
-                                                            let session_id =
-                                                                cabin_default_session_id(&self.cfg.session_mode);
-                                                            let session_selected =
-                                                                choice_label(sessions, session_id, "Chat");
-                                                            if let Some(i) = settings_dropdown(
-                                                                ui,
-                                                                ROW_SESSION,
-                                                                "Chat, Plan, or btw. Composer pills still change this launch.",
-                                                                &session_selected,
-                                                                &session_labels,
-                                                            ) {
-                                                                if let Some((id, _)) = sessions.get(i) {
-                                                                    if let Some(mode) = SessionMode::parse(id) {
-                                                                        if self.session_mode != mode
-                                                                            || self.cfg.session_mode != mode.as_str()
-                                                                        {
-                                                                            self.drop_turn_for_pin();
-                                                                            self.set_session_mode(mode);
-                                                                            self.status = "Saved".into();
-                                                                        }
-                                                                    }
-                                                                }
                                                             }
                                                             if settings_toggle(
                                                                 ui,
@@ -1619,19 +1578,6 @@ impl Cabin {
         ui.ctx().data_mut(|data| data.insert_temp(draft_id, draft));
     }
 
-    /// Next cabin turn picks up a Settings pin the same way a composer pill does.
-    pub(super) fn drop_turn_for_pin(&mut self) {
-        self.confirm = None;
-        if self.running {
-            self.halt_in_flight();
-        }
-        self.acp = None;
-        if let Some(t) = self.threads.get_mut(self.thread_idx) {
-            t.grok_session = None;
-        }
-        self.persist_idle_key = self.persist_idle_now();
-    }
-
     pub(super) fn save_settings(&mut self) {
         self.cfg.api_key.clear();
         self.cfg.quiet_start = normalize_hm(&self.quiet_start_buf, &self.cfg.quiet_start);
@@ -1964,11 +1910,10 @@ mod tests {
             [
                 "Weekly spend cap",
                 "Price limit",
-                "Permission",
+                "When the AI wants to change things",
                 "Let Loadout control the desktop",
                 "Desktop control",
                 "Screen recording",
-                "Session mode",
                 "Always collapse"
             ]
         );
@@ -1976,18 +1921,20 @@ mod tests {
             .iter()
             .all(|r| !r.to_ascii_lowercase().contains("effort")));
         let perms = cabin_default_permissions();
-        assert_eq!(perms, &[("ask", "Ask"), ("auto", "Auto")]);
-        assert!(perms.iter().all(|(id, _)| *id != "always-approve"));
-        assert_eq!(cabin_default_permission_id("always-approve"), "ask");
-        assert_eq!(cabin_default_permission_id("always"), "ask");
-        assert_eq!(cabin_default_permission_id("auto"), "auto");
-        let sessions = cabin_default_sessions();
         assert_eq!(
-            sessions,
-            &[("chat", "Chat"), ("plan", "Plan"), ("ask", "btw")]
+            perms,
+            &[
+                ("ask", "Ask me first"),
+                ("auto", "Only ask for risky things"),
+                ("always-approve", "Don't ask")
+            ]
         );
-        assert_eq!(cabin_default_session_id("ask"), "ask");
-        assert_eq!(cabin_default_session_id("plan"), "plan");
-        assert_eq!(cabin_default_session_id("nonsense"), "chat");
+        // Settings shows Always as Always: it no longer reads back as Ask.
+        assert_eq!(
+            cabin_default_permission_id("always-approve"),
+            "always-approve"
+        );
+        assert_eq!(cabin_default_permission_id("always"), "always-approve");
+        assert_eq!(cabin_default_permission_id("auto"), "auto");
     }
 }
