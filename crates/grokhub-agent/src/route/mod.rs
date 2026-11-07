@@ -292,6 +292,8 @@ pub fn call_model(
     let on_provider = decision.on_provider() && !on_device;
     let started = std::time::Instant::now();
     crate::harness::replay::clear_last();
+    // Set when Grok took a turn the picked provider failed: logged as Grok's.
+    let mut grok_model = String::new();
     let out = if on_device {
         local::serve(&call.class, &text, cancel)
     } else if on_provider {
@@ -303,7 +305,7 @@ pub fn call_model(
                 &call.session
             }
         );
-        providers::call_model(
+        let out = providers::call_model(
             &dir,
             &call.class,
             &sent.model,
@@ -312,13 +314,26 @@ pub fn call_model(
             providers::call_data(rc.sensitive),
             &span_id,
             cancel,
-        )
+        );
+        match out {
+            Err(err) if live::provider_fallible(&err) && sent.model != call.model => {
+                // The same rule as the chat path: cool the provider so the
+                // next pick skips it, and Grok takes the turn. Only when the
+                // router rerouted this call away from the caller's own model:
+                // a caller that named the provider model gets its error.
+                live::cool_down(&dir, &sent.model, now);
+                grok_model = call.model.clone();
+                sent.model = grok_model.clone();
+                client.stream(&sent.request(), cancel, &mut |_| {})
+            }
+            out => out,
+        }
     } else {
         client.stream(&sent.request(), cancel, &mut |_| {})
     };
     if on_device {
         rc.provider = local::PROVIDER_LOCAL;
-    } else if on_provider {
+    } else if on_provider && grok_model.is_empty() {
         rc.provider = &decision.route.provider;
     }
     rc.effort = sent.effort.as_deref();
