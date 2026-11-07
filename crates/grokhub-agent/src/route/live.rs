@@ -1585,16 +1585,22 @@ pub fn stream_routed(
         grokhub_core::adult_guard::Dest::Xai
     };
     // 18+ chat runs on this computer's model only, never online. With none
-    // ready the chat says so and nothing is sent.
+    // ready, it's decided per message: a clean ask still goes online with the
+    // chat's 18+ parts left out; an 18+ ask gets the one-line notice and
+    // nothing is sent. The app's own background work never goes online with it.
     if super::adult::to_local(&sent.input, dest) {
-        if let Some(notice) = super::adult::no_local_notice() {
-            sink(StreamEvent::TextDelta(notice.into()));
-            return Ok(TurnOutput {
-                text: notice.into(),
-                ..TurnOutput::default()
-            });
+        match super::adult::no_local_notice() {
+            None => on_device = true,
+            Some(notice) => {
+                let online = !class.trim().starts_with("background:")
+                    && super::adult::leave_adult_out(&mut sent.input);
+                if !online {
+                    let out = super::adult::notice_answer(class, notice)?;
+                    sink(StreamEvent::TextDelta(out.text.clone()));
+                    return Ok(out);
+                }
+            }
         }
-        on_device = true;
     }
     let mut on_provider = decision.on_provider() && !on_device;
     let model = if on_device && !decision.on_device() {
@@ -1650,6 +1656,13 @@ pub fn stream_routed(
     // The provider model that answered when xAI was down.
     let mut stood_in: Option<String> = None;
     let out = if on_device {
+        // A model that isn't loaded yet (unloaded for a game, or idle) loads
+        // again by itself; the chat shows why the answer takes a moment.
+        if !class.trim().starts_with("background:") && super::local::warm_runtime().is_none() {
+            sink(StreamEvent::ReasoningDelta(
+                super::local::LOCAL_LOADING_NOTE.into(),
+            ));
+        }
         // Pass the full request so cabin web_search / web_fetch tool calls round-trip
         // through the agent loop (OpenAI-compatible tools on the local sidecar).
         let out = super::local::serve_request(class, &sent, cancel);

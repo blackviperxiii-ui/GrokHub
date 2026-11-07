@@ -9,8 +9,9 @@ export type NoticeKind = "info" | "success" | "error";
 export type NoticeAction =
   /** Opens the chat with this text in the box, ready to send. */
   | { kind: "draft"; label: string; text: string }
-  /** Opens a screen: the chat, Automations, or a Settings section. */
-  | { kind: "chat"; label: string }
+  /** Opens a screen: a chat (that conversation when `id` is set), Automations,
+   * or a Settings section. */
+  | { kind: "chat"; label: string; id?: string }
   | { kind: "automations"; label: string }
   | { kind: "settings"; label: string; section: "about" | "localAi" }
   /** Puts the cards the Workboard tidy archived back in Todo. */
@@ -25,6 +26,8 @@ export interface Notice {
   /** The same words in a row fold into one entry, shown "(x2)". */
   count: number;
   action?: NoticeAction;
+  /** Where it came from, shown under the words: "Chat: Trip plans", "Workboard". */
+  from?: string;
 }
 
 export interface Notices {
@@ -43,21 +46,22 @@ function sameAction(a?: NoticeAction, b?: NoticeAction): boolean {
   return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 }
 
-/** Adds a notification, newest first. The same kind, words and button as the
- * newest entry fold into it (count + 1) instead of stacking. */
+/** Adds a notification, newest first. The same kind, words, place and button
+ * as the newest entry fold into it (count + 1) instead of stacking. */
 export function pushNotice(
   notices: Notices,
   kind: NoticeKind,
   text: string,
   now: number,
   action?: NoticeAction,
+  from?: string,
 ): Notices {
   const top = notices.items[0];
-  if (top && top.kind === kind && top.text === text && sameAction(top.action, action)) {
+  if (top && top.kind === kind && top.text === text && top.from === from && sameAction(top.action, action)) {
     const folded = { ...top, at: now, count: top.count + 1 };
     return { ...notices, items: [folded, ...notices.items.slice(1)], unread: Math.max(notices.unread, 1) };
   }
-  const notice: Notice = { id: notices.next, kind, text, at: now, count: 1, action };
+  const notice: Notice = { id: notices.next, kind, text, at: now, count: 1, action, from };
   return {
     items: [notice, ...notices.items].slice(0, NOTICE_CAP),
     unread: Math.min(notices.unread + 1, NOTICE_CAP),
@@ -74,8 +78,10 @@ export function clearNotices(notices: Notices): Notices {
   return { ...NO_NOTICES, next: notices.next };
 }
 
-/** A pressed button is spent: the entry stays as the record, without it. */
+/** A pressed one-time button (Undo) is spent: the entry stays as the record,
+ * without it. Buttons that open something stay, since opening twice is fine. */
 export function spendAction(notices: Notices, id: number): Notices {
+  if (notices.items.find((n) => n.id === id)?.action?.kind !== "undoSweep") return notices;
   return {
     ...notices,
     items: notices.items.map((n) => (n.id === id ? { ...n, action: undefined } : n)),
@@ -91,6 +97,12 @@ export function unreadBadge(unread: number): string {
 /** The entry's words, with how many times it happened. */
 export function shownText(notice: Notice): string {
   return notice.count > 1 ? `${notice.text} (x${notice.count})` : notice.text;
+}
+
+/** "Chat: Trip plans", or "Chat" when the chat has no name yet. */
+export function chatFrom(title?: string): string {
+  const name = title?.trim();
+  return name ? `Chat: ${name}` : "Chat";
 }
 
 /** "just now", "5 min ago", "2 h ago", then the clock time. */

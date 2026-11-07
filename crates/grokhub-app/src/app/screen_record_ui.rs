@@ -402,6 +402,7 @@ impl Cabin {
             self.notify(
                 super::notices::NoticeKind::Info,
                 format!("Save the steps you showed as a skill? {title}"),
+                Some(self.notice_chat(chat)),
                 Some(super::notices::NoticeAction::SaveAsSkill(done.dir.clone())),
             );
         }

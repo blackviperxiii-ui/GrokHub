@@ -208,7 +208,7 @@ impl Cabin {
         }
         for news in w.tracker.take(event) {
             match news {
-                MatchNews::Pointer(text) => self.toast_pointer(text, now),
+                MatchNews::Pointer(text) => self.toast_pointer(game, text, now),
                 MatchNews::End { recap, pointers } => {
                     // "Win 10 matches" and the like on Objectives move too.
                     let won = recap.won > recap.lost;
@@ -226,9 +226,14 @@ impl Cabin {
 
     /// A pointer goes to the bell: no sound, no focus change, nothing over
     /// the game. One that comes within a minute of the last is left to the recap.
-    fn toast_pointer(&mut self, text: String, now: u64) {
+    fn toast_pointer(&mut self, game: &str, text: String, now: u64) {
         if self.focus.watch.toast_gate.allow(now) {
-            self.notify(super::notices::NoticeKind::Info, text, None);
+            self.notify(
+                super::notices::NoticeKind::Info,
+                text,
+                Some(super::notices::NoticePlace::Game(game.to_string())),
+                None,
+            );
         }
     }
 

@@ -9,6 +9,7 @@ import {
   shownText,
   spendAction,
   unreadBadge,
+  chatFrom,
 } from "./notices";
 
 describe("the Notifications menu's model", () => {
@@ -45,11 +46,24 @@ describe("the Notifications menu's model", () => {
     expect(cleared.unread).toBe(0);
   });
 
-  it("a pressed button is spent but the entry stays", () => {
+  it("a pressed Undo is spent but the entry stays; an Open button stays", () => {
     const n = pushNotice(NO_NOTICES, "info", "Archived 2 finished cards", 1, { kind: "undoSweep", label: "Undo" });
     const spent = spendAction(n, n.items[0].id);
     expect(spent.items[0].action).toBeUndefined();
     expect(spent.items[0].text).toBe("Archived 2 finished cards");
+    const open = pushNotice(NO_NOTICES, "success", 'Reply finished in "Trip"', 1, {
+      kind: "chat",
+      label: "Open chat",
+      id: "c1",
+    });
+    expect(spendAction(open, open.items[0].id).items[0].action).toEqual({ kind: "chat", label: "Open chat", id: "c1" });
+  });
+
+  it("an entry keeps where it came from, and the same words from another place don't fold", () => {
+    let n = pushNotice(NO_NOTICES, "success", "Saved", 1, undefined, "Workboard");
+    n = pushNotice(n, "success", "Saved", 2, undefined, chatFrom("Trip plans"));
+    expect(n.items.map((i) => i.from)).toEqual(["Chat: Trip plans", "Workboard"]);
+    expect(chatFrom("  ")).toBe("Chat");
   });
 
   it("the bell number hides at 0 and caps at 99+", () => {

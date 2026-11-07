@@ -10,11 +10,14 @@
 //!   [`REPLY_REPLACED`] before the chat shows it ([`ReplyGuard`]).
 //! - Explicit adult turns run only on this computer's model, an abliterated
 //!   build with no refusals: never xAI, OpenRouter or any online provider
-//!   ([`route`]). With no local model ready the chat says so
+//!   ([`route`]). With no local model ready an 18+ ask gets one line
 //!   ([`LOCAL_ONLY_MISSING`], [`LOCAL_ONLY_PAUSED`]) and nothing is sent.
-//! - A turn is explicit when the conversation is ([`explicit_conversation`]): an
+//! - A call is explicit when the conversation is ([`explicit_conversation`]): an
 //!   adults-only voice in the system prompt, or any explicit user or assistant
-//!   turn, not just the newest ask.
+//!   turn, not just the newest ask. With the local model ready the whole chat
+//!   stays on it. Without it, each message is judged on its own: a clean ask
+//!   goes online with the 18+ turns and voice left out, so a chat never stays
+//!   stuck on 18+.
 //! - Age-ambiguous asks ("teen", "barely legal") count as minors: stricter than
 //!   any provider's own wording. A plain "girl" or "boy", and a student or
 //!   teacher, are not: only a stated or implied age under 18 is.

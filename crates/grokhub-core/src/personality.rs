@@ -63,6 +63,30 @@ pub fn unlocked_for_local(text: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Owned(out)
 }
 
+/// A prompt for a clean ask from an 18+ chat that goes online because this
+/// computer's model can't take it: the 18+ voice lines come out (every line
+/// that carries [`crate::adult_guard::ADULT_VOICE`]) and the closers go back
+/// to the plain ones. A prompt with no 18+ voice in it is unchanged.
+pub fn online_safe(text: &str) -> std::borrow::Cow<'_, str> {
+    use crate::adult_guard::ADULT_VOICE;
+    use crate::talk::{VOLATILE_SAFETY_CLOSER, VOLATILE_SAFETY_CLOSER_ADULT};
+    if !text.contains(ADULT_VOICE)
+        && !text.contains(EXPLICIT_SAFETY_LINE)
+        && !text.contains(VOLATILE_SAFETY_CLOSER_ADULT)
+    {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let kept: Vec<&str> = text
+        .split('\n')
+        .filter(|line| !line.contains(ADULT_VOICE))
+        .collect();
+    let out = kept
+        .join("\n")
+        .replace(EXPLICIT_SAFETY_LINE, SAFETY_LINE)
+        .replace(VOLATILE_SAFETY_CLOSER_ADULT, VOLATILE_SAFETY_CLOSER);
+    std::borrow::Cow::Owned(out)
+}
+
 /// What every voice gets while adults-only is on (see [`Personality::prompt_block_for`]):
 /// crude comedy, never sex chat, with the hard limits named once.
 pub const ADULT_HUMOR: &str = "18+ is on: the user confirmed they are 18 or older. Crude, raunchy jokes in this voice are welcome at the heat below: jokes, not sex chat. Never about minors, real people or non-consent, no slurs at groups, and drop the jokes for grief, health or real distress.";

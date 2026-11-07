@@ -553,7 +553,12 @@ impl Cabin {
             } else {
                 format!("{title} · {body}")
             };
-            self.notify(super::notices::NoticeKind::Info, line.clone(), None);
+            self.notify(
+                super::notices::NoticeKind::Info,
+                line.clone(),
+                Some(super::notices::NoticePlace::Page(Nav::Pulse)),
+                None,
+            );
             if !self.quiet_now() {
                 crate::notify::ping(grokhub_core::brand::product_name(), &title);
                 if !body.is_empty() {

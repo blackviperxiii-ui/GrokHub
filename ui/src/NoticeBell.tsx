@@ -77,7 +77,9 @@ export function NoticeBell({
               {notices.items.map((n) => (
                 <li key={n.id} className={`notice-item ${n.kind}`}>
                   <span className="notice-text">{shownText(n)}</span>
-                  <span className="activity-detail">{noticeAge(n.at, now)}</span>
+                  <span className="activity-detail">
+                    {n.from ? `${n.from} · ${noticeAge(n.at, now)}` : noticeAge(n.at, now)}
+                  </span>
                   {n.action && (
                     <button
                       type="button"

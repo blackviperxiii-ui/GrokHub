@@ -207,7 +207,16 @@ impl Cabin {
         if self.cfg.game_companion_ping && !self.window_focused && !self.quiet_now() {
             crate::notify::ping(&card.title, card.body.as_deref().unwrap_or_default());
             // Whatever pings the OS is kept in the bell too.
-            self.notify(super::notices::NoticeKind::Info, card.title.clone(), None);
+            let line = match card.body.as_deref().map(str::trim) {
+                Some(body) if !body.is_empty() => format!("{} \u{b7} {body}", card.title),
+                _ => card.title.clone(),
+            };
+            self.notify(
+                super::notices::NoticeKind::Info,
+                line,
+                Some(super::notices::NoticePlace::Page(Nav::Pulse)),
+                None,
+            );
         }
         // One card per game: the latest launch replaces the last one.
         self.updates.retain(|c| c.source_id != card.source_id);
