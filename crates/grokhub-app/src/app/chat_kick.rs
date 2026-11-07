@@ -44,7 +44,7 @@ impl Cabin {
             self.status = "Unknown command — /help".into();
             return;
         }
-        if self.try_diagnose_intent(&text) {
+        if self.try_diagnose_intent(&text) || self.try_setting_ask(&text) {
             return;
         }
         // A bare "continue" after a run stopped early (a provider error left

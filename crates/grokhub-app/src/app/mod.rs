@@ -126,6 +126,7 @@ use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 mod acp;
 mod amr_memory;
+mod auto_setup_ui;
 mod chat_kick;
 mod helper_offers_ui;
 mod learn_notes_ui;
