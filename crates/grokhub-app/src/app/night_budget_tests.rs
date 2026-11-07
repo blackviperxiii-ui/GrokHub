@@ -138,7 +138,7 @@ fn scheduled_night_loop_and_send_inherit_permission_mode() {
     );
     let kick_err = fn_src(&native_src, "kick_native_turn");
     assert!(
-        kick_err.matches("self.fail_turn_start(").count() == 3,
+        kick_err.matches("self.fail_turn_start(").count() == 4,
         "a native turn that fails to start drops scheduled_perm and resumes PTT: {kick_err}"
     );
     let poll_acp = fn_src(&src, "poll_acp");
