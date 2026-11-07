@@ -116,6 +116,7 @@ fn http_of(err: &ClientError) -> u16 {
     match err {
         ClientError::KeyOffer { status, .. }
         | ClientError::Auth { status, .. }
+        | ClientError::PaymentRequired { status, .. }
         | ClientError::Server { status, .. } => *status,
         ClientError::RateLimited { .. } => 429,
         ClientError::Protocol(msg) => msg
@@ -1298,6 +1299,27 @@ fn xai_outage(err: &ClientError) -> bool {
     err.is_retryable() || matches!(err, ClientError::IdleTimeout)
 }
 
+/// A provider you added failed in a way another route can get past: a limit
+/// (429), out of credit (402), a server fault (5xx), a refused key, a dropped
+/// stream or the wire itself. A refusal about the prompt, a prompt too long
+/// for the next model too, a cancel, or this computer being offline is not
+/// one: the next route would hit the same wall.
+pub(crate) fn provider_fallible(err: &ClientError) -> bool {
+    if err.is_context_length() {
+        return false;
+    }
+    matches!(
+        err,
+        ClientError::RateLimited { .. }
+            | ClientError::PaymentRequired { .. }
+            | ClientError::Server { .. }
+            | ClientError::Auth { .. }
+            | ClientError::KeyOffer { .. }
+            | ClientError::Disconnect
+            | ClientError::IdleTimeout
+    ) || matches!(err, ClientError::Transport(m) if !grokhub_core::offline::is_refusal(m))
+}
+
 /// The provider model you set up that takes a turn xAI couldn't: its key and a
 /// grant for this call's data, it fits the turn (tools, images, context), it
 /// passes Auto's own pick filter ([`super::providers::auto_pickable`]: listed
@@ -1655,6 +1677,12 @@ pub fn stream_routed(
     let mut xai_failed: Option<(ClientError, Duration)> = None;
     // The provider model that answered when xAI was down.
     let mut stood_in: Option<String> = None;
+    // A provider's error, the model that made it, and how long it took, when
+    // another route took the turn instead: it goes on the provider's own
+    // health line, never on the answering model's.
+    let mut provider_failed: Option<(String, ClientError, Duration)> = None;
+    // Grok took a turn a provider failed: the turn is logged as Grok's.
+    let mut grok_took_turn = false;
     let out = if on_device {
         // A model that isn't loaded yet (unloaded for a game, or idle) loads
         // again by itself; the chat shows why the answer takes a moment.
@@ -1701,7 +1729,33 @@ pub fn stream_routed(
                 );
             }
         }
-        out
+        match out {
+            Err(err) if provider_fallible(&err) => {
+                // The provider hit a limit, ran out of credit or fell over:
+                // cool it so the next pick, the resumed step included, skips
+                // it, and Grok takes this turn. The provider showed nothing,
+                // so no work repeats.
+                cool_down(&dir, &model, now);
+                provider_failed = Some((model.clone(), err, started.elapsed()));
+                grok_took_turn = true;
+                on_provider = false;
+                if asks_route {
+                    let n = route_note(&req.model, effort.as_deref(), false);
+                    super::ask::add_route_note(&mut sent.input, &n);
+                }
+                sent.model = req.model.clone();
+                let out = client.stream(&sent, cancel, &mut |ev: StreamEvent| {
+                    super::adult::guard(&mut reply, &mut *sink, ev)
+                });
+                if let Err(err) = &out {
+                    if xai_outage(err) {
+                        cool_down(&dir, &req.model, now);
+                    }
+                }
+                out
+            }
+            out => out,
+        }
     } else {
         // `streamed`: reply text reached the chat. Thinking alone isn't an
         // answer, so a stand-in can still take a turn xAI only thought about.
@@ -1753,8 +1807,46 @@ pub fn stream_routed(
                         );
                     }
                 }
-                stood_in = Some(m);
-                out
+                match out {
+                    Err(e2) if provider_fallible(&e2) && super::local::available() => {
+                        // The stand-in hit the same kind of wall: cool it so
+                        // it isn't picked again, note it on its own health
+                        // line, and this computer's model answers instead.
+                        // The provider showed nothing, so no work repeats.
+                        cool_down(&dir, &m, now);
+                        provider_failed = Some((m, e2, started.elapsed()));
+                        on_provider = false;
+                        on_device = true;
+                        if asks_route {
+                            let n =
+                                route_note(super::local::live_tier(), sent.effort.as_deref(), true);
+                            super::ask::add_route_note(&mut sent.input, &n);
+                        }
+                        let out = super::local::serve_request(class, &sent, cancel);
+                        if let Ok(turn) = &out {
+                            if !turn.text.is_empty() {
+                                super::adult::guard(
+                                    &mut reply,
+                                    &mut *sink,
+                                    StreamEvent::TextDelta(turn.text.clone()),
+                                );
+                            }
+                        }
+                        out
+                    }
+                    Err(e2) if provider_fallible(&e2) => {
+                        // No local model to land on: the error stands, but
+                        // the stand-in still cools so a resumed step doesn't
+                        // re-pick the model that just failed.
+                        cool_down(&dir, &m, now);
+                        stood_in = Some(m);
+                        Err(e2)
+                    }
+                    out => {
+                        stood_in = Some(m);
+                        out
+                    }
+                }
             }
             // An ordinary turn falls back to this computer's model when xAI is
             // down and no provider could take it. Only when xAI showed nothing
@@ -1811,6 +1903,16 @@ pub fn stream_routed(
         // xAI's health line says it failed; the answer is logged as the model's that gave it.
         note_failure(&dir, &call, err, *elapsed);
         call.model = stood_in.as_deref().unwrap_or(super::local::live_tier());
+    }
+    if let Some((failed_model, err, elapsed)) = &provider_failed {
+        // The provider's health line says it failed; the answer is logged as
+        // the route's that gave it.
+        let mut failed_call = call;
+        failed_call.model = failed_model;
+        note_failure(&dir, &failed_call, err, *elapsed);
+    }
+    if grok_took_turn {
+        call.model = &sent.model;
     }
     if on_device {
         call.provider = super::local::PROVIDER_LOCAL;
