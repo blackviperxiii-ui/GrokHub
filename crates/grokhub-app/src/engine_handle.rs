@@ -148,7 +148,12 @@ impl AcpHandle {
     pub fn external(
         cwd: PathBuf,
         session_id: String,
-    ) -> (AcpHandle, Receiver<ExternalCmd>, Sender<AcpEvent>, EngineLife) {
+    ) -> (
+        AcpHandle,
+        Receiver<ExternalCmd>,
+        Sender<AcpEvent>,
+        EngineLife,
+    ) {
         let alive = Arc::new(AtomicBool::new(true));
         let (cmd_tx, cmd_rx) = mpsc::channel::<Cmd>();
         let (evt_tx, evt_rx) = mpsc::channel();

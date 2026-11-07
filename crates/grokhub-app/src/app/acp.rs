@@ -5,7 +5,8 @@ use super::*;
 use grokhub_core::work_resume::InterruptCause;
 
 /// Status while a crashed reply runs again on a fresh engine.
-pub(super) const ENGINE_RESTART_STATUS: &str = "The chat engine restarted · picking the reply back up…";
+pub(super) const ENGINE_RESTART_STATUS: &str =
+    "The chat engine restarted · picking the reply back up…";
 
 /// Said after a reply crashed the engine twice in a row.
 pub(super) const ENGINE_CRASHED_AGAIN: &str =
@@ -365,7 +366,10 @@ impl Cabin {
         }
         self.scheduled_perm = false;
         self.post_turn_crash();
-        let note = format!("{} {ENGINE_CRASHED_AGAIN}", super::native_engine::ENGINE_CRASHED);
+        let note = format!(
+            "{} {ENGINE_CRASHED_AGAIN}",
+            super::native_engine::ENGINE_CRASHED
+        );
         self.thought_buf.clear();
         self.stream_buf.clear();
         self.status = self.apply_job_fail(&note);

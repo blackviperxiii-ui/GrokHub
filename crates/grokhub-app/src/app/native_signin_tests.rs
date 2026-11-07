@@ -74,7 +74,8 @@ impl FakeXai {
                     authorization,
                     body,
                 });
-                let refuse = path == "/v1/responses" && failed.fetch_add(1, Ordering::SeqCst) < fail;
+                let refuse =
+                    path == "/v1/responses" && failed.fetch_add(1, Ordering::SeqCst) < fail;
                 let (kind, payload) = if refuse {
                     (
                         "application/json",
@@ -930,7 +931,11 @@ fn an_engine_panic_mid_reply_restarts_the_engine_and_the_next_send_works() {
     assert_eq!(last_reply(&cabin), REPLY);
     let sent = server.responses();
     assert_eq!(sent.len(), 3, "{sent:?}");
-    assert!(sent[2].body.contains("which one is free"), "{}", sent[2].body);
+    assert!(
+        sent[2].body.contains("which one is free"),
+        "{}",
+        sent[2].body
+    );
     no_raw_channel_text(&cabin);
 }
 
@@ -1017,7 +1022,10 @@ fn a_provider_error_mid_reply_then_a_new_message_gets_an_answer() {
     pump_until_idle(&mut cabin);
     let failed = last_reply(&cabin);
     assert!(failed.starts_with("Error: "), "{failed}");
-    assert!(failed.contains("test: the provider refused this request"), "{failed}");
+    assert!(
+        failed.contains("test: the provider refused this request"),
+        "{failed}"
+    );
 
     say(&mut cabin, "find me a fan control app");
     cabin.kick_model(false);

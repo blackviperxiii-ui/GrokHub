@@ -675,7 +675,8 @@ const ENGINE_THREAD: &str = "loadout-chat-engine";
 
 /// What the chat shows when the engine thread panicked mid-reply. The engine
 /// is started fresh from the chat's saved turns on the next send.
-pub(super) const ENGINE_CRASHED: &str = "The chat engine hit an internal error and stopped this reply.";
+pub(super) const ENGINE_CRASHED: &str =
+    "The chat engine hit an internal error and stopped this reply.";
 
 /// Which engine (by [`crate::engine_handle::AcpHandle::id`]) is current for a
 /// session. Only the current one may clear the session's shared config and
