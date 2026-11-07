@@ -26,6 +26,7 @@ pub mod guard;
 pub mod heal;
 pub mod host;
 pub mod identity;
+pub mod intent;
 pub mod knn;
 pub mod ladder;
 pub mod learn;
