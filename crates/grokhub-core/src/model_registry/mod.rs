@@ -236,6 +236,9 @@ impl Registry {
 
     /// Fold fresh listings in. `named` is every id a pin, default, skill or
     /// automation names. No listing (every source failed) changes nothing.
+    /// A source that doesn't answer keeps the models it listed before: a
+    /// record only goes stale once every source that ever listed it has
+    /// checked in without it.
     pub fn apply_refresh(
         &mut self,
         listings: &[Listing],
@@ -332,8 +335,17 @@ impl Registry {
             self.models.remove(&id);
             events.push(RegistryEvent::Deleted { id });
         }
+        // The kinds that answered this refresh. A record only goes stale
+        // once every source that ever listed it checked in without it: a
+        // source that failed or stayed silent keeps its models, so one
+        // source's bad day can't wipe another's list.
+        let answered: Vec<SourceKind> = ordered.iter().filter_map(|l| l.kind).collect();
         for (id, rec) in self.models.iter_mut() {
             if merged.contains_key(id) {
+                continue;
+            }
+            if !rec.sources.is_empty() && rec.sources.iter().any(|k| !answered.contains(k)) {
+                // One of its sources never answered: its list stands.
                 continue;
             }
             let was_absent = rec.absent_since_ms != 0 || rec.sources.is_empty();
@@ -898,5 +910,46 @@ mod tests {
         let ev = reg.half_open_result("grok-4.7", true, until + 1).unwrap();
         assert_eq!(ev.kind(), "state");
         assert_eq!(reg.get("grok-4.7").unwrap().state, ModelState::Live);
+    }
+
+    #[test]
+    fn a_source_that_does_not_answer_keeps_its_models() {
+        let mut reg = Registry::default();
+        let gb = gb_listing(&["grok-build-1".into()], Some("1.0.49"));
+        reg.apply_refresh(&[gb, api(vec![meta("grok-4.7")])], &[], 1);
+        assert_eq!(reg.get("grok-build-1").unwrap().state, ModelState::Live);
+        // The Grok Build listing never arrives (its fetch failed) while the
+        // API listing answers: the GB-only model keeps its place and the
+        // refresh reports no change for it.
+        let ev = reg.apply_refresh(&[api(vec![meta("grok-4.7")])], &[], 2);
+        assert_eq!(ev, vec![]);
+        let kept = reg.get("grok-build-1").unwrap();
+        assert_eq!(kept.state, ModelState::Live);
+        assert!(reg.listed("grok-build-1"));
+        // Once GB answers again without it, it goes stale as before.
+        let gb = gb_listing(&["grok-4.7".into()], Some("1.0.49"));
+        let ev = reg.apply_refresh(&[gb, api(vec![meta("grok-4.7")])], &[], 3);
+        assert!(ev.contains(&RegistryEvent::Removed {
+            id: "grok-build-1".into()
+        }));
+        assert_eq!(
+            reg.get("grok-build-1").unwrap().state,
+            ModelState::NotInPlan
+        );
+    }
+
+    #[test]
+    fn a_model_kept_by_a_silent_source_survives_the_answering_source_dropping_it() {
+        let mut reg = Registry::default();
+        let gb = gb_listing(&["grok-dual".into()], Some("1.0.49"));
+        reg.apply_refresh(&[gb, api(vec![meta("grok-dual"), meta("grok-4.7")])], &[], 1);
+        assert_eq!(
+            reg.get("grok-dual").unwrap().sources,
+            vec![SourceKind::XaiApi, SourceKind::GrokBuild]
+        );
+        // The API answers and drops it, but GB never answered: it stands.
+        reg.apply_refresh(&[api(vec![meta("grok-4.7")])], &[], 2);
+        assert_eq!(reg.get("grok-dual").unwrap().state, ModelState::Live);
+        assert!(reg.listed("grok-dual"));
     }
 }
