@@ -261,6 +261,7 @@ impl Cabin {
                 named,
                 default_model,
                 now_ms: now,
+                xai_bearer: bearer.clone(),
             };
             let done = run_refresh(&job);
             let plan = bearer.as_deref().filter(|_| credential == Credential::Plan);
