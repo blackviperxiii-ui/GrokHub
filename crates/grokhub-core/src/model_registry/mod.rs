@@ -929,15 +929,24 @@ mod tests {
         // Once GB answers again without it, it goes stale as before.
         let gb = gb_listing(&["grok-4.7".into()], Some("1.0.49"));
         let ev = reg.apply_refresh(&[gb, api(vec![meta("grok-4.7")])], &[], 3);
-        assert!(ev.contains(&RegistryEvent::Removed { id: "grok-build-1".into() }));
-        assert_eq!(reg.get("grok-build-1").unwrap().state, ModelState::NotInPlan);
+        assert!(ev.contains(&RegistryEvent::Removed {
+            id: "grok-build-1".into()
+        }));
+        assert_eq!(
+            reg.get("grok-build-1").unwrap().state,
+            ModelState::NotInPlan
+        );
     }
 
     #[test]
     fn a_model_kept_by_a_silent_source_survives_the_answering_source_dropping_it() {
         let mut reg = Registry::default();
         let gb = gb_listing(&["grok-dual".into()], Some("1.0.49"));
-        reg.apply_refresh(&[gb, api(vec![meta("grok-dual"), meta("grok-4.7")])], &[], 1);
+        reg.apply_refresh(
+            &[gb, api(vec![meta("grok-dual"), meta("grok-4.7")])],
+            &[],
+            1,
+        );
         assert_eq!(
             reg.get("grok-dual").unwrap().sources,
             vec![SourceKind::XaiApi, SourceKind::GrokBuild]

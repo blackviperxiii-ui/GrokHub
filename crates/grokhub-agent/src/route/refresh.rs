@@ -532,7 +532,10 @@ mod tests {
             default_model: "grok-4.7".into(),
             now_ms: 1,
         });
-        assert_eq!(load_registry(&dir).entitlement.credential, Credential::ApiKey);
+        assert_eq!(
+            load_registry(&dir).entitlement.credential,
+            Credential::ApiKey
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
