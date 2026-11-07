@@ -112,6 +112,9 @@ describe("push to talk", () => {
     fireEvent.pointerDown(button);
     await waitFor(() => expect(mic.processor).not.toBeNull());
     expect(screen.getByRole("button", { name: /Listening/ })).toHaveAttribute("aria-pressed", "true");
+    // While held, a listening orb takes the mic glyph's place; the button still names it.
+    expect(button.querySelector("canvas.orb")).toHaveAttribute("aria-hidden", "true");
+    expect(button.querySelector("svg")).toBeNull();
     // 4800 samples at 48 kHz is 0.1 s: 1600 at 16 kHz.
     mic.feed(new Float32Array(4800).fill(0.25));
     fireEvent.pointerUp(button);

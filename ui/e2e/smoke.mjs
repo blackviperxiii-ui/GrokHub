@@ -1186,6 +1186,35 @@ async function noSidewaysScroll(s, when) {
   console.log(`no sideways scroll ${when}: ${wide}px in ${fits}px`);
 }
 
+/** A fresh profile opens on the first-run window (AutoSetup.tsx), which
+ * covers the page until it's answered, and WebKit then refuses a click on
+ * Send as "element click intercepted". Skip it the way a person would, then
+ * wait out the corner note the launch pass may leave over the composer. */
+async function skipFirstRun(s) {
+  const skip = await waitFor(
+    "the first-run window",
+    () =>
+      wd("POST", `${s}/element`, {
+        using: "xpath",
+        value: "//div[@role='dialog' and contains(@class,'first-run')]//button[normalize-space()='Skip setup']",
+      }),
+    20000,
+  ).catch(() => null);
+  if (!skip) {
+    console.log("first run: no window (auto setup off)");
+    return;
+  }
+  await wd("POST", `${s}/element/${skip[ELEMENT]}/click`, {});
+  await waitFor("the first-run window to close", async () => {
+    const open = await wd("POST", `${s}/elements`, { using: "css selector", value: ".first-run-backdrop" });
+    return open.length === 0;
+  });
+  await sleep(1000);
+  const notes = await wd("POST", `${s}/elements`, { using: "css selector", value: ".auto-note.card .chip" });
+  if (notes.length > 0) await wd("POST", `${s}/element/${notes[0][ELEMENT]}/click`, {});
+  console.log(`first run: skipped${notes.length > 0 ? ", corner note closed" : ""}`);
+}
+
 async function main() {
   const mock = await startMock();
   const config = mkdtempSync(join(tmpdir(), "grokhub-shell-smoke-"));
@@ -1218,6 +1247,7 @@ async function main() {
     const box = await waitFor("the message box", async () =>
       wd("POST", `${s}/element`, { using: "css selector", value: "textarea[aria-label='Message']" }),
     );
+    await skipFirstRun(s);
     await wd("POST", `${s}/element/${box[ELEMENT]}/value`, { text: PROMPT });
     const send = await wd("POST", `${s}/element`, {
       using: "css selector",

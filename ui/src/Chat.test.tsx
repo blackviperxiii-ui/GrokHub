@@ -580,6 +580,25 @@ describe("Chat", () => {
     });
   });
 
+  it("a reply that hasn't started shows a thinking orb, and a lookup tool a searching one", async () => {
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("what's new");
+
+    const orb = screen.getByRole("img", { name: "Thinking" });
+    expect(orb.tagName).toBe("CANVAS");
+    expect(orb.closest(".bubble")).toHaveAttribute("data-role", "assistant");
+    expect(screen.queryByText("…")).toBeNull();
+
+    emit(id, { kind: "tool", id: "t", title: "web_search", status: "pending", detail: "" });
+    expect(screen.getByRole("img", { name: "Looking it up" })).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: "Thinking" })).toBeNull();
+
+    emit(id, { kind: "text", text: "Here" });
+    expect(screen.queryByRole("img", { name: "Looking it up" })).toBeNull();
+    finish();
+  });
+
   it("Stop cancels the turn in flight", async () => {
     const finish = holdTurn();
     render(<Chat onOpenSettings={() => {}} />);
