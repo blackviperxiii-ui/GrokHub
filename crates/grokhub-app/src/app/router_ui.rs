@@ -225,10 +225,7 @@ impl Cabin {
             // A failed read (an OAuth renewal that blinked, a store that
             // would not open) is not a sign-out: the last credential a
             // refresh proved stands until a sign-in replaces it.
-            Err(_) => (
-                None,
-                load_registry(&crate::config::config_dir()).entitlement.credential,
-            ),
+            Err(_) => (None, load_registry(&crate::config::config_dir()).entitlement.credential),
         };
         let named = self.router_named_models();
         let default_model = grokhub_agent::DEFAULT_MODEL.to_string();
