@@ -46,6 +46,7 @@ pub mod log;
 pub mod match_ask;
 pub mod policy;
 pub mod providers;
+pub mod quota;
 pub mod refresh;
 pub mod session_metrics;
 pub mod signals;
