@@ -188,10 +188,23 @@ impl Cabin {
         if let Some(line) = self.take_focus_context() {
             carried = format!("{line}\n{carried}");
         }
-        let prompted = self
+        let mut prompted = self
             .acp
             .as_ref()
             .map(|handle| handle.prompt_with_image(&carried, image));
+        // The engine died between the check and the send: start a new one
+        // for this chat and send the message once more, never drop it.
+        if matches!(&prompted, Some(Err(err)) if err == crate::engine_handle::ENGINE_GONE) {
+            self.acp = None;
+            if let Err(err) = self.ensure_native_engine() {
+                self.fail_turn_start(&err);
+                return true;
+            }
+            prompted = self
+                .acp
+                .as_ref()
+                .map(|handle| handle.prompt_with_image(&carried, image));
+        }
         match prompted {
             Some(Ok(())) => {
                 self.episode_resume_sent();
@@ -330,18 +343,30 @@ impl Cabin {
         if changed {
             self.persist();
         }
-        if self
-            .acp
-            .as_ref()
-            .is_some_and(|handle| handle.session_id == session_id && handle.cwd == cwd)
-        {
+        // A handle whose engine thread is gone (it panicked or returned) is
+        // never reused: every send on it would fail. A new engine for the same
+        // session picks the chat up from its saved turns.
+        if self.acp.as_ref().is_some_and(|handle| {
+            handle.session_id == session_id && handle.cwd == cwd && handle.is_alive()
+        }) {
             return self.publish_native_cfg();
         }
         self.acp = None;
-        let (handle, ext_rx, evt_tx) =
+        let (handle, ext_rx, evt_tx, life) =
             crate::engine_handle::AcpHandle::external(cwd.clone(), session_id.clone());
         self.publish_native_cfg_for(&session_id)?;
-        std::thread::spawn(move || serve_native(session_id, ext_rx, evt_tx));
+        let owner = handle.id;
+        engine_owners()
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .insert(session_id.clone(), owner);
+        note_engine_panics();
+        let spawned = std::thread::Builder::new()
+            .name(ENGINE_THREAD.into())
+            .spawn(move || serve_native(session_id, owner, ext_rx, evt_tx, life));
+        if spawned.is_err() {
+            return Err(crate::engine_handle::ENGINE_GONE.into());
+        }
         self.acp = Some(handle);
         Ok(())
     }
@@ -645,10 +670,68 @@ enum NativeJob {
     Shutdown,
 }
 
+/// The engine thread's name. The panic note below only records panics here.
+const ENGINE_THREAD: &str = "loadout-chat-engine";
+
+/// What the chat shows when the engine thread panicked mid-reply. The engine
+/// is started fresh from the chat's saved turns on the next send.
+pub(super) const ENGINE_CRASHED: &str = "The chat engine hit an internal error and stopped this reply.";
+
+/// Which engine (by [`crate::engine_handle::AcpHandle::id`]) is current for a
+/// session. Only the current one may clear the session's shared config and
+/// question inbox when it ends, so an old engine shutting down late never
+/// takes them from the new one.
+fn engine_owners() -> &'static Mutex<HashMap<String, u64>> {
+    static MAP: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
+    MAP.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+thread_local! {
+    static LAST_ENGINE_PANIC: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Keep where an engine thread panicked (message and source line), then run
+/// the usual hook. The app runs without a console, so this is the only trace.
+fn note_engine_panics() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if std::thread::current().name() == Some(ENGINE_THREAD) {
+                let what = info.payload_as_str().unwrap_or("panic");
+                let at = info
+                    .location()
+                    .map(|l| format!("{}:{}", l.file(), l.line()))
+                    .unwrap_or_default();
+                LAST_ENGINE_PANIC.with(|slot| *slot.borrow_mut() = Some(format!("{what} at {at}")));
+            }
+            prev(info);
+        }));
+    });
+}
+
+/// One line per engine crash in `<config>/logs/engine-crash.log`.
+fn log_engine_crash(session_id: &str, what: &str) {
+    use std::io::Write;
+    let dir = crate::config::config_dir().join("logs");
+    let _ = std::fs::create_dir_all(&dir);
+    let what: String = what.replace('\n', " ").chars().take(600).collect();
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("engine-crash.log"))
+    {
+        let _ = writeln!(file, "{} {session_id} {what}", grokhub_core::now_ms());
+    }
+}
+
 fn serve_native(
     session_id: String,
+    owner: u64,
     ext_rx: std::sync::mpsc::Receiver<ExternalCmd>,
     evt_tx: std::sync::mpsc::Sender<AcpEvent>,
+    _life: crate::engine_handle::EngineLife,
 ) {
     let cancel = grokhub_agent::CancelToken::new();
     let steer = grokhub_agent::SteerQueue::new();
@@ -730,58 +813,132 @@ fn serve_native(
         let NativeJob::Prompt { text, image } = job else {
             break;
         };
-        let Some(cfg) = live_map()
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .get(&session_id)
-            .cloned()
-        else {
-            let _ = evt_tx.send(AcpEvent::Err(grokhub_core::XAI_NEED_SIGNIN.into()));
+        // A panic anywhere in the turn ends this engine, not the chat: the
+        // reply says so plainly and the cabin starts a fresh engine from the
+        // saved turns. The engine's state mid-panic is not trusted again.
+        let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_native_job(&mut engine, &session_id, &evt_tx, &text, image.as_deref())
+        }));
+        if let Err(payload) = ran {
+            let noted = LAST_ENGINE_PANIC.with(|slot| slot.borrow_mut().take());
+            let what = noted.unwrap_or_else(|| {
+                payload
+                    .downcast_ref::<&str>()
+                    .map(|s| s.to_string())
+                    .or_else(|| payload.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "panic".into())
+            });
+            log_engine_crash(&session_id, &what);
+            let _ = evt_tx.send(AcpEvent::Err(ENGINE_CRASHED.into()));
             let _ = evt_tx.send(AcpEvent::Done {
                 stop_reason: "error".into(),
             });
-            continue;
-        };
-        engine.set_workspace(cfg.workspace);
-        engine.set_gate(cfg.gate);
-        engine.set_origin(cfg.origin);
-        engine.set_episode(cfg.episode.clone());
-        engine.set_imagine_bearer(&cfg.bearer);
-        // Brain 1: the rules and the local scorer sort the ask in-process; a
-        // model call for what they can't sort is opt-in (off by default).
-        engine.set_brief_model(cfg.brief_model_fallback);
-        let client = XaiClient::new(cfg.bearer, cfg.auth_kind, Duration::from_secs(120));
-        #[cfg(test)]
-        let client = match test_responses_url() {
-            Some(url) => client.with_loopback_url(&url).expect("loopback test URL"),
-            None => client,
-        };
-        engine.set_route(
-            std::sync::Arc::new(client),
-            cfg.model,
-            cfg.effort,
-            cfg.system,
-            cfg.auth_kind,
-        );
-        let started = grokhub_core::now_ms();
-        engine.set_halt(Box::new(StampHalt {
-            started_ms: started,
-            read: || crate::desktop_mcp::read_halt_stamp(),
-        }));
-        let tx = evt_tx.clone();
-        let panel_thread = cfg.cabin_thread_id.clone();
-        let _ = engine.prompt(&text, image.as_deref(), &mut |ev| {
-            if let AcpEvent::Tool(ref card) = ev {
-                maybe_queue_show_panel(&panel_thread, card);
-            }
-            let _ = tx.send(ev);
-        });
+            break;
+        }
     }
-    live_map()
+    let mut owners = engine_owners()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    if owners.get(&session_id) == Some(&owner) {
+        owners.remove(&session_id);
+        live_map()
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .remove(&session_id);
+        grokhub_agent::mcp::detach_elicit(&session_id);
+    }
+}
+
+/// One chat message on the engine thread, with the config the cabin published.
+fn run_native_job(
+    engine: &mut NativeEngine,
+    session_id: &str,
+    evt_tx: &std::sync::mpsc::Sender<AcpEvent>,
+    text: &str,
+    image: Option<&str>,
+) {
+    let Some(cfg) = live_map()
         .lock()
         .unwrap_or_else(|err| err.into_inner())
-        .remove(&session_id);
-    grokhub_agent::mcp::detach_elicit(&session_id);
+        .get(session_id)
+        .cloned()
+    else {
+        let _ = evt_tx.send(AcpEvent::Err(grokhub_core::XAI_NEED_SIGNIN.into()));
+        let _ = evt_tx.send(AcpEvent::Done {
+            stop_reason: "error".into(),
+        });
+        return;
+    };
+    engine.set_workspace(cfg.workspace);
+    engine.set_gate(cfg.gate);
+    engine.set_origin(cfg.origin);
+    engine.set_episode(cfg.episode.clone());
+    engine.set_imagine_bearer(&cfg.bearer);
+    // Brain 1: the rules and the local scorer sort the ask in-process; a
+    // model call for what they can't sort is opt-in (off by default).
+    engine.set_brief_model(cfg.brief_model_fallback);
+    let client = XaiClient::new(cfg.bearer, cfg.auth_kind, Duration::from_secs(120));
+    #[cfg(test)]
+    let client = match test_responses_url() {
+        Some(url) => client.with_loopback_url(&url).expect("loopback test URL"),
+        None => client,
+    };
+    engine.set_route(
+        std::sync::Arc::new(client),
+        cfg.model,
+        cfg.effort,
+        cfg.system,
+        cfg.auth_kind,
+    );
+    let started = grokhub_core::now_ms();
+    engine.set_halt(Box::new(StampHalt {
+        started_ms: started,
+        read: || crate::desktop_mcp::read_halt_stamp(),
+    }));
+    let tx = evt_tx.clone();
+    let panel_thread = cfg.cabin_thread_id.clone();
+    #[cfg(test)]
+    let crash_here = take_mid_turn_panic(session_id);
+    let _ = engine.prompt(text, image, &mut |ev| {
+        if let AcpEvent::Tool(ref card) = ev {
+            maybe_queue_show_panel(&panel_thread, card);
+        }
+        #[cfg(test)]
+        let streamed = matches!(ev, AcpEvent::Text(_));
+        let _ = tx.send(ev);
+        #[cfg(test)]
+        if crash_here && streamed {
+            panic!("test: the engine panics mid-turn");
+        }
+    });
+}
+
+#[cfg(test)]
+fn mid_turn_panics() -> &'static Mutex<Vec<String>> {
+    static Q: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+    Q.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+#[cfg(test)]
+fn take_mid_turn_panic(session_id: &str) -> bool {
+    let mut q = mid_turn_panics()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    let Some(at) = q.iter().position(|id| id == session_id) else {
+        return false;
+    };
+    q.remove(at);
+    true
+}
+
+/// Test-only: the next turn on `session_id` panics on the engine thread right
+/// after its first streamed text, as a bug deep in a turn would.
+#[cfg(test)]
+pub(super) fn panic_mid_turn_for_test(session_id: &str) {
+    mid_turn_panics()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .push(session_id.to_string());
 }
 
 /// Local AI is on, installed and not paused, so a chat can answer on the device.

@@ -3,7 +3,8 @@
 //! every request goes to a loopback fake server. Nothing reaches xAI.
 
 use super::native_engine::{
-    published_bearer_for_test, set_local_ready_for_test, set_responses_url_for_test,
+    panic_mid_turn_for_test, published_bearer_for_test, set_local_ready_for_test,
+    set_responses_url_for_test,
 };
 use super::*;
 use grokhub_agent::AuthKind;
@@ -30,11 +31,18 @@ struct FakeXai {
 
 impl FakeXai {
     fn start() -> Self {
+        Self::start_failing(0)
+    }
+
+    /// The first `fail` chat requests answer HTTP 400, as a provider that
+    /// turns a request away; later ones stream [`REPLY`].
+    fn start_failing(fail: usize) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
         let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
         let seen = Arc::new(Mutex::new(Vec::new()));
         let token_calls = Arc::new(AtomicUsize::new(0));
         let (seen_t, calls_t) = (seen.clone(), token_calls.clone());
+        let failed = Arc::new(AtomicUsize::new(0));
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { continue };
@@ -66,7 +74,14 @@ impl FakeXai {
                     authorization,
                     body,
                 });
-                let (kind, payload) = if path == "/oauth2/token" {
+                let refuse = path == "/v1/responses" && failed.fetch_add(1, Ordering::SeqCst) < fail;
+                let (kind, payload) = if refuse {
+                    (
+                        "application/json",
+                        r#"{"error":{"message":"test: the provider refused this request"}}"#
+                            .to_string(),
+                    )
+                } else if path == "/oauth2/token" {
                     calls_t.fetch_add(1, Ordering::SeqCst);
                     (
                         "application/json",
@@ -81,8 +96,9 @@ impl FakeXai {
                         ),
                     )
                 };
+                let code = if refuse { "400 Bad Request" } else { "200 OK" };
                 let head = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    "HTTP/1.1 {code}\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                     payload.len()
                 );
                 let _ = stream.write_all(head.as_bytes());
@@ -768,7 +784,7 @@ fn a_cli_era_chat_moves_to_the_native_engine_with_a_recap_once() {
 }
 
 #[test]
-fn a_failed_first_native_send_keeps_the_recap_for_the_retry() {
+fn a_dead_engine_handle_is_replaced_and_the_first_send_carries_the_recap() {
     let sb = Sandbox::new("native-adopt-retry");
     let server = FakeXai::start();
     set_responses_url_for_test(Some(&format!("{}/v1/responses", server.base)));
@@ -798,24 +814,20 @@ fn a_failed_first_native_send_keeps_the_recap_for_the_retry() {
     }
     cabin.messages = Arc::new(turns);
 
-    // The engine for this session is gone, so the first send fails. No live
-    // engine runs first: its shutdown would race the retry's config.
+    // The engine for this session is gone (its thread ended), but the cabin
+    // still holds its handle. The send must start a fresh engine and go out,
+    // not fail on the dead one ("sending on a closed channel").
     cabin.acp = Some(crate::engine_handle::AcpHandle::dead(
         cwd,
         "native-retry-8".into(),
     ));
     assert!(cabin.kick_native_turn("what about lunch", None, "what about lunch", "Lab chat"));
-    assert!(!cabin.running);
-    assert!(
-        cabin.threads.last().unwrap().native_carry,
-        "a failed send must keep the recap"
-    );
-    assert!(server.responses().is_empty());
-
-    cabin.acp = None;
-    assert!(cabin.kick_native_turn("what about lunch", None, "what about lunch", "Lab chat"));
+    assert!(cabin.acp.as_ref().is_some_and(|h| h.is_alive()));
     wait_done(&cabin);
-    assert!(!cabin.threads.last().unwrap().native_carry);
+    assert!(
+        !cabin.threads.last().unwrap().native_carry,
+        "the recap went out with the send"
+    );
     let sent = server.responses();
     assert_eq!(sent.len(), 1, "{sent:?}");
     let body = &sent[0].body;
@@ -826,4 +838,191 @@ fn a_failed_first_native_send_keeps_the_recap_for_the_retry() {
     assert!(body.contains("User: plan the harbor walk"), "{body}");
     assert!(body.contains("You: Start at the north pier."), "{body}");
     assert_eq!(body.matches("what about lunch").count(), 1, "{body}");
+}
+
+/// Polls the chat the way the frame loop does until the turn ends.
+fn pump_until_idle(cabin: &mut Cabin) {
+    let start = std::time::Instant::now();
+    loop {
+        cabin.poll_acp();
+        if !cabin.running {
+            return;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(20),
+            "the turn never ended; status: {}",
+            cabin.status
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// A signed-in Lab chat with one typed message waiting for its reply.
+fn chat_with_ask(sb: &Sandbox, ask: &str) -> Cabin {
+    sb.write_signin(&format!(
+        r#"{{"accessToken":"test-access-token","refreshToken":"test-refresh-token","expiresAt":{},"connectedAt":1}}"#,
+        future_ms()
+    ));
+    let mut cabin = sb.cabin();
+    say(&mut cabin, ask);
+    cabin
+}
+
+fn say(cabin: &mut Cabin, ask: &str) {
+    let mut turns = cabin.messages.as_ref().clone();
+    turns.push(("user".into(), ask.into()));
+    cabin.messages = Arc::new(turns.clone());
+    cabin.threads.last_mut().unwrap().messages = Arc::new(turns);
+    cabin.turn_retried = false;
+}
+
+fn last_reply(cabin: &Cabin) -> String {
+    cabin
+        .messages
+        .iter()
+        .rev()
+        .find(|(role, _)| role == "assistant")
+        .map(|(_, text)| text.clone())
+        .unwrap_or_default()
+}
+
+fn no_raw_channel_text(cabin: &Cabin) {
+    for (_, text) in cabin.messages.iter() {
+        assert!(!text.contains("closed channel"), "{text}");
+    }
+    assert!(!cabin.status.contains("closed channel"), "{}", cabin.status);
+}
+
+#[test]
+fn an_engine_panic_mid_reply_restarts_the_engine_and_the_next_send_works() {
+    let sb = Sandbox::new("native-engine-panic");
+    let server = FakeXai::start();
+    set_responses_url_for_test(Some(&format!("{}/v1/responses", server.base)));
+    let mut cabin = chat_with_ask(&sb, "i need a fan control app for my pc case fans");
+    cabin.ensure_native_engine().expect("native engine starts");
+    let session = cabin.acp.as_ref().unwrap().session_id.clone();
+    let first = cabin.acp.as_ref().unwrap().id;
+    // The engine thread panics right after it streams its first words.
+    panic_mid_turn_for_test(&session);
+    cabin.kick_model(false);
+    pump_until_idle(&mut cabin);
+
+    // The reply ran again on a fresh engine for the same chat and finished.
+    let handle = cabin.acp.as_ref().expect("a fresh engine");
+    assert_ne!(handle.id, first);
+    assert!(handle.is_alive());
+    assert_eq!(handle.session_id, session);
+    assert_eq!(last_reply(&cabin), REPLY);
+    assert_eq!(server.responses().len(), 2);
+    let log = std::fs::read_to_string(
+        crate::config::config_dir()
+            .join("logs")
+            .join("engine-crash.log"),
+    )
+    .expect("the crash is logged");
+    assert!(log.contains("test: the engine panics mid-turn"), "{log}");
+    assert!(log.contains("native_engine.rs"), "{log}");
+
+    // A new message after the crash gets its answer too.
+    say(&mut cabin, "which one is free");
+    cabin.kick_model(false);
+    pump_until_idle(&mut cabin);
+    assert_eq!(last_reply(&cabin), REPLY);
+    let sent = server.responses();
+    assert_eq!(sent.len(), 3, "{sent:?}");
+    assert!(sent[2].body.contains("which one is free"), "{}", sent[2].body);
+    no_raw_channel_text(&cabin);
+}
+
+#[test]
+fn a_reply_that_crashes_the_engine_twice_stops_with_a_plain_note() {
+    let sb = Sandbox::new("native-engine-panic-twice");
+    let server = FakeXai::start();
+    set_responses_url_for_test(Some(&format!("{}/v1/responses", server.base)));
+    let mut cabin = chat_with_ask(&sb, "list my case fans");
+    cabin.ensure_native_engine().expect("native engine starts");
+    let session = cabin.acp.as_ref().unwrap().session_id.clone();
+    panic_mid_turn_for_test(&session);
+    panic_mid_turn_for_test(&session);
+    cabin.kick_model(false);
+    pump_until_idle(&mut cabin);
+
+    assert!(cabin.acp.is_none(), "the dead engine is let go");
+    assert_eq!(
+        last_reply(&cabin),
+        format!(
+            "Error: {} {}",
+            super::native_engine::ENGINE_CRASHED,
+            super::acp::ENGINE_CRASHED_AGAIN
+        )
+    );
+    assert_eq!(server.responses().len(), 2);
+
+    // The chat still answers the next message.
+    say(&mut cabin, "try again");
+    cabin.kick_model(false);
+    pump_until_idle(&mut cabin);
+    assert_eq!(last_reply(&cabin), REPLY);
+    no_raw_channel_text(&cabin);
+}
+
+#[test]
+fn a_turn_whose_engine_vanished_picks_up_on_a_fresh_engine() {
+    let sb = Sandbox::new("native-engine-vanished");
+    let server = FakeXai::start();
+    set_responses_url_for_test(Some(&format!("{}/v1/responses", server.base)));
+    let mut cabin = chat_with_ask(&sb, "check my fan speeds");
+    cabin.ensure_native_engine().expect("native engine starts");
+    let (cwd, session) = {
+        let h = cabin.acp.as_ref().unwrap();
+        (h.cwd.clone(), h.session_id.clone())
+    };
+    // A turn is running, then its engine thread is gone with no last word:
+    // before the fix the chat waited on it forever.
+    cabin.acp = Some(crate::engine_handle::AcpHandle::dead(cwd, session));
+    cabin.running = true;
+    cabin.chat_job_thread = Some(cabin.visible_thread_id());
+    pump_until_idle(&mut cabin);
+    assert_eq!(last_reply(&cabin), REPLY);
+    assert_eq!(server.responses().len(), 1);
+    no_raw_channel_text(&cabin);
+}
+
+#[test]
+fn stop_mid_reply_then_a_new_message_gets_an_answer() {
+    let sb = Sandbox::new("native-engine-stop");
+    let server = FakeXai::start();
+    set_responses_url_for_test(Some(&format!("{}/v1/responses", server.base)));
+    let mut cabin = chat_with_ask(&sb, "find me a fan control app");
+    cabin.kick_model(false);
+    assert!(cabin.running);
+    cabin.halt_work("Stopped");
+    assert!(!cabin.running);
+
+    say(&mut cabin, "find me a fan control app");
+    cabin.kick_model(false);
+    pump_until_idle(&mut cabin);
+    assert_eq!(last_reply(&cabin), REPLY);
+    assert!(cabin.acp.as_ref().is_some_and(|h| h.is_alive()));
+    no_raw_channel_text(&cabin);
+}
+
+#[test]
+fn a_provider_error_mid_reply_then_a_new_message_gets_an_answer() {
+    let sb = Sandbox::new("native-engine-provider-error");
+    let server = FakeXai::start_failing(1);
+    set_responses_url_for_test(Some(&format!("{}/v1/responses", server.base)));
+    let mut cabin = chat_with_ask(&sb, "find me a fan control app");
+    cabin.kick_model(false);
+    pump_until_idle(&mut cabin);
+    let failed = last_reply(&cabin);
+    assert!(failed.starts_with("Error: "), "{failed}");
+    assert!(failed.contains("test: the provider refused this request"), "{failed}");
+
+    say(&mut cabin, "find me a fan control app");
+    cabin.kick_model(false);
+    pump_until_idle(&mut cabin);
+    assert_eq!(last_reply(&cabin), REPLY);
+    assert_eq!(server.responses().len(), 2);
+    no_raw_channel_text(&cabin);
 }
