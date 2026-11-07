@@ -99,8 +99,18 @@ pub(super) fn settings_tab_home(tab: SettingsTab) -> SettingsSec {
 /// The big button at the top left of Settings: where it goes back to.
 pub(super) fn settings_back_label(back: Nav) -> String {
     let label = match back {
+        Nav::Settings => "Chat",
+        nav => nav_name(nav),
+    };
+    format!("\u{2190}  Back to {label}")
+}
+
+/// A page's name as the rail and its title say it.
+pub(super) fn nav_name(nav: Nav) -> &'static str {
+    match nav {
         Nav::Home => "Home",
-        Nav::Chat | Nav::Settings => "Chat",
+        Nav::Chat => "Chat",
+        Nav::Settings => "Settings",
         Nav::Objectives => "Objectives",
         Nav::Pulse => "Pulse",
         Nav::Library => "Library",
@@ -115,8 +125,7 @@ pub(super) fn settings_back_label(back: Nav) -> String {
         Nav::Command => "Command",
         Nav::Agents => "Queue",
         Nav::Memory => "Memory",
-    };
-    format!("\u{2190}  Back to {label}")
+    }
 }
 
 /// Room above a page's title.

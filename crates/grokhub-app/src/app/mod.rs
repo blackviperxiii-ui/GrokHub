@@ -5267,7 +5267,12 @@ impl eframe::App for Cabin {
         {
             // The GPU fallback line pings the OS once; the bell keeps it.
             if let Some(line) = crate::fx::on_frame() {
-                self.notify(notices::NoticeKind::Info, line.to_string(), None);
+                self.notify(
+                    notices::NoticeKind::Info,
+                    line.to_string(),
+                    Some(notices::NoticePlace::Settings(SettingsSec::Behavior)),
+                    None,
+                );
             }
         }
         self.poll_job();

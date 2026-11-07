@@ -5,6 +5,7 @@ import {
   getSettings,
   getWorkboard,
   haltDesktop,
+  listChats,
   onAutomationRan,
   onChatEvent,
   onHalt,
@@ -29,6 +30,7 @@ import { ActivityDock } from "./ActivityDock";
 import { Automations, resultLine, type RunNotice } from "./Automations";
 import { NoticeBell } from "./NoticeBell";
 import {
+  chatFrom,
   clearNotices,
   markRead,
   NO_NOTICES,
@@ -109,6 +111,11 @@ function Page({ shown, children }: { shown: boolean; children: ReactNode }) {
 /** How much of a run's reply its notification shows; Automations has the rest. */
 export const NOTICE_CHARS = 200;
 
+/** "your chat" -> "Your chat"; a quoted name stays as it is. */
+function capital(name: string): string {
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
 export function runNoticeText(run: RunNotice): string {
   const text = run.text.length > NOTICE_CHARS ? `${run.text.slice(0, NOTICE_CHARS).trimEnd()}…` : run.text;
   return `${run.name} ${run.ok ? "finished" : "failed"}${text ? `: ${text}` : ""}`;
@@ -170,12 +177,29 @@ export function App() {
   const [before, setBefore] = useState<View>("chat");
   if (view !== "settings" && before !== view) setBefore(view);
   useOverscroll();
-  const notify = useCallback((kind: NoticeKind, text: string, action?: NoticeAction) => {
-    setNotices((now) => pushNotice(now, kind, text, Date.now(), action));
+  const notify = useCallback((kind: NoticeKind, text: string, action?: NoticeAction, from?: string) => {
+    setNotices((now) => pushNotice(now, kind, text, Date.now(), action, from));
   }, []);
+  /** Something happened in a chat: the entry names the chat and opens it. */
+  const notifyChat = useCallback(
+    (kind: NoticeKind, conversationId: string, words: (name: string) => string, label: string) => {
+      // A side answer (`<chat>~side-<n>`) belongs to its chat.
+      const id = conversationId.split("~side-")[0];
+      const post = (title?: string) => {
+        const name = title?.trim();
+        notify(kind, words(name ? `"${name}"` : "your chat"), { kind: "chat", label, id }, chatFrom(name));
+      };
+      listChats().then(
+        (rows) => post(rows.find((row) => row.id === id)?.title),
+        () => post(),
+      );
+    },
+    [notify],
+  );
   /** An automation run ended: its result, with a one-tap follow-up. */
   const notifyRun = useCallback(
-    (run: RunNotice) => notify(run.ok ? "success" : "error", runNoticeText(run), runNoticeAction(run)),
+    (run: RunNotice) =>
+      notify(run.ok ? "success" : "error", runNoticeText(run), runNoticeAction(run), "Automations"),
     [notify],
   );
   // A Workboard tidy, read at start and whenever the Workboard loads.
@@ -184,7 +208,7 @@ export function App() {
     (sweep: BoardSwept | null) => {
       if (!sweep || swept.current === sweep.at) return;
       swept.current = sweep.at;
-      notify("info", sweep.text, { kind: "undoSweep", label: "Undo" });
+      notify("info", sweep.text, { kind: "undoSweep", label: "Undo" }, "Workboard");
     },
     [notify],
   );
@@ -252,11 +276,13 @@ export function App() {
       // bell too, so it is there on return (the OS notification is the echo).
       if (!document.hasFocus()) {
         const { event } = envelope;
+        const id = envelope.conversationId;
         if (event.kind === "done" && event.stop !== "halted" && event.stop !== "cancelled")
-          notify("success", "Reply finished", { kind: "chat", label: "Open chat" });
+          notifyChat("success", id, (name) => `Reply finished in ${name}`, "Open chat");
         else if (event.kind === "permission")
-          notify("info", `Needs your OK: ${event.title}`, { kind: "chat", label: "Review" });
-        else if (event.kind === "error") notify("error", event.message, { kind: "chat", label: "Open chat" });
+          notifyChat("info", id, (name) => `${capital(name)} needs your OK: ${event.title}`, "Review");
+        else if (event.kind === "error")
+          notifyChat("error", id, (name) => `Reply failed in ${name}: ${event.message}`, "Open chat");
       }
       setActivity((now) => {
         const key = `chat:${envelope.conversationId}`;
@@ -275,7 +301,7 @@ export function App() {
       dropped = true;
       stop?.();
     };
-  }, [notify]);
+  }, [notifyChat]);
   // A new update, the local engine finishing or failing, and a Workboard
   // tidy land in the bell, whichever page is open.
   useEffect(() => {
@@ -287,26 +313,37 @@ export function App() {
     };
     void onUpdateAvailable((update) => {
       if (update.available)
-        notify("info", `Version ${update.available} is ready to install.`, {
-          kind: "settings",
-          label: "Open About",
-          section: "about",
-        });
+        notify(
+          "info",
+          `Version ${update.available} is ready to install.`,
+          {
+            kind: "settings",
+            label: "Open About",
+            section: "about",
+          },
+          "Settings › About",
+        );
     }).then(keep);
     let downloading = false;
     void onLocalEngineEvent((event) => {
       if (event.error) {
         downloading = false;
-        notify("error", `Local AI: ${event.error}`, { kind: "settings", label: "Open Local AI", section: "localAi" });
+        notify(
+          "error",
+          `Local AI: ${event.error}`,
+          { kind: "settings", label: "Open Local AI", section: "localAi" },
+          "Settings › Local AI",
+        );
       } else if (event.state === "downloading") {
         downloading = true;
       } else if (event.state === "ready" && downloading) {
         downloading = false;
-        notify("success", event.message ?? "Local AI is ready.", {
-          kind: "settings",
-          label: "Open Local AI",
-          section: "localAi",
-        });
+        notify(
+          "success",
+          event.message ?? "Local AI is ready.",
+          { kind: "settings", label: "Open Local AI", section: "localAi" },
+          "Settings › Local AI",
+        );
       }
     }).then(keep);
     return () => {
@@ -420,13 +457,16 @@ export function App() {
     if (!action) return;
     setNotices((now) => spendAction(now, picked.id));
     if (action.kind === "draft") ask(action.text);
-    else if (action.kind === "chat") setView("chat");
+    else if (action.kind === "chat") {
+      if (action.id) openSaved(action.id);
+      else setView("chat");
+    }
     else if (action.kind === "automations") setView("automations");
     else if (action.kind === "settings") run({ kind: "settings", section: action.section });
     else
       workboardSweepUndo().then(
-        () => notify("success", "Put the archived cards back in Todo."),
-        (err) => notify("error", `Undo didn't go through: ${String(err)}`),
+        () => notify("success", "Put the archived cards back in Todo.", undefined, "Workboard"),
+        (err) => notify("error", `Undo didn't go through: ${String(err)}`, undefined, "Workboard"),
       );
   }
   return (
