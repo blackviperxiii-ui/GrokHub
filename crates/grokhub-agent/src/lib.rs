@@ -10,6 +10,7 @@ mod close_check;
 mod compact;
 mod config_file;
 mod denials;
+pub mod device;
 mod diet;
 pub mod dream_gate;
 mod dream_model;
