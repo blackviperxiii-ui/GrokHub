@@ -176,7 +176,10 @@ fn a_typed_btw_answers_on_the_side_and_drops_the_command() {
 #[test]
 fn a_typed_plan_plans_now_or_waits_with_its_command() {
     let r = read_turn("/plan clean my desktop", &IDLE);
-    assert_eq!((r.route, r.text.as_str()), (TurnRoute::Plan, "clean my desktop"));
+    assert_eq!(
+        (r.route, r.text.as_str()),
+        (TurnRoute::Plan, "clean my desktop")
+    );
     let q = read_turn("/plan clean my desktop", &RUNNING);
     assert_eq!(
         (q.route, q.text.as_str()),
@@ -193,7 +196,10 @@ fn a_bare_command_is_not_an_override() {
 #[test]
 fn each_route_has_an_instant_line() {
     assert_eq!(TurnRoute::Side.ack(), "Answering on the side");
-    assert_eq!(TurnRoute::Steer.ack(), "Got it, I'll fold that in after this step");
+    assert_eq!(
+        TurnRoute::Steer.ack(),
+        "Got it, I'll fold that in after this step"
+    );
     assert_eq!(TurnRoute::Queue.ack(), "Queued for after this reply");
     assert_eq!(TurnRoute::Stop.ack(), "Stopped");
     assert_eq!(TurnRoute::Plan.ack(), "Making a plan first");
@@ -238,7 +244,10 @@ fn two_corrections_flip_a_shape_and_a_typed_override_still_stands() {
     let dir = crate::harness::test_dir("intent-flip");
     let cfg = dir.as_path();
     let text = "why did you pick that folder?";
-    assert_eq!(read_turn_learned(cfg, text, &RUNNING).route, TurnRoute::Side);
+    assert_eq!(
+        read_turn_learned(cfg, text, &RUNNING).route,
+        TurnRoute::Side
+    );
     note_correction(cfg, text, true, TurnRoute::Steer);
     assert_eq!(
         read_turn_learned(cfg, text, &RUNNING).route,
@@ -251,7 +260,10 @@ fn two_corrections_flip_a_shape_and_a_typed_override_still_stands() {
     assert_eq!(r.rules[0], "turn:steer:learned");
     // Saved without words.
     let saved = std::fs::read_to_string(nudge_path(cfg)).expect("nudges saved");
-    assert!(!saved.contains("folder") && !saved.contains("why"), "{saved}");
+    assert!(
+        !saved.contains("folder") && !saved.contains("why"),
+        "{saved}"
+    );
     assert!(saved.contains("\"steer\": 2"), "{saved}");
     // The same shape while idle is a different shape.
     assert_eq!(read_turn_learned(cfg, text, &IDLE).route, TurnRoute::Chat);
@@ -282,8 +294,14 @@ fn the_nudge_store_stays_capped() {
 
 #[test]
 fn just_answer_and_plan_first_correct_the_previous_turn() {
-    assert_eq!(correction_of_previous("no, just answer"), Some(TurnRoute::Chat));
+    assert_eq!(
+        correction_of_previous("no, just answer"),
+        Some(TurnRoute::Chat)
+    );
     assert_eq!(correction_of_previous("Just do it."), Some(TurnRoute::Chat));
-    assert_eq!(correction_of_previous("make a plan first"), Some(TurnRoute::Plan));
+    assert_eq!(
+        correction_of_previous("make a plan first"),
+        Some(TurnRoute::Plan)
+    );
     assert_eq!(correction_of_previous("make a plan for dinner"), None);
 }

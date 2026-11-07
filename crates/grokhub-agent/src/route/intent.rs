@@ -168,16 +168,16 @@ const SIDE_LEADS: &[&str] = &[
 
 /// Words that open a question on their own.
 const WH_WORDS: &[&str] = &[
-    "what", "whats", "what's", "why", "how", "hows", "how's", "when", "where", "wheres",
-    "where's", "who", "whos", "who's", "which",
+    "what", "whats", "what's", "why", "how", "hows", "how's", "when", "where", "wheres", "where's",
+    "who", "whos", "who's", "which",
 ];
 
 /// Words that open a question only when it ends in a question mark
 /// ("do the docs next" is work; "do you know the size?" is a question).
 const AUX_WORDS: &[&str] = &[
     "is", "isn't", "isnt", "are", "aren't", "does", "doesn't", "do", "did", "didn't", "was",
-    "were", "has", "have", "hasn't", "haven't", "will", "should", "shall", "am", "any",
-    "anything", "can", "could", "would",
+    "were", "has", "have", "hasn't", "haven't", "will", "should", "shall", "am", "any", "anything",
+    "can", "could", "would",
 ];
 
 const REQUEST_PHRASES: &[&str] = &[
@@ -286,10 +286,27 @@ const SCOPE_WORDS: &[&str] = &[
 ];
 
 /// Verbs that make a new thing, and the things they make.
-const MAKE_VERBS: &[&str] = &["build", "create", "make", "scaffold", "develop", "code", "design"];
+const MAKE_VERBS: &[&str] = &[
+    "build", "create", "make", "scaffold", "develop", "code", "design",
+];
 const ARTIFACTS: &[&str] = &[
-    "website", "site", "app", "application", "bot", "system", "tool", "game", "server",
-    "dashboard", "extension", "plugin", "api", "service", "program", "launcher", "mod",
+    "website",
+    "site",
+    "app",
+    "application",
+    "bot",
+    "system",
+    "tool",
+    "game",
+    "server",
+    "dashboard",
+    "extension",
+    "plugin",
+    "api",
+    "service",
+    "program",
+    "launcher",
+    "mod",
 ];
 
 const SEQUENCERS: &[&str] = &[
@@ -483,9 +500,9 @@ fn shape(text: &str) -> Shape {
             l.starts_with("- ")
                 || l.starts_with("* ")
                 || l.starts_with("• ")
-                || l
-                    .split_once(['.', ')'])
-                    .is_some_and(|(n, _)| !n.is_empty() && n.len() <= 2 && n.chars().all(|c| c.is_ascii_digit()))
+                || l.split_once(['.', ')']).is_some_and(|(n, _)| {
+                    !n.is_empty() && n.len() <= 2 && n.chars().all(|c| c.is_ascii_digit())
+                })
         })
         .count();
     let sequencers = SEQUENCERS
@@ -596,7 +613,13 @@ fn read_running(s: &Shape, own: &str, words: &mut String, rules: &mut Vec<String
         if !work && s.chars <= SIDE_MAX_CHARS * 2 {
             return done(TurnRoute::Side, 0.9, text, "turn:side:lead", rules);
         }
-        return done(TurnRoute::Queue, 0.6, text, "turn:queue:side-lead-work", rules);
+        return done(
+            TurnRoute::Queue,
+            0.6,
+            text,
+            "turn:queue:side-lead-work",
+            rules,
+        );
     }
     if let Some(_lead) = starts_with_any(lower, QUEUE_LEADS) {
         return done(TurnRoute::Queue, 0.85, text, "turn:queue:lead", rules);
@@ -692,16 +715,16 @@ fn read_idle(s: &Shape, own: &str, cx: &TurnCx, text: String, rules: Vec<String>
     }
     if score >= PLAN_BAR && wants_work {
         let rule = format!("turn:plan:{}", why.join("+"));
-        return done(
-            TurnRoute::Plan,
-            (score / 5.0).min(1.0),
-            text,
-            &rule,
-            rules,
-        );
+        return done(TurnRoute::Plan, (score / 5.0).min(1.0), text, &rule, rules);
     }
     let c = if score <= 0.0 { 0.9 } else { 1.0 - score / 5.0 };
-    done(TurnRoute::Chat, c.clamp(0.3, 0.95), text, "turn:chat", rules)
+    done(
+        TurnRoute::Chat,
+        c.clamp(0.3, 0.95),
+        text,
+        "turn:chat",
+        rules,
+    )
 }
 
 // ------------------------------------------------------------ learned nudges
