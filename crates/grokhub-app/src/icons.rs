@@ -265,12 +265,30 @@ pub struct ComposerMotion {
     pub press: f32,
 }
 
-/// Mic while the voice line is idle, open, or speaking.
+/// Mic while the voice line is idle, open, thinking, or speaking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MicMood {
     Idle,
     Live,
+    /// Heard you, working on the answer: dots circle the mic.
+    Thinking,
     Speaking,
+}
+
+/// Dots that circle the mic while voice mode works on an answer.
+pub const THINKING_DOTS: usize = 3;
+
+/// Where the thinking dots sit `secs` in: evenly spaced on a circle of
+/// `radius` round `center`, one turn every 1.6 s, the first starting at the
+/// top. Reduced motion holds `secs` at 0.
+pub fn thinking_dots(center: Pos2, radius: f32, secs: f32) -> [Pos2; THINKING_DOTS] {
+    const TURN_SECS: f32 = 1.6;
+    let spin = (secs / TURN_SECS).fract() * std::f32::consts::TAU;
+    std::array::from_fn(|i| {
+        let ang = spin + i as f32 * std::f32::consts::TAU / THINKING_DOTS as f32
+            - std::f32::consts::FRAC_PI_2;
+        Pos2::new(center.x + radius * ang.cos(), center.y + radius * ang.sin())
+    })
 }
 
 /// Short ease: fast at the start, settled at the end. Input is 0..1.
@@ -409,7 +427,7 @@ fn mic_ink(mood: MicMood, fill: f32) -> egui::Color32 {
         MicMood::Idle => {
             crate::theme::blend_color(crate::theme::muted(), crate::theme::fg(), t * 0.85)
         }
-        MicMood::Live | MicMood::Speaking => crate::theme::blend_color(
+        MicMood::Live | MicMood::Thinking | MicMood::Speaking => crate::theme::blend_color(
             crate::theme::muted(),
             crate::theme::live(),
             (0.35 + 0.65 * t).clamp(0.0, 1.0),
@@ -539,7 +557,19 @@ pub fn paint_composer_mic(
     let speak_phase = speak_t * breath + (1.0 - speak_t) * breath * 0.35 * live_t;
     let motion = composer_motion(hover_t, press_t, live_t, speak_phase);
     let glyph = risen_glyph(alloc, hover_t, press_t);
-    paint_mic_glyph(ui.painter(), glyph, mic_ink(mood, motion.fill), motion);
+    let ink = mic_ink(mood, motion.fill);
+    paint_mic_glyph(ui.painter(), glyph, ink, motion);
+    if mood == MicMood::Thinking {
+        let secs = if crate::motion::reduced_motion(ui) {
+            0.0
+        } else {
+            ui.ctx().input(|i| i.time) as f32
+        };
+        let s = glyph.width() * motion.scale;
+        for dot in thinking_dots(glyph.center(), s * 0.48, secs) {
+            ui.painter().circle_filled(dot, (s * 0.06).max(1.4), ink);
+        }
+    }
     follow_composer_frame(ui, &resp, live, &[hover_t, press_t, live_t, speak_t]);
     name_control(&resp, bar_icon_name(BarIcon::Mic));
     (resp, motion)
@@ -1412,5 +1442,63 @@ mod tests {
         );
         t += 0.5;
         assert_eq!(frame(t, None), idle, "a settled hover is idle");
+    }
+    #[test]
+    fn thinking_dots_start_at_the_top_and_go_round_every_1_6_s() {
+        let c = Pos2::new(10.0, 20.0);
+        let [a, b, d] = thinking_dots(c, 5.0, 0.0);
+        assert!(
+            (a.x - 10.0).abs() < 1e-4 && (a.y - 15.0).abs() < 1e-4,
+            "{a:?}"
+        );
+        // A third of a turn apart: the other two sit below, either side.
+        assert!(
+            (b.x - (10.0 + 5.0 * 0.866_025_4)).abs() < 1e-3 && (b.y - 22.5).abs() < 1e-3,
+            "{b:?}"
+        );
+        assert!(
+            (d.x - (10.0 - 5.0 * 0.866_025_4)).abs() < 1e-3 && (d.y - 22.5).abs() < 1e-3,
+            "{d:?}"
+        );
+        // A quarter turn in, the first dot is at the right.
+        let [q, _, _] = thinking_dots(c, 5.0, 0.4);
+        assert!(
+            (q.x - 15.0).abs() < 1e-3 && (q.y - 20.0).abs() < 1e-3,
+            "{q:?}"
+        );
+        // One full turn later they're back where they began.
+        let [r, _, _] = thinking_dots(c, 5.0, 1.6);
+        assert!(
+            (r.x - a.x).abs() < 1e-3 && (r.y - a.y).abs() < 1e-3,
+            "{r:?}"
+        );
+    }
+
+    #[test]
+    fn a_thinking_mic_paints_three_dots_a_listening_one_does_not() {
+        fn filled_circles(mood: MicMood) -> usize {
+            let ctx = egui::Context::default();
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    Pos2::ZERO,
+                    Vec2::new(200.0, 100.0),
+                )),
+                time: Some(0.3),
+                ..Default::default()
+            };
+            let out = crate::theme::test_pass(&ctx, input, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let _ = paint_composer_mic(ui, 22.0, mood);
+                });
+            });
+            out.shapes
+                .iter()
+                .filter(|c| {
+                    matches!(&c.shape, egui::Shape::Circle(circle) if circle.fill != egui::Color32::TRANSPARENT)
+                })
+                .count()
+        }
+        let live = filled_circles(MicMood::Live);
+        assert_eq!(filled_circles(MicMood::Thinking), live + THINKING_DOTS);
     }
 }

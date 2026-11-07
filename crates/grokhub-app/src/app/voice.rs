@@ -422,9 +422,8 @@ impl Cabin {
         let on = self.voice_is_on();
         let mood = match self.voice_state {
             VoiceState::Speaking => crate::icons::MicMood::Speaking,
-            VoiceState::Listening | VoiceState::Thinking | VoiceState::Hands => {
-                crate::icons::MicMood::Live
-            }
+            VoiceState::Thinking => crate::icons::MicMood::Thinking,
+            VoiceState::Listening | VoiceState::Hands => crate::icons::MicMood::Live,
             VoiceState::Idle | VoiceState::Ready => {
                 if on {
                     crate::icons::MicMood::Live
