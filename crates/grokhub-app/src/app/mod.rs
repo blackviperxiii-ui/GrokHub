@@ -1017,6 +1017,7 @@ impl Cabin {
             let _ = config::save(&cfg);
         }
         config::ensure_memory_seeds();
+        grokhub_agent::device::start(setup_wizard::home(), config::config_dir());
         let mut hub = load_hub_state(&config::hub_state_path()).unwrap_or_else(HubState::empty);
         if !cfg.device_name.trim().is_empty() {
             hub.device_name = cfg.device_name.clone();

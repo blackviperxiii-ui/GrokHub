@@ -9,6 +9,7 @@ pub mod attach;
 pub mod audio_check;
 pub mod automation;
 pub mod autonomy;
+pub mod autotune;
 pub mod backup_nudge;
 pub mod battlenet;
 pub mod battlenet_api;
