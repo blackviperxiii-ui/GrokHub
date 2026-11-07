@@ -338,6 +338,36 @@ pub fn describe(key: Key, v: &Value, clock_12h: bool) -> String {
     }
 }
 
+/// A changed setting on one line: `Text size: 130%`.
+pub fn change_line(key: Key, to: &Value, clock_12h: bool) -> String {
+    format!("{}: {}", key.label(), describe(key, to, clock_12h))
+}
+
+/// An offer as a yes-or-no question: `Turn on game companion?`,
+/// `Set notifications to only important?`.
+pub fn offer_line(key: Key, to: &Value, clock_12h: bool) -> String {
+    let label = lower_first(key.label());
+    match to {
+        Value::Bool(true) => format!("Turn on {label}?"),
+        Value::Bool(false) => format!("Turn off {label}?"),
+        _ => format!(
+            "Set {label} to {}?",
+            lower_first(&describe(key, to, clock_12h))
+        ),
+    }
+}
+
+/// `Game companion` → `game companion`; `10 PM to 7 AM` stays as it is.
+pub fn lower_first(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        Some(f) if !s.contains(" AM") && !s.contains(" PM") => {
+            f.to_lowercase().collect::<String>() + c.as_str()
+        }
+        _ => s.to_string(),
+    }
+}
+
 /// `22` → `10 PM` or `22:00`.
 pub fn hour_text(h: u8, clock_12h: bool) -> String {
     let h = h % 24;
@@ -405,6 +435,26 @@ mod tests {
         );
         assert_eq!(hour_text(0, true), "12 AM");
         assert_eq!(hour_text(12, true), "12 PM");
+    }
+
+    #[test]
+    fn changes_and_offers_read_as_one_line() {
+        assert_eq!(
+            change_line(Key::TextSize, &Value::Pct(150), true),
+            "Text size: 150%"
+        );
+        assert_eq!(
+            offer_line(Key::GameCompanion, &Value::Bool(true), true),
+            "Turn on game companion?"
+        );
+        assert_eq!(
+            offer_line(Key::Notifications, &Value::pick("important"), true),
+            "Set notifications to only important?"
+        );
+        assert_eq!(
+            offer_line(Key::QuietHours, &Value::Hours(23, 8), true),
+            "Set quiet hours to 11 PM to 8 AM?"
+        );
     }
 
     #[test]

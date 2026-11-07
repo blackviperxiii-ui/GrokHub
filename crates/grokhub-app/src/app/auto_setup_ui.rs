@@ -16,7 +16,9 @@ use grokhub_core::autotune::chat::{self as auto_chat, SettingAsk};
 use grokhub_core::autotune::plan::{self, Change, Moment};
 use grokhub_core::autotune::questions::{Pace, Qid};
 use grokhub_core::autotune::rules::{Signals, Usage};
-use grokhub_core::autotune::settings::{self as auto_settings, describe, Key, Target, Value};
+use grokhub_core::autotune::settings::{
+    self as auto_settings, describe, lower_first, Key, Target, Value,
+};
 use grokhub_core::autotune::store::{self as auto_store, AutoStore, JournalLine};
 use grokhub_core::autotune::{DeviceProfile, Display, Tier};
 use grokhub_core::wire::PermissionMode;
@@ -107,30 +109,12 @@ fn clock_12h() -> bool {
 
 /// "Turn on game companion?", "Set notifications to only important?".
 pub(super) fn offer_line(c: &Change) -> String {
-    let label = lower_first(c.key.label());
-    match c.to {
-        Value::Bool(true) => format!("Turn on {label}?"),
-        Value::Bool(false) => format!("Turn off {label}?"),
-        _ => format!(
-            "Set {label} to {}?",
-            lower_first(&describe(c.key, &c.to, clock_12h()))
-        ),
-    }
+    auto_settings::offer_line(c.key, &c.to, clock_12h())
 }
 
 /// "Text size: 130%".
 pub(super) fn change_line(c: &Change) -> String {
-    format!("{}: {}", c.key.label(), describe(c.key, &c.to, clock_12h()))
-}
-
-fn lower_first(s: &str) -> String {
-    let mut c = s.chars();
-    match c.next() {
-        Some(f) if !s.contains(" AM") && !s.contains(" PM") => {
-            f.to_lowercase().collect::<String>() + c.as_str()
-        }
-        _ => s.to_string(),
-    }
+    auto_settings::change_line(c.key, &c.to, clock_12h())
 }
 
 /// The PC can run a model by itself, so the summary offers to set one up.
@@ -399,7 +383,9 @@ impl Cabin {
             self.auto_next_question(device);
             return;
         }
-        if !self.cfg.setup_done || self.setup.step.is_some() {
+        // Past first run: the launch check ran and the setup window is shut
+        // (a profile with chats never sees first run, and still gets tuned).
+        if !self.setup.checked || self.setup.step.is_some() {
             return;
         }
         let generation = grokhub_agent::device::generation();

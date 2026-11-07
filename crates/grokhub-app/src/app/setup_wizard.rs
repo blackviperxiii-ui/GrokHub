@@ -31,7 +31,7 @@ pub(super) struct SetupWizard {
     /// The open step; `None` while closed.
     pub(super) step: Option<SetupStep>,
     /// The first-run check ran this launch.
-    checked: bool,
+    pub(super) checked: bool,
     pub(super) hw: Option<Hardware>,
     hw_rx: Option<mpsc::Receiver<Hardware>>,
     /// The model download in flight.
