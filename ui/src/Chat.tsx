@@ -22,12 +22,14 @@ import {
   loadChat,
   onChatEvent,
   onEventGap,
+  readTurn,
   runSlash,
   saveSettings,
   sendChat,
+  sideChat,
   steerChat,
+  tellMain,
   type Answer,
-  type Approvals,
   type ChatEvent,
   type ElicitAction,
   type SavedFile,
@@ -37,6 +39,7 @@ import {
   type SlashHit,
   type QuickChip,
   type Transcript,
+  type TurnRead,
 } from "./api";
 import { ChipRow, useChipRow } from "./Chips";
 import { GoalAsk } from "./Goals";
@@ -54,7 +57,8 @@ import type { View } from "./Palette";
 import { Markdown } from "./Markdown";
 import { displayText } from "./md";
 import { appendDraft, Mic } from "./Mic";
-import { ElicitCard, ModeChips, type ElicitItem } from "./Modes";
+import { ElicitCard, type ElicitItem } from "./Modes";
+import { SIDE_MARK, SideCards, withSide, type Side } from "./Side";
 import { NyxDock } from "./NyxDock";
 import { NyxFace } from "./NyxFace";
 import { activityOf, useNyx } from "./nyx";
@@ -112,11 +116,18 @@ export interface Prefill {
   conversationId?: string;
 }
 
-const PLACEHOLDERS: Record<SessionMode, string> = {
-  chat: `Message ${PRODUCT_NAME}`,
-  plan: "Describe what to plan",
-  btw: "Ask on the side",
-};
+const PLACEHOLDER = `Message ${PRODUCT_NAME}`;
+
+/** Bare `/plan`: the next message plans first. */
+export const PLAN_NEXT = "Your next message gets a plan first.";
+/** Bare `/chat`: the next message is answered straight away. */
+export const CHAT_NEXT = "Your next message gets a straight answer, with no plan.";
+/** Bare `/btw`: side questions need no command. */
+export const BTW_HINT =
+  "No command needed: ask your question while a reply runs and it's answered on the side.";
+/** A permission card's Stop asking me, once the setting moved. */
+export const STOP_ASKING_DONE =
+  "Allowed. From now on only risky things ask. Settings → Defaults changes it back.";
 
 export const CHAT_EMPTY = `Ask ${PRODUCT_NAME} anything.`;
 export const SIGNED_OUT =
@@ -315,9 +326,12 @@ const ToolCard = memo(function ToolCard({
 function PermissionCard({
   item,
   onAnswer,
+  onStopAsking,
 }: {
   item: Extract<Item, { kind: "permission" }>;
   onAnswer: (answer: Answer) => void;
+  /** Allow this and ask less from now on; absent when it can't change here. */
+  onStopAsking?: () => void;
 }) {
   return (
     <div className="card permission" role="group" aria-label={`Approve ${item.title}`}>
@@ -339,6 +353,16 @@ function PermissionCard({
           <button type="button" className="quiet danger" onClick={() => onAnswer("deny")}>
             Deny
           </button>
+          {onStopAsking && (
+            <button
+              type="button"
+              className="link"
+              title="Allows this, and from now on only risky things ask. Settings → Defaults changes it back."
+              onClick={onStopAsking}
+            >
+              Stop asking me
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -355,6 +379,7 @@ function LogItem({
   onMenu,
   onAnswer,
   onAnswerCard,
+  onStopAsking,
   nyxUrl,
 }: {
   item: Item;
@@ -365,6 +390,8 @@ function LogItem({
   nyxUrl?: string;
   onAnswer: (id: string, answer: Answer) => void;
   onAnswerCard: (item: ElicitItem, action: ElicitAction, value: string) => void;
+  /** Stop asking me on a permission card, while the setting is Ask me first. */
+  onStopAsking?: (id: string) => void;
 }) {
   "use memo";
   switch (item.kind) {
@@ -390,7 +417,11 @@ function LogItem({
     case "permission":
       return (
         <ViewTransition>
-          <PermissionCard item={item} onAnswer={(a) => onAnswer(item.id, a)} />
+          <PermissionCard
+            item={item}
+            onAnswer={(a) => onAnswer(item.id, a)}
+            onStopAsking={onStopAsking && (() => onStopAsking(item.id))}
+          />
         </ViewTransition>
       );
     case "elicit":
@@ -487,7 +518,13 @@ export function Chat({
   const queueRef = useRef<string[]>([]);
   /** The queued message whose turn came: it sends after this render. */
   const [nextUp, setNextUp] = useState<{ text: string; n: number }>();
-  const [mode, setMode] = useState<SessionMode>("chat");
+  /** `/plan` or `/chat` named how the next message runs; otherwise the app reads it. */
+  const nextAs = useRef<SessionMode | undefined>(undefined);
+  /** Questions answered beside the running reply. */
+  const [sides, setSides] = useState<Side[]>([]);
+  const sideN = useRef(0);
+  /** The line shown the moment a message typed mid-reply is routed. */
+  const [ack, setAck] = useState<string | null>(null);
   /** A reply's follow-ups landed: the chip row is asked for again. */
   const [followed, setFollowed] = useState(0);
   /** The game goal the last reply noticed, asked about under it. */
@@ -504,7 +541,6 @@ export function Chat({
     surface: "composer",
     conversationId,
     draft,
-    mode,
     turn: followed,
     busy,
     active,
@@ -515,22 +551,6 @@ export function Chat({
   useEffect(() => {
     if (active) getSettings().then(setSettings, () => {});
   }, [active]);
-
-  async function setApprovals(approvals: Approvals) {
-    if (!settings) return;
-    try {
-      setSettings(
-        await saveSettings(
-          settings.closeToTray,
-          settings.workspace,
-          approvals,
-          settings.desktopControl,
-        ),
-      );
-    } catch (err) {
-      setError(String(err));
-    }
-  }
 
   /** A bubble's open menu, and the delete waiting on its confirm. */
   const [msgMenu, setMsgMenu] = useState<{ i: number; at: { x: number; y: number } } | null>(null);
@@ -553,8 +573,16 @@ export function Chat({
     }
   }
 
+  /** Side answers belong to the chat on screen: leaving it stops them. */
+  function leaveSides() {
+    for (const side of sides) if (side.live) void cancelChat(side.id);
+    setSides([]);
+    setAck(null);
+  }
+
   /** A new conversation; the old one stays saved for History. */
   function startFresh() {
+    leaveSides();
     touched.current = true;
     setGoalAsk(null);
     setItems([]);
@@ -564,6 +592,7 @@ export function Chat({
   }
 
   function show(transcript: Transcript) {
+    leaveSides();
     setGoalAsk(null);
     setConversationId(transcript.id);
     setItems(itemsFrom(transcript));
@@ -647,6 +676,7 @@ export function Chat({
       }
       touched.current = true;
       void closeChat(conversationId);
+      leaveSides();
       setGoalAsk(null);
       setItems([]);
       setEarlier(0);
@@ -665,7 +695,15 @@ export function Chat({
     let stop: (() => void) | undefined;
     let dropped = false;
     let stopGap: (() => void) | undefined;
+    const sidePrefix = `${conversationId}${SIDE_MARK}`;
     void onChatEvent(({ conversationId: id, event }) => {
+      // A side answer streams into its own card, never the chat.
+      if (id.startsWith(sidePrefix)) {
+        if (event.kind === "text")
+          setSides((now) => now.map((s) => (s.id === id ? { ...s, answer: s.answer + event.text } : s)));
+        else if (event.kind === "error") setSides((now) => now.map((s) => (s.id === id ? { ...s, failed: true } : s)));
+        return;
+      }
       // An event that lands after the turn ended must not reopen it.
       if (id !== conversationId || !busyRef.current) return;
       if (event.kind === "error") setError(event.message);
@@ -707,8 +745,10 @@ export function Chat({
     setQueue(next);
   }
 
-  /** Sends `text` and `files` in the current mode, or in `as` (`/plan <text>`).
-   * `fromDraft` empties the box and its files; a tapped chip leaves them. */
+  /** Sends `text` and `files`. `as` (`/plan <text>`, a plan's follow-up chip)
+   * names how it runs; otherwise `/plan` or `/chat` before it did, or the app
+   * reads the message. `fromDraft` empties the box and its files; a tapped
+   * chip leaves them. */
   async function deliver(
     text: string,
     files: typeof attach.files,
@@ -730,12 +770,15 @@ export function Chat({
       attach.clear();
     }
     setError(null);
+    setAck(null);
     busyRef.current = true;
     setBusy(true);
+    const runs = as ?? nextAs.current;
+    nextAs.current = undefined;
     let stop = "";
     try {
       const paths = files.map((f) => f.path);
-      stop = await (paths.length ? sendChat(conversationId, text, as ?? mode, paths) : sendChat(conversationId, text, as ?? mode));
+      stop = await (paths.length ? sendChat(conversationId, text, runs, paths) : sendChat(conversationId, text, runs));
     } catch (err) {
       setError(String(err));
     }
@@ -811,6 +854,21 @@ export function Chat({
     }
   }
 
+  /** Stop asking me: allow this step, and Ask me first becomes Only ask for
+   * risky things. Settings → Defaults is where it changes back. */
+  async function stopAsking(id: string) {
+    if (!settings || settings.approvals !== "ask") return;
+    void answer(id, "allow");
+    try {
+      setSettings(
+        await saveSettings(settings.closeToTray, settings.workspace, "auto", settings.desktopControl),
+      );
+      setAck(STOP_ASKING_DONE);
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
   async function answerCard(item: ElicitItem, action: ElicitAction, value: string) {
     const mark = (from: ElicitAction | null, to: ElicitAction | null) =>
       setItems((now) =>
@@ -819,17 +877,80 @@ export function Chat({
         ),
       );
     mark(null, action);
-    // An approved plan leaves plan mode, as in the cabin.
-    const leavesPlan = item.server === "Plan" && action === "accept";
-    if (leavesPlan) setMode("chat");
     try {
       await answerElicit(conversationId, item.id, action, item.fieldName, value);
     } catch (err) {
       // It never reached the agent, which is still asking: give the card back.
       mark(action, null);
-      if (leavesPlan) setMode("plan");
       setError(String(err));
     }
+  }
+
+  /** A question typed during a reply gets its own read-only answer in an
+   * "On the side" card; the reply, its chat and its history stay as they are. */
+  async function askOnTheSide(question: string) {
+    sideN.current += 1;
+    const id = `${conversationId}${SIDE_MARK}${sideN.current.toString(36)}`;
+    const ask = [...items].reverse().find((item) => item.kind === "user");
+    const reply = items.at(-1);
+    const soFar = reply?.kind === "assistant" ? reply.text : "";
+    setSides((now) => withSide(now, { id, question, answer: "", live: true, failed: false }));
+    let failed = false;
+    try {
+      await sideChat(conversationId, id, question, ask?.kind === "user" ? ask.text : "", soFar);
+    } catch {
+      failed = true;
+    }
+    setSides((now) => now.map((s) => (s.id === id ? { ...s, live: false, failed: s.failed || failed } : s)));
+  }
+
+  function stopSide(side: Side) {
+    void cancelChat(side.id);
+  }
+
+  function dismissSide(side: Side) {
+    setSides((now) => now.filter((s) => s.id !== side.id));
+  }
+
+  /** Tell the main task: the side answer joins the running reply at its next
+   * step, waits its turn behind it, or goes as the next message. */
+  async function tellSide(side: Side) {
+    dismissSide(side);
+    try {
+      const told = await tellMain(conversationId, side.question, side.answer);
+      if (told.steered) setItems((now) => [...now, { kind: "user", text: told.text }]);
+      else if (busyRef.current) changeQueue([...queueRef.current, told.text]);
+      else void deliver(told.text, [], false, "chat");
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  /** A message typed while a reply runs, as the app read it: a side
+   * question, a correction for the work, stop, or a new job that waits. */
+  async function routeRunning(typed: string, read: TurnRead) {
+    const text = read.text.trim() || typed;
+    setAck(read.ack || null);
+    switch (read.route) {
+      case "side":
+        void askOnTheSide(text);
+        return;
+      case "stop":
+        stopReply();
+        return;
+      case "steer": {
+        const took = await steerChat(conversationId, text).catch(() => false);
+        if (took) {
+          setItems((now) => [...now, { kind: "user", text }]);
+          return;
+        }
+        // The reply ended first: the words wait their turn instead.
+        break;
+      }
+      case "queue":
+        break;
+    }
+    changeQueue([...queueRef.current, text]);
   }
 
   /** Runs a slash line and applies what it did. */
@@ -848,10 +969,24 @@ export function Chat({
       case "newChat":
         startOver();
         break;
-      case "mode":
-        setMode(effect.mode);
-        if (effect.text) void deliver(effect.text.trim(), [], false, effect.mode);
+      case "mode": {
+        const text = effect.text?.trim();
+        if (effect.mode === "btw") {
+          // A typed side question: beside the reply when one runs, else just answered.
+          if (!text) setItems((now) => [...now, { kind: "slash", command, text: BTW_HINT }]);
+          else if (busyRef.current && !remote) void askOnTheSide(text);
+          else void deliver(text, [], false, "chat");
+        } else if (text) {
+          void deliver(text, [], false, effect.mode);
+        } else {
+          nextAs.current = effect.mode;
+          setItems((now) => [
+            ...now,
+            { kind: "slash", command, text: effect.mode === "plan" ? PLAN_NEXT : CHAT_NEXT },
+          ]);
+        }
         break;
+      }
       case "open":
         onOpenView?.(effect.view);
         break;
@@ -887,11 +1022,23 @@ export function Chat({
     event?.preventDefault();
     const text = draft.trim();
     const files = attach.files;
-    // While a reply runs, a message lines up behind it (files wait in the box).
+    // While a reply runs, the app reads what the message is for (files wait
+    // in the box). A typed /btw or /side asks on the side.
     if (busy) {
-      if (!text || isSlashCommand(text)) return;
-      changeQueue([...queueRef.current, text]);
+      if (!text || (isSlashCommand(text) && !/^\/(btw|side)\s+\S/i.test(text))) return;
       setDraft("");
+      // The web app lines messages up behind the reply, as before.
+      if (remote) {
+        changeQueue([...queueRef.current, text]);
+        return;
+      }
+      let read: TurnRead;
+      try {
+        read = await readTurn(text);
+      } catch {
+        read = { route: "queue", text, ack: "" };
+      }
+      await routeRunning(text, read);
       return;
     }
     if (!text && files.length === 0) return;
@@ -905,15 +1052,14 @@ export function Chat({
 
   /** One tap rule per chip (`grokhub_core::ChipAction`): Go opens its page;
    * Ask sends its text when the box is empty and adds it to what is typed
-   * otherwise. A follow-up puts its reply's mode back first. */
+   * otherwise. A follow-up from a plan's reply plans again. */
   function tapChip(chip: QuickChip) {
     row.picked(chip);
     if (chip.action === "go") {
       if (chip.view) onOpenView?.(chip.view as View);
       return;
     }
-    const as = chip.mode && chip.mode !== "btw" ? chip.mode : mode;
-    if (as !== mode) setMode(as);
+    const as = chip.mode === "plan" ? "plan" : undefined;
     if (draft.trim()) {
       setDraft(appendDraft(draft, chip.value));
       return;
@@ -1029,6 +1175,7 @@ export function Chat({
             nyxUrl={nyx?.url}
             onAnswer={answer}
             onAnswerCard={answerCard}
+            onStopAsking={!remote && settings?.approvals === "ask" ? stopAsking : undefined}
           />
         ))}
         {busy && waiting && (
@@ -1058,14 +1205,12 @@ export function Chat({
           )}
         </div>
       )}
-      <ModeChips
-        mode={mode}
-        onMode={setMode}
-        approvals={settings?.approvals ?? null}
-        onApprovals={(a) => void setApprovals(a)}
-        busy={busy}
-        remote={remote}
-      />
+      {ack && (
+        <p className="note route-ack" role="status">
+          {ack}
+        </p>
+      )}
+      <SideCards sides={sides} onStop={stopSide} onTell={(side) => void tellSide(side)} onDismiss={dismissSide} />
       <AttachChips files={attach.files} note={attach.note} onRemove={attach.remove} busy={busy} />
       <form className="composer slash-wrap" onSubmit={send}>
         {slashOpen && (
@@ -1081,7 +1226,7 @@ export function Chat({
         )}
         <textarea
           aria-label="Message"
-          placeholder={PLACEHOLDERS[mode]}
+          placeholder={PLACEHOLDER}
           value={draft}
           rows={2}
           role={slashOpen ? "combobox" : undefined}
@@ -1101,8 +1246,12 @@ export function Chat({
         {busy ? (
           <>
             {draft.trim() && !isSlashCommand(draft.trim()) && (
-              <button type="submit" className="quiet" title="Sends when this reply ends; Activity lists it">
-                Queue
+              <button
+                type="submit"
+                className="quiet"
+                title="A side question is answered beside this reply, a correction steers it, and a new job waits its turn"
+              >
+                Send
               </button>
             )}
             <button type="button" onClick={stopReply}>

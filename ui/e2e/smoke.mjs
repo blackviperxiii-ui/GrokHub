@@ -238,7 +238,8 @@ const AUTOMATION = "every day at 7am say hello from the smoke test";
 const MEMORY_NOTE = "the smoke test likes kumquats";
 const PULSE_ACTION = "close every done card on the smoke workboard";
 const JOURNAL_QUESTION = "Should the smoke test ship the shell first?";
-const PLAN_PROMPT = "plan a tidy of the smoke notes";
+// The app reads this as a plan with no picker (intent_tests.rs pins it).
+const PLAN_PROMPT = "make a plan to tidy the smoke notes";
 const PLAN_TEXT = "1. Read the smoke notes. 2. Merge the duplicates.";
 const PLAN_REPLY = "Plan approved, ready to tidy";
 const DESK_PROMPT = "clear out the old folder from the terminal";
@@ -746,8 +747,8 @@ async function palette(s) {
   console.log("the Command button opened the Journal");
 }
 
-// Plan chip: the turn is read-only, so a write is refused without a card;
-// the plan waits on its card until Approve plan, and the chip goes back to Chat.
+// A plan-shaped message plans on its own: the turn is read-only, so a write is
+// refused without a card, and the plan waits on its card until Approve plan.
 // Settings → Personality: Use makes a preset the default in shell.json, and
 // the next chat message's system prompt carries its voice after the rules.
 async function usePersonality(s, config, name) {
@@ -779,7 +780,8 @@ async function usePersonality(s, config, name) {
 
 async function plan(s, workspace) {
   await tab(s, "Chat");
-  await click(s, "[aria-label='Session mode'] button[title^='Loadout writes a plan']");
+  const [picker] = await wd("POST", `${s}/elements`, { using: "css selector", value: "[aria-label='Session mode']" });
+  if (picker) throw new Error("the composer still shows a mode picker");
   const box = await waitFor("the message box", () => find(s, "textarea[aria-label='Message']"));
   await wd("POST", `${s}/element/${box}/value`, { text: PLAN_PROMPT });
   await click(s, "form.composer button[type='submit']");
@@ -809,10 +811,7 @@ async function plan(s, workspace) {
     }
     return null;
   });
-  const chat = await find(s, "[aria-label='Session mode'] button[title^='Normal chat']");
-  const pressed = await wd("GET", `${s}/element/${chat}/attribute/aria-pressed`);
-  if (pressed !== "true") throw new Error("the chip stayed on Plan after the approval");
-  console.log(`plan approved: ${JSON.stringify(PLAN_REPLY)}, chip back on Chat`);
+  console.log(`plan approved: ${JSON.stringify(PLAN_REPLY)}, no picker needed`);
 }
 
 // Settings → Local AI: on Windows smoke, capture Get engine → progress →

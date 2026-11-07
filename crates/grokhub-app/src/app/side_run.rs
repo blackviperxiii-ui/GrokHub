@@ -9,14 +9,12 @@ use grokhub_agent::route::intent::TurnRoute;
 
 /// Finished side answers kept on screen per chat. Older ones drop off.
 pub(super) const SIDE_KEEP: usize = 3;
-/// How much of the main task's ask the side run is shown.
-const ASK_CLIP: usize = 400;
-/// How much of the reply so far the side run is shown, from its end.
-const SO_FAR_TAIL: usize = 600;
-
 pub(super) struct SideRun {
     pub id: u64,
     pub thread_id: String,
+    /// The forked copy the run works on; deleted once it ends, so side
+    /// answers never show in History.
+    pub session: String,
     pub question: String,
     pub answer: String,
     /// Some while the run is going.
@@ -51,64 +49,8 @@ pub(super) enum SideAct {
     Stop(u64),
 }
 
-fn clip_start(text: &str, max: usize) -> String {
-    let text = text.trim();
-    if text.chars().count() <= max {
-        return text.to_string();
-    }
-    let cut: String = text.chars().take(max).collect();
-    format!("{cut}…")
-}
-
-fn clip_end(text: &str, max: usize) -> String {
-    let text = text.trim();
-    let n = text.chars().count();
-    if n <= max {
-        return text.to_string();
-    }
-    let cut: String = text.chars().skip(n - max).collect();
-    format!("…{cut}")
-}
-
-/// The side run's own prompt: the question plus a snapshot of the work in
-/// flight, so it can answer about it without continuing it.
-pub(super) fn side_prompt(question: &str, ask: &str, so_far: &str) -> String {
-    let mut out = String::from(
-        "You are answering a quick side question while the main task in this chat keeps working. \
-         Answer only the side question, briefly and plainly. Do not continue, change or redo the \
-         main task, and do not start any work of your own. You can read files and look things up; \
-         you cannot change anything.\n",
-    );
-    if !ask.trim().is_empty() {
-        out.push_str(&format!(
-            "\nThe main task is working on: {}\n",
-            clip_start(ask, ASK_CLIP)
-        ));
-    }
-    if !so_far.trim().is_empty() {
-        out.push_str(&format!(
-            "\nIts reply so far ends with: {}\n",
-            clip_end(so_far, SO_FAR_TAIL)
-        ));
-    }
-    out.push_str(&format!("\nSide question: {}", question.trim()));
-    out
-}
-
-/// What **Tell the main task** feeds the main work: the question and the
-/// answer it got, so the main task can use both.
-pub(super) fn tell_main_text(question: &str, answer: &str) -> String {
-    let answer = answer.trim();
-    if answer.is_empty() {
-        question.trim().to_string()
-    } else {
-        format!(
-            "I asked on the side: {}\nThe answer was: {}\nTake this into account.",
-            question.trim(),
-            clip_start(answer, 1_200)
-        )
-    }
-}
+use grokhub_agent::route::intent::clip_start;
+pub(super) use grokhub_agent::route::intent::{side_prompt, tell_main_text};
 
 impl Cabin {
     /// Start a read-only side run for `question` on a copy of the chat on screen.
@@ -174,19 +116,31 @@ impl Cabin {
         grokhub_agent::watch_cancel(&session, cancel.clone());
         let (tx, rx) = mpsc::channel();
         let run_cancel = cancel.clone();
+        let run_session = session.clone();
         let model = grokhub_agent::DEFAULT_MODEL.to_string();
         std::thread::spawn(move || {
             let _origin =
                 grokhub_agent::harness::OriginScope::enter(grokhub_agent::harness::Origin::User);
             super::background::run_native_bg(
-                session, workspace, client, auth_kind, bearer, gate, model, effort, system, prompt,
-                run_cancel, tx,
+                run_session,
+                workspace,
+                client,
+                auth_kind,
+                bearer,
+                gate,
+                model,
+                effort,
+                system,
+                prompt,
+                run_cancel,
+                tx,
             );
         });
         self.side.next_id += 1;
         self.side.runs.push(SideRun {
             id: self.side.next_id,
             thread_id,
+            session,
             question,
             answer: String::new(),
             rx: Some(rx),
@@ -235,6 +189,7 @@ impl Cabin {
             }
             if ended {
                 run.rx = None;
+                let _ = grokhub_agent::delete_session(&run.session);
                 moved = true;
             }
         }
@@ -270,6 +225,7 @@ impl Cabin {
         if let Some(run) = self.side.runs.iter_mut().find(|r| r.id == id) {
             run.cancel.cancel();
             run.rx = None;
+            let _ = grokhub_agent::delete_session(&run.session);
             if run.answer.trim().is_empty() {
                 run.failed = Some("Stopped".into());
             }

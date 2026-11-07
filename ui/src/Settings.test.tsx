@@ -122,12 +122,12 @@ describe("Settings", () => {
     expect(await screen.findByLabelText("Let Loadout control the desktop")).toBeInTheDocument();
     // The folder, approvals and tray moved out of General.
     expect(screen.queryByLabelText("Work folder")).toBeNull();
-    expect(screen.queryByLabelText("Approvals")).toBeNull();
+    expect(screen.queryByLabelText("When the AI wants to change things")).toBeNull();
     expect(screen.queryByLabelText(/keeps Loadout in the tray/)).toBeNull();
 
     await openSection("Defaults");
     await userEvent.type(screen.getByLabelText("Work folder"), "/work");
-    await userEvent.selectOptions(screen.getByLabelText("Approvals"), "always");
+    await userEvent.selectOptions(screen.getByLabelText("When the AI wants to change things"), "always");
     await userEvent.click(screen.getByRole("button", { name: "Save defaults" }));
     expect(api.saveDefaults).toHaveBeenCalledWith("/work", "always");
     await openSection("Behavior");
@@ -424,7 +424,7 @@ describe("Settings", () => {
     expect(screen.queryByText(/grok-\d/i)).toBeNull();
     expect(screen.queryByText(/effort/i)).toBeNull();
     expect(screen.getByText("/home/user/GrokHub")).toBeInTheDocument();
-    expect(screen.getByText("Auto")).toBeInTheDocument();
+    expect(screen.getByText("Only ask for risky things")).toBeInTheDocument();
     expect(screen.getByText("Saved on your computer.")).toBeInTheDocument();
     expect(screen.queryByLabelText("API key")).toBeNull();
     expect(screen.queryByRole("button")).toBeNull();

@@ -42,13 +42,9 @@ pub const SHELL_SLASH: &[ShellCmd] = &[
     row("/help", "Show these commands", "/help"),
     row("/new", "New chat", "/new"),
     row("/clear", "Clear this chat", "/clear"),
-    row("/chat", "Chat mode", "/chat"),
-    row(
-        "/plan",
-        "Plan mode: read only until you approve the plan",
-        "/plan",
-    ),
-    row("/btw", "Side ask: looks, changes nothing", "/btw"),
+    row("/chat", "Just answer the next message", "/chat"),
+    row("/plan", "Plan the next message first", "/plan"),
+    row("/btw", "Ask on the side while a reply runs", "/btw"),
     row("/remember", "Save a memory note…", "/remember "),
     ShellCmd {
         desktop_only: true,
@@ -396,7 +392,7 @@ mod tests {
             Err("/history isn't in this app yet.".into())
         );
         let help = help();
-        assert!(help.contains("/plan — Plan mode"));
+        assert!(help.contains("/plan — Plan the next message first"));
         assert!(help.contains("/remember — Save a memory note"));
         assert!(!help.contains("/history"));
     }

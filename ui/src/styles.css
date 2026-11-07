@@ -1149,6 +1149,39 @@ button.md-copy {
   color: var(--danger-text);
 }
 
+/* The app's one-line read of a message ("Answering on the side"). */
+.note.route-ack {
+  margin: 0 0 4px;
+  font-size: 0.9em;
+}
+
+/* Answers to side questions, above the box; never part of the chat. */
+.side-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.side-card {
+  max-width: 100%;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.side-label {
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.side-question {
+  color: var(--muted);
+}
+
+.side-answer {
+  overflow-wrap: anywhere;
+}
+
 .card {
   align-self: flex-start;
   max-width: 80%;

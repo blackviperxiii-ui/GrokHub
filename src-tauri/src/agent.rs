@@ -31,7 +31,8 @@ pub fn shell_gate(mode: PermMode, desktop: bool, session: SessionMode) -> Gate {
     }
 }
 
-/// The composer's Chat / Plan / btw chip (the cabin's session modes).
+/// How one message runs. The app picks Chat or Plan for each message
+/// (`turns::pick_mode`); btw is a side answer's read-only run.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SessionMode {
@@ -310,9 +311,26 @@ impl Session {
         Self::spawn_with(conversation_id, config_dir, native_desktop)
     }
 
+    /// A side answer beside `parent`'s running reply: it starts from the
+    /// parent's saved turns and works under its own `side_id`, so the
+    /// parent's worker, history and inboxes are never touched.
+    pub fn spawn_side(side_id: &str, parent_id: &str, config_dir: PathBuf) -> Self {
+        Self::spawn_from(side_id, parent_id, config_dir, native_desktop)
+    }
+
     /// [`Session::spawn`] with the desktop the worker builds; tests pass a fake.
     pub fn spawn_with(
         conversation_id: &str,
+        config_dir: PathBuf,
+        desktop: fn() -> Box<dyn DesktopOps>,
+    ) -> Self {
+        Self::spawn_from(conversation_id, conversation_id, config_dir, desktop)
+    }
+
+    /// A worker for `conversation_id` that resumes from `resume_id`'s saved turns.
+    pub fn spawn_from(
+        conversation_id: &str,
+        resume_id: &str,
         config_dir: PathBuf,
         desktop: fn() -> Box<dyn DesktopOps>,
     ) -> Self {
@@ -327,6 +345,7 @@ impl Session {
         let steer = SteerQueue::new();
         let worker = Worker {
             id: conversation_id.to_string(),
+            resume: resume_id.to_string(),
             config_dir,
             desktop,
             cancel: worker_cancel,
@@ -526,6 +545,9 @@ fn follow_ups(
 /// What a chat's worker thread owns besides its queues.
 struct Worker {
     id: String,
+    /// Whose saved turns the engine starts from: the chat's own, or the
+    /// parent's for a side answer.
+    resume: String,
     config_dir: PathBuf,
     desktop: fn() -> Box<dyn DesktopOps>,
     cancel: CancelToken,
@@ -536,6 +558,7 @@ struct Worker {
 fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
     let Worker {
         id: conversation_id,
+        resume,
         config_dir,
         desktop,
         cancel,
@@ -616,7 +639,7 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                 }));
                 // A chat saved earlier (opened from History, or the last chat
                 // after a restart) goes on from its saved turns, as the cabin's does.
-                if let Ok(info) = grokhub_agent::load_session(&conversation_id) {
+                if let Ok(info) = grokhub_agent::load_session(&resume) {
                     engine.resume(info.input(), info.usage);
                 }
                 engine

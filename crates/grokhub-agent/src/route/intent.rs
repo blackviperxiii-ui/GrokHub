@@ -891,6 +891,75 @@ pub fn correction_of_previous(text: &str) -> Option<TurnRoute> {
     }
 }
 
+/// How much of the main task's ask a side answer is shown.
+const SIDE_ASK_CLIP: usize = 400;
+/// How much of the reply so far a side answer is shown, from its end.
+const SIDE_SO_FAR_TAIL: usize = 600;
+/// How much of a side answer Tell the main task passes on.
+const SIDE_TELL_CLIP: usize = 1_200;
+
+/// The first `max` characters of `text`, with an ellipsis when cut.
+pub fn clip_start(text: &str, max: usize) -> String {
+    let text = text.trim();
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let cut: String = text.chars().take(max).collect();
+    format!("{cut}…")
+}
+
+/// The last `max` characters of `text`, with an ellipsis when cut.
+pub fn clip_end(text: &str, max: usize) -> String {
+    let text = text.trim();
+    let n = text.chars().count();
+    if n <= max {
+        return text.to_string();
+    }
+    let cut: String = text.chars().skip(n - max).collect();
+    format!("…{cut}")
+}
+
+/// A side answer's own prompt: the question plus a snapshot of the work in
+/// flight (`ask`, and the reply `so_far`), so it can answer about the work
+/// without continuing it.
+pub fn side_prompt(question: &str, ask: &str, so_far: &str) -> String {
+    let mut out = String::from(
+        "You are answering a quick side question while the main task in this chat keeps working. \
+         Answer only the side question, briefly and plainly. Do not continue, change or redo the \
+         main task, and do not start any work of your own. You can read files and look things up; \
+         you cannot change anything.\n",
+    );
+    if !ask.trim().is_empty() {
+        out.push_str(&format!(
+            "\nThe main task is working on: {}\n",
+            clip_start(ask, SIDE_ASK_CLIP)
+        ));
+    }
+    if !so_far.trim().is_empty() {
+        out.push_str(&format!(
+            "\nIts reply so far ends with: {}\n",
+            clip_end(so_far, SIDE_SO_FAR_TAIL)
+        ));
+    }
+    out.push_str(&format!("\nSide question: {}", question.trim()));
+    out
+}
+
+/// What **Tell the main task** feeds the main work: the side question and
+/// the answer it got, so the main task can use both.
+pub fn tell_main_text(question: &str, answer: &str) -> String {
+    let answer = answer.trim();
+    if answer.is_empty() {
+        question.trim().to_string()
+    } else {
+        format!(
+            "I asked on the side: {}\nThe answer was: {}\nTake this into account.",
+            question.trim(),
+            clip_start(answer, SIDE_TELL_CLIP)
+        )
+    }
+}
+
 #[cfg(test)]
 #[path = "intent_tests.rs"]
 mod intent_tests;
