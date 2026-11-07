@@ -2987,6 +2987,13 @@ pub fn run() {
             // The router takes Local AI's switch, OpenRouter's policy and the
             // spend limits from the cabin's settings from the start.
             grokhub_agent::route::host::sync(&config_dir);
+            // The full device profile, shared with the cabin: sizes local
+            // model launches and sets the router's battery and low-end tier.
+            #[cfg(desktop)]
+            grokhub_agent::device::start(
+                grokhub_core::paths::user_home().unwrap_or_default(),
+                config_dir.clone(),
+            );
             pulse_feed::start(config_dir.clone(), || {
                 let client: Box<dyn grokhub_agent::ModelClient> = Box::new(model_client()?.0);
                 Ok((client, grokhub_agent::route::host::chat_start().0))

@@ -86,21 +86,11 @@ pub(super) const SETUP_DONE_STATUS: &str =
 pub(super) const SETUP_SKIPPED_STATUS: &str =
     "Setup skipped. Settings → Your PC → Automations & limits → Setup opens it again.";
 
-pub(super) fn run(cmd: &str, args: &[&str]) -> Option<String> {
-    let mut c = std::process::Command::new(cmd);
-    c.args(args)
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        c.creation_flags(CREATE_NO_WINDOW);
-    }
-    let out = c.output().ok()?;
-    out.status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+pub(super) use grokhub_agent::device::{free_disk_mb, ram_mb, run};
+
+/// The home folder (free disk and models are read under it).
+pub(super) fn home() -> PathBuf {
+    grokhub_core::paths::user_home().unwrap_or_else(|| PathBuf::from("."))
 }
 
 /// GPU (nvidia-smi, else Linux DRM / Windows DXGI), RAM and free disk under `dir`.
@@ -193,58 +183,6 @@ fn drm_gpu_name(card_dir: &Path) -> Option<String> {
             }
         }
     }
-    None
-}
-
-#[cfg(target_os = "linux")]
-pub(super) fn ram_mb() -> Option<u64> {
-    ls::parse_meminfo(&std::fs::read_to_string("/proc/meminfo").ok()?)
-}
-
-#[cfg(target_os = "macos")]
-pub(super) fn ram_mb() -> Option<u64> {
-    ls::parse_memsize_bytes(&run("sysctl", &["-n", "hw.memsize"])?)
-}
-
-#[cfg(windows)]
-pub(super) fn ram_mb() -> Option<u64> {
-    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
-    // SAFETY: a zeroed MEMORYSTATUSEX with dwLength set is what the call expects.
-    let mut m: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
-    m.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
-    (unsafe { GlobalMemoryStatusEx(&mut m) } != 0).then_some(m.ullTotalPhys / (1_024 * 1_024))
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
-pub(super) fn ram_mb() -> Option<u64> {
-    None
-}
-
-#[cfg(unix)]
-pub(super) fn free_disk_mb(dir: &Path) -> Option<u64> {
-    ls::parse_df_avail_mb(&run("df", &["-Pk", &dir.to_string_lossy()])?)
-}
-
-#[cfg(windows)]
-pub(super) fn free_disk_mb(dir: &Path) -> Option<u64> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
-    let wide: Vec<u16> = dir.as_os_str().encode_wide().chain(Some(0)).collect();
-    let mut free: u64 = 0;
-    // SAFETY: a NUL-terminated path and one out pointer; the other two may be null.
-    let ok = unsafe {
-        GetDiskFreeSpaceExW(
-            wide.as_ptr(),
-            &mut free,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-        )
-    };
-    (ok != 0).then_some(free / (1_024 * 1_024))
-}
-
-#[cfg(not(any(unix, windows)))]
-pub(super) fn free_disk_mb(_dir: &Path) -> Option<u64> {
     None
 }
 
