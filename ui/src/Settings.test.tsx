@@ -83,7 +83,7 @@ async function everyPage() {
   return pages;
 }
 
-const DESKTOP: Capabilities = { desktopControl: true, pulse: true, localAi: true, tray: true, webAccess: true, plugins: true, library: true };
+const DESKTOP: Capabilities = { desktopControl: true, pulse: true, localAi: true, tray: true, webAccess: true, plugins: true, library: true, autoSetup: true };
 const PHONE: Capabilities = { desktopControl: false, pulse: false, localAi: false, tray: false, webAccess: false, plugins: false, library: false };
 const WEB: Capabilities = { ...PHONE, remote: true };
 /** A desktop with start at login, the summon hotkey and notifications. */
@@ -303,7 +303,7 @@ describe("Settings", () => {
       Account: ["Account"],
       "Look & feel": ["Appearance"],
       "AI & chat": ["Defaults", "Personality", "Playbooks", "Pulse", "Local AI"],
-      "Your PC": ["General", "Behavior", "Background"],
+      "Your PC": ["General", "Behavior", "Background", "Auto setup"],
       "Privacy & safety": ["Privacy & data", "Permissions", "Web access"],
       "Help & updates": ["About", "Labs"],
     });

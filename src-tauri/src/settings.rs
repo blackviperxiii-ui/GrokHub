@@ -93,6 +93,21 @@ pub struct ShellSettings {
     /// Settings → Behavior. A value this build cannot read loads as its default.
     #[serde(deserialize_with = "lenient_behavior")]
     pub behavior: Behavior,
+    /// Settings → Appearance → Text size, in percent: one of auto setup's
+    /// steps. The window zooms to it.
+    #[serde(deserialize_with = "text_size")]
+    pub text_size: u16,
+    /// Settings → Appearance → Reduce motion: no animations or slides.
+    pub reduce_motion: bool,
+    /// Notifications only for what needs you: an OK to give or a reply, not
+    /// a finished automation (auto setup's "only important").
+    pub notify_important: bool,
+}
+
+/// A size this build doesn't offer reads as the step at or below it.
+fn text_size<'de, D: Deserializer<'de>>(d: D) -> Result<u16, D::Error> {
+    let pct = Value::deserialize(d)?.as_u64().unwrap_or(100).min(400);
+    Ok(grokhub_core::autotune::settings::text_step_for(pct as u16))
 }
 
 /// Settings → Behavior: the composer and the limits on scheduled work.
@@ -215,6 +230,9 @@ impl Default for ShellSettings {
             behavior: Behavior::default(),
             summon_hotkey: false,
             notifications: true,
+            text_size: 100,
+            reduce_motion: false,
+            notify_important: false,
         }
     }
 }
@@ -370,6 +388,9 @@ mod tests {
                 behavior: Behavior::default(),
                 summon_hotkey: false,
                 notifications: true,
+                text_size: 100,
+                reduce_motion: false,
+                notify_important: false,
             }
         );
     }
@@ -430,6 +451,9 @@ mod tests {
             },
             summon_hotkey: true,
             notifications: false,
+            text_size: 100,
+            reduce_motion: false,
+            notify_important: false,
         };
         save(&dir, &wanted).expect("save");
         assert_eq!(load(&dir), wanted);
@@ -483,6 +507,9 @@ mod tests {
                 behavior: Behavior::default(),
                 summon_hotkey: false,
                 notifications: true,
+                text_size: 100,
+                reduce_motion: false,
+                notify_important: false,
             }
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -516,6 +543,9 @@ mod tests {
                 behavior: Behavior::default(),
                 summon_hotkey: false,
                 notifications: true,
+                text_size: 100,
+                reduce_motion: false,
+                notify_important: false,
             }
         );
         save(&dir, &loaded).expect("save");

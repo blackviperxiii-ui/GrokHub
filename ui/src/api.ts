@@ -57,6 +57,8 @@ export interface Capabilities {
   library?: boolean;
   /** The web app, a remote for the desktop: settings and the key stay there. */
   remote?: boolean;
+  /** Auto setup: the first-run window, Settings → Auto setup, text size. */
+  autoSetup?: boolean;
 }
 
 /** Until the report loads, or if it fails, only the core features show. */

@@ -230,7 +230,8 @@ fn feed(module: &str, config_dir: &Path, now: u64) -> TileView {
     let on = match module {
         "achievements" => grokhub_core::steam_achievements::load(config_dir).on,
         "deals" => grokhub_core::steam_wishlist::load(config_dir).on,
-        _ => desktop_flag(config_dir, "game_companion"),
+        // app.json keeps its keys in camelCase.
+        _ => desktop_flag(config_dir, "gameCompanion"),
     };
     let cards = match pulse::cards(config_dir) {
         Ok(cards) => cards,

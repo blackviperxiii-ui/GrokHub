@@ -66,6 +66,7 @@ import { PRODUCT_NAME } from "./brand";
 import { isSlashCommand, SlashMenu, useSlashHits } from "./SlashMenu";
 import { needsSettings } from "./ui";
 import { SavedCard } from "./SavedCard";
+import { settingAsk } from "./autoSetup";
 
 export type Item =
   | { kind: "user"; text: string }
@@ -1045,6 +1046,13 @@ export function Chat({
     touched.current = true;
     if (isSlashCommand(text)) {
       await slash(text);
+      return;
+    }
+    // "make the text bigger", "undo that": a setting, answered here.
+    const said = files.length === 0 && !remote ? await settingAsk(text) : null;
+    if (said) {
+      setDraft("");
+      setItems((now) => [...now, { kind: "user", text }, { kind: "assistant", text: said, streaming: false }]);
       return;
     }
     await deliver(text, files, true);

@@ -364,7 +364,10 @@ pub fn answered_in_window(
 
 /// A Run now finished while the window was in the background.
 pub fn automation_finished(app: &AppHandle, name: &str) {
-    let enabled = crate::current(&app.state::<ShellState>()).notifications
+    // "Only important" keeps the OKs and replies, not finished automations.
+    let settings = crate::current(&app.state::<ShellState>());
+    let enabled = settings.notifications
+        && !settings.notify_important
         && capabilities::current().notifications;
     let focused = app
         .get_webview_window("main")

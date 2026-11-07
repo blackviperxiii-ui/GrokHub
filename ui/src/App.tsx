@@ -54,6 +54,7 @@ import { applyTheme } from "./theme";
 import { LOGO_MARK_URL, PRODUCT_NAME } from "./brand";
 import { TabIcon } from "./TabIcon";
 import { ChatTabMenu, ClearChatDialog } from "./ClearChat";
+import { AutoNote, FirstRun, useAutoSetup } from "./AutoSetup";
 
 // Chat and Automations stay mounted, so they load up front. The other screens
 // load the first time they open, and again in the background once the app is
@@ -163,6 +164,7 @@ export function App() {
   const [openCard, setOpenCard] = useState<{ id: string; n: number }>();
   const [desktopOn, setDesktopOn] = useState(false);
   const [haltNote, setHaltNote] = useState<string>();
+  const auto = useAutoSetup();
   // Halt is the computer's own: phones and the web app have no desktop control.
   const canHalt = caps.desktopControl && !caps.remote;
   const busy = Object.values(activity).some((item) => item.status === "running" || item.status === "waiting");
@@ -543,6 +545,10 @@ export function App() {
         </button>
       </header>
       {haltNote && <HaltNote text={haltNote} onDismiss={() => setHaltNote(undefined)} />}
+      {caps.autoSetup && auto.reply?.firstRun && <FirstRun reply={auto.reply} act={auto.act} />}
+      {caps.autoSetup && auto.note && !auto.reply?.firstRun && (
+        <AutoNote note={auto.note} act={auto.act} onClose={auto.closeNote} />
+      )}
       {palette && (
         <Palette
           caps={caps}

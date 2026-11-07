@@ -6,6 +6,7 @@
 
 pub mod agent;
 pub mod attach;
+pub mod auto_setup;
 pub mod automations;
 pub mod background;
 #[cfg(test)]
@@ -96,6 +97,8 @@ struct ShellState {
     /// Asks whose notifications are out (os_extras.rs).
     #[cfg(desktop)]
     notified: os_extras::Pending,
+    /// Auto setup's state for this launch.
+    auto: Mutex<auto_setup::Session>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -200,6 +203,64 @@ fn set_theme(state: State<'_, ShellState>, theme: settings::Theme) -> Result<Set
     settings::save(&state.config_dir, &next)?;
     *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
     Ok(view(&next))
+}
+
+/// Auto setup: the first-run window, the corner note, Settings → Auto setup
+/// and chat asks for a setting. Saves `shell.json` when a setting changed and
+/// zooms the window to the text size.
+#[tauri::command]
+fn auto_setup(
+    state: State<'_, ShellState>,
+    window: tauri::WebviewWindow,
+    act: auto_setup::Act,
+) -> Result<auto_setup::Reply, String> {
+    capabilities::needs(capabilities::current().auto_setup, "Auto setup")?;
+    if matches!(act, auto_setup::Act::Pass { .. }) {
+        tell_display(&window);
+    }
+    let before = current(&state);
+    let mut settings = before.clone();
+    let mut session = state.auto.lock().unwrap_or_else(|e| e.into_inner());
+    let has_chats = || !history::list(&state.config_dir).is_empty();
+    let mut tuner = auto_setup::Tuner {
+        settings: &mut settings,
+        session: &mut session,
+        dir: auto_setup::dir(&state.config_dir),
+        has_chats: &has_chats,
+        tray: capabilities::current().tray,
+        device: grokhub_agent::device::current(),
+        generation: grokhub_agent::device::generation(),
+    };
+    let said = tuner.act(act);
+    let reply = tuner.reply(said);
+    if settings != before {
+        settings::save(&state.config_dir, &settings)?;
+        *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = settings.clone();
+    }
+    if settings.text_size != before.text_size {
+        zoom(&window, settings.text_size);
+    }
+    Ok(reply)
+}
+
+/// The window's zoom follows Settings → Appearance → Text size.
+fn zoom(window: &tauri::WebviewWindow, text_size: u16) {
+    let _ = window.set_zoom(f64::from(text_size) / 100.0);
+}
+
+/// The screen the window is on, for the device profile (its readers can't see it).
+fn tell_display(window: &tauri::WebviewWindow) {
+    let Ok(Some(monitor)) = window.current_monitor() else {
+        return;
+    };
+    let monitors = window
+        .available_monitors()
+        .map_or(1, |all| all.len().max(1));
+    grokhub_agent::device::set_display(grokhub_core::autotune::Display {
+        scale_pct: (monitor.scale_factor() * 100.0).round() as u16,
+        width_px: monitor.size().width,
+        monitors: u8::try_from(monitors).unwrap_or(u8::MAX),
+    });
 }
 
 /// The composer's command list for a draft that starts with `/`.
@@ -3000,6 +3061,7 @@ pub fn run() {
             });
             #[cfg(desktop)]
             os_extras::setup(app.handle(), &loaded);
+            let text_size = loaded.text_size;
             app.manage(ShellState {
                 config_dir,
                 settings: Mutex::new(loaded),
@@ -3012,7 +3074,13 @@ pub fn run() {
                 turn_reads: turns::Reads::default(),
                 #[cfg(desktop)]
                 notified: os_extras::Pending::default(),
+                auto: Mutex::default(),
             });
+            if let Some(window) = app.get_webview_window("main") {
+                if text_size != 100 {
+                    zoom(&window, text_size);
+                }
+            }
             #[cfg(desktop)]
             {
                 let global = register_halt_keys(app.handle());
@@ -3053,6 +3121,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             phone_smoke_report,
+            auto_setup,
             quick_chips,
             chip_outcome,
             get_capabilities,
