@@ -219,7 +219,13 @@ pub fn run_refresh(job: &RefreshJob<'_>) -> RefreshDone {
     }
     let gb_version = listings.iter().find_map(|l| l.gb_version.clone());
     let mut reg = load_registry(dir);
-    reg.entitlement.credential = job.credential;
+    // A `None` here means the caller could not read a credential this
+    // time (a failed OAuth renewal reads the same as a sign-out): it
+    // never erases a credential an earlier refresh proved. A real
+    // change (plan <-> key) still lands.
+    if job.credential != Credential::None {
+        reg.entitlement.credential = job.credential;
+    }
     let (mut events, signal) = reg.fold(&take_observations(dir));
     events.extend(reg.apply_refresh(&listings, &job.named, job.now_ms));
     for ev in &events {
@@ -486,6 +492,39 @@ mod tests {
             .filter(|i| reg.get(i).unwrap().state == ModelState::Live)
             .count();
         assert_eq!((live, ids.len() - live), (5, 1));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_none_credential_never_erases_the_saved_one() {
+        let dir = test_dir("route-refresh-cred");
+        let api = Fixed(SourceKind::XaiApi, vec![meta("grok-4.7")], Cell::new(0));
+        let job = |credential| RefreshJob {
+            config_dir: dir.clone(),
+            sources: vec![&api],
+            credential,
+            named: vec![],
+            default_model: "grok-4.7".into(),
+            now_ms: 1,
+        };
+        run_refresh(&job(Credential::Plan));
+        assert_eq!(
+            load_registry(&dir).entitlement.credential,
+            Credential::Plan
+        );
+        // The error-shaped refresh: no bearer could be read this time.
+        run_refresh(&job(Credential::None));
+        assert_eq!(
+            load_registry(&dir).entitlement.credential,
+            Credential::Plan,
+            "a failed read must not wipe the saved credential"
+        );
+        // A real change still lands.
+        run_refresh(&job(Credential::ApiKey));
+        assert_eq!(
+            load_registry(&dir).entitlement.credential,
+            Credential::ApiKey
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
