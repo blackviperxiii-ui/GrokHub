@@ -4388,3 +4388,9 @@ label.toggle-row {
   padding: 14px;
   flex-direction: column;
 }
+
+/* The dotted orb (Orb.tsx): sits on the text line like a glyph. */
+.orb {
+  display: inline-block;
+  vertical-align: middle;
+}

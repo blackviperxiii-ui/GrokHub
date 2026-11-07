@@ -61,6 +61,7 @@ import { ElicitCard, type ElicitItem } from "./Modes";
 import { SIDE_MARK, SideCards, withSide, type Side } from "./Side";
 import { NyxDock } from "./NyxDock";
 import { NyxFace } from "./NyxFace";
+import { Orb, orbFor, orbLabel } from "./Orb";
 import { activityOf, useNyx } from "./nyx";
 import { PRODUCT_NAME } from "./brand";
 import { isSlashCommand, SlashMenu, useSlashHits } from "./SlashMenu";
@@ -547,7 +548,8 @@ export function Chat({
     active,
   });
   // Nyx's pose follows what the chat does, not each chunk of text.
-  const nyx = useNyx(activityOf(items, busy), active);
+  const activity = activityOf(items, busy);
+  const nyx = useNyx(activity, active);
 
   useEffect(() => {
     if (active) getSettings().then(setSettings, () => {});
@@ -1188,7 +1190,7 @@ export function Chat({
         ))}
         {busy && waiting && (
           <div className="bubble assistant streaming" data-role="assistant">
-            …
+            <Orb state={orbFor(activity)} label={orbLabel(activity)} />
           </div>
         )}
         <div ref={endRef} />
