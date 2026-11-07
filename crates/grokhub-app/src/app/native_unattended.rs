@@ -1296,7 +1296,11 @@ mod tests {
         // loadout_home/wardrobe_parity.rs is a #[cfg(test)] module: it lists the voice ids
         // to check the cabin and shell outfit tables match, and builds no prompt.
         // home/views.rs shows the picked voice's name on the Home tile; no prompt either.
+        // auto_setup_ui.rs maps the default voice for auto setup (and leaves any
+        // voice outside its three alone); it builds no prompt, nor do its tests.
         let want: std::collections::BTreeSet<String> = [
+            "app/auto_setup_ui.rs",
+            "app/auto_setup_ui_tests.rs",
             "app/home/views.rs",
             "app/loadout_home.rs",
             "app/loadout_home/wardrobe_parity.rs",

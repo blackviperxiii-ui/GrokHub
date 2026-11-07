@@ -512,6 +512,14 @@ pub struct AppConfig {
     /// and Settings jumps instead of scrolling. Off by default.
     #[serde(default)]
     pub reduce_motion: bool,
+    /// Settings → Appearance → Text size: 100, 115, 130 or 150 percent, set
+    /// by auto setup from the OS text size or by the user. 100 is not saved.
+    #[serde(
+        default = "default_text_size",
+        deserialize_with = "de_text_size",
+        skip_serializing_if = "is_text_size_default"
+    )]
+    pub text_size: u16,
     /// Settings → Appearance: chat pages show the objectives and recent chats on
     /// the left and a PC snapshot on the right (deck slide 10) instead of the
     /// companion dock. Off by default.
@@ -740,6 +748,22 @@ fn default_yolo() -> bool {
     false
 }
 
+fn default_text_size() -> u16 {
+    100
+}
+
+fn is_text_size_default(v: &u16) -> bool {
+    *v == default_text_size()
+}
+
+/// An out-of-range text size (hand-edited app.json) loads as the nearest step.
+fn de_text_size<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u16, D::Error> {
+    let raw = <u32 as serde::Deserialize>::deserialize(d)?;
+    Ok(grokhub_core::autotune::settings::text_step_for(
+        raw.min(400) as u16,
+    ))
+}
+
 fn is_false(v: &bool) -> bool {
     !*v
 }
@@ -931,6 +955,7 @@ impl Default for AppConfig {
             models_folder: String::new(),
             dock_panels: false,
             reduce_motion: false,
+            text_size: default_text_size(),
             chat_objectives: false,
             desktop_control: false,
             screen_record: false,

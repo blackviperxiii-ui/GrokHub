@@ -125,7 +125,7 @@ impl Cabin {
         chips
     }
 
-    fn set_resume_code(&mut self, on: bool) {
+    pub(super) fn set_resume_code(&mut self, on: bool) {
         self.cfg.resume_code = on;
         self.focus.resume = ResumeState::default();
         self.chip_paint_key.clear();

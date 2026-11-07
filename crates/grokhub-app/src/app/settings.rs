@@ -886,6 +886,7 @@ impl Cabin {
                                                                 crate::theme::paint_loadout_token_strip(ui);
                                                             }
                                                             self.ui_chat_layout_row(ui);
+                                                            self.ui_text_size_row(ui);
                                                             let mut calm = self.cfg.reduce_motion;
                                                             if settings_toggle(ui, "Reduce motion", REDUCE_MOTION_HINT, &mut calm) {
                                                                 self.set_reduce_motion(calm);
@@ -1012,6 +1013,7 @@ impl Cabin {
                                                                 self.ui_self_change_history(ui);
                                                                 self.ui_memory_retention_row(ui);
                                                                 self.ui_chat_archive_row(ui);
+                                                                self.ui_auto_setup_rows(ui);
                                                                 if crate::cards::settings_action(ui, "Setup", "Walk through first-run setup again.", "Open") {
                                                                     self.open_setup(super::setup_wizard::SetupStep::Welcome);
                                                                 }
