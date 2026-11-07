@@ -443,6 +443,13 @@ pub enum ClientError {
         retry_after_secs: Option<u64>,
         message: String,
     },
+    /// HTTP 402: the account is out of credit or over its spending limit.
+    /// Not retryable on this route — billing doesn't clear by waiting — but
+    /// another route can take the turn, so the router fails over on it.
+    PaymentRequired {
+        status: u16,
+        message: String,
+    },
     Server {
         status: u16,
         message: String,
@@ -469,6 +476,9 @@ impl std::fmt::Display for ClientError {
                 write!(f, "API key rejected (HTTP {status}): {message}")
             }
             ClientError::RateLimited { message, .. } => write!(f, "rate limited: {message}"),
+            ClientError::PaymentRequired { status, message } => {
+                write!(f, "HTTP {status}: {message}")
+            }
             ClientError::Server {
                 status, message, ..
             } => write!(f, "HTTP {status}: {message}"),
@@ -558,6 +568,7 @@ pub fn map_http_status(
             retry_after_secs,
             message,
         },
+        402 => ClientError::PaymentRequired { status, message },
         500..=599 => ClientError::Server {
             status,
             message,
@@ -2333,6 +2344,14 @@ mod tests {
             map_http_status(503, "down", None, AuthKind::OAuth),
             ClientError::Server { status: 503, .. }
         ));
+        // 402 is its own class: out of credit, never retried on this route.
+        let unpaid = map_http_status(402, "Insufficient credits", None, AuthKind::ApiKey);
+        assert!(matches!(
+            unpaid,
+            ClientError::PaymentRequired { status: 402, .. }
+        ));
+        assert!(!unpaid.is_retryable());
+        assert_eq!(unpaid.to_string(), "HTTP 402: Insufficient credits");
         assert!(!map_http_status(401, "no", None, AuthKind::OAuth).is_retryable());
         assert!(map_http_status(500, "x", None, AuthKind::ApiKey).is_retryable());
         assert!(!ClientError::IdleTimeout.is_retryable());

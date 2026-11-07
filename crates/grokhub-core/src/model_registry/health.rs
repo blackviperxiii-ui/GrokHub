@@ -1,5 +1,6 @@
 //! Passive health: real calls move a model's state. No health probes.
-//! 403 content-safety and 429 `free-usage-exhausted` are not health signals.
+//! 403 content-safety, 429 `free-usage-exhausted` and 402 out-of-credit are
+//! not health signals: they are about the prompt or the account, not the model.
 //!
 //! R2a adds the breaker ([`breaker_observe`]): 3 hard failures in a row (5xx
 //! or a timeout) or a ghost strike quarantine a model. It stays out of routing
@@ -52,6 +53,9 @@ pub enum CallStatus {
     ContentSafety,
     /// 429 `free-usage-exhausted`: about the account, not the model.
     FreeUsageExhausted,
+    /// 402, or a 400 that says the account is out of credit: about the
+    /// account's money, not the model.
+    QuotaExhausted,
     /// 429 or 503.
     Pressure,
     Error,
@@ -62,6 +66,13 @@ pub fn classify_status(http: u16, message: &str) -> CallStatus {
     let m = message.to_ascii_lowercase();
     match http {
         200..=299 => CallStatus::Ok,
+        402 => CallStatus::QuotaExhausted,
+        // Anthropic answers an empty account with a 400, not a 402.
+        400 if m.contains("credit balance is too low")
+            || m.contains("specified api usage limits") =>
+        {
+            CallStatus::QuotaExhausted
+        }
         404 => CallStatus::NotFound,
         403 if m.contains("subscription") => CallStatus::NoSubscription,
         403 if m.contains("content")
@@ -151,7 +162,9 @@ pub fn observe(rec: &mut ModelRecord, listed: bool, obs: &Observation) -> bool {
     let before = rec.state;
     let now = obs.ts_ms;
     match obs.status {
-        CallStatus::ContentSafety | CallStatus::FreeUsageExhausted => return false,
+        CallStatus::ContentSafety | CallStatus::FreeUsageExhausted | CallStatus::QuotaExhausted => {
+            return false
+        }
         CallStatus::NoSubscription => {
             rec.state = ModelState::NotInPlan;
             rec.reason =
@@ -692,6 +705,20 @@ mod tests {
         assert_eq!(classify_status(429, "slow down"), CallStatus::Pressure);
         assert_eq!(classify_status(503, ""), CallStatus::Pressure);
         assert_eq!(classify_status(500, ""), CallStatus::Error);
+        assert_eq!(
+            classify_status(402, "Insufficient credits"),
+            CallStatus::QuotaExhausted
+        );
+        // Anthropic's out-of-credit answer is a 400, not a 402.
+        assert_eq!(
+            classify_status(400, "Your credit balance is too low"),
+            CallStatus::QuotaExhausted
+        );
+        assert_eq!(
+            classify_status(400, "You have reached your specified API usage limits"),
+            CallStatus::QuotaExhausted
+        );
+        assert_eq!(classify_status(400, "Bad request"), CallStatus::Error);
     }
 
     #[test]
@@ -739,6 +766,8 @@ mod tests {
                 true,
                 &obs(CallStatus::FreeUsageExhausted, 1)
             ));
+            // Out of credit is the account's money, not the model's health.
+            assert!(!observe(&mut r, true, &obs(CallStatus::QuotaExhausted, 1)));
         }
         assert_eq!(r, before);
     }
