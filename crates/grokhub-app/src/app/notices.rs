@@ -799,7 +799,10 @@ mod tests {
             if !name.ends_with(".rs") || name.ends_with("_tests.rs") {
                 continue;
             }
-            let src = std::fs::read_to_string(&path).unwrap();
+            // Windows checkouts can carry CRLF line endings.
+            let src = std::fs::read_to_string(&path)
+                .unwrap()
+                .replace("\r\n", "\n");
             // Production code only: stop at the file's own test module.
             let src = src.split("#[cfg(test)]\nmod tests").next().unwrap();
             for (at, _) in src.match_indices(".notify(") {
