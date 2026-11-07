@@ -251,6 +251,11 @@ impl Registry {
         }
         let mut ordered: Vec<&Listing> = listings.iter().collect();
         ordered.sort_by_key(|l| l.kind);
+        // The kinds that answered this refresh. A record only goes stale
+        // once every source that ever listed it checked in without it: a
+        // source that failed or stayed silent keeps its models, so one
+        // source's bad day can't wipe another's list.
+        let answered: Vec<SourceKind> = ordered.iter().filter_map(|l| l.kind).collect();
         let mut merged: BTreeMap<String, (ModelMeta, Vec<SourceKind>)> = BTreeMap::new();
         let mut tier = None;
         for listing in ordered {
@@ -335,11 +340,6 @@ impl Registry {
             self.models.remove(&id);
             events.push(RegistryEvent::Deleted { id });
         }
-        // The kinds that answered this refresh. A record only goes stale
-        // once every source that ever listed it checked in without it: a
-        // source that failed or stayed silent keeps its models, so one
-        // source's bad day can't wipe another's list.
-        let answered: Vec<SourceKind> = ordered.iter().filter_map(|l| l.kind).collect();
         for (id, rec) in self.models.iter_mut() {
             if merged.contains_key(id) {
                 continue;
@@ -929,13 +929,8 @@ mod tests {
         // Once GB answers again without it, it goes stale as before.
         let gb = gb_listing(&["grok-4.7".into()], Some("1.0.49"));
         let ev = reg.apply_refresh(&[gb, api(vec![meta("grok-4.7")])], &[], 3);
-        assert!(ev.contains(&RegistryEvent::Removed {
-            id: "grok-build-1".into()
-        }));
-        assert_eq!(
-            reg.get("grok-build-1").unwrap().state,
-            ModelState::NotInPlan
-        );
+        assert!(ev.contains(&RegistryEvent::Removed { id: "grok-build-1".into() }));
+        assert_eq!(reg.get("grok-build-1").unwrap().state, ModelState::NotInPlan);
     }
 
     #[test]
