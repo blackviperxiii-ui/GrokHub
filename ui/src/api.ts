@@ -297,6 +297,12 @@ export function cancelChat(conversationId: string): Promise<void> {
   return invoke<void>("cancel_chat", { conversationId });
 }
 
+/** Steer now: queued words join the running reply at its next step. False
+ * when that chat has no reply running, so the words stay queued. */
+export function steerChat(conversationId: string, text: string): Promise<boolean> {
+  return invoke<boolean>("steer_chat", { conversationId, text });
+}
+
 export function closeChat(conversationId: string): Promise<void> {
   return invoke<void>("close_chat", { conversationId });
 }

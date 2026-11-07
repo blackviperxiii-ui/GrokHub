@@ -25,6 +25,7 @@ import {
   runSlash,
   saveSettings,
   sendChat,
+  steerChat,
   type Answer,
   type Approvals,
   type ChatEvent,
@@ -91,6 +92,19 @@ type Ended = "ended" | "halted";
 /** The stop reason of a turn Halt ended (`agent::HALTED`). */
 export const HALTED_STOP = "halted";
 export const HALTED_LINE = "Halted. This reply stopped, and nothing more ran.";
+
+/** Steer now or Remove on the `index`th queued message; a new `n` runs it. */
+export interface QueueAct {
+  op: "steer" | "remove";
+  index: number;
+  n: number;
+}
+
+/** Text to put back in the box, after what is typed there. */
+function withQueued(draft: string, texts: readonly string[]): string {
+  const back = texts.join("\n\n");
+  return draft.trim() ? `${draft.trimEnd()}\n\n${back}` : back;
+}
 
 export interface Prefill {
   text: string;
@@ -425,6 +439,8 @@ export function Chat({
   onOpenSettings,
   onSignIn = onOpenSettings,
   onOpenView,
+  onQueue,
+  queueAct,
   prefill,
   open,
   deleted,
@@ -439,6 +455,11 @@ export function Chat({
   /** `/memory`, `/connectors` and the like open their page, and so does a
    * chip that goes somewhere. */
   onOpenView?: (view: View) => void;
+  /** The messages waiting behind the running reply, for the Activity menu. */
+  onQueue?: (conversationId: string, texts: string[]) => void;
+  /** Steer now or Remove, pressed on a queued row in the Activity menu. A new
+   * `n` runs it once. */
+  queueAct?: QueueAct;
   prefill?: Prefill;
   open?: { id: string; n: number };
   deleted?: { id: string; n: number };
@@ -460,6 +481,12 @@ export function Chat({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const busyRef = useRef(false);
+  /** Messages sent while a reply runs wait here, in order, and show only in
+   * the Activity menu. The next one sends when the reply ends. */
+  const [queue, setQueue] = useState<string[]>([]);
+  const queueRef = useRef<string[]>([]);
+  /** The queued message whose turn came: it sends after this render. */
+  const [nextUp, setNextUp] = useState<{ text: string; n: number }>();
   const [mode, setMode] = useState<SessionMode>("chat");
   /** A reply's follow-ups landed: the chip row is asked for again. */
   const [followed, setFollowed] = useState(0);
@@ -675,6 +702,11 @@ export function Chat({
     startFresh();
   }
 
+  function changeQueue(next: string[]) {
+    queueRef.current = next;
+    setQueue(next);
+  }
+
   /** Sends `text` and `files` in the current mode, or in `as` (`/plan <text>`).
    * `fromDraft` empties the box and its files; a tapped chip leaves them. */
   async function deliver(
@@ -711,6 +743,53 @@ export function Chat({
     busyRef.current = false;
     setBusy(false);
     setItems(stop === HALTED_STOP ? settleHalted : settle);
+    // The reply ended well: the next queued message goes. Halt, Stop or a
+    // failure sends nothing more; what waited goes back in the box.
+    const waiting = queueRef.current;
+    if (waiting.length === 0) return;
+    if (stop && stop !== HALTED_STOP && stop !== "cancelled") {
+      changeQueue(waiting.slice(1));
+      setNextUp((now) => ({ text: waiting[0], n: (now?.n ?? 0) + 1 }));
+    } else {
+      changeQueue([]);
+      setDraft((now) => withQueued(now, waiting));
+    }
+  }
+
+  /** Stop: the reply ends, and the messages lined up behind it come back to
+   * the box instead of sending. */
+  function stopReply() {
+    const waiting = queueRef.current;
+    if (waiting.length > 0) {
+      changeQueue([]);
+      setDraft((now) => withQueued(now, waiting));
+    }
+    void cancelChat(conversationId);
+  }
+
+  /** Remove puts the words back in an empty box, so nothing typed is lost. */
+  function removeQueued(index: number) {
+    const text = queueRef.current[index];
+    if (text === undefined) return;
+    changeQueue(queueRef.current.filter((_, i) => i !== index));
+    setDraft((now) => (now.trim() ? now : text));
+  }
+
+  /** Steer now: the words join the running reply at its next step and show
+   * in the chat as sent. If the reply ended first they stay in line. */
+  async function steerQueued(index: number) {
+    const text = queueRef.current[index];
+    if (text === undefined) return;
+    let took: boolean;
+    try {
+      took = await steerChat(conversationId, text);
+    } catch (err) {
+      setError(String(err));
+      return;
+    }
+    if (!took || queueRef.current[index] !== text) return;
+    changeQueue(queueRef.current.filter((_, i) => i !== index));
+    setItems((now) => [...now, { kind: "user", text }]);
   }
 
   async function answer(id: string, choice: Answer) {
@@ -808,7 +887,14 @@ export function Chat({
     event?.preventDefault();
     const text = draft.trim();
     const files = attach.files;
-    if ((!text && files.length === 0) || busy) return;
+    // While a reply runs, a message lines up behind it (files wait in the box).
+    if (busy) {
+      if (!text || isSlashCommand(text)) return;
+      changeQueue([...queueRef.current, text]);
+      setDraft("");
+      return;
+    }
+    if (!text && files.length === 0) return;
     touched.current = true;
     if (isSlashCommand(text)) {
       await slash(text);
@@ -877,6 +963,31 @@ export function Chat({
     !(last?.kind === "assistant" && last.streaming) &&
     !(last?.kind === "permission" && last.answer === null) &&
     !(last?.kind === "elicit" && last.answer === null);
+
+  useEffect(() => {
+    onQueue?.(conversationId, queue);
+  }, [conversationId, queue, onQueue]);
+  const actN = useRef<number>(undefined);
+  const applyQueueAct = useEffectEvent((act: QueueAct) => {
+    if (act.n === actN.current) return;
+    actN.current = act.n;
+    if (act.op === "remove") removeQueued(act.index);
+    else void steerQueued(act.index);
+  });
+  const sendNext = useEffectEvent((text: string) => void deliver(text, [], false));
+  useEffect(() => {
+    if (!nextUp) return;
+    const text = nextUp.text;
+    const timer = window.setTimeout(() => sendNext(text), 0);
+    return () => window.clearTimeout(timer);
+  }, [nextUp]);
+  useEffect(() => {
+    if (!queueAct) return;
+    const act = queueAct;
+    // After this render, as Delete does, so the change is a render of its own.
+    const timer = window.setTimeout(() => applyQueueAct(act), 0);
+    return () => window.clearTimeout(timer);
+  }, [queueAct]);
 
   return (
     <section
@@ -988,9 +1099,16 @@ export function Chat({
           <Mic onText={(words) => setDraft((now) => appendDraft(now, words))} onError={setError} busy={busy} active={active} />
         )}
         {busy ? (
-          <button type="button" onClick={() => void cancelChat(conversationId)}>
-            Stop
-          </button>
+          <>
+            {draft.trim() && !isSlashCommand(draft.trim()) && (
+              <button type="submit" className="quiet" title="Sends when this reply ends; Activity lists it">
+                Queue
+              </button>
+            )}
+            <button type="button" onClick={stopReply}>
+              Stop
+            </button>
+          </>
         ) : (
           <button type="submit" disabled={!draft.trim() && attach.files.length === 0}>
             Send

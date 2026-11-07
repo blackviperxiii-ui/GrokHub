@@ -295,6 +295,8 @@ pub struct Session {
     permits: Sender<PermitNote>,
     elicits: Sender<ElicitNote>,
     cancel: CancelToken,
+    /// Words for the running reply, read at its next step (Steer now).
+    steer: SteerQueue,
     /// A prompt is running.
     busy: AtomicBool,
     /// Halt stopped the running prompt; its turn ends as `halted`.
@@ -322,11 +324,13 @@ impl Session {
         let cancel = CancelToken::new();
         let worker_cancel = cancel.clone();
         let halted = Arc::new(AtomicBool::new(false));
+        let steer = SteerQueue::new();
         let worker = Worker {
             id: conversation_id.to_string(),
             config_dir,
             desktop,
             cancel: worker_cancel,
+            steer: steer.clone(),
             halted: Arc::clone(&halted),
         };
         std::thread::spawn(move || serve(worker, inbox, rx));
@@ -336,6 +340,7 @@ impl Session {
             permits,
             elicits,
             cancel,
+            steer,
             busy: AtomicBool::new(false),
             halted,
         }
@@ -394,6 +399,17 @@ impl Session {
             action: action.to_string(),
             content,
         });
+    }
+
+    /// Steer now: hands `text` to the running reply, which reads it at its
+    /// next step (after the tool that is running, or before it ends). False,
+    /// and nothing kept, when no reply runs or the text is empty.
+    pub fn steer(&self, text: &str) -> bool {
+        if text.trim().is_empty() || !self.busy.load(Ordering::SeqCst) {
+            return false;
+        }
+        self.steer.push(text.trim());
+        true
     }
 
     /// Stops the running prompt. A tool that waits for an answer is cancelled
@@ -513,6 +529,7 @@ struct Worker {
     config_dir: PathBuf,
     desktop: fn() -> Box<dyn DesktopOps>,
     cancel: CancelToken,
+    steer: SteerQueue,
     halted: Arc<AtomicBool>,
 }
 
@@ -522,6 +539,7 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
         config_dir,
         desktop,
         cancel,
+        steer,
         halted,
     } = worker;
     let _config = grokhub_agent::perm::ConfigGuard::set(&config_dir);
@@ -590,7 +608,7 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                     auth_kind: route.auth_kind,
                     max_turns: 0,
                     cancel: cancel.clone(),
-                    steer: SteerQueue::new(),
+                    steer: steer.clone(),
                     halt: Box::new(NeverHalted),
                     gate,
                     desktop: Some(desktop()),
@@ -1337,6 +1355,21 @@ mod tests {
             assert_eq!(prompt.matches(closer).count(), 1, "{prompt}");
             assert!(prompt.trim_end().ends_with(closer), "{prompt}");
         }
+    }
+
+    #[test]
+    fn steer_now_reaches_only_a_running_reply() {
+        let config = temp_dir("steer-idle");
+        let session = Session::spawn_with("shell-steer-test", config, fake_desktop);
+        // No reply runs: nothing is kept for a later one.
+        assert!(!session.steer("then deploy"));
+        assert!(session.steer.drain().is_empty());
+        // A reply runs: the words wait for its next step, trimmed.
+        session.busy.store(true, Ordering::SeqCst);
+        assert!(!session.steer("   "));
+        assert!(session.steer("  then deploy "));
+        assert_eq!(session.steer.drain(), vec!["then deploy".to_string()]);
+        session.busy.store(false, Ordering::SeqCst);
     }
 
     #[test]

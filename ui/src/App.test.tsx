@@ -63,7 +63,11 @@ vi.mock("./Chat", () => ({
     deleted,
     clear,
     onSignIn,
+    onQueue,
+    queueAct,
   }: {
+    onQueue?: (conversationId: string, texts: string[]) => void;
+    queueAct?: { op: string; index: number; n: number };
     prefill?: { text: string; n: number; conversationId?: string };
     open?: { id: string; n: number };
     deleted?: { id: string; n: number };
@@ -75,6 +79,14 @@ vi.mock("./Chat", () => ({
       {open && <p>Opened {open.id}</p>}
       {deleted && <p>Deleted {deleted.id}</p>}
       {clear && <p>Cleared {clear.n}</p>}
+      {queueAct && (
+        <p>
+          Act {queueAct.op} {queueAct.index}
+        </p>
+      )}
+      <button type="button" onClick={() => onQueue?.("shell-c1", ["then deploy", "and tell me"])}>
+        Line up two
+      </button>
       <button type="button" onClick={onSignIn}>
         Sign in
       </button>
@@ -731,5 +743,29 @@ describe("App", () => {
     expect(menu).toHaveTextContent("Archived 2 finished cards");
     await userEvent.click(within(menu).getByRole("button", { name: "Undo" }));
     expect(api.workboardSweepUndo).toHaveBeenCalledTimes(1);
+  });
+
+  it("lists messages queued behind a reply in Activity, reading 1 of 3 running, with Steer now and Remove", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    chatHandlers.length = 0;
+    render(<App />);
+    await waitFor(() => expect(chatHandlers.length).toBeGreaterThan(0));
+    act(() => {
+      for (const h of chatHandlers) h({ conversationId: "shell-c1", event: { kind: "tool", title: "Reading notes.md", status: "in_progress" } });
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Line up two" }));
+    const dock = screen.getByRole("complementary", { name: "Activity" });
+    const toggle = within(dock).getByRole("button", { name: "Activity, 1 of 3 running" });
+    expect(toggle).toHaveTextContent("1 of 3 running");
+    await userEvent.click(toggle);
+    const next = within(dock).getByRole("listitem", { name: "then deploy" });
+    expect(next).toHaveTextContent("Next up");
+    expect(within(dock).getByRole("listitem", { name: "and tell me" })).toHaveTextContent("2nd in line");
+    await userEvent.click(within(next).getByRole("button", { name: "Steer now" }));
+    expect(screen.getByText("Act steer 0")).toBeVisible();
+    await userEvent.click(
+      within(within(dock).getByRole("listitem", { name: "and tell me" })).getByRole("button", { name: "Remove" }),
+    );
+    expect(screen.getByText("Act remove 1")).toBeVisible();
   });
 });
