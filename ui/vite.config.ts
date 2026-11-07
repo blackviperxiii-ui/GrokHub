@@ -26,7 +26,9 @@ export default defineConfig({
     strictPort: true,
     fs: { allow: [".", "../brand"] },
   },
-  build: { outDir: "dist", target: "es2022" },
+  // licenses.md ships the notices of every bundled package (MIT and the like
+  // ask for theirs to travel with the code).
+  build: { outDir: "dist", target: "es2022", license: { fileName: "licenses.md" } },
   test: {
     environment: "jsdom",
     globals: true,

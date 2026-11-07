@@ -6,6 +6,7 @@
 import { useEffect, useRef, useState } from "react";
 import { transcribe } from "./api";
 import { PRODUCT_NAME } from "./brand";
+import { Orb } from "./Orb";
 import { downsample, encodeWav, toBase64 } from "./wav";
 
 /** The desktop refuses more (src-tauri/src/voice.rs). */
@@ -260,7 +261,9 @@ export function Mic({
       onLostPointerCapture={() => void finish()}
     >
       {state === "transcribing" ? (
-        "…"
+        <Orb state="composing" />
+      ) : state === "recording" ? (
+        <Orb state="listening" />
       ) : (
         <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
           <rect x="9" y="3" width="6" height="11" rx="3" />
