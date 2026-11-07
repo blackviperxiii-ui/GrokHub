@@ -1044,6 +1044,7 @@ mod tests {
                 } else {
                     "{}".into()
                 },
+                headers: Vec::new(),
             })
         }
     }

@@ -9,6 +9,7 @@ pub mod entitlement;
 pub mod health;
 pub mod probe;
 pub mod profile;
+pub mod quota;
 pub mod record;
 pub mod seed;
 pub mod store;

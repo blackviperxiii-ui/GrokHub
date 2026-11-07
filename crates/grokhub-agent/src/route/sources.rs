@@ -26,6 +26,30 @@ use crate::harness::{
 
 pub const XAI_MODELS_URL: &str = crate::models::XAI_MODELS_URL;
 pub const XAI_LANGUAGE_MODELS_URL: &str = "https://api.x.ai/v1/language-models";
+pub const XAI_API_KEY_URL: &str = "https://api.x.ai/v1/api-key";
+
+/// `GET /v1/api-key` with the sign-in's own bearer: the key's blocked
+/// flags, for the quota ledger (parsed in
+/// `grokhub_core::model_registry::quota`). Same guard as the catalog
+/// reads; carries no user data.
+pub fn fetch_xai_api_key(config_dir: &Path, bearer: &str) -> Result<Value, String> {
+    if bearer.trim().is_empty() {
+        return Err("not signed in".into());
+    }
+    guard(config_dir, XAI_API_KEY_URL)?;
+    let resp = agent(Duration::from_secs(30))
+        .get(XAI_API_KEY_URL)
+        .header("Authorization", &format!("Bearer {bearer}"))
+        .header("User-Agent", USER_AGENT)
+        .any_status()
+        .call()
+        .map_err(|e| e.to_string())?;
+    if resp.status() >= 400 {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    let body = read_capped(resp)?;
+    serde_json::from_str(&body).map_err(|e| e.to_string())
+}
 /// Probe call spans go here, beside the model-call spans.
 pub const PROBE_TOOL: &str = "model.probe";
 pub const PROBE_CLASS: &str = "background:probe";

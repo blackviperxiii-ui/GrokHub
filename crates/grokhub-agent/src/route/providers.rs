@@ -614,11 +614,14 @@ pub fn provider_state(config_dir: &Path, ledger: &ConsentLedger, p: &Provider) -
 
 // ---- The wire ----------------------------------------------------------------
 
-/// One HTTP answer: status and body (capped).
+/// One HTTP answer: status, body (capped) and the reply's headers
+/// (names lowercased; the quota ledger reads Anthropic's rate limits
+/// from them). Fakes answer with no headers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HttpReply {
     pub status: u16,
     pub body: String,
+    pub headers: Vec<(String, String)>,
 }
 
 /// How provider requests leave. Tests use a counting fake: zero network.
@@ -681,12 +684,17 @@ fn reply(
         }
     };
     let status = resp.status();
+    let headers = resp.headers();
     let mut body = String::new();
     resp.into_reader()
         .take(BODY_CAP)
         .read_to_string(&mut body)
         .map_err(|e| e.to_string())?;
-    Ok(HttpReply { status, body })
+    Ok(HttpReply {
+        status,
+        body,
+        headers,
+    })
 }
 
 impl ProviderTransport for UreqTransport {
@@ -770,6 +778,33 @@ fn transport_for(config_dir: &Path) -> Arc<dyn ProviderTransport> {
 pub struct ProviderSource {
     pub config_dir: PathBuf,
     pub provider: Provider,
+}
+
+/// The OpenRouter account behind this provider's key, from
+/// `GET /api/v1/key`: the account's own answer about free vs paid and
+/// what is left (parsed in `grokhub_core::model_registry::quota`). Read
+/// only under the same grant as the model list; carries no user data.
+pub fn fetch_openrouter_key(config_dir: &Path, p: &Provider) -> Result<Value, String> {
+    let key = key(config_dir, &p.id).ok_or_else(|| format!("{}: no key", p.id))?;
+    let url = format!("{}/key", p.api_root());
+    if let GateOutcome::Park { reason, .. } | GateOutcome::Refuse { reason } =
+        guard_provider(config_dir, &EgressReq::new(&url, &[]))
+    {
+        return Err(format!("{}: {reason}", p.id));
+    }
+    let r = transport_for(config_dir).get(&url, &p.headers(&key))?;
+    if !(200..300).contains(&r.status) {
+        return Err(format!("{}: HTTP {}", p.id, r.status));
+    }
+    serde_json::from_str(&r.body).map_err(|e| e.to_string())
+}
+
+/// Anthropic's `usage.cache_creation_input_tokens`, which [`Usage`] has
+/// no field for; the quota spend ledger prices the write.
+fn anthropic_cache_write(body: &str) -> u64 {
+    serde_json::from_str::<Value>(body)
+        .map(|v| u64_at(&v["usage"], &["cache_creation_input_tokens"]))
+        .unwrap_or(0)
 }
 
 /// One source per provider you added.
@@ -1561,12 +1596,40 @@ pub fn call_model(
         return Err(ClientError::Cancelled);
     }
     if !(200..300).contains(&r.status) {
+        // A limit, an empty account or a refused key is account news, not
+        // just a failed call: the quota ledger stamps it (an Anthropic
+        // bench, an OpenRouter re-read) while the reply is in hand.
+        super::quota::note_provider_error(
+            config_dir,
+            &p,
+            model,
+            r.status,
+            &r.body,
+            &r.headers,
+            grokhub_core::now_ms(),
+        );
         return Err(error_of(r.status, &r.body, openrouter));
     }
     let mut turn = match p.kind {
         ProviderKind::OpenAiCompatible => parse_openai_reply(&r.body),
         ProviderKind::Anthropic => parse_anthropic_reply(&r.body),
     }?;
+    if p.kind == ProviderKind::Anthropic {
+        // Claude's account state rides on its replies: rate-limit headers
+        // and usage for the local spend ledger (quota.rs).
+        let prices = reg
+            .get(model)
+            .map(|rec| rec.meta.prices.clone())
+            .filter(|p| !p.is_empty());
+        super::quota::note_anthropic_reply(
+            config_dir,
+            prices.as_ref(),
+            &turn.usage,
+            anthropic_cache_write(&r.body),
+            &r.headers,
+            grokhub_core::now_ms(),
+        );
+    }
     // The next request names the model as the provider does ([`openai_body`]):
     // the backup's thinking goes back to the backup.
     let sent: Vec<&str> = std::iter::once(wire_model).chain(backup_wire).collect();

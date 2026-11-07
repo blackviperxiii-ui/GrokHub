@@ -1289,6 +1289,12 @@ fn note_failure(config_dir: &Path, call: &RouteCall<'_>, err: &ClientError, elap
     if let Some(obs) = observation(call, &done, grokhub_core::now_ms()) {
         let _ = append_observation(config_dir, &obs);
     }
+    // An account-shaped failure on the native route stamps the quota
+    // ledger's xAI re-read, so the next refresh re-checks the key's
+    // blocked state at once instead of waiting out the poll interval.
+    if matches!(done.http, 402 | 403 | 429) {
+        super::quota::note_native_error(config_dir, call.model, done.http, grokhub_core::now_ms());
+    }
 }
 
 /// xAI couldn't answer for a reason another model could get past: it is down,

@@ -518,6 +518,21 @@ impl Response {
         self.0.headers().get(name)?.to_str().ok()
     }
 
+    /// Every header as sent (names lowercased); a value that isn't visible
+    /// ASCII is skipped.
+    pub fn headers(&self) -> Vec<(String, String)> {
+        self.0
+            .headers()
+            .iter()
+            .filter_map(|(name, value)| {
+                value
+                    .to_str()
+                    .ok()
+                    .map(|v| (name.as_str().to_string(), v.to_string()))
+            })
+            .collect()
+    }
+
     /// `Content-Type` up to its first `;`, as sent (case kept, no trim);
     /// `text/plain` when the header is missing.
     pub fn content_type(&self) -> &str {
