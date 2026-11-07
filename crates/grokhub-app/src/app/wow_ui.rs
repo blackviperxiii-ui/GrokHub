@@ -347,7 +347,12 @@ impl Cabin {
         w.logging = Some(on);
         if !on && !w.nudged {
             w.nudged = true;
-            self.notify(super::notices::NoticeKind::Info, LOG_NUDGE.into(), None);
+            self.notify(
+                super::notices::NoticeKind::Info,
+                LOG_NUDGE.into(),
+                Some(super::notices::NoticePlace::Game(WOW_NAME.into())),
+                None,
+            );
         }
     }
 

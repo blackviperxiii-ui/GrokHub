@@ -1018,7 +1018,12 @@ impl Cabin {
             .take(&ask);
         if sent {
             // Whatever pings the OS is kept in the bell too.
-            self.notify(super::notices::NoticeKind::Info, line.to_string(), None);
+            self.notify(
+                super::notices::NoticeKind::Info,
+                line.to_string(),
+                Some(super::notices::NoticePlace::Page(Nav::Pulse)),
+                None,
+            );
             if !cfg!(test) {
                 crate::notify::ping(grokhub_core::brand::product_name(), line);
             }

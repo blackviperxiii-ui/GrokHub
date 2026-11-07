@@ -369,6 +369,7 @@ impl Cabin {
                 self.notify(
                     super::notices::NoticeKind::Success,
                     self.status.clone(),
+                    Some(self.notice_here()),
                     Some(super::notices::NoticeAction::ShowInFolder(path.clone())),
                 );
                 self.diagnostics.last_zip = Some(path);

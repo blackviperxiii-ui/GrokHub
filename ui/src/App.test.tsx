@@ -48,6 +48,7 @@ const api = vi.hoisted(() => ({
   }),
   onLocalEngineEvent: vi.fn(() => Promise.resolve(() => {})),
   workboardSweepUndo: vi.fn(() => Promise.resolve({})),
+  listChats: vi.fn(() => Promise.resolve([{ id: "shell-c9", title: "Trip plans", created: 1, updated: 2 }])),
   shareSchedulerClock: vi.fn(() => Promise.resolve()),
   quickChips: vi.fn(() => Promise.resolve([])),
   chipOutcome: vi.fn(() => Promise.resolve(true)),
@@ -739,10 +740,19 @@ describe("App", () => {
     focus.mockRestore();
     await userEvent.click(await screen.findByRole("button", { name: "Notifications, 2 new" }));
     const menu = screen.getByRole("region", { name: "Notifications" });
-    expect(menu).toHaveTextContent("Reply finished");
+    // Each entry says what happened, to what, and where it came from.
+    expect(menu).toHaveTextContent('Reply finished in "Trip plans"');
+    expect(menu).toHaveTextContent("Chat: Trip plans");
     expect(menu).toHaveTextContent("Archived 2 finished cards");
+    expect(menu).toHaveTextContent("Workboard");
     await userEvent.click(within(menu).getByRole("button", { name: "Undo" }));
     expect(api.workboardSweepUndo).toHaveBeenCalledTimes(1);
+    // Open chat opens that very chat, not just the Chat page.
+    await userEvent.click(screen.getByRole("button", { name: /^Notifications/ }));
+    await userEvent.click(
+      within(screen.getByRole("region", { name: "Notifications" })).getByRole("button", { name: "Open chat" }),
+    );
+    expect(await screen.findByText("Opened shell-c9")).toBeInTheDocument();
   });
 
   it("lists messages queued behind a reply in Activity, reading 1 of 3 running, with Steer now and Remove", async () => {

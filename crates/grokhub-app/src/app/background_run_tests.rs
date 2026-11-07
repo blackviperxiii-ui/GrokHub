@@ -108,6 +108,14 @@ fn slash_bg_runs_beside_the_chat_on_a_forked_session() {
         "the bell keeps the finished task"
     );
     assert_eq!(
+        cabin.notices.items.first().and_then(|n| n.from.clone()),
+        Some(super::notices::NoticePlace::Chat {
+            id: cabin.threads[0].id.clone(),
+            title: cabin.threads[0].title.clone(),
+        }),
+        "the bell row names the chat it ran beside and opens it"
+    );
+    assert_eq!(
         cabin.threads[0].grok_session.as_deref(),
         Some("native-main")
     );

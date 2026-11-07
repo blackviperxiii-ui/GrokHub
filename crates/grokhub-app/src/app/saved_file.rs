@@ -149,6 +149,7 @@ impl Cabin {
         self.notify(
             super::notices::NoticeKind::Success,
             line.clone(),
+            Some(self.notice_here()),
             Some(super::notices::NoticeAction::ShowInFolder(
                 path.to_path_buf(),
             )),

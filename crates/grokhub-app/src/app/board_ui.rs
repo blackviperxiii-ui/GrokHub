@@ -1156,6 +1156,7 @@ impl Cabin {
         self.notify(
             super::notices::NoticeKind::Error,
             format!("Resume failed: {title}. {why}"),
+            Some(super::notices::NoticePlace::Page(Nav::Workboard)),
             Some(super::notices::NoticeAction::OpenCard(id.to_string())),
         );
         false
@@ -1192,6 +1193,7 @@ impl Cabin {
             self.notify(
                 super::notices::NoticeKind::Info,
                 format!("Interrupted: {title}. Resume it from the Workboard."),
+                Some(super::notices::NoticePlace::Page(Nav::Workboard)),
                 Some(super::notices::NoticeAction::OpenCard(id)),
             );
         }
@@ -1251,6 +1253,7 @@ impl Cabin {
                     "Auto-delete removed {n} old archived {}",
                     if n == 1 { "card" } else { "cards" }
                 ),
+                Some(super::notices::NoticePlace::Page(Nav::Workboard)),
                 None,
             );
         }
@@ -1418,6 +1421,7 @@ impl Cabin {
         self.notify(
             super::notices::NoticeKind::Info,
             text,
+            Some(super::notices::NoticePlace::Page(Nav::Workboard)),
             Some(super::notices::NoticeAction::RestoreCards(ids)),
         );
     }

@@ -799,6 +799,7 @@ impl Cabin {
         self.notify(
             super::notices::NoticeKind::Info,
             text.to_string(),
+            Some(super::notices::NoticePlace::Settings(SettingsSec::AiModels)),
             Some(super::notices::NoticeAction::OpenSettings(
                 SettingsSec::AiModels,
             )),

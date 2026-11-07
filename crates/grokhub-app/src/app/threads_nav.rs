@@ -246,6 +246,7 @@ impl Cabin {
         self.notify(
             notices::NoticeKind::Info,
             self.status.clone(),
+            Some(notices::NoticePlace::Page(Nav::History)),
             Some(notices::NoticeAction::Unarchive(id)),
         );
         self.persist();
@@ -266,6 +267,7 @@ impl Cabin {
         self.notify(
             notices::NoticeKind::Info,
             self.status.clone(),
+            Some(notices::NoticePlace::Page(Nav::History)),
             Some(notices::NoticeAction::Archive(id)),
         );
         self.persist();

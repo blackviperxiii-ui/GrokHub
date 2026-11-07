@@ -609,7 +609,8 @@ impl Cabin {
                 } else {
                     super::notices::NoticeKind::Success
                 };
-                self.notify(kind, format!("{head} · {}", run.title), None);
+                let from = self.notice_chat(&run.thread_id);
+                self.notify(kind, format!("{head} · {}", run.title), Some(from), None);
             }
             if run.thread_id == vis {
                 self.status = format!("{head} · {}", run.title);
