@@ -81,6 +81,7 @@ impl ProviderTransport for Wire {
         Ok(HttpReply {
             status: 200,
             body: OR_LIST.into(),
+            headers: Vec::new(),
         })
     }
     fn post(
@@ -96,6 +97,7 @@ impl ProviderTransport for Wire {
         Ok(HttpReply {
             status: 200,
             body: OR_REPLY.into(),
+            headers: Vec::new(),
         })
     }
 }
@@ -238,9 +240,12 @@ fn the_model_list_needs_the_key_and_the_grant_and_gets_a_metadata_only_profile()
         named: Vec::new(),
         default_model: "grok-4.7".into(),
         now_ms: NOW,
+        xai_bearer: None,
     });
     assert_eq!(done.errors, Vec::<String>::new());
-    assert_eq!(wire.n(), 1);
+    // Two reads: the model list, and the refresh's quota check reading
+    // the account's `/key` state under the same grant.
+    assert_eq!(wire.n(), 2);
     let line = &read_egress(&dir)[0];
     assert_eq!(
         (
@@ -265,7 +270,7 @@ fn the_model_list_needs_the_key_and_the_grant_and_gets_a_metadata_only_profile()
         provider: p,
     };
     assert_eq!(src.fetch().unwrap_err(), "openrouter: no key");
-    assert_eq!(wire.n(), 1);
+    assert_eq!(wire.n(), 2);
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -1144,11 +1149,13 @@ impl ProviderTransport for KeyWire {
             Ok(HttpReply {
                 status: 200,
                 body: json!({"key": KEY, "user_id": "u-1"}).to_string(),
+                headers: Vec::new(),
             })
         } else {
             Ok(HttpReply {
                 status: 403,
                 body: "{}".into(),
+                headers: Vec::new(),
             })
         }
     }
@@ -1510,6 +1517,7 @@ impl ProviderTransport for LimitWire {
         Ok(HttpReply {
             status: 200,
             body: OR_LIST.into(),
+            headers: Vec::new(),
         })
     }
     fn post(&self, _: &str, _: &[(String, String)], _: &str) -> Result<HttpReply, String> {
@@ -1529,6 +1537,7 @@ impl ProviderTransport for LimitWire {
         Ok(HttpReply {
             status: 200,
             body: OR_REPLY.into(),
+            headers: Vec::new(),
         })
     }
 }
@@ -2500,6 +2509,7 @@ impl ProviderTransport for FixtureWire {
         Ok(HttpReply {
             status: 200,
             body: OR_FIXTURE.into(),
+            headers: Vec::new(),
         })
     }
     fn post(
@@ -2512,6 +2522,7 @@ impl ProviderTransport for FixtureWire {
         Ok(HttpReply {
             status: 200,
             body: self.reply.lock().unwrap().clone(),
+            headers: Vec::new(),
         })
     }
 }
@@ -2849,6 +2860,7 @@ impl ProviderTransport for BrokeWire {
         Ok(HttpReply {
             status: 200,
             body: OR_LIST.into(),
+            headers: Vec::new(),
         })
     }
     fn post(
@@ -2864,6 +2876,7 @@ impl ProviderTransport for BrokeWire {
         Ok(HttpReply {
             status: 402,
             body: r#"{"error":{"message":"Insufficient credits"}}"#.into(),
+            headers: Vec::new(),
         })
     }
 }
