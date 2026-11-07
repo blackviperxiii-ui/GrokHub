@@ -499,32 +499,40 @@ mod tests {
     fn a_none_credential_never_erases_the_saved_one() {
         let dir = test_dir("route-refresh-cred");
         let api = Fixed(SourceKind::XaiApi, vec![meta("grok-4.7")], Cell::new(0));
-        let job = |credential| RefreshJob {
+        let job = RefreshJob {
             config_dir: dir.clone(),
             sources: vec![&api],
-            credential,
+            credential: Credential::Plan,
             named: vec![],
             default_model: "grok-4.7".into(),
             now_ms: 1,
         };
-        run_refresh(&job(Credential::Plan));
-        assert_eq!(
-            load_registry(&dir).entitlement.credential,
-            Credential::Plan
-        );
+        run_refresh(&job);
+        assert_eq!(load_registry(&dir).entitlement.credential, Credential::Plan);
         // The error-shaped refresh: no bearer could be read this time.
-        run_refresh(&job(Credential::None));
+        run_refresh(&RefreshJob {
+            config_dir: dir.clone(),
+            sources: vec![&api],
+            credential: Credential::None,
+            named: vec![],
+            default_model: "grok-4.7".into(),
+            now_ms: 1,
+        });
         assert_eq!(
             load_registry(&dir).entitlement.credential,
             Credential::Plan,
             "a failed read must not wipe the saved credential"
         );
         // A real change still lands.
-        run_refresh(&job(Credential::ApiKey));
-        assert_eq!(
-            load_registry(&dir).entitlement.credential,
-            Credential::ApiKey
-        );
+        run_refresh(&RefreshJob {
+            config_dir: dir.clone(),
+            sources: vec![&api],
+            credential: Credential::ApiKey,
+            named: vec![],
+            default_model: "grok-4.7".into(),
+            now_ms: 1,
+        });
+        assert_eq!(load_registry(&dir).entitlement.credential, Credential::ApiKey);
         let _ = std::fs::remove_dir_all(dir);
     }
 
