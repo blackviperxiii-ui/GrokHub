@@ -4,6 +4,14 @@
 use super::*;
 use grokhub_core::work_resume::InterruptCause;
 
+/// Status while a crashed reply runs again on a fresh engine.
+pub(super) const ENGINE_RESTART_STATUS: &str =
+    "The chat engine restarted · picking the reply back up…";
+
+/// Said after a reply crashed the engine twice in a row.
+pub(super) const ENGINE_CRASHED_AGAIN: &str =
+    "It happened again on the retry, so it stopped. Your chat is kept; send again or reword it.";
+
 impl Cabin {
     pub(super) fn fail_turn_start(&mut self, detail: &str) {
         self.abandon_turn_card();
@@ -17,13 +25,17 @@ impl Cabin {
     }
 
     pub(super) fn poll_acp(&mut self) {
-        let evs = {
+        let (evs, batch, gone) = {
             let Some(h) = &self.acp else { return };
             let mut v = Vec::new();
-            while let Ok(ev) = h.try_recv() {
-                v.push(ev);
-            }
-            v
+            let gone = loop {
+                match h.try_recv() {
+                    Ok(ev) => v.push(ev),
+                    Err(mpsc::TryRecvError::Empty) => break false,
+                    Err(mpsc::TryRecvError::Disconnected) => break true,
+                }
+            };
+            (v, h.id, gone)
         };
         let native_session = self
             .acp
@@ -31,6 +43,12 @@ impl Cabin {
             .is_some_and(|handle| handle.session_id.starts_with("native-"));
         let auto_allow = self.permission_mode.auto_allows() && !native_session;
         for ev in evs {
+            // A retry or a fresh engine replaced the handle mid-batch: the old
+            // engine's leftovers (its Done after an error) must not end the
+            // new turn.
+            if self.acp.as_ref().map(|h| h.id) != Some(batch) {
+                break;
+            }
             match ev {
                 AcpEvent::Ready { session_id } => {
                     if !session_id.trim().is_empty() {
@@ -251,6 +269,10 @@ impl Cabin {
                     if e.contains("acp json") {
                         continue;
                     }
+                    if e == super::native_engine::ENGINE_CRASHED {
+                        self.recover_engine_crash();
+                        continue;
+                    }
                     match classify_stream_error(&e) {
                         StreamErrorKind::Transient | StreamErrorKind::TruncationContinue => {
                             self.status = retry_status_line(&rewrite_truncation_error(&e));
@@ -302,6 +324,59 @@ impl Cabin {
                 }
             }
         }
+        // The engine thread ended without a word (its events closed): the
+        // chat keeps going on a fresh engine instead of waiting forever on a
+        // dead one.
+        if gone
+            && self
+                .acp
+                .as_ref()
+                .is_some_and(|h| h.id == batch && !h.is_alive())
+        {
+            if self.running {
+                self.recover_engine_crash();
+            } else {
+                self.acp = None;
+            }
+        }
+    }
+
+    /// The chat engine died mid-reply (a panic, or its thread ended). The
+    /// handle is dropped so the next send starts a fresh engine from the saved
+    /// turns. The reply is tried once more on that engine; a second crash
+    /// ends the turn with a plain note in the chat and a retry card.
+    pub(super) fn recover_engine_crash(&mut self) {
+        self.withdraw_perm_asks();
+        self.perm_always_confirm = None;
+        self.confirm = None;
+        self.elicit_ask = None;
+        self.elicit_draft.clear();
+        self.acp = None;
+        if !self.running {
+            return;
+        }
+        self.running = false;
+        if !self.turn_retried {
+            self.turn_retried = true;
+            self.thought_buf.clear();
+            self.stream_buf.clear();
+            self.status = ENGINE_RESTART_STATUS.into();
+            self.kick_model(false);
+            return;
+        }
+        self.scheduled_perm = false;
+        self.post_turn_crash();
+        let note = format!(
+            "{} {ENGINE_CRASHED_AGAIN}",
+            super::native_engine::ENGINE_CRASHED
+        );
+        self.thought_buf.clear();
+        self.stream_buf.clear();
+        self.status = self.apply_job_fail(&note);
+        self.interrupt_turn_card(InterruptCause::WorkerGone);
+        self.chat_job_thread = None;
+        self.persist();
+        self.maybe_continue_ptt();
     }
 
     /// Put a new Ask on the card, or queue it behind the one already there. A

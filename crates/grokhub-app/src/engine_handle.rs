@@ -4,8 +4,30 @@
 use grokhub_core::wire::{AcpEvent, PermissionAsk};
 use serde_json::Value;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::Arc;
 use std::thread;
+
+/// What a send to a chat engine that is gone says, instead of the channel's
+/// own "sending on a closed channel".
+pub const ENGINE_GONE: &str =
+    "The chat engine stopped, so that message didn't send. Your chat is kept; send it again.";
+
+/// Held by the engine thread for as long as it runs. Dropping it (the thread
+/// returned or panicked) marks the handle dead, so the cabin starts a new one.
+pub struct EngineLife(Arc<AtomicBool>);
+
+impl Drop for EngineLife {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+fn next_handle_id() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
 
 /// How one permission card is answered.
 enum PermAnswer {
@@ -73,6 +95,10 @@ pub struct AcpHandle {
     pub events: Receiver<AcpEvent>,
     pub session_id: String,
     pub cwd: PathBuf,
+    /// Unique per handle: an engine for the same session started later has a
+    /// new one, so an old engine's cleanup can tell it is no longer current.
+    pub id: u64,
+    alive: Arc<AtomicBool>,
 }
 
 fn id_text(id: Value) -> String {
@@ -83,37 +109,52 @@ fn id_text(id: Value) -> String {
 }
 
 impl AcpHandle {
+    /// The engine thread is still running. False once it returned or panicked.
+    pub fn is_alive(&self) -> bool {
+        self.alive.load(Ordering::SeqCst)
+    }
+
+    fn send(&self, cmd: Cmd) -> Result<(), String> {
+        if !self.is_alive() {
+            return Err(ENGINE_GONE.into());
+        }
+        self.cmd.send(cmd).map_err(|_| ENGINE_GONE.to_string())
+    }
+
     pub fn prompt(&self, text: &str) -> Result<(), String> {
         self.prompt_with_image(text, None)
     }
 
     pub fn prompt_with_image(&self, text: &str, image: Option<&str>) -> Result<(), String> {
-        self.cmd
-            .send(Cmd::Prompt {
-                text: text.to_string(),
-                image: image
-                    .filter(|s| !s.trim().is_empty())
-                    .map(|s| s.to_string()),
-            })
-            .map_err(|e| e.to_string())
+        self.send(Cmd::Prompt {
+            text: text.to_string(),
+            image: image
+                .filter(|s| !s.trim().is_empty())
+                .map(|s| s.to_string()),
+        })
     }
 
     pub fn cancel(&self) -> Result<(), String> {
-        self.cmd.send(Cmd::Cancel).map_err(|e| e.to_string())
+        self.send(Cmd::Cancel)
     }
 
     pub fn steer(&self, text: &str) -> Result<(), String> {
-        self.cmd
-            .send(Cmd::Steer(text.to_string()))
-            .map_err(|e| e.to_string())
+        self.send(Cmd::Steer(text.to_string()))
     }
 
     /// A new session. `Ready` is already queued. The caller owns the event
-    /// sender and the commands that leave this process.
+    /// sender and the commands that leave this process, and holds the
+    /// [`EngineLife`] for as long as its engine runs.
     pub fn external(
         cwd: PathBuf,
         session_id: String,
-    ) -> (AcpHandle, Receiver<ExternalCmd>, Sender<AcpEvent>) {
+    ) -> (
+        AcpHandle,
+        Receiver<ExternalCmd>,
+        Sender<AcpEvent>,
+        EngineLife,
+    ) {
+        let alive = Arc::new(AtomicBool::new(true));
         let (cmd_tx, cmd_rx) = mpsc::channel::<Cmd>();
         let (evt_tx, evt_rx) = mpsc::channel();
         let (ext_tx, ext_rx) = mpsc::channel();
@@ -163,9 +204,12 @@ impl AcpHandle {
                 events: evt_rx,
                 session_id,
                 cwd,
+                id: next_handle_id(),
+                alive: Arc::clone(&alive),
             },
             ext_rx,
             evt_tx,
+            EngineLife(alive),
         )
     }
 
@@ -177,28 +221,22 @@ impl AcpHandle {
         } else {
             PermAnswer::Cancel
         };
-        self.cmd
-            .send(Cmd::Permission { id, answer })
-            .map_err(|e| e.to_string())
+        self.send(Cmd::Permission { id, answer })
     }
 
     pub fn answer_permission_always(&self, id: Value) -> Result<(), String> {
-        self.cmd
-            .send(Cmd::Permission {
-                id,
-                answer: PermAnswer::AllowAlways,
-            })
-            .map_err(|e| e.to_string())
+        self.send(Cmd::Permission {
+            id,
+            answer: PermAnswer::AllowAlways,
+        })
     }
 
     /// Deny the ask.
     pub fn reject_permission(&self, ask: &PermissionAsk) -> Result<(), String> {
-        self.cmd
-            .send(Cmd::Permission {
-                id: ask.rpc_id.clone(),
-                answer: PermAnswer::Reject,
-            })
-            .map_err(|e| e.to_string())
+        self.send(Cmd::Permission {
+            id: ask.rpc_id.clone(),
+            answer: PermAnswer::Reject,
+        })
     }
 
     pub fn answer_elicit(
@@ -207,13 +245,11 @@ impl AcpHandle {
         outcome: &'static str,
         content: Option<Value>,
     ) -> Result<(), String> {
-        self.cmd
-            .send(Cmd::Elicit {
-                id,
-                outcome,
-                content,
-            })
-            .map_err(|e| e.to_string())
+        self.send(Cmd::Elicit {
+            id,
+            outcome,
+            content,
+        })
     }
 
     /// A handle whose engine is gone: every send fails.
@@ -226,6 +262,8 @@ impl AcpHandle {
             events,
             session_id,
             cwd,
+            id: next_handle_id(),
+            alive: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -237,5 +275,34 @@ impl AcpHandle {
 impl Drop for AcpHandle {
     fn drop(&mut self) {
         let _ = self.cmd.send(Cmd::Shutdown);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_send_to_a_gone_engine_says_so_plainly() {
+        let handle = AcpHandle::dead(PathBuf::from("/tmp"), "native-gone".into());
+        assert!(!handle.is_alive());
+        assert_eq!(handle.prompt("hi").unwrap_err(), ENGINE_GONE);
+        assert_eq!(handle.steer("hi").unwrap_err(), ENGINE_GONE);
+        assert_eq!(handle.cancel().unwrap_err(), ENGINE_GONE);
+    }
+
+    #[test]
+    fn the_handle_dies_with_its_engine_thread() {
+        let (handle, _ext, _events, life) =
+            AcpHandle::external(PathBuf::from("/tmp"), "native-life".into());
+        assert!(handle.is_alive());
+        assert_eq!(handle.prompt("hi"), Ok(()));
+        let engine = std::thread::spawn(move || {
+            let _life = life;
+            panic!("test: engine thread panics");
+        });
+        assert!(engine.join().is_err());
+        assert!(!handle.is_alive());
+        assert_eq!(handle.prompt("again").unwrap_err(), ENGINE_GONE);
     }
 }
