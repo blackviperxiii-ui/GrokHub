@@ -1,8 +1,10 @@
 //! Titlebar bell: a session-only list of what the cabin told you.
 //!
-//! Archive / unarchive, diagnostics saves and the status lines that raise a
-//! toast land here instead of strips above the composer. Each row can carry
-//! one action (Undo, Show in folder). Nothing is written to disk.
+//! Archive / unarchive, diagnostics saves, finished background tasks, game
+//! and print alerts, the GPU fallback line and the Saved / finished / error
+//! status lines land here, and only here: no strip above the composer and no
+//! popup over the window. Each row can carry one action (Undo, Show in
+//! folder). Nothing is written to disk.
 
 use super::*;
 
@@ -57,6 +59,19 @@ pub(super) struct Notice {
     pub(super) kind: NoticeKind,
     pub(super) text: String,
     pub(super) action: Option<NoticeAction>,
+    /// How many times the same words came in a row (folded into one row).
+    pub(super) count: u32,
+}
+
+impl Notice {
+    /// The row's words, with "(x3)" when the same line came three times.
+    pub(super) fn shown_text(&self) -> String {
+        if self.count > 1 {
+            format!("{} (x{})", self.text, self.count)
+        } else {
+            self.text.clone()
+        }
+    }
 }
 
 /// Newest first, capped at [`NOTICE_CAP`].
@@ -73,6 +88,15 @@ pub(super) struct Notices {
 
 impl Notices {
     pub(super) fn push(&mut self, notice: Notice) {
+        // The same words again fold into the newest row instead of stacking.
+        if let Some(top) = self.items.first_mut() {
+            if top.kind == notice.kind && top.text == notice.text && top.action == notice.action {
+                top.at = notice.at;
+                top.count = top.count.saturating_add(notice.count.max(1));
+                self.unread = self.unread.max(1);
+                return;
+            }
+        }
         self.items.insert(0, notice);
         self.items.truncate(NOTICE_CAP);
         self.unread = (self.unread + 1).min(self.items.len());
@@ -140,6 +164,7 @@ impl Cabin {
             kind,
             text,
             action,
+            count: 1,
         });
     }
 
@@ -221,9 +246,24 @@ impl Cabin {
         )
         .on_hover_text(bell_tip(self.notices.unread));
         if self.notices.unread > 0 {
-            let c = egui::pos2(resp.rect.right() - 9.0, resp.rect.top() + 9.0);
+            // The unread number, so "something new" also says how much.
+            let galley = ui.painter().layout_no_wrap(
+                unread_badge(self.notices.unread),
+                egui::FontId::proportional(9.0),
+                egui::Color32::WHITE,
+            );
+            let w = (galley.size().x + 6.0).max(13.0);
+            let badge = egui::Rect::from_center_size(
+                egui::pos2(resp.rect.right() - 8.0, resp.rect.top() + 9.0),
+                egui::vec2(w, 13.0),
+            );
             ui.painter()
-                .circle_filled(c, 3.5, crate::theme::signal_red());
+                .rect_filled(badge, 6.5, crate::theme::signal_red());
+            ui.painter().galley(
+                badge.center() - galley.size() / 2.0,
+                galley,
+                egui::Color32::WHITE,
+            );
         }
         let id = ui.make_persistent_id("notice-bell-list");
         if resp.clicked() {
@@ -295,7 +335,7 @@ impl Cabin {
                                 );
                                 ui.add(
                                     egui::Label::new(
-                                        RichText::new(&n.text)
+                                        RichText::new(n.shown_text())
                                             .size(crate::theme::FONT_META)
                                             .color(crate::theme::fg()),
                                     )
@@ -324,6 +364,15 @@ impl Cabin {
     }
 }
 
+/// The number on the bell: hidden at zero, "99+" past ninety-nine.
+pub(super) fn unread_badge(unread: usize) -> String {
+    match unread {
+        0 => String::new(),
+        1..=99 => unread.to_string(),
+        _ => "99+".into(),
+    }
+}
+
 fn bell_tip(unread: usize) -> String {
     match unread {
         0 => "Notifications".into(),
@@ -342,7 +391,42 @@ mod tests {
             kind: NoticeKind::Info,
             text: text.into(),
             action: None,
+            count: 1,
         }
+    }
+
+    #[test]
+    fn the_same_words_fold_into_one_row() {
+        let mut n = Notices::default();
+        n.push(note("Back online."));
+        n.push(note("Back online."));
+        n.push(note("Back online."));
+        assert_eq!(n.items.len(), 1);
+        assert_eq!(n.items[0].shown_text(), "Back online. (x3)");
+        assert_eq!(n.unread, 1);
+        n.mark_read();
+        n.push(note("Back online."));
+        assert_eq!(n.unread, 1, "a repeat after reading is new again");
+        n.push(note("Offline since 02:01"));
+        n.push(note("Back online."));
+        assert_eq!(
+            n.items.iter().map(Notice::shown_text).collect::<Vec<_>>(),
+            ["Back online.", "Offline since 02:01", "Back online. (x4)"]
+        );
+        // A row with its own Undo never folds into one without.
+        n.push(Notice {
+            action: Some(NoticeAction::Unarchive("t1".into())),
+            ..note("Back online.")
+        });
+        assert_eq!(n.items.len(), 4);
+    }
+
+    #[test]
+    fn the_bell_number_hides_at_zero_and_caps() {
+        assert_eq!(unread_badge(0), "");
+        assert_eq!(unread_badge(1), "1");
+        assert_eq!(unread_badge(99), "99");
+        assert_eq!(unread_badge(120), "99+");
     }
 
     #[test]

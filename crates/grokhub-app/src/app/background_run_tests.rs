@@ -103,6 +103,11 @@ fn slash_bg_runs_beside_the_chat_on_a_forked_session() {
         Some("**Background task done** · run the checks\n\nbg finished")
     );
     assert_eq!(
+        cabin.notices.items.first().map(|n| n.text.as_str()),
+        Some("Background task done · run the checks"),
+        "the bell keeps the finished task"
+    );
+    assert_eq!(
         cabin.threads[0].grok_session.as_deref(),
         Some("native-main")
     );

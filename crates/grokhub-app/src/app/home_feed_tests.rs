@@ -537,11 +537,15 @@ fn discuss_card_opens_one_local_chat() {
     assert_eq!(cabin.updates[0].status, grokhub_core::UpdateStatus::Opened);
     assert!(cabin.updates[0].discuss_thread.is_some());
     assert!(!cabin.running);
-    wait_for("the discuss card must be saved opened", || {
-        std::fs::read_to_string(root.join("updates.json"))
-            .unwrap_or_default()
-            .contains("idea-harbor")
-    });
+    wait_within(
+        FILE_WRITE_BUDGET,
+        "the discuss card must be saved opened",
+        || {
+            std::fs::read_to_string(root.join("updates.json"))
+                .unwrap_or_default()
+                .contains("idea-harbor")
+        },
+    );
     quiet.settle();
 }
 
