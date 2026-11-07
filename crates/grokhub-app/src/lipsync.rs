@@ -20,6 +20,13 @@ pub const FRAME_MS: u32 = 20;
 /// [`OPEN_LEVEL`] it is open, between the two half open.
 pub const CLOSED_LEVEL: f32 = 0.18;
 pub const OPEN_LEVEL: f32 = 0.5;
+/// The smoothed level (for the talk hop) follows a rising voice within
+/// about this long and lets go of a falling one over about this long, so
+/// 20 ms frames don't make her jitter.
+pub const RISE_MS: f32 = 20.0;
+pub const FALL_MS: f32 = 120.0;
+/// How many frames back the smoothing looks; older frames have faded out.
+const SMOOTH_FRAMES: usize = 16;
 /// Frames louder than this many of the loudest are clipped so one shout
 /// doesn't make the rest of the sentence mumble.
 const LOUD_SHARE: f32 = 0.95;
@@ -48,6 +55,30 @@ impl Envelope {
     pub fn mouth_at(&self, at: Duration) -> Mouth {
         mouth_for(self.level_at(at))
     }
+
+    /// Loudness `at` into the clip, smoothed: a fast rise ([`RISE_MS`]) and
+    /// a slower fall ([`FALL_MS`]), run over the last [`SMOOTH_FRAMES`]
+    /// frames. 0 well after the end.
+    pub fn smooth_level_at(&self, at: Duration) -> f32 {
+        let frame = FRAME_MS as f32;
+        let rise = 1.0 - (-frame / RISE_MS).exp();
+        let fall = 1.0 - (-frame / FALL_MS).exp();
+        let now = (at.as_millis() / u128::from(FRAME_MS)) as usize;
+        let mut y = 0.0f32;
+        for i in now.saturating_sub(SMOOTH_FRAMES)..=now {
+            let x = self.levels.get(i).copied().unwrap_or(0.0);
+            y += (x - y) * if x > y { rise } else { fall };
+        }
+        y
+    }
+}
+
+/// The face while a reply is spoken: the mouth patch and the smoothed
+/// loudness that drives the talk hop.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Talk {
+    pub mouth: Mouth,
+    pub level: f32,
 }
 
 /// The mouth for a loudness level.
@@ -140,17 +171,21 @@ pub struct Speaking {
 }
 
 impl Speaking {
-    pub fn mouth_now(&self) -> Mouth {
-        self.env.mouth_at(self.started.elapsed())
+    pub fn talk_now(&self) -> Talk {
+        let at = self.started.elapsed();
+        Talk {
+            mouth: self.env.mouth_at(at),
+            level: self.env.smooth_level_at(at),
+        }
     }
 }
 
 /// Shared between the speaking thread and the UI.
 pub type LipSlot = Arc<Mutex<Option<Speaking>>>;
 
-/// The mouth right now, if a reply is being spoken.
-pub fn mouth_now(slot: &LipSlot) -> Option<Mouth> {
-    slot.lock().ok()?.as_ref().map(Speaking::mouth_now)
+/// The mouth and talk level right now, if a reply is being spoken.
+pub fn talk_now(slot: &LipSlot) -> Option<Talk> {
+    slot.lock().ok()?.as_ref().map(Speaking::talk_now)
 }
 
 /// Speak an mp3 piece: write it to the temp file the player reads, decode its
@@ -234,6 +269,29 @@ mod tests {
     }
 
     #[test]
+    fn the_smoothed_level_rises_fast_and_falls_slowly() {
+        // 100 ms silence, 200 ms full voice, then silence.
+        let mut levels = vec![0.0; 5];
+        levels.extend(vec![1.0; 10]);
+        levels.extend(vec![0.0; 40]);
+        let env = Envelope { levels };
+        let ms = Duration::from_millis;
+        assert_eq!(env.smooth_level_at(ms(80)), 0.0, "still quiet");
+        let first = env.smooth_level_at(ms(100));
+        assert!((0.6..0.7).contains(&first), "one frame in: {first}");
+        let held = env.smooth_level_at(ms(280));
+        assert!(held > 0.99, "a held voice reaches the top: {held}");
+        let after = env.smooth_level_at(ms(340));
+        assert!(
+            (0.55..0.65).contains(&after),
+            "60 ms after the voice stops it is still letting go: {after}"
+        );
+        let later = env.smooth_level_at(ms(1000));
+        assert_eq!(later, 0.0, "long after, nothing");
+        assert_eq!(Envelope::default().smooth_level_at(ms(0)), 0.0);
+    }
+
+    #[test]
     fn garbage_is_not_an_mp3() {
         assert_eq!(decode_mp3(b"not audio at all"), None);
         assert_eq!(envelope_from_mp3(&[]), None);
@@ -242,7 +300,7 @@ mod tests {
     #[test]
     fn the_slot_reads_the_mouth_only_while_speaking() {
         let slot: LipSlot = Arc::default();
-        assert_eq!(mouth_now(&slot), None);
+        assert_eq!(talk_now(&slot), None);
         let mut levels = vec![0.0; 10];
         levels.extend(vec![1.0; 10]);
         *slot.lock().unwrap() = Some(Speaking {
@@ -250,11 +308,14 @@ mod tests {
             env: Envelope { levels },
         });
         assert_eq!(
-            mouth_now(&slot),
-            Some(Mouth::Closed),
+            talk_now(&slot),
+            Some(Talk {
+                mouth: Mouth::Closed,
+                level: 0.0
+            }),
             "first 200 ms are quiet"
         );
         *slot.lock().unwrap() = None;
-        assert_eq!(mouth_now(&slot), None);
+        assert_eq!(talk_now(&slot), None);
     }
 }
