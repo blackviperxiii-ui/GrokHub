@@ -38,6 +38,10 @@ pub struct RefreshJob<'a> {
     /// Today's default model: probed first.
     pub default_model: String,
     pub now_ms: u64,
+    /// The sign-in's bearer, for the quota check's `GET /v1/api-key`
+    /// (see [`super::quota`]). `None` when no credential could be read:
+    /// the xAI check is skipped, never guessed at.
+    pub xai_bearer: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -240,6 +244,9 @@ pub fn run_refresh(job: &RefreshJob<'_>) -> RefreshDone {
         job.now_ms,
     );
     let _ = save_registry(dir, &reg);
+    // Quota detection rides the refresh: each route re-reads its account
+    // state when due (ten minutes, or at once after a 402, 403 or 429).
+    let _quota = super::quota::run_quota_checks(dir, job.xai_bearer.as_deref(), job.now_ms);
     RefreshDone {
         events,
         errors,
@@ -339,6 +346,7 @@ mod tests {
             named: vec!["grok-2-pinned".into()],
             default_model: "grok-4.7".into(),
             now_ms: 1_000,
+            xai_bearer: None,
         };
         let done = run_refresh(&job);
         assert_eq!(done.errors, Vec::<String>::new());
@@ -411,6 +419,7 @@ mod tests {
             named: vec![],
             default_model: "grok-4.7".into(),
             now_ms: 1,
+            xai_bearer: None,
         });
         let mut fake = Counting(0, true);
         let p = probe_next(&dir, Credential::Plan, 2, &mut |m, c| {
@@ -506,6 +515,7 @@ mod tests {
             named: vec![],
             default_model: "grok-4.7".into(),
             now_ms: 1,
+            xai_bearer: None,
         };
         run_refresh(&job);
         assert_eq!(load_registry(&dir).entitlement.credential, Credential::Plan);
@@ -517,6 +527,7 @@ mod tests {
             named: vec![],
             default_model: "grok-4.7".into(),
             now_ms: 1,
+            xai_bearer: None,
         });
         assert_eq!(
             load_registry(&dir).entitlement.credential,
@@ -531,6 +542,7 @@ mod tests {
             named: vec![],
             default_model: "grok-4.7".into(),
             now_ms: 1,
+            xai_bearer: None,
         });
         assert_eq!(
             load_registry(&dir).entitlement.credential,
@@ -550,6 +562,7 @@ mod tests {
             named: vec![],
             default_model: "grok-4.7".into(),
             now_ms: 1,
+            xai_bearer: None,
         });
         assert_eq!(
             read_profiles(&dir)["grok-4.7"].probe.status,
