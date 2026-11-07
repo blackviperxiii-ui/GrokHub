@@ -16,8 +16,9 @@ const DESKTOP: Capabilities = {
   webAccess: true,
   plugins: true,
   library: true,
+  autoSetup: true,
 };
-const PHONE: Capabilities = { ...DESKTOP, desktopControl: false, pulse: false, localAi: false, tray: false, webAccess: false, plugins: false, library: false };
+const PHONE: Capabilities = { ...DESKTOP, desktopControl: false, pulse: false, localAi: false, tray: false, webAccess: false, plugins: false, library: false, autoSetup: false };
 const WEB: Capabilities = { ...PHONE, remote: true };
 
 const PLAN: QuickChip = { id: "pred-1", label: "Plan my day", value: "Plan my day", action: "ask", hint: "", primary: true };
@@ -62,6 +63,7 @@ describe("paletteRows", () => {
       "Settings: Permissions",
       "Settings: Privacy & data",
       "Settings: Background",
+      "Settings: Auto setup",
       "Settings: Pulse",
       "Settings: Local AI",
       "Settings: Web access",

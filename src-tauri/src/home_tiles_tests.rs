@@ -131,7 +131,7 @@ fn feed_tiles_read_their_pulse_cards_and_say_where_the_switch_is() {
 
     std::fs::write(
         d.join("app.json"),
-        r#"{"game_companion":true,"theme":"dark"}"#,
+        r#"{"gameCompanion":true,"theme":"dark"}"#,
     )
     .unwrap();
     let mut card = grokhub_core::update_feed::digest_card(

@@ -51,7 +51,7 @@ vi.mock("./api", () => ({
   removeAttachment: vi.fn(),
 }));
 
-vi.mock("./transport", () => ({ call: desktop.call }));
+vi.mock("./transport", () => ({ call: desktop.call, inShell: () => false }));
 
 import { CHAT_EMPTY, Chat } from "./Chat";
 import { Personality } from "./Personality";

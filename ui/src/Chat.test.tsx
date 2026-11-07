@@ -50,6 +50,12 @@ const api = vi.hoisted(() => ({
   goalAct: vi.fn(() => Promise.resolve({ board: { today: [], mine: [], suggested: [], season: { label: "", done: 0, trophies: [], badges: [] } } })),
 }));
 
+// A chat line that asks for a setting is answered by auto setup.
+const auto = vi.hoisted(() => ({
+  settingAsk: vi.fn<(text: string) => Promise<string | null>>(() => Promise.resolve(null)),
+}));
+vi.mock("./autoSetup", () => auto);
+
 vi.mock("./api", () => ({
   sendChat: api.sendChat,
   answerElicit: api.answerElicit,
@@ -396,6 +402,17 @@ describe("Chat", () => {
     finish();
     await waitFor(() => expect(bubble()).not.toHaveClass("streaming"));
     expect(bubble()).toHaveAttribute("data-role", "assistant");
+  });
+
+  it("answers a setting ask here without sending it to the model", async () => {
+    auto.settingAsk.mockResolvedValueOnce("Text size is 115% now.");
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "make the text bigger{Enter}");
+    expect(await screen.findByText("Text size is 115% now.")).toBeInTheDocument();
+    expect(auto.settingAsk).toHaveBeenCalledWith("make the text bigger");
+    expect(screen.getByText("make the text bigger")).toHaveAttribute("data-role", "user");
+    expect(screen.getByLabelText("Message")).toHaveValue("");
+    expect(api.sendChat).not.toHaveBeenCalled();
   });
 
   it("renders the reply as Markdown and keeps the person's message plain", async () => {

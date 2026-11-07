@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { setTheme, type Theme } from "./api";
+import { LookRows } from "./AutoSetup";
 import { PRODUCT_NAME } from "./brand";
 import { applyTheme } from "./theme";
 
@@ -18,7 +19,16 @@ function displayTheme(theme: Theme): Theme {
   return theme === "dark" ? "ops-dark" : theme;
 }
 
-export function Appearance({ theme, onSaved }: { theme: Theme; onSaved: (theme: Theme) => void }) {
+export function Appearance({
+  theme,
+  textSize = false,
+  onSaved,
+}: {
+  theme: Theme;
+  /** Text size and reduce motion (auto setup's), on a desktop. */
+  textSize?: boolean;
+  onSaved: (theme: Theme) => void;
+}) {
   const shown = displayTheme(theme);
   const [note, setNote] = useState<string | null>(null);
 
@@ -51,6 +61,7 @@ export function Appearance({ theme, onSaved }: { theme: Theme; onSaved: (theme: 
         ))}
       </div>
       {note && <p className="note warn">{note}</p>}
+      {textSize && <LookRows />}
     </div>
   );
 }
