@@ -1451,13 +1451,13 @@ fn explicit_chats_never_reach_openrouter_or_xai_and_banned_asks_never_leave() {
         say("user", "and now?"),
     ]);
     let clean = send(vec![say("user", "fix my wifi")]);
-    for out in [explicit, history, persona] {
-        assert_eq!(
-            out.unwrap().text,
-            grokhub_core::adult_guard::LOCAL_ONLY_MISSING
-        );
-    }
-    for out in [banned, clean] {
+    assert_eq!(
+        explicit.unwrap().text,
+        grokhub_core::adult_guard::LOCAL_ONLY_MISSING
+    );
+    // Decided per message: a clean ask from an 18+ chat still gets answered,
+    // with the 18+ turns and the 18+ voice left out of what goes online.
+    for out in [history, persona, banned, clean] {
         out.unwrap();
     }
     assert_eq!(
@@ -1472,10 +1472,21 @@ fn explicit_chats_never_reach_openrouter_or_xai_and_banned_asks_never_leave() {
         .collect();
     assert_eq!(
         bodies.len(),
-        2,
-        "only the held and the clean chat reached OpenRouter"
+        4,
+        "every chat but the 18+ ask reached OpenRouter"
     );
-    let held = bodies[0].to_string();
+    let (history, persona) = (bodies[0].to_string(), bodies[1].to_string());
+    assert!(history.contains("continue"), "{history}");
+    assert!(
+        !history.contains("smut") && !history.contains("Here you go"),
+        "{history}"
+    );
+    assert!(persona.contains("my build broke"), "{persona}");
+    assert!(
+        !persona.contains(grokhub_core::adult_guard::ADULT_VOICE),
+        "{persona}"
+    );
+    let held = bodies[2].to_string();
     assert!(!held.contains("schoolgirl"), "{held}");
     assert!(held.contains("Loadout held this message back"), "{held}");
     for body in &bodies {
@@ -1639,6 +1650,108 @@ fn an_18_plus_chat_goes_straight_to_the_local_model_and_a_clean_one_does_not() {
         matches!(clean, Err(ClientError::Auth { .. })),
         "only 18+ chats fall back here: {clean:?}"
     );
+    assert_eq!(wire.n(), 0);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Viper's Nov 7 report: an 18+ chat worked while the local model was loaded,
+/// then hung and refused everything once it was unloaded for a game. Replays
+/// load, unload, an ordinary turn, an 18+ turn, the chat's summary, a reload
+/// and a model that has to load again.
+#[test]
+fn an_18_plus_chat_keeps_answering_after_its_local_model_is_unloaded() {
+    use grokhub_core::adult_guard::{ADULT_VOICE, LOCAL_ONLY_MISSING};
+    use grokhub_core::personality::{EXPLICIT_SAFETY_LINE, SAFETY_LINE};
+    let (dir, wire) = setup("adult-unload");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    save_registry(&dir, &fleet()).unwrap();
+    let xai = XaiRec::default();
+    let say = |role: &str, text: &str| InputItem::Message {
+        role: role.into(),
+        content: vec![ContentPart::InputText(text.into())],
+    };
+    let system =
+        format!("RULES\n\nPersonality: Whore mode. Flirty. {ADULT_VOICE}\n{EXPLICIT_SAFETY_LINE}");
+    let history = vec![
+        say("system", &system),
+        say("user", "wanna have some sexy time"),
+        say("assistant", "Mmm, get naked and talk dirty to me."),
+    ];
+    let send = |ask: &str, class: &str| {
+        let mut req = chat("adult-unload-1", &[]);
+        req.input = history.clone();
+        req.input.push(say("user", ask));
+        let (mut shown, mut thought) = (String::new(), String::new());
+        let out = live::stream_routed(
+            &xai,
+            &req,
+            &CancelToken::new(),
+            &mut |ev| match ev {
+                StreamEvent::TextDelta(t) => shown.push_str(&t),
+                StreamEvent::ReasoningDelta(t) => thought.push_str(&t),
+                StreamEvent::RateWait(_) => {}
+            },
+            class,
+        );
+        (out, shown, thought)
+    };
+    let sent_to_xai = || xai.0.lock().unwrap().len();
+
+    // Loaded: the 18+ turn runs on this computer's model.
+    let loaded = super::local::ForceOn::with(Some(Arc::new(LocalChat)));
+    let (out, shown, _) = send("lets do this, I'm horny", "chat:default");
+    assert_eq!(out.unwrap().text, "local here");
+    assert_eq!(shown, "local here");
+    assert_eq!(sent_to_xai(), 0);
+
+    // Unloaded for a game.
+    drop(loaded);
+    // An ordinary turn is answered, online, without the 18+ parts.
+    let (out, shown, _) = send("whats a good budget gaming mouse", "chat:default");
+    assert_eq!(out.unwrap().text, "hey you");
+    assert_eq!(shown, "hey you");
+    let body = responses_body(xai.0.lock().unwrap().last().unwrap()).to_string();
+    assert!(body.contains("budget gaming mouse"), "{body}");
+    assert!(
+        body.contains("RULES") && body.contains(SAFETY_LINE),
+        "{body}"
+    );
+    for adult in [
+        "sexy time",
+        "naked",
+        ADULT_VOICE,
+        "Whore mode",
+        "fictional adult content",
+    ] {
+        assert!(!body.contains(adult), "{adult} went online: {body}");
+    }
+    // An 18+ turn says in one line why it can't run, and sends nothing.
+    let (out, shown, _) = send("lets get naked", "chat:default");
+    assert_eq!(out.unwrap().text, LOCAL_ONLY_MISSING);
+    assert_eq!(shown, LOCAL_ONLY_MISSING);
+    assert_eq!(sent_to_xai(), 1);
+    // The chat's summary never becomes that notice, and never goes online.
+    let (out, shown, _) = send("Summarize the conversation so far.", super::CLASS_COMPACT);
+    assert!(out.is_err(), "{out:?}");
+    assert!(shown.is_empty(), "{shown}");
+    assert_eq!(sent_to_xai(), 1);
+
+    // Loaded again: 18+ turns are back on this computer's model.
+    let again = super::local::ForceOn::with(Some(Arc::new(LocalChat)));
+    let (out, _, thought) = send("lets get naked", "chat:default");
+    assert_eq!(out.unwrap().text, "local here");
+    assert!(
+        thought.is_empty(),
+        "a loaded model needs no note: {thought}"
+    );
+    drop(again);
+
+    // Ready but not loaded yet: the chat says it's loading, never a silent wait.
+    let _cold = super::local::ForceOn::with(None);
+    let (out, _, thought) = send("lets get naked", "chat:default");
+    assert_eq!(thought, super::local::LOCAL_LOADING_NOTE);
+    assert!(out.is_err(), "no engine here, so it can't start: {out:?}");
+    assert_eq!(sent_to_xai(), 1);
     assert_eq!(wire.n(), 0);
     let _ = std::fs::remove_dir_all(dir);
 }

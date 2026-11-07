@@ -266,6 +266,10 @@ pub fn heavy(class: &str, ctx_tokens: u64) -> bool {
     class.starts_with("background:") && ctx_tokens > ctx_cap() / 2
 }
 
+/// What the chat shows while a model that isn't loaded yet starts for a turn.
+pub const LOCAL_LOADING_NOTE: &str =
+    "Loading this computer's model first. It can take a minute after a game or a long idle.";
+
 /// The longest a heavy background step waits for RampUp before it runs anyway.
 pub const HEAVY_WAIT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
@@ -799,7 +803,9 @@ pub fn serve_request(
 ) -> Result<TurnOutput, ClientError> {
     let (text, _) = super::live::last_user_text(&req.input);
     let class_norm = class_row(class).map(|r| r.class).unwrap_or(class);
-    if !matches!(class_norm, "chat:quick" | "chat:default" | "desktop:soft") {
+    // Only the app's own background work is text-only; every other class is a
+    // reply someone reads (a math turn, a plan, an 18+ turn kept on device).
+    if class_norm.starts_with("background:") {
         return serve(class, &text, cancel);
     }
     let tokens = (text.len() as u64).div_ceil(4);

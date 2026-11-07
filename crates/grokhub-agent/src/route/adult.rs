@@ -7,7 +7,7 @@
 
 use grokhub_core::adult_guard::{self, Dest, Route};
 
-use crate::client::{ContentPart, InputItem, StreamEvent, TurnOutput};
+use crate::client::{ClientError, ContentPart, InputItem, StreamEvent, TurnOutput};
 
 /// Swap every banned user message in `input` for the held note, so an older
 /// turn is never re-sent either.
@@ -93,6 +93,77 @@ pub fn no_local_notice() -> Option<&'static str> {
     } else {
         Some(adult_guard::LOCAL_ONLY_MISSING)
     }
+}
+
+/// The newest ask, as typed, is 18+. Decided per message: the app's own note
+/// and the turns before it don't count, so a chat never stays stuck on 18+.
+pub fn ask_explicit(input: &[InputItem]) -> bool {
+    let (text, _) = super::live::last_user_text(input);
+    adult_guard::check(adult_guard::typed_part(&text)) != adult_guard::Risk::Clean
+}
+
+/// A clean ask from an 18+ chat that this computer's model can't take right
+/// now goes online with the chat's 18+ parts left out: each 18+ ask with
+/// everything that answered it, any other 18+ reply, and the 18+ voice
+/// lines in the prompt and the app's notes. True when what's left is clean;
+/// false leaves the call to the local-only notice.
+pub fn leave_adult_out(input: &mut Vec<InputItem>) -> bool {
+    if ask_explicit(input) {
+        return false;
+    }
+    let clean = |text: &str| adult_guard::check(text) == adult_guard::Risk::Clean;
+    let mut kept = Vec::with_capacity(input.len());
+    // Inside an 18+ ask's answer: replies, tool steps and reasoning go too.
+    let mut answering_adult = false;
+    for item in input.drain(..) {
+        let InputItem::Message { role, mut content } = item else {
+            if !answering_adult {
+                kept.push(item);
+            }
+            continue;
+        };
+        let text: String = content
+            .iter()
+            .filter_map(|p| match p {
+                ContentPart::InputText(t) => Some(t.as_str()),
+                ContentPart::InputImage(_) => None,
+            })
+            .collect();
+        match role.as_str() {
+            "user" => {
+                answering_adult = !clean(adult_guard::typed_part(&text));
+                if answering_adult {
+                    continue;
+                }
+            }
+            "assistant" if answering_adult || !clean(&text) => continue,
+            _ => {}
+        }
+        for part in content.iter_mut() {
+            if let ContentPart::InputText(text) = part {
+                if let std::borrow::Cow::Owned(safe) = grokhub_core::personality::online_safe(text)
+                {
+                    *text = safe;
+                }
+            }
+        }
+        kept.push(InputItem::Message { role, content });
+    }
+    *input = kept;
+    !explicit(input)
+}
+
+/// The local-only notice as the answer for `class`: a chat turn shows it; the
+/// app's own background work (a summary, a review) gets an error instead, so
+/// the notice never becomes the chat's summary or a step's result.
+pub fn notice_answer(class: &str, notice: &str) -> Result<TurnOutput, ClientError> {
+    if class.trim().starts_with("background:") {
+        return Err(ClientError::Protocol(notice.into()));
+    }
+    Ok(TurnOutput {
+        text: notice.into(),
+        ..TurnOutput::default()
+    })
 }
 
 /// A call that runs on this computer's model with 18+ on: the online-only
@@ -351,6 +422,74 @@ mod tests {
         assert_eq!(
             held_reply(&banned).map(|out| out.text),
             Some(adult_guard::HELD_NOTICE.to_string())
+        );
+    }
+
+    #[test]
+    fn a_clean_ask_leaves_the_18_plus_turns_and_their_tool_steps_out() {
+        let note = format!(
+            "<cabin-volatile>\nPersonality: Whore mode. {}\n</cabin-volatile>\n\nwhat time is it in Tokyo",
+            adult_guard::ADULT_VOICE
+        );
+        let mut input = vec![
+            msg("system", "RULES"),
+            msg("user", "talk dirty to me, I'm horny"),
+            InputItem::FunctionCall {
+                call_id: "c1".into(),
+                name: "web_search".into(),
+                arguments: "{}".into(),
+            },
+            InputItem::FunctionCallOutput {
+                call_id: "c1".into(),
+                output: "found".into(),
+            },
+            msg("assistant", "Mmm, get naked for me."),
+            msg("user", "fix my wifi"),
+            msg("assistant", "Restart the router."),
+            msg("user", &note),
+        ];
+        assert!(explicit(&input));
+        assert!(!ask_explicit(&input), "the newest ask is clean");
+        assert!(leave_adult_out(&mut input));
+        let texts: Vec<String> = input
+            .iter()
+            .map(|i| match i {
+                InputItem::Message { role, content } => format!(
+                    "{role}: {}",
+                    content
+                        .iter()
+                        .filter_map(|p| match p {
+                            ContentPart::InputText(t) => Some(t.as_str()),
+                            ContentPart::InputImage(_) => None,
+                        })
+                        .collect::<String>()
+                ),
+                other => format!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            texts,
+            [
+                "system: RULES",
+                "user: fix my wifi",
+                "assistant: Restart the router.",
+                "user: <cabin-volatile>\n</cabin-volatile>\n\nwhat time is it in Tokyo",
+            ]
+        );
+        // An 18+ newest ask is never cleaned up for online.
+        let mut adult = vec![
+            msg("user", "fix my wifi"),
+            msg("user", "talk dirty to me, I'm horny"),
+        ];
+        assert!(ask_explicit(&adult));
+        assert!(!leave_adult_out(&mut adult));
+        // Background work gets an error, never the notice as its text.
+        assert!(notice_answer("background:compact", adult_guard::LOCAL_ONLY_PAUSED).is_err());
+        assert_eq!(
+            notice_answer("chat:default", adult_guard::LOCAL_ONLY_PAUSED)
+                .unwrap()
+                .text,
+            adult_guard::LOCAL_ONLY_PAUSED
         );
     }
 }
