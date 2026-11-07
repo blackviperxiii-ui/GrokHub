@@ -115,7 +115,8 @@ fn always_permission_keeps_the_acp_session() {
         classify < drop_acp,
         "transient 5xx / truncation must not drop ACP: {err}"
     );
-    let retake = fn_src(&src, "retake_permission_session");
+    let confirm_src = include_str!("confirm.rs");
+    let retake = fn_src(confirm_src, "retake_permission_session");
     assert!(
         retake.contains("grok_session = None"),
         "a new permission setting must session/new or it does not take: {retake}"
@@ -124,9 +125,8 @@ fn always_permission_keeps_the_acp_session() {
         retake.contains("persist_idle_key") && !retake.contains("self.persist()"),
         "a permission change must not clone every thread; bump the idle key so persist_bg skips: {retake}"
     );
-    let confirm_src = include_str!("confirm.rs");
     for (file, func) in [
-        (src.as_str(), "pick_permission_mode"),
+        (confirm_src, "pick_permission_mode"),
         (confirm_src, "apply_session_always"),
     ] {
         let body = fn_src(file, func);

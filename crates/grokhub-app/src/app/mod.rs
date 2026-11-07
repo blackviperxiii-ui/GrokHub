@@ -3411,36 +3411,6 @@ impl Cabin {
         }
     }
 
-    /// Settings → Defaults picks a setting: Don't ask goes behind its one-time
-    /// confirm; the others save at once and take from the next step.
-    pub(super) fn pick_permission_mode(&mut self, mode: PermissionMode) {
-        if mode == self.permission_mode && self.cfg.permission_mode == mode.as_str() {
-            return;
-        }
-        if mode == PermissionMode::AlwaysApprove {
-            self.arm_session_always();
-            return;
-        }
-        self.confirm = None;
-        self.set_permission_mode(mode);
-        self.retake_permission_session();
-        self.status = "Saved".into();
-    }
-
-    /// The engine session reads the permission setting when it starts, so a
-    /// new setting starts a fresh one. Bumping the idle key keeps persist_bg
-    /// from cloning every thread for it.
-    pub(super) fn retake_permission_session(&mut self) {
-        if self.running {
-            self.halt_in_flight();
-        }
-        self.acp = None;
-        if let Some(t) = self.threads.get_mut(self.thread_idx) {
-            t.grok_session = None;
-        }
-        self.persist_idle_key = self.persist_idle_now();
-    }
-
     fn set_permission_mode(&mut self, mode: PermissionMode) {
         self.permission_mode = mode;
         self.cfg.permission_mode = crate::config::persistable_permission_mode(mode.as_str());
