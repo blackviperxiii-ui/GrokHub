@@ -393,7 +393,7 @@ pub fn locale_uses_12h(locale: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn gpu(name: &str, vram_mb: u64, integrated: bool) -> GpuFact {
