@@ -2166,18 +2166,13 @@ fn stop_hands_queued_messages_back_instead_of_sending_them_later() {
     let mut cabin = Cabin::quiet_for_test();
     cabin.running = true;
     cabin.composer = "half typed".into();
-    cabin.side_ask_queue = vec!["btw what time is it".into()];
     cabin.followup_queue = vec!["also rename the folder".into(), "  ".into()];
     cabin.halt_work("Stopped");
     assert!(cabin.followup_queue.is_empty());
-    assert!(cabin.side_ask_queue.is_empty());
-    assert_eq!(
-        cabin.composer,
-        "half typed\n\nbtw what time is it\n\nalso rename the folder"
-    );
+    assert_eq!(cabin.composer, "half typed\n\nalso rename the folder");
     assert!(cabin.status.starts_with("Stopped"));
     assert!(
-        cabin.status.contains("3 queued messages are back"),
+        cabin.status.contains("2 queued messages are back"),
         "{}",
         cabin.status
     );

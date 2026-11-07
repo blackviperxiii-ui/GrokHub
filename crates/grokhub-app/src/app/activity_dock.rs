@@ -173,6 +173,22 @@ pub(super) fn queued_items(
         .collect()
 }
 
+/// Live side answers, keyed by run id.
+pub(super) fn side_items(runs: &[super::side_run::SideRun], now: u64) -> Vec<ActivityItem> {
+    runs.iter()
+        .filter(|r| r.live())
+        .map(|r| ActivityItem {
+            key: format!("side:{}", r.id),
+            kind: ActivityKind::SideQuestion,
+            title: clip_to(r.question.lines().next().unwrap_or(""), QUEUED_TITLE_MAX),
+            status: ActivityStatus::Running,
+            detail: "Answering on the side".into(),
+            steps: 0,
+            at: now,
+        })
+        .collect()
+}
+
 /// The progress line under a running chat.
 pub(super) fn steps_line(item: &ActivityItem) -> String {
     if item.kind != ActivityKind::Chat || item.steps == 0 {
@@ -261,9 +277,8 @@ pub(super) fn row_buttons(item: &ActivityItem, steerable: bool) -> Vec<(&'static
                 ("Remove", RowPick::Remove),
             ]
         }
-        (ActivityKind::QueuedMessage | ActivityKind::SideQuestion, _) => {
-            vec![("Remove", RowPick::Remove)]
-        }
+        (ActivityKind::QueuedMessage, _) => vec![("Remove", RowPick::Remove)],
+        (ActivityKind::SideQuestion, _) => vec![("Stop", RowPick::Remove)],
         (ActivityKind::Recording, _) => vec![("Stop", RowPick::Stop)],
         (ActivityKind::Download, _) => vec![("Open", RowPick::Open)],
         (ActivityKind::Chat, ActivityStatus::Waiting) => vec![("Review", RowPick::Open)],
@@ -536,15 +551,13 @@ impl Cabin {
                 "queue",
                 now,
             );
-            let side = queued_items(
-                &self.side_ask_queue,
-                ActivityKind::SideQuestion,
-                "side",
-                now,
-            );
-            for item in queued.into_iter().chain(side) {
+            for item in queued {
                 upsert(&mut map, item);
             }
+        }
+        // A side answer being written shows here with Stop until it lands.
+        for item in side_items(&self.side.runs, now) {
+            upsert(&mut map, item);
         }
 
         if let Some(dl) = &self.setup.dl {
@@ -853,7 +866,7 @@ impl Cabin {
             // Queue edits keep the list open so the next row is one click away.
             Some(DockAct::SteerQueued(i)) => self.steer_queued(i),
             Some(DockAct::DropQueued(i)) => self.drop_queued(i),
-            Some(DockAct::DropSide(i)) => self.drop_side_question(i),
+            Some(DockAct::DropSide(id)) => self.stop_side_run(id as u64),
             Some(DockAct::StopRun(id)) => self.stop_bg_run(id),
             Some(DockAct::StopRecording) => self.stop_screen_recording(),
         }
@@ -1120,7 +1133,7 @@ mod tests {
         assert_eq!(labels(true), ["Steer now", "Remove"]);
         assert_eq!(labels(false), ["Remove"]);
         let side = &queued_items(&["y".into()], ActivityKind::SideQuestion, "side", now)[0];
-        assert_eq!(row_buttons(side, true), [("Remove", RowPick::Remove)]);
+        assert_eq!(row_buttons(side, true), [("Stop", RowPick::Remove)]);
         assert_eq!(queue_index("queue:3"), 3);
         assert_eq!(queue_index("side:0"), 0);
     }
@@ -1163,11 +1176,7 @@ mod tests {
         assert!(cabin.followup_queue.is_empty());
         assert_eq!(cabin.composer, "then deploy");
         assert_eq!(cabin.status, "Removed from the queue");
-        cabin.side_ask_queue = vec!["btw what time is it".into()];
-        cabin.composer.clear();
-        cabin.drop_side_question(0);
-        assert!(cabin.side_ask_queue.is_empty());
-        assert_eq!(cabin.composer, "btw what time is it");
+        cabin.composer = "btw what time is it".into();
         cabin.drop_queued(5);
         assert_eq!(
             cabin.composer, "btw what time is it",

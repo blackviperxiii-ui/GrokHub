@@ -771,9 +771,8 @@ fn chat_blocks_offer_copy_and_reply() {
         "Loadout Hangout moves chips above the composer and hides the session row: {stack}"
     );
     assert!(
-        src.contains("fn apply_composer_session_row(")
-            && src.contains("hangout_composer_layout(self.messages.is_empty())"),
-        "Hangout skips Chat/Plan/Use and Ask/Auto/Always under the composer"
+        !src.contains(["fn apply_composer", "_session_row("].concat().as_str()),
+        "no Chat/Plan/btw or Ask/Auto/Always row sits under the composer"
     );
     assert!(
         chat.contains("available_width") && chat.contains("set_max_width(pane)"),

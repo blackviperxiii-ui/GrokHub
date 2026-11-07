@@ -485,14 +485,7 @@ impl Cabin {
     pub(super) fn apply_session_always(&mut self) {
         self.confirm = None;
         self.set_permission_mode(PermissionMode::AlwaysApprove);
-        if self.running {
-            self.halt_in_flight();
-        }
-        self.acp = None;
-        if let Some(t) = self.threads.get_mut(self.thread_idx) {
-            t.grok_session = None;
-        }
-        self.persist_idle_key = self.persist_idle_now();
+        self.retake_permission_session();
         self.status = "Permission always-approve".into();
     }
 
@@ -557,12 +550,6 @@ mod tests {
         assert_eq!(
             ALWAYS_CONFIRM_LINE1.as_str(),
             "Skip every tool prompt until you change it. Loadout only stops for money, sending, deleting your data, credentials and irreversible system changes."
-        );
-        assert!(
-            crate::cards::composer_perm_tip("always-approve").is_some_and(|(_, tip)| tip
-                .contains("money, sending, deleting, credentials and irreversible changes")
-                && tip.contains("Stays until Ask or Auto")
-                && tip.len() < 160)
         );
         assert!(ALWAYS_CONFIRM_LINE2.contains("Night"));
         assert!(ALWAYS_CONFIRM_LINE2.contains("loop"));
@@ -669,7 +656,7 @@ mod tests {
             .and_then(|s| s.split("fn arm_session_always(").next())
             .expect("apply_session_always");
         assert!(
-            apply.contains("halt_in_flight") && apply.contains("self.acp = None"),
+            apply.contains("retake_permission_session"),
             "Confirm still applies Always and then drops the live job: {apply}"
         );
     }

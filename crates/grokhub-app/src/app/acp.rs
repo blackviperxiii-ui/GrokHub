@@ -823,11 +823,6 @@ impl Cabin {
         if self.running {
             return;
         }
-        if let Some(next) = self.side_ask_queue.first().cloned() {
-            self.side_ask_queue.remove(0);
-            self.send_queued_side_ask(next);
-            return;
-        }
         let Some(next) = self.followup_queue.first().cloned() else {
             self.kick_repair();
             return;
@@ -835,15 +830,6 @@ impl Cabin {
         self.followup_queue.remove(0);
         self.harness_user_queued();
         self.send_chat(next);
-    }
-
-    /// Look-safe send after the live turn. Does not cancel that turn — it already ended.
-    pub(super) fn send_queued_side_ask(&mut self, text: String) {
-        self.side_ask_kick = true;
-        self.send_chat(text);
-        if !self.running && self.pending_kick.is_none() {
-            self.side_ask_kick = false;
-        }
     }
 
     pub(super) fn thinking_status(&self) -> String {

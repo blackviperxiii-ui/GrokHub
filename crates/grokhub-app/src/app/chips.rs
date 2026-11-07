@@ -466,7 +466,6 @@ impl Cabin {
     /// a side question or an unwatched run, and not while they keep losing.
     pub(super) fn reply_chips_on(&self) -> bool {
         self.cfg.suggestions
-            && !self.side_ask_kick
             && !self.scheduled_perm
             && grokhub_core::chip_trailer_on(&self.chip_memory, now_ms())
     }

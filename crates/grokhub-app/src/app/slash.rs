@@ -45,6 +45,14 @@ pub(super) fn locked_recall_line(locked: usize, why: Option<&str>) -> Option<Str
     ))
 }
 
+/// Bare `/btw`: what to do instead of a mode.
+pub(super) const BTW_HINT: &str = "Ask anything while a reply runs and it's answered on the side. /btw <question> does it on purpose.";
+/// Bare `/plan`: the next message plans first.
+pub(super) const PLAN_NEXT_NOTE: &str = "Your next message gets a plan first";
+/// `/auto`, `/always-approve`, `/yolo`: the setting lives in Settings.
+pub(super) const PERMISSION_IN_SETTINGS: &str =
+    "Permissions are set in Settings → Defaults, under When the AI wants to change things";
+
 impl Cabin {
     pub(super) fn run_slash(&mut self, slash: Slash) {
         if let Some(cmd) = home_slash_cmd(slash_kind(&slash)) {
@@ -245,12 +253,9 @@ impl Cabin {
                 self.status = WORKTREE_GONE.into();
             }
             Slash::Btw => {
-                self.set_session_mode(SessionMode::Ask);
-                self.status = if self.running {
-                    "btw — side ask, main run continues".into()
-                } else {
-                    "btw — look-safe side ask".into()
-                };
+                // Side questions need no mode: one typed while a reply runs
+                // is answered on the side. `/btw <question>` still forces it.
+                self.status = BTW_HINT.into();
             }
             Slash::ViewPlan => {
                 let has = self
@@ -430,50 +435,16 @@ impl Cabin {
             }
             Slash::Palette => self.open_palette(),
             Slash::Plan => {
-                if self.running {
-                    self.halt_in_flight();
-                }
-                self.set_session_mode(SessionMode::Plan);
-                self.acp = None;
-                self.hold_chat_name_for_plan();
-                if let Some(t) = self.threads.get_mut(self.thread_idx) {
-                    t.grok_session = None;
-                }
-                self.persist_idle_key = self.persist_idle_now();
-                self.status = format!(
-                    "Plan mode — {} will plan first",
-                    grokhub_core::brand::product_name()
-                );
+                // One shot: the next message plans first. Big jobs plan first
+                // on their own; this is for when the app read it as small.
+                self.plan_next = true;
+                self.status = PLAN_NEXT_NOTE.into();
             }
-            Slash::AlwaysApprove => {
-                if self.permission_mode == PermissionMode::AlwaysApprove {
-                    self.confirm = None;
-                    self.set_permission_mode(PermissionMode::Ask);
-                    if self.running {
-                        self.halt_in_flight();
-                    }
-                    self.acp = None;
-                    if let Some(t) = self.threads.get_mut(self.thread_idx) {
-                        t.grok_session = None;
-                    }
-                    self.persist_idle_key = self.persist_idle_now();
-                    self.status = format!("Permission {}", self.permission_mode.as_str());
-                } else {
-                    self.arm_session_always();
-                }
-            }
-            Slash::AutoPerm => {
-                self.confirm = None;
-                self.set_permission_mode(PermissionMode::Auto);
-                if self.running {
-                    self.halt_in_flight();
-                }
-                self.acp = None;
-                if let Some(t) = self.threads.get_mut(self.thread_idx) {
-                    t.grok_session = None;
-                }
-                self.persist_idle_key = self.persist_idle_now();
-                self.status = "Permission auto".into();
+            Slash::AlwaysApprove | Slash::AutoPerm => {
+                // Ask / Auto / Always live in one place: Settings → Defaults.
+                self.nav = Nav::Settings;
+                self.settings_sec = SettingsSec::Defaults;
+                self.status = PERMISSION_IN_SETTINGS.into();
             }
             Slash::Sessions => {
                 self.nav = Nav::History;

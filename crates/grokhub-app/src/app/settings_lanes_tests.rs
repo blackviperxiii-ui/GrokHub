@@ -503,8 +503,6 @@ fn native_auto_keeps_the_permission_card() {
     assert!(poll.contains("&& !native_session"), "{poll}");
     let engine = include_str!("native_engine.rs");
     assert!(engine.contains("ExternalCmd::Permission"), "{engine}");
-    let kick = fn_src(engine, "kick_native_turn");
-    assert!(kick.contains("side_ask_kick = false"), "{kick}");
 }
 
 #[test]
@@ -583,18 +581,6 @@ fn destructive_host_spec_title_primary_is_danger() {
     assert!(spec.danger);
 }
 
-// Folded from PR #427.
-#[test]
-fn cabin_default_sessions_lists_known_ids() {
-    // Real fn: non-empty session list with known ids. No spawn/network.
-    let sessions = cabin_default_sessions();
-    assert!(!sessions.is_empty());
-    let ids: Vec<&str> = sessions.iter().map(|(id, _)| *id).collect();
-    for want in ["chat", "plan", "ask"] {
-        assert!(ids.contains(&want), "missing session id {want}: {ids:?}");
-    }
-}
-
 // Folded from PR #428.
 #[test]
 fn cabin_default_permissions_lists_known_ids() {
@@ -602,7 +588,7 @@ fn cabin_default_permissions_lists_known_ids() {
     let perms = cabin_default_permissions();
     assert!(!perms.is_empty());
     let ids: Vec<&str> = perms.iter().map(|(id, _)| *id).collect();
-    for want in ["ask", "auto"] {
+    for want in ["ask", "auto", "always-approve"] {
         assert!(ids.contains(&want), "missing permission id {want}: {ids:?}");
     }
 }
@@ -615,15 +601,4 @@ fn cabin_default_permission_id_empty_unknown_and_known() {
     assert_eq!(cabin_default_permission_id("nope"), "ask");
     assert_eq!(cabin_default_permission_id("ask"), "ask");
     assert_eq!(cabin_default_permission_id("auto"), "auto");
-}
-
-// Folded from PR #430.
-#[test]
-fn cabin_default_session_id_empty_unknown_and_known() {
-    // Real fn: empty/unknown → "chat"; known ids stay. No spawn/network.
-    assert_eq!(cabin_default_session_id(""), "chat");
-    assert_eq!(cabin_default_session_id("nonsense"), "chat");
-    assert_eq!(cabin_default_session_id("chat"), "chat");
-    assert_eq!(cabin_default_session_id("plan"), "plan");
-    assert_eq!(cabin_default_session_id("ask"), "ask");
 }

@@ -149,15 +149,8 @@ fn run_slash_help_export_and_clear() {
 /// Router R1: there is no effort control in the composer, Settings or the slash list.
 #[test]
 fn no_effort_selector_anywhere() {
-    // The composer row returns a mode and a permission. Nothing else.
-    let crate::cards::SessionRowOut { mode: _, perm: _ } = crate::cards::SessionRowOut {
-        mode: None,
-        perm: None,
-    };
-    for (id, label) in crate::cards::composer_modes()
-        .iter()
-        .chain(crate::cards::permission_modes())
-    {
+    // The one permission row offers permissions. Nothing else.
+    for (id, label) in super::settings::cabin_default_permissions() {
         assert!(
             !id.contains("effort")
                 && !grokhub_core::REASONING_EFFORTS
@@ -515,9 +508,8 @@ fn scratch_btw_worktree_and_plan() {
     assert_eq!(cabin.status, "No plan yet — use Plan mode");
     assert!(!cabin.plan_open);
     cabin.run_slash_line("/btw");
-    assert!(matches!(cabin.session_mode, SessionMode::Ask));
-    assert_eq!(cabin.cfg.session_mode, "ask");
-    assert_eq!(cabin.status, "btw — look-safe side ask");
+    assert!(matches!(cabin.session_mode, SessionMode::Chat));
+    assert_eq!(cabin.status, super::slash::BTW_HINT);
     cabin.run_slash_line("/scratch");
     assert_eq!(cabin.status, "Scratch — no memory writes");
     assert!(cabin.scratch());
@@ -722,33 +714,20 @@ fn permission_slashes_arm_always_and_set_auto() {
     unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     assert!(matches!(cabin.permission_mode, PermissionMode::Ask));
-    cabin.run_slash_line("/always-approve");
-    assert_eq!(cabin.status, "Confirm Always…");
-    assert!(matches!(
-        cabin.confirm,
-        Some(super::confirm::ConfirmKind::AlwaysSession)
-    ));
-    assert!(matches!(cabin.permission_mode, PermissionMode::Ask));
-    assert!(!cabin.running);
-    cabin.apply_session_always();
-    assert!(matches!(
-        cabin.permission_mode,
-        PermissionMode::AlwaysApprove
-    ));
-    assert_eq!(cabin.cfg.permission_mode, "always-approve");
-    assert!(cabin.cfg.always_confirmed);
-    assert_eq!(cabin.status, "Permission always-approve");
-    assert!(cabin.confirm.is_none());
-    cabin.run_slash_line("/always-approve");
-    assert!(matches!(cabin.permission_mode, PermissionMode::Ask));
-    assert_eq!(cabin.cfg.permission_mode, "ask");
-    assert_eq!(cabin.status, "Permission ask");
-    cabin.run_slash_line("/auto");
-    assert!(matches!(cabin.permission_mode, PermissionMode::Auto));
-    assert_eq!(cabin.cfg.permission_mode, "auto");
-    assert_eq!(cabin.status, "Permission auto");
-    assert!(cabin.confirm.is_none());
-    assert!(!cabin.running);
+    for line in ["/always-approve", "/auto"] {
+        cabin.nav = Nav::Chat;
+        cabin.run_slash_line(line);
+        // Typed, they open the one place permissions change.
+        assert!(matches!(cabin.nav, Nav::Settings), "{line}");
+        assert_eq!(cabin.settings_sec, SettingsSec::Defaults, "{line}");
+        assert_eq!(cabin.status, super::slash::PERMISSION_IN_SETTINGS, "{line}");
+        assert!(
+            matches!(cabin.permission_mode, PermissionMode::Ask),
+            "{line}"
+        );
+        assert!(cabin.confirm.is_none(), "{line}");
+        assert!(!cabin.running);
+    }
     unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 

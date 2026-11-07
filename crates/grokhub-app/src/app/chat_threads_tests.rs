@@ -516,24 +516,6 @@ fn park_fresh_chat_keeps_the_running_reply_and_opens_an_empty_chat() {
 }
 
 #[test]
-fn selecting_plan_leaves_the_title_and_sets_plan() {
-    let _g = crate::config::hold_test_config();
-    let (root, mut cabin) = isolated_cabin("plan-title");
-    let mut thread = crate::threads::ChatThread::new("Night watch", false);
-    thread.messages = std::sync::Arc::new(vec![("user".into(), "dock".into())]);
-    cabin.threads = vec![thread];
-    cabin.thread_idx = 0;
-    cabin.messages = cabin.threads[0].messages.clone();
-    cabin.session_mode = SessionMode::Chat;
-
-    cabin.select_plan_without_rename();
-
-    assert_eq!(cabin.threads[0].title, "Night watch");
-    assert_eq!(cabin.session_mode, SessionMode::Plan);
-    release_isolated(&root, cabin);
-}
-
-#[test]
 fn session_menu_sits_left_of_minimize() {
     let _g = crate::config::hold_test_config();
     let (root, mut cabin) = isolated_cabin("menu-place");

@@ -520,12 +520,12 @@ fn the_live_work_strip_offers_steer_and_queue_and_activity_holds_the_rest() {
     });
     let shown = paint(&mut cabin);
     assert!(
-        shown.ends_with("is still working.|Steer|Queue")
-            && !shown.contains("Queued")
+        !shown.contains("Steer")
+            && !shown.contains("Queue")
             && !shown.contains("then deploy")
             && !shown.contains("Background")
             && !shown.contains("Stop"),
-        "only the choice for the text being typed sits above the box: {shown}"
+        "typing during a reply needs no choice above the box: {shown}"
     );
     // The queued message and the background run are Activity rows instead.
     let items = cabin.activity_items();

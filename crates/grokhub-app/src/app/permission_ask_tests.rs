@@ -68,14 +68,18 @@ fn always_permission_keeps_the_acp_session() {
         "Ask Always is a second beat that names session skip and scheduled inherit: {ask}"
     );
     let always_click = ask
-        .find("ghost_pill(ui, \"Always\")")
-        .expect("Always ghost");
+        .find("RichText::new(\"Stop asking me\")")
+        .expect("Stop asking me");
     let set_always = ask
         .find("set_permission_mode(PermissionMode::AlwaysApprove)")
         .expect("Always mode");
     assert!(
         always_click < set_always && ask[always_click..set_always].contains("perm_always_confirm"),
-        "Always on the Ask card must confirm before flipping the pill: {ask}"
+        "Stop asking me must confirm before the setting becomes Don't ask: {ask}"
+    );
+    assert!(
+        ask.contains("ghost_pill(ui, \"Always allow\")"),
+        "Always allow is a per-step grant on the card: {ask}"
     );
     assert!(
         ask.contains("always_confirm_matches_rpc") && ask.contains("p.rpc_id"),
@@ -111,32 +115,23 @@ fn always_permission_keeps_the_acp_session() {
         classify < drop_acp,
         "transient 5xx / truncation must not drop ACP: {err}"
     );
-    let always = src
-        .split("Slash::AlwaysApprove =>")
-        .nth(1)
-        .and_then(|s| s.split("Slash::AutoPerm =>").next())
-        .expect("AlwaysApprove");
+    let retake = fn_src(&src, "retake_permission_session");
     assert!(
-        always.contains("grok_session = None"),
-        "/always must session/new or Ask vs Always does not take: {always}"
+        retake.contains("grok_session = None"),
+        "a new permission setting must session/new or it does not take: {retake}"
     );
     assert!(
-        always.contains("persist_idle_key") && !always.contains("self.persist()"),
-        "/always must not clone every thread — bump the idle key so persist_bg skips: {always}"
+        retake.contains("persist_idle_key") && !retake.contains("self.persist()"),
+        "a permission change must not clone every thread; bump the idle key so persist_bg skips: {retake}"
     );
-    let auto = src
-        .split("Slash::AutoPerm =>")
-        .nth(1)
-        .and_then(|s| s.split("Slash::Sessions =>").next())
-        .expect("AutoPerm");
-    assert!(
-        auto.contains("grok_session = None"),
-        "/auto must session/new or permission mode does not take: {auto}"
-    );
-    assert!(
-        auto.contains("persist_idle_key") && !auto.contains("self.persist()"),
-        "/auto must not clone every thread — bump the idle key so persist_bg skips: {auto}"
-    );
+    let confirm_src = include_str!("confirm.rs");
+    for (file, func) in [
+        (src.as_str(), "pick_permission_mode"),
+        (confirm_src, "apply_session_always"),
+    ] {
+        let body = fn_src(file, func);
+        assert!(body.contains("retake_permission_session"), "{func}: {body}");
+    }
     let appearance = src
         .split("SettingsSec::Appearance => {")
         .nth(1)
@@ -218,93 +213,12 @@ fn always_permission_keeps_the_acp_session() {
     let plan = src
         .split("Slash::Plan =>")
         .nth(1)
-        .and_then(|s| s.split("Slash::AlwaysApprove =>").next())
+        .and_then(|s| s.split("Slash::AlwaysApprove").next())
         .expect("Plan");
     assert!(
-        plan.contains("grok_session = None"),
-        "/plan must session/new or Chat vs Plan does not take: {plan}"
+        plan.contains("plan_next") && !plan.contains("grok_session = None"),
+        "bare /plan plans the next message and keeps the chat's session: {plan}"
     );
-    assert!(
-        plan.contains("persist_idle_key") && !plan.contains("self.persist()"),
-        "/plan must not clone every thread — bump the idle key so persist_bg skips: {plan}"
-    );
-    assert!(
-        plan.contains("halt_in_flight"),
-        "/plan mid-turn must halt or Thinking sticks after the agent is dropped: {plan}"
-    );
-    // rustfmt may break `let row = crate::cards::session_row(...)` across lines.
-    let row = src
-        .split("crate::cards::session_row(")
-        .nth(1)
-        .and_then(|s| s.split("ui.allocate_ui_with_layout").next())
-        .expect("session_row");
-    assert_eq!(
-        row.matches("grok_session = None").count(),
-        2,
-        "session/permission row must session/new so mode takes: {row}"
-    );
-    assert_eq!(
-            row.matches("persist_idle_key").count(),
-            2,
-            "session/permission row must not clone every thread — bump the idle key so persist_bg skips: {row}"
-        );
-    assert!(
-        row.contains("select_plan_without_rename") && !row.contains("t.title ="),
-        "clicking Plan must switch mode without writing the chat title: {row}"
-    );
-    let plan_pick = src
-        .split("fn select_plan_without_rename(")
-        .nth(1)
-        .and_then(|s| s.split("fn hold_chat_name_for_plan(").next())
-        .expect("select_plan_without_rename");
-    assert!(
-            plan_pick.contains("hold_chat_name_for_plan")
-                && plan_pick.contains("grok_session = None")
-                && plan_pick.contains("set_session_mode(SessionMode::Plan)")
-                && !plan_pick.contains("t.title ="),
-            "selecting Plan keeps the session-id clear and does not write the thread title: {plan_pick}"
-        );
-    let hold = src
-        .split("fn hold_chat_name_for_plan(")
-        .nth(1)
-        .and_then(|s| s.split("fn thread_rail_title(").next())
-        .expect("hold_chat_name_for_plan");
-    assert!(
-        hold.contains("title_after_selecting_plan")
-            && hold.contains("history_label_after_plan")
-            && !hold.contains("t.title ="),
-        "Plan must keep the thread title and the History label already on screen: {hold}"
-    );
-    assert!(
-        plan.contains("hold_chat_name_for_plan"),
-        "/plan must keep the chat name when it clears the session id: {plan}"
-    );
-}
-
-#[test]
-fn set_session_mode_ask_and_chat() {
-    let mut quiet = QuietCabin::boot("session-mode");
-    quiet.settle();
-    let app_json = quiet.boot.root.join("app.json");
-    let cabin = &mut quiet.cabin;
-    cabin.set_session_mode(grokhub_core::wire::SessionMode::Ask);
-    assert_eq!(cabin.session_mode, grokhub_core::wire::SessionMode::Ask);
-    assert_eq!(cabin.cfg.session_mode, "ask");
-    wait_for("Ask must be saved", || {
-        std::fs::read_to_string(&app_json)
-            .unwrap_or_default()
-            .contains("\"sessionMode\": \"ask\"")
-    });
-
-    cabin.set_session_mode(grokhub_core::wire::SessionMode::Chat);
-    assert_eq!(cabin.session_mode, grokhub_core::wire::SessionMode::Chat);
-    assert_eq!(cabin.cfg.session_mode, "chat");
-    wait_for("Chat must be saved", || {
-        std::fs::read_to_string(&app_json)
-            .unwrap_or_default()
-            .contains("\"sessionMode\": \"chat\"")
-    });
-    quiet.settle();
 }
 
 // Landed from PR #103.
