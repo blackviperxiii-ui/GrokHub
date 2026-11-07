@@ -38,6 +38,8 @@ function clip(text: string): string {
 /** Folds one chat event into the conversation's item. Text and tool events
  * mean the turn is running; a permission ask or a plan/question waits on the
  * user; done and error end it. */
+export const SIDE_TITLE = "Answering on the side";
+
 export function chatActivity(
   prev: ActivityItem | undefined,
   { conversationId, event }: ChatEnvelope,
@@ -46,7 +48,8 @@ export function chatActivity(
   const base: ActivityItem = prev ?? {
     key: `chat:${conversationId}`,
     kind: "chat",
-    title: CHAT_TITLE,
+    // A side answer (`<chat>~side-<n>`, see Side.tsx) gets its own row.
+    title: conversationId.includes("~side-") ? SIDE_TITLE : CHAT_TITLE,
     status: "running",
     detail: "Thinking…",
     steps: 0,

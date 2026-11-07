@@ -100,7 +100,7 @@ describe("App pages", () => {
     expect(screen.getByLabelText("Work folder")).not.toBeVisible();
     await userEvent.click(tab("Settings"));
 
-    await waitFor(() => expect(screen.getByRole("combobox", { name: "Approvals" })).toHaveValue("always"));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "When the AI wants to change things" })).toHaveValue("always"));
     expect(screen.getByLabelText("Work folder")).toHaveValue("/home/user/kept");
     expect(screen.getByLabelText("Work folder")).toBeVisible();
   });

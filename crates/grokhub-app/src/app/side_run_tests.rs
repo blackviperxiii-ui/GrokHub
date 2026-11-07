@@ -69,6 +69,10 @@ fn a_side_question_during_a_reply_gets_its_own_answer_and_leaves_the_work_alone(
         cabin.messages, before,
         "its answer stays off the chat history"
     );
+    assert!(
+        grokhub_agent::load_session(&cabin.side.runs[0].session).is_err(),
+        "the side run's copy of the chat is gone, so History never lists it"
+    );
     end_bg_test(root, cabin);
 }
 

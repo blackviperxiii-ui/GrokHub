@@ -2,23 +2,9 @@ import "@testing-library/jest-dom/vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { ElicitCard, ModeChips, type ElicitItem } from "./Modes";
+import { ElicitCard, type ElicitItem } from "./Modes";
 
 vi.mock("./api", () => ({}));
-
-function chips(over: Partial<Parameters<typeof ModeChips>[0]> = {}) {
-  return (
-    <ModeChips
-      mode="chat"
-      onMode={() => {}}
-      approvals="ask"
-      onApprovals={() => {}}
-      busy={false}
-      remote={false}
-      {...over}
-    />
-  );
-}
 
 function card(over: Partial<ElicitItem> = {}): ElicitItem {
   return {
@@ -35,46 +21,6 @@ function card(over: Partial<ElicitItem> = {}): ElicitItem {
     ...over,
   };
 }
-
-describe("ModeChips", () => {
-  it("every chip has its tooltip", () => {
-    render(chips());
-    const tips = screen.getAllByRole("button").map((b) => [b.textContent, b.title]);
-    expect(tips).toEqual([
-      ["Chat", "Normal chat. Loadout can edit files and use tools in your work folder. Everyday work."],
-      [
-        "Plan",
-        "Loadout writes a plan before changing things, and changes nothing until you approve it. Use this for bigger or riskier work.",
-      ],
-      ["btw", "A look-only side ask. Loadout can read and answer, but changes nothing."],
-      ["Ask", "It asks before it changes a file or runs a command."],
-      ["Auto", "A quick check approves routine steps and asks you about the rest."],
-      [
-        "Always",
-        "Files change and commands run without asking. Deleting, sending, paying and credentials still ask.",
-      ],
-    ]);
-    // The router picks the model and the effort: neither shows, as a chip or a label.
-    expect(screen.queryByText(/effort/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/model/i)).not.toBeInTheDocument();
-  });
-
-  it("picks a mode and an approval", async () => {
-    const onMode = vi.fn();
-    const onApprovals = vi.fn();
-    render(chips({ onMode, onApprovals }));
-    await userEvent.click(screen.getByRole("button", { name: "Plan" }));
-    await userEvent.click(screen.getByRole("button", { name: "Always" }));
-    expect(onMode).toHaveBeenCalledWith("plan");
-    expect(onApprovals).toHaveBeenCalledWith("always");
-  });
-
-  it("waits for Settings before the approvals can change", () => {
-    render(chips({ approvals: null }));
-    expect(screen.getByRole("button", { name: "Ask" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Chat" })).toBeEnabled();
-  });
-});
 
 describe("ElicitCard", () => {
   it("a secret field is a password box and its value never shows", async () => {

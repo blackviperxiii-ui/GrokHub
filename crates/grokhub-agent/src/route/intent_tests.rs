@@ -305,3 +305,10 @@ fn just_answer_and_plan_first_correct_the_previous_turn() {
     );
     assert_eq!(correction_of_previous("make a plan for dinner"), None);
 }
+
+#[test]
+fn the_shell_smoke_plan_prompt_plans() {
+    // ui/e2e/smoke.mjs types this with no picker and expects a plan card.
+    let read = read_turn("make a plan to tidy the smoke notes", &IDLE);
+    assert_eq!(read.route, TurnRoute::Plan);
+}

@@ -54,6 +54,7 @@ pub mod settings;
 pub mod shell_update;
 pub mod skills;
 pub mod slash;
+mod turns;
 pub mod voice;
 pub mod workboard;
 
@@ -90,6 +91,8 @@ struct ShellState {
     sign_in: Arc<oauth::SignIn>,
     /// Chat exports this window wrote; Open and Show in folder take their tokens.
     saves: export::Saves,
+    /// Each chat's last read message, for a "no, just answer" right after.
+    turn_reads: turns::Reads,
     /// Asks whose notifications are out (os_extras.rs).
     #[cfg(desktop)]
     notified: os_extras::Pending,
@@ -351,7 +354,6 @@ async fn send_chat(
     attachments: Option<Vec<String>>,
     clock: Option<automations::Clock>,
 ) -> Result<String, String> {
-    let mode = mode.unwrap_or_default();
     set_last_chat(&state, &conversation_id);
     // How long the composer's chip row stood before this message; off the
     // send's path.
@@ -374,11 +376,13 @@ async fn send_chat(
     chat_turn(app, &state, conversation_id, turn, current(&state)).await
 }
 
-/// One message from the composer: its text, chip and attached files (paths
-/// from `stage_attachment`).
+/// One message from the composer: its text, how it runs and attached files
+/// (paths from `stage_attachment`).
 struct Turn {
     text: String,
-    mode: agent::SessionMode,
+    /// `/plan` or a follow-up chip names it; otherwise the app reads the
+    /// message and picks Chat or Plan (`turns::pick_mode`).
+    mode: Option<agent::SessionMode>,
     attachments: Vec<String>,
     /// The page's local clock, for the day a finished step's XP lands on.
     clock: Option<automations::Clock>,
@@ -414,6 +418,7 @@ async fn chat_turn(
         clock,
     } = turn;
     let files = state.trays.take(&conversation_id, &attachments)?;
+    let mode = mode.unwrap_or_else(|| turns::pick_mode(state, &conversation_id, &text));
     let session = session(state, &conversation_id);
     let config_dir = state.config_dir.clone();
     if capabilities::current().pulse {
@@ -2381,7 +2386,7 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             };
             let turn = Turn {
                 text: arg(args, "text")?,
-                mode: arg::<Option<agent::SessionMode>>(args, "mode")?.unwrap_or_default(),
+                mode: arg::<Option<agent::SessionMode>>(args, "mode")?,
                 attachments: arg::<Option<Vec<String>>>(args, "attachments")?.unwrap_or_default(),
                 clock: arg::<Option<automations::Clock>>(args, "clock")?,
             };
@@ -2997,6 +3002,7 @@ pub fn run() {
                 chip_rows: Mutex::new(chips::Rows::default()),
                 sign_in: Arc::default(),
                 saves: export::Saves::default(),
+                turn_reads: turns::Reads::default(),
                 #[cfg(desktop)]
                 notified: os_extras::Pending::default(),
             });
@@ -3060,6 +3066,9 @@ pub fn run() {
             answer_elicit,
             cancel_chat,
             steer_chat,
+            turns::read_turn,
+            turns::side_chat,
+            turns::tell_main,
             halt_desktop,
             get_halt_keys,
             close_chat,

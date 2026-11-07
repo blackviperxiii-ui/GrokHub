@@ -148,8 +148,9 @@ export function chipOutcome(surface: ChipSurface, id: string, picked: boolean): 
 /** One answer on a question card; the label is what gets sent. */
 export type ElicitChoice = { label: string; description: string; recommended: boolean };
 
-/** The composer's chip: Chat, Plan (read-only until the plan is approved) or
- * btw (a look-only side ask). */
+/** How one message runs: Chat, Plan (read-only until the plan is approved)
+ * or btw (a look-only side answer). The app picks it; `/plan` and `/chat`
+ * name it for the next message. */
 export type SessionMode = "chat" | "plan" | "btw";
 
 export type ElicitAction = "accept" | "decline" | "cancel";
@@ -213,13 +214,54 @@ export function clearApiKey(): Promise<Settings> {
 
 /** Runs one prompt through the agent loop; resolves with the stop reason.
  * `attachments`: paths from `stageAttachment`, in the chips' order. */
+/** Sends one message. With no `mode` the app reads the message and picks:
+ * a big multi-step job plans first, anything else is answered. */
 export function sendChat(
   conversationId: string,
   text: string,
-  mode: SessionMode = "chat",
+  mode?: SessionMode,
   attachments: string[] = [],
 ): Promise<string> {
   return invoke<string>("send_chat", { conversationId, text, mode, attachments, clock: wallClock() });
+}
+
+/** What a message typed during a reply is for (src-tauri/src/turns.rs). */
+export type RunningRoute = "side" | "steer" | "queue" | "stop";
+
+export interface TurnRead {
+  route: RunningRoute;
+  /** The words to act on, with a typed btw lead taken off. */
+  text: string;
+  /** The line shown at once, so the message never looks dropped. */
+  ack: string;
+}
+
+/** Reads a message typed while a reply runs. Instant: no model call. */
+export function readTurn(text: string): Promise<TurnRead> {
+  return invoke<TurnRead>("read_turn", { text });
+}
+
+/** Answers `question` beside the running reply, read-only, under `sideId`.
+ * Resolves with the stop reason when the answer is in. */
+export function sideChat(
+  conversationId: string,
+  sideId: string,
+  question: string,
+  ask: string,
+  soFar: string,
+): Promise<string> {
+  return invoke<string>("side_chat", { conversationId, sideId, question, ask, soFar });
+}
+
+/** Tell the main task: `steered` when the words joined the running reply;
+ * otherwise send `text` as the next message. */
+export interface Told {
+  text: string;
+  steered: boolean;
+}
+
+export function tellMain(conversationId: string, question: string, answer: string): Promise<Told> {
+  return invoke<Told>("tell_main", { conversationId, question, answer });
 }
 
 /** A file waiting on the composer (src-tauri/src/attach.rs). */
