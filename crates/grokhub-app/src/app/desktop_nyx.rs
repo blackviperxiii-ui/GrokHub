@@ -64,8 +64,8 @@ pub(super) struct Snapshot {
     pub accent: Option<Color32>,
     /// An outfit the user pinned from the menu, by id.
     pub outfit_pin: Option<String>,
-    /// The mouth while a reply is spoken.
-    pub mouth: Option<crate::lipsync::Mouth>,
+    /// The mouth and voice level while a reply is spoken.
+    pub talk: Option<crate::lipsync::Talk>,
 }
 
 impl Default for Snapshot {
@@ -78,7 +78,7 @@ impl Default for Snapshot {
             behind: false,
             accent: None,
             outfit_pin: None,
-            mouth: None,
+            talk: None,
         }
     }
 }
@@ -196,6 +196,12 @@ pub(super) fn default_position(monitor: Vec2) -> Pos2 {
         (monitor.x - WINDOW_SIZE.x - 24.0).max(0.0),
         (monitor.y - WINDOW_SIZE.y - 56.0).max(0.0),
     )
+}
+
+/// Whether the window has anything moving: motion on, a fade running, or a
+/// reply being spoken (the mouth patches change even with motion reduced).
+pub(super) fn animating(still: bool, fading: bool, talking: bool) -> bool {
+    !still || fading || talking
 }
 
 /// How long to wait before the window repaints. Animating parts repaint at
@@ -399,7 +405,7 @@ impl Cabin {
             still: crate::motion::reduced_motion_ctx(ctx),
             behind: self.cfg.desktop_nyx_behind,
             outfit_pin: self.cfg.desktop_nyx_outfit.clone(),
-            mouth: crate::lipsync::mouth_now(&self.lips),
+            talk: crate::lipsync::talk_now(&self.lips),
             accent: grokhub_core::companion::nyx()
                 .pedestal_tint
                 .as_deref()
@@ -641,7 +647,7 @@ fn paint_window(ui: &mut egui::Ui, shared: &Arc<Mutex<Shared>>) {
         outfit,
         t,
         snap.still,
-        snap.mouth,
+        snap.talk,
     );
     let resp = ui.interact(
         frame,
@@ -714,7 +720,8 @@ fn paint_window(ui: &mut egui::Ui, shared: &Arc<Mutex<Shared>>) {
         sh.monitor = monitor;
         sh.over_art = over;
     }
-    if let Some(wait) = repaint_after(true, snap.still && !fading, false) {
+    let moving = animating(snap.still, fading, snap.talk.is_some());
+    if let Some(wait) = repaint_after(true, !moving, false) {
         ui.ctx().request_repaint_after(wait);
     } else if !snap.still {
         ui.ctx()
@@ -734,7 +741,7 @@ fn paint_companion(
     outfit: &Outfit,
     t: f64,
     still: bool,
-    mouth: Option<crate::lipsync::Mouth>,
+    talk: Option<crate::lipsync::Talk>,
 ) -> bool {
     let anim_id = ui.id().with("desktop-nyx-anim");
     let mut state = ui
@@ -757,7 +764,8 @@ fn paint_companion(
     let k = anim::fade_k(t, state.fade_start, still);
     let b = anim::breath(t, still);
     let bob = anim::bob(t, still);
-    let art_b = art.translate(Vec2::new(0.0, bob));
+    let hop = talk.map_or(0.0, |v| anim::talk_hop(art, v.level, still));
+    let art_b = art.translate(Vec2::new(0.0, bob - hop));
     if fading {
         if let Some((prev, _)) = &state.prev {
             painter.add(egui::Shape::mesh(anim::breath_mesh(
@@ -775,8 +783,8 @@ fn paint_companion(
             b,
             anim::fade_tint(k),
         )));
-        if let (Some(mouth), Some(patches)) = (mouth, &outfit.mouth) {
-            let file = match mouth {
+        if let (Some(talk), Some(patches)) = (talk, &outfit.mouth) {
+            let file = match talk.mouth {
                 crate::lipsync::Mouth::Closed => &patches.closed,
                 crate::lipsync::Mouth::Half => &patches.half,
                 crate::lipsync::Mouth::Open => &patches.open,
@@ -997,6 +1005,14 @@ mod tests {
         assert_eq!(repaint_after(true, false, false), Some(ANIM_FRAME));
         assert_eq!(repaint_after(true, true, true), Some(CURSOR_FRAME));
         assert_eq!(repaint_after(true, true, false), None);
+    }
+
+    #[test]
+    fn a_spoken_reply_keeps_the_window_painting_under_reduced_motion() {
+        assert!(animating(false, false, false), "motion on");
+        assert!(animating(true, true, false), "a fade runs");
+        assert!(animating(true, false, true), "speaking, motion reduced");
+        assert!(!animating(true, false, false), "still and quiet");
     }
 
     #[test]
