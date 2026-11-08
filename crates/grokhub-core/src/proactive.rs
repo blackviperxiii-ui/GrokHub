@@ -1169,6 +1169,11 @@ mod tests {
         assert_eq!(c.action, "find out why \"Morning brief\" keeps failing");
         let card = proactive_card(&c, ProactiveRoute::ICan, T0);
         assert_eq!(card.title, "\"Morning brief\" failed 3 times in a row");
+        // The Pulse row leads with the finding, not "I can find out why …".
+        assert_eq!(
+            crate::pulse::i_can_title(&card),
+            "\"Morning brief\" failed 3 times in a row"
+        );
         assert_eq!(
             card.body.as_deref(),
             Some("Last error: OpenRouter has no credits left. None of its last 3 runs finished, so what it does for you has not happened since.")

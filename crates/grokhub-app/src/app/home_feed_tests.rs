@@ -1228,6 +1228,18 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         posted_card(&cabin, "note_automation_done", |c| c.source_id == "auto-1"),
         "Nightly backup",
     ));
+    cabin.note_automation_report(
+        "auto-2",
+        "Nightly backup",
+        "Copied 3 files to the NAS. Two were new photos.",
+    );
+    rows.push((
+        "note_automation_report",
+        posted_card(&cabin, "note_automation_report", |c| {
+            c.source_id == "auto-2"
+        }),
+        "Nightly backup",
+    ));
     cabin.note_schedule_created("sched-1", "Morning brief", "every day at 8:00");
     rows.push((
         "note_schedule_created",

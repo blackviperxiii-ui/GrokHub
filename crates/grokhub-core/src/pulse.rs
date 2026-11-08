@@ -444,6 +444,16 @@ pub fn is_idea_card(card: &UpdateCard) -> bool {
 /// a card without one gets a plain line from its action: Do "I can {action}",
 /// Automate "I can {action} {cadence}", Learn "I can learn how you {action}".
 pub fn i_can_title(card: &UpdateCard) -> String {
+    // A card that found something leads with what it found.
+    if let Some(found) = card
+        .pulse
+        .report
+        .as_ref()
+        .map(|r| r.found.trim())
+        .filter(|found| !found.is_empty())
+    {
+        return found.to_string();
+    }
     let title = card.title.trim();
     // A written idea has its own short title; its "I can" line is the body.
     if crate::pulse_ideas::is_muse_idea(card) {
