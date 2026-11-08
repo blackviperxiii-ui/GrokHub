@@ -45,6 +45,12 @@ pub enum ProbeId {
     NetTest,
     WingetUpgrades,
     WuPending,
+    /// Crash dumps of one program (Linux). Needs a [`ProgramName`].
+    CrashDumps,
+    /// One program's warnings and errors in the journal (Linux).
+    CrashLog,
+    /// One program's crashes in the Application log (Windows).
+    AppCrashes,
 }
 
 pub const LINUX_PROBES: &[ProbeId] = &[
@@ -67,7 +73,61 @@ pub const WINDOWS_PROBES: &[ProbeId] = &[
     ProbeId::WuPending,
 ];
 
+/// Probes about one program, run only with a name from a card.
+pub const LINUX_SUBJECT_PROBES: &[ProbeId] = &[ProbeId::CrashDumps, ProbeId::CrashLog];
+pub const WINDOWS_SUBJECT_PROBES: &[ProbeId] = &[ProbeId::AppCrashes];
+
+/// A program's name taken from a card, never from the model: letters, digits
+/// and `_ . @ -`, not starting with `-` or `.`, at most 64 long. It goes into
+/// an argv (or a quoted PowerShell string) as one plain word.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProgramName(String);
+
+impl ProgramName {
+    pub fn parse(name: &str) -> Option<Self> {
+        let name = name.trim();
+        let ok = !name.is_empty()
+            && name.len() <= 64
+            && !name.starts_with(['-', '.'])
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '@' | '-'));
+        ok.then(|| Self(name.to_string()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// The kernel keeps 15 bytes of a process name; journal matches use that.
+    fn comm(&self) -> &str {
+        &self.0[..self.0.len().min(15)]
+    }
+
+    /// The name as Windows logs it: `Discord.exe`.
+    fn exe(&self) -> String {
+        if self.0.to_ascii_lowercase().ends_with(".exe") {
+            self.0.clone()
+        } else {
+            format!("{}.exe", self.0)
+        }
+    }
+}
+
 impl ProbeId {
+    /// The probes about one program on `os`.
+    pub fn for_subject(os: Os) -> &'static [ProbeId] {
+        match os {
+            Os::Linux => LINUX_SUBJECT_PROBES,
+            Os::Windows => WINDOWS_SUBJECT_PROBES,
+        }
+    }
+
+    /// True for a probe that runs only with a [`ProgramName`].
+    pub fn needs_subject(self) -> bool {
+        matches!(self, Self::CrashDumps | Self::CrashLog | Self::AppCrashes)
+    }
+
     pub fn all(os: Os) -> &'static [ProbeId] {
         match os {
             Os::Linux => LINUX_PROBES,
@@ -91,6 +151,9 @@ impl ProbeId {
             Self::NetTest => "net_test",
             Self::WingetUpgrades => "winget_upgrades",
             Self::WuPending => "wu_pending",
+            Self::CrashDumps => "crash_dumps",
+            Self::CrashLog => "crash_log",
+            Self::AppCrashes => "app_crashes",
         }
     }
 
@@ -113,13 +176,22 @@ impl ProbeId {
             Self::PackageHealth => "installed packages",
             Self::PendingUpdates | Self::WingetUpgrades => "app updates",
             Self::WuPending => "Windows Update",
+            Self::CrashDumps | Self::AppCrashes => "its crash history",
+            Self::CrashLog => "its recent log",
         }
     }
 
     /// Journal and Event Log probes: output may hold user text, so it is
     /// capped at [`LOG_LINE_CAP`] lines.
     pub fn is_log(self) -> bool {
-        matches!(self, Self::BootErrors | Self::EventErrors24h)
+        matches!(
+            self,
+            Self::BootErrors
+                | Self::EventErrors24h
+                | Self::CrashDumps
+                | Self::CrashLog
+                | Self::AppCrashes
+        )
     }
 }
 
@@ -252,6 +324,36 @@ pub fn probe_spec_with(id: ProbeId, os: Os, has_bin: &dyn Fn(&str) -> bool) -> O
             id,
             "\"{0}`t{1}\" -f (Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Auto Update\\RebootRequired'), (New-Object -ComObject Microsoft.Update.Session).CreateUpdateSearcher().Search('IsInstalled=0 and IsHidden=0').Updates.Count",
         ),
+        // Not in `all()`, so never reached: these need a name.
+        ProbeId::CrashDumps | ProbeId::CrashLog | ProbeId::AppCrashes => return None,
+    };
+    Some(spec)
+}
+
+/// The spec for a probe about `name` on `os`. Metadata only: when it crashed
+/// and how, never the dump itself. `None` for a probe that takes no name or
+/// isn't for this OS.
+pub fn subject_probe_spec(id: ProbeId, os: Os, name: &ProgramName) -> Option<ProbeSpec> {
+    if !ProbeId::for_subject(os).contains(&id) {
+        return None;
+    }
+    let spec = match id {
+        // A bare name matches the dump's process name; oldest first, so the
+        // log cap keeps the newest.
+        ProbeId::CrashDumps => ProbeSpec::new(id, "coredumpctl", &["list", "--no-pager", "--no-legend", name.comm()]),
+        ProbeId::CrashLog => {
+            let comm = format!("_COMM={}", name.comm());
+            ProbeSpec::new(id, "journalctl", &[&comm, "-p", "warning", "-n", "20", "--no-pager", "-q", "-o", "short"])
+        }
+        // Application Error (1000) for that exe, newest first: time, module, code.
+        ProbeId::AppCrashes => powershell(
+            id,
+            &format!(
+                "foreach ($e in @(Get-WinEvent -LogName Application -FilterXPath '*[System[EventID=1000] and EventData[Data[@Name=\"AppName\"]=\"{}\"]]' -MaxEvents 20 -ErrorAction SilentlyContinue)) {{ \"{{0}}`t{{1}}`t{{2}}\" -f $e.TimeCreated.ToString('s'), $e.Properties[3].Value, $e.Properties[6].Value }}",
+                name.exe()
+            ),
+        ),
+        _ => return None,
     };
     Some(spec)
 }

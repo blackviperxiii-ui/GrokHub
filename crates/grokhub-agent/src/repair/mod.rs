@@ -35,12 +35,13 @@ pub use fix::{
     StepClass, FLOOR_GUIDANCE,
 };
 pub use interpret::{
-    interpret, pending_update_count, Finding, ProbeOutput, Severity, DISK_CRIT_PCT, DISK_WARN_PCT,
-    LOG_WARN_LINES, MEM_WARN_PCT,
+    interpret, interpret_subject, pending_update_count, Finding, ProbeOutput, Severity,
+    DISK_CRIT_PCT, DISK_WARN_PCT, LOG_WARN_LINES, MEM_WARN_PCT,
 };
 pub use probes::{
-    on_path, probe_spec_with, read_only_violation, Os, PackageManager, ProbeId, ProbeSpec,
-    LINUX_PROBES, LOG_LINE_CAP, OUTPUT_CAP, PROBE_TIMEOUT, WINDOWS_PROBES,
+    on_path, probe_spec_with, read_only_violation, subject_probe_spec, Os, PackageManager, ProbeId,
+    ProbeSpec, ProgramName, LINUX_PROBES, LINUX_SUBJECT_PROBES, LOG_LINE_CAP, OUTPUT_CAP,
+    PROBE_TIMEOUT, WINDOWS_PROBES, WINDOWS_SUBJECT_PROBES,
 };
 pub use restore::{
     backup_dir, backup_files, detect_backends, restore_files, BackupEntry, FileBackup,
@@ -68,6 +69,8 @@ pub struct DiagnoseCtx<'a> {
     pub os: Os,
     pub has_bin: &'a dyn Fn(&str) -> bool,
     pub runner: &'a dyn Fn(&ProbeSpec) -> ProbeRun,
+    /// The program a card is about. Only with it do the crash probes run.
+    pub subject: Option<&'a ProgramName>,
 }
 
 /// The outcome of one diagnose run.
@@ -102,11 +105,18 @@ pub fn diagnose(ctx: &DiagnoseCtx<'_>, probes: &[ProbeId]) -> DiagnoseReport {
     } else {
         probes.to_vec()
     };
-    wanted.retain(|p| ProbeId::all(ctx.os).contains(p));
+    wanted.retain(|p| {
+        ProbeId::all(ctx.os).contains(p)
+            || (ctx.subject.is_some() && ProbeId::for_subject(ctx.os).contains(p))
+    });
     wanted.dedup();
     for id in wanted {
         let label = id.label();
-        let Some(spec) = probe_spec_with(id, ctx.os, ctx.has_bin) else {
+        let spec = match ctx.subject {
+            Some(name) if id.needs_subject() => subject_probe_spec(id, ctx.os, name),
+            _ => probe_spec_with(id, ctx.os, ctx.has_bin),
+        };
+        let Some(spec) = spec else {
             report.findings.push(note(
                 id,
                 format!("I couldn't check {label}: no supported tool for it is installed."),
@@ -167,7 +177,10 @@ pub fn diagnose(ctx: &DiagnoseCtx<'_>, probes: &[ProbeId]) -> DiagnoseReport {
                     stdout: redact_output(&stdout, id.is_log()),
                     stderr: redact_output(&stderr, id.is_log()),
                 };
-                let mut found = interpret(id, &out);
+                let mut found = match ctx.subject {
+                    Some(name) if id.needs_subject() => interpret_subject(id, &out, name.as_str()),
+                    _ => interpret(id, &out),
+                };
                 if found.is_empty() {
                     found.push(note(
                         id,
@@ -352,6 +365,43 @@ fn names_code(lower: &str) -> bool {
     })
 }
 
+/// In a chat opened from a card about one program: an ask to look into it,
+/// or one that names a crash, reads that program's crash history and the
+/// background services. `None` leaves the message to the usual paths.
+pub fn probes_for_subject(text: &str, os: Os) -> Option<Vec<ProbeId>> {
+    const LOOK: &[&str] = &[
+        "investigate",
+        "look into",
+        "looking into",
+        "look at it",
+        "check",
+        "dig into",
+        "find out",
+        "why",
+        "diagnose",
+        "what's wrong",
+        "what is wrong",
+        "crash",
+        "freez",
+        "keeps failing",
+        "keeps stopping",
+    ];
+    let lower = text.trim().to_lowercase().replace('\u{2019}', "'");
+    if lower.is_empty() || lower.len() > 160 || lower.starts_with('/') || names_code(&lower) {
+        return None;
+    }
+    if !LOOK.iter().any(|w| lower.contains(w)) {
+        return None;
+    }
+    let mut probes = ProbeId::for_subject(os).to_vec();
+    probes.push(if os == Os::Windows {
+        ProbeId::ServicesStoppedAuto
+    } else {
+        ProbeId::FailedServices
+    });
+    Some(probes)
+}
+
 /// Phrases that mean "check my computer". Some(probes) picks what to check;
 /// None leaves the message to the model. Narrow on purpose: "the build is
 /// broken on my machine" is a coding question, not a diagnose.
@@ -516,6 +566,7 @@ pub(crate) fn tool_run(args: &Value) -> crate::tools::ToolOutput {
         os,
         has_bin: &on_path,
         runner: &run_spec,
+        subject: None,
     };
     let report = diagnose(&ctx, &probes);
     crate::tools::ToolOutput::ok(model_text(&report))
