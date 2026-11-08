@@ -20,6 +20,7 @@ fn sorted(text: &str) -> Brief {
             tools: &[],
             recent: &[],
             background: false,
+            anchor: None,
         },
         None,
     )

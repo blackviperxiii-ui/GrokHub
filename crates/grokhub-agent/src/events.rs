@@ -205,7 +205,10 @@ impl NativeEngine {
             .filter(|item| matches!(item, InputItem::Message { role, .. } if role == "user"))
             .map(|item| {
                 let text = crate::compact::message_text(item);
-                crate::prefix_cache::visible_user_text(&text).to_string()
+                let visible = crate::prefix_cache::visible_user_text(&text);
+                grokhub_core::card_report::split_card_carry(visible)
+                    .map_or(visible, |(_, user)| user)
+                    .to_string()
             })
             .rev()
             .take(2)
@@ -215,18 +218,39 @@ impl NativeEngine {
             .collect()
     }
 
+    /// The card this chat was opened from, by its finding: read from the
+    /// turn that carried it.
+    fn card_anchor(&self) -> Option<String> {
+        self.history.iter().find_map(|item| {
+            if !matches!(item, InputItem::Message { role, .. } if role == "user") {
+                return None;
+            }
+            let text = crate::compact::message_text(item);
+            let visible = crate::prefix_cache::visible_user_text(&text);
+            grokhub_core::card_report::split_card_carry(visible).map(|(found, _)| found.to_string())
+        })
+    }
+
     /// Brain 1: sort the ask and store its Brief for the trail.
     /// The Brief changes nothing about the run or its reply. It is returned so
     /// the turn's router can read its intent, care, domain and confidence.
     fn write_brief(&self, text: &str, has_image: bool) -> crate::brain::Brief {
         let recent = self.recent_user_texts();
         let background = self.is_background();
+        // A chat opened from a card: the Brief reads the person's words, and
+        // "it" means the card's subject.
+        let (text, carried) = match grokhub_core::card_report::split_card_carry(text) {
+            Some((found, user)) => (user, Some(found.to_string())),
+            None => (text, None),
+        };
+        let anchor = carried.or_else(|| self.card_anchor());
         let input = crate::brain::BriefInput {
             text,
             files: usize::from(has_image),
             tools: &[],
             recent: &recent,
             background,
+            anchor: anchor.as_deref(),
         };
         let mut ask = |t: &str| -> Result<String, String> {
             let call = crate::route::ModelCall::xai(

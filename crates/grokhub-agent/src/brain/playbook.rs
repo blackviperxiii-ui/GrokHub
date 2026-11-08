@@ -653,6 +653,58 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// The bluetoothd card, replayed: the chat opened from the card picks the
+    /// PC fix playbook on its first turn and on "check into it for me",
+    /// whatever was said in a hangout before. Without the card, the same
+    /// follow-up after hangout talk names nothing, so the Brief can't place it.
+    #[test]
+    fn a_chat_opened_from_a_crash_card_stays_on_that_program() {
+        let (all, _) = load(&crate::harness::test_dir("playbook-crash-card-replay"));
+        let anchor = Some("bluetoothd crashed several times recently");
+        let ask =
+            "Help me investigate why bluetoothd keeps crashing (read crash logs metadata only).";
+        let hangout = [
+            "lol that raid was wild".to_string(),
+            "what should I play tonight".to_string(),
+        ];
+        let card_turns = [ask.to_string()];
+        let pick_for = |text: &str, recent: &[String], anchor: Option<&str>| {
+            let b = crate::brain::rules(&crate::brain::BriefInput {
+                text,
+                recent,
+                anchor,
+                ..Default::default()
+            })?;
+            let id = pick(&all, b.intent.as_str(), &b.domain, "linux", b.mood.as_str())
+                .map(|p| p.id.clone())
+                .unwrap_or_default();
+            Some((b.intent.as_str().to_string(), b.domain, id))
+        };
+        let pc_fix = Some((
+            "repair".to_string(),
+            "system".to_string(),
+            "pc-fix".to_string(),
+        ));
+        // The card's first turn.
+        assert_eq!(pick_for(ask, &[], anchor), pc_fix);
+        // "check into it for me" after it, and with only the card behind it.
+        assert_eq!(
+            pick_for("check into it for me", &card_turns, anchor),
+            pc_fix
+        );
+        assert_eq!(pick_for("check into it for me", &[], anchor), pc_fix);
+        assert_eq!(pick_for("why does it keep doing that", &[], anchor), pc_fix);
+        // Hangout talk never turns the card's chat into chat.
+        assert_eq!(pick_for("check into it for me", &hangout, anchor), pc_fix);
+        // The old way: the same line in the hangout chat had no subject.
+        assert_eq!(pick_for("check into it for me", &hangout, None), None);
+        // Small talk in the card's chat stays small talk.
+        assert_eq!(
+            pick_for("thanks, you're the best", &card_turns, anchor).map(|b| b.0),
+            Some("chat".to_string())
+        );
+    }
+
     #[test]
     fn gaming_specialists_are_picked_for_tips_builds_and_library() {
         let (all, _) = load(&crate::harness::test_dir(

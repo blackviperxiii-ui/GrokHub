@@ -902,6 +902,8 @@ impl Cabin {
             thread.title = title;
             thread.title_locked = true;
             thread.messages_mut().push(("assistant".into(), context));
+            // The first turn carries the card to the model, not only to the page.
+            thread.native_carry = true;
             self.messages = thread.messages.clone();
         }
         if let Some(card) = self.updates.iter_mut().find(|c| c.id == id) {

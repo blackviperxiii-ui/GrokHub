@@ -160,7 +160,18 @@ pub fn adopt_native(thread: &mut ChatThread) -> bool {
 pub fn native_carry_recap(messages: &[(String, String)]) -> String {
     const TURNS: usize = 12;
     const PER_TURN: usize = 600;
-    let earlier = &messages[..messages.len().saturating_sub(1)];
+    let mut earlier = &messages[..messages.len().saturating_sub(1)];
+    // A chat opened from a card starts with the card's context: it goes whole.
+    let mut card = String::new();
+    if let Some((role, text)) = earlier.first() {
+        let text = text.trim_start();
+        if role == "assistant"
+            && (text.starts_with("Pulse card: ") || text.starts_with("Feed post: "))
+        {
+            card = grokhub_core::card_report::card_carry(text);
+            earlier = &earlier[1..];
+        }
+    }
     let start = earlier.len().saturating_sub(TURNS);
     let mut lines = Vec::new();
     for (role, text) in &earlier[start..] {
@@ -176,10 +187,10 @@ pub fn native_carry_recap(messages: &[(String, String)]) -> String {
         lines.push(format!("{who}: {cut}"));
     }
     if lines.is_empty() {
-        return String::new();
+        return card;
     }
     format!(
-        "Earlier in this chat (before {} ran it natively):\n{}\n\n",
+        "{card}Earlier in this chat (before {} ran it natively):\n{}\n\n",
         grokhub_core::brand::product_name(),
         lines.join("\n")
     )
@@ -2590,6 +2601,36 @@ mod tests {
         assert!(adopt_native(&mut empty));
         assert!(!empty.native_carry, "nothing to recap");
         assert!(empty.retired_sessions.is_empty());
+    }
+
+    #[test]
+    fn a_chat_opened_from_a_card_carries_the_whole_card_to_the_first_turn() {
+        let report = format!(
+            "Pulse card: bluetoothd crashed several times recently\n{}",
+            "y".repeat(700)
+        );
+        let msgs: Vec<(String, String)> = vec![
+            ("assistant".into(), report.clone()),
+            ("user".into(), "check into it for me".into()),
+        ];
+        assert_eq!(
+            native_carry_recap(&msgs),
+            format!(
+                "The person opened this chat from a card in their feed. The card:\n{report}\n(End of the card.)\n\n"
+            ),
+            "the card goes whole, under its own head"
+        );
+        // A later turn in the same chat still recaps under the usual head.
+        let more: Vec<(String, String)> = vec![
+            ("assistant".into(), "Feed post: For you".into()),
+            ("user".into(), "what is it".into()),
+            ("assistant".into(), "A cancel change.".into()),
+            ("user".into(), "now".into()),
+        ];
+        assert_eq!(
+            native_carry_recap(&more),
+            "The person opened this chat from a card in their feed. The card:\nFeed post: For you\n(End of the card.)\n\nEarlier in this chat (before Loadout ran it natively):\nUser: what is it\nYou: A cancel change.\n\n"
+        );
     }
 
     #[test]
