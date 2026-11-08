@@ -53,16 +53,25 @@ pub(super) fn drafters_dir() -> std::path::PathBuf {
 /// What the draft model offer says.
 pub(super) fn drafter_offer_line(d: &LocalModel) -> String {
     format!(
-        "Optional: {} can draft replies for this model, which can make them faster on some machines. {} only downloads it if you ask, and keeps it only if the speed test finds it helps.",
+        "{} makes this model's replies come faster. It downloads with the model, and {} keeps it on only where the speed test finds it helps.",
         d.name,
         grokhub_core::brand::product_name()
     )
 }
 
+/// The draft model to fetch right after `m` finishes: its catalog drafter,
+/// when it isn't on disk yet and the drive has room for it.
+fn auto_drafter(m: &LocalModel) -> Option<&'static LocalModel> {
+    let d = ld::offer(m.file, &drafters_dir())?;
+    free_disk_now()
+        .is_none_or(|free| free >= ls::disk_needed_mb(d))
+        .then_some(d)
+}
+
 /// The status line for a finished draft model download.
 pub(super) fn drafter_done_status(m: &LocalModel) -> String {
     format!(
-        "Downloaded {} as a draft model. Test speed in Settings checks whether it makes replies faster; it only stays on if it does. The next chat turn uses it once that test keeps it (or Manual draft is On).",
+        "Downloaded {}. Test speed in Settings checks whether it makes replies faster; it only stays on if it does.",
         m.name
     )
 }
@@ -340,7 +349,17 @@ impl Cabin {
                 // until Test speed keeps it, or Manual draft On forces it).
                 local_sidecar::stop_global();
             }
-            Outcome::Done(rec) => self.adopt_local_model(rec),
+            Outcome::Done(rec) => {
+                self.adopt_local_model(rec);
+                // Its draft model follows on its own; it's small, and the
+                // speed test decides whether it stays on.
+                if let Some(d) = auto_drafter(m) {
+                    status.push_str(&format!(" Getting {} next.", d.name));
+                    self.status = status;
+                    self.start_drafter_download(d);
+                    return;
+                }
+            }
             _ => {}
         }
         self.status = status;
@@ -876,6 +895,51 @@ mod tests {
     }
 
     #[test]
+    fn a_finished_model_fetches_its_draft_model_next_when_the_drive_has_room() {
+        let root = std::env::temp_dir().join(format!("grokhub-dl-chain-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let _pin = crate::config::TestConfigDir::set(root.join("cfg"));
+        let g12 = ls::model_by_id("gemma-4-12b-it-abliterated-q4_k").expect("12B");
+        let mtp = ls::model_by_id("gemma-4-12b-it-abliterated-mtp").expect("12B heads");
+        // The 12B's own file name, so it pairs; the bytes come from the fake
+        // under a repo name of their own.
+        let body = b"tiny fake 12b".to_vec();
+        let m: &'static LocalModel = Box::leak(Box::new(LocalModel {
+            repo: "acme/test-GGUF",
+            remote_file: Some("test.gguf"),
+            sha256: md::sha256_hex(&body).leak(),
+            ..*g12
+        }));
+        for (free, chained) in [(None, true), (Some(ls::disk_needed_mb(mtp) - 1), false)] {
+            tests::FREE_NOW.with(|f| f.set(free));
+            tests::STARTED.with(|s| s.borrow_mut().clear());
+            let mut app = Cabin::quiet_for_test();
+            let dir = root.join(format!("models-{chained}"));
+            app.start_model_download_with(m, dir.clone(), Box::new(FakeHf(body.clone())));
+            for _ in 0..500 {
+                app.poll_model_download();
+                if app.setup.dl.is_none() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            assert!(dir.join(g12.file).is_file(), "saved under its own name");
+            let started = tests::STARTED.with(|s| s.borrow().clone());
+            assert_eq!(started.contains(&mtp.id), chained, "{free:?}");
+            assert_eq!(
+                app.status
+                    .ends_with(" Getting Gemma 4 12B draft model next."),
+                chained,
+                "{}",
+                app.status
+            );
+        }
+        tests::FREE_NOW.with(|f| f.set(None));
+        grokhub_agent::route::local::set_enabled(false);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn a_draft_model_downloads_beside_the_model_and_changes_nothing_else() {
         let root = std::env::temp_dir().join(format!("grokhub-dl-draft-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
@@ -884,10 +948,11 @@ mod tests {
         let e2b = ls::model_by_id("gemma-4-e2b-it-abliterated-q4_k").expect("E2B");
         let drafters = root.join("models").join(ld::DRAFTERS_DIR);
         // Offered for the 12B until it's on disk; the line says it is optional.
-        assert_eq!(ld::offer(g12.file, &drafters).map(|d| d.id), Some(e2b.id));
+        let mtp = ls::model_by_id("gemma-4-12b-it-abliterated-mtp").expect("12B heads");
+        assert_eq!(ld::offer(g12.file, &drafters).map(|d| d.id), Some(mtp.id));
         assert_eq!(
-            drafter_offer_line(e2b),
-            "Optional: Gemma 4 E2B can draft replies for this model, which can make them faster on some machines. Loadout only downloads it if you ask, and keeps it only if the speed test finds it helps."
+            drafter_offer_line(mtp),
+            "Gemma 4 12B draft model makes this model's replies come faster. It downloads with the model, and Loadout keeps it on only where the speed test finds it helps."
         );
         let body = b"tiny fake drafter".to_vec();
         // Pinned to the fake body, under the fake's repo and file.
@@ -917,7 +982,7 @@ mod tests {
         assert!(app.setup.dl.is_none(), "the download never finished");
         assert_eq!(
             app.status,
-            "Downloaded Gemma 4 E2B as a draft model. Test speed in Settings checks whether it makes replies faster; it only stays on if it does. The next chat turn uses it once that test keeps it (or Manual draft is On)."
+            "Downloaded Gemma 4 E2B. Test speed in Settings checks whether it makes replies faster; it only stays on if it does."
         );
         assert_eq!(
             app.setup.installed,

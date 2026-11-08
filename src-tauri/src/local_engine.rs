@@ -175,7 +175,7 @@ fn offer_for(config_dir: &Path, m: &LocalModel) -> Option<DraftOffer> {
         name: d.name.into(),
         size_label: ls::size_label(d.download_mb),
         line: format!(
-            "Optional: {} can draft replies for {}, which can make them faster on some machines. {} only downloads it if you ask, and keeps it only if the speed test finds it helps.",
+            "{} makes {}'s replies come faster. {} keeps it on only where the speed test finds it helps.",
             d.name,
             m.name,
             grokhub_core::brand::product_name()
@@ -724,7 +724,7 @@ pub fn start_drafter(
                     "done",
                     None,
                     Some(format!(
-                        "Downloaded {} as a draft model. Test speed in Settings checks whether it makes replies faster; it only stays on if it does. The next chat turn uses it once that test keeps it (or Manual draft is On).",
+                        "Downloaded {}. Test speed in Settings checks whether it makes replies faster; it only stays on if it does.",
                         model.name
                     )),
                 )
@@ -794,22 +794,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_gemma_selected_offers_e2b_when_missing() {
+    fn a_gemma_selected_offers_its_own_draft_model_when_missing() {
         let dir = std::env::temp_dir().join(format!("gh-shell-offer-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(legacy_drafters_dir(&dir)).unwrap();
         let offer = draft_offer(&dir, "gemma-4-12b-it-abliterated-q4_k").expect("offer");
-        assert_eq!(offer.id, "gemma-4-e2b-it-abliterated-q4_k");
+        assert_eq!(offer.id, "gemma-4-12b-it-abliterated-mtp");
         assert!(offer.button.starts_with("Install and run draft model"));
         assert!(offer
             .line
-            .contains("Gemma 4 E2B can draft replies for Gemma 4 12B"));
+            .contains("Gemma 4 12B draft model makes Gemma 4 12B's replies come faster"));
         // A stock Gemma 4 id from the older catalog is offered nothing.
         assert!(draft_offer(&dir, "gemma-4-12b-it-q4_k_m").is_none());
-        let e2b = ls::model_by_id("gemma-4-e2b-it-abliterated-q4_k").unwrap();
+        let mtp = ls::model_by_id("gemma-4-12b-it-abliterated-mtp").unwrap();
         // A drafter left in the older config folder still counts as installed.
         let dest = legacy_drafters_dir(&dir);
-        std::fs::write(dest.join(e2b.file), b"x").unwrap();
+        std::fs::write(dest.join(mtp.file), b"x").unwrap();
         assert!(draft_offer(&dir, "gemma-4-12b-it-abliterated-q4_k").is_none());
         let _ = std::fs::remove_dir_all(dir);
     }

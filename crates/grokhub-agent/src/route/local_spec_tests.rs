@@ -269,18 +269,18 @@ impl Drop for Rig {
     }
 }
 
-const E2B_FILE: &str = "Huihui-gemma-4-E2B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf";
 const G12B_FILE: &str = "Huihui-gemma-4-12B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf";
+const G12B_MTP: &str = "Huihui-gemma-4-12B-it-abliterated-MTP-BF16.gguf";
 
 #[test]
 fn a_matching_catalog_drafter_waits_for_the_speed_test_then_runs() {
-    let rig = Rig::new("pair", G12B_FILE, Some((E2B_FILE, VOCAB)));
-    let key = "NVIDIA GeForce RTX|Huihui-gemma-4-12B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf|Huihui-gemma-4-E2B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf";
+    let rig = Rig::new("pair", G12B_FILE, Some((G12B_MTP, VOCAB)));
+    let key = "NVIDIA GeForce RTX|Huihui-gemma-4-12B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf|Huihui-gemma-4-12B-it-abliterated-MTP-BF16.gguf";
     let first = rig.plan(GovState::Normal);
     assert_eq!(first.decision, Decision::NeedsTest);
     assert_eq!(first.draft, None);
     assert_eq!(first.key.as_deref(), Some(key));
-    assert_eq!(first.name.as_deref(), Some("Gemma 4 E2B"));
+    assert_eq!(first.name.as_deref(), Some("Gemma 4 12B draft model"));
     let keep = Verdict {
         keep: true,
         acceptance: 0.6,
@@ -292,12 +292,20 @@ fn a_matching_catalog_drafter_waits_for_the_speed_test_then_runs() {
     assert_eq!(
         on.draft,
         Some(DraftArgs {
-            kind: DraftKind::Simple,
-            model: Some(rig.dir.join("drafters").join(E2B_FILE)),
+            kind: DraftKind::Mtp,
+            model: Some(rig.dir.join("drafters").join(G12B_MTP)),
             on_gpu: true,
             flags: rig.flags.clone(),
         })
     );
+    // The heads file loads as the draft model and drafts four ahead.
+    let args = on.draft.unwrap().to_args();
+    assert!(args.windows(2).any(|w| w[1] == "draft-mtp"), "{args:?}");
+    assert!(
+        args.windows(2).any(|w| w[1].ends_with(G12B_MTP)),
+        "{args:?}"
+    );
+    assert!(args.windows(2).any(|w| w[1] == "4"), "{args:?}");
     assert_eq!(rig.plan(GovState::RampUp).decision, Decision::On);
     assert_eq!(
         rig.plan(GovState::Throttle).decision,
@@ -328,16 +336,15 @@ fn a_matching_catalog_drafter_waits_for_the_speed_test_then_runs() {
 }
 
 #[test]
-fn a_drafter_with_another_vocabulary_is_refused() {
+fn mtp_heads_skip_the_tokenizer_check_a_separate_drafter_needs() {
+    // The heads carry no vocabulary of their own; they're trained for the
+    // one model, so a different (or missing) one doesn't refuse them.
     let rig = Rig::new(
         "vocab",
         G12B_FILE,
-        Some((E2B_FILE, &["<pad>", "<eos>", "<bos>", "hello", "world!"])),
+        Some((G12B_MTP, &["<pad>", "<eos>", "<bos>", "hello", "world!"])),
     );
-    assert_eq!(
-        rig.plan(GovState::Normal).decision,
-        Decision::Off("the draft model's tokenizer doesn't match the model")
-    );
+    assert_eq!(rig.plan(GovState::Normal).decision, Decision::NeedsTest);
 }
 
 #[test]
@@ -345,7 +352,8 @@ fn a_catalog_drafter_with_an_unreadable_header_is_not_used() {
     let rig = Rig::new("broken", G12B_FILE, None);
     let drafters = rig.dir.join("drafters");
     std::fs::create_dir_all(&drafters).unwrap();
-    std::fs::write(drafters.join(E2B_FILE), b"not a gguf").unwrap();
+    // Not the catalog's size either, so it isn't a heads file to trust.
+    std::fs::write(drafters.join(G12B_MTP), b"not a gguf").unwrap();
     let p = rig.plan(GovState::Normal);
     assert_eq!(p.decision, Decision::Off("no draft model is installed"));
     assert_eq!(p.draft, None);
@@ -570,12 +578,12 @@ fn a_drafter_in_another_download_folder_still_pairs() {
     write_gguf(&elsewhere, "gemma4", VOCAB, 0);
     rig.model = elsewhere;
     write_gguf(
-        &rig.dir.join("models").join("drafters").join(E2B_FILE),
+        &rig.dir.join("models").join("drafters").join(G12B_MTP),
         "gemma4",
         VOCAB,
         0,
     );
     let p = rig.plan(GovState::Normal);
     assert_eq!(p.decision, Decision::NeedsTest);
-    assert_eq!(p.name.as_deref(), Some("Gemma 4 E2B"));
+    assert_eq!(p.name.as_deref(), Some("Gemma 4 12B draft model"));
 }
