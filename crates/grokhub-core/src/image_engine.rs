@@ -72,6 +72,112 @@ pub fn image_model(models_dir: &Path) -> Option<&'static LocalModel> {
         .find(|m| m.kind == ModelKind::Image && md::complete(&dir, m))
 }
 
+/// The first catalog picture guard whose files are all on disk.
+pub fn guard_model(models_dir: &Path) -> Option<&'static LocalModel> {
+    let dir = md::kind_dir(models_dir, ModelKind::ImageGuard);
+    crate::local_setup::local_models()
+        .iter()
+        .find(|m| m.kind == ModelKind::ImageGuard && md::complete(&dir, m))
+}
+
+/// A part of `m` told apart by the end of its file name.
+fn part(models_dir: &Path, m: &LocalModel, end: &str) -> Option<PathBuf> {
+    let dir = md::kind_dir(models_dir, m.kind);
+    m.parts
+        .iter()
+        .find(|p| p.file.ends_with(end))
+        .map(|p| dir.join(p.file))
+}
+
+/// Picture size for an aspect ratio: about a megapixel, both sides a
+/// multiple of 64, which Z-Image draws best. Unknown or blank is square.
+pub fn size_for(aspect: &str) -> (u32, u32) {
+    match aspect.trim() {
+        "16:9" | "19.5:9" | "20:9" | "21:9" | "2:1" | "5:2" => (1344, 768),
+        "9:16" | "9:19.5" | "9:20" | "1:2" => (768, 1344),
+        "4:3" => (1152, 896),
+        "3:4" => (896, 1152),
+        "3:2" => (1216, 832),
+        "2:3" => (832, 1216),
+        _ => (1024, 1024),
+    }
+}
+
+/// Threads for one picture: most of the work is on the graphics card, so a
+/// few CPU threads are plenty and leave the rest of the machine free.
+const THREADS: u32 = 4;
+
+/// The `sd-cli` arguments for one picture with a Z-Image style row: the
+/// diffusion model is the main file, the Qwen text encoder and the VAE are
+/// parts. Turbo wants guidance off (cfg 1) and 8 steps; the encoder and VAE
+/// wait in system memory until their stage, so a game keeps its VRAM.
+pub fn generate_args(
+    models_dir: &Path,
+    m: &LocalModel,
+    prompt: &str,
+    (width, height): (u32, u32),
+    seed: u64,
+    out: &Path,
+) -> Option<Vec<String>> {
+    let dir = md::kind_dir(models_dir, m.kind);
+    let s = |p: PathBuf| p.display().to_string();
+    let llm = part(models_dir, m, ".gguf")?;
+    let vae = part(models_dir, m, "ae.safetensors")?;
+    Some(vec![
+        "--diffusion-model".into(),
+        s(md::final_path(&dir, m)),
+        "--llm".into(),
+        s(llm),
+        "--vae".into(),
+        s(vae),
+        "-p".into(),
+        prompt.into(),
+        "--cfg-scale".into(),
+        "1.0".into(),
+        "--steps".into(),
+        "8".into(),
+        "-W".into(),
+        width.to_string(),
+        "-H".into(),
+        height.to_string(),
+        "--seed".into(),
+        seed.to_string(),
+        "-t".into(),
+        THREADS.to_string(),
+        "--diffusion-fa".into(),
+        "--offload-to-cpu".into(),
+        "-o".into(),
+        s(out.to_path_buf()),
+    ])
+}
+
+/// The guard's model and image reader, for `llama-server -m … --mmproj …`.
+pub fn guard_files(models_dir: &Path, g: &LocalModel) -> Option<(PathBuf, PathBuf)> {
+    let dir = md::kind_dir(models_dir, g.kind);
+    Some((md::final_path(&dir, g), part(models_dir, g, ".gguf")?))
+}
+
+/// What the guard is asked about every finished picture: the hard bans, one
+/// word back.
+pub const GUARD_QUESTION: &str = "You check pictures before anyone sees them. Look at this picture and answer with one word. Answer BANNED if it shows any of these: anyone who is or looks under 18 in a sexual, nude or suggestive way; sexual violence or anything sexual without consent; anything sexual with an animal; a real, recognizable person (a celebrity or public figure) nude or in sexual content. Otherwise answer SAFE.";
+
+/// The guard's answer: `Some(true)` banned, `Some(false)` safe, `None` when
+/// it said neither, which the caller treats as banned.
+pub fn guard_verdict(reply: &str) -> Option<bool> {
+    let up = reply.to_ascii_uppercase();
+    if up.contains("BANNED") {
+        Some(true)
+    } else if up
+        .trim_start()
+        .trim_start_matches(['*', '"', '\''])
+        .starts_with("SAFE")
+    {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,5 +218,56 @@ mod tests {
             .find(|m| m.kind == ModelKind::ImageGuard)
             .expect("a picture guard row");
         assert!(guard.parts.iter().any(|p| p.file.contains("mmproj")));
+    }
+
+    #[test]
+    fn one_picture_is_one_turbo_run_with_the_encoder_and_vae_beside_it() {
+        let models = Path::new("/m");
+        let m = crate::local_setup::local_models()
+            .iter()
+            .find(|m| m.kind == ModelKind::Image)
+            .unwrap();
+        let out = Path::new("/out/a.png");
+        let a = generate_args(models, m, "a red fox in snow", size_for("16:9"), 7, out).unwrap();
+        let after = |k: &str| a[a.iter().position(|x| x == k).unwrap() + 1].clone();
+        let img = md::kind_dir(models, ModelKind::Image);
+        assert_eq!(
+            after("--diffusion-model"),
+            img.join(m.file).display().to_string()
+        );
+        assert!(after("--llm").ends_with("Qwen3-4B-Instruct-2507-Q4_K_M.gguf"));
+        assert!(after("--vae").ends_with("ae.safetensors"));
+        assert_eq!(after("-p"), "a red fox in snow");
+        assert_eq!(after("--cfg-scale"), "1.0");
+        assert_eq!(after("--steps"), "8");
+        assert_eq!((after("-W"), after("-H")), ("1344".into(), "768".into()));
+        assert_eq!(after("-o"), "/out/a.png");
+        assert!(a.iter().any(|x| x == "--offload-to-cpu"));
+        for aspect in ["", "1:1", "9:16", "4:3", "3:2", "21:9", "weird"] {
+            let (w, h) = size_for(aspect);
+            assert!(w % 64 == 0 && h % 64 == 0 && w * h <= 1_100_000, "{aspect}");
+        }
+    }
+
+    #[test]
+    fn the_guard_says_banned_or_safe_and_anything_else_counts_as_banned() {
+        let g = crate::local_setup::local_models()
+            .iter()
+            .find(|m| m.kind == ModelKind::ImageGuard)
+            .unwrap();
+        let (model, mmproj) = guard_files(Path::new("/m"), g).unwrap();
+        assert!(model.ends_with(g.file));
+        assert!(mmproj
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("mmproj-"));
+        assert_eq!(guard_verdict("SAFE"), Some(false));
+        assert_eq!(guard_verdict(" **Safe**."), Some(false));
+        assert_eq!(guard_verdict("BANNED"), Some(true));
+        assert_eq!(guard_verdict("Safe? No: BANNED"), Some(true));
+        assert_eq!(guard_verdict("I can't tell"), None);
+        assert_eq!(guard_model(Path::new("/nowhere")), None);
     }
 }

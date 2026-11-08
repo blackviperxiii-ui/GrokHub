@@ -187,7 +187,7 @@ fn image_generate_schema() -> Value {
     json!({
         "type": "function",
         "name": "image_generate",
-        "description": "Generate images. n is 1 to 10. resolution is 1k or 2k. quality is auto, low, or medium on grok-imagine-image-2.0. Spends credits and is not read-only.",
+        "description": "Generate images. n is 1 to 10. resolution is 1k or 2k. quality is auto, low, or medium on grok-imagine-image-2.0. Spends credits and is not read-only. 18+ pictures are drawn on this computer only, one per call, with no credits spent.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -288,10 +288,68 @@ fn video_extend_schema() -> Value {
 
 pub(crate) fn run_with_ports(name: &str, args: &Value, stop: &dyn Fn() -> bool) -> ToolOutput {
     let ports = super::ports::current();
+    if let Some(out) = on_device(
+        name,
+        args,
+        ports.imagine.is_some(),
+        &crate::route::local_image::kit_here,
+        stop,
+        ports.media_dir.as_deref(),
+    ) {
+        return out;
+    }
     match ports.imagine {
         Some(api) => execute_with(name, args, api.as_ref(), stop, ports.media_dir.as_deref()),
         None => ToolOutput::err(grokhub_core::XAI_NEED_SIGNIN),
     }
+}
+
+/// A picture is drawn on this computer when it must or can: an 18+ prompt
+/// only ever is (never online), and a clean one is when Grok isn't signed in
+/// and the picture model is on disk. `None` leaves the call to Grok Imagine.
+/// A banned prompt is refused here before anything runs.
+pub(crate) fn on_device(
+    name: &str,
+    args: &Value,
+    signed_in: bool,
+    kit: &dyn Fn() -> Option<crate::route::local_image::Kit>,
+    stop: &dyn Fn() -> bool,
+    media_dir: Option<&std::path::Path>,
+) -> Option<ToolOutput> {
+    use crate::route::local_image as li;
+    use grokhub_core::adult_guard::{self as ag, Risk};
+    if name != "image_generate" {
+        return None;
+    }
+    let prompt = super::str_field(args, "prompt");
+    if prompt.trim().is_empty() {
+        return None;
+    }
+    let explicit = match ag::check(&prompt) {
+        Risk::Banned(_) => return Some(ToolOutput::err(ag::MEDIA_BANNED)),
+        Risk::Explicit => true,
+        Risk::Clean => false,
+    };
+    if !explicit && signed_in {
+        return None;
+    }
+    let Some(kit) = kit() else {
+        return explicit.then(|| ToolOutput::err(li::NEEDS_GUARD));
+    };
+    let aspect = aspect_of(args).unwrap_or_default();
+    let dir = media_dir
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| crate::perm::config_dir().join("media"));
+    Some(
+        match li::make(&kit, &prompt, &aspect, explicit, &dir, stop) {
+            Ok(path) => ToolOutput::ok(format!(
+                "IMAGINE: {}\n(Made on this computer with {}; nothing was sent.)",
+                path.display(),
+                kit.model.name
+            )),
+            Err(e) => ToolOutput::err(e),
+        },
+    )
 }
 
 /// The Imagine client for `bearer`. A blank bearer refuses without dialing.
@@ -1126,6 +1184,101 @@ pub(crate) mod tests {
                 "video": {"url": "https://cdn.example/cabin.mp4"}
             }))
         }
+    }
+
+    #[test]
+    fn an_18_plus_picture_is_drawn_on_this_computer_or_not_at_all() {
+        use crate::route::local_image as li;
+        let none = || None;
+        let go = |prompt: &str, signed_in: bool| {
+            on_device(
+                "image_generate",
+                &json!({ "prompt": prompt }),
+                signed_in,
+                &none,
+                &|| false,
+                None,
+            )
+        };
+        let banned = go("a nude teen on a beach", true).unwrap();
+        assert!(
+            banned.failed
+                && banned
+                    .text
+                    .contains(grokhub_core::adult_guard::MEDIA_BANNED)
+        );
+        for signed_in in [true, false] {
+            let adult = go("an erotic nude portrait", signed_in).unwrap();
+            assert!(
+                adult.failed && adult.text.contains(li::NEEDS_GUARD),
+                "{}",
+                adult.text
+            );
+        }
+        // A clean picture stays with Grok Imagine when signed in, and with no
+        // picture model it falls through to the usual sign-in note.
+        assert!(go("a cabin in the snow", true).is_none());
+        assert!(go("a cabin in the snow", false).is_none());
+        assert!(on_device(
+            "video_generate",
+            &json!({ "prompt": "an erotic dance" }),
+            true,
+            &none,
+            &|| false,
+            None
+        )
+        .is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn with_the_kit_on_disk_a_clean_picture_is_made_here_when_grok_is_signed_out() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("grokhub-media-local-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        // A stand-in engine: writes a PNG header to the path after -o.
+        let cli = root.join("sd-cli");
+        std::fs::write(
+            &cli,
+            "#!/bin/sh\nwhile [ $# -gt 0 ]; do if [ \"$1\" = -o ]; then printf '\\211PNG' > \"$2\"; fi; shift; done\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let model = grokhub_core::local_setup::local_models()
+            .iter()
+            .find(|m| m.kind == grokhub_core::local_setup::ModelKind::Image)
+            .unwrap();
+        let kit = || {
+            Some(crate::route::local_image::Kit {
+                cli: cli.clone(),
+                models_dir: root.clone(),
+                model,
+                guard: None,
+            })
+        };
+        let out_dir = root.join("media");
+        let out = on_device(
+            "image_generate",
+            &json!({ "prompt": "a cabin in the snow", "aspect_ratio": "16:9" }),
+            false,
+            &kit,
+            &|| false,
+            Some(&out_dir),
+        )
+        .unwrap();
+        assert!(!out.failed, "{}", out.text);
+        let path = out
+            .text
+            .lines()
+            .next()
+            .unwrap()
+            .strip_prefix("IMAGINE: ")
+            .unwrap();
+        assert!(std::path::Path::new(path).starts_with(&out_dir));
+        assert!(std::path::Path::new(path).is_file());
+        assert!(out.text.contains("nothing was sent"));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
