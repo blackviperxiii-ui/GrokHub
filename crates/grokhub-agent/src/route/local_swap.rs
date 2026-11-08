@@ -10,7 +10,7 @@
 
 use std::path::{Path, PathBuf};
 
-use grokhub_core::local_setup::{self, LocalModel, ModelKind};
+use grokhub_core::local_setup::{self, LocalModel};
 
 /// Why a model other than the Settings pick runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,7 +131,7 @@ fn catalog_for(file: &Path) -> Option<&'static LocalModel> {
 pub fn on_disk(dirs: &[PathBuf]) -> Vec<(&'static LocalModel, PathBuf)> {
     local_setup::local_models()
         .iter()
-        .filter(|m| m.kind == ModelKind::Chat && !m.is_drafter)
+        .filter(|m| m.is_chat())
         .filter_map(|m| {
             dirs.iter()
                 .map(|d| grokhub_core::model_download::final_path(d, m))

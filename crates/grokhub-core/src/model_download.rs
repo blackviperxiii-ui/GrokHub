@@ -6,7 +6,11 @@
 //! On disk, under the models folder:
 //! - `<file>.part` while it downloads (kept on pause or a failed connection, so it resumes);
 //! - `<file>` once the hash matches;
-//! - `installed.json`, the [`Installed`] record of the last model that finished.
+//! - `installed.json`, the [`Installed`] record of the last chat model (or
+//!   drafter, in its own folder) that finished.
+//!
+//! A voice or image model downloads several files (its `parts`) into a folder
+//! of its own, each checked the same way; it is only on disk once all are.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
@@ -16,7 +20,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::local_setup::LocalModel;
+use crate::local_setup::{FileCheck, LocalModel, ModelKind};
 
 pub const INSTALLED_FILE: &str = "installed.json";
 
@@ -33,11 +37,11 @@ pub trait Fetch {
 }
 
 pub fn download_url(m: &LocalModel) -> String {
-    format!(
-        "https://huggingface.co/{}/resolve/main/{}",
-        m.repo,
-        m.remote_name()
-    )
+    resolve_url(m.repo, m.remote_name())
+}
+
+fn resolve_url(repo: &str, remote: &str) -> String {
+    format!("https://huggingface.co/{repo}/resolve/main/{remote}")
 }
 
 /// The Hugging Face tree listing that carries each file's LFS SHA-256.
@@ -65,6 +69,26 @@ pub fn part_path(dir: &Path, m: &LocalModel) -> PathBuf {
 
 pub fn final_path(dir: &Path, m: &LocalModel) -> PathBuf {
     dir.join(m.file)
+}
+
+/// The folder under the models folder a kind downloads into. Speech, image
+/// and other specialty models keep out of the chat folder, so nothing that
+/// looks for chat GGUFs there ever finds them. Drafters have their own
+/// folder outside this one, so they map to the models folder itself here.
+pub fn kind_dir(models_dir: &Path, kind: ModelKind) -> PathBuf {
+    match kind {
+        ModelKind::Chat | ModelKind::Drafter | ModelKind::VisionProjector => models_dir.into(),
+        ModelKind::Image | ModelKind::ImageGuard => models_dir.join("image"),
+        ModelKind::SpeechToText | ModelKind::TextToSpeech => models_dir.join("voice"),
+        ModelKind::Embed | ModelKind::Rerank | ModelKind::Ocr | ModelKind::Guard => {
+            models_dir.join("other")
+        }
+    }
+}
+
+/// Every file of `m` finished and checked in `dir`.
+pub fn complete(dir: &Path, m: &LocalModel) -> bool {
+    final_path(dir, m).is_file() && m.parts.iter().all(|p| dir.join(p.file).is_file())
 }
 
 /// Bytes already on disk from an unfinished download.
@@ -96,7 +120,7 @@ pub fn installed(dir: &Path) -> Option<Installed> {
 pub fn downloaded(dir: &Path) -> Vec<&'static LocalModel> {
     crate::local_setup::local_models()
         .iter()
-        .filter(|m| !m.is_drafter && final_path(dir, m).is_file())
+        .filter(|m| m.is_chat() && final_path(dir, m).is_file())
         .collect()
 }
 
@@ -130,12 +154,27 @@ pub fn remove(dir: &Path, m: &LocalModel) -> Result<(), String> {
             product = crate::brand::product_name()
         ));
     }
-    let _ = fs::remove_file(part_path(dir, m));
-    match fs::remove_file(final_path(dir, m)) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(format!("Couldn't remove {}: {e}", m.name)),
+    let files = std::iter::once(m.file).chain(m.parts.iter().map(|p| p.file));
+    for file in files {
+        let fin = dir.join(file);
+        let _ = fs::remove_file(part_of(&fin));
+        match fs::remove_file(&fin) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("Couldn't remove {}: {e}", m.name)),
+        }
+        // A model's own folder goes once empty; the models folder never does.
+        if let Some(parent) = fin.parent().filter(|p| *p != dir) {
+            let _ = fs::remove_dir(parent);
+        }
     }
+    Ok(())
+}
+
+fn part_of(fin: &Path) -> PathBuf {
+    let mut s = fin.as_os_str().to_owned();
+    s.push(".part");
+    s.into()
 }
 
 /// Run (the default), pause or cancel, set from the UI while a download runs.
@@ -190,7 +229,17 @@ pub enum Outcome {
 
 const CHUNK: usize = 256 * 1024;
 
-/// Download `m` into `dir`, resuming any `.part`, then check its SHA-256.
+/// One file of a model's download.
+struct Item {
+    repo: &'static str,
+    remote: &'static str,
+    file: &'static str,
+    check: FileCheck,
+}
+
+/// Download `m` into `dir`, resuming any `.part`, then check each file: the
+/// main file, then its parts. A part already finished (it was checked before
+/// its rename) is kept.
 pub fn download(
     dir: &Path,
     m: &LocalModel,
@@ -204,26 +253,111 @@ pub fn download(
     if let Err(e) = fs::create_dir_all(dir) {
         return Outcome::Failed(format!("Couldn't create {}: {e}", dir.display()));
     }
-    // A listing that drifted from the pin means the file was swapped upstream:
-    // stop before pulling gigabytes that would fail the check anyway.
-    match fetch.sha256(m.repo, m.remote_name()) {
-        Ok(h) if h == m.sha256 => {}
-        Ok(_) => {
-            return Outcome::Failed(format!(
-                "Hugging Face now lists a different file for {} than the one {product} pinned, so it wasn't downloaded.",
-                m.name, product = crate::brand::product_name()
-            ))
-        }
-        Err(e) => {
-            return Outcome::Failed(format!("Couldn't read the checksum for {}: {e}", m.name))
+    let items: Vec<Item> = std::iter::once(Item {
+        repo: m.repo,
+        remote: m.remote_name(),
+        file: m.file,
+        check: FileCheck::Sha256(m.sha256),
+    })
+    .chain(m.parts.iter().map(|p| Item {
+        repo: p.repo,
+        remote: p.remote_file,
+        file: p.file,
+        check: p.check,
+    }))
+    .collect();
+    // A listing that drifted from the pin means a file was swapped upstream:
+    // stop before pulling gigabytes that would fail the check anyway. A small
+    // git file has no SHA-256 listed; its pinned oid is checked after.
+    for it in &items {
+        let FileCheck::Sha256(pin) = it.check else {
+            continue;
+        };
+        match fetch.sha256(it.repo, it.remote) {
+            Ok(h) if h == pin => {}
+            Ok(_) => {
+                return Outcome::Failed(format!(
+                    "Hugging Face now lists a different file for {} than the one {product} pinned, so it wasn't downloaded.",
+                    m.name, product = crate::brand::product_name()
+                ))
+            }
+            Err(e) => {
+                return Outcome::Failed(format!("Couldn't read the checksum for {}: {e}", m.name))
+            }
         }
     }
-    let want = m.sha256.to_string();
-    let part = part_path(dir, m);
-    let have = partial_bytes(dir, m).unwrap_or(0);
-    let (mut body, start, total) = match fetch.open(&download_url(m), have) {
+    let mut after: u64 = m.parts.iter().map(|p| p.bytes).sum();
+    let mut base = 0;
+    let mut main_bytes = 0;
+    for (i, it) in items.iter().enumerate() {
+        if i > 0 {
+            after -= m.parts[i - 1].bytes;
+        }
+        let fin = dir.join(it.file);
+        if i > 0
+            && let Ok(md) = fs::metadata(&fin)
+        {
+            base += md.len();
+            continue;
+        }
+        let mut sub = |p: Progress| {
+            on(match p {
+                Progress::Bytes { done, total } => Progress::Bytes {
+                    done: base + done,
+                    total: total.map(|t| base + t + after),
+                },
+                v => v,
+            })
+        };
+        match fetch_file(&fin, it, m.name, fetch, ctl, &mut sub) {
+            Ok(n) => {
+                if i == 0 {
+                    main_bytes = n;
+                }
+                base += n;
+            }
+            Err(Outcome::Paused { done }) => return Outcome::Paused { done: base + done },
+            Err(o) => return o,
+        }
+    }
+    let rec = Installed {
+        id: m.id.into(),
+        file: m.file.into(),
+        sha256: m.sha256.into(),
+        bytes: main_bytes,
+    };
+    // Only a chat model (or a drafter, in its own folder) is the one the
+    // engine runs; a voice or image model never takes that record.
+    if matches!(m.kind, ModelKind::Chat | ModelKind::Drafter) {
+        let json = serde_json::to_string_pretty(&rec).unwrap_or_default();
+        if let Err(e) = fs::write(dir.join(INSTALLED_FILE), json) {
+            return Outcome::Failed(format!("Couldn't record {}: {e}", m.name));
+        }
+    }
+    Outcome::Done(rec)
+}
+
+/// One file: resume its `.part`, check it, rename it into place. Ok is its
+/// size; Err is how it stopped (a pause carries this file's bytes).
+fn fetch_file(
+    fin: &Path,
+    it: &Item,
+    name: &str,
+    fetch: &dyn Fetch,
+    ctl: &Control,
+    on: &mut dyn FnMut(Progress),
+) -> Result<u64, Outcome> {
+    let failed = |s: String| Err(Outcome::Failed(s));
+    if let Some(parent) = fin.parent()
+        && let Err(e) = fs::create_dir_all(parent)
+    {
+        return failed(format!("Couldn't create {}: {e}", parent.display()));
+    }
+    let part = part_of(fin);
+    let have = fs::metadata(&part).map(|md| md.len()).unwrap_or(0);
+    let (mut body, start, total) = match fetch.open(&resolve_url(it.repo, it.remote), have) {
         Ok(x) => x,
-        Err(e) => return Outcome::Failed(format!("Couldn't download {}: {e}", m.name)),
+        Err(e) => return failed(format!("Couldn't download {name}: {e}")),
     };
     // The server ignored the range: start the file over.
     let mut out = match if start == 0 {
@@ -232,67 +366,77 @@ pub fn download(
         OpenOptions::new().append(true).open(&part)
     } {
         Ok(f) => f,
-        Err(e) => return Outcome::Failed(format!("Couldn't write {}: {e}", part.display())),
+        Err(e) => return failed(format!("Couldn't write {}: {e}", part.display())),
     };
     let mut done = start;
     on(Progress::Bytes { done, total });
     let mut buf = vec![0u8; CHUNK];
     loop {
         match ctl.state() {
-            PAUSE => return Outcome::Paused { done },
+            PAUSE => return Err(Outcome::Paused { done }),
             CANCEL => {
                 drop(out);
                 let _ = fs::remove_file(&part);
-                return Outcome::Cancelled;
+                return Err(Outcome::Cancelled);
             }
             _ => {}
         }
         let n = match body.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => n,
-            Err(e) => return Outcome::Failed(format!("The download of {} stopped: {e}", m.name)),
+            Err(e) => return failed(format!("The download of {name} stopped: {e}")),
         };
         if let Err(e) = out.write_all(&buf[..n]) {
-            return Outcome::Failed(format!("Couldn't write {}: {e}", part.display()));
+            return failed(format!("Couldn't write {}: {e}", part.display()));
         }
         done += n as u64;
         on(Progress::Bytes { done, total });
     }
     if let Err(e) = out.flush() {
-        return Outcome::Failed(format!("Couldn't write {}: {e}", part.display()));
+        return failed(format!("Couldn't write {}: {e}", part.display()));
     }
     drop(out);
     if total.is_some_and(|t| done < t) {
-        return Outcome::Failed(format!(
-            "The download of {} ended early ({done} of {} bytes).",
-            m.name,
+        return failed(format!(
+            "The download of {name} ended early ({done} of {} bytes).",
             total.unwrap_or(0)
         ));
     }
     on(Progress::Verifying);
-    match sha256_file(&part) {
+    let (got, want) = match it.check {
+        FileCheck::Sha256(h) => (sha256_file(&part), h),
+        FileCheck::GitOid(o) => (git_oid_file(&part), o),
+    };
+    match got {
         Ok(got) if got == want => {}
         Ok(_) => {
             let _ = fs::remove_file(&part);
-            return Outcome::BadChecksum;
+            return Err(Outcome::BadChecksum);
         }
-        Err(e) => return Outcome::Failed(format!("Couldn't check {}: {e}", part.display())),
+        Err(e) => return failed(format!("Couldn't check {}: {e}", part.display())),
     }
-    let fin = final_path(dir, m);
-    if let Err(e) = fs::rename(&part, &fin) {
-        return Outcome::Failed(format!("Couldn't finish {}: {e}", fin.display()));
+    if let Err(e) = fs::rename(&part, fin) {
+        return failed(format!("Couldn't finish {}: {e}", fin.display()));
     }
-    let rec = Installed {
-        id: m.id.into(),
-        file: m.file.into(),
-        sha256: want,
-        bytes: done,
-    };
-    let json = serde_json::to_string_pretty(&rec).unwrap_or_default();
-    if let Err(e) = fs::write(dir.join(INSTALLED_FILE), json) {
-        return Outcome::Failed(format!("Couldn't record {}: {e}", m.name));
+    Ok(done)
+}
+
+/// A file's git blob oid: lowercase hex SHA-1 of `blob <len>\0` and its bytes.
+pub fn git_oid_file(path: &Path) -> std::io::Result<String> {
+    use sha1::{Digest as _, Sha1};
+    let len = fs::metadata(path)?.len();
+    let mut f = File::open(path)?;
+    let mut h = Sha1::new();
+    h.update(format!("blob {len}\0").as_bytes());
+    let mut buf = vec![0u8; CHUNK];
+    loop {
+        let n = f.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
     }
-    Outcome::Done(rec)
+    Ok(hex::encode(h.finalize()))
 }
 
 /// Lowercase hex SHA-256 of `bytes`.
@@ -383,6 +527,7 @@ mod tests {
             drafter: None,
             min_budget: Default::default(),
             tok_s: Default::default(),
+            parts: &[],
         }
     }
 
@@ -627,7 +772,7 @@ mod tests {
         let ids = |d: &Path| downloaded(d).iter().map(|m| m.id).collect::<Vec<_>>();
         let all: Vec<&LocalModel> = crate::local_setup::local_models()
             .iter()
-            .filter(|m| !m.is_drafter)
+            .filter(|m| m.is_chat())
             .collect();
         let (a, b) = (all[0], all[1]);
         assert_eq!(ids(&dir), Vec::<&str>::new());
@@ -654,6 +799,120 @@ mod tests {
             activate(&dir, a),
             Err(format!("{} isn't downloaded.", a.name))
         );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Serves several files by name; the token list has no LFS hash listed.
+    struct Files(Vec<(&'static str, &'static [u8])>, Mutex<Vec<String>>);
+
+    impl Fetch for Files {
+        fn open(&self, url: &str, offset: u64) -> Result<Opened, String> {
+            self.1.lock().unwrap().push(url.into());
+            let (_, b) = self.0.iter().find(|(n, _)| url.ends_with(n)).unwrap();
+            let start = offset as usize;
+            Ok((
+                Box::new(Cursor::new(b[start..].to_vec())),
+                offset,
+                Some(b.len() as u64),
+            ))
+        }
+        fn sha256(&self, _repo: &str, file: &str) -> Result<String, String> {
+            let (_, b) = self.0.iter().find(|(n, _)| *n == file).unwrap();
+            Ok(sha(b))
+        }
+    }
+
+    fn git_oid(b: &[u8]) -> String {
+        use sha1::{Digest as _, Sha1};
+        let mut h = Sha1::new();
+        h.update(format!("blob {}\0", b.len()).as_bytes());
+        h.update(b);
+        hex::encode(h.finalize())
+    }
+
+    const ENC: &[u8] = b"encoder weights";
+    const TOK: &[u8] = b"<blk> 0\nhello 1\n";
+
+    fn speech(tok_check: FileCheck) -> LocalModel {
+        let parts = vec![crate::local_setup::ModelPart {
+            repo: "acme/stt",
+            remote_file: "tokens.txt",
+            file: "stt/tokens.txt",
+            check: tok_check,
+            bytes: TOK.len() as u64,
+        }];
+        LocalModel {
+            id: "test-stt",
+            name: "Test Speech",
+            repo: "acme/stt",
+            file: "stt/encoder.onnx",
+            remote_file: Some("encoder.onnx"),
+            sha256: sha(ENC).leak(),
+            kind: ModelKind::SpeechToText,
+            parts: parts.leak(),
+            ..model()
+        }
+    }
+
+    fn files() -> Files {
+        Files(
+            vec![("encoder.onnx", ENC), ("tokens.txt", TOK)],
+            Mutex::new(Vec::new()),
+        )
+    }
+
+    #[test]
+    fn a_speech_model_downloads_every_part_into_its_own_folder_and_never_takes_the_chat_record() {
+        let models = tmp("parts");
+        let dir = kind_dir(&models, ModelKind::SpeechToText);
+        assert_eq!(dir, models.join("voice"));
+        assert_eq!(kind_dir(&models, ModelKind::Chat), models);
+        assert_eq!(
+            kind_dir(&models, ModelKind::ImageGuard),
+            models.join("image")
+        );
+        let m = speech(FileCheck::GitOid(git_oid(TOK).leak()));
+        let mut seen = Vec::new();
+        let out = download(&dir, &m, &files(), &Control::default(), &mut |p| {
+            seen.push(p)
+        });
+        assert!(
+            matches!(out, Outcome::Done(ref r) if r.bytes == ENC.len() as u64),
+            "{out:?}"
+        );
+        assert!(complete(&dir, &m));
+        assert_eq!(fs::read(dir.join("stt/tokens.txt")).unwrap(), TOK);
+        assert!(!dir.join(INSTALLED_FILE).exists(), "the chat model stays");
+        // Progress runs across both files to their sum.
+        let all = (ENC.len() + TOK.len()) as u64;
+        assert_eq!(
+            seen.iter()
+                .rev()
+                .find(|p| matches!(p, Progress::Bytes { .. })),
+            Some(&Progress::Bytes {
+                done: all,
+                total: Some(all)
+            })
+        );
+        assert!(downloaded(&dir).is_empty(), "never listed as a chat model");
+        // A finished part is kept on the next run; removing clears the folder.
+        let f = files();
+        let _ = fs::remove_file(dir.join("stt/encoder.onnx"));
+        download(&dir, &m, &f, &Control::default(), &mut |_| {});
+        assert_eq!(f.1.lock().unwrap().len(), 1, "only the missing file");
+        remove(&dir, &m).unwrap();
+        assert!(!dir.join("stt").exists());
+        let _ = fs::remove_dir_all(&models);
+    }
+
+    #[test]
+    fn a_part_that_fails_its_pinned_git_oid_is_deleted_and_the_model_is_not_on_disk() {
+        let dir = tmp("bad-part");
+        let m = speech(FileCheck::GitOid("0000"));
+        let out = download(&dir, &m, &files(), &Control::default(), &mut |_| {});
+        assert_eq!(out, Outcome::BadChecksum);
+        assert!(!complete(&dir, &m));
+        assert!(!dir.join("stt/tokens.txt.part").exists());
         let _ = fs::remove_dir_all(&dir);
     }
 }

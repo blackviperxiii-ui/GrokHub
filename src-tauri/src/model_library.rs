@@ -103,12 +103,13 @@ pub fn dir_for(config_dir: &Path, m: &LocalModel) -> PathBuf {
     if m.kind == ModelKind::Drafter {
         local_engine::drafters_dir(config_dir)
     } else {
-        crate::local_ai::models_dir().unwrap_or_else(|| config_dir.join("models"))
+        let models = crate::local_ai::models_dir().unwrap_or_else(|| config_dir.join("models"));
+        md::kind_dir(&models, m.kind)
     }
 }
 
 fn on_disk(config_dir: &Path, m: &LocalModel) -> bool {
-    md::final_path(&dir_for(config_dir, m), m).is_file()
+    md::complete(&dir_for(config_dir, m), m)
 }
 
 fn status_of(s: &State) -> LibraryStatus {

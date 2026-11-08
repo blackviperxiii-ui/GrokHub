@@ -199,7 +199,7 @@ impl Cabin {
             tests::STARTED.with(|s| s.borrow_mut().push(m.id));
         }
         #[cfg(not(test))]
-        self.start_model_download_with(m, models_dir(), Box::new(HfFetch));
+        self.start_model_download_with(m, md::kind_dir(&models_dir(), m.kind), Box::new(HfFetch));
     }
 
     /// `start_model_download` for a draft model, into its own folder.
