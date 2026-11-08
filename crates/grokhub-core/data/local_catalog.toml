@@ -299,3 +299,66 @@ remote_file = "tokens.txt"
 file = "parakeet-tdt-0.6b-v3-int8/tokens.txt"
 git_oid = "fc43e1c723e262df60b70e1919614417162d1fe2"
 bytes = 93_939
+# Pictures: Tongyi's Z-Image Turbo (6B, 8 steps), leejet's Q4_K GGUF for
+# stable-diffusion.cpp (`image_engine.rs`). It loads for one picture and
+# exits, so nothing stays in memory beside a game. Its text encoder (Qwen3
+# 4B) and its VAE are parts in the same folder. Not a chat model, so no
+# `abliterated`; every picture ask still passes the hard bans first.
+[[model]]
+id = "z-image-turbo-q4_k"
+name = "Z-Image Turbo pictures"
+repo = "leejet/Z-Image-Turbo-GGUF"
+file = "z-image-turbo/z_image_turbo-Q4_K.gguf"
+remote_file = "z_image_turbo-Q4_K.gguf"
+sha256 = "14b375ab4f226bc5378f68f37e899ef3c2242b8541e61e2bc1aff40976086fbd"
+download_mb = 6_387
+quant = "Q4_K"
+license = "Apache-2.0"
+kind = "image"
+badges = []
+tier = "T2"
+route = "local:image"
+ctx_default = 0
+run_mb = 7_168
+needs_avx2 = false
+min_budget = {}
+tok_s = { gpu = 0, unified = 0, cpu = 0 }
+[[model.parts]]
+repo = "unsloth/Qwen3-4B-Instruct-2507-GGUF"
+remote_file = "Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
+file = "z-image-turbo/Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
+sha256 = "3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597"
+bytes = 2_497_281_120
+[[model.parts]]
+repo = "Comfy-Org/z_image_turbo"
+remote_file = "split_files/vae/ae.safetensors"
+file = "z-image-turbo/ae.safetensors"
+sha256 = "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38"
+bytes = 335_304_388
+# The picture guard: Qwen3-VL 2B looks at every finished local picture
+# against the hard bans before it is shown (llama.cpp with its image
+# reader). Local 18+ pictures wait until it is on disk.
+[[model]]
+id = "qwen3-vl-2b-guard-q8_0"
+name = "Picture guard (Qwen3-VL 2B)"
+repo = "ggml-org/Qwen3-VL-2B-Instruct-GGUF"
+file = "qwen3-vl-2b-guard/Qwen3-VL-2B-Instruct-Q8_0.gguf"
+remote_file = "Qwen3-VL-2B-Instruct-Q8_0.gguf"
+sha256 = "b7802e29f71a9e5b5e3f83f613df898a2204342dcea71a231ea501d481813c39"
+download_mb = 2_174
+quant = "Q8_0"
+license = "Apache-2.0"
+kind = "image-guard"
+badges = []
+tier = "T1"
+route = "local:image-guard"
+ctx_default = 4_096
+run_mb = 2_560
+needs_avx2 = false
+min_budget = {}
+tok_s = { gpu = 0, unified = 0, cpu = 0 }
+[[model.parts]]
+remote_file = "mmproj-Qwen3-VL-2B-Instruct-Q8_0.gguf"
+file = "qwen3-vl-2b-guard/mmproj-Qwen3-VL-2B-Instruct-Q8_0.gguf"
+sha256 = "69066c8f279ec85ff48ab4059f6ebba0d2932ca57667f2bbdac7d9805bca9e7b"
+bytes = 445_053_056
