@@ -86,7 +86,7 @@ pub const MEDIA_BANNED: &str = "Not made, and nothing was sent: images and video
 
 /// What an image or video tool says in place of an 18+ prompt bound for an
 /// online service. Nothing was sent.
-pub const MEDIA_LOCAL_ONLY: &str = "Not made, and nothing was sent: 18+ images and videos are only made on this computer, and on-device image making isn't set up yet.";
+pub const MEDIA_LOCAL_ONLY: &str = "Not made, and nothing was sent: 18+ pictures are only made on this computer (ask in chat), and 18+ videos aren't made at all.";
 
 /// The check every image or video prompt passes before it goes to `dest`:
 /// a banned ask is never sent, and an 18+ ask never goes online (the same
