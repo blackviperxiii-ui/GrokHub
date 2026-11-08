@@ -142,6 +142,21 @@ pub struct RouteRecord {
     /// an on-device step).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub request: String,
+    /// Failover PR 7: models that stopped inside this call and the ones that
+    /// took over, in order. Empty on any call that never switched.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub handoffs: Vec<HandoffLine>,
+}
+
+/// One model switch inside a call (failover PR 7): the model that stopped,
+/// the one that took over, and the rule that names why it stopped
+/// (`handoff:limit`, `handoff:credit`, `handoff:outage`, …). Ids and a rule
+/// only — never prompt text.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HandoffLine {
+    pub from: String,
+    pub to: String,
+    pub rule: String,
 }
 
 /// Where a request first stopped repeating the one before it, and why
