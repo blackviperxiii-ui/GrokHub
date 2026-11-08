@@ -406,9 +406,15 @@ pub struct RouteInput<'a> {
     pub lane: Option<&'a str>,
     /// Failover PR 5: the turn's size estimate ([`sizing`]), when the call
     /// site sized it. A long task keeps free provider models out of the pick
-    /// while a carrier route exists and ranks Grok ahead of every provider.
-    /// `None` keeps every pre-sizing behavior.
+    /// while a carrier route exists and ranks the paid routes first (xAI,
+    /// the plan, ahead of the other paid providers). `None` keeps every
+    /// pre-sizing behavior.
     pub size: Option<sizing::SizeEstimate>,
+    /// Failover PR 5: a local model is already loaded on the device (the
+    /// live path asks [`local::warm_runtime`]). With a tiny or short
+    /// estimate, the warm model takes the turn by default
+    /// ([`sizing::warm_local_default`]).
+    pub local_warm: bool,
 }
 
 /// The lowest rung an xAI reasoning model takes without a listing that says otherwise.
@@ -716,9 +722,12 @@ impl Router {
                 policy::is_new_provider(reg, m) && table.row(input.lane(), m).is_none()
             });
         };
-        // Failover PR 5: on a long task Grok outranks every provider, table
-        // rows included — a free model's small allowance is not what a long
-        // task spends itself on. The full route ladder lands with the scorer.
+        // Failover PR 5: on a long task the paid routes carry it, and within
+        // them the plan (xAI) outranks every provider, table rows included —
+        // a free model's small allowance is not what a long task spends
+        // itself on (rule corrected 2026-11-07: no free for long runs, paid
+        // before local; the order inside the paid routes is the scorer's
+        // call). The full route ladder lands with the scorer.
         let long_task = input.size.is_some_and(|s| s.size == sizing::TaskSize::Long);
         let long_first = |ranked: &mut Vec<String>, rules: &mut Vec<String>| {
             if !long_task {
@@ -1077,10 +1086,11 @@ impl Router {
             .filter(|id| policy::fits(reg, profiles, id, fit_for(id), &input.spend, now_ms))
             .collect();
         // Failover PR 5: a long task never spends itself on a free provider
-        // model (card §3.3) while a route that can carry it exists — an xAI
-        // model or a paid provider. Free models stay when they are the only
-        // cloud there is: a working free route beats a dead stop, and the
-        // on-device fallback below is untouched either way.
+        // model while a route that can carry it exists — a paid route (xAI,
+        // the plan, or a paid provider) or the device through its own
+        // branches below, paid first. Free models stay when they are the
+        // only cloud there is: a working free route beats a dead stop, and
+        // the on-device fallback below is untouched either way.
         let ids: Vec<&str> = if input.size.is_some_and(|s| s.size == sizing::TaskSize::Long) {
             rules.push("size:long".into());
             let free_provider =
@@ -1196,6 +1206,30 @@ impl Router {
             local::admits(&as_offline, id, input.class, input.ctx_tokens)
                 && policy::fits(reg, profiles, id, fit_for(id), &input.spend, now_ms)
         });
+        // Failover PR 5, the warm-local rule (corrected 2026-11-07): a model
+        // already loaded on the device takes a less challenging turn by
+        // default — no cloud spend, no cold start — unless the turn is
+        // pinned to an episode model or carries an explicit pick. The gate
+        // admitted the tier into `ids` already, so class eligibility and
+        // the governor's say are spent (at Unload nothing is admitted);
+        // sizing adds only the size line and, under throttle, tiny only.
+        // A cloud candidate must exist for the default to be a choice at
+        // all: with no cloud route the device is a fallback, and the
+        // fallback paths below own the pick (and its cabin note).
+        let throttled = matches!(
+            input.local.capacity.level,
+            grokhub_core::local_governor::Level::Throttle
+        );
+        let warm_local = if input.local_warm
+            && input.episode_model.is_none()
+            && input.pick.is_none()
+            && ids.iter().any(|id| !local::is_local(id))
+            && sizing::warm_local_default(input.size.map(|s| s.size), throttled)
+        {
+            ids.iter().find(|id| local::is_local(id)).copied()
+        } else {
+            None
+        };
         let chosen = if gov_paused && input.local.sensitive && !input.local.cloud_grant {
             // Sensitive data stays on the device, and the device is paused.
             local_paused(&mut rules)
@@ -1298,6 +1332,17 @@ impl Router {
                 }
             }
             pick
+        } else if let Some(id) = warm_local {
+            // The warm-local default (above): the loaded device model takes
+            // this less challenging turn. The one place the device wins over
+            // a healthy cloud on purpose — because it is already loaded, not
+            // because starting it would be cheaper.
+            rules.push("size:warm_local".into());
+            ModelPick {
+                model: id.to_string(),
+                no_route: false,
+                replaced: None,
+            }
         } else {
             // Every cloud model is down, not just left out for its price or this
             // step's needs (those keep the premium ask and the stand-in).
