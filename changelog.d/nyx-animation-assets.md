@@ -1,0 +1,2 @@
+- Archive all 144 Nyx source cards, 144 raw animations, 288 finished clips, and the release manifest under `assets/nyx-anim/`.
+- Keep animation videos out of CI and release checkouts, add checkout time limits, and allow more time for short metadata jobs.
