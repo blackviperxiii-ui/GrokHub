@@ -462,6 +462,13 @@ pub enum ClientError {
     /// Not retried: a second attempt would show the text twice and bill again,
     /// so the turn stops with what was shown. Holds the first error's text.
     CutOff(String),
+    /// The model declined to answer (Anthropic's `refusal` stop reason).
+    /// Its own class, not a generic failure: the turn stops and the user
+    /// hears it was a refusal. Never retried and never failed over — the
+    /// refusal is about this ask, not about the route's health.
+    Refused {
+        message: String,
+    },
     Cancelled,
     Protocol(String),
 }
@@ -490,6 +497,9 @@ impl std::fmt::Display for ClientError {
                     f,
                     "the reply was cut off partway ({cause}); what showed is kept"
                 )
+            }
+            ClientError::Refused { message } => {
+                write!(f, "the model declined to answer: {message}")
             }
             ClientError::Cancelled => write!(f, "cancelled"),
             ClientError::Protocol(msg) => write!(f, "{msg}"),

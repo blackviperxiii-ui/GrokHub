@@ -1792,9 +1792,10 @@ pub fn stream_routed(
         }
         out
     } else if on_provider {
-        // Not streamed: the whole answer arrives as one delta.
+        // An Anthropic answer streams; the rest arrive as one delta.
+        // Either way the text reaches the chat through the reply guard.
         let span_id = format!("{}:{now}", req.conversation_id);
-        let out = super::providers::call_model(
+        let out = super::providers::stream_model(
             &dir,
             class,
             &model,
@@ -1803,16 +1804,8 @@ pub fn stream_routed(
             super::providers::call_data(call.sensitive),
             &span_id,
             cancel,
+            &mut |ev: StreamEvent| super::adult::guard(&mut reply, &mut *sink, ev),
         );
-        if let Ok(turn) = &out {
-            if !turn.text.is_empty() {
-                super::adult::guard(
-                    &mut reply,
-                    &mut *sink,
-                    StreamEvent::TextDelta(turn.text.clone()),
-                );
-            }
-        }
         match out {
             Err(err) if provider_fallible(&err) => {
                 // The provider hit a limit, ran out of credit or fell over:
@@ -1876,7 +1869,7 @@ pub fn stream_routed(
                     super::ask::add_route_note(&mut sent.input, &n);
                 }
                 let span_id = format!("{}:{now}", req.conversation_id);
-                let out = super::providers::call_model(
+                let out = super::providers::stream_model(
                     &dir,
                     class,
                     &m,
@@ -1885,16 +1878,8 @@ pub fn stream_routed(
                     super::providers::call_data(call.sensitive),
                     &span_id,
                     cancel,
+                    &mut |ev: StreamEvent| super::adult::guard(&mut reply, &mut *sink, ev),
                 );
-                if let Ok(turn) = &out {
-                    if !turn.text.is_empty() {
-                        super::adult::guard(
-                            &mut reply,
-                            &mut *sink,
-                            StreamEvent::TextDelta(turn.text.clone()),
-                        );
-                    }
-                }
                 match out {
                     Err(e2) if provider_fallible(&e2) && super::local::available() => {
                         // The stand-in hit the same kind of wall: cool it so

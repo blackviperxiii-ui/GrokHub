@@ -46,7 +46,7 @@ use grokhub_core::model_registry::{CatalogSource, Listing, ModelMeta, Registry, 
 
 use crate::client::{
     map_http_status, AuthKind, ClientError, ContentPart, FunctionCall, InputItem, ResponsesRequest,
-    TurnOutput, Usage, USER_AGENT,
+    StreamEvent, TurnOutput, Usage, USER_AGENT,
 };
 use crate::harness::{
     egress_dest, guard_provider, is_model_host, provider_or_park, ConsentLedger, DataClass,
@@ -624,6 +624,16 @@ pub struct HttpReply {
     pub headers: Vec<(String, String)>,
 }
 
+/// A streaming answer in flight: status and headers up front, the body
+/// still arriving on `reader`. The caller reads it as it comes (a
+/// server-sent event stream) or, on an error status, reads it whole as
+/// the error body.
+pub struct HttpStream {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub reader: Box<dyn Read + Send>,
+}
+
 /// How provider requests leave. Tests use a counting fake: zero network.
 pub trait ProviderTransport: Send + Sync {
     fn get(&self, url: &str, headers: &[(String, String)]) -> Result<HttpReply, String>;
@@ -645,6 +655,23 @@ pub trait ProviderTransport: Send + Sync {
         let _ = limit;
         self.post(url, headers, body)
     }
+    /// `post` whose body the caller reads as it arrives. The default
+    /// waits for the whole reply and hands it over at once, which is
+    /// what fakes do; the real wire streams.
+    fn post_streamed(
+        &self,
+        url: &str,
+        headers: &[(String, String)],
+        body: &str,
+        limit: Option<Duration>,
+    ) -> Result<HttpStream, String> {
+        let r = self.post_within(url, headers, body, limit)?;
+        Ok(HttpStream {
+            status: r.status,
+            headers: r.headers,
+            reader: Box::new(std::io::Cursor::new(r.body.into_bytes())),
+        })
+    }
 }
 
 /// The real wire. Every call reaches it only after [`guard_provider`].
@@ -662,27 +689,35 @@ fn agent() -> grokhub_core::http::Agent {
     })
 }
 
-/// Every request is sent with `any_status`, so a 4xx/5xx comes back as an answer.
-fn reply(
+/// A raw answer with its connectivity noted, the way every provider
+/// request reports back; the caller decides how much of the body to read.
+fn noted(
     r: Result<grokhub_core::http::Response, grokhub_core::http::Error>,
-) -> Result<HttpReply, String> {
-    let resp = match r {
+) -> Result<grokhub_core::http::Response, String> {
+    match r {
         Ok(resp) if resp.status() < 400 => {
             grokhub_core::connectivity::note_global_transport_success(grokhub_core::now_ms());
-            resp
+            Ok(resp)
         }
         Ok(resp) => {
             grokhub_core::connectivity::note_global_transport_hint(
                 grokhub_core::connectivity::classify_http_status(resp.status()),
                 grokhub_core::now_ms(),
             );
-            resp
+            Ok(resp)
         }
         Err(err) => {
             super::connectivity::note_http_transport(&err);
-            return Err(err.to_string());
+            Err(err.to_string())
         }
-    };
+    }
+}
+
+/// Every request is sent with `any_status`, so a 4xx/5xx comes back as an answer.
+fn reply(
+    r: Result<grokhub_core::http::Response, grokhub_core::http::Error>,
+) -> Result<HttpReply, String> {
+    let resp = noted(r)?;
     let status = resp.status();
     let headers = resp.headers();
     let mut body = String::new();
@@ -730,6 +765,28 @@ impl ProviderTransport for UreqTransport {
             req = req.header(k, v);
         }
         reply(req.send_string(body))
+    }
+
+    fn post_streamed(
+        &self,
+        url: &str,
+        headers: &[(String, String)],
+        body: &str,
+        limit: Option<Duration>,
+    ) -> Result<HttpStream, String> {
+        let mut req = agent().post(url).any_status();
+        if let Some(limit) = limit {
+            req = req.timeout(limit);
+        }
+        for (k, v) in headers {
+            req = req.header(k, v);
+        }
+        let resp = noted(req.send_string(body))?;
+        Ok(HttpStream {
+            status: resp.status(),
+            headers: resp.headers(),
+            reader: resp.into_reader(),
+        })
     }
 }
 
@@ -1156,6 +1213,19 @@ fn push_block(messages: &mut Vec<Value>, role: &str, block: Value) {
     }
 }
 
+/// Anthropic prompt caching: this mark tells the API to cache the
+/// request prefix up to the block that carries it, so a later call that
+/// sends the same prefix pays the cached rate for it (the registry's
+/// price table carries both rates, and the spend ledger prices reads
+/// and writes apart). Marks go on the system text, the last tool and
+/// the last message block: between them they cover everything a turn
+/// re-sends — its instructions, its tools and the conversation so far —
+/// and the message mark moves forward each turn, so each turn reads
+/// back what the turns before it wrote.
+fn cache_mark(block: &mut Value) {
+    block["cache_control"] = json!({"type": "ephemeral"});
+}
+
 /// Anthropic `/v1/messages`. Effort is `output_config.effort`.
 pub fn anthropic_body(
     model: &str,
@@ -1221,16 +1291,29 @@ pub fn anthropic_body(
         .unwrap_or(ANTHROPIC_MAX_TOKENS);
     let mut body = json!({"model": model, "max_tokens": max_tokens, "messages": messages});
     if !system.is_empty() {
-        body["system"] = Value::String(system.join("\n\n"));
+        // Blocks, not a plain string, so the system text carries a
+        // cache mark (see [`cache_mark`]).
+        let mut block = json!({"type": "text", "text": system.join("\n\n")});
+        cache_mark(&mut block);
+        body["system"] = Value::Array(vec![block]);
     }
-    let tools: Vec<Value> = req
+    let mut tools: Vec<Value> = req
         .tools
         .iter()
         .filter_map(function_tool)
         .map(|(name, description, schema)| json!({"name": name, "description": description, "input_schema": schema}))
         .collect();
-    if !tools.is_empty() {
+    if let Some(last) = tools.last_mut() {
+        cache_mark(last);
         body["tools"] = Value::Array(tools);
+    }
+    if let Some(block) = body["messages"]
+        .as_array_mut()
+        .and_then(|ms| ms.last_mut())
+        .and_then(|m| m["content"].as_array_mut())
+        .and_then(|blocks| blocks.last_mut())
+    {
+        cache_mark(block);
     }
     if let Some(e) = effort
         .map(str::trim)
@@ -1324,6 +1407,39 @@ pub fn parse_openai_reply(body: &str) -> Result<TurnOutput, ClientError> {
     })
 }
 
+/// An Anthropic `stop_reason` folded into the turn, shared by the
+/// whole-reply parse and the streamed one so both read a stop the same
+/// way. `max_tokens` is a truncation the run loop can carry on from;
+/// `refusal` is the model declining — its own error class, never a
+/// silent empty answer; `pause_turn` (a server tool paused, the reply
+/// is complete as it stands), `end_turn`, `tool_use` and
+/// `stop_sequence` are ordinary endings. `category` is the refusal's
+/// `stop_details.category` when the reply carries one.
+fn note_anthropic_stop(
+    out: &mut TurnOutput,
+    stop_reason: Option<&str>,
+    category: Option<&str>,
+) -> Result<(), ClientError> {
+    match stop_reason {
+        Some("max_tokens") => {
+            out.truncated = true;
+            out.truncate_reason = Some("max_output_tokens".into());
+        }
+        Some("refusal") => {
+            return Err(ClientError::Refused {
+                message: match category {
+                    Some(c) if !c.is_empty() => {
+                        format!("it gave its safety rules as the reason ({c})")
+                    }
+                    _ => "it gave its safety rules as the reason".into(),
+                },
+            });
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 /// A `/v1/messages` answer as a turn.
 pub fn parse_anthropic_reply(body: &str) -> Result<TurnOutput, ClientError> {
     let v: Value = serde_json::from_str(body)
@@ -1352,10 +1468,11 @@ pub fn parse_anthropic_reply(body: &str) -> Result<TurnOutput, ClientError> {
             _ => {}
         }
     }
-    if v["stop_reason"].as_str() == Some("max_tokens") {
-        out.truncated = true;
-        out.truncate_reason = Some("max_output_tokens".into());
-    }
+    note_anthropic_stop(
+        &mut out,
+        v["stop_reason"].as_str(),
+        v["stop_details"]["category"].as_str(),
+    )?;
     let u = &v["usage"];
     out.usage = Usage {
         input_tokens: u64_at(u, &["input_tokens"]),
@@ -1364,6 +1481,334 @@ pub fn parse_anthropic_reply(body: &str) -> Result<TurnOutput, ClientError> {
         ..Usage::default()
     };
     Ok(out)
+}
+
+/// How often a streamed provider call checks for Stop while it waits.
+const STREAM_POLL: Duration = Duration::from_millis(250);
+/// How long a streamed reply may go quiet before it counts as stalled:
+/// the longest silence the native client's own idle clock allows (its
+/// xhigh thinking allowance), so a Claude turn thinking in silence is
+/// not cut off sooner than a Grok one.
+const STREAM_IDLE: Duration = Duration::from_secs(300);
+
+/// One tool call still arriving: its id and name came with the block
+/// start, its arguments with the deltas that follow.
+#[derive(Default)]
+struct StreamTool {
+    id: String,
+    name: String,
+    json: String,
+}
+
+/// An Anthropic event stream folded into a turn as it arrives, the way
+/// the native client's parser folds xAI's: text and thinking reach the
+/// chat delta by delta, tool calls assemble from their pieces, and the
+/// usage (cache reads and writes included) and stop reason land on the
+/// finished turn.
+#[derive(Default)]
+struct AnthropicStream {
+    out: TurnOutput,
+    /// `usage.cache_creation_input_tokens`, which [`Usage`] has no
+    /// field for; the spend ledger prices the write.
+    cache_write: u64,
+    tools: BTreeMap<usize, StreamTool>,
+    stop_reason: Option<String>,
+    refusal_category: Option<String>,
+    /// `message_stop` seen: the stream ended the way it should.
+    finished: bool,
+    /// Any answer text already reached the chat.
+    shown: bool,
+}
+
+impl AnthropicStream {
+    fn usage(&mut self, u: &Value) {
+        if let Some(n) = u["input_tokens"].as_u64() {
+            self.out.usage.input_tokens = n;
+        }
+        if let Some(n) = u["output_tokens"].as_u64() {
+            self.out.usage.output_tokens = n;
+        }
+        if let Some(n) = u["cache_read_input_tokens"].as_u64() {
+            self.out.usage.cached_tokens = n;
+        }
+        if let Some(n) = u["cache_creation_input_tokens"].as_u64() {
+            self.cache_write = n;
+        }
+    }
+
+    fn event(&mut self, v: &Value, sink: &mut dyn FnMut(StreamEvent)) -> Result<(), ClientError> {
+        match v["type"].as_str().unwrap_or("") {
+            "message_start" => self.usage(&v["message"]["usage"]),
+            "content_block_start" => {
+                let b = &v["content_block"];
+                if b["type"].as_str() == Some("tool_use") {
+                    let at = v["index"].as_u64().unwrap_or(0) as usize;
+                    self.tools.insert(
+                        at,
+                        StreamTool {
+                            id: b["id"].as_str().unwrap_or("").to_string(),
+                            name: b["name"].as_str().unwrap_or("").to_string(),
+                            json: String::new(),
+                        },
+                    );
+                }
+            }
+            "content_block_delta" => {
+                let d = &v["delta"];
+                match d["type"].as_str().unwrap_or("") {
+                    "text_delta" => {
+                        let t = d["text"].as_str().unwrap_or("");
+                        if !t.is_empty() {
+                            self.shown = true;
+                            self.out.text.push_str(t);
+                            sink(StreamEvent::TextDelta(t.to_string()));
+                        }
+                    }
+                    "thinking_delta" => {
+                        let t = d["thinking"].as_str().unwrap_or("");
+                        if !t.is_empty() {
+                            self.out.reasoning.push_str(t);
+                            sink(StreamEvent::ReasoningDelta(t.to_string()));
+                        }
+                    }
+                    "input_json_delta" => {
+                        let at = v["index"].as_u64().unwrap_or(0) as usize;
+                        if let Some(tool) = self.tools.get_mut(&at) {
+                            tool.json.push_str(d["partial_json"].as_str().unwrap_or(""));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            "content_block_stop" => {
+                let at = v["index"].as_u64().unwrap_or(0) as usize;
+                if let Some(tool) = self.tools.remove(&at) {
+                    self.out.calls.push(FunctionCall {
+                        call_id: tool.id,
+                        name: tool.name,
+                        arguments: if tool.json.is_empty() {
+                            "{}".into()
+                        } else {
+                            tool.json
+                        },
+                    });
+                }
+            }
+            "message_delta" => {
+                if let Some(s) = v["delta"]["stop_reason"].as_str() {
+                    self.stop_reason = Some(s.to_string());
+                }
+                if let Some(c) = v["delta"]["stop_details"]["category"].as_str() {
+                    self.refusal_category = Some(c.to_string());
+                }
+                self.usage(&v["usage"]);
+            }
+            "message_stop" => self.finished = true,
+            "error" => return Err(anthropic_stream_error(&v["error"])),
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// The finished turn and its cache-write count. A stream that ended
+    /// without `message_stop` is a disconnect, like the native parser's.
+    fn finish(mut self) -> Result<(TurnOutput, u64), ClientError> {
+        if !self.finished {
+            return Err(ClientError::Disconnect);
+        }
+        note_anthropic_stop(
+            &mut self.out,
+            self.stop_reason.as_deref(),
+            self.refusal_category.as_deref(),
+        )?;
+        Ok((self.out, self.cache_write))
+    }
+}
+
+/// An `error` event on the stream, as the client's own error classes:
+/// the HTTP layer never saw these, the stream itself carried them.
+fn anthropic_stream_error(e: &Value) -> ClientError {
+    let message =
+        grokhub_core::redact_secrets(e["message"].as_str().unwrap_or("the stream failed"));
+    match e["type"].as_str().unwrap_or("") {
+        "overloaded_error" => ClientError::Server {
+            status: 529,
+            message,
+            retry_after_secs: None,
+        },
+        "rate_limit_error" => ClientError::RateLimited {
+            retry_after_secs: None,
+            message,
+        },
+        "authentication_error" => ClientError::Auth {
+            status: 401,
+            message,
+        },
+        "invalid_request_error" => ClientError::Protocol(message),
+        _ => ClientError::Server {
+            status: 500,
+            message,
+            retry_after_secs: None,
+        },
+    }
+}
+
+/// Reads a streamed body on its own thread, so Stop and the stall clock
+/// are checked every [`STREAM_POLL`] even while a read is blocked (the
+/// same pattern as the native client's stream reads).
+fn stream_pump(
+    mut reader: impl Read + Send + 'static,
+) -> std::sync::mpsc::Receiver<std::io::Result<Vec<u8>>> {
+    let (tx, rx) = std::sync::mpsc::sync_channel(16);
+    let spawned = std::thread::Builder::new()
+        .name("provider-stream-read".into())
+        .spawn({
+            let tx = tx.clone();
+            move || {
+                let mut buf = [0u8; 4096];
+                loop {
+                    let sent = match reader.read(&mut buf) {
+                        Ok(0) => {
+                            let _ = tx.send(Ok(Vec::new()));
+                            break;
+                        }
+                        Ok(n) => tx.send(Ok(buf[..n].to_vec())),
+                        Err(e) => {
+                            let _ = tx.send(Err(e));
+                            break;
+                        }
+                    };
+                    // The call was dropped (Stop, a stall, an error): stop reading.
+                    if sent.is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+    if let Err(e) = spawned {
+        let _ = tx.send(Err(e));
+    }
+    rx
+}
+
+/// The frames complete in `buf` so far, drained: events split on blank
+/// lines, and only the `data:` lines carry anything (the JSON names its
+/// own type). A frame is whole bytes, so a character a read cut in half
+/// is never decoded in pieces.
+fn stream_frames(buf: &mut Vec<u8>) -> Vec<Value> {
+    let mut out = Vec::new();
+    while let Some(at) = buf
+        .windows(2)
+        .position(|w| w == b"\n\n")
+        .map(|p| p + 2)
+        .or_else(|| buf.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4))
+    {
+        let frame: Vec<u8> = buf.drain(..at).collect();
+        let text = String::from_utf8_lossy(&frame);
+        let mut data = String::new();
+        for line in text.split(['\n', '\r']) {
+            if let Some(rest) = line.trim_end().strip_prefix("data:") {
+                if !data.is_empty() {
+                    data.push('\n');
+                }
+                data.push_str(rest.trim_start());
+            }
+        }
+        let data = data.trim();
+        if !data.is_empty() && data != "[DONE]" {
+            if let Ok(v) = serde_json::from_str::<Value>(data) {
+                out.push(v);
+            }
+        }
+    }
+    out
+}
+
+/// Read one streamed Anthropic reply to its end, feeding `sink` as the
+/// answer arrives. Mirrors the native stream's rules: Stop answers at
+/// once, a stall is [`ClientError::IdleTimeout`], a stream that ends
+/// early is a disconnect, and a failure after text already showed is
+/// [`ClientError::CutOff`] — never retried, never failed over, because
+/// the chat already holds part of the answer.
+fn read_anthropic_stream(
+    reader: impl Read + Send + 'static,
+    cancel: &CancelToken,
+    sink: &mut dyn FnMut(StreamEvent),
+) -> Result<(TurnOutput, u64), ClientError> {
+    use std::sync::mpsc::RecvTimeoutError;
+    let chunks = stream_pump(reader);
+    let mut st = AnthropicStream::default();
+    let mut buf: Vec<u8> = Vec::new();
+    let mut last = std::time::Instant::now();
+    // A failure once text showed and the error is one a retry would
+    // repeat becomes the cut-off the turn stops with.
+    let wrap = |st: &AnthropicStream, err: ClientError| -> ClientError {
+        if st.shown && err.is_retryable() {
+            ClientError::CutOff(err.to_string())
+        } else {
+            err
+        }
+    };
+    'read: loop {
+        if cancel.is_cancelled() {
+            return Err(ClientError::Cancelled);
+        }
+        let chunk = match chunks.recv_timeout(STREAM_POLL) {
+            Ok(Ok(chunk)) => chunk,
+            Ok(Err(e)) => {
+                let msg = e.to_string();
+                let lower = msg.to_ascii_lowercase();
+                let err = if lower.contains("timed out") || lower.contains("timeout") {
+                    ClientError::IdleTimeout
+                } else {
+                    ClientError::Transport(msg)
+                };
+                return Err(wrap(&st, err));
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                if last.elapsed() >= STREAM_IDLE {
+                    return Err(wrap(&st, ClientError::IdleTimeout));
+                }
+                continue 'read;
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err(wrap(
+                    &st,
+                    ClientError::Transport("the stream reader stopped".into()),
+                ));
+            }
+        };
+        if chunk.is_empty() {
+            break 'read;
+        }
+        last = std::time::Instant::now();
+        buf.extend_from_slice(&chunk);
+        for v in stream_frames(&mut buf) {
+            if let Err(e) = st.event(&v, sink) {
+                return Err(wrap(&st, e));
+            }
+        }
+    }
+    // Whatever frame the stream ended on still counts.
+    if !buf.is_empty() {
+        buf.extend_from_slice(b"\n\n");
+        for v in stream_frames(&mut buf) {
+            if let Err(e) = st.event(&v, sink) {
+                return Err(wrap(&st, e));
+            }
+        }
+    }
+    if cancel.is_cancelled() {
+        return Err(ClientError::Cancelled);
+    }
+    let shown = st.shown;
+    st.finish().map_err(|e| {
+        if shown && e.is_retryable() {
+            ClientError::CutOff(e.to_string())
+        } else {
+            e
+        }
+    })
 }
 
 /// What the chat says when OpenRouter's account settings leave a model with
@@ -1515,13 +1960,36 @@ fn error_of(status: u16, body: &str, openrouter: bool) -> ClientError {
 
 // ---- The call ----------------------------------------------------------------
 
-/// Send one routed call to a provider you added: `model` is its registry id
-/// (`<provider>/<model>`), `effort` the router's pick from that model's own
-/// list, `class` the call's class (an OpenRouter call's backup is ranked for
-/// it). It goes only under your grant (one egress line, `span_id` on it);
-/// with no grant a hard send card parks and waits (Approve once = one
-/// `approved_once` line), and Deny, Esc, the timeout or a cancel send nothing.
-pub fn call_model(
+/// A provider call with everything decided and allowed: the provider,
+/// its key, the request body ready to serialize and the registry
+/// snapshot the reply is read against. Built once by [`prepare_call`];
+/// [`call_model`] sends it whole and [`stream_model`] streams it when
+/// the provider is Anthropic.
+struct ReadyCall {
+    p: Provider,
+    wire_model: String,
+    key: Zeroizing<String>,
+    url: String,
+    openrouter: bool,
+    backup_wire: Option<String>,
+    reg: Arc<Registry>,
+    body: Value,
+    call_timeout: Option<Duration>,
+}
+
+/// What [`prepare_call`] settled: a turn answered on this computer (a
+/// held reply; nothing was sent), or the call ready to go out.
+enum Prep {
+    Held(Box<TurnOutput>),
+    Ready(Box<ReadyCall>),
+}
+
+/// Everything a provider call does before the wire: the guards, the
+/// grant (one egress line, `span_id` on it; with no grant a hard send
+/// card parks and waits — Approve once = one `approved_once` line — and
+/// Deny, Esc, the timeout or a cancel send nothing) and the body.
+/// `stream` asks Anthropic for its event stream.
+fn prepare_call(
     config_dir: &Path,
     class: &str,
     model: &str,
@@ -1530,7 +1998,8 @@ pub fn call_model(
     data: &[DataClass],
     span_id: &str,
     cancel: &CancelToken,
-) -> Result<TurnOutput, ClientError> {
+    stream: bool,
+) -> Result<Prep, ClientError> {
     let (pid, wire_model) = split_provider_model(model)
         .ok_or_else(|| ClientError::Protocol(format!("`{model}` is not a provider model")))?;
     let p = provider(config_dir, pid)
@@ -1540,10 +2009,10 @@ pub fn call_model(
     let mut req = std::borrow::Cow::Borrowed(req);
     super::adult::scrub(&mut req.to_mut().input);
     if let Some(held) = super::adult::held_reply(&req.input) {
-        return Ok(held);
+        return Ok(Prep::Held(Box::new(held)));
     }
     if let Some(held) = super::coaching::held_reply(class, &req.input) {
-        return Ok(held);
+        return Ok(Prep::Held(Box::new(held)));
     }
     let to = dest(config_dir, model);
     if super::adult::to_local(&req.input, to) {
@@ -1588,10 +2057,53 @@ pub fn call_model(
         apply_openrouter_routing(&mut body, &routing());
         apply_openrouter_picks(&mut body, backup_wire, &req.conversation_id);
     }
+    if stream && p.kind == ProviderKind::Anthropic {
+        body["stream"] = json!(true);
+    }
     crate::harness::replay::note_request(config_dir, &body);
-    let body = body.to_string();
+    Ok(Prep::Ready(Box::new(ReadyCall {
+        p,
+        wire_model: wire_model.to_string(),
+        key,
+        url,
+        openrouter,
+        backup_wire: backup_wire.map(str::to_string),
+        reg,
+        body,
+        call_timeout: req.call_timeout,
+    })))
+}
+
+/// Send one routed call to a provider you added: `model` is its registry id
+/// (`<provider>/<model>`), `effort` the router's pick from that model's own
+/// list, `class` the call's class (an OpenRouter call's backup is ranked for
+/// it). It goes only under your grant (one egress line, `span_id` on it);
+/// with no grant a hard send card parks and waits (Approve once = one
+/// `approved_once` line), and Deny, Esc, the timeout or a cancel send nothing.
+pub fn call_model(
+    config_dir: &Path,
+    class: &str,
+    model: &str,
+    effort: Option<&str>,
+    req: &ResponsesRequest,
+    data: &[DataClass],
+    span_id: &str,
+    cancel: &CancelToken,
+) -> Result<TurnOutput, ClientError> {
+    let ready = match prepare_call(
+        config_dir, class, model, effort, req, data, span_id, cancel, false,
+    )? {
+        Prep::Held(turn) => return Ok(*turn),
+        Prep::Ready(r) => r,
+    };
+    let body = ready.body.to_string();
     let r = transport_for(config_dir)
-        .post_within(&url, &p.headers(&key), &body, req.call_timeout)
+        .post_within(
+            &ready.url,
+            &ready.p.headers(&ready.key),
+            &body,
+            ready.call_timeout,
+        )
         .map_err(|e| ClientError::Transport(grokhub_core::redact_secrets(&e)))?;
     // Cancelled while on the wire (a replaced or timed-out request): drop the reply.
     if cancel.is_cancelled() {
@@ -1603,23 +2115,24 @@ pub fn call_model(
         // bench, an OpenRouter re-read) while the reply is in hand.
         super::quota::note_provider_error(
             config_dir,
-            &p,
+            &ready.p,
             model,
             r.status,
             &r.body,
             &r.headers,
             grokhub_core::now_ms(),
         );
-        return Err(error_of(r.status, &r.body, openrouter));
+        return Err(error_of(r.status, &r.body, ready.openrouter));
     }
-    let mut turn = match p.kind {
+    let mut turn = match ready.p.kind {
         ProviderKind::OpenAiCompatible => parse_openai_reply(&r.body),
         ProviderKind::Anthropic => parse_anthropic_reply(&r.body),
     }?;
-    if p.kind == ProviderKind::Anthropic {
+    if ready.p.kind == ProviderKind::Anthropic {
         // Claude's account state rides on its replies: rate-limit headers
         // and usage for the local spend ledger (quota.rs).
-        let prices = reg
+        let prices = ready
+            .reg
             .get(model)
             .map(|rec| rec.meta.prices.clone())
             .filter(|p| !p.is_empty());
@@ -1634,17 +2147,112 @@ pub fn call_model(
     }
     // The next request names the model as the provider does ([`openai_body`]):
     // the backup's thinking goes back to the backup.
-    let sent: Vec<&str> = std::iter::once(wire_model).chain(backup_wire).collect();
-    let wrote = if openrouter {
-        answered_by(&r.body, &sent).unwrap_or(wire_model)
+    let sent: Vec<&str> = std::iter::once(ready.wire_model.as_str())
+        .chain(ready.backup_wire.as_deref())
+        .collect();
+    let wrote = if ready.openrouter {
+        answered_by(&r.body, &sent).unwrap_or(&ready.wire_model)
     } else {
-        wire_model
+        &ready.wire_model
     };
     for item in &mut turn.reasoning_items {
         if let InputItem::Reasoning { model, .. } = item {
             *model = wrote.to_string();
         }
     }
+    Ok(turn)
+}
+
+/// [`call_model`] for the chat's streamed path: an Anthropic call is
+/// sent as an event stream and the answer reaches `sink` as it is
+/// written, with the native stream's failure rules (a mid-stream
+/// failure before anything showed fails over like any provider error;
+/// one after text showed is a cut-off the turn stops with). Every
+/// other provider keeps the whole-reply call for now — its answer goes
+/// out as one delta, the way the chat has always shown it (OpenRouter
+/// streaming is its own step). A held reply goes out the same way.
+pub fn stream_model(
+    config_dir: &Path,
+    class: &str,
+    model: &str,
+    effort: Option<&str>,
+    req: &ResponsesRequest,
+    data: &[DataClass],
+    span_id: &str,
+    cancel: &CancelToken,
+    sink: &mut dyn FnMut(StreamEvent),
+) -> Result<TurnOutput, ClientError> {
+    let anthropic = split_provider_model(model)
+        .and_then(|(pid, _)| provider(config_dir, pid))
+        .is_some_and(|p| p.kind == ProviderKind::Anthropic);
+    if !anthropic {
+        let turn = call_model(config_dir, class, model, effort, req, data, span_id, cancel)?;
+        if !turn.text.is_empty() {
+            sink(StreamEvent::TextDelta(turn.text.clone()));
+        }
+        return Ok(turn);
+    }
+    let ready = match prepare_call(
+        config_dir, class, model, effort, req, data, span_id, cancel, true,
+    )? {
+        Prep::Held(turn) => {
+            if !turn.text.is_empty() {
+                sink(StreamEvent::TextDelta(turn.text.clone()));
+            }
+            return Ok(*turn);
+        }
+        Prep::Ready(r) => r,
+    };
+    let body = ready.body.to_string();
+    let mut s = transport_for(config_dir)
+        .post_streamed(
+            &ready.url,
+            &ready.p.headers(&ready.key),
+            &body,
+            ready.call_timeout,
+        )
+        .map_err(|e| ClientError::Transport(grokhub_core::redact_secrets(&e)))?;
+    // Cancelled while the stream opened: drop it unread.
+    if cancel.is_cancelled() {
+        return Err(ClientError::Cancelled);
+    }
+    if !(200..300).contains(&s.status) {
+        // The stream never started: the body is the error, read whole,
+        // and the quota ledger stamps it like any failed call.
+        let mut text = String::new();
+        s.reader
+            .by_ref()
+            .take(BODY_CAP)
+            .read_to_string(&mut text)
+            .map_err(|e| ClientError::Transport(e.to_string()))?;
+        super::quota::note_provider_error(
+            config_dir,
+            &ready.p,
+            model,
+            s.status,
+            &text,
+            &s.headers,
+            grokhub_core::now_ms(),
+        );
+        return Err(error_of(s.status, &text, false));
+    }
+    let headers = std::mem::take(&mut s.headers);
+    let (turn, cache_write) = read_anthropic_stream(s.reader, cancel, sink)?;
+    // Claude's account state rides on its replies, streamed ones too:
+    // rate-limit headers and usage for the local spend ledger (quota.rs).
+    let prices = ready
+        .reg
+        .get(model)
+        .map(|rec| rec.meta.prices.clone())
+        .filter(|p| !p.is_empty());
+    super::quota::note_anthropic_reply(
+        config_dir,
+        prices.as_ref(),
+        &turn.usage,
+        cache_write,
+        &headers,
+        grokhub_core::now_ms(),
+    );
     Ok(turn)
 }
 

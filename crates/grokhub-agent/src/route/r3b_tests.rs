@@ -23,8 +23,8 @@ use super::learn::RegistryFilters;
 use super::log::{route_records, ROUTE_TAIL_LINES};
 use super::policy::{class_row, CLASS_TABLE};
 use super::providers::{
-    self, add_provider, call_data, parse_base_url, request_body, usable, HttpReply, MemoryVault,
-    ProviderKind, ProviderSource, ProviderTransport, CALL_DATA, CALL_DATA_SENSITIVE,
+    self, add_provider, call_data, parse_base_url, request_body, usable, HttpReply, HttpStream,
+    MemoryVault, ProviderKind, ProviderSource, ProviderTransport, CALL_DATA, CALL_DATA_SENSITIVE,
 };
 use super::refresh::{run_refresh, RefreshJob};
 use super::spend::Spend;
@@ -891,7 +891,9 @@ fn effort_maps_per_provider_golden_bodies() {
         .to_string(),
         r#"{"include":["reasoning.encrypted_content"],"input":[{"content":[{"text":"be brief","type":"input_text"}],"role":"system","type":"message"},{"content":[{"text":"weather?","type":"input_text"}],"role":"user","type":"message"},{"arguments":"{\"city\":\"Oslo\"}","call_id":"c1","name":"weather","type":"function_call"},{"call_id":"c1","output":"4C","type":"function_call_output"}],"model":"grok-4.7","parallel_tool_calls":true,"prompt_cache_key":"conv","reasoning":{"effort":"high"},"store":false,"stream":true,"tools":[{"description":"Look it up","name":"weather","parameters":{"properties":{"city":{"type":"string"}},"type":"object"},"type":"function"},{"type":"web_search"}]}"#
     );
-    // Anthropic: `output_config.effort`, tool_use / tool_result blocks, the system prompt apart.
+    // Anthropic: `output_config.effort`, tool_use / tool_result blocks, the
+    // system prompt apart — and prompt-cache marks on the system text, the
+    // last tool and the last message block (failover PR 8).
     assert_eq!(
         request_body(
             ProviderKind::Anthropic,
@@ -901,7 +903,7 @@ fn effort_maps_per_provider_golden_bodies() {
             Some(32_000)
         )
         .to_string(),
-        r#"{"max_tokens":8192,"messages":[{"content":[{"text":"weather?","type":"text"}],"role":"user"},{"content":[{"id":"c1","input":{"city":"Oslo"},"name":"weather","type":"tool_use"}],"role":"assistant"},{"content":[{"content":"4C","tool_use_id":"c1","type":"tool_result"}],"role":"user"}],"model":"model-x","output_config":{"effort":"high"},"system":"be brief","tools":[{"description":"Look it up","input_schema":{"properties":{"city":{"type":"string"}},"type":"object"},"name":"weather"}]}"#
+        r#"{"max_tokens":8192,"messages":[{"content":[{"text":"weather?","type":"text"}],"role":"user"},{"content":[{"id":"c1","input":{"city":"Oslo"},"name":"weather","type":"tool_use"}],"role":"assistant"},{"content":[{"cache_control":{"type":"ephemeral"},"content":"4C","tool_use_id":"c1","type":"tool_result"}],"role":"user"}],"model":"model-x","output_config":{"effort":"high"},"system":[{"cache_control":{"type":"ephemeral"},"text":"be brief","type":"text"}],"tools":[{"cache_control":{"type":"ephemeral"},"description":"Look it up","input_schema":{"properties":{"city":{"type":"string"}},"type":"object"},"name":"weather"}]}"#
     );
     // OpenAI-compatible: `reasoning.effort`, chat messages, nested function tools; hosted tools dropped.
     assert_eq!(
@@ -1032,6 +1034,233 @@ fn e14_a_length_cut_with_no_answer_reads_as_a_spent_budget() {
         ..xai.clone()
     };
     assert!(!filtered.out_of_budget());
+}
+
+/// Failover PR 8: a refusal is its own error class, never a silent
+/// empty answer, and a server-tool pause is an ordinary ending.
+#[test]
+fn an_anthropic_refusal_is_its_own_error_and_a_pause_is_an_ordinary_end() {
+    let refused = providers::parse_anthropic_reply(
+        r#"{"content":[],"stop_reason":"refusal","stop_details":{"type":"refusal","category":"bio"},"usage":{"input_tokens":3,"output_tokens":0}}"#,
+    );
+    match refused {
+        Err(ClientError::Refused { message }) => assert!(message.contains("bio"), "{message}"),
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+    let paused = providers::parse_anthropic_reply(
+        r#"{"content":[{"type":"text","text":"half the search is in"}],"stop_reason":"pause_turn","usage":{"input_tokens":3,"output_tokens":9}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        (paused.text.as_str(), paused.truncated),
+        ("half the search is in", false)
+    );
+    let tools = providers::parse_anthropic_reply(
+        r#"{"content":[{"type":"tool_use","id":"t1","name":"weather","input":{}}],"stop_reason":"tool_use"}"#,
+    )
+    .unwrap();
+    assert_eq!((tools.calls.len(), tools.truncated), (1, false));
+}
+
+/// A fake wire that answers a POST as an event stream: the canned SSE
+/// body is handed over as a reader, the way the real wire streams it,
+/// with one rate-limit header riding along.
+struct SseWire {
+    posts: Mutex<Vec<String>>,
+    sse: String,
+    status: u16,
+}
+
+impl ProviderTransport for SseWire {
+    fn get(&self, _url: &str, _headers: &[(String, String)]) -> Result<HttpReply, String> {
+        Ok(HttpReply {
+            status: 200,
+            body: OR_LIST.into(),
+            headers: Vec::new(),
+        })
+    }
+
+    fn post(
+        &self,
+        _url: &str,
+        _headers: &[(String, String)],
+        body: &str,
+    ) -> Result<HttpReply, String> {
+        self.posts.lock().unwrap().push(body.into());
+        Ok(HttpReply {
+            status: self.status,
+            body: self.sse.clone(),
+            headers: Vec::new(),
+        })
+    }
+
+    fn post_streamed(
+        &self,
+        _url: &str,
+        _headers: &[(String, String)],
+        body: &str,
+        _limit: Option<std::time::Duration>,
+    ) -> Result<HttpStream, String> {
+        self.posts.lock().unwrap().push(body.into());
+        Ok(HttpStream {
+            status: self.status,
+            headers: vec![("anthropic-ratelimit-requests-remaining".into(), "9".into())],
+            reader: Box::new(std::io::Cursor::new(self.sse.clone().into_bytes())),
+        })
+    }
+}
+
+/// A config dir whose Anthropic provider answers with the canned stream.
+fn sse_setup(label: &str, sse: &str) -> (PathBuf, Arc<SseWire>) {
+    let dir = test_dir(label);
+    providers::use_vault_for(&dir, Arc::new(MemoryVault::default()));
+    let wire = Arc::new(SseWire {
+        posts: Mutex::new(Vec::new()),
+        sse: sse.into(),
+        status: 200,
+    });
+    providers::use_transport_for(&dir, wire.clone());
+    add_provider(&dir, "https://api.anthropic.com", KEY, NOW).unwrap();
+    grant_destination(
+        &dir,
+        "api.anthropic.com",
+        CALL_DATA,
+        UserClick::from_click(),
+    )
+    .unwrap();
+    (dir, wire)
+}
+
+fn stream_call(dir: &Path, shown: &mut Vec<String>) -> Result<TurnOutput, ClientError> {
+    providers::stream_model(
+        dir,
+        "chat:default",
+        AN_MODEL,
+        Some("high"),
+        &hello(),
+        CALL_DATA,
+        "conv-1:11",
+        &CancelToken::new(),
+        &mut |ev| {
+            if let StreamEvent::TextDelta(t) = ev {
+                shown.push(t);
+            }
+        },
+    )
+}
+
+/// Failover PR 8: a streamed Claude call reaches the chat delta by
+/// delta, assembles its tool call, counts cache reads and writes into
+/// the spend ledger, and asks for the stream with cache marks on.
+#[test]
+fn a_streamed_claude_call_arrives_in_deltas_and_notes_its_spend() {
+    let sse = concat!(
+        "event: message_start\n",
+        "data: {\"type\":\"message_start\",\"message\":{\"id\":\"m1\",\"usage\":{\"input_tokens\":100,\"cache_creation_input_tokens\":25,\"cache_read_input_tokens\":40,\"output_tokens\":1}}}\n\n",
+        "event: content_block_start\n",
+        "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+        "event: content_block_delta\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello \"}}\n\n",
+        "event: content_block_delta\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"there\"}}\n\n",
+        "event: content_block_start\n",
+        "data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"weather\",\"input\":{}}}\n\n",
+        "event: content_block_delta\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"city\\\":\"}}\n\n",
+        "event: content_block_delta\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"\\\"Oslo\\\"}\"}}\n\n",
+        "event: content_block_stop\n",
+        "data: {\"type\":\"content_block_stop\",\"index\":1}\n\n",
+        "event: content_block_stop\n",
+        "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+        "event: message_delta\n",
+        "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":7}}\n\n",
+        "event: message_stop\n",
+        "data: {\"type\":\"message_stop\"}\n\n",
+    );
+    let (dir, wire) = sse_setup("anthropic-stream", sse);
+    save_registry(&dir, &fleet()).unwrap();
+    let mut shown: Vec<String> = Vec::new();
+    let out = stream_call(&dir, &mut shown).unwrap();
+    // The chat saw the answer arrive in pieces, not as one block.
+    assert_eq!(shown, ["Hello ", "there"]);
+    assert_eq!(out.text, "Hello there");
+    assert_eq!(
+        (
+            out.calls[0].call_id.as_str(),
+            out.calls[0].name.as_str(),
+            out.calls[0].arguments.as_str()
+        ),
+        ("t1", "weather", r#"{"city":"Oslo"}"#)
+    );
+    assert_eq!(
+        (
+            out.usage.input_tokens,
+            out.usage.output_tokens,
+            out.usage.cached_tokens
+        ),
+        (100, 7, 40)
+    );
+    // The request asked for the stream, with a cache mark on the last block.
+    let body: serde_json::Value = serde_json::from_str(&wire.posts.lock().unwrap()[0]).unwrap();
+    assert_eq!(body["stream"], json!(true));
+    assert_eq!(
+        body["messages"][0]["content"][0]["cache_control"],
+        json!({"type": "ephemeral"})
+    );
+    // The spend ledger counted fresh + cache read + cache write input,
+    // and kept the rate-limit header the reply carried.
+    let ledger = grokhub_core::model_registry::store::load_quota(&dir);
+    assert_eq!(ledger.anthropic.spend.day_input_tokens, 100 + 40 + 25);
+    assert_eq!(ledger.anthropic.spend.day_output_tokens, 7);
+    assert_eq!(ledger.anthropic.rate.requests.remaining, Some(9));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Failover PR 8: the streamed path keeps the native stream's failure
+/// rules — a failure after text showed is a cut-off, one before is the
+/// error itself (a disconnect the router can fail over from), and a
+/// streamed refusal is the refusal class.
+#[test]
+fn a_streamed_claude_failure_follows_the_shown_rules() {
+    // Text showed, then the stream errored: what showed is kept.
+    let (dir, _w) = sse_setup(
+        "anthropic-stream-cutoff",
+        concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5,\"output_tokens\":1}}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}\n\n",
+            "data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"overloaded\"}}\n\n",
+        ),
+    );
+    let mut shown: Vec<String> = Vec::new();
+    let err = stream_call(&dir, &mut shown).unwrap_err();
+    assert_eq!(shown, ["partial"]);
+    assert!(matches!(err, ClientError::CutOff(_)), "{err:?}");
+    let _ = std::fs::remove_dir_all(dir);
+
+    // Nothing showed and the stream just ended: a disconnect.
+    let (dir, _w) = sse_setup(
+        "anthropic-stream-dropped",
+        "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5,\"output_tokens\":1}}}\n\n",
+    );
+    let mut shown: Vec<String> = Vec::new();
+    let err = stream_call(&dir, &mut shown).unwrap_err();
+    assert!(matches!(err, ClientError::Disconnect), "{err:?}");
+    let _ = std::fs::remove_dir_all(dir);
+
+    // A refusal riding the stream is the refusal class, not an empty turn.
+    let (dir, _w) = sse_setup(
+        "anthropic-stream-refusal",
+        concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5,\"output_tokens\":1}}}\n\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"refusal\",\"stop_details\":{\"type\":\"refusal\",\"category\":\"sexual\"}},\"usage\":{\"output_tokens\":2}}\n\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
+        ),
+    );
+    let mut shown: Vec<String> = Vec::new();
+    let err = stream_call(&dir, &mut shown).unwrap_err();
+    assert!(matches!(err, ClientError::Refused { .. }), "{err:?}");
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 // ---- End to end: the route record, and the key is nowhere ---------------------
