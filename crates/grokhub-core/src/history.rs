@@ -192,7 +192,8 @@ pub fn search_thread_body<'a>(chunks: impl IntoIterator<Item = &'a str>) -> Stri
         if !body.is_empty() {
             body.push('\n');
         }
-        body.push_str(search_text(c));
+        // Search reads the words as the chat showed them, not the app's tags.
+        body.push_str(&crate::shown_text(search_text(c)));
         if body.len() > TEXT_FILE_CAP {
             let mut end = TEXT_FILE_CAP;
             while end > 0 && !body.is_char_boundary(end) {
@@ -499,5 +500,12 @@ mod tests {
             hits.is_empty(),
             "History search must not lowercase an 8MB thread: {hits:?}"
         );
+    }
+
+    #[test]
+    fn search_reads_a_findings_card_without_its_tag() {
+        let card = crate::mark_slash_result("Findings from this run");
+        let body = search_thread_body([card.as_str(), "ok TURN_SAY: done"]);
+        assert_eq!(body, "Findings from this run\nok done");
     }
 }

@@ -3,6 +3,7 @@
 //! effort is kept: the router picks both, and a model or effort an older build
 //! saved is dropped when the file loads.
 
+use grokhub_core::personality::Heat;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -63,7 +64,22 @@ pub struct ShellSettings {
     pub personality: String,
     /// Settings → Personality → Adults-only personalities. Off hides the
     /// explicit presets, and a stored pick of one speaks in the default voice.
+    /// It only turns on after the one-time 18+ check ([`Self::adult_confirmed`]).
     pub explicit_personalities: bool,
+    /// The person confirmed once that they are 18 or older. Asked the first
+    /// time adults-only turns on, then never again. No birth date is kept.
+    pub adult_confirmed: bool,
+    /// When that 18+ yes was given (Unix ms). Empty for a yes carried over
+    /// from before it was recorded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adult_confirmed_at_ms: Option<u64>,
+    /// Settings → Personality → Dynamic chat: another voice can step in while
+    /// the topic calls for it, then hand back. On until the person turns it off.
+    #[serde(default = "on")]
+    pub dynamic_chat: bool,
+    /// Settings → Personality → Heat: how crude the jokes get, used only while
+    /// adults-only is on. Cheeky until the person moves it.
+    pub quip_heat: Heat,
     pub theme: Theme,
     /// The chat the window had open, reopened at the next launch. Empty after
     /// New chat.
@@ -77,15 +93,35 @@ pub struct ShellSettings {
     /// Settings → Behavior. A value this build cannot read loads as its default.
     #[serde(deserialize_with = "lenient_behavior")]
     pub behavior: Behavior,
+    /// Settings → Appearance → Text size, in percent: one of auto setup's
+    /// steps. The window zooms to it.
+    #[serde(deserialize_with = "text_size")]
+    pub text_size: u16,
+    /// Settings → Appearance → Reduce motion: no animations or slides.
+    pub reduce_motion: bool,
+    /// Notifications only for what needs you: an OK to give or a reply, not
+    /// a finished automation (auto setup's "only important").
+    pub notify_important: bool,
+}
+
+/// A size this build doesn't offer reads as the step at or below it.
+fn text_size<'de, D: Deserializer<'de>>(d: D) -> Result<u16, D::Error> {
+    let pct = Value::deserialize(d)?.as_u64().unwrap_or(100).min(400);
+    Ok(grokhub_core::autotune::settings::text_step_for(pct as u16))
 }
 
 /// Settings → Behavior: the composer and the limits on scheduled work.
-/// Everything starts off, and empty quiet hours are none.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// Everything but Suggestions starts off, and empty quiet hours are none.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Behavior {
     /// Sentence autocomplete in the composer.
     pub autocomplete: bool,
+    /// A few next steps to tap, under the box, on Home and after replies.
+    /// On until the person turns it off; off, no chip shows and the reply's
+    /// chips block leaves the chat's rules.
+    #[serde(default = "on")]
+    pub suggestions: bool,
     /// Quiet hours for automations, as `HH:MM`. Both empty is none.
     pub quiet_start: String,
     pub quiet_end: String,
@@ -93,6 +129,23 @@ pub struct Behavior {
     pub daily_token_budget: u64,
     /// Pause scheduled work over the daily budget.
     pub pause_over_budget: bool,
+}
+
+fn on() -> bool {
+    true
+}
+
+impl Default for Behavior {
+    fn default() -> Self {
+        Self {
+            autocomplete: false,
+            suggestions: true,
+            quiet_start: String::new(),
+            quiet_end: String::new(),
+            daily_token_budget: 0,
+            pause_over_budget: false,
+        }
+    }
 }
 
 impl Behavior {
@@ -144,6 +197,10 @@ fn lenient_behavior<'de, D: Deserializer<'de>>(d: D) -> Result<Behavior, D::Erro
         quiet_hours(text("quietStart"), text("quietEnd")).unwrap_or_default();
     Ok(Behavior {
         autocomplete: flag("autocomplete"),
+        suggestions: raw
+            .get("suggestions")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
         quiet_start,
         quiet_end,
         daily_token_budget: raw
@@ -164,12 +221,61 @@ impl Default for ShellSettings {
             desktop_control: false,
             personality: String::new(),
             explicit_personalities: false,
+            adult_confirmed: false,
+            adult_confirmed_at_ms: None,
+            dynamic_chat: true,
+            quip_heat: Heat::Cheeky,
             theme: Theme::System,
             last_chat: String::new(),
             behavior: Behavior::default(),
             summon_hotkey: false,
             notifications: true,
+            text_size: 100,
+            reduce_motion: false,
+            notify_important: false,
         }
+    }
+}
+
+impl ShellSettings {
+    /// Adults-only personalities in effect: switched on and the 18+ check answered.
+    pub fn adults_on(&self) -> bool {
+        self.explicit_personalities && self.adult_confirmed
+    }
+
+    /// The heat every voice jokes at, or `None` while adults-only is off or the
+    /// 18+ check was never answered.
+    pub fn adult_heat(&self) -> Option<Heat> {
+        self.adults_on().then_some(self.quip_heat)
+    }
+
+    /// Adults-only personalities switched `on`, or `None` while turning it on
+    /// still needs the one-time 18+ check: nothing changes until it is answered.
+    pub fn adults_only(self, on: bool) -> Option<Self> {
+        (!on || self.adult_confirmed).then_some(Self {
+            explicit_personalities: on,
+            ..self
+        })
+    }
+
+    /// The 18+ check's yes at `now_ms`: remembered for good, with when it was
+    /// given (never a birth date), and adults-only turns on.
+    pub fn confirm_adult(self, now_ms: u64) -> Self {
+        Self {
+            adult_confirmed: true,
+            adult_confirmed_at_ms: Some(now_ms),
+            explicit_personalities: true,
+            ..self
+        }
+    }
+}
+
+/// A stop on the Heat dial: anything off the dial (Clean) is Cheeky.
+pub fn dial_heat(heat: Heat) -> Heat {
+    if Heat::DIAL.contains(&heat) {
+        heat
+    } else {
+        Heat::Cheeky
     }
 }
 
@@ -225,6 +331,11 @@ pub fn load(config_dir: &Path) -> ShellSettings {
         .ok()
         .and_then(|raw| serde_json::from_str::<ShellSettings>(&raw).ok())
         .unwrap_or_default();
+    // Adults-only already on from before the 18+ check: that was the person's
+    // own opt-in, as the cabin reads it.
+    if settings.explicit_personalities {
+        settings.adult_confirmed = true;
+    }
     // The plain "Default" preset is gone; a shell still on it speaks as Nyx.
     if settings.personality.trim() == grokhub_core::personality::LEGACY_DEFAULT_ID {
         settings.personality = grokhub_core::personality::DEFAULT_ID.to_string();
@@ -268,11 +379,18 @@ mod tests {
                 desktop_control: false,
                 personality: "nyx".into(),
                 explicit_personalities: false,
+                adult_confirmed: false,
+                adult_confirmed_at_ms: None,
+                dynamic_chat: true,
+                quip_heat: Heat::Cheeky,
                 theme: Theme::System,
                 last_chat: String::new(),
                 behavior: Behavior::default(),
                 summon_hotkey: false,
                 notifications: true,
+                text_size: 100,
+                reduce_motion: false,
+                notify_important: false,
             }
         );
     }
@@ -316,10 +434,16 @@ mod tests {
             desktop_control: true,
             personality: "pirate".into(),
             explicit_personalities: true,
+            adult_confirmed: true,
+            adult_confirmed_at_ms: Some(1_700_000_000_000),
+            dynamic_chat: false,
+            quip_heat: Heat::Spicy,
             theme: Theme::Dark,
             last_chat: "shell-abc-123".into(),
             behavior: Behavior {
                 autocomplete: true,
+                // Off round-trips, though a missing value reads as on.
+                suggestions: false,
                 quiet_start: "22:00".into(),
                 quiet_end: "07:00".into(),
                 daily_token_budget: 1_000_000,
@@ -327,6 +451,9 @@ mod tests {
             },
             summon_hotkey: true,
             notifications: false,
+            text_size: 100,
+            reduce_motion: false,
+            notify_important: false,
         };
         save(&dir, &wanted).expect("save");
         assert_eq!(load(&dir), wanted);
@@ -337,6 +464,13 @@ mod tests {
         assert!(raw.contains("\"desktopControl\": true"), "{raw}");
         assert!(raw.contains("\"personality\": \"pirate\""), "{raw}");
         assert!(raw.contains("\"explicitPersonalities\": true"), "{raw}");
+        assert!(raw.contains("\"adultConfirmed\": true"), "{raw}");
+        assert!(
+            raw.contains("\"adultConfirmedAtMs\": 1700000000000"),
+            "{raw}"
+        );
+        assert!(raw.contains("\"dynamicChat\": false"), "{raw}");
+        assert!(raw.contains("\"quipHeat\": \"spicy\""), "{raw}");
         assert!(raw.contains("\"theme\": \"dark\""), "{raw}");
         assert!(raw.contains("\"lastChat\": \"shell-abc-123\""), "{raw}");
         assert!(raw.contains("\"quietStart\": \"22:00\""), "{raw}");
@@ -364,11 +498,18 @@ mod tests {
                 desktop_control: false,
                 personality: String::new(),
                 explicit_personalities: false,
+                adult_confirmed: false,
+                adult_confirmed_at_ms: None,
+                dynamic_chat: true,
+                quip_heat: Heat::Cheeky,
                 theme: Theme::System,
                 last_chat: String::new(),
                 behavior: Behavior::default(),
                 summon_hotkey: false,
                 notifications: true,
+                text_size: 100,
+                reduce_motion: false,
+                notify_important: false,
             }
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -393,11 +534,18 @@ mod tests {
                 desktop_control: false,
                 personality: "pirate".into(),
                 explicit_personalities: false,
+                adult_confirmed: false,
+                adult_confirmed_at_ms: None,
+                dynamic_chat: true,
+                quip_heat: Heat::Cheeky,
                 theme: Theme::System,
                 last_chat: String::new(),
                 behavior: Behavior::default(),
                 summon_hotkey: false,
                 notifications: true,
+                text_size: 100,
+                reduce_motion: false,
+                notify_important: false,
             }
         );
         save(&dir, &loaded).expect("save");
@@ -439,13 +587,14 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("dir");
         std::fs::write(
             path(&dir),
-            r#"{"model":"grok-5","behavior":{"autocomplete":"yes","quietStart":"bedtime","quietEnd":"07:00","dailyTokenBudget":123,"pauseOverBudget":1}}"#,
+            r#"{"model":"grok-5","behavior":{"autocomplete":"yes","suggestions":"nope","quietStart":"bedtime","quietEnd":"07:00","dailyTokenBudget":123,"pauseOverBudget":1}}"#,
         )
         .expect("write");
         assert_eq!(
             load(&dir).behavior,
             Behavior {
                 autocomplete: false,
+                suggestions: true,
                 quiet_start: String::new(),
                 quiet_end: String::new(),
                 daily_token_budget: 0,
@@ -457,13 +606,14 @@ mod tests {
         // One bad field leaves the good ones alone.
         std::fs::write(
             path(&dir),
-            r#"{"behavior":{"autocomplete":true,"quietStart":"23:00","quietEnd":"6:30","dailyTokenBudget":"lots"}}"#,
+            r#"{"behavior":{"autocomplete":true,"suggestions":false,"quietStart":"23:00","quietEnd":"6:30","dailyTokenBudget":"lots"}}"#,
         )
         .expect("write");
         assert_eq!(
             load(&dir).behavior,
             Behavior {
                 autocomplete: true,
+                suggestions: false,
                 quiet_start: "23:00".into(),
                 quiet_end: "06:30".into(),
                 daily_token_budget: 0,
@@ -527,5 +677,93 @@ mod tests {
         let set = load(&dir);
         assert_eq!((set.summon_hotkey, set.notifications), (true, false));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dynamic_chat_starts_on_and_heat_cheeky_even_in_an_old_file() {
+        let fresh = ShellSettings::default();
+        assert!(fresh.dynamic_chat);
+        assert_eq!(fresh.quip_heat, Heat::Cheeky);
+        assert!(!fresh.adult_confirmed);
+        assert_eq!(fresh.adult_confirmed_at_ms, None);
+        // A shell.json from before these settings.
+        let dir = temp_dir("voice-flow");
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(
+            path(&dir),
+            r#"{"closeToTray":false,"personality":"pirate"}"#,
+        )
+        .expect("write");
+        let old = load(&dir);
+        assert!(old.dynamic_chat);
+        assert_eq!(old.quip_heat, Heat::Cheeky);
+        assert!(!old.adult_confirmed);
+        // No timestamp is written until there is one.
+        save(&dir, &old).expect("save");
+        let raw = std::fs::read_to_string(path(&dir)).expect("read");
+        assert!(!raw.contains("adultConfirmedAtMs"), "{raw}");
+        assert!(raw.contains("\"dynamicChat\": true"), "{raw}");
+        assert!(raw.contains("\"quipHeat\": \"cheeky\""), "{raw}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn adults_only_from_before_the_check_counts_as_confirmed() {
+        let dir = temp_dir("adult-migrate");
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(path(&dir), r#"{"explicitPersonalities":true}"#).expect("write");
+        let old = load(&dir);
+        assert!(old.explicit_personalities && old.adult_confirmed);
+        assert_eq!(old.adult_confirmed_at_ms, None);
+        assert!(old.adults_on());
+        assert_eq!(old.adult_heat(), Some(Heat::Cheeky));
+        // Off stays unconfirmed.
+        std::fs::write(path(&dir), r#"{"explicitPersonalities":false}"#).expect("write");
+        let off = load(&dir);
+        assert!(!off.adult_confirmed && !off.adults_on());
+        assert_eq!(off.adult_heat(), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn heat_needs_both_the_switch_and_the_18_check() {
+        let mut s = ShellSettings {
+            quip_heat: Heat::Filthy,
+            ..ShellSettings::default()
+        };
+        assert_eq!(s.adult_heat(), None);
+        s.explicit_personalities = true;
+        assert_eq!(s.adult_heat(), None, "on without the check is still off");
+        s.adult_confirmed = true;
+        assert_eq!(s.adult_heat(), Some(Heat::Filthy));
+        s.explicit_personalities = false;
+        assert_eq!(s.adult_heat(), None);
+    }
+
+    #[test]
+    fn adults_only_waits_for_the_18_check_then_switches_freely() {
+        let fresh = ShellSettings::default();
+        // Before the check: refused, nothing changes.
+        assert_eq!(fresh.clone().adults_only(true), None);
+        // Off is always fine.
+        let off = fresh.clone().adults_only(false).expect("off");
+        assert!(!off.explicit_personalities);
+        let yes = fresh.confirm_adult(1_700_000_000_000);
+        assert!(yes.adult_confirmed && yes.explicit_personalities && yes.adults_on());
+        assert_eq!(yes.adult_confirmed_at_ms, Some(1_700_000_000_000));
+        // After it: off and back on with no second check, the yes kept.
+        let off = yes.adults_only(false).expect("off");
+        assert!(!off.adults_on() && off.adult_confirmed);
+        let on = off.adults_only(true).expect("on again");
+        assert!(on.adults_on());
+        assert_eq!(on.adult_confirmed_at_ms, Some(1_700_000_000_000));
+    }
+
+    #[test]
+    fn the_dial_has_no_clean_stop() {
+        assert_eq!(dial_heat(Heat::Clean), Heat::Cheeky);
+        for heat in Heat::DIAL {
+            assert_eq!(dial_heat(heat), heat);
+        }
     }
 }

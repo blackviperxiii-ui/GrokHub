@@ -24,8 +24,8 @@ Repo sources: `local_governor` + `app/local_signals.rs` (thermal, memory, power,
 | 10 | Up Next | Next games to play as cover cards | L (hero + 2) · M (3 stacked, slide 9) · S (1 cover) | PARTIAL: installed apps EXISTS; cover art + ordering NEW | Card → Play/launch; Library | Gradient covers with title when no art; "No games found · Scan" |
 | 11 | Games · Now Playing | Current/recent games, session & weekly time | L · M (recent list) · S | PARTIAL: game process detection EXISTS; playtime log NEW | Tap → game page | "Nothing playing · last: X" |
 | 12 | Game Library | Grid of installed games, store counts | L (4 covers + store chips) · M (2×2) · S (count) | PARTIAL (installed apps; covers/store split NEW) | Search, filter, launch | "Scan library" CTA |
-| 13 | Objectives | Today's objectives w/ progress, streak + coach (L) | L (slide 9) · M (top 3) · S (top 1 + bar) | NEW (objective store; seed from mission_ui todos) | Check off, tap → Chat, add via chat bar ("Assign an objective…") | "No objectives · Assign one below" |
-| 14 | Streak & XP | Level, XP bar, 7-day streak | M · S | NEW (XP ledger) | Tap → XP history | Day-1 blocks empty, "Start a streak today" |
+| 13 | Objectives | Today's objectives w/ progress, streak + coach (L) | L (slide 9) · M (top 3) · S (top 1 + bar) | EXISTS (core `objectives`, Objectives page; goals from chat and allowed game data) | Check off, tap → Chat, add via chat bar ("Assign an objective…") | "No objectives · Assign one below" |
+| 14 | Streak & XP | Level, XP bar, 7-day streak | M · S | EXISTS (core `xp` ledger, levels, weeks in a row) | Tap → XP history | Day-1 blocks empty, "Start a streak today" |
 | 15 | Achievements | Progress, new unlocks | M · S | NEW (Steam/Xbox APIs) | Tap → list | "Connect a store" |
 | 16 | Coach Tip | One stat-backed tip | M · S | PARTIAL (proactive cards; stats NEW) | Add as objective; dismiss (counts toward proactive dismiss streak) | Hidden tip → "No tip today" |
 | 17 | Patch Notes | Latest patch for your games, impact line | M · S | PARTIAL (Pulse feed sources) | Open → Pulse post; "new build?" → Chat | "No new patches" |
@@ -74,6 +74,14 @@ Repo sources: `local_governor` + `app/local_signals.rs` (thermal, memory, power,
 **Presets:** Streamer/Social (L Clips, M Squad + Pulse, S Upload (Stream) · Ping · Sent-to-cloud (Connection) · Daily Drop). Performance/Tuning (L PC Loadout, M Speeds + Game Mode, S FPS · Storage · AI usage · Updates).
 
 **Persistence:** `{config}/home_layout.json` next to `card_prefs.json` (per OS user/profile; synced with profile if sync is on): `{ "version":2, "preset":"mission_control", "large":"objectives", "medium":["pc_loadout"], "small":["up_next", null, null, null]  (exactly 4; null = hidden), "xp_bar":true, "module_cfg":{ "<id>":{…} } }`. Unknown/removed ids → slot falls back to the default module; v1 files: keep large/medium, take the first 4 smalls, pad with defaults; bad file → default + toast, file backed up `.bak`.
+
+## Status (Nov 2026)
+Every module draws a real tile at every size it offers, in the desktop app and in the new app (also on a paired phone or browser, where a PC-only tile says so). Two tests hold that: `every_module_paints_inside_its_tile_at_every_size` (desktop, wide and narrow windows, no "soon", no line past the tile's sides) and `every_catalog_module_gets_a_real_tile` (new app). Edit Home saves the same `home_layout.json` from both apps. Where the shipped data differs from the table above:
+- **Frame Rate:** counts frames from the OS (Windows present events, Linux display flips), never from inside a game.
+- **Squad:** how many Steam friends are saved on this PC, and a tap opens Steam's own friends list. It never guesses who is online.
+- **Achievements, Deals, Patch Notes:** the cards their opt-in Pulse sources posted (Steam achievements, the Steam wishlist, the game companion). The switches are in the desktop app's Pulse settings.
+- **Tonight:** the next 12 hours of automations that are on and scheduled, not a calendar connector.
+- **Speeds and Stream Check:** read the internet log; Turn on switches it on from the tile.
 
 ## Dev plan
 1. **Module trait + registry** (`app/home/modules/mod.rs`): `trait HomeModule { fn id(&self)->&'static str; fn name(); fn category()->Category; fn sizes()->&'static [Size]; fn data_status()->DataStatus; fn ui(&mut self, ui:&mut egui::Ui, size:Size, ctx:&HomeCtx)->ModuleResponse; fn empty_state(); }` + `inventory`/static `REGISTRY: &[fn()->Box<dyn HomeModule>]`. Adding a module = one file + one registry line. `ModuleResponse` returns actions (OpenChat(msg), Nav(page), RunPlaybook, Approve) so modules never mutate app state directly.

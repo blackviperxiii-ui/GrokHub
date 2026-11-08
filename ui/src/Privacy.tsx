@@ -1,15 +1,24 @@
 import { useEffect, useState } from "react";
-import { getPrivacy, openDataFolder, setOfflineOnly, type PrivacyPage } from "./api";
+import {
+  changeFilesFolder,
+  getPrivacy,
+  openDataFolder,
+  openFilesFolder,
+  setOfflineOnly,
+  type PrivacyPage,
+} from "./api";
 import { PRODUCT_NAME } from "./brand";
 import { Toggle } from "./Toggle";
 
 export const OFFLINE_NOTE = `${PRODUCT_NAME} stays off the internet. Chat uses Local AI if it's set up; web search, cloud models and online connectors pause.`;
+export const FILES_NOTE =
+  "Chats you export, and the cabin's diagnostics, recordings, images and reports, go here.";
 export const OFFLINE_NOT_READY =
   "No local model is ready, and nothing can be downloaded while Offline only is on.";
 
 /** Settings → Privacy & data: Offline only (the same offline.toml the cabin
- * reads), what left this computer this week, the data folder and whether
- * memory is sealed. It reads again whenever the window gets focus, so a flip
+ * reads), what left this computer this week, where your files go (shared
+ * with the cabin), the data folder and whether memory is sealed. It reads again whenever the window gets focus, so a flip
  * in the cabin shows here. `readOnly` is the web app's view. */
 export function Privacy({ readOnly = false }: { readOnly?: boolean }) {
   const [page, setPage] = useState<PrivacyPage | null>(null);
@@ -43,9 +52,20 @@ export function Privacy({ readOnly = false }: { readOnly?: boolean }) {
     void offline(on);
   }
 
-  async function openFolder() {
+  async function openFolder(open: () => Promise<void> = openDataFolder) {
     try {
-      await openDataFolder();
+      await open();
+    } catch (err) {
+      setNote(String(err));
+    }
+  }
+
+  async function changeFiles() {
+    const before = page?.filesFolder;
+    try {
+      const next = await changeFilesFolder();
+      setPage(next);
+      if (next.filesFolder !== before) setNote("Your files go to the new folder from now on.");
     } catch (err) {
       setNote(String(err));
     }
@@ -102,6 +122,21 @@ export function Privacy({ readOnly = false }: { readOnly?: boolean }) {
         Encrypted memory
       </Toggle>
       <p className="note">{page.encryptedNote}</p>
+      <h2>Your files</h2>
+      <p className="note">
+        <code>{page.filesFolder}</code>
+      </p>
+      <p className="note">{FILES_NOTE}</p>
+      {page.canOpenFolder && (
+        <div className="card-buttons">
+          <button type="button" className="quiet" onClick={() => void openFolder(openFilesFolder)}>
+            Open
+          </button>
+          <button type="button" className="quiet" onClick={() => void changeFiles()}>
+            Change…
+          </button>
+        </div>
+      )}
       <p className="note">
         Your data lives in <code>{page.dataFolder}</code>.
       </p>

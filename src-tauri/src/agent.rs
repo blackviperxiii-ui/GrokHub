@@ -31,7 +31,8 @@ pub fn shell_gate(mode: PermMode, desktop: bool, session: SessionMode) -> Gate {
     }
 }
 
-/// The composer's Chat / Plan / btw chip (the cabin's session modes).
+/// How one message runs. The app picks Chat or Plan for each message
+/// (`turns::pick_mode`); btw is a side answer's read-only run.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SessionMode {
@@ -44,25 +45,40 @@ pub enum SessionMode {
     Btw,
 }
 
+impl SessionMode {
+    /// The name the page and the saved follow-ups use.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Chat => "chat",
+            Self::Plan => "plan",
+            Self::Btw => "btw",
+        }
+    }
+}
+
 /// The system prompt the cabin's native chat uses, with the desktop line
 /// only while desktop control is on. `voice` is the personality's block
 /// (`crate::personality::voice`). The default voice carries its values rules.
 pub fn system_prompt(workspace: &std::path::Path, desktop: bool, voice: &str) -> String {
-    system_prompt_for(workspace, desktop, voice, "")
+    system_prompt_for(workspace, desktop, voice, "", false)
 }
 
+/// `chips` adds the rule that ends each reply with its chips block
+/// (`grokhub_core::CHIP_TRAILER_RULE`) to the cached rules, as the cabin does.
 pub fn system_prompt_for(
     workspace: &std::path::Path,
     desktop: bool,
     voice: &str,
     conversation_id: &str,
+    chips: bool,
 ) -> String {
     let volatile = volatile_tail(voice, &grokhub_agent::perm::config_dir(), conversation_id);
-    grokhub_agent::system_prompt_parts(
-        &grokhub_core::cabin_rules::cabin_static_rules(desktop),
-        &volatile,
-        workspace,
-    )
+    let mut rules = grokhub_core::cabin_rules::cabin_static_rules(desktop);
+    if chips {
+        rules.push_str("\n\n");
+        rules.push_str(grokhub_core::CHIP_TRAILER_RULE);
+    }
+    grokhub_agent::system_prompt_parts(&rules, &volatile, workspace)
 }
 
 /// Voice, then the capped SOUL and USER blocks, then open intentions, then the
@@ -139,7 +155,13 @@ pub enum UiEvent {
     /// One-tap follow-ups for the reply that just ended; sent only when one
     /// names a real action (grokhub_core::chips::reply_suggestions).
     Suggestions {
-        items: Vec<Suggestion>,
+        items: Vec<crate::chips::Chip>,
+    },
+    /// A game goal the reply noticed, to Track or leave with Not now. Sent
+    /// once per goal per chat, before `Done`.
+    Goal {
+        id: String,
+        title: String,
     },
     /// The plan Grok wrote, before it asks to leave plan mode.
     Plan {
@@ -162,22 +184,9 @@ pub enum UiEvent {
     },
 }
 
-/// A follow-up the user can send with one tap: `prompt` goes in as the next message.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct Suggestion {
-    pub label: String,
-    pub prompt: String,
-}
-
-/// The suggestions card for a finished reply, if this turn earns one.
-pub fn suggestions_for(said: &str, reply: &str, failed: bool) -> Option<UiEvent> {
-    let items: Vec<Suggestion> = grokhub_core::chips::reply_suggestions(said, reply, failed)
-        .into_iter()
-        .map(|chip| Suggestion {
-            label: chip.label,
-            prompt: chip.value,
-        })
-        .collect();
+/// The follow-ups card for a finished reply, if this turn earns one.
+pub fn suggestions_for(ups: &crate::chips::FollowUps) -> Option<UiEvent> {
+    let items = crate::chips::wire_follow_ups(ups);
     (!items.is_empty()).then_some(UiEvent::Suggestions { items })
 }
 
@@ -250,6 +259,12 @@ pub struct Route {
     pub session: SessionMode,
     /// Settings → Personality's block for the system prompt, or empty.
     pub voice: String,
+    /// The chat's voice settings for the agent's per-turn voice flow (dynamic
+    /// chat, quips, heat), registered under the chat's id before the turn.
+    /// `None` leaves whatever the chat had.
+    pub voice_session: Option<grokhub_agent::voice_session::VoiceConfig>,
+    /// Settings → Behavior → Suggestions: follow-ups after each reply.
+    pub suggestions: bool,
 }
 
 struct Job {
@@ -281,6 +296,8 @@ pub struct Session {
     permits: Sender<PermitNote>,
     elicits: Sender<ElicitNote>,
     cancel: CancelToken,
+    /// Words for the running reply, read at its next step (Steer now).
+    steer: SteerQueue,
     /// A prompt is running.
     busy: AtomicBool,
     /// Halt stopped the running prompt; its turn ends as `halted`.
@@ -294,9 +311,26 @@ impl Session {
         Self::spawn_with(conversation_id, config_dir, native_desktop)
     }
 
+    /// A side answer beside `parent`'s running reply: it starts from the
+    /// parent's saved turns and works under its own `side_id`, so the
+    /// parent's worker, history and inboxes are never touched.
+    pub fn spawn_side(side_id: &str, parent_id: &str, config_dir: PathBuf) -> Self {
+        Self::spawn_from(side_id, parent_id, config_dir, native_desktop)
+    }
+
     /// [`Session::spawn`] with the desktop the worker builds; tests pass a fake.
     pub fn spawn_with(
         conversation_id: &str,
+        config_dir: PathBuf,
+        desktop: fn() -> Box<dyn DesktopOps>,
+    ) -> Self {
+        Self::spawn_from(conversation_id, conversation_id, config_dir, desktop)
+    }
+
+    /// A worker for `conversation_id` that resumes from `resume_id`'s saved turns.
+    pub fn spawn_from(
+        conversation_id: &str,
+        resume_id: &str,
         config_dir: PathBuf,
         desktop: fn() -> Box<dyn DesktopOps>,
     ) -> Self {
@@ -308,11 +342,14 @@ impl Session {
         let cancel = CancelToken::new();
         let worker_cancel = cancel.clone();
         let halted = Arc::new(AtomicBool::new(false));
+        let steer = SteerQueue::new();
         let worker = Worker {
             id: conversation_id.to_string(),
+            resume: resume_id.to_string(),
             config_dir,
             desktop,
             cancel: worker_cancel,
+            steer: steer.clone(),
             halted: Arc::clone(&halted),
         };
         std::thread::spawn(move || serve(worker, inbox, rx));
@@ -322,6 +359,7 @@ impl Session {
             permits,
             elicits,
             cancel,
+            steer,
             busy: AtomicBool::new(false),
             halted,
         }
@@ -380,6 +418,17 @@ impl Session {
             action: action.to_string(),
             content,
         });
+    }
+
+    /// Steer now: hands `text` to the running reply, which reads it at its
+    /// next step (after the tool that is running, or before it ends). False,
+    /// and nothing kept, when no reply runs or the text is empty.
+    pub fn steer(&self, text: &str) -> bool {
+        if text.trim().is_empty() || !self.busy.load(Ordering::SeqCst) {
+            return false;
+        }
+        self.steer.push(text.trim());
+        true
     }
 
     /// Stops the running prompt. A tool that waits for an answer is cancelled
@@ -454,21 +503,66 @@ fn native_desktop() -> Box<dyn DesktopOps> {
     Box::new(NoDesktop)
 }
 
+/// A finished turn, for its follow-ups.
+struct FollowUpTurn<'a> {
+    said: &'a str,
+    reply: &'a str,
+    block: &'a str,
+    failed: bool,
+    mode: SessionMode,
+}
+
+/// The reply's chips, saved with the chat (the turn was recorded before
+/// Done, so its count is the chat's now), and the chips block reviewed
+/// against how its chips did.
+fn follow_ups(
+    config_dir: &std::path::Path,
+    conversation_id: &str,
+    turn: FollowUpTurn<'_>,
+) -> Option<crate::chips::FollowUps> {
+    let now = grokhub_core::now_ms();
+    crate::chips::review_trailer(config_dir, now);
+    let chips = crate::chips::reply_chips(turn.said, turn.reply, turn.block, turn.failed);
+    if chips.is_empty() {
+        return None;
+    }
+    let at = grokhub_agent::load_session(conversation_id)
+        .map(|info| crate::chips::user_turns(&crate::chips::chat_pairs(&info)))
+        .ok();
+    let ups = crate::chips::FollowUps {
+        chips,
+        at: at.unwrap_or(0),
+        mode: turn.mode.as_str().to_string(),
+        saved_ms: now,
+    };
+    // A chat with no saved file (scratch) still shows them, but keeps none.
+    if at.is_some() {
+        let _ = crate::chips::save_follow_ups(config_dir, conversation_id, Some(ups.clone()));
+    }
+    Some(ups)
+}
+
 /// What a chat's worker thread owns besides its queues.
 struct Worker {
     id: String,
+    /// Whose saved turns the engine starts from: the chat's own, or the
+    /// parent's for a side answer.
+    resume: String,
     config_dir: PathBuf,
     desktop: fn() -> Box<dyn DesktopOps>,
     cancel: CancelToken,
+    steer: SteerQueue,
     halted: Arc<AtomicBool>,
 }
 
 fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
     let Worker {
         id: conversation_id,
+        resume,
         config_dir,
         desktop,
         cancel,
+        steer,
         halted,
     } = worker;
     let _config = grokhub_agent::perm::ConfigGuard::set(&config_dir);
@@ -496,11 +590,20 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                 continue;
             }
         };
+        // The chips block stays in the rules on btw turns too, so the cached
+        // prompt doesn't change with the mode; a btw reply's chips are dropped.
+        let chips_on =
+            crate::chips::trailer_on(&config_dir, route.suggestions, grokhub_core::now_ms());
+        // The agent steps the voice per turn by this chat's id once it is registered.
+        if let Some(voice) = route.voice_session {
+            grokhub_agent::voice_session::register(&conversation_id, voice);
+        }
         let system = system_prompt_for(
             &route.workspace,
             route.desktop,
             &route.voice,
             &conversation_id,
+            chips_on,
         );
         let gate = shell_gate(route.mode, route.desktop, route.session);
         // Plan holds the turn read-only until its plan is approved; Chat and
@@ -528,7 +631,7 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                     auth_kind: route.auth_kind,
                     max_turns: 0,
                     cancel: cancel.clone(),
-                    steer: SteerQueue::new(),
+                    steer: steer.clone(),
                     halt: Box::new(NeverHalted),
                     gate,
                     desktop: Some(desktop()),
@@ -536,7 +639,7 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                 }));
                 // A chat saved earlier (opened from History, or the last chat
                 // after a restart) goes on from its saved turns, as the cabin's does.
-                if let Ok(info) = grokhub_agent::load_session(&conversation_id) {
+                if let Ok(info) = grokhub_agent::load_session(&resume) {
                     engine.resume(info.input(), info.usage);
                 }
                 engine
@@ -553,6 +656,12 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
         let mut stop = String::new();
         let mut error = None;
         let mut reply = String::new();
+        // The reply's chips block is held back from the page and the saved
+        // chat's view (`history::lines` strips it there).
+        let mut trailer = grokhub_core::ChipTrailerFilter::default();
+        // Game goal lines are read at the end and never shown.
+        let mut markers = grokhub_core::objectives::MarkerFilter::default();
+        let mut raw = String::new();
         let ran = engine.prompt(&message.text, message.image.as_deref(), &mut |event| {
             let Some(mut ui) = ui_event(event) else {
                 return;
@@ -563,15 +672,57 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                     *s = HALTED.into();
                 }
             }
-            match &ui {
-                UiEvent::Text { text } => reply.push_str(text),
+            match &mut ui {
+                UiEvent::Text { text } => {
+                    *text = trailer.feed(text);
+                    raw.push_str(text);
+                    *text = markers.feed(text);
+                    if text.is_empty() {
+                        return;
+                    }
+                    reply.push_str(text);
+                }
                 UiEvent::Done { stop: s } => {
                     stop = s.clone();
-                    // Btw asks only look, so they get no follow-ups.
-                    if route.session != SessionMode::Btw && s != "cancelled" && s != HALTED {
+                    let (tail, block) = trailer.finish();
+                    raw.push_str(&tail);
+                    let mut tail = markers.feed(&tail);
+                    tail.push_str(&markers.finish());
+                    if !tail.is_empty() {
+                        reply.push_str(&tail);
+                        emit(UiEvent::Text { text: tail });
+                    }
+                    let btw = route.session == SessionMode::Btw;
+                    if route.suggestions && crate::chips::follow_ups_wanted(btw, s) {
                         let failed = s == "error" || error.is_some();
-                        if let Some(card) = suggestions_for(&text, &reply, failed) {
+                        let ups = follow_ups(
+                            &config_dir,
+                            &conversation_id,
+                            FollowUpTurn {
+                                said: &text,
+                                reply: &reply,
+                                block: &block,
+                                failed,
+                                mode: route.session,
+                            },
+                        );
+                        if let Some(card) = ups.as_ref().and_then(suggestions_for) {
                             emit(card);
+                        }
+                    }
+                    if !btw && s != "error" && error.is_none() {
+                        let raw = std::mem::take(&mut raw);
+                        let ask = crate::goals::read_chat_turn(
+                            &config_dir,
+                            &conversation_id,
+                            &text,
+                            &raw,
+                        );
+                        if let Some(card) = ask {
+                            emit(UiEvent::Goal {
+                                id: card.id,
+                                title: card.title,
+                            });
                         }
                     }
                 }
@@ -753,6 +904,8 @@ mod tests {
             desktop,
             session: chip,
             voice: String::new(),
+            voice_session: None,
+            suggestions: true,
         };
         let runner = Arc::clone(&session);
         let result = std::thread::spawn(move || {
@@ -1209,6 +1362,74 @@ mod tests {
     }
 
     #[test]
+    fn the_safety_closer_appears_once_with_a_real_voice() {
+        let cfg = temp_dir("closer-once");
+        let _guard = grokhub_agent::perm::ConfigGuard::set(&cfg);
+        let ws = std::path::Path::new("/tmp");
+        let closer = grokhub_core::talk::VOLATILE_SAFETY_CLOSER;
+        for stored in ["", "pirate"] {
+            let settings = crate::settings::ShellSettings {
+                personality: stored.into(),
+                ..crate::settings::ShellSettings::default()
+            };
+            let voice = crate::personality::voice(&cfg, &settings);
+            assert!(!voice.is_empty());
+            let prompt = system_prompt(ws, false, &voice);
+            assert_eq!(prompt.matches(closer).count(), 1, "{prompt}");
+            assert!(prompt.trim_end().ends_with(closer), "{prompt}");
+        }
+    }
+
+    #[test]
+    fn steer_now_reaches_only_a_running_reply() {
+        let config = temp_dir("steer-idle");
+        let session = Session::spawn_with("shell-steer-test", config, fake_desktop);
+        // No reply runs: nothing is kept for a later one.
+        assert!(!session.steer("then deploy"));
+        assert!(session.steer.drain().is_empty());
+        // A reply runs: the words wait for its next step, trimmed.
+        session.busy.store(true, Ordering::SeqCst);
+        assert!(!session.steer("   "));
+        assert!(session.steer("  then deploy "));
+        assert_eq!(session.steer.drain(), vec!["then deploy".to_string()]);
+        session.busy.store(false, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn a_chat_turn_registers_its_voice_settings() {
+        let (workspace, config) = (temp_dir("voice-reg-ws"), temp_dir("voice-reg"));
+        let id = "shell-voice-register-test";
+        grokhub_agent::voice_session::forget(id);
+        let client = Arc::new(Answers {
+            requests: Mutex::new(Vec::new()),
+        });
+        let session = Session::spawn_with(id, config.clone(), fake_desktop);
+        let settings = crate::settings::ShellSettings {
+            personality: "pirate".into(),
+            ..crate::settings::ShellSettings::default()
+        };
+        let route = Route {
+            client: Arc::clone(&client) as Arc<dyn ModelClient + Send + Sync>,
+            auth_kind: AuthKind::ApiKey,
+            workspace,
+            mode: PermMode::Ask,
+            desktop: false,
+            session: SessionMode::Chat,
+            voice: crate::personality::voice(&config, &settings),
+            voice_session: Some(crate::personality::voice_config(&config, &settings, 0)),
+            suggestions: true,
+        };
+        assert_eq!(grokhub_agent::voice_session::active_voice(id), None);
+        let result = session.prompt("hello", Vec::new(), route, Box::new(|_| {}));
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(
+            grokhub_agent::voice_session::active_voice(id).as_deref(),
+            Some("pirate")
+        );
+        grokhub_agent::voice_session::forget(id);
+    }
+
+    #[test]
     fn soul_and_user_ride_before_the_safety_closer() {
         let cfg = temp_dir("soul-cfg");
         let _guard = grokhub_agent::perm::ConfigGuard::set(&cfg);
@@ -1449,6 +1670,8 @@ mod tests {
             desktop: false,
             session: SessionMode::Chat,
             voice: String::new(),
+            voice_session: None,
+            suggestions: true,
         };
         let result = session.prompt(text, files, route, Box::new(|_| {}));
         let requests = client.requests.lock().expect("requests");

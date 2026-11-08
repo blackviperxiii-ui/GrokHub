@@ -152,9 +152,16 @@ pub fn recording_title(secs: u64, note: &str) -> String {
     }
 }
 
-/// `~/GrokHub/recordings/<stamp>`: visible, local, one folder per recording.
-pub fn recording_dir(home: &Path, stamp: &str) -> PathBuf {
-    home.join("GrokHub").join("recordings").join(stamp)
+/// `<recordings>/<stamp>`: visible, local, one folder per recording, under
+/// the Recordings folder in your files.
+pub fn recording_dir(recordings: &Path, stamp: &str) -> PathBuf {
+    recordings.join(stamp)
+}
+
+/// `~/GrokHub/recordings`, where recordings went before your files had a
+/// Recordings folder. Still accepted for Delete.
+pub fn old_recordings_root(home: &Path) -> PathBuf {
+    home.join("GrokHub").join("recordings")
 }
 
 /// `frame-001.png` for the first still.
@@ -162,10 +169,11 @@ pub fn frame_name(index: usize, ext: &str) -> String {
     format!("frame-{:03}.{ext}", index + 1)
 }
 
-/// Only a folder directly under `~/GrokHub/recordings` may be deleted.
-pub fn is_recording_dir(home: &Path, dir: &Path) -> bool {
-    let root = home.join("GrokHub").join("recordings");
-    dir.parent() == Some(root.as_path())
+/// Only a folder directly under one of `roots` (the Recordings folder, the
+/// old `~/GrokHub/recordings`) may be deleted.
+pub fn is_recording_dir(roots: &[PathBuf], dir: &Path) -> bool {
+    dir.parent()
+        .is_some_and(|parent| roots.iter().any(|r| r.as_path() == parent))
         && dir
             .file_name()
             .and_then(|n| n.to_str())
@@ -360,26 +368,27 @@ mod tests {
     #[test]
     fn recordings_live_in_a_visible_folder_and_only_those_folders_can_be_deleted() {
         let home = Path::new("/home/ada");
-        let dir = recording_dir(home, "2026-10-09-104200");
+        let recordings = PathBuf::from("/home/ada/Documents/Loadout/Recordings");
+        let dir = recording_dir(&recordings, "2026-10-09-104200");
         assert_eq!(
             dir,
-            PathBuf::from("/home/ada/GrokHub/recordings/2026-10-09-104200")
+            PathBuf::from("/home/ada/Documents/Loadout/Recordings/2026-10-09-104200")
         );
         assert_eq!(frame_name(0, "png"), "frame-001.png");
-        assert!(is_recording_dir(home, &dir));
-        assert!(!is_recording_dir(
-            home,
-            Path::new("/home/ada/GrokHub/recordings")
-        ));
-        assert!(!is_recording_dir(home, Path::new("/home/ada/GrokHub")));
-        assert!(!is_recording_dir(
-            home,
-            Path::new("/home/ada/GrokHub/recordings/a/b")
-        ));
-        assert!(!is_recording_dir(
-            home,
-            Path::new("/home/ada/GrokHub/recordings/..")
-        ));
+        let old = old_recordings_root(home);
+        assert_eq!(old, PathBuf::from("/home/ada/GrokHub/recordings"));
+        let roots = [recordings.clone(), old.clone()];
+        assert!(is_recording_dir(&roots, &dir));
+        assert!(
+            is_recording_dir(&roots, &old.join("2026-10-01-1")),
+            "an older recording can still be deleted"
+        );
+        assert!(!is_recording_dir(&roots, &recordings));
+        assert!(!is_recording_dir(&roots, &old));
+        assert!(!is_recording_dir(&roots, Path::new("/home/ada/GrokHub")));
+        assert!(!is_recording_dir(&roots, &old.join("a/b")));
+        assert!(!is_recording_dir(&roots, &old.join("..")));
+        assert!(!is_recording_dir(&[], &dir), "no roots, nothing deletes");
     }
 
     #[test]

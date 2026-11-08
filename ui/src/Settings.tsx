@@ -14,6 +14,7 @@ import {
 } from "./api";
 import { inShell } from "./transport";
 import { Appearance } from "./Appearance";
+import { AutoSetupPage } from "./AutoSetup";
 import { Background } from "./Background";
 import { Behavior } from "./Behavior";
 import { Defaults } from "./Defaults";
@@ -260,13 +261,18 @@ export function Settings({
             )}
             {section === "behavior" && <WorkboardTidy />}
             {section === "appearance" && (
-              <Appearance theme={loaded.theme} onSaved={(theme) => setSettings({ ...loaded, theme })} />
+              <Appearance
+                theme={loaded.theme}
+                textSize={Boolean(caps.autoSetup)}
+                onSaved={(theme) => setSettings({ ...loaded, theme })}
+              />
             )}
             {section === "personality" && <Personality />}
             {section === "playbooks" && <Playbooks />}
             {section === "permissions" && <Permissions />}
             {section === "privacy" && <Privacy />}
             {section === "background" && <Background />}
+            {section === "autoSetup" && <AutoSetupPage />}
             {section === "pulse" && caps.pulse && <Interests />}
             {section === "localAi" && caps.localAi && <LocalAi />}
             {section === "webAccess" && caps.webAccess && <WebAccess />}

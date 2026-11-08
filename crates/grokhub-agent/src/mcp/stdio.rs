@@ -31,6 +31,8 @@ pub(crate) struct StdioConn {
     next_id: u64,
     /// The stateless revision sent in every request's `_meta`; `None` after `initialize`.
     stateless: Option<&'static str>,
+    /// How long the last `tools/list` may be reused (`ttlMs`); `None` keeps it.
+    pub(crate) list_ttl: Option<Duration>,
     #[cfg(unix)]
     pgid: i32,
     #[cfg(windows)]
@@ -105,17 +107,18 @@ impl StdioConn {
         &mut self,
         name: &str,
         args: &Value,
+        key: Option<&str>,
         timeout: Duration,
     ) -> Result<(String, bool), String> {
         if self.stateless.is_some() {
             let server = self.server.clone();
             return rpc::call_tool(&server, name, args, &mut |params| {
-                self.roundtrip("tools/call", params, timeout)
+                self.roundtrip("tools/call", rpc::with_key(params, key), timeout)
             });
         }
         let result = self.roundtrip(
             "tools/call",
-            serde_json::json!({"name": name, "arguments": args}),
+            rpc::with_key(serde_json::json!({"name": name, "arguments": args}), key),
             timeout,
         )?;
         Ok(rpc::tool_output(&result))
@@ -271,9 +274,21 @@ impl Drop for StdioConn {
     }
 }
 
+/// List the server's tools again, after its `ttlMs` ran out.
+pub(crate) fn relist(conn: &mut StdioConn, timeout: Duration) -> Result<Vec<RawTool>, String> {
+    list_tools(conn, timeout)
+}
+
 fn list_tools(conn: &mut StdioConn, timeout: Duration) -> Result<Vec<RawTool>, String> {
+    let mut all = list_pages(conn, timeout)?;
+    rpc::sort_tools(&mut all);
+    Ok(all)
+}
+
+fn list_pages(conn: &mut StdioConn, timeout: Duration) -> Result<Vec<RawTool>, String> {
     let mut all = Vec::new();
     let mut cursor: Option<String> = None;
+    conn.list_ttl = None;
     for _ in 0..100 {
         let mut params = serde_json::json!({});
         if let Some(token) = &cursor {
@@ -282,6 +297,9 @@ fn list_tools(conn: &mut StdioConn, timeout: Duration) -> Result<Vec<RawTool>, S
         let mut result = conn.roundtrip("tools/list", params, timeout)?;
         if conn.stateless.is_some() {
             result = rpc::complete(&conn.server, result)?;
+        }
+        if cursor.is_none() {
+            conn.list_ttl = rpc::list_ttl(&result);
         }
         let (page, next) = rpc::parse_tools(&result);
         all.extend(page);
@@ -309,7 +327,10 @@ fn spawn(
         .current_dir(cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        // Round 3 item 38: `npx` and `uvx` servers skip brand-new releases.
+        // The server's own env below wins.
+        .envs(crate::package_age::env());
     for (key, value) in env {
         cmd.env(key, value);
     }
@@ -353,6 +374,7 @@ fn spawn(
         reader: Some(reader),
         next_id: 0,
         stateless: None,
+        list_ttl: None,
         #[cfg(unix)]
         pgid,
         #[cfg(windows)]
@@ -382,18 +404,36 @@ fn read_stdout(stdout: std::process::ChildStdout, tx: mpsc::Sender<IoMsg>) {
     }
 }
 
-fn read_message(
-    reader: &mut BufReader<std::process::ChildStdout>,
-) -> Result<Option<Value>, String> {
+/// The largest message a server may send: one line, or one framed body.
+const MESSAGE_CAP: usize = 8 * 1024 * 1024;
+
+/// Read one line, never holding more than `cap` bytes of it: a server that
+/// streams without a newline fails here instead of growing memory without end.
+fn read_line_capped(
+    reader: &mut impl BufRead,
+    line: &mut String,
+    cap: usize,
+) -> Result<usize, String> {
+    use std::io::Read;
+    let limit = u64::try_from(cap).unwrap_or(u64::MAX).saturating_add(1);
+    let n = reader
+        .by_ref()
+        .take(limit)
+        .read_line(line)
+        .map_err(|err| err.to_string())?;
+    if line.len() > cap {
+        return Err("message too large".into());
+    }
+    Ok(n)
+}
+
+fn read_message(reader: &mut impl BufRead) -> Result<Option<Value>, String> {
     let mut line = String::new();
     loop {
         line.clear();
-        let n = reader.read_line(&mut line).map_err(|err| err.to_string())?;
+        let n = read_line_capped(reader, &mut line, MESSAGE_CAP)?;
         if n == 0 {
             return Ok(None);
-        }
-        if line.len() > 8 * 1024 * 1024 {
-            return Err("message too large".into());
         }
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -401,12 +441,12 @@ fn read_message(
         }
         if let Some(rest) = trimmed.strip_prefix("Content-Length:") {
             let len: usize = rest.trim().parse().map_err(|_| "bad framing".to_string())?;
-            if len > 8 * 1024 * 1024 {
+            if len > MESSAGE_CAP {
                 return Err("message too large".into());
             }
             loop {
                 line.clear();
-                let n = reader.read_line(&mut line).map_err(|err| err.to_string())?;
+                let n = read_line_capped(reader, &mut line, MESSAGE_CAP)?;
                 if n == 0 {
                     return Ok(None);
                 }
@@ -415,7 +455,6 @@ fn read_message(
                 }
             }
             let mut buf = vec![0u8; len];
-            use std::io::Read;
             reader.read_exact(&mut buf).map_err(|err| err.to_string())?;
             let text = String::from_utf8_lossy(&buf);
             return serde_json::from_str(&text)
@@ -431,10 +470,17 @@ fn read_message(
 }
 
 fn drain_stderr(pipe: std::process::ChildStderr) {
-    let mut reader = BufReader::new(pipe);
-    let mut line = String::new();
-    while reader.read_line(&mut line).unwrap_or(0) > 0 {
-        line.clear();
+    use std::io::Read;
+    // Read and drop: a fixed buffer, whatever the server prints.
+    let mut reader = pipe;
+    let mut buf = [0u8; 8192];
+    loop {
+        match reader.read(&mut buf) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => break,
+        }
     }
 }
 
@@ -511,4 +557,29 @@ fn terminate_job(job: usize) {
 pub(crate) fn workspace_or(cwd: Option<PathBuf>, fallback: &Path) -> PathBuf {
     cwd.filter(|path| !path.as_os_str().is_empty())
         .unwrap_or_else(|| fallback.to_path_buf())
+}
+
+#[cfg(test)]
+mod capped_read_tests {
+    use super::*;
+    use std::io::Read;
+
+    #[test]
+    fn a_line_with_no_end_fails_once_it_passes_the_cap() {
+        let endless = std::io::repeat(b'x').take(64 * 1024);
+        let mut reader = std::io::BufReader::new(endless);
+        let mut line = String::new();
+        let got = read_line_capped(&mut reader, &mut line, 1024);
+        assert_eq!(got, Err("message too large".to_string()));
+        assert!(line.len() <= 1025, "held {} bytes", line.len());
+    }
+
+    #[test]
+    fn messages_under_the_cap_still_read() {
+        let text = b"\n{\"jsonrpc\":\"2.0\",\"id\":1}\n";
+        let mut reader = std::io::BufReader::new(&text[..]);
+        let value = read_message(&mut reader).unwrap().unwrap();
+        assert_eq!(value["id"], 1);
+        assert_eq!(read_message(&mut reader).unwrap(), None);
+    }
 }

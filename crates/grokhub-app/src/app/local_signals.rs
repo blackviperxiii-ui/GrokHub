@@ -51,10 +51,16 @@ pub(super) fn start(config_dir: PathBuf) {
             // Launch sizing needs the hardware profile, and the setup wizard
             // only reads it on a first run.
             let home = grokhub_core::paths::user_home().unwrap_or_else(|| PathBuf::from("."));
-            grokhub_agent::route::local_autoconfig::set_profile(
-                super::local_probe::read_profile(&home),
-                config_dir.join("local"),
+            let profile = super::local_probe::read_profile(&home);
+            // The GPU micro-fact: re-checked each launch, retired if it changes.
+            let gpu = grokhub_core::env_facts::gpu_reading(&profile.gpus);
+            grokhub_core::env_facts::observe_machine(
+                &config_dir,
+                grokhub_core::env_facts::Kind::Gpu,
+                gpu.as_deref().map(|g| (g, "hardware probe")),
+                grokhub_core::now_ms(),
             );
+            grokhub_agent::route::local_autoconfig::set_profile(profile, config_dir.join("local"));
             local_gov::set_log_dir(config_dir.join("local"));
             // Every launch plans against the memory free right now.
             grokhub_agent::route::local_autoconfig::set_free_probe(std::sync::Arc::new(|| {
@@ -117,7 +123,29 @@ fn sample_loop(config_dir: &Path) {
         // The idle rule runs here too, so an unused model unloads on time
         // even when nothing asks for it again.
         local_sidecar::tick_idle_unload();
+        // A drafter nobody has timed yet gets its speed test while the
+        // machine sits quiet, so nobody has to press Test speed.
+        if slow {
+            grokhub_agent::route::local_spec::tick_auto_test(
+                config_dir,
+                &quiet(&s, want.is_none()),
+            );
+        }
         std::thread::sleep(Duration::from_millis(g::interval_ms(s.power.as_ref())));
+    }
+}
+
+/// What the unattended draft speed test reads from one sample: `calm` when
+/// the governor wants nothing slowed.
+fn quiet(s: &Signals, calm: bool) -> grokhub_core::local_draft::Quiet {
+    grokhub_core::local_draft::Quiet {
+        calm: calm && local_gov::level() == Level::Normal,
+        on_battery: s.power.as_ref().is_some_and(|p| p.battery && !p.on_ac),
+        game: s.game == Some(true) || s.fullscreen == Some(true),
+        user_idle_secs: s.idle_secs,
+        model_idle_secs: local_sidecar::secs_since_use(),
+        in_flight: local_sidecar::in_flight(),
+        warm_wanted: local::warm_wanted(),
     }
 }
 
@@ -489,12 +517,12 @@ fn own_rss_mb(pid: u32) -> Option<u64> {
     use windows_sys::Win32::System::ProcessStatus::{
         K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
     };
-    use windows_sys::Win32::System::Threading::{
-        OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
-    };
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    // Query-limited access is all K32GetProcessMemoryInfo needs. No VM_READ:
+    // some anti-cheats flag any handle that can read memory.
     // SAFETY: the handle is checked and closed here; the counters struct is sized for the call.
     unsafe {
-        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, 0, pid);
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
         if h.is_null() {
             return None;
         }

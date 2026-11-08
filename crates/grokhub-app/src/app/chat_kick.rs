@@ -1,12 +1,24 @@
 //! Composer send and the native turn kick.
 
 use super::*;
+use grokhub_agent::route::intent::{self, TurnCx, TurnRead, TurnRoute};
 use grokhub_core::{live_send, LiveSend};
+
+/// `/btw <question>` or `/plan <task>`: a one-shot route typed with its words.
+/// A bare `/btw` or `/plan` is still a slash command.
+pub(super) fn typed_route_with_words(text: &str) -> bool {
+    let t = text.trim_start();
+    ["/btw", "/plan", "/side"].iter().any(|cmd| {
+        t.strip_prefix(cmd)
+            .is_some_and(|rest| rest.starts_with(char::is_whitespace) && !rest.trim().is_empty())
+    })
+}
 
 impl Cabin {
     pub(super) fn send_chat(&mut self, text: String) {
         // Alt+Enter or `/queue`: wait for the live reply instead of steering it.
-        let queue_asked = std::mem::take(&mut self.bg.queue_next);
+        let mut queue_asked = std::mem::take(&mut self.bg.queue_next);
+        let forced = self.forced_route.take();
         self.turn_retried = false;
         // A typed turn is never a resume turn: the resume block went once (KB-03).
         self.work_resume.follow = None;
@@ -21,16 +33,63 @@ impl Cabin {
             self.status = "The idea talk is still going".into();
             return;
         }
-        if let Some(slash) = parse_slash(&text) {
-            self.run_slash(slash);
-            return;
+        let typed_route = typed_route_with_words(&text);
+        if !typed_route {
+            if let Some(slash) = parse_slash(&text) {
+                self.run_slash(slash);
+                return;
+            }
         }
-        if unknown_cabin_slash(&text) {
+        if !typed_route && unknown_cabin_slash(&text) {
             self.status = "Unknown command — /help".into();
             return;
         }
-        if self.try_diagnose_intent(&text) {
+        if self.try_diagnose_intent(&text) || self.try_setting_ask(&text) {
             return;
+        }
+        // A bare "continue" after a run stopped early (a provider error left
+        // Do all's next steps waiting) sends the next waiting step, not a
+        // new turn that re-reads the whole chat to guess what was meant.
+        let mut resumed_step = false;
+        if !self.running && is_bare_continue(&text) {
+            if let Some(step) = self.followup_queue.take_next_for(&self.visible_thread_id()) {
+                text = step;
+                resumed_step = true;
+            }
+        }
+        // The app reads what the message is for: a side question, a
+        // correction, stop, or a new job while a reply runs; plan first or
+        // just answer while nothing does. No pill or mode to pick.
+        let running_here = matches!(
+            chat_send_kind(
+                self.chat_job_thread.as_deref(),
+                &self.visible_thread_id(),
+                self.running,
+            ),
+            ChatSendKind::Redirect
+        );
+        if !(resumed_step || queue_asked && running_here) {
+            let read = self.read_turn_for(&text, running_here, forced);
+            text = read.text;
+            if running_here {
+                match read.route {
+                    TurnRoute::Side => {
+                        self.status = match self.start_side_run(text) {
+                            Ok(()) => TurnRoute::Side.ack().into(),
+                            Err(err) => err,
+                        };
+                        return;
+                    }
+                    TurnRoute::Stop => {
+                        self.halt_work(TurnRoute::Stop.ack());
+                        return;
+                    }
+                    TurnRoute::Queue => queue_asked = true,
+                    _ => {}
+                }
+            } else {
+                self.settle_turn_mode(&typed, read.route);
+            }
         }
         self.begin_turn_origin();
         if self.apply_unparsed_native_slash(&text) {
@@ -38,14 +97,6 @@ impl Cabin {
         }
         if let Some(recipe) = grokhub_agent::native_deep_research_prompt(&text) {
             text = recipe;
-        }
-        if btw_queues_without_interrupt(self.session_mode == SessionMode::Ask, self.running) {
-            self.side_ask_queue.push(text);
-            self.status = format!(
-                "btw queued ({}) — main run continues",
-                self.side_ask_queue.len()
-            );
-            return;
         }
         match chat_send_kind(
             self.chat_job_thread.as_deref(),
@@ -62,8 +113,12 @@ impl Cabin {
                         self.background_tasks_open(),
                     ) {
                         LiveSend::Queue => {
-                            self.followup_queue.push(text);
-                            self.status = format!("Queued ({})", self.followup_queue.len());
+                            let here = self.visible_thread_id();
+                            self.followup_queue.push(&here, text);
+                            self.status = match self.followup_queue.count_for(&here) {
+                                1 => TurnRoute::Queue.ack().into(),
+                                n => format!("{} ({n})", TurnRoute::Queue.ack()),
+                            };
                             return;
                         }
                         LiveSend::Steer => {
@@ -82,8 +137,11 @@ impl Cabin {
             ChatSendKind::Fresh => {
                 if self.running && self.chat_job_thread.is_some() {
                     if queue_asked || self.acp.is_some() || self.background_tasks_open() {
-                        self.followup_queue.push(text);
-                        self.status = format!("Queued ({})", self.followup_queue.len());
+                        // It waits for its own chat, the one on screen, not
+                        // for whichever chat is open when the other reply ends.
+                        let here = self.visible_thread_id();
+                        self.followup_queue.push(&here, text);
+                        self.status = format!("Queued ({})", self.followup_queue.count_for(&here));
                         return;
                     }
                     self.halt_in_flight();
@@ -92,6 +150,8 @@ impl Cabin {
             }
         }
         self.touch();
+        // How long the row stood before this step (chip_health).
+        grokhub_core::log_chip_next_action(&mut self.chip_memory, "composer", now_ms());
         // A chip's send was learned on its click; a typed ask teaches its
         // kind (never its words) and leaves no chip to credit.
         self.chip_turn_key = self.chip_send_key.take();
@@ -114,6 +174,11 @@ impl Cabin {
             self.speak_next = false;
             self.status = self.no_agent_note().into();
             // Signed out: hand the typed text back and offer sign-in inline.
+            // A waiting step it would have sent keeps its place.
+            if resumed_step {
+                let here = self.visible_thread_id();
+                self.followup_queue.push_front(&here, text);
+            }
             if self.composer.trim().is_empty() {
                 self.composer = typed;
             }
@@ -151,15 +216,21 @@ impl Cabin {
         } else {
             self.take_bg_results_follow(&notes_thread)
         };
-        let matched = match_skill(&text, &self.skill_list).cloned().map(|sk| {
-            let follow = self.trial_follow(&sk);
-            (
-                sk.name.clone(),
-                self.policy()
-                    .injects_skill()
-                    .then(|| skill_follow_block(&follow)),
-            )
-        });
+        // Unproven dream lessons are never auto-followed (round 3 item 39).
+        let matched = match_skill(&text, &self.skill_list)
+            .filter(|sk| {
+                grokhub_agent::dream_gate::may_follow(&sk.name, &crate::config::config_dir())
+            })
+            .cloned()
+            .map(|sk| {
+                let follow = self.trial_follow(&sk);
+                (
+                    sk.name.clone(),
+                    self.policy()
+                        .injects_skill()
+                        .then(|| skill_follow_block(&follow)),
+                )
+            });
         if let Some((skill_ran, follow)) = matched {
             self.skill_name = skill_ran.clone();
             self.engine_note("skills", &format!("ran:{skill_ran}"), &skill_ran);
@@ -302,7 +373,10 @@ impl Cabin {
         let with_notes = apply_skill_follow(&with_resume, self.card_notes_follow.as_deref());
         let with_bg = apply_skill_follow(&with_notes, self.bg.results_follow.as_deref());
         let with_skill = apply_skill_follow(&with_bg, self.active_skill_follow.as_deref());
-        let last_user = apply_skill_follow(&with_skill, self.idea_talk_brief().as_deref());
+        let with_idea = apply_skill_follow(&with_skill, self.idea_talk_brief().as_deref());
+        // A reply that will be spoken is shaped for the ear.
+        let voice_style = self.speak_next.then_some(grokhub_core::VOICE_TALK_STYLE);
+        let last_user = apply_skill_follow(&with_idea, voice_style);
         if self.grok_p_rx.is_some() {
             return;
         }
@@ -310,7 +384,10 @@ impl Cabin {
         self.kick_skip = false;
         self.eyes_attach = false;
         self.hands_attach = false;
+        // A new turn's reply replaces one still being spoken.
+        self.voice_spoken = None;
         self.stream_buf.clear();
+        self.begin_reply_chips();
         self.thought_buf.clear();
         self.turn_log.clear();
         self.thought_seam = false;
@@ -348,7 +425,9 @@ impl Cabin {
         self.halt_in_flight();
         self.bg.results_follow = results;
         self.active_skill_follow = None;
-        if let Some(sk) = match_skill(&t, &self.skill_list) {
+        if let Some(sk) = match_skill(&t, &self.skill_list).filter(|sk| {
+            grokhub_agent::dream_gate::may_follow(&sk.name, &crate::config::config_dir())
+        }) {
             if self.policy().injects_skill() {
                 self.active_skill_follow = Some(skill_follow_block(sk));
             }
@@ -382,6 +461,133 @@ impl Cabin {
                 self.pending_kick = None;
                 self.kick_model(consume);
             }
+        }
+    }
+}
+
+/// "continue", "go on", "keep going", "try again" and the like, alone.
+pub(super) fn is_bare_continue(text: &str) -> bool {
+    let t: String = text
+        .trim()
+        .trim_end_matches(['.', '!', '?'])
+        .to_ascii_lowercase();
+    matches!(
+        t.as_str(),
+        "continue"
+            | "cont"
+            | "go on"
+            | "go ahead"
+            | "keep going"
+            | "carry on"
+            | "resume"
+            | "try again"
+            | "retry"
+            | "next"
+            | "proceed"
+    )
+}
+
+impl Cabin {
+    /// Read one typed message for its route. A forced route (Tell the main
+    /// task) skips the read; a learned nudge from the user's own corrections
+    /// can flip the rules' answer.
+    fn read_turn_for(&self, text: &str, running: bool, forced: Option<TurnRoute>) -> TurnRead {
+        match forced {
+            Some(route) => TurnRead {
+                route,
+                confidence: 1.0,
+                text: text.to_string(),
+                rules: vec![format!("turn:{}:forced", route.id())],
+            },
+            None => intent::read_turn_learned(
+                &crate::config::config_dir(),
+                text,
+                &TurnCx {
+                    running,
+                    prior: None,
+                },
+            ),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn settle_turn_mode_for_test(&mut self, typed: &str) {
+        let read = self.read_turn_for(typed, false, None);
+        self.settle_turn_mode(typed, read.route);
+    }
+
+    /// Nothing runs: this turn plans first or is answered straight away. A
+    /// plan still waiting on approval keeps planning; "no, just answer" or
+    /// "make a plan first" right after a turn fixes it and teaches the reader.
+    fn settle_turn_mode(&mut self, typed: &str, route: TurnRoute) {
+        let fix = intent::correction_of_previous(typed);
+        if let (Some(fix), Some((prev, was))) = (fix, self.last_turn_read.take()) {
+            if fix != was {
+                intent::note_correction(&crate::config::config_dir(), &prev, false, fix);
+            }
+        }
+        let route = fix.unwrap_or(route);
+        let pending_plan = self.session_mode == SessionMode::Plan && fix != Some(TurnRoute::Chat);
+        let plan = std::mem::take(&mut self.plan_next) || route == TurnRoute::Plan || pending_plan;
+        let mode = if plan {
+            SessionMode::Plan
+        } else {
+            SessionMode::Chat
+        };
+        if mode != self.session_mode {
+            self.set_session_mode(mode);
+        }
+        if plan && !pending_plan {
+            self.status = TurnRoute::Plan.ack().into();
+        }
+        self.last_turn_read = Some((
+            typed.to_string(),
+            if plan {
+                TurnRoute::Plan
+            } else {
+                TurnRoute::Chat
+            },
+        ));
+    }
+}
+
+#[cfg(test)]
+mod continue_tests {
+    use super::*;
+
+    #[test]
+    fn a_bare_continue_is_told_apart_from_a_real_ask() {
+        for t in [
+            "Continue",
+            "continue.",
+            " go on ",
+            "Keep going!",
+            "try again",
+        ] {
+            assert!(is_bare_continue(t), "{t}");
+        }
+        for t in [
+            "continue with the disk cleanup",
+            "next week",
+            "go on then, delete it",
+        ] {
+            assert!(!is_bare_continue(t), "{t}");
+        }
+    }
+
+    #[test]
+    fn continue_never_loses_a_waiting_do_all_step() {
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.followup_queue =
+            Vec::<String>::from(["Fix 2: Clear temp files".into(), "Do all summary".into()]).into();
+        cabin.send_chat("Continue".into());
+        if cabin.signin_card {
+            // Signed out: nothing ran, so the step keeps its place.
+            assert_eq!(cabin.followup_queue.len(), 2);
+            assert_eq!(cabin.followup_queue[0], "Fix 2: Clear temp files");
+        } else {
+            // Signed in: the step went instead of a bare "Continue".
+            assert_eq!(cabin.followup_queue, ["Do all summary"]);
         }
     }
 }

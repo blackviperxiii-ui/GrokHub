@@ -552,7 +552,13 @@ impl Run<'_, '_> {
             ..Observation::default()
         });
         self.write(reply);
-        let (verdict, tokens) = self.check(&fin);
+        // Item 24: a total the claim gets wrong is a reject in code, before
+        // (and instead of) the checker's call.
+        let sums = crate::post_check::arithmetic(text);
+        let (verdict, tokens) = match sums.first() {
+            Some(f) => (Verdict::Reject(f.detail.clone()), None),
+            None => self.check(&fin),
+        };
         let mut check = Span::deny(&self.ep.chat_id, VERIFY_TOOL, "{}", "", "soft");
         check.decision = "allow".into();
         check.tokens = tokens;

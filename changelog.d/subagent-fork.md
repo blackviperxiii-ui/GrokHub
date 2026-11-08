@@ -1,0 +1,1 @@
+- A general subagent now starts as a fork of the chat, with the same history and cache key, so its first request is a cache hit instead of a cold start. Explore subagents still start fresh.

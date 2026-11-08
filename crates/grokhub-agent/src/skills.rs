@@ -214,6 +214,18 @@ fn discover_cache_key(
 }
 
 pub fn discover(workspace: &Path, home: Option<&Path>, plugin_dirs: &[PathBuf]) -> Vec<Skill> {
+    let mut skills = discover_cached(workspace, home, plugin_dirs);
+    // Dream lessons show only once a paired eval passed them as they stand
+    // (round 3 item 39). Checked past the cache so a pass shows at once.
+    skills.retain(|s| {
+        s.source != SkillSource::Cabin
+            || !s.name.eq_ignore_ascii_case(crate::dream_gate::LESSON_SKILL)
+            || crate::dream_gate::proven(&s.dir)
+    });
+    skills
+}
+
+fn discover_cached(workspace: &Path, home: Option<&Path>, plugin_dirs: &[PathBuf]) -> Vec<Skill> {
     let key = discover_cache_key(workspace, home, plugin_dirs);
     if let Ok(guard) = DISCOVER_CACHE.lock() {
         if let Some(cache) = guard.as_ref() {

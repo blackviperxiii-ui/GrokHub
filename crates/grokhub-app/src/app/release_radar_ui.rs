@@ -185,12 +185,24 @@ impl Cabin {
         else {
             return true;
         };
+        let had = self.radar_now().reminders.contains_key(&id);
         if self.radar_now().remind(&u) {
             self.save_radar();
             self.status = format!("I'll post again when {} is out ({}).", u.name, u.date_text);
             self.chip_paint_key.clear();
+            if !had {
+                self.set_chip_undo(&chip.label, super::chips::UndoKind::RadarRemind(id));
+            }
         }
         true
+    }
+
+    /// The Undo chip after a remind: the reminder is taken off again.
+    pub(super) fn undo_radar_remind(&mut self, id: u32) {
+        if self.radar_now().reminders.remove(&id).is_some() {
+            self.save_radar();
+            self.status = "Took the reminder back.".into();
+        }
     }
 
     /// Settings → Pulse → Sources: the radar toggle.

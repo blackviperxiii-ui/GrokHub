@@ -112,6 +112,7 @@ pub fn first_frame() {
         &marks,
         &steps,
     );
+    crate::driver_blocklist::refresh_if_due();
     let path = crate::config::config_dir().join("startup.jsonl");
     std::thread::spawn(move || {
         let old = std::fs::read_to_string(&path).unwrap_or_default();

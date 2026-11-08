@@ -1434,6 +1434,22 @@ pub struct GrokUsage {
     /// The previous turn's share when this turn's fell under the cache floor
     /// right after it (a broken prompt prefix). Native engine only.
     pub turn_cache_drop_from: Option<u8>,
+    /// Why the prompt prefix changed before that drop, as the engine's prefix
+    /// guard names it ("trim", "model_switch", ...). Native engine only.
+    pub turn_cache_drop_reason: Option<String>,
+}
+
+/// The plain words for a prefix guard reason, beside a cache drop.
+fn drop_cause(reason: &str) -> Option<&'static str> {
+    Some(match reason {
+        "trim" => "old tool output was trimmed",
+        "model_switch" => "the model changed",
+        "effort_switch" => "the thinking level changed",
+        "tools_appended" => "more tools were loaded",
+        "compaction" => "the chat was compacted",
+        "unexpected" => "the prompt was rewritten",
+        _ => return None,
+    })
 }
 
 /// Cached input as a whole percent of input. No input is 0%, never NaN.
@@ -1450,7 +1466,10 @@ impl GrokUsage {
     pub fn cache_note(&self) -> Option<String> {
         let pct = self.turn_cache_pct?;
         Some(match self.turn_cache_drop_from {
-            Some(prev) => format!("cache {pct}%, down from {prev}%"),
+            Some(prev) => match self.turn_cache_drop_reason.as_deref().and_then(drop_cause) {
+                Some(cause) => format!("cache {pct}%, down from {prev}%: {cause}"),
+                None => format!("cache {pct}%, down from {prev}%"),
+            },
             None => format!("cache {pct}%"),
         })
     }
@@ -1510,6 +1529,7 @@ impl GrokUsage {
         if other.turn_cache_pct.is_some() {
             self.turn_cache_pct = other.turn_cache_pct;
             self.turn_cache_drop_from = other.turn_cache_drop_from;
+            self.turn_cache_drop_reason = other.turn_cache_drop_reason.clone();
         }
         if other.total_tokens > 0 {
             self.total_tokens = other.total_tokens;
@@ -1737,6 +1757,7 @@ pub fn parse_usage(v: &Value) -> GrokUsage {
         // The CLI reports cache reads but no per-turn share.
         turn_cache_pct: None,
         turn_cache_drop_from: None,
+        turn_cache_drop_reason: None,
     };
     if u.num_turns == 0 {
         u.num_turns =
@@ -1868,6 +1889,40 @@ mod tests {
             ..GrokUsage::default()
         });
         assert_eq!(u.cache_note().as_deref(), Some("cache 88%"));
+    }
+
+    #[test]
+    fn a_cache_drop_names_its_cause_in_plain_words() {
+        let mut u = GrokUsage::default();
+        u.merge(&GrokUsage {
+            turn_cache_pct: Some(31),
+            turn_cache_drop_from: Some(92),
+            turn_cache_drop_reason: Some("trim".into()),
+            ..GrokUsage::default()
+        });
+        assert_eq!(
+            u.cache_note().as_deref(),
+            Some("cache 31%, down from 92%: old tool output was trimmed")
+        );
+        for (reason, words) in [
+            ("model_switch", "the model changed"),
+            ("effort_switch", "the thinking level changed"),
+            ("tools_appended", "more tools were loaded"),
+            ("compaction", "the chat was compacted"),
+            ("unexpected", "the prompt was rewritten"),
+        ] {
+            u.turn_cache_drop_reason = Some(reason.into());
+            assert!(u.cache_note().unwrap().ends_with(words), "{reason}");
+        }
+        u.turn_cache_drop_reason = Some("something new".into());
+        assert_eq!(u.cache_note().as_deref(), Some("cache 31%, down from 92%"));
+        // The next turn without a drop clears the cause with the drop.
+        u.merge(&GrokUsage {
+            turn_cache_pct: Some(88),
+            ..GrokUsage::default()
+        });
+        assert_eq!(u.cache_note().as_deref(), Some("cache 88%"));
+        assert_eq!(u.turn_cache_drop_reason, None);
     }
 
     use super::*;

@@ -82,32 +82,31 @@ pub fn settings(config_dir: &Path) -> Settings {
 }
 
 fn parse_file(text: &str, home: Option<&Path>) -> Settings {
-    let mut out = Settings::default();
-    for line in text.lines() {
-        let line = line.split('#').next().unwrap_or("").trim();
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        let key = key.trim().to_ascii_lowercase();
-        let value = value.trim();
-        let off = value.eq_ignore_ascii_case("false");
-        match key.as_str() {
-            "enabled" => out.enabled = !off,
-            "network_guard" => out.network_guard = !off,
-            "auto_allow" => out.auto_allow = !off,
-            "writable" => {
-                let inner = value.trim_start_matches('[').trim_end_matches(']');
-                out.writable = inner
-                    .split(',')
-                    .map(|s| s.trim().trim_matches(['"', '\'']))
-                    .filter(|s| !s.is_empty())
-                    .filter_map(|s| expand_home(s, home))
-                    .collect();
-            }
-            _ => {}
-        }
+    let file = crate::config_file::parse(
+        CONFIG_NAME,
+        text,
+        &["writable", "enabled", "network_guard", "auto_allow"],
+    );
+    let defaults = Settings::default();
+    let writable = file
+        .get("writable")
+        .map(|value| {
+            value
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .split(',')
+                .map(|s| s.trim().trim_matches(['"', '\'']))
+                .filter(|s| !s.is_empty())
+                .filter_map(|s| expand_home(s, home))
+                .collect()
+        })
+        .unwrap_or_default();
+    Settings {
+        enabled: file.flag("enabled", defaults.enabled),
+        network_guard: file.flag("network_guard", defaults.network_guard),
+        auto_allow: file.flag("auto_allow", defaults.auto_allow),
+        writable,
     }
-    out
 }
 
 fn expand_home(raw: &str, home: Option<&Path>) -> Option<PathBuf> {

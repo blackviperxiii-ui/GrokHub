@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::Read as _;
 
 use super::*;
+use grokhub_core::card_chips::{card_chips, remind_later, ChipAct, DayShape};
 use grokhub_core::pulse::{
     self as pc, LedgerEntry, LedgerReason, PulseCategory, PulseType, Ranked,
 };
@@ -142,6 +143,8 @@ pub(super) struct PulseView {
     image_failed: HashSet<String>,
     /// The Fix it sheet a PC health card's main button opened.
     pub fix: Option<super::pulse_fix_ui::FixSheet>,
+    /// Cards whose full report is open under their summary.
+    pub report_open: HashSet<String>,
 }
 
 /// How one Ideas row paints this frame.
@@ -152,6 +155,8 @@ pub(super) struct RowState {
     pub title_hot: bool,
     /// Narrow page: Run shows at rest, Snooze and Dismiss stay in ···.
     pub compact: bool,
+    /// The card's full report is open under its summary.
+    pub report_open: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -164,6 +169,14 @@ pub(super) enum PulseAct {
     Accept(String),
     Wrong(String),
     Open(String),
+    /// Show or hide a card's full report under its summary.
+    Report(String),
+    /// A card's offered fix at this index: into the card's chat.
+    Offer(String, usize),
+    /// Remind me later: hidden until this unix ms.
+    RemindAt(String, u64),
+    /// Ignore for now: off the page, with no "less of this".
+    Ignore(String),
     Like(String),
     Discuss(String),
     Link(String),
@@ -202,20 +215,17 @@ enum Glyph {
     Loop,
     Moon,
     Coin,
-    People,
-    Heart,
-    Bag,
     Star,
     List,
 }
 
 fn category_tint(cat: PulseCategory) -> egui::Color32 {
     match cat {
-        PulseCategory::Financial => egui::Color32::from_rgb(0x3f, 0xb3, 0x7f),
-        PulseCategory::Productivity => egui::Color32::from_rgb(0x4a, 0x90, 0xe2),
-        PulseCategory::Relationships => egui::Color32::from_rgb(0xe4, 0x6f, 0xa1),
-        PulseCategory::Health => egui::Color32::from_rgb(0xf0, 0x6a, 0x4a),
-        PulseCategory::Shopping => egui::Color32::from_rgb(0xe5, 0xa2, 0x3b),
+        PulseCategory::Games => egui::Color32::from_rgb(0x3f, 0xb3, 0x7f),
+        PulseCategory::Pc => egui::Color32::from_rgb(0x4a, 0x90, 0xe2),
+        PulseCategory::Mods => egui::Color32::from_rgb(0xe4, 0x6f, 0xa1),
+        PulseCategory::Deals => egui::Color32::from_rgb(0xe5, 0xa2, 0x3b),
+        PulseCategory::Automations => egui::Color32::from_rgb(0xf0, 0x6a, 0x4a),
         PulseCategory::More => egui::Color32::from_rgb(0x9b, 0x7b, 0xea),
     }
 }
@@ -234,11 +244,11 @@ pub(super) fn type_color(kind: PulseType) -> egui::Color32 {
 
 fn category_glyph(cat: PulseCategory) -> Glyph {
     match cat {
-        PulseCategory::Financial => Glyph::Coin,
-        PulseCategory::Productivity => Glyph::List,
-        PulseCategory::Relationships => Glyph::People,
-        PulseCategory::Health => Glyph::Heart,
-        PulseCategory::Shopping => Glyph::Bag,
+        PulseCategory::Games => Glyph::Play,
+        PulseCategory::Pc => Glyph::Eye,
+        PulseCategory::Mods => Glyph::Spark,
+        PulseCategory::Deals => Glyph::Coin,
+        PulseCategory::Automations => Glyph::Loop,
         PulseCategory::More => Glyph::Star,
     }
 }
@@ -358,45 +368,6 @@ fn paint_glyph(painter: &egui::Painter, rect: egui::Rect, glyph: Glyph, tint: eg
                 );
             }
         }
-        Glyph::People => {
-            for dx in [-0.24, 0.26] {
-                let head = c + egui::vec2(dx * s, -0.20 * s);
-                painter.circle_stroke(head, 0.15 * s, stroke);
-                let body = c + egui::vec2(dx * s, 0.42 * s);
-                painter.add(egui::Shape::line(
-                    ring(body, 0.26 * s, 0.24 * s, std::f32::consts::PI, tau, 12),
-                    stroke,
-                ));
-            }
-        }
-        Glyph::Heart => {
-            painter.circle_filled(c + egui::vec2(-0.20 * s, -0.12 * s), 0.22 * s, tint);
-            painter.circle_filled(c + egui::vec2(0.20 * s, -0.12 * s), 0.22 * s, tint);
-            let pts = vec![
-                c + egui::vec2(-0.41 * s, -0.04 * s),
-                c + egui::vec2(0.41 * s, -0.04 * s),
-                c + egui::vec2(0.0, 0.46 * s),
-            ];
-            painter.add(egui::Shape::convex_polygon(pts, tint, egui::Stroke::NONE));
-        }
-        Glyph::Bag => {
-            let body = egui::Rect::from_center_size(
-                c + egui::vec2(0.0, 0.14 * s),
-                egui::vec2(0.84 * s, 0.62 * s),
-            );
-            painter.rect_stroke(body, 3.0, stroke, egui::StrokeKind::Middle);
-            painter.add(egui::Shape::line(
-                ring(
-                    c + egui::vec2(0.0, -0.17 * s),
-                    0.22 * s,
-                    0.24 * s,
-                    std::f32::consts::PI,
-                    tau,
-                    12,
-                ),
-                stroke,
-            ));
-        }
         Glyph::Star => {
             let pts: Vec<egui::Pos2> = (0..10)
                 .map(|i| {
@@ -438,6 +409,10 @@ fn clamp_label(ui: &mut egui::Ui, text: &str, size: f32, color: egui::Color32, r
 }
 
 fn idea_blurb(card: &UpdateCard) -> String {
+    let summary = grokhub_core::card_report::card_summary(card);
+    if card.pulse.report.is_some() && !summary.is_empty() {
+        return summary;
+    }
     card.body
         .as_deref()
         .filter(|b| !b.trim().is_empty())
@@ -633,9 +608,10 @@ fn paint_type_tag(ui: &mut egui::Ui, kind: PulseType) {
 }
 
 /// One Ideas row: icon, bold "I can …" line, two or three lines of detail, the
-/// type tag, and ···. Hovered or focused, its two buttons show inline: the
-/// primary (Run, Do it, Send…, Fix it or Options) and Snooze. Dismiss and the
-/// rest wait in ···. On a narrow page only the primary shows.
+/// type tag, and ···. Hovered or focused, its quick chips show inline: its
+/// fixes or primary (Run, Do it, Send…, Fix it or Options), Discuss, Ignore
+/// for now and Remind me later. The rest wait in ···. On a narrow page only
+/// the first chip shows.
 /// Returns the action, the row's rect, and whether the bold line is hovered.
 pub(super) fn paint_pulse_row(
     ui: &mut egui::Ui,
@@ -643,6 +619,7 @@ pub(super) fn paint_pulse_row(
     kind: PulseType,
     st: RowState,
     why: Option<&str>,
+    chips: &[(String, ChipAct)],
 ) -> (Option<PulseAct>, egui::Rect, bool) {
     let mut act = None;
     let mut title_hover = false;
@@ -691,20 +668,22 @@ pub(super) fn paint_pulse_row(
                         3,
                     );
                 }
+                match paint_report_more(ui, card, st.report_open) {
+                    Some(ReportTap::Toggle) => act = Some(PulseAct::Report(card.id.clone())),
+                    Some(ReportTap::Open(item)) => act = Some(PulseAct::Open(item)),
+                    None => {}
+                }
                 ui.horizontal(|ui| {
                     paint_type_tag(ui, kind);
                     if active || st.compact {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.spacing_mut().item_spacing.x = 8.0;
-                            if !st.compact && quick_button(ui, "Snooze", Quick::Outline) {
-                                act = Some(PulseAct::Snooze(card.id.clone()));
-                            }
-                            if let Some(label) = super::pulse_fix_ui::fix_label(card) {
-                                if quick_button(ui, label, Quick::Primary) {
-                                    act = Some(PulseAct::Options(card.id.clone()));
+                            let shown = if st.compact { 1 } else { chips.len() };
+                            // Right to left: the last chip is laid down first.
+                            for (label, chip) in chips.iter().take(shown).rev() {
+                                if quick_button(ui, label, chip_style(chip)) {
+                                    act = Some(chip_act(card, chip));
                                 }
-                            } else if quick_button(ui, run_label(card), Quick::Primary) {
-                                act = Some(PulseAct::Run(card.id.clone()));
                             }
                         });
                     }
@@ -718,6 +697,37 @@ pub(super) fn paint_pulse_row(
         });
     });
     (act, resp.rect, title_hover)
+}
+
+/// A row's chips: its fixes, else its own primary (Fix it or Options, else
+/// Run), then Discuss, Ignore for now and Remind me later.
+pub(super) fn row_chips(card: &UpdateCard, day: &DayShape) -> Vec<(String, ChipAct)> {
+    let primary = super::pulse_fix_ui::fix_label(card).unwrap_or_else(|| run_label(card));
+    card_chips(card, day, Some(primary))
+        .into_iter()
+        .map(|c| (c.label, c.act))
+        .collect()
+}
+
+/// What a tapped chip does on the page.
+pub(super) fn chip_act(card: &UpdateCard, chip: &ChipAct) -> PulseAct {
+    let id = card.id.clone();
+    match chip {
+        ChipAct::Primary if super::pulse_fix_ui::fix_label(card).is_some() => PulseAct::Options(id),
+        ChipAct::Primary => PulseAct::Run(id),
+        ChipAct::Offer(i) => PulseAct::Offer(id, *i),
+        ChipAct::Discuss => PulseAct::Discuss(id),
+        ChipAct::Ignore => PulseAct::Ignore(id),
+        ChipAct::RemindAt(at) => PulseAct::RemindAt(id, *at),
+    }
+}
+
+/// The card's own fixes lead in amber; the rest are outlined.
+fn chip_style(chip: &ChipAct) -> Quick {
+    match chip {
+        ChipAct::Primary | ChipAct::Offer(_) => Quick::Primary,
+        _ => Quick::Outline,
+    }
 }
 
 /// "source · age" for the line above a post's title.
@@ -745,6 +755,12 @@ pub(super) enum FeedPostAct {
     NeverAgain,
     /// Crash card: open the chat the run was in.
     Open,
+    /// Show or hide the full report.
+    Report,
+    /// One of the card's quick chips.
+    Chip(ChipAct),
+    /// A digest's update: open that card.
+    OpenCard(String),
     /// Crash card: run it again.
     Retry,
     /// Screen recording card: delete its folder (after a confirm).
@@ -778,6 +794,9 @@ pub(super) fn feed_act(card: &UpdateCard, did: FeedPostAct) -> PulseAct {
         FeedPostAct::Undo => PulseAct::Undo(id),
         FeedPostAct::NeverAgain => PulseAct::NeverAgain(id),
         FeedPostAct::Open => PulseAct::Open(id),
+        FeedPostAct::Report => PulseAct::Report(id),
+        FeedPostAct::Chip(chip) => chip_act(card, &chip),
+        FeedPostAct::OpenCard(item) => PulseAct::Open(item),
         FeedPostAct::Retry => PulseAct::Retry(id),
         FeedPostAct::DeleteRecording => PulseAct::DeleteRecording(id),
         FeedPostAct::FixIt(fix) => PulseAct::FixIt(fix),
@@ -868,6 +887,45 @@ pub(super) fn post_actions(card: &UpdateCard, looking_more: bool) -> Vec<(String
 /// How many of a post's actions sit on the post; the rest go in its ···.
 pub(super) const POST_BUTTONS: usize = 2;
 
+/// A post's actions with its chips. A post whose only actions were Discuss and
+/// Like gets the card's chips instead, and Like moves to its ···. Posts with
+/// their own buttons (Fix it, Undo, Save…) keep them.
+pub(super) fn post_buttons(
+    card: &UpdateCard,
+    looking_more: bool,
+    day: &DayShape,
+) -> Vec<(String, FeedPostAct)> {
+    let acts = post_actions(card, looking_more);
+    let plain = acts
+        .iter()
+        .all(|(_, did)| matches!(did, FeedPostAct::Discuss | FeedPostAct::Like));
+    if !plain || card.status == grokhub_core::UpdateStatus::Dismissed {
+        return acts;
+    }
+    let mut out: Vec<(String, FeedPostAct)> = card_chips(card, day, None)
+        .into_iter()
+        .map(|c| (c.label, FeedPostAct::Chip(c.act)))
+        .collect();
+    out.extend(
+        acts.into_iter()
+            .filter(|(_, did)| *did == FeedPostAct::Like),
+    );
+    out
+}
+
+/// How many of these actions sit on the post: every chip, else two.
+pub(super) fn post_shown(acts: &[(String, FeedPostAct)]) -> usize {
+    let chips = acts
+        .iter()
+        .take_while(|(_, did)| matches!(did, FeedPostAct::Chip(_)))
+        .count();
+    if chips > 0 {
+        chips
+    } else {
+        POST_BUTTONS
+    }
+}
+
 /// One card button, answering a pointer click only (Undo and Delete live
 /// here, and a stray key must never fire them).
 pub(super) fn card_button(ui: &mut egui::Ui, label: &str, style: Quick) -> bool {
@@ -885,11 +943,12 @@ fn paint_post_buttons(ui: &mut egui::Ui, acts: &[(String, FeedPostAct)]) -> Opti
     let mut hit = None;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
-        for (i, (label, did)) in acts.iter().take(POST_BUTTONS).enumerate() {
-            let style = if i == 0 && *did != FeedPostAct::Like {
-                Quick::Primary
-            } else {
-                Quick::Outline
+        for (i, (label, did)) in acts.iter().take(post_shown(acts)).enumerate() {
+            let style = match did {
+                FeedPostAct::Chip(chip) => chip_style(chip),
+                FeedPostAct::Like => Quick::Outline,
+                _ if i == 0 => Quick::Primary,
+                _ => Quick::Outline,
             };
             if card_button(ui, label, style) {
                 hit = Some(did.clone());
@@ -903,7 +962,7 @@ fn paint_post_buttons(ui: &mut egui::Ui, acts: &[(String, FeedPostAct)]) -> Opti
 /// Delete recording are left out: the ··· already has them.
 pub(super) fn post_overflow(acts: &[(String, FeedPostAct)]) -> Vec<(String, FeedPostAct)> {
     acts.iter()
-        .skip(POST_BUTTONS)
+        .skip(post_shown(acts))
         .filter(|(_, did)| {
             !matches!(
                 did,
@@ -922,11 +981,13 @@ pub(super) fn paint_post_body(
     card: &UpdateCard,
     thumbs: &[Thumb],
     looking_more: bool,
+    report_open: bool,
+    day: &DayShape,
 ) -> Option<FeedPostAct> {
     let mut act = None;
     ui.add(
         egui::Label::new(
-            RichText::new(&card.title)
+            RichText::new(grokhub_core::card_report::card_headline(card))
                 .size(crate::theme::FONT_UI)
                 .strong()
                 .color(crate::theme::fg()),
@@ -937,7 +998,7 @@ pub(super) fn paint_post_body(
     if let Some(v) = card.pulse.verdict.as_ref() {
         super::pulse_fix_ui::paint_verdict(ui, v);
     }
-    let takeaway = grokhub_core::short_takeaway(card);
+    let takeaway = post_summary(card);
     if !takeaway.is_empty() {
         clamp_label(
             ui,
@@ -947,9 +1008,15 @@ pub(super) fn paint_post_body(
             3,
         );
     }
-    if let Some(topic) = card.pulse.because.as_deref() {
+    match paint_report_more(ui, card, report_open) {
+        Some(ReportTap::Toggle) => act = Some(FeedPostAct::Report),
+        Some(ReportTap::Open(item)) => act = Some(FeedPostAct::OpenCard(item)),
+        None => {}
+    }
+    let why = pc::plain_why(card).or_else(|| card.pulse.because.as_deref().map(why_line));
+    if let Some(why) = why {
         ui.label(
-            RichText::new(why_line(topic))
+            RichText::new(why)
                 .size(crate::theme::FONT_TIP)
                 .color(crate::theme::subtle()),
         );
@@ -977,10 +1044,98 @@ pub(super) fn paint_post_body(
         paint_thumbs(ui, thumbs);
     }
     ui.add_space(2.0);
-    if let Some(did) = paint_post_buttons(ui, &post_actions(card, looking_more)) {
+    if let Some(did) = paint_post_buttons(ui, &post_buttons(card, looking_more, day)) {
         act = Some(did);
     }
     act
+}
+
+/// The line under a post's headline: its report's summary, else the short takeaway.
+pub(super) fn post_summary(card: &UpdateCard) -> String {
+    if card.pulse.report.is_some() {
+        let summary = grokhub_core::card_report::card_summary(card);
+        if !summary.is_empty() {
+            return summary;
+        }
+    }
+    grokhub_core::short_takeaway(card)
+}
+
+/// What a tap under a card's summary asked for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum ReportTap {
+    Toggle,
+    Open(String),
+}
+
+/// The toggle's words: "Full report" (a digest: "See the N updates"), or "Hide report".
+pub(super) fn report_toggle_label(card: &UpdateCard, open: bool) -> Option<String> {
+    if !grokhub_core::card_report::has_more(card) {
+        return None;
+    }
+    if open {
+        return Some("Hide report".into());
+    }
+    let items = card.pulse.report.as_ref().map_or(0, |r| r.items.len());
+    Some(if items > 0 {
+        format!("See the {items} updates")
+    } else {
+        "Full report".into()
+    })
+}
+
+/// "Full report" under the summary; open, the report itself and, on a
+/// digest, one row per update that opens its own card.
+fn paint_report_more(ui: &mut egui::Ui, card: &UpdateCard, open: bool) -> Option<ReportTap> {
+    let label = report_toggle_label(card, open)?;
+    let mut tap = None;
+    let toggle = ui.add(
+        egui::Label::new(
+            RichText::new(label)
+                .size(crate::theme::FONT_TIP)
+                .underline()
+                .color(crate::theme::link()),
+        )
+        .sense(egui::Sense::click())
+        .selectable(false),
+    );
+    if toggle.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    if toggle.clicked() {
+        tap = Some(ReportTap::Toggle);
+    }
+    if !open {
+        return tap;
+    }
+    if let Some(more) = grokhub_core::card_report::report_more(card) {
+        ui.add_space(2.0);
+        crate::markdown::show(ui, &more);
+    }
+    for item in card.pulse.report.iter().flat_map(|r| r.items.iter()) {
+        let line = if item.summary.trim().is_empty() {
+            item.found.trim().to_string()
+        } else {
+            format!("{}: {}", item.found.trim(), item.summary.trim())
+        };
+        let row = ui.add(
+            egui::Label::new(
+                RichText::new(format!("• {line}"))
+                    .size(crate::theme::FONT_BODY)
+                    .color(crate::theme::fg()),
+            )
+            .wrap()
+            .sense(egui::Sense::click())
+            .selectable(false),
+        );
+        if row.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if row.clicked() {
+            tap = Some(ReportTap::Open(item.card_id.clone()));
+        }
+    }
+    tap
 }
 
 /// One-tap buttons under a Start my day Digest.
@@ -1036,7 +1191,42 @@ pub(super) fn post_source(card: &UpdateCard) -> String {
     }
 }
 
+/// Today's Pulse pings, for the one gate in core.
+static PULSE_PINGS: std::sync::Mutex<pc::PingGate> = std::sync::Mutex::new(pc::PingGate::new());
+
 impl Cabin {
+    /// Every Pulse-origin OS notification goes through here: only
+    /// time-sensitive ones, never while a game runs or in quiet hours, at
+    /// most [`pc::PINGS_PER_DAY`] a day. The rest wait on the page. True
+    /// when the ping went out.
+    pub(super) fn pulse_ping(&mut self, time_sensitive: bool, line: &str) -> bool {
+        let day = Self::local_day();
+        let ask = pc::PingAsk {
+            time_sensitive,
+            game_running: self.game_running().is_some()
+                || grokhub_desktop::game_guard::peek().gaming,
+            quiet_hours: self.quiet_now(),
+            day: &day,
+        };
+        let sent = PULSE_PINGS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take(&ask);
+        if sent {
+            // Whatever pings the OS is kept in the bell too.
+            self.notify(
+                super::notices::NoticeKind::Info,
+                line.to_string(),
+                Some(super::notices::NoticePlace::Page(Nav::Pulse)),
+                None,
+            );
+            if !cfg!(test) {
+                crate::notify::ping(grokhub_core::brand::product_name(), line);
+            }
+        }
+        sent
+    }
+
     /// The Pulse page: the header, then one centered column where ideas and
     /// feed posts share a single stream at every width.
     pub(super) fn ui_pulse(&mut self, ui: &mut egui::Ui) {
@@ -1383,10 +1573,11 @@ impl Cabin {
     ) -> Option<PulseAct> {
         let mut act = None;
         let kind = pc::pulse_type(card);
+        let day = self.card_day();
         let daily_drop = grokhub_core::daily_drop::is_daily_drop_card(card, &self.cfg.daily_drop);
         let why = self.reaction_why(card);
         let extra: Vec<(String, PulseAct)> =
-            post_overflow(&post_actions(card, self.sources.looking_more))
+            post_overflow(&post_buttons(card, self.sources.looking_more, &day))
                 .into_iter()
                 .map(|(label, did)| (label, feed_act(card, did)))
                 .collect();
@@ -1420,8 +1611,15 @@ impl Cabin {
                             });
                         });
                     });
-                    if let Some(did) = paint_post_body(ui, card, &thumbs, self.sources.looking_more)
-                    {
+                    let report_open = self.pulse_view.report_open.contains(&card.id);
+                    if let Some(did) = paint_post_body(
+                        ui,
+                        card,
+                        &thumbs,
+                        self.sources.looking_more,
+                        report_open,
+                        &day,
+                    ) {
                         act = Some(feed_act(card, did));
                     }
                     if let Some(id) = self.paint_backup_one_taps(ui, card) {
@@ -1514,16 +1712,26 @@ impl Cabin {
         if cfg!(test) || self.pulse_view.image_rx.is_some() {
             return;
         }
-        let tried = &self.pulse_view.image_tried;
-        let next = posts.iter().find(|c| {
-            !tried.contains(&c.id)
-                && (c
-                    .pulse
-                    .image_urls
-                    .iter()
-                    .any(|u| !pulse_image_path(u).exists())
-                    || (c.pulse.image_urls.is_empty() && !c.citations.is_empty()))
-        });
+        // Each post is checked on disk once: a post whose images are all
+        // cached counts as tried too, so later frames never stat its files.
+        let tried = &mut self.pulse_view.image_tried;
+        let mut next = None;
+        for c in posts {
+            if tried.contains(&c.id) {
+                continue;
+            }
+            let wants = c
+                .pulse
+                .image_urls
+                .iter()
+                .any(|u| !pulse_image_path(u).exists())
+                || (c.pulse.image_urls.is_empty() && !c.citations.is_empty());
+            if wants {
+                next = Some(c);
+                break;
+            }
+            tried.insert(c.id.clone());
+        }
         let Some(card) = next else {
             return;
         };
@@ -1673,6 +1881,7 @@ impl Cabin {
             focused: self.pulse_view.focus.as_deref() == Some(id),
             title_hot: self.pulse_view.title_hover.as_deref() == Some(id),
             compact: self.pulse_view.narrow,
+            report_open: self.pulse_view.report_open.contains(id),
         }
     }
 
@@ -1701,6 +1910,12 @@ impl Cabin {
                 let clock = Self::local_clock();
                 self.pulse_snooze_at(&id, clock.now_ms, clock.hour, clock.minute);
             }
+            PulseAct::RemindAt(id, at) => {
+                let day = self.card_day();
+                self.pulse_remind_at(&id, at, &day);
+            }
+            PulseAct::Ignore(id) => self.pulse_ignore(&id),
+            PulseAct::Offer(id, i) => self.pulse_offer(&id, i),
             PulseAct::Dismiss(id) => {
                 if self
                     .pulse_card(&id)
@@ -1727,6 +1942,11 @@ impl Cabin {
             PulseAct::Wrong(id) => self.pulse_wrong(&id, &Self::local_day()),
             PulseAct::Like(id) => self.pulse_like(&id, &Self::local_day()),
             PulseAct::Open(id) => self.pulse_open(&id),
+            PulseAct::Report(id) => {
+                if !self.pulse_view.report_open.remove(&id) {
+                    self.pulse_view.report_open.insert(id);
+                }
+            }
             PulseAct::Discuss(id) => self.discuss_card(&id),
             PulseAct::Undo(id) => self.done_for_you_undo(&id),
             PulseAct::NeverAgain(id) => self.done_for_you_never(&id),
@@ -1799,12 +2019,109 @@ impl Cabin {
             self.status = "Use Apply change in the card's menu.".into();
             return None;
         }
+        // A card with a report runs in its own chat, with the report, never
+        // beside whatever chat is open (that chat's talk and playbook stay out).
+        if card.pulse.report.is_some()
+            && matches!(card.kind, UpdateKind::Digest | UpdateKind::Suggestion)
+            && grokhub_core::paused_job_of(&card).is_none()
+        {
+            let action = card.idea_action();
+            let line = if action.is_empty() {
+                card.title.trim().to_string()
+            } else {
+                action
+            };
+            self.discuss_card(id);
+            self.send_from_card(line.clone());
+            return Some(line);
+        }
         let line = pc::run_line(&card);
         if grokhub_core::mark_update_opened(&mut self.updates, id) {
             self.persist_updates();
         }
         self.send_chat(line.clone());
         Some(line)
+    }
+
+    /// The person's day as the chips read it: the clock, when they wind down
+    /// (quiet hours, else learned) and when they usually sit down (learned).
+    pub(super) fn card_day(&mut self) -> DayShape {
+        let clock = Self::local_clock();
+        DayShape {
+            now_ms: clock.now_ms,
+            hour: clock.hour,
+            minute: clock.minute,
+            wind_down: self.wind_down_hour(),
+            start: self.rhythm_now().usual_start_hour(),
+        }
+    }
+
+    /// Remind me later: hidden until `at`, and the status says when it is back.
+    pub(super) fn pulse_remind_at(&mut self, id: &str, at: u64, day: &DayShape) {
+        if !pc::snooze_card(&mut self.updates, id, at) {
+            return;
+        }
+        self.persist_updates();
+        let later = remind_later(day);
+        self.status = if later.at_ms == at {
+            let mut label = later.label;
+            if let Some(first) = label.get(..1) {
+                let lower = first.to_lowercase();
+                label.replace_range(..1, &lower);
+            }
+            format!("Back {label}.")
+        } else {
+            "Reminder set.".into()
+        };
+    }
+
+    /// Ignore for now: the card leaves the page with no "less of this".
+    pub(super) fn pulse_ignore(&mut self, id: &str) {
+        let Some(card) = self.pulse_card(id) else {
+            return;
+        };
+        // An idea stays on the Ideas board; nothing is remembered as turned down.
+        self.ignore_feed_card(&card.id);
+        self.status = "Hidden for now.".into();
+    }
+
+    /// A card's offered fix: into the card's own chat (with its report), then
+    /// the fix's prompt. A card with no chat of its own runs it instead.
+    pub(super) fn pulse_offer(&mut self, id: &str, i: usize) {
+        let Some(card) = self.pulse_card(id) else {
+            return;
+        };
+        let Some(prompt) = card
+            .pulse
+            .report
+            .as_ref()
+            .and_then(|r| r.offers.get(i))
+            .map(|o| o.prompt.trim().to_string())
+            .filter(|p| !p.is_empty())
+        else {
+            return;
+        };
+        let discussable = matches!(card.kind, UpdateKind::Digest | UpdateKind::Suggestion)
+            && grokhub_core::paused_job_of(&card).is_none();
+        if !discussable {
+            self.pulse_run(id);
+            return;
+        }
+        self.discuss_card(id);
+        self.send_from_card(prompt);
+    }
+
+    /// A card's ask, sent in the card's chat (now on screen). A reply still
+    /// running, here or in another chat, is never cut off for it: the ask
+    /// waits its turn and goes when that reply ends.
+    pub(super) fn send_from_card(&mut self, text: String) {
+        if self.running {
+            let here = self.visible_thread_id();
+            self.followup_queue.push(&here, text);
+            self.status = "Queued for after this reply".into();
+            return;
+        }
+        self.send_chat(text);
     }
 
     /// Snooze: hidden until the next 09:00 local. Returns that unix ms.

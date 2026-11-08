@@ -246,6 +246,7 @@ impl Cabin {
         self.notify(
             notices::NoticeKind::Info,
             self.status.clone(),
+            Some(notices::NoticePlace::Page(Nav::History)),
             Some(notices::NoticeAction::Unarchive(id)),
         );
         self.persist();
@@ -266,6 +267,7 @@ impl Cabin {
         self.notify(
             notices::NoticeKind::Info,
             self.status.clone(),
+            Some(notices::NoticePlace::Page(Nav::History)),
             Some(notices::NoticeAction::Archive(id)),
         );
         self.persist();
@@ -506,8 +508,12 @@ impl Cabin {
                                 t.messages.is_empty()
                             },
                         // Main is never handed out as a fresh draft.
+                        // A chat whose reply is still running is never a
+                        // fresh draft, even before its first line lands.
                         has_session: buried
                             || t.main
+                            || (self.running
+                                && self.chat_job_thread.as_deref() == Some(t.id.as_str()))
                             || t.grok_session
                                 .as_deref()
                                 .is_some_and(|s| !s.trim().is_empty()),
@@ -1153,43 +1159,6 @@ impl Cabin {
             "command" => Nav::Command,
             "chat" => Nav::Chat,
             _ => Nav::Chat,
-        }
-    }
-
-    /// Plan pill: switch the session mode. Do not write the thread title.
-    /// The persist id still clears so the next turn is a new Grok session.
-    pub(super) fn select_plan_without_rename(&mut self) {
-        self.confirm = None;
-        if self.running {
-            self.halt_in_flight();
-        }
-        self.set_session_mode(SessionMode::Plan);
-        self.acp = None;
-        self.hold_chat_name_for_plan();
-        if let Some(t) = self.threads.get_mut(self.thread_idx) {
-            t.grok_session = None;
-        }
-        self.persist_idle_key = self.persist_idle_now();
-        self.status = format!("Session {}", SessionMode::Plan.as_str());
-    }
-
-    /// Freeze the title and the History label before Plan drops the session id.
-    pub(super) fn hold_chat_name_for_plan(&mut self) {
-        let idx = self.thread_idx;
-        let Some(t) = self.threads.get(idx) else {
-            return;
-        };
-        let kept = grokhub_core::cli_history::title_after_selecting_plan(&t.title);
-        if t.title != kept {
-            return;
-        }
-        let shown = self.thread_rail_title(idx);
-        let sid = t.grok_session.clone();
-        let Some(id) = sid else {
-            return;
-        };
-        if let Some(s) = self.grok_sessions.iter_mut().find(|s| s.id == id) {
-            s.title = grokhub_core::cli_history::history_label_after_plan(&shown, &s.title);
         }
     }
 

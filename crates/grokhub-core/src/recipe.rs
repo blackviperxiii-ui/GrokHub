@@ -655,33 +655,6 @@ pub fn recipe_from_json(raw: &str) -> Result<(String, Recipe), String> {
     ))
 }
 
-pub fn hands_protocol() -> &'static str {
-    "You run unsandboxed on this Linux desktop. The cabin has full host and GUI hands when the user asks.\n\
-     HOST_CMD: <shell> — runs via bash -lc immediately. The cabin drives; there is no approve step.\n\
-     COMPUTER_CMD: click X Y\n\
-     COMPUTER_CMD: dblclick X Y\n\
-     COMPUTER_CMD: move X Y\n\
-     COMPUTER_CMD: type <text>\n\
-     COMPUTER_CMD: key <name>\n\
-     COMPUTER_CMD: scroll <dy>\n\
-     COMPUTER_CMD: act <accessible-name>\n\
-     COMPUTER_CMD: wait_for title=<window>\n\
-     COMPUTER_CMD: tab list\n\
-     COMPUTER_CMD: tab new [url]\n\
-     COMPUTER_CMD: tab close <title-or-url>\n\
-     COMPUTER_CMD: tab focus <title-or-url>\n\
-     COMPUTER_CMD: cursor\n\
-     COMPUTER_CMD: move monitor <name> [x y]\n\
-     Prefer act, wait_for, tab list/new/close/focus, and key over guessed JPEG coordinates. After each COMPUTER_CMD hop, look at the new JPEG and Windshield before the next click.\n\
-     Coordinates are the global desktop (xrandr). A JPEG may be one output — use Windshield desk / outputs / frame. After move or click, COMPUTER_RESULT cursor X,Y monitor=NAME is the real pointer — treat it as ground truth and correct if it missed. Prefer move monitor <name> over hard-coded 7000-wide numbers. When Windshield says browser: cdp, open/close/focus a tab with tab new / tab close / tab focus. New tab: act the New Tab or + control; if Windshield has no such row, wait_for title=Firefox then key ctrl+t. Otherwise wait_for that window then key ctrl+w to close; do not guess the × from the still.\n\
-     Never emit XML or JSON <tool_call> tags. The first reply must include a COMPUTER_CMD line — do not only plan.\n\
-     A JPEG is attached when the user asks for hands, cabin eyes, or GUI help (close a tab, Settings, turn this on, how do I, for me). If the thing is on the glass and there is no honest shell, use COMPUTER_CMD — do not invent a CLI.\n\
-     Guide-only (just tell me / don't click / walk me through without do it): describe the control from the Windshield; do not emit COMPUTER_CMD unless they then say do it.\n\
-     Do-it / I can't / default GUI help: drive, then end with a short how-to the user can repeat (Settings → Bluetooth → the switch).\n\
-     Lock/password screens are won'ts — never click them or type into them. Do not read ~/.ssh or /etc/shadow.\n\
-     If Windshield says hands: daemon, hands: uinput, or hands: missing — or COMPUTER_RESULT says hands are down (not installed, uinput, or ydotoold) — tell the user how to enable them. Do not pkill, kill, or otherwise terminate apps as a stand-in for mouse or keyboard control."
-}
-
 pub fn user_asks_cabin_eyes(text: &str) -> bool {
     let t = text.to_ascii_lowercase();
     const NEEDLES: &[&str] = &[
@@ -1145,19 +1118,6 @@ mod tests {
             }),
             ComputerDrive::Tab(TabAction::Close, q) if q == "GitHub"
         ));
-        let proto = hands_protocol();
-        assert!(proto.contains("HOST_CMD:"));
-        assert!(proto.contains("COMPUTER_CMD:"));
-        assert!(proto.contains("tab close"));
-        assert!(
-            proto.contains("tab new") && proto.contains("ctrl+t") && proto.contains("<tool_call>"),
-            "new tab and no XML tool_call: {proto}"
-        );
-        assert!(proto.to_ascii_lowercase().contains("unsandboxed"));
-        assert!(
-            proto.contains("Do not pkill") && proto.contains("hands are down"),
-            "missing hands must not become a kill fallback: {proto}"
-        );
         assert!(user_asks_desktop_hands("click the Save button for me"));
         assert!(user_asks_desktop_hands("type into the settings window"));
         assert!(user_asks_desktop_hands("take over this desktop"));
@@ -1200,10 +1160,6 @@ mod tests {
             Some("Pressed Ctrl+W".into())
         );
         assert!(hands_step_label("HOST_RESULT (facts only):\n$ ls\n").is_none());
-        assert!(
-            proto.contains("how-to") && proto.contains("Guide-only"),
-            "protocol must teach after drive: {proto}"
-        );
         assert_eq!(
             pick_hands_backend(true, true, true),
             Some(HandsBackend::Ydotool)
@@ -1434,9 +1390,6 @@ mod tests {
         assert!(!user_asks_cabin_eyes("what's in the bowl"));
         assert!(!user_asks_cabin_eyes("tell me about rust"));
         assert!(user_asks_cabin_eyes("look at my screen"));
-        assert!(hands_protocol().contains("GUI help"));
-        assert!(hands_protocol().contains("global desktop"));
-        assert!(hands_protocol().contains("ctrl+w"));
     }
 
     #[test]
@@ -1500,10 +1453,6 @@ mod tests {
             y: None
         }));
         assert_eq!(empty_hands_steps_error(&ComputerOp::Cursor, &[]), None);
-        let proto = hands_protocol();
-        assert!(proto.contains("COMPUTER_CMD: cursor"), "{proto}");
-        assert!(proto.contains("move monitor"), "{proto}");
-        assert!(proto.contains("monitor="), "{proto}");
         assert_eq!(label_for_op(&ComputerOp::Cursor), "Read cursor");
         assert_eq!(
             label_for_op(&ComputerOp::MoveMonitor {

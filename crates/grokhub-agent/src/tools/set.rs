@@ -223,7 +223,7 @@ mod tests {
 
     #[test]
     fn background_is_subset_of_chat_and_at_least_30_percent_smaller() {
-        // Full tool list and per-turn system rewrite: the mode this test checks.
+        // Full tool list: the mode this test checks.
         let _legacy = crate::tools::registry::LegacyPromptGuard::set();
         let gate = chat_gate();
         let chat = schemas_for_job(&gate, &ToolSet::FULL);

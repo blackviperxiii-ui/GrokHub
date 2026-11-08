@@ -547,10 +547,22 @@ impl Cabin {
             let title = card.title.clone();
             let body = card.body.clone().unwrap_or_default();
             self.post_feed_card(card);
+            // A print alert is kept in the bell, quiet hours or not.
+            let line = if body.is_empty() {
+                title.clone()
+            } else {
+                format!("{title} · {body}")
+            };
+            self.notify(
+                super::notices::NoticeKind::Info,
+                line.clone(),
+                Some(super::notices::NoticePlace::Page(Nav::Pulse)),
+                None,
+            );
             if !self.quiet_now() {
                 crate::notify::ping(grokhub_core::brand::product_name(), &title);
                 if !body.is_empty() {
-                    self.status = format!("{title} · {body}");
+                    self.status = line;
                 }
             }
         }

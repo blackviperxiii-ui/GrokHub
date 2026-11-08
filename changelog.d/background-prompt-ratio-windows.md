@@ -1,0 +1,1 @@
+- Fixed a beta test on Windows: the line that tells the chat its app notes are not your words is shorter, so the background prompt stays at least 30% smaller than the chat prompt.

@@ -1169,6 +1169,9 @@ fn posted_text(card: &UpdateCard) -> String {
 /// Seed for Discuss on a digest or suggestion. Main chat gets the title, the
 /// short takeaway, the source URL, and why it matters.
 pub fn discuss_context(card: &UpdateCard) -> String {
+    if let Some(context) = crate::card_report::card_context(card) {
+        return context;
+    }
     let takeaway = short_takeaway(card);
     let mut out = format!("Feed post: {}", card.title.trim());
     if !takeaway.is_empty() {
@@ -1274,7 +1277,7 @@ fn is_lead_in(sentence: &str) -> bool {
 }
 
 /// Drop opening lead-in sentences. Kept when nothing else is left.
-fn skip_lead_ins(sentences: Vec<String>) -> Vec<String> {
+pub(crate) fn skip_lead_ins(sentences: Vec<String>) -> Vec<String> {
     let n = sentences.iter().take_while(|s| is_lead_in(s)).count();
     if n == 0 || n == sentences.len() {
         return sentences;
@@ -2157,7 +2160,7 @@ fn strip_title_prefix(text: &str, title: &str) -> String {
 
 /// End a sentence on `.` `!` `?` when the next letter is uppercase, or at the end.
 /// `1.0.50` stays one token. A missing space (`tips.Grok`) still splits.
-fn split_sentences(text: &str) -> Vec<String> {
+pub(crate) fn split_sentences(text: &str) -> Vec<String> {
     let chars: Vec<char> = text.chars().collect();
     let mut out = Vec::new();
     let mut start = 0usize;
@@ -2602,6 +2605,22 @@ pub fn automation_done_card(
     card.action = Some(UpdateAction::OpenAutomations);
     card.source_id = source_id.trim().to_string();
     refresh_event_why(&mut card);
+    card
+}
+
+/// A finished run that reported something: titled with what it found, the
+/// short summary under it, and the full report on the card.
+pub fn automation_report_card(
+    source_id: &str,
+    name: &str,
+    reply: &str,
+    created_at: u64,
+) -> UpdateCard {
+    let Some(report) = crate::card_report::report_from_run(name, reply) else {
+        return automation_done_card(source_id, name, "", created_at);
+    };
+    let mut card = automation_done_card(source_id, &report.found, &report.summary, created_at);
+    card.pulse.report = Some(report);
     card
 }
 
@@ -4997,6 +5016,16 @@ https://xstack.grok.me/post ZEPHYRTAIL"
                 "Nightly backup",
             ),
             (
+                "automation_report_card",
+                automation_report_card(
+                    "a1",
+                    "Nightly backup",
+                    "Copied 3 files to the NAS. Two were new photos.",
+                    at,
+                ),
+                "Nightly backup",
+            ),
+            (
                 "recovered_card",
                 recovered_card(
                     &crate::recovered::Recovered {
@@ -5343,7 +5372,7 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             title: "Cheaper groceries this week".into(),
             description: "I can plan meals around this week's grocery sales.".into(),
             emoji: "🛒".into(),
-            category: crate::pulse::PulseCategory::Shopping,
+            category: crate::pulse::PulseCategory::Deals,
             action: "plan a week of meals from this week's grocery sales".into(),
         };
         rows.push((

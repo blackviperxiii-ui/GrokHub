@@ -22,7 +22,7 @@ pub fn schema() -> Value {
     json!({
         "type": "function",
         "name": "run_terminal_command",
-        "description": "Run a shell command in the workspace. Bash on Linux, PowerShell on Windows. timeout is milliseconds (default 120000, max 300000). The process tree is killed on timeout, cancel, or halt.",
+        "description": "Run a shell command in the workspace. Bash on Linux, PowerShell on Windows. timeout is milliseconds (default 120000, max 300000). Timeout may move it to the background; halt kills it.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -37,7 +37,54 @@ pub fn schema() -> Value {
     })
 }
 
+/// Linux and macOS pass the command as one argument to bash, and the kernel
+/// caps one argument at 128 KB (`MAX_ARG_STRLEN`). Windows stages a long
+/// command in a script file instead, so it has no cap here.
+#[cfg(unix)]
+const ONE_ARG_MAX: usize = 128 * 1024;
+
+/// A plain refusal for a command too long to start, before the OS gives a
+/// bare "Argument list too long".
+pub(crate) fn too_long(command: &str) -> Option<String> {
+    #[cfg(unix)]
+    if command.len() >= ONE_ARG_MAX {
+        return Some(format!(
+            "This command is {} KB, over the 128 KB one command can carry. Put the long part in a file with the write tool and run that file.",
+            command.len() / 1024
+        ));
+    }
+    let _ = command;
+    None
+}
+
 pub fn run(workspace: &Path, args: &Value, stop: &dyn Fn() -> bool) -> ToolOutput {
+    run_adoptable(workspace, args, stop, None)
+}
+
+/// What [`run_adoptable`] hands a command that outlived its timeout to: the
+/// still-running process and the sandbox's git guard. It answers with the new
+/// background task's id and where the rest of the output goes, or gives both
+/// back when it can't take the command (a halted session), and the command
+/// is killed as before.
+pub(crate) type Adopt<'a> =
+    &'a mut dyn FnMut(
+        BgProc,
+        Option<crate::sandbox::git_guard::Guard>,
+    )
+        -> Result<(String, Feed), (BgProc, Option<crate::sandbox::git_guard::Guard>)>;
+
+/// Where an adopted command's later output goes: its background task.
+pub(crate) type Feed = Arc<dyn Fn(&[u8]) + Send + Sync>;
+
+/// [`run`], with a command that outlives its timeout handed to `adopt` in
+/// place of being killed. The answer then holds the output so far and the
+/// background task's id.
+pub(crate) fn run_adoptable(
+    workspace: &Path,
+    args: &Value,
+    stop: &dyn Fn() -> bool,
+    adopt: Option<Adopt<'_>>,
+) -> ToolOutput {
     let command = args
         .get("command")
         .and_then(|v| v.as_str())
@@ -50,18 +97,36 @@ pub fn run(workspace: &Path, args: &Value, stop: &dyn Fn() -> bool) -> ToolOutpu
     if crate::sudo_pass::names_helper(&command) {
         return ToolOutput::err(*crate::sudo_pass::HELPER_REFUSAL);
     }
+    if let Some(why) = too_long(&command) {
+        return ToolOutput::err(why);
+    }
     let timeout_ms = timeout_ms(args);
     let cwd = match workspace.canonicalize() {
         Ok(path) => path,
         Err(err) => return ToolOutput::err(format!("workspace is not available: {err}")),
     };
     let plan = crate::sandbox::plan_for_call("run_terminal_command", args, &cwd);
-    let guard = plan
+    let mut guard = plan
         .as_ref()
         .and_then(|_| crate::sandbox::git_guard::take(&cwd));
     let let_out = crate::sandbox::proxy::let_out_count();
+    // An adopted command takes the git guard with it: its task puts the git
+    // config and hooks back while it runs and once it ends.
+    let mut handover = adopt.map(|adopt| {
+        let guard = &mut guard;
+        move |proc: BgProc| match adopt(proc, guard.take()) {
+            Ok(taken) => Ok(taken),
+            Err((proc, back)) => {
+                *guard = back;
+                Err(proc)
+            }
+        }
+    });
+    let handover = handover
+        .as_mut()
+        .map(|f| f as &mut dyn FnMut(BgProc) -> Result<(String, Feed), BgProc>);
     // The output is fenced first; the sandbox's own note stays outside the fence.
-    let result = spawn_and_wait(&cwd, &command, timeout_ms, stop, plan.as_ref())
+    let result = spawn_and_wait(&cwd, &command, timeout_ms, stop, plan.as_ref(), handover)
         .map(|o| fence_if_fetched(o, let_out));
     let note = guard
         .as_ref()
@@ -72,7 +137,8 @@ pub fn run(workspace: &Path, args: &Value, stop: &dyn Fn() -> bool) -> ToolOutpu
                 .ok()
                 .and_then(|o| crate::sandbox::network_note(plan.as_ref(), o.failed, &o.text))
                 .map(str::to_string)
-        });
+        })
+        .or_else(|| crate::package_age::lockfile_hint(&command, &cwd));
     match (result, note) {
         (Ok(mut output), Some(note)) => {
             output.text = format!("{}\n{note}", output.text);
@@ -138,6 +204,9 @@ struct CapBuf {
     head: Vec<u8>,
     tail: std::collections::VecDeque<u8>,
     overflow: bool,
+    /// Set once the command was handed to a background task: what arrives
+    /// from then on goes there.
+    forward: Option<Feed>,
 }
 
 impl CapBuf {
@@ -148,10 +217,15 @@ impl CapBuf {
             head: Vec::new(),
             tail: std::collections::VecDeque::new(),
             overflow: false,
+            forward: None,
         }
     }
 
     fn push(&mut self, data: &[u8]) {
+        if let Some(forward) = &self.forward {
+            forward(data);
+            return;
+        }
         if !self.overflow {
             let room = Self::KEEP.saturating_sub(self.head.len());
             let n = room.min(data.len());
@@ -225,6 +299,38 @@ impl BgProc {
     }
 }
 
+/// A foreground command's child, as a [`BgProc`] for its new task. Its pipes
+/// stay with the readers the foreground started; they feed the task.
+#[cfg(unix)]
+fn adopted_child(child: std::process::Child, pgid: i32) -> BgProc {
+    use std::sync::atomic::AtomicBool;
+    let child = Mutex::new(child);
+    let kill: Arc<dyn Fn() + Send + Sync> = Arc::new(move || kill_group(pgid));
+    BgProc {
+        stdout: None,
+        stderr: None,
+        armed: Arc::new(AtomicBool::new(pgid > 1)),
+        kill,
+        wait: Mutex::new(Box::new(move || {
+            let mut child = child.lock().unwrap_or_else(|err| err.into_inner());
+            match child.try_wait() {
+                Ok(Some(status)) => WaitPoll::Exited(status.code().unwrap_or(1)),
+                Ok(None) => WaitPoll::Running,
+                Err(err) => WaitPoll::Failed(err.to_string()),
+            }
+        })),
+    }
+}
+
+/// Kill a process that could not be handed over, and wait a moment for it.
+fn kill_and_reap(mut proc: BgProc) {
+    proc.kill_tree();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while matches!(proc.poll(), WaitPoll::Running) && Instant::now() < deadline {
+        std::thread::sleep(POLL);
+    }
+}
+
 impl Drop for BgProc {
     fn drop(&mut self) {
         self.kill_tree();
@@ -267,8 +373,13 @@ fn bash(
         cmd.args(&argv[1..]);
         cmd
     };
+    // `bash -c` still sources $BASH_ENV, and `sh` sources $ENV, even with
+    // --noprofile --norc. Neither belongs in an agent command.
     cmd.current_dir(cwd)
+        .env_remove("BASH_ENV")
+        .env_remove("ENV")
         .envs(crate::sudo_pass::shell_env())
+        .envs(crate::package_age::env())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -361,7 +472,92 @@ pub(crate) fn spawn_background(
     Err("shell is not available on this system".into())
 }
 
+/// Windows PowerShell writes a piped stderr as CLIXML (`#< CLIXML` then
+/// XML records), and a nested `powershell` writes the same into the middle
+/// of the output. The model and the chat need the error text itself: each
+/// block keeps its records' text, decoded, and drops progress records. Text
+/// around the blocks, and output with none, comes back as it was.
+fn plain_stderr(stderr: Vec<u8>) -> Vec<u8> {
+    const HEAD: &str = "#< CLIXML";
+    let text = String::from_utf8_lossy(&stderr);
+    if !text.contains(HEAD) {
+        return stderr;
+    }
+    let mut out = String::new();
+    let mut rest = text.trim_start_matches('\u{feff}');
+    while let Some(at) = rest.find(HEAD) {
+        let before = &rest[..at];
+        // A block at the very start owns the stream; elsewhere keep what came before.
+        if !before.trim().is_empty() {
+            out.push_str(before);
+            if !before.ends_with('\n') {
+                out.push('\n');
+            }
+        }
+        let block = &rest[at..];
+        let end = block
+            .find("</Objs>")
+            .map_or(block.len(), |e| e + "</Objs>".len());
+        out.push_str(&clixml_records(&block[..end]));
+        rest = block[end..].trim_start_matches(['\r', '\n']);
+    }
+    out.push_str(rest);
+    out.into_bytes()
+}
+
+/// The decoded text of every `<S S="...">` record in one CLIXML block.
+fn clixml_records(block: &str) -> String {
+    let mut out = String::new();
+    let mut rest = block;
+    while let Some(at) = rest.find("<S S=\"") {
+        rest = &rest[at..];
+        let Some(open_end) = rest.find('>') else {
+            break;
+        };
+        let Some(close) = rest[open_end..].find("</S>") else {
+            break;
+        };
+        out.push_str(&clixml_unescape(&rest[open_end + 1..open_end + close]));
+        rest = &rest[open_end + close + 4..];
+    }
+    out
+}
+
+/// XML entities, then CLIXML's `_xHHHH_` UTF-16 code units (`_x000D__x000A_`
+/// is a line break; a literal underscore comes as `_x005F_`).
+fn clixml_unescape(raw: &str) -> String {
+    let xml = raw
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&");
+    let mut units: Vec<u16> = Vec::with_capacity(xml.len());
+    let mut i = 0;
+    let bytes = xml.as_bytes();
+    while i < bytes.len() {
+        if bytes[i] == b'_' && i + 7 <= bytes.len() && bytes[i + 1] == b'x' && bytes[i + 6] == b'_'
+        {
+            if let Some(unit) = xml
+                .get(i + 2..i + 6)
+                .and_then(|hex| u16::from_str_radix(hex, 16).ok())
+            {
+                units.push(unit);
+                i += 7;
+                continue;
+            }
+        }
+        let ch = xml[i..].chars().next().unwrap_or('\u{fffd}');
+        let mut buf = [0u16; 2];
+        units.extend_from_slice(ch.encode_utf16(&mut buf));
+        i += ch.len_utf8();
+    }
+    String::from_utf16_lossy(&units).replace("\r\n", "\n")
+}
+
 fn merge_output(stdout: Vec<u8>, stderr: Vec<u8>) -> Vec<u8> {
+    let stdout = plain_stderr(stdout);
+    let stderr = plain_stderr(stderr);
     if stderr.is_empty() {
         return stdout;
     }
@@ -376,6 +572,10 @@ fn merge_output(stdout: Vec<u8>, stderr: Vec<u8>) -> Vec<u8> {
     out
 }
 
+/// Hands a command that outlived its timeout to a background task: the task
+/// id and where its later output goes, or the process back to be killed.
+type Handover<'a> = &'a mut dyn FnMut(BgProc) -> Result<(String, Feed), BgProc>;
+
 #[cfg(unix)]
 fn spawn_and_wait(
     cwd: &Path,
@@ -383,6 +583,7 @@ fn spawn_and_wait(
     timeout_ms: u64,
     stop: &dyn Fn() -> bool,
     plan: Option<&crate::sandbox::Plan>,
+    mut handover: Option<Handover<'_>>,
 ) -> Result<ToolOutput, String> {
     use std::thread;
 
@@ -412,6 +613,29 @@ fn spawn_and_wait(
             break StopKind::Killed;
         }
         if started.elapsed() >= limit {
+            if let Some(handover) = handover.take() {
+                group.disarm();
+                match handover(adopted_child(child, pgid)) {
+                    Ok((id, feed)) => {
+                        let stdout = hand_over(&out_buf, Arc::clone(&feed));
+                        let stderr = hand_over(&err_buf, feed);
+                        return Ok(handed_over(timeout_ms, &id, stdout, stderr));
+                    }
+                    Err(proc) => {
+                        kill_and_reap(proc);
+                        let drained = drain_readers(&readers, stop, DRAIN_GRACE);
+                        let mut raw = merge_output(take_buf(&out_buf), take_buf(&err_buf));
+                        if !drained {
+                            raw.extend_from_slice(HELD_OPEN.as_bytes());
+                        }
+                        return Ok(finish(
+                            &format!("timed out after {timeout_ms}ms"),
+                            &raw,
+                            true,
+                        ));
+                    }
+                }
+            }
             kill_group(group.pgid);
             group.disarm();
             let _ = child.wait();
@@ -509,6 +733,31 @@ fn drain_readers(
         }
         std::thread::sleep(POLL);
     }
+}
+
+/// What `buf` holds so far, with the rest of the command's output sent to
+/// `feed` from now on. Both happen under the buffer's lock, so no byte is
+/// lost or sent twice.
+fn hand_over(buf: &Mutex<CapBuf>, feed: Feed) -> Vec<u8> {
+    let mut held = buf.lock().unwrap_or_else(|err| err.into_inner());
+    let mut fresh = CapBuf::new();
+    fresh.forward = Some(feed);
+    std::mem::replace(&mut *held, fresh).bytes()
+}
+
+/// The answer for a command handed to background task `id` at its timeout:
+/// what it wrote so far, and how to follow it.
+fn handed_over(timeout_ms: u64, id: &str, stdout: Vec<u8>, stderr: Vec<u8>) -> ToolOutput {
+    let raw = merge_output(stdout, stderr);
+    let mut out = finish(
+        &format!("still running after {timeout_ms}ms: moved to the background as task {id}"),
+        &raw,
+        false,
+    );
+    out.text.push_str(&format!(
+        "\n(task {id} keeps running. Read the rest with get_command_or_subagent_output, or stop it with kill_command_or_subagent.)"
+    ));
+    out
 }
 
 fn take_buf(buf: &Mutex<CapBuf>) -> Vec<u8> {
@@ -708,8 +957,9 @@ fn spawn_and_wait(
     timeout_ms: u64,
     stop: &dyn Fn() -> bool,
     plan: Option<&crate::sandbox::Plan>,
+    handover: Option<Handover<'_>>,
 ) -> Result<ToolOutput, String> {
-    win::run(cwd, command, timeout_ms, stop, plan)
+    win::run(cwd, command, timeout_ms, stop, plan, handover)
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -719,6 +969,7 @@ fn spawn_and_wait(
     _timeout_ms: u64,
     _stop: &dyn Fn() -> bool,
     _plan: Option<&crate::sandbox::Plan>,
+    _handover: Option<Handover<'_>>,
 ) -> Result<ToolOutput, String> {
     Err("shell is not available on this system".into())
 }
@@ -995,6 +1246,34 @@ mod tests {
         }
         std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
     }
+
+    #[test]
+    fn powershell_clixml_errors_read_as_plain_text() {
+        let raw = "#< CLIXML\r\n<Objs Version=\"1.1.0.1\" xmlns=\"http://schemas.microsoft.com/powershell/2004/04\"><Obj S=\"progress\" RefId=\"0\"><TN RefId=\"0\"><T>System.Management.Automation.PSCustomObject</T></TN><MS><I64 N=\"SourceId\">1</I64></MS></Obj><S S=\"Error\">At line:2 char:17_x000D__x000A_</S><S S=\"Error\">+ echo a &amp;&amp; echo b_x000D__x000A_</S><S S=\"Error\">my_x005F_file h\u{e9}llo &lt;x&gt;_x000D__x000A_</S></Objs>";
+        let plain = String::from_utf8(super::plain_stderr(raw.as_bytes().to_vec())).unwrap();
+        assert_eq!(
+            plain,
+            "At line:2 char:17\n+ echo a && echo b\nmy_file h\u{e9}llo <x>\n"
+        );
+        // Progress alone leaves nothing; ordinary stderr is untouched.
+        let progress =
+            "#< CLIXML\n<Objs Version=\"1.1.0.1\"><Obj S=\"progress\" RefId=\"0\"></Obj></Objs>";
+        assert!(super::plain_stderr(progress.as_bytes().to_vec()).is_empty());
+        assert_eq!(
+            super::plain_stderr(b"oops _x0041_\n".to_vec()),
+            b"oops _x0041_\n".to_vec()
+        );
+        // A nested powershell's block in the middle of the output.
+        let mid = format!("FREE=5713272832\r\n{progress}\r\nEXISTS=True\n");
+        assert_eq!(
+            String::from_utf8(super::plain_stderr(mid.into_bytes())).unwrap(),
+            "FREE=5713272832\r\nEXISTS=True\n"
+        );
+        let merged = super::merge_output(b"out".to_vec(), raw.as_bytes().to_vec());
+        assert!(String::from_utf8(merged)
+            .unwrap()
+            .starts_with("out\nAt line:2"));
+    }
 }
 
 #[cfg(windows)]
@@ -1053,7 +1332,7 @@ mod win {
                     return Ok(super::HookProc {
                         exit_code: Some(i32::try_from(code).unwrap_or(1)),
                         stdout: String::from_utf8_lossy(&stdout).into_owned(),
-                        stderr: String::from_utf8_lossy(&stderr).into_owned(),
+                        stderr: String::from_utf8_lossy(&super::plain_stderr(stderr)).into_owned(),
                         timed_out: false,
                     });
                 }
@@ -1065,12 +1344,17 @@ mod win {
         Ok(super::HookProc {
             exit_code: None,
             stdout: String::from_utf8_lossy(&stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&stderr).into_owned(),
+            stderr: String::from_utf8_lossy(&super::plain_stderr(stderr)).into_owned(),
             timed_out: true,
         })
     }
 
     fn env_wide(extra: &[(String, String)]) -> Vec<u16> {
+        // Round 3 item 38: the package cooldown, under the sandbox's own env.
+        let extra: Vec<(String, String)> = crate::package_age::env()
+            .into_iter()
+            .chain(extra.iter().cloned())
+            .collect();
         // Windows names are case-insensitive and the block is sorted that way:
         // key by upper case so an extra `HTTPS_PROXY` replaces `https_proxy`.
         let mut map = std::collections::BTreeMap::new();
@@ -1078,7 +1362,7 @@ mod win {
             for (key, value) in std::env::vars() {
                 map.insert(key.to_uppercase(), (key, value));
             }
-            for (key, value) in extra {
+            for (key, value) in &extra {
                 if key.contains('=') || key.contains('\0') || value.contains('\0') {
                     continue;
                 }
@@ -1104,6 +1388,7 @@ mod win {
         timeout_ms: u64,
         stop: &dyn Fn() -> bool,
         plan: Option<&crate::sandbox::Plan>,
+        mut handover: Option<super::Handover<'_>>,
     ) -> Result<super::ToolOutput, String> {
         if let Some(plan) = plan.filter(|p| p.isolation.is_some()) {
             let bg = container(cwd, command, plan)?;
@@ -1124,6 +1409,28 @@ mod win {
                 break Kind::Killed;
             }
             if started.elapsed() >= limit {
+                if let Some(handover) = handover.take() {
+                    let (proc, out_buf, err_buf) = child.into_bg();
+                    match handover(proc) {
+                        Ok((id, feed)) => {
+                            let stdout = super::hand_over(&out_buf, Arc::clone(&feed));
+                            let stderr = super::hand_over(&err_buf, feed);
+                            return Ok(super::handed_over(timeout_ms, &id, stdout, stderr));
+                        }
+                        Err(proc) => {
+                            super::kill_and_reap(proc);
+                            let raw = super::merge_output(
+                                super::take_buf(&out_buf),
+                                super::take_buf(&err_buf),
+                            );
+                            return Ok(finish(
+                                &format!("timed out after {timeout_ms}ms"),
+                                &raw,
+                                true,
+                            ));
+                        }
+                    }
+                }
                 child.kill();
                 break Kind::TimedOut;
             }
@@ -1366,10 +1673,7 @@ mod win {
                 hide_inherit(child.stderr_read)?;
                 hide_inherit(child.stdin_write)?;
                 let exe = powershell_exe();
-                let encoded = encode_ps(command);
-                let mut cmdline = wide(&format!(
-                    "\"{exe}\" -NoProfile -NonInteractive -EncodedCommand {encoded}"
-                ));
+                let mut cmdline = wide(&ps_command_line(&exe, command, env)?);
                 let app = wide(&exe);
                 let dir = wide(&super::plain_dir(&cwd.display().to_string()));
                 let mut si: STARTUPINFOW = std::mem::zeroed();
@@ -1465,6 +1769,28 @@ mod win {
                     Poll::Exited(code)
                 }
             }
+        }
+
+        /// This command as a [`super::BgProc`] for a background task, with
+        /// the buffers its readers keep filling. The job, process and thread
+        /// move to the task; the pipe ends this side wrote with are closed.
+        fn into_bg(
+            mut self,
+        ) -> (
+            super::BgProc,
+            Arc<Mutex<super::CapBuf>>,
+            Arc<Mutex<super::CapBuf>>,
+        ) {
+            close(&mut self.stdout_write);
+            close(&mut self.stderr_write);
+            close(&mut self.stdin_write);
+            close(&mut self.stdin_read);
+            let job = std::mem::replace(&mut self.job, ptr::null_mut());
+            let process = std::mem::replace(&mut self.process, ptr::null_mut());
+            let thread = std::mem::replace(&mut self.thread, ptr::null_mut());
+            let out_buf = Arc::clone(&self.out_buf);
+            let err_buf = Arc::clone(&self.err_buf);
+            (bg_proc(job, process, thread, None, None), out_buf, err_buf)
         }
 
         fn output(self, stop: &dyn Fn() -> bool) -> Vec<u8> {
@@ -1578,6 +1904,55 @@ mod win {
         format!(r"{root}\System32\WindowsPowerShell\v1.0\powershell.exe")
     }
 
+    /// Opens every agent and hook script: UTF-8 in and out, so text that
+    /// isn't ASCII survives the pipes (Windows PowerShell 5.1 otherwise uses
+    /// the console's OEM code page and the output decodes as `?`), and no
+    /// progress records, which reach a piped stderr as CLIXML noise. Plain
+    /// .NET calls, so no module loads for it. On a line of its own, so an
+    /// error shows the command's whole line and the right column. Each
+    /// switch is tried on its own, so one that fails leaves the others.
+    pub(super) const PS_PRELUDE: &str = "$GrokHubUtf8 = [System.Text.UTF8Encoding]::new($false); $OutputEncoding = $GrokHubUtf8; $ProgressPreference = 'SilentlyContinue'; try { [Console]::OutputEncoding = $GrokHubUtf8 } catch {}; try { [Console]::InputEncoding = $GrokHubUtf8 } catch {}\n";
+    /// CreateProcess takes 32,767 UTF-16 units for the whole command line.
+    pub(super) const CMDLINE_MAX: usize = 32_000;
+
+    /// The PowerShell command line for `command`. A command whose encoded
+    /// form won't fit one command line (about 12,000 characters) goes to a
+    /// script file that a short bootstrap reads, deletes and runs in the same
+    /// scope, instead of failing to start.
+    pub(super) fn ps_command_line(
+        exe: &str,
+        command: &str,
+        env: &[(String, String)],
+    ) -> Result<String, String> {
+        let line = |script: &str| {
+            format!(
+                "\"{exe}\" -NoProfile -NonInteractive -EncodedCommand {}",
+                encode_ps(&format!("{PS_PRELUDE}{script}"))
+            )
+        };
+        let direct = line(command);
+        if direct.len() <= CMDLINE_MAX {
+            return Ok(direct);
+        }
+        let dir = env
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("TEMP"))
+            .map(|(_, v)| std::path::PathBuf::from(v))
+            .unwrap_or_else(std::env::temp_dir);
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let path = dir.join(format!(
+            "grokhub-cmd-{}-{}.ps1",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::write(&path, command.as_bytes())
+            .map_err(|err| format!("could not stage a long command: {err}"))?;
+        let quoted = path.display().to_string().replace('\'', "''");
+        Ok(line(&format!(
+            "$p = '{quoted}'; $s = [IO.File]::ReadAllText($p); try {{ [IO.File]::Delete($p) }} catch {{}}; . ([scriptblock]::Create($s))"
+        )))
+    }
+
     fn encode_ps(script: &str) -> String {
         let bytes: Vec<u8> = script
             .encode_utf16()
@@ -1668,9 +2043,6 @@ mod win {
         command: &str,
         plan: Option<&crate::sandbox::Plan>,
     ) -> Result<super::BgProc, String> {
-        use std::sync::atomic::AtomicBool;
-        use std::sync::{Arc, Mutex};
-
         if let Some(plan) = plan.filter(|p| p.isolation.is_some()) {
             return container(cwd, command, plan);
         }
@@ -1711,10 +2083,7 @@ mod win {
             hide_inherit(guard.stderr_read)?;
             hide_inherit(guard.stdin_write)?;
             let exe = powershell_exe();
-            let encoded = encode_ps(command);
-            let mut cmdline = wide(&format!(
-                "\"{exe}\" -NoProfile -NonInteractive -EncodedCommand {encoded}"
-            ));
+            let mut cmdline = wide(&ps_command_line(&exe, command, env)?);
             let app = wide(&exe);
             let dir = wide(&super::plain_dir(&cwd.display().to_string()));
             let mut si: STARTUPINFOW = std::mem::zeroed();
@@ -1763,6 +2132,25 @@ mod win {
         let process = std::mem::replace(&mut guard.process, ptr::null_mut());
         let thread = std::mem::replace(&mut guard.thread, ptr::null_mut());
         drop(guard);
+        Ok(bg_proc(
+            job,
+            process,
+            thread,
+            Some(Box::new(stdout) as Box<dyn std::io::Read + Send>),
+            Some(Box::new(stderr) as Box<dyn std::io::Read + Send>),
+        ))
+    }
+
+    /// A [`super::BgProc`] that owns `job`, `process` and `thread`.
+    fn bg_proc(
+        job: HANDLE,
+        process: HANDLE,
+        thread: HANDLE,
+        stdout: Option<Box<dyn std::io::Read + Send>>,
+        stderr: Option<Box<dyn std::io::Read + Send>>,
+    ) -> super::BgProc {
+        use std::sync::atomic::AtomicBool;
+
         let shared = Arc::new(WinProc {
             job: job as usize,
             process: process as usize,
@@ -1797,13 +2185,13 @@ mod win {
                     super::WaitPoll::Exited(i32::try_from(code).unwrap_or(1))
                 }
             }));
-        Ok(super::BgProc {
-            stdout: Some(Box::new(stdout)),
-            stderr: Some(Box::new(stderr)),
+        super::BgProc {
+            stdout,
+            stderr,
             armed,
             kill,
             wait,
-        })
+        }
     }
 
     #[cfg(test)]

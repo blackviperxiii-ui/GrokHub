@@ -11,10 +11,15 @@ pub fn collect_other_chip_threads(
     threads: &[threads::ChatThread],
     current_id: &str,
 ) -> Vec<ChipThread> {
-    threads
+    let mut recent: Vec<&threads::ChatThread> = threads
         .iter()
         .rev()
         .filter(|t| t.id != current_id && !t.scratch && !t.background)
+        .collect();
+    // Most recently opened first: the list is in creation order, not use.
+    recent.sort_by_key(|t| std::cmp::Reverse(t.accessed_ms));
+    recent
+        .into_iter()
         .filter_map(|t| chip_thread_from_messages(&t.title, &t.messages))
         .take(6)
         .collect()
@@ -104,5 +109,25 @@ mod tests {
             .into_owned();
         assert_eq!(expand_home("$HOME/proj"), want);
         assert_eq!(expand_home("~/proj"), want);
+    }
+
+    #[test]
+    fn other_chats_come_most_recently_used_first() {
+        let chat = |title: &str, accessed_ms: u64| {
+            let mut t = threads::ChatThread::new(title, false);
+            t.messages_mut()
+                .push(("user".into(), format!("work on {title}")));
+            t.messages_mut()
+                .push(("assistant".into(), format!("Started on {title}.")));
+            t.accessed_ms = accessed_ms;
+            t
+        };
+        // Created in this order; the oldest was opened last.
+        let list = vec![chat("Garden", 900), chat("Taxes", 100), chat("Trip", 500)];
+        let titles: Vec<String> = collect_other_chip_threads(&list, "")
+            .into_iter()
+            .map(|t| t.title)
+            .collect();
+        assert_eq!(titles, ["Garden", "Trip", "Taxes"]);
     }
 }

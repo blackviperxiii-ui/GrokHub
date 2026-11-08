@@ -105,8 +105,8 @@ fn refresh_chips_does_not_rebuild_every_frame() {
         "chip rebuild must not clone an 8MB complete into chat_pairs: {chips}"
     );
     assert!(
-        chips.contains("host_on: false"),
-        "empty chips must not inject HOST_CMD host_chips: {chips}"
+        !chips.contains("host_on") && !chips.contains("HOST_CMD"),
+        "chips have no HOST_CMD path to switch on: {chips}"
     );
     assert!(
         chips.contains("grok_connected: self.cabin_signed_in()"),
@@ -284,8 +284,8 @@ fn composer_stack_drops_approve_slots() {
     );
     let send = fn_src(&src, "send_chat");
     assert!(
-        send.contains("btw_queues_without_interrupt") && send.contains("side_ask_queue"),
-        "btw must queue a side ask instead of halting the live run: {send}"
+        send.contains("read_turn_for") && send.contains("start_side_run"),
+        "a side question gets its own answer instead of halting the live run: {send}"
     );
     let order = super::composer_stack_order();
     assert_eq!(
@@ -296,6 +296,7 @@ fn composer_stack_drops_approve_slots() {
             super::ComposerStackSlot::SessionTools,
             super::ComposerStackSlot::LiveWork,
             super::ComposerStackSlot::SlashPalette,
+            super::ComposerStackSlot::SavedFile,
             super::ComposerStackSlot::ScreenshotOffer,
             super::ComposerStackSlot::Attach,
             super::ComposerStackSlot::Voice,
@@ -321,9 +322,19 @@ fn composer_chips_stay_visible_mid_thread() {
         !body.contains("Vec::new()") && !body.contains("if home"),
         "a thread with messages must not clear ranked chips: {body}"
     );
+    let features = src
+        .split("fn feature_chips(")
+        .nth(1)
+        .and_then(|s| s.split("fn composer_chips(").next())
+        .expect("feature_chips");
+    let refresh = src
+        .split("fn refresh_chips(")
+        .nth(1)
+        .and_then(|s| s.split("fn feature_chips(").next())
+        .expect("refresh_chips");
     assert!(
-        body.contains("skill_offer_chip"),
-        "skill offer still inserts on the same row: {body}"
+        features.contains("skill_offer_chip") && refresh.contains("extra: &features"),
+        "skill offer still reaches the same row, ranked with the rest: {features}"
     );
     let ui = include_str!("chat_ui.rs");
     let chips = ui
@@ -438,11 +449,7 @@ fn voice_mode_has_indicator_and_stop() {
             && voice_job.contains("maybe_continue_ptt"),
         "PTT must not idle after one listen: {voice_job}"
     );
-    let speak = src
-        .split("fn speak_reply(")
-        .nth(1)
-        .and_then(|s| s.split("fn poll_eyes_cap(").next())
-        .expect("speak_reply");
+    let speak = fn_src(&src, "speak_reply");
     assert!(
         speak.contains("voice_hold_rx") && speak.contains("maybe_continue_ptt"),
         "TTS done must re-arm listen while the line is open: {speak}"
@@ -991,22 +998,6 @@ fn attach_sets_the_chip_and_paste_lands_in_the_composer() {
     assert!(cabin.messages.is_empty());
 }
 
-// Landed from PR #141.
-#[test]
-fn session_pills_save_chat_and_ask() {
-    let _lock = crate::config::hold_test_config();
-    let root = crate::config::test_config_root("session-pills");
-    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
-    let mut cabin = Cabin::quiet_for_test();
-    cabin.set_session_mode(SessionMode::Chat);
-    assert_eq!(cabin.session_mode, SessionMode::Chat);
-    assert_eq!(cabin.cfg.session_mode, "chat");
-    cabin.set_session_mode(SessionMode::Ask);
-    assert_eq!(cabin.session_mode, SessionMode::Ask);
-    assert_eq!(cabin.cfg.session_mode, "ask");
-    assert!(!cabin.running);
-}
-
 // Landed from PR #145.
 #[test]
 fn bubble_reply_quotes_into_the_composer() {
@@ -1089,7 +1080,7 @@ fn chip_apply_mode_and_help_stay_off_a_run() {
     let mut mode = super::Cabin::quiet_for_test();
     let before = mode.status.clone();
     let turns = mode.messages.len();
-    mode.apply_chip(chip("mode-fast", "__mode:fast", super::ChipKind::Mode));
+    mode.apply_chip(chip("mode-fast", "__mode:fast", super::ChipKind::Nav));
     // The router alone picks the model: an old mode chip does nothing at all.
     assert_eq!(mode.status, before);
     assert_eq!(mode.messages.len(), turns);
@@ -1156,20 +1147,20 @@ fn followup_queue_drains_one_and_stays_off_a_run() {
     assert!(!cabin.running);
 
     let second = "second line stays queued".to_string();
-    cabin.followup_queue = vec!["/help".into(), second.clone()];
+    cabin.followup_queue = Vec::<String>::from(["/help".into(), second.clone()]).into();
     cabin.drain_followup_queue();
     assert_eq!(cabin.followup_queue, vec![second]);
     assert_eq!(cabin.status, help_status);
     assert_eq!(cabin.messages.as_ref(), composer.messages.as_ref());
     assert!(!cabin.running);
 
-    cabin.followup_queue = vec!["/approve".into()];
+    cabin.followup_queue = Vec::<String>::from(["/approve".into()]).into();
     cabin.drain_followup_queue();
     assert_eq!(cabin.status, "Unknown command — /help");
     assert!(!cabin.running);
 
     let sentence = "plain sentence with no grok".to_string();
-    cabin.followup_queue = vec![sentence.clone()];
+    cabin.followup_queue = Vec::<String>::from([sentence.clone()]).into();
     cabin.drain_followup_queue();
     assert_eq!(cabin.status, grokhub_core::XAI_NEED_SIGNIN);
     assert!(
@@ -1213,12 +1204,22 @@ fn shell_chip_stays_off_a_run_when_host_is_blocked() {
         primary: false,
     };
 
+    // A tap only fills the box; Enter sends it down the typed `/sh` path.
+    fn tap_then_enter(cabin: &mut super::Cabin, chip: grokhub_core::QuickChip) {
+        cabin.apply_chip(chip);
+        assert_eq!(cabin.composer, "/sh cat /etc/passwd");
+        assert!(!cabin.running, "a shell chip never runs on tap");
+        assert!(cabin.messages.is_empty(), "a tap writes nothing to chat");
+        let typed = std::mem::take(&mut cabin.composer);
+        cabin.send_chat(typed);
+    }
+
     let mut off = super::Cabin::quiet_for_test();
     off.cfg.host_on = false;
     off.cfg.project_dir = project_dir.clone();
     off.permission_mode = grokhub_core::wire::PermissionMode::Ask;
     off.running = false;
-    off.apply_chip(chip.clone());
+    tap_then_enter(&mut off, chip.clone());
     assert_eq!(off.status, "Host off — /host on");
     assert!(!off.running);
 
@@ -1227,7 +1228,7 @@ fn shell_chip_stays_off_a_run_when_host_is_blocked() {
     ask.cfg.project_dir = project_dir;
     ask.permission_mode = grokhub_core::wire::PermissionMode::Ask;
     ask.running = false;
-    ask.apply_chip(chip);
+    tap_then_enter(&mut ask, chip);
     assert!(
         !ask.running,
         "running became true; the command was inside the project"
@@ -1473,4 +1474,229 @@ fn a_chip_turn_is_credited_to_its_chip_and_a_typed_turn_to_none() {
         );
     }
     assert_eq!(typed_before, Some(1));
+}
+
+/// The model ends a reply with a hidden `<chips>` block: it never shows,
+/// never lands in the saved chat, and its lines join the row's pool.
+#[test]
+fn a_reply_chips_block_is_hidden_and_feeds_the_row() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("reply-chips");
+    let mut t = crate::threads::ChatThread::new("Login fix", false);
+    t.messages = Arc::new(vec![("user".into(), "fix the login test".into())]);
+    let tid = t.id.clone();
+    cabin.threads = vec![t];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    cabin.running = true;
+    cabin.chat_job_thread = Some(tid);
+    cabin.begin_reply_chips();
+    // The tag splits across chunks, as a stream may send it.
+    for chunk in [
+        "Fixed: the token check was off by one.\n<chi",
+        "ps>\nask|Add a test for the expiry edge|Test the edge\nopen|history|See history\n",
+        "ask|Send the fix to the team|Tell the team\n</chips>",
+    ] {
+        cabin.ingest_stream_chunk(LiveKind::Say, chunk);
+        assert!(!cabin.stream_buf.contains("<chi"), "{}", cabin.stream_buf);
+    }
+    let shown: String = cabin.live_blocks.iter().map(|b| b.body.as_str()).collect();
+    assert!(
+        !shown.contains("chips") && !shown.contains("ask|"),
+        "{shown}"
+    );
+    let text = cabin.stream_buf.clone();
+    cabin.finish_acp_turn(text);
+    let saved = cabin
+        .messages
+        .last()
+        .map(|m| m.1.clone())
+        .unwrap_or_default();
+    assert!(saved.contains("off by one"), "{saved}");
+    assert!(
+        !saved.contains("chips") && !saved.contains("ask|"),
+        "{saved}"
+    );
+    let reply: Vec<(String, String)> = cabin
+        .reply_chips_here()
+        .into_iter()
+        .map(|c| (c.id, c.value))
+        .collect();
+    assert_eq!(
+        reply,
+        vec![
+            ("reply-0".into(), "Add a test for the expiry edge".into()),
+            ("reply-1".into(), "__nav:history".into()),
+        ],
+        "the send line is dropped"
+    );
+    // The next ask moves the chat on: the old reply's chips go.
+    let mut next = cabin.messages.as_ref().clone();
+    next.push(("user".into(), "thanks".into()));
+    cabin.messages = Arc::new(next);
+    assert!(cabin.reply_chips_here().is_empty());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// A reply that only came in the end event still loses its block.
+#[test]
+fn a_block_in_the_final_text_is_stripped_too() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("reply-chips-final");
+    let mut t = crate::threads::ChatThread::new("Plain", false);
+    t.messages = Arc::new(vec![("user".into(), "hi".into())]);
+    let tid = t.id.clone();
+    cabin.threads = vec![t];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    cabin.running = true;
+    cabin.chat_job_thread = Some(tid);
+    cabin.begin_reply_chips();
+    cabin.finish_acp_turn("Hello there.\n<chips>\nask|Plan my week|Plan the week\n</chips>".into());
+    let saved = cabin
+        .messages
+        .last()
+        .map(|m| m.1.clone())
+        .unwrap_or_default();
+    assert_eq!(saved.trim(), "Hello there.");
+    assert_eq!(cabin.reply_chips_here().len(), 1);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// The rule rides the live chat's prompt only, never a side question or an
+/// unwatched run, and leaves while the reply's chips keep losing.
+#[test]
+fn the_reply_chips_rule_follows_the_chat() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.reply_chips_on());
+    cabin.scheduled_perm = true;
+    assert!(!cabin.reply_chips_on());
+    cabin.scheduled_perm = false;
+    cabin.chip_memory.trailer_off_at = now_ms();
+    assert!(!cabin.reply_chips_on());
+    let src = include_str!("native_engine.rs");
+    let publish = src
+        .split("fn publish_native_cfg_for(")
+        .nth(1)
+        .and_then(|s| s.split("fn chat_rules(").next())
+        .expect("publish");
+    assert!(
+        publish.contains("reply_chips_on()") && publish.contains("CHIP_TRAILER_RULE"),
+        "{publish}"
+    );
+    let parts = src
+        .split("fn chat_prompt_parts_for(")
+        .nth(1)
+        .and_then(|s| s.split("fn native_gate(").next())
+        .expect("parts");
+    assert!(
+        !parts.contains("CHIP_TRAILER_RULE"),
+        "background jobs share chat_prompt_parts and must not get chips"
+    );
+}
+
+/// A reply's follow-ups are saved with the chat, come back after a reload,
+/// and run in the mode of the turn they came from.
+#[test]
+fn follow_ups_come_back_with_the_chat_and_its_mode() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("follow-ups-saved");
+    let mut t = crate::threads::ChatThread::new("Move plan", false);
+    t.messages = Arc::new(vec![("user".into(), "plan the move".into())]);
+    let tid = t.id.clone();
+    cabin.threads = vec![t];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    cabin.session_mode = SessionMode::Plan;
+    cabin.running = true;
+    cabin.chat_job_thread = Some(tid);
+    cabin.begin_reply_chips();
+    cabin.finish_acp_turn(
+        "Step one: book the van.\n<chips>\nask|Break step two into tasks|Split step two\n</chips>"
+            .into(),
+    );
+    let saved = cabin.threads[0]
+        .follow_ups
+        .clone()
+        .expect("saved with the chat");
+    assert_eq!((saved.at, saved.mode.as_str()), (1, "plan"));
+    // Reload: the chat file brings the follow-ups back.
+    let json = serde_json::to_string(&cabin.threads[0]).unwrap();
+    let back: crate::threads::ChatThread = serde_json::from_str(&json).unwrap();
+    let mut again = Cabin::quiet_for_test();
+    again.threads = vec![back];
+    again.thread_idx = 0;
+    again.messages = again.threads[0].messages.clone();
+    let chips = again.reply_chips_here();
+    assert_eq!(chips.len(), 1, "{chips:?}");
+    // Tapped while the box is in Chat, the follow-up goes back to Plan.
+    again.session_mode = SessionMode::Chat;
+    again.apply_chip(chips[0].clone());
+    assert_eq!(again.session_mode, SessionMode::Plan);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// A Do chip runs at once; the Undo chip that follows puts it back and is
+/// not learned as a suggestion.
+#[test]
+fn a_do_chip_runs_and_its_undo_puts_it_back() {
+    use grokhub_core::backup_nudge as bn;
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("chip-undo");
+    let dir = crate::config::config_dir();
+    let before = bn::load(&dir);
+    let snooze = grokhub_core::QuickChip {
+        id: bn::SNOOZE_ID.into(),
+        label: "Snooze backup reminders".into(),
+        value: String::new(),
+        kind: grokhub_core::ChipKind::Chat,
+        score: 1.0,
+        hint: String::new(),
+        primary: false,
+    };
+    assert_eq!(
+        grokhub_core::chip_action(&snooze),
+        grokhub_core::ChipAction::Do
+    );
+    cabin.apply_chip(snooze);
+    assert_ne!(bn::load(&dir), before, "the snooze ran on tap");
+    let chips = cabin.composer_chips();
+    let undo = chips.first().expect("undo chip");
+    assert_eq!(undo.id, grokhub_core::UNDO_CHIP_ID);
+    assert!(
+        undo.hint.contains("Snooze backup reminders"),
+        "{}",
+        undo.hint
+    );
+    let events = cabin.chip_memory.events.len();
+    cabin.take_chip_act(crate::cards::ChipRowAct::Apply(0), &chips);
+    assert_eq!(bn::load(&dir), before, "undo put the old state back");
+    assert_eq!(cabin.status, "Backup reminders are back on.");
+    assert_eq!(cabin.chip_memory.events.len(), events, "undo is not logged");
+    assert!(cabin
+        .composer_chips()
+        .iter()
+        .all(|c| c.id != grokhub_core::UNDO_CHIP_ID));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// One switch in Settings: off, no row paints and no reply asks for chips.
+#[test]
+fn the_suggestions_switch_turns_every_chip_off() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("chips-off");
+    assert!(cabin.cfg.suggestions && cabin.reply_chips_on());
+    cabin.set_suggestions(false);
+    assert!(!cabin.reply_chips_on(), "no tokens go to chips when off");
+    assert!(cabin.visible_chips.is_empty() && cabin.home_chips.is_empty());
+    assert!(cabin.composer_chips().is_empty());
+    cabin.persist_svc.flush();
+    assert!(!crate::config::load().suggestions, "the switch is saved");
+    let chat = include_str!("chat_ui.rs");
+    assert!(chat.contains("ComposerStackSlot::Chips if !self.cfg.suggestions => {}"));
+    let home = include_str!("home/page.rs");
+    assert!(home.contains("} else if self.cfg.suggestions {"));
+    cabin.set_suggestions(true);
+    assert!(cabin.reply_chips_on());
+    let _ = std::fs::remove_dir_all(root);
 }

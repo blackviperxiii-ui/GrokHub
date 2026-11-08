@@ -1,0 +1,1 @@
+- A summary compaction now goes out as the chat's own next request (same system head, tools and notes), so it reuses the chat's prompt cache; earlier notes are still dropped from the result.

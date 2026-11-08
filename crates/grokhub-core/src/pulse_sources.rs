@@ -1351,14 +1351,36 @@ impl SourceCache {
 
     /// Spend one summary call. False when today's budget is used up.
     pub fn take_summary_call(&mut self, now_ms: u64) -> bool {
-        let used = self.calls_today(now_ms);
+        self.take_call_on(now_ms / DAY_MS)
+    }
+
+    /// Calls made on `day` (a [`local_day`] number).
+    pub fn calls_on(&self, day: u64) -> u32 {
+        if self.summary_day == day {
+            self.summary_calls
+        } else {
+            0
+        }
+    }
+
+    /// Spend one call on `day` (a [`local_day`] number). False when that
+    /// day's budget is used up.
+    pub fn take_call_on(&mut self, day: u64) -> bool {
+        let used = self.calls_on(day);
         if used >= SUMMARY_CALLS_PER_DAY {
             return false;
         }
-        self.summary_day = now_ms / DAY_MS;
+        self.summary_day = day;
         self.summary_calls = used + 1;
         true
     }
+}
+
+/// The person's local day number: midnight is theirs, not UTC's. With no
+/// known offset it is the UTC day.
+pub fn local_day(now_ms: u64, utc_offset_min: Option<i32>) -> u64 {
+    let shift = i64::from(utc_offset_min.unwrap_or(0)) * 60_000;
+    (now_ms as i64).saturating_add(shift).max(0) as u64 / DAY_MS
 }
 
 pub fn load_cache(path: &std::path::Path) -> SourceCache {
@@ -1457,11 +1479,15 @@ pub struct Ranked {
 pub const RANK_MIN: u32 = 12;
 /// What a followed source's item that names no interest is worth: you chose the source.
 pub const FOLLOWED_RELEVANCE: u32 = 35;
+/// What news for a library game you play is worth when it names no interest:
+/// more than a followed source, because it is your game.
+pub const PLAYED_RELEVANCE: u32 = 60;
 /// Titles this alike (shared-word ratio, in percent) are the same story.
 pub const SAME_STORY_PCT: u32 = 60;
 
 /// How well an item fits: the strongest interest it names (pinned counts as 100), else
-/// half the weight of the interest its search was for, else the followed-source floor.
+/// half the weight of the interest its search was for, at least the played-game floor
+/// for a Steam game's own news, else the followed-source floor. A muted topic is 0.
 fn relevance(
     item: &SourceItem,
     profile: &crate::interests::InterestProfile,
@@ -1475,12 +1501,16 @@ fn relevance(
     {
         return (weight(t), Some(t.topic.clone()));
     }
-    match item.topic.as_deref() {
-        Some(topic) => match profile.find(topic).filter(|t| !t.muted) {
-            Some(t) => (weight(t) / 2, Some(t.topic.clone())),
-            None => (0, None),
-        },
-        None => (FOLLOWED_RELEVANCE, None),
+    let Some(topic) = item.topic.as_deref() else {
+        return (FOLLOWED_RELEVANCE, None);
+    };
+    let played = item.source_name == format!("{topic} on Steam");
+    match profile.find(topic) {
+        Some(t) if t.muted => (0, None),
+        Some(t) if played => ((weight(t) / 2).max(PLAYED_RELEVANCE), Some(t.topic.clone())),
+        Some(t) => (weight(t) / 2, Some(t.topic.clone())),
+        None if played => (PLAYED_RELEVANCE, Some(topic.to_string())),
+        None => (0, None),
     }
 }
 
@@ -1741,10 +1771,31 @@ const SUMMARY_RULES: &str = "You write the summaries on a news feed. For each nu
 /// One fast-model ask that summarizes a run's picks. None when nothing cleared the
 /// threshold: then no model is called.
 pub fn summary_messages(picks: &[Ranked]) -> Option<Vec<(String, String)>> {
+    summary_messages_with(picks, "")
+}
+
+/// [`summary_messages`] that also carries the person's own Feed instructions,
+/// so the sheet's "future posts follow them" holds for source posts too. The
+/// default instructions add nothing; the instructions steer tone and focus
+/// and never add facts.
+pub fn summary_messages_with(
+    picks: &[Ranked],
+    instructions: &str,
+) -> Option<Vec<(String, String)>> {
     if picks.is_empty() {
         return None;
     }
     let mut ask = String::new();
+    let own: String = instructions
+        .trim()
+        .chars()
+        .take(crate::pulse::FEED_INSTRUCTIONS_CAP)
+        .collect();
+    if !own.is_empty() && own != crate::pulse::DEFAULT_FEED_INSTRUCTIONS.trim() {
+        ask.push_str(&format!(
+            "Their feed instructions (follow them for tone and focus; they never add facts):\n{own}\n\n"
+        ));
+    }
     for (i, r) in picks.iter().enumerate() {
         let text = one_line(&r.item.summary, SUMMARY_CHARS);
         ask.push_str(&format!(
@@ -2311,6 +2362,50 @@ mod tests {
     }
 
     #[test]
+    fn news_for_a_game_you_play_ranks_without_an_interest() {
+        const H: u64 = 3_600_000;
+        let steam = |game: &str, title: &str| {
+            let mut i = item(title, &format!("https://store.test/{title}"), NOW - H);
+            i.source_name = format!("{game} on Steam");
+            i.topic = Some(game.into());
+            i
+        };
+        let p = profile(&[
+            ("Deep Rock Galactic", 30, false, false),
+            ("Rust", 80, false, true),
+        ]);
+        let got: Vec<(String, u32, Option<String>)> = rank(
+            &[
+                steam("Helldivers 2", "Patch 1.004 notes"),
+                steam("Deep Rock Galactic", "Season 6 roadmap"),
+                steam("Rust", "Monthly update"),
+            ],
+            &p,
+            NOW,
+        )
+        .into_iter()
+        .map(|r| (r.item.title, r.score, r.because))
+        .collect();
+        assert_eq!(PLAYED_RELEVANCE, 60);
+        assert_eq!(
+            got,
+            vec![
+                ("Patch 1.004 notes".into(), 60, Some("Helldivers 2".into())),
+                (
+                    "Season 6 roadmap".into(),
+                    60,
+                    Some("Deep Rock Galactic".into())
+                ),
+            ],
+            "a played game lifts to 60 (×100% fresh ×100% source); a muted one stays out"
+        );
+        // A web search for a topic that is not an interest still scores nothing.
+        let mut search = item("Patch notes roundup", "https://s.test", NOW - H);
+        search.topic = Some("Helldivers 2".into());
+        assert!(rank(&[search], &p, NOW).is_empty());
+    }
+
+    #[test]
     fn rank_scores_relevance_freshness_and_source_signal() {
         const H: u64 = 3_600_000;
         let p = profile(&[
@@ -2519,6 +2614,19 @@ mod tests {
     }
 
     #[test]
+    fn the_budget_counts_the_persons_own_day() {
+        // NOW is 08:00 UTC on Oct 11.
+        assert_eq!(local_day(NOW, None), 20_737);
+        assert_eq!(local_day(NOW, Some(-600)), 20_736);
+        assert_eq!(local_day(NOW, Some(300)), 20_737);
+        assert_eq!(local_day(NOW + 12 * 3_600_000, Some(300)), 20_738);
+        let mut cache = SourceCache::default();
+        assert!(cache.take_call_on(20_736));
+        assert_eq!(cache.calls_on(20_736), 1);
+        assert_eq!(cache.calls_on(20_737), 0);
+    }
+
+    #[test]
     fn only_the_picks_go_to_the_model_and_nothing_new_asks_nothing() {
         assert_eq!(summary_messages(&[]), None);
         let mut a = ranked(item("Rust 1.99 released", "https://a.test/1", NOW));
@@ -2544,6 +2652,24 @@ mod tests {
         assert_eq!(picks[1].item.summary, "Six quiet units. Tested at home.");
         assert_eq!(picks[0].item.summary, "812 points on Hacker News.");
         assert_eq!(apply_summaries(&mut picks, "Sorry, I can't."), 0);
+    }
+
+    #[test]
+    fn source_summaries_follow_the_persons_own_feed_instructions() {
+        let a = ranked(item("Rust 1.99 released", "https://a.test/1", NOW));
+        let plain = summary_messages(std::slice::from_ref(&a)).expect("asks");
+        let default = summary_messages_with(
+            std::slice::from_ref(&a),
+            crate::pulse::DEFAULT_FEED_INSTRUCTIONS,
+        )
+        .expect("asks");
+        assert_eq!(default, plain, "the default instructions add nothing");
+        let own = summary_messages_with(std::slice::from_ref(&a), "  Keep it short, no hype. ")
+            .expect("asks");
+        assert_eq!(
+            own[1].1,
+            "Their feed instructions (follow them for tone and focus; they never add facts):\nKeep it short, no hype.\n\n1. Rust 1.99 released (feed.test)"
+        );
     }
 
     #[test]

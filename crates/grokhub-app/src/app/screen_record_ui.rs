@@ -1,7 +1,7 @@
 //! "Record my screen" (card 11, Phase A). `/record [what's wrong]` or the
 //! palette starts a consented recording: a still every 2 seconds into
-//! `~/GrokHub/recordings/<stamp>`, a red indicator with Stop on top of every
-//! page, and a 2-minute cap. On stop a few keyframes and the note go to Grok
+//! `Documents/Loadout/Recordings/<stamp>`, a red indicator with Stop on top
+//! of every page, and a 2-minute cap. On stop a few keyframes and the note go to Grok
 //! once; the report lands in the chat that asked and on a feed card. Nothing
 //! on the computer is changed. Delete recording asks first.
 //!
@@ -33,6 +33,11 @@ pub(super) struct LiveRecording {
     note: String,
     chat: String,
     rx: mpsc::Receiver<RecordDone>,
+}
+
+/// The recording's clock as one Activity line.
+pub(super) fn recording_dock_line(live: &LiveRecording) -> String {
+    sr::indicator_line(live.started.elapsed().as_secs().min(sr::MAX_SECS))
 }
 
 /// `(title, folder, chat, reply or error)` from the diagnosis thread.
@@ -233,6 +238,15 @@ pub(super) fn report_summary(report: &sr::ScreenReport) -> String {
     }
 }
 
+/// The Recordings folder in your files (`Documents/Loadout/Recordings`). The
+/// recorder makes it when the first still is written.
+fn recordings_folder() -> PathBuf {
+    crate::config::user_folder_path_in(
+        &crate::config::config_dir(),
+        grokhub_core::user_files::UserFolder::Recordings,
+    )
+}
+
 impl Cabin {
     /// `/record [note]`: needs Settings → Screen recording on, and no
     /// anti-cheat running (the game guard).
@@ -265,12 +279,14 @@ impl Cabin {
             self.persist();
             return;
         }
-        let Some(home) = grokhub_core::paths::user_home() else {
-            self.status = "No home folder to save the recording in.".into();
-            return;
-        };
         let stamp = format!("{}-{}", Self::local_day(), now_ms() / 1000);
-        let dir = sr::recording_dir(&home, &stamp);
+        // Made here (past every refusal) so the files folder is remembered.
+        let recordings = crate::config::user_folder_in(
+            &crate::config::config_dir(),
+            grokhub_core::user_files::UserFolder::Recordings,
+        )
+        .unwrap_or_else(|_| recordings_folder());
+        let dir = sr::recording_dir(&recordings, &stamp);
         let stop = Arc::new(AtomicBool::new(false));
         let (tx, rx) = mpsc::channel();
         let flag = stop.clone();
@@ -386,6 +402,7 @@ impl Cabin {
             self.notify(
                 super::notices::NoticeKind::Info,
                 format!("Save the steps you showed as a skill? {title}"),
+                Some(self.notice_chat(chat)),
                 Some(super::notices::NoticeAction::SaveAsSkill(done.dir.clone())),
             );
         }
@@ -659,11 +676,13 @@ impl Cabin {
         });
     }
 
-    /// After the confirm: only a folder directly under ~/GrokHub/recordings.
+    /// After the confirm: only a folder directly under the Recordings folder
+    /// (or the old ~/GrokHub/recordings).
     pub(super) fn delete_recording(&mut self, card_id: &str, dir: &str, title: &str) {
         let dir = PathBuf::from(dir);
-        let home = grokhub_core::paths::user_home().unwrap_or_default();
-        if !sr::is_recording_dir(&home, &dir) {
+        let mut roots = vec![recordings_folder()];
+        roots.extend(grokhub_core::paths::user_home().map(|h| sr::old_recordings_root(&h)));
+        if !sr::is_recording_dir(&roots, &dir) {
             self.status = format!(
                 "Not deleted: {} is not a {} recording folder.",
                 dir.display(),
@@ -1076,7 +1095,7 @@ mod tests {
         assert_eq!(cabin.status, why);
         assert!(cabin.messages.last().is_some_and(|m| m.1.ends_with(why)));
         assert!(
-            !root.join("GrokHub").join("recordings").exists(),
+            !recordings_folder().exists() && !root.join("GrokHub").join("recordings").exists(),
             "no folder is made while the guard holds"
         );
         unpin(home);
@@ -1129,7 +1148,7 @@ mod tests {
             .last()
             .is_some_and(|m| m.1.ends_with(sr::CONSENT_OFF)));
         assert!(
-            !root.join("GrokHub").join("recordings").exists(),
+            !recordings_folder().exists() && !root.join("GrokHub").join("recordings").exists(),
             "no folder is made without consent"
         );
         cabin.run_slash_line("/record stop");
@@ -1141,7 +1160,7 @@ mod tests {
     fn with_no_key_the_recording_stays_local_and_gets_a_named_card_with_delete() {
         let (_g, root, home) = pinned("screenrec-local");
         let mut cabin = Cabin::quiet_for_test();
-        let dir = sr::recording_dir(&root, "2026-10-09-1");
+        let dir = sr::recording_dir(&recordings_folder(), "2026-10-09-1");
         std::fs::create_dir_all(&dir).unwrap();
         let frames: Vec<PathBuf> = (0..3).map(|i| dir.join(sr::frame_name(i, "png"))).collect();
         frames.iter().for_each(|f| png(f));
@@ -1414,9 +1433,9 @@ mod tests {
     fn delete_recording_clears_save_as_skill_offer() {
         let _wl = watch_learn_test_guard();
         watch_set(None);
-        let (_g, root, home) = pinned("screenrec-watch-delete");
+        let (_g, _root, home) = pinned("screenrec-watch-delete");
         let mut cabin = Cabin::quiet_for_test();
-        let dir = sr::recording_dir(&root, "2026-10-14-delete");
+        let dir = sr::recording_dir(&recordings_folder(), "2026-10-14-delete");
         std::fs::create_dir_all(&dir).unwrap();
         png(&dir.join(sr::frame_name(0, "png")));
         watch_set(Some(WatchPhase::Offer(WatchOffer {

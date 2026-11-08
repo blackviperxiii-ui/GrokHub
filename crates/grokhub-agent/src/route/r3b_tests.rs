@@ -23,8 +23,8 @@ use super::learn::RegistryFilters;
 use super::log::{route_records, ROUTE_TAIL_LINES};
 use super::policy::{class_row, CLASS_TABLE};
 use super::providers::{
-    self, add_provider, call_data, parse_base_url, request_body, usable, HttpReply, MemoryVault,
-    ProviderKind, ProviderSource, ProviderTransport, CALL_DATA, CALL_DATA_SENSITIVE,
+    self, add_provider, call_data, parse_base_url, request_body, usable, HttpReply, HttpStream,
+    MemoryVault, ProviderKind, ProviderSource, ProviderTransport, CALL_DATA, CALL_DATA_SENSITIVE,
 };
 use super::refresh::{run_refresh, RefreshJob};
 use super::spend::Spend;
@@ -81,6 +81,7 @@ impl ProviderTransport for Wire {
         Ok(HttpReply {
             status: 200,
             body: OR_LIST.into(),
+            headers: Vec::new(),
         })
     }
     fn post(
@@ -96,6 +97,7 @@ impl ProviderTransport for Wire {
         Ok(HttpReply {
             status: 200,
             body: OR_REPLY.into(),
+            headers: Vec::new(),
         })
     }
 }
@@ -238,9 +240,12 @@ fn the_model_list_needs_the_key_and_the_grant_and_gets_a_metadata_only_profile()
         named: Vec::new(),
         default_model: "grok-4.7".into(),
         now_ms: NOW,
+        xai_bearer: None,
     });
     assert_eq!(done.errors, Vec::<String>::new());
-    assert_eq!(wire.n(), 1);
+    // Two reads: the model list, and the refresh's quota check reading
+    // the account's `/key` state under the same grant.
+    assert_eq!(wire.n(), 2);
     let line = &read_egress(&dir)[0];
     assert_eq!(
         (
@@ -265,7 +270,7 @@ fn the_model_list_needs_the_key_and_the_grant_and_gets_a_metadata_only_profile()
         provider: p,
     };
     assert_eq!(src.fetch().unwrap_err(), "openrouter: no key");
-    assert_eq!(wire.n(), 1);
+    assert_eq!(wire.n(), 2);
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -884,9 +889,11 @@ fn effort_maps_per_provider_golden_bodies() {
             ..xai.clone()
         })
         .to_string(),
-        r#"{"include":["reasoning.encrypted_content"],"input":[{"content":[{"text":"be brief","type":"input_text"}],"role":"system","type":"message"},{"content":[{"text":"weather?","type":"input_text"}],"role":"user","type":"message"},{"arguments":"{\"city\":\"Oslo\"}","call_id":"c1","name":"weather","type":"function_call"},{"call_id":"c1","output":"4C","type":"function_call_output"}],"model":"grok-4.7","prompt_cache_key":"conv","reasoning":{"effort":"high"},"store":false,"stream":true,"tools":[{"description":"Look it up","name":"weather","parameters":{"properties":{"city":{"type":"string"}},"type":"object"},"type":"function"},{"type":"web_search"}]}"#
+        r#"{"include":["reasoning.encrypted_content"],"input":[{"content":[{"text":"be brief","type":"input_text"}],"role":"system","type":"message"},{"content":[{"text":"weather?","type":"input_text"}],"role":"user","type":"message"},{"arguments":"{\"city\":\"Oslo\"}","call_id":"c1","name":"weather","type":"function_call"},{"call_id":"c1","output":"4C","type":"function_call_output"}],"model":"grok-4.7","parallel_tool_calls":true,"prompt_cache_key":"conv","reasoning":{"effort":"high"},"store":false,"stream":true,"tools":[{"description":"Look it up","name":"weather","parameters":{"properties":{"city":{"type":"string"}},"type":"object"},"type":"function"},{"type":"web_search"}]}"#
     );
-    // Anthropic: `output_config.effort`, tool_use / tool_result blocks, the system prompt apart.
+    // Anthropic: `output_config.effort`, tool_use / tool_result blocks, the
+    // system prompt apart — and prompt-cache marks on the system text, the
+    // last tool and the last message block (failover PR 8).
     assert_eq!(
         request_body(
             ProviderKind::Anthropic,
@@ -896,7 +903,7 @@ fn effort_maps_per_provider_golden_bodies() {
             Some(32_000)
         )
         .to_string(),
-        r#"{"max_tokens":8192,"messages":[{"content":[{"text":"weather?","type":"text"}],"role":"user"},{"content":[{"id":"c1","input":{"city":"Oslo"},"name":"weather","type":"tool_use"}],"role":"assistant"},{"content":[{"content":"4C","tool_use_id":"c1","type":"tool_result"}],"role":"user"}],"model":"model-x","output_config":{"effort":"high"},"system":"be brief","tools":[{"description":"Look it up","input_schema":{"properties":{"city":{"type":"string"}},"type":"object"},"name":"weather"}]}"#
+        r#"{"max_tokens":8192,"messages":[{"content":[{"text":"weather?","type":"text"}],"role":"user"},{"content":[{"id":"c1","input":{"city":"Oslo"},"name":"weather","type":"tool_use"}],"role":"assistant"},{"content":[{"cache_control":{"type":"ephemeral"},"content":"4C","tool_use_id":"c1","type":"tool_result"}],"role":"user"}],"model":"model-x","output_config":{"effort":"high"},"system":[{"cache_control":{"type":"ephemeral"},"text":"be brief","type":"text"}],"tools":[{"cache_control":{"type":"ephemeral"},"description":"Look it up","input_schema":{"properties":{"city":{"type":"string"}},"type":"object"},"name":"weather"}]}"#
     );
     // OpenAI-compatible: `reasoning.effort`, chat messages, nested function tools; hosted tools dropped.
     assert_eq!(
@@ -1029,6 +1036,461 @@ fn e14_a_length_cut_with_no_answer_reads_as_a_spent_budget() {
     assert!(!filtered.out_of_budget());
 }
 
+/// Failover PR 8: a refusal is its own error class, never a silent
+/// empty answer, and a server-tool pause is an ordinary ending.
+#[test]
+fn an_anthropic_refusal_is_its_own_error_and_a_pause_is_an_ordinary_end() {
+    let refused = providers::parse_anthropic_reply(
+        r#"{"content":[],"stop_reason":"refusal","stop_details":{"type":"refusal","category":"bio"},"usage":{"input_tokens":3,"output_tokens":0}}"#,
+    );
+    match refused {
+        Err(ClientError::Refused { message }) => assert!(message.contains("bio"), "{message}"),
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+    let paused = providers::parse_anthropic_reply(
+        r#"{"content":[{"type":"text","text":"half the search is in"}],"stop_reason":"pause_turn","usage":{"input_tokens":3,"output_tokens":9}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        (paused.text.as_str(), paused.truncated),
+        ("half the search is in", false)
+    );
+    let tools = providers::parse_anthropic_reply(
+        r#"{"content":[{"type":"tool_use","id":"t1","name":"weather","input":{}}],"stop_reason":"tool_use"}"#,
+    )
+    .unwrap();
+    assert_eq!((tools.calls.len(), tools.truncated), (1, false));
+}
+
+/// A fake wire that answers a POST as an event stream: the canned SSE
+/// body is handed over as a reader, the way the real wire streams it,
+/// with one rate-limit header riding along.
+struct SseWire {
+    posts: Mutex<Vec<String>>,
+    sse: String,
+    status: u16,
+}
+
+impl ProviderTransport for SseWire {
+    fn get(&self, _url: &str, _headers: &[(String, String)]) -> Result<HttpReply, String> {
+        Ok(HttpReply {
+            status: 200,
+            body: OR_LIST.into(),
+            headers: Vec::new(),
+        })
+    }
+
+    fn post(
+        &self,
+        _url: &str,
+        _headers: &[(String, String)],
+        body: &str,
+    ) -> Result<HttpReply, String> {
+        self.posts.lock().unwrap().push(body.into());
+        Ok(HttpReply {
+            status: self.status,
+            body: self.sse.clone(),
+            headers: Vec::new(),
+        })
+    }
+
+    fn post_streamed(
+        &self,
+        _url: &str,
+        _headers: &[(String, String)],
+        body: &str,
+        _limit: Option<std::time::Duration>,
+    ) -> Result<HttpStream, String> {
+        self.posts.lock().unwrap().push(body.into());
+        Ok(HttpStream {
+            status: self.status,
+            headers: vec![("anthropic-ratelimit-requests-remaining".into(), "9".into())],
+            reader: Box::new(std::io::Cursor::new(self.sse.clone().into_bytes())),
+        })
+    }
+}
+
+/// A config dir whose Anthropic provider answers with the canned stream.
+fn sse_setup(label: &str, sse: &str) -> (PathBuf, Arc<SseWire>) {
+    let dir = test_dir(label);
+    providers::use_vault_for(&dir, Arc::new(MemoryVault::default()));
+    let wire = Arc::new(SseWire {
+        posts: Mutex::new(Vec::new()),
+        sse: sse.into(),
+        status: 200,
+    });
+    providers::use_transport_for(&dir, wire.clone());
+    add_provider(&dir, "https://api.anthropic.com", KEY, NOW).unwrap();
+    grant_destination(
+        &dir,
+        "api.anthropic.com",
+        CALL_DATA,
+        UserClick::from_click(),
+    )
+    .unwrap();
+    (dir, wire)
+}
+
+fn stream_call(dir: &Path, shown: &mut Vec<String>) -> Result<TurnOutput, ClientError> {
+    providers::stream_model(
+        dir,
+        "chat:default",
+        AN_MODEL,
+        Some("high"),
+        &hello(),
+        CALL_DATA,
+        "conv-1:11",
+        &CancelToken::new(),
+        &mut |ev| {
+            if let StreamEvent::TextDelta(t) = ev {
+                shown.push(t);
+            }
+        },
+    )
+}
+
+/// Failover PR 8: a streamed Claude call reaches the chat delta by
+/// delta, assembles its tool call, counts cache reads and writes into
+/// the spend ledger, and asks for the stream with cache marks on.
+#[test]
+fn a_streamed_claude_call_arrives_in_deltas_and_notes_its_spend() {
+    let sse = concat!(
+        "event: message_start\n",
+        "data: {\"type\":\"message_start\",\"message\":{\"id\":\"m1\",\"usage\":{\"input_tokens\":100,\"cache_creation_input_tokens\":25,\"cache_read_input_tokens\":40,\"output_tokens\":1}}}\n\n",
+        "event: content_block_start\n",
+        "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+        "event: content_block_delta\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello \"}}\n\n",
+        "event: content_block_delta\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"there\"}}\n\n",
+        "event: content_block_start\n",
+        "data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"weather\",\"input\":{}}}\n\n",
+        "event: content_block_delta\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"city\\\":\"}}\n\n",
+        "event: content_block_delta\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"\\\"Oslo\\\"}\"}}\n\n",
+        "event: content_block_stop\n",
+        "data: {\"type\":\"content_block_stop\",\"index\":1}\n\n",
+        "event: content_block_stop\n",
+        "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+        "event: message_delta\n",
+        "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":7}}\n\n",
+        "event: message_stop\n",
+        "data: {\"type\":\"message_stop\"}\n\n",
+    );
+    let (dir, wire) = sse_setup("anthropic-stream", sse);
+    save_registry(&dir, &fleet()).unwrap();
+    let mut shown: Vec<String> = Vec::new();
+    let out = stream_call(&dir, &mut shown).unwrap();
+    // The chat saw the answer arrive in pieces, not as one block.
+    assert_eq!(shown, ["Hello ", "there"]);
+    assert_eq!(out.text, "Hello there");
+    assert_eq!(
+        (
+            out.calls[0].call_id.as_str(),
+            out.calls[0].name.as_str(),
+            out.calls[0].arguments.as_str()
+        ),
+        ("t1", "weather", r#"{"city":"Oslo"}"#)
+    );
+    assert_eq!(
+        (
+            out.usage.input_tokens,
+            out.usage.output_tokens,
+            out.usage.cached_tokens
+        ),
+        (100, 7, 40)
+    );
+    // The request asked for the stream, with a cache mark on the last block.
+    let body: serde_json::Value = serde_json::from_str(&wire.posts.lock().unwrap()[0]).unwrap();
+    assert_eq!(body["stream"], json!(true));
+    assert_eq!(
+        body["messages"][0]["content"][0]["cache_control"],
+        json!({"type": "ephemeral"})
+    );
+    // The spend ledger counted fresh + cache read + cache write input,
+    // and kept the rate-limit header the reply carried.
+    let ledger = grokhub_core::model_registry::store::load_quota(&dir);
+    assert_eq!(ledger.anthropic.spend.day_input_tokens, 100 + 40 + 25);
+    assert_eq!(ledger.anthropic.spend.day_output_tokens, 7);
+    assert_eq!(ledger.anthropic.rate.requests.remaining, Some(9));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Failover PR 8: the streamed path keeps the native stream's failure
+/// rules — a failure after text showed is a cut-off, one before is the
+/// error itself (a disconnect the router can fail over from), and a
+/// streamed refusal is the refusal class.
+#[test]
+fn a_streamed_claude_failure_follows_the_shown_rules() {
+    // Text showed, then the stream errored: what showed is kept.
+    let (dir, _w) = sse_setup(
+        "anthropic-stream-cutoff",
+        concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5,\"output_tokens\":1}}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}\n\n",
+            "data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"overloaded\"}}\n\n",
+        ),
+    );
+    let mut shown: Vec<String> = Vec::new();
+    let err = stream_call(&dir, &mut shown).unwrap_err();
+    assert_eq!(shown, ["partial"]);
+    assert!(matches!(err, ClientError::CutOff(_)), "{err:?}");
+    let _ = std::fs::remove_dir_all(dir);
+
+    // Nothing showed and the stream just ended: a disconnect.
+    let (dir, _w) = sse_setup(
+        "anthropic-stream-dropped",
+        "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5,\"output_tokens\":1}}}\n\n",
+    );
+    let mut shown: Vec<String> = Vec::new();
+    let err = stream_call(&dir, &mut shown).unwrap_err();
+    assert!(matches!(err, ClientError::Disconnect), "{err:?}");
+    let _ = std::fs::remove_dir_all(dir);
+
+    // A refusal riding the stream is the refusal class, not an empty turn.
+    let (dir, _w) = sse_setup(
+        "anthropic-stream-refusal",
+        concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5,\"output_tokens\":1}}}\n\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"refusal\",\"stop_details\":{\"type\":\"refusal\",\"category\":\"sexual\"}},\"usage\":{\"output_tokens\":2}}\n\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
+        ),
+    );
+    let mut shown: Vec<String> = Vec::new();
+    let err = stream_call(&dir, &mut shown).unwrap_err();
+    assert!(matches!(err, ClientError::Refused { .. }), "{err:?}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A config dir whose OpenRouter provider answers with the canned stream.
+fn or_sse_setup(label: &str, sse: &str) -> (PathBuf, Arc<SseWire>) {
+    let dir = test_dir(label);
+    providers::use_vault_for(&dir, Arc::new(MemoryVault::default()));
+    let wire = Arc::new(SseWire {
+        posts: Mutex::new(Vec::new()),
+        sse: sse.into(),
+        status: 200,
+    });
+    providers::use_transport_for(&dir, wire.clone());
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    grant_destination(&dir, OR_DEST, CALL_DATA, UserClick::from_click()).unwrap();
+    (dir, wire)
+}
+
+fn or_stream_call(
+    dir: &Path,
+    shown: &mut Vec<String>,
+    thought: &mut Vec<String>,
+) -> Result<TurnOutput, ClientError> {
+    providers::stream_model(
+        dir,
+        "chat:default",
+        OR_MODEL,
+        Some("high"),
+        &hello(),
+        CALL_DATA,
+        "conv-1:12",
+        &CancelToken::new(),
+        &mut |ev| match ev {
+            StreamEvent::TextDelta(t) => shown.push(t),
+            StreamEvent::ReasoningDelta(t) => thought.push(t),
+            _ => {}
+        },
+    )
+}
+
+/// Failover PR 10: a streamed OpenRouter call reaches the chat delta by
+/// delta (keep-alive comments ignored), assembles its tool call from
+/// indexed pieces, merges its reasoning details, reads the usage chunk
+/// that comes after the finish reason (cost included), gives the
+/// reasoning back to the model the chunks name, and asks for the
+/// stream with its usage on.
+#[test]
+fn a_streamed_openrouter_call_arrives_in_deltas_with_its_tools_and_cost() {
+    let sse = concat!(
+        ": OPENROUTER PROCESSING\n\n",
+        "data: {\"model\":\"vendor/cheap\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning\":\"Think\",\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"Think\",\"index\":0}]}}]}\n\n",
+        "data: {\"model\":\"vendor/cheap\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning\":\"ing\",\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"ing\",\"signature\":\"sig\",\"index\":0}]}}]}\n\n",
+        "data: {\"model\":\"vendor/cheap\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello \"}}]}\n\n",
+        "data: {\"model\":\"vendor/cheap\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"there\"}}]}\n\n",
+        "data: {\"model\":\"vendor/cheap\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"type\":\"function\",\"function\":{\"name\":\"weather\",\"arguments\":\"\"}}]}}]}\n\n",
+        "data: {\"model\":\"vendor/cheap\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"city\\\":\"}}]}}]}\n\n",
+        "data: {\"model\":\"vendor/cheap\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"Oslo\\\"}\"}}]}}]}\n\n",
+        "data: {\"model\":\"vendor/cheap\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+        "data: {\"model\":\"vendor/cheap\",\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":4,\"completion_tokens_details\":{\"reasoning_tokens\":2},\"prompt_tokens_details\":{\"cached_tokens\":3},\"cost\":0.0000025}}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let (dir, wire) = or_sse_setup("or-stream", sse);
+    let (mut shown, mut thought) = (Vec::new(), Vec::new());
+    let out = or_stream_call(&dir, &mut shown, &mut thought).unwrap();
+    assert_eq!(shown, ["Hello ", "there"]);
+    assert_eq!(thought, ["Think", "ing"]);
+    assert_eq!(
+        (out.text.as_str(), out.reasoning.as_str()),
+        ("Hello there", "Thinking")
+    );
+    assert_eq!(
+        (
+            out.calls[0].call_id.as_str(),
+            out.calls[0].name.as_str(),
+            out.calls[0].arguments.as_str()
+        ),
+        ("c1", "weather", r#"{"city":"Oslo"}"#)
+    );
+    assert_eq!(
+        (
+            out.usage.input_tokens,
+            out.usage.output_tokens,
+            out.usage.reasoning_tokens,
+            out.usage.cached_tokens,
+            out.usage.cost_in_usd_ticks
+        ),
+        (12, 4, 2, 3, 25_000)
+    );
+    // The reasoning details merged into one piece, and they go back to
+    // the model that wrote them.
+    assert_eq!(out.reasoning_items.len(), 1);
+    let details = out.reasoning_items[0]
+        .reasoning_details("vendor/cheap")
+        .expect("tagged with the answering model");
+    assert_eq!(
+        (
+            details[0]["text"].as_str(),
+            details[0]["signature"].as_str()
+        ),
+        (Some("Thinking"), Some("sig"))
+    );
+    assert!(!out.truncated);
+    let body: serde_json::Value = serde_json::from_str(&wire.posts.lock().unwrap()[0]).unwrap();
+    assert_eq!(
+        (&body["stream"], &body["stream_options"]),
+        (&json!(true), &json!({"include_usage": true}))
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Failover PR 10: the streamed OpenRouter path keeps the native
+/// stream's failure rules — an error chunk before any text is the error
+/// itself (a rate limit the router fails over from, stamped on the
+/// quota ledger), one after text showed is a cut-off, a stream with no
+/// finish reason is a disconnect, a cut at the output limit is a
+/// truncation, and a host that answered with the whole reply is read
+/// whole.
+#[test]
+fn a_streamed_openrouter_failure_follows_the_shown_rules() {
+    // An error chunk before anything showed: the error class itself.
+    let (dir, _w) = or_sse_setup(
+        "or-stream-limit",
+        concat!(
+            ": OPENROUTER PROCESSING\n\n",
+            "data: {\"error\":{\"code\":429,\"message\":\"Rate limit exceeded: free-models-per-day\"},\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\"},\"finish_reason\":\"error\"}]}\n\n",
+        ),
+    );
+    let (mut shown, mut thought) = (Vec::new(), Vec::new());
+    let err = or_stream_call(&dir, &mut shown, &mut thought).unwrap_err();
+    assert!(shown.is_empty());
+    assert!(matches!(err, ClientError::RateLimited { .. }), "{err:?}");
+    // The limit is account news: the ledger asks for a re-read at once.
+    let ledger = grokhub_core::model_registry::store::load_quota(&dir);
+    assert!(ledger.openrouter.recheck_at_ms > 0);
+    let _ = std::fs::remove_dir_all(dir);
+
+    // Text showed, then the provider failed mid-stream: what showed is kept.
+    let (dir, _w) = or_sse_setup(
+        "or-stream-cutoff",
+        concat!(
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"}}]}\n\n",
+            "data: {\"error\":{\"code\":502,\"message\":\"Provider returned error\"},\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\"},\"finish_reason\":\"error\"}]}\n\n",
+        ),
+    );
+    let (mut shown, mut thought) = (Vec::new(), Vec::new());
+    let err = or_stream_call(&dir, &mut shown, &mut thought).unwrap_err();
+    assert_eq!(shown, ["partial"]);
+    assert!(matches!(err, ClientError::CutOff(_)), "{err:?}");
+    let _ = std::fs::remove_dir_all(dir);
+
+    // Nothing showed and the stream just ended: a disconnect.
+    let (dir, _w) = or_sse_setup("or-stream-dropped", ": OPENROUTER PROCESSING\n\n");
+    let (mut shown, mut thought) = (Vec::new(), Vec::new());
+    let err = or_stream_call(&dir, &mut shown, &mut thought).unwrap_err();
+    assert!(matches!(err, ClientError::Disconnect), "{err:?}");
+    let _ = std::fs::remove_dir_all(dir);
+
+    // Cut at the output limit: a truncation the run loop carries on from.
+    let (dir, _w) = or_sse_setup(
+        "or-stream-length",
+        concat!(
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"long\"}}]}\n\n",
+            "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"length\"}]}\n\n",
+            "data: [DONE]\n\n",
+        ),
+    );
+    let (mut shown, mut thought) = (Vec::new(), Vec::new());
+    let out = or_stream_call(&dir, &mut shown, &mut thought).unwrap();
+    assert_eq!(
+        (
+            out.text.as_str(),
+            out.truncated,
+            out.truncate_reason.as_deref()
+        ),
+        ("long", true, Some("max_output_tokens"))
+    );
+    let _ = std::fs::remove_dir_all(dir);
+
+    // The whole reply instead of a stream: read whole, sent as one delta.
+    let (dir, _w) = or_sse_setup("or-stream-whole", OR_REPLY);
+    let (mut shown, mut thought) = (Vec::new(), Vec::new());
+    let out = or_stream_call(&dir, &mut shown, &mut thought).unwrap();
+    assert_eq!(shown, ["hello from the provider"]);
+    assert_eq!(out.usage.cost_in_usd_ticks, 25_000);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Failover PR 10: an OpenAI-compatible host other than OpenRouter keeps
+/// the whole-reply call, its answer one delta, with no stream asked for.
+#[test]
+fn a_custom_openai_compatible_host_keeps_the_whole_reply() {
+    let dir = test_dir("custom-host-whole");
+    providers::use_vault_for(&dir, Arc::new(MemoryVault::default()));
+    let wire = Arc::new(SseWire {
+        posts: Mutex::new(Vec::new()),
+        sse: OR_REPLY.into(),
+        status: 200,
+    });
+    providers::use_transport_for(&dir, wire.clone());
+    let p = add_provider(&dir, "https://api.example.com/v1", KEY, NOW).unwrap();
+    grant_destination(&dir, "api.example.com", CALL_DATA, UserClick::from_click()).unwrap();
+    let model = format!("{}/vendor/cheap", p.id);
+    let mut shown: Vec<String> = Vec::new();
+    let out = providers::stream_model(
+        &dir,
+        "chat:default",
+        &model,
+        None,
+        &hello(),
+        CALL_DATA,
+        "conv-1:13",
+        &CancelToken::new(),
+        &mut |ev| {
+            if let StreamEvent::TextDelta(t) = ev {
+                shown.push(t);
+            }
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        (out.text.as_str(), shown.len()),
+        ("hello from the provider", 1)
+    );
+    let body: serde_json::Value = serde_json::from_str(&wire.posts.lock().unwrap()[0]).unwrap();
+    assert_eq!(
+        (&body["stream"], body.get("stream_options")),
+        (&json!(false), None)
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 // ---- End to end: the route record, and the key is nowhere ---------------------
 
 struct Never;
@@ -1144,17 +1606,20 @@ impl ProviderTransport for KeyWire {
             Ok(HttpReply {
                 status: 200,
                 body: json!({"key": KEY, "user_id": "u-1"}).to_string(),
+                headers: Vec::new(),
             })
         } else {
             Ok(HttpReply {
                 status: 403,
                 body: "{}".into(),
+                headers: Vec::new(),
             })
         }
     }
 }
 
-/// The browser: approve at once by calling the `callback_url` with `code`.
+/// The browser: approve at once by calling the `callback_url` with `code`,
+/// echoing the `state` the link carried, as OpenRouter does.
 fn approving_browser(
     code: &'static str,
     seen: Arc<Mutex<String>>,
@@ -1168,6 +1633,11 @@ fn approving_browser(
             .unwrap_or("")
             .replace("%3A", ":")
             .replace("%2F", "/");
+        let state = query
+            .split('&')
+            .find_map(|p| p.strip_prefix("state="))
+            .unwrap_or("")
+            .to_string();
         let target = callback.trim_start_matches("http://").to_string();
         let (host, path) = target
             .split_once('/')
@@ -1178,7 +1648,7 @@ fn approving_browser(
             let mut sock = std::net::TcpStream::connect(&host).unwrap();
             let _ = write!(
                 sock,
-                "GET /{path}?code={code} HTTP/1.1\r\nHost: {host}\r\n\r\n"
+                "GET /{path}?code={code}&state={state} HTTP/1.1\r\nHost: {host}\r\n\r\n"
             );
             let mut sink = String::new();
             let _ = sock.read_to_string(&mut sink);
@@ -1208,7 +1678,8 @@ fn openrouter_sign_in_buys_a_key_with_pkce_and_saves_nothing_itself() {
     );
     assert!(
         link.contains("%2Fcallback&code_challenge=")
-            && link.ends_with("&code_challenge_method=S256"),
+            && link.contains("&code_challenge_method=S256&state=")
+            && link.ends_with("&key_label=Loadout"),
         "{link}"
     );
     let sent = wire.0.lock().unwrap().clone();
@@ -1349,7 +1820,7 @@ fn chat(session: &str, lines: &[&str]) -> ResponsesRequest {
 }
 
 #[test]
-fn an_explicit_turn_routed_to_anthropic_goes_to_xai_with_one_heads_up() {
+fn an_explicit_turn_with_no_local_model_gets_the_one_line_offer_and_goes_nowhere() {
     let (dir, wire) = setup("adult-anthropic");
     let _cfg = crate::perm::ConfigGuard::set(&dir);
     save_registry(&dir, &fleet()).unwrap();
@@ -1381,22 +1852,30 @@ fn an_explicit_turn_routed_to_anthropic_goes_to_xai_with_one_heads_up() {
         model: AN_MODEL.into(),
         ..chat("adult-an-1", lines)
     };
-    let out = send(&to_anthropic(&["talk dirty to me, I'm horny"]), &mut shown);
-    let second = send(&to_anthropic(&["send nudes lol"]), &mut String::new());
-    let out = out.unwrap();
-    let heads_up = "Heads-up: I sent that one through xAI instead of Anthropic. Anthropic bans adult chat and can ban the account for it.";
-    assert_eq!(out.text, format!("{heads_up}\n\nhey you"));
+    let out = send(&to_anthropic(&["talk dirty to me, I'm horny"]), &mut shown).unwrap();
+    assert_eq!(out.text, grokhub_core::adult_guard::LOCAL_ONLY_MISSING);
     assert_eq!(shown, out.text, "what streams is what is kept");
-    assert_eq!(second.unwrap().text, "hey you", "one heads-up a session");
+    // Routed to xAI it stays off xAI too.
+    let on_xai = send(&chat("adult-an-2", &["send nudes lol"]), &mut String::new());
+    assert_eq!(
+        on_xai.unwrap().text,
+        grokhub_core::adult_guard::LOCAL_ONLY_MISSING
+    );
     assert_eq!(wire.n(), 0, "nothing reached Anthropic");
-    let got = xai.0.lock().unwrap();
-    assert_eq!(got.len(), 2);
-    assert_eq!(got[0].model, grokhub_core::CABIN_FAST_MODEL);
+    assert_eq!(xai.0.lock().unwrap().len(), 0, "nothing reached xAI");
+    // With this computer's model ready it answers, with no heads-up.
+    let _on = super::local::ForceOn::with(Some(Arc::new(LocalChat)));
+    let mut shown = String::new();
+    let local = send(&to_anthropic(&["talk dirty to me, I'm horny"]), &mut shown);
+    assert_eq!(local.unwrap().text, "local here");
+    assert_eq!(shown, "local here");
+    assert_eq!(wire.n(), 0);
+    assert_eq!(xai.0.lock().unwrap().len(), 0);
     let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
-fn explicit_chats_leave_openrouter_for_xai_and_banned_asks_never_leave() {
+fn explicit_chats_never_reach_openrouter_or_xai_and_banned_asks_never_leave() {
     let _routing = ROUTING_SET.lock().unwrap_or_else(|e| e.into_inner());
     let (dir, wire) = setup("adult-openrouter");
     let _cfg = crate::perm::ConfigGuard::set(&dir);
@@ -1436,13 +1915,19 @@ fn explicit_chats_leave_openrouter_for_xai_and_banned_asks_never_leave() {
         say("user", "and now?"),
     ]);
     let clean = send(vec![say("user", "fix my wifi")]);
-    for out in [explicit, history, persona, banned, clean] {
+    assert_eq!(
+        explicit.unwrap().text,
+        grokhub_core::adult_guard::LOCAL_ONLY_MISSING
+    );
+    // Decided per message: a clean ask from an 18+ chat still gets answered,
+    // with the 18+ turns and the 18+ voice left out of what goes online.
+    for out in [history, persona, banned, clean] {
         out.unwrap();
     }
     assert_eq!(
         xai.0.lock().unwrap().len(),
-        3,
-        "the three explicit chats went to xAI"
+        0,
+        "no explicit chat went to xAI"
     );
     let bodies: Vec<serde_json::Value> = wire
         .bodies()
@@ -1451,10 +1936,21 @@ fn explicit_chats_leave_openrouter_for_xai_and_banned_asks_never_leave() {
         .collect();
     assert_eq!(
         bodies.len(),
-        2,
-        "only the held and the clean chat reached OpenRouter"
+        4,
+        "every chat but the 18+ ask reached OpenRouter"
     );
-    let held = bodies[0].to_string();
+    let (history, persona) = (bodies[0].to_string(), bodies[1].to_string());
+    assert!(history.contains("continue"), "{history}");
+    assert!(
+        !history.contains("smut") && !history.contains("Here you go"),
+        "{history}"
+    );
+    assert!(persona.contains("my build broke"), "{persona}");
+    assert!(
+        !persona.contains(grokhub_core::adult_guard::ADULT_VOICE),
+        "{persona}"
+    );
+    let held = bodies[2].to_string();
     assert!(!held.contains("schoolgirl"), "{held}");
     assert!(held.contains("Loadout held this message back"), "{held}");
     for body in &bodies {
@@ -1478,6 +1974,7 @@ impl ProviderTransport for LimitWire {
         Ok(HttpReply {
             status: 200,
             body: OR_LIST.into(),
+            headers: Vec::new(),
         })
     }
     fn post(&self, _: &str, _: &[(String, String)], _: &str) -> Result<HttpReply, String> {
@@ -1497,6 +1994,7 @@ impl ProviderTransport for LimitWire {
         Ok(HttpReply {
             status: 200,
             body: OR_REPLY.into(),
+            headers: Vec::new(),
         })
     }
 }
@@ -1582,7 +2080,7 @@ impl super::local::LocalRuntime for LocalChat {
 }
 
 #[test]
-fn an_18_plus_chat_xai_cant_take_falls_back_to_the_local_model_and_a_clean_one_does_not() {
+fn an_18_plus_chat_goes_straight_to_the_local_model_and_a_clean_one_does_not() {
     let (dir, wire) = setup("adult-local-fallback");
     let _cfg = crate::perm::ConfigGuard::set(&dir);
     save_registry(&dir, &fleet()).unwrap();
@@ -1598,21 +2096,16 @@ fn an_18_plus_chat_xai_cant_take_falls_back_to_the_local_model_and_a_clean_one_d
     };
     let explicit = send(&["talk dirty to me, I'm horny"]).unwrap();
     assert_eq!(explicit.text, "local here");
-    // xAI's failure is logged as a failure, and the answer as the local model's.
+    // xAI is never tried: the only call logged is the local model's.
     let health = grokhub_core::model_registry::store::take_observations(&dir);
     let lines: Vec<(&str, grokhub_core::model_registry::CallStatus)> = health
         .iter()
         .map(|o| (o.model.as_str(), o.status))
         .collect();
     let local = super::local::live_tier();
-    assert_eq!(lines.len(), 2, "{health:?}");
-    assert!(
-        lines[0].0 != local && lines[0].1 == grokhub_core::model_registry::CallStatus::Error,
-        "xAI's model is logged as failed: {health:?}"
-    );
     assert_eq!(
-        lines[1],
-        (local, grokhub_core::model_registry::CallStatus::Ok),
+        lines,
+        [(local, grokhub_core::model_registry::CallStatus::Ok)],
         "the answer is the local model's: {health:?}"
     );
     // A banned ask is held before any model sees it: the notice is the answer.
@@ -1627,46 +2120,105 @@ fn an_18_plus_chat_xai_cant_take_falls_back_to_the_local_model_and_a_clean_one_d
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// Viper's Nov 7 report: an 18+ chat worked while the local model was loaded,
+/// then hung and refused everything once it was unloaded for a game. Replays
+/// load, unload, an ordinary turn, an 18+ turn, the chat's summary, a reload
+/// and a model that has to load again.
 #[test]
-fn a_rerouted_18_plus_turn_the_local_model_answers_says_so_in_its_heads_up() {
-    let (dir, wire) = setup("adult-local-heads-up");
+fn an_18_plus_chat_keeps_answering_after_its_local_model_is_unloaded() {
+    use grokhub_core::adult_guard::{ADULT_VOICE, LOCAL_ONLY_MISSING};
+    use grokhub_core::personality::{EXPLICIT_SAFETY_LINE, SAFETY_LINE};
+    let (dir, wire) = setup("adult-unload");
     let _cfg = crate::perm::ConfigGuard::set(&dir);
     save_registry(&dir, &fleet()).unwrap();
-    add_provider(&dir, "https://api.anthropic.com", KEY, NOW).unwrap();
-    grant_destination(
-        &dir,
-        "api.anthropic.com",
-        CALL_DATA,
-        UserClick::from_click(),
-    )
-    .unwrap();
-    let _on = super::local::ForceOn::with(Some(Arc::new(LocalChat)));
-    rank_first(&dir, AN_MODEL);
-    let mut shown = String::new();
-    let req = ResponsesRequest {
-        model: AN_MODEL.into(),
-        ..chat("adult-local-heads-up-1", &["talk dirty to me, I'm horny"])
+    let xai = XaiRec::default();
+    let say = |role: &str, text: &str| InputItem::Message {
+        role: role.into(),
+        content: vec![ContentPart::InputText(text.into())],
     };
-    let out = live::stream_routed(
-        &XaiSignedOut,
-        &req,
-        &CancelToken::new(),
-        &mut |ev| {
-            if let StreamEvent::TextDelta(t) = ev {
-                shown.push_str(&t);
-            }
-        },
-        "chat:default",
+    let system =
+        format!("RULES\n\nPersonality: Whore mode. Flirty. {ADULT_VOICE}\n{EXPLICIT_SAFETY_LINE}");
+    let history = vec![
+        say("system", &system),
+        say("user", "wanna have some sexy time"),
+        say("assistant", "Mmm, get naked and talk dirty to me."),
+    ];
+    let send = |ask: &str, class: &str| {
+        let mut req = chat("adult-unload-1", &[]);
+        req.input = history.clone();
+        req.input.push(say("user", ask));
+        let (mut shown, mut thought) = (String::new(), String::new());
+        let out = live::stream_routed(
+            &xai,
+            &req,
+            &CancelToken::new(),
+            &mut |ev| match ev {
+                StreamEvent::TextDelta(t) => shown.push_str(&t),
+                StreamEvent::ReasoningDelta(t) => thought.push_str(&t),
+                StreamEvent::RateWait(_) => {}
+            },
+            class,
+        );
+        (out, shown, thought)
+    };
+    let sent_to_xai = || xai.0.lock().unwrap().len();
+
+    // Loaded: the 18+ turn runs on this computer's model.
+    let loaded = super::local::ForceOn::with(Some(Arc::new(LocalChat)));
+    let (out, shown, _) = send("lets do this, I'm horny", "chat:default");
+    assert_eq!(out.unwrap().text, "local here");
+    assert_eq!(shown, "local here");
+    assert_eq!(sent_to_xai(), 0);
+
+    // Unloaded for a game.
+    drop(loaded);
+    // An ordinary turn is answered, online, without the 18+ parts.
+    let (out, shown, _) = send("whats a good budget gaming mouse", "chat:default");
+    assert_eq!(out.unwrap().text, "hey you");
+    assert_eq!(shown, "hey you");
+    let body = responses_body(xai.0.lock().unwrap().last().unwrap()).to_string();
+    assert!(body.contains("budget gaming mouse"), "{body}");
+    assert!(
+        body.contains("RULES") && body.contains(SAFETY_LINE),
+        "{body}"
     );
-    let out = out.unwrap();
-    let heads_up = "Heads-up: I sent that one to this computer's model instead of Anthropic. Anthropic bans adult chat and can ban the account for it.";
-    assert_eq!(out.text, format!("{heads_up}\n\nlocal here"));
-    assert!(!shown.contains("through xAI"), "{shown}");
-    assert_eq!(
-        shown, out.text,
-        "the chat shows the local answer, not just the heads-up"
+    for adult in [
+        "sexy time",
+        "naked",
+        ADULT_VOICE,
+        "Whore mode",
+        "fictional adult content",
+    ] {
+        assert!(!body.contains(adult), "{adult} went online: {body}");
+    }
+    // An 18+ turn says in one line why it can't run, and sends nothing.
+    let (out, shown, _) = send("lets get naked", "chat:default");
+    assert_eq!(out.unwrap().text, LOCAL_ONLY_MISSING);
+    assert_eq!(shown, LOCAL_ONLY_MISSING);
+    assert_eq!(sent_to_xai(), 1);
+    // The chat's summary never becomes that notice, and never goes online.
+    let (out, shown, _) = send("Summarize the conversation so far.", super::CLASS_COMPACT);
+    assert!(out.is_err(), "{out:?}");
+    assert!(shown.is_empty(), "{shown}");
+    assert_eq!(sent_to_xai(), 1);
+
+    // Loaded again: 18+ turns are back on this computer's model.
+    let again = super::local::ForceOn::with(Some(Arc::new(LocalChat)));
+    let (out, _, thought) = send("lets get naked", "chat:default");
+    assert_eq!(out.unwrap().text, "local here");
+    assert!(
+        thought.is_empty(),
+        "a loaded model needs no note: {thought}"
     );
-    assert_eq!(wire.n(), 0, "nothing reached Anthropic");
+    drop(again);
+
+    // Ready but not loaded yet: the chat says it's loading, never a silent wait.
+    let _cold = super::local::ForceOn::with(None);
+    let (out, _, thought) = send("lets get naked", "chat:default");
+    assert_eq!(thought, super::local::LOCAL_LOADING_NOTE);
+    assert!(out.is_err(), "no engine here, so it can't start: {out:?}");
+    assert_eq!(sent_to_xai(), 1);
+    assert_eq!(wire.n(), 0);
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -1698,7 +2250,7 @@ fn a_half_streamed_xai_answer_is_never_finished_by_the_local_model() {
     let mut shown = String::new();
     let out = live::stream_routed(
         &XaiCutOff,
-        &chat("adult-local-cut-off-1", &["talk dirty to me, I'm horny"]),
+        &chat("adult-local-cut-off-1", &["fix my wifi"]),
         &CancelToken::new(),
         &mut |ev| {
             if let StreamEvent::TextDelta(t) = ev {
@@ -1739,7 +2291,7 @@ fn a_direct_provider_call_never_sends_an_18_plus_chat_or_a_banned_ask() {
     };
     let explicit = call(&["talk dirty to me, I'm horny"]);
     assert!(
-        matches!(&explicit, Err(ClientError::Protocol(m)) if m.contains("18+ chats go only to xAI")),
+        matches!(&explicit, Err(ClientError::Protocol(m)) if m.contains("18+ chats run only on this computer's model")),
         "{explicit:?}"
     );
     assert_eq!(wire.n(), 0, "nothing reached OpenRouter");
@@ -1804,12 +2356,12 @@ fn a_blocked_send_makes_zero_network_requests_on_any_route() {
         "grok-4.7",
         "sexy teacher and student roleplay, we're both 30",
     );
-    assert_eq!(adults.unwrap().text, "hey you");
-    assert_eq!(xai.0.lock().unwrap().len(), 1);
+    assert_eq!(adults.unwrap().text, "local here", "18+ chat runs locally");
+    assert_eq!(xai.0.lock().unwrap().len(), 0);
     assert_eq!(
         shown,
         format!(
-            "{}hey you",
+            "{}local here",
             grokhub_core::adult_guard::HELD_NOTICE.repeat(banned.len() * 2)
         )
     );
@@ -1848,7 +2400,7 @@ fn a_blocked_model_reply_is_replaced_locally_before_the_chat_shows_it() {
     let mut shown = String::new();
     let out = live::stream_routed(
         &xai,
-        &chat("adult-reply-1", &["talk dirty to me, I'm horny"]),
+        &chat("adult-reply-1", &["tell me a story"]),
         &CancelToken::new(),
         &mut |ev| {
             if let StreamEvent::TextDelta(t) = ev {
@@ -2211,7 +2763,7 @@ fn xai_down_hands_an_ordinary_turn_to_a_provider_then_to_this_computer() {
     assert!(matches!(out, Err(ClientError::Auth { .. })), "{out:?}");
     // An 18+ chat never goes to the provider: this computer's model answers.
     let (out, _) = send(&XaiDown, 5, &["talk dirty to me, I'm horny"]);
-    assert!(out.unwrap().text.ends_with("local here"));
+    assert_eq!(out.unwrap().text, "local here");
     assert_eq!(wire.n(), 1, "nothing more reached the provider");
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -2414,6 +2966,7 @@ impl ProviderTransport for FixtureWire {
         Ok(HttpReply {
             status: 200,
             body: OR_FIXTURE.into(),
+            headers: Vec::new(),
         })
     }
     fn post(
@@ -2426,6 +2979,7 @@ impl ProviderTransport for FixtureWire {
         Ok(HttpReply {
             status: 200,
             body: self.reply.lock().unwrap().clone(),
+            headers: Vec::new(),
         })
     }
 }
@@ -2737,4 +3291,430 @@ fn an_openrouter_long_context_step_reaches_the_ceiling_and_the_cost() {
         0.5090025,
         "every token at the long rates: $2.50/M in, $15/M out"
     );
+}
+
+#[test]
+fn a_claude_row_becomes_auto_pickable_once_the_bundled_table_prices_it() {
+    // Anthropic's own listing names no prices, so before the model card
+    // table the row could never enter Auto's pool.
+    let body = r#"{"data":[{"id":"claude-sonnet-5.5","type":"model","display_name":"Sonnet",
+        "max_input_tokens":1000000,"max_tokens":128000,
+        "capabilities":{"effort":{"levels":["low","medium","high"]}}}]}"#;
+    let rows = grokhub_core::model_registry::parse_anthropic_catalog("anthropic", body).unwrap();
+    let need = providers::PickNeed {
+        tools: true,
+        reasoning: true,
+        ctx_tokens: 10_000,
+        ceiling_usd_per_m: 15.0,
+    };
+    assert!(
+        !providers::auto_pickable("anthropic/claude-sonnet-5.5", &rows[0], &need),
+        "no prices in the listing: never pickable"
+    );
+    let mut reg = Registry::default();
+    reg.apply_refresh(&[Listing::new(SourceKind::Anthropic, rows)], &[], 1);
+    let rec = reg.get("anthropic/claude-sonnet-5.5").unwrap();
+    assert_eq!(rec.route(), grokhub_core::model_registry::Route::Anthropic);
+    // The bundled table priced it ($10/M out, under the $15 ceiling) and
+    // filled its window, so the same filter now lets it in.
+    assert!(providers::auto_pickable(
+        "anthropic/claude-sonnet-5.5",
+        &rec.meta,
+        &need
+    ));
+    assert_eq!(rec.meta.prices.cache_write, Some(25_000));
+}
+
+/// A wire that answers every call 402: the account is out of credit.
+#[derive(Default)]
+struct BrokeWire(Mutex<Vec<Sent>>);
+
+impl BrokeWire {
+    fn calls(&self) -> usize {
+        self.0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(url, _, _)| url.contains("chat/completions"))
+            .count()
+    }
+}
+
+impl ProviderTransport for BrokeWire {
+    fn get(&self, url: &str, headers: &[(String, String)]) -> Result<HttpReply, String> {
+        self.0
+            .lock()
+            .unwrap()
+            .push((url.into(), headers.to_vec(), String::new()));
+        Ok(HttpReply {
+            status: 200,
+            body: OR_LIST.into(),
+            headers: Vec::new(),
+        })
+    }
+    fn post(
+        &self,
+        url: &str,
+        headers: &[(String, String)],
+        body: &str,
+    ) -> Result<HttpReply, String> {
+        self.0
+            .lock()
+            .unwrap()
+            .push((url.into(), headers.to_vec(), body.into()));
+        Ok(HttpReply {
+            status: 402,
+            body: r#"{"error":{"message":"Insufficient credits"}}"#.into(),
+            headers: Vec::new(),
+        })
+    }
+}
+
+/// Grok answers, and remembers the model it was asked for.
+struct GrokOk(Mutex<String>);
+
+impl ModelClient for GrokOk {
+    fn stream(
+        &self,
+        r: &ResponsesRequest,
+        _c: &CancelToken,
+        s: &mut dyn FnMut(StreamEvent),
+    ) -> Result<TurnOutput, ClientError> {
+        *self.0.lock().unwrap() = r.model.clone();
+        s(StreamEvent::TextDelta("hello from grok".into()));
+        Ok(TurnOutput {
+            text: "hello from grok".into(),
+            ..TurnOutput::default()
+        })
+    }
+}
+
+#[test]
+fn a_provider_out_of_credit_cools_it_and_grok_takes_the_turn() {
+    let dir = test_dir("r3b-402-fallback");
+    providers::use_vault_for(&dir, Arc::new(MemoryVault::default()));
+    let wire = Arc::new(BrokeWire::default());
+    providers::use_transport_for(&dir, wire.clone());
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    save_registry(&dir, &fleet()).unwrap();
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    grant_destination(&dir, OR_DEST, CALL_DATA, UserClick::from_click()).unwrap();
+    rank_first(&dir, OR_MODEL);
+    let grok = GrokOk(Mutex::new(String::new()));
+    let mut shown = String::new();
+    let out = live::stream_routed(
+        &grok,
+        &chat("chat-402", &["say hello"]),
+        &CancelToken::new(),
+        &mut |ev| {
+            if let StreamEvent::TextDelta(t) = ev {
+                shown.push_str(&t);
+            }
+        },
+        "chat:default",
+    )
+    .expect("Grok takes the turn the provider couldn't pay for");
+    assert_eq!(out.text, "hello from grok");
+    assert_eq!(shown, "hello from grok");
+    assert_eq!(grok.0.lock().unwrap().as_str(), "grok-4.7");
+    // The provider was tried once, then cooled: the next pick skips it.
+    assert_eq!(wire.calls(), 1);
+    assert!(live::cooling(&dir, OR_MODEL, grokhub_core::now_ms()));
+    // The route record names Grok as the route that answered.
+    let (_, rec) = route_records(&dir, ROUTE_TAIL_LINES)
+        .pop()
+        .expect("a route record");
+    assert_eq!(
+        (rec.used.provider.as_str(), rec.used.model.as_str()),
+        ("xai", "grok-4.7")
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn provider_fallible_covers_limits_credit_and_outages_only() {
+    let fallible = [
+        ClientError::RateLimited {
+            retry_after_secs: None,
+            message: "slow down".into(),
+        },
+        ClientError::PaymentRequired {
+            status: 402,
+            message: "Insufficient credits".into(),
+        },
+        ClientError::Server {
+            status: 502,
+            message: "bad gateway".into(),
+            retry_after_secs: None,
+        },
+        ClientError::Auth {
+            status: 401,
+            message: "bad key".into(),
+        },
+        ClientError::Transport("connection reset".into()),
+        ClientError::Disconnect,
+        ClientError::IdleTimeout,
+    ];
+    for err in &fallible {
+        assert!(live::provider_fallible(err), "{err:?}");
+    }
+    let not_fallible = [
+        ClientError::Cancelled,
+        // A refusal about the prompt: the next route would refuse it too.
+        ClientError::Protocol("Blocked by content safety".into()),
+        // Too long for this model is the run loop's compaction retry, and
+        // the app's own offline mode blocks every cloud route alike.
+        ClientError::Protocol("HTTP 400: maximum context length exceeded".into()),
+        ClientError::Transport(
+            "Offline only is on, so Loadout can't reach the internet. Turn it off in Settings → AI models to use this."
+                .into(),
+        ),
+    ];
+    for err in &not_fallible {
+        assert!(!live::provider_fallible(err), "{err:?}");
+    }
+}
+
+/// Failover step 9: a wire that answers every POST with one canned
+/// status and body, and keeps what it was sent.
+struct ProbeWire {
+    status: u16,
+    body: String,
+    sent: Mutex<Vec<String>>,
+}
+
+impl ProviderTransport for ProbeWire {
+    fn get(&self, _url: &str, _headers: &[(String, String)]) -> Result<HttpReply, String> {
+        Ok(HttpReply {
+            status: 200,
+            body: OR_LIST.into(),
+            headers: Vec::new(),
+        })
+    }
+    fn post(
+        &self,
+        _url: &str,
+        _headers: &[(String, String)],
+        body: &str,
+    ) -> Result<HttpReply, String> {
+        self.sent.lock().unwrap().push(body.into());
+        Ok(HttpReply {
+            status: self.status,
+            body: self.body.clone(),
+            headers: Vec::new(),
+        })
+    }
+}
+
+const TRIAL_MODEL: &str = "openrouter/vendor/new:free";
+
+/// A granted OpenRouter key, a registry with one free model on tryout
+/// (saved, as the send path reads it) and the canned wire.
+fn probe_setup(label: &str, status: u16, body: &str) -> (PathBuf, Arc<ProbeWire>, Registry) {
+    let dir = test_dir(label);
+    providers::use_vault_for(&dir, Arc::new(MemoryVault::default()));
+    let wire = Arc::new(ProbeWire {
+        status,
+        body: body.into(),
+        sent: Mutex::new(Vec::new()),
+    });
+    providers::use_transport_for(&dir, wire.clone());
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    grant_destination(&dir, OR_DEST, CALL_DATA, UserClick::from_click()).unwrap();
+    let or = |ids: &[&str]| {
+        Listing::new(
+            SourceKind::OpenAiCompatible,
+            ids.iter().map(|id| ModelMeta::bare(id)).collect(),
+        )
+    };
+    let mut reg = Registry::default();
+    reg.apply_refresh(&[or(&["openrouter/vendor/old:free"])], &[], NOW);
+    reg.apply_refresh(
+        &[or(&["openrouter/vendor/old:free", TRIAL_MODEL])],
+        &[],
+        NOW,
+    );
+    assert!(reg.get(TRIAL_MODEL).is_some_and(|r| r.probation.is_some()));
+    save_registry(&dir, &reg).unwrap();
+    (dir, wire, reg)
+}
+
+fn tally(reg: &Registry) -> (u32, u32, u32) {
+    let p = reg.get(TRIAL_MODEL).unwrap().probation.clone().unwrap();
+    (p.calls, p.ok, p.probes)
+}
+
+#[test]
+fn a_tryout_probe_counts_a_tool_call_that_answers_and_one_that_does_not() {
+    let call = r#"{"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"record_number","arguments":"{\"n\":7}"}}]}}]}"#;
+    let (dir, wire, mut reg) = probe_setup("trial-probe-pass", 200, call);
+    assert_eq!(super::trial::run_probes(&dir, &mut reg, NOW), 1);
+    assert_eq!(tally(&reg), (1, 1, 1));
+    // The probe goes as the model's own answer: no backup, a small cap, the tool.
+    let sent: serde_json::Value = serde_json::from_str(&wire.sent.lock().unwrap()[0]).unwrap();
+    assert!(sent.get("models").is_none(), "{sent}");
+    assert_eq!(sent["max_tokens"], json!(512));
+    assert!(sent.to_string().contains("record_number"));
+    // The second of the day is the text probe; a third waits for tomorrow.
+    super::trial::run_probes(&dir, &mut reg, NOW + 1);
+    assert_eq!(tally(&reg), (2, 1, 2));
+    assert_eq!(super::trial::run_probes(&dir, &mut reg, NOW + 2), 0);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_limit_on_a_probe_counts_against_the_account_not_the_model() {
+    let (dir, wire, mut reg) = probe_setup(
+        "trial-probe-limit",
+        429,
+        r#"{"error":{"code":429,"message":"Rate limit exceeded: free-models-per-day"}}"#,
+    );
+    assert_eq!(super::trial::run_probes(&dir, &mut reg, NOW), 1);
+    assert_eq!(tally(&reg), (0, 0, 0));
+    assert_eq!(wire.sent.lock().unwrap().len(), 1);
+    // A server error is the model's.
+    let (dir2, _wire, mut reg2) = probe_setup("trial-probe-502", 502, r#"{"error":{"code":502}}"#);
+    super::trial::run_probes(&dir2, &mut reg2, NOW);
+    assert_eq!(tally(&reg2), (1, 0, 1));
+    for d in [dir, dir2] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}
+
+#[test]
+fn no_grant_means_no_probe() {
+    let dir = test_dir("trial-probe-nogrant");
+    providers::use_vault_for(&dir, Arc::new(MemoryVault::default()));
+    let wire = Arc::new(ProbeWire {
+        status: 200,
+        body: OR_REPLY.into(),
+        sent: Mutex::new(Vec::new()),
+    });
+    providers::use_transport_for(&dir, wire.clone());
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    let or = |ids: &[&str]| {
+        Listing::new(
+            SourceKind::OpenAiCompatible,
+            ids.iter().map(|id| ModelMeta::bare(id)).collect(),
+        )
+    };
+    let mut reg = Registry::default();
+    reg.apply_refresh(&[or(&["openrouter/vendor/old:free"])], &[], NOW);
+    reg.apply_refresh(
+        &[or(&["openrouter/vendor/old:free", TRIAL_MODEL])],
+        &[],
+        NOW,
+    );
+    assert_eq!(super::trial::run_probes(&dir, &mut reg, NOW), 0);
+    assert!(wire.sent.lock().unwrap().is_empty());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The connection check's wire: a listing answer and a reply answer.
+struct CheckWire {
+    list_status: u16,
+    reply_body: String,
+    posts: Mutex<u32>,
+}
+
+impl ProviderTransport for CheckWire {
+    fn get(&self, _url: &str, _headers: &[(String, String)]) -> Result<HttpReply, String> {
+        Ok(HttpReply {
+            status: self.list_status,
+            body: if self.list_status == 200 {
+                OR_LIST.into()
+            } else {
+                r#"{"error":{"code":401,"message":"No auth credentials found"}}"#.into()
+            },
+            headers: Vec::new(),
+        })
+    }
+    fn post(
+        &self,
+        _url: &str,
+        _headers: &[(String, String)],
+        _body: &str,
+    ) -> Result<HttpReply, String> {
+        *self.posts.lock().unwrap() += 1;
+        Ok(HttpReply {
+            status: 200,
+            body: self.reply_body.clone(),
+            headers: Vec::new(),
+        })
+    }
+}
+
+fn check_setup(label: &str, list_status: u16, grant: bool) -> (PathBuf, Arc<CheckWire>) {
+    let dir = test_dir(label);
+    providers::use_vault_for(&dir, Arc::new(MemoryVault::default()));
+    let wire = Arc::new(CheckWire {
+        list_status,
+        reply_body: r#"{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"Ready"}}]}"#.into(),
+        posts: Mutex::new(0),
+    });
+    providers::use_transport_for(&dir, wire.clone());
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    if grant {
+        grant_destination(&dir, OR_DEST, CALL_DATA, UserClick::from_click()).unwrap();
+    }
+    let mut reg = Registry::default();
+    reg.apply_refresh(
+        &[Listing::new(
+            SourceKind::OpenAiCompatible,
+            vec![ModelMeta::bare("openrouter/vendor/cheap")],
+        )],
+        &[],
+        NOW,
+    );
+    save_registry(&dir, &reg).unwrap();
+    (dir, wire)
+}
+
+#[test]
+fn the_connection_check_asks_the_wire_and_reports_what_it_said() {
+    use super::check::{self, Wire};
+    // Allowed: the key lists models and the cheapest one says the word.
+    let (dir, wire) = check_setup("check-ready", 200, true);
+    let c = check::run(&dir, true, NOW);
+    let p = &c.providers[0];
+    assert_eq!(p.name, "OpenRouter");
+    assert_eq!(p.listing, Some(Wire::Listed(1)));
+    assert!(matches!(p.reply, Some(Wire::Replied(_))), "{:?}", p.reply);
+    assert_eq!(*wire.posts.lock().unwrap(), 1);
+    assert!(check::report(&c, false).contains("Auto can use it."));
+    // Saved settings only: nothing goes out.
+    let quiet = check::run(&dir, false, NOW);
+    assert_eq!(
+        (
+            quiet.providers[0].listing.clone(),
+            quiet.providers[0].reply.clone()
+        ),
+        (None, None)
+    );
+    assert_eq!(*wire.posts.lock().unwrap(), 1);
+    // Not allowed yet: nothing goes out, and the report says why.
+    let (dir2, wire2) = check_setup("check-ungranted", 200, false);
+    let c2 = check::run(&dir2, true, NOW);
+    assert_eq!(
+        (
+            c2.providers[0].listing.clone(),
+            c2.providers[0].reply.clone()
+        ),
+        (None, None)
+    );
+    assert_eq!(*wire2.posts.lock().unwrap(), 0);
+    assert!(check::report(&c2, false).contains("not allowed yet"));
+    // A rejected key says so, and no reply is tried.
+    let (dir3, wire3) = check_setup("check-badkey", 401, true);
+    let c3 = check::run(&dir3, true, NOW);
+    assert_eq!(c3.providers[0].listing, Some(Wire::KeyRejected));
+    assert_eq!(*wire3.posts.lock().unwrap(), 0);
+    let r3 = check::report(&c3, false);
+    assert!(
+        r3.contains("rejected the saved key") && !r3.contains("Auto can use it"),
+        "{r3}"
+    );
+    for d in [dir, dir2, dir3] {
+        let _ = std::fs::remove_dir_all(d);
+    }
 }

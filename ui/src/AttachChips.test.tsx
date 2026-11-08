@@ -13,6 +13,8 @@ const api = vi.hoisted(() => ({
 }));
 
 vi.mock("./api", () => ({
+  quickChips: () => Promise.resolve([]),
+  chipOutcome: () => Promise.resolve(true),
   // No chat saved from an earlier launch.
   getLastChat: () => Promise.resolve(null),
   loadChat: vi.fn(),
@@ -109,7 +111,7 @@ describe("composer attachments", () => {
     await userEvent.type(screen.getByLabelText("Message"), "what is this{Enter}");
     await waitFor(() => expect(api.sendChat).toHaveBeenCalled());
     const id = api.stageAttachment.mock.calls[0][0];
-    expect(api.sendChat).toHaveBeenCalledWith(id, "what is this", "chat", [shot.path]);
+    expect(api.sendChat).toHaveBeenCalledWith(id, "what is this", undefined, [shot.path]);
     expect(screen.queryByRole("button", { name: "Remove shot.png" })).toBeNull();
     // The message shows what went with it.
     expect(screen.getByText(/what is this\s+Picture shot\.png/)).toHaveAttribute("data-role", "user");
@@ -125,7 +127,7 @@ describe("composer attachments", () => {
     expect(send).toBeEnabled();
     await userEvent.click(send);
     await waitFor(() =>
-      expect(api.sendChat).toHaveBeenCalledWith(expect.any(String), "", "chat", [staged("notes.md").path]),
+      expect(api.sendChat).toHaveBeenCalledWith(expect.any(String), "", undefined, [staged("notes.md").path]),
     );
   });
 

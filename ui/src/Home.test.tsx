@@ -1,28 +1,79 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { HomePage, HomeSlot, Xp } from "./api";
+import type { HomePage, HomeSlot, PulseAct, PulsePage, QuickChip, TileView, Xp } from "./api";
 
 const api = vi.hoisted(() => ({
   getHome: vi.fn<(conversationId?: string) => Promise<HomePage>>(),
+  pulseAct: vi.fn<(id: string, act: PulseAct) => Promise<PulsePage>>(),
+  quickChips: vi.fn<(surface: string) => Promise<QuickChip[]>>(),
+  chipOutcome: vi.fn<(surface: string, id: string, picked: boolean) => Promise<boolean>>(),
+  libraryPlay: vi.fn<(appId: number) => Promise<string>>(),
+  homeOpenClip: vi.fn<(index: number) => Promise<void>>(),
+  libraryFriends: vi.fn<() => Promise<void>>(),
+  homeTurnOn: vi.fn<(feature: string) => Promise<void>>(),
+  homeCatalog: vi.fn(),
+  setHomeLayout: vi.fn(),
+  openUrl: vi.fn<(url: string) => Promise<void>>(),
 }));
 
 vi.mock("./api", () => api);
 
-import { CABIN_NOTE, DESKTOP_NOTE, Home, NO_STEPS, grouped } from "./Home";
+import { Home, NO_STEPS, grouped, pollSecs, staleLabel } from "./Home";
 
 const XP: Xp = {
   level: 3,
+  title: "Rookie",
   xp: 1240,
   nextLevelXp: 1500,
   frac: 0.48,
   today: 110,
-  streak: [false, true, false, false, true, false, true],
+  week: {
+    days: [false, true, false, false, true, false, true],
+    today: 6,
+    active: 3,
+    target: 4,
+    inARow: 5,
+    played: 7,
+    freezes: 2,
+  },
 };
 
+function view(over: Partial<TileView>): TileView {
+  return {
+    state: "ready",
+    tag: null,
+    text: { big: "", caption: "", detail: null, tone: "normal" },
+    rows: [],
+    progress: null,
+    buttons: [],
+    tap: null,
+    updatedMs: 1,
+    ...over,
+  };
+}
+
+const PC: TileView = view({
+  text: { big: "RTX 4070", caption: "12 GB VRAM · 32 GB RAM", detail: null, tone: "normal" },
+  rows: ["GPU driver", "Memory", "Free for models", "Fan", "Extra"].map((label) => ({
+    label,
+    value: `${label} value`,
+    tone: label === "Free for models" ? "warn" : "normal",
+    tap: null,
+  })),
+  buttons: [{ label: "Tune-up", action: { kind: "ask", ask: "Check this PC and suggest a tune-up." }, primary: true }],
+});
+
+const SQUAD: TileView = view({
+  state: "empty",
+  text: { big: "—", caption: "Friends online show here once Steam friends are linked", detail: null, tone: "quiet" },
+  buttons: [{ label: "Find a duo", action: { kind: "ask", ask: "Find a duo tonight" }, primary: true }],
+  tap: { kind: "ask", ask: "Find a duo tonight" },
+});
+
 function slot(over: Partial<HomeSlot> & Pick<HomeSlot, "slot" | "module" | "name" | "tile">): HomeSlot {
-  return { size: "small", purpose: "", ...over };
+  return { size: "small", purpose: "", refreshSecs: null, ...over };
 }
 
 /** The Mission Control layout with every tile the shell fills, and two it doesn't. */
@@ -62,7 +113,7 @@ const PAGE: HomePage = {
       module: "pc_loadout",
       name: "PC Loadout",
       purpose: "Health at a glance: score, temps, storage, RAM, startup apps",
-      tile: { kind: "cabin" },
+      tile: { kind: "view", view: PC },
     }),
     slot({
       slot: "medium-2",
@@ -103,7 +154,7 @@ const PAGE: HomePage = {
       name: "Up Next",
       tile: { kind: "upNext", games: [{ appId: 10, name: "Portal 2" }] },
     }),
-    slot({ slot: "small-4", module: "squad", name: "Squad", tile: { kind: "desktop" } }),
+    slot({ slot: "small-4", module: "squad", name: "Squad", tile: { kind: "view", view: SQUAD } }),
   ],
 };
 
@@ -116,6 +167,14 @@ const tile = (name: string) => screen.getByRole("listitem", { name });
 describe("Home", () => {
   beforeEach(() => {
     api.getHome.mockReset();
+    api.pulseAct.mockReset().mockResolvedValue({} as PulsePage);
+    api.quickChips.mockReset().mockResolvedValue([]);
+    api.chipOutcome.mockReset().mockResolvedValue(true);
+    api.libraryPlay.mockReset().mockResolvedValue("Starting");
+    api.homeOpenClip.mockReset().mockResolvedValue();
+    api.libraryFriends.mockReset().mockResolvedValue();
+    api.homeTurnOn.mockReset().mockResolvedValue();
+    api.openUrl.mockReset().mockResolvedValue();
   });
 
   it("renders the layout's tiles in order from the fixture", async () => {
@@ -137,7 +196,7 @@ describe("Home", () => {
     expect(within(objectives).getByText("Read the logs")).toHaveClass("done");
     expect(within(objectives).getByText("Restart the service")).not.toHaveClass("done");
     expect(within(objectives).queryByText("Skip it")).toBeNull();
-    expect(objectives).toHaveTextContent("Lvl 3");
+    expect(objectives).toHaveTextContent("Lvl 3 · Rookie");
     expect(objectives).toHaveTextContent("1,240 XP");
 
     expect(within(tile("Recent Chats")).getByRole("button", { name: "Untitled chat" })).toBeInTheDocument();
@@ -152,22 +211,160 @@ describe("Home", () => {
     expect(screen.getByText("1,240 / 1,500 XP")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Memory · 12 (2 to review)" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Connectors · 2 / 3 connected · 1 failing" })).toBeInTheDocument();
-    expect(screen.getByText(/Mission Control layout\. Edit Home in the cabin/)).toBeInTheDocument();
+    expect(screen.getByText(/Mission Control layout\./)).toBeInTheDocument();
   });
 
-  it("shows the cabin's note on a tile the shell can't fill, and the computer's on the web", async () => {
+  it("draws every other module from the shared tile model, cut to its size", async () => {
     api.getHome.mockResolvedValue(PAGE);
-    render(<Home {...routes()} remote={false} />);
+    const go = routes();
+    render(<Home {...go} remote={false} />);
     const pc = await screen.findByRole("listitem", { name: "PC Loadout" });
-    expect(pc).toHaveClass("away");
-    expect(within(pc).getByText(CABIN_NOTE)).toBeInTheDocument();
-    expect(pc).toHaveTextContent("Health at a glance");
-    expect(within(pc).queryByRole("button")).toBeNull();
+    expect(pc).not.toHaveClass("away");
+    expect(pc).toHaveTextContent("RTX 4070");
+    expect(pc).toHaveTextContent("12 GB VRAM · 32 GB RAM");
+    // Medium holds four rows; the fifth waits for a Large slot.
+    expect(within(pc).getAllByRole("listitem")).toHaveLength(4);
+    expect(pc).not.toHaveTextContent("Extra");
+    expect(within(pc).getByText("Free for models value")).toHaveClass("tone-warn");
+    await userEvent.click(within(pc).getByRole("button", { name: "Tune-up" }));
+    expect(go.onAsk).toHaveBeenLastCalledWith("Check this PC and suggest a tune-up.");
+    // A Small empty tile says what it will show and is one tap.
     const squad = tile("Squad");
-    expect(within(squad).getByText(DESKTOP_NOTE)).toBeInTheDocument();
-    expect(within(squad).queryByText(CABIN_NOTE)).toBeNull();
-    // Filled tiles carry no note.
-    expect(within(tile("Automations")).queryByText(CABIN_NOTE)).toBeNull();
+    expect(squad).toHaveTextContent("Friends online show here");
+    expect(within(squad).queryByRole("button", { name: "Find a duo" })).toBeNull();
+    await userEvent.click(within(squad).getByRole("button"));
+    expect(go.onAsk).toHaveBeenLastCalledWith("Find a duo tonight");
+    expect(screen.queryByText(/cabin\b(?! to change)/)).toBeNull();
+  });
+
+  it("a clip row plays that clip on the PC, by its place in the list", async () => {
+    api.getHome.mockResolvedValue({
+      ...PAGE,
+      slots: [
+        slot({
+          slot: "large",
+          size: "large",
+          module: "clips",
+          name: "Clips",
+          tile: {
+            kind: "view",
+            view: view({
+              text: { big: "Ace", caption: "Newest clip · 2h ago · 2 this week", detail: null, tone: "normal" },
+              rows: [
+                { label: "Ace", value: "2h ago", tone: "normal", tap: { kind: "openClip", index: 0 } },
+                { label: "Clutch", value: "1d ago", tone: "normal", tap: { kind: "openClip", index: 1 } },
+              ],
+            }),
+          },
+        }),
+      ],
+    });
+    render(<Home {...routes()} remote={false} />);
+    await userEvent.click(await screen.findByRole("button", { name: /Clutch/ }));
+    expect(api.homeOpenClip).toHaveBeenCalledWith(1);
+  });
+
+  it("Turn on switches the internet log in place and reads Home again", async () => {
+    const offPage = {
+      ...PAGE,
+      slots: [
+        slot({
+          slot: "medium-1",
+          size: "medium",
+          module: "speeds",
+          name: "Speeds",
+          tile: {
+            kind: "view",
+            view: view({
+              state: "off",
+              text: { big: "Off", caption: "Turn on the internet log", detail: null, tone: "quiet" },
+              buttons: [{ label: "Turn on", action: { kind: "turnOn", feature: "net_log" }, primary: true }],
+            }),
+          },
+        }),
+      ],
+    };
+    api.getHome.mockResolvedValue(offPage);
+    const go = routes();
+    render(<Home {...go} remote={false} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Turn on" }));
+    expect(api.homeTurnOn).toHaveBeenCalledWith("net_log");
+    await vi.waitFor(() => expect(api.getHome.mock.calls.length).toBeGreaterThan(1));
+    expect(go.onSettings).not.toHaveBeenCalled();
+  });
+
+  it("Edit Home opens the editor under the layout name", async () => {
+    api.getHome.mockResolvedValue(PAGE);
+    api.homeCatalog.mockReturnValue(new Promise(() => {}));
+    render(<Home {...routes()} remote={false} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Home" }));
+    expect(screen.getByRole("region", { name: "Edit Home" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit Home" })).not.toBeInTheDocument();
+  });
+
+  it("the Squad tile opens Steam's friends list on the PC only", async () => {
+    const squadPage = {
+      ...PAGE,
+      slots: [
+        slot({
+          slot: "medium-1",
+          size: "medium",
+          module: "squad",
+          name: "Squad",
+          tile: {
+            kind: "view",
+            view: view({
+              text: { big: "14 friends", caption: "On Steam · open the list to see who's on", detail: null, tone: "normal" },
+              buttons: [{ label: "Friends list", action: { kind: "steamFriends" }, primary: true }],
+            }),
+          },
+        }),
+      ],
+    };
+    api.getHome.mockResolvedValue(squadPage);
+    const { unmount } = render(<Home {...routes()} remote={false} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Friends list" }));
+    expect(api.libraryFriends).toHaveBeenCalledTimes(1);
+    unmount();
+    render(<Home {...routes()} remote />);
+    await userEvent.click(await screen.findByRole("button", { name: "Friends list" }));
+    expect(api.libraryFriends).toHaveBeenCalledTimes(1);
+  });
+
+  it("a tile this device can't read draws quiet, and Play never starts a game from a browser", async () => {
+    api.getHome.mockResolvedValue({
+      ...PAGE,
+      slots: [
+        slot({
+          slot: "medium-1",
+          size: "medium",
+          module: "storage",
+          name: "Storage",
+          tile: { kind: "view", view: view({ state: "unsupported", text: { big: "—", caption: "Shows on the PC that runs Loadout", detail: null, tone: "quiet" } }) },
+        }),
+        slot({
+          slot: "medium-2",
+          size: "medium",
+          module: "what_to_play",
+          name: "What To Play",
+          tile: {
+            kind: "view",
+            view: view({
+              text: { big: "Portal 2", caption: "Last played 9d ago", detail: null, tone: "normal" },
+              buttons: [{ label: "Play", action: { kind: "play", appId: 620 }, primary: true }],
+            }),
+          },
+        }),
+      ],
+    });
+    const { unmount } = render(<Home {...routes()} remote />);
+    expect(await screen.findByRole("listitem", { name: "Storage" })).toHaveClass("away");
+    await userEvent.click(within(tile("What To Play")).getByRole("button", { name: "Play" }));
+    expect(api.libraryPlay).not.toHaveBeenCalled();
+    unmount();
+    render(<Home {...routes()} remote={false} />);
+    await userEvent.click(within(await screen.findByRole("listitem", { name: "What To Play" })).getByRole("button", { name: "Play" }));
+    expect(api.libraryPlay).toHaveBeenCalledWith(620);
   });
 
   it("a tile click opens its page, a chat row its chat, and an idea fills the chat box", async () => {
@@ -186,13 +383,14 @@ describe("Home", () => {
     expect(go.onOpenChat).toHaveBeenCalledWith("shell-a");
     await userEvent.click(screen.getByRole("button", { name: "I can tidy your downloads" }));
     expect(go.onAsk).toHaveBeenCalledWith("tidy my downloads folder");
+    expect(api.pulseAct).toHaveBeenCalledWith("i1", "accept");
     await userEvent.click(screen.getByRole("button", { name: /^Memory/ }));
     expect(go.onOpen).toHaveBeenLastCalledWith("memory");
     await userEvent.click(screen.getByRole("button", { name: /^Connectors/ }));
     expect(go.onOpen).toHaveBeenLastCalledWith("connectors");
   });
 
-  it("an empty checklist asks for a plan, and the streak tile counts its days", async () => {
+  it("an empty checklist asks for a plan, and the streak tile shows weeks in a row", async () => {
     api.getHome.mockResolvedValue({
       ...PAGE,
       xpBar: false,
@@ -205,17 +403,95 @@ describe("Home", () => {
     const go = routes();
     render(<Home {...go} remote={false} />);
     expect(await screen.findByText(NO_STEPS)).toBeInTheDocument();
-    expect(tile("Streak & XP")).toHaveTextContent("3 DAYS");
+    expect(tile("Streak & XP")).toHaveTextContent("Weeks in a row5");
+    expect(tile("Streak & XP")).toHaveTextContent("This week: 3 of 4 days");
+    expect(tile("Streak & XP")).toHaveTextContent("Lvl 3 · Rookie");
     // xp_bar off in the layout: no bar over the grid.
     expect(screen.queryByText("1,240 / 1,500 XP")).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Open Personality settings" }));
     expect(go.onSettings).toHaveBeenCalledWith("personality");
   });
 
-  it("says why when Home can't load", async () => {
+  it("the objectives tile shows a goal follow-up whose Plan it fills the box", async () => {
+    const followUp = {
+      id: "g2",
+      title: "Elden Ring · Finish",
+      line: "Want to pick a night for your next Elden Ring session?",
+      prompt: "Help me pick a night this week for my next Elden Ring session. My goal there: Finish.",
+      stop: false,
+    };
+    api.getHome.mockResolvedValue({
+      ...PAGE,
+      slots: [slot({ slot: "large", size: "large", module: "objectives", name: "Objectives", tile: { kind: "objectives", mission: null, xp: XP, followUp } })],
+    });
+    const go = routes();
+    render(<Home {...go} remote={false} />);
+    expect(await screen.findByText(followUp.line)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Plan it" }));
+    expect(go.onAsk).toHaveBeenCalledWith(followUp.prompt);
+    expect(go.onOpen).not.toHaveBeenCalled();
+  });
+
+  it("Home's chip row fills the box or opens a page, and teaches what was picked", async () => {
+    api.getHome.mockResolvedValue(PAGE);
+    api.quickChips.mockResolvedValue([
+      { id: "pred-1", label: "Plan my day", value: "Plan my day", action: "ask", hint: "You often start here", primary: true },
+      { id: "nav-1", label: "Automations", value: "__nav:night", action: "go", hint: "", primary: false, view: "automations" },
+    ]);
+    const go = routes();
+    render(<Home {...go} remote={false} />);
+    const row = await screen.findByRole("group", { name: "Suggestions" });
+    expect(api.quickChips).toHaveBeenCalledWith("home", undefined, "", undefined);
+    await userEvent.click(within(row).getByRole("button", { name: "Plan my day" }));
+    expect(go.onAsk).toHaveBeenCalledWith("Plan my day");
+    expect(api.chipOutcome).toHaveBeenCalledWith("home", "pred-1", true);
+    await userEvent.click(await screen.findByRole("button", { name: "Automations" }));
+    expect(go.onOpen).toHaveBeenCalledWith("automations");
+  });
+
+  it("says why when Home can't load, and tries again on a tap", async () => {
     api.getHome.mockRejectedValue("home_layout.json: no access");
     render(<Home {...routes()} remote />);
-    expect(await screen.findByRole("status")).toHaveTextContent("home_layout.json: no access");
+    const status = await screen.findByRole("status");
+    expect(status).toHaveTextContent("home_layout.json: no access");
+    api.getHome.mockResolvedValue(PAGE);
+    await userEvent.click(within(status).getByRole("button", { name: "Try again" }));
+    expect(await screen.findByRole("listitem", { name: "PC Loadout" })).toBeInTheDocument();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("asks again at its fastest tile's pace and keeps the last read when offline", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      api.getHome.mockResolvedValue({
+        ...PAGE,
+        slots: PAGE.slots.map((s) => (s.module === "pc_loadout" ? { ...s, refreshSecs: 30 } : s)),
+      });
+      render(<Home {...routes()} remote={false} />);
+      await screen.findByRole("listitem", { name: "PC Loadout" });
+      expect(api.getHome).toHaveBeenCalledTimes(1);
+      api.getHome.mockRejectedValue("offline");
+      await vi.advanceTimersByTimeAsync(29_000);
+      expect(api.getHome).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await waitFor(() => expect(api.getHome).toHaveBeenCalledTimes(2));
+      expect(await screen.findByRole("status")).toHaveTextContent("show what Home last read");
+      expect(screen.getByRole("listitem", { name: "PC Loadout" })).toHaveTextContent("RTX 4070");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("polls no faster than ten seconds and marks data past twice its age", () => {
+    const at = (refreshSecs: number | null) => slot({ slot: "small-1", module: "x", name: "X", tile: { kind: "view", view: PC }, refreshSecs });
+    expect(pollSecs([at(2), at(60)])).toBe(10);
+    expect(pollSecs([at(60), at(null)])).toBe(60);
+    expect(pollSecs([at(null)])).toBeNull();
+    const now = 10_000_000;
+    expect(staleLabel(now - 100_000, 60, now)).toBeNull();
+    expect(staleLabel(now - 300_000, 60, now)).toBe("Updated 5 min ago");
+    expect(staleLabel(now - 3 * 3_600_000, 60, now)).toBe("Updated 3 h ago");
+    expect(staleLabel(null, 60, now)).toBeNull();
   });
 
   it("groups XP as the cabin does", () => {

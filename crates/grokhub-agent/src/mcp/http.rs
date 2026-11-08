@@ -73,6 +73,8 @@ pub(crate) struct HttpConn {
     stateless: bool,
     /// Stateless era: each tool's `x-mcp-header` annotations from `tools/list`.
     param_headers: HashMap<String, Vec<ParamHeader>>,
+    /// How long the last `tools/list` may be reused (`ttlMs`); `None` keeps it.
+    pub(crate) list_ttl: Option<Duration>,
     next_id: u64,
     legacy: bool,
     legacy_rx: Option<Receiver<IoMsg>>,
@@ -103,6 +105,7 @@ pub(crate) fn connect(
         protocol: None,
         stateless: false,
         param_headers: HashMap::new(),
+        list_ttl: None,
         next_id: 0,
         legacy: sse,
         legacy_rx: None,
@@ -137,12 +140,18 @@ pub(crate) fn connect(
 }
 
 impl HttpConn {
+    /// Run tool `name`, sent once more when the answer never came and
+    /// `retry_safe` says a second run is harmless (`readOnlyHint` or
+    /// `idempotentHint`). The egress check runs once: a resend is the same
+    /// call, not a new one.
     pub(crate) fn call(
         &mut self,
         name: &str,
         args: &Value,
+        key: Option<&str>,
         timeout: Duration,
         stop: &dyn Fn() -> bool,
+        retry_safe: bool,
     ) -> Result<(String, bool), String> {
         // Tool args are chat, or personal when they carry a recall-pack line.
         // A hard Send waits on the cabin's card; Deny sends nothing.
@@ -150,15 +159,30 @@ impl HttpConn {
         let req = crate::harness::EgressReq::new(&self.post_url, data);
         let tool = format!("mcp:{}", self.server);
         crate::harness::guard_or_park(&crate::perm::config_dir(), &req, &tool, &mut || stop())?;
+        match self.send_call(name, args, key, timeout) {
+            Err(err) if retry_safe && super::idem::maybe_ran(&err) && !stop() => {
+                self.send_call(name, args, key, timeout)
+            }
+            other => other,
+        }
+    }
+
+    fn send_call(
+        &mut self,
+        name: &str,
+        args: &Value,
+        key: Option<&str>,
+        timeout: Duration,
+    ) -> Result<(String, bool), String> {
         if self.stateless {
             let server = self.server.clone();
             return rpc::call_tool(&server, name, args, &mut |params| {
-                self.roundtrip("tools/call", params, timeout)
+                self.roundtrip("tools/call", rpc::with_key(params, key), timeout)
             });
         }
         let result = self.roundtrip(
             "tools/call",
-            json!({"name": name, "arguments": args}),
+            rpc::with_key(json!({"name": name, "arguments": args}), key),
             timeout,
         )?;
         Ok(rpc::tool_output(&result))
@@ -452,9 +476,22 @@ pub(super) fn guard_handshake(url: &str) -> Result<(), String> {
     )
 }
 
+/// List the server's tools again, after its `ttlMs` ran out.
+pub(crate) fn relist(conn: &mut HttpConn, timeout: Duration) -> Result<Vec<RawTool>, String> {
+    list_tools(conn, timeout)
+}
+
 fn list_tools(conn: &mut HttpConn, timeout: Duration) -> Result<Vec<RawTool>, String> {
+    let mut all = list_pages(conn, timeout)?;
+    rpc::sort_tools(&mut all);
+    Ok(all)
+}
+
+fn list_pages(conn: &mut HttpConn, timeout: Duration) -> Result<Vec<RawTool>, String> {
     let mut all = Vec::new();
     let mut cursor: Option<String> = None;
+    conn.list_ttl = None;
+    conn.param_headers.clear();
     for _ in 0..100 {
         let mut params = json!({});
         if let Some(token) = &cursor {
@@ -463,6 +500,9 @@ fn list_tools(conn: &mut HttpConn, timeout: Duration) -> Result<Vec<RawTool>, St
         let mut result = conn.roundtrip("tools/list", params, timeout)?;
         if conn.stateless {
             result = rpc::complete(&conn.server, result)?;
+        }
+        if cursor.is_none() {
+            conn.list_ttl = rpc::list_ttl(&result);
         }
         let (page, next) = rpc::parse_tools(&result);
         for tool in page {
@@ -806,6 +846,9 @@ pub(crate) mod tests {
         Refuse(u16, &'static str),
         /// Stateless, but `tools/list` adds tools with these schemas.
         StatelessTools(Value),
+        /// Stateless, and the first `tools/call` gets its connection closed
+        /// with no answer.
+        DropFirstCall,
     }
 
     /// A Streamable HTTP MCP server that counts every request and each
@@ -933,6 +976,7 @@ pub(crate) mod tests {
             Mode::Session(_) => Value::Null,
             Mode::Stateless => json!([]),
             Mode::StatelessTools(tools) => tools.clone(),
+            Mode::DropFirstCall => json!([]),
         };
         let stateless = !extra.is_null();
         let result = match method {
@@ -959,10 +1003,14 @@ pub(crate) mod tests {
                     json!({"name": "echo", "description": "Echo", "inputSchema": {"type": "object"}}),
                 ];
                 tools.extend(extra.as_array().cloned().unwrap_or_default());
-                json!({"tools": tools})
+                json!({"tools": tools, "ttlMs": 60_000})
             }
             "tools/call" => {
-                calls.fetch_add(1, Ordering::SeqCst);
+                let n = calls.fetch_add(1, Ordering::SeqCst);
+                if matches!(mode, Mode::DropFirstCall) && n == 0 {
+                    let _ = sock.shutdown(std::net::Shutdown::Both);
+                    return;
+                }
                 let asked = req.body.pointer("/params/arguments/ask").is_some();
                 let answered = req.body.pointer("/params/inputResponses").is_some();
                 if asked && !answered {
@@ -1031,7 +1079,14 @@ pub(crate) mod tests {
         let args = json!({"note": format!("remember: {MEMORY}")});
         let deny = hx::answer_next_park(dir.clone(), false);
         let err = c
-            .call("echo", &args, Duration::from_secs(5), &|| false)
+            .call(
+                "echo",
+                &args,
+                None,
+                Duration::from_secs(5),
+                &|| false,
+                false,
+            )
             .unwrap_err();
         let card = deny.join().unwrap().expect("a hard card was posted");
         assert_eq!((card.path.as_str(), card.class.as_str()), ("E", "send"));
@@ -1047,7 +1102,14 @@ pub(crate) mod tests {
 
         let approve = hx::answer_next_park(dir.clone(), true);
         let (text, failed) = c
-            .call("echo", &args, Duration::from_secs(5), &|| false)
+            .call(
+                "echo",
+                &args,
+                None,
+                Duration::from_secs(5),
+                &|| false,
+                false,
+            )
             .unwrap();
         assert!(approve.join().unwrap().is_some());
         assert_eq!((text.as_str(), failed), ("counted", false));
@@ -1086,7 +1148,7 @@ pub(crate) mod tests {
         // Nobody answers the card; Stop is already pressed.
         let started = std::time::Instant::now();
         let err = c
-            .call("echo", &args, Duration::from_secs(5), &|| true)
+            .call("echo", &args, None, Duration::from_secs(5), &|| true, false)
             .unwrap_err();
         assert!(
             started.elapsed() < Duration::from_secs(10),
@@ -1142,7 +1204,14 @@ pub(crate) mod tests {
         let mut c = conn(&server);
         let args = json!({"q": "weather sk-abcdefghijklmnopqrstuv"});
         let (text, _) = c
-            .call("echo", &args, Duration::from_secs(5), &|| false)
+            .call(
+                "echo",
+                &args,
+                None,
+                Duration::from_secs(5),
+                &|| false,
+                false,
+            )
             .unwrap();
         assert_eq!(text, "counted");
         assert_eq!(server.calls.load(Ordering::SeqCst), 1);
@@ -1201,8 +1270,15 @@ pub(crate) mod tests {
         let server = Counting::answering("2025-11-25");
         let (mut c, _) = connect_to(&server).unwrap();
         assert_eq!(c.protocol, Some("2025-11-25"));
-        c.call("echo", &json!({}), Duration::from_secs(5), &|| false)
-            .unwrap();
+        c.call(
+            "echo",
+            &json!({}),
+            None,
+            Duration::from_secs(5),
+            &|| false,
+            false,
+        )
+        .unwrap();
         c.ping(Duration::from_secs(5)).unwrap();
         let v = Some("2025-11-25".to_string());
         assert_eq!(
@@ -1234,8 +1310,15 @@ pub(crate) mod tests {
         let (mut c, tools) = connect_to(&server).unwrap();
         assert_eq!(tools.len(), 1);
         assert_eq!(c.protocol, Some("2025-03-26"));
-        c.call("echo", &json!({}), Duration::from_secs(5), &|| false)
-            .unwrap();
+        c.call(
+            "echo",
+            &json!({}),
+            None,
+            Duration::from_secs(5),
+            &|| false,
+            false,
+        )
+        .unwrap();
         let headers: Vec<Option<String>> = seen(&server).into_iter().map(|(_, v)| v).collect();
         let old = Some("2025-03-26".to_string());
         assert_eq!(headers, vec![modern(), None, old.clone(), old.clone(), old]);
@@ -1269,6 +1352,31 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_dropped_call_is_sent_again_only_when_the_tool_says_that_is_safe() {
+        let dir = hx::test_dir("mcp-drop-retry");
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let call = |retry_safe: bool| {
+            let server = Counting::with(Mode::DropFirstCall);
+            let (mut c, _) = connect_to(&server).unwrap();
+            let out = c.call(
+                "echo",
+                &json!({"q": 1}),
+                None,
+                Duration::from_secs(5),
+                &|| false,
+                retry_safe,
+            );
+            (out, server.calls.load(Ordering::SeqCst))
+        };
+        let (out, calls) = call(true);
+        assert_eq!(out.unwrap(), ("counted".to_string(), false));
+        assert_eq!(calls, 2, "a read-only or idempotent tool is sent once more");
+        let (out, calls) = call(false);
+        assert!(out.is_err(), "{out:?}");
+        assert_eq!(calls, 1, "a tool that may change things is never resent");
+    }
+
+    #[test]
     fn a_stateless_server_gets_no_initialize_and_no_session_id() {
         let dir = hx::test_dir("mcp-stateless");
         let _cfg = crate::perm::ConfigGuard::set(&dir);
@@ -1277,7 +1385,14 @@ pub(crate) mod tests {
         assert_eq!(tools.len(), 1);
         assert_eq!((c.protocol, c.stateless), (Some("2026-07-28"), true));
         let (text, failed) = c
-            .call("echo", &json!({"q": 1}), Duration::from_secs(5), &|| false)
+            .call(
+                "echo",
+                &json!({"q": 1}),
+                None,
+                Duration::from_secs(5),
+                &|| false,
+                false,
+            )
             .unwrap();
         assert_eq!((text.as_str(), failed), ("counted", false));
         c.ping(Duration::from_secs(5)).unwrap();
@@ -1328,6 +1443,24 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn tools_come_back_sorted_with_their_ttl_and_relist_asks_again() {
+        let dir = hx::test_dir("mcp-sorted-ttl");
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let server = Counting::with(Mode::StatelessTools(json!([
+            {"name": "zeta", "inputSchema": {"type": "object"}},
+            {"name": "alpha", "inputSchema": {"type": "object"}}
+        ])));
+        let (mut c, tools) = connect_to(&server).unwrap();
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, vec!["alpha", "echo", "zeta"]);
+        assert_eq!(c.list_ttl, Some(Duration::from_secs(60)));
+        let before = server.requests.load(Ordering::SeqCst);
+        let again = relist(&mut c, Duration::from_secs(5)).unwrap();
+        assert_eq!(again.len(), 3);
+        assert!(server.requests.load(Ordering::SeqCst) > before);
+    }
+
+    #[test]
     fn x_mcp_header_values_ride_as_param_headers_and_a_bad_tool_is_left_out() {
         let dir = hx::test_dir("mcp-param-headers");
         let _cfg = crate::perm::ConfigGuard::set(&dir);
@@ -1346,22 +1479,28 @@ pub(crate) mod tests {
         c.call(
             "execute_sql",
             &json!({"region": "us-west1", "query": "SELECT * FROM users"}),
+            None,
             Duration::from_secs(5),
             &|| false,
+            false,
         )
         .unwrap();
         c.call(
             "execute_sql",
             &json!({"region": "Zürich"}),
+            None,
             Duration::from_secs(5),
             &|| false,
+            false,
         )
         .unwrap();
         c.call(
             "echo",
             &json!({"region": "x"}),
+            None,
             Duration::from_secs(5),
             &|| false,
+            false,
         )
         .unwrap();
         let params: Vec<Vec<(String, String)>> = reqs(&server)
@@ -1394,8 +1533,10 @@ pub(crate) mod tests {
             .call(
                 "echo",
                 &json!({"ask": true}),
+                None,
                 Duration::from_secs(5),
                 &|| false,
+                false,
             )
             .unwrap();
         assert_eq!(text, "counted");
@@ -1414,9 +1555,14 @@ pub(crate) mod tests {
         assert_eq!(calls[1]["params"]["arguments"], json!({"ask": true}));
         assert_ne!(calls[0]["id"], calls[1]["id"], "a retry is a new request");
         let err = c
-            .call("echo", &json!({"odd": 1}), Duration::from_secs(5), &|| {
-                false
-            })
+            .call(
+                "echo",
+                &json!({"odd": 1}),
+                None,
+                Duration::from_secs(5),
+                &|| false,
+                false,
+            )
             .unwrap_err();
         assert_eq!(err, "MCP server `box` sent a result of type partial");
         let _ = std::fs::remove_dir_all(dir);

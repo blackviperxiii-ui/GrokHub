@@ -1,0 +1,1 @@
+- A model source that fails to answer a refresh (an xAI outage, a sign-in renewal that blinked) no longer wipes its models or your saved sign-in from the router: each source's last good list stands until that source checks in again.

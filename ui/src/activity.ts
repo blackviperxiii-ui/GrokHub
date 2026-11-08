@@ -3,12 +3,14 @@
 // the latest state of each one.
 import type { BoardPage, ChatEnvelope } from "./api";
 
-export type ActivityStatus = "running" | "waiting" | "done" | "failed";
+/** `queued`: lined up behind the running reply, in order. */
+export type ActivityStatus = "running" | "waiting" | "queued" | "done" | "failed";
 
 export interface ActivityItem {
   /** `chat:<conversation>` or `run:<automation id>`. */
   key: string;
-  kind: "chat" | "routine";
+  /** `queued`: a message sent while a reply ran, waiting its turn. */
+  kind: "chat" | "routine" | "queued";
   title: string;
   status: ActivityStatus;
   /** The latest step, the approval it waits on, or how it ended. */
@@ -36,6 +38,8 @@ function clip(text: string): string {
 /** Folds one chat event into the conversation's item. Text and tool events
  * mean the turn is running; a permission ask or a plan/question waits on the
  * user; done and error end it. */
+export const SIDE_TITLE = "Answering on the side";
+
 export function chatActivity(
   prev: ActivityItem | undefined,
   { conversationId, event }: ChatEnvelope,
@@ -44,7 +48,8 @@ export function chatActivity(
   const base: ActivityItem = prev ?? {
     key: `chat:${conversationId}`,
     kind: "chat",
-    title: CHAT_TITLE,
+    // A side answer (`<chat>~side-<n>`, see Side.tsx) gets its own row.
+    title: conversationId.includes("~side-") ? SIDE_TITLE : CHAT_TITLE,
     status: "running",
     detail: "Thinking…",
     steps: 0,
@@ -94,6 +99,7 @@ export function chatActivity(
     case "error":
       return { ...restart, status: "failed", detail: clip(event.message), at: now };
     case "suggestions":
+    case "goal":
       return prev;
   }
 }
@@ -121,7 +127,7 @@ export function routineFinished(
   return { ...item, status: ok ? "done" : "failed", detail: clip(text), at: now };
 }
 
-const RANK: Record<ActivityStatus, number> = { waiting: 0, running: 1, failed: 2, done: 3 };
+const RANK: Record<ActivityStatus, number> = { waiting: 0, running: 1, queued: 2, failed: 3, done: 4 };
 
 /** Still worth showing: unfinished, or finished less than `DONE_TTL_MS` ago. */
 function current(item: ActivityItem, now: number): boolean {
@@ -142,19 +148,64 @@ export function pruneActivity(items: Record<string, ActivityItem>, now: number):
   return kept.length === Object.keys(items).length ? items : Object.fromEntries(kept);
 }
 
-/** The collapsed dock's line, e.g. "1 waiting · 2 running". */
+/** The collapsed dock's line, e.g. "1 waiting · 1 of 3 running · 1 done".
+ * Anything queued reads as "x of y running", where y counts the running work
+ * plus what is lined up behind it. */
 export function dockSummary(items: ActivityItem[]): string {
   const count = (s: ActivityStatus) => items.filter((i) => i.status === s).length;
+  const running = count("running");
+  const queued = count("queued");
+  const work =
+    queued === 0
+      ? running > 0
+        ? `${running} running`
+        : ""
+      : running === 0
+        ? `${queued} queued`
+        : `${running} of ${running + queued} running`;
   const parts = [
-    [count("waiting"), "waiting"],
-    [count("running"), "running"],
-    [count("failed"), "failed"],
-    [count("done"), "done"],
-  ] as const;
-  return parts
-    .filter(([n]) => n > 0)
-    .map(([n, word]) => `${n} ${word}`)
-    .join(" · ");
+    count("waiting") > 0 ? `${count("waiting")} waiting` : "",
+    work,
+    count("failed") > 0 ? `${count("failed")} failed` : "",
+    count("done") > 0 ? `${count("done")} done` : "",
+  ];
+  return parts.filter(Boolean).join(" · ");
+}
+
+/** Where a queued message stands: "Next up", "2nd in line", … */
+export function queuePlace(index: number): string {
+  if (index === 0) return "Next up";
+  const n = index + 1;
+  const teen = n % 100 >= 11 && n % 100 <= 13;
+  const suffix = teen ? "th" : (["th", "st", "nd", "rd"][n % 10] ?? "th");
+  return `${n}${suffix} in line`;
+}
+
+const QUEUED_TITLE_MAX = 48;
+
+/** One row per message waiting behind `conversationId`'s reply, in order:
+ * its first line, and where it stands. Keys are `queue:<chat>:<index>`. */
+export function queuedItems(conversationId: string, texts: readonly string[]): ActivityItem[] {
+  return texts.map((text, i) => {
+    const first = (text.split("\n").find((line) => line.trim()) ?? "").replace(/\s+/g, " ").trim();
+    const title = first.length > QUEUED_TITLE_MAX ? `${first.slice(0, QUEUED_TITLE_MAX - 1).trimEnd()}…` : first;
+    return {
+      key: `queue:${conversationId}:${i}`,
+      kind: "queued",
+      title,
+      status: "queued",
+      detail: queuePlace(i),
+      steps: 0,
+      // Order within the queue: the first in line sorts first.
+      at: -i,
+    };
+  });
+}
+
+/** The chat and place of a queued row's key. */
+export function queueSpot(key: string): { conversationId: string; index: number } | null {
+  const match = /^queue:(.+):(\d+)$/.exec(key);
+  return match ? { conversationId: match[1], index: Number(match[2]) } : null;
 }
 
 /** The progress line under a running chat. */

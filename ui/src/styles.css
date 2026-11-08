@@ -243,6 +243,7 @@ button:disabled {
 button.quiet:disabled,
 button.link:disabled,
 .chip:disabled,
+.quick-chip:disabled,
 .tabs button:disabled,
 .switch button:disabled,
 .settings-nav button:disabled,
@@ -1148,6 +1149,39 @@ button.md-copy {
   color: var(--danger-text);
 }
 
+/* The app's one-line read of a message ("Answering on the side"). */
+.note.route-ack {
+  margin: 0 0 4px;
+  font-size: 0.9em;
+}
+
+/* Answers to side questions, above the box; never part of the chat. */
+.side-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.side-card {
+  max-width: 100%;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.side-label {
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.side-question {
+  color: var(--muted);
+}
+
+.side-answer {
+  overflow-wrap: anywhere;
+}
+
 .card {
   align-self: flex-start;
   max-width: 80%;
@@ -1471,7 +1505,8 @@ button.danger {
 
 /* Local engine and draft model: cards like .card, full width. */
 .local-engine,
-.local-draft-offer {
+.local-draft-offer,
+.local-library {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -1485,13 +1520,16 @@ button.danger {
 
 .local-engine h3,
 .local-draft-offer h3,
+.local-library h3,
 .local-engine p,
-.local-draft-offer p {
+.local-draft-offer p,
+.local-library p {
   margin: 0;
 }
 
 .local-engine button,
-.local-draft-offer button {
+.local-draft-offer button,
+.local-library button {
   align-self: flex-start;
 }
 
@@ -1972,16 +2010,61 @@ span.chip.quiet {
   cursor: default;
 }
 
-/* Next steps stay one row that scrolls sideways; the next chip peeks in. */
-.card.suggest .card-buttons {
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  position: relative;
+/* Quick chips: one row on every page, big enough to hit. It stays one line
+   that scrolls sideways, and the next chip peeks in. */
+.chip-row {
+  margin: 8px 0;
 }
 
-.card.suggest .card-buttons button {
+.chip-row-items {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 8px;
+  overflow-x: auto;
+  position: relative;
+  scrollbar-width: none;
+}
+
+.chip-row-items::-webkit-scrollbar {
+  display: none;
+}
+
+.quick-chip {
   flex: none;
+  min-height: 48px;
+  padding: 0 18px;
+  font-size: 16px;
   white-space: nowrap;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.quick-chip.primary {
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.quick-chip:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+/* The × sits tight against its chip, still a full-height target. */
+.quick-chip-hide {
+  flex: none;
+  min-width: 36px;
+  min-height: 48px;
+  margin-left: -6px;
+  padding: 0;
+  font-size: 18px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+}
+
+.quick-chip-hide:hover {
+  color: var(--text);
 }
 
 .card.elicit .card-buttons input {
@@ -2267,6 +2350,27 @@ label.toggle-row {
   margin-right: 2px;
 }
 
+.feed-source {
+  margin: 0;
+  font-size: 0.85em;
+  color: var(--muted);
+}
+
+.pulse .day-end {
+  list-style: none;
+  text-align: center;
+  font-size: 0.85em;
+  color: var(--muted);
+  padding: 8px 0;
+}
+
+.feed-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
 .feed-foot button[aria-pressed="true"] span {
   color: var(--danger-text);
 }
@@ -2514,6 +2618,11 @@ label.toggle-row {
   align-self: flex-start;
 }
 
+.activity-buttons {
+  display: flex;
+  gap: 8px;
+}
+
 .activity-head {
   display: flex;
   gap: 8px;
@@ -2579,6 +2688,95 @@ label.toggle-row {
   }
 }
 
+/* The Notifications bell sits beside Activity: the record of what finished,
+   failed or wants a look. A number counts what is unread. */
+.notice-bell {
+  position: relative;
+  flex: none;
+  margin-left: auto;
+}
+
+.activity-dock + .notice-bell,
+.notice-bell + .palette-open {
+  margin-left: 8px;
+}
+
+.notice-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.notice-badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 0.72em;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+}
+
+.notice-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 6;
+  width: min(340px, calc(100vw - 32px));
+  padding: 10px 12px 12px;
+  max-height: 60vh;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+}
+
+.notice-menu-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.notice-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.notice-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 0;
+}
+
+.notice-item + .notice-item {
+  border-top: 1px solid var(--border);
+}
+
+.notice-item button {
+  align-self: flex-start;
+}
+
+.notice-item.error .notice-text {
+  color: var(--danger-text);
+}
+
 /* Phones: the bar is at the bottom, so the dock is a dot and a count and its
    list opens upward across the screen. */
 @media (max-width: 600px) {
@@ -2586,7 +2784,8 @@ label.toggle-row {
     display: none;
   }
 
-  .activity-list {
+  .activity-list,
+  .notice-menu {
     position: fixed;
     left: 8px;
     right: 8px;
@@ -3817,6 +4016,33 @@ label.toggle-row {
   font-size: 0.85em;
 }
 
+.home-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.home-edit-presets,
+.home-edit-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.home-edit-slot {
+  display: grid;
+  grid-template-columns: minmax(110px, auto) 1fr;
+  gap: 4px 10px;
+  align-items: center;
+}
+
+.home-edit-slot small {
+  grid-column: 2;
+}
+
 .xp-bar,
 .home-streak {
   display: flex;
@@ -3931,6 +4157,46 @@ label.toggle-row {
   color: var(--muted);
 }
 
+.goal-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.goal-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+
+.goal-row > p {
+  margin: 0;
+  width: 100%;
+}
+
+.goal-summary {
+  display: flex;
+  flex: 1 1 240px;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.goal-add {
+  display: flex;
+  gap: 8px;
+}
+
+.goal-add input {
+  flex: 1;
+  min-width: 0;
+}
+
 .objectives-back {
   align-self: center;
   width: auto;
@@ -3946,4 +4212,207 @@ label.toggle-row {
     grid-column: auto;
     grid-row: auto;
   }
+}
+
+/* Shared-model Home tiles. */
+.home-big {
+  font-size: 1.4em;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.tone-warn {
+  color: var(--amber);
+}
+
+.tone-alert {
+  color: var(--danger-text);
+}
+
+.tone-quiet {
+  color: var(--muted);
+}
+
+.home-pair {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.home-pair > :first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-pair > :last-child {
+  flex: none;
+  font-weight: 600;
+}
+
+.home-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.home-tag {
+  margin-left: 8px;
+  color: var(--amber);
+}
+
+.home-stale {
+  font-size: 0.75rem;
+  font-style: italic;
+}
+
+/* "Track this goal?" under a reply that noticed a game goal. */
+.goal-follow-up p {
+  margin: 0 0 0.25rem;
+}
+
+/* Monday's "Your week" on Today. */
+.goal-week ul {
+  margin: 0.25rem 0;
+  padding-left: 1.25rem;
+}
+
+/* "First goal this season: +50 bonus XP". */
+.goal-bonus {
+  margin: 0.25rem 0;
+  padding-left: 0.5rem;
+  border-left: 3px solid var(--amber);
+  font-weight: 600;
+}
+
+.goal-ask {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.25rem 0 0.5rem;
+}
+
+/* Settings → Appearance → Reduce motion (auto setup turns it on for a slow
+   or battery PC). */
+:root[data-reduce-motion="true"] *,
+:root[data-reduce-motion="true"] *::before,
+:root[data-reduce-motion="true"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
+/* Auto setup: the first-run window and the note in the corner. */
+.first-run-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgb(0 0 0 / 0.35);
+}
+
+.first-run.card {
+  align-self: center;
+  max-width: 520px;
+  width: 100%;
+  padding: 24px;
+  gap: 12px;
+  flex-direction: column;
+}
+
+.first-run h2 {
+  margin: 0;
+}
+
+.first-run-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.first-run-choices button,
+.first-run-big {
+  padding: 12px 16px;
+  font-size: 1.05em;
+}
+
+.first-run-bigger {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.first-run-foot,
+.auto-note-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.first-run-list,
+.auto-setup-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.first-run-list li,
+.auto-setup-rows li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.first-run-list li > span,
+.auto-setup-rows li > span,
+.auto-note {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.auto-note.card {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 50;
+  max-width: 340px;
+  padding: 14px;
+  flex-direction: column;
+}
+
+/* The dotted orb (Orb.tsx): sits on the text line like a glyph. */
+.orb {
+  display: inline-block;
+  vertical-align: middle;
+}
+
+/* Download models: kind tabs, then one row per model. */
+.local-library-tabs,
+.local-library-queue {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.local-library ul {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }

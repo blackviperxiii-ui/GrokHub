@@ -12,6 +12,8 @@ const api = vi.hoisted(() => ({
 }));
 
 vi.mock("./api", () => ({
+  quickChips: () => Promise.resolve([]),
+  chipOutcome: () => Promise.resolve(true),
   sendChat: api.sendChat,
   getSettings: api.getSettings,
   slashHits: api.slashHits,
@@ -34,7 +36,7 @@ vi.mock("./api", () => ({
   removeAttachment: vi.fn(),
 }));
 
-import { Chat } from "./Chat";
+import { Chat, PLAN_NEXT } from "./Chat";
 import { isSlashCommand } from "./SlashMenu";
 
 const SETTINGS: Settings = {
@@ -107,25 +109,23 @@ describe("composer slash commands", () => {
     expect(api.sendChat).not.toHaveBeenCalled();
   });
 
-  it("Enter on a pick that takes no text runs it: /plan switches the mode", async () => {
+  it("Enter on a pick that takes no text runs it: /plan plans the next message", async () => {
     api.runSlash.mockResolvedValue({ kind: "mode", mode: "plan", text: null });
     render(<Chat onOpenSettings={() => {}} />);
     await userEvent.type(screen.getByLabelText("Message"), "/pl");
     await screen.findByRole("option", { name: /plan/ });
     await userEvent.keyboard("{Enter}");
     await waitFor(() => expect(api.runSlash).toHaveBeenCalledWith("/plan"));
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: /Plan/ })).toHaveAttribute("aria-pressed", "true"),
-    );
+    expect(await screen.findByText(PLAN_NEXT)).toBeVisible();
     expect(api.sendChat).not.toHaveBeenCalled();
   });
 
-  it("/btw with text sends the text in that mode", async () => {
+  it("/btw with text while nothing runs just answers it", async () => {
     api.runSlash.mockResolvedValue({ kind: "mode", mode: "btw", text: "what does this do" });
     render(<Chat onOpenSettings={() => {}} />);
     await userEvent.type(screen.getByLabelText("Message"), "/btw what does this do{Enter}");
     await waitFor(() =>
-      expect(api.sendChat).toHaveBeenCalledWith(expect.any(String), "what does this do", "btw"),
+      expect(api.sendChat).toHaveBeenCalledWith(expect.any(String), "what does this do", "chat"),
     );
   });
 
@@ -149,7 +149,7 @@ describe("composer slash commands", () => {
     render(<Chat onOpenSettings={() => {}} />);
     await userEvent.type(screen.getByLabelText("Message"), "/usr/bin is slow{Enter}");
     await waitFor(() =>
-      expect(api.sendChat).toHaveBeenCalledWith(expect.any(String), "/usr/bin is slow", "chat"),
+      expect(api.sendChat).toHaveBeenCalledWith(expect.any(String), "/usr/bin is slow", undefined),
     );
     expect(api.runSlash).not.toHaveBeenCalled();
   });

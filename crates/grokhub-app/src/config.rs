@@ -159,12 +159,36 @@ enum StoreRead {
     Missing,
     Text(String),
     Unusable,
+    /// Held by another handle (a Windows replace, a scanner) past every retry.
+    /// Not the same as missing or broken: it is never quarantined.
+    Busy,
 }
 
+/// Waits between reads of a store another handle is holding: about half a
+/// second in all, the time a Windows replace or a scanner usually takes.
+const READ_BACKOFF_MS: [u64; 6] = [10, 20, 40, 80, 160, 190];
+
 fn read_store(path: &Path, cap: usize) -> StoreRead {
+    let mut got = read_store_once(path, cap);
+    for wait_ms in READ_BACKOFF_MS {
+        if !matches!(got, StoreRead::Busy) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(wait_ms));
+        got = read_store_once(path, cap);
+    }
+    got
+}
+
+/// One try. Only "not found" is missing; any other open or read error is a
+/// busy file, since a reader racing a replace sees access denied or a
+/// sharing violation, and quarantining a live store over that loses it.
+fn read_store_once(path: &Path, cap: usize) -> StoreRead {
+    let gone = |e: &std::io::Error| e.kind() == std::io::ErrorKind::NotFound;
     let meta = match fs::metadata(path) {
         Ok(m) => m,
-        Err(_) => return StoreRead::Missing,
+        Err(e) if gone(&e) => return StoreRead::Missing,
+        Err(_) => return StoreRead::Busy,
     };
     if meta.len() > cap as u64 {
         return StoreRead::Unusable;
@@ -174,10 +198,13 @@ fn read_store(path: &Path, cap: usize) -> StoreRead {
             let mut raw = String::new();
             match f.read_to_string(&mut raw) {
                 Ok(_) => StoreRead::Text(raw),
-                Err(_) => StoreRead::Unusable,
+                // Not UTF-8: the bytes themselves are broken.
+                Err(e) if e.kind() == std::io::ErrorKind::InvalidData => StoreRead::Unusable,
+                Err(_) => StoreRead::Busy,
             }
         }
-        Err(_) => StoreRead::Missing,
+        Err(e) if gone(&e) => StoreRead::Missing,
+        Err(_) => StoreRead::Busy,
     }
 }
 
@@ -198,7 +225,7 @@ where
     F: FnOnce() -> T,
 {
     let raw = match read_store(path, cap) {
-        StoreRead::Missing => return fallback(),
+        StoreRead::Missing | StoreRead::Busy => return fallback(),
         StoreRead::Unusable => {
             quarantine(path);
             return fallback();
@@ -368,9 +395,6 @@ pub struct AppConfig {
     /// Settings → AI models → Local AI: how the on-device model runs.
     #[serde(default, skip_serializing_if = "LocalTuning::is_default")]
     pub local_tuning: LocalTuning,
-    /// Composer session pill — chat / plan / ask.
-    #[serde(default = "default_session_mode")]
-    pub session_mode: String,
     /// Composer permission pill — ask / auto / always-approve. Survives restart.
     #[serde(default = "default_permission_mode")]
     pub permission_mode: String,
@@ -433,6 +457,10 @@ pub struct AppConfig {
     /// Inline sentence autocomplete in the chat composer (ghost text). Off by default.
     #[serde(default)]
     pub composer_autocomplete: bool,
+    /// Settings → Behavior: quick chips (suggested next steps) under the
+    /// composer, on Home and after replies. The one chip setting; on by default.
+    #[serde(default = "default_suggestions")]
+    pub suggestions: bool,
     /// Settings → Behavior: suggest help for the app the user was just in,
     /// from its process name only. Off by default.
     #[serde(default)]
@@ -484,6 +512,14 @@ pub struct AppConfig {
     /// and Settings jumps instead of scrolling. Off by default.
     #[serde(default)]
     pub reduce_motion: bool,
+    /// Settings → Appearance → Text size: 100, 115, 130 or 150 percent, set
+    /// by auto setup from the OS text size or by the user. 100 is not saved.
+    #[serde(
+        default = "default_text_size",
+        deserialize_with = "de_text_size",
+        skip_serializing_if = "is_text_size_default"
+    )]
+    pub text_size: u16,
     /// Settings → Appearance: chat pages show the objectives and recent chats on
     /// the left and a PC snapshot on the right (deck slide 10) instead of the
     /// companion dock. Off by default.
@@ -515,6 +551,14 @@ pub struct AppConfig {
     /// from before it was recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adult_confirmed_at_ms: Option<u64>,
+    /// Settings → Personality → Dynamic chat: another voice can step in while the
+    /// topic calls for it (a build error, venting), then hand back. On by default.
+    #[serde(default = "default_dynamic_chat")]
+    pub dynamic_chat: bool,
+    /// Settings → Personality → Heat: how crude the jokes get, shown and used only
+    /// while adults-only is on. Cheeky until the user moves it.
+    #[serde(default)]
+    pub quip_heat: grokhub_core::personality::Heat,
     /// Settings → Labs → Diagnostics mode. Off by default. When on, chat and
     /// message actions can Save a redacted debug bundle to the Desktop.
     #[serde(default)]
@@ -704,6 +748,22 @@ fn default_yolo() -> bool {
     false
 }
 
+fn default_text_size() -> u16 {
+    100
+}
+
+fn is_text_size_default(v: &u16) -> bool {
+    *v == default_text_size()
+}
+
+/// An out-of-range text size (hand-edited app.json) loads as the nearest step.
+fn de_text_size<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u16, D::Error> {
+    let raw = <u32 as serde::Deserialize>::deserialize(d)?;
+    Ok(grokhub_core::autotune::settings::text_step_for(
+        raw.min(400) as u16,
+    ))
+}
+
 fn is_false(v: &bool) -> bool {
     !*v
 }
@@ -717,6 +777,10 @@ fn default_host_cap() -> u32 {
 }
 
 fn default_close_to_tray() -> bool {
+    true
+}
+
+fn default_dynamic_chat() -> bool {
     true
 }
 
@@ -773,6 +837,10 @@ fn default_imagine_wall() -> bool {
     true
 }
 
+fn default_suggestions() -> bool {
+    true
+}
+
 fn default_budget_pause() -> bool {
     true
 }
@@ -814,10 +882,6 @@ fn default_theme() -> String {
     "ops-dark".into()
 }
 
-fn default_session_mode() -> String {
-    "chat".into()
-}
-
 fn default_permission_mode() -> String {
     "ask".into()
 }
@@ -855,7 +919,6 @@ impl Default for AppConfig {
             brief_model_fallback: false,
             provider_routing: Default::default(),
             local_tuning: LocalTuning::default(),
-            session_mode: default_session_mode(),
             permission_mode: default_permission_mode(),
             always_confirmed: false,
             always_collapse_thoughts: false,
@@ -876,6 +939,7 @@ impl Default for AppConfig {
             imagine_wall: default_imagine_wall(),
             composer_glow: false,
             composer_autocomplete: false,
+            suggestions: true,
             focus_help: false,
             resume_code: false,
             downloads_tidy: false,
@@ -891,6 +955,7 @@ impl Default for AppConfig {
             models_folder: String::new(),
             dock_panels: false,
             reduce_motion: false,
+            text_size: default_text_size(),
             chat_objectives: false,
             desktop_control: false,
             screen_record: false,
@@ -899,6 +964,8 @@ impl Default for AppConfig {
             explicit_personalities: false,
             adult_confirmed: false,
             adult_confirmed_at_ms: None,
+            dynamic_chat: true,
+            quip_heat: grokhub_core::personality::Heat::Cheeky,
             diagnostics_mode: false,
             diagnostics_include_logs: false,
             desktop_nyx: false,
@@ -972,8 +1039,8 @@ pub fn config_dir() -> PathBuf {
     if let Some(dir) = TEST_CONFIG_DIR.with(|slot| slot.borrow().clone()) {
         return dir;
     }
-    if let Ok(p) = std::env::var("GROKHUB_CONFIG") {
-        return PathBuf::from(p);
+    if let Some(p) = grokhub_core::paths::env_config_dir() {
+        return p;
     }
     unpinned_fallback()
 }
@@ -999,17 +1066,7 @@ pub fn cabin_grok_home() -> PathBuf {
 
 #[cfg(not(test))]
 fn dirs_fallback() -> PathBuf {
-    if cfg!(windows) {
-        if let Ok(app) = std::env::var("APPDATA") {
-            if !app.trim().is_empty() {
-                return PathBuf::from(app).join("GrokHub");
-            }
-        }
-    }
-    if let Some(home) = grokhub_core::user_home() {
-        return home.join(".config/GrokHub");
-    }
-    PathBuf::from(".grokhub")
+    grokhub_core::paths::default_config_dir()
 }
 
 pub fn memory_dir() -> PathBuf {
@@ -1123,6 +1180,10 @@ pub fn load() -> AppConfig {
     if cfg.personality.trim() == grokhub_core::personality::LEGACY_DEFAULT_ID {
         cfg.personality = grokhub_core::personality::DEFAULT_ID.into();
         rewrite_personality = true;
+    } else if let Some(new) = grokhub_core::personality::retired(&cfg.personality) {
+        // A voice that left the roster: speak as its nearest built-in.
+        cfg.personality = new.into();
+        rewrite_personality = true;
     }
     // Adults-only already on from before the 18+ check: that was the user's own opt-in.
     if cfg.explicit_personalities {
@@ -1136,10 +1197,6 @@ pub fn load() -> AppConfig {
     }
     drop_saved_effort(&mut cfg, &config_dir());
     migrate_theme(&mut cfg);
-    cfg.session_mode = grokhub_core::wire::SessionMode::parse(&cfg.session_mode)
-        .unwrap_or(grokhub_core::wire::SessionMode::Chat)
-        .as_str()
-        .to_string();
     // Ask / Auto / Always stick until the user changes them.
     cfg.permission_mode = persistable_permission_mode(&cfg.permission_mode);
     cfg.cabin_lane = match cfg.cabin_lane.trim().to_ascii_lowercase().as_str() {
@@ -1309,11 +1366,34 @@ pub fn wall_dir() -> PathBuf {
     config_dir().join("imagine-wall")
 }
 
-pub fn imagine_dir() -> PathBuf {
-    if let Ok(home) = std::env::var("HOME") {
-        return PathBuf::from(home).join("GrokHub-Work/imagine");
+/// Where your files' folder for `kind` is, without making it. Tests that
+/// pinned no `folders.json` get a folder inside their own config root, never
+/// the real Documents.
+pub fn user_folder_path_in(config: &Path, kind: grokhub_core::user_files::UserFolder) -> PathBuf {
+    #[cfg(test)]
+    if !config.join(grokhub_core::user_files::FOLDERS_FILE).exists() {
+        return config.join("test-files").join(kind.name());
     }
-    config_dir().join("imagine")
+    grokhub_core::user_files::folder_path(config, kind)
+}
+
+/// [`user_folder_path_in`], made (and the files root remembered) on first use.
+pub fn user_folder_in(
+    config: &Path,
+    kind: grokhub_core::user_files::UserFolder,
+) -> std::io::Result<PathBuf> {
+    #[cfg(test)]
+    if !config.join(grokhub_core::user_files::FOLDERS_FILE).exists() {
+        let dir = user_folder_path_in(config, kind);
+        std::fs::create_dir_all(&dir)?;
+        return Ok(dir);
+    }
+    grokhub_core::user_files::folder(config, kind)
+}
+
+/// Imagine saves: the Images folder in your files (`Documents/Loadout/Images`).
+pub fn imagine_dir() -> PathBuf {
+    user_folder_path_in(&config_dir(), grokhub_core::user_files::UserFolder::Images)
 }
 
 pub fn save_chat(msgs: &[(String, String)]) -> Result<(), String> {
@@ -1728,6 +1808,21 @@ mod tests {
     }
 
     #[test]
+    fn suggestions_default_on_and_round_trip_off() {
+        assert!(AppConfig::default().suggestions);
+        let absent: AppConfig = serde_json::from_str(r#"{"deviceName":"cabin"}"#).unwrap();
+        assert!(
+            absent.suggestions,
+            "a config from before the switch keeps chips on"
+        );
+        let off: AppConfig =
+            serde_json::from_str(r#"{"deviceName":"cabin","suggestions":false}"#).unwrap();
+        assert!(!off.suggestions);
+        let text = serde_json::to_string(&off).unwrap();
+        assert!(text.contains("\"suggestions\":false"), "{text}");
+    }
+
+    #[test]
     fn composer_autocomplete() {
         assert!(!AppConfig::default().composer_autocomplete);
         let absent: AppConfig = serde_json::from_str(r#"{"deviceName":"cabin"}"#).unwrap();
@@ -1968,20 +2063,17 @@ mod tests {
     }
 
     #[test]
-    fn composer_pills_including_always_survive_a_restart() {
+    fn permission_setting_including_always_survives_a_restart() {
         let _g = hold_test_config();
         let root = test_config_root("pills");
         let _ = fs::remove_dir_all(&root);
         unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
         let mut cfg = AppConfig::default();
-        assert_eq!(cfg.session_mode, "chat");
         assert_eq!(cfg.permission_mode, "ask");
         assert!(!cfg.always_confirmed);
-        cfg.session_mode = "plan".into();
         cfg.permission_mode = "auto".into();
         save(&cfg).expect("save");
         let loaded = load();
-        assert_eq!(loaded.session_mode, "plan");
         assert_eq!(loaded.permission_mode, "auto");
         cfg.permission_mode = "always-approve".into();
         cfg.always_confirmed = true;
@@ -1996,11 +2088,9 @@ mod tests {
         let always = load();
         assert_eq!(always.permission_mode, "always-approve");
         assert!(always.always_confirmed);
-        cfg.session_mode = "nonsense".into();
         cfg.permission_mode = "nonsense".into();
         save(&cfg).expect("save");
         let fallback = load();
-        assert_eq!(fallback.session_mode, "chat");
         assert_eq!(fallback.permission_mode, "ask");
         let _ = fs::remove_dir_all(&root);
         unsafe { std::env::remove_var("GROKHUB_CONFIG") };
@@ -2016,18 +2106,15 @@ mod tests {
         assert!(!cfg.always_collapse_thoughts);
         assert!(!cfg.close_to_tray_tip_seen);
         cfg.permission_mode = persistable_permission_mode("auto");
-        cfg.session_mode = "plan".into();
         cfg.always_collapse_thoughts = true;
         cfg.close_to_tray_tip_seen = true;
         save(&cfg).expect("save");
         let loaded = load();
         assert_eq!(loaded.permission_mode, "auto");
-        assert_eq!(loaded.session_mode, "plan");
         assert!(loaded.always_collapse_thoughts);
         assert!(loaded.close_to_tray_tip_seen);
         cfg.permission_mode = persistable_permission_mode("always-approve");
         cfg.always_confirmed = true;
-        cfg.session_mode = "ask".into();
         cfg.always_collapse_thoughts = false;
         cfg.close_to_tray_tip_seen = false;
         assert_eq!(cfg.permission_mode, "always-approve");
@@ -2052,7 +2139,6 @@ mod tests {
         let loaded = load();
         assert_eq!(loaded.permission_mode, "always-approve");
         assert!(loaded.always_confirmed);
-        assert_eq!(loaded.session_mode, "ask");
         assert!(!loaded.always_collapse_thoughts);
         assert!(!loaded.close_to_tray_tip_seen);
         let mut raw: serde_json::Value = serde_json::from_str(&body).unwrap();
@@ -2060,7 +2146,8 @@ mod tests {
         raw["alwaysConfirmed"] = serde_json::json!(true);
         raw["alwaysCollapseThoughts"] = serde_json::json!(true);
         raw["reasoningEffort"] = serde_json::json!("minimal");
-        raw["sessionMode"] = serde_json::json!("chat");
+        // A saved Chat / Plan / btw pill from before the app read each message.
+        raw["sessionMode"] = serde_json::json!("plan");
         fs::write(
             config_dir().join("app.json"),
             serde_json::to_string_pretty(&raw).unwrap(),
@@ -2077,8 +2164,13 @@ mod tests {
             loaded.legacy_reasoning_effort, None,
             "R1: a saved effort is dropped on load"
         );
-        assert_eq!(loaded.session_mode, "chat");
         assert!(loaded.always_collapse_thoughts);
+        save(&loaded).expect("save migrated");
+        let body = fs::read_to_string(config_dir().join("app.json")).expect("app.json");
+        assert!(
+            !body.contains("sessionMode"),
+            "the old session pill is dropped on the next save: {body}"
+        );
         fs::write(config_dir().join("app.json"), r#"{"closeToTray":true}"#).expect("bare");
         assert!(
             !load().close_to_tray_tip_seen,
@@ -2352,6 +2444,32 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_chat_starts_on_and_heat_starts_cheeky_even_in_an_old_file() {
+        let fresh = AppConfig::default();
+        assert!(fresh.dynamic_chat);
+        assert_eq!(fresh.quip_heat, grokhub_core::personality::Heat::Cheeky);
+        let old: AppConfig = serde_json::from_str("{}").expect("an empty file loads");
+        assert!(
+            old.dynamic_chat,
+            "a file from before the setting keeps it on"
+        );
+        assert_eq!(old.quip_heat, grokhub_core::personality::Heat::Cheeky);
+        let cfg = AppConfig {
+            dynamic_chat: false,
+            quip_heat: grokhub_core::personality::Heat::Filthy,
+            ..AppConfig::default()
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(
+            json.contains("\"dynamicChat\":false") && json.contains("\"quipHeat\":\"filthy\""),
+            "{json}"
+        );
+        let back: AppConfig = serde_json::from_str(&json).unwrap();
+        assert!(!back.dynamic_chat);
+        assert_eq!(back.quip_heat, grokhub_core::personality::Heat::Filthy);
+    }
+
+    #[test]
     fn default_close_to_tray_is_on() {
         assert!(
             AppConfig::default().close_to_tray,
@@ -2560,6 +2678,36 @@ mod tests {
         );
         let names: Vec<_> = fs::read_dir(&root).expect("dir").flatten().collect();
         assert_eq!(names.len(), 2);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_store_that_cannot_be_read_right_now_is_never_quarantined() {
+        let root = test_config_root("busy-store");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("root");
+        // Open succeeds or is refused, and the read fails without the bytes
+        // being broken: what a reader racing a Windows replace sees.
+        let held = root.join("updates.json");
+        fs::create_dir_all(&held).expect("held");
+        let loaded: Vec<String> = load_json(&held, JSON_STORE_CAP);
+        assert!(loaded.is_empty());
+        assert!(held.is_dir(), "a store that is only busy stays where it is");
+        assert_eq!(peek_json::<Vec<String>>(&held, JSON_STORE_CAP), None);
+
+        // Bytes that are not UTF-8 are broken, and that store is moved aside.
+        let broken = root.join("ideas.json");
+        fs::write(&broken, [0xFF, 0xFE, 0x00, 0x5B]).expect("write");
+        let loaded: Vec<String> = load_json(&broken, JSON_STORE_CAP);
+        assert!(loaded.is_empty());
+        assert!(!broken.exists(), "a broken store is quarantined");
+        let junk: Vec<_> = fs::read_dir(&root)
+            .expect("dir")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(".corrupt-"))
+            .collect();
+        assert_eq!(junk.len(), 1, "only the broken store moved: {junk:?}");
         let _ = fs::remove_dir_all(&root);
     }
 

@@ -15,7 +15,6 @@ use crate::config;
 
 /// Optional ledger written by other opt-in features (prints, disk tidy).
 const COUNTERS_FILE: &str = "week-counters.json";
-const SHARE_PNG: &str = "week-recap-share.png";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -47,8 +46,16 @@ fn counters_path() -> std::path::PathBuf {
     config::config_dir().join(COUNTERS_FILE)
 }
 
-fn share_path() -> std::path::PathBuf {
-    config::config_dir().join(SHARE_PNG)
+/// The week's share image, in Reports in your files: one file per week,
+/// `week-recap-2026-W45.png`, rewritten when that week is regenerated.
+fn share_path(week_key: &str) -> Option<std::path::PathBuf> {
+    let kind = grokhub_core::user_files::UserFolder::Reports;
+    let dir = crate::config::user_folder_in(&config::config_dir(), kind).ok()?;
+    let week: String = week_key
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    Some(dir.join(format!("week-recap-{week}.png")))
 }
 
 fn load_state() -> RecapFile {
@@ -117,8 +124,9 @@ impl Cabin {
         state.latest_md = Some(md.clone());
         state.latest_at = now;
         save_state(&state);
-        let png = wr::share_png(&recap);
-        let _ = std::fs::write(share_path(), png);
+        if let Some(path) = share_path(&recap.week_key) {
+            let _ = std::fs::write(&path, wr::share_png(&recap));
+        }
         self.post_week_recap_card(&recap, &md, now);
     }
 
@@ -275,8 +283,13 @@ mod tests {
         assert!(details.contains("## Disk freed"), "{details}");
         assert!(details.contains("## Top Loadout tasks"), "{details}");
         assert!(!details.contains("/home/"), "{details}");
-        assert!(share_path().is_file(), "share png written");
-        let png = std::fs::read(share_path()).expect("png");
+        let share = share_path(week).expect("Reports folder");
+        assert!(
+            share.ends_with(format!("Reports/week-recap-{week}.png")),
+            "{share:?}"
+        );
+        assert!(share.is_file(), "share png written");
+        let png = std::fs::read(&share).expect("png");
         assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
 
         // Steam source off → games section gone on regenerate.

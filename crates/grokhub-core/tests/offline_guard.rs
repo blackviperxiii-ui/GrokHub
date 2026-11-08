@@ -49,6 +49,7 @@ const EXITS: &[&str] = &[
     "UdpSocket::bind(",
     "tungstenite::client(",
     "tungstenite::connect(",
+    "tungstenite::client_tls_with_config(",
     "Invoke-WebRequest",
     "Command::new(\"curl",
     "Command::new(\"wget",
@@ -69,12 +70,14 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("crates/grokhub-core/src/http.rs", 1, "agent factory (LU-12, ureq 3): no guard of its own; each caller below runs its guard first, and public_only dials public_only_resolve (refuses all while on)"),
     // Model providers.
     ("crates/grokhub-agent/src/client.rs", 1, "XaiClient::once: egress guard (api.x.ai); a refusal is Protocol, never retried"),
+    ("crates/grokhub-agent/src/ws_mode.rs", 2, "WsPool::turn (TCP connect, then the WebSocket upgrade): XaiClient::over_socket runs the egress guard (api.x.ai) first; a refusal is Protocol, never retried"),
     ("crates/grokhub-agent/src/route/providers.rs", 1, "providers you added: guard_provider / provider_or_park"),
     ("crates/grokhub-app/src/xai.rs", 1, "cabin Grok calls (STT, TTS, Imagine): egress_ok"),
+    ("crates/grokhub-app/src/stt_stream.rs", 1, "voice mode streaming speech-to-text (api.x.ai WebSocket): egress_ok before the TCP connect; also off behind a proxy"),
     // Model registry, probes, connectivity.
     ("crates/grokhub-agent/src/route/sources.rs", 1, "model listing: egress guard; token probe: offline::check_url"),
     ("crates/grokhub-core/src/connectivity.rs", 1, "default_http_client (facade agent) for the re-probe: run_probe_if_due sends nothing while on; the net log speed test calls offline::refuse first"),
-    ("crates/grokhub-app/src/app/net_log_ui.rs", 1, "resolver connect probe and speed test: offline::refuse first"),
+    ("crates/grokhub-core/src/net_log.rs", 1, "net log resolver connect probe (shared by the app and the shell): offline::refuse first; its speed test goes through connectivity's facade agent above"),
     // Web tools, Pulse, GitHub, plugins.
     ("crates/grokhub-agent/src/tools/web_fetch.rs", 1, "every hop: egress guard + public_only_resolve (refuses all while on)"),
     ("crates/grokhub-agent/src/tools/web_search.rs", 1, "Brave: egress guard; DDG / SearXNG go through web_fetch"),
@@ -88,6 +91,7 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("src-tauri/src/pulse_feed.rs", 2, "Pulse feed: guard_quiet + public_only_resolve; LoopbackNet is loopback only"),
     ("crates/grokhub-app/src/github.rs", 1, "GitHub tool: egress_ok"),
     ("crates/grokhub-app/src/mods_fetch.rs", 1, "mod sources: offline::refuse + egress_ok on every hop"),
+    ("crates/grokhub-app/src/driver_blocklist.rs", 1, "Microsoft's driver blocklist (Windows, monthly): offline::refuse + egress_ok on every hop, public_only"),
     ("crates/grokhub-agent/src/plugins.rs", 2, "marketplace index: egress guard; plugin git clone: offline::check_url"),
     ("crates/grokhub-app/src/app/library_ui/game_art.rs", 1, "store art: egress_ok"),
     ("src-tauri/src/library.rs", 1, "Library store art: guard_quiet + public_only resolve, no redirects; Play only spawns the OS opener for steam://rungameid/<digits>"),

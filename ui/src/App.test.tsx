@@ -10,6 +10,7 @@ const chatHandlers = vi.hoisted(() => [] as ((envelope: unknown) => void)[]);
 // The tray's Halt and Super+Shift+Esc reach the window through this.
 const haltHandlers = vi.hoisted(() => [] as ((stopped: string[]) => void)[]);
 const ranHandlers = vi.hoisted(() => [] as ((run: unknown) => void)[]);
+const updateHandlers = vi.hoisted(() => [] as ((update: unknown) => void)[]);
 const api = vi.hoisted(() => ({
   CORE_ONLY: { desktopControl: false, pulse: false, localAi: false, tray: false, webAccess: false, plugins: false, library: false },
   getCapabilities: vi.fn<() => Promise<Capabilities>>(),
@@ -41,7 +42,16 @@ const api = vi.hoisted(() => ({
     ranHandlers.push(handler);
     return Promise.resolve(() => {});
   }),
+  onUpdateAvailable: vi.fn((handler: (update: unknown) => void) => {
+    updateHandlers.push(handler);
+    return Promise.resolve(() => {});
+  }),
+  onLocalEngineEvent: vi.fn(() => Promise.resolve(() => {})),
+  workboardSweepUndo: vi.fn(() => Promise.resolve({})),
+  listChats: vi.fn(() => Promise.resolve([{ id: "shell-c9", title: "Trip plans", created: 1, updated: 2 }])),
   shareSchedulerClock: vi.fn(() => Promise.resolve()),
+  quickChips: vi.fn(() => Promise.resolve([])),
+  chipOutcome: vi.fn(() => Promise.resolve(true)),
 }));
 
 vi.mock("./api", () => api);
@@ -54,7 +64,11 @@ vi.mock("./Chat", () => ({
     deleted,
     clear,
     onSignIn,
+    onQueue,
+    queueAct,
   }: {
+    onQueue?: (conversationId: string, texts: string[]) => void;
+    queueAct?: { op: string; index: number; n: number };
     prefill?: { text: string; n: number; conversationId?: string };
     open?: { id: string; n: number };
     deleted?: { id: string; n: number };
@@ -66,6 +80,14 @@ vi.mock("./Chat", () => ({
       {open && <p>Opened {open.id}</p>}
       {deleted && <p>Deleted {deleted.id}</p>}
       {clear && <p>Cleared {clear.n}</p>}
+      {queueAct && (
+        <p>
+          Act {queueAct.op} {queueAct.index}
+        </p>
+      )}
+      <button type="button" onClick={() => onQueue?.("shell-c1", ["then deploy", "and tell me"])}>
+        Line up two
+      </button>
       <button type="button" onClick={onSignIn}>
         Sign in
       </button>
@@ -662,5 +684,98 @@ describe("App", () => {
     expect(within(dock).getByRole("listitem", { name: "summarize my inbox" })).toHaveTextContent(
       "3 new mails.",
     );
+  });
+
+  it("puts a scheduled run's result in the bell, not the chat, with a follow-up", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    ranHandlers.length = 0;
+    render(<App />);
+    await waitFor(() => expect(ranHandlers.length).toBe(1));
+    expect(screen.getByRole("button", { name: "Notifications" })).toBeVisible();
+    act(() => {
+      ranHandlers[0]({
+        id: "auto-2",
+        name: "board",
+        result: { text: "", error: "API key rejected", stop: "error" },
+      });
+    });
+    const bell = screen.getByRole("button", { name: "Notifications, 1 new" });
+    await userEvent.click(bell);
+    expect(screen.getByRole("button", { name: "Notifications" })).toBeVisible();
+    const menu = screen.getByRole("region", { name: "Notifications" });
+    expect(menu).toHaveTextContent("board failed");
+    await userEvent.click(within(menu).getByRole("button", { name: "Find the cause" }));
+    expect(screen.queryByRole("region", { name: "Notifications" })).toBeNull();
+    expect(screen.getByText(/^Chat page: The "board" automation failed: API key rejected/)).toBeVisible();
+  });
+
+  it("an update found in the background lands in the bell", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    updateHandlers.length = 0;
+    render(<App />);
+    await waitFor(() => expect(updateHandlers.length).toBe(1));
+    act(() => updateHandlers[0]({ version: "1.0.0", channel: "beta", updatable: true, note: null, available: "1.0.1" }));
+    await userEvent.click(screen.getByRole("button", { name: "Notifications, 1 new" }));
+    expect(screen.getByRole("region", { name: "Notifications" })).toHaveTextContent(
+      "Version 1.0.1 is ready to install.",
+    );
+  });
+
+  it("while the window is in the background, a finished reply and a Workboard tidy land in the bell", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    api.getWorkboard.mockResolvedValueOnce({
+      columns: [],
+      archived: [],
+      stamp: 1,
+      swept: { text: "Archived 2 finished cards", ids: ["a", "b"], at: 7 },
+    } as never);
+    chatHandlers.length = 0;
+    const focus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    render(<App />);
+    await waitFor(() => expect(chatHandlers.length).toBeGreaterThan(0));
+    act(() => {
+      for (const h of chatHandlers) h({ conversationId: "shell-c9", event: { kind: "text", text: "Hi" } });
+      for (const h of chatHandlers) h({ conversationId: "shell-c9", event: { kind: "done", stop: "end_turn" } });
+    });
+    focus.mockRestore();
+    await userEvent.click(await screen.findByRole("button", { name: "Notifications, 2 new" }));
+    const menu = screen.getByRole("region", { name: "Notifications" });
+    // Each entry says what happened, to what, and where it came from.
+    expect(menu).toHaveTextContent('Reply finished in "Trip plans"');
+    expect(menu).toHaveTextContent("Chat: Trip plans");
+    expect(menu).toHaveTextContent("Archived 2 finished cards");
+    expect(menu).toHaveTextContent("Workboard");
+    await userEvent.click(within(menu).getByRole("button", { name: "Undo" }));
+    expect(api.workboardSweepUndo).toHaveBeenCalledTimes(1);
+    // Open chat opens that very chat, not just the Chat page.
+    await userEvent.click(screen.getByRole("button", { name: /^Notifications/ }));
+    await userEvent.click(
+      within(screen.getByRole("region", { name: "Notifications" })).getByRole("button", { name: "Open chat" }),
+    );
+    expect(await screen.findByText("Opened shell-c9")).toBeInTheDocument();
+  });
+
+  it("lists messages queued behind a reply in Activity, reading 1 of 3 running, with Steer now and Remove", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    chatHandlers.length = 0;
+    render(<App />);
+    await waitFor(() => expect(chatHandlers.length).toBeGreaterThan(0));
+    act(() => {
+      for (const h of chatHandlers) h({ conversationId: "shell-c1", event: { kind: "tool", title: "Reading notes.md", status: "in_progress" } });
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Line up two" }));
+    const dock = screen.getByRole("complementary", { name: "Activity" });
+    const toggle = within(dock).getByRole("button", { name: "Activity, 1 of 3 running" });
+    expect(toggle).toHaveTextContent("1 of 3 running");
+    await userEvent.click(toggle);
+    const next = within(dock).getByRole("listitem", { name: "then deploy" });
+    expect(next).toHaveTextContent("Next up");
+    expect(within(dock).getByRole("listitem", { name: "and tell me" })).toHaveTextContent("2nd in line");
+    await userEvent.click(within(next).getByRole("button", { name: "Steer now" }));
+    expect(screen.getByText("Act steer 0")).toBeVisible();
+    await userEvent.click(
+      within(within(dock).getByRole("listitem", { name: "and tell me" })).getByRole("button", { name: "Remove" }),
+    );
+    expect(screen.getByText("Act remove 1")).toBeVisible();
   });
 });

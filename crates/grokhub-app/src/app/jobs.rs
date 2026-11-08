@@ -226,6 +226,10 @@ impl Cabin {
             }
             Ok(JobOut::Voice(t)) => {
                 self.running = false;
+                if !t.trim().is_empty() {
+                    // Their words win over whatever is still being said.
+                    self.stop_speaking();
+                }
                 let stt_ok = !is_voice_error(&t);
                 let voice_on = self.voice_is_on();
                 self.voice_state = voice_state_after_ptt_stt(voice_on, stt_ok);
@@ -243,10 +247,19 @@ impl Cabin {
                         self.status = t;
                         self.maybe_continue_ptt();
                     }
+                    PttLine::Hold if t == VOICE_PAUSED => {
+                        self.leave_voice();
+                        self.status = t.trim_start_matches("VOICE_RECEIPT:").trim().into();
+                    }
                     PttLine::Hold => {
                         self.voice_orb = "idle".into();
                         self.voice_ready_at = Some(Instant::now());
                         self.status = t;
+                    }
+                    PttLine::Chat if t.trim().is_empty() => {
+                        // Nothing worth sending was heard: keep listening.
+                        self.voice_ready_at = None;
+                        self.start_ptt_listen();
                     }
                     PttLine::Chat => {
                         self.voice_ready_at = None;
@@ -256,6 +269,14 @@ impl Cabin {
                         self.maybe_continue_ptt();
                     }
                 }
+            }
+            Ok(JobOut::VoiceNote(note)) => {
+                self.rx = Some(rx);
+                self.status = note;
+            }
+            Ok(JobOut::VoiceHeard) => {
+                self.rx = Some(rx);
+                self.heard_talking();
             }
             Ok(JobOut::UpdateProgress { pct, msg }) => {
                 self.rx = Some(rx);
@@ -320,6 +341,7 @@ impl Cabin {
                 self.finish_hub_dispatch(&e, false);
                 self.interrupt_turn_card(InterruptCause::from_failure(&e));
                 self.chat_job_thread = None;
+                self.voice_spoken = None;
                 self.stream_buf.clear();
                 self.thought_buf.clear();
                 self.persist();
@@ -335,6 +357,7 @@ impl Cabin {
                 self.finish_hub_dispatch(worker_gone_status(), false);
                 self.interrupt_turn_card(InterruptCause::WorkerGone);
                 self.chat_job_thread = None;
+                self.voice_spoken = None;
                 self.stream_buf.clear();
                 self.thought_buf.clear();
                 self.persist();

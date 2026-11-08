@@ -655,6 +655,13 @@ impl Cabin {
                     install::start_remove(ui.ctx(), game, m);
                 }
             });
+            if let Some(note) = &m.offline_only {
+                ui.label(
+                    egui::RichText::new(note)
+                        .size(crate::theme::TYPE_CAPTION)
+                        .color(crate::theme::amber()),
+                );
+            }
         }
         if rows.is_empty() && ours.is_empty() {
             ui.label(

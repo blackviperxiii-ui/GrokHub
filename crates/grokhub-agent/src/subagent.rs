@@ -43,6 +43,9 @@ pub struct SpawnCall<'a> {
     pub effort: Option<&'a str>,
     pub system: &'a str,
     pub max_turns: u32,
+    /// The parent's context window: a child trims, compacts and stops before
+    /// the long-context price step the same way.
+    pub context_length: u64,
     pub policy: Option<&'a crate::perm::Policy>,
     pub on_event: &'a mut dyn FnMut(LoopEvent),
 }
@@ -102,10 +105,18 @@ pub fn drain_side_events() -> Vec<SideEvent> {
 }
 
 pub fn spawn_schema() -> Value {
+    let mut description = String::from(
+        "Run a child agent. type is explore (read-only) or general (same permissions as the parent). isolation worktree uses git worktree add. background returns a task id.",
+    );
+    if crate::route::boundary::enabled(&crate::perm::config_dir()) {
+        description.push_str(
+            " A general helper's prompt needs a brief, one labeled line each: Goal:, Constraints:, Edge cases:, Done when:, Files:.",
+        );
+    }
     json!({
         "type": "function",
         "name": "spawn_subagent",
-        "description": "Run a child agent. type is explore (read-only) or general (same permissions as the parent). isolation worktree uses git worktree add. background returns a task id.",
+        "description": description,
         "parameters": {
             "type": "object",
             "properties": {
@@ -200,6 +211,21 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         Ok(spec) => spec,
         Err(err) => return (ToolOutput::err(err), Usage::default()),
     };
+    // Item 34: with boundary routing on, a general helper needs a brief and
+    // runs fresh on the cheap lane rather than forking the chat.
+    let briefed = !spec.explore
+        && !spec.worktree
+        && spec.persona.trim().is_empty()
+        && crate::route::boundary::enabled(&crate::perm::config_dir());
+    if briefed {
+        let missing = crate::route::boundary::missing_brief(&spec.prompt);
+        if !missing.is_empty() {
+            return (
+                ToolOutput::err(crate::route::boundary::brief_refusal(&missing)),
+                Usage::default(),
+            );
+        }
+    }
     let child_cancel = CancelToken::child_of(call.cancel);
     let steer = SteerQueue::new();
     let wt_cell: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
@@ -259,6 +285,17 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         .unwrap_or_else(|| call.workspace.to_path_buf());
     let conversation_id = format!("{}/{}", call.session, id);
     let kind_name = if spec.explore { "explore" } else { "general" };
+    // A plain general child of the chat forks it: same system, tools and
+    // history, so its first request reuses the chat's cached prefix. An
+    // explore child (other tools), a persona or a worktree starts fresh.
+    let fork = (call.depth == 0
+        && !briefed
+        && !spec.explore
+        && spec.persona.trim().is_empty()
+        && worktree.is_none())
+    .then(|| parent_request(call.session))
+    .flatten()
+    .filter(|req| req.model == call.model);
     let job = ChildJob {
         client: Arc::clone(&client),
         permits: call
@@ -269,7 +306,11 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         workspace,
         model: call.model.to_string(),
         effort: call.effort.map(str::to_string),
-        system: child_system(call.system, &spec.persona, spec.explore),
+        system: if fork.is_some() {
+            call.system.to_string()
+        } else {
+            child_system(call.system, &spec.persona, spec.explore)
+        },
         conversation_id,
         parent_session: call.session.to_string(),
         parent_workspace: call.workspace.to_path_buf(),
@@ -279,13 +320,18 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         } else {
             call.max_turns
         },
+        context_length: call.context_length,
         cancel: child_cancel.clone(),
         steer,
         gate: child_gate(call.gate, spec.explore),
         policy: call.policy.cloned(),
         depth: call.depth.saturating_add(1),
         tasks: Arc::clone(&tasks),
-        prompt: spec.prompt,
+        prompt: if fork.is_some() {
+            fork_task(&spec.prompt)
+        } else {
+            spec.prompt
+        },
         agent_id: id.clone(),
         kind_name: kind_name.to_string(),
         title: title.clone(),
@@ -293,6 +339,9 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         shared_client: client,
         ports: crate::tools::ports::current(),
         origin: crate::harness::current_origin(),
+        fork,
+        config: crate::perm::pinned_config(),
+        class: briefed.then_some(crate::route::boundary::HELPER_CLASS),
     };
     if spec.background {
         thread::spawn(move || run_job(job, None));
@@ -364,6 +413,7 @@ struct ChildJob {
     /// The parent run's origin trace: the child's task text is not yours.
     trace: Option<crate::harness::provenance::Trace>,
     max_turns: u32,
+    context_length: u64,
     cancel: CancelToken,
     steer: SteerQueue,
     gate: Gate,
@@ -379,6 +429,12 @@ struct ChildJob {
     ports: crate::tools::ports::Ports,
     /// The parent's origin: a child of a scheduled run is still automation.
     origin: crate::harness::Origin,
+    /// Set for a fork: the parent's last request, which the child starts from.
+    fork: Option<Arc<ParentRequest>>,
+    /// The parent thread's pinned config folder: the child reads the same rules and grants.
+    config: Option<PathBuf>,
+    /// Item 34: the route class a briefed helper runs under.
+    class: Option<&'static str>,
 }
 
 struct ChildDone {
@@ -405,6 +461,7 @@ impl HaltCheck for HubHalt {
 fn run_job(job: ChildJob, tx: Option<Sender<ChildNote>>) {
     let _origin = crate::harness::OriginScope::enter(job.origin);
     let _trace = crate::harness::provenance::enter(job.trace.clone());
+    let _config = job.config.clone().map(crate::perm::ConfigGuard::set);
     let mut done = run_child(&job, &tx);
     done.text = guard_result(
         &job.parent_workspace,
@@ -451,7 +508,17 @@ fn run_child(job: &ChildJob, tx: &Option<Sender<ChildNote>>) -> ChildDone {
         hub: Arc::clone(&job.tasks),
     };
     let agent_id = job.agent_id.clone();
-    let mut history = Vec::new();
+    let _class = job.class.map(crate::route::live::ClassScope::enter);
+    let _fork = job
+        .fork
+        .as_ref()
+        .map(|parent| ForkScope::enter(&job.conversation_id, &job.parent_session, parent));
+    let mut history = job
+        .fork
+        .as_ref()
+        .map(|parent| parent.input.clone())
+        .unwrap_or_default();
+    let inherited = history.len();
     let policy = job.policy.clone();
     let desktop = job.desktop.as_ref().map(erase_desktop);
     let input = LoopIn {
@@ -470,7 +537,7 @@ fn run_child(job: &ChildJob, tx: &Option<Sender<ChildNote>>) -> ChildDone {
         desktop,
         permits: job.permits.as_ref(),
         perms: policy.as_ref(),
-        context_length: 0,
+        context_length: job.context_length,
         tasks: Some(Arc::clone(&job.tasks)),
         depth: job.depth,
         agent_id: Some(&agent_id),
@@ -484,10 +551,17 @@ fn run_child(job: &ChildJob, tx: &Option<Sender<ChildNote>>) -> ChildDone {
         emit_child(ev, background, &parent_session, tx)
     });
     let _ = crate::hooks::on_subagent_stop(&job.parent_session, &job.workspace, &job.kind_name);
+    // A fork's answer is what it added, not the chat it inherited. Once it
+    // compacted, the inherited part is a summary and the whole is its own.
+    let own = if out.compacted || history.len() < inherited {
+        0
+    } else {
+        inherited
+    };
     ChildDone {
         stop: out.stop,
         usage: out.usage,
-        text: child_text(&history),
+        text: child_text(&history[own..]),
     }
 }
 
@@ -950,6 +1024,126 @@ fn forget_steer(id: &str) {
         .lock()
         .unwrap_or_else(|err| err.into_inner())
         .remove(id);
+}
+
+/// What a root chat last sent, so a fork can start from exactly that prefix.
+struct ParentRequest {
+    model: String,
+    input: Vec<InputItem>,
+    /// The tools array as it went out, so a fork sends the same bytes and its
+    /// first request hits the chat's cached prefix past the tool list.
+    tools: Vec<Value>,
+}
+
+/// Root chats whose last request is kept. Each entry is one chat's context.
+const KEPT_REQUESTS: usize = 8;
+
+/// Kept requests by conversation id, newest first.
+type ParentRequests = std::collections::VecDeque<(String, Arc<ParentRequest>)>;
+
+fn parent_requests() -> &'static Mutex<ParentRequests> {
+    static LIST: OnceLock<Mutex<ParentRequests>> = OnceLock::new();
+    LIST.get_or_init(|| Mutex::new(std::collections::VecDeque::new()))
+}
+
+/// Keeps a root chat's request input and tools as they went out, newest chat first.
+pub fn remember_request(
+    conversation_id: &str,
+    model: &str,
+    input: Vec<InputItem>,
+    tools: Vec<Value>,
+) {
+    let entry = Arc::new(ParentRequest {
+        model: model.to_string(),
+        input,
+        tools,
+    });
+    let mut list = parent_requests()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    list.retain(|(id, _)| id != conversation_id);
+    list.push_front((conversation_id.to_string(), entry));
+    list.truncate(KEPT_REQUESTS);
+}
+
+fn parent_request(conversation_id: &str) -> Option<Arc<ParentRequest>> {
+    parent_requests()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .iter()
+        .find(|(id, _)| id == conversation_id)
+        .map(|(_, req)| Arc::clone(req))
+}
+
+/// Fork conversation ids, the parent chat whose cache key they share, and the
+/// parent request they started from.
+type Forks = HashMap<String, (String, Arc<ParentRequest>)>;
+
+fn forks() -> &'static Mutex<Forks> {
+    static MAP: OnceLock<Mutex<Forks>> = OnceLock::new();
+    MAP.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// The `prompt_cache_key` for a request: a fork uses its parent's, so it
+/// lands on the server that already holds the shared prefix.
+pub fn cache_key(conversation_id: &str) -> String {
+    forks()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .get(conversation_id)
+        .map(|(parent, _)| parent.clone())
+        .unwrap_or_else(|| conversation_id.to_string())
+}
+
+/// A running fork's tool list: its parent's last one, byte for byte, so the
+/// fork's requests share the parent's cached prefix past the tools. The fork
+/// runs under the parent's own gate, so the list offers it nothing new.
+pub fn fork_tools(conversation_id: &str) -> Option<Vec<Value>> {
+    forks()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .get(conversation_id)
+        .map(|(_, parent)| parent.tools.clone())
+        .filter(|tools| !tools.is_empty())
+}
+
+#[cfg(test)]
+fn is_fork(conversation_id: &str) -> bool {
+    forks()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .contains_key(conversation_id)
+}
+
+/// Registered while a fork runs.
+struct ForkScope(String);
+
+impl ForkScope {
+    fn enter(child: &str, parent: &str, request: &Arc<ParentRequest>) -> Self {
+        forks()
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .insert(child.to_string(), (parent.to_string(), Arc::clone(request)));
+        Self(child.to_string())
+    }
+}
+
+impl Drop for ForkScope {
+    fn drop(&mut self) {
+        forks()
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .remove(&self.0);
+    }
+}
+
+/// The user turn a fork gets after the inherited conversation.
+fn fork_task(prompt: &str) -> String {
+    format!(
+        "You are now a fork of this conversation, started for one task. Do only that task, \
+         then end with what you found or did: only your final reply goes back.\n\nTask: {}",
+        prompt.trim()
+    )
 }
 
 #[cfg(test)]
@@ -1621,6 +1815,124 @@ mod tests {
     }
 
     #[test]
+    fn a_general_child_forks_the_chat_prefix_and_cache_key() {
+        let dir = scratch("fork");
+        let sid = session("fork");
+        let parent_id = sid.clone();
+        // (depth, input, cache key, tools) of every request, in order.
+        type Seen = Vec<(usize, Vec<InputItem>, String, Vec<Value>)>;
+        let seen: Arc<Mutex<Seen>> = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::clone(&seen);
+        let client = fake(&sid, move |req, _cancel, n| {
+            let depth = depth_of(&parent_id, &req.conversation_id);
+            log.lock().unwrap().push((
+                depth,
+                req.input.clone(),
+                cache_key(&req.conversation_id),
+                req.tools.clone(),
+            ));
+            match (depth, n) {
+                (0, 0) => Ok(calls_turn(
+                    vec![
+                        call(
+                            "g",
+                            "spawn_subagent",
+                            &spawn_args("find the bug", "general", false, "none"),
+                        ),
+                        call(
+                            "e",
+                            "spawn_subagent",
+                            &spawn_args("list files", "explore", false, "none"),
+                        ),
+                    ],
+                    Usage::default(),
+                )),
+                // The fork starts a child of its own first.
+                (1, 0)
+                    if req.input.iter().any(|item| {
+                        crate::compact::message_text(item).contains("find the bug")
+                    }) =>
+                {
+                    Ok(calls_turn(
+                        vec![call(
+                            "gg",
+                            "spawn_subagent",
+                            &spawn_args("deeper", "general", false, "none"),
+                        )],
+                        Usage::default(),
+                    ))
+                }
+                (1, _) => Ok(text_turn("child-done", Usage::default())),
+                _ => Ok(text_turn("parent-done", Usage::default())),
+            }
+        });
+        let (out, history) = run_parent(
+            &client,
+            &dir,
+            &sid,
+            chat(PermMode::Always, false, true),
+            &closed(),
+            &CancelToken::new(),
+            &mut |_| {},
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert!(joined_outputs(&history).contains("child-done"));
+
+        let seen = seen.lock().unwrap();
+        let first = seen.iter().find(|(d, _, _, _)| *d == 0).unwrap();
+        let (parent, parent_tools) = (&first.1, &first.3);
+        let firsts: Vec<_> = seen.iter().filter(|(d, _, _, _)| *d == 1).collect();
+        let fork = firsts
+            .iter()
+            .find(|(_, input, _, _)| input.starts_with(parent))
+            .expect("the general child's first request starts with the chat's last one");
+        assert!(fork.1.len() > parent.len());
+        let task = crate::compact::message_text(fork.1.last().unwrap());
+        assert!(
+            task.contains("fork") && task.contains("find the bug"),
+            "{task}"
+        );
+        assert_eq!(fork.2, sid, "a fork shares the chat's cache key");
+        assert_eq!(
+            serde_json::to_string(&fork.3).unwrap(),
+            serde_json::to_string(parent_tools).unwrap(),
+            "a fork sends the chat's tool list byte for byte"
+        );
+        let fork_steps: Vec<_> = seen
+            .iter()
+            .filter(|(d, input, _, _)| *d == 1 && input.starts_with(parent))
+            .collect();
+        assert!(fork_steps.iter().all(|step| &step.3 == parent_tools));
+
+        let explore = firsts
+            .iter()
+            .find(|(_, input, _, _)| {
+                input
+                    .iter()
+                    .any(|item| crate::compact::message_text(item).contains("list files"))
+            })
+            .unwrap();
+        assert!(
+            !explore.1.starts_with(parent),
+            "an explore child starts fresh"
+        );
+        assert_ne!(explore.2, sid);
+
+        // The fork's own child is a plain subagent: fresh context, own cache key.
+        let grand = seen
+            .iter()
+            .find(|(d, _, _, _)| *d == 2)
+            .expect("the fork can start a child");
+        assert!(!grand.1.starts_with(parent));
+        assert_ne!(grand.2, sid);
+        assert!(
+            !is_fork(&format!("{sid}/s1")),
+            "the fork scope ends with the run"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn child_usage_rolls_into_the_parent() {
         let dir = scratch("usage");
         let sid = session("usage");
@@ -1749,6 +2061,119 @@ mod tests {
             thread::sleep(Duration::from_millis(15));
         }
         assert_eq!(rolled.input_tokens, 8, "{seen}");
+        let _ = drain_side_events();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_child_reads_the_config_folder_its_parent_pinned() {
+        let dir = scratch("childcfg");
+        let cfg = dir.join("pinned-config");
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        let sid = session("childcfg");
+        let parent_id = sid.clone();
+        let seen = Arc::new(Mutex::new(Vec::<(usize, PathBuf)>::new()));
+        let seen_step = Arc::clone(&seen);
+        let client = fake(&sid, move |req, _cancel, n| {
+            let depth = depth_of(&parent_id, &req.conversation_id);
+            seen_step
+                .lock()
+                .unwrap()
+                .push((depth, crate::perm::config_dir()));
+            if depth == 0 && n == 0 {
+                return Ok(calls_turn(
+                    vec![call(
+                        "s",
+                        "spawn_subagent",
+                        &spawn_args("cfg", "explore", false, "none"),
+                    )],
+                    Usage::default(),
+                ));
+            }
+            if depth >= 1 {
+                return Ok(text_turn("child-done", Usage::default()));
+            }
+            Ok(text_turn("parent-done", Usage::default()))
+        });
+        let (out, _) = run_parent(
+            &client,
+            &dir,
+            &sid,
+            chat(PermMode::Always, false, true),
+            &closed(),
+            &CancelToken::new(),
+            &mut |_| {},
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        let seen = seen.lock().unwrap().clone();
+        assert!(seen.iter().any(|(d, _)| *d >= 1), "the child ran: {seen:?}");
+        for (depth, dir_seen) in &seen {
+            assert_eq!(dir_seen, &cfg, "depth {depth} read another config folder");
+        }
+        let _ = drain_side_events();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn with_boundary_routing_a_general_helper_needs_a_brief_and_starts_fresh() {
+        let dir = scratch("briefed");
+        let cfg = dir.join("cfg");
+        std::fs::create_dir_all(&cfg).unwrap();
+        std::fs::write(cfg.join(crate::route::boundary::CONFIG), "enabled = true\n").unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        let sid = session("briefed");
+        let parent_id = sid.clone();
+        let brief = "Goal: find the bug\nConstraints: read only\nEdge cases: none\n\
+                     Done when: the cause is named\nFiles: src/lib.rs";
+        // (depth, input, class) of every request.
+        type Seen = Vec<(usize, Vec<InputItem>, &'static str)>;
+        let seen: Arc<Mutex<Seen>> = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::clone(&seen);
+        let brief_args = spawn_args(brief, "general", false, "none");
+        let client = fake(&sid, move |req, _cancel, n| {
+            let depth = depth_of(&parent_id, &req.conversation_id);
+            log.lock().unwrap().push((
+                depth,
+                req.input.clone(),
+                crate::route::live::current_class(),
+            ));
+            match (depth, n) {
+                (0, 0) => Ok(calls_turn(
+                    vec![call(
+                        "bare",
+                        "spawn_subagent",
+                        &spawn_args("find the bug", "general", false, "none"),
+                    )],
+                    Usage::default(),
+                )),
+                (0, 1) => Ok(calls_turn(
+                    vec![call("briefed", "spawn_subagent", &brief_args)],
+                    Usage::default(),
+                )),
+                (1, _) => Ok(text_turn("child-done", Usage::default())),
+                _ => Ok(text_turn("parent-done", Usage::default())),
+            }
+        });
+        let (out, history) = run_parent(
+            &client,
+            &dir,
+            &sid,
+            chat(PermMode::Always, false, true),
+            &closed(),
+            &CancelToken::new(),
+            &mut |_| {},
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        let outputs = joined_outputs(&history);
+        assert!(outputs.contains("needs a brief"), "{outputs}");
+        assert!(outputs.contains("child-done"), "{outputs}");
+        let seen = seen.lock().unwrap();
+        let parent = &seen.iter().find(|(d, _, _)| *d == 0).unwrap().1;
+        let children: Vec<_> = seen.iter().filter(|(d, _, _)| *d == 1).collect();
+        assert_eq!(children.len(), 1, "only the briefed helper ran");
+        let (_, input, class) = children[0];
+        assert!(!input.starts_with(parent), "a briefed helper starts fresh");
+        assert_eq!(*class, crate::route::boundary::HELPER_CLASS);
         let _ = drain_side_events();
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2106,7 +2531,7 @@ mod tests {
 
     #[test]
     fn schemas_for_keeps_spawn_and_session_tools_in_plan_mode() {
-        // Full tool list and per-turn system rewrite: the mode this test checks.
+        // Full tool list: the mode this test checks.
         let _legacy = crate::tools::registry::LegacyPromptGuard::set();
         let plan = tools::schemas_for(&Gate::phase_readonly());
         let names: Vec<&str> = plan

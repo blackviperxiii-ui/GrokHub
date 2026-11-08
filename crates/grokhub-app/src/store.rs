@@ -1,7 +1,6 @@
 use grokhub_core::{
-    empty_chip_memory, prune_ephemeral_insights, prune_retired_chip_memory, rotate_trajectory,
-    ChipMemory, ImagineWall, LearningState, ProjectNode, SuggestionStore, UsageDay,
-    TRAJECTORY_MAX_BYTES,
+    prune_ephemeral_insights, rotate_trajectory, ChipMemory, ImagineWall, LearningState,
+    ProjectNode, SuggestionStore, UsageDay, TRAJECTORY_MAX_BYTES,
 };
 
 use crate::config;
@@ -36,16 +35,10 @@ pub fn save_usage(d: &UsageDay) -> Result<(), String> {
     config::atomic_write(&usage_path(), body.as_bytes())
 }
 
-pub fn chips_path() -> std::path::PathBuf {
-    config::config_dir().join("chips.json")
-}
-
+/// The chip store lives in core so every app on this PC reads and writes it
+/// the same way (lock, private write, migration).
 pub fn load_chips() -> ChipMemory {
-    let mut mem = config::load_json_or(&chips_path(), config::JSON_STORE_CAP, empty_chip_memory);
-    if prune_retired_chip_memory(&mut mem) {
-        let _ = save_chips(&mem);
-    }
-    mem
+    grokhub_core::load_chip_memory(&config::config_dir())
 }
 
 pub fn wall_path() -> std::path::PathBuf {
@@ -75,8 +68,7 @@ pub fn save_projects(nodes: &[ProjectNode]) -> Result<(), String> {
 }
 
 pub fn save_chips(s: &ChipMemory) -> Result<(), String> {
-    let body = serde_json::to_string_pretty(s).map_err(|e| e.to_string())?;
-    config::atomic_write(&chips_path(), body.as_bytes())
+    grokhub_core::save_chip_memory(&config::config_dir(), s)
 }
 
 pub fn suggestions_path() -> std::path::PathBuf {
@@ -143,8 +135,10 @@ mod tests {
         let root = crate::config::test_config_root("chips");
         let _ = fs::remove_dir_all(&root);
         unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
-        let mut s = empty_chip_memory();
-        s.total_events = 3;
+        let s = ChipMemory {
+            total_events: 3,
+            ..ChipMemory::default()
+        };
         save_chips(&s).expect("save");
         assert_eq!(load_chips().total_events, 3);
         let _ = fs::remove_dir_all(&root);

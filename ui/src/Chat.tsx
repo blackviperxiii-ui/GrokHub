@@ -15,26 +15,34 @@ import {
   cancelChat,
   closeChat,
   deleteChat,
+  exportChat,
   forgetMessage,
   getLastChat,
   getSettings,
   loadChat,
   onChatEvent,
   onEventGap,
+  readTurn,
   runSlash,
   saveSettings,
   sendChat,
+  sideChat,
+  steerChat,
+  tellMain,
   type Answer,
-  type Approvals,
   type ChatEvent,
   type ElicitAction,
+  type SavedFile,
   type SessionMode,
   type Settings,
   type SlashEffect,
   type SlashHit,
-  type Suggestion,
+  type QuickChip,
   type Transcript,
+  type TurnRead,
 } from "./api";
+import { ChipRow, useChipRow } from "./Chips";
+import { GoalAsk } from "./Goals";
 import { ATTACH_MAX, AttachButton, AttachChips, useAttachments } from "./AttachChips";
 import {
   type Cut,
@@ -45,18 +53,21 @@ import {
   MessageMenu,
   withoutCut,
 } from "./DeleteMessage";
-import type { RunNotice } from "./Automations";
+import type { View } from "./Palette";
 import { Markdown } from "./Markdown";
 import { displayText } from "./md";
 import { appendDraft, Mic } from "./Mic";
-import { ElicitCard, ModeChips, type ElicitItem } from "./Modes";
+import { ElicitCard, type ElicitItem } from "./Modes";
+import { SIDE_MARK, SideCards, withSide, type Side } from "./Side";
 import { NyxDock } from "./NyxDock";
 import { NyxFace } from "./NyxFace";
+import { Orb, orbFor, orbLabel } from "./Orb";
 import { activityOf, useNyx } from "./nyx";
 import { PRODUCT_NAME } from "./brand";
-import { onArrowFocus, usePeek } from "./peek";
 import { isSlashCommand, SlashMenu, useSlashHits } from "./SlashMenu";
 import { needsSettings } from "./ui";
+import { SavedCard } from "./SavedCard";
+import { settingAsk } from "./autoSetupApi";
 
 export type Item =
   | { kind: "user"; text: string }
@@ -72,14 +83,14 @@ export type Item =
        * "halted": Halt stopped it. */
       answer: Answer | Ended | null;
     }
-  | { kind: "suggest"; items: Suggestion[] }
   /** A saved chat's tool steps, named on one muted line instead of cards. */
   | { kind: "tools"; text: string }
-  | ({ kind: "notice" } & RunNotice)
   /** Halt stopped this reply. */
   | { kind: "halted" }
   /** What a slash command did. It stays in the log and never reaches the model. */
   | { kind: "slash"; command: string; text: string }
+  /** `/export` saved this chat; the card opens or shows the file. */
+  | { kind: "saved"; saved: SavedFile }
   | ElicitItem;
 
 type Ended = "ended" | "halted";
@@ -88,43 +99,17 @@ type Ended = "ended" | "halted";
 export const HALTED_STOP = "halted";
 export const HALTED_LINE = "Halted. This reply stopped, and nothing more ran.";
 
-/** How much of a run's reply its notice shows; Automations has the rest. */
-export const NOTICE_CHARS = 280;
+/** Steer now or Remove on the `index`th queued message; a new `n` runs it. */
+export interface QueueAct {
+  op: "steer" | "remove";
+  index: number;
+  n: number;
+}
 
-/** At most this many follow-ups show under a reply. */
-export const SUGGESTIONS_MAX = 3;
-
-/** The next steps under a reply: one row that scrolls sideways when it runs
- * out of room, with the next chip peeking in. Left and Right move along it. */
-function SuggestRow({
-  items,
-  busy,
-  onPick,
-}: {
-  items: Suggestion[];
-  busy: boolean;
-  onPick: (prompt: string) => void;
-}) {
-  const row = useRef<HTMLDivElement>(null);
-  usePeek(row, "x", items.length);
-  return (
-    <div className="card suggest" role="group" aria-label="Suggestions">
-      <div ref={row} className="card-buttons" onKeyDown={(e) => onArrowFocus(e, "x")}>
-        {items.map((s) => (
-          <button
-            key={s.label}
-            type="button"
-            className="quiet"
-            title={s.prompt}
-            disabled={busy}
-            onClick={() => onPick(s.prompt)}
-          >
-            {s.label}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
+/** Text to put back in the box, after what is typed there. */
+function withQueued(draft: string, texts: readonly string[]): string {
+  const back = texts.join("\n\n");
+  return draft.trim() ? `${draft.trimEnd()}\n\n${back}` : back;
 }
 
 export interface Prefill {
@@ -133,11 +118,18 @@ export interface Prefill {
   conversationId?: string;
 }
 
-const PLACEHOLDERS: Record<SessionMode, string> = {
-  chat: `Message ${PRODUCT_NAME}`,
-  plan: "Describe what to plan",
-  btw: "Ask on the side",
-};
+const PLACEHOLDER = `Message ${PRODUCT_NAME}`;
+
+/** Bare `/plan`: the next message plans first. */
+export const PLAN_NEXT = "Your next message gets a plan first.";
+/** Bare `/chat`: the next message is answered straight away. */
+export const CHAT_NEXT = "Your next message gets a straight answer, with no plan.";
+/** Bare `/btw`: side questions need no command. */
+export const BTW_HINT =
+  "No command needed: ask your question while a reply runs and it's answered on the side.";
+/** A permission card's Stop asking me, once the setting moved. */
+export const STOP_ASKING_DONE =
+  "Allowed. From now on only risky things ask. Settings → Defaults changes it back.";
 
 export const CHAT_EMPTY = `Ask ${PRODUCT_NAME} anything.`;
 export const SIGNED_OUT =
@@ -222,9 +214,7 @@ export function applyEvent(items: Item[], event: ChatEvent): Item[] {
     // The plan comes again on its approval card; one copy is enough.
     case "elicit":
       return [...items, { ...event, answer: null }];
-    case "suggestions":
-      if (event.items.length === 0) return items;
-      return [...items, { kind: "suggest", items: event.items.slice(0, SUGGESTIONS_MAX) }];
+    // A reply's follow-ups join the chip row under the box (`useChipRow`).
     default:
       return items;
   }
@@ -338,9 +328,12 @@ const ToolCard = memo(function ToolCard({
 function PermissionCard({
   item,
   onAnswer,
+  onStopAsking,
 }: {
   item: Extract<Item, { kind: "permission" }>;
   onAnswer: (answer: Answer) => void;
+  /** Allow this and ask less from now on; absent when it can't change here. */
+  onStopAsking?: () => void;
 }) {
   return (
     <div className="card permission" role="group" aria-label={`Approve ${item.title}`}>
@@ -362,6 +355,16 @@ function PermissionCard({
           <button type="button" className="quiet danger" onClick={() => onAnswer("deny")}>
             Deny
           </button>
+          {onStopAsking && (
+            <button
+              type="button"
+              className="link"
+              title="Allows this, and from now on only risky things ask. Settings → Defaults changes it back."
+              onClick={onStopAsking}
+            >
+              Stop asking me
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -378,9 +381,7 @@ function LogItem({
   onMenu,
   onAnswer,
   onAnswerCard,
-  onPick,
-  onDraft,
-  onOpenAutomations,
+  onStopAsking,
   nyxUrl,
 }: {
   item: Item;
@@ -391,9 +392,8 @@ function LogItem({
   nyxUrl?: string;
   onAnswer: (id: string, answer: Answer) => void;
   onAnswerCard: (item: ElicitItem, action: ElicitAction, value: string) => void;
-  onPick: (prompt: string) => void;
-  onDraft: (text: string) => void;
-  onOpenAutomations?: () => void;
+  /** Stop asking me on a permission card, while the setting is Ask me first. */
+  onStopAsking?: (id: string) => void;
 }) {
   "use memo";
   switch (item.kind) {
@@ -419,7 +419,11 @@ function LogItem({
     case "permission":
       return (
         <ViewTransition>
-          <PermissionCard item={item} onAnswer={(a) => onAnswer(item.id, a)} />
+          <PermissionCard
+            item={item}
+            onAnswer={(a) => onAnswer(item.id, a)}
+            onStopAsking={onStopAsking && (() => onStopAsking(item.id))}
+          />
         </ViewTransition>
       );
     case "elicit":
@@ -428,42 +432,6 @@ function LogItem({
           <ElicitCard item={item} onAnswer={(action, value) => onAnswerCard(item, action, value)} />
         </ViewTransition>
       );
-    case "notice":
-      return (
-        <div
-          className={item.ok ? "card notice" : "card notice warn"}
-          role="status"
-          aria-label={`${item.name} finished`}
-        >
-          <span className="card-title">{item.name}</span>
-          <span className="card-status">{item.ok ? "Finished" : "Failed"}</span>
-          <p className="card-detail-line plain">
-            {item.text.length > NOTICE_CHARS
-              ? `${item.text.slice(0, NOTICE_CHARS).trimEnd()}…`
-              : item.text}
-          </p>
-          <div className="card-buttons">
-            <button
-              type="button"
-              className="quiet"
-              onClick={() =>
-                onDraft(
-                  item.ok
-                    ? `About the "${item.name}" automation run: `
-                    : `The "${item.name}" automation failed: ${item.text}. What went wrong and how do I fix it?`,
-                )
-              }
-            >
-              {item.ok ? "Ask about it" : "Find the cause"}
-            </button>
-            {onOpenAutomations && (
-              <button type="button" className="link" onClick={onOpenAutomations}>
-                Open Automations
-              </button>
-            )}
-          </div>
-        </div>
-      );
     case "slash":
       return (
         <div className="card notice slash-notice" role="status" aria-label={`${item.command} result`}>
@@ -471,6 +439,8 @@ function LogItem({
           <p className="card-detail-line plain">{item.text}</p>
         </div>
       );
+    case "saved":
+      return <SavedCard saved={item.saved} />;
     case "halted":
       return (
         <p className="halted-line" role="status">
@@ -483,8 +453,6 @@ function LogItem({
           Tools ran: {item.text}
         </p>
       );
-    case "suggest":
-      return <SuggestRow items={item.items} busy={busy} onPick={onPick} />;
   }
 }
 
@@ -493,8 +461,8 @@ function LogItem({
  * sends it. With `conversationId` the chat moves to that conversation first,
  * like Start over, unless it is already there. `active`: the Chat tab is
  * showing, so the approvals chips read Settings again. `remote`: the web app,
- * where the approvals stay the computer's. `notice`: an automation run that
- * ended; a new `n` posts it in this chat. `open`: a saved chat History picked;
+ * where the approvals stay the computer's. Finished automation runs go to the
+ * Notifications menu, not this log. `open`: a saved chat History picked;
  * a new `n` shows it, and the next message carries it on. `deleted`: a chat
  * History deleted; if it is the open one, a new chat starts. `clear`: the
  * Chat tab's Clear chat, already confirmed; a new `n` deletes the open chat's
@@ -503,10 +471,10 @@ function LogItem({
 export function Chat({
   onOpenSettings,
   onSignIn = onOpenSettings,
-  onOpenAutomations,
   onOpenView,
+  onQueue,
+  queueAct,
   prefill,
-  notice,
   open,
   deleted,
   clear,
@@ -517,11 +485,15 @@ export function Chat({
   onOpenSettings: () => void;
   /** The signed-out card's button: Settings → Account. */
   onSignIn?: () => void;
-  onOpenAutomations?: () => void;
-  /** `/memory`, `/connectors` and the like open their page. */
-  onOpenView?: (view: Extract<SlashEffect, { kind: "open" }>["view"]) => void;
+  /** `/memory`, `/connectors` and the like open their page, and so does a
+   * chip that goes somewhere. */
+  onOpenView?: (view: View) => void;
+  /** The messages waiting behind the running reply, for the Activity menu. */
+  onQueue?: (conversationId: string, texts: string[]) => void;
+  /** Steer now or Remove, pressed on a queued row in the Activity menu. A new
+   * `n` runs it once. */
+  queueAct?: QueueAct;
   prefill?: Prefill;
-  notice?: RunNotice & { n: number };
   open?: { id: string; n: number };
   deleted?: { id: string; n: number };
   clear?: { n: number };
@@ -540,9 +512,34 @@ export function Chat({
   const touched = useRef(false);
 
   const [busy, setBusy] = useState(false);
+  /** The chat whose reply is running. Another chat opened meanwhile (Clear
+   * chat, or deleting the open one) shows Send, and its messages wait. */
+  const [runIn, setRunIn] = useState<string>();
+  /** The chat on screen now, read after a reply ends. */
+  const openNow = useRef(conversationId);
+  useEffect(() => {
+    openNow.current = conversationId;
+  }, [conversationId]);
+  const busyHere = busy && runIn === conversationId;
   const [error, setError] = useState<string | null>(null);
   const busyRef = useRef(false);
-  const [mode, setMode] = useState<SessionMode>("chat");
+  /** Messages sent while a reply runs wait here, in order, and show only in
+   * the Activity menu. The next one sends when the reply ends. */
+  const [queue, setQueue] = useState<string[]>([]);
+  const queueRef = useRef<string[]>([]);
+  /** The queued message whose turn came: it sends after this render. */
+  const [nextUp, setNextUp] = useState<{ text: string; n: number }>();
+  /** `/plan` or `/chat` named how the next message runs; otherwise the app reads it. */
+  const nextAs = useRef<SessionMode | undefined>(undefined);
+  /** Questions answered beside the running reply. */
+  const [sides, setSides] = useState<Side[]>([]);
+  const sideN = useRef(0);
+  /** The line shown the moment a message typed mid-reply is routed. */
+  const [ack, setAck] = useState<string | null>(null);
+  /** A reply's follow-ups landed: the chip row is asked for again. */
+  const [followed, setFollowed] = useState(0);
+  /** The game goal the last reply noticed, asked about under it. */
+  const [goalAsk, setGoalAsk] = useState<{ id: string; title: string } | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
   const attach = useAttachments(conversationId, { remote, active });
   const slashRows = useSlashHits(draft);
@@ -551,28 +548,21 @@ export function Chat({
   const [slashShut, setSlashShut] = useState<string | null>(null);
   const slashOpen = slashRows.length > 0 && slashShut !== draft;
   const slashPick = Math.min(slashAt, slashRows.length - 1);
+  const row = useChipRow({
+    surface: "composer",
+    conversationId,
+    draft,
+    turn: followed,
+    busy,
+    active,
+  });
   // Nyx's pose follows what the chat does, not each chunk of text.
-  const nyx = useNyx(activityOf(items, busy), active);
+  const activity = activityOf(items, busy);
+  const nyx = useNyx(activity, active);
 
   useEffect(() => {
     if (active) getSettings().then(setSettings, () => {});
   }, [active]);
-
-  async function setApprovals(approvals: Approvals) {
-    if (!settings) return;
-    try {
-      setSettings(
-        await saveSettings(
-          settings.closeToTray,
-          settings.workspace,
-          approvals,
-          settings.desktopControl,
-        ),
-      );
-    } catch (err) {
-      setError(String(err));
-    }
-  }
 
   /** A bubble's open menu, and the delete waiting on its confirm. */
   const [msgMenu, setMsgMenu] = useState<{ i: number; at: { x: number; y: number } } | null>(null);
@@ -595,9 +585,30 @@ export function Chat({
     }
   }
 
+  /** Side answers belong to the chat on screen: leaving it stops them. */
+  function leaveSides() {
+    for (const side of sides) if (side.live) void cancelChat(side.id);
+    setSides([]);
+    setAck(null);
+  }
+
   /** A new conversation; the old one stays saved for History. */
+  function changeQueue(next: string[]) {
+    queueRef.current = next;
+    setQueue(next);
+  }
+
   function startFresh() {
+    // Messages lined up in the chat being left go back in the box, never
+    // into the new chat by themselves.
+    const waiting = queueRef.current;
+    if (waiting.length > 0) {
+      changeQueue([]);
+      setDraft((now) => withQueued(now, waiting));
+    }
+    leaveSides();
     touched.current = true;
+    setGoalAsk(null);
     setItems([]);
     setEarlier(0);
     setError(null);
@@ -605,6 +616,8 @@ export function Chat({
   }
 
   function show(transcript: Transcript) {
+    leaveSides();
+    setGoalAsk(null);
     setConversationId(transcript.id);
     setItems(itemsFrom(transcript));
     setEarlier(transcript.earlier);
@@ -687,6 +700,8 @@ export function Chat({
       }
       touched.current = true;
       void closeChat(conversationId);
+      leaveSides();
+      setGoalAsk(null);
       setItems([]);
       setEarlier(0);
       setError(null);
@@ -698,23 +713,26 @@ export function Chat({
     if (prefill) applyPrefill(prefill);
   }, [prefill]);
 
-  // A new `n` posts the run's notice, once.
-  const [noticeN, setNoticeN] = useState<number>();
-  if (notice && notice.n !== noticeN) {
-    setNoticeN(notice.n);
-    const { n: _n, ...run } = notice;
-    setItems((now) => [...now, { kind: "notice", ...run }]);
-  }
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let stop: (() => void) | undefined;
     let dropped = false;
     let stopGap: (() => void) | undefined;
+    const sidePrefix = `${conversationId}${SIDE_MARK}`;
     void onChatEvent(({ conversationId: id, event }) => {
+      // A side answer streams into its own card, never the chat.
+      if (id.startsWith(sidePrefix)) {
+        if (event.kind === "text")
+          setSides((now) => now.map((s) => (s.id === id ? { ...s, answer: s.answer + event.text } : s)));
+        else if (event.kind === "error") setSides((now) => now.map((s) => (s.id === id ? { ...s, failed: true } : s)));
+        return;
+      }
       // An event that lands after the turn ended must not reopen it.
       if (id !== conversationId || !busyRef.current) return;
       if (event.kind === "error") setError(event.message);
+      else if (event.kind === "suggestions") setFollowed((n) => n + 1);
+      else if (event.kind === "goal") setGoalAsk({ id: event.id, title: event.title });
       else if (event.kind === "done") setItems(event.stop === HALTED_STOP ? settleHalted : settle);
       else if (event.kind === "text") setItems((now) => applyEvent(now, event));
       // A card is a transition, so the webview can fade it in; text streams as is.
@@ -746,8 +764,10 @@ export function Chat({
     startFresh();
   }
 
-  /** Sends `text` and `files` in the current mode, or in `as` (`/plan <text>`).
-   * `fromDraft` empties the box and its files; a picked suggestion leaves them. */
+  /** Sends `text` and `files`. `as` (`/plan <text>`, a plan's follow-up chip)
+   * names how it runs; otherwise `/plan` or `/chat` before it did, or the app
+   * reads the message. `fromDraft` empties the box and its files; a tapped
+   * chip leaves them. */
   async function deliver(
     text: string,
     files: typeof attach.files,
@@ -756,32 +776,88 @@ export function Chat({
   ) {
     if ((!text && files.length === 0) || busy) return;
     touched.current = true;
+    setGoalAsk(null);
     const unread = files.find((f) => f.status);
     if (unread) {
       setError(`${unread.name}: ${unread.status}`);
       return;
     }
     const said = [text, ...files.map((f) => f.label)].filter(Boolean).join("\n");
-    // Suggestions belong to the reply they followed.
-    setItems((now) => [...now.filter((item) => item.kind !== "suggest"), { kind: "user", text: said }]);
+    setItems((now) => [...now, { kind: "user", text: said }]);
     if (fromDraft) {
       setDraft("");
       attach.clear();
     }
     setError(null);
+    setAck(null);
     busyRef.current = true;
     setBusy(true);
+    const from = conversationId;
+    setRunIn(from);
+    const runs = as ?? nextAs.current;
+    nextAs.current = undefined;
     let stop = "";
     try {
       const paths = files.map((f) => f.path);
-      stop = await (paths.length ? sendChat(conversationId, text, as ?? mode, paths) : sendChat(conversationId, text, as ?? mode));
+      stop = await (paths.length ? sendChat(conversationId, text, runs, paths) : sendChat(conversationId, text, runs));
     } catch (err) {
       setError(String(err));
     }
     // After the catch rather than in a finally, which React Compiler can't compile yet.
     busyRef.current = false;
     setBusy(false);
-    setItems(stop === HALTED_STOP ? settleHalted : settle);
+    setRunIn(undefined);
+    // Another chat opened meanwhile: what waits now was typed there, so it
+    // goes, and the lines on screen are that chat's, not this reply's.
+    const moved = openNow.current !== from;
+    if (!moved) setItems(stop === HALTED_STOP ? settleHalted : settle);
+    // The reply ended well: the next queued message goes. Halt, Stop or a
+    // failure sends nothing more; what waited goes back in the box.
+    const waiting = queueRef.current;
+    if (waiting.length === 0) return;
+    if (moved || (stop && stop !== HALTED_STOP && stop !== "cancelled")) {
+      changeQueue(waiting.slice(1));
+      setNextUp((now) => ({ text: waiting[0], n: (now?.n ?? 0) + 1 }));
+    } else {
+      changeQueue([]);
+      setDraft((now) => withQueued(now, waiting));
+    }
+  }
+
+  /** Stop: the reply ends, and the messages lined up behind it come back to
+   * the box instead of sending. */
+  function stopReply() {
+    const waiting = queueRef.current;
+    if (waiting.length > 0) {
+      changeQueue([]);
+      setDraft((now) => withQueued(now, waiting));
+    }
+    void cancelChat(conversationId);
+  }
+
+  /** Remove puts the words back in an empty box, so nothing typed is lost. */
+  function removeQueued(index: number) {
+    const text = queueRef.current[index];
+    if (text === undefined) return;
+    changeQueue(queueRef.current.filter((_, i) => i !== index));
+    setDraft((now) => (now.trim() ? now : text));
+  }
+
+  /** Steer now: the words join the running reply at its next step and show
+   * in the chat as sent. If the reply ended first they stay in line. */
+  async function steerQueued(index: number) {
+    const text = queueRef.current[index];
+    if (text === undefined) return;
+    let took: boolean;
+    try {
+      took = await steerChat(conversationId, text);
+    } catch (err) {
+      setError(String(err));
+      return;
+    }
+    if (!took || queueRef.current[index] !== text) return;
+    changeQueue(queueRef.current.filter((_, i) => i !== index));
+    setItems((now) => [...now, { kind: "user", text }]);
   }
 
   async function answer(id: string, choice: Answer) {
@@ -803,6 +879,21 @@ export function Chat({
     }
   }
 
+  /** Stop asking me: allow this step, and Ask me first becomes Only ask for
+   * risky things. Settings → Defaults is where it changes back. */
+  async function stopAsking(id: string) {
+    if (!settings || settings.approvals !== "ask") return;
+    void answer(id, "allow");
+    try {
+      setSettings(
+        await saveSettings(settings.closeToTray, settings.workspace, "auto", settings.desktopControl),
+      );
+      setAck(STOP_ASKING_DONE);
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
   async function answerCard(item: ElicitItem, action: ElicitAction, value: string) {
     const mark = (from: ElicitAction | null, to: ElicitAction | null) =>
       setItems((now) =>
@@ -811,17 +902,80 @@ export function Chat({
         ),
       );
     mark(null, action);
-    // An approved plan leaves plan mode, as in the cabin.
-    const leavesPlan = item.server === "Plan" && action === "accept";
-    if (leavesPlan) setMode("chat");
     try {
       await answerElicit(conversationId, item.id, action, item.fieldName, value);
     } catch (err) {
       // It never reached the agent, which is still asking: give the card back.
       mark(action, null);
-      if (leavesPlan) setMode("plan");
       setError(String(err));
     }
+  }
+
+  /** A question typed during a reply gets its own read-only answer in an
+   * "On the side" card; the reply, its chat and its history stay as they are. */
+  async function askOnTheSide(question: string) {
+    sideN.current += 1;
+    const id = `${conversationId}${SIDE_MARK}${sideN.current.toString(36)}`;
+    const ask = [...items].reverse().find((item) => item.kind === "user");
+    const reply = items.at(-1);
+    const soFar = reply?.kind === "assistant" ? reply.text : "";
+    setSides((now) => withSide(now, { id, question, answer: "", live: true, failed: false }));
+    let failed = false;
+    try {
+      await sideChat(conversationId, id, question, ask?.kind === "user" ? ask.text : "", soFar);
+    } catch {
+      failed = true;
+    }
+    setSides((now) => now.map((s) => (s.id === id ? { ...s, live: false, failed: s.failed || failed } : s)));
+  }
+
+  function stopSide(side: Side) {
+    void cancelChat(side.id);
+  }
+
+  function dismissSide(side: Side) {
+    setSides((now) => now.filter((s) => s.id !== side.id));
+  }
+
+  /** Tell the main task: the side answer joins the running reply at its next
+   * step, waits its turn behind it, or goes as the next message. */
+  async function tellSide(side: Side) {
+    dismissSide(side);
+    try {
+      const told = await tellMain(conversationId, side.question, side.answer);
+      if (told.steered) setItems((now) => [...now, { kind: "user", text: told.text }]);
+      else if (busyRef.current) changeQueue([...queueRef.current, told.text]);
+      else void deliver(told.text, [], false, "chat");
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  /** A message typed while a reply runs, as the app read it: a side
+   * question, a correction for the work, stop, or a new job that waits. */
+  async function routeRunning(typed: string, read: TurnRead) {
+    const text = read.text.trim() || typed;
+    setAck(read.ack || null);
+    switch (read.route) {
+      case "side":
+        void askOnTheSide(text);
+        return;
+      case "stop":
+        stopReply();
+        return;
+      case "steer": {
+        const took = await steerChat(conversationId, text).catch(() => false);
+        if (took) {
+          setItems((now) => [...now, { kind: "user", text }]);
+          return;
+        }
+        // The reply ended first: the words wait their turn instead.
+        break;
+      }
+      case "queue":
+        break;
+    }
+    changeQueue([...queueRef.current, text]);
   }
 
   /** Runs a slash line and applies what it did. */
@@ -840,15 +994,37 @@ export function Chat({
       case "newChat":
         startOver();
         break;
-      case "mode":
-        setMode(effect.mode);
-        if (effect.text) void deliver(effect.text.trim(), [], false, effect.mode);
+      case "mode": {
+        const text = effect.text?.trim();
+        if (effect.mode === "btw") {
+          // A typed side question: beside the reply when one runs, else just answered.
+          if (!text) setItems((now) => [...now, { kind: "slash", command, text: BTW_HINT }]);
+          else if (busyRef.current && !remote) void askOnTheSide(text);
+          else void deliver(text, [], false, "chat");
+        } else if (text) {
+          void deliver(text, [], false, effect.mode);
+        } else {
+          nextAs.current = effect.mode;
+          setItems((now) => [
+            ...now,
+            { kind: "slash", command, text: effect.mode === "plan" ? PLAN_NEXT : CHAT_NEXT },
+          ]);
+        }
         break;
+      }
       case "open":
         onOpenView?.(effect.view);
         break;
       case "notice":
         setItems((now) => [...now, { kind: "slash", command, text: effect.text }]);
+        break;
+      case "export":
+        try {
+          const saved = await exportChat(conversationId);
+          setItems((now) => [...now, { kind: "saved", saved }]);
+        } catch (err) {
+          setError(String(err));
+        }
         break;
     }
   }
@@ -866,23 +1042,64 @@ export function Chat({
 
   // Declared after what they call: React Compiler skips a component that
   // calls a function declared further down.
-  /** Sends the draft, or `picked` from a suggestion (the draft stays).
-   * A slash line runs instead of going to the model. */
-  async function send(event?: FormEvent, picked?: string) {
+  /** Sends the draft. A slash line runs instead of going to the model. */
+  async function send(event?: FormEvent) {
     event?.preventDefault();
-    const text = (picked ?? draft).trim();
-    const files = picked === undefined ? attach.files : [];
-    if ((!text && files.length === 0) || busy) return;
+    const text = draft.trim();
+    const files = attach.files;
+    // While a reply runs, the app reads what the message is for (files wait
+    // in the box). A typed /btw or /side asks on the side.
+    if (busy) {
+      if (!text || (isSlashCommand(text) && !/^\/(btw|side)\s+\S/i.test(text))) return;
+      setDraft("");
+      // The web app lines messages up behind the reply, as before. In a chat
+      // opened while another chat's reply ends, the message waits for it.
+      if (remote || !busyHere) {
+        changeQueue([...queueRef.current, text]);
+        return;
+      }
+      let read: TurnRead;
+      try {
+        read = await readTurn(text);
+      } catch {
+        read = { route: "queue", text, ack: "" };
+      }
+      await routeRunning(text, read);
+      return;
+    }
+    if (!text && files.length === 0) return;
     touched.current = true;
-    if (picked === undefined && isSlashCommand(text)) {
+    if (isSlashCommand(text)) {
       await slash(text);
       return;
     }
-    await deliver(text, files, picked === undefined);
+    // "make the text bigger", "undo that": a setting, answered here.
+    const said = files.length === 0 && !remote ? await settingAsk(text) : null;
+    if (said) {
+      setDraft("");
+      setItems((now) => [...now, { kind: "user", text }, { kind: "assistant", text: said, streaming: false }]);
+      return;
+    }
+    await deliver(text, files, true);
   }
 
-  function pick(prompt: string) {
-    void send(undefined, prompt);
+  /** One tap rule per chip (`grokhub_core::ChipAction`): Go opens its page;
+   * Ask sends its text when the box is empty and adds it to what is typed
+   * otherwise. A follow-up from a plan's reply plans again. */
+  function tapChip(chip: QuickChip) {
+    row.picked(chip);
+    if (chip.action === "go") {
+      if (chip.view) onOpenView?.(chip.view as View);
+      return;
+    }
+    const as = chip.mode === "plan" ? "plan" : undefined;
+    if (draft.trim()) {
+      setDraft(appendDraft(draft, chip.value));
+      return;
+    }
+    touched.current = true;
+    if (isSlashCommand(chip.value)) void slash(chip.value);
+    else void deliver(chip.value, [], false, as);
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -926,6 +1143,31 @@ export function Chat({
     !(last?.kind === "permission" && last.answer === null) &&
     !(last?.kind === "elicit" && last.answer === null);
 
+  useEffect(() => {
+    onQueue?.(conversationId, queue);
+  }, [conversationId, queue, onQueue]);
+  const actN = useRef<number>(undefined);
+  const applyQueueAct = useEffectEvent((act: QueueAct) => {
+    if (act.n === actN.current) return;
+    actN.current = act.n;
+    if (act.op === "remove") removeQueued(act.index);
+    else void steerQueued(act.index);
+  });
+  const sendNext = useEffectEvent((text: string) => void deliver(text, [], false));
+  useEffect(() => {
+    if (!nextUp) return;
+    const text = nextUp.text;
+    const timer = window.setTimeout(() => sendNext(text), 0);
+    return () => window.clearTimeout(timer);
+  }, [nextUp]);
+  useEffect(() => {
+    if (!queueAct) return;
+    const act = queueAct;
+    // After this render, as Delete does, so the change is a render of its own.
+    const timer = window.setTimeout(() => applyQueueAct(act), 0);
+    return () => window.clearTimeout(timer);
+  }, [queueAct]);
+
   return (
     <section
       className={nyx ? "chat has-nyx" : "chat"}
@@ -966,14 +1208,12 @@ export function Chat({
             nyxUrl={nyx?.url}
             onAnswer={answer}
             onAnswerCard={answerCard}
-            onPick={pick}
-            onDraft={setDraft}
-            onOpenAutomations={onOpenAutomations}
+            onStopAsking={!remote && settings?.approvals === "ask" ? stopAsking : undefined}
           />
         ))}
         {busy && waiting && (
           <div className="bubble assistant streaming" data-role="assistant">
-            …
+            <Orb state={orbFor(activity)} label={orbLabel(activity)} />
           </div>
         )}
         <div ref={endRef} />
@@ -998,14 +1238,12 @@ export function Chat({
           )}
         </div>
       )}
-      <ModeChips
-        mode={mode}
-        onMode={setMode}
-        approvals={settings?.approvals ?? null}
-        onApprovals={(a) => void setApprovals(a)}
-        busy={busy}
-        remote={remote}
-      />
+      {ack && (
+        <p className="note route-ack" role="status">
+          {ack}
+        </p>
+      )}
+      <SideCards sides={sides} onStop={stopSide} onTell={(side) => void tellSide(side)} onDismiss={dismissSide} />
       <AttachChips files={attach.files} note={attach.note} onRemove={attach.remove} busy={busy} />
       <form className="composer slash-wrap" onSubmit={send}>
         {slashOpen && (
@@ -1021,7 +1259,7 @@ export function Chat({
         )}
         <textarea
           aria-label="Message"
-          placeholder={PLACEHOLDERS[mode]}
+          placeholder={PLACEHOLDER}
           value={draft}
           rows={2}
           role={slashOpen ? "combobox" : undefined}
@@ -1038,12 +1276,23 @@ export function Chat({
         {!remote && (
           <Mic onText={(words) => setDraft((now) => appendDraft(now, words))} onError={setError} busy={busy} active={active} />
         )}
-        {busy ? (
-          <button type="button" onClick={() => void cancelChat(conversationId)}>
-            Stop
-          </button>
+        {busyHere ? (
+          <>
+            {draft.trim() && !isSlashCommand(draft.trim()) && (
+              <button
+                type="submit"
+                className="quiet"
+                title="A side question is answered beside this reply, a correction steers it, and a new job waits its turn"
+              >
+                Send
+              </button>
+            )}
+            <button type="button" onClick={stopReply}>
+              Stop
+            </button>
+          </>
         ) : (
-          <button type="submit" disabled={!draft.trim() && attach.files.length === 0}>
+          <button type="submit" disabled={!draft.trim() && (busy || attach.files.length === 0)}>
             Send
           </button>
         )}
@@ -1051,6 +1300,10 @@ export function Chat({
           New chat
         </button>
       </form>
+      {goalAsk && !busy ? (
+        <GoalAsk key={goalAsk.id} id={goalAsk.id} title={goalAsk.title} onDone={() => setGoalAsk(null)} />
+      ) : null}
+      <ChipRow chips={row.chips} busy={busy} keys={active} onTap={tapChip} onHide={row.hide} />
     </section>
   );
 }

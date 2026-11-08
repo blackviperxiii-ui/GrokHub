@@ -34,6 +34,128 @@ pub const EXPLICIT_SAFETY_LINE: &str =
 /// adults-only is on ([`gated`]), which needs the one-time 18+ confirmation.
 pub const ADULT_PERMISSION: &str = "The user confirmed in Settings that they are 18 or older and opted in to adult roleplay and fantasy between fictional adults. Stay in character, with no moralizing or disclaimers. Hard limits, always: no minors or age-play, no non-consent, no sexual content about real or identifiable people, no bestiality, and if the user says stop, stop at once.";
 
+/// A prompt for a turn that runs on this computer's model with 18+ on: the
+/// online-only limits come off. "Jokes, not sex chat" becomes
+/// [`ADULT_PERMISSION`], the heat lines lose "never a sex scene", and the
+/// closer names only the hard limits. Nothing goes online, so only the hard
+/// limits stay ([`crate::adult_guard`]). A prompt without 18+ on is unchanged.
+pub fn unlocked_for_local(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.contains(ADULT_HUMOR) && !text.contains(ADULT_PERMISSION) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let mut out = if text.contains(ADULT_PERMISSION) {
+        text.replace(&format!(" {ADULT_HUMOR}"), "")
+            .replace(ADULT_HUMOR, "")
+    } else {
+        text.replace(ADULT_HUMOR, ADULT_PERMISSION)
+    };
+    for heat in Heat::DIAL {
+        out = out.replace(heat.line(), heat.local_line());
+    }
+    out = out.replace(
+        crate::talk::VOLATILE_SAFETY_CLOSER_ADULT,
+        crate::talk::VOLATILE_SAFETY_CLOSER,
+    );
+    out = out.replace(
+        crate::talk::VOLATILE_SAFETY_CLOSER,
+        crate::talk::VOLATILE_SAFETY_CLOSER_ADULT,
+    );
+    std::borrow::Cow::Owned(out)
+}
+
+/// A prompt for a clean ask from an 18+ chat that goes online because this
+/// computer's model can't take it: the 18+ voice lines come out (every line
+/// that carries [`crate::adult_guard::ADULT_VOICE`]) and the closers go back
+/// to the plain ones. A prompt with no 18+ voice in it is unchanged.
+pub fn online_safe(text: &str) -> std::borrow::Cow<'_, str> {
+    use crate::adult_guard::ADULT_VOICE;
+    use crate::talk::{VOLATILE_SAFETY_CLOSER, VOLATILE_SAFETY_CLOSER_ADULT};
+    if !text.contains(ADULT_VOICE)
+        && !text.contains(EXPLICIT_SAFETY_LINE)
+        && !text.contains(VOLATILE_SAFETY_CLOSER_ADULT)
+    {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let kept: Vec<&str> = text
+        .split('\n')
+        .filter(|line| !line.contains(ADULT_VOICE))
+        .collect();
+    let out = kept
+        .join("\n")
+        .replace(EXPLICIT_SAFETY_LINE, SAFETY_LINE)
+        .replace(VOLATILE_SAFETY_CLOSER_ADULT, VOLATILE_SAFETY_CLOSER);
+    std::borrow::Cow::Owned(out)
+}
+
+/// What every voice gets while adults-only is on (see [`Personality::prompt_block_for`]):
+/// crude comedy, never sex chat, with the hard limits named once.
+pub const ADULT_HUMOR: &str = "18+ is on: the user confirmed they are 18 or older. Crude, raunchy jokes in this voice are welcome at the heat below: jokes, not sex chat. Never about minors, real people or non-consent, no slurs at groups, and drop the jokes for grief, health or real distress.";
+
+/// How crude the jokes get while adults-only is on. [`Heat::Clean`] is the
+/// voice with adults-only off; the dial in Settings runs Cheeky to Filthy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Heat {
+    Clean,
+    #[default]
+    Cheeky,
+    Spicy,
+    Filthy,
+}
+
+impl Heat {
+    /// The three stops on the Settings dial, mildest first.
+    pub const DIAL: [Heat; 3] = [Heat::Cheeky, Heat::Spicy, Heat::Filthy];
+
+    /// Short label for the dial.
+    pub fn label(self) -> &'static str {
+        match self {
+            Heat::Clean => "Clean",
+            Heat::Cheeky => "Cheeky",
+            Heat::Spicy => "Spicy",
+            Heat::Filthy => "Filthy",
+        }
+    }
+
+    /// The line a voice gets at this heat. Clean adds nothing.
+    pub fn line(self) -> &'static str {
+        match self {
+            Heat::Clean => "",
+            Heat::Cheeky => "Heat: cheeky. Innuendo, double meanings and mild swearing; nothing graphic.",
+            Heat::Spicy => "Heat: spicy. Raunchy punchlines, sex jokes and strong swearing are fine; keep it comedy, never a sex scene.",
+            Heat::Filthy => "Heat: filthy. As crude as the joke wants, swearing freely; still comedy, never a sex scene or roleplay.",
+        }
+    }
+
+    /// [`Self::line`] on this computer's model with 18+ on: the same heat,
+    /// with no "never a sex scene" cap.
+    pub fn local_line(self) -> &'static str {
+        match self {
+            Heat::Clean => "",
+            Heat::Cheeky => "Heat: cheeky. Innuendo, double meanings and mild swearing.",
+            Heat::Spicy => "Heat: spicy. Raunchy talk, sex and strong swearing are all fine.",
+            Heat::Filthy => "Heat: filthy. As crude and explicit as they want, swearing freely.",
+        }
+    }
+
+    /// One step hotter, capped at Filthy ("roast me harder").
+    pub fn hotter(self) -> Heat {
+        match self {
+            Heat::Clean | Heat::Cheeky => Heat::Spicy,
+            Heat::Spicy | Heat::Filthy => Heat::Filthy,
+        }
+    }
+
+    /// One step milder, never below Cheeky while adults-only is on ("ease off").
+    pub fn milder(self) -> Heat {
+        match self {
+            Heat::Filthy => Heat::Spicy,
+            Heat::Spicy | Heat::Cheeky => Heat::Cheeky,
+            Heat::Clean => Heat::Clean,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Emoji {
@@ -75,6 +197,10 @@ pub struct Personality {
     /// Profanity allowed; the picker tags it Explicit.
     #[serde(default)]
     pub explicit: bool,
+    /// What this voice is best at, first one leading. Dynamic chat
+    /// ([`crate::voice_flow`]) hands it the conversation when that topic takes over.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub topics: Vec<crate::voice_flow::Topic>,
     /// Loaded from the user's `{config}/personalities/`, not shipped with the build.
     #[serde(skip)]
     pub custom: bool,
@@ -126,6 +252,14 @@ impl Personality {
     /// The block this preset adds to the system prompt, ending in
     /// [`Self::safety_line`]. Empty when the tone rules are empty.
     pub fn prompt_block(&self) -> String {
+        self.prompt_block_for(None)
+    }
+
+    /// [`Self::prompt_block`] with adults-only on at `adult` heat: every voice
+    /// gets [`ADULT_HUMOR`] (explicit presets keep their own permission instead)
+    /// and the heat line. `None` or [`Heat::Clean`] is the plain block.
+    pub fn prompt_block_for(&self, adult: Option<Heat>) -> String {
+        let heat = adult.filter(|h| *h != Heat::Clean);
         let rules = self.tone_rules.trim();
         if rules.is_empty() {
             return String::new();
@@ -160,6 +294,17 @@ impl Personality {
             out.push_str(crate::adult_guard::ADULT_VOICE);
             out.push(' ');
             out.push_str(ADULT_PERMISSION);
+        }
+        if let Some(heat) = heat {
+            // Heat alone never marks a chat 18+: it's global, so it would send
+            // every chat to the local model. A chat is 18+ by what's in it or
+            // by an adults-only voice speaking.
+            if !self.explicit {
+                out.push(' ');
+                out.push_str(ADULT_HUMOR);
+            }
+            out.push(' ');
+            out.push_str(heat.line());
         }
         out.push('\n');
         out.push_str(self.safety_line());
@@ -213,6 +358,7 @@ fn neutral() -> Personality {
         voice_hint: None,
         roast: false,
         explicit: false,
+        topics: Vec::new(),
         custom: false,
     }
 }
@@ -347,9 +493,25 @@ pub fn find(presets: &[Personality], id: &str) -> Personality {
     presets
         .iter()
         .find(|p| p.id == id)
+        .or_else(|| retired(id).and_then(|new| presets.iter().find(|p| p.id == new)))
         .or_else(|| presets.iter().find(|p| p.id == DEFAULT_ID))
         .cloned()
         .unwrap_or_else(neutral)
+}
+
+/// Built-in voices that left the roster, and the voice a stored pick of each
+/// now speaks as. A user's own copy keeps working: it has its own id.
+pub const RETIRED: &[(&str, &str)] = &[
+    ("lawyer-precise", "concise-pro"),
+    ("friendly-neighbor", DEFAULT_ID),
+];
+
+/// The voice a retired built-in id now speaks as.
+pub fn retired(id: &str) -> Option<&'static str> {
+    RETIRED
+        .iter()
+        .find(|(old, _)| *old == id.trim())
+        .map(|(_, new)| *new)
 }
 
 /// The presets a picker offers: every one when adults-only personalities are on,
@@ -406,19 +568,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn nyx_flirts_back_but_stays_pg13() {
+    fn nyx_flirts_back_suggestive_never_explicit() {
         let nyx = builtin("nyx");
-        assert!(nyx.tone_rules.ends_with(
-            "When they flirt, flirt back playfully and keep it PG-13: no profanity or explicit content."
-        ));
+        assert!(nyx
+            .tone_rules
+            .ends_with("When they flirt, flirt back playfully: suggestive, never explicit."));
+        assert!(!nyx.tone_rules.contains("PG-13"));
         assert!(!nyx.explicit);
         assert!(nyx.tone_rules.len() <= TONE_RULES_MAX);
     }
 
     #[test]
-    fn the_builtins_are_nyx_and_the_twenty_one_styles() {
+    fn the_builtins_are_nyx_and_the_twenty_three_styles() {
         let all = parse(BUILTIN).expect("assets/personalities.toml parses");
-        assert_eq!(all.len(), 22);
+        assert_eq!(all.len(), 24);
         assert_eq!(all[0].id, DEFAULT_ID);
         assert!(
             all[0].tone_rules.contains("not sycophantic"),
@@ -443,14 +606,16 @@ mod tests {
                 "Professor",
                 "Drill Sergeant (lite)",
                 "Chief Engineer",
-                "Lawyer-precise",
                 "Zen Mentor",
                 "Concise Pro",
-                "Friendly Neighbor",
                 "Southern Mechanic",
                 "Space Mission Control",
                 "Retro 80s Hacker",
                 "Gentle Listener",
+                "Theorycrafter",
+                "Gremlin",
+                "Dungeon Master",
+                "Esports Caster",
                 "Viper",
                 "Whore",
             ]
@@ -462,13 +627,13 @@ mod tests {
                 p.id
             );
         }
-        // Only Nyx, Sarcastic Sidekick and Viper may roast; only Viper and Whore are explicit.
+        // Only Nyx, Sarcastic Sidekick, Gremlin and Viper may roast; only Viper and Whore are explicit.
         let roasts: Vec<&str> = all
             .iter()
             .filter(|p| p.roast)
             .map(|p| p.id.as_str())
             .collect();
-        assert_eq!(roasts, ["nyx", "sarcastic-sidekick", "viper"]);
+        assert_eq!(roasts, ["nyx", "sarcastic-sidekick", "gremlin", "viper"]);
         let explicit: Vec<&str> = all
             .iter()
             .filter(|p| p.explicit)
@@ -739,7 +904,7 @@ mod tests {
         let (all, problems) = load_all(&dir);
         assert_eq!(
             (all.len(), problems.len()),
-            (22, 0),
+            (24, 0),
             "no folder yet: built-ins only"
         );
         let mut mine = duplicate(&builtin("butler"), &all);
@@ -756,7 +921,7 @@ mod tests {
 
         let (all, problems) = load_all(&dir);
         assert!(problems.is_empty(), "{problems:?}");
-        assert_eq!(all.len(), 23);
+        assert_eq!(all.len(), 25);
         let back = find(&all, "butler-copy");
         assert_eq!(back, mine, "the saved file reads back field for field");
         assert_eq!(lookup(&dir, "butler-copy").name, "Jeeves");
@@ -766,7 +931,7 @@ mod tests {
         assert_eq!(duplicate(&builtin("butler"), &all).id, "butler-copy-2");
 
         delete_custom(&dir, "butler-copy").expect("deletes");
-        assert_eq!(load_all(&dir).0.len(), 22);
+        assert_eq!(load_all(&dir).0.len(), 24);
         assert_eq!(
             lookup(&dir, "butler-copy").id,
             DEFAULT_ID,
@@ -786,7 +951,7 @@ mod tests {
         std::fs::write(dir.join("a.toml"), "[[preset]]\nid = \"genie\"\nname = \"G\"\ndescription = \"d\"\ntone_rules = \"x\"\nemoji = \"none\"\nverbosity = \"terse\"\n").unwrap();
         std::fs::write(dir.join("b.toml"), "not toml [").unwrap();
         let (all, problems) = load_all(&dir);
-        assert_eq!(all.len(), 22);
+        assert_eq!(all.len(), 24);
         assert_eq!(problems.len(), 2, "{problems:?}");
         assert_eq!(problems[0], "a.toml: the id genie is already taken.");
         assert!(
@@ -836,7 +1001,7 @@ mod tests {
             "Read the room.",
             "never mean or cruel",
             "drop the jokes and help straight",
-            "no profanity or explicit content",
+            "suggestive, never explicit",
         ] {
             assert!(block.contains(must), "missing {must:?}: {block}");
         }
@@ -933,5 +1098,135 @@ mod tests {
                 builtin("pirate").tone_rules
             )
         );
+    }
+
+    #[test]
+    fn adults_only_off_or_clean_heat_leaves_every_block_unchanged() {
+        for p in parse(BUILTIN).unwrap() {
+            assert_eq!(p.prompt_block_for(None), p.prompt_block(), "{}", p.id);
+            assert_eq!(
+                p.prompt_block_for(Some(Heat::Clean)),
+                p.prompt_block(),
+                "{}",
+                p.id
+            );
+        }
+    }
+
+    #[test]
+    fn adults_only_on_gives_every_clean_voice_crude_jokes_never_sex_chat() {
+        let professor = builtin("professor");
+        assert!(!professor.explicit);
+        let cheeky = professor.prompt_block_for(Some(Heat::Cheeky));
+        assert!(cheeky.contains(ADULT_HUMOR), "{cheeky}");
+        assert!(cheeky.contains("jokes, not sex chat"));
+        assert!(cheeky.contains(Heat::Cheeky.line()));
+        assert!(
+            !cheeky.contains(crate::adult_guard::ADULT_VOICE),
+            "heat never tags 18+"
+        );
+        assert!(
+            !cheeky.contains(ADULT_PERMISSION),
+            "no roleplay grant outside explicit voices"
+        );
+        assert!(cheeky.ends_with(&format!("\n{SAFETY_LINE}")));
+        for heat in [Heat::Spicy, Heat::Filthy] {
+            let block = professor.prompt_block_for(Some(heat));
+            assert!(
+                !block.contains(crate::adult_guard::ADULT_VOICE),
+                "{heat:?} alone never tags the chat 18+"
+            );
+            assert!(block.contains(heat.line()));
+            assert!(!block.contains(ADULT_PERMISSION));
+            for limit in [
+                "minors",
+                "real people",
+                "non-consent",
+                "slurs",
+                "grief, health or real distress",
+            ] {
+                assert!(block.contains(limit), "{heat:?} names {limit}: {block}");
+            }
+        }
+        assert!(Heat::Filthy
+            .line()
+            .contains("never a sex scene or roleplay"));
+    }
+
+    #[test]
+    fn explicit_voices_keep_their_own_permission_and_add_only_the_heat_line() {
+        let viper = builtin("viper");
+        let block = viper.prompt_block_for(Some(Heat::Filthy));
+        assert!(block.contains(ADULT_PERMISSION));
+        assert!(!block.contains(ADULT_HUMOR));
+        assert_eq!(block.matches(crate::adult_guard::ADULT_VOICE).count(), 1);
+        assert!(block.contains(Heat::Filthy.line()));
+        assert!(block.ends_with(EXPLICIT_SAFETY_LINE));
+    }
+
+    #[test]
+    fn heat_moves_one_step_inside_the_dial() {
+        assert_eq!(Heat::default(), Heat::Cheeky);
+        assert_eq!(Heat::DIAL, [Heat::Cheeky, Heat::Spicy, Heat::Filthy]);
+        assert_eq!(Heat::Cheeky.hotter(), Heat::Spicy);
+        assert_eq!(Heat::Filthy.hotter(), Heat::Filthy);
+        assert_eq!(Heat::Filthy.milder(), Heat::Spicy);
+        assert_eq!(Heat::Cheeky.milder(), Heat::Cheeky);
+        let toml: Heat = serde_json::from_str("\"filthy\"").unwrap();
+        assert_eq!(toml, Heat::Filthy);
+    }
+
+    #[test]
+    fn retired_voices_speak_as_their_nearest_voice() {
+        assert_eq!(builtin("lawyer-precise").id, "concise-pro");
+        assert_eq!(builtin("friendly-neighbor").id, DEFAULT_ID);
+        assert_eq!(
+            lookup(std::path::Path::new("/nonexistent"), "lawyer-precise").id,
+            "concise-pro"
+        );
+        for (old, new) in RETIRED {
+            assert!(
+                builtins().iter().all(|p| p.id != *old),
+                "{old} is still built in"
+            );
+            assert!(builtins().iter().any(|p| p.id == *new), "{new} is missing");
+        }
+    }
+
+    #[test]
+    fn a_local_turn_with_18_plus_on_keeps_only_the_hard_limits() {
+        let nyx = builtin(DEFAULT_ID);
+        for heat in Heat::DIAL {
+            let block = format!(
+                "{}\n\n{}",
+                nyx.prompt_block_for(Some(heat)),
+                crate::talk::VOLATILE_SAFETY_CLOSER
+            );
+            let open = unlocked_for_local(&block);
+            assert!(!open.contains("not sex chat"), "{open}");
+            assert!(!open.contains("never a sex scene"), "{open}");
+            assert!(!open.contains("nothing graphic"), "{open}");
+            assert!(open.contains(ADULT_PERMISSION), "{open}");
+            assert!(open.contains(heat.local_line()), "{open}");
+            assert!(
+                open.ends_with(crate::talk::VOLATILE_SAFETY_CLOSER_ADULT),
+                "{open}"
+            );
+            assert_eq!(open.matches(ADULT_PERMISSION).count(), 1);
+            // The hard limits are still named.
+            assert!(open.contains("no minors or age-play"), "{open}");
+        }
+        // An adults-only voice already carries the grant: never doubled.
+        let whore = builtin("whore").prompt_block_for(Some(Heat::Spicy));
+        assert_eq!(
+            unlocked_for_local(&whore).matches(ADULT_PERMISSION).count(),
+            1
+        );
+        // With 18+ off nothing changes.
+        let plain = nyx.prompt_block();
+        assert!(matches!(
+            unlocked_for_local(&plain),
+            std::borrow::Cow::Borrowed(_)
+        ));
     }
 }

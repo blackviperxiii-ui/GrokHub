@@ -35,6 +35,7 @@ pub fn seed_prices(id: &str) -> Option<Prices> {
     Some(Prices {
         prompt: Some(prompt),
         cached: Some(cached),
+        cache_write: None,
         completion: Some(completion),
         prompt_long: Some(prompt * 2),
         completion_long: Some(completion * 2),
@@ -71,6 +72,7 @@ mod tests {
             Some(Prices {
                 prompt: Some(20_000),
                 cached: Some(5_000),
+                cache_write: None,
                 completion: Some(60_000),
                 prompt_long: Some(40_000),
                 completion_long: Some(120_000),
@@ -82,6 +84,7 @@ mod tests {
             Some(Prices {
                 prompt: Some(20_000),
                 cached: Some(3_000),
+                cache_write: None,
                 completion: Some(60_000),
                 prompt_long: Some(40_000),
                 completion_long: Some(120_000),
@@ -93,6 +96,7 @@ mod tests {
             Some(Prices {
                 prompt: Some(12_500),
                 cached: Some(2_000),
+                cache_write: None,
                 completion: Some(25_000),
                 prompt_long: Some(25_000),
                 completion_long: Some(50_000),

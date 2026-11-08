@@ -32,13 +32,18 @@ ring = "0.17"
 zeroize = "1"
 keyring = { workspace = true }
 
+# rustls on the ring provider with webpki roots, the same ureq already builds
+# on every OS: the sandbox's TLS-ending proxy (unix) and WebSocket mode.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+webpki-roots = "1"
+# xAI WebSocket mode (ws_mode.rs): the same crate and features the app uses,
+# with the rustls/ring/webpki config built here.
+tungstenite = { version = "0.30", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.189"
 # Sandbox credential masking: the egress proxy ends TLS for hosts a masked
-# token may go to, with a session CA (rcgen) and rustls on the ring provider,
-# the same rustls and roots ureq already builds.
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
-webpki-roots = "1"
+# token may go to, with a session CA (rcgen) on the ring provider.
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring", "pem"] }
 
 [target.'cfg(windows)'.dependencies]
@@ -55,6 +60,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_JobObjects",
     "Win32_System_Pipes",
     "Win32_System_Power",
+    "Win32_System_SystemInformation",
     "Win32_System_Threading",
     "Win32_System_Time",
 ] }

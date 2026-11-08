@@ -205,7 +205,10 @@ impl NativeEngine {
             .filter(|item| matches!(item, InputItem::Message { role, .. } if role == "user"))
             .map(|item| {
                 let text = crate::compact::message_text(item);
-                crate::prefix_cache::visible_user_text(&text).to_string()
+                let visible = crate::prefix_cache::visible_user_text(&text);
+                grokhub_core::card_report::split_card_carry(visible)
+                    .map_or(visible, |(_, user)| user)
+                    .to_string()
             })
             .rev()
             .take(2)
@@ -215,18 +218,39 @@ impl NativeEngine {
             .collect()
     }
 
+    /// The card this chat was opened from, by its finding: read from the
+    /// turn that carried it.
+    fn card_anchor(&self) -> Option<String> {
+        self.history.iter().find_map(|item| {
+            if !matches!(item, InputItem::Message { role, .. } if role == "user") {
+                return None;
+            }
+            let text = crate::compact::message_text(item);
+            let visible = crate::prefix_cache::visible_user_text(&text);
+            grokhub_core::card_report::split_card_carry(visible).map(|(found, _)| found.to_string())
+        })
+    }
+
     /// Brain 1: sort the ask and store its Brief for the trail.
     /// The Brief changes nothing about the run or its reply. It is returned so
     /// the turn's router can read its intent, care, domain and confidence.
     fn write_brief(&self, text: &str, has_image: bool) -> crate::brain::Brief {
         let recent = self.recent_user_texts();
         let background = self.is_background();
+        // A chat opened from a card: the Brief reads the person's words, and
+        // "it" means the card's subject.
+        let (text, carried) = match grokhub_core::card_report::split_card_carry(text) {
+            Some((found, user)) => (user, Some(found.to_string())),
+            None => (text, None),
+        };
+        let anchor = carried.or_else(|| self.card_anchor());
         let input = crate::brain::BriefInput {
             text,
             files: usize::from(has_image),
             tools: &[],
             recent: &recent,
             background,
+            anchor: anchor.as_deref(),
         };
         let mut ask = |t: &str| -> Result<String, String> {
             let call = crate::route::ModelCall::xai(
@@ -280,6 +304,19 @@ impl NativeEngine {
         crate::route::goal::set_goal(&self.conversation_id, goal);
         // Brain 2: the run's checkpoints read the done list and care.
         crate::checkpoint::set_turn_brief(&self.conversation_id, brief.clone());
+        // The chat's voice for this turn (dynamic chat, quips, heat): a note
+        // for the turn's volatile block, never the cached prefix.
+        crate::voice_session::step(
+            &self.conversation_id,
+            crate::voice_session::TurnView {
+                text,
+                intent: brief.intent.as_str(),
+                care: brief.care.as_str(),
+                mood: &brief.mood,
+                background,
+                hour: None,
+            },
+        );
         // An unclear ask (no rule, no sure local sort, no model) is only a
         // guess at chat: it gets no playbook and no talk style, so a guess
         // never turns a real ask into small talk. The model reads the ask as is.
@@ -330,6 +367,8 @@ impl NativeEngine {
     /// Replace the in-memory transcript with a session file. The next prompt continues it.
     pub fn resume(&mut self, items: Vec<InputItem>, usage: Usage) {
         self.history = items;
+        // A chat saved mid-batch by an older build heals here.
+        crate::client::pair_orphan_calls(&mut self.history);
         self.usage = usage;
     }
 }
@@ -474,6 +513,8 @@ impl Engine for NativeEngine {
         let meter = kind.meter();
         let before_len = self.history.len();
         let before_usage = self.usage.clone();
+        // Breaks after this mark belong to this prompt: a cache drop names one.
+        let break_mark = crate::prefix_guard::break_mark();
         let _network = crate::tools::install_network(&self.imagine_bearer, &self.conversation_id);
         let _origin = crate::harness::OriginScope::enter(self.origin);
         let mut meter_used = crate::compact::estimate_input_tokens(&self.history);
@@ -504,6 +545,7 @@ impl Engine for NativeEngine {
                     kind,
                     meter_used,
                     meter_limit,
+                    None,
                     None,
                 ));
             }
@@ -544,6 +586,10 @@ impl Engine for NativeEngine {
         };
         let used = crate::compact::estimate_input_tokens(&self.history);
         let dropped = self.watch_turn_cache(&delta, out.compacted);
+        let why = dropped.and_then(|_| {
+            let key = crate::prefix_guard::run_key(&self.conversation_id, 0, None);
+            crate::prefix_guard::first_break_since(&key, break_mark)
+        });
         emit(turn_usage_event(
             &self.usage,
             &delta,
@@ -551,6 +597,7 @@ impl Engine for NativeEngine {
             used,
             self.context_length,
             dropped,
+            why.map(|b| b.reason),
         ));
         emit(AcpEvent::Done { stop_reason: stop });
         Ok(())
@@ -706,12 +753,6 @@ impl NativeEngine {
             return false;
         }
         let config_dir = crate::perm::config_dir();
-        // A chat's first turn starts with the system prompt. Only the prefix
-        // cache's stable one can be written without the model loop.
-        let first = self.history.is_empty();
-        if first && !crate::prefix_cache::enabled(&config_dir) {
-            return false;
-        }
         if pick.tool == crate::repair::DIAGNOSE_TOOL
             && !crate::repair::system_state_allowed(&config_dir)
         {
@@ -804,7 +845,7 @@ impl NativeEngine {
         // The next model turn sees the ask, the call, its output and the reply,
         // paired by call id like any tool turn.
         let before = self.history.len();
-        if first {
+        if self.history.is_empty() {
             crate::prefix_cache::push_stable_system(&mut self.history, &self.system);
         }
         self.history.push(InputItem::Message {
@@ -840,6 +881,7 @@ impl NativeEngine {
             used,
             limit,
             None,
+            None,
         ));
         emit(AcpEvent::Done {
             stop_reason: "end_turn".into(),
@@ -873,6 +915,8 @@ impl NativeEngine {
             self.effort.as_deref(),
             &self.conversation_id,
             &mut self.history,
+            &[],
+            // A manual compact has no step request to match: plain summary.
             &[],
         );
         crate::hooks::on_compact(&self.conversation_id, &self.workspace, false);
@@ -1067,7 +1111,8 @@ fn grok_usage_event(usage: &Usage, kind: AuthKind, used: u64, limit: u64) -> Acp
 }
 
 /// Session totals plus the share of this turn's input the prompt cache served.
-/// `dropped_from` is the previous turn's share when this one fell under the floor.
+/// `dropped_from` is the previous turn's share when this one fell under the floor,
+/// and `why` the prompt rewrite that caused it, when one was seen.
 fn turn_usage_event(
     total: &Usage,
     turn: &Usage,
@@ -1075,6 +1120,7 @@ fn turn_usage_event(
     used: u64,
     limit: u64,
     dropped_from: Option<u8>,
+    why: Option<crate::prefix_guard::Reason>,
 ) -> AcpEvent {
     let mut usage = grok_usage(total, kind, used, limit);
     usage.turn_cache_pct = Some(grokhub_core::wire::cache_pct(
@@ -1082,6 +1128,7 @@ fn turn_usage_event(
         turn.input_tokens,
     ));
     usage.turn_cache_drop_from = dropped_from;
+    usage.turn_cache_drop_reason = dropped_from.and(why).map(|r| r.as_str().to_string());
     AcpEvent::Usage(usage)
 }
 
@@ -1167,7 +1214,7 @@ mod tests {
             cached_tokens: 870,
             ..Usage::default()
         };
-        match turn_usage_event(&total, &turn, AuthKind::ApiKey, 0, 0, None) {
+        match turn_usage_event(&total, &turn, AuthKind::ApiKey, 0, 0, None, None) {
             AcpEvent::Usage(u) => {
                 assert_eq!(u.turn_cache_pct, Some(87));
                 assert_eq!(u.cache_read_input_tokens, 2000);
@@ -1181,6 +1228,7 @@ mod tests {
             AuthKind::ApiKey,
             0,
             0,
+            None,
             None,
         ) {
             AcpEvent::Usage(u) => assert_eq!(u.turn_cache_pct, Some(0), "0 input is 0%, not NaN"),
@@ -1236,7 +1284,7 @@ mod tests {
 
     #[test]
     fn native_engine_emits_acp_events_without_permission() {
-        // Full tool list and per-turn system rewrite: the mode this test checks.
+        // Full tool list: the mode this test checks.
         let _legacy = crate::tools::registry::LegacyPromptGuard::set();
         let dir = std::env::temp_dir().join(format!("gh-eng-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1290,7 +1338,8 @@ mod tests {
                 InputItem::Message { role, content }
                     if role == "user"
                         && content.iter().any(|part| {
-                            matches!(part, crate::ContentPart::InputText(text) if text == "hi")
+                            matches!(part, crate::ContentPart::InputText(text)
+                                if crate::prefix_cache::visible_user_text(text) == "hi")
                         })
             )),
             "{resumed:?}"
@@ -1443,8 +1492,10 @@ mod tests {
                     "chat-1".into(),
                     2,
                     vec![
-                        "Brief: repair × critical, done = services, packages, boot errors, ports"
-                            .into(),
+                        format!(
+                            "Brief: repair × critical, done = {}",
+                            crate::brain::SYSTEM_DONE_TEXT
+                        ),
                         "Policy: repair × critical, goal quality (mistakes can break the system)"
                             .into(),
                         "Talk: findings card, reply under 80 words".into(),

@@ -147,8 +147,7 @@ impl QuietCabin {
             .unwrap_or_else(|| std::sync::Arc::new(Vec::new()));
         cabin.threads = threads;
         cabin.thread_idx = 0;
-        cabin.session_mode = grokhub_core::wire::SessionMode::parse(&cfg.session_mode)
-            .unwrap_or(grokhub_core::wire::SessionMode::Chat);
+        cabin.session_mode = grokhub_core::wire::SessionMode::Chat;
         cabin.permission_mode = grokhub_core::wire::PermissionMode::parse(&cfg.permission_mode)
             .unwrap_or(grokhub_core::wire::PermissionMode::Ask);
         cabin.cfg = cfg.clone();
@@ -197,7 +196,7 @@ pub(super) fn wait_until(label: &str, mut ready: impl FnMut() -> bool) {
 /// sized for in-memory state; these writes go through `config::atomic_write`
 /// (write, `sync_all`, rename), and the flush alone has taken over 2 s on a
 /// busy Windows CI runner. A write that never reports still fails here.
-const FILE_WRITE_BUDGET: std::time::Duration = std::time::Duration::from_secs(10);
+pub(super) const FILE_WRITE_BUDGET: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Poll `ready` every 25 ms until it holds; panic with `label` once `budget`
 /// has passed. For waits on real disk I/O; use `wait_until` for in-memory state.
@@ -219,6 +218,16 @@ pub(super) fn wait_within(
 }
 
 /// Poll background file writes until each has reported to the status line.
+/// The path the last export's card names ("" when it failed).
+pub(super) fn exported_path(cabin: &Cabin) -> String {
+    cabin
+        .saved_file
+        .as_ref()
+        .and_then(|s| s.path.as_ref())
+        .map(|p| p.display().to_string())
+        .unwrap_or_default()
+}
+
 pub(super) fn wait_file_writes(cabin: &mut Cabin) {
     wait_within(
         FILE_WRITE_BUDGET,

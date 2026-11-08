@@ -146,19 +146,18 @@ fn visible_small(layout: &HomeLayout) -> Vec<(SlotId, &str)> {
         .collect()
 }
 
-fn col_widths(total: f32, with_small: bool) -> (f32, f32, f32) {
-    let (lw, mw, sw) = if with_small {
-        (L_WEIGHT, M_WEIGHT, S_WEIGHT)
-    } else {
-        (L_WEIGHT, M_WEIGHT, 0.0)
-    };
-    let sum = lw + mw + sw;
-    let gaps = if with_small { 2.0 } else { 1.0 };
+/// Column widths for L, M and S. A column with nothing in it takes no
+/// width, so the others widen at their weights instead of leaving a band.
+fn col_widths(total: f32, with_medium: bool, with_small: bool) -> (f32, f32, f32) {
+    let mw = if with_medium { M_WEIGHT } else { 0.0 };
+    let sw = if with_small { S_WEIGHT } else { 0.0 };
+    let sum = L_WEIGHT + mw + sw;
+    let gaps = f32::from(u8::from(with_medium)) + f32::from(u8::from(with_small));
     let inner = (total - GAP * gaps).max(0.0);
     (
-        inner * (lw / sum),
+        inner * (L_WEIGHT / sum),
         inner * (mw / sum),
-        if with_small { inner * (sw / sum) } else { 0.0 },
+        inner * (sw / sum),
     )
 }
 
@@ -225,7 +224,7 @@ fn place_wide(
 ) -> Vec<PlacedSlot> {
     let body_h = body_height(h);
     let with_s = !smalls.is_empty();
-    let (lw, mw, sw) = col_widths(w, with_s);
+    let (lw, mw, sw) = col_widths(w, !mediums.is_empty(), with_s);
     let mut out = Vec::with_capacity(7);
     let mut x = ox;
     push_large(&mut out, large, x, oy, lw, body_h, false);
@@ -289,7 +288,7 @@ fn place_medium(
     } else {
         body_height(h)
     };
-    let (lw, mw, _) = col_widths(w, false);
+    let (lw, mw, _) = col_widths(w, !mediums.is_empty(), false);
     let mut out = Vec::with_capacity(7);
     push_large(&mut out, large, ox, oy, lw, top_h, false);
 
@@ -489,7 +488,7 @@ mod tests {
         assert_eq!(s1.module_id.as_deref(), Some("up_next"));
         assert!((s1.h - body_h).abs() < 0.01);
         assert!(placed[0].w < m1.w);
-        let (lw, mw, sw) = col_widths(1600.0, true);
+        let (lw, mw, sw) = col_widths(1600.0, true, true);
         assert!((placed[0].w - lw).abs() < 0.01);
         assert!((m1.w - mw).abs() < 0.01);
         assert!((s1.w - sw).abs() < 0.01);
@@ -609,11 +608,25 @@ mod tests {
         assert_eq!(placed.len(), 2); // L + 1 M (Mission Control)
         let large = &placed[0];
         let m1 = placed.iter().find(|p| p.slot == SlotId::Medium1).unwrap();
-        let (lw, mw, sw) = col_widths(1600.0, false);
+        let (lw, mw, sw) = col_widths(1600.0, true, false);
         assert_eq!(sw, 0.0);
         assert!((large.w - lw).abs() < 0.01);
         assert!((m1.w - mw).abs() < 0.01);
         assert!(large.w + GAP + m1.w <= 1600.0 + 0.01);
+    }
+
+    #[test]
+    fn hiding_both_mediums_leaves_no_empty_band_on_wide() {
+        let mut layout = default_layout();
+        layout.medium = vec![];
+        let placed = place_slots((0.0, 0.0, 1600.0, 470.0), &layout);
+        assert!(placed.iter().all(|p| p.size != ModuleSize::Medium));
+        let right = placed.iter().map(|p| p.x + p.w).fold(0.0_f32, f32::max);
+        assert!((right - 1600.0).abs() < 0.5, "right edge {right}");
+        layout.small = [None, None, None, None];
+        let placed = place_slots((0.0, 0.0, 1600.0, 470.0), &layout);
+        assert_eq!(placed.len(), 1);
+        assert!((placed[0].w - 1600.0).abs() < 0.5, "large {}", placed[0].w);
     }
 
     #[test]

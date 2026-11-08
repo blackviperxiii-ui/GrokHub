@@ -357,7 +357,7 @@ fn report_findings(arguments: &str, on_event: &mut dyn FnMut(LoopEvent)) -> Tool
             );
             if !dropped.is_empty() {
                 out.push_str(&format!(
-                    " Left out {} that no follow-up run can carry out. Don't post the card again.",
+                    " Left out {} that change nothing or that no follow-up run can carry out. Don't post the card again.",
                     dropped
                         .iter()
                         .map(|l| format!("\"{l}\""))
@@ -1095,7 +1095,7 @@ mod tests {
         assert_eq!(
             out.text,
             "Findings card posted: 1 findings, 1 one-tap fixes. It shows after your reply. \
-             Left out \"Reference Memory in pulse logic\" that no follow-up run can carry out. Don't post the card again."
+             Left out \"Reference Memory in pulse logic\" that change nothing or that no follow-up run can carry out. Don't post the card again."
         );
         assert_eq!(
             cards,

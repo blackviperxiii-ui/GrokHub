@@ -290,6 +290,8 @@ pub(super) struct HarnessState {
     /// A retry / backtrack turn, sent once the live reply and the user's
     /// queued messages are done.
     pub repair: Option<String>,
+    /// The chat `repair` belongs to: it only ever sends there.
+    pub repair_thread: Option<String>,
     /// The last finished reply's prose, for the turn-end audit. `None` when
     /// that turn was not on the visible chat.
     pub last_reply: Option<String>,
@@ -883,6 +885,53 @@ impl Cabin {
         self.resolve_hard_park(approve, why);
     }
 
+    /// The first waiting hard card (0 is the card on screen, then the queue)
+    /// that `pick` matches.
+    pub(super) fn waiting_hard_park(
+        &self,
+        pick: impl Fn(&ParkSource) -> bool,
+    ) -> Option<(usize, HardParkUi)> {
+        self.harness
+            .park
+            .iter()
+            .chain(self.harness.queue.iter())
+            .enumerate()
+            .find(|(_, p)| pick(&p.source))
+            .map(|(i, p)| (i, p.clone()))
+    }
+
+    /// Settings covers the chat, so a card a Settings click parked would wait
+    /// there out of sight until it timed out. Paint the first waiting card
+    /// `note_for` names a note for here too: the same hard card, click only
+    /// (Esc closes Settings, never answers it), on the same answer path and spans.
+    pub(super) fn paint_parks_in_settings(
+        &mut self,
+        ui: &mut egui::Ui,
+        salt: &'static str,
+        note_for: impl Fn(&ParkSource) -> Option<&'static str>,
+    ) {
+        let Some((i, park)) = self.waiting_hard_park(|s| note_for(s).is_some()) else {
+            return;
+        };
+        let note = note_for(&park.source).unwrap_or(HARD_NOTE);
+        let title = park.class.label().to_string();
+        let text = CardText {
+            eyebrow: HARD_EYEBROW,
+            title: &title,
+            action: &park.action,
+            note,
+            primary: "Approve",
+            secondary: "Deny",
+            hard: true,
+        };
+        let id = (salt, format!("{}:{}", park.path, park.action));
+        match harness_card(ui, id, text, self.running) {
+            Some(true) => self.resolve_hard_park_at(i, true, ""),
+            Some(false) => self.resolve_hard_park_at(i, false, SOFT_DENY),
+            None => {}
+        }
+    }
+
     /// A ladder pause answered from its card or the inbox. Approve writes the
     /// same `resume` span as the user's next message, and approving the last
     /// pause with no reply running resumes the run; Deny drops the pause and
@@ -1075,6 +1124,11 @@ impl Cabin {
         match step.rung {
             hx::Rung::Retry | hx::Rung::Backtrack | hx::Rung::Replan => {
                 self.harness.repair = step.prompt;
+                self.harness.repair_thread = Some(
+                    self.chat_job_thread
+                        .clone()
+                        .unwrap_or_else(|| self.visible_thread_id()),
+                );
                 if self.chrome_here() {
                     self.status = snap.status_line();
                 }
@@ -1135,13 +1189,24 @@ impl Cabin {
     /// The repair turn goes once nothing of the user's is waiting. Returns
     /// true when it was sent.
     pub(super) fn kick_repair(&mut self) -> bool {
-        match self.harness.repair.take() {
-            Some(prompt) => {
-                self.send_chat(prompt);
-                true
-            }
-            None => false,
+        let owner = self.harness.repair_thread.take();
+        let Some(prompt) = self.harness.repair.take() else {
+            return false;
+        };
+        // A retry for a chat that's no longer on screen is dropped, never
+        // sent into the chat that is.
+        let here = self.visible_thread_id();
+        if owner.as_deref().is_some_and(|t| !t.is_empty() && t != here) {
+            let trace = self.trace_id();
+            let mut span = hx::Span::deny(&trace, hx::RECOVERY_TOOL, "{}", "skip", "soft")
+                .from_origin(hx::Origin::Repair);
+            span.decision = "skip".into();
+            span.claim = "its chat is no longer on screen".into();
+            self.write_span(span, "audit");
+            return false;
         }
+        self.send_chat(prompt);
+        true
     }
 
     /// A message the user queued goes first; the pending repair turn is
@@ -2385,7 +2450,7 @@ mod tests {
         // and a pending repair turn gives way with a span.
         cabin.running = false;
         cabin.harness.repair = Some("GrokHub's check: retry".into());
-        cabin.followup_queue = vec!["also rename the folder".into()];
+        cabin.followup_queue = Vec::<String>::from(["also rename the folder".into()]).into();
         cabin.drain_followup_queue();
         assert!(cabin.followup_queue.is_empty());
         assert_eq!(cabin.harness.repair, None);

@@ -183,8 +183,8 @@ fn empty_home_pulse_stays_off_scratch_and_off_about() {
         .and_then(|s| s.split("fn fire_loop(").next())
         .expect("poll_grok_loop");
     assert!(
-        poll.contains("note_automation_done"),
-        "a finished /loop posts automation_done: {poll}"
+        poll.contains("note_automation_report"),
+        "a finished /loop posts an automation_done card with its report: {poll}"
     );
     let commit = night
         .split("fn commit_schedule(")
@@ -228,32 +228,13 @@ fn empty_home_pulse_stays_off_scratch_and_off_about() {
         "Last you must scroll a reserved off-screen row: {reserved}"
     );
     let auto = src
-        .split("Slash::AutoPerm =>")
+        .split("Slash::AlwaysApprove | Slash::AutoPerm =>")
         .nth(1)
         .and_then(|s| s.split("Slash::Sessions =>").next())
         .expect("AutoPerm");
     assert!(
-        auto.contains("self.confirm = None"),
-        "/auto must drop a session Always overlay: {auto}"
-    );
-    // rustfmt may break `let row = crate::cards::session_row(...)` across lines.
-    let row = src
-        .split("crate::cards::session_row(")
-        .nth(1)
-        .and_then(|s| s.split("ui.allocate_ui_with_layout").next())
-        .expect("session_row");
-    let perm = row
-        .split("if let Some(perm) = row.perm")
-        .nth(1)
-        .and_then(|s| s.split("if row.why").next())
-        .expect("perm pills");
-    let ask_auto = perm
-        .split("self.arm_session_always();")
-        .nth(1)
-        .expect("Ask/Auto after Always");
-    assert!(
-        ask_auto.contains("self.confirm = None"),
-        "Auto/Ask must disarm the session Always overlay: {ask_auto}"
+        auto.contains("SettingsSec::Defaults") && !auto.contains("set_permission_mode"),
+        "/auto and /always-approve open Settings and change nothing: {auto}"
     );
 }
 
@@ -354,11 +335,20 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
         .and_then(|s| s.split("fn apply_feed_act(").next())
         .expect("release_situation_ping");
     assert!(
-        ping.contains("notify::ping")
-            && ping.contains("quiet_now")
-            && ping.contains("window_focused")
-            && ping.contains("brand::product_name()"),
-        "only the situation card pings, and only when the window is away and quiet hours are off: {ping}"
+        ping.contains("self.pulse_ping(true, &line)") && ping.contains("window_focused"),
+        "only the situation card pings, only when the window is away, through the Pulse gate: {ping}"
+    );
+    let gate = include_str!("pulse_ui.rs")
+        .split("fn pulse_ping(")
+        .nth(1)
+        .and_then(|s| s.split("\n    }\n").next())
+        .expect("pulse_ping");
+    assert!(
+        gate.contains("notify::ping")
+            && gate.contains("quiet_hours: self.quiet_now()")
+            && gate.contains("game_running")
+            && gate.contains("brand::product_name()"),
+        "the Pulse gate keeps quiet hours and never pings mid-game: {gate}"
     );
     assert!(
         !pulse.contains("No updates") && !pulse.contains("Nothing queued"),
@@ -528,11 +518,15 @@ fn discuss_card_opens_one_local_chat() {
     assert_eq!(cabin.updates[0].status, grokhub_core::UpdateStatus::Opened);
     assert!(cabin.updates[0].discuss_thread.is_some());
     assert!(!cabin.running);
-    wait_for("the discuss card must be saved opened", || {
-        std::fs::read_to_string(root.join("updates.json"))
-            .unwrap_or_default()
-            .contains("idea-harbor")
-    });
+    wait_within(
+        FILE_WRITE_BUDGET,
+        "the discuss card must be saved opened",
+        || {
+            std::fs::read_to_string(root.join("updates.json"))
+                .unwrap_or_default()
+                .contains("idea-harbor")
+        },
+    );
     quiet.settle();
 }
 
@@ -1232,6 +1226,18 @@ fn every_home_card_the_cabin_posts_names_its_item() {
     rows.push((
         "note_automation_done",
         posted_card(&cabin, "note_automation_done", |c| c.source_id == "auto-1"),
+        "Nightly backup",
+    ));
+    cabin.note_automation_report(
+        "auto-2",
+        "Nightly backup",
+        "Copied 3 files to the NAS. Two were new photos.",
+    );
+    rows.push((
+        "note_automation_report",
+        posted_card(&cabin, "note_automation_report", |c| {
+            c.source_id == "auto-2"
+        }),
         "Nightly backup",
     ));
     cabin.note_schedule_created("sched-1", "Morning brief", "every day at 8:00");

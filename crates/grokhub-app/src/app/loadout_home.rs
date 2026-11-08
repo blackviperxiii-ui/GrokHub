@@ -8,7 +8,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use grokhub_core::local_profile::{LocalProfile, Thermal};
-use grokhub_core::mission::{MissionCheckItem, MissionCheckStatus, MissionView};
+use grokhub_core::mission::{MissionCheckStatus, MissionView};
 use grokhub_core::{ChipKind, QuickChip, UpdateCard, UpdateStatus};
 
 use super::*;
@@ -43,10 +43,9 @@ const XP_REFRESH: Duration = Duration::from_secs(30);
 const PULSE_LINES: usize = 2;
 /// Listening waveform at rest, bar heights as a share of the row.
 const WAVE: [f32; 9] = [0.35, 0.7, 1.0, 0.5, 0.85, 0.4, 0.95, 0.6, 0.3];
-use grokhub_core::xp::XpTally;
-pub(super) use grokhub_core::xp::XP_PER_LEVEL;
-/// What the XP bar's hover says earns XP.
-pub(super) const XP_HOW: &str = "XP comes from what you do: 100 per finished task, 25 per checked step, 25 per Home card you run and 50 when its work finishes, plus 10 for each day you're active. Card and day XP stops at 150 a day.";
+pub(super) use grokhub_core::xp::objective_progress;
+const XP_SUMMARY_ID: &str = "loadout-xp-summary";
+use grokhub_core::xp::{WeekView, XpSummary, XP_HOW};
 
 /// What Nyx is doing, shown in the corner box. The modes and her outfits
 /// live in [`grokhub_core::companion`] (`assets/companions/nyx/companion.toml`),
@@ -266,19 +265,78 @@ pub(super) fn wave_heights(t: f64, live: bool, still: bool) -> [f32; 9] {
     out
 }
 
-/// Level, total XP and progress into the level, from the XP tally and the
-/// open mission's checked steps.
-pub(super) fn level_xp(t: XpTally, checked: usize) -> (u32, u32, f32) {
-    grokhub_core::xp::level_xp(t.finished, checked, t.bonus)
-}
-
 /// The XP bar's hover: today's XP, then how XP is earned.
-pub(super) fn xp_hover(t: XpTally) -> String {
-    if t.today > 0 {
-        format!("+{} XP today.\n{XP_HOW}", grouped(t.today))
+pub(super) fn xp_hover(s: &XpSummary) -> String {
+    if s.today > 0 {
+        format!("+{} XP today.\n{XP_HOW}", grouped(s.today))
     } else {
         XP_HOW.to_string()
     }
+}
+
+/// Drops the cached XP so the next frame reads the ledger again (after a
+/// goal paid XP).
+pub(super) fn forget_xp(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.remove::<(Instant, XpSummary)>(egui::Id::new(XP_SUMMARY_ID)));
+}
+
+/// "Lvl 14 · Grinder", the line over every XP bar.
+pub(super) fn level_line(s: &XpSummary) -> String {
+    format!("Lvl {} · {}", s.level, s.title)
+}
+
+/// The level line, the XP amount on the right (`2,350 XP`, or with `full`
+/// `2,350 / 2,450 XP`) and the bar, with today's XP and how XP is earned on
+/// hover.
+pub(super) fn paint_level_bar(ui: &mut egui::Ui, s: &XpSummary, full: bool) {
+    ui.horizontal(|ui| {
+        ui.label(caption(&level_line(s)));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let amount = if full {
+                format!("{} / {} XP", grouped(s.xp), grouped(s.next_level_xp))
+            } else {
+                format!("{} XP", grouped(s.xp))
+            };
+            ui.label(
+                egui::RichText::new(amount)
+                    .size(crate::theme::TYPE_CAPTION)
+                    .extra_letter_spacing(1.0)
+                    .strong()
+                    .color(crate::theme::amber()),
+            );
+        });
+    });
+    let (bar, bar_resp) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 6.0), egui::Sense::hover());
+    bar_resp.on_hover_text(xp_hover(s));
+    ui.painter().rect_filled(bar, 3.0, crate::theme::selected());
+    let mut fill = bar;
+    fill.set_width(bar.width() * s.frac.clamp(0.0, 1.0));
+    ui.painter().rect_filled(fill, 3.0, crate::theme::amber());
+}
+
+/// Weeks in a row: the count on the right, this week's days (Monday first)
+/// and the week's target in a line under them.
+pub(super) fn paint_weeks(ui: &mut egui::Ui, w: &WeekView) {
+    ui.horizontal(|ui| {
+        ui.label(caption("Weeks in a row"));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(
+                egui::RichText::new(w.in_a_row.to_string())
+                    .size(crate::theme::TYPE_CAPTION)
+                    .extra_letter_spacing(1.5)
+                    .strong()
+                    .color(crate::theme::amber()),
+            );
+        });
+    });
+    super::mission_page::paint_streak(ui, w);
+    ui.add_space(4.0);
+    ui.label(
+        egui::RichText::new(grokhub_core::xp::week_target_line(w))
+            .size(crate::theme::TYPE_CAPTION)
+            .color(crate::theme::muted()),
+    );
 }
 
 /// `2340` as `2,340`.
@@ -317,18 +375,6 @@ pub(super) fn dock_width(page_w: f32) -> Option<f32> {
     } else {
         Some(340.0)
     }
-}
-
-/// Verified and counted checklist items. Cancelled ones don't count.
-pub(super) fn objective_progress(items: &[MissionCheckItem]) -> (usize, usize) {
-    let counted = items
-        .iter()
-        .filter(|i| i.status != MissionCheckStatus::Cancelled);
-    let total = counted.clone().count();
-    let done = counted
-        .filter(|i| i.status == MissionCheckStatus::Verified)
-        .count();
-    (done, total)
 }
 
 /// One PC loadout tile: a caption and its value.
@@ -1468,29 +1514,35 @@ impl Cabin {
         view
     }
 
-    /// The XP tally from the outcome and card signal logs, re-read every
-    /// [`XP_REFRESH`].
-    pub(super) fn dock_xp(&self, ctx: &egui::Context) -> XpTally {
-        type Cached = (Instant, XpTally);
-        let id = egui::Id::new("loadout-xp-tally");
-        if let Some((at, t)) = ctx.data(|d| d.get_temp::<Cached>(id)) {
+    /// Level, XP and weeks in a row from the XP ledger, re-read every
+    /// [`XP_REFRESH`]. The open chat's checked steps are banked on the way.
+    pub(super) fn dock_xp(&self, ctx: &egui::Context) -> XpSummary {
+        type Cached = (Instant, XpSummary);
+        let id = egui::Id::new(XP_SUMMARY_ID);
+        if let Some((at, s)) = ctx.data(|d| d.get_temp::<Cached>(id)) {
             if at.elapsed() < XP_REFRESH {
-                return t;
+                return s;
             }
         }
-        let dir = crate::config::config_dir();
-        let t = grokhub_core::xp::tally(
-            &grokhub_core::outcome::read_outcomes(&dir),
-            &grokhub_core::card_signals::read_signals(&dir),
-            now_ms(),
+        let mission = self.dock_mission(ctx);
+        let open = mission.as_ref().map(|m| grokhub_core::xp::OpenChat {
+            id: &m.id,
+            items: &m.checklist,
+        });
+        let clock = Self::local_clock();
+        let s = grokhub_core::xp::refresh(
+            &crate::config::config_dir(),
+            open,
+            clock.now_ms,
+            clock.utc_offset_min(),
         );
-        ctx.data_mut(|d| d.insert_temp::<Cached>(id, (Instant::now(), t)));
-        t
+        ctx.data_mut(|d| d.insert_temp::<Cached>(id, (Instant::now(), s.clone())));
+        s
     }
 
     fn dock_objectives(&self, ui: &mut egui::Ui) {
         let mission = self.dock_mission(ui.ctx());
-        let tally = self.dock_xp(ui.ctx());
+        let xp = self.dock_xp(ui.ctx());
         card(ui, |ui| {
             let items = mission.as_ref().map_or(&[][..], |m| &m.checklist[..]);
             let (done, total) = objective_progress(items);
@@ -1545,27 +1597,8 @@ impl Cabin {
                     }
                 }
             }
-            let (level, xp, frac) = level_xp(tally, done);
             ui.add_space(crate::theme::SPACING_4);
-            ui.horizontal(|ui| {
-                ui.label(caption(&format!("Lvl {level}")));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(
-                        egui::RichText::new(format!("{} XP", grouped(xp)))
-                            .size(crate::theme::TYPE_CAPTION)
-                            .extra_letter_spacing(1.0)
-                            .strong()
-                            .color(crate::theme::amber()),
-                    );
-                });
-            });
-            let (bar, bar_resp) =
-                ui.allocate_exact_size(egui::vec2(ui.available_width(), 6.0), egui::Sense::hover());
-            bar_resp.on_hover_text(xp_hover(tally));
-            ui.painter().rect_filled(bar, 3.0, crate::theme::selected());
-            let mut fill = bar;
-            fill.set_width(bar.width() * frac);
-            ui.painter().rect_filled(fill, 3.0, crate::theme::amber());
+            paint_level_bar(ui, &xp, false);
         });
     }
 
@@ -1753,14 +1786,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    fn item(id: &str, status: MissionCheckStatus) -> MissionCheckItem {
-        MissionCheckItem {
-            id: id.into(),
-            text: format!("step {id}"),
-            status,
-        }
-    }
-
     fn profile(gpus: Vec<Gpu>) -> LocalProfile {
         LocalProfile {
             os: "linux",
@@ -1800,19 +1825,6 @@ mod tests {
         assert_eq!(dock_width(1106.0), Some(280.0));
         assert_eq!(dock_width(1660.0), Some(300.0));
         assert_eq!(dock_width(2300.0), Some(340.0));
-    }
-
-    #[test]
-    fn objectives_count_verified_steps_and_skip_cancelled_ones() {
-        let items = vec![
-            item("a", MissionCheckStatus::Verified),
-            item("b", MissionCheckStatus::Attempted),
-            item("c", MissionCheckStatus::Cancelled),
-            item("d", MissionCheckStatus::Verified),
-            item("e", MissionCheckStatus::Planned),
-        ];
-        assert_eq!(objective_progress(&items), (2, 4));
-        assert_eq!(objective_progress(&[]), (0, 0));
     }
 
     #[test]
@@ -2230,21 +2242,17 @@ mod tests {
     }
 
     #[test]
-    fn level_and_xp_come_from_the_tally_and_checked_steps() {
-        let t = |finished, bonus| XpTally {
-            finished,
-            bonus,
-            today: 0,
-        };
-        assert_eq!(level_xp(t(0, 0), 0), (1, 0, 0.0));
-        // 23 finished tasks and 2 checked steps: 2,350 XP, level 5, 70% in.
-        assert_eq!(level_xp(t(23, 0), 2), (5, 2350, 0.7));
-        assert_eq!(level_xp(t(4, 100), 0), (2, 500, 0.0));
-        assert!(xp_hover(XpTally {
+    fn the_level_line_and_hover_read_from_the_summary() {
+        let s = XpSummary {
+            level: 14,
+            title: "Grinder",
             today: 1250,
-            ..t(0, 0)
-        })
-        .starts_with("+1,250 XP today."));
+            ..XpSummary::default()
+        };
+        assert_eq!(level_line(&s), "Lvl 14 · Grinder");
+        assert!(xp_hover(&s).starts_with("+1,250 XP today.\nXP comes from what you do"));
+        let quiet = XpSummary { today: 0, ..s };
+        assert_eq!(xp_hover(&quiet), XP_HOW);
         assert_eq!(grouped(2350), "2,350");
         assert_eq!(grouped(999), "999");
         assert_eq!(grouped(1_000_000), "1,000,000");

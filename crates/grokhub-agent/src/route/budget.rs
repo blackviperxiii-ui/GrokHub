@@ -522,6 +522,7 @@ mod tests {
                 tokens: RouteTokens::default(),
                 cost_usd: 0.0,
                 limit,
+                ..RouteOutcome::default()
             }),
             ..RouteRecord::default()
         }

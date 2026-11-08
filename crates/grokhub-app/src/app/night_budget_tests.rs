@@ -138,7 +138,7 @@ fn scheduled_night_loop_and_send_inherit_permission_mode() {
     );
     let kick_err = fn_src(&native_src, "kick_native_turn");
     assert!(
-        kick_err.matches("self.fail_turn_start(").count() == 3,
+        kick_err.matches("self.fail_turn_start(").count() == 4,
         "a native turn that fails to start drops scheduled_perm and resumes PTT: {kick_err}"
     );
     let poll_acp = fn_src(&src, "poll_acp");
@@ -615,11 +615,15 @@ fn add_automation_seed_daily_clock_and_loop() {
         "the cabin must show the 09:00 automation, got {}",
         cabin.status
     );
-    wait_for("automations.json must record the daily clock", || {
-        std::fs::read_to_string(root.join("automations.json"))
-            .unwrap_or_default()
-            .contains("09")
-    });
+    wait_within(
+        FILE_WRITE_BUDGET,
+        "automations.json must record the daily clock",
+        || {
+            std::fs::read_to_string(root.join("automations.json"))
+                .unwrap_or_default()
+                .contains("09")
+        },
+    );
 
     cabin.add_automation_seed("/loop 30m check deploy");
     assert_eq!(cabin.grok_loops.len(), 1);
@@ -629,11 +633,15 @@ fn add_automation_seed_daily_clock_and_loop() {
         " /loop must show the interval, got {}",
         cabin.status
     );
-    wait_for("loops.json must record the 30m loop", || {
-        std::fs::read_to_string(root.join("loops.json"))
-            .unwrap_or_default()
-            .contains("30m")
-    });
+    wait_within(
+        FILE_WRITE_BUDGET,
+        "loops.json must record the 30m loop",
+        || {
+            std::fs::read_to_string(root.join("loops.json"))
+                .unwrap_or_default()
+                .contains("30m")
+        },
+    );
     quiet.settle();
 }
 

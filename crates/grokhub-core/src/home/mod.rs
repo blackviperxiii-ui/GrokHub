@@ -7,14 +7,23 @@
 mod config;
 mod layout;
 mod registry;
+pub mod text;
+pub mod tiles;
+mod view;
 
-pub use config::{HomeLayout, HomePreset, HOME_LAYOUT_FILE, HOME_LAYOUT_VERSION};
+pub use config::{
+    HomeLayout, HomePick, HomePreset, HOME_LAYOUT_FILE, HOME_LAYOUT_VERSION, HOME_PRESETS,
+};
 pub use layout::{
     place_slots, Breakpoint, ModuleSize, PlacedSlot, SlotId, GAP, MEDIUM_MIN_W, NARROW_L_AS_M,
     WIDE_MIN_W,
 };
 pub use registry::{
     lookup, modules_fitting, modules_for_category, Category, DataStatus, ModuleEntry, REGISTRY,
+};
+pub use view::{
+    fit, is_stale, refresh_secs, Fit, TileAction, TileButton, TileRow, TileState, TileText,
+    TileView, Tone,
 };
 
 /// The PC tile's Tune-up button.

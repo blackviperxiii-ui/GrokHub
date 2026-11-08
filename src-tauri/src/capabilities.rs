@@ -33,6 +33,9 @@ pub struct Capabilities {
     pub voice: bool,
     /// The Library page: this computer's Steam games and Play.
     pub library: bool,
+    /// Auto setup: the first-run window, Settings → Auto setup and the
+    /// window's text size (a phone's webview can't zoom).
+    pub auto_setup: bool,
 }
 
 /// The report for an OS name as `std::env::consts::OS` spells it. Linux,
@@ -60,6 +63,7 @@ pub fn for_env(os: &str, wayland: bool) -> Capabilities {
         notifications: desktop,
         voice: desktop || phone,
         library: desktop,
+        auto_setup: desktop,
     }
 }
 
@@ -109,6 +113,7 @@ mod tests {
             notifications: true,
             voice: true,
             library: true,
+            auto_setup: true,
         };
         assert_eq!(for_os("linux"), all);
         assert_eq!(for_os("windows"), all);
@@ -130,6 +135,7 @@ mod tests {
             notifications: false,
             voice: true,
             library: false,
+            auto_setup: false,
         };
         assert_eq!(for_os("android"), none);
         assert_eq!(
@@ -198,6 +204,7 @@ mod tests {
                 "notifications": false,
                 "voice": true,
                 "library": false,
+                "autoSetup": false,
             })
         );
     }

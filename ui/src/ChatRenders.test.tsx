@@ -1,11 +1,11 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { StrictMode, type ComponentProps } from "react";
+import type { ComponentProps } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatEnvelope, ChatEvent, Settings } from "./api";
 
 // How often Chat draws, subscribes and posts: a question card while a reply
-// streams under it, the chat event subscription, and automation notices.
+// streams under it, and the chat event subscription.
 const seen = vi.hoisted(() => ({
   handler: null as ((envelope: ChatEnvelope) => void) | null,
   subscriptions: 0,
@@ -15,6 +15,8 @@ const seen = vi.hoisted(() => ({
 }));
 
 vi.mock("./api", () => ({
+  quickChips: () => Promise.resolve([]),
+  chipOutcome: () => Promise.resolve(true),
   // No chat saved from an earlier launch.
   getLastChat: () => Promise.resolve(null),
   loadChat: vi.fn(),
@@ -100,18 +102,5 @@ describe("Chat renders and subscriptions", () => {
     );
     expect(screen.getByLabelText("Message")).toHaveValue("Mission: Q again");
     expect(seen.subscriptions).toBe(2);
-  });
-
-  it("posts each automation notice once, StrictMode's double render included", () => {
-    const run = { id: "r1", name: "Digest", ok: true, text: "3 new posts" };
-    const chat = (n: number) => (
-      <StrictMode>
-        <Chat onOpenSettings={() => {}} notice={{ ...run, n }} />
-      </StrictMode>
-    );
-    const { rerender } = render(chat(1));
-    rerender(chat(2));
-    rerender(chat(2));
-    expect(screen.getAllByRole("status", { name: "Digest finished" })).toHaveLength(2);
   });
 });

@@ -134,6 +134,47 @@ pub fn act(config_dir: &Path, topic: &str, act: Act) -> Result<Page, String> {
     Ok(page(&profile, note))
 }
 
+/// Most of a memory file seeding reads.
+const SEED_READ_CAP: u64 = 64 * 1024;
+
+/// The first Pulse run seeds topics from `memory/USER.md`, `memory/MEMORY.md`
+/// and loved posts, the same way the desktop app does. Runs once; topics the
+/// person removed never come back. Returns how many topics it added.
+pub fn seed_once(config_dir: &Path, now_ms: u64) -> Result<usize, String> {
+    let _held = STORE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut profile = interests::load(&path(config_dir));
+    if profile.seeded {
+        return Ok(0);
+    }
+    let read = |name: &str| {
+        use std::io::Read;
+        let mut text = String::new();
+        if let Ok(file) = std::fs::File::open(config_dir.join("memory").join(name)) {
+            let _ = file.take(SEED_READ_CAP).read_to_string(&mut text);
+        }
+        text
+    };
+    let user_md = read("USER.md");
+    let memory_md = read("MEMORY.md");
+    let saved_titles: Vec<String> = crate::pulse::cards(config_dir)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|c| c.reaction == Some(grokhub_core::CardReaction::Up))
+        .map(|c| c.title)
+        .collect();
+    let added = profile.seed(
+        &interests::SeedFrom {
+            user_md: &user_md,
+            memory_md: &memory_md,
+            chats: &[],
+            saved_titles: &saved_titles,
+        },
+        now_ms,
+    );
+    interests::save(&path(config_dir), &profile)?;
+    Ok(added)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

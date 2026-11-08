@@ -236,6 +236,7 @@ pub fn grok_imagine_opts(
     if key.is_empty() {
         return Err("Connect Grok in Settings".into());
     }
+    grokhub_core::adult_guard::screen_media_prompt(prompt, grokhub_core::adult_guard::Dest::Xai)?;
     let primary = dedicated_imagine_model(model);
     let quality = match resolution.map(str::trim) {
         Some("1k") => Some("low"),
@@ -317,6 +318,7 @@ pub fn grok_imagine_generations(
     if key.is_empty() {
         return Err("Connect Grok in Settings".into());
     }
+    grokhub_core::adult_guard::screen_media_prompt(prompt, grokhub_core::adult_guard::Dest::Xai)?;
     let body = imagine_generation_body(prompt, model, n, resolution, aspect, quality, "url");
     let v = grok_json(
         &format!("{}/images/generations", imagine_api_base()),
@@ -341,6 +343,7 @@ pub fn grok_imagine_edits(
     if key.is_empty() {
         return Err("Connect Grok in Settings".into());
     }
+    grokhub_core::adult_guard::screen_media_prompt(prompt, grokhub_core::adult_guard::Dest::Xai)?;
     let refs: Vec<&str> = sources.iter().map(String::as_str).collect();
     let post = |body: serde_json::Value| -> Result<Vec<String>, String> {
         let v = grok_json(
@@ -414,6 +417,10 @@ pub fn grok_imagine_video_op(api_key: &str, req: &VideoBodyReq<'_>) -> Result<St
     if key.is_empty() {
         return Err("Connect Grok in Settings".into());
     }
+    grokhub_core::adult_guard::screen_media_prompt(
+        req.prompt,
+        grokhub_core::adult_guard::Dest::Xai,
+    )?;
     let path = match req.op {
         ImagineVideoOp::Edit => "videos/edits",
         ImagineVideoOp::Extend => "videos/extensions",
@@ -467,11 +474,15 @@ fn save_media(url: &str, prompt: &str, ext: &str, key: &str) -> Result<String, S
         }
     };
     let ext = media_ext_from_bytes(&buf, ext);
-    let path = crate::desktop::imagine_save_path_ext(&imagine_slug(prompt), ext);
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
-    std::fs::write(&path, buf).map_err(|e| e.to_string())?;
+    let name = crate::desktop::imagine_save_name(&imagine_slug(prompt), ext);
+    let plain = |e: std::io::Error| grokhub_core::user_files::plain_io_error(&e);
+    let dir = crate::config::user_folder_in(
+        &crate::config::config_dir(),
+        grokhub_core::user_files::UserFolder::Images,
+    )
+    .map_err(plain)?;
+    // A second image from the same prompt gets `-2`, never replacing the first.
+    let path = grokhub_core::user_files::write_new_file(&dir, &name, &buf).map_err(plain)?;
     Ok(path.display().to_string())
 }
 
@@ -528,8 +539,19 @@ pub fn http_err(e: http::Error) -> String {
     }
 }
 
-/// Speak `text` in `voice` (an id from `grokhub_core::TTS_VOICES`).
-pub fn grok_tts(api_key: &str, text: &str, voice: &str) -> Result<Vec<u8>, String> {
+/// One agent for a whole spoken reply: its pieces reuse one warm connection.
+pub fn speech_agent() -> http::Agent {
+    xai_agent(60)
+}
+
+/// Speak `text` in `voice` (an id from `grokhub_core::TTS_VOICES`) on the
+/// caller's [`speech_agent`], so a reply's pieces share a connection.
+pub fn grok_tts_on(
+    agent: &http::Agent,
+    api_key: &str,
+    text: &str,
+    voice: &str,
+) -> Result<Vec<u8>, String> {
     let key = api_key.trim();
     if key.is_empty() {
         return Err("Connect Grok in Settings".into());
@@ -540,7 +562,7 @@ pub fn grok_tts(api_key: &str, text: &str, voice: &str) -> Result<Vec<u8>, Strin
     }
     egress_ok(&tts_url(), &[hx::DataClass::Chat])?;
     let body = serde_json::to_vec(&tts_request_body(text, voice)).map_err(|e| e.to_string())?;
-    let resp = xai_agent(60)
+    let resp = agent
         .post(&tts_url())
         .header("authorization", &format!("Bearer {key}"))
         .header("content-type", "application/json")
@@ -562,6 +584,26 @@ pub fn grok_tts(api_key: &str, text: &str, voice: &str) -> Result<Vec<u8>, Strin
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn a_banned_or_18_plus_prompt_never_leaves_for_grok_imagine() {
+        use grokhub_core::adult_guard::{MEDIA_BANNED, MEDIA_LOCAL_ONLY};
+        let banned = "a nude teen on a beach";
+        assert_eq!(
+            grok_imagine_generations("k", banned, "m", 1, "1k", "1:1", "low").err(),
+            Some(MEDIA_BANNED.to_string())
+        );
+        assert_eq!(
+            grok_imagine_edits("k", banned, "m", &[], None, 1, "1k", "1:1").err(),
+            Some(MEDIA_BANNED.to_string())
+        );
+        assert_eq!(
+            grok_imagine_opts("k", "m", "an erotic nude portrait", None, None).err(),
+            Some(MEDIA_LOCAL_ONLY.to_string())
+        );
+    }
+
     #[test]
     fn a_bounded_grok_ask_sends_nothing_once_cancelled_or_out_of_time() {
         let _lock = crate::config::hold_test_config();
@@ -611,10 +653,10 @@ mod tests {
             "Imagine download must not slurp a huge body: {save}"
         );
         let tts = src
-            .split("pub fn grok_tts(")
+            .split("pub fn grok_tts_on(")
             .nth(1)
             .and_then(|s| s.split("#[cfg(test)]").next())
-            .expect("grok_tts");
+            .expect("grok_tts_on");
         let tts_take = tts.find(".take(").expect("capped tts");
         let tts_read = tts.find("read_to_end").expect("tts read");
         assert!(
@@ -635,7 +677,7 @@ mod tests {
         let err = src
             .split("pub fn http_err(")
             .nth(1)
-            .and_then(|s| s.split("pub fn grok_tts(").next())
+            .and_then(|s| s.split("pub fn speech_agent(").next())
             .expect("http_err");
         assert!(
             err.contains("http::Error::Status { code, body, .. }")

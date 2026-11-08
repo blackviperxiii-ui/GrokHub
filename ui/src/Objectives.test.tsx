@@ -7,6 +7,10 @@ import type { Mission, MissionPage, Xp } from "./api";
 const api = vi.hoisted(() => ({
   getMission: vi.fn<(conversationId?: string) => Promise<MissionPage>>(),
   setMissionDone: vi.fn<(done: boolean, conversationId?: string) => Promise<MissionPage>>(),
+  getGoals: vi.fn(() =>
+    Promise.resolve({ today: [], mine: [], suggested: [], season: { label: "Oct to Dec 2026", done: 0, trophies: [], badges: [] } }),
+  ),
+  goalAct: vi.fn(),
 }));
 
 vi.mock("./api", () => api);
@@ -14,7 +18,15 @@ vi.mock("./api", () => api);
 import { NO_STEPS } from "./Home";
 import { dayCaption, Objectives } from "./Objectives";
 
-const XP: Xp = { level: 1, xp: 0, nextLevelXp: 500, frac: 0, today: 0, streak: [false, false, false, false, false, false, false] };
+const XP: Xp = {
+  level: 1,
+  title: "Rookie",
+  xp: 0,
+  nextLevelXp: 200,
+  frac: 0,
+  today: 0,
+  week: { days: [false, false, false, false, false, false, false], today: 2, active: 0, target: 2, inARow: 0, played: 0, freezes: 2 },
+};
 
 function mission(over: Partial<Mission> = {}): Mission {
   return {
@@ -48,7 +60,7 @@ describe("Objectives", () => {
   });
 
   it("lists the open chat's steps with the cabin's tags, the current one marked", async () => {
-    api.getMission.mockResolvedValue({ mission: mission(), xp: { ...XP, xp: 320, frac: 0.64, today: 110 } });
+    api.getMission.mockResolvedValue({ mission: mission(), xp: { ...XP, level: 2, xp: 320, nextLevelXp: 450, frac: 0.48, today: 110 } });
     const onOpenChat = vi.fn();
     view({ onOpenChat });
     const list = await screen.findByRole("list", { name: "Steps" });
@@ -58,7 +70,7 @@ describe("Objectives", () => {
     expect(rows[0]).toHaveClass("unverified", "current");
     expect(rows[1]).not.toHaveClass("current");
     expect(screen.getByText("0 / 3")).toBeInTheDocument();
-    expect(screen.getByText("320 / 500 XP")).toBeInTheDocument();
+    expect(screen.getByText("320 / 450 XP")).toBeInTheDocument();
     expect(screen.getByText("+110 XP today")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Accept as done" })).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Open the chat" }));
@@ -84,13 +96,13 @@ describe("Objectives", () => {
         accepted: true,
         steps: closed.steps.map((s) => ({ ...s, status: "verified" as const })),
       },
-      xp: { ...XP, xp: 160, frac: 0.32, today: 160 },
+      xp: { ...XP, xp: 160, frac: 0.8, today: 160 },
     });
     view();
     await userEvent.click(await screen.findByRole("button", { name: "Accept as done" }));
     expect(api.setMissionDone).toHaveBeenCalledWith(true, "shell-m");
     expect(await screen.findByText("2 / 2")).toBeInTheDocument();
-    expect(screen.getByText("160 / 500 XP")).toBeInTheDocument();
+    expect(screen.getByText("160 / 200 XP")).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Accepted.");
     expect(screen.queryByRole("button", { name: "Accept as done" })).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Undo" }));
@@ -106,11 +118,15 @@ describe("Objectives", () => {
   });
 
   it("no checklist asks for a plan, and Back goes Home", async () => {
-    api.getMission.mockResolvedValue({ mission: null, xp: { ...XP, streak: [true, false, false, false, false, false, true] } });
+    api.getMission.mockResolvedValue({
+      mission: null,
+      xp: { ...XP, week: { ...XP.week, days: [true, true, false, false, false, false, false], active: 2, inARow: 3 } },
+    });
     const onHome = vi.fn();
     view({ onHome });
     expect(await screen.findByText(NO_STEPS)).toBeInTheDocument();
-    expect(screen.getByText("2 DAYS")).toBeInTheDocument();
+    expect(screen.getByText("This week: 2 of 2 days")).toBeInTheDocument();
+    expect(screen.getByText("3")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Back to Home" }));
     expect(onHome).toHaveBeenCalled();
   });

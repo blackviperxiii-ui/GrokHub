@@ -80,6 +80,20 @@ pub struct ChatThread {
     /// project, always lists first, and background reports post into it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub main: bool,
+    /// The last reply's own follow-up chips, saved so they come back on reload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follow_ups: Option<FollowUps>,
+}
+
+/// A reply's follow-up chips. They belong to the reply after the `at`-th ask
+/// and to the mode (chat, plan, ask) that turn ran in.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FollowUps {
+    pub chips: Vec<grokhub_core::QuickChip>,
+    pub at: usize,
+    #[serde(default)]
+    pub mode: String,
 }
 
 impl ChatThread {
@@ -110,6 +124,7 @@ impl ChatThread {
             native_carry: false,
             personality: String::new(),
             main: false,
+            follow_ups: None,
         }
     }
 
@@ -145,7 +160,18 @@ pub fn adopt_native(thread: &mut ChatThread) -> bool {
 pub fn native_carry_recap(messages: &[(String, String)]) -> String {
     const TURNS: usize = 12;
     const PER_TURN: usize = 600;
-    let earlier = &messages[..messages.len().saturating_sub(1)];
+    let mut earlier = &messages[..messages.len().saturating_sub(1)];
+    // A chat opened from a card starts with the card's context: it goes whole.
+    let mut card = String::new();
+    if let Some((role, text)) = earlier.first() {
+        let text = text.trim_start();
+        if role == "assistant"
+            && (text.starts_with("Pulse card: ") || text.starts_with("Feed post: "))
+        {
+            card = grokhub_core::card_report::card_carry(text);
+            earlier = &earlier[1..];
+        }
+    }
     let start = earlier.len().saturating_sub(TURNS);
     let mut lines = Vec::new();
     for (role, text) in &earlier[start..] {
@@ -161,10 +187,10 @@ pub fn native_carry_recap(messages: &[(String, String)]) -> String {
         lines.push(format!("{who}: {cut}"));
     }
     if lines.is_empty() {
-        return String::new();
+        return card;
     }
     format!(
-        "Earlier in this chat (before {} ran it natively):\n{}\n\n",
+        "{card}Earlier in this chat (before {} ran it natively):\n{}\n\n",
         grokhub_core::brand::product_name(),
         lines.join("\n")
     )
@@ -1155,24 +1181,40 @@ pub fn release_project_chats(threads: &mut [ChatThread], project_id: &str) -> us
 }
 
 pub fn export_markdown(t: &ChatThread) -> String {
-    let mut out = format!("# {}\n\n", t.title);
-    for (role, content) in t.messages.iter() {
-        // A saved turn's labels and thoughts are the app's own format; the
-        // export reads as the chat did. Save diagnostics keeps them raw.
-        let content = if role == "assistant" {
-            grokhub_core::strip_turn_labels(content)
-        } else {
-            content.clone()
-        };
-        out.push_str(&format!("## {role}\n\n{content}\n\n"));
-    }
-    out
+    // The whole chat, thoughts and tool rows included, in the order they
+    // happened. The app's own tags are left out so it reads as the chat did.
+    // Save diagnostics keeps them raw.
+    grokhub_core::chat_transcript_markdown(
+        &t.title,
+        t.messages.iter().map(|(r, c)| (r.as_str(), c.as_str())),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn an_exported_chat_reads_as_the_chat_did_without_the_apps_tags() {
+        let mut t = ChatThread::new("tune-up", false);
+        t.messages = Arc::new(vec![
+            ("user".into(), "check the pc".into()),
+            (
+                "assistant".into(),
+                grokhub_core::mark_slash_result("Findings from this run\n- High: C: is 95% full."),
+            ),
+            ("assistant".into(), "ok TURN_SAY: Cleaned it up.".into()),
+        ]);
+        let md = export_markdown(&t);
+        assert!(!md.contains("SLASH_RESULT"), "{md}");
+        assert!(!md.contains("TURN_"), "{md}");
+        assert!(
+            md.contains("Findings from this run\n- High: C: is 95% full."),
+            "{md}"
+        );
+        assert!(md.contains("ok Cleaned it up."), "{md}");
+    }
 
     #[test]
     fn thread_roundtrip() {
@@ -2559,6 +2601,36 @@ mod tests {
         assert!(adopt_native(&mut empty));
         assert!(!empty.native_carry, "nothing to recap");
         assert!(empty.retired_sessions.is_empty());
+    }
+
+    #[test]
+    fn a_chat_opened_from_a_card_carries_the_whole_card_to_the_first_turn() {
+        let report = format!(
+            "Pulse card: bluetoothd crashed several times recently\n{}",
+            "y".repeat(700)
+        );
+        let msgs: Vec<(String, String)> = vec![
+            ("assistant".into(), report.clone()),
+            ("user".into(), "check into it for me".into()),
+        ];
+        assert_eq!(
+            native_carry_recap(&msgs),
+            format!(
+                "The person opened this chat from a card in their feed. The card:\n{report}\n(End of the card.)\n\n"
+            ),
+            "the card goes whole, under its own head"
+        );
+        // A later turn in the same chat still recaps under the usual head.
+        let more: Vec<(String, String)> = vec![
+            ("assistant".into(), "Feed post: For you".into()),
+            ("user".into(), "what is it".into()),
+            ("assistant".into(), "A cancel change.".into()),
+            ("user".into(), "now".into()),
+        ];
+        assert_eq!(
+            native_carry_recap(&more),
+            "The person opened this chat from a card in their feed. The card:\nFeed post: For you\n(End of the card.)\n\nEarlier in this chat (before Loadout ran it natively):\nUser: what is it\nYou: A cancel change.\n\n"
+        );
     }
 
     #[test]

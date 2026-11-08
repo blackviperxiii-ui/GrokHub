@@ -2,13 +2,12 @@
 
 use grokhub_core::home::{place_slots, GAP};
 
-use super::super::loadout_home::{
-    caption, grouped, level_xp, objective_progress, xp_hover, XP_PER_LEVEL,
-};
+use super::super::loadout_home::{caption, paint_level_bar};
 use super::super::mission_page::{day_caption, greeting};
 use super::super::*;
 use super::edit::HomeEditDraft;
 use super::paint::{paint_module, ModuleAction};
+use grokhub_core::home::TileAction;
 
 const PAGE_PAD: f32 = 24.0;
 /// Chips + composer height before the first frame measures it.
@@ -28,11 +27,7 @@ impl Cabin {
             .inner_margin(egui::Margin::same(PAGE_PAD as i8))
             .show(ui, |ui| {
                 ui.set_min_size(ui.available_size());
-                let mission = self.dock_mission(ui.ctx());
-                let done = mission
-                    .as_ref()
-                    .map_or(0, |m| objective_progress(&m.checklist).0);
-                self.home_header(ui, done);
+                self.home_header(ui);
                 ui.add_space(GAP);
                 let w = ui.available_width();
                 let compose_id = egui::Id::new(COMPOSE_H_ID);
@@ -107,6 +102,12 @@ impl Cabin {
                                     egui::Sense::hover(),
                                 );
                                 let base = area.min;
+                                super::live::paint_in(ui.ctx());
+                                if let Some(every) = repaint_every(
+                                    placed.iter().filter_map(|p| p.module_id.as_deref()),
+                                ) {
+                                    ui.ctx().request_repaint_after(every);
+                                }
                                 for slot in &placed {
                                     let rect = egui::Rect::from_min_size(
                                         egui::pos2(base.x + slot.x, base.y + slot.y),
@@ -142,11 +143,12 @@ impl Cabin {
                     self.set_nav_id("settings");
                     self.settings_sec = sec;
                 }
+                ModuleAction::Tile(a) => self.run_tile_action(a),
             }
         }
     }
 
-    fn home_header(&mut self, ui: &mut egui::Ui, done: usize) {
+    fn home_header(&mut self, ui: &mut egui::Ui) {
         let name = greeting_name(
             &self.greeting_user_md,
             self.secrets
@@ -172,42 +174,14 @@ impl Cabin {
                 );
             });
             if show_xp {
-                let xp_tally = self.dock_xp(ui.ctx());
-                let (level, xp, frac) = level_xp(xp_tally, done);
+                let xp = self.dock_xp(ui.ctx());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                     ui.allocate_ui_with_layout(
                         egui::vec2(280.0_f32.min(ui.available_width()), 48.0),
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
                             ui.add_space(14.0);
-                            ui.horizontal(|ui| {
-                                ui.label(caption(&format!("Lvl {level}")));
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        ui.label(
-                                            RichText::new(format!(
-                                                "{} / {} XP",
-                                                grouped(xp),
-                                                grouped(level * XP_PER_LEVEL)
-                                            ))
-                                            .size(crate::theme::TYPE_CAPTION)
-                                            .extra_letter_spacing(1.0)
-                                            .strong()
-                                            .color(crate::theme::amber()),
-                                        );
-                                    },
-                                );
-                            });
-                            let (bar, bar_resp) = ui.allocate_exact_size(
-                                egui::vec2(ui.available_width(), 6.0),
-                                egui::Sense::hover(),
-                            );
-                            bar_resp.on_hover_text(xp_hover(xp_tally));
-                            ui.painter().rect_filled(bar, 3.0, crate::theme::selected());
-                            let mut fill = bar;
-                            fill.set_width(bar.width() * frac);
-                            ui.painter().rect_filled(fill, 3.0, crate::theme::amber());
+                            paint_level_bar(ui, &xp, true);
                         },
                     );
                 });
@@ -227,8 +201,9 @@ impl Cabin {
                     }
                 }
             });
-        } else {
-            let chips = self.home_chips.clone();
+        } else if self.cfg.suggestions {
+            let chips = self.with_undo(self.home_chips.clone());
+            self.note_chips_shown("home", &chips);
             if let Some(act) = crate::cards::quick_chip_row(ui, &chips) {
                 self.take_home_chip_act(act, &chips);
             }
@@ -284,7 +259,77 @@ impl Cabin {
         self.send_from_composer(text);
     }
 
+    /// What a shared-model tile's button, row or tap does in the desktop app.
+    /// A tile's Turn on, done in place for a switch that needs nothing else
+    /// (no key, no download). `false` sends the user to its Settings row.
+    pub(super) fn turn_on_from_home(&mut self, feature: &str) -> bool {
+        match feature {
+            "net_log" => self.set_net_log(true),
+            "game_companion" => self.set_game_companion(true),
+            _ => return false,
+        }
+        self.status = "Turned on".into();
+        true
+    }
+
+    fn run_tile_action(&mut self, a: TileAction) {
+        use super::views::{feature_sec, settings_sec};
+        let settings = |cabin: &mut Self, sec: SettingsSec| {
+            cabin.set_nav_id("settings");
+            cabin.settings_sec = sec;
+        };
+        match a {
+            TileAction::Ask { ask } => self.send_home_to_chat(ask),
+            TileAction::OpenChat { id } => match self.threads.iter().position(|t| t.id == id) {
+                Some(idx) => {
+                    self.switch_thread(idx);
+                    self.nav = Nav::Chat;
+                }
+                None => self.set_nav_id("history"),
+            },
+            TileAction::Nav { page } => self.set_nav_id(&page),
+            TileAction::Settings { section } => settings(self, settings_sec(&section)),
+            TileAction::RunPlaybook { .. } => settings(self, SettingsSec::Playbooks),
+            TileAction::Review { .. } => self.set_nav_id("workboard"),
+            TileAction::TurnOn { feature } if self.turn_on_from_home(&feature) => {}
+            TileAction::Toggle { feature, .. } | TileAction::TurnOn { feature } => {
+                settings(self, feature_sec(&feature))
+            }
+            TileAction::OpenUrl { url } => {
+                if url.starts_with("https://") {
+                    let _ = crate::desktop::open_path(&url);
+                }
+            }
+            TileAction::Play { app_id } => {
+                let _ = crate::desktop::open_path(&super::super::library_ui::play_link(app_id));
+            }
+            TileAction::SteamFriends => {
+                let _ = crate::desktop::open_path(super::super::library_ui::FRIENDS_LINK);
+            }
+            TileAction::OpenClip { index } => {
+                if let Some(path) = super::views::clip_path(index) {
+                    let _ = crate::desktop::open_path(&path.to_string_lossy());
+                }
+            }
+            TileAction::Reroll => super::views::reroll(),
+            TileAction::Retry => {}
+        }
+    }
+
     pub(in crate::app) fn open_mission_home(&mut self) {
         self.nav = Nav::Home;
     }
+}
+
+/// How often Home redraws while it is up: the fastest cadence among the
+/// modules on it, never under five seconds (the frame-rate tile keeps its
+/// own one-second beat while it has a reading). `None` with nothing placed.
+pub(super) fn repaint_every<'a>(
+    modules: impl IntoIterator<Item = &'a str>,
+) -> Option<std::time::Duration> {
+    modules
+        .into_iter()
+        .filter_map(grokhub_core::home::refresh_secs)
+        .min()
+        .map(|s| std::time::Duration::from_secs(s.max(5)))
 }

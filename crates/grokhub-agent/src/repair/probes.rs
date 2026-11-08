@@ -235,7 +235,9 @@ pub fn probe_spec_with(id: ProbeId, os: Os, has_bin: &dyn Fn(&str) -> bool) -> O
         ),
         ProbeId::ServicesStoppedAuto => powershell(
             id,
-            "foreach ($s in Get-Service) { if ($s.StartType -eq 'Automatic' -and $s.Status -ne 'Running') { \"{0}`t{1}\" -f $s.Name, $s.DisplayName } }",
+            // Automatic only: delayed-start and trigger-start services stop on
+            // their own once idle, and a clean exit (code 0) is not a failure.
+            "foreach ($s in Get-CimInstance Win32_Service -Filter \"StartMode='Auto' AND State!='Running'\") { if (-not $s.DelayedAutoStart -and $s.ExitCode -ne 0 -and -not (Test-Path ('HKLM:\\SYSTEM\\CurrentControlSet\\Services\\' + $s.Name + '\\TriggerInfo'))) { \"{0}`t{1}\" -f $s.Name, $s.DisplayName } }",
         ),
         ProbeId::EventErrors24h => powershell(
             id,

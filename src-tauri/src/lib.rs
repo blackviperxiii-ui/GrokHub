@@ -6,15 +6,22 @@
 
 pub mod agent;
 pub mod attach;
+pub mod auto_setup;
 pub mod automations;
 pub mod background;
 #[cfg(test)]
 mod brand_guard;
 pub mod capabilities;
+pub mod chips;
 pub mod connectors;
 pub mod credential;
+pub mod export;
+pub mod goals;
 pub mod history;
 pub mod home;
+#[cfg(desktop)]
+mod home_fps;
+pub mod home_tiles;
 pub mod imagine;
 pub mod interests;
 pub mod journal;
@@ -24,6 +31,9 @@ pub mod local_engine;
 #[cfg(test)]
 mod md_fixtures;
 pub mod memory;
+pub mod model_library;
+#[cfg(desktop)]
+mod net_watch;
 pub mod nyx;
 pub mod oauth;
 pub mod opener;
@@ -46,6 +56,7 @@ pub mod settings;
 pub mod shell_update;
 pub mod skills;
 pub mod slash;
+mod turns;
 pub mod voice;
 pub mod workboard;
 
@@ -77,10 +88,18 @@ struct ShellState {
     global_halt: std::sync::atomic::AtomicBool,
     /// Files waiting on each chat's composer.
     trays: attach::Trays,
+    /// The chip rows the page was shown, for the tap that follows.
+    chip_rows: Mutex<chips::Rows>,
     sign_in: Arc<oauth::SignIn>,
+    /// Chat exports this window wrote; Open and Show in folder take their tokens.
+    saves: export::Saves,
+    /// Each chat's last read message, for a "no, just answer" right after.
+    turn_reads: turns::Reads,
     /// Asks whose notifications are out (os_extras.rs).
     #[cfg(desktop)]
     notified: os_extras::Pending,
+    /// Auto setup's state for this launch.
+    auto: Mutex<auto_setup::Session>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -185,6 +204,64 @@ fn set_theme(state: State<'_, ShellState>, theme: settings::Theme) -> Result<Set
     settings::save(&state.config_dir, &next)?;
     *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
     Ok(view(&next))
+}
+
+/// Auto setup: the first-run window, the corner note, Settings → Auto setup
+/// and chat asks for a setting. Saves `shell.json` when a setting changed and
+/// zooms the window to the text size.
+#[tauri::command]
+fn auto_setup(
+    state: State<'_, ShellState>,
+    window: tauri::WebviewWindow,
+    act: auto_setup::Act,
+) -> Result<auto_setup::Reply, String> {
+    capabilities::needs(capabilities::current().auto_setup, "Auto setup")?;
+    if matches!(act, auto_setup::Act::Pass { .. }) {
+        tell_display(&window);
+    }
+    let before = current(&state);
+    let mut settings = before.clone();
+    let mut session = state.auto.lock().unwrap_or_else(|e| e.into_inner());
+    let has_chats = || !history::list(&state.config_dir).is_empty();
+    let mut tuner = auto_setup::Tuner {
+        settings: &mut settings,
+        session: &mut session,
+        dir: auto_setup::dir(&state.config_dir),
+        has_chats: &has_chats,
+        tray: capabilities::current().tray,
+        device: grokhub_agent::device::current(),
+        generation: grokhub_agent::device::generation(),
+    };
+    let said = tuner.act(act);
+    let reply = tuner.reply(said);
+    if settings != before {
+        settings::save(&state.config_dir, &settings)?;
+        *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = settings.clone();
+    }
+    if settings.text_size != before.text_size {
+        zoom(&window, settings.text_size);
+    }
+    Ok(reply)
+}
+
+/// The window's zoom follows Settings → Appearance → Text size.
+fn zoom(window: &tauri::WebviewWindow, text_size: u16) {
+    let _ = window.set_zoom(f64::from(text_size) / 100.0);
+}
+
+/// The screen the window is on, for the device profile (its readers can't see it).
+fn tell_display(window: &tauri::WebviewWindow) {
+    let Ok(Some(monitor)) = window.current_monitor() else {
+        return;
+    };
+    let monitors = window
+        .available_monitors()
+        .map_or(1, |all| all.len().max(1));
+    grokhub_agent::device::set_display(grokhub_core::autotune::Display {
+        scale_pct: (monitor.scale_factor() * 100.0).round() as u16,
+        width_px: monitor.size().width,
+        monitors: u8::try_from(monitors).unwrap_or(u8::MAX),
+    });
 }
 
 /// The composer's command list for a draft that starts with `/`.
@@ -320,11 +397,10 @@ fn route(
         mode: settings.approvals.mode(),
         desktop: settings.desktop_control && capabilities::current().desktop_control,
         session,
-        voice: personality::voice(
-            config_dir,
-            &settings.personality,
-            settings.explicit_personalities,
-        ),
+        voice: personality::voice(config_dir, settings),
+        // A chat turn adds its voice settings (`chat_turn`); automations have none.
+        voice_session: None,
+        suggestions: settings.behavior.suggestions,
     })
 }
 
@@ -338,23 +414,40 @@ async fn send_chat(
     text: String,
     mode: Option<agent::SessionMode>,
     attachments: Option<Vec<String>>,
+    clock: Option<automations::Clock>,
 ) -> Result<String, String> {
-    let mode = mode.unwrap_or_default();
     set_last_chat(&state, &conversation_id);
+    // How long the composer's chip row stood before this message; off the
+    // send's path.
+    let timing = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = timing.state::<ShellState>();
+        chips::next_step(
+            &state.config_dir,
+            &state.chip_rows,
+            chips::COMPOSER,
+            grokhub_core::now_ms(),
+        );
+    });
     let turn = Turn {
         text,
         mode,
         attachments: attachments.unwrap_or_default(),
+        clock,
     };
     chat_turn(app, &state, conversation_id, turn, current(&state)).await
 }
 
-/// One message from the composer: its text, chip and attached files (paths
-/// from `stage_attachment`).
+/// One message from the composer: its text, how it runs and attached files
+/// (paths from `stage_attachment`).
 struct Turn {
     text: String,
-    mode: agent::SessionMode,
+    /// `/plan` or a follow-up chip names it; otherwise the app reads the
+    /// message and picks Chat or Plan (`turns::pick_mode`).
+    mode: Option<agent::SessionMode>,
     attachments: Vec<String>,
+    /// The page's local clock, for the day a finished step's XP lands on.
+    clock: Option<automations::Clock>,
 }
 
 /// The chat the window has open, reopened at the next launch; empty for none.
@@ -384,8 +477,10 @@ async fn chat_turn(
         text,
         mode,
         attachments,
+        clock,
     } = turn;
     let files = state.trays.take(&conversation_id, &attachments)?;
+    let mode = mode.unwrap_or_else(|| turns::pick_mode(state, &conversation_id, &text));
     let session = session(state, &conversation_id);
     let config_dir = state.config_dir.clone();
     if capabilities::current().pulse {
@@ -393,9 +488,13 @@ async fn chat_turn(
         pulse_feed::note_chat(&config_dir, &text, grokhub_core::now_ms());
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let route = route(&settings, mode, &config_dir)?;
+        let mut route = route(&settings, mode, &config_dir)?;
+        // Dynamic chat and quips step per turn from this chat's voice settings,
+        // at the page's local hour (UTC when the page sent no clock).
+        let offset = clock.map_or(0, |c| c.at(grokhub_core::now_ms()).utc_offset_min());
+        route.voice_session = Some(personality::voice_config(&config_dir, &settings, offset));
         let id = conversation_id.clone();
-        session.prompt(
+        let stop = session.prompt(
             &text,
             files,
             route,
@@ -410,7 +509,17 @@ async fn chat_turn(
                     },
                 );
             }),
-        )
+        );
+        if stop
+            .as_deref()
+            .is_ok_and(|s| s != agent::HALTED && s != "error")
+        {
+            // A chat's finished checklist moves the XP bar here too.
+            let now = grokhub_core::now_ms();
+            let offset = clock.map_or(0, |c| c.at(now).utc_offset_min());
+            home::turn_done_for(&config_dir, &conversation_id, now, offset);
+        }
+        stop
     })
     .await
     .map_err(|e| e.to_string())?
@@ -500,6 +609,18 @@ fn cancel_chat(state: State<'_, ShellState>, conversation_id: String) {
     {
         session.cancel();
     }
+}
+
+/// Steer now from the Activity menu: the queued words join the running
+/// reply at its next step. False when that chat has no reply running.
+#[tauri::command]
+fn steer_chat(state: State<'_, ShellState>, conversation_id: String, text: String) -> bool {
+    state
+        .chats
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&conversation_id)
+        .is_some_and(|session| session.steer(&text))
 }
 
 /// Halt from the top bar, Ctrl+Alt+H, the tray or Super+Shift+Esc: stops
@@ -795,6 +916,126 @@ fn now_clock(clock: automations::Clock) -> grokhub_core::LocalClock {
     clock.at(grokhub_core::now_ms())
 }
 
+/// The chat's transcript (without its chips blocks) and its follow-ups
+/// while they still belong to its last reply, which rank in its row (a chat
+/// opened from History, or the last chat after a restart, keeps them). A
+/// chat with no file has none.
+fn chip_chat(dir: &Path, id: &str) -> (Vec<(String, String)>, Option<chips::FollowUps>) {
+    let _config = grokhub_agent::perm::ConfigGuard::set(dir);
+    let Ok(info) = grokhub_agent::load_session(id) else {
+        return (Vec::new(), None);
+    };
+    let pairs = chips::chat_pairs(&info);
+    let ups = chips::follow_ups(dir, id, chips::user_turns(&pairs));
+    (pairs, ups)
+}
+
+/// The quick chips for the composer (`conversation_id` the open chat, with
+/// the box's `draft`), for Home, or for the empty palette. The cabin's engine, memory and ranker;
+/// empty with Settings → Behavior → Suggestions off.
+fn chip_row(
+    state: &ShellState,
+    surface: &str,
+    conversation_id: Option<String>,
+    draft: &str,
+    mode: agent::SessionMode,
+    clock: automations::Clock,
+) -> Vec<chips::Chip> {
+    let settings = current(state);
+    if !settings.behavior.suggestions {
+        return Vec::new();
+    }
+    let surface = match surface {
+        chips::HOME => chips::HOME,
+        chips::PALETTE => chips::PALETTE,
+        _ => chips::COMPOSER,
+    };
+    let dir = &state.config_dir;
+    let (chat, ups) = match (&conversation_id, surface) {
+        (Some(id), chips::COMPOSER) => chip_chat(dir, id),
+        _ => (Vec::new(), None),
+    };
+    let follow = ups.map(|u| u.chips).unwrap_or_default();
+    let local = now_clock(clock);
+    let quiet = !settings.behavior.quiet_start.is_empty()
+        && grokhub_core::quiet_hours_active(
+            &local.hm(),
+            &settings.behavior.quiet_start,
+            &settings.behavior.quiet_end,
+        );
+    let first_run = chat.is_empty() && history::list(dir).is_empty();
+    chips::row(
+        dir,
+        &state.chip_rows,
+        chips::RowAsk {
+            surface,
+            chat: &chat,
+            draft: if surface == chips::COMPOSER {
+                draft
+            } else {
+                ""
+            },
+            follow_ups: &follow,
+            mode: mode.as_str(),
+            signed_in: credential::has_key() || oauth::signed_in(&oauth::Keychain).is_some(),
+            first_run,
+            hour: local.hour as u8,
+            weekday: local.weekday,
+            quiet_hours: quiet,
+            now_ms: local.now_ms,
+        },
+    )
+}
+
+#[tauri::command]
+async fn quick_chips(
+    app: AppHandle,
+    surface: String,
+    conversation_id: Option<String>,
+    draft: Option<String>,
+    mode: Option<agent::SessionMode>,
+    clock: automations::Clock,
+) -> Result<Vec<chips::Chip>, String> {
+    off_main(move || {
+        let state = app.state::<ShellState>();
+        chip_row(
+            &state,
+            &surface,
+            conversation_id,
+            &draft.unwrap_or_default(),
+            mode.unwrap_or_default(),
+            clock,
+        )
+    })
+    .await
+}
+
+/// A tap (`picked`) or a hide on a chip of the row `surface` last showed.
+/// Teaches the ranker and the habits; the page acts on the tap itself.
+#[tauri::command]
+async fn chip_outcome(
+    app: AppHandle,
+    surface: String,
+    id: String,
+    picked: bool,
+    clock: automations::Clock,
+) -> Result<bool, String> {
+    off_main(move || {
+        let state = app.state::<ShellState>();
+        let local = now_clock(clock);
+        chips::outcome(
+            &state.config_dir,
+            &state.chip_rows,
+            &surface,
+            &id,
+            picked,
+            (local.hour as u8, local.weekday, local.now_ms),
+        )
+        .is_some()
+    })
+    .await
+}
+
 #[tauri::command]
 fn list_automations(
     state: State<'_, ShellState>,
@@ -958,8 +1199,25 @@ async fn home_read<T: Send + 'static>(
     .await
 }
 
+/// Edit Home: today's slots, every module and the presets.
+#[tauri::command]
+async fn home_catalog(state: State<'_, ShellState>) -> Result<home::Catalog, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || home::catalog(&dir)).await
+}
+
+/// Edit Home → Save. The same `home_layout.json` the cabin reads.
+#[tauri::command]
+async fn set_home_layout(
+    state: State<'_, ShellState>,
+    pick: grokhub_core::home::HomePick,
+) -> Result<(), String> {
+    let dir = state.config_dir.clone();
+    off_main(move || home::save_pick(&dir, &pick)).await?
+}
+
 /// Home: the cabin's tiles from `home_layout.json`, filled where the shell
-/// can. Read only; Edit Home stays in the cabin.
+/// can.
 #[tauri::command]
 async fn get_home(
     state: State<'_, ShellState>,
@@ -991,6 +1249,41 @@ async fn set_mission_done(
     let args = home_args(&state, clock, conversation_id, None);
     home_read(args, move |src| {
         home::toggle_for(src, done, src.clock.now_ms)
+    })
+    .await?
+}
+
+/// Objectives → My goals, Today's picks and This season.
+#[tauri::command]
+async fn get_goals(
+    state: State<'_, ShellState>,
+    clock: automations::Clock,
+) -> Result<grokhub_core::objectives::Board, String> {
+    let dir = state.config_dir.clone();
+    let now = grokhub_core::now_ms();
+    off_main(move || goals::board(&dir, now, clock.at(now).utc_offset_min())).await
+}
+
+/// Objectives → add a goal, +1, Done, Drop, Track or Not now. A paired
+/// phone may do these too: goals are the player's own list.
+#[tauri::command]
+async fn goal_act(
+    state: State<'_, ShellState>,
+    clock: automations::Clock,
+    acts: Vec<grokhub_core::objectives::GoalAct>,
+) -> Result<goals::Saved, String> {
+    let dir = state.config_dir.clone();
+    let now = grokhub_core::now_ms();
+    off_main(move || {
+        let library = if acts
+            .iter()
+            .any(|a| matches!(a, grokhub_core::objectives::GoalAct::Add { .. }))
+        {
+            goals::library()
+        } else {
+            Vec::new()
+        };
+        goals::act(&dir, &acts, &library, now, clock.at(now).utc_offset_min())
     })
     .await?
 }
@@ -1407,17 +1700,14 @@ async fn forget_grant(
 #[tauri::command]
 async fn get_personalities(state: State<'_, ShellState>) -> Result<personality::Page, String> {
     let (dir, now) = (state.config_dir.clone(), current(&state));
-    off_main(move || personality::load(&dir, &now.personality, now.explicit_personalities)).await
+    off_main(move || personality::load(&dir, &now)).await
 }
 
 /// The default voice for every chat; applies to the next message.
 #[tauri::command]
 fn set_personality(state: State<'_, ShellState>, id: String) -> Result<personality::Page, String> {
     let now = current(&state);
-    let picked = personality::allowed(
-        personality::pick(&state.config_dir, &id)?,
-        now.explicit_personalities,
-    )?;
+    let picked = personality::allowed(personality::pick(&state.config_dir, &id)?, now.adults_on())?;
     let next = ShellSettings {
         personality: personality::stored_id(&picked.id),
         ..now
@@ -1427,28 +1717,70 @@ fn set_personality(state: State<'_, ShellState>, id: String) -> Result<personali
     Ok(personalities(&state))
 }
 
-/// Settings → Personality → Adults-only personalities.
+/// Settings → Personality → Adults-only personalities. The first time it
+/// turns on, nothing changes and the page comes back with `ageCheck`, so the
+/// one-time 18+ check comes first ([`confirm_adult`]).
 #[tauri::command]
 fn set_explicit_personalities(
     state: State<'_, ShellState>,
     on: bool,
 ) -> Result<personality::Page, String> {
-    let next = ShellSettings {
-        explicit_personalities: on,
-        ..current(&state)
-    };
+    match current(&state).adults_only(on) {
+        Some(next) => save_shell(&state, next),
+        None => Ok(personality::Page {
+            age_check: true,
+            ..personalities(&state)
+        }),
+    }
+}
+
+/// The 18+ check's yes: remembered for good, with when it was given (never a
+/// birth date), and adults-only turns on.
+#[tauri::command]
+fn confirm_adult(state: State<'_, ShellState>) -> Result<personality::Page, String> {
+    save_shell(
+        &state,
+        current(&state).confirm_adult(grokhub_core::now_ms()),
+    )
+}
+
+/// Settings → Personality → Heat. Clean is not a stop on the dial, so it reads
+/// as Cheeky. Applies to the next message.
+#[tauri::command]
+fn set_quip_heat(
+    state: State<'_, ShellState>,
+    heat: grokhub_core::personality::Heat,
+) -> Result<personality::Page, String> {
+    save_shell(
+        &state,
+        ShellSettings {
+            quip_heat: settings::dial_heat(heat),
+            ..current(&state)
+        },
+    )
+}
+
+/// Settings → Personality → Dynamic chat. Applies to the next message.
+#[tauri::command]
+fn set_dynamic_chat(state: State<'_, ShellState>, on: bool) -> Result<personality::Page, String> {
+    save_shell(
+        &state,
+        ShellSettings {
+            dynamic_chat: on,
+            ..current(&state)
+        },
+    )
+}
+
+/// Saves the shell's settings and returns the Personality page they make.
+fn save_shell(state: &ShellState, next: ShellSettings) -> Result<personality::Page, String> {
     settings::save(&state.config_dir, &next)?;
     *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next;
-    Ok(personalities(&state))
+    Ok(personalities(state))
 }
 
 fn personalities(state: &ShellState) -> personality::Page {
-    let now = current(state);
-    personality::load(
-        &state.config_dir,
-        &now.personality,
-        now.explicit_personalities,
-    )
+    personality::load(&state.config_dir, &current(state))
 }
 
 /// Returns the copy's id with the page, so the editor can open it.
@@ -1500,7 +1832,7 @@ fn nyx_look(
     nyx::look(
         &state.config_dir,
         voice.as_deref().unwrap_or(&now.personality),
-        now.explicit_personalities,
+        now.adults_on(),
         nyx::activity(mood, tool.as_deref()),
     )
 }
@@ -1508,7 +1840,7 @@ fn nyx_look(
 /// Settings → Personality's pictures, by preset id.
 #[tauri::command]
 fn nyx_tiles(state: State<'_, ShellState>, ids: Vec<String>) -> HashMap<String, String> {
-    nyx::tiles(&ids, current(&state).explicit_personalities)
+    nyx::tiles(&ids, current(&state).adults_on())
 }
 
 #[tauri::command]
@@ -1633,6 +1965,34 @@ async fn library_cover(
 async fn library_play(app_id: u32) -> Result<String, String> {
     capabilities::needs(capabilities::current().library, "Library")?;
     off_main(move || library::play(grokhub_core::steam::detect_root().as_deref(), app_id)).await?
+}
+
+/// A Home tile's Turn on, for a switch that needs nothing else. The rest
+/// open their Settings row instead.
+#[tauri::command]
+async fn home_turn_on(state: State<'_, ShellState>, feature: String) -> Result<(), String> {
+    let dir = state.config_dir.clone();
+    match feature.as_str() {
+        #[cfg(desktop)]
+        "net_log" => off_main(move || net_watch::turn_on(&dir)).await?,
+        _ => {
+            let _ = dir;
+            Err("That switch is in Settings.".into())
+        }
+    }
+}
+
+/// Home's Squad tile: open Steam's own friends list.
+#[tauri::command]
+async fn library_friends() -> Result<(), String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(move || library::open_friends(grokhub_core::steam::detect_root().as_deref())).await?
+}
+
+/// Home's Clips tile: play the clip at this place in its list.
+#[tauri::command]
+async fn home_open_clip(index: usize) -> Result<(), String> {
+    off_main(move || home_tiles::open_clip(index)).await?
 }
 
 #[tauri::command]
@@ -1818,6 +2178,58 @@ async fn check_model_file(
 }
 
 #[tauri::command]
+async fn set_local_keep_loaded(
+    state: State<'_, ShellState>,
+    on: bool,
+) -> Result<local_ai::LocalAiView, String> {
+    capabilities::needs(capabilities::current().local_ai, "Local AI")?;
+    let dir = state.config_dir.clone();
+    off_main(move || local_ai::set_keep_loaded(&dir, on)).await
+}
+
+#[tauri::command]
+async fn unload_local_model(state: State<'_, ShellState>) -> Result<local_ai::LocalAiView, String> {
+    capabilities::needs(capabilities::current().local_ai, "Local AI")?;
+    let dir = state.config_dir.clone();
+    off_main(move || local_ai::unload_now(&dir)).await
+}
+
+#[tauri::command]
+async fn get_model_library(
+    state: State<'_, ShellState>,
+) -> Result<model_library::LibraryView, String> {
+    capabilities::needs(capabilities::current().local_ai, "Local AI")?;
+    let dir = state.config_dir.clone();
+    off_main(move || model_library::view(&dir)).await
+}
+
+#[tauri::command]
+async fn download_models(
+    app: AppHandle,
+    state: State<'_, ShellState>,
+    ids: Vec<String>,
+) -> Result<model_library::LibraryView, String> {
+    capabilities::needs(capabilities::current().local_ai, "Local AI")?;
+    let dir = state.config_dir.clone();
+    off_main(move || model_library::download(app, dir, ids)).await?
+}
+
+#[tauri::command]
+fn pause_model_downloads() -> Result<(), String> {
+    model_library::pause()
+}
+
+#[tauri::command]
+async fn remove_library_model(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<model_library::LibraryView, String> {
+    capabilities::needs(capabilities::current().local_ai, "Local AI")?;
+    let dir = state.config_dir.clone();
+    off_main(move || model_library::remove(&dir, &id)).await?
+}
+
+#[tauri::command]
 async fn run_local_speed_test(state: State<'_, ShellState>) -> Result<String, String> {
     capabilities::needs(capabilities::current().local_ai, "Local AI")?;
     let dir = state.config_dir.clone();
@@ -1970,6 +2382,70 @@ fn open_data_folder(state: State<'_, ShellState>) -> Result<(), String> {
     privacy::open_data_folder(&state.config_dir)
 }
 
+#[tauri::command]
+fn open_files_folder(state: State<'_, ShellState>) -> Result<(), String> {
+    privacy::open_files_folder(&state.config_dir)
+}
+
+/// Settings → Privacy & data → Your files → Change…: the system folder
+/// picker, then the page again. Nothing changes when the picker is closed.
+#[tauri::command]
+async fn change_files_folder(app: AppHandle) -> Result<privacy::Page, String> {
+    #[cfg(desktop)]
+    {
+        use tauri_plugin_dialog::DialogExt;
+        let picked = app
+            .dialog()
+            .file()
+            .set_title("Where should your files go?")
+            .blocking_pick_folder()
+            .and_then(|p| p.into_path().ok());
+        let dir = app.state::<ShellState>().config_dir.clone();
+        off_main(move || {
+            if let Some(folder) = picked {
+                privacy::set_files_folder(&dir, &folder)?;
+            }
+            Ok(privacy::page(
+                &dir,
+                privacy::keyring(&dir),
+                grokhub_core::now_ms(),
+            ))
+        })
+        .await?
+    }
+    #[cfg(mobile)]
+    {
+        let _ = app;
+        Err("Changing where your files go works on your computer.".into())
+    }
+}
+
+/// `/export` and History's Export: the chat as Markdown in your Chats
+/// folder. The card that follows opens the file by its token only.
+#[tauri::command]
+async fn export_chat(
+    state: State<'_, ShellState>,
+    id: String,
+    clock: automations::Clock,
+) -> Result<export::Saved, String> {
+    capabilities::needs(cfg!(desktop), "Saving a chat")?;
+    let dir = state.config_dir.clone();
+    let now = grokhub_core::now_ms();
+    let offset = clock.at(now).utc_offset_min();
+    let path = off_main(move || export::export_to_chats(&dir, &id, now, offset)).await??;
+    Ok(export::saved(&state.saves, path))
+}
+
+#[tauri::command]
+fn open_saved(state: State<'_, ShellState>, token: String) -> Result<(), String> {
+    export::open(&state.saves, &token)
+}
+
+#[tauri::command]
+fn reveal_saved(state: State<'_, ShellState>, token: String) -> Result<(), String> {
+    export::reveal(&state.saves, &token)
+}
+
 /// Settings → Background: who fires automations, and when each runs.
 #[tauri::command]
 fn get_background(state: State<'_, ShellState>) -> Result<background::Page, String> {
@@ -2024,8 +2500,9 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             };
             let turn = Turn {
                 text: arg(args, "text")?,
-                mode: arg::<Option<agent::SessionMode>>(args, "mode")?.unwrap_or_default(),
+                mode: arg::<Option<agent::SessionMode>>(args, "mode")?,
                 attachments: arg::<Option<Vec<String>>>(args, "attachments")?.unwrap_or_default(),
+                clock: arg::<Option<automations::Clock>>(args, "clock")?,
             };
             out(block_on(chat_turn(
                 app.clone(),
@@ -2083,6 +2560,7 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             cancel_chat(state, own(args)?);
             Ok(Value::Null)
         }
+        "steer_chat" => out(steer_chat(state, own(args)?, arg(args, "text")?)),
         "close_chat" => {
             close_chat(state, own(args)?);
             Ok(Value::Null)
@@ -2187,6 +2665,8 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
                 }))?)
             }
         }
+        "home_catalog" => out(block_on(home_catalog(state))?),
+        "set_home_layout" => out(block_on(set_home_layout(state, arg(args, "pick")?))?),
         "get_workboard" => out(block_on(get_workboard(state))?),
         "workboard_add" => out(block_on(workboard_add(
             state,
@@ -2215,6 +2695,28 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         ))?),
         "workboard_sweep_undo" => out(block_on(workboard_sweep_undo(state))?),
         "workboard_sweep_dismiss" => out(block_on(workboard_sweep_dismiss(state))?),
+        "quick_chips" => {
+            // A browser sees chips only for the chats it started.
+            let id: Option<String> = arg(args, "conversationId")?;
+            if id.as_deref().is_some_and(|id| !web.owns(id)) {
+                return Err(remote::NOT_YOURS.into());
+            }
+            out(chip_row(
+                &state,
+                &arg::<String>(args, "surface")?,
+                id,
+                &arg::<Option<String>>(args, "draft")?.unwrap_or_default(),
+                arg::<Option<agent::SessionMode>>(args, "mode")?.unwrap_or_default(),
+                arg(args, "clock")?,
+            ))
+        }
+        "chip_outcome" => out(block_on(chip_outcome(
+            app.clone(),
+            arg(args, "surface")?,
+            arg(args, "id")?,
+            arg(args, "picked")?,
+            arg(args, "clock")?,
+        ))?),
         "get_behavior" => out(get_behavior(state)),
         "get_privacy" => out(block_on(get_privacy(state))?),
         "get_background" => out(get_background(state)?),
@@ -2599,22 +3101,39 @@ pub fn run() {
             // The router takes Local AI's switch, OpenRouter's policy and the
             // spend limits from the cabin's settings from the start.
             grokhub_agent::route::host::sync(&config_dir);
+            // The full device profile, shared with the cabin: sizes local
+            // model launches and sets the router's battery and low-end tier.
+            #[cfg(desktop)]
+            grokhub_agent::device::start(
+                grokhub_core::paths::user_home().unwrap_or_default(),
+                config_dir.clone(),
+            );
             pulse_feed::start(config_dir.clone(), || {
                 let client: Box<dyn grokhub_agent::ModelClient> = Box::new(model_client()?.0);
                 Ok((client, grokhub_agent::route::host::chat_start().0))
             });
             #[cfg(desktop)]
             os_extras::setup(app.handle(), &loaded);
+            let text_size = loaded.text_size;
             app.manage(ShellState {
                 config_dir,
                 settings: Mutex::new(loaded),
                 chats: Mutex::new(HashMap::new()),
                 global_halt: std::sync::atomic::AtomicBool::new(false),
                 trays: attach::Trays::default(),
+                chip_rows: Mutex::new(chips::Rows::default()),
                 sign_in: Arc::default(),
+                saves: export::Saves::default(),
+                turn_reads: turns::Reads::default(),
                 #[cfg(desktop)]
                 notified: os_extras::Pending::default(),
+                auto: Mutex::default(),
             });
+            if let Some(window) = app.get_webview_window("main") {
+                if text_size != 100 {
+                    zoom(&window, text_size);
+                }
+            }
             #[cfg(desktop)]
             {
                 let global = register_halt_keys(app.handle());
@@ -2631,6 +3150,9 @@ pub fn run() {
             });
             #[cfg(desktop)]
             start_scheduler(app);
+            // The internet log, when it's on and the cabin isn't running.
+            #[cfg(desktop)]
+            net_watch::start(app.state::<ShellState>().config_dir.clone());
             // The Workboard's local tidy, while the cabin is closed. No model.
             #[cfg(desktop)]
             workboard::start_sweeper(app.state::<ShellState>().config_dir.clone());
@@ -2652,6 +3174,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             phone_smoke_report,
+            auto_setup,
+            quick_chips,
+            chip_outcome,
             get_capabilities,
             get_settings,
             save_settings,
@@ -2669,6 +3194,10 @@ pub fn run() {
             answer_permission,
             answer_elicit,
             cancel_chat,
+            steer_chat,
+            turns::read_turn,
+            turns::side_chat,
+            turns::tell_main,
             halt_desktop,
             get_halt_keys,
             close_chat,
@@ -2723,6 +3252,9 @@ pub fn run() {
             get_personalities,
             set_personality,
             set_explicit_personalities,
+            confirm_adult,
+            set_quip_heat,
+            set_dynamic_chat,
             duplicate_personality,
             save_personality,
             delete_personality,
@@ -2760,6 +3292,12 @@ pub fn run() {
             reset_local_ai,
             check_model_file,
             run_local_speed_test,
+            set_local_keep_loaded,
+            unload_local_model,
+            get_model_library,
+            download_models,
+            pause_model_downloads,
+            remove_library_model,
             get_web_access,
             set_web_access,
             get_devices,
@@ -2800,13 +3338,25 @@ pub fn run() {
             get_privacy,
             set_offline_only,
             open_data_folder,
+            open_files_folder,
+            change_files_folder,
+            export_chat,
+            open_saved,
+            reveal_saved,
             get_background,
             get_home,
             get_mission,
             set_mission_done,
+            get_goals,
+            goal_act,
             get_library,
             library_cover,
             library_play,
+            home_open_clip,
+            library_friends,
+            home_turn_on,
+            home_catalog,
+            set_home_layout,
             open_url
         ])
         .run(tauri::generate_context!());

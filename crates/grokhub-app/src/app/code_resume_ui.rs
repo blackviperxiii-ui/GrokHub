@@ -125,7 +125,7 @@ impl Cabin {
         chips
     }
 
-    fn set_resume_code(&mut self, on: bool) {
+    pub(super) fn set_resume_code(&mut self, on: bool) {
         self.cfg.resume_code = on;
         self.focus.resume = ResumeState::default();
         self.chip_paint_key.clear();
@@ -240,7 +240,10 @@ mod tests {
             chips[0].hint,
             "my-app is on branch feat-x with 3 unpushed commits. Want to continue?"
         );
-        assert_eq!(cabin.composer_chips()[0].id, "resume:continue:my-app");
+        cabin.refresh_chips();
+        let row: Vec<String> = cabin.composer_chips().into_iter().map(|c| c.id).collect();
+        // The feature's own order holds on the ranked row.
+        assert_eq!(row[0], "resume:continue:my-app", "{row:?}");
         cabin.dismiss_chip(chips[0].clone());
         assert_eq!(cabin.resume_chips().len(), 3, "dismissed stays gone");
     }

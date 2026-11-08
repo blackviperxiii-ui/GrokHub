@@ -128,19 +128,34 @@ impl Cabin {
         }
         let dir = crate::config::config_dir();
         let mut state = bn::load(&dir);
+        let before = state.clone();
         state.snooze(now_ms());
         state.reminder = None;
         state.card_source.clear();
         match bn::save(&dir, &state) {
             Ok(()) => {
                 self.status = format!("Backup reminders snoozed for {} days.", bn::SNOOZE_DAYS);
-                self.focus.backup.reminder = None;
-                self.chip_paint_key.clear();
+                let shown = self.focus.backup.reminder.take();
+                self.set_chip_undo(
+                    &chip.label,
+                    super::chips::UndoKind::BackupSnooze(Box::new(before), shown),
+                );
             }
             // The one-taps stay so the snooze can be tried again.
             Err(err) => self.status = format!("Couldn't save the snooze: {err}"),
         }
         true
+    }
+
+    /// The Undo chip after a snooze: the saved state and the reminder come back.
+    pub(super) fn undo_backup_snooze(&mut self, before: bn::NudgeState, shown: Option<Reminder>) {
+        match bn::save(&crate::config::config_dir(), &before) {
+            Ok(()) => {
+                self.focus.backup.reminder = shown;
+                self.status = "Backup reminders are back on.".into();
+            }
+            Err(err) => self.status = format!("Couldn't undo the snooze: {err}"),
+        }
     }
 
     /// The reminder's one-taps as pills under its own Pulse post, so they sit

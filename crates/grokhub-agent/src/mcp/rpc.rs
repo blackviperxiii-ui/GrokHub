@@ -268,6 +268,23 @@ const MAX_ICON_SRC: usize = 64 * 1024;
 /// Largest `outputSchema` kept, serialized.
 const MAX_OUTPUT_SCHEMA: usize = 16 * 1024;
 
+/// How long a `tools/list` result may be reused (`ttlMs`, MCP 2026-07-28).
+/// Clamped to at least [`MIN_LIST_TTL`] so a tiny value can't turn into a
+/// re-list on every step. `None` when the server gave none: keep the list.
+pub(crate) fn list_ttl(result: &Value) -> Option<std::time::Duration> {
+    let ms = result.get("ttlMs").and_then(Value::as_u64)?;
+    Some(std::time::Duration::from_millis(ms).max(MIN_LIST_TTL))
+}
+
+/// The shortest reuse window honored for a listed `ttlMs`.
+pub(crate) const MIN_LIST_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// A server's tools by name, whatever order it sent: the same catalog always
+/// gives the same tool list, so the prompt cache keeps matching.
+pub(crate) fn sort_tools(tools: &mut [RawTool]) {
+    tools.sort_by(|a, b| a.name.cmp(&b.name));
+}
+
 pub(crate) fn parse_tools(result: &Value) -> (Vec<RawTool>, Option<String>) {
     let mut tools = Vec::new();
     if let Some(items) = result.get("tools").and_then(|v| v.as_array()) {
@@ -437,6 +454,30 @@ pub(crate) fn initialize_params() -> Value {
     })
 }
 
+/// The `_meta` field that carries an idempotency key on `tools/call`.
+pub(crate) const IDEMPOTENCY_META: &str = "idempotency-key";
+
+/// `params` with `key` in its `_meta`, so a server (or a proxy in front of
+/// it) that honors idempotency keys runs a resent call once. `None` leaves
+/// `params` as it is.
+pub(crate) fn with_key(params: Value, key: Option<&str>) -> Value {
+    let Some(key) = key else {
+        return params;
+    };
+    let mut params = match params {
+        Value::Object(map) => map,
+        _ => serde_json::Map::new(),
+    };
+    let meta = params.entry("_meta").or_insert_with(|| json!({}));
+    if !meta.is_object() {
+        *meta = json!({});
+    }
+    if let Some(meta) = meta.as_object_mut() {
+        meta.insert(IDEMPOTENCY_META.into(), json!(key));
+    }
+    Value::Object(params)
+}
+
 /// `params` with the stateless era's per-request `_meta`: the version, the
 /// client's capabilities (required) and its name (recommended). Keys the
 /// caller already put in `_meta` stay.
@@ -551,6 +592,17 @@ fn input_round(server: &str, result: &Value) -> Result<(Option<Value>, Option<St
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_listed_ttl_is_read_and_never_shorter_than_the_floor() {
+        assert_eq!(list_ttl(&json!({"tools": []})), None);
+        assert_eq!(
+            list_ttl(&json!({"ttlMs": 120_000})),
+            Some(std::time::Duration::from_secs(120))
+        );
+        assert_eq!(list_ttl(&json!({"ttlMs": 5})), Some(MIN_LIST_TTL));
+        assert_eq!(list_ttl(&json!({"ttlMs": "soon"})), None);
+    }
+
     fn answer(version: &str) -> Value {
         json!({"protocolVersion": version, "capabilities": {}, "serverInfo": {"name": "s", "version": "0"}})
     }
@@ -654,6 +706,20 @@ mod tests {
             Ok(Era::Session)
         );
         assert_eq!(era(None), Ok(Era::Session));
+    }
+
+    #[test]
+    fn a_key_rides_in_meta_and_survives_the_per_request_fields() {
+        let keyed = with_key(json!({"name": "send", "arguments": {}}), Some("k1"));
+        assert_eq!(keyed["_meta"][IDEMPOTENCY_META], "k1");
+        let both = with_meta(keyed, "2026-07-28");
+        assert_eq!(both["_meta"][IDEMPOTENCY_META], "k1");
+        assert_eq!(
+            both["_meta"]["io.modelcontextprotocol/protocolVersion"],
+            "2026-07-28"
+        );
+        let plain = json!({"name": "read", "arguments": {}});
+        assert_eq!(with_key(plain.clone(), None), plain);
     }
 
     #[test]

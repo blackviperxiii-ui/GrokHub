@@ -45,6 +45,7 @@ const BUILDERS: &[&str] = &[
     "http::agent(",
     "tungstenite::client(",
     "tungstenite::connect(",
+    "tungstenite::client_tls_with_config(",
 ];
 
 /// `(path under crates/, builders in it, the guard in front of them)`.
@@ -53,6 +54,7 @@ const WRAPPED: &[(&str, usize, &str)] = &[
     ("grokhub-core/src/connectivity.rs", 1, "default_http_client: the connectivity re-probe (HEAD to the xAI models URL, no user data; run_probe_if_due sends nothing while Offline only is on) and the net log speed test (offline::refuse first)"),
     ("grokhub-core/src/game_watch_league.rs", 1, "RiotLoopback: League's live client API on 127.0.0.1 only (loopback_self_signed: loopback-only resolver, https only, no redirects); no egress line (on-device)"),
     ("grokhub-agent/src/client.rs", 1, "XaiClient::post_guarded (turns, /v1/responses/compact, Batch API submits): XAI_MODEL_ENDPOINTS or batch_url + guard_egress (chat, personal) to api.x.ai; get_guarded (Batch API status and results): batch_url + guard_egress (no user data), same agent"),
+    ("grokhub-agent/src/ws_mode.rs", 1, "WsPool::turn's socket (WebSocket mode): only XaiClient::over_socket calls it, after guard_egress (chat, personal) for the same endpoint; api.x.ai, or a loopback ws URL in tests"),
     ("grokhub-agent/src/mcp/http.rs", 1, "connect / ping: guard_quiet (no user data); call: guard_or_park"),
     ("grokhub-agent/src/route/providers.rs", 1, "ProviderSource::fetch / call_model: guard_provider / provider_or_park (your grant, else a hard send card)"),
     ("grokhub-agent/src/route/local_http.rs", 2, "HttpLocalRuntime: loopback-only chat/completions and the /props window lookup; no egress line (on-device)"),
@@ -81,6 +83,7 @@ const WRAPPED: &[(&str, usize, &str)] = &[
     ("grokhub-app/src/app/pulse_ui.rs", 1, "source_preview / cache_image: egress_ok (chat)"),
     ("grokhub-app/src/app/pulse_sources_ui.rs", 1, "fetch_source: egress_ok on every hop (chat for a topic search, else no user data)"),
     ("grokhub-app/src/desktop.rs", 2, "hub health and CDP HTTP (loopback_agent), CDP websocket: egress_ok (loopback)"),
+    ("grokhub-app/src/driver_blocklist.rs", 1, "fetch: egress_ok (no user data) on every hop to Microsoft's download hosts only (aka.ms, go.microsoft.com, download.microsoft.com), https, redirects checked by hand, public IPs only; Windows only, at most monthly"),
     ("grokhub-app/src/mods_fetch.rs", 1, "ModsNet::once: egress_ok (chat when a search carries text) to the mod source's own hosts, redirects checked by hand, public IPs only"),
     ("grokhub-app/src/github.rs", 1, "run_github_tool: egress_ok (chat)"),
     ("grokhub-app/src/imagine_auth.rs", 1, "auth_agent callers post_form / imagine_discovery: egress_ok (no user data)"),
@@ -270,7 +273,8 @@ fn an_agent_from_the_http_facade_counts_as_a_builder() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// The model client posts only from `post_guarded` and reads only from
+/// The model client builds its one POST only in `guarded_post` (which
+/// `post_guarded` and the compaction call send) and reads only from
 /// `get_guarded` (the Batch API's status and results), each after its endpoint
 /// allowlist and the guard. Every xAI URL it names is on
 /// [`XAI_MODEL_ENDPOINTS`] (compaction too) or is the Batch API root that
@@ -290,7 +294,11 @@ fn the_xai_client_posts_only_listed_endpoints_behind_the_guard() {
             .unwrap_or_else(|| panic!("{name}"))
             .to_string()
     };
-    let body = site("post_guarded");
+    assert!(
+        site("post_guarded").contains("self.guarded_post("),
+        "post_guarded sends only what guarded_post built"
+    );
+    let body = site("guarded_post");
     let allow = body
         .find("XAI_MODEL_ENDPOINTS.contains(")
         .expect("allowlist check");

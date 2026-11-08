@@ -1,19 +1,21 @@
 //! Home and Objectives in the shell (LO-17n). Home draws the cabin's tile
-//! grid from the same `{config}/home_layout.json`, filling the tiles the
-//! shell knows about and leaving the rest to the cabin. Objectives is the
-//! open chat's checklist with level, XP and the weekly streak.
+//! grid from the same `{config}/home_layout.json` and fills every tile:
+//! the ones below have their own look, the rest come from `home_tiles` in
+//! the shared tile model. Objectives is the
+//! open chat's checklist with level, XP and weeks in a row.
 //!
 //! The layout, the catalog and the mission and XP sums are the cabin's own
-//! (`grokhub_core::home`, `mission`, `xp`, `outcome`). The shell only reads
-//! the layout: a missing or broken file shows the default and is never
-//! rewritten, so editing Home stays in the cabin. The one write here is
+//! (`grokhub_core::home`, `mission`, `xp`, `outcome`). A missing or broken
+//! layout shows the default and is left alone until Edit Home saves one
+//! ([`save_pick`]), the same file the cabin writes. The other write here is
 //! Accept as done (and its Undo) on Objectives, an `accepted` or `undo` line
 //! in the cabin's outcome log, as the cabin's own self-review writes them.
 
 use std::path::Path;
 
 use grokhub_core::home::{
-    lookup, place_slots, HomeLayout, ModuleSize, SlotId, HOME_LAYOUT_FILE, HOME_LAYOUT_VERSION,
+    lookup, place_slots, HomeLayout, HomePick, ModuleSize, SlotId, TileView, HOME_LAYOUT_FILE,
+    HOME_LAYOUT_VERSION, HOME_PRESETS, REGISTRY,
 };
 use grokhub_core::mission::{MissionCheckStatus, MissionSeed, MissionView};
 use grokhub_core::outcome::{self as oc, OutcomeResult, OutcomeSignals, TaskOutcome};
@@ -28,7 +30,6 @@ use crate::{automations, connectors, history, library, memory, nyx, personality,
 const LAYOUT_CAP: u64 = 1024 * 1024;
 /// Rows a list tile shows.
 const TILE_ROWS: usize = 3;
-const DAY_MS: u64 = 86_400_000;
 
 /// A chat's `todo_write` rows: `(id, text, status)`.
 pub type Todos = Vec<(String, String, String)>;
@@ -63,6 +64,69 @@ pub fn load_layout(config_dir: &Path) -> HomeLayout {
     serde_json::from_value::<HomeLayout>(value)
         .map(HomeLayout::sanitize)
         .unwrap_or_default()
+}
+
+/// One module Edit Home can place, with the sizes it draws at.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogModule {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub category: &'static str,
+    pub sizes: Vec<&'static str>,
+    pub purpose: &'static str,
+}
+
+/// A named layout Edit Home offers as a starting point.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogPreset {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub pick: HomePick,
+}
+
+/// What Edit Home needs: today's slots, every module and the presets.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Catalog {
+    pub current: HomePick,
+    pub modules: Vec<CatalogModule>,
+    pub presets: Vec<CatalogPreset>,
+}
+
+pub fn catalog(config_dir: &Path) -> Catalog {
+    Catalog {
+        current: load_layout(config_dir).pick(),
+        modules: REGISTRY
+            .iter()
+            .map(|m| CatalogModule {
+                id: m.id,
+                name: m.name,
+                category: m.category.label(),
+                sizes: m.sizes.iter().map(|s| size_key(*s)).collect(),
+                purpose: m.purpose,
+            })
+            .collect(),
+        presets: HOME_PRESETS
+            .iter()
+            .map(|kind| CatalogPreset {
+                id: kind.id(),
+                label: kind.label(),
+                pick: HomeLayout::preset(*kind).pick(),
+            })
+            .collect(),
+    }
+}
+
+/// Edit Home → Save: the picked slots into `home_layout.json`, keeping the
+/// XP bar and each module's settings. Written whole through a temp file, so
+/// the cabin never reads half a layout.
+pub fn save_pick(config_dir: &Path, pick: &HomePick) -> Result<(), String> {
+    let layout = load_layout(config_dir).with_pick(pick);
+    let text = serde_json::to_string_pretty(&layout).map_err(|e| e.to_string())?;
+    grokhub_core::pulse_writer::write_atomic(&config_dir.join(HOME_LAYOUT_FILE), &text)
+        .map_err(|_| "Couldn't save Home. Try again.".to_string())
 }
 
 /// Who is looking: this computer's window, or a paired browser that may see
@@ -141,19 +205,8 @@ pub struct Mission {
     pub accepted: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Xp {
-    pub level: u32,
-    pub xp: u32,
-    /// XP at which the next level starts.
-    pub next_level_xp: u32,
-    /// Progress into the level, 0 to 1.
-    pub frac: f32,
-    pub today: u32,
-    /// The last seven days, today last: true when a task finished.
-    pub streak: [bool; 7],
-}
+/// Level, title, XP and this week, as the cabin shows them.
+pub type Xp = grokhub_core::xp::XpSummary;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -179,27 +232,17 @@ fn result_word(r: OutcomeResult) -> &'static str {
     }
 }
 
-/// Days of the last week that finished a task, oldest first.
-fn streak_days(outcomes: &[TaskOutcome], now: u64) -> [bool; 7] {
-    let today = now / DAY_MS;
-    let mut out = [false; 7];
-    for o in outcomes
-        .iter()
-        .filter(|o| o.effective(now) == OutcomeResult::Success)
-    {
-        let day = o.finished_at / DAY_MS;
-        if day <= today && today - day < 7 {
-            out[6 - (today - day) as usize] = true;
-        }
-    }
-    out
-}
-
 /// One chat's checklist (`(id, text, todo status)`) as the cabin projects it,
-/// with level and XP from the outcome and card-signal logs.
-pub fn mission_page(config_dir: &Path, chat: Option<Chat<'_>>, now: u64) -> MissionPage {
+/// with level and XP from the XP ledger, which banks the chat's checked steps.
+/// `offset_min` is the local clock's offset from UTC, for days and weeks.
+pub fn mission_page(
+    config_dir: &Path,
+    chat: Option<Chat<'_>>,
+    now: u64,
+    offset_min: i32,
+) -> MissionPage {
     let outcomes = oc::read_outcomes(config_dir);
-    let mission = chat.and_then(|(id, title, todos)| {
+    let projected = chat.and_then(|(id, title, todos)| {
         let last = chat_outcome(&outcomes, id);
         let reasons = last.map(|o| o.reasons.clone()).unwrap_or_default();
         let result = last.map(|o| result_word(o.result)).unwrap_or_default();
@@ -213,25 +256,18 @@ pub fn mission_page(config_dir: &Path, chat: Option<Chat<'_>>, now: u64) -> Miss
             outcome_reasons: reasons,
             ..MissionSeed::default()
         };
-        MissionView::project(&seed).map(|view| mission(id, &view, result == "success"))
+        MissionView::project(&seed).map(|view| (id, view, result == "success"))
     });
-    let tally = grokhub_core::xp::tally(
-        &outcomes,
-        &grokhub_core::card_signals::read_signals(config_dir),
-        now,
-    );
-    let done = mission.as_ref().map_or(0, |m| m.done);
-    let (level, xp, frac) = grokhub_core::xp::level_xp(tally.finished, done, tally.bonus);
+    let open = projected
+        .as_ref()
+        .map(|(id, view, _)| grokhub_core::xp::OpenChat {
+            id,
+            items: &view.checklist,
+        });
+    let xp = grokhub_core::xp::refresh(config_dir, open, now, offset_min);
     MissionPage {
-        mission,
-        xp: Xp {
-            level,
-            xp,
-            next_level_xp: level * grokhub_core::xp::XP_PER_LEVEL,
-            frac,
-            today: tally.today,
-            streak: streak_days(&outcomes, now),
-        },
+        mission: projected.map(|(id, view, accepted)| mission(id, &view, accepted)),
+        xp,
     }
 }
 
@@ -278,9 +314,10 @@ pub fn set_mission_done(
     chat: Chat<'_>,
     done: bool,
     now: u64,
+    offset_min: i32,
 ) -> Result<(), String> {
     let (id, title, _) = chat;
-    let page = mission_page(config_dir, Some(chat), now);
+    let page = mission_page(config_dir, Some(chat), now, offset_min);
     let Some(mission) = page.mission else {
         return Err(NO_MISSION.into());
     };
@@ -350,8 +387,7 @@ pub struct GameLine {
     pub name: String,
 }
 
-/// What one tile shows. `Cabin` is a tile only the cabin paints; `Desktop`
-/// one a paired browser can't read.
+/// What one tile shows. `View` is any module in the shared tile model.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Tile {
@@ -359,6 +395,9 @@ pub enum Tile {
     Objectives {
         mission: Option<Mission>,
         xp: Xp,
+        /// A follow-up on a goal left a few days, with "Plan it" under it.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        follow_up: Option<grokhub_core::objectives::FollowUp>,
     },
     #[serde(rename_all = "camelCase")]
     Streak {
@@ -391,8 +430,9 @@ pub enum Tile {
     Error {
         message: String,
     },
-    Cabin,
-    Desktop,
+    View {
+        view: TileView,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -406,6 +446,8 @@ pub struct Slot {
     pub name: String,
     pub purpose: String,
     pub tile: Tile,
+    /// How often this tile's data changes, so the screen asks again on time.
+    pub refresh_secs: Option<u64>,
 }
 
 /// The two counts no layout slot holds: learned memory and connectors.
@@ -459,8 +501,22 @@ pub fn visible_slots(layout: &HomeLayout) -> Vec<(SlotId, String)> {
         .collect()
 }
 
-/// The shell's half of the catalog: which modules it fills itself.
-pub fn shell_fills(module: &str) -> bool {
+/// A shared-model tile, stamped with when it was read.
+fn module_view(module: &str, src: &Sources<'_>, now: u64) -> TileView {
+    let web = matches!(src.viewer, Viewer::Web(_));
+    if let Some(v) = crate::home_tiles::cached(module, web, now) {
+        return v;
+    }
+    let mut view = crate::home_tiles::view(module, src)
+        .unwrap_or_else(|| TileView::unsupported("This tile isn't in this version"));
+    view.updated_ms.get_or_insert(now);
+    crate::home_tiles::keep(module, web, &view);
+    view
+}
+
+/// The modules with a look of their own here; every other one is a
+/// shared-model tile.
+pub fn own_look(module: &str) -> bool {
     matches!(
         module,
         "objectives"
@@ -471,6 +527,34 @@ pub fn shell_fills(module: &str) -> bool {
             | "personality"
             | "up_next"
     )
+}
+
+/// At the end of a chat turn: banks the chat's checked steps, and once
+/// every step is closed (what Accept as done asks for), the finished task counts for
+/// XP as a pending line on the chat, as the cabin's turn-end review writes
+/// one. Accept as done later writes on the same chat, so nothing pays twice;
+/// a chat with any outcome line already (accepted, undone) is left alone.
+/// True when a line was written.
+pub fn turn_done(config_dir: &Path, chat: Chat<'_>, now: u64, offset_min: i32) -> bool {
+    let (id, title, _) = chat;
+    let title = title.to_string();
+    let page = mission_page(config_dir, Some(chat), now, offset_min);
+    let Some(m) = page.mission else { return false };
+    if !m.can_accept {
+        return false;
+    }
+    if chat_outcome(&oc::read_outcomes(config_dir), id).is_some() {
+        return false;
+    }
+    let sig = oc::topic_signature(&title);
+    let line = TaskOutcome::finished(id, &sig, &OutcomeSignals::default(), now);
+    oc::append_outcome(config_dir, &line).is_ok()
+}
+
+/// [`turn_done`] for a chat by id, with its saved title and to-dos.
+pub fn turn_done_for(config_dir: &Path, id: &str, now: u64, offset_min: i32) -> bool {
+    let (title, todos) = chat_todos(config_dir, id);
+    turn_done(config_dir, (id, &title, todos), now, offset_min)
 }
 
 /// The open chat's title and to-dos, for its mission.
@@ -498,6 +582,7 @@ pub fn mission_for(src: &Sources<'_>, now: u64) -> MissionPage {
             .as_ref()
             .map(|(id, (title, todos))| (*id, title.as_str(), todos.clone())),
         now,
+        src.clock.utc_offset_min(),
     )
 }
 
@@ -508,7 +593,13 @@ pub fn toggle_for(src: &Sources<'_>, done: bool, now: u64) -> Result<MissionPage
     }
     let id = src.mission_chat().ok_or(NO_MISSION)?;
     let (title, todos) = chat_todos(src.config_dir, &id);
-    set_mission_done(src.config_dir, (&id, &title, todos), done, now)?;
+    set_mission_done(
+        src.config_dir,
+        (&id, &title, todos),
+        done,
+        now,
+        src.clock.utc_offset_min(),
+    )?;
     Ok(mission_for(src, now))
 }
 
@@ -555,7 +646,9 @@ fn automations_tile(src: &Sources<'_>) -> Tile {
 
 fn pulse_tile(src: &Sources<'_>) -> Tile {
     if !src.caps.pulse {
-        return Tile::Cabin;
+        return Tile::View {
+            view: TileView::unsupported("Pulse isn't on this device"),
+        };
     }
     match pulse::peek(src.config_dir, src.clock.now_ms) {
         Ok(page) => Tile::Pulse {
@@ -580,19 +673,24 @@ fn pulse_tile(src: &Sources<'_>) -> Tile {
     }
 }
 
-fn personality_tile(src: &Sources<'_>) -> Tile {
+/// The name of the personality every chat uses by default.
+pub(crate) fn personality_name(src: &Sources<'_>) -> String {
     let (dir, s) = (src.config_dir, src.settings);
-    let page = personality::load(dir, &s.personality, s.explicit_personalities);
-    let name = page
-        .presets
+    let page = personality::load(dir, s);
+    page.presets
         .iter()
         .find(|p| p.id == page.current)
         .map(|p| p.name.clone())
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
+
+fn personality_tile(src: &Sources<'_>) -> Tile {
+    let (dir, s) = (src.config_dir, src.settings);
+    let name = personality_name(src);
     let picture = nyx::look(
         dir,
         &s.personality,
-        s.explicit_personalities,
+        s.adults_on(),
         grokhub_core::companion::Mood::HangingOut,
     )
     .and_then(|look| look.poses.into_iter().next());
@@ -600,11 +698,10 @@ fn personality_tile(src: &Sources<'_>) -> Tile {
 }
 
 fn up_next_tile(src: &Sources<'_>) -> Tile {
-    if src.viewer.web() {
-        return Tile::Desktop;
-    }
-    if !src.caps.library {
-        return Tile::Cabin;
+    if src.viewer.web() || !src.caps.library {
+        return Tile::View {
+            view: TileView::unsupported(&crate::home_tiles::on_pc()),
+        };
     }
     let page = library::page(grokhub_core::steam::detect_root().as_deref());
     Tile::UpNext {
@@ -637,7 +734,7 @@ fn glance(src: &Sources<'_>) -> Glance {
     }
 }
 
-/// Home: the layout's visible slots, each filled or left to the cabin.
+/// Home: the layout's visible slots, every one filled.
 pub fn page(src: &Sources<'_>) -> Page {
     let layout = load_layout(src.config_dir);
     let now = src.clock.now_ms;
@@ -650,6 +747,7 @@ pub fn page(src: &Sources<'_>) -> Page {
                 "objectives" => Tile::Objectives {
                     mission: objectives.mission.clone(),
                     xp: objectives.xp.clone(),
+                    follow_up: crate::goals::follow_up(src.config_dir, now),
                 },
                 "streak" => Tile::Streak {
                     xp: objectives.xp.clone(),
@@ -659,13 +757,16 @@ pub fn page(src: &Sources<'_>) -> Page {
                 "pulse" => pulse_tile(src),
                 "personality" => personality_tile(src),
                 "up_next" => up_next_tile(src),
-                _ => Tile::Cabin,
+                other => Tile::View {
+                    view: module_view(other, src, now),
+                },
             };
             Slot {
                 slot: slot_key(slot),
                 size: size_key(slot.size()),
                 name: entry.map(|e| e.name.to_string()).unwrap_or_default(),
                 purpose: entry.map(|e| e.purpose.to_string()).unwrap_or_default(),
+                refresh_secs: grokhub_core::home::refresh_secs(&module),
                 module,
                 tile,
             }
@@ -687,6 +788,7 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
+    const DAY_MS: u64 = 86_400_000;
     const NOW: u64 = 40 * DAY_MS + 3_600_000;
 
     fn dir(tag: &str) -> PathBuf {
@@ -795,7 +897,8 @@ mod tests {
     }
 
     #[test]
-    fn the_shell_fills_its_tiles_and_leaves_the_rest_to_the_cabin() {
+    fn every_catalog_module_gets_a_real_tile() {
+        use grokhub_core::home::{TileState, REGISTRY};
         for id in [
             "objectives",
             "recent_chats",
@@ -803,12 +906,43 @@ mod tests {
             "pulse",
             "up_next",
         ] {
-            assert!(shell_fills(id), "{id}");
+            assert!(own_look(id), "{id}");
             assert!(lookup(id).is_some(), "{id} is not in the catalog");
         }
-        for id in ["pc_loadout", "storage", "game_mode", "frame_rate", "clips"] {
-            assert!(!shell_fills(id), "{id}");
+        let d = dir("every-tile");
+        let settings = ShellSettings::default();
+        let src = Sources {
+            config_dir: &d,
+            workspace: &d,
+            settings: &settings,
+            caps: crate::capabilities::current(),
+            clock: LocalClock {
+                now_ms: NOW,
+                weekday: 1,
+                hour: 9,
+                minute: 0,
+            },
+            viewer: Viewer::Desktop,
+            conversation_id: None,
+        };
+        for m in REGISTRY.iter().filter(|m| !own_look(m.id)) {
+            let view = crate::home_tiles::view(m.id, &src)
+                .unwrap_or_else(|| panic!("{} has no tile", m.id));
+            assert!(!view.text.caption.is_empty(), "{} says nothing", m.id);
+            if matches!(
+                view.state,
+                TileState::Empty | TileState::Off | TileState::Error
+            ) {
+                assert_eq!(view.buttons.len(), 1, "{} needs one way forward", m.id);
+            }
+            let tile = Tile::View {
+                view: module_view(m.id, &src, NOW),
+            };
+            let json = serde_json::to_value(&tile).unwrap();
+            assert_eq!(json["kind"], "view", "{}", m.id);
+            assert!(json["view"]["updatedMs"].is_u64(), "{}", m.id);
         }
+        let _ = fs::remove_dir_all(&d);
     }
 
     fn outcome(task: &str, result: OutcomeResult, finished_at: u64) -> TaskOutcome {
@@ -846,7 +980,7 @@ mod tests {
             todo("3", "Skip the old way", "cancelled"),
             todo("4", "Restart the service", "in_progress"),
         ];
-        let page = mission_page(&d, Some(("shell-m", "Fix the server", todos)), NOW);
+        let page = mission_page(&d, Some(("shell-m", "Fix the server", todos)), NOW, 0);
         let m = page.mission.expect("a mission");
         assert_eq!(m.title, "Fix the server");
         assert_eq!((m.done, m.total), (2, 3));
@@ -863,17 +997,24 @@ mod tests {
                 MissionCheckStatus::Attempted
             ]
         );
-        // 3 finished tasks × 100 + 2 verified steps × 25 + 2 active days × 10.
+        // 3 finished tasks × 100 + 2 banked steps × 25 + 2 active days × 10.
         assert_eq!(page.xp.xp, 370);
-        assert_eq!(page.xp.level, 1);
-        assert_eq!(page.xp.next_level_xp, 500);
-        assert!((page.xp.frac - 0.74).abs() < 1e-6, "{}", page.xp.frac);
-        // Today: the one task (100) and the day (10).
-        assert_eq!(page.xp.today, 110);
+        // Level 1 takes 200, level 2 takes 250: 170 into level 2.
+        assert_eq!((page.xp.level, page.xp.title), (2, "Rookie"));
+        assert_eq!(page.xp.next_level_xp, 450);
+        assert!((page.xp.frac - 0.68).abs() < 1e-6, "{}", page.xp.frac);
+        // Today: the one task (100), its two steps (50) and the day (10).
+        assert_eq!(page.xp.today, 160);
+        // Day 40 is a Tuesday; the finished tasks three days back were last Saturday.
         assert_eq!(
-            page.xp.streak,
-            [false, false, false, true, false, false, true]
+            page.xp.week.days,
+            [false, true, false, false, false, false, false]
         );
+        assert_eq!(page.xp.week.today, 1);
+        assert_eq!((page.xp.week.active, page.xp.week.target), (1, 2));
+        assert_eq!(page.xp.week.in_a_row, 2);
+        // The steps stay banked when the chat's checklist is gone.
+        assert_eq!(mission_page(&d, None, NOW, 0).xp.xp, 370);
         let _ = fs::remove_dir_all(&d);
     }
 
@@ -881,10 +1022,10 @@ mod tests {
     fn no_checklist_means_no_mission_but_xp_still_counts() {
         let d = dir("empty");
         oc::append_outcome(&d, &outcome("shell-x:1", OutcomeResult::Success, NOW)).unwrap();
-        let page = mission_page(&d, Some(("shell-quiet", "", Vec::new())), NOW);
+        let page = mission_page(&d, Some(("shell-quiet", "", Vec::new())), NOW, 0);
         assert_eq!(page.mission, None);
         assert_eq!(page.xp.xp, 110);
-        assert_eq!(mission_page(&d, None, NOW).xp.xp, 110);
+        assert_eq!(mission_page(&d, None, NOW, 0).xp.xp, 110);
         let _ = fs::remove_dir_all(&d);
     }
 
@@ -897,20 +1038,20 @@ mod tests {
                 todo("2", "Ship it", "completed"),
             ]
         };
-        let before = mission_page(&d, Some(("shell-a", "Ship", todos())), NOW);
+        let before = mission_page(&d, Some(("shell-a", "Ship", todos())), NOW, 0);
         let m = before.mission.expect("mission");
         assert_eq!((m.done, m.total), (0, 2), "completed but not verified yet");
         assert!(m.can_accept && !m.accepted);
         assert_eq!(before.xp.xp, 0);
 
-        set_mission_done(&d, ("shell-a", "Ship", todos()), true, NOW).unwrap();
+        set_mission_done(&d, ("shell-a", "Ship", todos()), true, NOW, 0).unwrap();
         let lines = oc::read_outcome_lines(&d);
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].task, "shell-a");
         assert_eq!(lines[0].result, OutcomeResult::Success);
         assert_eq!(lines[0].reasons, vec![oc::REASON_ACCEPTED.to_string()]);
         assert_eq!(lines[0].signature, oc::topic_signature("Ship"));
-        let after = mission_page(&d, Some(("shell-a", "Ship", todos())), NOW);
+        let after = mission_page(&d, Some(("shell-a", "Ship", todos())), NOW, 0);
         let m = after.mission.expect("mission");
         assert_eq!((m.done, m.total), (2, 2));
         assert_eq!(m.status, "done");
@@ -919,15 +1060,15 @@ mod tests {
         assert_eq!(after.xp.xp, 100 + 50 + 10);
 
         // Accepting twice writes nothing more.
-        set_mission_done(&d, ("shell-a", "Ship", todos()), true, NOW + 1).unwrap();
+        set_mission_done(&d, ("shell-a", "Ship", todos()), true, NOW + 1, 0).unwrap();
         assert_eq!(oc::read_outcome_lines(&d).len(), 1);
 
-        set_mission_done(&d, ("shell-a", "Ship", todos()), false, NOW + 2).unwrap();
+        set_mission_done(&d, ("shell-a", "Ship", todos()), false, NOW + 2, 0).unwrap();
         let lines = oc::read_outcome_lines(&d);
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[1].result, OutcomeResult::Failure);
         assert_eq!(lines[1].reasons, vec![oc::REASON_UNDO.to_string()]);
-        let undone = mission_page(&d, Some(("shell-a", "Ship", todos())), NOW + 2);
+        let undone = mission_page(&d, Some(("shell-a", "Ship", todos())), NOW + 2, 0);
         let m = undone.mission.expect("mission");
         assert_eq!((m.done, m.total), (0, 2));
         assert!(m.can_accept && !m.accepted);
@@ -936,15 +1077,53 @@ mod tests {
     }
 
     #[test]
+    fn a_turn_that_closes_the_checklist_counts_the_task_once() {
+        let d = dir("turn");
+        let open = || {
+            vec![
+                todo("1", "Write it", "completed"),
+                todo("2", "Ship it", "in_progress"),
+            ]
+        };
+        let closed = || {
+            vec![
+                todo("1", "Write it", "completed"),
+                todo("2", "Ship it", "completed"),
+            ]
+        };
+        assert!(!turn_done(&d, ("shell-t", "Ship", open()), NOW, 0));
+        assert!(!turn_done(&d, ("shell-n", "Ship", Vec::new()), NOW, 0));
+        assert!(oc::read_outcome_lines(&d).is_empty());
+
+        assert!(turn_done(&d, ("shell-t", "Ship", closed()), NOW, 0));
+        let lines = oc::read_outcome_lines(&d);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].task, "shell-t");
+        assert_eq!(lines[0].result, OutcomeResult::Pending);
+        assert_eq!(lines[0].signature, oc::topic_signature("Ship"));
+        let page = mission_page(&d, Some(("shell-t", "Ship", closed())), NOW, 0);
+        // One task and one active day; the steps wait for Accept as done.
+        assert_eq!(page.xp.xp, 100 + 10);
+        assert!(page.mission.expect("mission").can_accept);
+
+        // The next turn writes nothing more, and Accept as done pays no second task.
+        assert!(!turn_done(&d, ("shell-t", "Ship", closed()), NOW + 1, 0));
+        set_mission_done(&d, ("shell-t", "Ship", closed()), true, NOW + 2, 0).unwrap();
+        let page = mission_page(&d, Some(("shell-t", "Ship", closed())), NOW + 2, 0);
+        assert_eq!(page.xp.xp, 100 + 50 + 10);
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
     fn accept_refuses_open_steps_and_a_chat_with_no_checklist() {
         let d = dir("refuse");
         let open = vec![todo("1", "Plan", "pending")];
         assert_eq!(
-            set_mission_done(&d, ("shell-o", "T", open), true, NOW),
+            set_mission_done(&d, ("shell-o", "T", open), true, NOW, 0),
             Err(STEPS_OPEN.to_string())
         );
         assert_eq!(
-            set_mission_done(&d, ("shell-n", "T", Vec::new()), true, NOW),
+            set_mission_done(&d, ("shell-n", "T", Vec::new()), true, NOW, 0),
             Err(NO_MISSION.to_string())
         );
         assert!(oc::read_outcome_lines(&d).is_empty());
@@ -997,5 +1176,34 @@ mod tests {
             toggle_for(&src(Viewer::Web(&owns), Some("shell-web")), true, NOW),
             Err(crate::remote::refused())
         );
+    }
+
+    #[test]
+    fn edit_home_saves_the_picked_slots_and_keeps_the_rest() {
+        let d = dir("edit");
+        let cat = catalog(&d);
+        assert_eq!(cat.current, HomeLayout::default().pick());
+        assert_eq!(cat.presets.len(), 3);
+        assert!(cat.modules.iter().all(|m| !m.sizes.is_empty()));
+        assert!(!d.join(HOME_LAYOUT_FILE).exists(), "reading writes nothing");
+
+        let base = HomeLayout {
+            xp_bar: false,
+            ..HomeLayout::default()
+        };
+        fs::write(
+            d.join(HOME_LAYOUT_FILE),
+            serde_json::to_string(&base).unwrap(),
+        )
+        .unwrap();
+        let streamer = cat.presets.iter().find(|p| p.id == "streamer").unwrap();
+        save_pick(&d, &streamer.pick).unwrap();
+        let saved = load_layout(&d);
+        assert_eq!(saved.large, "clips");
+        assert_eq!(saved.preset, "streamer");
+        assert!(!saved.xp_bar);
+        let slots: Vec<String> = visible_slots(&saved).into_iter().map(|(_, m)| m).collect();
+        assert!(slots.contains(&"squad".to_string()), "{slots:?}");
+        let _ = fs::remove_dir_all(&d);
     }
 }

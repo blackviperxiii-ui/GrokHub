@@ -344,6 +344,36 @@ fn paint_confirm_sheet_titled(
 }
 
 impl Cabin {
+    /// Settings → Defaults picks a setting: Don't ask goes behind its one-time
+    /// confirm; the others save at once and take from the next step.
+    pub(super) fn pick_permission_mode(&mut self, mode: PermissionMode) {
+        if mode == self.permission_mode && self.cfg.permission_mode == mode.as_str() {
+            return;
+        }
+        if mode == PermissionMode::AlwaysApprove {
+            self.arm_session_always();
+            return;
+        }
+        self.confirm = None;
+        self.set_permission_mode(mode);
+        self.retake_permission_session();
+        self.status = "Saved".into();
+    }
+
+    /// The engine session reads the permission setting when it starts, so a
+    /// new setting starts a fresh one. Bumping the idle key keeps persist_bg
+    /// from cloning every thread for it.
+    pub(super) fn retake_permission_session(&mut self) {
+        if self.running {
+            self.halt_in_flight();
+        }
+        self.acp = None;
+        if let Some(t) = self.threads.get_mut(self.thread_idx) {
+            t.grok_session = None;
+        }
+        self.persist_idle_key = self.persist_idle_now();
+    }
+
     pub(super) fn paint_confirm_overlay(&mut self, ctx: &egui::Context) {
         let Some(kind) = self.confirm.clone() else {
             return;
@@ -485,14 +515,7 @@ impl Cabin {
     pub(super) fn apply_session_always(&mut self) {
         self.confirm = None;
         self.set_permission_mode(PermissionMode::AlwaysApprove);
-        if self.running {
-            self.halt_in_flight();
-        }
-        self.acp = None;
-        if let Some(t) = self.threads.get_mut(self.thread_idx) {
-            t.grok_session = None;
-        }
-        self.persist_idle_key = self.persist_idle_now();
+        self.retake_permission_session();
         self.status = "Permission always-approve".into();
     }
 
@@ -557,12 +580,6 @@ mod tests {
         assert_eq!(
             ALWAYS_CONFIRM_LINE1.as_str(),
             "Skip every tool prompt until you change it. Loadout only stops for money, sending, deleting your data, credentials and irreversible system changes."
-        );
-        assert!(
-            crate::cards::composer_perm_tip("always-approve").is_some_and(|(_, tip)| tip
-                .contains("money, sending, deleting, credentials and irreversible changes")
-                && tip.contains("Stays until Ask or Auto")
-                && tip.len() < 160)
         );
         assert!(ALWAYS_CONFIRM_LINE2.contains("Night"));
         assert!(ALWAYS_CONFIRM_LINE2.contains("loop"));
@@ -669,7 +686,7 @@ mod tests {
             .and_then(|s| s.split("fn arm_session_always(").next())
             .expect("apply_session_always");
         assert!(
-            apply.contains("halt_in_flight") && apply.contains("self.acp = None"),
+            apply.contains("retake_permission_session"),
             "Confirm still applies Always and then drops the live job: {apply}"
         );
     }

@@ -12,13 +12,15 @@ use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Media::Audio::{
     waveInAddBuffer, waveInClose, waveInOpen, waveInPrepareHeader, waveInReset, waveInStart,
-    waveInStop, waveInUnprepareHeader, PlaySoundW, CALLBACK_NULL, HWAVEIN, SND_FILENAME,
-    SND_NODEFAULT, SND_SYNC, WAVEFORMATEX, WAVEHDR, WAVE_FORMAT_PCM, WAVE_MAPPER, WHDR_DONE,
+    waveInStop, waveInUnprepareHeader, CALLBACK_NULL, HWAVEIN, WAVEFORMATEX, WAVEHDR,
+    WAVE_FORMAT_PCM, WAVE_MAPPER, WHDR_DONE,
 };
 use windows_sys::Win32::Media::Multimedia::mciSendStringW;
 
 pub(crate) const RATE: u32 = 24_000;
 const FRAME: usize = 4800; // 100 ms s16le mono
+/// Queued capture buffers: 800 ms of slack before a busy moment drops audio.
+const BUFS: usize = 8;
 const MMSYSERR_NOERROR: u32 = 0;
 
 fn pcm_fmt() -> WAVEFORMATEX {
@@ -47,9 +49,9 @@ fn empty_hdr() -> WAVEHDR {
 }
 
 struct WaveInInner {
-    bufs: [Vec<u8>; 2],
-    hdrs: [WAVEHDR; 2],
-    prepared: [bool; 2],
+    bufs: [Vec<u8>; BUFS],
+    hdrs: [WAVEHDR; BUFS],
+    prepared: [bool; BUFS],
     next: usize,
 }
 
@@ -70,13 +72,13 @@ impl WaveIn {
         let mut mic = Self {
             handle,
             inner: Box::new(WaveInInner {
-                bufs: [vec![0u8; FRAME], vec![0u8; FRAME]],
-                hdrs: [empty_hdr(), empty_hdr()],
-                prepared: [false, false],
+                bufs: std::array::from_fn(|_| vec![0u8; FRAME]),
+                hdrs: std::array::from_fn(|_| empty_hdr()),
+                prepared: [false; BUFS],
                 next: 0,
             }),
         };
-        for i in 0..2 {
+        for i in 0..BUFS {
             if !mic.queue(i) {
                 return None;
             }
@@ -138,7 +140,7 @@ impl WaveIn {
                 if !self.queue(i) {
                     return None;
                 }
-                self.inner.next = 1 - i;
+                self.inner.next = (i + 1) % BUFS;
                 return Some(pcm);
             }
             if Instant::now() >= deadline {
@@ -155,7 +157,7 @@ impl Drop for WaveIn {
         unsafe {
             let _ = waveInStop(self.handle);
             let _ = waveInReset(self.handle);
-            for i in 0..2 {
+            for i in 0..BUFS {
                 if self.inner.prepared[i] {
                     let _ = waveInUnprepareHeader(
                         self.handle,
@@ -170,7 +172,7 @@ impl Drop for WaveIn {
     }
 }
 
-/// Capture `secs` of 24 kHz s16le mono for push-to-talk.
+/// Capture `secs` of 24 kHz s16le mono (the audio check's clip).
 pub fn record_pcm_secs(secs: u32) -> Result<Vec<u8>, String> {
     let mut mic = WaveIn::start().ok_or_else(|| {
         format!(
@@ -197,87 +199,61 @@ pub fn record_pcm_secs(secs: u32) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-pub fn write_wav_s16le_24k(path: &Path, pcm: &[u8]) -> Result<(), String> {
-    let mut out = Vec::with_capacity(44 + pcm.len());
-    out.extend_from_slice(b"RIFF");
-    out.extend_from_slice(&(36u32 + pcm.len() as u32).to_le_bytes());
-    out.extend_from_slice(b"WAVE");
-    out.extend_from_slice(b"fmt ");
-    out.extend_from_slice(&16u32.to_le_bytes());
-    out.extend_from_slice(&1u16.to_le_bytes());
-    out.extend_from_slice(&1u16.to_le_bytes());
-    out.extend_from_slice(&RATE.to_le_bytes());
-    out.extend_from_slice(&(RATE * 2).to_le_bytes());
-    out.extend_from_slice(&2u16.to_le_bytes());
-    out.extend_from_slice(&16u16.to_le_bytes());
-    out.extend_from_slice(b"data");
-    out.extend_from_slice(&(pcm.len() as u32).to_le_bytes());
-    out.extend_from_slice(pcm);
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
-    std::fs::write(path, out).map_err(|e| e.to_string())
-}
-
-pub fn record_wav(path: &Path, secs: u32) -> Result<(), String> {
-    let pcm = record_pcm_secs(secs)?;
-    write_wav_s16le_24k(path, &pcm)
-}
-
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-pub fn play_file(path: &Path) -> Result<(), String> {
+/// Play a file until it ends or `stop` is set. MCI plays without `wait`
+/// and is polled, so an interruption closes it mid-sentence.
+pub fn play_file_until(path: &Path, stop: &std::sync::atomic::AtomicBool) -> Result<(), String> {
     let dest = path.to_str().ok_or("audio path")?;
-    let bytes = std::fs::read(path).unwrap_or_default();
-    if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WAVE" {
-        let w = wide(dest);
-        let flags = SND_FILENAME | SND_NODEFAULT | SND_SYNC;
-        let ok = unsafe { PlaySoundW(w.as_ptr(), ptr::null_mut(), flags) };
-        if ok != 0 {
-            return Ok(());
+    let alias = format!("grokhubspeak{}", std::process::id());
+    let send = |cmd: &str, out: &mut [u16]| -> u32 {
+        let w = wide(cmd);
+        unsafe {
+            mciSendStringW(
+                w.as_ptr(),
+                if out.is_empty() {
+                    ptr::null_mut()
+                } else {
+                    out.as_mut_ptr()
+                },
+                out.len() as u32,
+                ptr::null_mut(),
+            )
+        }
+    };
+    if send(&format!("open \"{dest}\" alias {alias}"), &mut []) != 0 {
+        return Err("Windows media play failed".into());
+    }
+    if send(&format!("play {alias}"), &mut []) != 0 {
+        send(&format!("close {alias}"), &mut []);
+        return Err("Windows media play failed".into());
+    }
+    let deadline = Instant::now() + Duration::from_secs(600);
+    let mut mode = [0u16; 64];
+    loop {
+        std::thread::sleep(Duration::from_millis(30));
+        if stop.load(std::sync::atomic::Ordering::SeqCst) || Instant::now() >= deadline {
+            break;
+        }
+        mode.fill(0);
+        if send(&format!("status {alias} mode"), &mut mode) != 0 {
+            break;
+        }
+        let end = mode.iter().position(|&c| c == 0).unwrap_or(mode.len());
+        if String::from_utf16_lossy(&mode[..end]) != "playing" {
+            break;
         }
     }
-    let alias = format!("grokhubplay{}", std::process::id());
-    let open = wide(&format!("open \"{dest}\" alias {alias}"));
-    let play = wide(&format!("play {alias} wait"));
-    let close = wide(&format!("close {alias}"));
-    unsafe {
-        let mut err = [0u16; 128];
-        if mciSendStringW(
-            open.as_ptr(),
-            err.as_mut_ptr(),
-            err.len() as u32,
-            ptr::null_mut(),
-        ) != 0
-        {
-            return Err("Windows media play failed (need a microphone-capable audio stack)".into());
-        }
-        let _ = mciSendStringW(play.as_ptr(), ptr::null_mut(), 0, ptr::null_mut());
-        let _ = mciSendStringW(close.as_ptr(), ptr::null_mut(), 0, ptr::null_mut());
-    }
+    send(&format!("stop {alias}"), &mut []);
+    send(&format!("close {alias}"), &mut []);
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn wav_header_is_s16le_24k_mono() {
-        let dir = std::env::temp_dir().join(format!("grokhub-wav-{}", std::process::id()));
-        let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join("t.wav");
-        write_wav_s16le_24k(&path, b"PCM!").unwrap();
-        let b = std::fs::read(&path).unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
-        assert!(b.starts_with(b"RIFF"));
-        assert_eq!(&b[8..12], b"WAVE");
-        assert_eq!(&b[22..24], &1u16.to_le_bytes());
-        assert_eq!(&b[24..28], &24000u32.to_le_bytes());
-        assert_eq!(&b[44..], b"PCM!");
-    }
 
     #[test]
     fn wave_headers_live_on_the_heap() {

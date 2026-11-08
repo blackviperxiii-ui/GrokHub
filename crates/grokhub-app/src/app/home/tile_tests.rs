@@ -4,12 +4,36 @@ use grokhub_agent::route::connectivity::NetState;
 use grokhub_core::game_guard::GameGuard;
 
 use super::live::{summarize_sends, LiveFacts};
-use super::paint::{
-    connection_text, frame_rate_text, game_mode_text, gpu_temp_text, speeds_text, storage_rows,
-    storage_text, updates_text, usage_text, Tone,
-};
+use super::paint::{frame_rate_text, speeds_text};
 use crate::app::budget_ui::WeekSpend;
 use grokhub_agent::indexers::system_state::DiskUse;
+use grokhub_core::home::text::{
+    game_mode_text, gpu_temp_text, storage_rows, storage_text, updates_text,
+};
+use grokhub_core::home::{TileText, Tone};
+
+/// The usage tile as the desktop app calls it, with the real cache floor.
+fn usage_text(
+    used: u64,
+    cap: u64,
+    week: Option<WeekSpend>,
+    week_cap_usd: u32,
+    cache_pct: Option<u8>,
+) -> TileText {
+    grokhub_core::home::text::usage_text(
+        used,
+        cap,
+        week,
+        week_cap_usd,
+        cache_pct,
+        grokhub_agent::cache_watch::FLOOR_PCT,
+    )
+}
+
+/// The Connection tile as the desktop app calls it.
+fn connection_text(net: NetState, local_on: bool, facts: &LiveFacts) -> TileText {
+    grokhub_core::home::text::connection_text(net.link(), local_on, &facts.sends())
+}
 
 #[test]
 fn usage_tile_shows_tokens_against_the_cap_and_week_spend() {
@@ -187,7 +211,10 @@ fn storage_tile_shows_the_fullest_drive_and_lists_the_rest() {
     assert_eq!(t.caption, "Games · 97% used of 2.0 TB");
     assert_eq!(t.detail.as_deref(), Some("2 drives · fullest shown"));
     assert_eq!(t.tone, Tone::Alert);
-    let rows = storage_rows(&drives);
+    let rows: Vec<_> = storage_rows(&drives)
+        .into_iter()
+        .map(|r| (r.label, r.value, r.tone))
+        .collect();
     assert_eq!(
         rows,
         [
@@ -213,7 +240,7 @@ fn storage_tile_shows_the_fullest_drive_and_lists_the_rest() {
 
 #[test]
 fn updates_tile_names_what_is_waiting() {
-    use super::updates::{OsUpdates, UpdateFacts};
+    use grokhub_core::home::text::{OsUpdates, UpdateFacts};
     let none = UpdateFacts {
         os: OsUpdates::NotAllowed,
         steam: vec![],
@@ -330,43 +357,228 @@ fn frame_rate_tile_on_windows_names_the_app_it_counts() {
 }
 
 #[test]
-fn every_home_module_is_live_a_link_or_a_labelled_preview() {
-    use super::paint::{module_kind, LinkTarget, ModuleKind, LIVE_MODULES};
-    use grokhub_core::home::{lookup, DataStatus, REGISTRY};
-    // Every live painter is a real registry module, and none is flagged New:
-    // a painted module must never sit in the picker as "not built".
+fn every_home_module_has_a_painter_or_a_real_tile() {
+    use super::paint::LIVE_MODULES;
+    use super::views::{
+        automations_view, daily_drop_view, decisions_view, journal_view, local_ai_view,
+        personality_view, playbooks_view, recent_chats_view,
+    };
+    use grokhub_core::home::{lookup, tiles, DataStatus, TileState, REGISTRY};
+    // Every painter is a real registry module, and none is flagged New.
     for id in LIVE_MODULES {
         let m = lookup(id).unwrap_or_else(|| panic!("{id} painted but not in the registry"));
         assert_ne!(m.data, DataStatus::New, "{id} is painted but flagged New");
     }
-    let mut previews = Vec::new();
-    for m in REGISTRY {
-        match module_kind(m.id) {
-            ModuleKind::Live => {}
-            ModuleKind::Link { cta, to } => {
-                assert!(cta.starts_with("Open "), "{}: {cta}", m.id);
-                if let LinkTarget::Page(page) = to {
-                    assert!(
-                        ["library", "journal", "automations"].contains(&page),
-                        "{} links to {page}",
-                        m.id
-                    );
-                }
-            }
-            ModuleKind::Preview => previews.push(m.id),
+    // The rest draw from the shared model; with nothing to show, each says
+    // what it will show and gives one way forward. No placeholder is left.
+    let now = 1_800_000_000_000;
+    let empties = [
+        recent_chats_view(&[], now),
+        local_ai_view(false, false, false),
+        local_ai_view(false, true, false),
+        playbooks_view(std::iter::empty(), 0),
+        automations_view(&[], now),
+        journal_view(&[]),
+        daily_drop_view(None),
+        tiles::now_playing_view(&[], now, None),
+        tiles::game_library_view(&[]),
+        tiles::what_to_play_view(&[], now, true, None),
+        tiles::clips_view(&[], now),
+        tiles::session_timer_view(None, None, now),
+    ];
+    for v in &empties {
+        assert!(
+            matches!(v.state, TileState::Empty | TileState::Off),
+            "{:?}",
+            v.text
+        );
+        assert_eq!(v.buttons.len(), 1, "{:?}", v.text);
+        assert!(!v.text.caption.is_empty());
+    }
+    assert_eq!(decisions_view(&[]).text.big, "All clear");
+    assert_eq!(personality_view("").text.caption, "Your companion's voice");
+    let painted = REGISTRY
+        .iter()
+        .filter(|m| !LIVE_MODULES.contains(&m.id))
+        .count();
+    assert_eq!(painted, 23, "every other module goes through views.rs");
+}
+
+#[test]
+fn recent_chats_lead_with_the_latest_and_open_it() {
+    use super::views::recent_chats_view;
+    use grokhub_core::home::TileAction;
+    let mk = |id: &str, title: &str, at: u64| {
+        let mut t = crate::threads::ChatThread::new(title, false);
+        t.id = id.into();
+        t.last_active_ms = at;
+        t.messages = std::sync::Arc::new(vec![("user".into(), "hi".into())]);
+        t
+    };
+    let now = 1_800_000_000_000;
+    let threads = [
+        mk("a", "Old", now - 86_400_000),
+        mk("b", "Fresh", now - 60_000),
+    ];
+    let v = recent_chats_view(&threads, now);
+    assert_eq!(v.text.big, "Fresh");
+    assert_eq!(v.rows.len(), 2);
+    assert_eq!(v.tap, Some(TileAction::OpenChat { id: "b".into() }));
+}
+
+#[test]
+fn home_redraws_at_its_fastest_tile_but_never_faster_than_five_seconds() {
+    use super::page::repaint_every;
+    use std::time::Duration;
+    assert_eq!(
+        repaint_every(["pulse", "storage", "game_mode"]),
+        Some(Duration::from_secs(10))
+    );
+    assert_eq!(repaint_every(["frame_rate"]), Some(Duration::from_secs(5)));
+    assert_eq!(repaint_every(std::iter::empty()), None);
+}
+
+#[test]
+fn feed_tiles_list_only_their_own_live_cards() {
+    use grokhub_core::home::tiles::feed_items;
+    use grokhub_core::update_feed::digest_card;
+    let mut ach = digest_card(
+        "source:steam-achievements:620:48",
+        "Portal 2: 2 to go",
+        "",
+        5,
+    );
+    ach.pulse.source_name = Some(grokhub_core::steam_achievements::SOURCE_NAME.into());
+    ach.citations = vec!["https://steamcommunity.com/app/620/guides/".into()];
+    let mut gone = ach.clone();
+    gone.source_id = "source:steam-achievements:620:47".into();
+    gone.status = grokhub_core::UpdateStatus::Dismissed;
+    let news = digest_card("source:game-companion:570", "Back to Dota 2", "", 6);
+    let cards = [ach, gone, news];
+    let a = feed_items(&cards, "achievements");
+    assert_eq!(a.len(), 1, "a dismissed card stays off Home");
+    assert_eq!(a[0].title, "Portal 2: 2 to go");
+    assert_eq!(feed_items(&cards, "patch_notes")[0].title, "Back to Dota 2");
+    assert!(feed_items(&cards, "deals").is_empty());
+}
+
+#[test]
+fn tonight_lists_only_automations_that_are_on_and_scheduled() {
+    let auto =
+        |name: &str, enabled: bool, next: Option<u64>| -> grokhub_core::automation::Automation {
+            serde_json::from_value(serde_json::json!({
+                "name": name,
+                "schedule": "daily",
+                "time": "20:00",
+                "instructions": "check",
+                "enabled": enabled,
+                "nextRun": next,
+            }))
+            .unwrap()
+        };
+    let due = super::views::tonight_due(&[
+        auto("Raid reminder", true, Some(1_000)),
+        auto("Paused", false, Some(2_000)),
+        auto("Not set", true, None),
+    ]);
+    assert_eq!(due, vec![("Raid reminder".to_string(), 1_000)]);
+}
+
+#[test]
+fn turn_on_switches_a_plain_feature_in_place_and_leaves_the_rest_to_settings() {
+    let root = crate::config::test_config_root("home-turn-on");
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::create_dir_all(&root);
+    let _pin = crate::config::TestConfigDir::set(root.clone());
+    let mut cabin = crate::app::Cabin::quiet_for_test();
+    cabin.cfg.net_log = false;
+    cabin.cfg.game_companion = false;
+    assert!(cabin.turn_on_from_home("net_log"));
+    assert!(cabin.cfg.net_log);
+    assert!(cabin.turn_on_from_home("game_companion"));
+    assert!(cabin.cfg.game_companion);
+    assert!(
+        !cabin.turn_on_from_home("local_ai"),
+        "a model needs its own setup"
+    );
+    assert!(!cabin.turn_on_from_home("steam_wishlist"));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Every module, painted at every size it offers on the Streamer grid (all
+/// seven slots filled) at a wide and a narrow window: each one draws words,
+/// none says "soon", and no line runs out past its tile's sides.
+#[test]
+fn every_module_paints_inside_its_tile_at_every_size() {
+    use crate::app::Cabin;
+    use eframe::egui;
+    use grokhub_core::home::{place_slots, HomeLayout, HomePreset, ModuleSize, REGISTRY};
+
+    let root = crate::config::test_config_root("home-paint");
+    let _ = std::fs::remove_dir_all(&root);
+    let _pin = crate::config::TestConfigDir::set(root.clone());
+    let mut cabin = Cabin::quiet_for_test();
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_on(&ctx);
+    let grid = HomeLayout::preset(HomePreset::Streamer);
+
+    fn texts(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+        match shape {
+            egui::Shape::Text(t) => out.push((t.galley.job.text.clone(), t.visual_bounding_rect())),
+            egui::Shape::Vec(v) => v.iter().for_each(|s| texts(s, out)),
+            _ => {}
         }
     }
-    // The modules the old READY stub covered that do have a home in the app
-    // now open it instead of showing an empty "ready" card.
-    for id in [
-        "local_ai",
-        "personality",
-        "playbooks",
-        "automations",
-        "journal",
-        "game_library",
-    ] {
-        assert!(matches!(module_kind(id), ModuleKind::Link { .. }), "{id}");
+
+    let mut painted = 0;
+    for width in [1600.0, 900.0] {
+        let slots = place_slots((0.0, 0.0, width, 470.0), &grid);
+        for size in [ModuleSize::Large, ModuleSize::Medium, ModuleSize::Small] {
+            let Some(slot) = slots.iter().find(|s| s.size == size) else {
+                continue;
+            };
+            let rect =
+                egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(slot.w, slot.h));
+            for m in REGISTRY.iter().filter(|m| m.supports(size)) {
+                let raw = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width + 40.0, 600.0),
+                    )),
+                    ..Default::default()
+                };
+                let out = crate::theme::test_pass(&ctx, raw, |ui| {
+                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                    child.set_clip_rect(rect);
+                    child.set_min_size(rect.size());
+                    let _ = super::paint::paint_module(&mut cabin, &mut child, m.id, size);
+                });
+                let mut found = Vec::new();
+                out.shapes.iter().for_each(|c| texts(&c.shape, &mut found));
+                let words: Vec<&str> = found
+                    .iter()
+                    .map(|(t, _)| t.as_str())
+                    .filter(|t| t.chars().any(char::is_alphanumeric))
+                    .collect();
+                let at = format!("{} at {} in a {width} window", m.id, size.label());
+                assert!(!words.is_empty(), "{at} drew no words");
+                assert!(
+                    !words.iter().any(|t| *t == "SOON" || *t == "Coming soon"),
+                    "{at} says soon: {words:?}"
+                );
+                for (t, r) in found
+                    .iter()
+                    .filter(|(t, _)| t.chars().any(char::is_alphanumeric))
+                {
+                    assert!(
+                        r.min.x >= rect.min.x - 1.0 && r.max.x <= rect.max.x + 1.0,
+                        "{at}: {t:?} runs out of the tile ({r:?} in {rect:?})"
+                    );
+                }
+                painted += 1;
+            }
+        }
     }
-    assert!(previews.contains(&"deals") && previews.contains(&"now_playing"));
+    assert!(painted > REGISTRY.len(), "{painted}");
+    let _ = std::fs::remove_dir_all(&root);
 }

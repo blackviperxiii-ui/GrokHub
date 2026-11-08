@@ -1,15 +1,19 @@
 //! Paint one Home module at a given size. Missing data → clean "coming soon".
 
-use grokhub_agent::indexers::system_state::DiskUse;
-use grokhub_core::home::{lookup, ModuleSize};
-use grokhub_core::local_profile::Thermal;
+use grokhub_core::home::text::{
+    connection_text, game_mode_text, gpu_temp_text, storage_rows, storage_text, updates_text,
+    usage_text,
+};
+use grokhub_core::home::{
+    fit, lookup, ModuleSize, TileAction, TileState, TileText, TileView, Tone,
+};
 use grokhub_core::mission::MissionView;
 
 use super::super::loadout_home::{
-    caption, header, objective_progress, pc_profile, pc_reading, pc_tile_grid, pc_tile_list,
-    pulse_lines,
+    caption, header, objective_progress, paint_weeks, pc_profile, pc_reading, pc_tile_grid,
+    pc_tile_list, pulse_lines,
 };
-use super::super::mission_page::{paint_streak, up_next, up_next_tile};
+use super::super::mission_page::{goal_summary, paint_streak, up_next, up_next_tile};
 use super::super::*;
 use super::fps::FpsState;
 
@@ -20,6 +24,8 @@ pub(super) enum ModuleAction {
     Nav(&'static str),
     /// Settings, opened on this section (a bare `Nav("settings")` lands on Account).
     Settings(SettingsSec),
+    /// A shared-model tile's button, row or tap.
+    Tile(TileAction),
 }
 
 pub(super) fn paint_module(
@@ -31,7 +37,6 @@ pub(super) fn paint_module(
     let mut actions = Vec::new();
     let entry = lookup(module_id);
     let name = entry.map(|e| e.name).unwrap_or(module_id);
-    let purpose = entry.map(|e| e.purpose).unwrap_or("");
 
     if !entry.map(|e| e.supports(size)).unwrap_or(false) {
         coming_soon_card(ui, name, "This size is not offered");
@@ -52,49 +57,18 @@ pub(super) fn paint_module(
         "speeds" => paint_speeds(cabin, ui, size, &mut actions),
         "frame_rate" => paint_frame_rate(ui, size),
         "workboard" => paint_workboard(cabin, ui, size, name, &mut actions),
-        "recent_chats" => paint_nav_stub(ui, size, name, "Open Chat", "chat", &mut actions),
-        _ => match module_kind(module_id) {
-            ModuleKind::Link { cta, to } => {
-                let note = link_note(cabin, module_id);
-                paint_link_card(
-                    ui,
-                    size,
-                    name,
-                    purpose,
-                    note.as_deref(),
-                    cta,
-                    to,
-                    &mut actions,
-                )
-            }
-            // A module with no tile yet says so plainly: no READY badge
-            // over a card with nothing on it.
-            _ => preview_card(ui, size, name, purpose),
+        _ => match super::views::desktop_view(cabin, module_id) {
+            Some(view) => paint_view(ui, name, &view, size, &mut actions),
+            None => coming_soon_card(ui, name, ""),
         },
     }
     actions
 }
 
-/// What a Home module paints today. `Live` modules draw their own data;
-/// `Link` modules have no tile data yet but their data lives on another page,
-/// so the card says what it is and opens that page; `Preview` modules aren't
-/// built and show a labelled placeholder. The Edit Home picker reads this too,
-/// so it never offers a placeholder as if it were ready.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::app) enum ModuleKind {
-    Live,
-    Link { cta: &'static str, to: LinkTarget },
-    Preview,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::app) enum LinkTarget {
-    Page(&'static str),
-    Settings(SettingsSec),
-}
-
-/// Modules with a painter of their own (the arms of `paint_module`).
-pub(in crate::app) const LIVE_MODULES: [&str; 14] = [
+/// Modules with a painter of their own (the arms of `paint_module`). Every
+/// other catalog module draws from the shared tile model in `views.rs`.
+#[cfg(test)]
+pub(in crate::app) const LIVE_MODULES: [&str; 13] = [
     "objectives",
     "up_next",
     "pulse",
@@ -108,116 +82,99 @@ pub(in crate::app) const LIVE_MODULES: [&str; 14] = [
     "speeds",
     "frame_rate",
     "workboard",
-    "recent_chats",
 ];
 
-pub(in crate::app) fn module_kind(id: &str) -> ModuleKind {
-    if LIVE_MODULES.contains(&id) {
-        return ModuleKind::Live;
-    }
-    let link = |cta, to| ModuleKind::Link { cta, to };
-    match id {
-        "game_library" => link("Open Library", LinkTarget::Page("library")),
-        "journal" => link("Open Journal", LinkTarget::Page("journal")),
-        "automations" => link("Open Automations", LinkTarget::Page("automations")),
-        "personality" => link(
-            "Open Personality",
-            LinkTarget::Settings(SettingsSec::Personality),
-        ),
-        "playbooks" => link(
-            "Open Playbooks",
-            LinkTarget::Settings(SettingsSec::Playbooks),
-        ),
-        "local_ai" => link(
-            "Open model settings",
-            LinkTarget::Settings(SettingsSec::AiModels),
-        ),
-        _ => ModuleKind::Preview,
-    }
-}
-
-/// One live line for a link card when the app already holds it in memory.
-/// Tiles stay light: nothing here reads disk or calls a model.
-fn link_note(cabin: &Cabin, id: &str) -> Option<String> {
-    match id {
-        "journal" => Some(match cabin.journal.len() {
-            0 => "No open questions yet".to_string(),
-            1 => "1 question in the journal".to_string(),
-            n => format!("{n} questions in the journal"),
-        }),
-        _ => None,
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn paint_link_card(
+/// One shared-model tile: the big line and caption, then progress, rows and
+/// buttons as the size fits. A Small tile is one tap: its own, else its first
+/// button's.
+fn paint_view(
     ui: &mut egui::Ui,
-    size: ModuleSize,
     name: &str,
-    purpose: &str,
-    note: Option<&str>,
-    cta: &str,
-    to: LinkTarget,
+    view: &TileView,
+    size: ModuleSize,
     actions: &mut Vec<ModuleAction>,
 ) {
-    let action = match to {
-        LinkTarget::Page(id) => ModuleAction::Nav(id),
-        LinkTarget::Settings(sec) => ModuleAction::Settings(sec),
-    };
+    let room = fit(size);
+    let quiet = matches!(view.state, TileState::Unsupported);
     let resp = card(ui, |ui| {
-        header(ui, false, name, "", crate::theme::fg());
-        if let Some(note) = note {
-            ui.label(
-                RichText::new(note)
-                    .size(crate::theme::TYPE_BODY)
-                    .color(crate::theme::fg()),
-            );
-        }
-        if size != ModuleSize::Small {
-            ui.label(
-                RichText::new(purpose)
-                    .size(crate::theme::TYPE_CAPTION)
-                    .color(crate::theme::muted()),
-            );
-            ui.add_space(6.0);
-            if crate::cards::ghost_pill(ui, cta) {
-                actions.push(action.clone());
-            }
-        } else {
-            // No room for a pill: the card itself is the button, and says so.
-            ui.label(
-                RichText::new(cta)
-                    .size(crate::theme::TYPE_CAPTION)
-                    .color(crate::theme::amber()),
-            );
-        }
-    });
-    if card_clicked(ui, &resp, name, cta) && actions.is_empty() {
-        actions.push(action);
-    }
-}
-
-/// A module that isn't built yet: labelled Preview so nobody reads it as data.
-fn preview_card(ui: &mut egui::Ui, size: ModuleSize, name: &str, purpose: &str) {
-    card(ui, |ui| {
-        header(ui, false, name, "PREVIEW", crate::theme::muted());
-        ui.label(
-            RichText::new(if purpose.is_empty() {
-                "Not built yet"
-            } else {
-                purpose
-            })
-            .size(crate::theme::TYPE_BODY)
-            .color(crate::theme::muted()),
+        header(
+            ui,
+            false,
+            name,
+            view.tag.as_deref().unwrap_or(""),
+            crate::theme::muted(),
         );
+        paint_tile_text(ui, &view.text, size);
         if size != ModuleSize::Small {
-            ui.label(
-                RichText::new("Not built yet: this is a placeholder.")
-                    .size(crate::theme::TYPE_CAPTION)
-                    .color(crate::theme::muted()),
-            );
+            if let Some(pct) = view.progress {
+                ui.add_space(4.0);
+                ui.add(
+                    egui::ProgressBar::new(f32::from(pct) / 100.0)
+                        .desired_height(4.0)
+                        .fill(crate::theme::amber()),
+                );
+            }
+        }
+        if room.rows > 0 && !view.rows.is_empty() {
+            ui.add_space(6.0);
+            for row in view.rows.iter().take(room.rows) {
+                let resp = ui
+                    .horizontal(|ui| {
+                        ui.label(
+                            RichText::new(&row.label)
+                                .size(crate::theme::TYPE_BODY)
+                                .color(crate::theme::fg()),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                RichText::new(&row.value)
+                                    .size(crate::theme::TYPE_CAPTION)
+                                    .color(tone_color(row.tone)),
+                            );
+                        });
+                    })
+                    .response;
+                if let Some(tap) = &row.tap {
+                    if ui
+                        .interact(
+                            resp.rect,
+                            ui.id().with((name, &row.label)),
+                            egui::Sense::click(),
+                        )
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .clicked()
+                    {
+                        actions.push(ModuleAction::Tile(tap.clone()));
+                    }
+                }
+            }
+        }
+        if room.buttons > 0 && !view.buttons.is_empty() {
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                for b in view.buttons.iter().take(room.buttons) {
+                    let pressed = if b.primary {
+                        crate::cards::white_pill(ui, &b.label)
+                    } else {
+                        crate::cards::ghost_pill(ui, &b.label)
+                    };
+                    if pressed {
+                        actions.push(ModuleAction::Tile(b.action.clone()));
+                    }
+                }
+            });
         }
     });
+    let tap = view
+        .tap
+        .clone()
+        .or_else(|| view.buttons.first().map(|b| b.action.clone()));
+    if let (Some(tap), false) = (tap, quiet) {
+        let tip = view.buttons.first().map_or(name, |b| b.label.as_str());
+        if card_clicked(ui, &resp, name, tip) && actions.is_empty() {
+            actions.push(ModuleAction::Tile(tap));
+        }
+    }
 }
 
 /// A module card that fills its slot, so stacked slots read as one packed grid
@@ -236,23 +193,6 @@ fn card_clicked(ui: &mut egui::Ui, resp: &egui::Response, salt: &str, tip: &str)
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .on_hover_text(tip)
         .clicked()
-}
-
-/// Big number, its caption, and an optional second line for one tile.
-#[derive(Debug, Clone, PartialEq)]
-pub(super) struct TileText {
-    pub big: String,
-    pub caption: String,
-    pub detail: Option<String>,
-    pub tone: Tone,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Tone {
-    Normal,
-    Warn,
-    Alert,
-    Quiet,
 }
 
 fn tone_color(t: Tone) -> egui::Color32 {
@@ -288,20 +228,6 @@ fn paint_tile_text(ui: &mut egui::Ui, t: &TileText, size: ModuleSize) {
     }
 }
 
-/// Shown under empty streak tiles so seven grey boxes explain themselves.
-const STREAK_EMPTY: &str = "Finish an objective today to start your streak.";
-
-fn streak_hint(ui: &mut egui::Ui, days: usize) {
-    if days == 0 {
-        ui.add_space(4.0);
-        ui.label(
-            RichText::new(STREAK_EMPTY)
-                .size(crate::theme::TYPE_CAPTION)
-                .color(crate::theme::muted()),
-        );
-    }
-}
-
 fn coming_soon_card(ui: &mut egui::Ui, name: &str, detail: &str) {
     card(ui, |ui| {
         header(ui, false, name, "SOON", crate::theme::muted());
@@ -317,33 +243,6 @@ fn coming_soon_card(ui: &mut egui::Ui, name: &str, detail: &str) {
     });
 }
 
-fn paint_nav_stub(
-    ui: &mut egui::Ui,
-    size: ModuleSize,
-    name: &str,
-    cta: &str,
-    nav: &'static str,
-    actions: &mut Vec<ModuleAction>,
-) {
-    card(ui, |ui| {
-        header(ui, false, name, "", crate::theme::fg());
-        if size != ModuleSize::Small {
-            if crate::cards::ghost_pill(ui, cta) {
-                actions.push(ModuleAction::Nav(nav));
-            }
-        } else if ui
-            .add(
-                egui::Label::new(RichText::new(cta).color(crate::theme::amber()))
-                    .sense(egui::Sense::click()),
-            )
-            .clicked()
-        {
-            actions.push(ModuleAction::Nav(nav));
-        }
-    });
-}
-
-/// Workboard counts from the cards already in memory: no disk, no model.
 fn paint_workboard(
     cabin: &Cabin,
     ui: &mut egui::Ui,
@@ -407,8 +306,7 @@ fn paint_objectives(
     actions: &mut Vec<ModuleAction>,
 ) {
     let mission = cabin.dock_mission(ui.ctx());
-    let now = now_ms();
-    let streak = cabin.mission_streak(ui.ctx(), now);
+    let week = cabin.dock_xp(ui.ctx()).week;
     card(ui, |ui| {
         let items = mission.as_ref().map_or(&[][..], |m| &m.checklist[..]);
         let (done, total) = objective_progress(items);
@@ -447,6 +345,15 @@ fn paint_objectives(
                     actions.push(ModuleAction::Nav("objectives"));
                 }
                 ui.add_space(4.0);
+                // The goal closest to done, over the chat's steps.
+                let goals = cabin.dock_goals(ui.ctx());
+                let top = grokhub_core::objectives::today_picks(&goals, now_ms())
+                    .into_iter()
+                    .find_map(|p| goals.goals.iter().find(|g| g.id == p.id()).cloned());
+                if let Some(g) = top {
+                    goal_summary(ui, &g);
+                    ui.add_space(8.0);
+                }
                 let cap = if size == ModuleSize::Medium {
                     3
                 } else {
@@ -456,22 +363,7 @@ fn paint_objectives(
                 ui.add_space(8.0);
                 ui.separator();
                 ui.add_space(4.0);
-                let days = streak.iter().filter(|d| **d).count();
-                ui.horizontal(|ui| {
-                    ui.label(caption("Weekly streak"));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let unit = if days == 1 { "DAY" } else { "DAYS" };
-                        ui.label(
-                            RichText::new(format!("{days} {unit}"))
-                                .size(crate::theme::TYPE_CAPTION)
-                                .extra_letter_spacing(1.5)
-                                .strong()
-                                .color(crate::theme::amber()),
-                        );
-                    });
-                });
-                paint_streak(ui, &streak);
-                streak_hint(ui, days);
+                paint_weeks(ui, &week);
             }
         }
     });
@@ -611,48 +503,6 @@ fn paint_pulse(
     });
 }
 
-/// The Small PC tile: the main GPU's °C when the OS reports it, else the
-/// PC's thermal reading.
-pub(super) fn gpu_temp_text(temp_c: Option<i32>, thermal: Option<Thermal>) -> TileText {
-    match (temp_c, thermal.unwrap_or(Thermal::Unknown)) {
-        (Some(c), _) => {
-            let (word, tone) = if c >= 85 {
-                ("hot", Tone::Alert)
-            } else if c >= 70 {
-                ("warm", Tone::Warn)
-            } else {
-                ("cool", Tone::Normal)
-            };
-            TileText {
-                big: format!("{c} °C"),
-                caption: format!("Main GPU · {word}"),
-                detail: None,
-                tone,
-            }
-        }
-        (None, Thermal::Unknown) => TileText {
-            big: "—".into(),
-            caption: "No temperature sensor found".into(),
-            detail: None,
-            tone: Tone::Quiet,
-        },
-        (None, th) => {
-            let (word, tone) = match th {
-                Thermal::Fair => ("Warm", Tone::Warn),
-                Thermal::Serious => ("Hot", Tone::Alert),
-                Thermal::Critical => ("Critical", Tone::Alert),
-                _ => ("Cool", Tone::Normal),
-            };
-            TileText {
-                big: word.into(),
-                caption: "PC sensors · no GPU sensor".into(),
-                detail: None,
-                tone,
-            }
-        }
-    }
-}
-
 fn paint_pc_loadout(ui: &mut egui::Ui, size: ModuleSize, actions: &mut Vec<ModuleAction>) {
     let profile = pc_profile();
     super::pc_sheet::show_pc_sheet(ui.ctx(), profile.as_ref());
@@ -707,25 +557,23 @@ fn paint_pc_loadout(ui: &mut egui::Ui, size: ModuleSize, actions: &mut Vec<Modul
 }
 
 fn paint_streak_mod(cabin: &mut Cabin, ui: &mut egui::Ui, size: ModuleSize) {
-    let now = now_ms();
-    let streak = cabin.mission_streak(ui.ctx(), now);
-    let days = streak.iter().filter(|d| **d).count();
+    let week = cabin.dock_xp(ui.ctx()).week;
     card(ui, |ui| {
-        header(ui, false, "Streak", "", crate::theme::amber());
+        header(ui, false, "Weeks in a row", "", crate::theme::amber());
         ui.label(
-            RichText::new(format!("{days}"))
+            RichText::new(week.in_a_row.to_string())
                 .size(crate::theme::TYPE_TITLE)
                 .strong()
                 .color(crate::theme::fg()),
         );
         ui.label(
-            RichText::new(if days == 1 { "DAY" } else { "DAYS" })
+            RichText::new(grokhub_core::xp::week_target_line(&week))
                 .size(crate::theme::TYPE_CAPTION)
                 .color(crate::theme::muted()),
         );
         if size != ModuleSize::Small {
-            paint_streak(ui, &streak);
-            streak_hint(ui, days);
+            ui.add_space(4.0);
+            paint_streak(ui, &week);
         }
     });
 }
@@ -742,6 +590,7 @@ fn paint_usage(
         cabin.harness.router.budget.week,
         cabin.cfg.weekly_spend_cap_usd,
         cabin.harness.router.budget.cache_pct,
+        grokhub_agent::cache_watch::FLOOR_PCT,
     );
     let resp = card(ui, |ui| {
         header(ui, false, "AI usage", "", crate::theme::fg());
@@ -756,121 +605,6 @@ fn paint_usage(
     }
 }
 
-/// Today's tokens against the daily cap, plus this week's spend and the last
-/// day's Grok cache share when known. A share under the cache floor is flagged.
-pub(super) fn usage_text(
-    used: u64,
-    cap: u64,
-    week: Option<crate::app::budget_ui::WeekSpend>,
-    week_cap_usd: u32,
-    cache_pct: Option<u8>,
-) -> TileText {
-    use grokhub_core::{budget_level, compact_tokens, BudgetLevel};
-    let caption = if cap == 0 {
-        "Tokens today · no daily cap".to_string()
-    } else {
-        let pct = used.saturating_mul(100) / cap.max(1);
-        format!("Tokens today · {pct}% of {}", compact_tokens(cap))
-    };
-    let tone = match budget_level(used, cap) {
-        Some(BudgetLevel::Over) => Tone::Alert,
-        Some(BudgetLevel::Near) => Tone::Warn,
-        _ if used == 0 => Tone::Quiet,
-        _ => Tone::Normal,
-    };
-    let spend = week.filter(|w| w.usd > 0.0 || w.pct.is_some()).map(|w| {
-        if week_cap_usd > 0 {
-            format!("${:.2} of ${week_cap_usd} this week", w.usd)
-        } else {
-            format!("${:.2} this week", w.usd)
-        }
-    });
-    let cache = cache_pct.map(|pct| {
-        if pct < grokhub_agent::cache_watch::FLOOR_PCT {
-            format!("cache {pct}% (low)")
-        } else {
-            format!("cache {pct}%")
-        }
-    });
-    let detail = match (spend, cache) {
-        (Some(s), Some(c)) => Some(format!("{s} · {c}")),
-        (s, c) => s.or(c),
-    };
-    TileText {
-        big: compact_tokens(used),
-        caption,
-        detail,
-        tone,
-    }
-}
-
-fn gb_bytes(bytes: u64) -> String {
-    let gb = bytes as f64 / 1_000_000_000.0;
-    if gb >= 1_000.0 {
-        format!("{:.1} TB", gb / 1_000.0)
-    } else {
-        format!("{gb:.0} GB")
-    }
-}
-
-fn free_tone(d: &DiskUse) -> Tone {
-    let pct_free = (d.free * 100).checked_div(d.total).unwrap_or(100);
-    if pct_free < 5 {
-        Tone::Alert
-    } else if pct_free < 15 {
-        Tone::Warn
-    } else {
-        Tone::Normal
-    }
-}
-
-/// One line per drive, fullest first: label, "120 GB free of 1.0 TB", tone.
-pub(super) fn storage_rows(drives: &[DiskUse]) -> Vec<(String, String, Tone)> {
-    let mut ds: Vec<&DiskUse> = drives.iter().filter(|d| d.total > 0).collect();
-    ds.sort_by_key(|d| (d.free * 1_000).checked_div(d.total).unwrap_or(1_000));
-    ds.iter()
-        .map(|d| {
-            (
-                d.label.clone(),
-                format!("{} free of {}", gb_bytes(d.free), gb_bytes(d.total)),
-                free_tone(d),
-            )
-        })
-        .collect()
-}
-
-/// The Small tile: the fullest drive, or the profile's free space before the first read.
-pub(super) fn storage_text(drives: &[DiskUse], fallback_free_mb: Option<u64>) -> TileText {
-    let fullest = drives
-        .iter()
-        .filter(|d| d.total > 0)
-        .min_by_key(|d| (d.free * 1_000).checked_div(d.total).unwrap_or(1_000));
-    match (fullest, fallback_free_mb) {
-        (Some(d), _) => {
-            let used = 100 - (d.free * 100).checked_div(d.total).unwrap_or(100);
-            let n = drives.iter().filter(|d| d.total > 0).count();
-            TileText {
-                big: format!("{} free", gb_bytes(d.free)),
-                caption: format!("{} · {used}% used of {}", d.label, gb_bytes(d.total)),
-                detail: (n > 1).then(|| format!("{n} drives · fullest shown")),
-                tone: free_tone(d),
-            }
-        }
-        (None, Some(mb)) if mb > 0 => TileText {
-            big: format!("{} free", gb_bytes(mb * 1_048_576)),
-            caption: "Home drive".into(),
-            detail: None,
-            tone: Tone::Normal,
-        },
-        _ => TileText {
-            big: "—".into(),
-            caption: "Reading drives…".into(),
-            detail: None,
-            tone: Tone::Quiet,
-        },
-    }
-}
-
 fn paint_storage(ui: &mut egui::Ui, size: ModuleSize, actions: &mut Vec<ModuleAction>) {
     let facts = super::live::live_facts();
     let fallback = pc_profile().map(|p| p.free_disk_mb);
@@ -881,19 +615,19 @@ fn paint_storage(ui: &mut egui::Ui, size: ModuleSize, actions: &mut Vec<ModuleAc
             paint_tile_text(ui, &storage_text(&facts.drives, fallback), size);
         } else {
             let cap = if size == ModuleSize::Medium { 3 } else { 6 };
-            for (label, value, tone) in rows.iter().take(cap) {
+            for row in rows.iter().take(cap) {
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new(label)
+                        RichText::new(&row.label)
                             .size(crate::theme::TYPE_CAPTION)
                             .color(crate::theme::muted()),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
-                            RichText::new(value)
+                            RichText::new(&row.value)
                                 .size(crate::theme::TYPE_BODY)
                                 .strong()
-                                .color(tone_color(*tone)),
+                                .color(tone_color(row.tone)),
                         );
                     });
                 });
@@ -908,60 +642,6 @@ fn paint_storage(ui: &mut egui::Ui, size: ModuleSize, actions: &mut Vec<ModuleAc
             ));
         }
     });
-}
-
-/// The Updates & Drivers tile in words: Loadout first, then games, the OS
-/// and the GPU driver.
-pub(super) fn updates_text(
-    loadout_update: bool,
-    f: &super::updates::UpdateFacts,
-    gpu_driver: Option<&str>,
-) -> TileText {
-    use super::updates::OsUpdates;
-    let mut waiting = Vec::new();
-    if loadout_update {
-        waiting.push("Loadout".to_string());
-    }
-    match f.steam.len() {
-        0 => {}
-        1 => waiting.push(f.steam[0].clone()),
-        n => waiting.push(format!("{n} Steam games")),
-    }
-    if let OsUpdates::Pending(n) = f.os {
-        if n > 0 {
-            waiting.push(format!(
-                "{n} system package{}",
-                if n == 1 { "" } else { "s" }
-            ));
-        }
-    }
-    let big = match waiting.len() {
-        0 => "Up to date".to_string(),
-        n => format!("{n} waiting"),
-    };
-    let caption = if waiting.is_empty() {
-        match f.os {
-            OsUpdates::NotAllowed => "Loadout and Steam checked · system checks off".into(),
-            OsUpdates::Unknown | OsUpdates::NoChecker => "Loadout and Steam checked".into(),
-            OsUpdates::Pending(_) => "Loadout, Steam and system checked".into(),
-        }
-    } else {
-        waiting.join(" · ")
-    };
-    let detail = gpu_driver
-        .map(str::trim)
-        .filter(|d| !d.is_empty())
-        .map(|d| format!("GPU driver {d}"));
-    TileText {
-        big,
-        caption,
-        detail,
-        tone: if loadout_update || !f.steam.is_empty() {
-            Tone::Warn
-        } else {
-            Tone::Normal
-        },
-    }
 }
 
 fn paint_updates(
@@ -1090,65 +770,14 @@ pub(super) fn frame_rate_text(
     presenter: Option<&str>,
 ) -> TileText {
     use grokhub_agent::indexers::display_fps::FpsBlock;
-    let Some(state) = reading else {
-        return TileText {
-            big: "Not read".into(),
-            caption: "Loadout never hooks into games".into(),
-            detail: Some("Xbox Game Bar (Win+G) or Steam's in-game counter show FPS safely".into()),
-            tone: Tone::Quiet,
-        };
-    };
-    match state {
-        FpsState::Rate(r) if windows => TileText {
-            big: format!("{} FPS", r.round() as u32),
-            caption: match presenter {
-                Some(p) => format!("From {}", p.strip_suffix(".exe").unwrap_or(p)),
-                None => "Nothing is drawing frames".into(),
-            },
-            detail: Some("Counted by Windows, never inside the game".into()),
-            tone: if presenter.is_some() {
-                Tone::Normal
-            } else {
-                Tone::Quiet
-            },
-        },
-        FpsState::Rate(r) => TileText {
-            big: format!("{} FPS", r.round() as u32),
-            caption: "Frames on screen".into(),
-            detail: Some("Counted by the kernel, never inside the game".into()),
-            tone: Tone::Normal,
-        },
-        FpsState::Starting => TileText {
-            big: "...".into(),
-            caption: "Counting frames on screen".into(),
-            detail: None,
-            tone: Tone::Quiet,
-        },
-        FpsState::Blocked(FpsBlock::NeedsPermission) if windows => TileText {
-            big: "Not read".into(),
-            caption: "Needs a one-time admin setup".into(),
-            detail: Some("Copy setup, read it, run it in an admin PowerShell".into()),
-            tone: Tone::Warn,
-        },
-        FpsState::Blocked(FpsBlock::NeedsPermission) => TileText {
-            big: "Not read".into(),
-            caption: "Needs a sudo setup first".into(),
-            detail: Some("Copy setup, read it, run it in a terminal".into()),
-            tone: Tone::Warn,
-        },
-        FpsState::Blocked(_) if windows => TileText {
-            big: "Not read".into(),
-            caption: "Windows didn't start the frame trace".into(),
-            detail: Some("Xbox Game Bar (Win+G) or Steam's counter show FPS safely".into()),
-            tone: Tone::Quiet,
-        },
-        FpsState::Blocked(_) => TileText {
-            big: "Not read".into(),
-            caption: "This driver doesn't report screen frames".into(),
-            detail: Some("Steam's in-game FPS counter shows it safely".into()),
-            tone: Tone::Quiet,
-        },
-    }
+    use grokhub_core::home::text::FpsRead;
+    let read = reading.map(|state| match state {
+        FpsState::Starting => FpsRead::Starting,
+        FpsState::Rate(r) => FpsRead::Rate(r),
+        FpsState::Blocked(FpsBlock::NeedsPermission) => FpsRead::NeedsSetup,
+        FpsState::Blocked(_) => FpsRead::NoTrace,
+    });
+    grokhub_core::home::text::frame_rate_text(read, windows, presenter)
 }
 
 /// The Windows account the setup adds to Performance Log Users.
@@ -1248,39 +877,12 @@ fn paint_game_mode(
     }
 }
 
-/// What the game guard sees, in words. Never reads game data itself.
-pub(super) fn game_mode_text(
-    guard: grokhub_core::game_guard::GameGuard,
-    game: Option<&str>,
-    local_paused: bool,
-) -> TileText {
-    let playing = guard.gaming || guard.anticheat.is_some();
-    let big = match (playing, game) {
-        (true, Some(name)) => name.to_string(),
-        (true, None) => "Game running".to_string(),
-        (false, _) => "No game running".to_string(),
-    };
-    let caption = match (guard.anticheat, guard.idle_anticheat) {
-        (Some(ac), _) => format!("{ac} active · Loadout stays hands-off"),
-        (None, Some(ac)) => format!("{ac} installed · idle"),
-        (None, None) if playing => "Desktop control paused while you play".to_string(),
-        (None, None) => "Watching for games by process name only".to_string(),
-    };
-    let detail = local_paused.then(|| "Local AI paused to keep the GPU free".to_string());
-    TileText {
-        big,
-        caption,
-        detail,
-        tone: if playing { Tone::Warn } else { Tone::Quiet },
-    }
-}
-
 fn paint_connection(ui: &mut egui::Ui, size: ModuleSize, actions: &mut Vec<ModuleAction>) {
     let facts = super::live::live_facts();
     let t = connection_text(
-        grokhub_agent::route::connectivity::state(),
+        grokhub_agent::route::connectivity::state().link(),
         grokhub_agent::route::local::switched_on(),
-        &facts,
+        &facts.sends(),
     );
     let resp = card(ui, |ui| {
         header(ui, false, "Connection", "", crate::theme::fg());
@@ -1291,45 +893,5 @@ fn paint_connection(ui: &mut egui::Ui, size: ModuleSize, actions: &mut Vec<Modul
     });
     if card_clicked(ui, &resp, "home-connection", "What left this PC") {
         actions.push(ModuleAction::Settings(SettingsSec::Privacy));
-    }
-}
-
-/// Online state, local model, and how many sends left this PC in a day.
-/// The log counts sends, not bytes, so the tile says sends.
-pub(super) fn connection_text(
-    net: grokhub_agent::route::connectivity::NetState,
-    local_on: bool,
-    facts: &super::live::LiveFacts,
-) -> TileText {
-    use grokhub_agent::route::connectivity::NetState;
-    let net_word = match net {
-        NetState::Online => "Online",
-        NetState::Degraded => "Spotty",
-        NetState::Offline => "Offline",
-    };
-    let local = match (local_on, facts.local_ready) {
-        (true, true) => "local AI ready",
-        (true, false) => "local AI not ready",
-        (false, _) => "local AI off",
-    };
-    let big = match facts.sends_24h {
-        Some(1) => "1 send".to_string(),
-        Some(n) => format!("{n} sends"),
-        None => "—".to_string(),
-    };
-    let detail = facts
-        .top_dest
-        .as_ref()
-        .filter(|_| facts.sends_24h.unwrap_or(0) > 0)
-        .map(|d| format!("Mostly to {d} · last 24 h"));
-    TileText {
-        big,
-        caption: format!("{net_word} · {local}"),
-        detail,
-        tone: match net {
-            NetState::Online => Tone::Normal,
-            NetState::Degraded => Tone::Warn,
-            NetState::Offline => Tone::Alert,
-        },
     }
 }

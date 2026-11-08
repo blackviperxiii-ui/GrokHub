@@ -322,27 +322,28 @@ fn settings_defaults_section() {
         "SettingsSec::Defaults => {",
         "if let Some(s) = next_sec",
     );
-    for label in ["ROW_PERMISSION", "ROW_SESSION", "ROW_COLLAPSE"] {
+    for label in ["ROW_PERMISSION", "ROW_COLLAPSE"] {
         assert!(defaults.contains(label), "missing {label}: {defaults}");
     }
-    // Permission and Session mode; the model rows live on AI models.
-    assert_eq!(defaults.matches("settings_dropdown").count(), 2);
+    assert!(!defaults.contains(["ROW_", "SESSION"].concat().as_str()));
+    // Permission only; the model rows live on AI models.
+    assert_eq!(defaults.matches("settings_dropdown").count(), 1);
     assert!(defaults.contains("settings_toggle"));
     assert!(
         !defaults.contains("effort"),
         "R1: no effort row: {defaults}"
     );
-    assert!(defaults.contains("set_permission_mode"));
-    assert!(defaults.contains("set_session_mode"));
+    assert!(defaults.contains("pick_permission_mode"));
+    assert!(!defaults.contains("set_session_mode"));
     assert!(defaults.contains("always_collapse_thoughts"));
     assert!(defaults.contains("persist_cfg"));
     assert!(!defaults.contains("always-approve"));
     assert!(!defaults.contains("grok_tile"));
     assert!(!defaults.contains("quick_chip_row"));
-    let cards = include_str!("../cards.rs");
+    let settings_src = include_str!("settings.rs");
     assert!(
-        cards.contains("pub fn session_row(") && cards.contains("(\"always-approve\", \"Always\")"),
-        "composer pills stay the live session controls, including Always"
+        settings_src.contains("(\"always-approve\", \"Don't ask\")"),
+        "Settings is the one permission control, including Always"
     );
 }
 
@@ -370,6 +371,7 @@ fn ai_models_holds_every_model_setting_once() {
         "self.ui_provider_rows(ui)",
         "paint_offline_row(ui)",
         "self.ui_local_model_rows(ui)",
+        "self.ui_download_models(ui)",
         "local_notes(",
         "self.ui_spend_rows(ui)",
         "\"Daily token budget\"",
@@ -476,8 +478,8 @@ fn settings_permissions_editor_lists_rules_and_grants() {
         "SettingsSec::Defaults => {",
         "if let Some(s) = next_sec",
     );
-    // Permission and Session mode. R1 removed the effort dropdown.
-    assert_eq!(defaults.matches("settings_dropdown").count(), 2);
+    // Permission only. R1 removed the effort dropdown; session mode is gone.
+    assert_eq!(defaults.matches("settings_dropdown").count(), 1);
 }
 
 // Landed from PR #95.
@@ -1134,7 +1136,7 @@ fn labs_beta_channel_toggle_is_wired() {
         diag.contains("Diagnostics mode")
             && diag.contains("save_chat_diagnostics")
             && diag.contains("loadout-diagnostics"),
-        "Labs Diagnostics UI must wire the mode toggle and Desktop zip export"
+        "Labs Diagnostics UI must wire the mode toggle and zip export"
     );
     let app = include_str!("mod.rs");
     assert!(

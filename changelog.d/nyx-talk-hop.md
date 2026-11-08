@@ -1,0 +1,1 @@
+- Desktop Nyx: while she speaks a reply she now hops gently with her voice on every outfit (smoothed so she doesn't jitter, off with reduced motion), and the window keeps painting while she talks so mouth patches move even with motion reduced.

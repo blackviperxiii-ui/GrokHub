@@ -7,6 +7,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::gate::{self, Decision, Gate, PermAnswer, PermitWait, Waited};
+use crate::harness::safety_events;
 use crate::tasks::TaskHub;
 use crate::tools::{self, DesktopOps, ToolCtx, ToolOutput, ToolSet};
 use crate::{
@@ -100,8 +101,11 @@ fn bound_job_tool_set(session: &str) -> Option<ToolSet> {
     None
 }
 
-const REPEAT_LIMIT: u32 = 3;
-/// What a call repeated [`REPEAT_LIMIT`] times gets back instead of running.
+/// How many times the same call (name and arguments) may run before the next
+/// one is refused. Refused calls don't count, and a successful edit starts the
+/// count over, so "edit, test, edit, test, edit, test" keeps going.
+const REPEAT_LIMIT: u32 = 2;
+/// What a call that already ran [`REPEAT_LIMIT`] times gets back instead of running.
 pub const REPEAT_REPLAN: &str = "not run: the same call already ran twice. Stop repeating it. \
 Re-read the goal, say in one line what you tried, then pick a different approach \
 (another tool, another route or a smaller sub-step) and go on.";
@@ -124,16 +128,59 @@ pub const TRUNCATED_STREAK_LIMIT: u32 = 3;
 /// pauses for the user. Each request resends the whole context, so a run that
 /// loops burns this fast; a "continue" starts a fresh budget.
 pub const RUN_INPUT_TOKEN_BUDGET: u64 = 1_000_000;
+/// The same for a subagent, halved again for each level below it. A child
+/// works one task, so it stops sooner and hands back what it found.
+pub const CHILD_RUN_INPUT_TOKEN_BUDGET: u64 = 400_000;
+
+/// Input tokens this run may send before it stops: a bounded root run (a
+/// script, a scheduled job) keeps its own turn limit instead.
+pub fn run_token_budget(max_turns: u32, depth: u32) -> Option<u64> {
+    match depth {
+        0 if max_turns == 0 => Some(RUN_INPUT_TOKEN_BUDGET),
+        0 => None,
+        d => Some(CHILD_RUN_INPUT_TOKEN_BUDGET >> (d - 1).min(8)),
+    }
+}
+
+/// HTTP 400 or 422: the provider refused what was sent, which a bad tool
+/// schema can cause.
+fn refused_over_a_schema(err: &ClientError) -> bool {
+    matches!(err, ClientError::Protocol(m) if m.starts_with("HTTP 400") || m.starts_with("HTTP 422"))
+}
+
+/// Replies in a row whose tool-call arguments don't parse that the model gets
+/// to try again before the run stops. Each one sees the parse error.
+pub const BAD_ARGS_RETRIES: u32 = 2;
+/// What each call of the reply that runs out of retries gets back.
+pub const BAD_ARGS_TOOL: &str =
+    "not run: three replies in a row sent tool arguments that were not a JSON object";
+const BAD_ARGS_STOP: &str = "I stopped here: my tool calls kept coming out garbled. \
+Say continue and I'll try again.";
 
 const TRUNCATED_STOP: &str = "I stopped here: my last three replies were cut off at the output \
 limit before they finished. Say continue and I'll go on in smaller steps.";
 
-fn budget_pause(sent: u64) -> String {
+fn budget_pause(sent: u64, depth: u32) -> String {
+    if depth > 0 {
+        return format!(
+            "I stopped here: this subagent has sent about {}k tokens to the model, \
+             its share for one task. What I found so far is above.",
+            sent / 1000
+        );
+    }
     format!(
         "I paused here: this run has sent about {}k tokens to the model so far. \
          Say continue and I'll pick it up where I stopped.",
         sent / 1000
     )
+}
+
+/// The request lets the model start a subagent, which may fork from it.
+fn offers_spawn(tools: &[serde_json::Value]) -> bool {
+    tools.iter().any(|tool| {
+        tool.get("name").and_then(|n| n.as_str()) == Some("spawn_subagent")
+            || tool.pointer("/function/name").and_then(|n| n.as_str()) == Some("spawn_subagent")
+    })
 }
 
 /// Tokens one request asks the model to read: its input plus the tool schemas.
@@ -298,16 +345,54 @@ fn finish(
     }
 }
 
+/// Chats that have carried recalled memory lines. Kept small: the least
+/// recently used chat goes first, so the open one keeps its mark.
+const MAX_RECALLED_CHATS: usize = 256;
+
+fn recalled_chats() -> std::sync::MutexGuard<'static, crate::lru_map::LruMap<()>> {
+    static RECALLED: std::sync::Mutex<crate::lru_map::LruMap<()>> =
+        std::sync::Mutex::new(crate::lru_map::LruMap::new(MAX_RECALLED_CHATS));
+    RECALLED.lock().unwrap_or_else(|err| err.into_inner())
+}
+
+/// Whether this step may carry xAI's hosted search. `recalled` sticks for the
+/// chat: once it has seen recalled memory lines, hosted search stays off for
+/// the rest of that chat, even after a compaction folds the lines away or a
+/// later turn recalls nothing. So the tool list flips at most once per chat,
+/// and only toward the safe side. An empty `chat` sticks for this run only.
+fn hosted_for_step(
+    gate: &Gate,
+    workspace: &Path,
+    history: &[InputItem],
+    chat: &str,
+    recalled: &mut bool,
+) -> bool {
+    if !*recalled {
+        *recalled = !crate::memory::recall_lines(history).is_empty()
+            || (!chat.is_empty() && recalled_chats().get(chat).is_some());
+    }
+    if *recalled && !chat.is_empty() {
+        recalled_chats().insert(chat, ());
+    }
+    crate::perm::hosted_search_allowed(gate, &crate::perm::Policy::load(workspace).rules, *recalled)
+}
+
 enum CompactPass {
-    Ok,
+    /// `background`: the result came from a background compaction.
+    Ok {
+        background: bool,
+    },
     Cancelled,
     Failed,
 }
 
+/// `last_tools` is the tool list of the chat's last request, so a summary
+/// compaction sends the same prefix and reuses its cache.
 fn run_compact_pass(
     input: &LoopIn<'_>,
     history: &mut Vec<InputItem>,
     modified_paths: &[String],
+    last_tools: &[serde_json::Value],
     usage: &mut Usage,
     on_event: &mut dyn FnMut(LoopEvent),
 ) -> CompactPass {
@@ -318,16 +403,48 @@ fn run_compact_pass(
         server: None,
     });
     crate::hooks::on_compact(input.conversation_id, input.workspace, true);
-    let compact_result = crate::compact::compact_after_flush(
-        input.workspace,
-        input.client,
-        input.cancel,
-        input.model,
-        input.effort,
-        input.conversation_id,
-        history,
-        modified_paths,
-    );
+    let key = crate::prefix_guard::run_key(input.conversation_id, input.depth, input.agent_id);
+    // A compaction already made in the background is used first, waiting for
+    // it if it is still running; it falls through when it failed or no
+    // longer fits the history.
+    let background = if crate::compact::bg::has(&key) {
+        if input.depth == 0 {
+            let _ = crate::memory::flush_pending(input.workspace, history);
+        }
+        crate::compact::bg::take(&key, history)
+    } else {
+        None
+    };
+    let from_background = background.is_some();
+    // Only the chat writes its session log to memory: a subagent's history
+    // is one task, and a fork's starts with the chat's own.
+    let compact_result = if let Some((rebuilt, done)) = background {
+        *history = rebuilt;
+        Ok(done)
+    } else if input.depth == 0 {
+        crate::compact::compact_after_flush(
+            input.workspace,
+            input.client,
+            input.cancel,
+            input.model,
+            input.effort,
+            input.conversation_id,
+            history,
+            modified_paths,
+            last_tools,
+        )
+    } else {
+        crate::compact::compact_transcript(
+            input.client,
+            input.cancel,
+            input.model,
+            input.effort,
+            input.conversation_id,
+            history,
+            modified_paths,
+            last_tools,
+        )
+    };
     crate::hooks::on_compact(input.conversation_id, input.workspace, false);
     match compact_result {
         Ok(done) => {
@@ -336,6 +453,8 @@ fn run_compact_pass(
                 input.depth,
                 input.agent_id,
             ));
+            // Item 34: a compaction is a boundary where the route may move.
+            crate::route::boundary::note_compaction(input.conversation_id);
             usage.add(&done.usage);
             on_event(LoopEvent::Compact {
                 started: false,
@@ -344,7 +463,9 @@ fn run_compact_pass(
                 server: done.server,
             });
             emit_usage(on_event, usage, history, input.context_length);
-            CompactPass::Ok
+            CompactPass::Ok {
+                background: from_background,
+            }
         }
         Err(crate::compact::CompactError::Cancelled) => {
             on_event(LoopEvent::Compact {
@@ -374,7 +495,33 @@ pub fn run_loop(
     image: Option<&str>,
     on_event: &mut dyn FnMut(LoopEvent),
 ) -> LoopOut {
+    // Every way out of a turn (Stop, Halt, a denied step, an error) can leave
+    // calls of the last batch unanswered. Pair them on the way in, for chats
+    // saved like that, and on the way out, so no provider ever sees a call
+    // without its output.
+    crate::client::pair_orphan_calls(history);
+    // Failover PR 7: a new run starts with a clean hand-off chain.
+    crate::route::handoff::begin(input.conversation_id);
+    let out = run_turn(input, history, user_text, image, on_event);
+    crate::client::pair_orphan_calls(history);
+    out
+}
+
+fn run_turn(
+    input: &LoopIn<'_>,
+    history: &mut Vec<InputItem>,
+    user_text: &str,
+    image: Option<&str>,
+    on_event: &mut dyn FnMut(LoopEvent),
+) -> LoopOut {
     let first_turn = history.is_empty();
+    // A fork starts with its chat's history. Its budget counts what it adds
+    // on top, until a compaction turns that history into its own.
+    let mut inherited_tokens = if input.depth > 0 {
+        crate::compact::estimate_input_tokens(history)
+    } else {
+        0
+    };
     // Brain 5: the turn's talk style sits in the system prompt's volatile tail.
     let style = (input.depth == 0)
         .then(|| crate::checkpoint::turn_style(input.conversation_id))
@@ -413,77 +560,41 @@ pub fn run_loop(
         })
         .filter(|block| !block.is_empty());
     tools::begin_deferred_turn(input.conversation_id);
-    if crate::prefix_cache::enabled(&config_dir) {
-        if first_turn {
-            crate::prefix_cache::push_stable_system(history, input.system);
-        }
-        let already = crate::memory::injected_lines(history);
-        let volatile_intentions = match (intention_block.clone(), plan_skill_block.clone()) {
-            (Some(a), Some(b)) => Some(format!("{a}\n\n{b}")),
-            (Some(a), None) => Some(a),
-            (None, Some(b)) => Some(b),
-            (None, None) => None,
-        };
-        let volatile = crate::prefix_cache::TurnVolatile::assemble(
-            input.workspace,
-            user_text,
-            first_turn,
-            style,
-            soft_caps,
-            playbook.as_deref(),
-            &already,
-            volatile_intentions,
-        );
-        crate::prefix_cache::push_user_turn(history, &volatile, user_text, image);
-        if crate::prefix_cache::settings(&config_dir).old_notes
-            == crate::prefix_cache::OldNotes::EveryTurn
-        {
-            crate::prefix_cache::drop_older_notes(history);
-        }
-    } else {
-        if first_turn {
-            let base = style.map(|s| grokhub_core::talk::restyle_caps(input.system, s, soft_caps));
-            let base = base.as_deref().unwrap_or(input.system);
-            let base = match &playbook {
-                Some(block) => grokhub_core::playbook::with_playbook(base, Some(block)),
-                None => base.to_string(),
-            };
-            let system = match crate::memory::first_turn_injection(input.workspace, user_text) {
-                Some(block) if base.trim().is_empty() => block,
-                Some(block) => format!("{base}\n\n{block}"),
-                None => base.to_string(),
-            };
-            if !system.trim().is_empty() {
-                history.push(InputItem::Message {
-                    role: "system".into(),
-                    content: vec![ContentPart::InputText(system)],
-                });
-            }
-        } else {
-            if let Some(style) = style {
-                restyle_history(history, style, soft_caps);
-            }
-            if input.depth == 0 {
-                replaybook_history(history, playbook.as_deref());
-            }
-            // Later turns add recall only for lines this history has not seen.
-            let already = crate::memory::injected_lines(history);
-            if let Some(block) =
-                crate::memory::followup_injection(input.workspace, user_text, &already)
-            {
-                history.push(InputItem::Message {
-                    role: "system".into(),
-                    content: vec![ContentPart::InputText(block)],
-                });
-            }
-        }
-        if let Some(block) = intention_block {
-            push_intention_block(history, &block);
-        }
-        if let Some(block) = plan_skill_block.as_deref() {
-            push_intention_block(history, block);
-        }
-        history.push(user_message(user_text, image));
+    if input.depth == 0 && !input.conversation_id.is_empty() {
+        tools::start_workspace_session(input.conversation_id, input.workspace);
+    }
+    if first_turn {
+        crate::prefix_cache::push_stable_system(history, input.system);
+    }
+    let already = crate::memory::injected_lines(history);
+    let volatile_intentions = match (intention_block, plan_skill_block) {
+        (Some(a), Some(b)) => Some(format!("{a}\n\n{b}")),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    };
+    let volatile = crate::prefix_cache::TurnVolatile::assemble(
+        input.workspace,
+        user_text,
+        first_turn,
+        style,
+        soft_caps,
+        playbook.as_deref(),
+        &already,
+        volatile_intentions,
+    )
+    .with_voice(
+        (input.depth == 0)
+            .then(|| crate::voice_session::turn_block(input.conversation_id))
+            .flatten(),
+    );
+    crate::prefix_cache::push_user_turn(history, &volatile, user_text, image);
+    // Item 31: the Auto judge weighs each call against the person's own asks.
+    if input.depth == 0 {
+        crate::auto_review::note_ask(input.conversation_id, user_text);
+    }
+    if crate::prefix_cache::old_notes(&config_dir) == crate::prefix_cache::OldNotes::EveryTurn {
+        crate::prefix_cache::drop_older_notes(history);
     }
     // After this turn's message is in, so its own text and notes are clean too.
     scrub_turn_labels(history);
@@ -492,6 +603,10 @@ pub fn run_loop(
     // ROPE / PACT: which addresses, sites and numbers came from you.
     let _trace =
         crate::harness::provenance::begin(history, &recall_lines, input.workspace, input.depth);
+    // Hosted search stays off for the rest of the chat once recalled lines
+    // were in it, so a compaction that folds them away can't flip the tool
+    // list back.
+    let mut recalled = !recall_lines.is_empty();
     let _recall = crate::harness::RecallScope::enter(recall_lines);
     input.permits.drain();
     let mut usage = input.usage_base.clone();
@@ -502,6 +617,8 @@ pub fn run_loop(
         gate.readonly_session = true;
     }
     let mut compacted_once = false;
+    // The tool list the last request sent, for a compaction that keeps its prefix.
+    let mut last_tools: Vec<serde_json::Value> = Vec::new();
     let mut turns_since_compact = 0u32;
     let mut overflow_compacted = false;
     let mut modified_paths: Vec<String> = Vec::new();
@@ -510,11 +627,17 @@ pub fn run_loop(
     let mut breaker = crate::denials::Breaker::default();
     let mut stop_hook_active = false;
     let mut truncated_streak = 0u32;
+    let mut bad_args_streak = 0u32;
     let mut run_tokens = 0u64;
     // A subagent's checklist belongs to its parent; plan mode can't do the work.
     let mut drive = (input.depth == 0 && !plan_at_start && !input.conversation_id.is_empty())
         .then(|| crate::drive::Drive::new(&crate::session_tools::todos_for(input.conversation_id)));
     let mut evidence = 0usize;
+    // This run's tool calls, for the checks before the turn ends.
+    let mut ran: Vec<crate::post_check::Ran> = Vec::new();
+    // Where `ran` stood at the last check, and how many notes it sent.
+    let mut post_mark: Option<(usize, Option<crate::post_check::Ran>)> = None;
+    let mut post_notes = 0usize;
     let mut close_continued = false;
     let mut close_steps: Vec<String> = Vec::new();
     let mut close_surfaced = false;
@@ -522,7 +645,7 @@ pub fn run_loop(
     let brief = drive
         .as_ref()
         .and_then(|_| crate::checkpoint::turn_brief(input.conversation_id));
-    let mut fresh = crate::checkpoint::Fresh::default();
+    let mut fresh = crate::checkpoint::Fresh::for_conversation(input.conversation_id);
     let (mut checkpoint_at, mut checkpoint_due) = (0usize, Vec::<String>::new());
     // Brain 5: a long run in a progress style gets a note at each phase boundary.
     let mut progress = drive
@@ -556,6 +679,15 @@ pub fn run_loop(
     }
     let mut step_ended: Option<std::time::Instant> = None;
     let mut turns = 0u32;
+    // Steps sent again after a busy or dropped model, this turn.
+    let mut resumes = 0u32;
+    // Item 33: a step budget learned from past runs of this kind, and one
+    // redirect before the token budget pauses the run.
+    let mut turn_budget = crate::turn_budget::TurnBudget::new(
+        (input.depth == 0)
+            .then(|| crate::turn_budget::for_ask(&crate::perm::config_dir(), user_text))
+            .flatten(),
+    );
     let guard_key =
         crate::prefix_guard::run_key(input.conversation_id, input.depth, input.agent_id);
     // At most one trim pass changes the history per turn, so it costs the prompt
@@ -583,94 +715,177 @@ pub fn run_loop(
                 emit_usage(on_event, &usage, history, input.context_length);
             }
         }
-        if !trimmed
-            && crate::compact::trim_pass(
+        let config_dir = crate::perm::config_dir();
+        let sent_before = crate::compact::sent_estimate(history, prompt_mark);
+        let mut changed = 0;
+        if !trimmed {
+            changed = crate::compact::trim_pass(
                 history,
                 crate::compact::trim_window(input.model, input.context_length),
-                &crate::perm::config_dir(),
+                prompt_mark,
+                &config_dir,
                 input.workspace,
                 input.conversation_id,
-            ) > 0
-        {
-            trimmed = true;
-            prompt_mark = None;
+            );
+            trimmed = changed > 0;
+        }
+        // Old images go in the same cache break as a trim, else once per batch.
+        changed += crate::compact::mask_images_pass(history, &config_dir, changed > 0);
+        if changed > 0 {
+            prompt_mark = crate::compact::rebase_mark(prompt_mark, sent_before, history);
             crate::prefix_guard::note_trim(&guard_key);
         }
         // Compact when the context fills (or before a long-context price step).
         // Re-arm after at least one new turn since the last successful compact.
-        let long = crate::route::live::crosses_long_context(
-            &crate::perm::config_dir(),
-            input.model,
-            crate::compact::estimate_input_tokens(history),
-        );
+        let trigger = crate::compact::trigger_tokens(history, prompt_mark);
+        let long = crate::route::live::crosses_long_context(&config_dir, input.model, trigger);
         // xAI bills the whole request at about 2x from 200k prompt tokens, so a
         // Grok chat compacts before that, whatever the model's window.
         let projected = crate::compact::projected_prompt_tokens(history, prompt_mark);
         let step = crate::compact::crosses_price_step(input.model, input.context_length, projected);
         let over =
-            crate::compact::needs_auto_compact(history, input.context_length) || long || step;
-        let may_compact = over && (!compacted_once || turns_since_compact >= 1);
+            crate::compact::needs_auto_compact_at(trigger, input.context_length) || long || step;
+        let rearmed = !compacted_once || turns_since_compact >= 1;
+        let may_compact = over && rearmed;
         if may_compact {
-            match run_compact_pass(input, history, &modified_paths, &mut usage, on_event) {
-                CompactPass::Ok => {
-                    compacted_once = true;
-                    turns_since_compact = 0;
-                    prompt_mark = None;
+            // A background result can be older than the run's last steps: if
+            // the prompt is still over the line with it in, compact once more.
+            let mut passes = 0;
+            while passes < 2 {
+                passes += 1;
+                match run_compact_pass(
+                    input,
+                    history,
+                    &modified_paths,
+                    &last_tools,
+                    &mut usage,
+                    on_event,
+                ) {
+                    CompactPass::Ok { background } => {
+                        compacted_once = true;
+                        turns_since_compact = 0;
+                        prompt_mark = None;
+                        inherited_tokens = 0;
+                        let now = crate::compact::trigger_tokens(history, None);
+                        let still =
+                            crate::compact::needs_auto_compact_at(now, input.context_length)
+                                || crate::compact::crosses_price_step(
+                                    input.model,
+                                    input.context_length,
+                                    crate::compact::projected_prompt_tokens(history, None),
+                                );
+                        if !(background && still) {
+                            break;
+                        }
+                    }
+                    CompactPass::Cancelled => {
+                        return finish(input, StopReason::Cancelled, usage, compacted_once, true);
+                    }
+                    CompactPass::Failed => break,
                 }
-                CompactPass::Cancelled => {
-                    return finish(input, StopReason::Cancelled, usage, compacted_once, true);
-                }
-                CompactPass::Failed => {}
+            }
+        } else if rearmed
+            && crate::compact::bg::soft_due(input.model, input.context_length, trigger, projected)
+            && crate::compact::bg::enabled(&config_dir)
+            && !crate::route::local::is_local(input.model)
+        {
+            // Past the soft line: start the compaction now on a worker, so the
+            // hard line swaps it in instead of making the person wait. A local
+            // model is left alone: a second call would slow the run on the
+            // same machine.
+            if let Some(client) = &input.shared_client {
+                crate::compact::bg::start_unless_fresh(&guard_key, history, || {
+                    crate::compact::bg::Start {
+                        key: guard_key.clone(),
+                        client: Arc::clone(client),
+                        model: input.model.to_string(),
+                        effort: input.effort.map(str::to_string),
+                        conversation_id: input.conversation_id.to_string(),
+                        history: history.clone(),
+                        modified_paths: modified_paths.clone(),
+                        tools: last_tools.clone(),
+                    }
+                });
             }
         }
         let sent_len = history.len();
         let mut wire = history.clone();
         crate::image_budget::apply_image_budget(&mut wire);
-        let tools = match bound_job_tool_set(input.conversation_id) {
-            Some(set) => tools::schemas_for_job(&gate, &set),
-            None => tools::schemas_for(&gate),
+        let tools = match (
+            crate::subagent::fork_tools(input.conversation_id),
+            bound_job_tool_set(input.conversation_id),
+        ) {
+            (Some(parents), _) => parents,
+            (None, Some(set)) => tools::schemas_for_job(&gate, &set),
+            (None, None) => tools::schemas_for(&gate),
         };
-        let req = ResponsesRequest {
+        let mut req = ResponsesRequest {
             text_format: None,
             model: input.model.to_string(),
             effort: input.effort.map(str::to_string),
             input: wire,
             conversation_id: input.conversation_id.to_string(),
             tools,
-            hosted_search: crate::perm::hosted_search_allowed(
+            hosted_search: hosted_for_step(
                 &gate,
-                &crate::perm::Policy::load(input.workspace).rules,
-                !crate::memory::recall_lines(history).is_empty(),
+                input.workspace,
+                history,
+                input.conversation_id,
+                &mut recalled,
             ),
             call_timeout: None,
         };
-        let req_tokens = request_tokens(&req);
-        if input.max_turns == 0
-            && turns > 1
-            && run_tokens.saturating_add(req_tokens) > RUN_INPUT_TOKEN_BUDGET
+        let req_tokens = request_tokens(&req).saturating_sub(inherited_tokens);
+        if turns > 1
+            && run_token_budget(input.max_turns, input.depth)
+                .is_some_and(|budget| run_tokens.saturating_add(req_tokens) > budget)
         {
-            stop_with_note(history, on_event, budget_pause(run_tokens));
+            stop_with_note(history, on_event, budget_pause(run_tokens, input.depth));
             return finish(input, StopReason::MaxTurns, usage, compacted_once, true);
         }
         run_tokens = run_tokens.saturating_add(req_tokens);
         // Each request should extend the last one; a rewrite logs its first changed segment.
         crate::prefix_guard::observe(&guard_key, &req);
+        last_tools.clone_from(&req.tools);
+        let remember = input.depth == 0 && offers_spawn(&req.tools);
         let class = crate::route::live::current_class();
         drop(turn_top);
         if let Some(t) = step_ended {
             crate::timing::record("loop:step_gap", t.elapsed());
         }
-        let turn = match crate::route::live::stream_routed(
+        // What the chat showed of this reply, kept if the reply fails partway.
+        let mut shown = String::new();
+        let streamed = crate::route::live::stream_routed(
             input.client,
             &req,
             input.cancel,
             &mut |ev| match ev {
-                StreamEvent::TextDelta(text) => on_event(LoopEvent::Text(text)),
+                StreamEvent::TextDelta(text) => {
+                    shown.push_str(&text);
+                    on_event(LoopEvent::Text(text))
+                }
                 StreamEvent::ReasoningDelta(text) => on_event(LoopEvent::Thought(text)),
+                StreamEvent::RateWait(wait) => on_event(LoopEvent::Thought(rate_wait_note(wait))),
             },
             class,
-        ) {
+        );
+        // The stored request this reply came from, for its calls' safety events.
+        let turn_request = crate::harness::replay::last_request();
+        // A fork of this chat starts from exactly what went out. The request
+        // is done with, so its input and tools move there instead of a copy.
+        if remember {
+            crate::subagent::remember_request(
+                input.conversation_id,
+                input.model,
+                std::mem::take(&mut req.input),
+                std::mem::take(&mut req.tools),
+            );
+        }
+        let turn = match streamed {
             Ok(turn) => {
+                // Failover PR 7: the step landed; its failures stop
+                // shadowing the next step's hand-off packet.
+                crate::route::handoff::clear_chain(input.conversation_id);
                 overflow_compacted = false;
                 if turn.usage.input_tokens > 0 {
                     // A request that still went over (one huge message, a failed
@@ -683,6 +898,9 @@ pub fn run_loop(
                             input.model,
                             turn.usage.input_tokens,
                         );
+                    }
+                    if let Some(sent) = history.get(..sent_len) {
+                        crate::compact::log_blob_sizes_once(sent, turn.usage.input_tokens);
                     }
                     prompt_mark = Some((turn.usage.input_tokens, sent_len));
                 }
@@ -701,8 +919,15 @@ pub fn run_loop(
                         true,
                     );
                 }
-                match run_compact_pass(input, history, &modified_paths, &mut usage, on_event) {
-                    CompactPass::Ok => {
+                match run_compact_pass(
+                    input,
+                    history,
+                    &modified_paths,
+                    &last_tools,
+                    &mut usage,
+                    on_event,
+                ) {
+                    CompactPass::Ok { .. } => {
                         compacted_once = true;
                         turns_since_compact = 0;
                         overflow_compacted = true;
@@ -723,9 +948,68 @@ pub fn run_loop(
                 }
             }
             Err(err) => {
+                // A provider that refuses one MCP tool's schema would fail
+                // every turn: offer that tool bare and send the step again.
+                if shown.is_empty()
+                    && refused_over_a_schema(&err)
+                    && crate::mcp::bare_schema_named_in(input.conversation_id, &err.to_string())
+                {
+                    turns = turns.saturating_sub(1);
+                    run_tokens = run_tokens.saturating_sub(req_tokens);
+                    continue;
+                }
+                // A reply cut off partway stays as the chat showed it, so the
+                // next turn knows what was already said.
+                if !shown.trim().is_empty() {
+                    history.push(InputItem::Message {
+                        role: "assistant".into(),
+                        content: vec![ContentPart::InputText(grokhub_core::strip_turn_labels(
+                            &shown,
+                        ))],
+                    });
+                }
+                // A busy, stalled or dropped model doesn't end the turn: the
+                // same step goes again on the next route (the failed model
+                // cools down), with every tool result so far, and no "continue"
+                // from them.
+                if resumes < MAX_RESUMES && resumable(&err) {
+                    resumes += 1;
+                    // Failover PR 7: the hand-off packet goes in as one
+                    // cabin note — who stopped and why, who already failed
+                    // this step, who wrote what is above. Only when the
+                    // step did some work: a step that produced nothing is
+                    // resent exactly as it was, no note added.
+                    let tool_results = history
+                        .iter()
+                        .filter(|i| matches!(i, InputItem::FunctionCallOutput { .. }))
+                        .count();
+                    let open_items = crate::session_tools::todos_for(input.conversation_id)
+                        .iter()
+                        .filter(|t| matches!(t.status.as_str(), "pending" | "in_progress"))
+                        .count();
+                    if let Some(packet) = crate::route::handoff::packet(
+                        input.conversation_id,
+                        &err,
+                        crate::route::handoff::PacketFacts {
+                            partial_kept: !shown.trim().is_empty(),
+                            tool_results,
+                            compacted: compacted_once,
+                            open_items,
+                        },
+                    ) {
+                        history.push(cabin_note(&packet));
+                    }
+                    on_event(LoopEvent::Thought(resume_thought(resumes)));
+                    if !resume_wait(resumes, input.cancel) {
+                        return finish(input, StopReason::Cancelled, usage, compacted_once, true);
+                    }
+                    turns = turns.saturating_sub(1);
+                    run_tokens = run_tokens.saturating_sub(req_tokens);
+                    continue;
+                }
                 return finish(
                     input,
-                    StopReason::Error(err.to_string()),
+                    StopReason::Error(final_error(&err)),
                     usage,
                     compacted_once,
                     true,
@@ -787,9 +1071,64 @@ pub fn run_loop(
             continue;
         }
         truncated_streak = 0;
+        if turn
+            .calls
+            .iter()
+            .any(|call| !tools::args_parse(&call.arguments))
+        {
+            bad_args_streak = bad_args_streak.saturating_add(1);
+        } else {
+            bad_args_streak = 0;
+        }
+        if bad_args_streak > BAD_ARGS_RETRIES {
+            for call in &turn.calls {
+                history.push(InputItem::FunctionCall {
+                    call_id: call.call_id.clone(),
+                    name: call.name.clone(),
+                    arguments: call.arguments.clone(),
+                });
+                emit_tool(
+                    on_event,
+                    &tool_id(call),
+                    call,
+                    "failed",
+                    BAD_ARGS_TOOL,
+                    None,
+                );
+                history.push(InputItem::FunctionCallOutput {
+                    call_id: call.call_id.clone(),
+                    output: BAD_ARGS_TOOL.into(),
+                });
+            }
+            stop_with_note(history, on_event, BAD_ARGS_STOP.to_string());
+            return finish(input, StopReason::MaxTurns, usage, compacted_once, true);
+        }
         if turn.calls.is_empty() {
             let notes = input.steer.drain();
             if notes.is_empty() {
+                // Item 24: the reply's totals, test counts, claimed commits,
+                // pushes and edits, and what it says the checks found meet
+                // this run's results. Again after more calls ran, so a reply
+                // after a checkpoint's extra check is read too.
+                let mark = (ran.len(), ran.last().cloned());
+                if post_notes < crate::post_check::NOTES_PER_RUN
+                    && post_mark.as_ref() != Some(&mark)
+                {
+                    post_mark = Some(mark);
+                    let mut findings = crate::post_check::check(&last_assistant, &ran);
+                    // A turn that asked about the online models carried the
+                    // router's live check; any other word on them needs one.
+                    findings.extend(crate::post_check::connections(
+                        &last_assistant,
+                        &ran,
+                        crate::route::check::connection_question(user_text),
+                    ));
+                    if let Some(note) = crate::post_check::note(&findings) {
+                        post_notes += 1;
+                        history.push(cabin_note(&note));
+                        continue;
+                    }
+                }
                 let mut drive_blocked = false;
                 if let Some(drive) = drive
                     .as_mut()
@@ -800,7 +1139,7 @@ pub fn run_loop(
                         crate::checkpoint::Gaps::of(brief.as_ref(), &todos, evidence, &fresh);
                     match drive.check_with(&todos, evidence, &gaps) {
                         crate::drive::Verdict::Push(note) => {
-                            history.push(user_message(&note, None));
+                            history.push(cabin_note(&note));
                             continue;
                         }
                         crate::drive::Verdict::Blocked(text) => {
@@ -830,11 +1169,9 @@ pub fn run_loop(
                                 .then(|| crate::drive::unbacked_done(&last_assistant, evidence))
                                 .flatten()
                             {
-                                on_event(LoopEvent::Text(format!("\n\n{text}")));
-                                history.push(InputItem::Message {
-                                    role: "assistant".into(),
-                                    content: vec![ContentPart::InputText(text.into())],
-                                });
+                                // The app's check, shown as status: it doesn't
+                                // speak in the model's voice or join its words.
+                                on_event(LoopEvent::Thought(text.into()));
                             }
                         }
                     }
@@ -877,7 +1214,7 @@ pub fn run_loop(
                         crate::close_check::CloseGate::Continue { note, steps } => {
                             close_continued = true;
                             close_steps = steps;
-                            history.push(user_message(&note, None));
+                            history.push(cabin_note(&note));
                             continue;
                         }
                         crate::close_check::CloseGate::Proceed(notice) => {
@@ -892,10 +1229,7 @@ pub fn run_loop(
                         crate::hooks::on_stop(input.conversation_id, input.workspace, "Stop", false)
                     {
                         stop_hook_active = true;
-                        history.push(user_message(
-                            &format!("Stop hook blocked the turn: {reason}"),
-                            None,
-                        ));
+                        history.push(cabin_note(&format!("Stop hook blocked the turn: {reason}")));
                         continue;
                     }
                     return finish(input, StopReason::EndTurn, usage, compacted_once, false);
@@ -903,6 +1237,7 @@ pub fn run_loop(
                 return finish(input, StopReason::EndTurn, usage, compacted_once, true);
             }
             for note in notes {
+                note_steer(input, &note);
                 history.push(user_message(&note, None));
             }
             continue;
@@ -953,6 +1288,7 @@ pub fn run_loop(
                         &mut repeats,
                         &mut nested_agents,
                         &mut evidence,
+                        &mut ran,
                         &mut fresh,
                         &mut modified_paths,
                         history,
@@ -988,11 +1324,13 @@ pub fn run_loop(
                     }
                 }
             }
-            let key = format!("{}\\n{}", call.name, call.arguments);
-            let seen = repeats.entry(key).or_insert(0);
-            *seen = seen.saturating_add(1);
-            if *seen >= REPEAT_LIMIT {
+            let key = repeat_key(call);
+            if repeats.get(&key).copied().unwrap_or(0) >= REPEAT_LIMIT {
                 let output = ToolOutput::err(REPEAT_REPLAN);
+                let id = tool_id(call);
+                // Shown in the chat too, so a stalled step isn't silent.
+                emit_tool(on_event, &id, call, "in_progress", &call.arguments, None);
+                emit_tool(on_event, &id, call, "failed", &output.text, None);
                 push_refusal(history, input.conversation_id, call, output);
                 call_i += 1;
                 continue;
@@ -1010,6 +1348,7 @@ pub fn run_loop(
                 input.workspace,
                 input.perms,
             );
+            let base_kind = safety_events::Kind::of(&base);
             let reviewed = crate::auto_review::review(&crate::auto_review::ReviewIn {
                 client: input.client,
                 cancel: input.cancel,
@@ -1040,6 +1379,7 @@ pub fn run_loop(
                 let _ = stop_for_halt(input);
                 return finish(input, StopReason::Halted, usage, compacted_once, true);
             }
+            let reviewed_kind = safety_events::Kind::of(&reviewed.decision);
             let constrained = crate::hooks::constrain_tool(crate::hooks::ToolHook {
                 session: input.conversation_id,
                 workspace: input.workspace,
@@ -1051,12 +1391,28 @@ pub fn run_loop(
                 tool_use_id: &id,
             });
             drop(gate_lap);
+            let decided_by = safety_events::decided_by(
+                base_kind,
+                reviewed_kind,
+                safety_events::Kind::of(&constrained.decision),
+                safety_events::wants_outside_sandbox(&call.arguments),
+            );
             let ask_reason = constrained.ask_reason;
             let pre_context = constrained.context;
             let mut refused = false;
             let (output, extra_usage) = match constrained.decision {
                 Decision::Refuse(text) => {
                     refused = true;
+                    if crate::denials::is_denial(&text) {
+                        note_safety(
+                            input,
+                            call,
+                            safety_events::Outcome::Stopped,
+                            decided_by,
+                            None,
+                            &turn_request,
+                        );
+                    }
                     batch_failed = hard_step(&call.name, &gate_args);
                     crate::hooks::on_permission_denied(
                         input.conversation_id,
@@ -1089,10 +1445,18 @@ pub fn run_loop(
                         action: action_line(&call.name, &call.arguments),
                         reason: ask_reason,
                     });
-                    match input
+                    let waited = input
                         .permits
-                        .wait(&id, input.cancel, &|| stop_for_halt(input))
-                    {
+                        .wait(&id, input.cancel, &|| stop_for_halt(input));
+                    note_safety(
+                        input,
+                        call,
+                        safety_events::Outcome::Asked,
+                        decided_by,
+                        ask_answer(&waited),
+                        &turn_request,
+                    );
+                    match waited {
                         Waited::Answer(PermAnswer::Allow) => note_tool(
                             input,
                             &mut gate,
@@ -1175,6 +1539,10 @@ pub fn run_loop(
             }
             let cancelled = input.cancel.is_cancelled();
             let halted = stop_for_halt(input);
+            if !refused {
+                note_repeat(&mut repeats, call, &output);
+            }
+            crate::post_check::note_ran(&mut ran, call, &output);
             if !output.failed && !crate::drive::is_session_tool(&call.name) {
                 evidence += 1;
                 fresh.note(
@@ -1232,9 +1600,18 @@ pub fn run_loop(
                     uncovered: due.clone(),
                     ..Default::default()
                 };
-                history.push(user_message(&format!("Checkpoint: {}", gaps.note()), None));
+                history.push(cabin_note(&format!("Checkpoint: {}", gaps.note())));
             }
             checkpoint_due = due;
+        }
+        let calls_ran = u32::try_from(turn.calls.len()).unwrap_or(u32::MAX);
+        if let Some(note) = turn_budget.after_steps(calls_ran) {
+            history.push(cabin_note(&note));
+        }
+        if let Some(note) =
+            turn_budget.after_tokens(run_tokens, run_token_budget(input.max_turns, input.depth))
+        {
+            history.push(cabin_note(&note));
         }
         if let Some(note) = progress.as_mut().and_then(|p| {
             p.check(
@@ -1242,27 +1619,22 @@ pub fn run_loop(
                 evidence,
             )
         }) {
-            // Shown in the reply, not sent back to the model.
-            on_event(LoopEvent::Text(format!("\n\n{note}\n\n")));
+            // A status line from the app, not the model's words: it shows as a
+            // thought, stays out of the saved reply and never goes back to the
+            // model.
+            on_event(LoopEvent::Thought(note));
         }
         for note in input.steer.drain() {
+            note_steer(input, &note);
             history.push(user_message(&note, None));
         }
     }
 }
 
-/// A later turn's talk style replaces the earlier one in the stored system
-/// message; the stable prefix before it stays cached.
-fn restyle_history(
-    history: &mut [InputItem],
-    style: grokhub_core::talk::TalkStyle,
-    soft_caps: bool,
-) {
-    if let Some(InputItem::Message { role, content }) = history.first_mut() {
-        if let Some(ContentPart::InputText(text)) = content.first_mut().filter(|_| role == "system")
-        {
-            *text = grokhub_core::talk::restyle_caps(text, style, soft_caps);
-        }
+/// A steer is the person's own words mid-run, so the Auto judge keeps it as an ask.
+fn note_steer(input: &LoopIn<'_>, note: &str) {
+    if input.depth == 0 {
+        crate::auto_review::note_ask(input.conversation_id, note);
     }
 }
 
@@ -1281,17 +1653,6 @@ fn scrub_turn_labels(history: &mut [InputItem]) {
                     *text = grokhub_core::strip_turn_labels(text);
                 }
             }
-        }
-    }
-}
-
-/// A later turn's playbook replaces the earlier one in the stored system
-/// prompt; a turn with none drops it.
-fn replaybook_history(history: &mut [InputItem], block: Option<&str>) {
-    if let Some(InputItem::Message { role, content }) = history.first_mut() {
-        if let Some(ContentPart::InputText(text)) = content.first_mut().filter(|_| role == "system")
-        {
-            *text = grokhub_core::playbook::with_playbook(text, block);
         }
     }
 }
@@ -1333,23 +1694,11 @@ fn emit_usage(
     on_event(LoopEvent::Usage(usage.clone()));
 }
 
-fn push_intention_block(history: &mut Vec<InputItem>, block: &str) {
-    if block.is_empty() || history_has_text(history, block) {
-        return;
-    }
-    history.push(InputItem::Message {
-        role: "system".into(),
-        content: vec![ContentPart::InputText(block.to_string())],
-    });
-}
-
-fn history_has_text(history: &[InputItem], needle: &str) -> bool {
-    history.iter().any(|item| match item {
-        InputItem::Message { content, .. } => content
-            .iter()
-            .any(|part| matches!(part, ContentPart::InputText(text) if text.contains(needle))),
-        _ => false,
-    })
+/// A note the app adds to the chat for the model (a nudge to keep going, a
+/// checkpoint, a stop hook), tagged so it never reads as the person's words:
+/// not to the model, not to the summary, and not to the rules compaction pins.
+fn cabin_note(text: &str) -> InputItem {
+    user_message(&crate::compact::cabin_note_text(text), None)
 }
 
 fn user_message(text: &str, image: Option<&str>) -> InputItem {
@@ -1384,6 +1733,43 @@ fn add_to_output(history: &mut [InputItem], call_id: &str, note: &str) {
     }
 }
 
+/// Round 3 item 28: one sealed safety event for a call that was stopped or
+/// asked about, linked to the stored request whose reply made it.
+fn note_safety(
+    input: &LoopIn<'_>,
+    call: &FunctionCall,
+    outcome: safety_events::Outcome,
+    by: safety_events::DecidedBy,
+    answer: Option<safety_events::Answer>,
+    request: &str,
+) {
+    let _ = safety_events::record(
+        &crate::perm::config_dir(),
+        &safety_events::SafetyEvent {
+            ts_ms: grokhub_core::now_ms(),
+            chat: input.conversation_id.to_string(),
+            tool: call.name.clone(),
+            outcome,
+            by,
+            answer,
+            request: request.to_string(),
+        },
+    );
+}
+
+/// What the person said to an ask, for its safety event.
+fn ask_answer(waited: &Waited) -> Option<safety_events::Answer> {
+    match waited {
+        Waited::Answer(PermAnswer::Allow) => Some(safety_events::Answer::Allowed),
+        Waited::Answer(PermAnswer::Always) => Some(safety_events::Answer::AlwaysAllowed),
+        Waited::Answer(PermAnswer::Deny) => Some(safety_events::Answer::Denied),
+        Waited::Answer(PermAnswer::Cancel) | Waited::Cancelled => {
+            Some(safety_events::Answer::Cancelled)
+        }
+        Waited::Halted => None,
+    }
+}
+
 /// [`push_output`] for a call that never ran: the user said no, a gate or
 /// hook refused it, it repeated too often, or an earlier step in its batch
 /// failed. Nothing went wrong in the work, so the next step's effort stays put.
@@ -1394,6 +1780,22 @@ pub(crate) fn push_refusal(
     output: ToolOutput,
 ) {
     push_result(history, conversation_id, call, output);
+}
+
+fn repeat_key(call: &FunctionCall) -> String {
+    format!("{}\n{}", call.name, call.arguments)
+}
+
+/// Count a call that ran. A successful edit clears every count: the next test
+/// run checks new code, so it isn't a repeat.
+fn note_repeat(repeats: &mut HashMap<String, u32>, call: &FunctionCall, output: &ToolOutput) {
+    if !output.failed && crate::compact::path_from_write_call(&call.name, &call.arguments).is_some()
+    {
+        repeats.clear();
+        return;
+    }
+    let seen = repeats.entry(repeat_key(call)).or_insert(0);
+    *seen = seen.saturating_add(1);
 }
 
 fn push_result(
@@ -1417,6 +1819,70 @@ fn push_result(
             ],
         });
     }
+}
+
+/// The thinking line while a 429 waits.
+/// Times one turn picks itself back up after a busy or dropped model.
+const MAX_RESUMES: u32 = 2;
+
+/// Told to the model when its reply was cut off and the step goes again:
+/// the closing line of the hand-off packet (failover PR 7).
+#[cfg(test)]
+pub(crate) use crate::route::handoff::RESUME_NOTE;
+
+/// The model couldn't answer for a reason that clears: busy, rate limited,
+/// stalled, dropped or cut off. A refused key, a bad request, a cancel or a
+/// prompt too long never resumes.
+fn resumable(err: &ClientError) -> bool {
+    !err.is_context_length()
+        && (err.is_retryable() || matches!(err, ClientError::IdleTimeout | ClientError::CutOff(_)))
+}
+
+/// The error the chat shows once the turn has stopped. A model still busy
+/// after its resumes reads as a plain sentence, not the provider's raw body,
+/// and never as a retry still under way (the chat would wait on it forever).
+fn final_error(err: &ClientError) -> String {
+    match err {
+        ClientError::RateLimited { .. } | ClientError::Server { .. } if resumable(err) => {
+            BUSY_GAVE_UP.into()
+        }
+        _ => err.to_string(),
+    }
+}
+
+/// Shown when a busy model still couldn't answer after the turn's resumes.
+pub const BUSY_GAVE_UP: &str = "The model is too busy to answer right now, so I stopped after several tries. Send it again in a minute, or pick another model.";
+
+fn resume_thought(attempt: u32) -> String {
+    if attempt <= 1 {
+        "The model was busy, so I'm picking this back up where it stopped.".into()
+    } else {
+        "Still busy, so I'm trying another route.".into()
+    }
+}
+
+/// A short, cancellable pause before the step goes again: 2 s, then 5 s.
+fn resume_wait(attempt: u32, cancel: &CancelToken) -> bool {
+    let secs = if attempt <= 1 { 2 } else { 5 };
+    let wait = if cfg!(test) {
+        std::time::Duration::from_millis(5)
+    } else {
+        std::time::Duration::from_secs(secs)
+    };
+    let slice = std::time::Duration::from_millis(50);
+    let start = std::time::Instant::now();
+    while start.elapsed() < wait {
+        if cancel.is_cancelled() {
+            return false;
+        }
+        std::thread::sleep(slice.min(wait));
+    }
+    !cancel.is_cancelled()
+}
+
+fn rate_wait_note(wait: std::time::Duration) -> String {
+    let secs = wait.as_secs_f64().ceil().max(1.0) as u64;
+    format!("\n\nGrok is busy right now, trying again in {secs} s.\n\n")
 }
 
 /// Trail span for a length-truncated model reply (`turn_truncated`).
@@ -1475,7 +1941,10 @@ fn inject_notices(input: &LoopIn<'_>, history: &mut Vec<InputItem>) {
         return;
     };
     for note in tasks.drain_notices() {
-        let text = format!("<background-notice>\n{note}\n</background-notice>");
+        let text = format!(
+            "<background-notice>\n{}\n</background-notice>",
+            note.render()
+        );
         history.push(user_message(&text, None));
     }
 }
@@ -1616,6 +2085,7 @@ fn run_readonly_tool_batch(
     repeats: &mut HashMap<String, u32>,
     nested_agents: &mut crate::prompt::NestedAgents,
     evidence: &mut usize,
+    ran: &mut Vec<crate::post_check::Ran>,
     fresh: &mut crate::checkpoint::Fresh,
     modified_paths: &mut Vec<String>,
     history: &mut Vec<InputItem>,
@@ -1624,9 +2094,13 @@ fn run_readonly_tool_batch(
 ) -> ReadonlyBatchOutcome {
     let mut prepared = Vec::with_capacity(calls.len());
     for call in calls {
-        let key = format!("{}\\n{}", call.name, call.arguments);
-        let seen = repeats.entry(key).or_insert(0);
-        if *seen >= REPEAT_LIMIT {
+        let key = repeat_key(call);
+        let queued = prepared
+            .iter()
+            .filter(|(c, _, _): &&(&FunctionCall, String, _)| repeat_key(c) == key)
+            .count() as u32;
+        if repeats.get(&key).copied().unwrap_or(0) + queued >= REPEAT_LIMIT {
+            // One at a time, so the refusal shows like any other.
             return ReadonlyBatchOutcome::Fallback;
         }
         let id = tool_id(call);
@@ -1682,7 +2156,6 @@ fn run_readonly_tool_batch(
         drop(gate_lap);
         match constrained.decision {
             Decision::Run => {
-                *seen = seen.saturating_add(1);
                 prepared.push((call, id, constrained.context));
             }
             Decision::Refuse(_) | Decision::Ask => return ReadonlyBatchOutcome::Fallback,
@@ -1746,6 +2219,7 @@ fn run_readonly_tool_batch(
             usage.add(&extra_usage);
             emit_usage(on_event, usage, history, input.context_length);
         }
+        crate::post_check::note_ran(ran, call, &output);
         if !output.failed && !crate::drive::is_session_tool(&call.name) {
             *evidence += 1;
             fresh.note(
@@ -1761,6 +2235,7 @@ fn run_readonly_tool_batch(
         if !output.failed && call.name == "report_findings" {
             fresh.note_findings();
         }
+        note_repeat(repeats, call, &output);
         push_output(history, input.conversation_id, call, output);
     }
 
@@ -1821,6 +2296,7 @@ fn dispatch_tool_call(
         effort: input.effort,
         system: input.system,
         max_turns: input.max_turns,
+        context_length: input.context_length,
         policy: input.perms,
         on_event,
     }) {
@@ -1974,6 +2450,7 @@ mod tests {
                 usage: turn.usage,
                 truncated: turn.truncated,
                 truncate_reason: turn.truncated.then(|| "max_output_tokens".into()),
+                ..Default::default()
             })
         }
     }
@@ -2052,8 +2529,19 @@ mod tests {
         steer: &SteerQueue,
         halt: &dyn HaltCheck,
     ) -> (LoopOut, Vec<InputItem>, Vec<LoopEvent>) {
+        run_with(script, dir, max_turns, cancel, steer, halt)
+    }
+
+    fn run_with(
+        client: &dyn ModelClient,
+        dir: &std::path::Path,
+        max_turns: u32,
+        cancel: &CancelToken,
+        steer: &SteerQueue,
+        halt: &dyn HaltCheck,
+    ) -> (LoopOut, Vec<InputItem>, Vec<LoopEvent>) {
         let input = LoopIn {
-            client: script,
+            client,
             workspace: dir,
             model: "grok-4.7",
             effort: Some("low"),
@@ -2123,6 +2611,242 @@ mod tests {
         assert_eq!(bound_job_tool_set(&child).as_ref(), Some(&set));
         assert!(!set.allows("write"));
         clear_job_tool_set(&child);
+    }
+
+    struct CutAfterText;
+    impl ModelClient for CutAfterText {
+        fn stream(
+            &self,
+            _req: &ResponsesRequest,
+            _cancel: &CancelToken,
+            sink: &mut dyn FnMut(StreamEvent),
+        ) -> Result<crate::TurnOutput, ClientError> {
+            sink(StreamEvent::TextDelta("First, the config ".into()));
+            sink(StreamEvent::TextDelta("lives in".into()));
+            Err(ClientError::CutOff("stream disconnected".into()))
+        }
+    }
+
+    #[test]
+    fn a_reply_cut_off_partway_keeps_what_the_chat_showed() {
+        let dir = workspace("cut-off");
+        let (out, history, events) = run_with(
+            &CutAfterText,
+            &dir,
+            4,
+            &CancelToken::new(),
+            &SteerQueue::new(),
+            &NeverHalt,
+        );
+        // A stream that keeps dropping is sent again twice, then stops plainly.
+        assert!(matches!(&out.stop, StopReason::Error(e) if e.contains("cut off")));
+        let shown: String = events
+            .iter()
+            .filter_map(|e| match e {
+                LoopEvent::Text(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(shown, "First, the config lives in".repeat(3));
+        let shown = "First, the config lives in".to_string();
+        assert!(matches!(
+            history.last(),
+            Some(InputItem::Message { role, content })
+                if role == "assistant"
+                    && content == &vec![ContentPart::InputText(shown.clone())]
+        ));
+    }
+
+    /// Fails the first `fails` requests with `err`, showing `before` first, then
+    /// answers "All done." Keeps every request's input.
+    struct BusyThen {
+        fails: usize,
+        before: &'static str,
+        err: fn() -> ClientError,
+        seen: Mutex<Vec<Vec<InputItem>>>,
+    }
+    impl ModelClient for BusyThen {
+        fn stream(
+            &self,
+            req: &ResponsesRequest,
+            _cancel: &CancelToken,
+            sink: &mut dyn FnMut(StreamEvent),
+        ) -> Result<crate::TurnOutput, ClientError> {
+            let n = {
+                let mut seen = self.seen.lock().unwrap();
+                seen.push(req.input.clone());
+                seen.len()
+            };
+            if n <= self.fails {
+                if !self.before.is_empty() {
+                    sink(StreamEvent::TextDelta(self.before.into()));
+                }
+                return Err((self.err)());
+            }
+            sink(StreamEvent::TextDelta("All done.".into()));
+            Ok(crate::TurnOutput {
+                text: "All done.".into(),
+                ..Default::default()
+            })
+        }
+    }
+
+    fn at_capacity() -> ClientError {
+        crate::client::stream_error(
+            "The model is currently at capacity due to high demand. Please try again in a few minutes."
+                .into(),
+        )
+    }
+
+    fn thoughts(events: &[LoopEvent]) -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                LoopEvent::Thought(t) => Some(t.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_busy_model_picks_the_turn_back_up_without_a_continue() {
+        let dir = workspace("busy-resume");
+        let client = BusyThen {
+            fails: 1,
+            before: "",
+            err: at_capacity,
+            seen: Mutex::new(Vec::new()),
+        };
+        let (out, history, events) = run_with(
+            &client,
+            &dir,
+            4,
+            &CancelToken::new(),
+            &SteerQueue::new(),
+            &NeverHalt,
+        );
+        assert!(matches!(out.stop, StopReason::EndTurn), "{:?}", out.stop);
+        let seen = client.seen.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        // The same step went again: nothing was added to what the model sees.
+        assert_eq!(seen[0], seen[1]);
+        assert!(thoughts(&events).iter().any(|t| t.contains("busy")));
+        assert!(matches!(
+            history.last(),
+            Some(InputItem::Message { role, content })
+                if role == "assistant"
+                    && content == &vec![ContentPart::InputText("All done.".into())]
+        ));
+    }
+
+    #[test]
+    fn a_reply_cut_off_by_a_busy_model_carries_on_from_where_it_stopped() {
+        let dir = workspace("busy-carry-on");
+        let client = BusyThen {
+            fails: 1,
+            before: "Cleaning the temp folder now",
+            err: at_capacity,
+            seen: Mutex::new(Vec::new()),
+        };
+        let (out, _history, _events) = run_with(
+            &client,
+            &dir,
+            4,
+            &CancelToken::new(),
+            &SteerQueue::new(),
+            &NeverHalt,
+        );
+        assert!(matches!(out.stop, StopReason::EndTurn), "{:?}", out.stop);
+        let seen = client.seen.lock().unwrap();
+        let resent = &seen[1];
+        let n = resent.len();
+        assert!(n >= 2);
+        // What showed is kept, then the model is told to carry on, not repeat.
+        assert!(matches!(
+            &resent[n - 2],
+            InputItem::Message { role, content }
+                if role == "assistant"
+                    && content
+                        == &vec![ContentPart::InputText("Cleaning the temp folder now".into())]
+        ));
+        let note = match &resent[n - 1] {
+            InputItem::Message { role, content } if role == "user" => match &content[..] {
+                [ContentPart::InputText(t)] => t.clone(),
+                _ => String::new(),
+            },
+            _ => String::new(),
+        };
+        let body = crate::compact::cabin_note_body(&note).expect("a cabin note");
+        // Failover PR 7: the note is the hand-off packet now — it names the
+        // model that stopped, and still closes with the carry-on line.
+        assert!(body.starts_with("Hand-off:"), "{body}");
+        assert!(body.contains("grok-4.7"), "{body}");
+        assert!(body.ends_with(RESUME_NOTE), "{body}");
+    }
+
+    #[test]
+    fn a_model_that_stays_busy_stops_after_two_resumes_with_the_plain_error() {
+        let dir = workspace("busy-gives-up");
+        let client = BusyThen {
+            fails: 10,
+            before: "",
+            err: at_capacity,
+            seen: Mutex::new(Vec::new()),
+        };
+        let (out, _history, events) = run_with(
+            &client,
+            &dir,
+            8,
+            &CancelToken::new(),
+            &SteerQueue::new(),
+            &NeverHalt,
+        );
+        assert!(
+            matches!(&out.stop, StopReason::Error(e) if e == BUSY_GAVE_UP),
+            "{:?}",
+            out.stop
+        );
+        // The chat shows it as the turn's end, not as a retry still running.
+        assert_eq!(
+            grokhub_core::wire::classify_stream_error(BUSY_GAVE_UP),
+            grokhub_core::wire::StreamErrorKind::Fatal
+        );
+        assert_eq!(client.seen.lock().unwrap().len(), 1 + MAX_RESUMES as usize);
+        assert_eq!(thoughts(&events).len(), MAX_RESUMES as usize);
+    }
+
+    #[test]
+    fn a_refused_key_or_bad_request_never_resumes() {
+        for err in [
+            (|| ClientError::Auth {
+                status: 401,
+                message: "bad key".into(),
+            }) as fn() -> ClientError,
+            || ClientError::Protocol("invalid argument".into()),
+            || {
+                crate::client::stream_error(
+                    "You have run out of credits for this billing period.".into(),
+                )
+            },
+        ] {
+            let dir = workspace("no-resume");
+            let client = BusyThen {
+                fails: 10,
+                before: "",
+                err,
+                seen: Mutex::new(Vec::new()),
+            };
+            let (out, _h, _e) = run_with(
+                &client,
+                &dir,
+                4,
+                &CancelToken::new(),
+                &SteerQueue::new(),
+                &NeverHalt,
+            );
+            assert!(matches!(out.stop, StopReason::Error(_)), "{:?}", out.stop);
+            assert_eq!(client.seen.lock().unwrap().len(), 1);
+        }
     }
 
     #[test]
@@ -2362,6 +3086,178 @@ mod tests {
     }
 
     #[test]
+    fn garbled_tool_arguments_get_two_retries_then_the_run_stops() {
+        let dir = workspace("bad-args");
+        let config = dir.join("config");
+        std::fs::create_dir_all(&config).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&config);
+        let bad = || {
+            ScriptTurn::calls(
+                vec![call("g", "read_file", r#"{"target_file": "a"#)],
+                Usage::default(),
+            )
+        };
+        let script = Script {
+            turns: Mutex::new(vec![bad(), bad(), bad(), bad(), ScriptTurn::text("never")]),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+        let (out, history, _) = run(
+            &script,
+            &dir,
+            0,
+            &CancelToken::new(),
+            &SteerQueue::new(),
+            &NeverHalt,
+        );
+        assert_eq!(out.stop, StopReason::MaxTurns);
+        assert_eq!(script.seen.lock().unwrap().len(), 3);
+        let outputs: Vec<&str> = history
+            .iter()
+            .filter_map(|item| match item {
+                InputItem::FunctionCallOutput { output, .. } => Some(output.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(outputs.len(), 3, "{outputs:?}");
+        assert!(outputs[0].contains("send the call again"), "{}", outputs[0]);
+        assert!(outputs[1].contains("send the call again"), "{}", outputs[1]);
+        assert_eq!(outputs[2], BAD_ARGS_TOOL);
+        assert!(matches!(
+            history.last(),
+            Some(InputItem::Message { role, content })
+                if role == "assistant"
+                    && matches!(&content[0], ContentPart::InputText(t) if t == BAD_ARGS_STOP)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    struct RefusesASchemaOnce {
+        tools: Mutex<Vec<Vec<serde_json::Value>>>,
+    }
+
+    impl ModelClient for RefusesASchemaOnce {
+        fn stream(
+            &self,
+            req: &ResponsesRequest,
+            _cancel: &CancelToken,
+            sink: &mut dyn FnMut(StreamEvent),
+        ) -> Result<crate::TurnOutput, ClientError> {
+            let mut tools = self.tools.lock().unwrap();
+            tools.push(req.tools.clone());
+            if tools.len() == 1 {
+                return Err(ClientError::Protocol(
+                    "HTTP 400: invalid parameters schema for function box__poke".into(),
+                ));
+            }
+            sink(StreamEvent::TextDelta("done".into()));
+            Ok(crate::TurnOutput {
+                text: "done".into(),
+                ..Default::default()
+            })
+        }
+    }
+
+    #[test]
+    fn a_refused_mcp_schema_is_sent_bare_and_the_step_goes_again_once() {
+        let dir = workspace("bare-schema");
+        let config = dir.join("config");
+        std::fs::create_dir_all(&config).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&config);
+        let _tools = crate::mcp::install_test_tools(&[("box", "poke", "Poke", false)]);
+        let client = RefusesASchemaOnce {
+            tools: Mutex::new(Vec::new()),
+        };
+        let conversation = format!("bare-run-{}", std::process::id());
+        let gate = Gate {
+            readonly_session: false,
+            ..Gate::phase_readonly()
+        };
+        let input = LoopIn {
+            client: &client,
+            workspace: &dir,
+            model: "grok-4.7",
+            effort: Some("low"),
+            system: "sys",
+            conversation_id: &conversation,
+            max_turns: 0,
+            usage_base: Usage::default(),
+            cancel: &CancelToken::new(),
+            steer: &SteerQueue::new(),
+            halt: &NeverHalt,
+            gate,
+            desktop: None,
+            permits: &gate::ClosedPermits,
+            perms: None,
+            context_length: 0,
+            tasks: None,
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
+        };
+        let mut history = Vec::new();
+        let out = run_loop(&input, &mut history, "poke it", None, &mut |_| {});
+        assert_eq!(out.stop, StopReason::EndTurn);
+        let sent = client.tools.lock().unwrap();
+        assert_eq!(sent.len(), 2);
+        let poke = sent[1]
+            .iter()
+            .find(|tool| tool["name"] == "box__poke")
+            .expect("the tool is still offered");
+        assert_eq!(
+            poke["parameters"],
+            serde_json::json!({"type": "object", "properties": {}})
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_good_call_after_garbled_ones_starts_the_count_over() {
+        let dir = workspace("bad-args-reset");
+        let config = dir.join("config");
+        std::fs::create_dir_all(&config).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&config);
+        std::fs::write(dir.join("a"), "hi").unwrap();
+        let bad = || {
+            ScriptTurn::calls(
+                vec![call("g", "read_file", r#"{"target_file": "a"#)],
+                Usage::default(),
+            )
+        };
+        let good = ScriptTurn::calls(
+            vec![call("ok", "read_file", r#"{"target_file": "a"}"#)],
+            Usage::default(),
+        );
+        let script = Script {
+            turns: Mutex::new(vec![
+                bad(),
+                bad(),
+                good,
+                bad(),
+                bad(),
+                ScriptTurn::text("done"),
+            ]),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+        let (out, _, _) = run(
+            &script,
+            &dir,
+            0,
+            &CancelToken::new(),
+            &SteerQueue::new(),
+            &NeverHalt,
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(script.seen.lock().unwrap().len(), 6);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn an_unbounded_run_pauses_once_it_has_sent_its_token_budget() {
         let dir = workspace("budget");
         let config = dir.join("config");
@@ -2409,6 +3305,181 @@ mod tests {
             texts.iter().any(|t| t.contains("I paused here")),
             "{texts:?}"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_subagent_stops_at_its_smaller_token_budget() {
+        assert_eq!(run_token_budget(0, 0), Some(RUN_INPUT_TOKEN_BUDGET));
+        assert_eq!(run_token_budget(8, 0), None);
+        assert_eq!(run_token_budget(50, 1), Some(CHILD_RUN_INPUT_TOKEN_BUDGET));
+        assert_eq!(
+            run_token_budget(50, 2),
+            Some(CHILD_RUN_INPUT_TOKEN_BUDGET / 2)
+        );
+
+        let dir = workspace("child-budget");
+        let config = dir.join("config");
+        std::fs::create_dir_all(&config).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&config);
+        let client = AlwaysTool {
+            calls: AtomicUsize::new(0),
+        };
+        // About 250k tokens of context: well under a root run's budget, but the
+        // second request would take a child past its 400k.
+        let system = "x".repeat(1_000_000);
+        let input = LoopIn {
+            client: &client,
+            workspace: &dir,
+            model: "grok-4.7",
+            effort: None,
+            system: &system,
+            conversation_id: "child-budget",
+            max_turns: 50,
+            usage_base: Usage::default(),
+            cancel: &CancelToken::new(),
+            steer: &SteerQueue::new(),
+            halt: &NeverHalt,
+            gate: Gate::phase_readonly(),
+            desktop: None,
+            permits: &gate::ClosedPermits,
+            perms: None,
+            context_length: 0,
+            tasks: None,
+            depth: 1,
+            agent_id: Some("a1"),
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
+        };
+        let mut history = Vec::new();
+        let mut texts = Vec::new();
+        let out = run_loop(&input, &mut history, "go", None, &mut |ev| {
+            if let LoopEvent::Text(t) = ev {
+                texts.push(t);
+            }
+        });
+        assert_eq!(out.stop, StopReason::MaxTurns);
+        assert_eq!(client.calls.load(Ordering::SeqCst), 1);
+        assert!(
+            texts.iter().any(|t| t.contains("this subagent has sent")),
+            "{texts:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_fork_counts_only_what_it_adds_to_the_chat_it_inherited() {
+        let dir = workspace("fork-budget");
+        let config = dir.join("config");
+        std::fs::create_dir_all(&config).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&config);
+        let client = AlwaysTool {
+            calls: AtomicUsize::new(0),
+        };
+        let input = LoopIn {
+            client: &client,
+            workspace: &dir,
+            model: "grok-4.7",
+            effort: None,
+            system: "sys",
+            conversation_id: "fork-budget",
+            max_turns: 3,
+            usage_base: Usage::default(),
+            cancel: &CancelToken::new(),
+            steer: &SteerQueue::new(),
+            halt: &NeverHalt,
+            gate: Gate::phase_readonly(),
+            desktop: None,
+            permits: &gate::ClosedPermits,
+            perms: None,
+            context_length: 0,
+            tasks: None,
+            depth: 1,
+            agent_id: Some("a1"),
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
+        };
+        // About 250k tokens inherited: two requests would be 500k in all, but
+        // only what the fork adds counts against its 400k.
+        let mut history = vec![user_message(&"x".repeat(1_000_000), None)];
+        let out = run_loop(&input, &mut history, "task", None, &mut |_| {});
+        assert_eq!(out.stop, StopReason::MaxTurns);
+        assert_eq!(client.calls.load(Ordering::SeqCst), 3);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn edit_then_check_loops_keep_going_and_a_real_repeat_shows_in_the_chat() {
+        let dir = workspace("repeat-edit");
+        std::fs::write(dir.join("note.txt"), "x").unwrap();
+        let read = |id: &str| call(id, "read_file", r#"{"target_file":"note.txt"}"#);
+        let write = |id: &str, n: u32| {
+            call(
+                id,
+                "write",
+                &format!(r#"{{"path":"a.rs","content":"v{n}"}}"#),
+            )
+        };
+        let mut turns: Vec<ScriptTurn> = Vec::new();
+        for n in 0..3 {
+            turns.push(ScriptTurn::calls(
+                vec![write(&format!("w{n}"), n)],
+                Usage::default(),
+            ));
+            turns.push(ScriptTurn::calls(
+                vec![read(&format!("r{n}"))],
+                Usage::default(),
+            ));
+        }
+        // Then the same check three times with no edit between.
+        for n in 3..6 {
+            turns.push(ScriptTurn::calls(
+                vec![read(&format!("r{n}"))],
+                Usage::default(),
+            ));
+        }
+        turns.push(ScriptTurn::text("done"));
+        let script = Script {
+            turns: Mutex::new(turns),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+        let permits = Answer {
+            answer: PermAnswer::Allow,
+            asks: AtomicUsize::new(0),
+        };
+        let (out, history, events) = once_for(
+            &script,
+            &dir,
+            chat(gate::PermMode::Always, true, false),
+            None,
+            &permits,
+            20,
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        let refused: Vec<String> = history
+            .iter()
+            .filter_map(|item| match item {
+                InputItem::FunctionCallOutput { call_id, output }
+                    if output.contains(REPEAT_REPLAN) =>
+                {
+                    Some(call_id.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        // r0, r1 and r2 each follow an edit, so none is a repeat. With no edit
+        // after w2, r2 and r3 are two runs of the same check; r4 and r5 are
+        // refused (a refusal doesn't count as a run).
+        assert_eq!(refused, ["r4", "r5"]);
+        assert!(events.iter().any(|ev| matches!(ev,
+            LoopEvent::Tool { name, status, detail, .. }
+                if name == "read_file" && status == "failed" && detail.contains("Stop repeating it")
+        )));
+        assert_eq!(std::fs::read_to_string(dir.join("a.rs")).unwrap(), "v2");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2732,9 +3803,61 @@ mod tests {
             &HaltAfter(AtomicUsize::new(0)),
         );
         assert_eq!(out.stop, StopReason::Halted);
-        assert!(!history
+        // The halted call still gets an output, so the next request is valid.
+        let outputs: Vec<(&str, &str)> = history
             .iter()
-            .any(|item| matches!(item, InputItem::FunctionCallOutput { .. })));
+            .filter_map(|item| match item {
+                InputItem::FunctionCallOutput { call_id, output } => {
+                    Some((call_id.as_str(), output.as_str()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(outputs, vec![("h", crate::client::NOT_RUN)]);
+
+        let halt_batch = Script {
+            turns: Mutex::new(vec![ScriptTurn {
+                text: String::new(),
+                calls: vec![
+                    call("h1", "read_file", r#"{"target_file":"note.txt"}"#),
+                    call("h2", "read_file", r#"{"target_file":"note.txt"}"#),
+                    call("h3", "read_file", r#"{"target_file":"note.txt"}"#),
+                ],
+                usage: Usage::default(),
+                truncated: false,
+            }]),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+        let (out, history, _) = run(
+            &halt_batch,
+            &dir,
+            4,
+            &CancelToken::new(),
+            &SteerQueue::new(),
+            &HaltAfter(AtomicUsize::new(0)),
+        );
+        assert_eq!(out.stop, StopReason::Halted);
+        let calls: Vec<&str> = history
+            .iter()
+            .filter_map(|item| match item {
+                InputItem::FunctionCall { call_id, .. } => Some(call_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        let answered: Vec<&str> = history
+            .iter()
+            .filter_map(|item| match item {
+                InputItem::FunctionCallOutput { call_id, .. } => Some(call_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(calls, vec!["h1", "h2", "h3"]);
+        assert_eq!(
+            answered, calls,
+            "every call of a halted batch is answered, in order"
+        );
 
         let cap_client = AlwaysTool {
             calls: AtomicUsize::new(0),
@@ -2830,6 +3953,18 @@ mod tests {
         desktop: Option<&dyn DesktopOps>,
         permits: &dyn PermitWait,
     ) -> (LoopOut, Vec<InputItem>, Vec<LoopEvent>) {
+        once_for(script, dir, gate, desktop, permits, 4)
+    }
+
+    /// [`once`] with its own turn cap.
+    fn once_for(
+        script: &Script,
+        dir: &std::path::Path,
+        gate: Gate,
+        desktop: Option<&dyn DesktopOps>,
+        permits: &dyn PermitWait,
+        max_turns: u32,
+    ) -> (LoopOut, Vec<InputItem>, Vec<LoopEvent>) {
         let input = LoopIn {
             client: script,
             workspace: dir,
@@ -2837,7 +3972,7 @@ mod tests {
             effort: None,
             system: "",
             conversation_id: "conv",
-            max_turns: 4,
+            max_turns,
             usage_base: Usage::default(),
             cancel: &CancelToken::new(),
             steer: &SteerQueue::new(),
@@ -2953,6 +4088,43 @@ mod tests {
             self.has_cabin_search.lock().unwrap().push(cabin);
             self.script.stream(req, cancel, sink)
         }
+    }
+
+    #[test]
+    fn once_recall_was_in_the_run_hosted_search_stays_off() {
+        let _online = grokhub_core::offline::force_for_thread(false);
+        let dir = workspace("hosted-sticky");
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let gate = chat(gate::PermMode::Ask, true, false);
+        let plain = vec![InputItem::Message {
+            role: "user".into(),
+            content: vec![ContentPart::InputText("look it up".into())],
+        }];
+        let mut fresh = false;
+        assert!(hosted_for_step(&gate, &dir, &plain, "", &mut fresh));
+        let mut recalled = true;
+        assert!(
+            !hosted_for_step(&gate, &dir, &plain, "", &mut recalled),
+            "no recall left in the history, but the run saw some"
+        );
+        assert!(recalled);
+
+        // The mark outlives the run: a later turn of the same chat that
+        // recalls nothing still keeps hosted search off.
+        let chat = "hosted-sticky-chat";
+        let mut first = true;
+        assert!(!hosted_for_step(&gate, &dir, &plain, chat, &mut first));
+        let mut later = false;
+        assert!(
+            !hosted_for_step(&gate, &dir, &plain, chat, &mut later),
+            "the chat saw recalled lines in an earlier turn"
+        );
+        assert!(later);
+        let mut other = false;
+        assert!(
+            hosted_for_step(&gate, &dir, &plain, "hosted-sticky-other", &mut other),
+            "another chat is not marked"
+        );
     }
 
     #[test]
@@ -3690,7 +4862,7 @@ mod tests {
 
     #[test]
     fn desktop_tools_follow_the_switch_halt_and_lock() {
-        // Full tool list and per-turn system rewrite: the mode this test checks.
+        // Full tool list: the mode this test checks.
         let _legacy = crate::tools::registry::LegacyPromptGuard::set();
         let dir = workspace("desk");
         let shot = |id: &str| ScriptTurn {
@@ -4090,7 +5262,7 @@ mod tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
         let mut notes = Vec::new();
         while std::time::Instant::now() < deadline {
-            notes.extend(hub.drain_notices());
+            notes.extend(hub.drain_notices().iter().map(ToString::to_string));
             if notes
                 .iter()
                 .any(|note| note.contains("cancelled") || note.contains("killed"))
@@ -4213,6 +5385,13 @@ mod tests {
     #[test]
     fn pre_tool_hook_deny_blocks_and_allow_does_not_skip_ask() {
         let dir = workspace("hook-gate");
+        // Round 3 item 28: each stopped or asked call leaves one safety event.
+        let cfg = dir.join("cfg");
+        let _cfg = crate::perm::ConfigGuard::set(cfg.clone());
+        crate::harness::use_key_store_for(
+            &cfg,
+            std::sync::Arc::new(crate::harness::MemoryKeyStore::new()),
+        );
         let session = format!("hook-gate-{}", std::process::id());
         let deny = crate::hooks::install_test_hooks(
             &session,
@@ -4280,6 +5459,23 @@ mod tests {
             "{history:?}"
         );
         drop(deny);
+        let safety = safety_events::read(&cfg);
+        assert_eq!(safety.len(), 1, "{safety:?}");
+        assert_eq!(
+            (
+                safety[0].tool.as_str(),
+                safety[0].outcome,
+                safety[0].by,
+                safety[0].answer
+            ),
+            (
+                "write",
+                safety_events::Outcome::Stopped,
+                safety_events::DecidedBy::Hook,
+                None
+            )
+        );
+        assert_eq!(safety[0].chat, session);
 
         let allow_session = format!("{session}-allow");
         let allow = crate::hooks::install_test_hooks(
@@ -4350,6 +5546,16 @@ mod tests {
             "{history:?}"
         );
         drop(allow);
+        let safety = safety_events::read(&cfg);
+        assert_eq!(safety.len(), 2, "{safety:?}");
+        assert_eq!(
+            (safety[1].outcome, safety[1].by, safety[1].answer),
+            (
+                safety_events::Outcome::Asked,
+                safety_events::DecidedBy::Rule,
+                Some(safety_events::Answer::Denied)
+            )
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -4414,8 +5620,14 @@ mod tests {
             .iter()
             .filter_map(|item| match item {
                 InputItem::Message { role, content } if role == "user" => match content.first() {
+                    // An app note reads as its words; one test checks the tag.
                     Some(ContentPart::InputText(t)) => {
-                        Some(crate::prefix_cache::visible_user_text(t).to_string())
+                        let text = crate::prefix_cache::visible_user_text(t);
+                        Some(
+                            crate::compact::cabin_note_body(text)
+                                .unwrap_or(text)
+                                .to_string(),
+                        )
                     }
                     _ => None,
                 },
@@ -4460,6 +5672,12 @@ mod tests {
         let (out, history, _) = run_drive(&script, &dir, &conv);
         assert_eq!(out.stop, StopReason::EndTurn);
         assert_eq!(script.seen.lock().unwrap().len(), 4);
+        // The push goes in as the app's note, never as the person's words.
+        assert!(history.iter().any(|item| matches!(
+            item,
+            InputItem::Message { role, content } if role == "user"
+                && matches!(content.first(), Some(ContentPart::InputText(t)) if t.starts_with("<cabin-note>\nNot done yet"))
+        )));
         assert_eq!(
             user_texts(&history),
             [
@@ -4678,6 +5896,36 @@ mod tests {
     }
 
     #[test]
+    fn a_reply_that_says_the_tests_pass_after_a_red_run_gets_one_note() {
+        let dir = workspace("post-check");
+        let conv = format!("post-check-{}", std::process::id());
+        // Prints a cargo-style summary and fails, in bash and PowerShell alike.
+        let red =
+            r#"{"command":"echo 'test result: FAILED. 3 passed; 1 failed'; exit 1 # cargo test"}"#;
+        let script = scripted(vec![
+            turn("", vec![call("t1", "run_terminal_command", red)]),
+            turn("Done, all tests pass.", Vec::new()),
+            turn("Correction: 1 test still fails.", Vec::new()),
+        ]);
+        let (out, history, _) = run_drive_in(
+            &script,
+            &dir,
+            &conv,
+            chat(gate::PermMode::Always, true, false),
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(script.seen.lock().unwrap().len(), 3);
+        let texts = user_texts(&history);
+        assert_eq!(texts.len(), 2, "{texts:?}");
+        assert!(
+            texts[1].starts_with("Before this turn ends") && texts[1].contains("shows 1 failed"),
+            "{}",
+            texts[1]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn an_edit_then_a_test_run_then_stop_ends() {
         let dir = workspace("verify-tests");
         let conv = format!("verify-tests-{}", std::process::id());
@@ -4878,16 +6126,21 @@ mod tests {
         assert_eq!(out.stop, StopReason::EndTurn);
         assert_eq!(script.seen.lock().unwrap().len(), 1);
         let line = "That isn't done yet: nothing ran this turn to make or check the change.";
+        // The app's check shows as status, once, and never as the model's words.
         assert_eq!(
             events
                 .iter()
-                .filter(|ev| matches!(ev, LoopEvent::Text(t) if t == &format!("\n\n{line}")))
+                .filter(|ev| matches!(ev, LoopEvent::Thought(t) if t == line))
                 .count(),
             1
         );
-        assert!(
-            matches!(history.last(), Some(InputItem::Message { role, content }) if role == "assistant" && content.first() == Some(&ContentPart::InputText(line.into())))
-        );
+        assert!(!events
+            .iter()
+            .any(|ev| matches!(ev, LoopEvent::Text(t) if t.contains(line))));
+        assert!(!history.iter().any(|item| matches!(
+            item,
+            InputItem::Message { content, .. } if content.first() == Some(&ContentPart::InputText(line.into()))
+        )));
         crate::session_tools::invalidate_todos(&conv);
         // A plain question with the same words gets no extra line.
         let conv = format!("claim-done-q-{}", std::process::id());
@@ -4948,6 +6201,20 @@ mod tests {
         (out, events)
     }
 
+    fn last_user_text(history: &[InputItem]) -> String {
+        history
+            .iter()
+            .rev()
+            .find_map(|item| match item {
+                InputItem::Message { role, content } if role == "user" => match content.first() {
+                    Some(ContentPart::InputText(t)) => Some(t.clone()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
     fn system_text(history: &[InputItem]) -> String {
         match history.first() {
             Some(InputItem::Message { role, content }) if role == "system" => match content.first()
@@ -4959,77 +6226,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn casual_chat_gets_the_short_style_and_a_later_repair_swaps_it_in_place() {
-        // Full tool list and per-turn system rewrite: the mode this test checks.
-        let _legacy = crate::tools::registry::LegacyPromptGuard::set();
-        use grokhub_core::talk::{TalkStyle, VOLATILE_SAFETY_CLOSER};
-        let dir = workspace("talk-short");
-        let conv = format!("talk-short-{}", std::process::id());
-        let voice = grokhub_core::personality::builtin("pirate").prompt_block();
-        let system = format!("CABIN RULES\n\n{voice}\n\n{VOLATILE_SAFETY_CLOSER}");
-        crate::checkpoint::set_turn_style(&conv, Some(TalkStyle::Short));
-        let script = scripted(vec![
-            turn("Ahoy! All calm here. What be next?", Vec::new()),
-            turn("Fixed.", Vec::new()),
-        ]);
-        let mut history = Vec::new();
-        let (out, events) = talk_turn(
-            &script,
-            &dir,
-            &conv,
-            &system,
-            Gate::phase_readonly(),
-            &gate::ClosedPermits,
-            &mut history,
-            "hi there",
-        );
-        assert_eq!(out.stop, StopReason::EndTurn);
-        let short = format!(
-            "CABIN RULES\n\n{voice}\n\n\
-             Talk style for this turn: casual chat. Reply in one to three short sentences, under 60 words, with no headings, lists or preamble.\n\
-             Talk style sets length and shape, and its length wins over a personality's; a personality sets tone only. Accuracy and care beat those word caps, so say what is true and what is careful even when that runs past the cap. Approval questions, security warnings and error facts stay plain. The person's latest ask outranks this style: when they ask for a task, do the task. The cabin safety rules win.\n\n\
-             {VOLATILE_SAFETY_CLOSER}"
-        );
-        let seen = script.seen.lock().unwrap()[0].clone();
-        assert_eq!(system_text(&seen), short);
-        // The reply the model gave fits the short style's cap.
-        let reply: String = events
-            .iter()
-            .filter_map(|e| {
-                if let LoopEvent::Text(t) = e {
-                    Some(t.as_str())
-                } else {
-                    None
-                }
-            })
-            .collect();
-        assert_eq!(reply, "Ahoy! All calm here. What be next?");
-        assert!(grokhub_core::talk::fits_cap(TalkStyle::Short, &reply));
-        // The next turn is a repair: the stored system message swaps the block, nothing else.
-        crate::checkpoint::set_turn_style(&conv, Some(TalkStyle::Findings));
-        let _ = talk_turn(
-            &script,
-            &dir,
-            &conv,
-            &system,
-            Gate::phase_readonly(),
-            &gate::ClosedPermits,
-            &mut history,
-            "wifi broke",
-        );
-        let repair = short.replace(&TalkStyle::Short.block(), &TalkStyle::Findings.block());
-        assert_eq!(system_text(&script.seen.lock().unwrap()[1]), repair);
-        crate::checkpoint::set_turn_style(&conv, None);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// The default stable prompt: the style rides in the turn's own user message,
+    /// The stable prompt: the style rides in the turn's own user message,
     /// the system message never changes, and earlier turns stay as sent.
     #[test]
     fn with_the_stable_prompt_the_style_rides_in_the_user_turn() {
         use grokhub_core::talk::{TalkStyle, VOLATILE_SAFETY_CLOSER};
-        crate::prefix_cache::set_enabled_for_tests(Some(true));
         let dir = workspace("talk-stable");
         let conv = format!("talk-stable-{}", std::process::id());
         let voice = grokhub_core::personality::builtin("pirate").prompt_block();
@@ -5085,16 +6286,14 @@ mod tests {
             "wifi broke"
         );
         crate::checkpoint::set_turn_style(&conv, None);
-        crate::prefix_cache::set_enabled_for_tests(None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Two turns whose talk style changes in between, through the real loop.
-    fn two_styled_turns(tag: &str, prefix_cache: bool) -> String {
+    fn two_styled_turns(tag: &str) -> String {
         use grokhub_core::talk::TalkStyle;
         let dir = workspace(tag);
         let conv = format!("{tag}-{}", std::process::id());
-        crate::prefix_cache::set_enabled_for_tests(Some(prefix_cache));
         crate::checkpoint::set_turn_style(&conv, Some(TalkStyle::Short));
         let script = scripted(vec![turn("Hi.", Vec::new()), turn("Fixed.", Vec::new())]);
         let mut history = Vec::new();
@@ -5116,29 +6315,15 @@ mod tests {
             assert_eq!(out.stop, StopReason::EndTurn);
         }
         crate::checkpoint::set_turn_style(&conv, None);
-        crate::prefix_cache::set_enabled_for_tests(None);
         let _ = std::fs::remove_dir_all(&dir);
         crate::prefix_guard::run_key(&conv, 0, None)
     }
 
     #[test]
-    fn with_prefix_cache_a_style_change_keeps_the_prefix_append_only() {
-        let key = two_styled_turns("guard-cache-on", true);
+    fn a_style_change_keeps_the_prefix_append_only() {
+        let key = two_styled_turns("guard-style");
         crate::prefix_guard::assert_no_unexpected_break(&key);
         assert_eq!(crate::prefix_guard::breaks(&key), Vec::new());
-    }
-
-    #[test]
-    fn without_prefix_cache_a_style_change_is_reported_as_a_system_rewrite() {
-        let key = two_styled_turns("guard-cache-off", false);
-        assert_eq!(
-            crate::prefix_guard::breaks(&key),
-            vec![crate::prefix_guard::PrefixBreak {
-                index: 0,
-                part: crate::prefix_guard::Part::System,
-                reason: crate::prefix_guard::Reason::Unexpected,
-            }]
-        );
     }
 
     #[test]
@@ -5265,7 +6450,8 @@ mod tests {
         ]);
         let (out, history, events) = run_drive(&script, &dir, &conv);
         assert_eq!(out.stop, StopReason::EndTurn);
-        let notes: Vec<&str> = events
+        // Progress notes show as status lines; the reply is the model's alone.
+        let texts: Vec<&str> = events
             .iter()
             .filter_map(|e| {
                 if let LoopEvent::Text(t) = e {
@@ -5275,12 +6461,19 @@ mod tests {
                 }
             })
             .collect();
+        assert_eq!(texts, ["All three checked."]);
+        let notes: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                LoopEvent::Thought(t) if t.starts_with("Finished ") => Some(t.as_str()),
+                _ => None,
+            })
+            .collect();
         assert_eq!(
             notes,
             [
-                "\n\nFinished check services. Now on check packages.\n\n",
-                "\n\nFinished check packages. Now on boot errors.\n\n",
-                "All three checked."
+                "Finished check services. Now on check packages.",
+                "Finished check packages. Now on boot errors.",
             ]
         );
         // The notes are for the person, not sent back to the model.
@@ -5292,9 +6485,9 @@ mod tests {
 
     #[test]
     fn the_picked_playbook_reaches_the_prompt_and_a_later_turn_swaps_or_drops_it() {
-        // Full tool list and per-turn system rewrite: the mode this test checks.
+        // Full tool list: the mode this test checks.
         let _legacy = crate::tools::registry::LegacyPromptGuard::set();
-        use grokhub_core::playbook::{parse, with_playbook, BUILTIN};
+        use grokhub_core::playbook::{parse, BUILTIN};
         let dir = workspace("playbook-prompt");
         let conv = format!("playbook-prompt-{}", std::process::id());
         let system = format!(
@@ -5330,31 +6523,26 @@ mod tests {
         ask(Some(&files), "move my photos into folders by year");
         ask(None, "thanks");
         let seen = script.seen.lock().unwrap();
-        let prompts: Vec<String> = seen.iter().map(|h| system_text(h)).collect();
+        // The system message never changes; each turn's playbook rides in
+        // that turn's own user message, and only there.
+        assert!(seen.iter().all(|h| system_text(h) == system));
+        let last: Vec<String> = seen.iter().map(|h| last_user_text(h)).collect();
+        assert!(last[0].contains(&code) && !last[0].contains(&files));
+        assert!(last[1].contains(&files) && !last[1].contains(&code));
+        assert!(!last[2].contains(&code) && !last[2].contains(&files));
         assert_eq!(
-            prompts,
-            vec![
-                format!(
-                    "CABIN RULES\n\n{code}\n\n{}",
-                    grokhub_core::talk::VOLATILE_SAFETY_CLOSER
-                ),
-                format!(
-                    "CABIN RULES\n\n{files}\n\n{}",
-                    grokhub_core::talk::VOLATILE_SAFETY_CLOSER
-                ),
-                system.clone(),
-            ]
+            crate::prefix_cache::visible_user_text(&last[1]),
+            "move my photos into folders by year"
         );
-        assert_eq!(prompts[1], with_playbook(&prompts[0], Some(&files)));
         crate::checkpoint::set_turn_playbook(&conv, None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn the_approval_card_is_identical_in_every_style_and_personality() {
-        // Full tool list and per-turn system rewrite: the mode this test checks.
+        // Full tool list: the mode this test checks.
         let _legacy = crate::tools::registry::LegacyPromptGuard::set();
-        use grokhub_core::talk::{restyle, TalkStyle};
+        use grokhub_core::talk::TalkStyle;
         let styles = [
             TalkStyle::Short,
             TalkStyle::Concise,
@@ -5365,7 +6553,12 @@ mod tests {
             TalkStyle::Draft,
             TalkStyle::Natural,
         ];
-        let personalities = grokhub_core::personality::builtins();
+        // An 18+ voice only ever runs on this computer's model, never this
+        // scripted online one, so the others are checked here.
+        let personalities: Vec<_> = grokhub_core::personality::builtins()
+            .into_iter()
+            .filter(|p| !p.explicit)
+            .collect();
         assert!(personalities.len() > 10);
         let dir = workspace("talk-approval");
         let conv = format!("talk-approval-{}", std::process::id());
@@ -5401,10 +6594,9 @@ mod tests {
                     "write the plan",
                 );
                 // The style reached the prompt, and the card came out of the gate all the same.
-                assert_eq!(
-                    system_text(&script.seen.lock().unwrap()[0]),
-                    restyle(&system, style)
-                );
+                let sent = &script.seen.lock().unwrap()[0];
+                assert_eq!(system_text(sent), system);
+                assert!(last_user_text(sent).contains(&style.block()));
                 cards.extend(
                     events
                         .into_iter()

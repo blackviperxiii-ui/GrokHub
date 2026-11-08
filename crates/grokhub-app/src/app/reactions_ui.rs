@@ -70,9 +70,9 @@ impl Cabin {
     /// Cards left untouched for a day count as ignored, once each.
     pub(super) fn sweep_reactions(&mut self, now: u64) {
         let cards = self.updates.clone();
-        let before = self.reactions_now().log.len();
+        let before = self.reactions_now().clone();
         let quieted = self.reactions_now().sweep_ignored(&cards, now);
-        if self.reactions_now().log.len() != before {
+        if *self.reactions_now() != before {
             self.save_reactions();
         }
         self.announce_quiet(&quieted);
@@ -100,15 +100,17 @@ impl Cabin {
         use super::pulse_ui::{PulseAct, SourceAct};
         let (id, outcome, more) = match act {
             PulseAct::Run(id)
+            | PulseAct::Offer(id, _)
             | PulseAct::Always(id)
             | PulseAct::Accept(id)
             | PulseAct::Like(id)
             | PulseAct::HobbyDone(id)
             | PulseAct::HobbyTooEasy(id) => (id, Outcome::Accepted, None),
-            PulseAct::Open(id) | PulseAct::Discuss(id) | PulseAct::DayTap(id, ..) => {
-                (id, Outcome::Tapped, None)
-            }
-            PulseAct::Snooze(id) => (id, Outcome::Snoozed, None),
+            PulseAct::Open(id)
+            | PulseAct::Report(id)
+            | PulseAct::Discuss(id)
+            | PulseAct::DayTap(id, ..) => (id, Outcome::Tapped, None),
+            PulseAct::Snooze(id) | PulseAct::RemindAt(id, _) => (id, Outcome::Snoozed, None),
             PulseAct::Dismiss(id) => (id, Outcome::Dismissed, None),
             PulseAct::Wrong(id) => (id, Outcome::Dismissed, None),
             PulseAct::NotThis(id) | PulseAct::HobbySkip(id) | PulseAct::HobbyTooHard(id) => {
@@ -259,12 +261,12 @@ mod tests {
         let card = cabin.pulse_card("a").unwrap();
         assert_eq!(
             cabin.reaction_why(&card).as_deref(),
-            Some("From Dota 2 on Steam · game news -3")
+            Some("From Dota 2 on Steam. You've passed on some game news, so they show a little less.")
         );
     }
 
     #[test]
-    fn a_quiet_category_leaves_the_feed_and_more_brings_it_back() {
+    fn skipped_game_news_stays_in_the_feed() {
         let _pin = pinned("reactions-quiet");
         let mut cabin = Cabin::quiet_for_test();
         let card = steam_post(&mut cabin, "a");
@@ -273,13 +275,14 @@ mod tests {
         for _ in 0..3 {
             cabin.react(&card, Outcome::Ignored);
         }
-        assert!(cabin
-            .status
-            .starts_with("You've skipped game news a few times"));
-        assert!(cabin.pulse_feed_posts(now).is_empty());
-        cabin.react_to_act(&PulseAct::MoreKind("a".into()));
+        assert!(
+            !cabin.status.starts_with("You've skipped game news"),
+            "scrolling past is not a no: {}",
+            cabin.status
+        );
         assert_eq!(cabin.pulse_feed_posts(now).len(), 1);
         assert!(!reactions::load(&reactions_path()).quiet("game news"));
+        assert_eq!(reactions::load(&reactions_path()).score("game news"), -3);
     }
 
     #[test]

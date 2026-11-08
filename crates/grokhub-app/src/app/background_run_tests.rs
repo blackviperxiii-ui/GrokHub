@@ -103,6 +103,19 @@ fn slash_bg_runs_beside_the_chat_on_a_forked_session() {
         Some("**Background task done** · run the checks\n\nbg finished")
     );
     assert_eq!(
+        cabin.notices.items.first().map(|n| n.text.as_str()),
+        Some("Background task done · run the checks"),
+        "the bell keeps the finished task"
+    );
+    assert_eq!(
+        cabin.notices.items.first().and_then(|n| n.from.clone()),
+        Some(super::notices::NoticePlace::Chat {
+            id: cabin.threads[0].id.clone(),
+            title: cabin.threads[0].title.clone(),
+        }),
+        "the bell row names the chat it ran beside and opens it"
+    );
+    assert_eq!(
         cabin.threads[0].grok_session.as_deref(),
         Some("native-main")
     );
@@ -464,7 +477,7 @@ fn a_cabin_wide_grok_command_still_queues_instead_of_steering() {
 }
 
 #[test]
-fn the_live_work_strip_offers_steer_queue_and_background_stop() {
+fn the_live_work_strip_offers_steer_and_queue_and_activity_holds_the_rest() {
     let _g = crate::config::hold_test_config();
     let (root, mut cabin) = isolated_cabin("bg-strip");
     cabin.threads = vec![crate::threads::ChatThread::new("Chat", false)];
@@ -496,7 +509,7 @@ fn the_live_work_strip_offers_steer_queue_and_background_stop() {
     cabin.running = true;
     cabin.chat_job_thread = Some(id.clone());
     cabin.composer = "make it blue".into();
-    cabin.followup_queue = vec!["then deploy".into()];
+    cabin.followup_queue = Vec::<String>::from(["then deploy".into()]).into();
     cabin.bg.runs.push(super::background::BgRun {
         id: 7,
         thread_id: id.clone(),
@@ -514,19 +527,48 @@ fn the_live_work_strip_offers_steer_queue_and_background_stop() {
         automation: None,
     });
     let shown = paint(&mut cabin);
-    for want in [
-        "Steer",
-        "Queue",
-        "Queued",
-        "then deploy",
-        "Steer now",
-        "Remove",
-        "Background · run the checks",
-        "0s · cargo test",
-        "Stop",
-    ] {
-        assert!(shown.contains(want), "missing {want:?}: {shown}");
-    }
+    assert!(
+        !shown.contains("Steer")
+            && !shown.contains("Queue")
+            && !shown.contains("then deploy")
+            && !shown.contains("Background")
+            && !shown.contains("Stop"),
+        "typing during a reply needs no choice above the box: {shown}"
+    );
+    // The queued message and the background run are Activity rows instead.
+    let items = cabin.activity_items();
+    let queued = items
+        .iter()
+        .find(|i| i.key == "queue:0")
+        .expect("queued message row");
+    assert_eq!(queued.title, "then deploy");
+    assert_eq!(queued.detail, "Next up");
+    assert_eq!(
+        super::activity_dock::row_buttons(queued, cabin.can_steer_live_turn())
+            .iter()
+            .map(|(l, _)| *l)
+            .collect::<Vec<_>>(),
+        ["Steer now", "Remove"]
+    );
+    let run = items
+        .iter()
+        .find(|i| i.key == "bg:7")
+        .expect("background row");
+    assert_eq!(run.title, "run the checks");
+    assert_eq!(run.detail, "0s · cargo test");
+    assert_eq!(
+        super::activity_dock::row_buttons(run, true)
+            .iter()
+            .map(|(l, _)| *l)
+            .collect::<Vec<_>>(),
+        ["Open chat", "Stop"]
+    );
+    cabin.composer.clear();
+    assert_eq!(
+        paint(&mut cabin),
+        "",
+        "no typed text, nothing above the box"
+    );
     cabin.grok_p_rx = None;
     cabin.running = false;
     cabin.bg.runs.clear();
@@ -1091,9 +1133,10 @@ fn a_scheduled_run_never_blocks_pauses_or_shows_in_your_chat() {
         .find(|u| grokhub_core::feed_group_key(u).as_deref() == Some("run:a-snap"))
         .expect("home card");
     assert_eq!(home.board_id.as_deref(), Some(card.id.as_str()));
+    assert_eq!(home.title, "bg finished");
     assert_eq!(
         home.body.as_deref(),
-        Some("In Follow up on your workboard. Open it to read and reply.")
+        Some("The latest run of \"Host snapshot\" reported this.")
     );
 
     // 3. A job is mid-turn: your next message goes out at once, not behind it.

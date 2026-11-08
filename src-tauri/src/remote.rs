@@ -69,6 +69,7 @@ pub const WEB_COMMANDS: &[&str] = &[
     "answer_permission",
     "answer_elicit",
     "cancel_chat",
+    "steer_chat",
     "close_chat",
     // Pasted or dropped files only; the picker and paths stay on the computer.
     "stage_attachment",
@@ -125,9 +126,18 @@ pub const WEB_COMMANDS: &[&str] = &[
     "get_behavior",
     "get_privacy",
     "get_background",
-    // Read only; Accept as done (`set_mission_done`) stays on the computer.
+    // Accept as done (`set_mission_done`) stays on the computer; the layout
+    // is only which tiles show, so a paired phone may edit it.
     "get_home",
     "get_mission",
+    // Goals are the player's own list; a paired phone may add and move them.
+    "get_goals",
+    "goal_act",
+    "home_catalog",
+    "set_home_layout",
+    // Chips read and teach chip memory only; a tap acts on the page.
+    "quick_chips",
+    "chip_outcome",
 ];
 
 pub fn web_command(name: &str) -> bool {
@@ -989,6 +999,7 @@ mod tests {
         for name in [
             "save_settings",
             "set_theme",
+            "auto_setup",
             "set_api_key",
             "clear_api_key",
             "get_interests",
@@ -1006,6 +1017,9 @@ mod tests {
             "get_personalities",
             "set_personality",
             "set_explicit_personalities",
+            "confirm_adult",
+            "set_quip_heat",
+            "set_dynamic_chat",
             "duplicate_personality",
             "save_personality",
             "delete_personality",
@@ -1038,6 +1052,9 @@ mod tests {
             "get_library",
             "library_cover",
             "library_play",
+            "home_open_clip",
+            "library_friends",
+            "home_turn_on",
             "set_mission_done",
         ] {
             assert!(!web_command(name), "{name}");
@@ -1082,14 +1099,30 @@ mod tests {
             "save_defaults",
             "set_offline_only",
             "open_data_folder",
+            "open_files_folder",
+            "change_files_folder",
         ] {
             assert!(!web_command(name), "{name}");
         }
     }
 
     #[test]
+    fn saving_and_opening_chat_files_stay_on_this_computer() {
+        for name in ["export_chat", "open_saved", "reveal_saved"] {
+            assert!(!web_command(name), "{name}");
+        }
+    }
+
+    #[test]
     fn the_web_reads_home_and_objectives_but_never_accepts_a_mission() {
-        for name in ["get_home", "get_mission"] {
+        for name in [
+            "get_home",
+            "get_mission",
+            "get_goals",
+            "goal_act",
+            "home_catalog",
+            "set_home_layout",
+        ] {
             assert!(web_command(name), "{name}");
         }
         assert!(!web_command("set_mission_done"));

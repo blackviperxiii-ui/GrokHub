@@ -4,13 +4,10 @@
 //! the cabin says when it is back online and why it was offline, and a daily
 //! Feed card names the pattern. Off, nothing is sent at all.
 
-use std::net::{SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
 
 use super::*;
 use grokhub_core::net_log::{self as nl, Change, NetLog};
-
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Default)]
 pub(super) struct NetState {
@@ -52,17 +49,6 @@ pub(in crate::app) fn jitter_ms(samples: &[u32]) -> Option<u32> {
     Some((total / (samples.len() as u64 - 1)) as u32)
 }
 
-/// The connect time to the first resolver that answers, or `None`.
-fn probe() -> Option<u32> {
-    grokhub_core::offline::refuse().ok()?;
-    nl::PROBE_HOSTS.iter().find_map(|host| {
-        let addr: SocketAddr = host.parse().ok()?;
-        let start = Instant::now();
-        TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT).ok()?;
-        Some(u32::try_from(start.elapsed().as_millis()).unwrap_or(u32::MAX))
-    })
-}
-
 /// Bytes read and milliseconds taken for one speed-test download.
 fn speed_test() -> Result<(u64, u64), String> {
     grokhub_core::offline::refuse()?;
@@ -87,35 +73,6 @@ fn log_dir() -> std::path::PathBuf {
     crate::config::config_dir()
 }
 
-/// Where the CSV export goes: the user's Downloads folder, under USERPROFILE
-/// on Windows (a HOME set there can point somewhere else) and HOME elsewhere.
-fn downloads() -> std::path::PathBuf {
-    downloads_in(
-        cfg!(windows),
-        std::env::var_os("HOME"),
-        std::env::var_os("USERPROFILE"),
-    )
-}
-
-/// Kept as `OsString` so a home path that is not UTF-8 still works.
-fn downloads_in(
-    windows: bool,
-    home: Option<std::ffi::OsString>,
-    userprofile: Option<std::ffi::OsString>,
-) -> std::path::PathBuf {
-    let set = |v: Option<std::ffi::OsString>| v.filter(|s| !s.is_empty());
-    let (first, second) = if windows {
-        (userprofile, home)
-    } else {
-        (home, userprofile)
-    };
-    set(first)
-        .or_else(|| set(second))
-        .map(std::path::PathBuf::from)
-        .unwrap_or_default()
-        .join("Downloads")
-}
-
 impl Cabin {
     fn net_now(&mut self) -> &mut NetLog {
         self.focus
@@ -135,6 +92,11 @@ impl Cabin {
     pub(super) fn tick_net_log(&mut self) {
         if !self.cfg.net_log {
             return;
+        }
+        if !self.net_now().on {
+            // Turned on before the log file carried the switch.
+            self.net_now().on = true;
+            self.save_net();
         }
         if let Some(rx) = self.focus.net.speed_rx.take() {
             match rx.try_recv() {
@@ -167,7 +129,7 @@ impl Cabin {
         let (tx, rx) = mpsc::channel();
         self.focus.net.probe_rx = Some(rx);
         std::thread::spawn(move || {
-            let _ = tx.send(probe());
+            let _ = tx.send(nl::probe());
         });
     }
 
@@ -272,14 +234,30 @@ impl Cabin {
         }
     }
 
+    /// The CSV goes to Reports in your files (the app folder if that can't
+    /// be written), and a second export the same day gets `-2`, never
+    /// replacing the first.
     fn export_net_csv(&mut self, now: u64) {
+        use super::saved_file::{save_into, SaveDir};
+        use grokhub_core::user_files::UserFolder;
         let name = format!("internet-log-{}.csv", &nl::iso_utc(now)[..10]);
-        let path = downloads().join(&name);
         let csv = self.net_now().csv(now);
-        self.focus.net.note = match grokhub_core::pulse_writer::write_atomic(&path, &csv) {
-            Ok(()) => format!("Saved {name} in Downloads."),
-            Err(err) => err,
+        let dirs = [SaveDir::User(UserFolder::Reports), SaveDir::AppData];
+        self.focus.net.note = match save_into(&log_dir(), &dirs, &name, csv.as_bytes()) {
+            Ok(path) => self.announce_saved(&path),
+            Err(reason) => format!("Couldn't save the log: {reason}. Nothing was saved."),
         };
+    }
+
+    /// Switch the internet log on or off and save it. Starting fresh drops
+    /// any probe still in flight.
+    pub(super) fn set_net_log(&mut self, on: bool) {
+        self.cfg.net_log = on;
+        self.focus.net = NetState::default();
+        self.persist_cfg();
+        // The log file carries the switch too, so the shell's tiles see it.
+        self.net_now().on = on;
+        self.save_net();
     }
 
     /// Settings → Behavior: the toggle, the drops-by-hour chart, a speed
@@ -292,9 +270,7 @@ impl Cabin {
             "About once a minute, check that the internet answers (a quick connection to two public DNS servers) and log drops and slow minutes on this computer. Export the log for your ISP any time.",
             &mut on,
         ) {
-            self.cfg.net_log = on;
-            self.focus.net = NetState::default();
-            self.persist_cfg();
+            self.set_net_log(on);
             self.status = "Saved".into();
         }
         if !self.cfg.net_log {
@@ -360,32 +336,37 @@ mod tests {
     const MIN: u64 = 60_000;
 
     #[test]
-    fn the_csv_goes_to_downloads_under_userprofile_on_windows() {
-        let os = |s: &str| Some(std::ffi::OsString::from(s));
-        assert_eq!(
-            downloads_in(true, os("C:/Users/user/AppData/Local"), os("C:/Users/user")),
-            std::path::PathBuf::from("C:/Users/user").join("Downloads")
+    fn the_csv_goes_to_reports_and_never_replaces_the_first() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("net-csv-reports");
+        let _ = std::fs::remove_dir_all(&root);
+        let _pin = crate::config::TestConfigDir::set(root.clone());
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.export_net_csv(DAY0);
+        let first = cabin.focus.net.note.clone();
+        assert!(
+            first.starts_with("Saved internet-log-") && first.ends_with(".csv to Reports"),
+            "{first}"
         );
         assert_eq!(
-            downloads_in(false, os("/home/user"), os("/elsewhere")),
-            std::path::PathBuf::from("/home/user").join("Downloads")
+            cabin.notices.items[0].action,
+            Some(super::super::notices::NoticeAction::ShowInFolder(
+                root.join("test-files/Reports").join(
+                    first
+                        .trim_start_matches("Saved ")
+                        .trim_end_matches(" to Reports")
+                )
+            ))
         );
-        assert_eq!(
-            downloads_in(true, os("C:/Users/user"), os("")),
-            std::path::PathBuf::from("C:/Users/user").join("Downloads"),
-            "an empty USERPROFILE falls back to HOME"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_home_that_is_not_utf8_still_gets_its_downloads() {
-        use std::os::unix::ffi::OsStringExt;
-        let home = std::ffi::OsString::from_vec(b"/home/us\xffer".to_vec());
-        assert_eq!(
-            downloads_in(false, Some(home.clone()), None),
-            std::path::PathBuf::from(home).join("Downloads")
-        );
+        cabin.export_net_csv(DAY0);
+        let reports = root.join("test-files/Reports");
+        let names: Vec<_> = std::fs::read_dir(&reports)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names.len(), 2, "{names:?}");
+        assert!(names.iter().any(|n| n.ends_with("-2.csv")), "{names:?}");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -13,6 +13,7 @@ mod list_dir;
 pub(crate) mod local_ai;
 mod lock;
 mod media;
+mod models_check;
 pub(crate) mod mods;
 pub(crate) mod ports;
 mod read_file;
@@ -25,6 +26,7 @@ pub(crate) mod taint;
 pub(crate) mod talk;
 mod web_fetch;
 pub(crate) mod web_search;
+pub(crate) mod workspace_tools;
 mod write;
 
 pub use registry::Settings as DeferredToolsSettings;
@@ -35,6 +37,11 @@ pub use web_search::{
 };
 
 /// Whether `{config_dir}/deferred_tools.toml` has `enabled = true`.
+/// `generative_ui.toml` turns show_panel and the chat's panels on, read the one way.
+pub fn generative_ui_enabled(config_dir: &Path) -> bool {
+    show_panel::enabled(config_dir)
+}
+
 pub fn deferred_tools_enabled(config_dir: &Path) -> bool {
     registry::settings(config_dir).enabled
 }
@@ -128,6 +135,16 @@ pub fn begin_deferred_turn(session: &str) {
     registry::begin_turn(session);
 }
 
+/// Item 33: count a chat's session in its workspace and freeze the workspace's
+/// up-front tool list for it. A chat already started keeps its list.
+pub fn start_workspace_session(session: &str, workspace: &Path) {
+    // Tests that share a config folder would count each other's sessions.
+    if cfg!(test) && crate::perm::pinned_config().is_none() {
+        return;
+    }
+    workspace_tools::start(&crate::perm::config_dir(), session, workspace);
+}
+
 /// LO-45: give the chat's Brief to the tool router. The first Brief picks the
 /// chat's tool profile; a later work Brief upgrades a Talk chat.
 pub fn note_turn_brief(session: &str, brief: &crate::brain::Brief) {
@@ -172,6 +189,9 @@ pub fn dispatch_for_job(
         if !set.allows(name) {
             return ToolOutput::err(set::tool_set_refusal(name));
         }
+    }
+    if let Some(session) = ctx.session {
+        workspace_tools::note_use(&crate::perm::config_dir(), session, name);
     }
     let args = match parse_args(arguments) {
         Ok(args) => args,
@@ -223,7 +243,18 @@ fn run_shell(ctx: &ToolCtx<'_>, args: &Value) -> ToolOutput {
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
     if !background {
-        return shell::run(ctx.workspace, args, ctx.stop);
+        // Where background tasks are on, a command that outlives its timeout
+        // keeps running as one instead of being killed.
+        let Some(tasks) = ctx.tasks.as_ref() else {
+            return shell::run(ctx.workspace, args, ctx.stop);
+        };
+        let command = args
+            .get("command")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let mut adopt = |proc, guard| tasks.adopt(proc, &command, ctx.owner, guard);
+        return shell::run_adoptable(ctx.workspace, args, ctx.stop, Some(&mut adopt));
     }
     let Some(tasks) = ctx.tasks.as_ref() else {
         return ToolOutput::err("background tasks are not available on this run");
@@ -276,6 +307,7 @@ fn dispatch_readonly(ctx: &ToolCtx<'_>, name: &str, args: &Value) -> ToolOutput 
         "skill" => crate::skills::tool_run(ctx.workspace, args),
         "diagnose" => crate::repair::tool_run(args),
         local_ai::STATUS => local_ai::status(args),
+        models_check::NAME => models_check::run(args),
         mods::SEARCH | mods::DETAIL | mods::INSTALLED => mods::run(name, args),
         other => ToolOutput::err(format!("{READ_ONLY_PHASE}: `{other}` is not available.")),
     }
@@ -299,9 +331,18 @@ fn parse_args(arguments: &str) -> Result<Value, ToolOutput> {
     }
     match serde_json::from_str::<Value>(arguments) {
         Ok(value) if value.as_object().is_some() => Ok(value),
-        Ok(_) => Err(ToolOutput::err("arguments must be a JSON object")),
-        Err(err) => Err(ToolOutput::err(format!("arguments are not JSON: {err}"))),
+        Ok(_) => Err(ToolOutput::err(
+            "arguments must be a JSON object: send the call again with them as one object",
+        )),
+        Err(err) => Err(ToolOutput::err(format!(
+            "arguments are not JSON ({err}): send the call again with valid JSON"
+        ))),
     }
+}
+
+/// Whether a call's arguments parse the way [`parse_args`] takes them.
+pub fn args_parse(arguments: &str) -> bool {
+    parse_args(arguments).is_ok()
 }
 
 /// Lexical `..` and symlink targets that leave the canonical workspace are rejected.
@@ -439,6 +480,9 @@ pub fn u32_field(v: &Value, key: &str) -> Option<u32> {
 }
 
 #[cfg(test)]
+mod arg_roundtrip_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -505,7 +549,7 @@ mod tests {
     /// tools share a name, so chat fails before the first token.
     #[test]
     fn schemas_for_has_no_duplicate_names() {
-        // Full tool list and per-turn system rewrite: the mode this test checks.
+        // Full tool list: the mode this test checks.
         let _legacy = crate::tools::registry::LegacyPromptGuard::set();
         for readonly_session in [false, true] {
             for desktop in [false, true] {

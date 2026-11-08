@@ -21,6 +21,8 @@ pub(super) struct AchState {
 
 struct AchRun {
     picks: Vec<Nudge>,
+    /// Unlocked and in all for each game read, for goals on Objectives.
+    counts: Vec<(u32, sa::Count)>,
     private: bool,
     error: Option<String>,
 }
@@ -34,6 +36,7 @@ fn run_check(
     get: &mut dyn FnMut(&str) -> Result<String, String>,
 ) -> AchRun {
     let mut picks = Vec::new();
+    let mut counts = Vec::new();
     let mut failed = 0;
     for (app_id, name) in games {
         let list = match get(&sa::player_url(steam_id, *app_id)).map(|b| sa::parse_player(&b)) {
@@ -41,6 +44,7 @@ fn run_check(
             Ok(Some(Player::Private)) => {
                 return AchRun {
                     picks: Vec::new(),
+                    counts: Vec::new(),
                     private: true,
                     error: None,
                 }
@@ -51,6 +55,7 @@ fn run_check(
                 continue;
             }
         };
+        counts.push((*app_id, sa::Count::of(&list)));
         let rates = if sa::worth_rates(&list) {
             get(&sa::global_url(*app_id))
                 .map(|b| sa::parse_global(&b))
@@ -64,6 +69,7 @@ fn run_check(
         .then(|| "Steam's stats pages didn't answer".to_string());
     AchRun {
         picks,
+        counts,
         private: false,
         error,
     }
@@ -94,24 +100,31 @@ fn deck_reply(url: &str) -> Result<String, String> {
     Ok(body)
 }
 
-/// The games to read: the most recently played installs that have play time.
+/// The games to read: games with an achievements goal on Objectives first,
+/// then the most recently played installs that have play time.
 fn games_to_check() -> Vec<(u32, String)> {
     if deck_check() {
         return vec![(1145360, "Hades".into())];
     }
-    let Some(root) = grokhub_core::steam::detect_root() else {
-        return Vec::new();
-    };
-    grokhub_core::steam::read_library(&root)
-        .into_iter()
-        .filter(|g| g.playtime_min > 0)
-        .take(sa::GAMES_PER_CHECK)
-        .map(|g| (g.app_id, g.name))
-        .collect()
+    let goals = grokhub_core::objectives::load(&crate::config::config_dir());
+    let mut games = grokhub_core::objectives::goal_steam_games(&goals);
+    if let Some(root) = grokhub_core::steam::detect_root() {
+        let played = grokhub_core::steam::read_library(&root)
+            .into_iter()
+            .filter(|g| g.playtime_min > 0)
+            .map(|g| (g.app_id, g.name));
+        for game in played {
+            if !games.iter().any(|(id, _)| *id == game.0) {
+                games.push(game);
+            }
+        }
+    }
+    games.truncate(sa::GAMES_PER_CHECK);
+    games
 }
 
 impl Cabin {
-    fn ach_now(&mut self) -> &mut Tracker {
+    pub(super) fn ach_now(&mut self) -> &mut Tracker {
         self.sources
             .ach
             .tracker
@@ -186,9 +199,9 @@ impl Cabin {
                 .get(sa::SOURCE_NAME)
                 .copied()
                 .unwrap_or(0);
-        let picks = self
-            .ach_now()
-            .check(run.picks, run.private, sa::nudges_allowed(bias), now);
+        let tracker = self.ach_now();
+        tracker.counts.extend(run.counts);
+        let picks = tracker.check(run.picks, run.private, sa::nudges_allowed(bias), now);
         let mut added = 0;
         for nudge in &picks {
             if grokhub_core::post_update(&mut self.updates, nudge.card(now)) {
@@ -206,6 +219,8 @@ impl Cabin {
             format!("Checked your games. {added} close to done.")
         };
         self.save_ach();
+        // Achievement goals on Objectives move to the new counts.
+        grokhub_core::objectives::refresh_from_games(&crate::config::config_dir(), now);
     }
 
     /// A check Steam didn't answer: try again in hours, not a week. Nothing
@@ -354,9 +369,30 @@ mod tests {
             ..Default::default()
         });
         let games = vec![(1145360, "Hades".to_string())];
+        let hades = [grokhub_core::objectives::KnownGame {
+            name: "Hades",
+            steam_app_id: Some(1145360),
+            source: None,
+        }];
+        let add = [grokhub_core::objectives::GoalAct::Add {
+            text: "get 50 achievements in hades".into(),
+        }];
+        let dir = crate::config::config_dir();
+        grokhub_core::objectives::change(&dir, |o| {
+            grokhub_core::objectives::apply(o, &add, &hades, 4_000)
+        })
+        .unwrap();
+        assert_eq!(
+            games_to_check()[0],
+            games[0],
+            "the goal's game is read first"
+        );
         let run = run_check(&games, FAKE_ID, &mut deck_reply);
         let before = cabin.updates.len();
         cabin.finish_achievements(run, 5_000);
+        // The goal moved to Steam's count, marked as checked.
+        let goal = grokhub_core::objectives::load(&dir).goals.remove(0);
+        assert_eq!((goal.current, goal.checked), (48, true));
         assert_eq!(cabin.updates.len(), before + 1);
         assert!(cabin
             .updates
@@ -428,6 +464,7 @@ mod tests {
         cabin.finish_achievements(
             AchRun {
                 picks: Vec::new(),
+                counts: Vec::new(),
                 private: true,
                 error: None,
             },

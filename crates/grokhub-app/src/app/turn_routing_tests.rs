@@ -26,11 +26,11 @@ fn chat_side_effects_keep_the_origin_thread() {
         .nth(1)
         .and_then(|s| s.split("fn fit_rail_label").next())
         .expect("listen_turn");
-    let wav_read = listen.find("std::fs::read(&wav)").expect("wav read");
+    let upload = listen.find("grok_stt(").expect("STT upload");
     assert!(
         listen.contains("IMAGE_FILE_CAP")
-            && listen.find("IMAGE_FILE_CAP").expect("wav cap") < wav_read,
-        "voice STT must not slurp a huge wav: {listen}"
+            && listen.find("IMAGE_FILE_CAP").expect("wav cap") < upload,
+        "voice STT must not upload a huge wav: {listen}"
     );
     let queue = fn_src(&src, "ui_agents");
     let queued = fn_src(&src, "start_queued_job");
@@ -661,7 +661,7 @@ fn chat_side_effects_keep_the_origin_thread() {
     let replay = src
         .split("fn replay_recipe(")
         .nth(1)
-        .and_then(|s| s.split("fn speak_reply").next())
+        .and_then(|s| s.split("fn poll_eyes_cap(").next())
         .expect("replay_recipe");
     assert!(
         replay.contains("run_cmds") && !replay.contains("run_computer_op("),
@@ -732,6 +732,14 @@ fn chat_side_effects_keep_the_origin_thread() {
     assert!(
         halt_flight.contains("speak_next = false"),
         "Stop must cancel a pending voice speak: {halt_flight}"
+    );
+    assert!(
+        halt_flight.contains("voice_spoken = None"),
+        "Stop must stop a reply that is being spoken: {halt_flight}"
+    );
+    assert!(
+        src.contains("self.speak_next.then_some(grokhub_core::VOICE_TALK_STYLE)"),
+        "a turn whose reply will be spoken asks for an answer shaped for the ear"
     );
     assert!(
         halt_flight.contains("scheduled_perm = false"),
@@ -1450,26 +1458,21 @@ fn chat_side_effects_keep_the_origin_thread() {
         "/project clear must drop the sidebar selection: {unbound}"
     );
     let export = src
-        .split("Slash::Export =>")
+        .split("fn export_thread_as(")
         .nth(1)
-        .and_then(|s| s.split("Slash::Recall").next())
-        .expect("Export");
+        .and_then(|s| s.split("fn dispatch_native_slash").next())
+        .expect("export_thread_as");
     let flushed = export.find("self.persist()").expect("export persist");
     let wrote = export.find("export_markdown").expect("export_markdown");
     assert!(
         flushed < wrote,
         "/export must flush the live pane before writing the thread file: {export}"
     );
-    assert!(
-        export.contains("expand_home"),
-        "/export must expand ~ in the bound project or it writes a literal tilde folder: {export}"
-    );
     let export_spawn = export
-        .find("spawn_file_write")
+        .find("spawn_export(")
         .expect("export write must leave the UI thread");
-    let export_write = export.find("write_new_file").expect("export.md");
     assert!(
-        export_spawn < export_write && export_spawn < wrote,
+        export_spawn < wrote,
         "/export must not freeze the cabin formatting an 8MB thread into markdown: {export}"
     );
     let recall = src
@@ -2156,6 +2159,43 @@ fn halt_work_stops_a_running_turn() {
 }
 
 #[test]
+fn stop_hands_queued_messages_back_instead_of_sending_them_later() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("stop-queue");
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.running = true;
+    cabin.composer = "half typed".into();
+    cabin.followup_queue =
+        Vec::<String>::from(["also rename the folder".into(), "  ".into()]).into();
+    cabin.halt_work("Stopped");
+    assert!(cabin.followup_queue.is_empty());
+    assert_eq!(cabin.composer, "half typed\n\nalso rename the folder");
+    assert!(cabin.status.starts_with("Stopped"));
+    assert!(
+        cabin.status.contains("2 queued messages are back"),
+        "{}",
+        cabin.status
+    );
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
+}
+
+#[test]
+fn a_redirect_keeps_the_queue_and_a_stop_with_none_keeps_its_status() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("redirect-queue");
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.running = true;
+    cabin.followup_queue = Vec::<String>::from(["next".into()]).into();
+    cabin.halt_work("Redirected");
+    assert_eq!(cabin.followup_queue, vec!["next".to_string()]);
+    assert!(cabin.composer.is_empty());
+    assert_eq!(cabin.status, "Redirected");
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
+}
+
+#[test]
 fn composer_stop_leaves_background_runs_going_and_tray_halt_stops_them() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("stop-spares-bg");
@@ -2242,4 +2282,116 @@ fn a_turn_that_cannot_start_stays_off_a_run() {
         assert!(cabin.pending_kick.is_none());
         assert!(cabin.chat_job_thread.is_none());
     }
+}
+
+/// Two chats, A then B, with A's reply running and B on screen.
+fn two_chats_a_running_b_open() -> (Cabin, String, String) {
+    let mut cabin = Cabin::quiet_for_test();
+    let a = crate::threads::ChatThread::new("Chat A", false);
+    let b = crate::threads::ChatThread::new("Chat B", false);
+    let (ida, idb) = (a.id.clone(), b.id.clone());
+    cabin.threads = vec![a, b];
+    cabin.thread_idx = 1;
+    cabin.running = true;
+    cabin.chat_job_thread = Some(ida.clone());
+    (cabin, ida, idb)
+}
+
+#[test]
+fn a_message_typed_in_chat_a_never_sends_into_chat_b() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("queue-per-chat");
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
+    let (mut cabin, ida, idb) = two_chats_a_running_b_open();
+    cabin.followup_queue.push(&ida, "then deploy A".into());
+    // A's reply ends while B is the chat on screen.
+    cabin.running = false;
+    cabin.chat_job_thread = None;
+    cabin.drain_followup_queue();
+    cabin.send_waiting_here();
+    assert_eq!(
+        cabin.followup_queue,
+        ["then deploy A"],
+        "A's message waits for A"
+    );
+    assert!(!cabin.followup_queue.ready_for(&idb));
+    assert!(cabin.composer.is_empty(), "nothing of A's lands in B's box");
+    // Opening A again lets it go, once.
+    cabin.thread_idx = 0;
+    cabin.send_waiting_here();
+    assert!(
+        !cabin.followup_queue.contains_text("then deploy A"),
+        "it left the line for A"
+    );
+    let after = cabin.followup_queue.len();
+    cabin.send_waiting_here();
+    assert_eq!(cabin.followup_queue.len(), after);
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
+}
+
+#[test]
+fn stop_hands_back_only_the_open_chats_queued_messages() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("stop-per-chat");
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
+    let (mut cabin, ida, idb) = two_chats_a_running_b_open();
+    cabin.thread_idx = 0;
+    cabin.followup_queue.push(&ida, "for A".into());
+    cabin.followup_queue.push(&idb, "for B".into());
+    cabin.halt_work("Stopped");
+    assert_eq!(cabin.composer, "for A");
+    assert_eq!(
+        cabin.followup_queue,
+        ["for B"],
+        "B's message keeps waiting for B"
+    );
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
+}
+
+#[test]
+fn steer_now_ignores_a_message_queued_for_another_chat() {
+    let (mut cabin, _ida, idb) = two_chats_a_running_b_open();
+    cabin.followup_queue.push(&idb, "for B".into());
+    assert!(
+        !cabin.queued_steers_here(0),
+        "B's line must not join A's reply"
+    );
+    cabin.steer_queued(0);
+    assert_eq!(cabin.followup_queue, ["for B"]);
+}
+
+#[test]
+fn a_failed_reply_holds_its_line_for_continue_when_its_chat_opens() {
+    let (mut cabin, ida, _idb) = two_chats_a_running_b_open();
+    cabin.followup_queue.push(&ida, "step 2".into());
+    cabin.followup_queue.pause_for(&ida);
+    cabin.running = false;
+    cabin.chat_job_thread = None;
+    cabin.thread_idx = 0;
+    cabin.send_waiting_here();
+    assert_eq!(
+        cabin.followup_queue,
+        ["step 2"],
+        "a paused line waits for continue"
+    );
+}
+
+#[test]
+fn only_the_running_chat_shows_stop_and_new_chat_never_reuses_it() {
+    let (mut cabin, ida, _idb) = two_chats_a_running_b_open();
+    assert!(!cabin.thinking_here(), "chat B shows Send while A works");
+    cabin.thread_idx = 0;
+    assert!(cabin.thinking_here(), "chat A shows Stop");
+    // A's reply is still starting, so A looks empty: New chat must not hand it out.
+    cabin.threads.truncate(1);
+    cabin.new_thread(false);
+    assert_ne!(
+        cabin.visible_thread_id(),
+        ida,
+        "New chat opened the running chat"
+    );
+    assert!(
+        !cabin.thinking_here(),
+        "a new chat shows Send while another chat works"
+    );
 }

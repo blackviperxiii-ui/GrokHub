@@ -4,14 +4,13 @@
 //! get the match state). The loopback listener opens only while the game
 //! launch companion's sample (`game_companion_ui`, what Steam says is
 //! running) shows a supported game, and closes when the game exits. Pointers
-//! show as a quiet toast here in the cabin, at most one a minute, and the
+//! land in the bell here in the cabin, at most one a minute, and the
 //! match's end posts one recap card to Pulse. Off: the listener stops and the
 //! file goes. Nothing reads the game's memory, touches the game or draws over
 //! it. The event side (`note_watch_event`) takes any game's `WatchEvent`s, so
 //! adapters that aren't GSI can feed it too.
 
 use std::path::PathBuf;
-use std::time::Duration;
 
 use super::*;
 use grokhub_core::game_watch::{self as gw, MatchNews, MatchTracker, ToastGate, WatchEvent};
@@ -20,8 +19,6 @@ use grokhub_core::game_watch_gsi::{self as gsi, GsiEvent, GsiGame, GsiServer, Gs
 /// Events held for the cabin; past this new ones are dropped, never queued
 /// without end.
 const EVENT_QUEUE: usize = 256;
-/// How long a pointer toast stays.
-const POINTER_TOAST_SECS: u64 = 8;
 
 #[derive(Default)]
 pub(super) struct WatchState {
@@ -211,8 +208,13 @@ impl Cabin {
         }
         for news in w.tracker.take(event) {
             match news {
-                MatchNews::Pointer(text) => self.toast_pointer(text, now),
+                MatchNews::Pointer(text) => self.toast_pointer(game, text, now),
                 MatchNews::End { recap, pointers } => {
+                    // "Win 10 matches" and the like on Objectives move too.
+                    let won = recap.won > recap.lost;
+                    let _ = grokhub_core::objectives::change(&crate::config::config_dir(), |o| {
+                        grokhub_core::objectives::match_finished(o, game, won, recap.kills, now)
+                    });
                     let card = gw::recap_card(game, &recap, &pointers, now);
                     if grokhub_core::post_update(&mut self.updates, card) {
                         self.persist_updates();
@@ -222,14 +224,16 @@ impl Cabin {
         }
     }
 
-    /// An in-cabin toast: no sound, no focus change, nothing over the game.
-    /// One that comes within a minute of the last is left to the recap.
-    fn toast_pointer(&mut self, text: String, now: u64) {
+    /// A pointer goes to the bell: no sound, no focus change, nothing over
+    /// the game. One that comes within a minute of the last is left to the recap.
+    fn toast_pointer(&mut self, game: &str, text: String, now: u64) {
         if self.focus.watch.toast_gate.allow(now) {
-            self.toasts
-                .info(text)
-                .duration(Some(Duration::from_secs(POINTER_TOAST_SECS)))
-                .closable(true);
+            self.notify(
+                super::notices::NoticeKind::Info,
+                text,
+                Some(super::notices::NoticePlace::Game(game.to_string())),
+                None,
+            );
         }
     }
 
@@ -587,9 +591,14 @@ mod tests {
         assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_err());
         assert!(!cfg_dir.join(gsi::CFG_FILE).exists());
         assert_eq!(cabin.focus.watch.heard, 0);
-        assert_eq!(cabin.toasts.len(), 0);
+        assert_eq!(cabin.notices.items.len(), 0);
         assert_eq!(recaps(&cabin), vec![]);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Pointer tips in the bell, counting the ones folded into one row.
+    fn pointer_count(cabin: &Cabin) -> u32 {
+        cabin.notices.items.iter().map(|n| n.count).sum()
     }
 
     #[test]
@@ -597,30 +606,30 @@ mod tests {
         let (mut cabin, root, _cfg_dir, _pin) = watch_cabin("game-watch-toast");
         cabin.cfg.game_watch = true;
         let tx = fake_feed(&mut cabin);
-        // Three lost rounds fire the loss-streak pointer: one toast.
+        // Three lost rounds fire the loss-streak pointer: one bell entry.
         for i in 1..=3 {
             tx.send(round(i, i as u32, false)).unwrap();
         }
         cabin.take_watch_events(100_000);
-        assert_eq!(cabin.toasts.len(), 1);
+        assert_eq!(pointer_count(&cabin), 1);
         // A win, three more losses: the pointer fires again 30 s later,
-        // inside the minute, so no second toast.
+        // inside the minute, so no second entry.
         tx.send(round(4, 4, true)).unwrap();
         for i in 5..=7 {
             tx.send(round(i, i as u32, false)).unwrap();
         }
         cabin.take_watch_events(130_000);
-        assert_eq!(cabin.toasts.len(), 1);
-        // Past the minute it shows again.
+        assert_eq!(pointer_count(&cabin), 1);
+        // Past the minute it shows again (the same words fold into one row, x2).
         tx.send(round(8, 8, true)).unwrap();
         for i in 9..=11 {
             tx.send(round(i, i as u32, false)).unwrap();
         }
         cabin.take_watch_events(161_000);
-        assert_eq!(cabin.toasts.len(), 2);
+        assert_eq!(pointer_count(&cabin), 2);
         // A frame with nothing new adds nothing.
         cabin.take_watch_events(400_000);
-        assert_eq!(cabin.toasts.len(), 2);
+        assert_eq!(pointer_count(&cabin), 2);
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -629,6 +638,14 @@ mod tests {
         let (mut cabin, root, _cfg_dir, _pin) = watch_cabin("game-watch-recap");
         cabin.cfg.game_watch = true;
         let tx = fake_feed(&mut cabin);
+        let dir = crate::config::config_dir();
+        let add = [grokhub_core::objectives::GoalAct::Add {
+            text: "win 10 matches in cs2".into(),
+        }];
+        grokhub_core::objectives::change(&dir, |o| {
+            grokhub_core::objectives::apply(o, &add, &[], 1)
+        })
+        .unwrap();
         tx.send(cs2(1, gw::EventKind::Kill)).unwrap();
         tx.send(round(2, 1, true)).unwrap();
         tx.send(round(3, 2, true)).unwrap();
@@ -666,6 +683,9 @@ mod tests {
                 ),
             ]
         );
+        // One win of the two moved the goal, checked by the game's own feed.
+        let goal = grokhub_core::objectives::load(&dir).goals.remove(0);
+        assert_eq!((goal.current, goal.checked), (1, true));
         let _ = std::fs::remove_dir_all(&root);
     }
 

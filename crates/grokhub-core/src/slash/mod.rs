@@ -191,6 +191,19 @@ pub fn strip_slash_result(text: &str) -> &str {
         .unwrap_or(text)
 }
 
+/// A saved message as the chat shows it: no findings-card tag and no turn
+/// labels. Exports and search read this, so a copied chat never carries the
+/// app's own markers.
+pub fn shown_text(text: &str) -> String {
+    let trimmed = text.trim_start();
+    let body = if trimmed.starts_with(SLASH_RESULT_PREFIX) {
+        strip_slash_result(trimmed)
+    } else {
+        text
+    };
+    crate::strip_turn_labels(body)
+}
+
 /// Help / recall dumps (and model catalogs saved by older builds) stay on the
 /// pane and out of the next model kick.
 pub fn is_cabin_slash_turn(role: &str, content: &str) -> bool {
@@ -929,7 +942,7 @@ pub fn slash_help() -> String {
         "/hub — devices / pair",
         "/inhabit <peer> — hand this chat to another paired computer",
         "/rewind — rewind the conversation; /rewind step lists agent file checkpoints and /rewind step <n> restores one; /rewind --files restores the last project snapshot",
-        "/btw — side ask. A live run keeps going; the question waits, then sends look-safe. Saved as ask.",
+        "/btw — side ask. A live run keeps going; the answer shows beside it, read-only.",
         "/bg <task> — run a task in the background beside this chat (up to 3 at once); its reply posts here when it ends. Bare /bg moves the live reply to the background and frees the composer. /bg stop stops every background run.",
         "/queue <message> — hold a message until the live reply ends instead of steering it (Alt+Enter does the same).",
         "Typing while a reply runs steers it: Enter stops the turn where it is, keeps what it said and did, and carries on with your message folded in. Alt+Enter queues instead. Sending in another chat moves a running reply to the background instead of stopping it.",
@@ -954,10 +967,10 @@ pub fn slash_help() -> String {
         "/palette — command palette. Search walks nested files in the bound project (or ~/GrokHub-Work), not only the top of that folder.",
         "Enter sends; Ctrl+Enter newline. Composer Stop is a disc with a small rounded mark. Idle Stop and the idle mic sit still; they ease while hovered, pressed, listening, speaking, or a reply is running. The transcript Running row has no Stop. The changing status text above the composer is gone. The context usage bar stays. No live dot or Thinking label sits on the turn; the composer glow shows a running reply, and Stop's hover names the current action.",
         "The Ask card names the command, path, or site. Always on that card confirms skip every tool prompt this launch; night / loop / /send inherit Always until quit. Composer Always and a destructive host command reuse that confirm sheet (title, consequence, Confirm or Run, Cancel). Enter / Esc stay Allow / Deny on the Ask card; overlay confirm uses them only when the composer is empty. Live secrets stay redacted. Naming a schedule teaches that routine on Automations and leaves the rewind snapshot out. History is the cabin's own chats. Background jobs such as workboard summarize stay off that list. Same on Linux and Windows. History offers a Last you point when that marker exists.",
-        "Mode pill: Chat / Plan / btw. Permission: Ask / Auto / Always-approve. Both pills are remembered; Always-approve resets to Ask on the next launch. {product} picks the model and how hard to think on each step. Say \"think hard\" or \"keep it quick\" to steer one task; ask in chat which model and effort answered. Hover a composer pill for what it does. {product}'s own engine runs the agent.",
+        "No mode to pick: {product} reads each message. A big job plans first, anything else is answered; while a reply runs, a side question is answered beside it, a correction steers it and a new job waits. When the AI wants to change things (Ask / Auto / Always) lives in Settings → Defaults and stays as you set it; Stop asking me on a permission card moves it on. {product} picks the model and how hard to think on each step. Say \"think hard\" or \"keep it quick\" to steer one task; ask in chat which model and effort answered. {product}'s own engine runs the agent.",
         "Settings → Behavior: close to tray, living wall, and a quiet hours dropdown. Picking a window saves it. A Quiet until chip shows on the titlebar only while that window is active. Signed-in empty home shows an update feed in the gap under the composer when a card is undismissed, and hides that slot when the feed is empty. A finished /loop posts automation_done from poll_grok_loop. Saving a schedule posts schedule_created. Cards stay until opened or dismissed. A device glance appears only when hub share or a last frame is bound; click opens Devices.",
         "History search drops stale hits when the box changes. Re-opening the memory file already in the editor keeps unsaved typing.",
-        "Appearance: Dark, Light, System. Ask permission shows Allow / Deny before each step that changes something. Auto and Always follow the PermissionMode pill, and `/compact` and `/rewind` honor that same pill. btw (saved as ask) is a side ask: a live run keeps going and the question waits, then sends read-only (no desktop-do-the-work). Idle btw sends that same read-only ask. Night, inbox, and anticipate runs are unattended: they inherit the pill, and Ask fails closed. Halt cancels the turn.",
+        "Appearance: Dark, Light, System. Ask permission shows Allow / Deny before each step that changes something. Auto and Always follow that setting, and `/compact` and `/rewind` honor it too. A side question asked while a run works gets its own read-only answer beside it (no desktop-do-the-work); the run keeps going. Night, inbox, and anticipate runs are unattended: they inherit the setting, and Ask fails closed. Halt cancels the turn.",
         "Voice: Ara. Hey Grok is push-to-talk STT into chat, then TTS of the reply body (not the thought process). Same on Linux and Windows. While live, Listening / Speaking / Ready sits above the composer with Stop. The strip stays up while Listening or Speaking and auto-hides about a second after Ready. Stop, the live mic, or Ctrl+G / Super+G leave. Failed STT shows Ready, not Listening. Desktop control runs through the cabin's own desktop tools; Halt cancels the turn.",
         if cfg!(windows) {
             "First run is Get Started: Super Grok OAuth signs {product} in, and that sign-in stays with {product}. Get Started shows live device-code / OAuth failures, not leftover wall status. One Update control checks GitHub Latest every 2 hours. Settings → Update stays visible for a manual check. The titlebar chip says Update cabin and notifies in-app, not a web page. Acting on it takes the GitHub zip when there is no clone or the leftover clone is not main. A click when the probe found nothing still overlays."
@@ -1235,17 +1248,17 @@ mod tests {
             slash_help()
         );
         assert!(slash_help().contains("Desktop control runs through the cabin's own desktop tools"));
-        assert!(slash_help().contains("they inherit the pill, and Ask fails closed"));
+        assert!(slash_help().contains("they inherit the setting, and Ask fails closed"));
         assert!(!slash_help().contains("grok -p") && !slash_help().contains("ACP"));
         assert!(slash_help().contains("Devices pair URL is a LAN IPv4"));
-        assert!(slash_help().contains("Mode pill: Chat / Plan / btw"));
+        assert!(slash_help().contains("No mode to pick"));
         assert!(slash_help().contains("/view-plan"));
         assert!(slash_help().contains("/btw — side ask"));
         assert!(
             slash_help().contains("Ask permission shows Allow / Deny")
-                && slash_help().contains("btw (saved as ask) is a side ask")
+                && slash_help().contains("gets its own read-only answer beside it")
                 && slash_help().contains("Night, inbox, and anticipate runs are unattended")
-                && slash_help().contains("`/compact` and `/rewind` honor that same pill"),
+                && slash_help().contains("`/compact` and `/rewind` honor it too"),
             "{}",
             slash_help()
         );
@@ -1254,7 +1267,8 @@ mod tests {
         ));
         assert!(!slash_help().contains("Default model"));
         assert!(!slash_help().contains("Auto chip"));
-        assert!(slash_help().contains("Hover a composer pill for what it does"));
+        assert!(slash_help().contains("No mode to pick"));
+        assert!(!slash_help().contains("Mode pill"));
         assert!(slash_help().contains("centered over the composer"));
         assert!(slash_help().contains("Hidden idle waits for the pulse"));
         assert!(slash_help().contains("Chat rail reuses one empty draft"));

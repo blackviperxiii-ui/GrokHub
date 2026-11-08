@@ -1,0 +1,1 @@
+- Stop hands queued messages back: anything you queued behind a stopped reply lands in the message box instead of sitting out of sight and sending itself after your next reply.

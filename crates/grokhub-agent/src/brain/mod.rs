@@ -9,9 +9,12 @@ mod local_sort;
 pub mod playbook;
 mod policy;
 
+#[cfg(test)]
+pub(crate) use brief::SYSTEM_DONE_TEXT;
 pub use brief::{
-    brief_for_turn, classify, classify_effort, effort_word, read_briefs, record_brief, rules,
-    AskModel, Brief, BriefInput, BriefLine, Care, Intent, BRIEF_CLASS, BRIEF_PROMPT,
+    brief_for_turn, classify, classify_effort, effort_word, is_follow_up, read_briefs,
+    record_brief, rules, AskModel, Brief, BriefInput, BriefLine, Care, Intent, BRIEF_CLASS,
+    BRIEF_PROMPT,
 };
 pub use policy::{
     care_first_enabled, effective_rows, load_policy, pick_policy, policy_path, PolicyPick,

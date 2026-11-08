@@ -73,7 +73,7 @@ fn steps_line(l: &Loaded) -> String {
 }
 
 impl Cabin {
-    fn reload_playbooks(&mut self) {
+    pub(super) fn reload_playbooks(&mut self) {
         let (all, problems) = pb::load(&crate::config::config_dir());
         self.playbooks.all = all;
         self.playbooks.problems = problems;

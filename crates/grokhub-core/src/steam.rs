@@ -575,6 +575,35 @@ pub fn merge_stats(vdf: &Vdf, out: &mut BTreeMap<u32, (u64, u64)>) {
     }
 }
 
+/// How many friends one parsed `localconfig.vdf` lists. Steam saves each
+/// friend under their numeric account id with a `name`; other keys in that
+/// block are settings. Only the count is read.
+pub fn count_friends(vdf: &Vdf) -> usize {
+    vdf.at(&["UserLocalConfigStore", "friends"])
+        .map(|f| {
+            f.entries()
+                .iter()
+                .filter(|(k, v)| k.parse::<u64>().is_ok() && v.get("name").is_some())
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+/// The most friends any Steam account on this PC has saved, or `None`
+/// when there is no Steam account here to read.
+pub fn friend_count(root: &Path) -> Option<usize> {
+    let users = std::fs::read_dir(root.join("userdata")).ok()?;
+    let mut best = None;
+    for user in users.flatten() {
+        let file = user.path().join("config").join("localconfig.vdf");
+        if let Ok(text) = std::fs::read_to_string(&file) {
+            let n = count_friends(&parse_vdf(&text));
+            best = Some(best.unwrap_or(0).max(n));
+        }
+    }
+    best
+}
+
 /// Active games first: most recently played, then most played, then the rest
 /// by name. Never-played installs sink to the bottom.
 pub fn rank_games(mut games: Vec<SteamGame>) -> Vec<SteamGame> {
@@ -706,6 +735,17 @@ pub fn feeding<'a>(games: &'a [SteamGame], prefs: &SteamPrefs) -> Vec<&'a SteamG
     games.iter().filter(|g| !prefs.is_muted(g.app_id)).collect()
 }
 
+/// Names of the games that feed Pulse and have been played, most recent
+/// first, for idea prompts. Never-played library games are left out.
+pub fn played_names(games: &[SteamGame], prefs: &SteamPrefs, max: usize) -> Vec<String> {
+    feeding(games, prefs)
+        .into_iter()
+        .filter(|g| g.last_played > 0)
+        .take(max)
+        .map(|g| g.name.clone())
+        .collect()
+}
+
 /// This check's Steam news fetches. Each one carries its game as the topic,
 /// so Pulse's interest ranking and feedback apply to it.
 pub fn requests(games: &[SteamGame], prefs: &SteamPrefs, max: usize) -> Vec<SourceReq> {
@@ -767,6 +807,23 @@ pub fn status_line(games: &[SteamGame], prefs: &SteamPrefs, found: bool) -> Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn counts_saved_friends_and_skips_the_friends_settings() {
+        let text = r#""UserLocalConfigStore"
+        {
+            "friends"
+            {
+                "PersonaName" "me"
+                "11111" { "name" "Ally" }
+                "22222" { "name" "Bo" "NameHistory" { "0" "Bob" } }
+                "33333" { "avatar" "x" }
+                "communitypreferences" "x"
+            }
+        }"#;
+        assert_eq!(count_friends(&parse_vdf(text)), 2);
+        assert_eq!(count_friends(&parse_vdf("\"a\" {}")), 0);
+    }
 
     #[test]
     fn workshop_acf_lists_installed_items_newest_first() {
@@ -1154,6 +1211,18 @@ mod tests {
             last_played: last,
             playtime_min: minutes,
         }
+    }
+
+    #[test]
+    fn played_names_skip_muted_and_never_played_games() {
+        let games = vec![
+            game(1, "Helldivers 2", 30, 90),
+            game(2, "Muted", 20, 60),
+            game(3, "Never", 0, 0),
+        ];
+        let mut prefs = SteamPrefs::default();
+        prefs.set_muted(2, true);
+        assert_eq!(played_names(&games, &prefs, 8), vec!["Helldivers 2"]);
     }
 
     #[test]

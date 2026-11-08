@@ -5,6 +5,7 @@ import { DOCK_MAX, dockItems, dockSummary, stepsLine, type ActivityItem } from "
 const STATUS_WORD: Record<ActivityItem["status"], string> = {
   running: "Running",
   waiting: "Waiting on you",
+  queued: "Queued",
   done: "Done",
   failed: "Failed",
 };
@@ -19,6 +20,9 @@ export function ActivityDock({
   onOpenAutomations,
   cardFor,
   onOpenCard,
+  canSteer,
+  onSteer,
+  onRemove,
   now: fixedNow,
 }: {
   items: ActivityItem[];
@@ -27,6 +31,12 @@ export function ActivityDock({
   /** The work card a chat works, if any (keyed by conversation id). */
   cardFor?: (conversationId: string) => string | undefined;
   onOpenCard?: (cardId: string) => void;
+  /** A queued message can join the running reply now. */
+  canSteer?: (item: ActivityItem) => boolean;
+  /** Steer now: the queued message joins the running reply at its next step. */
+  onSteer?: (item: ActivityItem) => void;
+  /** Remove: the queued message leaves the line (its words go back to the box). */
+  onRemove?: (item: ActivityItem) => void;
   /** Tests pin the clock; the app ticks it so finished items age out. */
   now?: number;
 }) {
@@ -44,6 +54,7 @@ export function ActivityDock({
   const waiting = shown.some((i) => i.status === "waiting");
   const listed = shown.slice(0, DOCK_MAX);
   const more = shown.length - listed.length;
+  const summary = dockSummary(shown);
 
   return (
     <aside
@@ -55,11 +66,14 @@ export function ActivityDock({
         type="button"
         className="activity-toggle"
         aria-expanded={open}
+        aria-label={summary ? `Activity, ${summary}` : "Activity"}
         onClick={() => setOpen((o) => !o)}
       >
         <span className={`activity-dot ${shown[0].status}`} aria-hidden="true" />
         <span className="activity-label">Activity</span>
-        <span className="activity-summary">{dockSummary(shown)}</span>
+        <span className="activity-summary" aria-live="polite">
+          {summary}
+        </span>
       </button>
       {open && (
         <ul className="activity-list">
@@ -76,21 +90,36 @@ export function ActivityDock({
                 </div>
               )}
               {stepsLine(item) && <div className="activity-steps">{stepsLine(item)}</div>}
-              <button
-                type="button"
-                className="quiet"
-                onClick={() => {
-                  setOpen(false);
-                  if (item.kind === "chat") onOpenChat();
-                  else onOpenAutomations();
-                }}
-              >
-                {item.kind === "chat"
-                  ? item.status === "waiting"
-                    ? "Review"
-                    : "Open chat"
-                  : "Open result"}
-              </button>
+              {item.kind === "queued" ? (
+                <div className="activity-buttons">
+                  {canSteer?.(item) && onSteer && (
+                    <button type="button" className="quiet" onClick={() => onSteer(item)}>
+                      Steer now
+                    </button>
+                  )}
+                  {onRemove && (
+                    <button type="button" className="quiet" onClick={() => onRemove(item)}>
+                      Remove
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="quiet"
+                  onClick={() => {
+                    setOpen(false);
+                    if (item.kind === "chat") onOpenChat();
+                    else onOpenAutomations();
+                  }}
+                >
+                  {item.kind === "chat"
+                    ? item.status === "waiting"
+                      ? "Review"
+                      : "Open chat"
+                    : "Open result"}
+                </button>
+              )}
               {(() => {
                 const card = item.kind === "chat" ? cardFor?.(item.key.slice("chat:".length)) : undefined;
                 return card && onOpenCard ? (

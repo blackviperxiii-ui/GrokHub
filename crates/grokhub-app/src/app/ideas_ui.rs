@@ -136,8 +136,16 @@ impl Cabin {
             } else {
                 let st = self.pulse_row_state(&card.id);
                 let why = self.reaction_why(&card);
-                let (a, rect, on_title) =
-                    super::pulse_ui::paint_pulse_row(ui, &card, row.kind, st, why.as_deref());
+                let day = self.card_day();
+                let chips = super::pulse_ui::row_chips(&card, &day);
+                let (a, rect, on_title) = super::pulse_ui::paint_pulse_row(
+                    ui,
+                    &card,
+                    row.kind,
+                    st,
+                    why.as_deref(),
+                    &chips,
+                );
                 if a.is_some() {
                     pass.pulse_act = a;
                 }

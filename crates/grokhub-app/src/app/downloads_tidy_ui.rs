@@ -45,8 +45,10 @@ pub(super) enum TidyAct {
     Close,
 }
 
+/// The real Downloads folder (OneDrive's or a renamed XDG one when the OS
+/// moved it), else `~/Downloads`.
 fn downloads() -> PathBuf {
-    home().join("Downloads")
+    grokhub_core::downloads_dir().unwrap_or_else(|| home().join("Downloads"))
 }
 
 fn home() -> PathBuf {

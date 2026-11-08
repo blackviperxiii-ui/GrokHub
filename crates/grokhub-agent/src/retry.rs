@@ -68,8 +68,10 @@ pub fn decide_retry(err: &ClientError, retry_count: u32, max_retries: u32) -> Op
             if next_attempt >= max_retries.min(RATE_LIMIT_RETRY_THRESHOLD) {
                 return None;
             }
+            // A long Retry-After is capped like any other wait; the chat says
+            // how long, and a Stop ends it.
             Some(match retry_after_secs.filter(|secs| *secs > 0) {
-                Some(secs) => Duration::from_secs(secs),
+                Some(secs) => Duration::from_secs(secs).min(MAX_RETRY_BACKOFF),
                 None => retry_backoff_with_jitter(next_attempt),
             })
         }
@@ -148,14 +150,22 @@ mod tests {
     }
 
     #[test]
-    fn retry_schedule_honors_retry_after_and_the_fifteen_try_cap() {
+    fn retry_schedule_honors_retry_after_up_to_the_cap_and_the_six_try_cap() {
         let limited = ClientError::RateLimited {
             retry_after_secs: Some(120),
             message: "slow".into(),
         };
         assert_eq!(
             decide_retry(&limited, 0, DEFAULT_MAX_RETRIES),
-            Some(Duration::from_secs(120))
+            Some(MAX_RETRY_BACKOFF)
+        );
+        let short = ClientError::RateLimited {
+            retry_after_secs: Some(7),
+            message: "slow".into(),
+        };
+        assert_eq!(
+            decide_retry(&short, 0, DEFAULT_MAX_RETRIES),
+            Some(Duration::from_secs(7))
         );
         assert!(decide_retry(&limited, 1, DEFAULT_MAX_RETRIES).is_none());
 

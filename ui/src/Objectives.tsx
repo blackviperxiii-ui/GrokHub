@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getMission, setMissionDone, type MissionPage, type StepStatus } from "./api";
-import { NO_STEPS, Streak, XpBar } from "./Home";
+import { Goals } from "./Goals";
+import { NO_STEPS, Weeks, XpBar } from "./Home";
 
 /** The tag at the end of a step's row, as the cabin's Objectives writes it. */
 export const STEP_TAGS: Record<StepStatus, string> = {
@@ -28,19 +29,22 @@ export function dayCaption(now: Date = new Date()): string {
   return `${day} · ${month} ${now.getDate()}`;
 }
 
-/** Objectives: the open chat's checklist with level, XP and the weekly
- * streak, the cabin's Objectives page. The steps are the chat's own to-dos;
+/** Objectives: the open chat's checklist with level, XP and weeks in a
+ * row, the cabin's Objectives page. The steps are the chat's own to-dos;
  * on the desktop, Accept as done (and Undo) writes the cabin's outcome log. */
 export function Objectives({
   conversationId,
   remote,
   onOpenChat,
   onHome,
+  onAsk,
 }: {
   conversationId?: string;
   remote: boolean;
   onOpenChat: (id: string) => void;
   onHome: () => void;
+  /** Puts a goal follow-up's ask in the chat box. */
+  onAsk?: (text: string) => void;
 }) {
   const [page, setPage] = useState<MissionPage | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -123,9 +127,17 @@ export function Objectives({
           ) : (
             <p className="home-muted">{NO_STEPS}</p>
           )}
-          <Streak days={page.xp.streak} />
+          <Weeks week={page.xp.week} />
           {page.xp.today > 0 && <p className="home-muted">+{page.xp.today.toLocaleString("en-US")} XP today</p>}
         </div>
+      )}
+      {page && (
+        <Goals
+          onAsk={onAsk}
+          onChange={() => {
+            getMission(conversationId).then(setPage, (err) => setNote(String(err)));
+          }}
+        />
       )}
       <button type="button" className="quiet objectives-back" onClick={onHome}>
         Back to Home

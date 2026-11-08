@@ -238,7 +238,7 @@ impl Cabin {
                 }
                 self.harness.fixes.gb_started = false;
                 self.send_chat(prompt.clone());
-                let queued = self.followup_queue.iter().any(|q| q == &prompt);
+                let queued = self.followup_queue.contains_text(&prompt);
                 if !self.running && !queued {
                     // Grok Build didn't take the step (not installed, not signed in).
                     let why = format!("{STEP_FAILED_NOTE} {}", self.status);

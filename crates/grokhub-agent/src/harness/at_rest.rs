@@ -463,6 +463,14 @@ pub fn use_key_store_for(config_dir: &Path, store: Arc<dyn KeyStore>) {
     o.push((config_dir.to_path_buf(), Keys::new(store)));
 }
 
+/// Drop the store [`use_key_store_for`] set for this config dir.
+pub fn forget_key_store_for(config_dir: &Path) {
+    overrides()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .retain(|(d, _)| d != config_dir);
+}
+
 fn keys_for(config_dir: &Path) -> Arc<Keys> {
     if let Some((_, k)) = overrides()
         .lock()

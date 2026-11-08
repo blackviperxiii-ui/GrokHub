@@ -69,24 +69,37 @@ fn run_slash_help_export_and_clear() {
     cabin.messages = std::sync::Arc::new(vec![("user".into(), "harbor export line".into())]);
     cabin.cfg.project_dir.clear();
     cabin.run_slash(grokhub_core::Slash::Export);
-    assert!(
-        cabin.status.starts_with("Exporting to "),
-        " /export must not claim Wrote before the file exists, got {}",
-        cabin.status
+    assert_eq!(
+        cabin.status, "Saving the chat…",
+        " /export must not claim Saved before the file exists"
     );
+    assert!(cabin.saved_file.is_none());
     wait_file_writes(cabin);
-    let path = cabin
-        .status
-        .strip_prefix("Wrote ")
-        .unwrap_or("")
-        .to_string();
+    let path = exported_path(cabin);
+    assert!(
+        path.contains("Chats"),
+        " /export lands in the Chats folder, got {path}"
+    );
     let name = std::path::Path::new(&path)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
+    assert_eq!(cabin.status, format!("Saved {name} to Chats"));
+    assert_eq!(cabin.notices.items[0].text, cabin.status);
+    assert_eq!(
+        cabin.notices.items[0].action,
+        Some(super::notices::NoticeAction::ShowInFolder(
+            std::path::PathBuf::from(&path)
+        ))
+    );
+    let name = std::path::Path::new(&path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let stem = grokhub_core::export_file_stem(&cabin.threads[cabin.thread_idx].title);
     assert!(
-        name.starts_with("export-") && name.ends_with(".md"),
-        " /export must name a stamped export-*.md, got {}",
+        name.starts_with(&format!("{stem}-")) && name.ends_with(".md"),
+        " /export must name a stamped <chat title>-*.md, got {}",
         cabin.status
     );
     assert!(
@@ -99,28 +112,28 @@ fn run_slash_help_export_and_clear() {
     // A second export never clobbers the first.
     cabin.run_slash(grokhub_core::Slash::Export);
     wait_file_writes(cabin);
-    let second = cabin
-        .status
-        .strip_prefix("Wrote ")
-        .unwrap_or("")
-        .to_string();
+    let second = exported_path(cabin);
     assert_ne!(second, path, "second export must get its own file");
     assert!(std::path::Path::new(&path).exists() && std::path::Path::new(&second).exists());
 
-    // A folder that isn't there: the status says so instead of "Wrote".
-    cabin.cfg.project_dir = std::env::temp_dir()
-        .join(format!("gh-export-missing-{}", std::process::id()))
-        .join("nope")
-        .display()
-        .to_string();
+    // Every folder refuses: the card and status say why, nothing is claimed.
+    let blocker = std::env::temp_dir().join(format!("gh-export-blocker-{}", std::process::id()));
+    std::fs::write(&blocker, "x").unwrap();
+    let pinned = crate::config::config_dir();
+    let _pin = crate::config::TestConfigDir::set(blocker.join("cfg"));
     cabin.run_slash(grokhub_core::Slash::Export);
     wait_file_writes(cabin);
     assert!(
-        cabin.status.starts_with("Couldn't write ") && cabin.status.contains("nope"),
+        cabin.status.starts_with("Couldn't save the chat: ")
+            && cabin.status.ends_with("Nothing was saved."),
         "a failed export must say so, got {}",
         cabin.status
     );
-    cabin.cfg.project_dir.clear();
+    let card = cabin.saved_file.clone().expect("failure card");
+    assert!(card.path.is_none() && card.error.is_some());
+    drop(_pin);
+    assert_eq!(crate::config::config_dir(), pinned);
+    let _ = std::fs::remove_file(&blocker);
 
     cabin.run_slash(grokhub_core::Slash::Clear);
     assert!(
@@ -136,15 +149,8 @@ fn run_slash_help_export_and_clear() {
 /// Router R1: there is no effort control in the composer, Settings or the slash list.
 #[test]
 fn no_effort_selector_anywhere() {
-    // The composer row returns a mode and a permission. Nothing else.
-    let crate::cards::SessionRowOut { mode: _, perm: _ } = crate::cards::SessionRowOut {
-        mode: None,
-        perm: None,
-    };
-    for (id, label) in crate::cards::composer_modes()
-        .iter()
-        .chain(crate::cards::permission_modes())
-    {
+    // The one permission row offers permissions. Nothing else.
+    for (id, label) in super::settings::cabin_default_permissions() {
         assert!(
             !id.contains("effort")
                 && !grokhub_core::REASONING_EFFORTS
@@ -448,7 +454,7 @@ fn export_writes_a_chat_and_empty_video_does_not_send() {
     cabin.run_slash_line("/export");
     wait_file_writes(&mut cabin);
     assert!(
-        cabin.status.starts_with("Wrote ") && cabin.status.ends_with(".md"),
+        cabin.status.starts_with("Saved ") && exported_path(&cabin).ends_with(".md"),
         "export status was {}",
         cabin.status
     );
@@ -502,9 +508,8 @@ fn scratch_btw_worktree_and_plan() {
     assert_eq!(cabin.status, "No plan yet — use Plan mode");
     assert!(!cabin.plan_open);
     cabin.run_slash_line("/btw");
-    assert!(matches!(cabin.session_mode, SessionMode::Ask));
-    assert_eq!(cabin.cfg.session_mode, "ask");
-    assert_eq!(cabin.status, "btw — look-safe side ask");
+    assert!(matches!(cabin.session_mode, SessionMode::Chat));
+    assert_eq!(cabin.status, super::slash::BTW_HINT);
     cabin.run_slash_line("/scratch");
     assert_eq!(cabin.status, "Scratch — no memory writes");
     assert!(cabin.scratch());
@@ -709,33 +714,20 @@ fn permission_slashes_arm_always_and_set_auto() {
     unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     assert!(matches!(cabin.permission_mode, PermissionMode::Ask));
-    cabin.run_slash_line("/always-approve");
-    assert_eq!(cabin.status, "Confirm Always…");
-    assert!(matches!(
-        cabin.confirm,
-        Some(super::confirm::ConfirmKind::AlwaysSession)
-    ));
-    assert!(matches!(cabin.permission_mode, PermissionMode::Ask));
-    assert!(!cabin.running);
-    cabin.apply_session_always();
-    assert!(matches!(
-        cabin.permission_mode,
-        PermissionMode::AlwaysApprove
-    ));
-    assert_eq!(cabin.cfg.permission_mode, "always-approve");
-    assert!(cabin.cfg.always_confirmed);
-    assert_eq!(cabin.status, "Permission always-approve");
-    assert!(cabin.confirm.is_none());
-    cabin.run_slash_line("/always-approve");
-    assert!(matches!(cabin.permission_mode, PermissionMode::Ask));
-    assert_eq!(cabin.cfg.permission_mode, "ask");
-    assert_eq!(cabin.status, "Permission ask");
-    cabin.run_slash_line("/auto");
-    assert!(matches!(cabin.permission_mode, PermissionMode::Auto));
-    assert_eq!(cabin.cfg.permission_mode, "auto");
-    assert_eq!(cabin.status, "Permission auto");
-    assert!(cabin.confirm.is_none());
-    assert!(!cabin.running);
+    for line in ["/always-approve", "/auto"] {
+        cabin.nav = Nav::Chat;
+        cabin.run_slash_line(line);
+        // Typed, they open the one place permissions change.
+        assert!(matches!(cabin.nav, Nav::Settings), "{line}");
+        assert_eq!(cabin.settings_sec, SettingsSec::Defaults, "{line}");
+        assert_eq!(cabin.status, super::slash::PERMISSION_IN_SETTINGS, "{line}");
+        assert!(
+            matches!(cabin.permission_mode, PermissionMode::Ask),
+            "{line}"
+        );
+        assert!(cabin.confirm.is_none(), "{line}");
+        assert!(!cabin.running);
+    }
     unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }
 
@@ -1121,4 +1113,53 @@ fn context_slash_counts_an_empty_chat() {
     assert_eq!(cabin.status, "0 turns · 0 tokens · 0% · pin none");
     assert!(!cabin.running);
     assert!(cabin.messages.is_empty());
+}
+
+/// The export the user asked for: the whole chat, thoughts and tool rows
+/// included, in the Chats folder (not pulled off by a Desktop or a bound
+/// project folder).
+#[test]
+fn export_puts_the_whole_chat_in_the_chats_folder() {
+    let mut quiet = QuietCabin::boot("slash-export-desktop");
+    let cabin = &mut quiet.cabin;
+    let desktop = std::env::temp_dir().join(format!("gh-export-desktop-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&desktop);
+    std::fs::create_dir_all(&desktop).unwrap();
+    super::slash::set_test_desktop(Some(desktop.clone()));
+    // Neither the Desktop nor a bound project folder pull the export away.
+    cabin.cfg.project_dir = std::env::temp_dir()
+        .join("gh-export-elsewhere")
+        .display()
+        .to_string();
+    let turn = "TURN_THOUGHT:\nChecking disk space first.\nTURN_TOOL: done\tRun terminal command\tFREE=5713272832\nTURN_SAY:\nYour C: drive has 5 GB free.";
+    cabin.messages = std::sync::Arc::new(vec![
+        ("user".into(), "check my pc".into()),
+        ("assistant".into(), turn.into()),
+    ]);
+    cabin.run_slash(grokhub_core::Slash::Export);
+    wait_file_writes(cabin);
+    let path = std::path::PathBuf::from(exported_path(cabin));
+    assert_eq!(
+        path.parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str()),
+        Some("Chats"),
+        "{}",
+        cabin.status
+    );
+    let md = std::fs::read_to_string(&path).unwrap_or_default();
+    for line in [
+        "check my pc",
+        "Checking disk space first.",
+        "Tool: Run terminal command",
+        "FREE=5713272832",
+        "5 GB free",
+    ] {
+        assert!(md.contains(line), "export is missing {line:?}: {md}");
+    }
+    assert!(!md.contains("TURN_"), "{md}");
+    super::slash::set_test_desktop(None);
+    cabin.cfg.project_dir.clear();
+    let _ = std::fs::remove_dir_all(&desktop);
+    quiet.settle();
 }

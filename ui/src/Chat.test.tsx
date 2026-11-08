@@ -8,6 +8,7 @@ import type {
   ChatEnvelope,
   ChatEvent,
   ElicitAction,
+  QuickChip,
   SessionMode,
   Settings,
   Transcript,
@@ -28,6 +29,11 @@ const api = vi.hoisted(() => ({
     >(),
   answerPermission: vi.fn<(id: string, callId: string, answer: Answer) => Promise<void>>(),
   cancelChat: vi.fn<(id: string) => Promise<void>>(),
+  steerChat: vi.fn<(id: string, text: string) => Promise<boolean>>(),
+  readTurn: vi.fn((text: string) => Promise.resolve({ route: "queue", text, ack: "Queued for after this reply" })),
+  sideChat:
+    vi.fn<(id: string, sideId: string, question: string, ask: string, soFar: string) => Promise<string>>(),
+  tellMain: vi.fn<(id: string, question: string, answer: string) => Promise<{ text: string; steered: boolean }>>(),
   closeChat: vi.fn<(id: string) => Promise<void>>(),
   deleteChat: vi.fn<(id: string) => Promise<void>>(),
   forgetMessage:
@@ -36,7 +42,19 @@ const api = vi.hoisted(() => ({
   loadChat: vi.fn<(id: string, limit?: number) => Promise<Transcript>>(),
   slashHits: vi.fn(() => Promise.resolve([])),
   runSlash: vi.fn(),
+  exportChat: vi.fn(),
+  openSaved: vi.fn(),
+  revealSaved: vi.fn(),
+  quickChips: vi.fn<(surface: string, id?: string, draft?: string, mode?: SessionMode) => Promise<QuickChip[]>>(),
+  chipOutcome: vi.fn<(surface: string, id: string, picked: boolean) => Promise<boolean>>(),
+  goalAct: vi.fn(() => Promise.resolve({ board: { today: [], mine: [], suggested: [], season: { label: "", done: 0, trophies: [], badges: [] } } })),
 }));
+
+// A chat line that asks for a setting is answered by auto setup.
+const auto = vi.hoisted(() => ({
+  settingAsk: vi.fn<(text: string) => Promise<string | null>>(() => Promise.resolve(null)),
+}));
+vi.mock("./autoSetupApi", () => auto);
 
 vi.mock("./api", () => ({
   sendChat: api.sendChat,
@@ -45,6 +63,10 @@ vi.mock("./api", () => ({
   saveSettings: api.saveSettings,
   answerPermission: api.answerPermission,
   cancelChat: api.cancelChat,
+  steerChat: api.steerChat,
+  readTurn: api.readTurn,
+  sideChat: api.sideChat,
+  tellMain: api.tellMain,
   closeChat: api.closeChat,
   deleteChat: api.deleteChat,
   forgetMessage: api.forgetMessage,
@@ -52,6 +74,12 @@ vi.mock("./api", () => ({
   loadChat: api.loadChat,
   slashHits: api.slashHits,
   runSlash: api.runSlash,
+  exportChat: api.exportChat,
+  openSaved: api.openSaved,
+  revealSaved: api.revealSaved,
+  quickChips: api.quickChips,
+  chipOutcome: api.chipOutcome,
+  goalAct: api.goalAct,
   onChatEvent: (handler: (envelope: ChatEnvelope) => void) => {
     api.handler = handler;
     return Promise.resolve(() => {});
@@ -80,8 +108,12 @@ import {
   itemsFrom,
   MISSION_BUSY,
   OPEN_BUSY,
+  PLAN_NEXT,
+  STOP_ASKING_DONE,
   type Item,
+  type QueueAct,
 } from "./Chat";
+import { ASK_TRACKED } from "./Goals";
 
 const SAVED: Transcript = {
   id: "shell-saved",
@@ -106,6 +138,18 @@ const SETTINGS: Settings = {
   summonHotkey: false,
   notifications: true,
 };
+
+function chip(id: string, label: string, value: string, over: Partial<QuickChip> = {}): QuickChip {
+  return {
+    id,
+    label,
+    value,
+    action: "ask",
+    hint: id.startsWith("reply-") ? "Suggested in the reply" : "",
+    primary: false,
+    ...over,
+  };
+}
 
 /** Holds sendChat open until `finish` is called, like a turn in flight. */
 function holdTurn() {
@@ -140,6 +184,8 @@ describe("Chat", () => {
       fn.mockReset();
     }
     api.getLastChat.mockReset().mockResolvedValue(null);
+    api.quickChips.mockReset().mockResolvedValue([]);
+    api.chipOutcome.mockReset().mockResolvedValue(true);
     api.getSettings.mockReset().mockResolvedValue(SETTINGS);
     api.handler = null;
     api.gap = null;
@@ -183,7 +229,7 @@ describe("Chat", () => {
 
     await userEvent.type(screen.getByLabelText("Message"), "{Enter}");
     await waitFor(() =>
-      expect(api.sendChat).toHaveBeenLastCalledWith("shell-m1", "Mission from my decision journal: Q", "chat"),
+      expect(api.sendChat).toHaveBeenLastCalledWith("shell-m1", "Mission from my decision journal: Q", undefined),
     );
 
     rerender(<Chat onOpenSettings={() => {}} prefill={{ ...mission, text: "again", n: 2 }} />);
@@ -204,91 +250,135 @@ describe("Chat", () => {
     expect(api.closeChat).not.toHaveBeenCalled();
     expect(screen.getByText("hello")).toBeVisible();
     finish();
-    await waitFor(() => expect(api.sendChat).toHaveBeenCalledWith(id, "hello", "chat"));
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledWith(id, "hello", undefined));
   });
 
-  it("shows at most three suggestions under a reply, and a tap sends one", async () => {
+  it("a goal the reply noticed is asked about under it, and Track puts it on My goals", async () => {
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("fishing is so relaxing");
+    emit(id, { kind: "text", text: "Nice, go for 99!" });
+    emit(id, { kind: "goal", id: "g7", title: "Old School RuneScape · 99 fishing" });
+    emit(id, { kind: "done", stop: "end_turn" });
+    finish();
+    const ask = await screen.findByRole("group", { name: "Track this goal?" });
+    expect(ask).toHaveTextContent("Old School RuneScape · 99 fishing");
+    await userEvent.click(within(ask).getByRole("button", { name: "Track" }));
+    expect(api.goalAct).toHaveBeenCalledWith([{ act: "track", id: "g7" }]);
+    expect(await screen.findByText(ASK_TRACKED)).toBeInTheDocument();
+  });
+
+  it("a reply's follow-ups join the row under the box, and a tap sends one in its reply's mode", async () => {
     let finish = holdTurn();
     render(<Chat onOpenSettings={() => {}} />);
     const id = await startTurn("the build failed");
     emit(id, { kind: "text", text: "TypeError in parse_row." });
-    emit(id, {
-      kind: "suggestions",
-      items: [
-        { label: "Fix the cause", prompt: "Fix the root cause in parse_row." },
-        { label: "Root cause + fix", prompt: "Diagnose the error." },
-        { label: "Add a test", prompt: "Add a test for parse_row." },
-        { label: "Fourth", prompt: "Never shown." },
-      ],
-    });
+    expect(screen.queryByRole("group", { name: "Suggestions" })).toBeNull();
+    api.quickChips.mockResolvedValue([
+      chip("reply-0", "Fix the cause", "Fix the root cause in parse_row.", { mode: "plan" }),
+      chip("reply-1", "Add a test", "Add a test for parse_row."),
+      chip("pred-1", "Explain it", "Explain the error."),
+      chip("pred-2", "Fourth", "Never shown."),
+    ]);
+    emit(id, { kind: "suggestions", items: [] });
     emit(id, { kind: "done", stop: "end_turn" });
     finish();
-    const card = await screen.findByRole("group", { name: "Suggestions" });
-    expect(within(card).getAllByRole("button").map((b) => b.textContent)).toEqual([
-      "Fix the cause",
-      "Root cause + fix",
-      "Add a test",
-    ]);
-    await waitFor(() => expect(within(card).getByRole("button", { name: "Fix the cause" })).toBeEnabled());
-    await userEvent.type(screen.getByLabelText("Message"), "half typed");
+    const row = await screen.findByRole("group", { name: "Suggestions" });
+    expect(api.quickChips).toHaveBeenLastCalledWith("composer", id, "", undefined);
+    const taps = () =>
+      within(row)
+        .getAllByRole("button")
+        .filter((b) => !b.getAttribute("aria-label")?.startsWith("Hide"));
+    expect(taps().map((b) => b.textContent)).toEqual(["Fix the cause", "Add a test", "Explain it"]);
+    expect(taps()[0]).toHaveAttribute("title", "Why this? Suggested in the reply  (Alt+1)");
     finish = holdTurn();
-    await userEvent.click(within(card).getByRole("button", { name: "Fix the cause" }));
+    await userEvent.click(within(row).getByRole("button", { name: "Fix the cause" }));
+    expect(api.chipOutcome).toHaveBeenCalledWith("composer", "reply-0", true);
     await waitFor(() =>
-      expect(api.sendChat).toHaveBeenLastCalledWith(id, "Fix the root cause in parse_row.", "chat"),
+      expect(api.sendChat).toHaveBeenLastCalledWith(id, "Fix the root cause in parse_row.", "plan"),
     );
     expect(screen.getByText("Fix the root cause in parse_row.")).toHaveAttribute("data-role", "user");
     expect(screen.queryByRole("group", { name: "Suggestions" })).toBeNull();
-    expect(screen.getByLabelText("Message")).toHaveValue("half typed");
     finish();
   });
 
-  it("posts a notice when an automation finishes, with a one-tap follow-up", async () => {
-    const onOpenAutomations = vi.fn();
-    const long = `${"x".repeat(300)} tail`;
-    const view = render(<Chat onOpenSettings={() => {}} onOpenAutomations={onOpenAutomations} />);
-    view.rerender(
-      <Chat
-        onOpenSettings={() => {}}
-        onOpenAutomations={onOpenAutomations}
-        notice={{ id: "auto-1", name: "summarize my inbox", ok: true, text: "3 new mails, none urgent.", n: 1 }}
-      />,
-    );
-    const done = screen.getByRole("status", { name: "summarize my inbox finished" });
-    expect(within(done).getByText("Finished")).toBeVisible();
-    expect(within(done).getByText("3 new mails, none urgent.")).toBeVisible();
-    await userEvent.click(within(done).getByRole("button", { name: "Ask about it" }));
-    expect(screen.getByLabelText("Message")).toHaveValue('About the "summarize my inbox" automation run: ');
-    await userEvent.click(within(done).getByRole("button", { name: "Open Automations" }));
-    expect(onOpenAutomations).toHaveBeenCalledTimes(1);
-
-    view.rerender(
-      <Chat
-        onOpenSettings={() => {}}
-        onOpenAutomations={onOpenAutomations}
-        notice={{ id: "auto-2", name: "board", ok: false, text: long, n: 2 }}
-      />,
-    );
-    const failed = screen.getByRole("status", { name: "board finished" });
-    expect(within(failed).getByText("Failed")).toBeVisible();
-    expect(within(failed).getByText(`${"x".repeat(280)}…`)).toBeVisible();
-    await userEvent.click(within(failed).getByRole("button", { name: "Find the cause" }));
-    expect(screen.getByLabelText("Message")).toHaveValue(
-      `The "board" automation failed: ${long}. What went wrong and how do I fix it?`,
-    );
+  it("a chip adds to what is typed, Go opens its page, and × hides one", async () => {
+    const onOpenView = vi.fn();
+    api.quickChips.mockResolvedValue([
+      chip("pred-1", "Explain it", "Explain the error."),
+      { ...chip("nav-1", "Automations", "__nav:night"), action: "go", view: "automations" },
+    ]);
+    render(<Chat onOpenSettings={() => {}} onOpenView={onOpenView} />);
+    const row = await screen.findByRole("group", { name: "Suggestions" });
+    await userEvent.type(screen.getByLabelText("Message"), "half typed");
+    await userEvent.click(within(row).getByRole("button", { name: "Explain it" }));
+    expect(screen.getByLabelText("Message")).toHaveValue("half typed Explain the error.");
     expect(api.sendChat).not.toHaveBeenCalled();
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Automations" })).toBeVisible());
+    await userEvent.click(screen.getByRole("button", { name: "Automations" }));
+    expect(onOpenView).toHaveBeenCalledWith("automations");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Hide Explain it" }));
+    expect(api.chipOutcome).toHaveBeenLastCalledWith("composer", "pred-1", false);
   });
 
-  it("a reply without suggestions shows no suggestion card", async () => {
+  it("Alt+2 taps the second chip", async () => {
+    const onOpenView = vi.fn();
+    api.quickChips.mockResolvedValue([
+      chip("pred-1", "Explain it", "Explain the error."),
+      { ...chip("nav-1", "Automations", "__nav:night"), action: "go", view: "automations" },
+    ]);
+    render(<Chat onOpenSettings={() => {}} onOpenView={onOpenView} />);
+    await screen.findByRole("group", { name: "Suggestions" });
+    fireEvent.keyDown(window, { key: "™", code: "Digit2", altKey: true });
+    expect(onOpenView).toHaveBeenCalledWith("automations");
+    expect(api.chipOutcome).toHaveBeenCalledWith("composer", "nav-1", true);
+  });
+
+  it("a reply without follow-ups and an empty row show no chips", async () => {
     const finish = holdTurn();
     render(<Chat onOpenSettings={() => {}} />);
     const id = await startTurn("list the files");
     emit(id, { kind: "text", text: "There are 12 files." });
-    emit(id, { kind: "suggestions", items: [] });
     emit(id, { kind: "done", stop: "end_turn" });
     finish();
     await waitFor(() => expect(screen.getByLabelText("Message")).toBeEnabled());
     expect(screen.getByText("There are 12 files.")).toBeVisible();
     expect(screen.queryByRole("group", { name: "Suggestions" })).toBeNull();
+  });
+
+  it("/export saves this chat and leaves a card that opens or shows the file", async () => {
+    api.runSlash.mockReset().mockResolvedValue({ kind: "export" });
+    api.exportChat.mockReset().mockResolvedValue({
+      token: "saved-1",
+      name: "hello-20261106-1415.md",
+      folder: "Chats",
+      path: "/home/user/Documents/Loadout/Chats/hello-20261106-1415.md",
+      line: "Saved hello-20261106-1415.md to Chats",
+      revealLabel: "Show in folder",
+    });
+    api.revealSaved.mockReset().mockResolvedValue(undefined);
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("hello");
+    await act(async () => finish());
+    await userEvent.type(screen.getByLabelText("Message"), "/export{Enter}");
+    expect(api.runSlash).toHaveBeenCalledWith("/export");
+    expect(api.exportChat).toHaveBeenCalledWith(id);
+    const card = await screen.findByRole("status", { name: "Saved hello-20261106-1415.md to Chats" });
+    await userEvent.click(within(card).getByRole("button", { name: "Show in folder" }));
+    expect(api.revealSaved).toHaveBeenCalledWith("saved-1");
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("a failed /export says why and saves no card", async () => {
+    api.runSlash.mockReset().mockResolvedValue({ kind: "export" });
+    api.exportChat.mockReset().mockRejectedValue("There's nothing in this chat to save yet.");
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "/export{Enter}");
+    expect(await screen.findByText("There's nothing in this chat to save yet.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Show in folder" })).toBeNull();
   });
 
   it("sends the text and streams its own conversation's reply", async () => {
@@ -297,7 +387,7 @@ describe("Chat", () => {
     const id = await startTurn("hello");
 
     expect(id).toMatch(/^shell-/);
-    expect(api.sendChat).toHaveBeenCalledWith(id, "hello", "chat");
+    expect(api.sendChat).toHaveBeenCalledWith(id, "hello", undefined);
     expect(screen.getByText("hello")).toHaveAttribute("data-role", "user");
     expect(screen.getByLabelText("Message")).toHaveValue("");
 
@@ -312,6 +402,17 @@ describe("Chat", () => {
     finish();
     await waitFor(() => expect(bubble()).not.toHaveClass("streaming"));
     expect(bubble()).toHaveAttribute("data-role", "assistant");
+  });
+
+  it("answers a setting ask here without sending it to the model", async () => {
+    auto.settingAsk.mockResolvedValueOnce("Text size is 115% now.");
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "make the text bigger{Enter}");
+    expect(await screen.findByText("Text size is 115% now.")).toBeInTheDocument();
+    expect(auto.settingAsk).toHaveBeenCalledWith("make the text bigger");
+    expect(screen.getByText("make the text bigger")).toHaveAttribute("data-role", "user");
+    expect(screen.getByLabelText("Message")).toHaveValue("");
+    expect(api.sendChat).not.toHaveBeenCalled();
   });
 
   it("renders the reply as Markdown and keeps the person's message plain", async () => {
@@ -479,6 +580,25 @@ describe("Chat", () => {
     });
   });
 
+  it("a reply that hasn't started shows a thinking orb, and a lookup tool a searching one", async () => {
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("what's new");
+
+    const orb = screen.getByRole("img", { name: "Thinking" });
+    expect(orb.tagName).toBe("CANVAS");
+    expect(orb.closest(".bubble")).toHaveAttribute("data-role", "assistant");
+    expect(screen.queryByText("…")).toBeNull();
+
+    emit(id, { kind: "tool", id: "t", title: "web_search", status: "pending", detail: "" });
+    expect(screen.getByRole("img", { name: "Looking it up" })).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: "Thinking" })).toBeNull();
+
+    emit(id, { kind: "text", text: "Here" });
+    expect(screen.queryByRole("img", { name: "Looking it up" })).toBeNull();
+    finish();
+  });
+
   it("Stop cancels the turn in flight", async () => {
     const finish = holdTurn();
     render(<Chat onOpenSettings={() => {}} />);
@@ -575,70 +695,61 @@ describe("applyEvent", () => {
     ]);
   });
 
-  it("sends with the picked chip, and the chips wait while a reply runs", async () => {
+  it("the app picks how each message runs: there are no mode or approval chips", async () => {
     const finish = holdTurn();
     render(<Chat onOpenSettings={() => {}} />);
     // The composer names the product, not the model.
     expect(screen.getByLabelText("Message")).toHaveAttribute("placeholder", "Message Loadout");
-    await userEvent.click(screen.getByRole("button", { name: "btw" }));
-    expect(screen.getByRole("button", { name: "btw" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByLabelText("Message")).toHaveAttribute("placeholder", "Ask on the side");
+    for (const name of ["Chat", "Plan", "btw", "Ask", "Auto", "Always"]) {
+      expect(screen.queryByRole("button", { name })).toBeNull();
+    }
     const id = await startTurn("what does main.rs do");
-    expect(api.sendChat).toHaveBeenCalledWith(id, "what does main.rs do", "btw");
-    expect(screen.getByRole("button", { name: "Chat" })).toBeDisabled();
+    expect(api.sendChat).toHaveBeenCalledWith(id, "what does main.rs do", undefined);
     finish();
-    await waitFor(() => expect(screen.getByRole("button", { name: "Chat" })).toBeEnabled());
   });
 
   it("the composer shows no model or effort and has nothing to pick one with", async () => {
     render(<Chat onOpenSettings={() => {}} />);
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Ask" })).toHaveAttribute("aria-pressed", "true"),
-    );
+    await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
     expect(screen.queryByText(/effort/i)).toBeNull();
     expect(screen.queryByText(/grok-\d/i)).toBeNull();
     expect(screen.queryByText(/^model/i)).toBeNull();
     expect(screen.queryByLabelText(/model/i)).toBeNull();
     expect(screen.queryByRole("button", { name: /model|effort|grok/i })).toBeNull();
-    const chips = screen.getAllByRole("button").filter((b) => b.closest(".chips"));
-    expect(chips.map((b) => b.textContent)).toEqual(["Chat", "Plan", "btw", "Ask", "Auto", "Always"]);
+    expect(document.querySelector(".chips")).toBeNull();
   });
 
-  it("the approvals chips show and save Settings' approvals", async () => {
+  it("Stop asking me allows the step and moves the setting to only ask for risky things", async () => {
+    holdTurn();
+    api.answerPermission.mockResolvedValue();
     api.saveSettings.mockResolvedValue({ ...SETTINGS, approvals: "auto" });
     render(<Chat onOpenSettings={() => {}} />);
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Ask" })).toHaveAttribute("aria-pressed", "true"),
-    );
-    expect(screen.getByRole("button", { name: "Auto" })).toHaveAttribute(
-      "title",
-      "A quick check approves routine steps and asks you about the rest.",
-    );
-    await userEvent.click(screen.getByRole("button", { name: "Auto" }));
+    await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
+    const id = await startTurn("write a note");
+    emit(id, { kind: "permission", id: "call-1", title: "write", action: "note.txt", reason: "" });
+    await userEvent.click(screen.getByRole("button", { name: "Stop asking me" }));
+    expect(api.answerPermission).toHaveBeenCalledWith(id, "call-1", "allow");
     expect(api.saveSettings).toHaveBeenCalledWith(true, "", "auto", false);
-    expect(screen.getByRole("button", { name: "Auto" })).toHaveAttribute("aria-pressed", "true");
+    expect(await screen.findByText(STOP_ASKING_DONE)).toBeVisible();
+    emit(id, { kind: "permission", id: "call-2", title: "run", action: "make", reason: "" });
+    // Only ask for risky things now: the next card has nothing looser to offer.
+    expect(screen.queryByRole("button", { name: "Stop asking me" })).toBeNull();
   });
 
-  it("on the web app the approvals chips only show the computer's", async () => {
+  it("on the web app the permission card has no Stop asking me", async () => {
+    holdTurn();
     render(<Chat onOpenSettings={() => {}} remote />);
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Ask" })).toHaveAttribute("aria-pressed", "true"),
-    );
-    for (const name of ["Ask", "Auto", "Always"]) {
-      expect(screen.getByRole("button", { name })).toBeDisabled();
-      expect(screen.getByRole("button", { name })).toHaveAttribute(
-        "title",
-        "Set in Loadout on your computer.",
-      );
-    }
+    await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
+    const id = await startTurn("write a note");
+    emit(id, { kind: "permission", id: "call-1", title: "write", action: "note.txt", reason: "" });
+    expect(screen.getByRole("button", { name: "Allow once" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Stop asking me" })).toBeNull();
   });
 
-  it("a plan card approves, then the chip goes back to Chat", async () => {
+  it("a plan card approves, and the next message is read afresh", async () => {
     const finish = holdTurn();
     render(<Chat onOpenSettings={() => {}} />);
-    await userEvent.click(screen.getByRole("button", { name: "Plan" }));
     const id = await startTurn("tidy the build");
-    expect(api.sendChat).toHaveBeenCalledWith(id, "tidy the build", "plan");
     emit(id, { kind: "plan", text: "1. Read build.rs" });
     emit(id, {
       kind: "elicit",
@@ -659,9 +770,27 @@ describe("applyEvent", () => {
     expect(api.answerElicit).toHaveBeenCalledWith(id, "plan-1", "accept", null, "");
     expect(card).toHaveTextContent("Approved. Loadout can make the changes now.");
     finish();
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true"),
-    );
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeVisible());
+    holdTurn();
+    await startTurn("thanks");
+    expect(api.sendChat).toHaveBeenLastCalledWith(id, "thanks", undefined);
+  });
+
+  it("/plan makes only the next message plan first", async () => {
+    api.runSlash.mockResolvedValue({ kind: "mode", mode: "plan", text: null });
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "/plan{Enter}");
+    expect(await screen.findByText(PLAN_NEXT)).toBeVisible();
+    expect(api.sendChat).not.toHaveBeenCalled();
+    let finish = holdTurn();
+    const id = await startTurn("set up the release pipeline");
+    expect(api.sendChat).toHaveBeenLastCalledWith(id, "set up the release pipeline", "plan");
+    finish();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeVisible());
+    finish = holdTurn();
+    await startTurn("and what about docs?");
+    expect(api.sendChat).toHaveBeenLastCalledWith(id, "and what about docs?", undefined);
+    finish();
   });
 
   it("a question takes a typed answer, and an unanswered one ends with the turn", async () => {
@@ -766,7 +895,7 @@ describe("Chat history", () => {
     expect(screen.getByText("Tools ran: read_file, web_search")).toHaveAttribute("data-role", "tools");
     expect(screen.getByText("blue").closest("[data-role]")).toHaveAttribute("data-role", "assistant");
     await startTurn("and the trim?");
-    expect(api.sendChat).toHaveBeenLastCalledWith("shell-saved", "and the trim?", "chat");
+    expect(api.sendChat).toHaveBeenLastCalledWith("shell-saved", "and the trim?", undefined);
   });
 
   it("the web app never asks for the desktop's last chat", async () => {
@@ -929,5 +1058,182 @@ describe("Chat history", () => {
     expect(api.loadChat).toHaveBeenCalledWith("shell-saved", 3 + EARLIER_STEP);
     expect(await screen.findByText("the very first ask")).toBeVisible();
     expect(screen.queryByRole("button", { name: /Show earlier/ })).toBeNull();
+  });
+});
+
+describe("Chat queue", () => {
+  /** Each sendChat waits until its `end(stop)` is called. */
+  function turns() {
+    const ends: ((stop: string) => void)[] = [];
+    api.sendChat.mockReset().mockImplementation(() => new Promise<string>((resolve) => ends.push(resolve)));
+    return ends;
+  }
+
+  beforeEach(() => {
+    api.getLastChat.mockReset().mockResolvedValue(null);
+    api.quickChips.mockReset().mockResolvedValue([]);
+    api.chipOutcome.mockReset().mockResolvedValue(true);
+    api.getSettings.mockReset().mockResolvedValue(SETTINGS);
+    api.cancelChat.mockReset().mockResolvedValue();
+    api.steerChat.mockReset();
+    api.sideChat.mockReset();
+    api.tellMain.mockReset();
+    api.readTurn.mockReset().mockImplementation((text: string) =>
+      Promise.resolve({ route: "queue", text, ack: "Queued for after this reply" }),
+    );
+  });
+
+  it("a side question gets its own answer beside the reply, never in the chat", async () => {
+    const ends = turns();
+    let endSide: (stop: string) => void = () => {};
+    api.sideChat.mockImplementation(() => new Promise<string>((resolve) => (endSide = resolve)));
+    api.readTurn.mockResolvedValue({ route: "side", text: "what is a lockfile", ack: "Answering on the side" });
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "update the deps{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    const id = api.sendChat.mock.calls[0][0];
+    await userEvent.type(screen.getByLabelText("Message"), "btw what is a lockfile{Enter}");
+    await waitFor(() =>
+      expect(api.sideChat).toHaveBeenCalledWith(id, `${id}~side-1`, "what is a lockfile", "update the deps", ""),
+    );
+    const card = screen.getByRole("group", { name: "On the side: what is a lockfile" });
+    expect(card).toHaveTextContent("Answering…");
+    emit(`${id}~side-1`, { kind: "text", text: "It pins exact versions." });
+    expect(card).toHaveTextContent("It pins exact versions.");
+    await act(async () => endSide("end_turn"));
+    // The main chat never shows the side answer, and nothing queued.
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
+    api.tellMain.mockResolvedValue({ text: "About lockfiles: It pins exact versions.", steered: true });
+    await userEvent.click(screen.getByRole("button", { name: "Tell the main task" }));
+    expect(api.tellMain).toHaveBeenCalledWith(id, "what is a lockfile", "It pins exact versions.");
+    await waitFor(() => expect(screen.queryByRole("group", { name: /On the side/ })).toBeNull());
+    await act(async () => ends[0]("end_turn"));
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("a correction during a reply steers it, and stop stops it", async () => {
+    turns();
+    api.steerChat.mockResolvedValue(true);
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "write the docs{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    const id = api.sendChat.mock.calls[0][0];
+    api.readTurn.mockResolvedValueOnce({ route: "steer", text: "use British spelling", ack: "Added to the reply" });
+    await userEvent.type(screen.getByLabelText("Message"), "use British spelling{Enter}");
+    await waitFor(() => expect(api.steerChat).toHaveBeenCalledWith(id, "use British spelling"));
+    api.readTurn.mockResolvedValueOnce({ route: "stop", text: "stop", ack: "Stopping" });
+    await userEvent.type(screen.getByLabelText("Message"), "stop{Enter}");
+    await waitFor(() => expect(api.cancelChat).toHaveBeenCalledWith(id));
+  });
+
+  it("lines up messages sent during a reply, reports them, and sends the next when it ends", async () => {
+    const ends = turns();
+    const onQueue = vi.fn();
+    render(<Chat onOpenSettings={() => {}} onQueue={onQueue} />);
+    await userEvent.type(screen.getByLabelText("Message"), "first{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    const box = screen.getByLabelText("Message");
+    await userEvent.type(box, "then deploy");
+    expect(screen.getByRole("button", { name: "Send" })).toBeVisible();
+    await userEvent.type(box, "{Enter}");
+    await userEvent.type(box, "and tell me{Enter}");
+    expect(box).toHaveValue("");
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
+    // Queued messages are not in the chat log until they send.
+    expect(screen.queryByText("then deploy")).toBeNull();
+    const id = api.sendChat.mock.calls[0][0];
+    expect(onQueue).toHaveBeenLastCalledWith(id, ["then deploy", "and tell me"]);
+    await act(async () => ends[0]("end_turn"));
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(2));
+    expect(api.sendChat.mock.calls[1][1]).toBe("then deploy");
+    expect(onQueue).toHaveBeenLastCalledWith(id, ["and tell me"]);
+    await act(async () => ends[1]("end_turn"));
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(3));
+    expect(api.sendChat.mock.calls[2][1]).toBe("and tell me");
+    await act(async () => ends[2]("end_turn"));
+    expect(onQueue).toHaveBeenLastCalledWith(id, []);
+  });
+
+  it("Clear chat mid-reply opens a chat that shows Send, and the old chat's waiting words go back in the box", async () => {
+    const ends = turns();
+    api.deleteChat.mockResolvedValue();
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "first{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    const old = api.sendChat.mock.calls[0][0];
+    await userEvent.type(screen.getByLabelText("Message"), "then deploy{Enter}");
+    rerender(<Chat onOpenSettings={() => {}} clear={{ n: 1 }} />);
+    await waitFor(() => expect(api.deleteChat).toHaveBeenCalledWith(old));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Stop" })).toBeNull());
+    expect(screen.getByLabelText("Message")).toHaveValue("then deploy");
+    // The old reply ends after the new chat is open: nothing of it sends here.
+    await act(async () => ends[0]("end_turn"));
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("Message")).toHaveValue("then deploy");
+  });
+
+  it("a message typed in the new chat while the old reply ends goes to the new chat", async () => {
+    const ends = turns();
+    api.deleteChat.mockResolvedValue();
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "first{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    const old = api.sendChat.mock.calls[0][0];
+    rerender(<Chat onOpenSettings={() => {}} clear={{ n: 1 }} />);
+    await waitFor(() => expect(api.deleteChat).toHaveBeenCalledWith(old));
+    await userEvent.type(screen.getByLabelText("Message"), "fresh start");
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
+    await act(async () => ends[0]("cancelled"));
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(2));
+    expect(api.sendChat.mock.calls[1][0]).not.toBe(old);
+    expect(api.sendChat.mock.calls[1][1]).toBe("fresh start");
+  });
+
+  it("Stop puts what waited back in the box instead of sending it", async () => {
+    const ends = turns();
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "first{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    await userEvent.type(screen.getByLabelText("Message"), "then deploy{Enter}");
+    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+    expect(api.cancelChat).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("Message")).toHaveValue("then deploy");
+    await act(async () => ends[0]("cancelled"));
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("Remove puts the words back in an empty box; Steer now hands them to the reply", async () => {
+    const ends = turns();
+    api.steerChat.mockResolvedValue(true);
+    const onQueue = vi.fn();
+    const chat = (queueAct?: QueueAct) => <Chat onOpenSettings={() => {}} onQueue={onQueue} queueAct={queueAct} />;
+    const { rerender } = render(chat());
+    await userEvent.type(screen.getByLabelText("Message"), "first{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    const id = api.sendChat.mock.calls[0][0];
+    await userEvent.type(screen.getByLabelText("Message"), "then deploy{Enter}");
+    await userEvent.type(screen.getByLabelText("Message"), "use staging{Enter}");
+    rerender(chat({ op: "remove", index: 0, n: 1 }));
+    await waitFor(() => expect(screen.getByLabelText("Message")).toHaveValue("then deploy"));
+    expect(onQueue).toHaveBeenLastCalledWith(id, ["use staging"]);
+    rerender(chat({ op: "steer", index: 0, n: 2 }));
+    await waitFor(() => expect(api.steerChat).toHaveBeenCalledWith(id, "use staging"));
+    await waitFor(() => expect(onQueue).toHaveBeenLastCalledWith(id, []));
+    // Steered words show as sent; nothing more goes when the reply ends.
+    expect(screen.getByText("use staging")).toBeVisible();
+    await act(async () => ends[0]("end_turn"));
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("a Halt puts the queue back in the box", async () => {
+    const ends = turns();
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "first{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    await userEvent.type(screen.getByLabelText("Message"), "then deploy{Enter}");
+    await act(async () => ends[0]("halted"));
+    expect(screen.getByLabelText("Message")).toHaveValue("then deploy");
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
   });
 });

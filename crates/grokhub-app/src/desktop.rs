@@ -12,7 +12,7 @@ use grokhub_core::{
     session_is_wayland, tab_list_from_rows, take_text_body, virtual_desktop_size, x11_grab_size,
     ydotool_socket_path, AtspiRow, BrowserTab, CaptureKind, ComputerDrive, ComputerOp,
     DisplayOutput, HandsBackend, HandsDown, TabAction, ATSPI_PY, CDP_DOWN, CDP_PORTS,
-    IMAGE_FILE_CAP, RECORDERS, TEXT_FILE_CAP, TRANSCRIBERS,
+    IMAGE_FILE_CAP, TEXT_FILE_CAP, TRANSCRIBERS,
 };
 use grokhub_desktop::game_guard::{GameGuard, Guarded};
 use image::GenericImageView;
@@ -58,7 +58,7 @@ fn capture_temp(kind: &str, ext: &str) -> PathBuf {
 /// Local whisper on a worker thread — still must not hang halt forever.
 const DESK_TRANSCRIBE_TIMEOUT: Duration = Duration::from_secs(20);
 
-fn kill_limited(child: &mut Child) {
+pub(crate) fn kill_limited(child: &mut Child) {
     #[cfg(unix)]
     {
         let pid = child.id() as i32;
@@ -559,7 +559,7 @@ pub fn first_bin(names: &[&str]) -> Option<String> {
     names.iter().find(|n| which(n)).map(|s| (*s).to_string())
 }
 
-fn spawn_bin(name: &str) -> Command {
+pub(crate) fn spawn_bin(name: &str) -> Command {
     match resolve_bin(name) {
         Some(p) => Command::new(p),
         None => Command::new(name),
@@ -1468,81 +1468,60 @@ pub(crate) fn private_temp(name: &str) -> Result<PathBuf, String> {
 
 pub const PLAYERS: &[&str] = &["ffplay", "mpv", "paplay"];
 
-pub fn record_once() -> Result<PathBuf, String> {
-    let wav = private_temp("voice.wav")?;
-    record_wav(&wav)?;
-    Ok(wav)
-}
-
 pub fn transcribe_local(wav: &Path) -> Result<String, String> {
     transcribe(wav)
 }
 
-pub fn play_audio(path: &Path) -> Result<(), String> {
+/// Longest one spoken piece may play before it's treated as a stuck player.
+const SPEECH_PLAY_CAP: Duration = Duration::from_secs(600);
+
+/// Play one spoken piece to the end, or until `stop` is set (the person
+/// interrupted). No short player timeout: a long sentence plays whole.
+pub fn play_speech(path: &Path, stop: &AtomicBool) -> Result<(), String> {
     #[cfg(windows)]
     {
-        if crate::win_audio::play_file(path).is_ok() {
+        if crate::win_audio::play_file_until(path, stop).is_ok() {
             return Ok(());
         }
     }
     let dest = path.to_str().ok_or("audio path")?;
-    match first_bin(PLAYERS).as_deref() {
-        Some("ffplay") => run_ok(
+    let (bin, args): (&str, Vec<&str>) = match first_bin(PLAYERS).as_deref() {
+        Some("ffplay") => (
             "ffplay",
-            &["-nodisp", "-autoexit", "-loglevel", "error", dest],
+            vec!["-nodisp", "-autoexit", "-loglevel", "error", dest],
         ),
-        Some("mpv") => run_ok("mpv", &["--no-video", "--really-quiet", dest]),
-        Some("paplay") => run_ok("paplay", &[dest]),
-        _ => {
-            #[cfg(windows)]
-            {
-                crate::win_audio::play_file(path)
-            }
-            #[cfg(not(windows))]
-            {
-                Err("no ffplay/mpv/paplay to speak".into())
-            }
-        }
-    }
-}
-
-fn record_wav(path: &Path) -> Result<(), String> {
-    #[cfg(windows)]
+        Some("mpv") => ("mpv", vec!["--no-video", "--really-quiet", dest]),
+        Some("paplay") => ("paplay", vec![dest]),
+        _ => return Err("no ffplay/mpv/paplay to speak".into()),
+    };
+    let mut cmd = spawn_bin(bin);
+    cmd.args(&args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    crate::host::hide_windows_console(&mut cmd);
+    #[cfg(unix)]
     {
-        match crate::win_audio::record_wav(path, 4) {
-            Ok(()) => return Ok(()),
-            Err(e) => {
-                if first_bin(RECORDERS).is_none() {
-                    return Err(e);
-                }
-            }
-        }
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
     }
-    let dest = path.to_str().ok_or("wav path")?;
-    match first_bin(RECORDERS).as_deref() {
-        Some("arecord") => run_ok("arecord", &["-q", "-d", "4", "-f", "cd", "-t", "wav", dest]),
-        Some("ffmpeg") => run_ok(
-            "ffmpeg",
-            &[
-                "-y",
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-f",
-                "pulse",
-                "-i",
-                "default",
-                "-t",
-                "4",
-                "-ac",
-                "1",
-                "-ar",
-                "16000",
-                dest,
-            ],
-        ),
-        Some("sox") | Some("rec") => run_ok("rec", &[dest, "trim", "0", "4"]),
-        _ => Err("no arecord/ffmpeg/sox — install alsa-utils or ffmpeg".into()),
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("{bin} didn't start: {e}"))?;
+    let deadline = Instant::now() + SPEECH_PLAY_CAP;
+    loop {
+        match child.try_wait() {
+            Ok(Some(st)) if st.success() => return Ok(()),
+            Ok(Some(_)) => return Err(format!("{bin} failed")),
+            Ok(None) => {}
+            Err(e) => return Err(format!("{bin}: {e}")),
+        }
+        if stop.load(Ordering::SeqCst) || Instant::now() >= deadline {
+            kill_limited(&mut child);
+            let _ = child.wait();
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(30));
     }
 }
 
@@ -1626,30 +1605,30 @@ pub fn record_clip(device: Option<&str>) -> Result<(u32, Vec<u8>), String> {
     Ok((ac::CLIP_RATE, pcm))
 }
 
+/// Local whisper on a 16 kHz mono WAV. The transcript lands next to the WAV
+/// (`voice.txt` beside `voice.wav`) and is read back from there.
 fn transcribe(wav: &Path) -> Result<String, String> {
     let dest = wav.to_str().ok_or("wav")?;
     let bin = first_bin(TRANSCRIBERS).ok_or("install whisper (openai-whisper or whisper.cpp)")?;
-    let out_dir = std::env::temp_dir();
-    let mut cmd = Command::new(&bin);
+    let txt = wav.with_extension("txt");
+    let dir = wav.parent().and_then(Path::to_str).ok_or("wav folder")?;
+    let stem = wav.with_extension("");
+    let stem = stem.to_str().ok_or("wav path")?;
+    let _ = std::fs::remove_file(&txt);
+    let mut cmd = spawn_bin(&bin);
     match bin.as_str() {
         "whisper-cli" | "whisper.cpp" => {
-            cmd.args([
-                dest,
-                "-otxt",
-                "-of",
-                out_dir
-                    .join("grokhub-voice")
-                    .to_str()
-                    .unwrap_or("/tmp/grokhub-voice"),
-            ]);
+            cmd.args(["-l", "en", "-nt", "-otxt", "-of", stem, "-f", dest]);
         }
         _ => {
             cmd.args([
                 dest,
+                "--language",
+                "en",
                 "--output_format",
                 "txt",
                 "--output_dir",
-                out_dir.to_str().unwrap_or("/tmp"),
+                dir,
             ]);
         }
     }
@@ -1660,9 +1639,9 @@ fn transcribe(wav: &Path) -> Result<String, String> {
     if !out.status.success() {
         return Err(format!("{bin} failed"));
     }
-    let txt = wav.with_extension("txt");
-    let alt = out_dir.join("grokhub-voice.txt");
-    read_text_capped(&txt).or_else(|_| read_text_capped(&alt))
+    let text = read_text_capped(&txt);
+    let _ = std::fs::remove_file(&txt);
+    text
 }
 
 fn run_ok(bin: &str, args: &[&str]) -> Result<(), String> {
@@ -1675,10 +1654,11 @@ fn run_ok(bin: &str, args: &[&str]) -> Result<(), String> {
     }
 }
 
-pub fn imagine_save_path_ext(slug: &str, ext: &str) -> PathBuf {
+/// `slug.ext` for an Imagine save (`png` when the type is unknown).
+pub fn imagine_save_name(slug: &str, ext: &str) -> String {
     let ext = ext.trim().trim_start_matches('.').to_ascii_lowercase();
     let ext = if ext.is_empty() { "png".into() } else { ext };
-    crate::config::imagine_dir().join(format!("{slug}.{ext}"))
+    format!("{slug}.{ext}")
 }
 
 /// Second frame for a wall cover when the second Imagine call fails.
@@ -1764,6 +1744,93 @@ pub fn open_path(path: &str) -> Result<(), String> {
             .map(|_| ())
             .map_err(|e| e.to_string())
     }
+}
+
+/// What the "show this file in its folder" button says on this OS.
+pub fn reveal_label() -> &'static str {
+    if cfg!(windows) {
+        "Show in File Explorer"
+    } else if cfg!(target_os = "macos") {
+        "Show in Finder"
+    } else {
+        "Show in folder"
+    }
+}
+
+/// Open the folder holding `path` with the file selected. Windows asks
+/// Explorer to select it; macOS uses `open -R`; Linux asks the file manager
+/// over D-Bus (`org.freedesktop.FileManager1.ShowItems`) and opens the folder
+/// when no file manager answers. A file that is gone opens its folder.
+pub fn reveal_file(path: &std::path::Path) -> Result<(), String> {
+    if !path.exists() {
+        return match path.parent().filter(|p| p.is_dir()) {
+            Some(dir) => open_path(&dir.to_string_lossy()),
+            None => Err("the file and its folder are gone".into()),
+        };
+    }
+    #[cfg(windows)]
+    {
+        crate::win_native::reveal_file(&path.to_string_lossy())
+            .or_else(|_| open_folder_holding(path))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        spawn_reaped(std::process::Command::new("open").arg("-R").arg(path))
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let uri = file_uri(path);
+        let fallback = path.to_path_buf();
+        // The call can wait on a file manager starting up: keep it off the UI thread.
+        std::thread::spawn(move || {
+            if show_items_over_dbus(&uri).is_err() {
+                let _ = open_folder_holding(&fallback);
+            }
+        });
+        Ok(())
+    }
+}
+
+/// Open the folder that holds `path` (no selection).
+fn open_folder_holding(path: &std::path::Path) -> Result<(), String> {
+    let dir = if path.is_dir() {
+        path
+    } else {
+        path.parent().ok_or("no folder")?
+    };
+    open_path(&dir.to_string_lossy())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn show_items_over_dbus(uri: &str) -> Result<(), String> {
+    let conn = zbus::blocking::Connection::session().map_err(|e| e.to_string())?;
+    conn.call_method(
+        Some("org.freedesktop.FileManager1"),
+        "/org/freedesktop/FileManager1",
+        Some("org.freedesktop.FileManager1"),
+        "ShowItems",
+        &(vec![uri], ""),
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
+/// `file://` URI for an absolute path, every byte outside the unreserved set
+/// percent-encoded (spaces, `#`, `%`, non-ASCII names).
+#[cfg(all(unix, not(target_os = "macos")))]
+pub(crate) fn file_uri(path: &std::path::Path) -> String {
+    use std::os::unix::ffi::OsStrExt as _;
+    let mut out = String::from("file://");
+    for &b in path.as_os_str().as_bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'/' | b'-' | b'_' | b'.' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
 }
 
 /// Caret, pipe, backtick, backslash, braces, and quotes, plus whitespace or control.
@@ -2089,6 +2156,26 @@ pub fn clipboard_once() -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn file_uri_percent_encodes_spaces_and_unicode() {
+        assert_eq!(
+            super::file_uri(std::path::Path::new(
+                "/home/user/Documents/Loadout/Chats/my chat #1-é.md"
+            )),
+            "file:///home/user/Documents/Loadout/Chats/my%20chat%20%231-%C3%A9.md"
+        );
+    }
+
+    #[test]
+    fn reveal_of_a_missing_file_with_no_folder_says_so() {
+        let gone = std::env::temp_dir().join("no-such-dir-for-reveal-test/x/y.md");
+        assert_eq!(
+            super::reveal_file(&gone),
+            Err("the file and its folder are gone".to_string())
+        );
+    }
+
     use super::*;
 
     #[test]
@@ -2156,7 +2243,6 @@ mod tests {
 
     #[test]
     fn bins_are_named() {
-        assert!(RECORDERS.contains(&"arecord"));
         assert!(TRANSCRIBERS.contains(&"whisper"));
         assert!(PLAYERS.contains(&"ffplay"));
         assert!(VIDEO_PLAYERS.contains(&"mpv") && VIDEO_PLAYERS.contains(&"ffplay"));
@@ -2687,7 +2773,7 @@ mod tests {
         let run_ok = src
             .split("fn run_ok(")
             .nth(1)
-            .and_then(|s| s.split("\npub fn imagine_save_path_ext(").next())
+            .and_then(|s| s.split("\n/// `slug.ext` for an Imagine save").next())
             .expect("run_ok");
         assert!(
             run_ok.contains("run_limited("),

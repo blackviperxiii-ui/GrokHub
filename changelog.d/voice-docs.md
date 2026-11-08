@@ -1,0 +1,1 @@
+- Docs: a compass map for voice mode (open mic, streaming speech-to-text, spoken replies, barge-in) and an updated Hey Grok paragraph in the reference.

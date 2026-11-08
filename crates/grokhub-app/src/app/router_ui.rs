@@ -143,7 +143,6 @@ impl Cabin {
         }
         self.poll_guard();
         self.poll_tune();
-        self.poll_openrouter_sign_in();
         super::connectivity_ui::tick_connectivity(now_ms());
         self.sync_router_pin();
         self.sync_spend();
@@ -223,7 +222,15 @@ impl Cabin {
         let (bearer, credential) = match self.native_cred() {
             Ok((b, AuthKind::OAuth)) => (Some(b), Credential::Plan),
             Ok((b, AuthKind::ApiKey)) => (Some(b), Credential::ApiKey),
-            Err(_) => (None, Credential::None),
+            // A failed read (an OAuth renewal that blinked, a store that
+            // would not open) is not a sign-out: the last credential a
+            // refresh proved stands until a sign-in replaces it.
+            Err(_) => (
+                None,
+                load_registry(&crate::config::config_dir())
+                    .entitlement
+                    .credential,
+            ),
         };
         let named = self.router_named_models();
         let default_model = grokhub_agent::DEFAULT_MODEL.to_string();
@@ -254,6 +261,7 @@ impl Cabin {
                 named,
                 default_model,
                 now_ms: now,
+                xai_bearer: bearer.clone(),
             };
             let done = run_refresh(&job);
             let plan = bearer.as_deref().filter(|_| credential == Credential::Plan);

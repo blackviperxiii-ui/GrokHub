@@ -17,13 +17,12 @@ import {
   workboardRecur,
   workboardResume,
   workboardStamp,
-  workboardSweepDismiss,
-  workboardSweepUndo,
   workboardWork,
   type BoardAct,
   type BoardCard,
   type BoardLane,
   type BoardPage,
+  type BoardSwept,
   type BoardWork,
   type WorkLogLine,
 } from "./api";
@@ -100,6 +99,7 @@ export function Workboard({
   onResume,
   resumable = true,
   onCards,
+  onSwept,
   openCard,
 }: {
   onWork: (prompt: string) => void;
@@ -108,6 +108,9 @@ export function Workboard({
   resumable?: boolean;
   /** The chat-to-card map, after every load. */
   onCards?: (byChat: Record<string, string>) => void;
+  /** The last tidy's note, after every load: it goes to the Notifications
+   * menu, with Undo, instead of a banner here. */
+  onSwept?: (swept: BoardSwept | null) => void;
   /** Opens this card, as the Activity dock asks. `n` repeats a request. */
   openCard?: { id: string; n: number };
 }) {
@@ -143,6 +146,10 @@ export function Workboard({
   useEffect(() => {
     if (page) onCards?.(cardsByChat(page));
   }, [page, onCards]);
+  const swept = page?.swept ?? null;
+  useEffect(() => {
+    onSwept?.(swept);
+  }, [swept, onSwept]);
 
   // The cabin may save meanwhile: check the file's mtime, reload on a change.
   const stamp = page?.stamp;
@@ -275,21 +282,6 @@ export function Workboard({
         <p className="status" role="status">
           {note}
         </p>
-      )}
-      {page?.swept && (
-        <div className="board-swept" role="group" aria-label="Tidy">
-          <span>{page.swept.text}</span>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void run(workboardSweepUndo, "Put back in Todo.")}
-          >
-            Undo
-          </button>
-          <button type="button" className="quiet" disabled={busy} onClick={() => void run(workboardSweepDismiss)}>
-            Dismiss
-          </button>
-        </div>
       )}
       {page?.queueNote && <p className="card-status">{page.queueNote}</p>}
       {page === null && !note && <p className="empty">Loading the workboard…</p>}

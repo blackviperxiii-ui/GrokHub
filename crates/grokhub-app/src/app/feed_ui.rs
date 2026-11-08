@@ -60,6 +60,16 @@ impl Cabin {
         self.post_feed_card(card);
     }
 
+    /// A finished run's card, titled with what its reply found.
+    pub(super) fn note_automation_report(&mut self, source_id: &str, name: &str, reply: &str) {
+        if name.trim().is_empty() && reply.trim().is_empty() {
+            return;
+        }
+        let mut card = grokhub_core::automation_report_card(source_id, name, reply, now_ms());
+        hold_if_quiet(&mut card, self.quiet_now());
+        self.post_feed_card(card);
+    }
+
     /// One Home card per store that would not load and was moved aside: a settings or
     /// feed file (`config::quarantine`), the hub state, or a damaged memory note.
     /// Notes for files outside this cabin's config folder are dropped.
@@ -435,7 +445,7 @@ impl Cabin {
         let Some((title, body)) = self.situation_ping.take() else {
             return;
         };
-        if self.quiet_now() || self.window_focused {
+        if self.window_focused {
             return;
         }
         let line = if body.is_empty() {
@@ -443,7 +453,7 @@ impl Cabin {
         } else {
             format!("{title} {body}")
         };
-        crate::notify::ping(grokhub_core::brand::product_name(), &line);
+        self.pulse_ping(true, &line);
     }
 
     #[cfg(test)]
@@ -646,6 +656,21 @@ impl Cabin {
             .chain(self.grok_loops.iter().map(|l| l.prompt.clone()))
             .collect();
         let skills: Vec<String> = self.skill_list.iter().map(|s| s.name.clone()).collect();
+        // Games and interests: what an idea about their games may stand on.
+        // The cached library only; this never reads Steam.
+        let games = self.steam_played_names(8);
+        let interests: Vec<String> = self
+            .interests
+            .profile
+            .as_ref()
+            .map(|p| {
+                p.ranked()
+                    .into_iter()
+                    .take(8)
+                    .map(|t| t.topic.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
         let existing: Vec<String> = self
             .updates
             .iter()
@@ -676,6 +701,8 @@ impl Cabin {
                 skills: &skills,
                 existing: &existing,
                 rejected: &rejected,
+                games: &games,
+                interests: &interests,
                 hour: clock.hour as u8,
                 weekday,
             })
@@ -691,6 +718,8 @@ impl Cabin {
         sources.extend(memory_lines.iter().cloned());
         let mut lasting = memory_lines;
         lasting.extend(open_cards);
+        lasting.extend(games);
+        lasting.extend(interests);
         let mut taken = existing;
         taken.extend(rejected);
         taken.extend(automations);
@@ -873,6 +902,8 @@ impl Cabin {
             thread.title = title;
             thread.title_locked = true;
             thread.messages_mut().push(("assistant".into(), context));
+            // The first turn carries the card to the model, not only to the page.
+            thread.native_carry = true;
             self.messages = thread.messages.clone();
         }
         if let Some(card) = self.updates.iter_mut().find(|c| c.id == id) {
@@ -969,6 +1000,16 @@ impl Cabin {
     }
 
     pub(super) fn dismiss_feed_card(&mut self, id: &str) {
+        self.close_feed_card(id, true);
+    }
+
+    /// Ignore for now: the card leaves the page, but its source and topic are
+    /// not remembered as turned down, so it can come back.
+    pub(super) fn ignore_feed_card(&mut self, id: &str) {
+        self.close_feed_card(id, false);
+    }
+
+    fn close_feed_card(&mut self, id: &str, turned_down: bool) {
         let prior = self.updates.iter().find(|c| c.id == id).cloned();
         let kind = prior.as_ref().map(|c| c.kind);
         let touched = prior.as_ref().is_some_and(|c| self.card_touched(c));
@@ -982,12 +1023,12 @@ impl Cabin {
             dismiss_update_at(&mut self.updates, id, now_ms())
         };
         if removed {
-            if kind == Some(UpdateKind::Suggestion) {
+            if turned_down && kind == Some(UpdateKind::Suggestion) {
                 remember_dismissed_source(&mut self.cfg.feed_pulse, &source);
                 self.persist_cfg();
             }
             // The idea stays on the Ideas board. New ideas on its topic stay off.
-            if kind == Some(UpdateKind::Idea) {
+            if turned_down && kind == Some(UpdateKind::Idea) {
                 grokhub_core::remember_turned_down(&mut self.cfg.feed_pulse, &title);
                 self.persist_cfg();
             }

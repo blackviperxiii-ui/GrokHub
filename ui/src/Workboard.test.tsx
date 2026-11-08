@@ -487,35 +487,17 @@ describe("Workboard", () => {
     );
   });
 
-  it("shows the sweep's notice with Undo and Dismiss", async () => {
+  it("hands the sweep's notice to the Notifications menu instead of a banner", async () => {
     const swept = {
       ...board({}, [card({ id: "a1", title: "Old run", archivedMs: 5 })]),
     };
     swept.swept = { text: "Archived 1 finished card", ids: ["a1"], at: 5 };
     api.getWorkboard.mockResolvedValue(swept);
-    api.workboardSweepUndo.mockResolvedValue(
-      board({ todo: [card({ id: "a1", title: "Old run" })] }),
-    );
-    render(<Workboard onWork={() => {}} />);
-    const tidy = await screen.findByRole("group", { name: "Tidy" });
-    expect(within(tidy).getByText("Archived 1 finished card")).toBeVisible();
-    await userEvent.click(within(tidy).getByRole("button", { name: "Undo" }));
-    expect(api.workboardSweepUndo).toHaveBeenCalledTimes(1);
+    const onSwept = vi.fn();
+    render(<Workboard onWork={() => {}} onSwept={onSwept} />);
+    await waitFor(() => expect(onSwept).toHaveBeenCalledWith(swept.swept));
     expect(screen.queryByRole("group", { name: "Tidy" })).toBeNull();
-    expect(within(column("Todo")).getByText("Old run")).toBeVisible();
-
-    api.getWorkboard.mockResolvedValue(swept);
-    api.workboardSweepDismiss.mockResolvedValue(
-      board({}, [card({ id: "a1", title: "Old run" })]),
-    );
-    const { unmount } = render(<Workboard onWork={() => {}} />);
-    const again = await screen.findByRole("group", { name: "Tidy" });
-    await userEvent.click(
-      within(again).getByRole("button", { name: "Dismiss" }),
-    );
-    expect(api.workboardSweepDismiss).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole("group", { name: "Tidy" })).toBeNull();
-    unmount();
+    expect(screen.queryByText("Archived 1 finished card")).toBeNull();
   });
 
   it("shows the error and the file's state when a change fails", async () => {

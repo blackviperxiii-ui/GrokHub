@@ -39,6 +39,9 @@ pub struct Page {
     pub encrypted: bool,
     pub encrypted_note: String,
     pub data_folder: String,
+    /// Where exports and the cabin's other files go
+    /// (`Documents/Loadout` by default, shared with the cabin).
+    pub files_folder: String,
     /// Open data folder works here (desktops only).
     pub can_open_folder: bool,
 }
@@ -120,6 +123,9 @@ pub fn page(config_dir: &Path, lock: Option<Option<Locked>>, now_ms: u64) -> Pag
         encrypted,
         encrypted_note,
         data_folder: config_dir.display().to_string(),
+        files_folder: grokhub_core::user_files::files_root(config_dir)
+            .display()
+            .to_string(),
         can_open_folder: cfg!(desktop),
     }
 }
@@ -135,7 +141,24 @@ pub fn set_offline(config_dir: &Path, on: bool) -> Result<(), String> {
 /// Opens the GrokHub config folder in the file manager.
 pub fn open_data_folder(config_dir: &Path) -> Result<(), String> {
     crate::capabilities::needs(cfg!(desktop), "Opening the data folder")?;
-    std::fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
+    open_folder(config_dir)
+}
+
+/// Opens your files folder (`Documents/Loadout`), making it first if needed.
+pub fn open_files_folder(config_dir: &Path) -> Result<(), String> {
+    crate::capabilities::needs(cfg!(desktop), "Opening your files folder")?;
+    open_folder(&grokhub_core::user_files::files_root(config_dir))
+}
+
+/// Change… on Your files: the folder picked, checked before it's used. The
+/// cabin reads the same setting, so both save to the new folder from now on.
+pub fn set_files_folder(config_dir: &Path, picked: &Path) -> Result<(), String> {
+    grokhub_core::user_files::set_files_root(config_dir, picked)
+        .map_err(|why| format!("Can't use that folder: {why}"))
+}
+
+fn open_folder(dir: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let opener = if cfg!(windows) {
         "explorer"
     } else if cfg!(target_os = "macos") {
@@ -144,12 +167,12 @@ pub fn open_data_folder(config_dir: &Path) -> Result<(), String> {
         "xdg-open"
     };
     let mut child = std::process::Command::new(opener)
-        .arg(config_dir)
+        .arg(dir)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
-        .map_err(|e| format!("Couldn't open {}: {e}", config_dir.display()))?;
+        .map_err(|e| format!("Couldn't open {}: {e}", dir.display()))?;
     // Reap the helper so it never lingers as a zombie.
     std::thread::spawn(move || {
         let _ = child.wait();

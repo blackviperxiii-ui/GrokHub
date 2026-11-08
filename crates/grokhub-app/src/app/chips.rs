@@ -1,10 +1,18 @@
 //! Quick chips and the empty-home greeting.
 
 use super::*;
-use grokhub_core::ChipSignals;
+use grokhub_core::{ChipAction, ChipSignals};
+
+/// Where a feature's offer ranks: above the PC's plain signals and seeds,
+/// under a reply's own follow-ups.
+const FEATURE_SCORE: f32 = 100.0;
+/// The app you just came from leads the empty row, as it did before.
+const FEATURE_FOCUS_SCORE: f32 = 110.0;
+/// A skill matching the draft is what the person is typing toward.
+const FEATURE_SKILL_SCORE: f32 = 108.0;
 
 /// Chips on Home's row.
-pub(super) const HOME_CHIP_MAX: usize = 4;
+pub(super) const HOME_CHIP_MAX: usize = grokhub_core::CHIP_ROW_MAX;
 
 /// The plain chip signals, kept apart so they join the paint key: chips
 /// redraw when a game starts or the day turns, not every frame.
@@ -14,6 +22,43 @@ struct ChipSignalsKey {
     weekday: u8,
     update_waiting: bool,
     quiet_hours: bool,
+    gaming: bool,
+    anticheat: bool,
+}
+
+/// Chip state that lives between taps: the stream filter that keeps a
+/// reply's `<chips>` block off screen, and the last Do chip's undo.
+#[derive(Debug, Default)]
+pub(super) struct ChipLive {
+    filter: grokhub_core::ChipTrailerFilter,
+    undo: Option<ChipUndo>,
+}
+
+/// How long the Undo chip stays after a Do chip.
+const UNDO_MS: u64 = 30_000;
+
+/// What the last Do chip changed, so its Undo chip can put it back.
+#[derive(Debug, Clone)]
+pub(super) struct ChipUndo {
+    label: String,
+    at_ms: u64,
+    kind: UndoKind,
+}
+
+#[derive(Debug, Clone)]
+pub(super) enum UndoKind {
+    /// The backup state and reminder from before the snooze. The state is
+    /// boxed so the undo stays small.
+    BackupSnooze(
+        Box<grokhub_core::backup_nudge::NudgeState>,
+        Option<grokhub_core::backup_nudge::Reminder>,
+    ),
+    /// The game whose release-day reminder was just added.
+    RadarRemind(u32),
+}
+
+fn user_turns(messages: &[(String, String)]) -> usize {
+    messages.iter().filter(|(role, _)| role == "user").count()
 }
 
 /// True when a chat chip should run through `send_chat` (slash parse or empty-composer send).
@@ -28,12 +73,42 @@ fn chip_chat_runs_immediately(chip: &QuickChip, composer_draft: &str) -> bool {
     false
 }
 
+/// The composer text a shell chip leaves: one `/sh` line, ready to check
+/// and run with Enter.
+fn shell_chip_draft(value: &str) -> String {
+    let cmd = value.trim().trim_start_matches('$').trim();
+    let cmd = cmd.strip_prefix("/sh ").unwrap_or(cmd).trim();
+    format!("/sh {cmd}")
+}
+
+/// A chat chip picked while a draft is typed: the chip's text goes after
+/// the draft on its own line, so nothing typed is lost. A chip whose text
+/// already starts with the draft (expand-draft) replaces it.
+fn draft_with_chip(draft: &str, value: &str) -> String {
+    let draft = draft.trim_end();
+    let value = value.trim();
+    if draft.is_empty() || value.starts_with(draft) {
+        // Empty box, or the chip already builds on the draft (expand-draft).
+        value.to_string()
+    } else if value.is_empty() || draft.ends_with(value) {
+        draft.to_string()
+    } else {
+        format!("{draft}\n{value}")
+    }
+}
+
+/// Only the chip in the first slot carries the primary style, after every
+/// insert and re-order.
+fn mark_first_primary(chips: &mut [QuickChip]) {
+    for (i, c) in chips.iter_mut().enumerate() {
+        c.primary = i == 0;
+    }
+}
+
 fn chip_action_tip(chip: &QuickChip, composer_draft: &str) -> String {
     match chip.kind {
         ChipKind::Nav => "Opens this page — nothing is sent".into(),
-        // Retired: never offered (old chip memory only). Nothing happens.
-        ChipKind::Mode => "Nothing is sent".into(),
-        ChipKind::Shell => "Runs on the host when you send — review the command first".into(),
+        ChipKind::Shell => "Puts the command in the box — check it, then press Enter to run".into(),
         ChipKind::Chat => {
             if chip_chat_runs_immediately(chip, composer_draft) {
                 if chip.value.trim().starts_with('/') {
@@ -43,7 +118,7 @@ fn chip_action_tip(chip: &QuickChip, composer_draft: &str) -> String {
                         .into()
                 }
             } else {
-                "Inserts draft text — edit and send when ready (never auto-sends)".into()
+                "Adds to what you typed — edit and send when ready (never auto-sends)".into()
             }
         }
     }
@@ -387,8 +462,155 @@ impl Cabin {
         self.apply_thread_goal(&tid, &reply);
     }
 
+    /// Whether this chat's prompt asks the model for its own chips: never for
+    /// a side question or an unwatched run, and not while they keep losing.
+    pub(super) fn reply_chips_on(&self) -> bool {
+        self.cfg.suggestions
+            && !self.scheduled_perm
+            && grokhub_core::chip_trailer_on(&self.chip_memory, now_ms())
+    }
+
+    /// A new turn: no block half read.
+    pub(super) fn begin_reply_chips(&mut self) {
+        self.chip_live.filter = Default::default();
+    }
+
+    /// The part of a streamed chunk that is shown: a reply's chips block is
+    /// held back, thinking passes as it came.
+    pub(super) fn shown_chunk<'a>(
+        &mut self,
+        kind: LiveKind,
+        chunk: &'a str,
+    ) -> std::borrow::Cow<'a, str> {
+        match kind {
+            LiveKind::Say => self.chip_live.filter.feed(chunk).into(),
+            _ => chunk.into(),
+        }
+    }
+
+    /// The finished reply without its chips block. The block's chips are
+    /// saved with the chat the reply belongs to, with the turn's mode, and
+    /// the rule is reviewed against how they did.
+    pub(super) fn take_reply_chips(&mut self, mut text: String) -> String {
+        let (tail, mut block) = self.chip_live.filter.finish();
+        text.push_str(&tail);
+        let (text, late) = grokhub_core::split_chip_trailer(&text);
+        if block.trim().is_empty() {
+            block = late;
+        }
+        grokhub_core::review_chip_trailer(&mut self.chip_memory, now_ms());
+        let chips = grokhub_core::parse_chip_trailer(&block);
+        if self.job_is_idea_talk() || chips.is_empty() {
+            return text;
+        }
+        let visible = self.visible_thread_id();
+        let id = self
+            .chat_job_thread
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| visible.clone());
+        let live_turns = user_turns(&self.messages);
+        let mode = self.session_mode.as_str().to_string();
+        if let Some(t) = self.threads.iter_mut().find(|t| t.id == id) {
+            let at = if id == visible {
+                live_turns
+            } else {
+                user_turns(&t.messages)
+            };
+            t.follow_ups = Some(crate::threads::FollowUps { chips, at, mode });
+        }
+        text
+    }
+
+    /// The saved follow-ups of the chat on screen, while they still belong
+    /// to its last reply.
+    fn follow_ups_here(&self) -> Option<&crate::threads::FollowUps> {
+        let id = self.visible_thread_id();
+        let turns = user_turns(&self.messages);
+        self.threads
+            .iter()
+            .find(|t| t.id == id)
+            .and_then(|t| t.follow_ups.as_ref())
+            .filter(|f| f.at == turns)
+    }
+
+    /// The model's chips for the reply on screen; none once the chat moved on.
+    pub(super) fn reply_chips_here(&self) -> Vec<QuickChip> {
+        self.follow_ups_here()
+            .map(|f| f.chips.clone())
+            .unwrap_or_default()
+    }
+
+    /// A follow-up runs in the mode of the turn it came from.
+    fn take_follow_up_mode(&mut self) {
+        let Some(mode) = self
+            .follow_ups_here()
+            .and_then(|f| SessionMode::parse(&f.mode))
+        else {
+            return;
+        };
+        if mode != self.session_mode {
+            self.set_session_mode(mode);
+            let name = match mode {
+                SessionMode::Plan => "Plan",
+                SessionMode::Ask => "Ask",
+                SessionMode::Chat => "Chat",
+            };
+            self.status = format!("Back in {name} for this follow-up.");
+        }
+    }
+
+    /// Note what a Do chip changed; its Undo chip leads the row for a while.
+    pub(super) fn set_chip_undo(&mut self, label: &str, kind: UndoKind) {
+        self.chip_live.undo = Some(ChipUndo {
+            label: label.to_string(),
+            at_ms: now_ms(),
+            kind,
+        });
+        self.chip_paint_key.clear();
+    }
+
+    /// The Undo chip, while the last Do chip can still be taken back.
+    fn undo_chip(&self) -> Option<QuickChip> {
+        let u = self.chip_live.undo.as_ref()?;
+        (now_ms().saturating_sub(u.at_ms) < UNDO_MS).then(|| QuickChip {
+            id: grokhub_core::UNDO_CHIP_ID.into(),
+            label: "Undo".into(),
+            value: String::new(),
+            kind: ChipKind::Chat,
+            score: 0.0,
+            hint: format!("Takes back: {}", u.label),
+            primary: false,
+        })
+    }
+
+    /// A row with the Undo chip first, when there is one.
+    pub(super) fn with_undo(&self, mut chips: Vec<QuickChip>) -> Vec<QuickChip> {
+        if let Some(undo) = self.undo_chip() {
+            chips.insert(0, undo);
+            chips.truncate(grokhub_core::CHIP_ROW_MAX);
+        }
+        chips
+    }
+
+    fn take_undo(&mut self) {
+        let Some(u) = self.chip_live.undo.take() else {
+            return;
+        };
+        match u.kind {
+            UndoKind::BackupSnooze(state, reminder) => self.undo_backup_snooze(*state, reminder),
+            UndoKind::RadarRemind(id) => self.undo_radar_remind(id),
+        }
+        self.chip_paint_key.clear();
+    }
+
     pub(super) fn refresh_chips(&mut self) {
         if self.running {
+            return;
+        }
+        if !self.cfg.suggestions {
+            self.visible_chips.clear();
+            self.home_chips.clear();
             return;
         }
         let hour = Self::chip_hour();
@@ -417,6 +639,12 @@ impl Cabin {
             .and_then(|id| self.steam_cached_name(id))
             .map(str::to_string);
         let game_ended = self.game_just_ended().map(str::to_string);
+        let features = self.feature_chips();
+        let feature_ids: Vec<&str> = features.iter().map(|c| c.id.as_str()).collect();
+        let guard = self.chip_guard();
+        let attachment = self.attached_file_name();
+        let reply = self.reply_chips_here();
+        let reply_ids: Vec<&str> = reply.iter().map(|c| c.id.as_str()).collect();
         let signals_key = ChipSignalsKey {
             low_disk: super::home::cached_drives()
                 .iter()
@@ -424,9 +652,11 @@ impl Cabin {
             weekday: Self::local_clock().weekday,
             update_waiting: self.cabin_update_available(),
             quiet_hours: self.quiet_now(),
+            gaming: guard.gaming,
+            anticheat: guard.anticheat.is_some(),
         };
         let key = format!(
-            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{:?}|{:?}",
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
             self.thread_idx,
             n,
             last,
@@ -449,7 +679,10 @@ impl Cabin {
             persistable_cabin_lane(&self.cfg.cabin_lane),
             game,
             game_ended,
-            signals_key
+            signals_key,
+            feature_ids,
+            attachment,
+            reply_ids
         );
         if self.chip_paint_key == key && !self.visible_chips.is_empty() {
             return;
@@ -461,19 +694,18 @@ impl Cabin {
             chat: &chat,
             draft: &self.composer,
             grok_connected: self.cabin_signed_in(),
-            host_on: false,
             // The router alone picks the model: chips always see Auto.
             mode: "auto",
             thread_title: &title,
             usage_messages: self.usage.messages,
-            usage_cap: self.cfg.daily_auto_cap,
             memory: &self.chip_memory,
             dismissed: &self.chip_dismissed,
-            llm_chips: &[],
+            reply_chips: &reply,
             last_failed,
             hour,
             now_ms: now_ms(),
-            max: CHIP_VISIBLE_MAX,
+            // The engine gathers a pool; the ranker picks the row from it.
+            max: grokhub_core::CHIP_HARD_MAX,
             other_threads: &others,
             first_run,
             last_slash: &last_slash,
@@ -488,7 +720,11 @@ impl Cabin {
                 weekday: signals_key.weekday,
                 update_waiting: signals_key.update_waiting,
                 quiet_hours: signals_key.quiet_hours,
+                gaming: signals_key.gaming,
+                anticheat: signals_key.anticheat,
+                attachment: attachment.as_deref(),
             },
+            extra: &features,
         };
         let pace = grokhub_core::cabin_pace(&input);
         self.offer_repeated = matches!(
@@ -502,12 +738,125 @@ impl Cabin {
             draft: "",
             thread_title: "",
             last_failed: false,
-            max: HOME_CHIP_MAX,
+            max: grokhub_core::CHIP_HARD_MAX,
+            // Feature offers, the reply's chips and the tray's file belong
+            // to the open chat.
+            extra: &[],
+            reply_chips: &[],
+            signals: ChipSignals {
+                attachment: None,
+                ..input.signals
+            },
             ..input.clone()
         };
-        self.home_chips = build_quick_chips(home);
         // Chips are local only: no model ask, cloud or local (LO-28).
-        self.visible_chips = build_quick_chips(input);
+        let home_pool = build_quick_chips(home);
+        let mut pool = build_quick_chips(input);
+        bias_chips_for_lane(&mut pool, cabin_lane(&self.cfg.cabin_lane));
+        // One draw per boundary (thread, turn, hour), never per keystroke,
+        // so the row holds still while the person types.
+        let mut seed = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            (self.thread_idx, n, last, hour).hash(&mut h);
+            h.finish()
+        };
+        // The seed takes the hour, so 1 boundary in 20 lands in the holdout
+        // at some hours and not others. Tests here need a row every time;
+        // the holdout itself is proven in core's chip health tests.
+        while cfg!(test) && grokhub_core::chip_health::in_holdout(seed) {
+            seed = seed.wrapping_add(1);
+        }
+        let ctx = |surface, max| grokhub_core::RankCtx {
+            surface,
+            hour,
+            now_ms: now_ms(),
+            seed,
+            max,
+        };
+        self.home_chips = grokhub_core::rank_quick_chips(
+            &mut self.chip_memory,
+            home_pool,
+            ctx("home", HOME_CHIP_MAX),
+        );
+        self.visible_chips = grokhub_core::rank_quick_chips(
+            &mut self.chip_memory,
+            pool,
+            ctx("composer", grokhub_core::CHIP_ROW_MAX),
+        );
+    }
+
+    /// Every feature's offer for the open chat, with the score it ranks at.
+    /// Each was spliced in front of the row before; now the engine weighs
+    /// it against the chat's own chips. All read cached state only.
+    pub(super) fn feature_chips(&self) -> Vec<QuickChip> {
+        fn scored(chips: Vec<QuickChip>, score: f32, hint: &str) -> Vec<QuickChip> {
+            chips
+                .into_iter()
+                .map(|mut c| {
+                    c.score = score;
+                    if c.hint.trim().is_empty() {
+                        c.hint = hint.to_string();
+                    }
+                    c
+                })
+                .collect()
+        }
+        let mut out: Vec<QuickChip> = Vec::new();
+        out.extend(scored(
+            skill_offer_chip(&self.composer, &self.skill_list)
+                .into_iter()
+                .collect(),
+            FEATURE_SKILL_SCORE,
+            "A skill fits what you're typing",
+        ));
+        out.extend(scored(
+            self.focus_chip().into_iter().collect(),
+            FEATURE_FOCUS_SCORE,
+            "The app you were just in",
+        ));
+        out.extend(scored(
+            self.model_chips(),
+            FEATURE_SCORE + 4.0,
+            "New model file",
+        ));
+        out.extend(scored(
+            self.resume_chips(),
+            FEATURE_SCORE + 3.0,
+            "Code you left",
+        ));
+        out.extend(scored(
+            self.backup_chips(),
+            FEATURE_SCORE + 2.0,
+            "Backup due",
+        ));
+        out.extend(scored(
+            self.tidy_chips(),
+            FEATURE_SCORE,
+            "Downloads cleanup",
+        ));
+        out.extend(scored(self.goal_chips(), FEATURE_SCORE + 1.0, "Your goal"));
+        out.extend(scored(self.game_chips(), FEATURE_SCORE, "Your game"));
+        out.extend(scored(
+            self.radar_chips(),
+            FEATURE_SCORE - 2.0,
+            "Release radar",
+        ));
+        // Order inside one feature is its own: keep it among equal scores.
+        for (i, c) in out.iter_mut().enumerate() {
+            c.score -= i as f32 * 0.001;
+        }
+        out.retain(|c| !self.chip_hidden(c));
+        out
+    }
+
+    /// The first file waiting in the attach tray, by name only.
+    fn attached_file_name(&self) -> Option<String> {
+        let item = self.attach_tray.queue.items().first()?;
+        std::path::Path::new(&item.path)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .filter(|n| !n.trim().is_empty())
     }
 
     /// Ranked composer chips. Empty home and mid-thread share `visible_chips`
@@ -521,37 +870,28 @@ impl Cabin {
         {
             return super::loadout_home::hangout_quick_chips();
         }
+        // Feature offers (focus help, model drop, code resume, tidy, backup,
+        // radar, game, skill offer) are already in the ranked pool.
         let mut chips = self.visible_chips.clone();
-        if let Some(c) = skill_offer_chip(&self.composer, &self.skill_list) {
-            let gone = grokhub_core::chip_dismissed_for_good(&self.chip_memory, &c)
-                || self
-                    .chip_dismissed
-                    .iter()
-                    .any(|d| d == &c.id || d == &c.value);
-            if !gone && chips.iter().all(|x| x.id != c.id) {
-                chips.insert(0, c);
-            }
-        }
-        bias_chips_for_lane(&mut chips, cabin_lane(&self.cfg.cabin_lane));
         polish_chip_hints(&mut chips, &self.composer);
-        let mut resume = self.model_chips();
-        resume.extend(self.resume_chips());
-        resume.extend(self.tidy_chips());
-        resume.extend(self.backup_chips());
-        resume.extend(self.radar_chips());
-        resume.extend(self.game_chips());
-        // A clicked resume chip is remembered and can come back as a plain chip.
-        chips.retain(|x| {
-            resume
-                .iter()
-                .all(|r| r.id != x.id && r.value != x.value && r.label != x.label)
-        });
-        chips.splice(0..0, resume);
-        if let Some(c) = self.focus_chip() {
-            chips.retain(|x| x.id != c.id);
-            chips.insert(0, c);
+        // A shell chip fills the box with its command; with a draft typed
+        // there is no room for it, so it waits until the box is empty.
+        if !self.composer.trim().is_empty() {
+            chips.retain(|c| c.kind != ChipKind::Shell);
         }
+        chips.truncate(grokhub_core::CHIP_ROW_MAX);
+        let mut chips = self.with_undo(chips);
+        mark_first_primary(&mut chips);
         chips
+    }
+
+    /// True when the person hid this chip, this session or for good.
+    fn chip_hidden(&self, chip: &QuickChip) -> bool {
+        grokhub_core::chip_dismissed_for_good(&self.chip_memory, chip)
+            || self
+                .chip_dismissed
+                .iter()
+                .any(|d| d == &chip.id || d == &chip.value)
     }
 
     /// Home's row. A chat chip starts its own chat, like an ask typed on
@@ -569,18 +909,77 @@ impl Cabin {
                 self.composer.clear();
             }
         }
-        self.take_chip_act(act, chips);
+        self.take_chip_act_on("home", act, chips);
     }
 
     pub(super) fn take_chip_act(&mut self, act: crate::cards::ChipRowAct, chips: &[QuickChip]) {
+        self.take_chip_act_on("composer", act, chips);
+    }
+
+    /// Note a shown row in the local chip log (no chip text, see
+    /// `grokhub_core::chip_store`). Same ids as last time on this surface:
+    /// nothing to do, so a repaint costs one hash.
+    pub(super) fn note_chips_shown(&mut self, surface: &'static str, chips: &[QuickChip]) {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for c in chips {
+            c.id.hash(&mut h);
+        }
+        let sig = h.finish();
+        match self.chips_logged.iter_mut().find(|(s, _)| *s == surface) {
+            Some((_, last)) if *last == sig => return,
+            Some((_, last)) => *last = sig,
+            None => self.chips_logged.push((surface, sig)),
+        }
+        grokhub_core::log_chips_shown(&mut self.chip_memory, surface, chips, now_ms());
+    }
+
+    fn take_chip_act_on(
+        &mut self,
+        surface: &'static str,
+        act: crate::cards::ChipRowAct,
+        chips: &[QuickChip],
+    ) {
+        let i = match act {
+            crate::cards::ChipRowAct::Apply(i) | crate::cards::ChipRowAct::Dismiss(i) => i,
+        };
+        // The Undo chip is not a suggestion: it is not logged or learned.
+        if chips
+            .get(i)
+            .is_some_and(|c| c.id == grokhub_core::UNDO_CHIP_ID)
+        {
+            match act {
+                crate::cards::ChipRowAct::Apply(_) => self.take_undo(),
+                crate::cards::ChipRowAct::Dismiss(_) => self.chip_live.undo = None,
+            }
+            self.chip_paint_key.clear();
+            return;
+        }
         match act {
             crate::cards::ChipRowAct::Apply(i) => {
                 if let Some(c) = chips.get(i).cloned() {
+                    grokhub_core::log_chip_outcome(
+                        &mut self.chip_memory,
+                        surface,
+                        &c,
+                        true,
+                        now_ms(),
+                    );
+                    // A shown row that was acted on is closed: the next showing is new.
+                    self.chips_logged.retain(|(s, _)| *s != surface);
                     self.apply_chip(c);
                 }
             }
             crate::cards::ChipRowAct::Dismiss(i) => {
                 if let Some(c) = chips.get(i).cloned() {
+                    grokhub_core::log_chip_outcome(
+                        &mut self.chip_memory,
+                        surface,
+                        &c,
+                        false,
+                        now_ms(),
+                    );
+                    self.chips_logged.retain(|(s, _)| *s != surface);
                     self.dismiss_chip(c);
                     self.refresh_chips();
                 }
@@ -589,11 +988,19 @@ impl Cabin {
     }
 
     pub(super) fn apply_chip(&mut self, chip: QuickChip) {
+        // A retired model/effort chip from old memory does nothing at all:
+        // the router alone picks the model and effort.
+        if grokhub_core::retired_mode_value(&chip.value) {
+            return;
+        }
+        // A new tap closes the last Do chip's undo.
+        self.chip_live.undo = None;
         // One-shot chips act here and are not learned: replayed later they would mean nothing.
         // The tidy review chip opens a window; it is not sent or learned either.
         if self.take_tidy_chip(&chip)
             || self.take_backup_chip(&chip)
             || self.take_radar_chip(&chip)
+            || self.take_goal_chip(&chip)
             || self.take_game_chip(&chip)
         {
             return;
@@ -617,8 +1024,11 @@ impl Cabin {
             Self::local_clock().weekday,
         );
         self.flush_chips();
-        match chip.kind {
-            ChipKind::Nav => {
+        // One tap rule per kind (see `grokhub_core::ChipAction`). The Do
+        // one-taps already ran above.
+        match grokhub_core::chip_action(&chip) {
+            ChipAction::Do => {}
+            ChipAction::Go => {
                 if nav_from_chip_value(&chip.value) == Some("update") {
                     self.open_update_overlay();
                 } else if let Some(id) = nav_from_chip_value(&chip.value) {
@@ -630,24 +1040,41 @@ impl Cabin {
                     }
                 }
             }
-            // No chip changes the model or effort: the router alone picks them.
-            ChipKind::Mode => {}
-            ChipKind::Shell => {
-                let cmd = chip.value.trim().trim_start_matches('$').trim();
-                let cmd = cmd.strip_prefix("/sh ").unwrap_or(cmd);
-                self.run_slash(Slash::Sh(cmd.to_string()));
+            // A shell chip never runs on tap: it puts the command in the box
+            // so the person sees it, and Enter runs it through the same path
+            // (and the same destructive-command confirm) as a typed `/sh`.
+            ChipAction::Review => {
+                self.composer = shell_chip_draft(&chip.value);
+                self.composer_want_focus = true;
             }
-            ChipKind::Chat => {
+            ChipAction::Ask => {
+                if chip
+                    .id
+                    .starts_with(grokhub_core::chip_trailer::REPLY_CHIP_PREFIX)
+                {
+                    self.take_follow_up_mode();
+                }
                 // Slash chips use the typed send path so `/learn` click and Enter
                 // both parse locally instead of inserting a no-op or hitting Grok.
                 if chip_chat_runs_immediately(&chip, &self.composer) {
                     self.composer.clear();
                     // The send below is the chip's turn, not a typed one.
                     self.chip_send_key = Some(grokhub_core::chip_memory_key(&chip));
+                    // A send that can't go out (signed out) puts the text back
+                    // in the box; it is still the chip's text, not a draft.
+                    self.composer_chip_text = chip.value.clone();
                     self.send_chat(chip.value);
                     self.chip_send_key = None;
                 } else {
-                    self.composer = chip.value;
+                    // Never replace what the person typed: add to it. Text a
+                    // chip put there (and nobody edited) is swapped instead.
+                    let typed = if self.composer == self.composer_chip_text {
+                        ""
+                    } else {
+                        self.composer.as_str()
+                    };
+                    self.composer = draft_with_chip(typed, &chip.value);
+                    self.composer_chip_text = self.composer.clone();
                     self.composer_want_focus = true;
                 }
             }
@@ -816,15 +1243,18 @@ pub mod row {
             .join(" ")
     }
 
-    pub const CHIP_LABEL_MAX_W: f32 = 180.0;
+    pub const CHIP_LABEL_MAX_W: f32 = 200.0;
     pub const CHIP_PAD_X: f32 = crate::theme::SPACING_12;
     #[cfg(test)]
     pub const CHIP_PAD_Y: f32 = 8.0;
-    pub const CHIP_GAP: f32 = 6.0;
+    pub const CHIP_GAP: f32 = crate::theme::SPACING_8;
     pub const CHIP_DISMISS_SLOT: f32 = crate::theme::MIN_HIT * 0.55;
     pub const CHIP_DISMISS_GAP: f32 = crate::theme::SPACING_4;
-    /// One fixed chip height. Does not grow when a label is long.
-    pub const CHIP_ROW_H: f32 = 40.0;
+    /// One fixed chip height, a full touch target. Does not grow when a
+    /// label is long.
+    pub const CHIP_ROW_H: f32 = 48.0;
+    /// Chip text: 16 px, easy to read without leaning in.
+    pub const CHIP_FONT: f32 = crate::theme::TYPE_TITLE;
 
     pub fn chip_row_width_lock(avail: f32) -> f32 {
         avail.clamp(120.0, crate::theme::CHAT_COL_W)
@@ -997,11 +1427,72 @@ pub mod row {
         primary
     }
 
+    /// One hint segment in plain words. The engine's hints were written for
+    /// debugging ("Predicted · finish · Mid-thread"); the tooltip is for people.
+    fn plain_why_part(part: &str) -> Option<String> {
+        let part = part.trim();
+        let intent = |s: &str| -> Option<&'static str> {
+            Some(match s.trim() {
+                "finish" | "finish work" => "finish the job",
+                "fix" | "fix something" => "fix something",
+                "ship" | "build/ship" => "build or ship it",
+                "explain" => "understand it",
+                "host" | "run on host" => "run something on your PC",
+                "decide" => "make a call",
+                "create" => "make something",
+                "continue" => "keep going",
+                "review" => "check the work",
+                "chat" => "keep chatting",
+                _ => return None,
+            })
+        };
+        if part.is_empty() || part == "Predicted" {
+            return None;
+        }
+        if let Some(i) = intent(part) {
+            return Some(format!("Looks like you want to {i}"));
+        }
+        if let Some(rest) = part.strip_prefix("Predicted next:") {
+            return Some(match intent(rest) {
+                Some(i) => format!("Looks like you want to {i}"),
+                None => "A likely next step".into(),
+            });
+        }
+        let plain = match part {
+            "Highest-ranked next action" => "A likely next step",
+            "Mid-thread" => "You're mid-conversation",
+            "Predicted for this time of day" => "You often do this around now",
+            "Predicted — last attempt failed" => "The last try didn't work",
+            "Predicted incomplete turn" => "The last reply looks unfinished",
+            "Predicted: you need action, not another plan" => {
+                "The reply was a plan; this acts on it"
+            }
+            _ if part.starts_with("Predicted match") => "Matches what you're typing",
+            _ if part.starts_with("Predicted") => "Based on what you're typing",
+            _ => return Some(part.to_string()),
+        };
+        Some(plain.to_string())
+    }
+
+    /// A chip hint in plain words, one reason per line, no repeats.
+    fn plain_why(hint: &str) -> String {
+        let mut lines: Vec<String> = Vec::new();
+        for part in hint.split(['\n', '·']) {
+            if let Some(p) = plain_why_part(part) {
+                if !lines.contains(&p) {
+                    lines.push(p);
+                }
+            }
+        }
+        lines.join("\n")
+    }
+
     pub fn chip_why_tip(hint: &str, label: &str) -> String {
         let why = hint.trim();
         if why == "New here" {
             return "Suggested because you're new here".into();
         }
+        let why = plain_why(why);
         if !why.is_empty() {
             return format!("Why this?\n{why}");
         }
@@ -1044,7 +1535,7 @@ pub mod row {
                 let galley = layout_chip_label(
                     ui,
                     CHIP_EMPTY_LABEL,
-                    FontId::proportional(crate::theme::TYPE_CAPTION),
+                    FontId::proportional(CHIP_FONT),
                     color,
                     budget,
                 );
@@ -1073,6 +1564,16 @@ pub mod row {
         );
     }
 
+    /// Alt+1, Alt+2 and Alt+3 pick the chip in that slot.
+    const CHIP_KEYS: [egui::Key; 3] = [egui::Key::Num1, egui::Key::Num2, egui::Key::Num3];
+
+    fn chip_key_pick(ui: &egui::Ui, shown: usize) -> Option<usize> {
+        CHIP_KEYS
+            .iter()
+            .take(shown)
+            .position(|k| ui.input_mut(|i| i.consume_key(egui::Modifiers::ALT, *k)))
+    }
+
     pub fn quick_chip_row(
         ui: &mut egui::Ui,
         chips: &[grokhub_core::QuickChip],
@@ -1088,9 +1589,9 @@ pub mod row {
             .iter()
             .map(|c| {
                 let font = if quick_chip_strong(c.primary) {
-                    crate::theme::title_font(crate::theme::TYPE_CAPTION)
+                    crate::theme::title_font(CHIP_FONT)
                 } else {
-                    FontId::proportional(crate::theme::TYPE_CAPTION)
+                    FontId::proportional(CHIP_FONT)
                 };
                 let color = quick_chip_fg(c.primary);
                 layout_chip_label(ui, &chip_paint_label(&c.label), font, color, budget)
@@ -1120,6 +1621,9 @@ pub mod row {
                     ui.ctx().pixels_per_point(),
                 ));
                 let mut used = 0.0f32;
+                // Tab reaches the chips, egui's arrow keys move between them
+                // and Enter or Space picks one; Alt+1/2/3 picks by slot.
+                let mut shown = 0usize;
                 for (i, c) in chips.iter().enumerate().take(fit) {
                     let galley = measured[i].clone();
                     let pill_w = widths[i];
@@ -1140,10 +1644,14 @@ pub mod row {
                     } else {
                         c.hint.as_str()
                     };
-                    let tip = chip_why_tip(why, &c.label);
+                    let tip = match CHIP_KEYS.get(i) {
+                        Some(_) => format!("{}  (Alt+{})", chip_why_tip(why, &c.label), i + 1),
+                        None => chip_why_tip(why, &c.label),
+                    };
                     let (rect, hit_resp) =
                         ui.allocate_exact_size(egui::vec2(pill_w, CHIP_ROW_H), Sense::click());
                     let hit_resp = crate::theme::pointing(hit_resp);
+                    shown += 1;
                     let hovered = hit_resp.hovered();
                     if hovered {
                         chip_hover = Some(rect);
@@ -1194,7 +1702,7 @@ pub mod row {
                             x_rect.center(),
                             Align2::CENTER_CENTER,
                             "×",
-                            FontId::proportional(crate::theme::TYPE_CAPTION),
+                            FontId::proportional(CHIP_FONT),
                             x_color,
                         );
                     }
@@ -1212,6 +1720,9 @@ pub mod row {
                             &hit_resp,
                         );
                     }
+                }
+                if let Some(i) = chip_key_pick(ui, shown) {
+                    act = Some(ChipRowAct::Apply(i));
                 }
                 if let Some(rect) = chip_hover {
                     crate::theme::glide_candidate(ui, "quick-chips", rect, true, false);
@@ -1251,7 +1762,9 @@ pub mod row {
         fn chip_row_height_meets_caption_pad() {
             let _hold = hold_paint_test();
             const {
-                assert!(CHIP_ROW_H >= crate::theme::TYPE_CAPTION + CHIP_PAD_Y * 2.0);
+                assert!(CHIP_ROW_H >= CHIP_FONT + CHIP_PAD_Y * 2.0);
+                // A full touch target and text that reads without leaning in.
+                assert!(CHIP_ROW_H >= 48.0 && CHIP_FONT >= 16.0 && CHIP_GAP >= 8.0);
             }
         }
 
@@ -1314,5 +1827,193 @@ mod chip_apply_tests {
 
         let _ = std::fs::remove_dir_all(&root);
         unsafe { std::env::remove_var("GROKHUB_CONFIG") };
+    }
+
+    fn chip_of(id: &str, kind: ChipKind, score: f32) -> QuickChip {
+        QuickChip {
+            id: id.into(),
+            label: id.into(),
+            value: id.into(),
+            kind,
+            score,
+            hint: String::new(),
+            primary: false,
+        }
+    }
+
+    #[test]
+    fn shell_chip_fills_the_box_and_never_runs() {
+        assert_eq!(shell_chip_draft("$ cargo test"), "/sh cargo test");
+        assert_eq!(shell_chip_draft("/sh git status"), "/sh git status");
+        assert_eq!(shell_chip_draft("  ls -la "), "/sh ls -la");
+
+        let mut cabin = Cabin::quiet_for_test();
+        let mut chip = chip_of("shell", ChipKind::Shell, 1.0);
+        chip.value = "rm -rf build".into();
+        cabin.apply_chip(chip);
+        assert_eq!(cabin.composer, "/sh rm -rf build");
+        assert!(!cabin.running, "a tap only fills the box");
+        assert!(cabin.messages.is_empty());
+        assert!(cabin.composer_want_focus);
+    }
+
+    #[test]
+    fn chat_chip_adds_to_a_typed_draft() {
+        assert_eq!(draft_with_chip("", "Explain this"), "Explain this");
+        assert_eq!(
+            draft_with_chip("the build broke ", "Fix it"),
+            "the build broke\nFix it"
+        );
+        assert_eq!(draft_with_chip("Fix it", "Fix it"), "Fix it");
+        assert_eq!(
+            draft_with_chip("fix the leak", "fix the leak. Be concrete."),
+            "fix the leak. Be concrete."
+        );
+
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.composer = "my notes on the wall".into();
+        cabin.apply_chip(chat_chip("a", "A", "Summarize it"));
+        assert_eq!(cabin.composer, "my notes on the wall\nSummarize it");
+        assert!(!cabin.running);
+    }
+
+    #[test]
+    fn a_second_chip_swaps_text_the_first_chip_put_there() {
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.composer = "typed".into();
+        cabin.composer_chip_text = "typed".into();
+        cabin.apply_chip(chat_chip("b", "B", "Plan it"));
+        assert_eq!(cabin.composer, "Plan it");
+        // The person edits the chip's text: now it is theirs and is kept.
+        cabin.composer.push_str(" today");
+        cabin.apply_chip(chat_chip("c", "C", "Be brief"));
+        assert_eq!(cabin.composer, "Plan it today\nBe brief");
+    }
+
+    #[test]
+    fn only_the_first_chip_is_primary() {
+        let mut chips = vec![
+            QuickChip {
+                primary: true,
+                ..chip_of("a", ChipKind::Chat, 1.0)
+            },
+            QuickChip {
+                primary: true,
+                ..chip_of("b", ChipKind::Chat, 2.0)
+            },
+            chip_of("c", ChipKind::Nav, 3.0),
+        ];
+        mark_first_primary(&mut chips);
+        assert_eq!(
+            chips.iter().map(|c| c.primary).collect::<Vec<_>>(),
+            vec![true, false, false]
+        );
+    }
+
+    #[test]
+    fn shell_chips_wait_for_an_empty_box() {
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.visible_chips = vec![
+            chip_of("shell", ChipKind::Shell, 2.0),
+            chip_of("chat", ChipKind::Chat, 1.0),
+        ];
+        cabin.composer = "half a thought".into();
+        assert!(cabin
+            .composer_chips()
+            .iter()
+            .all(|c| c.kind != ChipKind::Shell));
+        cabin.composer.clear();
+        assert!(cabin.composer_chips().iter().any(|c| c.id == "shell"));
+    }
+
+    #[test]
+    fn a_hidden_chip_stays_hidden() {
+        let mut cabin = Cabin::quiet_for_test();
+        let chip = chip_of("radar:new", ChipKind::Nav, 1.0);
+        assert!(!cabin.chip_hidden(&chip));
+        cabin.chip_dismissed.push("radar:new".into());
+        assert!(cabin.chip_hidden(&chip));
+    }
+
+    #[test]
+    fn why_tip_speaks_plainly() {
+        let tip = |h: &str| row::chip_why_tip(h, "x");
+        assert_eq!(
+            tip("Predicted · finish · Mid-thread"),
+            "Why this?\nLooks like you want to finish the job\nYou're mid-conversation"
+        );
+        assert_eq!(
+            tip("Predicted match"),
+            "Why this?\nMatches what you're typing"
+        );
+        assert_eq!(
+            tip("Highest-ranked next action"),
+            "Why this?\nA likely next step"
+        );
+        assert_eq!(
+            tip("Predicted next: fix"),
+            "Why this?\nLooks like you want to fix something"
+        );
+        assert_eq!(
+            tip("Predicted for this time of day"),
+            "Why this?\nYou often do this around now"
+        );
+        assert_eq!(tip("Last slash"), "Why this?\nLast slash");
+        for h in ["Predicted · ship", "Predicted match · Predicted next: x"] {
+            assert!(!tip(h).contains("Predicted"), "{h} -> {}", tip(h));
+        }
+    }
+
+    #[test]
+    fn lane_only_breaks_near_ties() {
+        let mut chips = vec![
+            QuickChip {
+                label: "Open Imagine".into(),
+                value: "__nav:imagine".into(),
+                ..chip_of("imagine", ChipKind::Nav, 100.0)
+            },
+            QuickChip {
+                label: "Ship it".into(),
+                value: "Ship a minimal solid slice.".into(),
+                ..chip_of("ship", ChipKind::Chat, 40.0)
+            },
+        ];
+        super::super::glance::bias_chips_for_lane(&mut chips, super::super::CabinLane::Coding);
+        assert_eq!(chips[0].id, "imagine", "a far stronger chip keeps its spot");
+        chips[1].score = 95.0;
+        super::super::glance::bias_chips_for_lane(&mut chips, super::super::CabinLane::Coding);
+        assert_eq!(chips[0].id, "ship", "inside one band the lane decides");
+    }
+
+    #[test]
+    fn a_shown_row_and_its_outcome_reach_the_chip_log() {
+        let mut cabin = Cabin::quiet_for_test();
+        let row = vec![
+            chip_of("pred-a", ChipKind::Nav, 2.0),
+            chip_of("learn-b", ChipKind::Nav, 1.0),
+        ];
+        cabin.note_chips_shown("composer", &row);
+        cabin.note_chips_shown("composer", &row);
+        assert_eq!(
+            cabin.chip_memory.events.len(),
+            1,
+            "a repaint is one showing"
+        );
+        cabin.take_chip_act(crate::cards::ChipRowAct::Dismiss(1), &row);
+        assert!(matches!(
+            cabin.chip_memory.events[0].outcome,
+            Some(grokhub_core::ChipOutcome::Dismissed { slot: 1, .. })
+        ));
+        cabin.note_chips_shown("composer", &row);
+        assert_eq!(
+            cabin.chip_memory.events.len(),
+            2,
+            "after an act the next showing is new"
+        );
+        let json = serde_json::to_string(&cabin.chip_memory.events).expect("json");
+        assert!(
+            !json.contains("pred-a") && !json.contains("learn-b"),
+            "{json}"
+        );
     }
 }

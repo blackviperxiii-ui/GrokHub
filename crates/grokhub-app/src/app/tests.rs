@@ -26,6 +26,8 @@ mod pulse_page_tests;
 
 #[path = "background_run_tests.rs"]
 mod background_run_tests;
+#[path = "side_run_tests.rs"]
+mod side_run_tests;
 
 #[path = "self_work_tests.rs"]
 mod self_work_tests;
@@ -931,21 +933,15 @@ fn grok_login_powers_history_and_imagine() {
 #[test]
 fn speak_reply_does_not_clone_an_8mb_complete() {
     let src = cabin_src();
-    let speak = src
-        .split("fn speak_reply(")
-        .nth(1)
-        .and_then(|s| s.split("fn poll_eyes_cap(").next())
-        .expect("speak_reply");
-    let clone = speak.find("to_string()").expect("tts clone");
+    let speak = fn_src(&src, "speak_reply");
+    // The spoken reply caps what it takes (TEXT_FILE_CAP) on its own side.
     assert!(
-        speak[..clone].contains("TEXT_FILE_CAP")
-            || speak[..clone].contains("chip_scan")
-            || speak[..clone].contains("take_ui"),
+        !speak.contains("to_string()") && !speak.contains("to_owned()"),
         "voice speak must not clone an 8MB complete onto the UI thread: {speak}"
     );
     assert!(
         speak.contains("voice_tts_script"),
-        "TTS must strip THINKING: / thoughts before grok_tts: {speak}"
+        "TTS must strip THINKING: / thoughts before speech: {speak}"
     );
 }
 
@@ -1693,16 +1689,17 @@ fn plan_and_empty_video_stay_off_a_run() {
     }
 
     cabin.run_slash(super::Slash::Plan);
-    assert_eq!(cabin.status, "Plan mode — Loadout will plan first");
-    assert!(matches!(cabin.session_mode, super::SessionMode::Plan));
-    assert_eq!(cabin.cfg.session_mode, "plan");
-    assert!(cabin.acp.is_none());
+    assert_eq!(cabin.status, super::slash::PLAN_NEXT_NOTE);
+    assert!(
+        cabin.plan_next,
+        "bare /plan makes the next message plan first"
+    );
     let session = cabin
         .threads
         .get(cabin.thread_idx)
         .and_then(|t| t.grok_session.as_deref())
         .unwrap_or("");
-    assert!(session.is_empty());
+    assert_eq!(session, "sess", "the chat keeps its session");
     assert!(!cabin.running);
 
     cabin.run_slash(super::Slash::ImagineVideo(String::new()));
@@ -1836,33 +1833,6 @@ fn goal_pin_sets_and_clears() {
     assert_eq!(cabin.status, "No goal pin");
     assert!(cabin.cfg.goal_pin.is_empty());
     assert!(!cabin.running);
-}
-
-// Landed from PR #186.
-#[test]
-fn btw_sets_a_side_ask() {
-    let _g = crate::config::hold_test_config();
-    let root = crate::config::test_config_root("btw-side-ask");
-    let _ = std::fs::remove_dir_all(&root);
-    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
-
-    let mut cabin = Cabin::quiet_for_test();
-    assert!(!cabin.running);
-    cabin.run_slash(Slash::Btw);
-
-    assert!(matches!(cabin.session_mode, SessionMode::Ask));
-    assert_eq!(cabin.cfg.session_mode, "ask");
-    assert!(!cabin.running);
-    assert_eq!(cabin.status, "btw — look-safe side ask");
-    assert_eq!(cabin_default_session_id(&cabin.cfg.session_mode), "ask");
-    let persisted = cabin
-        .cfg_slot
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .cfg
-        .session_mode
-        .clone();
-    assert_eq!(persisted, "ask");
 }
 
 // Landed from PR #188.
@@ -2121,6 +2091,7 @@ fn quiet_cabin() -> Cabin {
         goal_step: 0,
         followup_step: 0,
         stream_buf: String::new(),
+        chip_live: Default::default(),
         thought_buf: String::new(),
         chat_views: Vec::new(),
         chat_view_keys: Vec::new(),
@@ -2132,8 +2103,10 @@ fn quiet_cabin() -> Cabin {
         presence_ring: Vec::new(),
         voice_state: grokhub_core::VoiceState::Idle,
         voice_ready_at: None,
+        voice_mic: None,
         desktop_nyx: None,
         voice_hold_rx: None,
+        voice_spoken: None,
         lips: Default::default(),
         cmd_line: String::new(),
         cmd_hist: Vec::new(),
@@ -2198,6 +2171,8 @@ fn quiet_cabin() -> Cabin {
         native_maximize_due: false,
         imagine_want_focus: false,
         composer_want_focus: false,
+        composer_chip_text: String::new(),
+        chips_logged: Vec::new(),
         settings_sec: super::SettingsSec::Account,
         market: Default::default(),
         picker: Default::default(),
@@ -2224,6 +2199,8 @@ fn quiet_cabin() -> Cabin {
         imagine_native: super::imagine::ImagineNative::default(),
         imagine_save_rx: None,
         file_writes: Vec::new(),
+        saved_file: None,
+        storage: Default::default(),
         goal_rx: None,
         goal_busy: false,
         goal_stale: false,
@@ -2284,10 +2261,12 @@ fn quiet_cabin() -> Cabin {
         tokens_seen: (0, 0, 0),
         grok_commands: Vec::new(),
         grok_tasks: Vec::new(),
-        followup_queue: Vec::new(),
-        side_ask_queue: Vec::new(),
+        followup_queue: Default::default(),
+        side: Default::default(),
+        forced_route: None,
+        last_turn_read: None,
+        plan_next: false,
         bg: super::background::BgWork::default(),
-        side_ask_kick: false,
         plan_open: false,
         tool_cards: Vec::new(),
         panels: super::panels::PanelStore::default(),
@@ -2340,8 +2319,6 @@ fn quiet_cabin() -> Cabin {
         composer_geom: None,
         composer_ghost: ghost::ComposerGhost::default(),
         dock_state: super::dock_ui::default_dock_state(),
-        toasts: super::status_toasts::cabin_toasts(),
-        status_toasted: Default::default(),
         activity: Default::default(),
         diagnostics: Default::default(),
         home_layout: grokhub_core::home::HomeLayout::default(),
@@ -2422,28 +2399,6 @@ fn busy_update_stays_queued() {
     assert!(matches!(cabin.settings_sec, SettingsSec::Update));
 }
 
-// Landed from PR #221.
-#[test]
-fn plan_pill_stays_off_a_run() {
-    let _hold = crate::config::hold_test_config();
-    let root = crate::config::test_config_root("plan-pill");
-    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
-    let mut cabin = Cabin::quiet_for_test();
-    if cabin.threads.is_empty() {
-        cabin.new_thread(false);
-    }
-    assert_eq!(cabin.threads[cabin.thread_idx].title, "Chat");
-    assert!(!cabin.threads[cabin.thread_idx].title_locked);
-    cabin.select_plan_without_rename();
-    assert_eq!(cabin.status, "Session plan");
-    assert!(matches!(cabin.session_mode, SessionMode::Plan));
-    assert_eq!(cabin.cfg.session_mode, "plan");
-    assert_eq!(cabin.threads[cabin.thread_idx].title, "Chat");
-    assert!(!cabin.threads[cabin.thread_idx].title_locked);
-    assert!(cabin.acp.is_none());
-    assert!(!cabin.running);
-}
-
 #[test]
 fn dropping_files_says_what_happens() {
     use super::plus::{drop_extra_note, drop_hint_line};
@@ -2493,11 +2448,7 @@ fn export_writes_html_and_json_next_to_export_md() {
 
     cabin.run_slash_line("/export html");
     wait_file_writes(cabin);
-    let html_path = cabin
-        .status
-        .strip_prefix("Wrote ")
-        .unwrap_or("")
-        .to_string();
+    let html_path = exported_path(cabin);
     assert!(
         html_path.contains("export-") && html_path.ends_with(".html"),
         "{}",
@@ -2511,11 +2462,7 @@ fn export_writes_html_and_json_next_to_export_md() {
 
     cabin.run_slash_line("/export json");
     wait_file_writes(cabin);
-    let json_path = cabin
-        .status
-        .strip_prefix("Wrote ")
-        .unwrap_or("")
-        .to_string();
+    let json_path = exported_path(cabin);
     assert!(
         json_path.contains("export-") && json_path.ends_with(".json"),
         "{}",
@@ -2530,7 +2477,7 @@ fn export_writes_html_and_json_next_to_export_md() {
 
     cabin.run_slash_line("/export md");
     wait_file_writes(cabin);
-    assert!(cabin.status.ends_with(".md"), "{}", cabin.status);
+    assert!(exported_path(cabin).ends_with(".md"), "{}", cabin.status);
     cabin.run_slash_line("/export pdf");
     assert_eq!(cabin.status, grokhub_core::EXPORT_FORMATS_HINT);
     assert!(!cabin.running);

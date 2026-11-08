@@ -55,6 +55,16 @@ pub struct RouteOutcome {
     /// R2b: the call hit the plan's usage limit (429 `free-usage-exhausted`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub limit: bool,
+    /// Hosted search the reply ran and was billed for.
+    #[serde(default, skip_serializing_if = "crate::client::HostedUsage::is_empty")]
+    pub hosted: crate::client::HostedUsage,
+    /// Pages the reply cited.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub sources: u32,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 /// `{span_id, episode, step, class, d, ctx_tokens, signals, candidates_n,
@@ -123,6 +133,52 @@ pub struct RouteRecord {
     pub gov_state: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub tier: String,
+    /// This request rewrote the cached prompt prefix: where, and why. Its
+    /// cache share drops with it, so the cause sits next to the numbers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix_break: Option<BreakNote>,
+    /// The exact request this call sent, by hash (`harness::replay`); empty
+    /// when none was stored (no learned-tier key, the store switched off, or
+    /// an on-device step).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub request: String,
+    /// Failover PR 7: models that stopped inside this call and the ones that
+    /// took over, in order. Empty on any call that never switched.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub handoffs: Vec<HandoffLine>,
+}
+
+/// One model switch inside a call (failover PR 7): the model that stopped,
+/// the one that took over, and the rule that names why it stopped
+/// (`handoff:limit`, `handoff:credit`, `handoff:outage`, …). Ids and a rule
+/// only — never prompt text.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HandoffLine {
+    pub from: String,
+    pub to: String,
+    pub rule: String,
+}
+
+/// Where a request first stopped repeating the one before it, and why
+/// ([`crate::prefix_guard::PrefixBreak`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BreakNote {
+    /// `system`, `tools` or `input`.
+    pub part: String,
+    /// Segment index in cache order.
+    pub index: u32,
+    /// `compaction`, `trim`, `model_switch`, `effort_switch`, `tools_appended` or `unexpected`.
+    pub reason: String,
+}
+
+impl From<&crate::prefix_guard::PrefixBreak> for BreakNote {
+    fn from(b: &crate::prefix_guard::PrefixBreak) -> Self {
+        Self {
+            part: b.part.as_str().to_string(),
+            index: u32::try_from(b.index).unwrap_or(u32::MAX),
+            reason: b.reason.as_str().to_string(),
+        }
+    }
 }
 
 // `d` and `cost_usd` are finite (rounded rules and token math), so equality is total.

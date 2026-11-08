@@ -110,6 +110,7 @@ pub fn parse_model_row(row: &Value) -> Option<ModelMeta> {
                     "cached_prompt_token_price",
                 ],
             ),
+            cache_write: None,
             completion: u64_of(row, &["completion_text_token_price"]),
             prompt_long: u64_of(
                 row,
@@ -143,6 +144,7 @@ pub fn parse_model_row(row: &Value) -> Option<ModelMeta> {
         api_shape,
         deprecated: bool_of(row, &["deprecated"]),
         notice,
+        card: Default::default(),
     })
 }
 
@@ -193,6 +195,19 @@ pub fn gb_listing(ids: &[String], gb_version: Option<&str>) -> Listing {
     );
     listing.gb_version = gb_version.map(str::to_string);
     listing
+}
+
+/// OpenRouter's own free router, a model id like any other.
+pub const OPENROUTER_FREE_ROUTER: &str = "openrouter/free";
+
+/// A free tier on OpenRouter: a `:free` variant or its free router. Takes
+/// the wire model (`google/x:free`) or the registry id
+/// (`openrouter/google/x:free`). This is the one definition of "free":
+/// route classification ([`super::record::route_for`]), the quota ledger
+/// and the provider calls all read it.
+pub fn is_free_model(id: &str) -> bool {
+    let id = id.trim();
+    id.ends_with(":free") || id == OPENROUTER_FREE_ROUTER || id.ends_with("/openrouter/free")
 }
 
 /// The registry id of a model on a provider you added: `<provider>/<model>`.
@@ -321,6 +336,7 @@ pub fn parse_openai_compatible_catalog(
             prices: Prices {
                 prompt: usd_per_token(pricing.get("prompt")),
                 cached: usd_per_token(pricing.get("input_cache_read")),
+                cache_write: usd_per_token(pricing.get("input_cache_write")),
                 completion: usd_per_token(pricing.get("completion")),
                 prompt_long,
                 completion_long,
@@ -410,6 +426,7 @@ mod tests {
             Prices {
                 prompt: Some(30_000),
                 cached: Some(7_500),
+                cache_write: None,
                 completion: Some(150_000),
                 prompt_long: Some(60_000),
                 completion_long: Some(300_000),
@@ -648,6 +665,7 @@ mod tests {
             Prices {
                 prompt: Some(12_500),
                 cached: Some(1_250),
+                cache_write: None,
                 completion: Some(100_000),
                 prompt_long: Some(25_000),
                 completion_long: Some(150_000),

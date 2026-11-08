@@ -1,14 +1,17 @@
-//! The first-run setup wizard: welcome, app setup (close to tray, dream
-//! time), and the local AI step, which reads this machine's GPU, RAM and free
-//! disk and suggests the on-device model that fits. It opens once on a fresh
-//! profile; finishing or skipping sets `setupDone`. Settings → Behavior →
-//! Setup and Cabin defaults → Local model → Set up open it again. The local
-//! AI step downloads the suggested model (`model_download_ui.rs`).
+//! The first-run setup: a welcome with "Make things bigger", a few one-tap
+//! questions picked for this PC (`auto_setup_ui.rs`), a summary of what auto
+//! setup set with Undo on each line, and the local AI step, which reads this
+//! machine's GPU, RAM and free disk and suggests the on-device model that
+//! fits. It opens once on a fresh profile; finishing or skipping sets
+//! `setupDone`. Settings → Automations & limits → Setup and Cabin defaults →
+//! Local model → Set up open it again. The local AI step downloads the
+//! suggested model (`model_download_ui.rs`).
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
 use grokhub_agent::route::local::{self, Device};
+use grokhub_core::autotune::questions::{self as auto_q, Pace};
 use grokhub_core::local_setup::{self as ls, Hardware};
 
 use super::*;
@@ -16,7 +19,10 @@ use super::*;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SetupStep {
     Welcome,
-    App,
+    /// One question at a time, only those worth asking on this PC.
+    Questions,
+    /// What auto setup set, with Undo, and what it offers.
+    Summary,
     LocalAi,
 }
 
@@ -25,7 +31,7 @@ pub(super) struct SetupWizard {
     /// The open step; `None` while closed.
     pub(super) step: Option<SetupStep>,
     /// The first-run check ran this launch.
-    checked: bool,
+    pub(super) checked: bool,
     pub(super) hw: Option<Hardware>,
     hw_rx: Option<mpsc::Receiver<Hardware>>,
     /// The model download in flight.
@@ -46,6 +52,16 @@ pub(super) struct SetupWizard {
     /// Free disk read when that confirm opened, so it isn't the figure from
     /// launch after other downloads filled the drive.
     pub(super) confirm_free_mb: Option<u64>,
+    /// Auto setup's state for this launch.
+    pub(super) auto: super::auto_setup_ui::AutoSetup,
+    /// The local speed test running off the UI thread.
+    pub(super) speed_rx: Option<mpsc::Receiver<Result<String, String>>>,
+    /// The last speed test's whole report, draft model verdict included.
+    pub(super) speed_report: Option<String>,
+    /// The open Download models tab; Chat when none.
+    pub(super) lib_tab: Option<grokhub_core::local_setup::ModelTab>,
+    /// Models waiting their turn to download, next first.
+    pub(super) dl_queue: Vec<&'static grokhub_core::local_setup::LocalModel>,
 }
 
 /// Open on its own only on a fresh profile that hasn't finished or skipped it.
@@ -81,26 +97,33 @@ pub(super) fn hw_unknown(hw: &Hardware) -> bool {
     hw.ram_mb == 0
 }
 
+/// What a press in the setup window asks for, run once the window is drawn.
+enum WizardAct {
+    None,
+    Go(SetupStep),
+    Finish(bool),
+    Bigger,
+    Start(Pace),
+    Answer(auto_q::Qid, Option<&'static str>),
+    Undo(grokhub_core::autotune::settings::Key),
+    Accept(grokhub_core::autotune::plan::Change),
+}
+
+const WELCOME_BODY: &str = "I'll set myself up for this PC. Answer a few one-tap questions, or let me pick everything. You can change anything later.";
+const CHECKING_PC: &str = "Reading this PC's screen, memory and graphics…";
+const SUMMARY_BODY: &str =
+    "Undo anything you don't want. Settings → Your PC → Automations & limits shows it all again.";
+
 pub(super) const SETUP_DONE_STATUS: &str =
     "Setup saved. Settings → Your PC → Automations & limits → Setup opens it again.";
 pub(super) const SETUP_SKIPPED_STATUS: &str =
     "Setup skipped. Settings → Your PC → Automations & limits → Setup opens it again.";
 
-pub(super) fn run(cmd: &str, args: &[&str]) -> Option<String> {
-    let mut c = std::process::Command::new(cmd);
-    c.args(args)
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        c.creation_flags(CREATE_NO_WINDOW);
-    }
-    let out = c.output().ok()?;
-    out.status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+pub(super) use grokhub_agent::device::{free_disk_mb, ram_mb, run};
+
+/// The home folder (free disk and models are read under it).
+pub(super) fn home() -> PathBuf {
+    grokhub_core::paths::user_home().unwrap_or_else(|| PathBuf::from("."))
 }
 
 /// GPU (nvidia-smi, else Linux DRM / Windows DXGI), RAM and free disk under `dir`.
@@ -196,58 +219,6 @@ fn drm_gpu_name(card_dir: &Path) -> Option<String> {
     None
 }
 
-#[cfg(target_os = "linux")]
-pub(super) fn ram_mb() -> Option<u64> {
-    ls::parse_meminfo(&std::fs::read_to_string("/proc/meminfo").ok()?)
-}
-
-#[cfg(target_os = "macos")]
-pub(super) fn ram_mb() -> Option<u64> {
-    ls::parse_memsize_bytes(&run("sysctl", &["-n", "hw.memsize"])?)
-}
-
-#[cfg(windows)]
-pub(super) fn ram_mb() -> Option<u64> {
-    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
-    // SAFETY: a zeroed MEMORYSTATUSEX with dwLength set is what the call expects.
-    let mut m: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
-    m.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
-    (unsafe { GlobalMemoryStatusEx(&mut m) } != 0).then_some(m.ullTotalPhys / (1_024 * 1_024))
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
-pub(super) fn ram_mb() -> Option<u64> {
-    None
-}
-
-#[cfg(unix)]
-pub(super) fn free_disk_mb(dir: &Path) -> Option<u64> {
-    ls::parse_df_avail_mb(&run("df", &["-Pk", &dir.to_string_lossy()])?)
-}
-
-#[cfg(windows)]
-pub(super) fn free_disk_mb(dir: &Path) -> Option<u64> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
-    let wide: Vec<u16> = dir.as_os_str().encode_wide().chain(Some(0)).collect();
-    let mut free: u64 = 0;
-    // SAFETY: a NUL-terminated path and one out pointer; the other two may be null.
-    let ok = unsafe {
-        GetDiskFreeSpaceExW(
-            wide.as_ptr(),
-            &mut free,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-        )
-    };
-    (ok != 0).then_some(free / (1_024 * 1_024))
-}
-
-#[cfg(not(any(unix, windows)))]
-pub(super) fn free_disk_mb(_dir: &Path) -> Option<u64> {
-    None
-}
-
 impl Cabin {
     /// The Dream time picker (Settings → Behavior and the setup wizard).
     pub(super) fn ui_dream_time_row(&mut self, ui: &mut egui::Ui) {
@@ -280,6 +251,7 @@ impl Cabin {
         }
         self.poll_model_download();
         self.poll_runtime_download();
+        self.poll_speed_test();
         if self.cfg.local_model && !self.setup.engine_checked {
             self.setup.engine_checked = true;
             self.ensure_local_engine();
@@ -330,6 +302,7 @@ impl Cabin {
     /// Done or skipped: close, and never open on its own again.
     pub(super) fn finish_setup(&mut self, skipped: bool) {
         self.setup.step = None;
+        self.auto_finish_first_run();
         if !self.cfg.setup_done {
             self.cfg.setup_done = true;
             self.persist_cfg();
@@ -343,11 +316,12 @@ impl Cabin {
     }
 
     pub(super) fn paint_setup_wizard(&mut self, ctx: &egui::Context) {
+        self.tick_auto_setup(ctx);
+        self.paint_auto_note(ctx);
         let Some(step) = self.setup.step else {
             return;
         };
-        let mut next: Option<Option<SetupStep>> = None;
-        let mut finish: Option<bool> = None;
+        let mut act = WizardAct::None;
         let modal = egui::Modal::new(egui::Id::new("setup-wizard"))
             .backdrop_color(egui::Color32::from_black_alpha(153))
             .frame(
@@ -360,60 +334,150 @@ impl Cabin {
             .show(ctx, |ui| {
                 ui.set_width(560.0_f32.min(ctx.content_rect().width() - 80.0));
                 let welcome = format!("Welcome to {}", grokhub_core::brand::product_name());
-                let (title, body) = match step {
-                    SetupStep::Welcome => (
-                        welcome.as_str(),
-                        "A quick setup: two app settings, then an optional on-device model for background work. You can skip any step.",
-                    ),
-                    SetupStep::App => ("App setup", "Change either of these later in Settings → Your PC → App & extras."),
-                    SetupStep::LocalAi => (
+                let question = self.setup.auto.question.map(auto_q::question);
+                let (title, body) = match (step, question) {
+                    (SetupStep::Welcome, _) => (welcome.as_str(), WELCOME_BODY),
+                    (SetupStep::Questions, Some(q)) => (q.prompt, ""),
+                    (SetupStep::Questions, None) => ("Getting to know this PC", CHECKING_PC),
+                    (SetupStep::Summary, _) => ("Here's what I set up for you", SUMMARY_BODY),
+                    (SetupStep::LocalAi, _) => (
                         "On-device model",
                         "An on-device model can run background work like dream and summaries on this machine. Chat stays on your cloud model.",
                     ),
                 };
                 ui.label(RichText::new(title).font(crate::theme::title_font(22.0)).color(crate::theme::fg()));
-                ui.add_space(4.0);
-                ui.label(RichText::new(body).size(crate::theme::FONT_BODY).color(crate::theme::muted()));
+                if !body.is_empty() {
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(body).size(crate::theme::FONT_BODY).color(crate::theme::muted()));
+                }
                 ui.add_space(12.0);
                 match step {
-                    SetupStep::Welcome => {}
-                    SetupStep::App => {
-                        let mut close_to_tray = self.cfg.close_to_tray;
-                        if crate::cards::settings_toggle(ui, "Close to tray", grokhub_core::brand::filled("{product} keeps working in the background."), &mut close_to_tray) {
-                            self.set_close_to_tray(close_to_tray);
+                    SetupStep::Welcome => {
+                        if crate::cards::white_pill(ui, "Make things bigger") {
+                            act = WizardAct::Bigger;
                         }
-                        self.ui_dream_time_row(ui);
+                        if self.cfg.text_size > 100 {
+                            crate::cards::settings_note(ui, &format!("Text size: {}%", self.cfg.text_size));
+                        }
+                    }
+                    SetupStep::Questions => {
+                        if let Some(q) = question {
+                            ui.horizontal_wrapped(|ui| {
+                                for c in q.choices {
+                                    if crate::cards::white_pill(ui, c.label) {
+                                        act = WizardAct::Answer(q.id, Some(c.value));
+                                    }
+                                }
+                            });
+                        }
+                    }
+                    SetupStep::Summary => {
+                        if let Some(a) = self.ui_setup_summary(ui) {
+                            act = a;
+                        }
                     }
                     SetupStep::LocalAi => self.ui_setup_local_ai(ui),
                 }
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
-                    if step != SetupStep::Welcome && crate::cards::ghost_pill(ui, "Back") {
-                        next = Some(Some(if step == SetupStep::LocalAi { SetupStep::App } else { SetupStep::Welcome }));
+                    let back = match step {
+                        SetupStep::Welcome => None,
+                        SetupStep::Questions | SetupStep::Summary => Some(SetupStep::Welcome),
+                        SetupStep::LocalAi => Some(SetupStep::Summary),
+                    };
+                    if let Some(to) = back {
+                        if crate::cards::ghost_pill(ui, "Back") {
+                            act = WizardAct::Go(to);
+                        }
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let primary = if step == SetupStep::LocalAi { "Done" } else { "Next" };
-                        if crate::cards::white_pill(ui, primary) {
-                            match step {
-                                SetupStep::Welcome => next = Some(Some(SetupStep::App)),
-                                SetupStep::App => next = Some(Some(SetupStep::LocalAi)),
-                                SetupStep::LocalAi => finish = Some(false),
+                        match step {
+                            SetupStep::Welcome => {
+                                if crate::cards::white_pill(ui, "Just set it up") {
+                                    act = WizardAct::Start(Pace::Quick);
+                                }
+                                if crate::cards::ghost_pill(ui, "Tailor it (about 30 s)") {
+                                    act = WizardAct::Start(Pace::Detailed);
+                                }
+                            }
+                            SetupStep::Questions => {
+                                if let Some(q) = question {
+                                    if crate::cards::ghost_pill(ui, "Skip this one") {
+                                        act = WizardAct::Answer(q.id, None);
+                                    }
+                                }
+                            }
+                            SetupStep::Summary | SetupStep::LocalAi => {
+                                if crate::cards::white_pill(ui, "Done") {
+                                    act = WizardAct::Finish(false);
+                                }
                             }
                         }
                         let skip = if step == SetupStep::Welcome { "Skip setup" } else { "Skip for now" };
-                        if crate::cards::ghost_pill(ui, skip) {
-                            finish = Some(true);
+                        if step != SetupStep::Summary && crate::cards::ghost_pill(ui, skip) {
+                            act = WizardAct::Finish(true);
                         }
                     });
                 });
             });
-        if let Some(skipped) = finish {
-            self.finish_setup(skipped);
-        } else if let Some(step) = next {
-            self.setup.step = step;
-        } else if modal.should_close() {
-            self.finish_setup(true);
+        match act {
+            WizardAct::None if modal.should_close() => self.finish_setup(true),
+            WizardAct::None => {}
+            WizardAct::Go(to) => self.setup.step = Some(to),
+            WizardAct::Finish(skipped) => self.finish_setup(skipped),
+            WizardAct::Bigger => self.auto_bigger(),
+            WizardAct::Start(pace) => self.auto_start_questions(pace),
+            WizardAct::Answer(id, value) => self.auto_answer(id, value),
+            WizardAct::Undo(key) => {
+                self.auto_undo(key);
+            }
+            WizardAct::Accept(c) => self.auto_accept(&c),
         }
+    }
+
+    /// The summary: each change with Undo, each offer with Yes, and the
+    /// local AI step when this PC can run a model and none is on.
+    fn ui_setup_summary(&mut self, ui: &mut egui::Ui) -> Option<WizardAct> {
+        let mut act = None;
+        let made = self.setup.auto.made.clone();
+        let offered = self.setup.auto.offered.clone();
+        if made.is_empty() && offered.is_empty() {
+            crate::cards::settings_note(ui, "Everything already fits this PC, so nothing changed.");
+        }
+        for c in made {
+            if crate::cards::settings_action(
+                ui,
+                &super::auto_setup_ui::change_line(&c),
+                &c.reason,
+                "Undo",
+            ) {
+                act = Some(WizardAct::Undo(c.key));
+            }
+        }
+        for c in offered {
+            if crate::cards::settings_action(
+                ui,
+                &super::auto_setup_ui::offer_line(&c),
+                &c.reason,
+                "Yes",
+            ) {
+                act = Some(WizardAct::Accept(c));
+            }
+        }
+        let fits = grokhub_agent::device::current()
+            .is_some_and(|d| super::auto_setup_ui::fits_local_ai(&d));
+        if fits
+            && !self.cfg.local_model
+            && crate::cards::settings_action(
+                ui,
+                "AI on this PC",
+                "This PC can run an AI model by itself, even offline.",
+                "Set up",
+            )
+        {
+            act = Some(WizardAct::Go(SetupStep::LocalAi));
+        }
+        act
     }
 
     fn ui_setup_local_ai(&mut self, ui: &mut egui::Ui) {

@@ -39,20 +39,9 @@ pub fn settings(config_dir: &Path) -> Settings {
 }
 
 fn parse_file(text: &str) -> Settings {
-    let mut enabled = true;
-    for line in text.lines() {
-        let line = line.split('#').next().unwrap_or("").trim();
-        if line.is_empty() {
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        if key.trim().eq_ignore_ascii_case("enabled") {
-            enabled = !value.trim().eq_ignore_ascii_case("false");
-        }
+    Settings {
+        enabled: crate::config_file::parse(CONFIG_NAME, text, &["enabled"]).flag("enabled", true),
     }
-    Settings { enabled }
 }
 
 fn session_native(name: &str) -> bool {

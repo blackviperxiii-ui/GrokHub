@@ -440,33 +440,29 @@ fn fallback_cabin_name_defaults_to_you() {
     assert_eq!(from_md, "Tester");
 }
 
-// Folded from PR #417.
+// Folded from PR #417; exports now land in your Chats folder first.
 #[test]
-fn export_dest_joins_under_config_or_project() {
-    let _g = crate::config::hold_test_config();
-    let root = crate::config::test_config_root("export-dest");
-    let _ = std::fs::remove_dir_all(&root);
-    let _pin = crate::config::TestConfigDir::set(root.clone());
-    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
-
-    let mut cabin = Cabin::quiet_for_test();
-    cabin.cfg.project_dir.clear();
+fn chat_exports_try_chats_then_desktop_then_app_data() {
+    use super::saved_file::SaveDir;
+    use grokhub_core::user_files::UserFolder;
+    super::slash::set_test_desktop(None);
     assert_eq!(
-        cabin.export_dest("export.md"),
-        crate::config::config_dir().join("export.md"),
-        "empty project_dir lands under config_dir"
+        Cabin::chat_export_dirs(),
+        vec![SaveDir::User(UserFolder::Chats), SaveDir::AppData]
     );
-
-    let project = root.join("harbor-work");
-    cabin.cfg.project_dir = project.display().to_string();
+    let desktop = std::env::temp_dir().join(format!("gh-export-order-{}", std::process::id()));
+    std::fs::create_dir_all(&desktop).unwrap();
+    super::slash::set_test_desktop(Some(desktop.clone()));
     assert_eq!(
-        cabin.export_dest("export.html"),
-        project.join("export.html"),
-        "a bound project_dir joins under that path"
+        Cabin::chat_export_dirs(),
+        vec![
+            SaveDir::User(UserFolder::Chats),
+            SaveDir::Existing(desktop.clone()),
+            SaveDir::AppData
+        ]
     );
-
-    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
-    let _ = std::fs::remove_dir_all(&root);
+    super::slash::set_test_desktop(None);
+    let _ = std::fs::remove_dir_all(&desktop);
 }
 
 // Folded from PR #418.
@@ -507,8 +503,6 @@ fn native_auto_keeps_the_permission_card() {
     assert!(poll.contains("&& !native_session"), "{poll}");
     let engine = include_str!("native_engine.rs");
     assert!(engine.contains("ExternalCmd::Permission"), "{engine}");
-    let kick = fn_src(engine, "kick_native_turn");
-    assert!(kick.contains("side_ask_kick = false"), "{kick}");
 }
 
 #[test]
@@ -587,18 +581,6 @@ fn destructive_host_spec_title_primary_is_danger() {
     assert!(spec.danger);
 }
 
-// Folded from PR #427.
-#[test]
-fn cabin_default_sessions_lists_known_ids() {
-    // Real fn: non-empty session list with known ids. No spawn/network.
-    let sessions = cabin_default_sessions();
-    assert!(!sessions.is_empty());
-    let ids: Vec<&str> = sessions.iter().map(|(id, _)| *id).collect();
-    for want in ["chat", "plan", "ask"] {
-        assert!(ids.contains(&want), "missing session id {want}: {ids:?}");
-    }
-}
-
 // Folded from PR #428.
 #[test]
 fn cabin_default_permissions_lists_known_ids() {
@@ -606,7 +588,7 @@ fn cabin_default_permissions_lists_known_ids() {
     let perms = cabin_default_permissions();
     assert!(!perms.is_empty());
     let ids: Vec<&str> = perms.iter().map(|(id, _)| *id).collect();
-    for want in ["ask", "auto"] {
+    for want in ["ask", "auto", "always-approve"] {
         assert!(ids.contains(&want), "missing permission id {want}: {ids:?}");
     }
 }
@@ -619,15 +601,4 @@ fn cabin_default_permission_id_empty_unknown_and_known() {
     assert_eq!(cabin_default_permission_id("nope"), "ask");
     assert_eq!(cabin_default_permission_id("ask"), "ask");
     assert_eq!(cabin_default_permission_id("auto"), "auto");
-}
-
-// Folded from PR #430.
-#[test]
-fn cabin_default_session_id_empty_unknown_and_known() {
-    // Real fn: empty/unknown → "chat"; known ids stay. No spawn/network.
-    assert_eq!(cabin_default_session_id(""), "chat");
-    assert_eq!(cabin_default_session_id("nonsense"), "chat");
-    assert_eq!(cabin_default_session_id("chat"), "chat");
-    assert_eq!(cabin_default_session_id("plan"), "plan");
-    assert_eq!(cabin_default_session_id("ask"), "ask");
 }

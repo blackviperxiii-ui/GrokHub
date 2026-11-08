@@ -194,6 +194,7 @@ pub(crate) fn keeps_meaning(input: &TidyIn<'_>, tidied: &str) -> bool {
                 tools: &[],
                 recent: input.recent,
                 background: false,
+                anchor: None,
             },
             None,
         )

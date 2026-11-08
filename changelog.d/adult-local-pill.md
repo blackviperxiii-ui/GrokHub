@@ -1,0 +1,1 @@
+- When an 18+ chat needs this PC's model and none is set up, a "Get a local model" button under the chat opens Local AI in Settings.

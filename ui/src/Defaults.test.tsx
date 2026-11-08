@@ -53,13 +53,13 @@ describe("Defaults", () => {
     render(<Defaults settings={shape()} onSaved={onSaved} />);
 
     expect(screen.getByText("/home/user/GrokHub")).toBeInTheDocument();
-    const pick = screen.getByLabelText("Approvals");
+    const pick = screen.getByLabelText("When the AI wants to change things");
     expect(pick).toHaveValue("ask");
     expect(screen.getByText("It asks before it changes a file or runs a command.")).toBeInTheDocument();
     await userEvent.selectOptions(pick, "always");
     expect(
       screen.getByText(
-        "Files change and commands run without asking. Deleting, sending, paying and credentials still ask.",
+        "Files change and commands run without asking. Deleting, sending, paying and passwords still ask.",
       ),
     ).toHaveClass("warn");
     await userEvent.type(screen.getByLabelText("Work folder"), " /work ");
@@ -80,7 +80,7 @@ describe("Defaults", () => {
   it("the web app sees them with nothing to change them", () => {
     render(<Defaults settings={shape({ approvals: "auto" })} readOnly />);
     expect(screen.getByText("/home/user/GrokHub")).toBeInTheDocument();
-    expect(screen.getByText("Auto")).toBeInTheDocument();
+    expect(screen.getByText("Only ask for risky things")).toBeInTheDocument();
     expect(screen.queryByRole("button")).toBeNull();
     expect(screen.queryByRole("textbox")).toBeNull();
   });

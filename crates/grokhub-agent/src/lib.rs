@@ -8,7 +8,11 @@ mod checkpoint;
 mod client;
 mod close_check;
 mod compact;
+mod config_file;
 mod denials;
+pub mod device;
+mod diet;
+pub mod dream_gate;
 mod dream_model;
 mod drive;
 pub mod episode;
@@ -22,13 +26,17 @@ pub mod identity;
 mod image_budget;
 pub mod indexers;
 mod loopback;
+mod lru_map;
 pub mod mcp;
 mod memory;
 mod memory_embed;
 mod models;
+mod pace;
+pub mod package_age;
 pub mod perm;
 mod plan_skills;
 pub mod plugins;
+mod post_check;
 mod prefix_cache;
 pub mod prefix_guard;
 mod prompt;
@@ -52,7 +60,10 @@ pub mod tasks;
 pub mod timing;
 pub mod tokens;
 mod tools;
+mod turn_budget;
 mod unattended;
+pub mod voice_session;
+mod ws_mode;
 
 pub use client::{
     map_http_status, request_headers, responses_body, AuthKind, CancelToken, ClientError,
@@ -60,10 +71,13 @@ pub use client::{
     TurnOutput, Usage, XaiClient, DEFAULT_MODEL, RESPONSES_URL, USER_AGENT,
 };
 pub use compact::{estimate_input_tokens, message_text};
+pub use config_file::config_warnings;
 pub use dream_model::sleep_dream;
 pub use eval::efficiency::{render_bench, run_bench, BenchRow};
 pub use eval::live::{
-    parse_budget as parse_live_budget, render_live, run_live, LiveOpts, LiveReport,
+    ab_flag as live_ab_flag, dream_lessons_passed, parse_budget as parse_live_budget, render_live,
+    run_live, LiveOpts, LiveReport, LocalClient as LiveLocalClient,
+    OpenRouterClient as LiveOpenRouterClient, Provider as LiveProvider, AB_FLAGS as LIVE_AB_FLAGS,
     DEFAULT_K as LIVE_DEFAULT_K,
 };
 pub use eval::memory_index::{render_memory_index_bench, run_memory_index_bench, MemoryIndexBench};
@@ -107,13 +121,9 @@ pub use plan_skills::{
     standing_reminder as plan_skills_standing, PlanSkillCtx, SkillMoment, AV_QA_WALKTHROUGH,
     CREATE_VERIFICATION, FOLLOW_THROUGH, MAINTAIN_VERIFICATION, QA_WALKTHROUGH,
 };
-pub use prefix_cache::{
-    enabled as prefix_cache_enabled, settings as prefix_cache_settings,
-    Settings as PrefixCacheSettings,
-};
 pub use prompt::{
-    prompt_need_from_job, system_prompt, system_prompt_parts, system_prompt_with,
-    tool_set_from_job, PromptNeed, PromptProfile,
+    chat_volatile_tail, prompt_need_from_job, system_prompt, system_prompt_parts,
+    system_prompt_with, tool_set_from_job, ChatTail, PromptNeed, PromptProfile,
 };
 pub use recovery::{
     project as project_recovery, state_for_rung, DriveFact, RecoveryFacts, RecoverySnapshot,
@@ -151,9 +161,9 @@ pub use tools::control::{take_automation_changes, AutomationChange};
 pub use tools::mods::{set_host as set_mods_host, ModsOps};
 pub use tools::{
     brave_key_present, deferred_tools_enabled, deferred_tools_settings, dispatch_for_job, execute,
-    imagine_client, is_readonly, public_only_resolve, run_media_tool, schemas_for, schemas_for_job,
-    seal_brave_key, tool_schemas, tool_set_for_kind, tool_set_refusal, DeferredToolsSettings,
-    DesktopOps, ImagineApi, ToolOutput, ToolSet, WebSearchBackend, WebSearchSettings,
-    READ_ONLY_PHASE, TOOL_SET_OUTSIDE,
+    generative_ui_enabled, imagine_client, is_readonly, public_only_resolve, run_media_tool,
+    schemas_for, schemas_for_job, seal_brave_key, tool_schemas, tool_set_for_kind,
+    tool_set_refusal, DeferredToolsSettings, DesktopOps, ImagineApi, ToolOutput, ToolSet,
+    WebSearchBackend, WebSearchSettings, READ_ONLY_PHASE, TOOL_SET_OUTSIDE,
 };
 pub use unattended::{run_unattended, UnattendedDone, UnattendedRun};

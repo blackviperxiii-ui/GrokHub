@@ -43,9 +43,33 @@ fn chip_leans_coding(chip: &QuickChip) -> bool {
         || blob.contains("/sh")
 }
 
-/// Reorder existing chips. Does not invent tiles or rebrand Imagine as Life.
+/// Lean the pool toward the lane before the ranker sees it. Does not invent
+/// tiles or rebrand Imagine as Life.
+///
+/// The lane only breaks near-ties: an on-lane chip gains at most two thirds
+/// of a tenth of the top score, so a much stronger suggestion is never
+/// pushed down just for being off-lane. The ranker then weighs the leaned
+/// score like any other, so the row it logs is the row that shows.
 pub(super) fn bias_chips_for_lane(chips: &mut [QuickChip], lane: CabinLane) {
-    chips.sort_by_key(|c| match lane {
+    let top = chips.iter().map(|c| c.score).fold(0.0_f32, f32::max);
+    let step = (top * 0.1).max(f32::EPSILON) / 3.0;
+    for c in chips.iter_mut() {
+        c.score += step * f32::from(2 - lane_rank(c, lane));
+    }
+    chips.sort_by(|a, b| b.score.total_cmp(&a.score));
+}
+
+/// A feature's own offers (code resume, focus help, backup and the rest)
+/// keep the order the feature gave them, as they did when they led the row.
+const FEATURE_OFFER_IDS: &[&str] = &[
+    "model:", "resume:", "backup:", "tidy:", "radar:", "game:", "focus:",
+];
+
+fn lane_rank(c: &QuickChip, lane: CabinLane) -> u8 {
+    if FEATURE_OFFER_IDS.iter().any(|p| c.id.starts_with(p)) {
+        return 0;
+    }
+    match lane {
         CabinLane::Coding => {
             if chip_leans_coding(c) {
                 0
@@ -64,7 +88,7 @@ pub(super) fn bias_chips_for_lane(chips: &mut [QuickChip], lane: CabinLane) {
                 1
             }
         }
-    });
+    }
 }
 
 pub(super) fn quiet_until_chip(now_hm: &str, start: &str, end: &str) -> Option<String> {

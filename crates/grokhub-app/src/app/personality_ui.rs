@@ -15,13 +15,24 @@ include!(concat!(env!("OUT_DIR"), "/personality_photos.rs"));
 
 const ADULTS_ONLY: &str = "Adults-only personalities";
 const ADULTS_ONLY_HINT: &str =
-    "Show explicit presets like Viper. Off hides them, and a chat set to one uses the default personality.";
+    "18+ for every voice: crude jokes at the heat you pick, and explicit presets like Viper. Off keeps jokes clean and hides those presets; a chat set to one uses the default personality.";
 /// Playbooks 8: the one-time 18+ check, the first time adults-only turns on.
 fn age_check_line() -> String {
     format!(
         "Adults-only personalities are for people 18 or older. Confirm once and {} remembers it.",
         grokhub_core::brand::product_name()
     )
+}
+/// What turning 18+ on changes, shown with the age check.
+const AGE_CHANGES: &str = "What changes: every voice can tell crude, raunchy jokes at the heat you pick, and explicit presets like Viper show up. Still never sex chat in the regular voices, and never anything about minors, real people or non-consent.";
+const DYNAMIC_CHAT: &str = "Dynamic chat";
+const DYNAMIC_CHAT_HINT: &str = "Another voice can step in while the topic calls for it, like Chief Engineer for a build error or Gentle Listener when you're venting, then hand back. A voice you pick for a chat stays put.";
+const HEAT: &str = "Heat";
+const HEAT_HINT: &str =
+    "How crude the jokes get. You can also say \"roast me harder\" or \"ease off\" in a chat.";
+/// The switch sheet's line while dynamic chat has a guest voice speaking.
+fn guest_line(name: &str) -> String {
+    format!("{name} is speaking for this part of the chat. Keep {name} to stay in that voice.")
 }
 const AGE_YES: &str = "I'm 18 or older";
 const AGE_NO: &str = "Not now";
@@ -307,7 +318,8 @@ impl Cabin {
     /// dock): the open chat's pick in Chat, else the default.
     pub(super) fn shown_personality_id(&self) -> String {
         if self.nav == Nav::Chat {
-            self.open_chat_personality()
+            self.open_chat_guest_voice()
+                .unwrap_or_else(|| self.open_chat_personality())
         } else {
             self.allowed_id(shown_id(self.cfg.personality.trim()))
         }
@@ -419,6 +431,85 @@ impl Cabin {
             self.cfg.adult_confirmed = true;
             self.cfg.adult_confirmed_at_ms = Some(grokhub_core::now_ms());
             self.set_explicit_personalities(true);
+        }
+    }
+
+    /// The heat every voice jokes at, or `None` while adults-only is off or the
+    /// 18+ check was never answered.
+    pub(super) fn adult_heat(&self) -> Option<personality::Heat> {
+        (self.cfg.explicit_personalities && self.cfg.adult_confirmed).then_some(self.cfg.quip_heat)
+    }
+
+    /// Settings → Personality → Dynamic chat.
+    pub(super) fn set_dynamic_chat(&mut self, on: bool) {
+        self.cfg.dynamic_chat = on;
+        self.persist_cfg();
+        self.status = if on {
+            "Dynamic chat on".into()
+        } else {
+            "Dynamic chat off: each chat keeps one voice".into()
+        };
+    }
+
+    /// Settings → Personality → Heat, a stop on the dial.
+    pub(super) fn set_quip_heat(&mut self, heat: personality::Heat) {
+        let heat = if personality::Heat::DIAL.contains(&heat) {
+            heat
+        } else {
+            personality::Heat::Cheeky
+        };
+        self.cfg.quip_heat = heat;
+        self.persist_cfg();
+        self.status = format!("Heat: {}", heat.label());
+    }
+
+    /// The voice settings for the chat being answered: its home voice, the
+    /// voices dynamic chat may hand to (never an explicit one), and whether a
+    /// hand-picked voice holds it in place.
+    pub(super) fn chat_voice_config(&mut self) -> grokhub_agent::voice_session::VoiceConfig {
+        let idx = self
+            .chat_job_thread
+            .as_deref()
+            .and_then(|id| self.threads.iter().position(|t| t.id == id))
+            .unwrap_or(self.thread_idx);
+        let pinned = self
+            .threads
+            .get(idx)
+            .is_some_and(|t| !t.personality.trim().is_empty());
+        // Adults-only voices join only with adults-only on, and then speak
+        // only for 18+ turns.
+        let adult = self.adult_heat().is_some();
+        let roster = self
+            .presets_now()
+            .into_iter()
+            .filter(|p| adult || !p.explicit)
+            .collect();
+        grokhub_agent::voice_session::VoiceConfig {
+            home: self.thread_personality(idx),
+            roster,
+            dynamic: self.cfg.dynamic_chat,
+            pinned,
+            adult: self.adult_heat(),
+            utc_offset_min: Self::local_clock().utc_offset_min(),
+        }
+    }
+
+    /// The voice dynamic chat has the open chat speaking in right now, when it
+    /// is not the chat's own.
+    pub(super) fn open_chat_guest_voice(&self) -> Option<String> {
+        if !self.cfg.dynamic_chat {
+            return None;
+        }
+        let session = self.threads.get(self.thread_idx)?.grok_session.as_deref()?;
+        let active = grokhub_agent::voice_session::active_voice(session)?;
+        (active != self.open_chat_personality()).then_some(active)
+    }
+
+    /// Chat header → Keep: the guest voice becomes this chat's own pick, which
+    /// also holds it in place.
+    pub(super) fn keep_guest_voice(&mut self) {
+        if let Some(id) = self.open_chat_guest_voice() {
+            self.set_chat_personality(&id);
         }
     }
 
@@ -638,6 +729,7 @@ impl Cabin {
         if self.picker.age_check {
             ui.add_space(6.0);
             crate::cards::settings_note(ui, &age_check_line());
+            crate::cards::settings_note(ui, AGE_CHANGES);
             let mut answer = None;
             ui.horizontal(|ui| {
                 if crate::cards::white_pill(ui, AGE_YES) {
@@ -787,6 +879,7 @@ impl Cabin {
                     paint_grid(ui, &mut act_on, &mut hover_id);
                 });
         }
+        self.ui_voice_flow_settings(ui);
         self.picker.hover = hover_id;
         match act_on {
             Some(CardAct::Focus(id)) => self.picker.focus = Some(id),
@@ -799,6 +892,30 @@ impl Cabin {
             Some(CardAct::Edit(id)) => self.edit_personality(&id),
             Some(CardAct::SignIn) => self.settings_sec = SettingsSec::Account,
             None => {}
+        }
+    }
+
+    /// Dynamic chat and the Heat dial, under the grid so the cards keep their room.
+    fn ui_voice_flow_settings(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(16.0);
+        let mut dynamic = self.cfg.dynamic_chat;
+        if crate::cards::settings_toggle(ui, DYNAMIC_CHAT, DYNAMIC_CHAT_HINT, &mut dynamic) {
+            self.set_dynamic_chat(dynamic);
+        }
+        if self.adult_heat().is_some() {
+            ui.add_space(10.0);
+            crate::cards::settings_note(ui, &format!("{HEAT}: {HEAT_HINT}"));
+            let mut pick = None;
+            ui.horizontal(|ui| {
+                for heat in personality::Heat::DIAL {
+                    if crate::cards::tab_pill(ui, heat.label(), self.cfg.quip_heat == heat) {
+                        pick = Some(heat);
+                    }
+                }
+            });
+            if let Some(heat) = pick {
+                self.set_quip_heat(heat);
+            }
         }
     }
 
@@ -945,6 +1062,10 @@ impl Cabin {
         let open = self.open_chat_personality();
         let presets = self.presets_now();
         let default = shown_id(&self.cfg.personality).to_string();
+        let guest = self
+            .open_chat_guest_voice()
+            .map(|id| personality::find(&presets, &id).name);
+        let mut keep_guest = false;
         let mut pick: Option<String> = None;
         let mut make_default = false;
         let mut all = false;
@@ -996,6 +1117,17 @@ impl Cabin {
                             }
                         });
                     });
+                if let Some(name) = guest.as_deref() {
+                    ui.add_space(12.0);
+                    ui.label(
+                        RichText::new(guest_line(name))
+                            .size(crate::theme::FONT_META)
+                            .color(crate::theme::muted()),
+                    );
+                    if crate::cards::white_pill(ui, &format!("Keep {name}")) {
+                        keep_guest = true;
+                    }
+                }
                 ui.add_space(16.0);
                 ui.horizontal(|ui| {
                     let differs = open != default;
@@ -1020,6 +1152,10 @@ impl Cabin {
         }
         if let Some(id) = pick {
             self.set_chat_personality(&id);
+            close = true;
+        }
+        if keep_guest {
+            self.keep_guest_voice();
             close = true;
         }
         if make_default {
@@ -1544,6 +1680,105 @@ mod tests {
     }
 
     #[test]
+    fn heat_only_counts_with_adults_only_on_and_stays_on_the_dial() {
+        let (_lock, _root, mut cabin) = cabin_with_chat();
+        assert_eq!(cabin.adult_heat(), None, "18+ off by default");
+        assert!(cabin.cfg.dynamic_chat, "dynamic chat on by default");
+        let (_, tail) = cabin.chat_prompt_parts();
+        assert!(!tail.contains(personality::ADULT_HUMOR), "{tail}");
+        cabin.cfg.explicit_personalities = true;
+        cabin.cfg.adult_confirmed = true;
+        assert_eq!(cabin.adult_heat(), Some(personality::Heat::Cheeky));
+        let (_, tail) = cabin.chat_prompt_parts();
+        assert!(tail.contains(personality::ADULT_HUMOR), "{tail}");
+        assert!(
+            !tail.contains(grokhub_core::adult_guard::ADULT_VOICE),
+            "cheeky routes anywhere: {tail}"
+        );
+        cabin.set_quip_heat(personality::Heat::Spicy);
+        let (_, tail) = cabin.chat_prompt_parts();
+        assert!(
+            !tail.contains(grokhub_core::adult_guard::ADULT_VOICE),
+            "heat alone never makes a chat 18+: {tail}"
+        );
+        assert!(tail.contains(personality::Heat::Spicy.line()), "{tail}");
+        cabin.set_quip_heat(personality::Heat::Clean);
+        assert_eq!(
+            cabin.cfg.quip_heat,
+            personality::Heat::Cheeky,
+            "clean is off the dial"
+        );
+        cabin.set_quip_heat(personality::Heat::Filthy);
+        assert_eq!(cabin.status, "Heat: Filthy");
+        // set_quip_heat saves on the persist worker; wait for it, or a
+        // write still in flight can land after a direct save and win.
+        cabin.persist_svc.flush();
+        let back = crate::config::load();
+        assert_eq!(
+            back.quip_heat,
+            personality::Heat::Filthy,
+            "saved to app.json"
+        );
+        cabin.set_dynamic_chat(false);
+        assert!(!cabin.cfg.dynamic_chat);
+    }
+
+    #[test]
+    fn a_guest_voice_shows_in_the_chat_and_keep_holds_it() {
+        let (_lock, _root, mut cabin) = cabin_with_chat();
+        cabin.nav = Nav::Chat;
+        cabin.threads[0].grok_session = Some("cabin-guest".into());
+        let cfg = cabin.chat_voice_config();
+        assert!(!cfg.pinned && cfg.dynamic);
+        assert!(
+            cfg.roster.iter().all(|p| !p.explicit),
+            "never hands to an explicit voice"
+        );
+        assert_eq!(cfg.home.id, personality::DEFAULT_ID);
+        grokhub_agent::voice_session::register("cabin-guest", cfg);
+        assert_eq!(cabin.open_chat_guest_voice(), None);
+        for text in [
+            "game crashed with an error",
+            "still broken, driver error again",
+        ] {
+            grokhub_agent::voice_session::step(
+                "cabin-guest",
+                grokhub_agent::voice_session::TurnView {
+                    text,
+                    intent: "repair",
+                    care: "casual",
+                    mood: "calm",
+                    background: false,
+                    hour: Some(20),
+                },
+            );
+        }
+        assert_eq!(
+            cabin.open_chat_guest_voice().as_deref(),
+            Some("chief-engineer")
+        );
+        assert_eq!(
+            cabin.shown_personality_id(),
+            "chief-engineer",
+            "the card follows"
+        );
+        cabin.cfg.dynamic_chat = false;
+        assert_eq!(
+            cabin.open_chat_guest_voice(),
+            None,
+            "off shows the chat's own voice"
+        );
+        cabin.cfg.dynamic_chat = true;
+        cabin.keep_guest_voice();
+        assert_eq!(cabin.threads[0].personality, "chief-engineer");
+        assert!(
+            cabin.chat_voice_config().pinned,
+            "a kept voice holds the chat"
+        );
+        grokhub_agent::voice_session::forget("cabin-guest");
+    }
+
+    #[test]
     fn adults_only_off_hides_explicit_presets_and_mutes_a_stored_pick() {
         let (_lock, _root, mut cabin) = cabin_with_chat();
         assert!(!cabin.cfg.explicit_personalities, "off by default");
@@ -1768,6 +2003,43 @@ mod tests {
             plain_volatile.contains("earlier in this prompt always win"),
             "the values voice still closes under the cabin rules: {plain_volatile}"
         );
+    }
+
+    /// With the 18+ toggle on, the real tail the cabin puts on each turn names
+    /// the hard limits. Viper's two turns from a Nov 6 export must pass the
+    /// pre-send check and read as explicit (so they run on the local model);
+    /// a hard-limit ask under the same tail is still held.
+    #[test]
+    fn the_18_plus_toggle_lets_an_ordinary_adult_turn_through_the_send_check() {
+        use grokhub_core::adult_guard::{explicit_conversation, hold, HELD};
+        let (_lock, _root, mut cabin) = cabin_with_chat();
+        cabin.answer_age_check(true);
+        assert!(cabin.adult_heat().is_some(), "the toggle is on");
+        let turn = |volatile: &str, typed: &str| {
+            format!(
+                "<cabin-volatile>\n{}\n</cabin-volatile>\n\n{typed}",
+                volatile.trim()
+            )
+        };
+        let (_, nyx) = cabin.chat_prompt_parts();
+        cabin.set_chat_personality("whore");
+        let (_, adult) = cabin.chat_prompt_parts();
+        for (volatile, typed) in [
+            (&nyx, "wanna have some sexy time"),
+            (&adult, "lets do this"),
+        ] {
+            let sent = turn(volatile, typed);
+            assert_eq!(hold(&sent), None, "{typed:?} is not held");
+        }
+        assert!(explicit_conversation([(
+            "user",
+            turn(&nyx, "wanna have some sexy time").as_str()
+        )]));
+        assert!(explicit_conversation([(
+            "user",
+            turn(&adult, "lets do this").as_str()
+        )]));
+        assert_eq!(hold(&turn(&adult, "nsfw schoolgirl roleplay")), Some(*HELD));
     }
 
     #[test]

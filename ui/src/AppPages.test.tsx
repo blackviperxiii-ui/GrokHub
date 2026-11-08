@@ -24,6 +24,8 @@ const api = vi.hoisted(() => ({
 vi.mock("./api", () => ({
   // No chat saved from an earlier launch.
   getLastChat: () => Promise.resolve(null),
+  quickChips: () => Promise.resolve([]),
+  chipOutcome: () => Promise.resolve(true),
   loadChat: vi.fn(),
   CORE_ONLY: api.CORE_ONLY,
   getCapabilities: api.getCapabilities,
@@ -37,6 +39,9 @@ vi.mock("./api", () => ({
   onEventGap: () => Promise.resolve(() => {}),
   // The scheduler has its own tests (App.test.tsx, Automations.test.tsx).
   onAutomationRan: () => Promise.resolve(() => {}),
+  onUpdateAvailable: () => Promise.resolve(() => {}),
+  onLocalEngineEvent: () => Promise.resolve(() => {}),
+  workboardSweepUndo: () => Promise.resolve({}),
   shareSchedulerClock: () => Promise.resolve(),
   onFileDrop: () => Promise.resolve(() => {}),
   // The turn stays open, so its events keep landing.
@@ -95,7 +100,7 @@ describe("App pages", () => {
     expect(screen.getByLabelText("Work folder")).not.toBeVisible();
     await userEvent.click(tab("Settings"));
 
-    await waitFor(() => expect(screen.getByRole("combobox", { name: "Approvals" })).toHaveValue("always"));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "When the AI wants to change things" })).toHaveValue("always"));
     expect(screen.getByLabelText("Work folder")).toHaveValue("/home/user/kept");
     expect(screen.getByLabelText("Work folder")).toBeVisible();
   });

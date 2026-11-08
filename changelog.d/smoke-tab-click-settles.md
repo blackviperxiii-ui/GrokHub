@@ -1,0 +1,1 @@
+- CI: the shell smoke test clicks a top tab only once it sits still and clicks again until it is pressed, so a tab click right after a turn ends no longer fails as "not interactable" on Linux.

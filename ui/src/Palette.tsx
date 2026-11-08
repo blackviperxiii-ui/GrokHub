@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import type { Capabilities } from "./api";
+import type { Capabilities, QuickChip } from "./api";
 import {
   answersTo,
   chatRows,
@@ -48,6 +48,8 @@ export type PaletteAction =
 export interface PaletteRow {
   label: string;
   action: PaletteAction;
+  /** The suggestion this row came from, taught on pick. */
+  chip?: QuickChip;
   /** The key that does the same, shown at the row's right. */
   keys?: string;
 }
@@ -58,6 +60,10 @@ export interface PaletteSources {
   signedOut: boolean;
   chats: ChatSource;
   slash: SlashSource;
+  /** Suggested next steps, shown first while nothing is typed. */
+  chips?: readonly QuickChip[];
+  /** A suggestion was picked. */
+  onChip?: (chip: QuickChip) => void;
 }
 
 /** Pages and Settings sections only. */
@@ -69,9 +75,19 @@ export interface PaletteExtras {
   signedOut: boolean;
   chats: readonly ChatHit[];
   slash: readonly SlashHit[];
+  chips?: readonly QuickChip[];
 }
 
 const NO_EXTRAS: PaletteExtras = { runners: {}, signedOut: false, chats: [], slash: [] };
+
+/** A suggestion as a palette row: a Go chip opens its page when this app has
+ * it, an Ask chip puts its words in the chat box. */
+function chipRow(chip: QuickChip, views: readonly View[]): PaletteRow | null {
+  const label = `Suggested: ${chip.label}`;
+  if (chip.action === "ask") return { label, chip, action: { kind: "ask", text: chip.value } };
+  const view = views.find((v) => v === chip.view);
+  return view ? { label, chip, action: { kind: "view", view } } : null;
+}
 
 export const VIEW_LABELS: Record<View, string> = {
   home: "Home",
@@ -124,9 +140,10 @@ export function pageViews(caps: Capabilities): View[] {
   return [...tabs.slice(0, at), "objectives", ...tabs.slice(at)];
 }
 
-/** The rows for `query`, in order: pages, commands, slash commands (for a
- * query that starts with `/`), recent chats, Settings sections, then Ask
- * with the typed text, which puts it in the chat box like the cabin's palette. */
+/** The rows for `query`, in order: suggestions (while nothing is typed),
+ * pages, commands, slash commands (for a query that starts with `/`), recent
+ * chats, Settings sections, then Ask with the typed text, which puts it in the
+ * chat box like the cabin's palette. */
 export function paletteRows(caps: Capabilities, query: string, extras: PaletteExtras = NO_EXTRAS): PaletteRow[] {
   const q = query.trim().toLowerCase();
   const slash = q.startsWith("/");
@@ -141,7 +158,10 @@ export function paletteRows(caps: Capabilities, query: string, extras: PaletteEx
     action: { kind: "settings", section },
   }));
   const named = (rows: PaletteRow[]) => (q ? rows.filter((row) => answersTo(row.label, q)) : rows);
+  const views = pageViews(caps);
+  const suggested = q ? [] : (extras.chips ?? []).flatMap((chip) => chipRow(chip, views) ?? []);
   const all = [
+    ...suggested,
     ...named(pages),
     ...named(commandRows(caps, extras)),
     ...(slash ? slashRows(extras.slash) : []),
@@ -156,6 +176,7 @@ const NOTHING_FOUND = { chats: [], slash: [] };
 
 /** Rows can share a label (two chats with one title), so keys use the action. */
 function rowKey(row: PaletteRow): string {
+  if (row.chip) return `chip:${row.chip.id}`;
   return row.action.kind === "chat" ? `chat:${row.action.id}` : row.label;
 }
 
@@ -188,6 +209,7 @@ export function Palette({
   // The way the last arrow key moved, so only key moves (not hovers) scroll.
   const moved = useRef<1 | -1 | null>(null);
   const rows = paletteRows(caps, query, { ...sources, ...found });
+  const { onChip } = sources;
   const { chats: findChats, slash: findSlash } = sources;
   const at = Math.min(pick, rows.length - 1);
   usePeek(list, "y", rows.length, paletteRoom);
@@ -221,6 +243,7 @@ export function Palette({
 
   function choose(row: PaletteRow | undefined) {
     if (!row) return;
+    if (row.chip) onChip?.(row.chip);
     onClose();
     onPick(row.action);
   }

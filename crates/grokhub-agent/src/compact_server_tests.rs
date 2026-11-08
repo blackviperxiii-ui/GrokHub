@@ -21,6 +21,8 @@ const COMPACT_OK: &str = r#"{"id":"cmp_1","object":"response.compaction","create
 #[derive(Clone)]
 enum Reply {
     Json(u16, &'static str),
+    /// 400 to a body with `prompt_cache_key`, else the compaction.
+    KeyRefused,
     Sse(String),
     Hang(Duration),
 }
@@ -108,8 +110,20 @@ fn serve(mut stream: TcpStream, compact: &Reply, responses: &Reply, log: &Mutex<
     } else {
         responses
     };
+    let keyed = body.contains("prompt_cache_key");
     log.lock().unwrap().push(Seen { path, head, body });
     let out = match reply {
+        Reply::KeyRefused if keyed => {
+            let text = r#"{"error":{"message":"unknown field prompt_cache_key"}}"#;
+            format!(
+                "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
+                text.len()
+            )
+        }
+        Reply::KeyRefused => format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{COMPACT_OK}",
+            COMPACT_OK.len()
+        ),
         Reply::Hang(wait) => {
             std::thread::sleep(*wait);
             return;
@@ -186,8 +200,14 @@ fn compact_with(client: &XaiClient, model: &str, items: &mut Vec<InputItem>) -> 
         "conv-srv",
         items,
         &[],
+        &[],
     )
     .expect("compaction")
+}
+
+/// What the pinned safety rules add to the estimate after a compaction.
+fn pin_tokens() -> u64 {
+    super::estimate_input_tokens(&[super::standing_rules_message(&[])])
 }
 
 #[test]
@@ -201,7 +221,7 @@ fn server_compaction_folds_all_but_the_tail_and_keeps_the_item_verbatim() {
     assert_eq!(server.paths(), vec!["/v1/responses/compact"]);
     assert_eq!(
         server.body(0),
-        json!({"model": "grok-4.7", "input": [
+        json!({"model": "grok-4.7", "prompt_cache_key": "conv-srv", "input": [
             {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "OLD_TOPIC"}]},
             {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "old answer"}]},
         ]})
@@ -217,6 +237,8 @@ fn server_compaction_folds_all_but_the_tail_and_keeps_the_item_verbatim() {
             raw: ITEM.to_string(),
             digest: "User: OLD_TOPIC\nAssistant: old answer".into(),
         },
+        // The safety rules come back word for word after the folded part.
+        super::standing_rules_message(&[]),
     ];
     want.extend(history()[3..].iter().cloned());
     assert_eq!(items, want);
@@ -238,7 +260,8 @@ fn server_compaction_folds_all_but_the_tail_and_keeps_the_item_verbatim() {
             // Before: 95 bytes; after: 9 + 72 (the item) + 14 + 26 + 14 bytes. 4 bytes a token.
             server: Some(grokhub_core::wire::CompactDetail {
                 tokens_before: 23,
-                tokens_after: 33,
+                // What's left, pinned safety rules included.
+                tokens_after: super::estimate_input_tokens(&want),
                 dropped_message_count: 2,
             }),
         }
@@ -274,18 +297,19 @@ fn a_compacted_history_compacts_again_with_the_old_item_first() {
                 // The older digest first, then what this compaction folded.
                 digest: "User: first ask\nAssistant: middle".into(),
             },
+            super::standing_rules_message(&[]),
             msg("user", "now")
         ]
     );
 }
 
-/// The endpoint failed: the same compaction goes the summary way, once each.
-fn assert_fell_back(server: &Mock, items: &[InputItem], done: &Compacted) {
-    assert_eq!(
-        server.paths(),
-        vec!["/v1/responses/compact", "/v1/responses"]
-    );
-    assert!(server.seen.lock().unwrap()[1]
+/// The endpoint failed: the same compaction goes the summary way, after
+/// `compacts` tries at the endpoint.
+fn assert_fell_back(server: &Mock, compacts: usize, items: &[InputItem], done: &Compacted) {
+    let mut want = vec!["/v1/responses/compact".to_string(); compacts];
+    want.push("/v1/responses".into());
+    assert_eq!(server.paths(), want);
+    assert!(server.seen.lock().unwrap()[compacts]
         .body
         .contains("faithful, concise summary"));
     assert_eq!(done.server, None);
@@ -310,7 +334,39 @@ fn an_http_400_from_the_endpoint_falls_back_to_the_summary() {
     );
     let mut items = history();
     let done = compact_with(&server.client(), "grok-4.7", &mut items);
-    assert_fell_back(&server, &items, &done);
+    // Once with the cache key, once with the documented body only.
+    assert_fell_back(&server, 2, &items, &done);
+    assert!(server.body(0).get("prompt_cache_key").is_some());
+    assert!(server.body(1).get("prompt_cache_key").is_none());
+}
+
+#[test]
+fn a_refused_cache_key_is_dropped_and_not_sent_again() {
+    let (_dir, _guard) = config("keyrefused");
+    let server = mock(Reply::KeyRefused, summary_reply());
+    let client = server.client();
+    let mut items = history();
+    let done = compact_with(&client, "grok-4.7", &mut items);
+    assert!(
+        done.server.is_some(),
+        "the fold went through without the key"
+    );
+    assert_eq!(
+        server.paths(),
+        vec!["/v1/responses/compact", "/v1/responses/compact"]
+    );
+    assert_eq!(server.body(0)["prompt_cache_key"], "conv-srv");
+    assert_eq!(keys(&server.body(1)), ["input", "model"]);
+
+    // The same client remembers: the next fold sends the documented body once.
+    let mut items = history();
+    compact_with(&client, "grok-4.7", &mut items);
+    assert_eq!(server.paths().len(), 3);
+    assert_eq!(keys(&server.body(2)), ["input", "model"]);
+}
+
+fn keys(v: &Value) -> Vec<String> {
+    v.as_object().unwrap().keys().cloned().collect()
 }
 
 #[test]
@@ -325,7 +381,7 @@ fn a_malformed_compaction_reply_falls_back_to_the_summary() {
     );
     let mut items = history();
     let done = compact_with(&server.client(), "grok-4.7", &mut items);
-    assert_fell_back(&server, &items, &done);
+    assert_fell_back(&server, 1, &items, &done);
 }
 
 #[test]
@@ -339,7 +395,7 @@ fn a_hung_compaction_call_times_out_and_falls_back_to_the_summary() {
     let took = started.elapsed();
     set_server_compact_timeout_for_tests(None);
     assert!(took < Duration::from_secs(4), "took {took:?}");
-    assert_fell_back(&server, &items, &done);
+    assert_fell_back(&server, 1, &items, &done);
 }
 
 #[test]
@@ -363,6 +419,7 @@ fn forced_summary_and_non_xai_models_never_call_the_endpoint() {
             None,
             "conv-local",
             &mut items,
+            &[],
             &[],
         );
         assert!(
@@ -501,8 +558,12 @@ fn auto_compact_at_the_threshold_uses_the_server_path() {
         turn["input"][0],
         json!({"type": "compaction", "id": "cmp_9", "encrypted_content": "E"})
     );
-    assert_eq!(turn["input"][1]["role"], "user");
-    assert_eq!(turn["input"][1]["content"][0]["text"], "go");
+    assert!(turn["input"][1]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .starts_with("<standing_rules>"));
+    assert_eq!(turn["input"][2]["role"], "user");
+    assert_eq!(turn["input"][2]["content"][0]["text"], "go");
     assert_eq!(out.usage.input_tokens, 903);
     assert_eq!(out.usage.output_tokens, 11);
     assert_eq!(
@@ -511,7 +572,7 @@ fn auto_compact_at_the_threshold_uses_the_server_path() {
             None,
             Some(grokhub_core::wire::CompactDetail {
                 tokens_before: 905,
-                tokens_after: 16,
+                tokens_after: 16 + pin_tokens(),
                 dropped_message_count: 1,
             })
         )]
@@ -629,4 +690,29 @@ fn other_providers_get_the_digest_and_xai_gets_only_the_sealed_item() {
     };
     let open = openai_body("m", None, &bare);
     assert_eq!(open["messages"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn stop_during_a_hung_compaction_call_returns_at_once() {
+    let (_dir, _guard) = config("stop");
+    let server = mock(Reply::Hang(Duration::from_secs(8)), summary_reply());
+    let client = server.client();
+    let cancel = CancelToken::new();
+    let stopper = cancel.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(200));
+        stopper.cancel();
+    });
+    let req = CompactRequest {
+        model: "grok-4.7".into(),
+        input: history(),
+        conversation_id: "conv-stop".into(),
+        timeout: Duration::from_secs(60),
+    };
+    let started = Instant::now();
+    let out = client.compact(&req, &cancel).expect("server compaction");
+    let took = started.elapsed();
+    assert!(matches!(out, Err(ClientError::Cancelled)), "{out:?}");
+    assert!(took < Duration::from_secs(1), "took {took:?}");
+    assert_eq!(server.paths(), vec!["/v1/responses/compact"]);
 }

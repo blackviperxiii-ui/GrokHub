@@ -1,0 +1,1 @@
+- grep cuts long lines, keeps its answer under 40 KB, skips .git and files over 4 MB, prints overlapping context once, and lists hits in path order so the same search gives the same output.

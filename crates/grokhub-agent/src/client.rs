@@ -89,6 +89,26 @@ pub enum ContentPart {
 /// The `type` of a provider's reasoning item ([`InputItem::provider_reasoning`]).
 pub const PROVIDER_REASONING: &str = "reasoning_details";
 
+/// Output items of xAI's hosted search: `web_search_call`, and `custom_tool_call`
+/// for X search (`xs_` call ids) and attachment search (`as_`). They go back
+/// with the next request like sealed reasoning, as xAI asks for every output
+/// item, so the reasoning that refers to them still lines up.
+pub const HOSTED_CALLS: [&str; 3] = ["web_search_call", "x_search_call", "custom_tool_call"];
+
+/// A hosted search call item: one of [`HOSTED_CALLS`] with an `id` or `call_id`.
+pub fn is_hosted_call(value: &Value) -> bool {
+    value
+        .get("type")
+        .and_then(Value::as_str)
+        .is_some_and(|t| HOSTED_CALLS.contains(&t))
+        && ["id", "call_id"].iter().any(|k| {
+            value
+                .get(*k)
+                .and_then(Value::as_str)
+                .is_some_and(|s| !s.is_empty())
+        })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputItem {
     Message {
@@ -117,8 +137,8 @@ pub enum InputItem {
         raw: String,
         digest: String,
     },
-    /// One xAI `reasoning` output item with its `encrypted_content`, kept as the
-    /// JSON text it arrived as. Opaque like [`InputItem::ServerCompaction`]: it goes
+    /// One xAI `reasoning` output item with its `encrypted_content`, or one hosted
+    /// search call ([`HOSTED_CALLS`]), kept as the JSON text it arrived as. Opaque like [`InputItem::ServerCompaction`]: it goes
     /// back to xAI unchanged on the next request, so the model keeps its own
     /// reasoning between tool steps and the prompt cache keeps matching. Other
     /// providers and the local model never see it, and it goes only to the
@@ -133,24 +153,85 @@ pub enum InputItem {
     },
 }
 
+/// The output a tool call gets when the turn ended before it ran.
+pub const NOT_RUN: &str = "Not run: the turn stopped before this call ran.";
+
+/// Give every tool call in `history` an output, so no provider sees a call
+/// with no answer. A call left without one (Stop, Halt or a denied step
+/// partway through a batch, or a chat saved like that) gets [`NOT_RUN`],
+/// placed after the run of calls and outputs it belongs to. Returns how many
+/// outputs it added.
+pub fn pair_orphan_calls(history: &mut Vec<InputItem>) -> usize {
+    let answered: std::collections::HashSet<String> = history
+        .iter()
+        .filter_map(|item| match item {
+            InputItem::FunctionCallOutput { call_id, .. } => Some(call_id.clone()),
+            _ => None,
+        })
+        .collect();
+    let mut added = 0;
+    let mut i = 0;
+    while i < history.len() {
+        if !matches!(history[i], InputItem::FunctionCall { .. }) {
+            i += 1;
+            continue;
+        }
+        // One batch: the calls and the outputs that follow them.
+        let start = i;
+        let mut end = i;
+        while end < history.len()
+            && matches!(
+                history[end],
+                InputItem::FunctionCall { .. } | InputItem::FunctionCallOutput { .. }
+            )
+        {
+            end += 1;
+        }
+        let missing: Vec<String> = history[start..end]
+            .iter()
+            .filter_map(|item| match item {
+                InputItem::FunctionCall { call_id, .. } if !answered.contains(call_id) => {
+                    Some(call_id.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        let count = missing.len();
+        for (k, call_id) in missing.into_iter().enumerate() {
+            history.insert(
+                end + k,
+                InputItem::FunctionCallOutput {
+                    call_id,
+                    output: NOT_RUN.to_string(),
+                },
+            );
+        }
+        added += count;
+        i = end + count;
+    }
+    added
+}
+
 impl InputItem {
     /// A [`InputItem::Reasoning`] from one item's JSON text, or `None` when it is
     /// neither a JSON object of type `reasoning` with a non-empty
-    /// `encrypted_content` (xAI) nor one of type [`PROVIDER_REASONING`] with a
-    /// non-empty `reasoning_details` list (an OpenAI-compatible provider).
+    /// `encrypted_content` (xAI), a hosted search call ([`is_hosted_call`]), nor
+    /// one of type [`PROVIDER_REASONING`] with a non-empty `reasoning_details`
+    /// list (an OpenAI-compatible provider).
     pub fn reasoning(raw: &str, model: &str) -> Option<InputItem> {
         let value: Value = serde_json::from_str(raw).ok()?;
-        let sealed = match value.get("type").and_then(Value::as_str) {
-            Some("reasoning") => value
-                .get("encrypted_content")
-                .and_then(Value::as_str)
-                .is_some_and(|s| !s.is_empty()),
-            Some(PROVIDER_REASONING) => value
-                .get("reasoning_details")
-                .and_then(Value::as_array)
-                .is_some_and(|d| !d.is_empty()),
-            _ => false,
-        };
+        let sealed = is_hosted_call(&value)
+            || match value.get("type").and_then(Value::as_str) {
+                Some("reasoning") => value
+                    .get("encrypted_content")
+                    .and_then(Value::as_str)
+                    .is_some_and(|s| !s.is_empty()),
+                Some(PROVIDER_REASONING) => value
+                    .get("reasoning_details")
+                    .and_then(Value::as_array)
+                    .is_some_and(|d| !d.is_empty()),
+                _ => false,
+            };
         sealed.then(|| InputItem::Reasoning {
             raw: raw.to_string(),
             model: model.trim().to_string(),
@@ -280,6 +361,37 @@ pub struct CompactOutput {
 pub enum StreamEvent {
     TextDelta(String),
     ReasoningDelta(String),
+    /// xAI asked to slow down: the call waits this long, then tries again.
+    RateWait(Duration),
+}
+
+/// What xAI's hosted search did in one reply (`usage.server_side_tool_usage_details`).
+/// Only successful calls are counted, and only those are billed: web search per
+/// call, X search per post and per profile fetched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub struct HostedUsage {
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub web_search_calls: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub x_posts_fetched: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub x_users_fetched: u64,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
+}
+
+impl HostedUsage {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    pub fn add(&mut self, other: &HostedUsage) {
+        self.web_search_calls = self.web_search_calls.saturating_add(other.web_search_calls);
+        self.x_posts_fetched = self.x_posts_fetched.saturating_add(other.x_posts_fetched);
+        self.x_users_fetched = self.x_users_fetched.saturating_add(other.x_users_fetched);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -296,6 +408,11 @@ pub struct TurnOutput {
     pub truncated: bool,
     /// Provider reason for truncation, when present (e.g. `max_output_tokens`).
     pub truncate_reason: Option<String>,
+    /// Pages hosted search cited in the reply (`url_citation` annotations), once
+    /// each, in order. The reply text carries them inline as well.
+    pub sources: Vec<String>,
+    /// Hosted search the reply ran and was billed for.
+    pub hosted: HostedUsage,
 }
 
 impl TurnOutput {
@@ -326,6 +443,13 @@ pub enum ClientError {
         retry_after_secs: Option<u64>,
         message: String,
     },
+    /// HTTP 402: the account is out of credit or over its spending limit.
+    /// Not retryable on this route — billing doesn't clear by waiting — but
+    /// another route can take the turn, so the router fails over on it.
+    PaymentRequired {
+        status: u16,
+        message: String,
+    },
     Server {
         status: u16,
         message: String,
@@ -334,6 +458,17 @@ pub enum ClientError {
     Transport(String),
     IdleTimeout,
     Disconnect,
+    /// A retryable failure after part of the reply already showed in the chat.
+    /// Not retried: a second attempt would show the text twice and bill again,
+    /// so the turn stops with what was shown. Holds the first error's text.
+    CutOff(String),
+    /// The model declined to answer (Anthropic's `refusal` stop reason).
+    /// Its own class, not a generic failure: the turn stops and the user
+    /// hears it was a refusal. Never retried and never failed over — the
+    /// refusal is about this ask, not about the route's health.
+    Refused {
+        message: String,
+    },
     Cancelled,
     Protocol(String),
 }
@@ -348,12 +483,24 @@ impl std::fmt::Display for ClientError {
                 write!(f, "API key rejected (HTTP {status}): {message}")
             }
             ClientError::RateLimited { message, .. } => write!(f, "rate limited: {message}"),
+            ClientError::PaymentRequired { status, message } => {
+                write!(f, "HTTP {status}: {message}")
+            }
             ClientError::Server {
                 status, message, ..
             } => write!(f, "HTTP {status}: {message}"),
             ClientError::Transport(msg) => write!(f, "transport: {msg}"),
             ClientError::IdleTimeout => write!(f, "model stopped responding"),
             ClientError::Disconnect => write!(f, "stream disconnected before it completed"),
+            ClientError::CutOff(cause) => {
+                write!(
+                    f,
+                    "the reply was cut off partway ({cause}); what showed is kept"
+                )
+            }
+            ClientError::Refused { message } => {
+                write!(f, "the model declined to answer: {message}")
+            }
             ClientError::Cancelled => write!(f, "cancelled"),
             ClientError::Protocol(msg) => write!(f, "{msg}"),
         }
@@ -431,12 +578,79 @@ pub fn map_http_status(
             retry_after_secs,
             message,
         },
+        402 => ClientError::PaymentRequired { status, message },
         500..=599 => ClientError::Server {
             status,
             message,
             retry_after_secs,
         },
+        other if overload_message(&message) => ClientError::Server {
+            status: other,
+            message,
+            retry_after_secs,
+        },
         other => ClientError::Protocol(format!("HTTP {other}: {message}")),
+    }
+}
+
+/// The provider is busy, not refusing this request: at capacity, overloaded,
+/// briefly unavailable. Worth a retry and then another route. Quota and
+/// billing text is never this: those don't clear by waiting.
+pub fn overload_message(message: &str) -> bool {
+    let l = message.to_ascii_lowercase();
+    if billing_message(&l) {
+        return false;
+    }
+    [
+        "at capacity",
+        "high demand",
+        "overloaded",
+        "over capacity",
+        "temporarily unavailable",
+        "service unavailable",
+        "server is busy",
+        "try again later",
+        "try again in a few",
+        "internal server error",
+        "server_error",
+    ]
+    .iter()
+    .any(|needle| l.contains(needle))
+}
+
+fn rate_limit_message(lower: &str) -> bool {
+    !billing_message(lower)
+        && (lower.contains("rate limit")
+            || lower.contains("rate_limit")
+            || lower.contains("too many requests"))
+}
+
+fn billing_message(lower: &str) -> bool {
+    lower.contains("quota")
+        || lower.contains("credit")
+        || lower.contains("billing")
+        || lower.contains("spending limit")
+        || lower.contains("payment")
+}
+
+/// An error the model stream sent mid-reply (`error`, `response.failed`).
+/// A busy or rate-limited provider is retried and failed over like the same
+/// answer over HTTP; anything else ends the call as it says.
+pub fn stream_error(message: String) -> ClientError {
+    let lower = message.to_ascii_lowercase();
+    if rate_limit_message(&lower) {
+        ClientError::RateLimited {
+            retry_after_secs: None,
+            message,
+        }
+    } else if overload_message(&message) {
+        ClientError::Server {
+            status: 503,
+            message,
+            retry_after_secs: None,
+        }
+    } else {
+        ClientError::Protocol(message)
     }
 }
 
@@ -558,7 +772,7 @@ pub fn input_wire_len(items: &[InputItem]) -> usize {
 
 /// The `input` list for `model`. A sealed reasoning item goes only to the model
 /// that wrote it; `None` keeps every one (size estimates).
-fn input_wire(items: &[InputItem], model: Option<&str>) -> (Vec<Value>, bool) {
+pub(crate) fn input_wire(items: &[InputItem], model: Option<&str>) -> (Vec<Value>, bool) {
     let mut input = Vec::new();
     let mut has_image = false;
     for item in items {
@@ -610,7 +824,7 @@ fn input_wire(items: &[InputItem], model: Option<&str>) -> (Vec<Value>, bool) {
                 if let Some(item) = same
                     .then(|| serde_json::from_str::<Value>(raw).ok())
                     .flatten()
-                    .filter(|v| v["type"] == "reasoning")
+                    .filter(|v| v["type"] == "reasoning" || is_hosted_call(v))
                 {
                     input.push(item);
                 }
@@ -630,8 +844,31 @@ pub fn compact_body(req: &CompactRequest) -> Value {
     json!({"model": model, "input": input_wire(&req.input, Some(model)).0})
 }
 
+/// [`compact_body`] plus the chat's cache key (a fork's is its chat's), so the
+/// fold reaches the server that holds the chat's cached prefix. Grok models only.
+pub fn keyed_compact_body(req: &CompactRequest) -> Value {
+    let mut body = compact_body(req);
+    let key = crate::subagent::cache_key(req.conversation_id.trim());
+    if !key.is_empty() && body["model"].as_str().is_some_and(is_grok_model) {
+        body["prompt_cache_key"] = json!(key);
+    }
+    body
+}
+
+/// A refusal that a field we added could cause: HTTP 400 or 422.
+fn refused_body(err: &ClientError) -> bool {
+    matches!(err, ClientError::Protocol(m) if m.starts_with("HTTP 400") || m.starts_with("HTTP 422"))
+}
+
 /// Largest compaction reply read (the opaque item grows with the conversation).
 const COMPACT_REPLY_CAP: u64 = 64 * 1024 * 1024;
+
+/// What the compaction thread hands back: the body of a 2xx, or any other
+/// answer (an error status, or none) for [`XaiClient::answered`] to map.
+enum CompactReply {
+    Body(std::io::Result<String>),
+    Answer(Result<grokhub_core::http::Response, grokhub_core::http::Error>),
+}
 
 /// A `response.compaction` reply: its `output` items as the exact JSON text
 /// they came in, `usage`, and `dropped_message_count`.
@@ -675,6 +912,20 @@ pub fn parse_compact_reply(body: &str) -> Result<CompactOutput, ClientError> {
     })
 }
 
+/// Cap on xAI's own search loop in one reply (`max_turns`), by what the turn
+/// is for: a quick lookup for chat, more room for a task, deep for research
+/// (xAI suggests 1 to 2, 3 to 5 and 10 or more). A run with no brief, such as
+/// a subagent, gets the middle. Hosted search is billed per call, so this
+/// bounds its spend; a client tool call starts the count again.
+pub fn hosted_max_turns(conversation_id: &str) -> u32 {
+    use crate::brain::Intent;
+    match crate::checkpoint::turn_brief(conversation_id).map(|b| b.intent) {
+        Some(Intent::Research) => 5,
+        Some(Intent::Task | Intent::Repair) | None => 3,
+        Some(Intent::Chat | Intent::Question | Intent::Creative | Intent::Background) => 2,
+    }
+}
+
 pub fn responses_body(req: &ResponsesRequest) -> Value {
     let model = if req.model.trim().is_empty() {
         DEFAULT_MODEL
@@ -691,12 +942,17 @@ pub fn responses_body(req: &ResponsesRequest) -> Value {
         tools.push(json!({"type": "web_search"}));
         tools.push(json!({"type": "x_search"}));
     }
+    let hosted_turns = (req.hosted_search && is_grok_model(model))
+        .then(|| hosted_max_turns(req.conversation_id.trim()));
     let mut body = json!({
         "model": model,
         "stream": true,
         "input": input,
         "tools": tools,
     });
+    if let Some(turns) = hosted_turns {
+        body["max_turns"] = json!(turns);
+    }
     // Normalize here too, so a saved legacy level (e.g. `minimal`) never reaches the wire.
     let effort = req
         .effort
@@ -725,14 +981,26 @@ pub fn responses_body(req: &ResponsesRequest) -> Value {
     if is_grok_model(model) {
         // Routes this chat's requests to the same warm server (xAI's cache key
         // on the Responses API; `x-grok-conv-id` is the Chat Completions one).
-        let key = req.conversation_id.trim();
+        // A fork shares its chat's key, so it reaches the warm prefix.
+        let key = crate::subagent::cache_key(req.conversation_id.trim());
         if !key.is_empty() {
             body["prompt_cache_key"] = json!(key);
         }
+        // History is managed here, so xAI never needs to keep a copy of a
+        // request or its reply, reasoning or not.
+        body["store"] = json!(false);
+        if body["tools"]
+            .as_array()
+            .is_some_and(|tools| tools.iter().any(|t| t["type"] == "function"))
+        {
+            // Said outright, so a batch of read-only calls in one reply never
+            // hangs on a server default changing. Hosted search alone runs
+            // server-side and needs no say.
+            body["parallel_tool_calls"] = json!(true);
+        }
         if returns_encrypted_reasoning(model) {
-            // History is managed here, so ask for the reasoning back and pass
-            // it in on the next request ([`InputItem::Reasoning`]).
-            body["store"] = json!(false);
+            // Ask for the reasoning back and pass it in on the next request
+            // ([`InputItem::Reasoning`]).
             body["include"] = json!(["reasoning.encrypted_content"]);
         }
         if let Some(text) = req.text_format.as_ref().and_then(TextFormat::wire) {
@@ -741,6 +1009,14 @@ pub fn responses_body(req: &ResponsesRequest) -> Value {
         }
     }
     body
+}
+
+/// The chat's socket carries only the chat's own agent steps. A side call
+/// (auto-review judge, close check, Brief, memory, dream) sends no tools or
+/// has a hard deadline: it goes over HTTP, so it never replaces the chat's
+/// `previous_response_id` chain, and HTTP holds it to its deadline.
+pub(crate) fn rides_chat_socket(req: &ResponsesRequest) -> bool {
+    !req.tools.is_empty() && req.call_timeout.is_none()
 }
 
 /// An xAI Grok id as the Responses API takes it (not an OpenRouter slug).
@@ -767,6 +1043,16 @@ pub struct XaiClient {
     url: String,
     /// Set by [`XaiClient::deferrable`]: eligible asks go through the Batch API.
     batch: Option<crate::batch::BatchPolicy>,
+    /// Set once the compact endpoint answered 400 or 422 to a body with
+    /// `prompt_cache_key` and took the same body without it: that key is not in
+    /// the endpoint's docs, so from then on this client sends only `model` and
+    /// `input` there.
+    compact_key_refused: AtomicBool,
+    /// The base idle clock for a stream; see [`idle_for`].
+    idle: Duration,
+    /// WebSocket mode's sockets (`ws_mode`), for api.x.ai or a loopback test
+    /// server; `None` for a plain loopback client.
+    ws: Option<crate::ws_mode::WsPool>,
 }
 
 /// One Batch API call on api.x.ai: the root, or a batch id with `/requests`,
@@ -821,15 +1107,19 @@ impl XaiClient {
     pub fn new(bearer: impl Into<String>, auth_kind: AuthKind, idle: Duration) -> Self {
         let agent = grokhub_core::http::agent(grokhub_core::http::Opts {
             connect: Duration::from_secs(20),
-            read: Some(idle),
+            read: Some(socket_read_timeout(idle)),
             ..Default::default()
         });
         Self {
+            idle,
             agent,
             bearer: bearer.into(),
             auth_kind,
             url: RESPONSES_URL.to_string(),
             batch: None,
+            compact_key_refused: AtomicBool::new(false),
+            // Unit tests never dial api.x.ai; their sockets are loopback only.
+            ws: (!cfg!(test)).then(|| crate::ws_mode::WsPool::new(crate::ws_mode::WS_URL)),
         }
     }
 
@@ -868,6 +1158,19 @@ impl XaiClient {
             return Err(format!("not a loopback URL: {url}"));
         }
         self.url = url.to_string();
+        // A loopback server speaks HTTP only, unless a test adds a socket.
+        self.ws = None;
+        Ok(self)
+    }
+
+    /// Test servers: send turns over a WebSocket at this loopback `ws://` URL
+    /// first, as the real client does to api.x.ai.
+    pub fn with_loopback_ws(mut self, url: &str) -> Result<Self, String> {
+        let http = url.replacen("ws://", "http://", 1);
+        if !url.starts_with("ws://") || !loopback_http(&http) {
+            return Err(format!("not a loopback ws URL: {url}"));
+        }
+        self.ws = Some(crate::ws_mode::WsPool::new(url));
         Ok(self)
     }
 
@@ -890,6 +1193,23 @@ impl XaiClient {
         call_timeout: Option<Duration>,
         body: Value,
     ) -> Result<grokhub_core::http::Response, ClientError> {
+        let call = self.guarded_post(url, conversation_id, accept, call_timeout)?;
+        let sent = crate::timing::lap("client:to_headers");
+        let response = call.send_json(body);
+        drop(sent);
+        self.answered(response)
+    }
+
+    /// The POST [`Self::post_guarded`] sends, built and checked but not sent:
+    /// only an xAI model endpoint, a batch call or a loopback test server, and
+    /// only once the egress guard lets it go.
+    fn guarded_post(
+        &self,
+        url: &str,
+        conversation_id: &str,
+        accept: &str,
+        call_timeout: Option<Duration>,
+    ) -> Result<grokhub_core::http::Request, ClientError> {
         // Only the listed xAI endpoints, a batch call, or a loopback test server.
         if !loopback_http(url) && !XAI_MODEL_ENDPOINTS.contains(&url) && !batch_url(url) {
             return Err(ClientError::Protocol(format!(
@@ -911,16 +1231,17 @@ impl XaiClient {
                 format!("Bearer {bearer}")
             })
             .header("User-Agent", USER_AGENT)
-            .header("x-grok-conv-id", conversation_id)
+            // A fork rides its chat's conversation, as its cache key does.
+            .header(
+                "x-grok-conv-id",
+                &crate::subagent::cache_key(conversation_id.trim()),
+            )
             .header("Accept", accept)
             .any_status();
         if let Some(limit) = call_timeout {
             call = call.timeout(limit);
         }
-        let sent = crate::timing::lap("client:to_headers");
-        let response = call.send_json(body);
-        drop(sent);
-        self.answered(response)
+        Ok(call)
     }
 
     /// The Batch API's reads (status and results): batch URLs only, then the
@@ -991,20 +1312,36 @@ impl XaiClient {
         }
         let _ = crate::sse::take_served_model();
         let body = crate::timing::time("client:body", || responses_body(req));
-        let response = self.post_guarded(
-            &self.url,
-            &req.conversation_id,
-            "text/event-stream",
-            req.call_timeout,
-            body,
-        )?;
-        let mut turn = read_sse(response.into_reader(), cancel, sink)?;
+        // Round 3 item 28: kept sealed by hash, so this exact request can be replayed.
+        crate::harness::replay::note_request(&crate::perm::config_dir(), &body);
+        if !crate::pace::take(&req.model, cancel) {
+            return Err(ClientError::Cancelled);
+        }
+        let idle = idle_for(req.effort.as_deref(), self.idle);
         let wrote = req.model.trim();
         let wrote = if wrote.is_empty() {
             DEFAULT_MODEL
         } else {
             wrote
         };
+        if let Some(turn) = self.over_socket(req, &body, wrote, cancel, idle, sink) {
+            return turn;
+        }
+        let response = self
+            .post_guarded(
+                &self.url,
+                &req.conversation_id,
+                "text/event-stream",
+                req.call_timeout,
+                body,
+            )
+            .inspect_err(|err| {
+                if matches!(err, ClientError::RateLimited { .. }) {
+                    crate::pace::note_limited(&req.model);
+                }
+            })?;
+        crate::pace::note_ok(&req.model);
+        let mut turn = read_sse(response.into_reader(), cancel, idle, sink)?;
         for item in &mut turn.reasoning_items {
             if let InputItem::Reasoning { model, .. } = item {
                 *model = wrote.to_string();
@@ -1013,36 +1350,137 @@ impl XaiClient {
         Ok(turn)
     }
 
+    /// WebSocket mode first, when it's on: `None` hands the call to HTTP.
+    fn over_socket(
+        &self,
+        req: &ResponsesRequest,
+        body: &Value,
+        wrote: &str,
+        cancel: &CancelToken,
+        idle: Duration,
+        sink: &mut dyn FnMut(StreamEvent),
+    ) -> Option<Result<TurnOutput, ClientError>> {
+        let pool = self.ws.as_ref()?;
+        if !rides_chat_socket(req) {
+            return None;
+        }
+        let config_dir = crate::perm::config_dir();
+        if !crate::ws_mode::enabled_at(&config_dir) {
+            return None;
+        }
+        // The same EgressGuard as HTTP, for the same endpoint.
+        let data = [DataClass::Chat, DataClass::Personal];
+        let egress = guard_egress(&config_dir, &EgressReq::new(&self.url, &data));
+        if let GateOutcome::Park { reason, .. } | GateOutcome::Refuse { reason } = egress {
+            return Some(Err(ClientError::Protocol(reason)));
+        }
+        let turn = pool.turn(
+            &self.bearer,
+            self.auth_kind,
+            &req.conversation_id,
+            body,
+            wrote,
+            cancel,
+            idle,
+            sink,
+        );
+        match turn {
+            crate::ws_mode::WsTurn::Done(turn) => {
+                grokhub_core::connectivity::note_global_transport_success(grokhub_core::now_ms());
+                crate::pace::note_ok(&req.model);
+                Some(Ok(turn))
+            }
+            crate::ws_mode::WsTurn::Failed(err) => {
+                if matches!(err, ClientError::RateLimited { .. }) {
+                    crate::pace::note_limited(&req.model);
+                }
+                Some(Err(err))
+            }
+            crate::ws_mode::WsTurn::Http => None,
+        }
+    }
+
+    /// One compaction call. The endpoint answers only when it is done, so the
+    /// call runs on its own thread and Stop is checked every [`READ_POLL`]: a
+    /// Stop returns at once instead of after up to [`crate::compact`]'s 90 s cap.
+    /// The abandoned call ends on its own when its timeout runs out.
     fn compact_once(
         &self,
         url: &str,
         req: &CompactRequest,
         cancel: &CancelToken,
         limit: Option<Duration>,
+        keyed: bool,
     ) -> Result<CompactOutput, ClientError> {
+        use std::sync::mpsc::RecvTimeoutError;
         if cancel.is_cancelled() {
             return Err(ClientError::Cancelled);
         }
-        let response = self.post_guarded(
-            url,
-            &req.conversation_id,
-            "application/json",
-            limit,
-            compact_body(req),
-        )?;
-        let mut text = String::new();
-        response
-            .into_reader()
-            .take(COMPACT_REPLY_CAP)
-            .read_to_string(&mut text)
-            .map_err(|e| {
-                let msg = e.to_string();
-                if msg.to_ascii_lowercase().contains("timed out") {
-                    ClientError::IdleTimeout
-                } else {
-                    ClientError::Transport(msg)
+        let call = self.guarded_post(url, &req.conversation_id, "application/json", limit)?;
+        let body = if keyed {
+            keyed_compact_body(req)
+        } else {
+            compact_body(req)
+        };
+        crate::harness::replay::note_request(&crate::perm::config_dir(), &body);
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let spawned = std::thread::Builder::new()
+            .name("compact-read".into())
+            .spawn(move || {
+                let reply = match call.send_json(body) {
+                    Ok(resp) if resp.status() < 400 => {
+                        let mut text = String::new();
+                        CompactReply::Body(
+                            resp.into_reader()
+                                .take(COMPACT_REPLY_CAP)
+                                .read_to_string(&mut text)
+                                .map(|_| text),
+                        )
+                    }
+                    other => CompactReply::Answer(other),
+                };
+                let _ = tx.send(reply);
+            });
+        if let Err(e) = spawned {
+            return Err(ClientError::Transport(e.to_string()));
+        }
+        let reply = loop {
+            if cancel.is_cancelled() {
+                return Err(ClientError::Cancelled);
+            }
+            match rx.recv_timeout(READ_POLL) {
+                Ok(reply) => break reply,
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err(ClientError::Transport(
+                        "the compaction call stopped without an answer".into(),
+                    ))
                 }
-            })?;
+            }
+        };
+        let text = match reply {
+            CompactReply::Body(read) => {
+                grokhub_core::connectivity::note_global_transport_success(grokhub_core::now_ms());
+                read.map_err(|e| {
+                    let msg = e.to_string();
+                    if msg.to_ascii_lowercase().contains("timed out") {
+                        ClientError::IdleTimeout
+                    } else {
+                        ClientError::Transport(msg)
+                    }
+                })?
+            }
+            CompactReply::Answer(answer) => {
+                // Only an error status or no answer lands here.
+                let resp = self.answered(answer)?;
+                let mut text = String::new();
+                resp.into_reader()
+                    .take(COMPACT_REPLY_CAP)
+                    .read_to_string(&mut text)
+                    .map_err(|e| ClientError::Transport(e.to_string()))?;
+                text
+            }
+        };
         if cancel.is_cancelled() {
             return Err(ClientError::Cancelled);
         }
@@ -1055,7 +1493,17 @@ impl XaiClient {
     fn with_retries<T>(
         cancel: &CancelToken,
         deadline: Option<std::time::Instant>,
+        call: impl FnMut(Option<Duration>) -> Result<T, ClientError>,
+    ) -> Result<T, ClientError> {
+        Self::with_retries_noting(cancel, deadline, call, &mut |_, _| {})
+    }
+
+    /// [`Self::with_retries`], telling `on_wait` about each wait before it starts.
+    fn with_retries_noting<T>(
+        cancel: &CancelToken,
+        deadline: Option<std::time::Instant>,
         mut call: impl FnMut(Option<Duration>) -> Result<T, ClientError>,
+        on_wait: &mut dyn FnMut(&ClientError, Duration),
     ) -> Result<T, ClientError> {
         let left = || deadline.map(|d| d.saturating_duration_since(std::time::Instant::now()));
         let mut retry_count = 0u32;
@@ -1073,6 +1521,7 @@ impl XaiClient {
                         Some(wait) if left().is_some_and(|l| wait >= l) => return Err(err),
                         Some(wait) => {
                             retry_count = retry_count.saturating_add(1);
+                            on_wait(&err, wait);
                             if !sleep_cancellable(wait, cancel) {
                                 return Err(ClientError::Cancelled);
                             }
@@ -1084,6 +1533,44 @@ impl XaiClient {
             }
         }
     }
+}
+
+/// Runs `once` under the retry policy, but never retries once reply text has
+/// reached `sink`: the chat already shows it, so a retry would show it twice
+/// and bill the request again. That failure comes back as
+/// [`ClientError::CutOff`] and the turn stops with what was shown.
+fn stream_once_shown(
+    cancel: &CancelToken,
+    mut once: impl FnMut(&mut dyn FnMut(StreamEvent)) -> Result<TurnOutput, ClientError>,
+    sink: &mut dyn FnMut(StreamEvent),
+) -> Result<TurnOutput, ClientError> {
+    let sink = std::cell::RefCell::new(sink);
+    let mut shown = false;
+    XaiClient::with_retries_noting(
+        cancel,
+        None,
+        |_| {
+            once(&mut |ev: StreamEvent| {
+                if matches!(&ev, StreamEvent::TextDelta(t) if !t.is_empty()) {
+                    shown = true;
+                }
+                (*sink.borrow_mut())(ev)
+            })
+            .map_err(|err| {
+                if shown && err.is_retryable() {
+                    ClientError::CutOff(err.to_string())
+                } else {
+                    err
+                }
+            })
+        },
+        // A 429's wait shows in the chat, so a pause isn't a hang.
+        &mut |err, wait| {
+            if matches!(err, ClientError::RateLimited { .. }) {
+                (*sink.borrow_mut())(StreamEvent::RateWait(wait));
+            }
+        },
+    )
 }
 
 impl std::fmt::Debug for XaiClient {
@@ -1122,7 +1609,7 @@ impl ModelClient for XaiClient {
                 crate::batch::Deferred::Fallback(_) => {}
             }
         }
-        Self::with_retries(cancel, None, |_| self.once(req, cancel, sink))
+        stream_once_shown(cancel, |sink| self.once(req, cancel, sink), sink)
     }
 
     fn compacts_server_side(&self) -> bool {
@@ -1140,9 +1627,26 @@ impl ModelClient for XaiClient {
     ) -> Option<Result<CompactOutput, ClientError>> {
         let url = self.compact_url()?;
         let deadline = std::time::Instant::now() + req.timeout;
-        Some(Self::with_retries(cancel, Some(deadline), |limit| {
-            self.compact_once(&url, req, cancel, limit)
-        }))
+        let call = |keyed: bool| {
+            Self::with_retries(cancel, Some(deadline), |limit| {
+                self.compact_once(&url, req, cancel, limit, keyed)
+            })
+        };
+        let keyed = !self.compact_key_refused.load(Ordering::Relaxed)
+            && keyed_compact_body(req).get("prompt_cache_key").is_some();
+        let first = call(keyed);
+        if !(keyed && first.as_ref().is_err_and(refused_body)) {
+            return Some(first);
+        }
+        // The endpoint may not take the key: once more with the documented body.
+        let again = call(false);
+        if again.is_ok() {
+            self.compact_key_refused.store(true, Ordering::Relaxed);
+            eprintln!(
+                "grokhub compact: the compact endpoint refused prompt_cache_key; sending model and input only"
+            );
+        }
+        Some(again)
     }
 }
 
@@ -1303,31 +1807,84 @@ fn take_utf8(pending: &mut Vec<u8>) -> String {
     String::from_utf8(whole).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
 }
 
-fn read_sse<R: Read>(
-    mut reader: R,
+/// How often a stream that is waiting on xAI checks for Stop.
+const READ_POLL: Duration = Duration::from_millis(250);
+
+/// How long a stream may go quiet before it counts as stalled. High and
+/// xhigh effort can think in silence for minutes, so they get two and a half
+/// times the base (120 s becomes 300 s).
+fn idle_for(effort: Option<&str>, base: Duration) -> Duration {
+    match effort.map(str::trim) {
+        Some("high" | "xhigh") => base.saturating_mul(5) / 2,
+        _ => base,
+    }
+}
+
+/// The socket's own read timeout: a backstop past the longest idle clock, so
+/// the clock in [`read_sse`] is what ends a quiet stream.
+fn socket_read_timeout(base: Duration) -> Duration {
+    idle_for(Some("xhigh"), base) + Duration::from_secs(5)
+}
+
+/// Reads the body on its own thread, so Stop and the idle clock are checked
+/// every [`READ_POLL`] even while a read is blocked.
+fn pump(
+    mut reader: impl Read + Send + 'static,
+) -> std::sync::mpsc::Receiver<std::io::Result<Vec<u8>>> {
+    let (tx, rx) = std::sync::mpsc::sync_channel(16);
+    let spawned = std::thread::Builder::new().name("sse-read".into()).spawn({
+        let tx = tx.clone();
+        move || {
+            let mut buf = [0u8; 4096];
+            loop {
+                let sent = match reader.read(&mut buf) {
+                    Ok(0) => {
+                        let _ = tx.send(Ok(Vec::new()));
+                        break;
+                    }
+                    Ok(n) => tx.send(Ok(buf[..n].to_vec())),
+                    Err(e) => {
+                        let _ = tx.send(Err(e));
+                        break;
+                    }
+                };
+                // The stream was dropped (Stop, a stall, an error): stop reading.
+                if sent.is_err() {
+                    break;
+                }
+            }
+        }
+    });
+    if let Err(e) = spawned {
+        let _ = tx.send(Err(e));
+    }
+    rx
+}
+
+fn read_sse(
+    reader: impl Read + Send + 'static,
     cancel: &CancelToken,
+    idle: Duration,
     sink: &mut dyn FnMut(StreamEvent),
 ) -> Result<TurnOutput, ClientError> {
+    use std::sync::mpsc::RecvTimeoutError;
+    let chunks = pump(reader);
     let mut parser = SseParser::new();
-    let mut buf = [0u8; 4096];
-    let mut text = String::new();
-    let mut reasoning = String::new();
-    let mut reasoning_items = Vec::new();
-    let mut calls = Vec::new();
-    let mut usage = Usage::default();
-    let mut truncated = false;
-    let mut truncate_reason = None;
+    let mut out = TurnOutput::default();
     // Bytes of a character that a read cut in half, kept for the next read.
     let mut pending: Vec<u8> = Vec::new();
+    let mut last = std::time::Instant::now();
+    let mut longest = Duration::ZERO;
+    let gap_done = |longest: Duration| crate::timing::record("stream:longest_gap", longest);
     loop {
         if cancel.is_cancelled() {
-            drop(reader);
             return Err(ClientError::Cancelled);
         }
-        let n = match reader.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => n,
-            Err(e) => {
+        let buf = match chunks.recv_timeout(READ_POLL.min(idle)) {
+            Ok(Ok(buf)) if buf.is_empty() => break,
+            Ok(Ok(buf)) => buf,
+            Ok(Err(e)) => {
+                gap_done(longest.max(last.elapsed()));
                 let msg = e.to_string();
                 let lower = msg.to_ascii_lowercase();
                 if lower.contains("timed out") || lower.contains("timeout") {
@@ -1335,47 +1892,39 @@ fn read_sse<R: Read>(
                 }
                 return Err(ClientError::Transport(msg));
             }
+            Err(RecvTimeoutError::Timeout) => {
+                if last.elapsed() >= idle {
+                    gap_done(last.elapsed());
+                    return Err(ClientError::IdleTimeout);
+                }
+                continue;
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err(ClientError::Transport("the stream reader stopped".into()));
+            }
         };
+        longest = longest.max(last.elapsed());
+        last = std::time::Instant::now();
+        let n = buf.len();
         pending.extend_from_slice(&buf[..n]);
         let chunk = take_utf8(&mut pending);
-        fold_events(
-            parser.push(&chunk),
-            sink,
-            &mut text,
-            &mut reasoning,
-            &mut reasoning_items,
-            &mut calls,
-            &mut usage,
-            &mut truncated,
-            &mut truncate_reason,
-        )?;
+        fold_events(parser.push(&chunk), sink, &mut out)?;
     }
     if !pending.is_empty() {
         let tail = String::from_utf8_lossy(&pending).into_owned();
-        fold_events(
-            parser.push(&tail),
-            sink,
-            &mut text,
-            &mut reasoning,
-            &mut reasoning_items,
-            &mut calls,
-            &mut usage,
-            &mut truncated,
-            &mut truncate_reason,
-        )?;
+        fold_events(parser.push(&tail), sink, &mut out)?;
     }
-    fold_events(
-        parser.finish()?,
-        sink,
-        &mut text,
-        &mut reasoning,
-        &mut reasoning_items,
-        &mut calls,
-        &mut usage,
-        &mut truncated,
-        &mut truncate_reason,
-    )?;
-    Ok(TurnOutput {
+    fold_events(parser.finish()?, sink, &mut out)?;
+    gap_done(longest);
+    Ok(out)
+}
+
+pub(crate) fn fold_events(
+    events: Vec<SseEvent>,
+    sink: &mut dyn FnMut(StreamEvent),
+    out: &mut TurnOutput,
+) -> Result<(), ClientError> {
+    let TurnOutput {
         text,
         reasoning,
         reasoning_items,
@@ -1383,20 +1932,9 @@ fn read_sse<R: Read>(
         usage,
         truncated,
         truncate_reason,
-    })
-}
-
-fn fold_events(
-    events: Vec<SseEvent>,
-    sink: &mut dyn FnMut(StreamEvent),
-    text: &mut String,
-    reasoning: &mut String,
-    reasoning_items: &mut Vec<InputItem>,
-    calls: &mut Vec<FunctionCall>,
-    usage: &mut Usage,
-    truncated: &mut bool,
-    truncate_reason: &mut Option<String>,
-) -> Result<(), ClientError> {
+        sources,
+        hosted,
+    } = out;
     for ev in events {
         match ev {
             SseEvent::TextDelta(delta) => {
@@ -1411,6 +1949,14 @@ fn fold_events(
             SseEvent::ReasoningItem(raw) => {
                 reasoning_items.extend(InputItem::reasoning(&raw, ""));
             }
+            SseEvent::Sources(urls) => {
+                for url in urls {
+                    if !sources.contains(&url) {
+                        sources.push(url);
+                    }
+                }
+            }
+            SseEvent::Hosted(next) => *hosted = next,
             SseEvent::Completed {
                 usage: next,
                 incomplete,
@@ -1424,7 +1970,7 @@ fn fold_events(
                     }
                 }
             }
-            SseEvent::Error(message) => return Err(ClientError::Protocol(message)),
+            SseEvent::Error(message) => return Err(stream_error(message)),
         }
     }
     Ok(())
@@ -1433,6 +1979,67 @@ fn fold_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fc(id: &str) -> InputItem {
+        InputItem::FunctionCall {
+            call_id: id.into(),
+            name: "read_file".into(),
+            arguments: "{}".into(),
+        }
+    }
+
+    fn fco(id: &str, out: &str) -> InputItem {
+        InputItem::FunctionCallOutput {
+            call_id: id.into(),
+            output: out.into(),
+        }
+    }
+
+    fn user_text(text: &str) -> InputItem {
+        InputItem::Message {
+            role: "user".into(),
+            content: vec![ContentPart::InputText(text.into())],
+        }
+    }
+
+    #[test]
+    fn a_stopped_batch_gets_an_output_for_every_call_in_order() {
+        let mut history = vec![
+            user_text("go"),
+            fc("a"),
+            fc("b"),
+            fc("c"),
+            fco("a", "ran"),
+            user_text("next"),
+        ];
+        assert_eq!(pair_orphan_calls(&mut history), 2);
+        assert_eq!(
+            history,
+            vec![
+                user_text("go"),
+                fc("a"),
+                fc("b"),
+                fc("c"),
+                fco("a", "ran"),
+                fco("b", NOT_RUN),
+                fco("c", NOT_RUN),
+                user_text("next"),
+            ]
+        );
+        assert_eq!(
+            pair_orphan_calls(&mut history),
+            0,
+            "a second pass changes nothing"
+        );
+    }
+
+    #[test]
+    fn answered_calls_are_left_alone() {
+        let mut history = vec![fc("a"), fco("a", "ok"), fc("b"), fco("b", "ok")];
+        let before = history.clone();
+        assert_eq!(pair_orphan_calls(&mut history), 0);
+        assert_eq!(history, before);
+    }
 
     fn format_request(model: &str, format: TextFormat) -> ResponsesRequest {
         ResponsesRequest {
@@ -1539,11 +2146,16 @@ mod tests {
         let cuts = [&body[..e + 1], &body[e + 1..crab + 2], &body[crab + 2..]];
         let reader = Cuts(cuts.iter().map(|c| c.to_vec()).collect());
         let mut shown = String::new();
-        let out = read_sse(reader, &CancelToken::new(), &mut |ev| {
-            if let StreamEvent::TextDelta(t) = ev {
-                shown.push_str(&t);
-            }
-        })
+        let out = read_sse(
+            reader,
+            &CancelToken::new(),
+            Duration::from_secs(5),
+            &mut |ev| {
+                if let StreamEvent::TextDelta(t) = ev {
+                    shown.push_str(&t);
+                }
+            },
+        )
         .unwrap();
         assert_eq!(out.text, "café 🦀");
         assert_eq!(shown, "café 🦀");
@@ -1608,6 +2220,119 @@ mod tests {
         assert!(!later.is_cancelled());
     }
 
+    /// A body that never sends another byte, like xAI thinking in silence.
+    struct Quiet;
+    impl Read for Quiet {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            std::thread::sleep(Duration::from_secs(30));
+            Ok(0)
+        }
+    }
+
+    #[test]
+    fn stop_ends_a_quiet_stream_at_once_and_the_idle_clock_follows_effort() {
+        let cancel = CancelToken::new();
+        let stopper = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            stopper.cancel();
+        });
+        let began = std::time::Instant::now();
+        let out = read_sse(Quiet, &cancel, Duration::from_secs(120), &mut |_| {});
+        assert!(matches!(out, Err(ClientError::Cancelled)));
+        assert!(
+            began.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            began.elapsed()
+        );
+
+        let began = std::time::Instant::now();
+        let out = read_sse(
+            Quiet,
+            &CancelToken::new(),
+            Duration::from_millis(400),
+            &mut |_| {},
+        );
+        assert!(matches!(out, Err(ClientError::IdleTimeout)));
+        assert!(
+            began.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            began.elapsed()
+        );
+
+        let base = Duration::from_secs(120);
+        assert_eq!(idle_for(None, base), base);
+        assert_eq!(idle_for(Some("low"), base), base);
+        assert_eq!(idle_for(Some("medium"), base), base);
+        assert_eq!(idle_for(Some("high"), base), Duration::from_secs(300));
+        assert_eq!(idle_for(Some("xhigh"), base), Duration::from_secs(300));
+        assert!(socket_read_timeout(base) > Duration::from_secs(300));
+    }
+
+    #[test]
+    fn a_reply_cut_off_after_it_showed_stops_instead_of_showing_twice() {
+        let cancel = CancelToken::new();
+        let mut shown = Vec::new();
+        let mut calls = 0;
+        let out = stream_once_shown(
+            &cancel,
+            |sink| {
+                calls += 1;
+                sink(StreamEvent::TextDelta("Here is the plan".into()));
+                Err(ClientError::Disconnect)
+            },
+            &mut |ev| shown.push(ev),
+        );
+        assert_eq!(calls, 1, "a reply that showed text is never sent again");
+        assert!(matches!(out, Err(ClientError::CutOff(_))));
+        assert!(!out.unwrap_err().is_retryable());
+        assert_eq!(
+            shown,
+            vec![StreamEvent::TextDelta("Here is the plan".into())]
+        );
+
+        // Thinking alone showed nothing in the reply, so the call still retries.
+        let mut calls = 0;
+        let out = stream_once_shown(
+            &cancel,
+            |sink| {
+                calls += 1;
+                sink(StreamEvent::ReasoningDelta("hmm".into()));
+                if calls == 1 {
+                    return Err(ClientError::Disconnect);
+                }
+                sink(StreamEvent::TextDelta("done".into()));
+                Ok(TurnOutput {
+                    text: "done".into(),
+                    ..TurnOutput::default()
+                })
+            },
+            &mut |_| {},
+        );
+        assert_eq!(calls, 2);
+        assert_eq!(out.unwrap().text, "done");
+
+        // A 429's wait shows before it starts, and the call then goes through.
+        let mut seen = Vec::new();
+        let mut calls = 0;
+        let out = stream_once_shown(
+            &cancel,
+            |_| {
+                calls += 1;
+                if calls == 1 {
+                    return Err(ClientError::RateLimited {
+                        retry_after_secs: Some(1),
+                        message: "slow down".into(),
+                    });
+                }
+                Ok(TurnOutput::default())
+            },
+            &mut |ev| seen.push(ev),
+        );
+        assert!(out.is_ok());
+        assert_eq!(seen, vec![StreamEvent::RateWait(Duration::from_secs(1))]);
+    }
+
     #[test]
     fn http_status_maps_oauth_key_rate_and_server() {
         assert!(matches!(
@@ -1629,6 +2354,14 @@ mod tests {
             map_http_status(503, "down", None, AuthKind::OAuth),
             ClientError::Server { status: 503, .. }
         ));
+        // 402 is its own class: out of credit, never retried on this route.
+        let unpaid = map_http_status(402, "Insufficient credits", None, AuthKind::ApiKey);
+        assert!(matches!(
+            unpaid,
+            ClientError::PaymentRequired { status: 402, .. }
+        ));
+        assert!(!unpaid.is_retryable());
+        assert_eq!(unpaid.to_string(), "HTTP 402: Insufficient credits");
         assert!(!map_http_status(401, "no", None, AuthKind::OAuth).is_retryable());
         assert!(map_http_status(500, "x", None, AuthKind::ApiKey).is_retryable());
         assert!(!ClientError::IdleTimeout.is_retryable());
@@ -1639,6 +2372,46 @@ mod tests {
         assert!(overflow.is_context_length());
         assert!(!overflow.is_retryable());
         assert!(!ClientError::Protocol("disk full".into()).is_context_length());
+    }
+
+    #[test]
+    fn a_busy_model_mid_stream_is_retried_and_billing_is_not() {
+        let busy = "The model is currently at capacity due to high demand. Please try again in a few minutes, or use a higher service tier for priority processing";
+        let err = stream_error(busy.into());
+        assert!(
+            matches!(err, ClientError::Server { status: 503, .. }),
+            "{err:?}"
+        );
+        assert!(err.is_retryable());
+        assert!(matches!(
+            stream_error("Rate limit reached for requests".into()),
+            ClientError::RateLimited {
+                retry_after_secs: None,
+                ..
+            }
+        ));
+        let quota = stream_error("You exceeded your current quota, please check billing".into());
+        assert!(matches!(&quota, ClientError::Protocol(m) if m.contains("quota")));
+        assert!(!quota.is_retryable());
+        assert!(matches!(
+            stream_error("boom".into()),
+            ClientError::Protocol(m) if m == "boom"
+        ));
+        // The same text on an odd HTTP status is still a busy provider.
+        assert!(matches!(
+            map_http_status(400, busy, None, AuthKind::ApiKey),
+            ClientError::Server { status: 400, .. }
+        ));
+        assert!(matches!(
+            map_http_status(400, "bad tool schema", None, AuthKind::ApiKey),
+            ClientError::Protocol(m) if m == "HTTP 400: bad tool schema"
+        ));
+        let mut out = TurnOutput::default();
+        let folded = fold_events(vec![SseEvent::Error(busy.into())], &mut |_| {}, &mut out);
+        assert!(
+            matches!(folded, Err(ClientError::Server { status: 503, .. })),
+            "{folded:?}"
+        );
     }
 
     /// 2.10.87: native path. A saved `minimal` goes out as `low`; `off` sends none.
@@ -1670,6 +2443,81 @@ mod tests {
         assert!(responses_body(&req("off")).get("reasoning").is_none());
     }
 
+    /// The body carries only fields xAI's Responses API reads. Ones it ignores
+    /// or rejects (server-side history, sampling knobs) would cost bytes or a
+    /// 400 and never help: none goes out, for any request shape.
+    #[test]
+    fn responses_body_sends_only_fields_xai_reads() {
+        const ALLOWED: &[&str] = &[
+            "model",
+            "stream",
+            "input",
+            "tools",
+            "max_turns",
+            "reasoning",
+            "store",
+            "prompt_cache_key",
+            "include",
+            "text",
+            "parallel_tool_calls",
+        ];
+        const NEVER: &[&str] = &[
+            "context_management",
+            "background",
+            "truncation",
+            "metadata",
+            "logprobs",
+            "top_logprobs",
+            "top_p",
+            "temperature",
+            "min_p",
+            "top_k",
+            "reasoning_effort",
+            "previous_response_id",
+        ];
+        let format = TextFormat {
+            name: "pick",
+            schema: r#"{"type":"object","properties":{"a":{"type":"string"}},"required":["a"],"additionalProperties":false}"#,
+        };
+        let req = |model: &str, image: bool, text_format: Option<TextFormat>, hosted: bool| {
+            let part = if image {
+                ContentPart::InputImage("data:image/png;base64,YQ==".into())
+            } else {
+                ContentPart::InputText("hi".into())
+            };
+            ResponsesRequest {
+                text_format,
+                model: model.into(),
+                effort: Some("high".into()),
+                input: vec![InputItem::Message {
+                    role: "user".into(),
+                    content: vec![part],
+                }],
+                conversation_id: "c".into(),
+                tools: crate::tool_schemas(),
+                hosted_search: hosted,
+                call_timeout: None,
+            }
+        };
+        let shapes = [
+            req("grok-4.3", false, None, false),
+            req("grok-4.3", false, None, true),
+            req("grok-4.3", true, None, false),
+            req("grok-4.3", false, Some(format), false),
+            req("grok-4-fast-non-reasoning", false, None, true),
+            req("openai/gpt-5", false, None, true),
+            req("openai/gpt-5", true, Some(format), false),
+            req("", false, None, false),
+        ];
+        for r in &shapes {
+            let body = responses_body(r);
+            for key in body.as_object().unwrap().keys() {
+                assert!(ALLOWED.contains(&key.as_str()), "{}: sends {key}", r.model);
+                assert!(!NEVER.contains(&key.as_str()), "{}: sends {key}", r.model);
+            }
+        }
+    }
+
     #[test]
     fn responses_body_tools_effort_and_store_flag() {
         let plain = ResponsesRequest {
@@ -1694,6 +2542,7 @@ mod tests {
         assert_eq!(body["store"], false);
         assert_eq!(body["include"], json!(["reasoning.encrypted_content"]));
         assert_eq!(body["prompt_cache_key"], "c");
+        assert_eq!(body["parallel_tool_calls"], true);
         let tools = body["tools"].as_array().unwrap();
         assert!(tools
             .iter()
@@ -1872,6 +2721,18 @@ mod tests {
                 {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
             ]})
         );
+        // The keyed body adds only the chat's cache key, and only for Grok.
+        let mut keyed = keyed_compact_body(&req);
+        assert_eq!(keyed["prompt_cache_key"], "c");
+        keyed.as_object_mut().unwrap().remove("prompt_cache_key");
+        assert_eq!(keyed, compact_body(&req));
+        let other_model = CompactRequest {
+            model: "gpt-5".into(),
+            ..req.clone()
+        };
+        assert!(keyed_compact_body(&other_model)
+            .get("prompt_cache_key")
+            .is_none());
     }
 
     fn grok_req(model: &str, effort: Option<&str>) -> ResponsesRequest {
@@ -1899,11 +2760,12 @@ mod tests {
             body,
             r#"{"include":["reasoning.encrypted_content"],"input":[{"content":[{"text":"hi","type":"input_text"}],"role":"user","type":"message"}],"model":"grok-4.7","prompt_cache_key":"chat-9","reasoning":{"effort":"high"},"store":false,"stream":true,"tools":[]}"#
         );
-        // A non-reasoning Grok still pins its cache, and asks for nothing sealed.
+        // A non-reasoning Grok still pins its cache and isn't stored, and asks
+        // for nothing sealed.
         let body = responses_body(&grok_req("grok-4.20-0309-non-reasoning", None)).to_string();
         assert_eq!(
             body,
-            r#"{"input":[{"content":[{"text":"hi","type":"input_text"}],"role":"user","type":"message"}],"model":"grok-4.20-0309-non-reasoning","prompt_cache_key":"chat-9","stream":true,"tools":[]}"#
+            r#"{"input":[{"content":[{"text":"hi","type":"input_text"}],"role":"user","type":"message"}],"model":"grok-4.20-0309-non-reasoning","prompt_cache_key":"chat-9","store":false,"stream":true,"tools":[]}"#
         );
         // Another provider's model gets neither.
         let body = responses_body(&grok_req("vendor/model", None)).to_string();
@@ -1973,5 +2835,57 @@ mod tests {
         );
         assert!(InputItem::reasoning("not json", "m").is_none());
         assert!(sealed.is_opaque());
+    }
+
+    #[test]
+    fn hosted_search_calls_go_back_in_order_to_the_same_model_only() {
+        let web = r#"{"id":"ws_1","type":"web_search_call","status":"completed"}"#;
+        let x = r#"{"call_id":"xs_2","type":"custom_tool_call","name":"x_keyword_search","input":"{}"}"#;
+        let mut req = grok_req("grok-4.7", Some("high"));
+        req.input
+            .push(InputItem::reasoning(SEALED, "grok-4.7").unwrap());
+        req.input
+            .push(InputItem::reasoning(web, "grok-4.7").unwrap());
+        req.input.push(InputItem::reasoning(x, "grok-4.7").unwrap());
+        let body = responses_body(&req);
+        let sent = body["input"].as_array().unwrap();
+        assert_eq!(sent.len(), 4);
+        assert_eq!(sent[2], serde_json::from_str::<Value>(web).unwrap());
+        assert_eq!(sent[3], serde_json::from_str::<Value>(x).unwrap());
+        req.model = "grok-4.3".into();
+        assert_eq!(responses_body(&req)["input"].as_array().unwrap().len(), 1);
+        // A call item needs its id to be passed back.
+        assert!(InputItem::reasoning(r#"{"type":"web_search_call"}"#, "m").is_none());
+        assert!(InputItem::reasoning(r#"{"type":"function_call","id":"f"}"#, "m").is_none());
+    }
+
+    #[test]
+    fn hosted_search_turns_are_capped_by_what_the_turn_is_for() {
+        use crate::brain::{Brief, Intent};
+        let conv = format!("hosted-turns-{}", std::process::id());
+        let mut req = grok_req("grok-4.7", Some("low"));
+        req.conversation_id = conv.clone();
+        assert!(
+            responses_body(&req).get("max_turns").is_none(),
+            "no hosted search"
+        );
+        req.hosted_search = true;
+        // No brief (a subagent): the middle.
+        assert_eq!(responses_body(&req)["max_turns"], 3);
+        for (intent, turns) in [
+            (Intent::Chat, 2),
+            (Intent::Question, 2),
+            (Intent::Task, 3),
+            (Intent::Research, 5),
+        ] {
+            crate::checkpoint::set_turn_brief(
+                &conv,
+                Brief {
+                    intent,
+                    ..Default::default()
+                },
+            );
+            assert_eq!(responses_body(&req)["max_turns"], turns, "{intent:?}");
+        }
     }
 }

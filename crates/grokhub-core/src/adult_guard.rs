@@ -8,12 +8,16 @@
 //!   history goes out as the [`hold`] note instead.
 //! - A reply that drifts into one of the four is replaced here with
 //!   [`REPLY_REPLACED`] before the chat shows it ([`ReplyGuard`]).
-//! - Explicit adult turns go only to xAI or this computer's model. Every other
-//!   provider's turn reroutes to xAI ([`route`]), OpenRouter included, since its
-//!   pick can land on a model whose maker bans adult chat.
-//! - A turn is explicit when the conversation is ([`explicit_conversation`]): an
+//! - Explicit adult turns run only on this computer's model, an abliterated
+//!   build with no refusals: never xAI, OpenRouter or any online provider
+//!   ([`route`]). With no local model ready an 18+ ask gets one line
+//!   ([`LOCAL_ONLY_MISSING`], [`LOCAL_ONLY_PAUSED`]) and nothing is sent.
+//! - A call is explicit when the conversation is ([`explicit_conversation`]): an
 //!   adults-only voice in the system prompt, or any explicit user or assistant
-//!   turn, not just the newest ask.
+//!   turn, not just the newest ask. With the local model ready the whole chat
+//!   stays on it. Without it, each message is judged on its own: a clean ask
+//!   goes online with the 18+ turns and voice left out, so a chat never stays
+//!   stuck on 18+.
 //! - Age-ambiguous asks ("teen", "barely legal") count as minors: stricter than
 //!   any provider's own wording. A plain "girl" or "boy", and a student or
 //!   teacher, are not: only a stated or implied age under 18 is.
@@ -24,7 +28,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Risk {
     Clean,
-    /// Adult sexual content: fine for xAI and local models, banned by others.
+    /// Adult sexual content: runs only on this computer's model.
     Explicit,
     /// Banned everywhere: never sent.
     Banned(Ban),
@@ -57,8 +61,8 @@ pub enum Dest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Route {
     Send,
-    /// The provider bans adult chat: xAI takes the turn instead.
-    ToXai,
+    /// 18+ chat runs on this computer's model only, never an online one.
+    ToLocal,
 }
 
 /// The line an adults-only voice adds to the system prompt
@@ -76,6 +80,24 @@ pub const HELD_NOTICE: &str = "Not sent: nothing left this computer. 18+ chat ne
 
 /// What the chat shows in place of a reply that drifted into a hard limit.
 pub const REPLY_REPLACED: &str = "Reply hidden on this computer: it drifted into minors or age-play, non-consent, real people, or animals, which 18+ chat never covers.";
+
+/// What an image or video tool says in place of a banned prompt. Nothing was sent.
+pub const MEDIA_BANNED: &str = "Not made, and nothing was sent: images and videos never show minors or age-play, non-consent, real people in sexual content, or animals.";
+
+/// What an image or video tool says in place of an 18+ prompt bound for an
+/// online service. Nothing was sent.
+pub const MEDIA_LOCAL_ONLY: &str = "Not made, and nothing was sent: 18+ images and videos are only made on this computer, and on-device image making isn't set up yet.";
+
+/// The check every image or video prompt passes before it goes to `dest`:
+/// a banned ask is never sent, and an 18+ ask never goes online (the same
+/// rule as 18+ chat).
+pub fn screen_media_prompt(prompt: &str, dest: Dest) -> Result<(), &'static str> {
+    match check(prompt) {
+        Risk::Banned(_) => Err(MEDIA_BANNED),
+        Risk::Explicit if dest != Dest::Local => Err(MEDIA_LOCAL_ONLY),
+        Risk::Explicit | Risk::Clean => Ok(()),
+    }
+}
 
 /// Words that make a message sexual.
 const SEXUAL: &[&str] = &[
@@ -392,8 +414,11 @@ pub fn check(text: &str) -> Risk {
 }
 
 /// The text to send in place of `text`: the [`HELD`] note for a banned ask.
+/// Only what the person typed counts: the app's own `<cabin-volatile>` note
+/// names the hard limits ("no minors or age-play"), and read with a typed
+/// "sexy" it looked like a banned ask, so every 18+ turn was held.
 pub fn hold(text: &str) -> Option<&'static str> {
-    matches!(check(text), Risk::Banned(_)).then_some(*HELD)
+    matches!(check(typed_part(text)), Risk::Banned(_)).then_some(*HELD)
 }
 
 /// The note [`hold`] put in place of an ask.
@@ -533,8 +558,8 @@ pub fn dest_of(base_url: &str) -> Dest {
 /// The per-provider table for one turn.
 pub fn route(risk: Risk, dest: Dest) -> Route {
     match (risk, dest) {
-        (Risk::Explicit, Dest::Xai | Dest::Local) => Route::Send,
-        (Risk::Explicit, _) => Route::ToXai,
+        (Risk::Explicit, Dest::Local) => Route::Send,
+        (Risk::Explicit, _) => Route::ToLocal,
         _ => Route::Send,
     }
 }
@@ -546,23 +571,38 @@ pub fn route(risk: Risk, dest: Dest) -> Route {
 pub fn explicit_conversation<'a>(turns: impl IntoIterator<Item = (&'a str, &'a str)>) -> bool {
     turns.into_iter().any(|(role, text)| match role {
         "system" | "developer" => text.contains(ADULT_VOICE),
-        "user" | "assistant" => check(text) != Risk::Clean,
+        "user" => app_note_tags_adult(text) || check(typed_part(text)) != Risk::Clean,
+        "assistant" => check(text) != Risk::Clean,
         _ => false,
     })
 }
 
-/// The plain heads-up, once a session, after an explicit turn left a provider.
-pub fn heads_up_rerouted(name: &str) -> String {
-    format!("Heads-up: I sent that one through xAI instead of {name}. {name} bans adult chat and can ban the account for it.")
+/// The app's own per-turn note at the head of a user turn (`<cabin-volatile>`)
+/// carries the 18+ tag: a chat turned up to Spicy in chat, or a guest voice at
+/// that heat. Words the person typed never count.
+fn app_note_tags_adult(text: &str) -> bool {
+    app_note(text).is_some_and(|(note, _)| note.contains(ADULT_VOICE))
 }
 
-/// The heads-up when xAI couldn't take a rerouted explicit turn and this
-/// computer's model answered it instead.
-pub fn heads_up_local(name: &str) -> String {
-    format!("Heads-up: I sent that one to this computer's model instead of {name}. {name} bans adult chat and can ban the account for it.")
+/// A user turn split into the app's note and what follows it.
+fn app_note(text: &str) -> Option<(&str, &str)> {
+    text.strip_prefix("<cabin-volatile>\n")
+        .and_then(|rest| rest.split_once("\n</cabin-volatile>"))
 }
 
-/// A provider's name for the heads-up.
+/// What the person typed: a user turn without the app's own note, whose heat
+/// line ("sex jokes are fine") is never the person asking for 18+ chat.
+pub fn typed_part(text: &str) -> &str {
+    app_note(text).map_or(text, |(_, rest)| rest)
+}
+
+/// An 18+ chat with no local model to answer it: nothing is sent online.
+pub const LOCAL_ONLY_MISSING: &str = "18+ chats run only on this computer's model, and none is set up yet. Turn on Local AI in Settings to download one.";
+
+/// An 18+ chat while the local model is paused (a game, low battery, heat).
+pub const LOCAL_ONLY_PAUSED: &str = "18+ chats run only on this computer's model, and it's paused while a game or low battery needs the PC. Try again in a bit.";
+
+/// A provider's name, for messages.
 pub fn dest_name(dest: Dest) -> &'static str {
     match dest {
         Dest::Xai => "xAI",
@@ -578,6 +618,22 @@ pub fn dest_name(dest: Dest) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_apps_heat_note_never_makes_a_turn_18_plus_but_typed_words_do() {
+        let note = |typed: &str| {
+            format!(
+                "<cabin-volatile>\n{}\n</cabin-volatile>\n{typed}",
+                crate::personality::Heat::Spicy.line()
+            )
+        };
+        let clean = note("roast me harder");
+        assert!(!explicit_conversation([("user", clean.as_str())]));
+        let typed = note("talk dirty to me, I'm horny");
+        assert!(explicit_conversation([("user", typed.as_str())]));
+        let tagged = format!("<cabin-volatile>\n{ADULT_VOICE}\n</cabin-volatile>\nhey");
+        assert!(explicit_conversation([("user", tagged.as_str())]));
+    }
 
     #[test]
     fn everyday_lines_and_plain_swearing_stay_clean() {
@@ -686,6 +742,14 @@ mod tests {
         assert_eq!(hold("talk dirty to me, I'm horny"), None);
         assert_eq!(hold("hello"), None);
         assert!(is_held(*HELD));
+        // The app's own note names the hard limits; only the typed ask counts.
+        let note = "<cabin-volatile>\n18+ is on. Jokes, not sex chat. Never about minors.\n</cabin-volatile>\n\n";
+        assert_eq!(hold(&format!("{note}wanna have some sexy time")), None);
+        assert_eq!(hold(&format!("{note}lets do this")), None);
+        assert_eq!(
+            hold(&format!("{note}nsfw schoolgirl roleplay")),
+            Some(*HELD)
+        );
         assert!(!(*HELD).contains("schoolgirl"));
         // The notes themselves never trip the check again.
         assert_eq!(check(*HELD), Risk::Clean);
@@ -812,22 +876,19 @@ mod tests {
         assert_eq!(dest_of("https://api.groq.com/openai/v1"), Dest::Other);
         assert_eq!(dest_of("https://notanthropic.com"), Dest::Other);
 
-        assert_eq!(route(Risk::Explicit, Dest::Xai), Route::Send);
         assert_eq!(route(Risk::Explicit, Dest::Local), Route::Send);
+        assert_eq!(route(Risk::Clean, Dest::Xai), Route::Send);
         for dest in [
+            Dest::Xai,
             Dest::OpenRouter,
             Dest::Anthropic,
             Dest::Gemini,
             Dest::OpenAi,
             Dest::Other,
         ] {
-            assert_eq!(route(Risk::Explicit, dest), Route::ToXai, "{dest:?}");
+            assert_eq!(route(Risk::Explicit, dest), Route::ToLocal, "{dest:?}");
             assert_eq!(route(Risk::Clean, dest), Route::Send, "{dest:?}");
         }
-        assert_eq!(
-            heads_up_rerouted("Anthropic"),
-            "Heads-up: I sent that one through xAI instead of Anthropic. Anthropic bans adult chat and can ban the account for it."
-        );
     }
 
     #[test]
@@ -851,8 +912,39 @@ mod tests {
             ("assistant", "She moaned and pulled off her nude stockings"),
             ("user", "continue"),
         ]));
-        // The marker only counts in the system prompt, and tool output is skipped.
+        // The marker counts in the system prompt or the app's own turn note,
+        // never in words the person typed; tool output is skipped.
         assert!(!explicit_conversation([("user", ADULT_VOICE)]));
+        let typed = format!("hey\n<cabin-volatile>\n{ADULT_VOICE}\n</cabin-volatile>");
+        assert!(!explicit_conversation([("user", typed.as_str())]));
+        let note =
+            format!("<cabin-volatile>\nHeat: spicy. {ADULT_VOICE}\n</cabin-volatile>\n\nroast me");
+        assert!(explicit_conversation([("user", note.as_str())]));
         assert!(!explicit_conversation([("tool", "nsfw porn")]));
+    }
+
+    #[test]
+    fn a_media_prompt_with_a_hard_ban_is_never_sent_and_18_plus_stays_on_this_computer() {
+        assert_eq!(
+            screen_media_prompt("a castle at sunset, oil painting", Dest::Xai),
+            Ok(())
+        );
+        assert_eq!(
+            screen_media_prompt("a nude teen on a beach", Dest::Xai),
+            Err(MEDIA_BANNED)
+        );
+        assert_eq!(
+            screen_media_prompt("a nude teen on a beach", Dest::Local),
+            Err(MEDIA_BANNED),
+            "a ban holds on this computer too"
+        );
+        assert_eq!(
+            screen_media_prompt("an erotic nude portrait", Dest::Xai),
+            Err(MEDIA_LOCAL_ONLY)
+        );
+        assert_eq!(
+            screen_media_prompt("an erotic nude portrait", Dest::Local),
+            Ok(())
+        );
     }
 }

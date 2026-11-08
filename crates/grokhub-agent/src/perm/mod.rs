@@ -28,8 +28,8 @@ pub(crate) use risk::{
     git_words_are_read_only_query, git_words_have_unsafe_query_option, trusted_head,
 };
 pub use store::{
-    add_grant_at, config_dir, config_pinned, load_all_grants, load_grants, load_rules, project_key,
-    remember_grant, remove_grant, save_rules, ConfigGuard,
+    add_grant_at, config_dir, config_pinned, load_all_grants, load_grants, load_rules,
+    pinned_config, project_key, remember_grant, remove_grant, save_rules, ConfigGuard,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

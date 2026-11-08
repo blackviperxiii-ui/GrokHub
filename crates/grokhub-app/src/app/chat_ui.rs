@@ -19,6 +19,8 @@ pub(super) enum ComposerStackSlot {
     LiveWork,
     SlashPalette,
     ScreenshotOffer,
+    /// The last export's card: where it went, Open, Show in folder.
+    SavedFile,
     Chips,
     Attach,
     Voice,
@@ -188,6 +190,7 @@ pub(super) fn composer_stack_order() -> &'static [ComposerStackSlot] {
         ComposerStackSlot::SessionTools,
         ComposerStackSlot::LiveWork,
         ComposerStackSlot::SlashPalette,
+        ComposerStackSlot::SavedFile,
         ComposerStackSlot::ScreenshotOffer,
         ComposerStackSlot::Attach,
         ComposerStackSlot::Voice,
@@ -204,6 +207,7 @@ fn hangout_composer_stack_order() -> &'static [ComposerStackSlot] {
         ComposerStackSlot::LiveWork,
         ComposerStackSlot::SlashPalette,
         ComposerStackSlot::Chips,
+        ComposerStackSlot::SavedFile,
         ComposerStackSlot::ScreenshotOffer,
         ComposerStackSlot::Attach,
         ComposerStackSlot::Pill,
@@ -965,6 +969,12 @@ pub(super) fn chat_row_outside_clip(
 
 /// The composer field paints no frame of its own, only a 2px side inset.
 #[cfg(feature = "fx")]
+/// Hover on the permission card's Stop asking me.
+pub(super) const STOP_ASKING_TIP: &str = "Ask less from now on: Ask me first becomes Only ask for risky things, and that becomes Don't ask. Settings → Defaults changes it back.";
+/// Status after Stop asking me moves Ask me first to Only ask for risky things.
+pub(super) const STOP_ASKING_DONE: &str =
+    "Allowed. From now on only risky things ask (Settings → Defaults)";
+
 impl Cabin {
     /// GPU glow behind the pill while a reply streams, on wgpu with the Settings switch on.
     fn paint_composer_glow(&self, ui: &egui::Ui, pill: egui::Rect) {
@@ -975,11 +985,12 @@ impl Cabin {
         let settle = crate::theme::animate_selection_secs(
             ui,
             egui::Id::new("composer-glow-stream"),
-            self.running,
+            self.thinking_here(),
             grokhub_core::GLOW_SETTLE_SECS,
         );
-        if self.running || settle > 0.01 {
-            crate::fx::paint_composer_glow_at(ui, pill, self.running);
+        let here = self.thinking_here();
+        if here || settle > 0.01 {
+            crate::fx::paint_composer_glow_at(ui, pill, here);
         }
     }
 }
@@ -1934,6 +1945,7 @@ impl Cabin {
                         self.paint_inbox_only(ui);
                     }
                     self.paint_try_again(ui);
+                    self.paint_get_local_model(ui);
                     if pin_tail {
                         // The transcript is laid out now, so the bottom is a real place.
                         ui.scroll_to_cursor(Some(egui::Align::BOTTOM));
@@ -2372,7 +2384,8 @@ impl Cabin {
         }
         ui.ctx().data_mut(|d| d.insert_temp(row_h_id, next_heights));
         self.panels = panels;
-        self.followup_queue.extend(panel_followups);
+        let here = self.visible_thread_id();
+        self.followup_queue.extend(&here, panel_followups);
         act
     }
 
@@ -2578,25 +2591,64 @@ impl Cabin {
                         None => false,
                     };
                     let mut answered = None;
+                    let mut always_this = false;
+                    let mut stop_asking = false;
                     ui.horizontal(|ui| {
-                        if crate::cards::white_pill(ui, "Allow") || key == Some(PermKey::Allow) {
+                        if crate::cards::white_pill(ui, "Allow once") || key == Some(PermKey::Allow)
+                        {
                             answered = Some(true);
+                        } else if crate::cards::ghost_pill(ui, "Always allow") {
+                            // This kind of step in this project, and the rest of
+                            // this reply. The setting itself stays as it is.
+                            always_this = true;
                         } else if crate::cards::ghost_pill(ui, "Deny") || key == Some(PermKey::Deny)
                         {
                             // Grok's own reject option: "denied", not "User cancelled".
                             answered = Some(false);
                         }
                         if answered.is_none()
+                            && !always_this
                             && self.perm_always_confirm.is_none()
-                            && crate::cards::ghost_pill(ui, "Always")
+                            && self.permission_mode != PermissionMode::AlwaysApprove
+                            && ui
+                                .add(
+                                    egui::Button::new(
+                                        RichText::new("Stop asking me")
+                                            .size(crate::theme::FONT_META)
+                                            .color(crate::theme::muted()),
+                                    )
+                                    .frame(false),
+                                )
+                                .on_hover_text(STOP_ASKING_TIP)
+                                .clicked()
                         {
-                            self.perm_always_confirm = Some(p.rpc_id.clone());
+                            stop_asking = true;
                         }
                     });
                     // The same answer the inbox row gives.
                     if let Some(allow) = answered {
                         self.answer_perm_at(0, allow, super::harness_ui::SOFT_DENY);
                         return;
+                    }
+                    if always_this {
+                        if let Some(h) = &self.acp {
+                            let _ = h.answer_permission_always(p.rpc_id.clone());
+                        }
+                        self.perm_ask = None;
+                        self.next_perm_ask();
+                        self.status = "Always allowed for this kind of step here".into();
+                        return;
+                    }
+                    if stop_asking {
+                        // One step looser: Ask → Only risky; Only risky → Don't ask,
+                        // behind the one-time confirm below.
+                        if self.permission_mode == PermissionMode::Ask {
+                            self.set_permission_mode(PermissionMode::Auto);
+                            self.answer_perm_at(0, true, super::harness_ui::SOFT_DENY);
+                            self.status = STOP_ASKING_DONE.into();
+                            return;
+                        }
+                        self.perm_always_confirm = Some(p.rpc_id.clone());
                     }
                     if always_confirm_matches_rpc(self.perm_always_confirm.as_ref(), &p.rpc_id) {
                         ui.add_space(8.0);
@@ -2616,7 +2668,7 @@ impl Cabin {
                                     }
                                     self.perm_ask = None;
                                     self.perm_always_confirm = None;
-                                    self.status = "Permission always-approve".into();
+                                    self.status = "Allowed. From now on nothing asks except money, sending, deleting and passwords (Settings → Defaults)".into();
                                 }
                                 ConfirmAct::Cancel => {
                                     self.perm_always_confirm = None;
@@ -2629,7 +2681,7 @@ impl Cabin {
             crate::motion::paint_thinking_rim(
                 ui.painter(),
                 framed.response.rect,
-                self.running,
+                self.thinking_here(),
                 time,
             );
             // Primary one-shot breath envelope (Allow row); composer_breath while running.
@@ -2749,6 +2801,38 @@ impl Cabin {
         });
     }
 
+    /// The last reply says an 18+ chat needs this computer's model and none is
+    /// set up: one pill under the chat opens Local AI to download one.
+    pub(super) fn needs_local_for_adult(&self) -> bool {
+        !self.thinking_here()
+            && self.messages.last().is_some_and(|(role, text)| {
+                role == "assistant" && text.trim() == grokhub_core::adult_guard::LOCAL_ONLY_MISSING
+            })
+    }
+
+    pub(super) fn paint_get_local_model(&mut self, ui: &mut egui::Ui) {
+        if !self.needs_local_for_adult() {
+            return;
+        }
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new("18+ chats need this PC's model")
+                    .size(13.0)
+                    .color(crate::theme::muted()),
+            );
+            if crate::cards::white_pill(ui, "Get a local model") {
+                self.open_local_ai();
+            }
+        });
+    }
+
+    /// Settings → AI models, where Local AI is turned on and a model downloaded.
+    pub(super) fn open_local_ai(&mut self) {
+        self.nav = Nav::Settings;
+        self.settings_sec = SettingsSec::AiModels;
+    }
+
     pub(super) fn ui_empty_home(&mut self, ui: &mut egui::Ui) {
         let greet_on = should_paint_greeting(self.messages.is_empty(), self.scratch())
             && !self.greeting.is_empty();
@@ -2825,6 +2909,7 @@ impl Cabin {
                         self.paint_inbox_only(ui);
                     }
                     self.paint_try_again(ui);
+                    self.paint_get_local_model(ui);
                     if pulse_on && device_on {
                         let gap = ui.available_height();
                         ui.add_space(((gap - device_h) * 0.5).max(0.0));
@@ -2939,65 +3024,6 @@ impl Cabin {
                 }
             });
         placed
-    }
-
-    /// Session Chat/Plan/Use and Ask/Auto/Always under the composer. Hangout
-    /// (slide 02) hides this row — those controls stay in Settings / the
-    /// session menu — so chips can sit above the pill.
-    fn apply_composer_session_row(&mut self, ui: &mut egui::Ui) {
-        if super::loadout_home::hangout_composer_layout(self.messages.is_empty()) {
-            return;
-        }
-        let session_now = self.session_mode.as_str().to_string();
-        let perm_now = self.permission_mode.as_str().to_string();
-        let row = crate::cards::session_row(ui, &session_now, &perm_now);
-        if let Some(mode) = row.mode {
-            if let Some(m) = SessionMode::parse(&mode) {
-                if m == SessionMode::Plan {
-                    self.select_plan_without_rename();
-                } else if m == SessionMode::Ask && self.running {
-                    self.set_session_mode(m);
-                    self.status = "btw — side ask, main run continues".into();
-                } else {
-                    self.confirm = None;
-                    if self.running {
-                        self.halt_in_flight();
-                    }
-                    self.set_session_mode(m);
-                    self.acp = None;
-                    if let Some(t) = self.threads.get_mut(self.thread_idx) {
-                        t.grok_session = None;
-                    }
-                    self.persist_idle_key = self.persist_idle_now();
-                    self.status = if m == SessionMode::Ask {
-                        "btw — look-safe side ask".into()
-                    } else {
-                        format!("Session {}", m.as_str())
-                    };
-                }
-            }
-        }
-        if let Some(perm) = row.perm {
-            if let Some(p) = PermissionMode::parse(&perm) {
-                if p == PermissionMode::AlwaysApprove
-                    && self.permission_mode != PermissionMode::AlwaysApprove
-                {
-                    self.arm_session_always();
-                } else {
-                    self.confirm = None;
-                    if self.running {
-                        self.halt_in_flight();
-                    }
-                    self.set_permission_mode(p);
-                    self.acp = None;
-                    if let Some(t) = self.threads.get_mut(self.thread_idx) {
-                        t.grok_session = None;
-                    }
-                    self.persist_idle_key = self.persist_idle_now();
-                    self.status = format!("Permission {}", p.as_str());
-                }
-            }
-        }
     }
 
     pub(super) fn ui_composer_stack(&mut self, ui: &mut egui::Ui) {
@@ -3148,9 +3174,18 @@ impl Cabin {
                     ComposerStackSlot::ScreenshotOffer => {
                         self.ui_screenshot_offer_chip(ui);
                     }
+                    ComposerStackSlot::SavedFile => self.ui_saved_file_card(ui),
+                    ComposerStackSlot::Chips if !self.cfg.suggestions => {}
                     ComposerStackSlot::Chips => {
                         ui.add_space(6.0);
-                        let chips = self.composer_chips();
+                        // While a reply streams the row's chips are for the
+                        // last turn, so the row waits for the turn to end.
+                        let chips = if self.thinking_here() {
+                            Vec::new()
+                        } else {
+                            self.composer_chips()
+                        };
+                        self.note_chips_shown("composer", &chips);
                         if let Some(act) = crate::cards::quick_chip_row(ui, &chips) {
                             self.take_chip_act(act, &chips);
                         }
@@ -3166,7 +3201,6 @@ impl Cabin {
                         let cap = pill_w.min(ui.available_width()).max(360.0);
                         ui.set_width(cap);
                         ui.set_max_width(cap);
-                        self.apply_composer_session_row(ui);
                         let composer_id = egui::Id::new("chat-composer");
                         let focused = ui.memory(|m| m.has_focus(composer_id));
                         let pad_l = 20.0;

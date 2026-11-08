@@ -38,8 +38,8 @@ pub fn set_enabled_for_tests(on: Option<bool>) {
     TEST_OVERRIDE.with(|cell| cell.set(on));
 }
 
-/// Pins deferred tools and the stable prompt off on this thread until dropped,
-/// for tests that check the full tool list or the per-turn system rewrite.
+/// Pins deferred tools off on this thread until dropped, for tests that check
+/// the full tool list.
 #[cfg(test)]
 pub struct LegacyPromptGuard;
 
@@ -47,7 +47,6 @@ pub struct LegacyPromptGuard;
 impl LegacyPromptGuard {
     pub fn set() -> Self {
         set_enabled_for_tests(Some(false));
-        crate::prefix_cache::set_enabled_for_tests(Some(false));
         Self
     }
 }
@@ -56,7 +55,6 @@ impl LegacyPromptGuard {
 impl Drop for LegacyPromptGuard {
     fn drop(&mut self) {
         set_enabled_for_tests(None);
-        crate::prefix_cache::set_enabled_for_tests(None);
     }
 }
 
@@ -81,20 +79,9 @@ pub fn settings(config_dir: &Path) -> Settings {
 }
 
 fn parse_file(text: &str) -> Settings {
-    let mut enabled = true;
-    for line in text.lines() {
-        let line = line.split('#').next().unwrap_or("").trim();
-        if line.is_empty() {
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        if key.trim().eq_ignore_ascii_case("enabled") {
-            enabled = !value.trim().eq_ignore_ascii_case("false");
-        }
+    Settings {
+        enabled: crate::config_file::parse(CONFIG_NAME, text, &["enabled"]).flag("enabled", true),
     }
-    Settings { enabled }
 }
 
 /// Bind the conversation id for deferred schema state on this thread.
@@ -107,8 +94,10 @@ pub fn bind_session(session: &str) {
 /// Start a user turn. Schemas this chat already loaded stay, in load order,
 /// so the tool list only ever grows at its end and the cached prefix holds;
 /// clearing them each turn shrank the tail, broke the cache and cost a reload.
+/// MCP servers that connected since the last turn join here, not mid-turn.
 pub fn begin_turn(session: &str) {
     bind_session(session);
+    crate::mcp::begin_turn(session);
     loaded_by_session()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -200,8 +189,14 @@ fn offer(gate: &Gate, cfg: Settings) -> Offer {
     }
     let session = current_session().unwrap_or_default();
     let talk = talk_shaped(&session, cfg);
-    // Indexed (not eager): deferred rows, plus the demoted ones on Talk.
-    let indexed = |def: &ToolDef| def.defer || (talk && talk::is_demoted(def.name));
+    let ws = workspace_plan(&session);
+    // Indexed (not eager): deferred rows, plus the demoted ones on Talk, and
+    // this workspace's own changes, frozen for the session.
+    let indexed = |def: &ToolDef| {
+        (def.defer && !ws.promotes(def.name))
+            || (talk && talk::is_demoted(def.name))
+            || ws.demotes(def.name)
+    };
     let rows = offered_defs(gate);
     let mut stable: Vec<Value> = rows
         .iter()
@@ -239,9 +234,17 @@ fn offer(gate: &Gate, cfg: Settings) -> Offer {
         } else {
             0
         };
-        stable.extend(crate::mcp::schema_tools(native));
+        stable.extend(crate::mcp::chat_schema_tools(&session, native));
     }
     Offer { stable, volatile }
+}
+
+/// Item 33: this chat's per-workspace list changes. A bound job keeps its own set.
+fn workspace_plan(session: &str) -> super::workspace_tools::Plan {
+    if session.is_empty() || crate::run::has_job_tool_set(session) {
+        return super::workspace_tools::Plan::default();
+    }
+    super::workspace_tools::plan(session)
 }
 
 fn legacy_schemas(gate: &Gate) -> Vec<Value> {
@@ -378,6 +381,10 @@ pub fn run_load_tool_schema(args: &Value) -> ToolOutput {
         let session = current_session().unwrap_or_default();
         if talk::is_demoted(name) && talk_shaped(&session, settings(&crate::perm::config_dir())) {
             upgrade_talk(&session);
+            return finish_load(name, (def.schema)());
+        }
+        // This workspace sent it to the index for the session: load it alone.
+        if workspace_plan(&session).demotes(name) {
             return finish_load(name, (def.schema)());
         }
         return ToolOutput::err(format!(
@@ -603,6 +610,10 @@ mod tests {
     /// eager read `know_me_tags` (the agent's only view of Know me) 184.
     /// Eager `web_search` (OpenRouter / local always see the schema) added 472
     /// to Chat/Agent (10_503 → 10_975) and background (9_323 → 9_795).
+    /// Grep's `-i` and `output_mode` args (R2-30: ask for paths or counts
+    /// instead of 200 lines) added 143 to Chat/Agent and background, 146 to Plan/Ask.
+    /// The deferred `models_check` index line (the live key test) added 48 to
+    /// Chat/Agent and background, and 50 to Plan/Ask.
     #[test]
     fn eager_schema_payload_stays_within_budget_per_profile() {
         use super::super::set::ToolSet;
@@ -612,21 +623,21 @@ mod tests {
                 "chat",
                 profile(PermMode::Ask, false, true),
                 full.clone(),
-                // +150 for the shell's outside_sandbox arg (HX-11).
-                11_125,
+                // +150 for the shell's outside_sandbox arg (HX-11), +143 for grep's modes.
+                11_316,
             ),
             (
                 "agent",
                 profile(PermMode::Always, false, true),
                 full.clone(),
-                11_125,
+                11_316,
             ),
-            ("plan/ask", profile(PermMode::Ask, true, true), full, 6_824),
+            ("plan/ask", profile(PermMode::Ask, true, true), full, 7_020),
             (
                 "background",
                 profile(PermMode::Auto, false, false),
                 ToolSet::background(),
-                9_945,
+                10_136,
             ),
         ];
         for (label, gate, set, budget) in cases {

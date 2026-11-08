@@ -30,6 +30,9 @@ pub(super) struct GameUi {
     ended: Option<(SteamGame, u64)>,
     /// The note being written: game and text.
     editing: Option<(SteamGame, String)>,
+    /// The game guard's last reading, for the chip row, and when it was read.
+    guard: grokhub_core::game_guard::GameGuard,
+    guard_ms: u64,
 }
 
 /// What Steam says is running: its launch wrapper's command line on Linux
@@ -115,6 +118,23 @@ impl Cabin {
         });
     }
 
+    /// Each frame: take the game guard's cached reading every few seconds,
+    /// so the chip row knows about gaming and anti-cheats without a read of
+    /// its own. Tests keep a clear guard so a busy machine can't move rows.
+    pub(super) fn tick_chip_guard(&mut self) {
+        let now = now_ms();
+        if cfg!(test) || now.saturating_sub(self.focus.game.guard_ms) < SAMPLE_EVERY_MS {
+            return;
+        }
+        self.focus.game.guard_ms = now;
+        self.focus.game.guard = grokhub_desktop::game_guard::peek();
+    }
+
+    /// The game guard as the chip row last saw it.
+    pub(super) fn chip_guard(&self) -> grokhub_core::game_guard::GameGuard {
+        self.focus.game.guard
+    }
+
     /// The library game that closed in the last half hour, while no other runs.
     pub(super) fn game_just_ended(&self) -> Option<&str> {
         let (game, at) = self.focus.game.ended.as_ref()?;
@@ -127,8 +147,17 @@ impl Cabin {
         self.focus.game.watch.current
     }
 
+    #[cfg(test)]
+    pub(super) fn set_game_running_for_test(&mut self, id: Option<u32>) {
+        self.focus.game.watch.current = id;
+    }
+
     /// One sample. A launch of a library game fetches its news off the UI thread.
     pub(super) fn note_running(&mut self, running: Option<u32>, now: u64) {
+        super::home::note_session(
+            running.or(grokhub_desktop::game_guard::peek().gaming.then_some(0)),
+            now,
+        );
         let events = self.focus.game.watch.note(running);
         if events.is_empty() || !self.cfg.game_companion {
             return;
@@ -177,6 +206,17 @@ impl Cabin {
         let card = companion.companion_card(now_ms());
         if self.cfg.game_companion_ping && !self.window_focused && !self.quiet_now() {
             crate::notify::ping(&card.title, card.body.as_deref().unwrap_or_default());
+            // Whatever pings the OS is kept in the bell too.
+            let line = match card.body.as_deref().map(str::trim) {
+                Some(body) if !body.is_empty() => format!("{} \u{b7} {body}", card.title),
+                _ => card.title.clone(),
+            };
+            self.notify(
+                super::notices::NoticeKind::Info,
+                line,
+                Some(super::notices::NoticePlace::Page(Nav::Pulse)),
+                None,
+            );
         }
         // One card per game: the latest launch replaces the last one.
         self.updates.retain(|c| c.source_id != card.source_id);
@@ -311,6 +351,20 @@ impl Cabin {
         grokhub_core::game_watch_pick::settings_line(games)
     }
 
+    /// Switch the game launch companion on or off and save it.
+    pub(super) fn set_game_companion(&mut self, on: bool) {
+        self.cfg.game_companion = on;
+        // The game watcher keeps what the last sample saw, so its
+        // listener doesn't drop mid-match.
+        let seen = std::mem::take(&mut self.focus.game.watch);
+        self.focus.game = GameUi::default();
+        if self.cfg.game_watch {
+            self.focus.game.watch = seen;
+        }
+        self.chip_paint_key.clear();
+        self.persist_cfg();
+    }
+
     pub(super) fn ui_game_companion_row(&mut self, ui: &mut egui::Ui) {
         let mut on = self.cfg.game_companion;
         if crate::cards::settings_toggle(
@@ -319,16 +373,7 @@ impl Cabin {
             "When you start a game from your Steam library, the Feed shows what changed since you last played, a link to top guides, and your note from last time. It only reads what Steam reports as running: no screen capture, nothing drawn over the game, nothing a game's anti-cheat would see.",
             &mut on,
         ) {
-            self.cfg.game_companion = on;
-            // The game watcher keeps what the last sample saw, so its
-            // listener doesn't drop mid-match.
-            let seen = std::mem::take(&mut self.focus.game.watch);
-            self.focus.game = GameUi::default();
-            if self.cfg.game_watch {
-                self.focus.game.watch = seen;
-            }
-            self.chip_paint_key.clear();
-            self.persist_cfg();
+            self.set_game_companion(on);
             self.status = "Saved".into();
         }
         let line = self.game_watch_first_line(now_ms());
@@ -630,11 +675,17 @@ mod tests {
         let ended = body(&own, "fn game_just_ended(", "\n    }\n");
         let live = include_str!("home/live.rs").replace("\r\n", "\n");
         let drives = body(&live, "fn cached_drives(", "\n}\n");
+        let features = body(&chips, "fn feature_chips(", "\n    }\n");
+        let attached = body(&chips, "fn attached_file_name(", "\n    }\n");
+        let guard = body(&own, "fn chip_guard(", "\n    }\n");
         for (what, src) in [
             ("fill", &fill),
             ("name", &name),
             ("ended", &ended),
             ("drives", &drives),
+            ("features", &features),
+            ("attached", &attached),
+            ("guard", &guard),
         ] {
             for io in [
                 "refresh(",

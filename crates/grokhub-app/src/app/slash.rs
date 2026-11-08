@@ -45,6 +45,14 @@ pub(super) fn locked_recall_line(locked: usize, why: Option<&str>) -> Option<Str
     ))
 }
 
+/// Bare `/btw`: what to do instead of a mode.
+pub(super) const BTW_HINT: &str = "Ask anything while a reply runs and it's answered on the side. /btw <question> does it on purpose.";
+/// Bare `/plan`: the next message plans first.
+pub(super) const PLAN_NEXT_NOTE: &str = "Your next message gets a plan first";
+/// `/auto`, `/always-approve`, `/yolo`: the setting lives in Settings.
+pub(super) const PERMISSION_IN_SETTINGS: &str =
+    "Permissions are set in Settings → Defaults, under When the AI wants to change things";
+
 impl Cabin {
     pub(super) fn run_slash(&mut self, slash: Slash) {
         if let Some(cmd) = home_slash_cmd(slash_kind(&slash)) {
@@ -245,12 +253,9 @@ impl Cabin {
                 self.status = WORKTREE_GONE.into();
             }
             Slash::Btw => {
-                self.set_session_mode(SessionMode::Ask);
-                self.status = if self.running {
-                    "btw — side ask, main run continues".into()
-                } else {
-                    "btw — look-safe side ask".into()
-                };
+                // Side questions need no mode: one typed while a reply runs
+                // is answered on the side. `/btw <question>` still forces it.
+                self.status = BTW_HINT.into();
             }
             Slash::ViewPlan => {
                 let has = self
@@ -430,50 +435,16 @@ impl Cabin {
             }
             Slash::Palette => self.open_palette(),
             Slash::Plan => {
-                if self.running {
-                    self.halt_in_flight();
-                }
-                self.set_session_mode(SessionMode::Plan);
-                self.acp = None;
-                self.hold_chat_name_for_plan();
-                if let Some(t) = self.threads.get_mut(self.thread_idx) {
-                    t.grok_session = None;
-                }
-                self.persist_idle_key = self.persist_idle_now();
-                self.status = format!(
-                    "Plan mode — {} will plan first",
-                    grokhub_core::brand::product_name()
-                );
+                // One shot: the next message plans first. Big jobs plan first
+                // on their own; this is for when the app read it as small.
+                self.plan_next = true;
+                self.status = PLAN_NEXT_NOTE.into();
             }
-            Slash::AlwaysApprove => {
-                if self.permission_mode == PermissionMode::AlwaysApprove {
-                    self.confirm = None;
-                    self.set_permission_mode(PermissionMode::Ask);
-                    if self.running {
-                        self.halt_in_flight();
-                    }
-                    self.acp = None;
-                    if let Some(t) = self.threads.get_mut(self.thread_idx) {
-                        t.grok_session = None;
-                    }
-                    self.persist_idle_key = self.persist_idle_now();
-                    self.status = format!("Permission {}", self.permission_mode.as_str());
-                } else {
-                    self.arm_session_always();
-                }
-            }
-            Slash::AutoPerm => {
-                self.confirm = None;
-                self.set_permission_mode(PermissionMode::Auto);
-                if self.running {
-                    self.halt_in_flight();
-                }
-                self.acp = None;
-                if let Some(t) = self.threads.get_mut(self.thread_idx) {
-                    t.grok_session = None;
-                }
-                self.persist_idle_key = self.persist_idle_now();
-                self.status = "Permission auto".into();
+            Slash::AlwaysApprove | Slash::AutoPerm => {
+                // Ask / Auto / Always live in one place: Settings → Defaults.
+                self.nav = Nav::Settings;
+                self.settings_sec = SettingsSec::Defaults;
+                self.status = PERMISSION_IN_SETTINGS.into();
             }
             Slash::Sessions => {
                 self.nav = Nav::History;
@@ -608,24 +579,7 @@ impl Cabin {
                 self.status = format!("Room {} → {p}", plan.slug);
                 self.queue_sh(plan.host_script);
             }
-            Slash::Export => {
-                self.persist();
-                if let Some(t) = self.threads.get(self.thread_idx) {
-                    let t = t.clone();
-                    // A stamped name per export: a second /export never
-                    // clobbers the first. expand_home lives in export_dest.
-                    let dest = self.export_dest(&Self::stamped_export_name("export.md"));
-                    let status_path = dest.display().to_string();
-                    let make_dir = self.cfg.project_dir.trim().is_empty();
-                    self.status = format!("Exporting to {status_path}…");
-                    self.spawn_file_write(status_path, false, move || {
-                        let md = threads::export_markdown(&t);
-                        file_writes::write_new_file(&dest, md.as_bytes(), make_dir)
-                            .map(|p| p.display().to_string())
-                            .map_err(|e| e.to_string())
-                    });
-                }
-            }
+            Slash::Export => self.export_thread_as(grokhub_core::ChatExport::Markdown),
             Slash::ExportAs(fmt) => match grokhub_core::ChatExport::parse(&fmt) {
                 Some(grokhub_core::ChatExport::Markdown) => self.run_slash(Slash::Export),
                 Some(format) => self.export_thread_as(format),
@@ -749,36 +703,61 @@ impl Cabin {
     }
 }
 
-impl Cabin {
-    /// `/export html` and `/export json` land next to `export.md`.
-    pub(super) fn export_dest(&self, file: &str) -> std::path::PathBuf {
-        if self.cfg.project_dir.trim().is_empty() {
-            config::config_dir().join(file)
-        } else {
-            std::path::PathBuf::from(expand_home(&self.cfg.project_dir)).join(file)
-        }
-    }
+/// The user's Desktop when it is there. Tests set their own with
+/// [`set_test_desktop`] so a run never writes to the real one.
+pub(super) fn export_desktop() -> Option<std::path::PathBuf> {
+    #[cfg(test)]
+    let desktop = TEST_DESKTOP.with(|d| d.borrow().clone());
+    #[cfg(not(test))]
+    let desktop = grokhub_core::desktop_dir();
+    desktop.filter(|d| d.is_dir())
+}
 
-    /// Flush the pane, then format and write off the UI thread.
+#[cfg(test)]
+thread_local! {
+    static TEST_DESKTOP: std::cell::RefCell<Option<std::path::PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(super) fn set_test_desktop(dir: Option<std::path::PathBuf>) {
+    TEST_DESKTOP.with(|d| *d.borrow_mut() = dir);
+}
+
+impl Cabin {
+    /// Export the open chat: flush the pane, then format and write off the
+    /// UI thread into the Chats folder (see `saved_file`).
     pub(super) fn export_thread_as(&mut self, format: grokhub_core::ChatExport) {
         self.persist();
-        let Some(t) = self.threads.get(self.thread_idx).cloned() else {
+        if self.threads.get(self.thread_idx).is_none() {
+            self.status = "Nothing to export".into();
+            return;
+        }
+        self.export_thread_at(self.thread_idx, format);
+    }
+
+    /// Export chat `idx`. The chat's name, stamped: a second export never
+    /// clobbers the first.
+    pub(super) fn export_thread_at(&mut self, idx: usize, format: grokhub_core::ChatExport) {
+        let Some(t) = self.threads.get(idx).cloned() else {
             self.status = "Nothing to export".into();
             return;
         };
-        let dest = self.export_dest(&Self::stamped_export_name(format.file_name()));
-        let status_path = dest.display().to_string();
+        let file = match format.file_name().rsplit_once('.') {
+            Some((_, ext)) => format!("{}.{ext}", grokhub_core::export_file_stem(&t.title)),
+            None => format.file_name().to_string(),
+        };
+        let name = Self::stamped_export_name(&file);
         let footer = format!(
             "Exported from {} {}",
             grokhub_core::brand::product_name(),
             env!("CARGO_PKG_VERSION")
         );
         let now = now_ms();
-        let make_dir = self.cfg.project_dir.trim().is_empty();
-        self.status = format!("Exporting to {status_path}…");
-        self.spawn_file_write(status_path, false, move || {
+        let retry = super::saved_file::ExportRetry::Thread(t.id.clone(), format);
+        self.spawn_export(name, retry, move || {
             let msgs = t.messages.iter().map(|m| (m.0.as_str(), m.1.as_str()));
-            let body = match format {
+            Ok(match format {
                 grokhub_core::ChatExport::Html => {
                     grokhub_core::chat_export_html(&t.title, msgs, &footer)
                 }
@@ -786,10 +765,7 @@ impl Cabin {
                     grokhub_core::chat_export_json(&t.title, &t.id, msgs, now)
                 }
                 grokhub_core::ChatExport::Markdown => threads::export_markdown(&t),
-            };
-            file_writes::write_new_file(&dest, body.as_bytes(), make_dir)
-                .map(|p| p.display().to_string())
-                .map_err(|e| e.to_string())
+            })
         });
     }
 }

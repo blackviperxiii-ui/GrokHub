@@ -70,6 +70,12 @@ pub fn looks_fenced(text: &str) -> bool {
     text.contains(OPEN_PREFIX) && text.contains(CLOSE_PREFIX)
 }
 
+/// True when `text` is one fence and nothing else: it opens with the marker
+/// and ends at the matching close.
+pub fn is_whole_fence(text: &str) -> bool {
+    fenced_parts(text.trim()).is_some_and(|(_, tail)| tail.trim().is_empty())
+}
+
 /// The text a person reads on a tool row: [`ERROR_LEAD`] and a leading fence's
 /// markers dropped, the body kept, plus any note appended after the fence
 /// (hooks, nested AGENTS.md). Text that does not open with a fence is unchanged.

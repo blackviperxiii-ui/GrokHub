@@ -45,7 +45,7 @@ fn recipe_reshoot_leaves_the_ui_thread() {
     let replay = src
         .split("fn replay_recipe(")
         .nth(1)
-        .and_then(|s| s.split("fn speak_reply").next())
+        .and_then(|s| s.split("fn poll_eyes_cap(").next())
         .expect("replay_recipe");
     let spawn = replay
         .find("thread::spawn")

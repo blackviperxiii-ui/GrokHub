@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { saveDefaults, type Approvals, type Settings } from "./api";
-import { APPROVALS } from "./approvals";
+import { APPROVALS, APPROVALS_LABEL } from "./approvals";
 import { PRODUCT_NAME } from "./brand";
 
 /** Settings → Defaults: where the agent works and how chat handles changes,
@@ -20,7 +20,7 @@ export function Defaults({
   const [note, setNote] = useState<string | null>(null);
   // Settings stays mounted while hidden and reads the settings again each time
   // it shows. A field edited here and not saved keeps the edit; an untouched
-  // one takes the fresh value (Chat's chips save approvals too).
+  // one takes the fresh value (Stop asking me on a permission card saves it too).
   const [seen, setSeen] = useState(settings);
   if (settings !== seen) {
     setSeen(settings);
@@ -35,7 +35,7 @@ export function Defaults({
         <dd>
           <code>{settings.workspacePath}</code>
         </dd>
-        <dt>Approvals</dt>
+        <dt>{APPROVALS_LABEL}</dt>
         <dd>{APPROVALS[settings.approvals].label}</dd>
       </dl>
     );
@@ -68,7 +68,7 @@ export function Defaults({
         {PRODUCT_NAME} works in <code>{settings.workspacePath}</code>.
       </p>
       <label>
-        Approvals
+        {APPROVALS_LABEL}
         <select value={approvals} onChange={(e) => setApprovals(e.target.value as Approvals)}>
           {(Object.keys(APPROVALS) as Approvals[]).map((value) => (
             <option key={value} value={value}>

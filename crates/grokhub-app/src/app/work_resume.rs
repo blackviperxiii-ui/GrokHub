@@ -362,6 +362,7 @@ impl Cabin {
         self.notify(
             super::notices::NoticeKind::Info,
             format!("Auto-resume stopped: {title}. Resume it from the Workboard."),
+            Some(super::notices::NoticePlace::Page(Nav::Workboard)),
             Some(super::notices::NoticeAction::OpenCard(id.to_string())),
         );
     }

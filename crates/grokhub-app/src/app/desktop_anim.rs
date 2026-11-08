@@ -20,6 +20,10 @@ pub const BOB_SECS: f64 = 5.0;
 pub const BLINK_MIN_SECS: f64 = 3.0;
 pub const BLINK_MAX_SECS: f64 = 7.0;
 pub const BLINK_SECS: f64 = 0.12;
+/// While a reply is spoken she hops up with her voice by up to this share
+/// of the picture's height (LivLiv Player's PNGTuber hop), on every outfit,
+/// with or without mouth patches.
+pub const TALK_HOP: f32 = 0.015;
 /// An outfit change crossfades over this long with a scanline sweep.
 pub const FADE_SECS: f64 = 0.45;
 
@@ -44,6 +48,15 @@ pub fn bob(t: f64, still: bool) -> f32 {
         return 0.0;
     }
     ((t * std::f64::consts::TAU / BOB_SECS).sin() as f32) * BOB_PX
+}
+
+/// How far she hops up while talking, in points (positive up), for a
+/// picture `art` tall at smoothed voice `level` (0 to 1). Still: 0.
+pub fn talk_hop(art: Rect, level: f32, still: bool) -> f32 {
+    if still {
+        return 0.0;
+    }
+    level.clamp(0.0, 1.0) * TALK_HOP * art.height()
 }
 
 /// The picture split into bands for breathing: for each row, its `uv.y`
@@ -216,6 +229,16 @@ mod tests {
         assert_eq!(breath(1.0, true), 0.0);
         assert_eq!(bob(1.25, false), BOB_PX);
         assert_eq!(bob(1.25, true), 0.0);
+    }
+
+    #[test]
+    fn she_hops_with_her_voice_and_not_under_reduced_motion() {
+        let art = Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(100.0, 400.0));
+        assert_eq!(talk_hop(art, 0.0, false), 0.0);
+        assert_eq!(talk_hop(art, 1.0, false), 6.0, "1.5% of 400 px");
+        assert_eq!(talk_hop(art, 0.5, false), 3.0);
+        assert_eq!(talk_hop(art, 3.0, false), 6.0, "clamped at full voice");
+        assert_eq!(talk_hop(art, 1.0, true), 0.0);
     }
 
     #[test]

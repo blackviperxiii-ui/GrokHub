@@ -57,6 +57,8 @@ export interface Capabilities {
   library?: boolean;
   /** The web app, a remote for the desktop: settings and the key stay there. */
   remote?: boolean;
+  /** Auto setup: the first-run window, Settings → Auto setup, text size. */
+  autoSetup?: boolean;
 }
 
 /** Until the report loads, or if it fails, only the core features show. */
@@ -91,7 +93,9 @@ export type ChatEvent =
   | { kind: "done"; stop: string }
   | { kind: "plan"; text: string }
   /** One-tap follow-ups for the reply that just ended; most replies get none. */
-  | { kind: "suggestions"; items: Suggestion[] }
+  | { kind: "suggestions"; items: QuickChip[] }
+  /** A game goal the reply noticed, to Track or leave with Not now. */
+  | { kind: "goal"; id: string; title: string }
   | {
       kind: "elicit";
       id: string;
@@ -107,14 +111,48 @@ export type ChatEvent =
       options?: ElicitChoice[];
     };
 
-/** A follow-up to send with one tap: `prompt` becomes the next message. */
-export type Suggestion = { label: string; prompt: string };
+/** A quick chip: the cabin's engine picked it for this moment (`chips.rs`).
+ * Ask puts `value` in the box, or sends it when the box is empty; Go opens
+ * `view`. Only these two cross from the shell. */
+export interface QuickChip {
+  id: string;
+  label: string;
+  value: string;
+  action: "ask" | "go";
+  /** Why it is here, for the chip's tip. */
+  hint: string;
+  primary: boolean;
+  view?: string;
+  /** A follow-up's reply mode, put back on tap. */
+  mode?: SessionMode;
+}
+
+/** The composer's row, Home's row and the empty palette's, as the log names them. */
+export type ChipSurface = "composer" | "home" | "palette";
+
+/** The row for the open chat and its draft, or Home's. Empty with Settings →
+ * Behavior → Suggestions off. */
+export function quickChips(
+  surface: ChipSurface,
+  conversationId?: string,
+  draft?: string,
+  mode?: SessionMode,
+): Promise<QuickChip[]> {
+  return invoke<QuickChip[]>("quick_chips", { surface, conversationId, draft, mode, clock: wallClock() });
+}
+
+/** A tap (`picked`) or a hide on a chip of that row; it teaches the ranker.
+ * The page acts on the tap itself. */
+export function chipOutcome(surface: ChipSurface, id: string, picked: boolean): Promise<boolean> {
+  return invoke<boolean>("chip_outcome", { surface, id, picked, clock: wallClock() });
+}
 
 /** One answer on a question card; the label is what gets sent. */
 export type ElicitChoice = { label: string; description: string; recommended: boolean };
 
-/** The composer's chip: Chat, Plan (read-only until the plan is approved) or
- * btw (a look-only side ask). */
+/** How one message runs: Chat, Plan (read-only until the plan is approved)
+ * or btw (a look-only side answer). The app picks it; `/plan` and `/chat`
+ * name it for the next message. */
 export type SessionMode = "chat" | "plan" | "btw";
 
 export type ElicitAction = "accept" | "decline" | "cancel";
@@ -178,13 +216,54 @@ export function clearApiKey(): Promise<Settings> {
 
 /** Runs one prompt through the agent loop; resolves with the stop reason.
  * `attachments`: paths from `stageAttachment`, in the chips' order. */
+/** Sends one message. With no `mode` the app reads the message and picks:
+ * a big multi-step job plans first, anything else is answered. */
 export function sendChat(
   conversationId: string,
   text: string,
-  mode: SessionMode = "chat",
+  mode?: SessionMode,
   attachments: string[] = [],
 ): Promise<string> {
-  return invoke<string>("send_chat", { conversationId, text, mode, attachments });
+  return invoke<string>("send_chat", { conversationId, text, mode, attachments, clock: wallClock() });
+}
+
+/** What a message typed during a reply is for (src-tauri/src/turns.rs). */
+export type RunningRoute = "side" | "steer" | "queue" | "stop";
+
+export interface TurnRead {
+  route: RunningRoute;
+  /** The words to act on, with a typed btw lead taken off. */
+  text: string;
+  /** The line shown at once, so the message never looks dropped. */
+  ack: string;
+}
+
+/** Reads a message typed while a reply runs. Instant: no model call. */
+export function readTurn(text: string): Promise<TurnRead> {
+  return invoke<TurnRead>("read_turn", { text });
+}
+
+/** Answers `question` beside the running reply, read-only, under `sideId`.
+ * Resolves with the stop reason when the answer is in. */
+export function sideChat(
+  conversationId: string,
+  sideId: string,
+  question: string,
+  ask: string,
+  soFar: string,
+): Promise<string> {
+  return invoke<string>("side_chat", { conversationId, sideId, question, ask, soFar });
+}
+
+/** Tell the main task: `steered` when the words joined the running reply;
+ * otherwise send `text` as the next message. */
+export interface Told {
+  text: string;
+  steered: boolean;
+}
+
+export function tellMain(conversationId: string, question: string, answer: string): Promise<Told> {
+  return invoke<Told>("tell_main", { conversationId, question, answer });
 }
 
 /** A file waiting on the composer (src-tauri/src/attach.rs). */
@@ -262,6 +341,12 @@ export function cancelChat(conversationId: string): Promise<void> {
   return invoke<void>("cancel_chat", { conversationId });
 }
 
+/** Steer now: queued words join the running reply at its next step. False
+ * when that chat has no reply running, so the words stay queued. */
+export function steerChat(conversationId: string, text: string): Promise<boolean> {
+  return invoke<boolean>("steer_chat", { conversationId, text });
+}
+
 export function closeChat(conversationId: string): Promise<void> {
   return invoke<void>("close_chat", { conversationId });
 }
@@ -318,6 +403,35 @@ export function renameChat(id: string, title: string): Promise<void> {
 /** Deletes the saved chat; a reply still running in it stops. */
 export function deleteChat(id: string): Promise<void> {
   return invoke<void>("delete_chat", { id });
+}
+
+/** A chat export on disk (src-tauri/src/export.rs). Open and Show in folder
+ * take its token, never a path. */
+export interface SavedFile {
+  token: string;
+  /** "trip-plan-20261106-1415.md" */
+  name: string;
+  /** "Chats" */
+  folder: string;
+  /** The whole path, for Copy path. */
+  path: string;
+  /** "Saved trip-plan-20261106-1415.md to Chats" */
+  line: string;
+  /** "Show in File Explorer", "Show in Finder" or "Show in folder". */
+  revealLabel: string;
+}
+
+/** `/export` and History's Export: the chat as Markdown in your Chats folder. */
+export function exportChat(id: string): Promise<SavedFile> {
+  return invoke<SavedFile>("export_chat", { id, clock: wallClock() });
+}
+
+export function openSaved(token: string): Promise<void> {
+  return invoke<void>("open_saved", { token });
+}
+
+export function revealSaved(token: string): Promise<void> {
+  return invoke<void>("reveal_saved", { token });
 }
 
 /** Takes one message out of a saved chat after the page asked: the ask
@@ -523,7 +637,8 @@ export type SlashEffect =
   | { kind: "newChat" }
   | { kind: "mode"; mode: SessionMode; text: string | null }
   | { kind: "open"; view: "settings" | "memory" | "automations" | "connectors" }
-  | { kind: "notice"; text: string };
+  | { kind: "notice"; text: string }
+  | { kind: "export" };
 
 export function slashHits(draft: string): Promise<SlashHit[]> {
   return invoke<SlashHit[]>("slash_hits", { draft });
@@ -672,6 +787,7 @@ export interface PulsePost {
   source: string;
   title: string;
   summary: string;
+  /** Why a fetched post is here, in words ("You play Helldivers 2"). */
   because: string;
   /** A written post's topic emoji. Empty on older posts. */
   icon: string;
@@ -752,6 +868,10 @@ export interface FixView {
 
 export interface PulsePage {
   feed: PulsePost[];
+  /** How many of `feed` are today's set; "That's all for today" follows them. */
+  today: number;
+  /** What the feed writer's last run did, shown on an empty feed. */
+  note: string;
   /** An empty label is the unlabeled top group. */
   ideas: { label: string; ideas: PulseIdea[] }[];
 }
@@ -760,6 +880,7 @@ export type PulseAct =
   | "dismiss"
   | "notThis"
   | "love"
+  | "unlove"
   | "delete"
   | "snooze"
   | "accept"
@@ -1129,15 +1250,33 @@ export interface Mission {
   accepted: boolean;
 }
 
+/** This week on the local clock, Monday first. */
+export interface WeekView {
+  /** Monday to Sunday: true for a day with any XP. */
+  days: boolean[];
+  /** Today's place in `days`. */
+  today: number;
+  /** Days with XP so far this week. */
+  active: number;
+  /** Active days the week asks for, tuned from the weeks before. */
+  target: number;
+  inARow: number;
+  /** Weeks with any XP, ever. */
+  played: number;
+  freezes: number;
+}
+
 export interface Xp {
   level: number;
+  /** "Rookie", "Grinder" and so on, a new one every five levels. */
+  title: string;
   xp: number;
+  /** Total XP at which the next level starts. */
   nextLevelXp: number;
   /** Progress into the level, 0 to 1. */
   frac: number;
   today: number;
-  /** The last seven days, today last: true when a task finished. */
-  streak: boolean[];
+  week: WeekView;
 }
 
 export interface MissionPage {
@@ -1146,7 +1285,7 @@ export interface MissionPage {
 }
 
 export type HomeTile =
-  | { kind: "objectives"; mission: Mission | null; xp: Xp }
+  | { kind: "objectives"; mission: Mission | null; xp: Xp; followUp?: FollowUp }
   | { kind: "streak"; xp: Xp }
   | { kind: "recentChats"; chats: { id: string; title: string; updated: number }[] }
   | { kind: "automations"; active: number; next: { id: string; name: string; summary: string }[] }
@@ -1158,10 +1297,39 @@ export type HomeTile =
   | { kind: "personality"; name: string; picture: string | null }
   | { kind: "upNext"; games: { appId: number; name: string }[] }
   | { kind: "error"; message: string }
-  /** Only the cabin paints it. */
-  | { kind: "cabin" }
-  /** A paired browser can't read it. */
-  | { kind: "desktop" };
+  /** Any other module, in the shared tile model. */
+  | { kind: "view"; view: TileView };
+
+export type TileTone = "normal" | "warn" | "alert" | "quiet";
+export type TileState = "ready" | "empty" | "off" | "error" | "offline" | "unsupported";
+
+/** What a tile, row or button does; Home maps it onto its routes. */
+export type TileAction =
+  | { kind: "ask"; ask: string }
+  | { kind: "openChat"; id: string }
+  | { kind: "nav"; page: string }
+  | { kind: "settings"; section: string }
+  | { kind: "runPlaybook"; id: string }
+  | { kind: "review"; id: string }
+  | { kind: "toggle"; feature: string; on: boolean }
+  | { kind: "turnOn"; feature: string }
+  | { kind: "openUrl"; url: string }
+  | { kind: "play"; appId: number }
+  | { kind: "openClip"; index: number }
+  | { kind: "steamFriends" }
+  | { kind: "reroll" }
+  | { kind: "retry" };
+
+export interface TileView {
+  state: TileState;
+  tag: string | null;
+  text: { big: string; caption: string; detail: string | null; tone: TileTone };
+  rows: { label: string; value: string; tone: TileTone; tap: TileAction | null }[];
+  progress: number | null;
+  buttons: { label: string; action: TileAction; primary: boolean }[];
+  tap: TileAction | null;
+  updatedMs: number | null;
+}
 
 export type SlotSize = "large" | "medium" | "small";
 
@@ -1173,6 +1341,8 @@ export interface HomeSlot {
   name: string;
   purpose: string;
   tile: HomeTile;
+  /** How often this tile's data changes, in seconds; `null` if it doesn't on its own. */
+  refreshSecs: number | null;
 }
 
 export interface HomePage {
@@ -1187,6 +1357,28 @@ export function getHome(conversationId?: string): Promise<HomePage> {
   return invoke<HomePage>("get_home", { clock: wallClock(), conversationId });
 }
 
+/** Which module sits in each slot. "" or null hides a Medium or Small slot. */
+export interface HomePick {
+  preset: string;
+  large: string;
+  medium: string[];
+  small: (string | null)[];
+}
+
+export interface HomeCatalog {
+  current: HomePick;
+  modules: { id: string; name: string; category: string; sizes: SlotSize[]; purpose: string }[];
+  presets: { id: string; label: string; pick: HomePick }[];
+}
+
+export function homeCatalog(): Promise<HomeCatalog> {
+  return invoke<HomeCatalog>("home_catalog");
+}
+
+export function setHomeLayout(pick: HomePick): Promise<void> {
+  return invoke<void>("set_home_layout", { pick });
+}
+
 export function getMission(conversationId?: string): Promise<MissionPage> {
   return invoke<MissionPage>("get_mission", { clock: wallClock(), conversationId });
 }
@@ -1194,6 +1386,78 @@ export function getMission(conversationId?: string): Promise<MissionPage> {
 /** Accept as done (`done`) or Undo. Desktop only. */
 export function setMissionDone(done: boolean, conversationId?: string): Promise<MissionPage> {
   return invoke<MissionPage>("set_mission_done", { clock: wallClock(), conversationId, done });
+}
+
+/** One goal row on Objectives (grokhub-core objectives::GoalCard). */
+export interface GoalCard {
+  id: string;
+  /** "Old School RuneScape · 99 Fishing". */
+  title: string;
+  /** "93 / 99 · 6 levels to 99". */
+  detail: string;
+  frac: number;
+  /** True when the goal moves one step at a time and gets a +1. */
+  plusOne: boolean;
+  /** "Pick up Elden Ring tonight?" on a Today row. */
+  prompt?: string;
+  /** "Nov 2" on a finished goal. */
+  doneOn?: string;
+}
+
+/** A gentle follow-up on a goal left a few days (grokhub-core objectives::FollowUp). */
+export interface FollowUp {
+  id: string;
+  /** "Elden Ring · Finish". */
+  title: string;
+  /** "Want to pick a night for your next Elden Ring session?", or the last line. */
+  line: string;
+  /** What "Plan it" puts in the chat box. Empty on the last line. */
+  prompt: string;
+  /** "I'll stop asking about …": a note with no button. */
+  stop: boolean;
+}
+
+export interface GoalBoard {
+  today: GoalCard[];
+  mine: GoalCard[];
+  suggested: GoalCard[];
+  season: {
+    label: string;
+    done: number;
+    trophies: GoalCard[];
+    /** Seasons whose badge was earned (three goals done), newest first. */
+    badges: string[];
+    /** "1 more goal for the Oct to Dec 2026 badge"; absent once earned. */
+    badgeLine?: string;
+    /** "First goal this season: +50 bonus XP", for a week after it landed. */
+    bonus?: string;
+  };
+  followUp?: FollowUp;
+  /** Monday's "Your week": up to three real changes and one goal to try. */
+  week?: YourWeek;
+}
+
+export interface YourWeek {
+  lines: string[];
+  suggestion?: GoalCard;
+}
+
+export type GoalAct =
+  | { act: "add"; text: string }
+  | { act: "bump" | "done" | "drop" | "track" | "notNow"; id: string };
+
+export interface GoalsSaved {
+  board: GoalBoard;
+  /** Why an added goal was refused. */
+  note?: string;
+}
+
+export function getGoals(): Promise<GoalBoard> {
+  return invoke<GoalBoard>("get_goals", { clock: wallClock() });
+}
+
+export function goalAct(acts: GoalAct[]): Promise<GoalsSaved> {
+  return invoke<GoalsSaved>("goal_act", { clock: wallClock(), acts });
 }
 
 /** Settings → Local AI (src-tauri/src/local_ai.rs). */
@@ -1208,8 +1472,6 @@ export interface LocalCaps {
 export interface LocalManual {
   /** "auto", "cuda", "rocm", "vulkan", "metal", "sycl" or "cpu". */
   backend: string;
-  /** "auto", "on" or "off". */
-  draft: string;
   ngl: number | null;
   ctx: number | null;
   threads: number | null;
@@ -1325,6 +1587,14 @@ export interface LocalAiView {
   /** Offers for every catalog model still missing its draft pair. */
   draftOffers: LocalDraftOffer[];
   draftProgress: LocalDraftProgress | null;
+  running: LocalRunning;
+}
+
+/** What runs now, with its two controls: keep loaded and unload now. */
+export interface LocalRunning {
+  lines: string[];
+  loaded: boolean;
+  keptLoaded: boolean;
 }
 
 export type LocalEngineEvent = {
@@ -1356,6 +1626,78 @@ export function resetLocalAi(): Promise<LocalAiView> {
 
 export function checkModelFile(path: string): Promise<LocalFileRow> {
   return invoke<LocalFileRow>("check_model_file", { path });
+}
+
+export function setLocalKeepLoaded(on: boolean): Promise<LocalAiView> {
+  return invoke<LocalAiView>("set_local_keep_loaded", { on });
+}
+
+export function unloadLocalModel(): Promise<LocalAiView> {
+  return invoke<LocalAiView>("unload_local_model");
+}
+
+/** Settings → Local AI → Download models (src-tauri/src/model_library.rs). */
+export type LibraryRowState =
+  | "download"
+  | "resume"
+  | "queued"
+  | "downloading"
+  | "downloaded"
+  | "inUse"
+  | "wontRun";
+
+export interface LibraryRow {
+  id: string;
+  name: string;
+  line: string;
+  about: string;
+  state: LibraryRowState;
+}
+
+export interface LibraryQueueOffer {
+  ids: string[];
+  line: string;
+}
+
+export interface LibraryTab {
+  label: string;
+  rows: LibraryRow[];
+  empty: string | null;
+  all: LibraryQueueOffer | null;
+}
+
+export interface LibraryStatus {
+  job: { id: string; line: string; pct: number } | null;
+  queued: number;
+  message: string | null;
+  running: boolean;
+}
+
+export interface LibraryView {
+  tabs: LibraryTab[];
+  everything: LibraryQueueOffer | null;
+  status: LibraryStatus;
+}
+
+/** Reads the hardware, so it can take a moment. */
+export function getModelLibrary(): Promise<LibraryView> {
+  return invoke<LibraryView>("get_model_library");
+}
+
+export function downloadModels(ids: string[]): Promise<LibraryView> {
+  return invoke<LibraryView>("download_models", { ids });
+}
+
+export function pauseModelDownloads(): Promise<void> {
+  return invoke<void>("pause_model_downloads");
+}
+
+export function removeLibraryModel(id: string): Promise<LibraryView> {
+  return invoke<LibraryView>("remove_library_model", { id });
+}
+
+export function onModelLibraryEvent(handler: (status: LibraryStatus) => void): Promise<UnlistenFn> {
+  return subscribe<LibraryStatus>("model-library", handler);
 }
 
 export function runLocalSpeedTest(): Promise<string> {
@@ -1515,9 +1857,19 @@ export interface PersonalityPage {
   current: string;
   /** Custom files that could not be used. */
   problems: string[];
-  /** Adults-only personalities: off leaves the explicit presets out. */
+  /** Adults-only personalities: off leaves the explicit presets out. On only
+   * once the 18+ check was answered yes. */
   explicit: boolean;
+  /** The switch was turned on before the 18+ check: nothing changed; ask it. */
+  ageCheck: boolean;
+  /** How crude the jokes get while adults-only is on. */
+  heat: Heat;
+  /** Another voice can step in while the topic calls for it. */
+  dynamicChat: boolean;
 }
+
+/** A stop on the Heat dial (src-tauri `set_quip_heat`); "clean" reads as cheeky. */
+export type Heat = "clean" | "cheeky" | "spicy" | "filthy";
 
 export interface PersonalityEdit {
   id: string;
@@ -1538,6 +1890,19 @@ export function setPersonality(id: string): Promise<PersonalityPage> {
 
 export function setExplicitPersonalities(on: boolean): Promise<PersonalityPage> {
   return invoke<PersonalityPage>("set_explicit_personalities", { on });
+}
+
+/** The one-time 18+ check's yes: remembered, and adults-only turns on. */
+export function confirmAdult(): Promise<PersonalityPage> {
+  return invoke<PersonalityPage>("confirm_adult");
+}
+
+export function setQuipHeat(heat: Heat): Promise<PersonalityPage> {
+  return invoke<PersonalityPage>("set_quip_heat", { heat });
+}
+
+export function setDynamicChat(on: boolean): Promise<PersonalityPage> {
+  return invoke<PersonalityPage>("set_dynamic_chat", { on });
 }
 
 /** The copy's id, then the page. */
@@ -1759,6 +2124,8 @@ export function stopTask(conversationId: string, taskId?: string): Promise<Queue
 /** Settings → Behavior, saved in shell.json. Everything starts off. */
 export interface Behavior {
   autocomplete: boolean;
+  /** A few next steps to tap, under the box, on Home and after replies. */
+  suggestions: boolean;
   /** Quiet hours for automations as HH:MM; both empty is none. */
   quietStart: string;
   quietEnd: string;
@@ -1797,6 +2164,8 @@ export interface PrivacyPage {
   encrypted: boolean;
   encryptedNote: string;
   dataFolder: string;
+  /** Where exports and the cabin's other files go (Documents/Loadout). */
+  filesFolder: string;
   canOpenFolder: boolean;
 }
 
@@ -1810,6 +2179,15 @@ export function setOfflineOnly(on: boolean): Promise<PrivacyPage> {
 
 export function openDataFolder(): Promise<void> {
   return invoke<void>("open_data_folder");
+}
+
+export function openFilesFolder(): Promise<void> {
+  return invoke<void>("open_files_folder");
+}
+
+/** The folder picker; the page as it is after (unchanged when closed). */
+export function changeFilesFolder(): Promise<PrivacyPage> {
+  return invoke<PrivacyPage>("change_files_folder");
 }
 
 /** Settings → Background (src-tauri/src/background.rs). */
@@ -1859,4 +2237,19 @@ export function libraryCover(appId: number, shape: CoverShape): Promise<string |
 /** Ask Steam to start the game. Resolves to a line to show. */
 export function libraryPlay(appId: number): Promise<string> {
   return invoke<string>("library_play", { appId });
+}
+
+/** A Home tile's Turn on, for a switch that needs nothing else. */
+export function homeTurnOn(feature: string): Promise<void> {
+  return invoke<void>("home_turn_on", { feature });
+}
+
+/** Opens Steam's own friends list, for Home's Squad tile. */
+export function libraryFriends(): Promise<void> {
+  return invoke<void>("library_friends");
+}
+
+/** Plays the clip at this place in Home's Clips tile with the PC's player. */
+export function homeOpenClip(index: number): Promise<void> {
+  return invoke<void>("home_open_clip", { index });
 }

@@ -223,12 +223,22 @@ pub fn desktop_dir() -> Option<PathBuf> {
 }
 
 /// The user's Downloads folder, found the same way as [`desktop_dir`].
-fn downloads_dir() -> Option<PathBuf> {
+pub fn downloads_dir() -> Option<PathBuf> {
     let home = user_home()?;
     let platform = dirs::download_dir()
         .filter(|_| dirs::home_dir().as_deref() == Some(home.as_path()))
         .filter(|d| d != &home);
     Some(platform.unwrap_or_else(|| home.join("Downloads")))
+}
+
+/// The user's Documents folder, found the same way as [`desktop_dir`]
+/// (OneDrive's when Windows moved it there; the translated name on Linux).
+pub fn documents_dir() -> Option<PathBuf> {
+    let home = user_home()?;
+    let platform = dirs::document_dir()
+        .filter(|_| dirs::home_dir().as_deref() == Some(home.as_path()))
+        .filter(|d| d != &home);
+    Some(platform.unwrap_or_else(|| home.join("Documents")))
 }
 
 /// Folders a sync client uploads: the OneDrive roots Windows names in the
@@ -240,6 +250,12 @@ fn sync_roots_from_env() -> Vec<PathBuf> {
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
         .collect()
+}
+
+/// True when `dir` sits inside a folder a sync client uploads (OneDrive,
+/// Dropbox, Google Drive, iCloud Drive).
+pub fn dir_is_cloud_synced(dir: &Path) -> bool {
+    is_cloud_synced(dir, &sync_roots_from_env())
 }
 
 /// True when `dir` sits inside a cloud-synced folder: one of `sync_roots`,
@@ -292,6 +308,46 @@ pub fn diagnostics_zip_path(at: SystemTime) -> Result<PathBuf, String> {
         || "Not saved: your Desktop, Downloads and home folder all sync to the cloud".to_string(),
     )?;
     Ok(dir.join(diagnostics_zip_name(at)))
+}
+
+/// Where a diagnostics zip lands, for its status line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiagnosticsPlace {
+    /// The Diagnostics folder in your files (`Documents/Loadout/Diagnostics`).
+    Diagnostics,
+    /// The Desktop (your files sync to the cloud, the Desktop doesn't).
+    Desktop,
+    /// Downloads or home, because the others sync to the cloud.
+    Elsewhere,
+}
+
+/// Destination for a new export: the Diagnostics folder in your files
+/// (under `config`'s `folders.json`), unless that folder syncs to the cloud
+/// or can't be made; then [`diagnostics_zip_path`]'s Desktop chain. A bundle
+/// never uploads itself.
+pub fn diagnostics_zip_path_in(config: &Path, at: SystemTime) -> Result<PathBuf, String> {
+    let kind = crate::user_files::UserFolder::Diagnostics;
+    let planned = crate::user_files::folder_path(config, kind);
+    if !is_cloud_synced(&planned, &sync_roots_from_env()) {
+        if let Ok(dir) = crate::user_files::folder(config, kind) {
+            return Ok(dir.join(diagnostics_zip_name(at)));
+        }
+    }
+    diagnostics_zip_path(at)
+}
+
+/// Which [`DiagnosticsPlace`] `path` is in.
+pub fn diagnostics_place(config: &Path, path: &Path) -> DiagnosticsPlace {
+    let dir = path.parent();
+    let diagnostics =
+        crate::user_files::folder_path(config, crate::user_files::UserFolder::Diagnostics);
+    if dir == Some(diagnostics.as_path()) {
+        DiagnosticsPlace::Diagnostics
+    } else if dir.is_some() && dir == desktop_dir().as_deref() {
+        DiagnosticsPlace::Desktop
+    } else {
+        DiagnosticsPlace::Elsewhere
+    }
 }
 
 /// Redact secrets, bare token shapes (AWS, Slack, Stripe, Google, Notion,
@@ -694,14 +750,15 @@ pub fn diagnostics_redaction_summary(markdown: &str) -> String {
 /// Status line after a successful write, naming the folder when it is not
 /// the Desktop (`on_desktop` false) (triggers a Saved toast; the chat's notice carries the Open
 /// folder action).
-pub fn diagnostics_saved_status(path: &Path, on_desktop: bool) -> String {
+pub fn diagnostics_saved_status(path: &Path, place: DiagnosticsPlace) -> String {
     let name = path
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("diagnostics.zip");
-    match path.parent() {
-        Some(dir) if !on_desktop => format!(
-            "Saved {name} to {} (your Desktop syncs to the cloud, so it stays on this PC)",
+    match (place, path.parent()) {
+        (DiagnosticsPlace::Diagnostics, _) => format!("Saved {name} to Diagnostics"),
+        (DiagnosticsPlace::Elsewhere, Some(dir)) => format!(
+            "Saved {name} to {} (your Documents and Desktop sync to the cloud, so it stays on this PC)",
             dir.display()
         ),
         _ => format!("Saved {name} to your Desktop"),
@@ -930,7 +987,7 @@ mod tests {
         assert!(md.contains("Length cap:"), "{md}");
         assert!(md.contains("Why chat vs task:"), "{md}");
         assert_eq!(
-            diagnostics_saved_status(&path, true),
+            diagnostics_saved_status(&path, DiagnosticsPlace::Desktop),
             "Saved loadout-diagnostics-20231114-221320.zip to your Desktop"
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -1086,16 +1143,51 @@ mod tests {
     }
 
     #[test]
+    fn a_bundle_goes_to_diagnostics_unless_that_folder_syncs() {
+        let root = std::env::temp_dir().join(format!("gh-diag-in-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let config = root.join("cfg");
+        std::fs::create_dir_all(&config).unwrap();
+        let files = root.join("files");
+        crate::user_files::set_files_root(&config, &files).unwrap();
+        let at = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        let path = diagnostics_zip_path_in(&config, at).unwrap();
+        assert_eq!(path.parent(), Some(files.join("Diagnostics").as_path()));
+        assert_eq!(
+            diagnostics_place(&config, &path),
+            DiagnosticsPlace::Diagnostics
+        );
+        // A files folder inside OneDrive is skipped for the old chain.
+        let synced = root.join("OneDrive").join("Loadout");
+        crate::user_files::set_files_root(&config, &synced).unwrap();
+        if let Ok(other) = diagnostics_zip_path_in(&config, at) {
+            assert!(!other.starts_with(&synced), "{other:?}");
+        }
+        assert!(!synced.join("Diagnostics").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn saved_status_names_the_folder_when_it_is_not_the_desktop() {
         let zip = Path::new("/home/user/Downloads/a.zip");
         assert_eq!(
-            diagnostics_saved_status(Path::new("/home/user/Desktop/a.zip"), true),
+            diagnostics_saved_status(
+                Path::new("/home/user/Documents/Loadout/Diagnostics/a.zip"),
+                DiagnosticsPlace::Diagnostics
+            ),
+            "Saved a.zip to Diagnostics"
+        );
+        assert_eq!(
+            diagnostics_saved_status(
+                Path::new("/home/user/Desktop/a.zip"),
+                DiagnosticsPlace::Desktop
+            ),
             "Saved a.zip to your Desktop"
         );
         assert_eq!(
-            diagnostics_saved_status(zip, false),
+            diagnostics_saved_status(zip, DiagnosticsPlace::Elsewhere),
             format!(
-                "Saved a.zip to {} (your Desktop syncs to the cloud, so it stays on this PC)",
+                "Saved a.zip to {} (your Documents and Desktop sync to the cloud, so it stays on this PC)",
                 Path::new("/home/user/Downloads").display()
             )
         );

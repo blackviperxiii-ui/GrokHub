@@ -2,8 +2,10 @@
 //! the feed prompt is saved, it fetches the free sources, asks the model for
 //! one post whose cites must be pages fetched this run, caches the post's
 //! images locally, and adds the post to the same `updates.json` the page
-//! reads. The taste summary is rebuilt first when the person loved,
-//! discussed or chatted since the last rebuild.
+//! reads. The taste summary is rebuilt before the post call when the person
+//! loved, discussed, passed on a post or chatted since the last rebuild and
+//! there is something new to write about. Every model call spends one of the
+//! day's calls, counted on the person's own day.
 //!
 //! The same clock runs the idea writer (`grokhub_core::pulse_ideas`) after a
 //! feed run, at most once every six hours: Muse-style ideas from the
@@ -138,8 +140,7 @@ pub fn run_once(
         s.last_run_ms = now_ms;
         s.clone()
     })?;
-    let taste = taste_summary(config_dir, model, client, &state, now_ms);
-    let outcome = write_post(config_dir, model, client, net, &state, &taste, now_ms);
+    let outcome = write_post(config_dir, model, client, net, &state, now_ms);
     let note = match &outcome {
         Ok(Outcome::Posted(_)) => "Posted a new story.".to_string(),
         Ok(Outcome::Nothing(why)) => why.clone(),
@@ -147,6 +148,16 @@ pub fn run_once(
     };
     with_state(config_dir, |s| s.note = note)?;
     outcome
+}
+
+/// The Steam games that feed Pulse and were played, most recent first.
+fn played_games(config_dir: &Path, steam_root: Option<&Path>) -> Vec<String> {
+    let Some(root) = steam_root else {
+        return Vec::new();
+    };
+    let games = grokhub_core::steam::read_library(root);
+    let prefs = grokhub_core::steam::load_prefs(config_dir);
+    grokhub_core::steam::played_names(&games, &prefs, 8)
 }
 
 /// One idea run behind its six-hour gate. With nothing personal to go on
@@ -182,7 +193,11 @@ pub fn run_ideas(
         .filter(|c| c.kind == grokhub_core::UpdateKind::Idea)
         .map(|c| c.title.clone())
         .collect();
+    let games = played_games(config_dir, grokhub_core::steam::detect_root().as_deref());
+    let pc = pi::pc_lines(&cards);
     let Some(messages) = pi::idea_messages(&pi::IdeaInput {
+        games: &games,
+        pc: &pc,
         goals: &goals,
         topics: &profile.prompt_section(),
         chats: &chats,
@@ -201,11 +216,16 @@ pub fn run_ideas(
 }
 
 /// The current taste note, rebuilt first when new taste events landed.
+/// The taste note, rebuilt first when it is stale. The rebuild is a model
+/// call, so it spends one of `day`'s calls; with none left the current note
+/// stays.
 fn taste_summary(
     config_dir: &Path,
     model: &str,
     client: &dyn ModelClient,
     state: &WriterState,
+    cache: &mut ps::SourceCache,
+    day: u64,
     now_ms: u64,
 ) -> String {
     let path = config_dir.join(pw::TASTE_FILE);
@@ -216,6 +236,9 @@ fn taste_summary(
     let Some(messages) = pw::taste_messages(&current, &state.taste_events) else {
         return current;
     };
+    if !cache.take_call_on(day) {
+        return current;
+    }
     let Some(note) = ask(client, model, &messages)
         .ok()
         .and_then(|r| pw::parse_taste(&r))
@@ -246,9 +269,9 @@ fn write_post(
     client: &dyn ModelClient,
     net: &dyn Net,
     state: &WriterState,
-    taste: &str,
     now_ms: u64,
 ) -> Result<Outcome, String> {
+    crate::interests::seed_once(config_dir, now_ms)?;
     let profile =
         grokhub_core::interests::load(&config_dir.join(grokhub_core::interests::FILE_NAME));
     let topics = profile.search_topics();
@@ -258,13 +281,17 @@ fn write_post(
     if reqs.is_empty() {
         return Ok(Outcome::Nothing(NOTHING_TO_READ.into()));
     }
-    if !cache.take_summary_call(now_ms) {
+    let day = ps::local_day(now_ms, state.utc_offset_min);
+    if cache.calls_on(day) >= ps::SUMMARY_CALLS_PER_DAY {
         return Ok(Outcome::Nothing(BUDGET_USED.into()));
     }
     let got = ps::gather(&reqs, &mut cache, now_ms, &mut |req, have| {
         net.source(req, have)
     });
     cache.last_run_ms = now_ms;
+    // Every check moves the topic rotation on, posted or not, so the same
+    // searches never repeat run after run.
+    cache.runs = cache.runs.saturating_add(1);
     let ranked = ps::rank_with(
         &got.items,
         &profile,
@@ -282,11 +309,16 @@ fn write_post(
             grokhub_core::update_feed::HONEST_EMPTY.into(),
         ));
     }
+    let taste = taste_summary(config_dir, model, client, state, &mut cache, day, now_ms);
+    if !cache.take_call_on(day) {
+        ps::save_cache(&cache_path, &cache)?;
+        return Ok(Outcome::Nothing(BUDGET_USED.into()));
+    }
     let research = pw::research_from(&picks);
     let recent = pw::recent_titles(&cards);
     let messages = pw::writer_messages(&pw::WriterInput {
         prompt: state.prompt_or_default(),
-        taste,
+        taste: &taste,
         topics: &profile.prompt_section(),
         recent_titles: &recent,
         research: &research,
@@ -303,7 +335,6 @@ fn write_post(
         Err(why) => {
             // Offered and passed over: these items don't come back.
             ps::mark_seen(&mut cache, &picks);
-            cache.runs = cache.runs.saturating_add(1);
             ps::save_cache(&cache_path, &cache)?;
             return Ok(Outcome::Nothing(why));
         }
@@ -323,7 +354,6 @@ fn write_post(
         .collect();
     ps::mark_seen(&mut cache, &used);
     cache.mark_source_posts(&used);
-    cache.runs = cache.runs.saturating_add(1);
     ps::save_cache(&cache_path, &cache)?;
     Ok(Outcome::Posted(id))
 }
@@ -421,9 +451,7 @@ fn tick(
     }
     let now = grokhub_core::now_ms();
     let state = state(config_dir);
-    let quiet = state.utc_offset_min.is_some_and(|offset| {
-        grokhub_core::quiet_hours_active(&pw::local_hm(now, offset), pw::QUIET_START, pw::QUIET_END)
-    });
+    let quiet = quiet_now(config_dir, &state, now);
     if !pw::writer_due(&state, now, just_opened, quiet) {
         return;
     }
@@ -436,6 +464,22 @@ fn tick(
     let _ = run_once(config_dir, &model, client.as_ref(), net().as_ref(), now);
     let _ = run_ideas(config_dir, &model, client.as_ref(), now);
     RUNNING.store(false, Ordering::SeqCst);
+}
+
+/// Quiet hours as saved in Settings → Behavior, on the person's clock. No
+/// quiet hours saved, or no clock reported yet, means not quiet.
+fn quiet_now(config_dir: &Path, state: &WriterState, now_ms: u64) -> bool {
+    let behavior = crate::settings::load(config_dir).behavior;
+    if behavior.quiet_start.is_empty() || behavior.quiet_end.is_empty() {
+        return false;
+    }
+    state.utc_offset_min.is_some_and(|offset| {
+        grokhub_core::quiet_hours_active(
+            &pw::local_hm(now_ms, offset),
+            &behavior.quiet_start,
+            &behavior.quiet_end,
+        )
+    })
 }
 
 /// The live network, or the loopback mock when [`NET_ENV`] names one.
@@ -818,6 +862,105 @@ mod tests {
             ))
         );
         assert!(again.seen.lock().unwrap().is_empty(), "no model call");
+        let cache = ps::load_cache(&d.config.join(ps::CACHE_FILE));
+        // Both checks move the topic rotation on; only the two model calls
+        // of the first run spent today's budget.
+        assert_eq!(cache.runs, 2);
+        assert_eq!(cache.calls_on(ps::local_day(NOW, None)), 2);
+    }
+
+    #[test]
+    fn a_new_love_with_nothing_new_to_read_makes_no_taste_call() {
+        let d = dirs("taste-gate");
+        let client = Script::new(&[POST]);
+        run_once(&d.config, "grok-test", &client, &FakeNet, NOW).expect("post");
+        assert_eq!(
+            client.seen.lock().unwrap().len(),
+            1,
+            "no taste yet: post only"
+        );
+        with_state(&d.config, |s| {
+            s.note_taste(TasteKind::Love, "Async closures", NOW + 1);
+        })
+        .expect("love");
+        let again = Script::new(&[]);
+        assert_eq!(
+            run_once(&d.config, "grok-test", &again, &FakeNet, NOW + 3_600_000),
+            Ok(Outcome::Nothing(
+                grokhub_core::update_feed::HONEST_EMPTY.into()
+            ))
+        );
+        assert!(again.seen.lock().unwrap().is_empty(), "no model call");
+        assert!(
+            state(&d.config).taste_stale(),
+            "the love waits for the next post"
+        );
+    }
+
+    #[test]
+    fn a_used_day_budget_spends_no_fetch_and_the_next_local_day_runs() {
+        let d = dirs("budget");
+        with_state(&d.config, |s| s.utc_offset_min = Some(-600)).expect("clock");
+        let day = ps::local_day(NOW, Some(-600));
+        let mut cache = ps::SourceCache::default();
+        for _ in 0..ps::SUMMARY_CALLS_PER_DAY {
+            assert!(cache.take_call_on(day));
+        }
+        ps::save_cache(&d.config.join(ps::CACHE_FILE), &cache).expect("cache");
+        let net = Recording::default();
+        assert_eq!(
+            run_once(&d.config, "grok-test", &Script::new(&[]), &net, NOW),
+            Ok(Outcome::Nothing(BUDGET_USED.into()))
+        );
+        assert!(net.0.lock().unwrap().is_empty(), "no fetch on a spent day");
+        // NOW is 22:00 the day before at UTC-10; two hours later is a new day there.
+        let client = Script::new(&[POST]);
+        let next = NOW + 2 * 3_600_000;
+        assert_ne!(ps::local_day(next, Some(-600)), day);
+        assert!(matches!(
+            run_once(&d.config, "grok-test", &client, &FakeNet, next),
+            Ok(Outcome::Posted(_))
+        ));
+    }
+
+    #[test]
+    fn quiet_hours_come_from_behavior_settings() {
+        let d = dirs("quiet");
+        let mut st = WriterState {
+            utc_offset_min: Some(0),
+            ..WriterState::default()
+        };
+        let at = |h: u64| NOW - NOW % 86_400_000 + h * 3_600_000;
+        // Nothing saved: never quiet, even at 23:00.
+        assert!(!quiet_now(&d.config, &st, at(23)));
+        std::fs::write(
+            d.config.join(crate::settings::FILE),
+            r#"{"behavior":{"quietStart":"01:00","quietEnd":"06:00"}}"#,
+        )
+        .expect("shell.json");
+        assert!(quiet_now(&d.config, &st, at(3)));
+        assert!(!quiet_now(&d.config, &st, at(23)));
+        st.utc_offset_min = None;
+        assert!(!quiet_now(&d.config, &st, at(3)), "no clock yet: not quiet");
+    }
+
+    #[test]
+    fn the_first_run_seeds_interests_from_memory() {
+        let d = dirs("seed");
+        std::fs::remove_file(d.config.join(grokhub_core::interests::FILE_NAME)).expect("rm");
+        std::fs::create_dir_all(d.config.join("memory")).expect("memory");
+        std::fs::write(d.config.join("memory").join("USER.md"), "Interests: Rust\n").expect("user");
+        let client = Script::new(&[POST]);
+        assert!(matches!(
+            run_once(&d.config, "grok-test", &client, &FakeNet, NOW),
+            Ok(Outcome::Posted(_))
+        ));
+        let profile =
+            grokhub_core::interests::load(&d.config.join(grokhub_core::interests::FILE_NAME));
+        assert!(profile.seeded);
+        assert_eq!(profile.search_topics(), vec!["Rust".to_string()]);
+        // Removed topics never come back: the seed runs once.
+        assert_eq!(crate::interests::seed_once(&d.config, NOW + 1), Ok(0));
     }
 
     /// FakeNet that writes down every source URL it was asked for.

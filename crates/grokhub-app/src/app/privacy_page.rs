@@ -8,7 +8,6 @@ use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use grokhub_agent::harness as hx;
-use grokhub_core::wire::PermissionMode;
 
 use super::loadout_home::{caption, card};
 use super::*;
@@ -222,7 +221,7 @@ pub(super) const LOCAL_ROUTING: [&str; 5] = [
     "Offline, this PC's model takes what it can. Work that needs the cloud waits for the network.",
     "Sensitive data you haven't allowed to the cloud stays on this PC.",
     "The model loads only when it's needed and unloads when it sits idle.",
-    "Explicit 18+ chats go only to xAI or this PC's model.",
+    "Explicit 18+ chats run only on this PC's model.",
 ];
 
 /// The lines under the On-device model switch: only while it can run.
@@ -576,31 +575,8 @@ impl Cabin {
         }
     }
 
-    /// "Agent asks before changes" is the saved Ask / Auto choice.
-    pub(super) fn set_asks_first(&mut self, on: bool) {
-        let mode = if on {
-            PermissionMode::Ask
-        } else {
-            PermissionMode::Auto
-        };
-        if self.permission_mode != mode {
-            self.drop_turn_for_pin();
-            self.set_permission_mode(mode);
-            self.status = "Saved".into();
-        }
-    }
-
     fn privacy_switches(&mut self, ui: &mut egui::Ui, week: &Week, now: u64) {
         crate::cards::settings_note(ui, MODELS_MOVED);
-        let mut asks = self.permission_mode == PermissionMode::Ask;
-        if crate::cards::settings_toggle(
-            ui,
-            "Agent asks before changes",
-            "Every tool that changes something waits for your OK. Off is Auto.",
-            &mut asks,
-        ) {
-            self.set_asks_first(asks);
-        }
         let mut know = self.know_me_on();
         if crate::cards::settings_toggle(
             ui,
@@ -655,6 +631,8 @@ impl Cabin {
                 "Click again to turn Know me off and delete every tag it learned.",
             );
         }
+        ui.add_space(14.0);
+        self.ui_storage_block(ui);
         ui.add_space(14.0);
         paint_ledger(ui, week, now);
     }
@@ -752,7 +730,7 @@ mod tests {
                 "Offline, this PC's model takes what it can. Work that needs the cloud waits for the network.",
                 "Sensitive data you haven't allowed to the cloud stays on this PC.",
                 "The model loads only when it's needed and unloads when it sits idle.",
-                "Explicit 18+ chats go only to xAI or this PC's model.",
+                "Explicit 18+ chats run only on this PC's model.",
             ]
         );
         assert!(local_notes(true, false).is_empty());
@@ -828,14 +806,11 @@ mod tests {
     }
 
     #[test]
-    fn the_asks_switch_saves_ask_or_auto() {
-        let mut cabin = Cabin::quiet_for_test();
-        cabin.set_asks_first(false);
-        assert_eq!(cabin.permission_mode, PermissionMode::Auto);
-        assert_eq!(cabin.cfg.permission_mode, "auto");
-        cabin.set_asks_first(true);
-        assert_eq!(cabin.permission_mode, PermissionMode::Ask);
-        assert_eq!(cabin.cfg.permission_mode, "ask");
+    fn privacy_has_no_permission_switch() {
+        // Ask / Auto / Always live only in Settings → Defaults.
+        let src = include_str!("privacy_page.rs");
+        let gone = ["Agent asks", " before changes"].concat();
+        assert_eq!(src.matches(gone.as_str()).count(), 0);
     }
 
     #[test]
@@ -901,7 +876,7 @@ mod tests {
                 .clone()
         };
         let (_, hero_rect, hero_justified) = find(HERO_SENT);
-        let (_, switch_rect, _) = find("Agent asks before changes");
+        let (_, switch_rect, _) = find("Know me");
         assert!(!hero_justified, "the hero is ragged right");
         assert!(
             hero_rect.right() + STORY_GUTTER - 1.0 <= switch_rect.left(),
