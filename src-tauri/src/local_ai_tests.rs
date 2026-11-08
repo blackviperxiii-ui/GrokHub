@@ -249,7 +249,6 @@ fn values_are_clamped_and_caps_never_pass_90_percent() {
         mode: Mode::Manual,
         manual: Manual {
             backend: "Vulkan".into(),
-            draft: "maybe".into(),
             ngl: Some(5_000),
             ctx: Some(100),
             threads: Some(64),
@@ -268,10 +267,7 @@ fn values_are_clamped_and_caps_never_pass_90_percent() {
     }
     .clamped(16);
     let m = &wild.manual;
-    assert_eq!(
-        (m.backend.as_str(), m.draft.as_str(), m.kv.as_str()),
-        ("vulkan", "auto", "q4")
-    );
+    assert_eq!((m.backend.as_str(), m.kv.as_str()), ("vulkan", "q4"));
     assert_eq!(
         (m.ngl, m.ctx, m.threads),
         (Some(999), Some(2_048), Some(16))
@@ -516,4 +512,19 @@ fn saving_keeps_the_cabins_unload_choice() {
     let rules = Rules::from_json(&std::fs::read_to_string(&gov).unwrap());
     assert!(!rules.unload_for_games);
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_settings_file_from_before_the_draft_choice_went_away_still_loads() {
+    let old = r#"{"backend":"cuda","draft":"on","idleMinutes":5}"#;
+    let m: Manual = serde_json::from_str(old).unwrap();
+    assert_eq!((m.backend.as_str(), m.idle_minutes), ("cuda", 5));
+}
+
+#[test]
+fn the_running_rows_offer_keep_loaded_and_say_when_nothing_runs() {
+    let dir = std::env::temp_dir().join(format!("gh-shell-running-{}", std::process::id()));
+    let r = running(&dir);
+    assert!(r.lines[0].starts_with("Running now: "), "{:?}", r.lines);
+    assert_eq!(r.kept_loaded, local_sidecar::keep_loaded());
 }

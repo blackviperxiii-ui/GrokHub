@@ -2178,6 +2178,23 @@ async fn check_model_file(
 }
 
 #[tauri::command]
+async fn set_local_keep_loaded(
+    state: State<'_, ShellState>,
+    on: bool,
+) -> Result<local_ai::LocalAiView, String> {
+    capabilities::needs(capabilities::current().local_ai, "Local AI")?;
+    let dir = state.config_dir.clone();
+    off_main(move || local_ai::set_keep_loaded(&dir, on)).await
+}
+
+#[tauri::command]
+async fn unload_local_model(state: State<'_, ShellState>) -> Result<local_ai::LocalAiView, String> {
+    capabilities::needs(capabilities::current().local_ai, "Local AI")?;
+    let dir = state.config_dir.clone();
+    off_main(move || local_ai::unload_now(&dir)).await
+}
+
+#[tauri::command]
 async fn get_model_library(
     state: State<'_, ShellState>,
 ) -> Result<model_library::LibraryView, String> {
@@ -3275,6 +3292,8 @@ pub fn run() {
             reset_local_ai,
             check_model_file,
             run_local_speed_test,
+            set_local_keep_loaded,
+            unload_local_model,
             get_model_library,
             download_models,
             pause_model_downloads,
