@@ -1280,6 +1280,8 @@ pub fn route_record(
         // Set by `route_log`, from the request this call just sent.
         prefix_break: None,
         request: crate::harness::replay::last_request(),
+        // Set by `route_log`, from the switches stashed while the call ran.
+        handoffs: Vec::new(),
     }
 }
 
@@ -1454,6 +1456,11 @@ pub fn route_log(
         .or_else(|| crate::prefix_guard::take_staged(call.episode))
         .as_ref()
         .map(super::log::BreakNote::from);
+    // Failover PR 7: the switches this call made, stashed as they happened.
+    rec.handoffs = super::handoff::take_stashed(call.session);
+    if rec.handoffs.is_empty() && !call.episode.is_empty() {
+        rec.handoffs = super::handoff::take_stashed(call.episode);
+    }
     let key = episode_key(call);
     if !key.is_empty() {
         let class = class_row(call.class).map(|r| r.class).unwrap_or(call.class);
@@ -1738,6 +1745,16 @@ pub fn stream_routed(
         }
         sink(ev)
     };
+    // Failover PR 7: a switch inside this call tells the chat one plain
+    // line — why it moved, never which models (background work stays
+    // silent, like the loading note below).
+    let switch_line = |sink: &mut dyn FnMut(StreamEvent), err: &ClientError| {
+        if !class.trim().starts_with("background:") {
+            sink(StreamEvent::ReasoningDelta(
+                super::handoff::chat_line(super::handoff::stop_rule(err)).to_string(),
+            ));
+        }
+    };
     // Reply text passes the hard-limit check before the chat shows it.
     let mut reply = grokhub_core::adult_guard::ReplyGuard::default();
     // xAI's error and how long it took, when another model answered instead.
@@ -1803,6 +1820,8 @@ pub fn stream_routed(
                 // it, and Grok takes this turn. The provider showed nothing,
                 // so no work repeats.
                 cool_down(&dir, &model, now);
+                super::handoff::note_switch(&req.conversation_id, &model, &req.model, &err);
+                switch_line(&mut *sink, &err);
                 provider_failed = Some((model.clone(), err, started.elapsed()));
                 grok_took_turn = true;
                 on_provider = false;
@@ -1848,6 +1867,8 @@ pub fn stream_routed(
         match out {
             Err(err) if stand_in.is_some() => {
                 let m = stand_in.unwrap_or_default();
+                super::handoff::note_switch(&req.conversation_id, &model, &m, &err);
+                switch_line(&mut *sink, &err);
                 xai_failed = Some((err, started.elapsed()));
                 on_provider = true;
                 if asks_route {
@@ -1881,6 +1902,13 @@ pub fn stream_routed(
                         // line, and this computer's model answers instead.
                         // The provider showed nothing, so no work repeats.
                         cool_down(&dir, &m, now);
+                        super::handoff::note_switch(
+                            &req.conversation_id,
+                            &m,
+                            super::local::live_tier(),
+                            &e2,
+                        );
+                        switch_line(&mut *sink, &e2);
                         provider_failed = Some((m, e2, started.elapsed()));
                         on_provider = false;
                         on_device = true;
@@ -1926,6 +1954,13 @@ pub fn stream_routed(
                         || matches!(&err, ClientError::Transport(m)
                             if grokhub_core::offline::is_refusal(m))) =>
             {
+                super::handoff::note_switch(
+                    &req.conversation_id,
+                    &model,
+                    super::local::live_tier(),
+                    &err,
+                );
+                switch_line(&mut *sink, &err);
                 xai_failed = Some((err, started.elapsed()));
                 on_device = true;
                 if asks_route {
@@ -1987,6 +2022,15 @@ pub fn stream_routed(
         call.provider = split_provider_model(m).map_or(&decision.route.provider, |(p, _)| p);
     } else if on_provider {
         call.provider = &decision.route.provider;
+    }
+    // Failover PR 7: the step's hand-off chain learns how this call ended —
+    // who served it, or who failed it last — for the resume packet.
+    match &out {
+        Ok(_) => super::handoff::note_served(&req.conversation_id, call.model),
+        Err(e) if !matches!(e, ClientError::Cancelled) => {
+            super::handoff::note_failure(&req.conversation_id, call.model, e)
+        }
+        _ => {}
     }
     let mut done = RouteDone::of(&out, started.elapsed());
     // Only the xAI client queues; a local or provider answer was timed live.

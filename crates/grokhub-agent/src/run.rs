@@ -500,6 +500,8 @@ pub fn run_loop(
     // saved like that, and on the way out, so no provider ever sees a call
     // without its output.
     crate::client::pair_orphan_calls(history);
+    // Failover PR 7: a new run starts with a clean hand-off chain.
+    crate::route::handoff::begin(input.conversation_id);
     let out = run_turn(input, history, user_text, image, on_event);
     crate::client::pair_orphan_calls(history);
     out
@@ -881,6 +883,9 @@ fn run_turn(
         }
         let turn = match streamed {
             Ok(turn) => {
+                // Failover PR 7: the step landed; its failures stop
+                // shadowing the next step's hand-off packet.
+                crate::route::handoff::clear_chain(input.conversation_id);
                 overflow_compacted = false;
                 if turn.usage.input_tokens > 0 {
                     // A request that still went over (one huge message, a failed
@@ -969,8 +974,30 @@ fn run_turn(
                 // from them.
                 if resumes < MAX_RESUMES && resumable(&err) {
                     resumes += 1;
-                    if !shown.trim().is_empty() {
-                        history.push(cabin_note(RESUME_NOTE));
+                    // Failover PR 7: the hand-off packet goes in as one
+                    // cabin note — who stopped and why, who already failed
+                    // this step, who wrote what is above. Only when the
+                    // step did some work: a step that produced nothing is
+                    // resent exactly as it was, no note added.
+                    let tool_results = history
+                        .iter()
+                        .filter(|i| matches!(i, InputItem::FunctionCallOutput { .. }))
+                        .count();
+                    let open_items = crate::session_tools::todos_for(input.conversation_id)
+                        .iter()
+                        .filter(|t| matches!(t.status.as_str(), "pending" | "in_progress"))
+                        .count();
+                    if let Some(packet) = crate::route::handoff::packet(
+                        input.conversation_id,
+                        &err,
+                        crate::route::handoff::PacketFacts {
+                            partial_kept: !shown.trim().is_empty(),
+                            tool_results,
+                            compacted: compacted_once,
+                            open_items,
+                        },
+                    ) {
+                        history.push(cabin_note(&packet));
                     }
                     on_event(LoopEvent::Thought(resume_thought(resumes)));
                     if !resume_wait(resumes, input.cancel) {
@@ -1791,8 +1818,10 @@ fn push_result(
 /// Times one turn picks itself back up after a busy or dropped model.
 const MAX_RESUMES: u32 = 2;
 
-/// Told to the model when its reply was cut off and the step goes again.
-const RESUME_NOTE: &str = "Your last reply was cut off by a connection problem. Carry on from where it stopped: do not repeat what you already said, and do not redo steps whose tool results are above.";
+/// Told to the model when its reply was cut off and the step goes again:
+/// the closing line of the hand-off packet (failover PR 7).
+#[cfg(test)]
+pub(crate) use crate::route::handoff::RESUME_NOTE;
 
 /// The model couldn't answer for a reason that clears: busy, rate limited,
 /// stalled, dropped or cut off. A refused key, a bad request, a cancel or a
@@ -2740,11 +2769,12 @@ mod tests {
             },
             _ => String::new(),
         };
-        assert_eq!(
-            crate::compact::cabin_note_body(&note),
-            Some(RESUME_NOTE),
-            "{note}"
-        );
+        let body = crate::compact::cabin_note_body(&note).expect("a cabin note");
+        // Failover PR 7: the note is the hand-off packet now — it names the
+        // model that stopped, and still closes with the carry-on line.
+        assert!(body.starts_with("Hand-off:"), "{body}");
+        assert!(body.contains("grok-4.7"), "{body}");
+        assert!(body.ends_with(RESUME_NOTE), "{body}");
     }
 
     #[test]
