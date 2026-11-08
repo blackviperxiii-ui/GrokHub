@@ -1,12 +1,12 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Act, AutoReply } from "./autoSetup";
+import type { Act, AutoReply } from "./autoSetupApi";
 
 const mock = vi.hoisted(() => ({
   autoSetup: vi.fn<(act: Act) => Promise<AutoReply | null>>(),
 }));
-vi.mock("./autoSetup", () => ({ autoSetup: mock.autoSetup, TEXT_STEPS: [100, 115, 130, 150] }));
+vi.mock("./autoSetupApi", () => ({ autoSetup: mock.autoSetup, TEXT_STEPS: [100, 115, 130, 150] }));
 
 import { AutoNote, AutoSetupPage, FirstRun, LookRows, SUMMARY } from "./AutoSetup";
 

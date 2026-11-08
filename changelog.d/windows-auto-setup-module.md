@@ -1,0 +1,1 @@
+- Fix Windows shell release builds by giving the auto-setup API and React components distinct module names on case-insensitive filesystems.
