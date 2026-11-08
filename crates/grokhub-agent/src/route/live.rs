@@ -1792,7 +1792,7 @@ pub fn stream_routed(
         }
         out
     } else if on_provider {
-        // An Anthropic answer streams; the rest arrive as one delta.
+        // An Anthropic or OpenRouter answer streams; the rest arrive as one delta.
         // Either way the text reaches the chat through the reply guard.
         let span_id = format!("{}:{now}", req.conversation_id);
         let out = super::providers::stream_model(

@@ -1653,6 +1653,192 @@ fn anthropic_stream_error(e: &Value) -> ClientError {
     }
 }
 
+/// An OpenRouter `/chat/completions` event stream folded into a turn as
+/// it arrives: `delta.content` and the reasoning text reach the chat
+/// delta by delta, tool calls assemble from their indexed pieces (id and
+/// name first, the arguments in fragments), `reasoning_details` merge by
+/// their index, and the usage chunk at the end (cost included) lands on
+/// the finished turn with the same fields [`parse_openai_reply`] reads.
+#[derive(Default)]
+struct OpenAiStream {
+    out: TurnOutput,
+    tools: BTreeMap<usize, StreamTool>,
+    details: BTreeMap<usize, serde_json::Map<String, Value>>,
+    finish_reason: Option<String>,
+    /// The model the chunks say answered (the pick or its backup).
+    model: Option<String>,
+    /// The HTTP status an error chunk carried, for the quota ledger.
+    error_status: Option<(u16, String)>,
+    shown: bool,
+    /// Frames read so far.
+    frames: usize,
+    /// The body as it came, kept until the first frame: a host that
+    /// answered with the whole reply instead of a stream sent no frames.
+    raw: Vec<u8>,
+}
+
+impl OpenAiStream {
+    fn usage(&mut self, u: &Value) {
+        self.out.usage = Usage {
+            input_tokens: u64_at(u, &["prompt_tokens"]),
+            output_tokens: u64_at(u, &["completion_tokens"]),
+            reasoning_tokens: u64_at(u, &["completion_tokens_details", "reasoning_tokens"]),
+            cached_tokens: u64_at(u, &["prompt_tokens_details", "cached_tokens"]),
+            cost_in_usd_ticks: u["cost"]
+                .as_f64()
+                .map(|c| (c * 1e10).round() as i64)
+                .unwrap_or(0),
+        };
+    }
+
+    /// One `reasoning_details` piece merged into the entry at its index:
+    /// the text-like fields grow, anything else (type, format, id, the
+    /// signature that comes last) takes the newest value it is given.
+    fn detail(&mut self, at: usize, piece: &Value) {
+        let Some(piece) = piece.as_object() else {
+            return;
+        };
+        let entry = self.details.entry(at).or_default();
+        for (k, v) in piece {
+            match (k.as_str(), v, entry.get_mut(k)) {
+                ("text" | "summary" | "data", Value::String(more), Some(Value::String(have))) => {
+                    have.push_str(more)
+                }
+                (_, Value::Null, Some(_)) => {}
+                _ => {
+                    entry.insert(k.clone(), v.clone());
+                }
+            }
+        }
+    }
+
+    /// An error chunk: OpenRouter's mid-stream `error` object, whose
+    /// `code` is an HTTP status when it is a number.
+    fn error(&mut self, e: &Value) -> ClientError {
+        let status = e["code"]
+            .as_u64()
+            .and_then(|c| u16::try_from(c).ok())
+            .filter(|c| (400..600).contains(c))
+            .unwrap_or(502);
+        let body = json!({ "error": e }).to_string();
+        self.error_status = Some((status, body.clone()));
+        error_of(status, &body, true)
+    }
+
+    fn event(&mut self, v: &Value, sink: &mut dyn FnMut(StreamEvent)) -> Result<(), ClientError> {
+        self.frames += 1;
+        self.raw = Vec::new();
+        if v["error"].is_object() {
+            return Err(self.error(&v["error"]));
+        }
+        if let Some(m) = v["model"].as_str().filter(|m| !m.is_empty()) {
+            self.model = Some(m.to_string());
+        }
+        if v["usage"].is_object() {
+            self.usage(&v["usage"]);
+        }
+        let choice = &v["choices"][0];
+        let d = &choice["delta"];
+        if let Some(t) = d["content"].as_str().filter(|t| !t.is_empty()) {
+            self.shown = true;
+            self.out.text.push_str(t);
+            sink(StreamEvent::TextDelta(t.to_string()));
+        }
+        // OpenRouter says `reasoning`; most other hosts `reasoning_content`.
+        if let Some(t) = ["reasoning", "reasoning_content"]
+            .iter()
+            .find_map(|k| d[*k].as_str().filter(|t| !t.is_empty()))
+        {
+            self.out.reasoning.push_str(t);
+            sink(StreamEvent::ReasoningDelta(t.to_string()));
+        }
+        for (n, piece) in d["reasoning_details"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            let at = piece["index"].as_u64().map_or(n, |i| i as usize);
+            self.detail(at, piece);
+        }
+        for (n, c) in d["tool_calls"].as_array().into_iter().flatten().enumerate() {
+            let at = c["index"].as_u64().map_or(n, |i| i as usize);
+            let tool = self.tools.entry(at).or_default();
+            if let Some(id) = c["id"].as_str().filter(|id| !id.is_empty()) {
+                tool.id = id.to_string();
+            }
+            if let Some(name) = c["function"]["name"].as_str().filter(|n| !n.is_empty()) {
+                if tool.name.is_empty() {
+                    tool.name = name.to_string();
+                }
+            }
+            if let Some(args) = c["function"]["arguments"].as_str() {
+                tool.json.push_str(args);
+            }
+        }
+        if let Some(f) = choice["finish_reason"].as_str() {
+            if f == "error" {
+                return Err(
+                    self.error(&json!({"message": "the provider ended the stream with an error"}))
+                );
+            }
+            self.finish_reason = Some(f.to_string());
+        }
+        Ok(())
+    }
+
+    /// The finished turn and the model the chunks named. A stream that
+    /// ended without a `finish_reason` is a disconnect, like the native
+    /// parser's; one cut at the output limit is a truncation the run
+    /// loop can carry on from.
+    fn finish(mut self) -> Result<(TurnOutput, Option<String>), ClientError> {
+        let Some(reason) = self.finish_reason.take() else {
+            return Err(ClientError::Disconnect);
+        };
+        if reason == "length" {
+            self.out.truncated = true;
+            self.out.truncate_reason = Some("max_output_tokens".into());
+        }
+        self.out.calls = std::mem::take(&mut self.tools)
+            .into_values()
+            .map(|t| FunctionCall {
+                call_id: t.id,
+                name: t.name,
+                arguments: if t.json.is_empty() {
+                    "{}".into()
+                } else {
+                    t.json
+                },
+            })
+            .collect();
+        let details: Vec<Value> = std::mem::take(&mut self.details)
+            .into_values()
+            .map(Value::Object)
+            .collect();
+        if !details.is_empty() {
+            // Tagged with the model that wrote them by the caller.
+            self.out.reasoning_items = InputItem::provider_reasoning(&Value::Array(details), "")
+                .into_iter()
+                .collect();
+        }
+        Ok((self.out, self.model))
+    }
+}
+
+impl StreamFold for OpenAiStream {
+    fn event(&mut self, v: &Value, sink: &mut dyn FnMut(StreamEvent)) -> Result<(), ClientError> {
+        OpenAiStream::event(self, v, sink)
+    }
+    fn shown(&self) -> bool {
+        self.shown
+    }
+    fn bytes(&mut self, chunk: &[u8]) {
+        if self.frames == 0 && (self.raw.len() as u64) < BODY_CAP {
+            self.raw.extend_from_slice(chunk);
+        }
+    }
+}
+
 /// Reads a streamed body on its own thread, so Stop and the stall clock
 /// are checked every [`STREAM_POLL`] even while a read is blocked (the
 /// same pattern as the native client's stream reads).
@@ -1724,31 +1910,50 @@ fn stream_frames(buf: &mut Vec<u8>) -> Vec<Value> {
     out
 }
 
-/// Read one streamed Anthropic reply to its end, feeding `sink` as the
+/// One provider's event stream folded into a turn as its frames arrive.
+trait StreamFold {
+    fn event(&mut self, v: &Value, sink: &mut dyn FnMut(StreamEvent)) -> Result<(), ClientError>;
+    /// Any answer text already reached the chat.
+    fn shown(&self) -> bool;
+    /// The raw bytes as they arrive, before they are split into frames.
+    fn bytes(&mut self, _chunk: &[u8]) {}
+}
+
+impl StreamFold for AnthropicStream {
+    fn event(&mut self, v: &Value, sink: &mut dyn FnMut(StreamEvent)) -> Result<(), ClientError> {
+        AnthropicStream::event(self, v, sink)
+    }
+    fn shown(&self) -> bool {
+        self.shown
+    }
+}
+
+/// A failure once text showed, when it is one a retry would repeat, is
+/// the cut-off the turn stops with: the chat already holds part of the
+/// answer, so it is never retried and never failed over.
+fn cut_off_if_shown(shown: bool, err: ClientError) -> ClientError {
+    if shown && err.is_retryable() {
+        ClientError::CutOff(err.to_string())
+    } else {
+        err
+    }
+}
+
+/// Read one event stream to its end into `st`, feeding `sink` as the
 /// answer arrives. Mirrors the native stream's rules: Stop answers at
-/// once, a stall is [`ClientError::IdleTimeout`], a stream that ends
-/// early is a disconnect, and a failure after text already showed is
-/// [`ClientError::CutOff`] — never retried, never failed over, because
-/// the chat already holds part of the answer.
-fn read_anthropic_stream(
+/// once, a stall is [`ClientError::IdleTimeout`], and a failure after
+/// text already showed is [`ClientError::CutOff`]. Whether the stream
+/// ended the way it should is the fold's own `finish` to say.
+fn read_stream(
     reader: impl Read + Send + 'static,
     cancel: &CancelToken,
     sink: &mut dyn FnMut(StreamEvent),
-) -> Result<(TurnOutput, u64), ClientError> {
+    st: &mut dyn StreamFold,
+) -> Result<(), ClientError> {
     use std::sync::mpsc::RecvTimeoutError;
     let chunks = stream_pump(reader);
-    let mut st = AnthropicStream::default();
     let mut buf: Vec<u8> = Vec::new();
     let mut last = std::time::Instant::now();
-    // A failure once text showed and the error is one a retry would
-    // repeat becomes the cut-off the turn stops with.
-    let wrap = |st: &AnthropicStream, err: ClientError| -> ClientError {
-        if st.shown && err.is_retryable() {
-            ClientError::CutOff(err.to_string())
-        } else {
-            err
-        }
-    };
     'read: loop {
         if cancel.is_cancelled() {
             return Err(ClientError::Cancelled);
@@ -1763,17 +1968,17 @@ fn read_anthropic_stream(
                 } else {
                     ClientError::Transport(msg)
                 };
-                return Err(wrap(&st, err));
+                return Err(cut_off_if_shown(st.shown(), err));
             }
             Err(RecvTimeoutError::Timeout) => {
                 if last.elapsed() >= STREAM_IDLE {
-                    return Err(wrap(&st, ClientError::IdleTimeout));
+                    return Err(cut_off_if_shown(st.shown(), ClientError::IdleTimeout));
                 }
                 continue 'read;
             }
             Err(RecvTimeoutError::Disconnected) => {
-                return Err(wrap(
-                    &st,
+                return Err(cut_off_if_shown(
+                    st.shown(),
                     ClientError::Transport("the stream reader stopped".into()),
                 ));
             }
@@ -1781,11 +1986,15 @@ fn read_anthropic_stream(
         if chunk.is_empty() {
             break 'read;
         }
+        // Any bytes count as life, comment frames too: OpenRouter's
+        // `: OPENROUTER PROCESSING` keep-alives hold the stall clock off
+        // while a slow model thinks before its first token.
         last = std::time::Instant::now();
+        st.bytes(&chunk);
         buf.extend_from_slice(&chunk);
         for v in stream_frames(&mut buf) {
             if let Err(e) = st.event(&v, sink) {
-                return Err(wrap(&st, e));
+                return Err(cut_off_if_shown(st.shown(), e));
             }
         }
     }
@@ -1794,21 +2003,27 @@ fn read_anthropic_stream(
         buf.extend_from_slice(b"\n\n");
         for v in stream_frames(&mut buf) {
             if let Err(e) = st.event(&v, sink) {
-                return Err(wrap(&st, e));
+                return Err(cut_off_if_shown(st.shown(), e));
             }
         }
     }
     if cancel.is_cancelled() {
         return Err(ClientError::Cancelled);
     }
+    Ok(())
+}
+
+/// Read one streamed Anthropic reply to its end ([`read_stream`]); a
+/// stream that ends early is a disconnect.
+fn read_anthropic_stream(
+    reader: impl Read + Send + 'static,
+    cancel: &CancelToken,
+    sink: &mut dyn FnMut(StreamEvent),
+) -> Result<(TurnOutput, u64), ClientError> {
+    let mut st = AnthropicStream::default();
+    read_stream(reader, cancel, sink, &mut st)?;
     let shown = st.shown;
-    st.finish().map_err(|e| {
-        if shown && e.is_retryable() {
-            ClientError::CutOff(e.to_string())
-        } else {
-            e
-        }
-    })
+    st.finish().map_err(|e| cut_off_if_shown(shown, e))
 }
 
 /// What the chat says when OpenRouter's account settings leave a model with
@@ -1924,13 +2139,32 @@ pub fn apply_openrouter_picks(body: &mut Value, backup: Option<&str>, conversati
     }
 }
 
-/// The model a `/chat/completions` reply says answered, when it is one of
-/// `sent` (the pick or its backup). Read only to give the reply's reasoning
-/// back to the model that wrote it; never shown, never kept on the turn.
-fn answered_by<'a>(body: &str, sent: &[&'a str]) -> Option<&'a str> {
-    let v: Value = serde_json::from_str(body).ok()?;
-    let m = v["model"].as_str()?.trim();
+/// `model` (the model a `/chat/completions` reply says answered) when it
+/// is one of `sent` (the pick or its backup), as `sent` spells it. Read
+/// only to give the reply's reasoning back to the model that wrote it;
+/// never shown, never kept on the turn.
+fn named_in<'a>(model: &str, sent: &[&'a str]) -> Option<&'a str> {
+    let m = model.trim();
     sent.iter().copied().find(|s| s.eq_ignore_ascii_case(m))
+}
+
+/// The reasoning items of a turn from `wire_model` (or, on OpenRouter,
+/// its `backup`), tagged with the model the reply says wrote them, so
+/// the next request gives them back to that model alone.
+fn tag_reasoning(turn: &mut TurnOutput, ready: &ReadyCall, answered: Option<&str>) {
+    let sent: Vec<&str> = std::iter::once(ready.wire_model.as_str())
+        .chain(ready.backup_wire.as_deref())
+        .collect();
+    let wrote = answered
+        .filter(|_| ready.openrouter)
+        .and_then(|m| named_in(m, &sent))
+        .unwrap_or(&ready.wire_model)
+        .to_string();
+    for item in &mut turn.reasoning_items {
+        if let InputItem::Reasoning { model, .. } = item {
+            *model = wrote.clone();
+        }
+    }
 }
 
 /// `host` is openrouter.ai or one of its subdomains.
@@ -1964,7 +2198,7 @@ fn error_of(status: u16, body: &str, openrouter: bool) -> ClientError {
 /// its key, the request body ready to serialize and the registry
 /// snapshot the reply is read against. Built once by [`prepare_call`];
 /// [`call_model`] sends it whole and [`stream_model`] streams it when
-/// the provider is Anthropic.
+/// the provider is Anthropic or OpenRouter.
 struct ReadyCall {
     p: Provider,
     wire_model: String,
@@ -1988,7 +2222,7 @@ enum Prep {
 /// grant (one egress line, `span_id` on it; with no grant a hard send
 /// card parks and waits — Approve once = one `approved_once` line — and
 /// Deny, Esc, the timeout or a cancel send nothing) and the body.
-/// `stream` asks Anthropic for its event stream.
+/// `stream` asks Anthropic or OpenRouter for its event stream.
 fn prepare_call(
     config_dir: &Path,
     class: &str,
@@ -2059,6 +2293,12 @@ fn prepare_call(
     }
     if stream && p.kind == ProviderKind::Anthropic {
         body["stream"] = json!(true);
+    }
+    // OpenRouter streams the OpenAI way; its usage chunk (cost included)
+    // comes last, after the finish reason.
+    if stream && openrouter && p.kind == ProviderKind::OpenAiCompatible {
+        body["stream"] = json!(true);
+        body["stream_options"] = json!({"include_usage": true});
     }
     crate::harness::replay::note_request(config_dir, &body);
     Ok(Prep::Ready(Box::new(ReadyCall {
@@ -2147,30 +2387,22 @@ pub fn call_model(
     }
     // The next request names the model as the provider does ([`openai_body`]):
     // the backup's thinking goes back to the backup.
-    let sent: Vec<&str> = std::iter::once(ready.wire_model.as_str())
-        .chain(ready.backup_wire.as_deref())
-        .collect();
-    let wrote = if ready.openrouter {
-        answered_by(&r.body, &sent).unwrap_or(&ready.wire_model)
-    } else {
-        &ready.wire_model
-    };
-    for item in &mut turn.reasoning_items {
-        if let InputItem::Reasoning { model, .. } = item {
-            *model = wrote.to_string();
-        }
-    }
+    let answered: Option<String> = serde_json::from_str::<Value>(&r.body)
+        .ok()
+        .and_then(|v| v["model"].as_str().map(str::to_string));
+    tag_reasoning(&mut turn, &ready, answered.as_deref());
     Ok(turn)
 }
 
-/// [`call_model`] for the chat's streamed path: an Anthropic call is
-/// sent as an event stream and the answer reaches `sink` as it is
-/// written, with the native stream's failure rules (a mid-stream
-/// failure before anything showed fails over like any provider error;
-/// one after text showed is a cut-off the turn stops with). Every
-/// other provider keeps the whole-reply call for now — its answer goes
-/// out as one delta, the way the chat has always shown it (OpenRouter
-/// streaming is its own step). A held reply goes out the same way.
+/// [`call_model`] for the chat's streamed path: an Anthropic or an
+/// OpenRouter call is sent as an event stream and the answer reaches
+/// `sink` as it is written, with the native stream's failure rules (a
+/// mid-stream failure before anything showed fails over like any
+/// provider error; one after text showed is a cut-off the turn stops
+/// with). Any other OpenAI-compatible host you added keeps the
+/// whole-reply call — its answer goes out as one delta, the way the
+/// chat has always shown it, since not every such host streams the
+/// same way. A held reply goes out as one delta too.
 pub fn stream_model(
     config_dir: &Path,
     class: &str,
@@ -2182,10 +2414,10 @@ pub fn stream_model(
     cancel: &CancelToken,
     sink: &mut dyn FnMut(StreamEvent),
 ) -> Result<TurnOutput, ClientError> {
-    let anthropic = split_provider_model(model)
+    let streams = split_provider_model(model)
         .and_then(|(pid, _)| provider(config_dir, pid))
-        .is_some_and(|p| p.kind == ProviderKind::Anthropic);
-    if !anthropic {
+        .is_some_and(|p| p.kind == ProviderKind::Anthropic || p.is_openrouter());
+    if !streams {
         let turn = call_model(config_dir, class, model, effort, req, data, span_id, cancel)?;
         if !turn.text.is_empty() {
             sink(StreamEvent::TextDelta(turn.text.clone()));
@@ -2234,9 +2466,12 @@ pub fn stream_model(
             &s.headers,
             grokhub_core::now_ms(),
         );
-        return Err(error_of(s.status, &text, false));
+        return Err(error_of(s.status, &text, ready.openrouter));
     }
     let headers = std::mem::take(&mut s.headers);
+    if ready.p.kind == ProviderKind::OpenAiCompatible {
+        return read_openrouter_reply(config_dir, model, &ready, s.reader, &headers, cancel, sink);
+    }
     let (turn, cache_write) = read_anthropic_stream(s.reader, cancel, sink)?;
     // Claude's account state rides on its replies, streamed ones too:
     // rate-limit headers and usage for the local spend ledger (quota.rs).
@@ -2253,6 +2488,53 @@ pub fn stream_model(
         &headers,
         grokhub_core::now_ms(),
     );
+    Ok(turn)
+}
+
+/// A streamed OpenRouter reply read to its end. A host that answered
+/// with the whole reply instead of an event stream (a proxy in the way)
+/// is read whole, its answer sent as one delta. An error chunk on the
+/// stream is account news like any failed call: the quota ledger stamps
+/// it with the status the chunk carried.
+fn read_openrouter_reply(
+    config_dir: &Path,
+    model: &str,
+    ready: &ReadyCall,
+    reader: Box<dyn Read + Send>,
+    headers: &[(String, String)],
+    cancel: &CancelToken,
+    sink: &mut dyn FnMut(StreamEvent),
+) -> Result<TurnOutput, ClientError> {
+    let mut st = OpenAiStream::default();
+    let read = read_stream(reader, cancel, sink, &mut st);
+    if let Some((status, body)) = st.error_status.take() {
+        super::quota::note_provider_error(
+            config_dir,
+            &ready.p,
+            model,
+            status,
+            &body,
+            headers,
+            grokhub_core::now_ms(),
+        );
+    }
+    read?;
+    // No frames, but a JSON body: the whole reply came instead of a stream.
+    // (A stream of keep-alives alone is not JSON, and ends as a disconnect.)
+    let whole = (st.frames == 0)
+        .then(|| serde_json::from_slice::<Value>(&st.raw).ok())
+        .flatten();
+    if let Some(v) = whole {
+        let mut turn = parse_openai_reply(&v.to_string())?;
+        tag_reasoning(&mut turn, ready, v["model"].as_str());
+        if !turn.text.is_empty() {
+            sink(StreamEvent::TextDelta(turn.text.clone()));
+        }
+        return Ok(turn);
+    }
+    let shown = st.shown;
+    let (mut turn, answered) = st.finish().map_err(|e| cut_off_if_shown(shown, e))?;
+    tag_reasoning(&mut turn, ready, answered.as_deref());
     Ok(turn)
 }
 
