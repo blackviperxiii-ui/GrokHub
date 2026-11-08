@@ -306,6 +306,7 @@ fn crash_offers(
     vec![crate::card_report::FixOffer {
         label: "Look into the crashes".into(),
         prompt: prompt.to_string(),
+        kind: crate::card_report::OfferKind::Look,
     }]
 }
 
@@ -813,6 +814,7 @@ mod tests {
             vec![crate::card_report::FixOffer {
                 label: "Look into the crashes".into(),
                 prompt: "Help me investigate why bluetoothd keeps crashing (read crash logs metadata only).".into(),
+                kind: crate::card_report::OfferKind::Look,
             }]
         );
     }

@@ -17,6 +17,10 @@ use grokhub_agent::repair;
 
 /// A diagnose answer, whether it needs the System state ask, and the fixes it found.
 pub(super) type DiagnoseDone = (String, bool, Vec<repair::FixPlan>);
+/// A card's quiet look: the card, what was checked, and what it found.
+pub(super) type CardLookDone = (String, String, repair::DiagnoseReport);
+/// The receipt line when the look couldn't read system state yet.
+pub(super) const LOOK_NEEDS_SCOPE: &str = "I need your OK to read system state first. Allow it on the card in your chat, then tap this again.";
 
 /// Fix proposals and the fix being applied.
 #[derive(Debug, Default)]
@@ -166,7 +170,103 @@ impl Cabin {
         });
     }
 
+    /// A card's read-only look, run quietly: the card's program's crash
+    /// history and the background services. Its receipt lands on the card;
+    /// nothing goes to a chat. False when there is no program to look at.
+    pub(super) fn start_card_look(&mut self, card_id: &str) -> bool {
+        let Some(name) = self
+            .updates
+            .iter()
+            .find(|c| c.id == card_id)
+            .and_then(|c| c.pulse.report.as_ref()?.subject.as_ref())
+            .filter(|s| s.kind == grokhub_core::card_report::SubjectKind::Program)
+            .and_then(|s| repair::ProgramName::parse(&s.name))
+        else {
+            return false;
+        };
+        if self.harness.card_look_rx.is_some() {
+            self.status = "Already checking a card".into();
+            return true;
+        }
+        let os = repair::Os::current();
+        let mut probes = repair::ProbeId::for_subject(os).to_vec();
+        probes.push(if os == repair::Os::Windows {
+            repair::ProbeId::ServicesStoppedAuto
+        } else {
+            repair::ProbeId::FailedServices
+        });
+        let what = format!("Checked {}'s crash history", name.as_str());
+        let dir = crate::config::config_dir();
+        let session = format!("card-{card_id}");
+        let access = self.access_mode();
+        let (tx, rx) = mpsc::channel();
+        self.harness.card_look_rx = Some(rx);
+        self.status = format!("Checking {}'s crash history (read only)…", name.as_str());
+        let id = card_id.to_string();
+        std::thread::spawn(move || {
+            let ledger = hx::ConsentLedger::load(&dir);
+            let ctx = repair::DiagnoseCtx {
+                config_dir: &dir,
+                session_id: &session,
+                ledger: &ledger,
+                access,
+                os,
+                has_bin: &repair::on_path,
+                runner: &repair::run_spec,
+                subject: Some(&name),
+            };
+            let _ = tx.send((id, what, repair::diagnose(&ctx, &probes)));
+        });
+        true
+    }
+
+    /// The look's receipt goes on its card, which opens to show it.
+    pub(super) fn poll_card_look(&mut self) {
+        let Some(rx) = self.harness.card_look_rx.take() else {
+            return;
+        };
+        let (id, what, report) = match rx.try_recv() {
+            Ok(done) => done,
+            Err(mpsc::TryRecvError::Empty) => {
+                self.harness.card_look_rx = Some(rx);
+                return;
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.status = "Couldn't finish checking".into();
+                return;
+            }
+        };
+        let result = if report.ask.is_some() {
+            let ledger = hx::ConsentLedger::load_now(&crate::config::config_dir());
+            self.harness.indexer.asks.ask(
+                hx::Scope::SystemState,
+                repair::SCOPE_ASK_WHY,
+                &ledger,
+                now_ms(),
+            );
+            vec![LOOK_NEEDS_SCOPE.to_string()]
+        } else {
+            report.findings.iter().map(|f| f.plain.clone()).collect()
+        };
+        let Some(card) = self.updates.iter_mut().find(|c| c.id == id) else {
+            self.status.clear();
+            return;
+        };
+        grokhub_core::card_report::add_receipt(
+            card,
+            grokhub_core::card_report::CardReceipt {
+                at_ms: now_ms(),
+                what: what.clone(),
+                result,
+            },
+        );
+        self.pulse_view.report_open.insert(id);
+        self.status = format!("{what}. It's on the card.");
+        self.persist_updates();
+    }
+
     pub(super) fn poll_diagnose(&mut self) {
+        self.poll_card_look();
         self.poll_fix();
         let Some(rx) = self.harness.diagnose_rx.take() else {
             return;

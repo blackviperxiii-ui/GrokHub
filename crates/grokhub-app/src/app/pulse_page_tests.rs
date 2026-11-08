@@ -1639,7 +1639,7 @@ fn a_plain_post_shows_its_chips_and_keeps_like_in_its_menu() {
 }
 
 #[test]
-fn chips_send_the_fix_into_the_cards_chat_and_hide_or_bring_back_the_card() {
+fn a_look_chip_checks_quietly_and_other_chips_hide_or_bring_back_the_card() {
     use super::pulse_ui::PulseAct;
     let mut quiet = QuietCabin::boot("pulse-chips-act");
     let cabin = &mut quiet.cabin;
@@ -1648,31 +1648,42 @@ fn chips_send_the_fix_into_the_cards_chat_and_hide_or_bring_back_the_card() {
     let id = crash.id.clone();
     cabin.updates.push(crash);
 
-    // The fix opens the card's own chat with its report, then sends its prompt.
+    // Look into the crashes reads only, so it runs quietly: no chat opens,
+    // and the receipt lands on the card, which opens to show it.
+    let nav = cabin.nav;
+    let chats = cabin.threads.len();
     cabin.apply_pulse_act(PulseAct::Offer(id.clone(), 0));
-    assert_eq!(cabin.nav, Nav::Chat);
-    let thread = cabin
-        .threads
-        .iter()
-        .find(|t| t.title == "Discuss · bluetoothd crashed several times recently")
-        .expect("card chat");
-    assert_eq!(cabin.threads[cabin.thread_idx].id, thread.id);
-    let context = thread
-        .messages
-        .iter()
-        .find(|m| m.0 == "assistant")
-        .map(|m| m.1.clone())
-        .unwrap_or_default();
-    assert!(
-        context.starts_with("Pulse card: bluetoothd crashed several times recently\nAbout: the program \"bluetoothd\"."),
-        "{context}"
+    assert_eq!(cabin.nav, nav);
+    assert_eq!(cabin.threads.len(), chats);
+    assert_eq!(
+        cabin.status,
+        "Checking bluetoothd's crash history (read only)…"
     );
-    assert!(
-        thread.messages.iter().any(|m| m.0 == "user"
-            && m.1
-                == "Help me investigate why bluetoothd keeps crashing (read crash logs metadata only)."),
-        "{:?}",
-        thread.messages
+    let start = std::time::Instant::now();
+    while cabin.harness.card_look_rx.is_some()
+        && start.elapsed() < std::time::Duration::from_secs(10)
+    {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        cabin.poll_card_look();
+    }
+    assert_eq!(
+        cabin.status,
+        "Checked bluetoothd's crash history. It's on the card."
+    );
+    assert!(cabin.pulse_view.report_open.contains(&id));
+    let receipts = cabin
+        .updates
+        .iter()
+        .find(|c| c.id == id)
+        .and_then(|c| c.pulse.report.as_ref())
+        .map(|r| r.receipts.clone())
+        .unwrap_or_default();
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(receipts[0].what, "Checked bluetoothd's crash history");
+    // The test config has no system-state grant, so nothing ran.
+    assert_eq!(
+        receipts[0].result,
+        vec![super::repair_ui::LOOK_NEEDS_SCOPE.to_string()]
     );
 
     // Remind me later: hidden until tonight, and the status says when.
@@ -1708,7 +1719,11 @@ fn a_card_fix_tapped_mid_reply_waits_instead_of_cutting_the_reply_off() {
     let hangout = cabin.threads[cabin.thread_idx].id.clone();
     cabin.running = true;
     cabin.chat_job_thread = Some(hangout.clone());
-    let crash = crash_card();
+    let mut crash = crash_card();
+    // An offer that asks in the card's chat (not a quiet look).
+    if let Some(report) = crash.pulse.report.as_mut() {
+        report.offers[0].kind = grokhub_core::card_report::OfferKind::Chat;
+    }
     let id = crash.id.clone();
     cabin.updates.push(crash);
 

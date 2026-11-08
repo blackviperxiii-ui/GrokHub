@@ -2091,16 +2091,23 @@ impl Cabin {
         let Some(card) = self.pulse_card(id) else {
             return;
         };
-        let Some(prompt) = card
+        let Some(offer) = card
             .pulse
             .report
             .as_ref()
             .and_then(|r| r.offers.get(i))
-            .map(|o| o.prompt.trim().to_string())
-            .filter(|p| !p.is_empty())
+            .filter(|o| !o.prompt.trim().is_empty())
+            .cloned()
         else {
             return;
         };
+        let prompt = offer.prompt.trim().to_string();
+        // A read-only look runs quietly and leaves its receipt on the card.
+        let mode =
+            grokhub_core::action_mode::action_mode(&grokhub_core::action_mode::offer_shape(&offer));
+        if mode == grokhub_core::action_mode::ActionMode::Background && self.start_card_look(id) {
+            return;
+        }
         let discussable = matches!(card.kind, UpdateKind::Digest | UpdateKind::Suggestion)
             && grokhub_core::paused_job_of(&card).is_none();
         if !discussable {
