@@ -560,3 +560,22 @@ fn the_flags_b12017_removed_never_go_out() {
         "--spec-type draft-simple --spec-draft-model d.gguf --spec-draft-ngl 0 --spec-draft-n-max 16"
     );
 }
+
+#[test]
+fn a_drafter_in_another_download_folder_still_pairs() {
+    // The model sits in another app's folder; the drafter landed in the
+    // desktop app's older `{config}/models/drafters`. The plan finds it.
+    let mut rig = Rig::new("legacy-folder", G12B_FILE, None);
+    let elsewhere = rig.dir.join("lmstudio").join(G12B_FILE);
+    write_gguf(&elsewhere, "gemma4", VOCAB, 0);
+    rig.model = elsewhere;
+    write_gguf(
+        &rig.dir.join("models").join("drafters").join(E2B_FILE),
+        "gemma4",
+        VOCAB,
+        0,
+    );
+    let p = rig.plan(GovState::Normal);
+    assert_eq!(p.decision, Decision::NeedsTest);
+    assert_eq!(p.name.as_deref(), Some("Gemma 4 E2B"));
+}

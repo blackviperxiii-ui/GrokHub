@@ -123,24 +123,24 @@ fn state() -> &'static Mutex<State> {
     })
 }
 
-/// Where new draft downloads land: beside the config models folder (same
-/// tree as the engine under `{config}/bin`).
+/// Where new draft downloads land: the shared `~/GrokHub/models/drafters`
+/// that the cabin uses and the engine searches (the config folder only when
+/// there is no home folder).
 fn drafters_dir(config_dir: &Path) -> PathBuf {
+    ld::drafters_root().unwrap_or_else(|| legacy_drafters_dir(config_dir))
+}
+
+/// Where this app downloaded drafters before they moved to the shared root.
+fn legacy_drafters_dir(config_dir: &Path) -> PathBuf {
     config_dir.join("models").join(ld::DRAFTERS_DIR)
 }
 
-/// Config drafters first, then the home models tree — same places the
-/// picker discovers GGUFs.
+/// The shared root first, then the older config folder.
 fn drafter_dirs(config_dir: &Path) -> Vec<PathBuf> {
     let mut dirs = vec![drafters_dir(config_dir)];
-    if let Some(home) = grokhub_core::paths::user_home() {
-        let alt = home
-            .join(grokhub_core::brand::INTERNAL_ID)
-            .join("models")
-            .join(ld::DRAFTERS_DIR);
-        if alt != dirs[0] {
-            dirs.push(alt);
-        }
+    let old = legacy_drafters_dir(config_dir);
+    if old != dirs[0] {
+        dirs.push(old);
     }
     dirs
 }
@@ -670,6 +670,12 @@ pub fn start_drafter(
         return Ok(draft_offer(&config_dir, &target_id));
     };
     let dir = drafters_dir(&config_dir);
+    if let Some(free) = crate::local_ai::free_disk_mb(&crate::local_ai::existing(&dir)) {
+        let need = ls::disk_needed_mb(d);
+        if free < need {
+            return Err(disk_short_line(d, free, need));
+        }
+    }
     let ctl = Arc::new(Control::default());
     let done = md::partial_bytes(&dir, d).unwrap_or(0);
     claim_drafter_job(state(), d, &ctl, done)?;
@@ -765,6 +771,16 @@ pub fn start_drafter(
     Ok(draft_offer(&config_dir, &target_id))
 }
 
+/// Why a drafter download didn't start: not enough free disk.
+fn disk_short_line(d: &LocalModel, free_mb: u64, need_mb: u64) -> String {
+    format!(
+        "{} needs {} free, and this drive has {}. Free up some space and try again.",
+        d.name,
+        ls::size_label(need_mb),
+        ls::size_label(free_mb)
+    )
+}
+
 pub fn cancel_drafter() -> Result<(), String> {
     let s = state().lock().map_err(|e| e.to_string())?;
     if let Some(j) = &s.drafter {
@@ -781,7 +797,7 @@ mod tests {
     fn a_gemma_selected_offers_e2b_when_missing() {
         let dir = std::env::temp_dir().join(format!("gh-shell-offer-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(drafters_dir(&dir)).unwrap();
+        std::fs::create_dir_all(legacy_drafters_dir(&dir)).unwrap();
         let offer = draft_offer(&dir, "gemma-4-12b-it-abliterated-q4_k").expect("offer");
         assert_eq!(offer.id, "gemma-4-e2b-it-abliterated-q4_k");
         assert!(offer.button.starts_with("Install and run draft model"));
@@ -791,10 +807,24 @@ mod tests {
         // A stock Gemma 4 id from the older catalog is offered nothing.
         assert!(draft_offer(&dir, "gemma-4-12b-it-q4_k_m").is_none());
         let e2b = ls::model_by_id("gemma-4-e2b-it-abliterated-q4_k").unwrap();
-        let dest = drafters_dir(&dir);
+        // A drafter left in the older config folder still counts as installed.
+        let dest = legacy_drafters_dir(&dir);
         std::fs::write(dest.join(e2b.file), b"x").unwrap();
         assert!(draft_offer(&dir, "gemma-4-12b-it-abliterated-q4_k").is_none());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_drafter_download_says_when_the_drive_is_too_full() {
+        let e2b = ls::model_by_id("gemma-4-e2b-it-abliterated-q4_k").unwrap();
+        assert_eq!(
+            disk_short_line(e2b, 1_024, ls::disk_needed_mb(e2b)),
+            format!(
+                "Gemma 4 E2B needs {} free, and this drive has {}. Free up some space and try again.",
+                ls::size_label(e2b.download_mb + 2_048),
+                ls::size_label(1_024)
+            )
+        );
     }
 
     #[test]
