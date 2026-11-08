@@ -172,20 +172,6 @@ pub fn lines(l: &LocalLive) -> Vec<String> {
     out
 }
 
-/// A short line for beside the chat box: model, where and speed.
-pub fn chip(l: &LocalLive) -> Option<String> {
-    let model = l.model.as_ref()?;
-    let place = match l.place {
-        Some(Place::Gpu) | None => "GPU",
-        Some(Place::Split { .. }) => "GPU + RAM",
-        Some(Place::Cpu) => "CPU",
-    };
-    Some(match l.tok_s {
-        Some(t) => format!("{model} · {place} · {t:.0} tok/s"),
-        None => format!("{model} · {place}"),
-    })
-}
-
 fn group(n: u32) -> String {
     let s = n.to_string();
     let mut out = String::new();
@@ -228,10 +214,6 @@ mod tests {
                 "Draft model: Gemma 4 12B draft model is on and kept 63% of its guesses so far.",
                 "Unloads after 4 minutes without replies.",
             ]
-        );
-        assert_eq!(
-            chip(&loaded()).as_deref(),
-            Some("Gemma 4 12B · GPU · 41 tok/s")
         );
     }
 
@@ -276,13 +258,12 @@ mod tests {
     }
 
     #[test]
-    fn nothing_loaded_says_so_and_has_no_chip() {
+    fn nothing_loaded_says_so() {
         let l = snapshot_empty(false);
         assert_eq!(
             lines(&l),
             ["Running now: nothing. The model loads with the next reply."]
         );
-        assert_eq!(chip(&l), None);
         assert!(lines(&snapshot_empty(true))[0].ends_with("and then stays loaded."));
     }
 

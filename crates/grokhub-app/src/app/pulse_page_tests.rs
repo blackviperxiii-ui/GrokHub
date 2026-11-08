@@ -1695,3 +1695,34 @@ fn chips_send_the_fix_into_the_cards_chat_and_hide_or_bring_back_the_card() {
         cabin.cfg.feed_pulse.dismissed_sources
     );
 }
+
+/// The bluetoothd transcript's dropped reply: a card's fix tapped while a
+/// hangout reply streams waits in the card's chat. The hangout reply is not
+/// cut off, and the card chat carries the card to its first turn.
+#[test]
+fn a_card_fix_tapped_mid_reply_waits_instead_of_cutting_the_reply_off() {
+    use super::pulse_ui::PulseAct;
+    let mut quiet = QuietCabin::boot("pulse-chips-wait");
+    let cabin = &mut quiet.cabin;
+    cabin.updates.clear();
+    let hangout = cabin.threads[cabin.thread_idx].id.clone();
+    cabin.running = true;
+    cabin.chat_job_thread = Some(hangout.clone());
+    let crash = crash_card();
+    let id = crash.id.clone();
+    cabin.updates.push(crash);
+
+    cabin.apply_pulse_act(PulseAct::Offer(id, 0));
+    assert!(cabin.running, "the hangout reply keeps running");
+    assert_eq!(cabin.chat_job_thread.as_deref(), Some(hangout.as_str()));
+    assert_eq!(cabin.status, "Queued for after this reply");
+    let card_chat = cabin.threads[cabin.thread_idx].clone();
+    assert_eq!(
+        card_chat.title,
+        "Discuss · bluetoothd crashed several times recently"
+    );
+    assert_ne!(card_chat.id, hangout);
+    assert!(card_chat.native_carry, "its first turn carries the card");
+    assert_eq!(cabin.followup_queue.count_for(&card_chat.id), 1);
+    assert_eq!(cabin.followup_queue.count_for(&hangout), 0);
+}

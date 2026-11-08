@@ -2019,6 +2019,22 @@ impl Cabin {
             self.status = "Use Apply change in the card's menu.".into();
             return None;
         }
+        // A card with a report runs in its own chat, with the report, never
+        // beside whatever chat is open (that chat's talk and playbook stay out).
+        if card.pulse.report.is_some()
+            && matches!(card.kind, UpdateKind::Digest | UpdateKind::Suggestion)
+            && grokhub_core::paused_job_of(&card).is_none()
+        {
+            let action = card.idea_action();
+            let line = if action.is_empty() {
+                card.title.trim().to_string()
+            } else {
+                action
+            };
+            self.discuss_card(id);
+            self.send_from_card(line.clone());
+            return Some(line);
+        }
         let line = pc::run_line(&card);
         if grokhub_core::mark_update_opened(&mut self.updates, id) {
             self.persist_updates();
@@ -2092,7 +2108,20 @@ impl Cabin {
             return;
         }
         self.discuss_card(id);
-        self.send_chat(prompt);
+        self.send_from_card(prompt);
+    }
+
+    /// A card's ask, sent in the card's chat (now on screen). A reply still
+    /// running, here or in another chat, is never cut off for it: the ask
+    /// waits its turn and goes when that reply ends.
+    pub(super) fn send_from_card(&mut self, text: String) {
+        if self.running {
+            let here = self.visible_thread_id();
+            self.followup_queue.push(&here, text);
+            self.status = "Queued for after this reply".into();
+            return;
+        }
+        self.send_chat(text);
     }
 
     /// Snooze: hidden until the next 09:00 local. Returns that unix ms.

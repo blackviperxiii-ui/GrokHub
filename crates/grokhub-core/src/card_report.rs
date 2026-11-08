@@ -140,6 +140,32 @@ pub fn has_more(card: &UpdateCard) -> bool {
             .is_some_and(|r| !r.items.is_empty())
 }
 
+/// Heads a card's context on the first turn of a chat opened from that card.
+pub const CARD_CARRY_HEAD: &str =
+    "The person opened this chat from a card in their feed. The card:";
+/// Ends the card's context; the person's own message follows it.
+pub const CARD_CARRY_END: &str = "(End of the card.)";
+
+/// The card's context as the first turn of its chat carries it.
+pub fn card_carry(context: &str) -> String {
+    format!(
+        "{CARD_CARRY_HEAD}\n{}\n{CARD_CARRY_END}\n\n",
+        context.trim()
+    )
+}
+
+/// A turn that carries a card: the card's finding (its "Pulse card:" or
+/// "Feed post:" line) and the person's own words after it.
+pub fn split_card_carry(text: &str) -> Option<(&str, &str)> {
+    let rest = text.trim_start().strip_prefix(CARD_CARRY_HEAD)?;
+    let (card, user) = rest.split_once(CARD_CARRY_END)?;
+    let found = card.lines().find_map(|line| {
+        line.strip_prefix("Pulse card: ")
+            .or_else(|| line.strip_prefix("Feed post: "))
+    })?;
+    Some((found.trim(), user.trim_start()))
+}
+
 /// Everything a chat opened from a reported card starts from: the finding,
 /// what it is about, the facts behind it and the full report. `None` when the
 /// card has no report.
@@ -292,6 +318,26 @@ pub(crate) fn clip(text: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_carried_card_splits_back_into_its_finding_and_the_ask() {
+        let carried = format!(
+            "{}Help me investigate why bluetoothd keeps crashing.",
+            card_carry("Pulse card: bluetoothd crashed several times recently\nAbout: the program \"bluetoothd\".")
+        );
+        assert_eq!(
+            carried,
+            "The person opened this chat from a card in their feed. The card:\nPulse card: bluetoothd crashed several times recently\nAbout: the program \"bluetoothd\".\n(End of the card.)\n\nHelp me investigate why bluetoothd keeps crashing."
+        );
+        assert_eq!(
+            split_card_carry(&carried),
+            Some((
+                "bluetoothd crashed several times recently",
+                "Help me investigate why bluetoothd keeps crashing."
+            ))
+        );
+        assert_eq!(split_card_carry("check into it for me"), None);
+    }
     use crate::update_feed::{blank_card, UpdateKind};
 
     #[test]
