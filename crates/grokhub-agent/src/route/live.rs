@@ -1737,9 +1737,26 @@ pub fn stream_routed(
             .flatten();
         super::ask::route_note(&super::identity::describe(model, name.as_deref()), effort)
     };
-    if asks_route {
-        let n = route_note(&model, sent.effort.as_deref(), on_device);
-        super::ask::add_route_note(&mut sent.input, &n);
+    // A turn that asks about the online models or a key gets the live
+    // connection check, so the answer is the wire's, never a guess. It
+    // rides under the route note (one write: a second would replace it).
+    let connections = (!class.trim().starts_with("background:")
+        && super::check::connection_question(&text))
+    .then(|| {
+        super::check::note(&super::check::report_for_turn(
+            &dir,
+            &req.conversation_id,
+            &text,
+            call.adult,
+        ))
+    });
+    let notes: Vec<String> = asks_route
+        .then(|| route_note(&model, sent.effort.as_deref(), on_device))
+        .into_iter()
+        .chain(connections)
+        .collect();
+    if !notes.is_empty() {
+        super::ask::add_route_note(&mut sent.input, &notes.join("\n"));
     }
     let started = std::time::Instant::now();
     timing::record("send:pre_request", started.duration_since(entered));

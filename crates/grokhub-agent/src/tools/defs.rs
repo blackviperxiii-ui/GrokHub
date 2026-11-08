@@ -5,8 +5,8 @@ use serde_json::Value;
 use crate::gate::Gate;
 
 use super::{
-    connections, control, desktop, glob, grep, list_dir, local_ai, media, mods, read_file,
-    search_replace, shell, show_panel, web_fetch, web_search, write,
+    connections, control, desktop, glob, grep, list_dir, local_ai, media, models_check, mods,
+    read_file, search_replace, shell, show_panel, web_fetch, web_search, write,
 };
 
 /// One row in the native catalog. When deferred loading is on, `defer` tools ship as
@@ -57,7 +57,7 @@ fn desktop_schema(i: usize) -> Value {
 
 /// Read-only tools, sent first. All eager except `scheduler_list`.
 pub fn read_defs() -> &'static [ToolDef] {
-    static DEFS: [ToolDef; 12] = [
+    static DEFS: [ToolDef; 13] = [
         ToolDef {
             name: "read_file",
             blurb: "Read a workspace file",
@@ -119,6 +119,13 @@ pub fn read_defs() -> &'static [ToolDef] {
             blurb: "Report the on-device model's state and recent health",
             defer: true,
             schema: local_ai::status_schema,
+            visible: always,
+        },
+        ToolDef {
+            name: models_check::NAME,
+            blurb: "Test the online model keys live",
+            defer: true,
+            schema: models_check::schema,
             visible: always,
         },
         ToolDef {

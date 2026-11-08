@@ -16,6 +16,7 @@ pub mod boundary;
 pub mod budget;
 pub mod cabin;
 pub mod capabilities;
+pub mod check;
 pub mod cleanup;
 pub mod coaching;
 pub mod connectivity;

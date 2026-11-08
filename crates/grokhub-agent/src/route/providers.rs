@@ -2658,6 +2658,35 @@ pub fn probe_passed(kind: TrialProbe, turn: &TurnOutput) -> bool {
     }
 }
 
+/// A live read of `id`'s model listing with its saved key, for the
+/// connection check ([`super::check`]): how many models it lists, or the
+/// error its answer maps to. Nothing of yours goes out (the same gate the
+/// registry's listing passes, with no data), and the daily OpenRouter
+/// cache is skipped: this asks the wire now.
+pub fn live_listing(config_dir: &Path, id: &str) -> Result<usize, ClientError> {
+    let p = provider(config_dir, id)
+        .ok_or_else(|| ClientError::Protocol(format!("no provider `{id}`")))?;
+    let key = key(config_dir, &p.id).ok_or_else(|| ClientError::Protocol("no key".into()))?;
+    let url = p.models_url();
+    if let GateOutcome::Park { reason, .. } | GateOutcome::Refuse { reason } =
+        guard_provider(config_dir, &EgressReq::new(&url, &[]))
+    {
+        return Err(ClientError::Protocol(reason));
+    }
+    let r = transport_for(config_dir)
+        .get(&url, &p.headers(&key))
+        .map_err(|e| ClientError::Transport(grokhub_core::redact_secrets(&e)))?;
+    if !(200..300).contains(&r.status) {
+        return Err(error_of(r.status, &r.body, p.is_openrouter()));
+    }
+    let rows = match p.kind {
+        ProviderKind::OpenAiCompatible => parse_openai_compatible_catalog(&p.id, &r.body),
+        ProviderKind::Anthropic => parse_anthropic_catalog(&p.id, &r.body),
+    }
+    .map_err(ClientError::Protocol)?;
+    Ok(rows.len())
+}
+
 /// The backup for an OpenRouter call of `class` to `model`: it must take what
 /// this request sends (`require_parameters`): tools when it carries them, an
 /// effort when one goes or the lane reasons, images when it has them.
