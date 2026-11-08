@@ -236,6 +236,7 @@ pub fn grok_imagine_opts(
     if key.is_empty() {
         return Err("Connect Grok in Settings".into());
     }
+    grokhub_core::adult_guard::screen_media_prompt(prompt, grokhub_core::adult_guard::Dest::Xai)?;
     let primary = dedicated_imagine_model(model);
     let quality = match resolution.map(str::trim) {
         Some("1k") => Some("low"),
@@ -317,6 +318,7 @@ pub fn grok_imagine_generations(
     if key.is_empty() {
         return Err("Connect Grok in Settings".into());
     }
+    grokhub_core::adult_guard::screen_media_prompt(prompt, grokhub_core::adult_guard::Dest::Xai)?;
     let body = imagine_generation_body(prompt, model, n, resolution, aspect, quality, "url");
     let v = grok_json(
         &format!("{}/images/generations", imagine_api_base()),
@@ -341,6 +343,7 @@ pub fn grok_imagine_edits(
     if key.is_empty() {
         return Err("Connect Grok in Settings".into());
     }
+    grokhub_core::adult_guard::screen_media_prompt(prompt, grokhub_core::adult_guard::Dest::Xai)?;
     let refs: Vec<&str> = sources.iter().map(String::as_str).collect();
     let post = |body: serde_json::Value| -> Result<Vec<String>, String> {
         let v = grok_json(
@@ -414,6 +417,10 @@ pub fn grok_imagine_video_op(api_key: &str, req: &VideoBodyReq<'_>) -> Result<St
     if key.is_empty() {
         return Err("Connect Grok in Settings".into());
     }
+    grokhub_core::adult_guard::screen_media_prompt(
+        req.prompt,
+        grokhub_core::adult_guard::Dest::Xai,
+    )?;
     let path = match req.op {
         ImagineVideoOp::Edit => "videos/edits",
         ImagineVideoOp::Extend => "videos/extensions",
@@ -577,6 +584,26 @@ pub fn grok_tts_on(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn a_banned_or_18_plus_prompt_never_leaves_for_grok_imagine() {
+        use grokhub_core::adult_guard::{MEDIA_BANNED, MEDIA_LOCAL_ONLY};
+        let banned = "a nude teen on a beach";
+        assert_eq!(
+            grok_imagine_generations("k", banned, "m", 1, "1k", "1:1", "low").err(),
+            Some(MEDIA_BANNED.to_string())
+        );
+        assert_eq!(
+            grok_imagine_edits("k", banned, "m", &[], None, 1, "1k", "1:1").err(),
+            Some(MEDIA_BANNED.to_string())
+        );
+        assert_eq!(
+            grok_imagine_opts("k", "m", "an erotic nude portrait", None, None).err(),
+            Some(MEDIA_LOCAL_ONLY.to_string())
+        );
+    }
+
     #[test]
     fn a_bounded_grok_ask_sends_nothing_once_cancelled_or_out_of_time() {
         let _lock = crate::config::hold_test_config();
