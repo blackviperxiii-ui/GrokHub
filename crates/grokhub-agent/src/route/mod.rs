@@ -56,6 +56,7 @@ pub mod sizing;
 pub mod sources;
 pub mod spend;
 pub mod table;
+pub mod trial;
 pub mod tune;
 pub mod wait;
 
@@ -441,6 +442,11 @@ pub struct RouteInput<'a> {
     /// [`Router::choose`] keeps it local when the device is a candidate,
     /// and the scorer bars every cloud candidate outright.
     pub adult: bool,
+    /// Failover step 9: the episode key when this turn is in the tryout
+    /// canary (low risk, nothing sensitive, nothing explicit, no pinned
+    /// model; the live path draws it with [`tune::in_canary`]). The
+    /// scorer then lets a model on tryout lead a tiny or short turn.
+    pub probation_canary: Option<&'a str>,
 }
 
 /// The lowest rung an xAI reasoning model takes without a listing that says otherwise.
@@ -766,6 +772,7 @@ impl Router {
             quota: &input.quota,
             ctx_tokens: input.ctx_tokens,
             now_ms,
+            canary: input.probation_canary,
         };
         let attn = attention::decide(&attention::AttentionInput {
             class: input.lane(),

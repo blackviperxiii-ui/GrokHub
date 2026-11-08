@@ -8,6 +8,7 @@ pub mod cost_class;
 pub mod discover;
 pub mod entitlement;
 pub mod health;
+pub mod probation;
 pub mod probe;
 pub mod profile;
 pub mod quota;
@@ -72,6 +73,18 @@ pub enum RegistryEvent {
     Deleted {
         id: String,
     },
+    /// A new model's tryout moved: started, graduated, failed or retried.
+    Probation {
+        id: String,
+        stage: probation::Stage,
+        reason: String,
+    },
+    /// A routable model's announced expiry is close: routing to it has
+    /// stopped (the scorer's expiry bar); logged once per date.
+    Expiring {
+        id: String,
+        expires: String,
+    },
 }
 
 impl RegistryEvent {
@@ -83,6 +96,8 @@ impl RegistryEvent {
             Self::State { .. } => "state",
             Self::Notice { .. } => "notice",
             Self::Deleted { .. } => "deleted",
+            Self::Probation { .. } => "probation",
+            Self::Expiring { .. } => "expiring",
         }
     }
 }
@@ -293,6 +308,15 @@ impl Registry {
         if tier.is_some() {
             self.entitlement.tier = tier;
         }
+        // The providers that had listed models before this refresh: a model
+        // one of them starts listing now is new, and goes on a tryout. A
+        // provider's first listing is its baseline, not a batch of new models.
+        let known_providers: std::collections::BTreeSet<String> = self
+            .models
+            .iter()
+            .filter(|(_, r)| r.sources.iter().any(|k| k.is_new_provider()))
+            .filter_map(|(id, _)| id.split_once('/').map(|(p, _)| p.to_string()))
+            .collect();
         for (id, (meta, sources)) in &mut merged {
             let api = sources.contains(&SourceKind::XaiApi);
             if !api {
@@ -304,6 +328,33 @@ impl Registry {
             // bundled table ships (Claude's prices among them — its own
             // listing names none). A listing's own figures stay.
             card::fill(meta, sources);
+            // The tryout: kept as it stands, or started for a model the
+            // table marks as on probation or a known provider newly lists.
+            // Its stage, not the table's prior, is what the card says.
+            let fresh_from_provider = sources.iter().any(|k| k.is_new_provider())
+                && id
+                    .split_once('/')
+                    .is_some_and(|(p, _)| known_providers.contains(p));
+            let trial = match self.models.get(id) {
+                Some(rec) => rec.probation.clone().or_else(|| {
+                    meta.card
+                        .probation
+                        .then(|| probation::Probation::start(now_ms))
+                }),
+                None => (meta.card.probation || fresh_from_provider)
+                    .then(|| probation::Probation::start(now_ms)),
+            };
+            let had = self.models.get(id).is_some_and(|r| r.probation.is_some());
+            if let Some(t) = &trial {
+                meta.card.probation = t.active();
+                if !had {
+                    events.push(RegistryEvent::Probation {
+                        id: id.clone(),
+                        stage: t.stage,
+                        reason: t.reason.clone(),
+                    });
+                }
+            }
             let hash = meta.content_hash();
             let rec = match self.models.get_mut(id) {
                 Some(rec) => {
@@ -327,6 +378,7 @@ impl Registry {
                 }
             };
             rec.meta = meta.clone();
+            rec.probation = trial;
             rec.sources = sources.clone();
             rec.content_hash = hash;
             rec.absent_since_ms = 0;
@@ -481,6 +533,9 @@ impl Registry {
             let from = rec.state;
             health::observe(rec, listed, obs);
             health::breaker_observe(rec, listed, obs);
+            if let Some(p) = rec.probation.as_mut() {
+                p.observe(obs);
+            }
             if rec.state != from {
                 events.push(RegistryEvent::State {
                     id: id.to_string(),
@@ -493,6 +548,51 @@ impl Registry {
                 matches!(obs.status, CallStatus::NotFound) || rec.state == ModelState::Redirected;
         }
         (events, signal)
+    }
+
+    /// Judge every tryout (graduate, fail, retry) with the learner's word
+    /// on each model's answers, and keep each card's probation flag on
+    /// its stage. The tryout events.
+    pub fn judge_probation(
+        &mut self,
+        quality: &dyn Fn(&str) -> probation::Quality,
+        now_ms: u64,
+    ) -> Vec<RegistryEvent> {
+        let mut events = Vec::new();
+        for (id, rec) in self.models.iter_mut() {
+            let Some(p) = rec.probation.as_mut() else {
+                continue;
+            };
+            if let Some(v) = p.judge(quality(id), now_ms) {
+                events.push(RegistryEvent::Probation {
+                    id: id.clone(),
+                    stage: v.to,
+                    reason: v.reason,
+                });
+            }
+            rec.meta.card.probation = p.active();
+        }
+        events
+    }
+
+    /// Routable models whose announced expiry is inside the scorer's stop
+    /// window (`stop_day`: the day key that many days on): one event per
+    /// model and date, so the log says why routing to it stopped.
+    pub fn note_expiring(&mut self, stop_day: &str) -> Vec<RegistryEvent> {
+        let mut events = Vec::new();
+        for (id, rec) in self.models.iter_mut() {
+            let Some(expires) = rec.meta.card.expires.clone() else {
+                continue;
+            };
+            if rec.state.routable() && expires.as_str() <= stop_day && rec.expiry_noted != expires {
+                rec.expiry_noted.clone_from(&expires);
+                events.push(RegistryEvent::Expiring {
+                    id: id.clone(),
+                    expires,
+                });
+            }
+        }
+        events
     }
 
     /// Quarantined models whose open backoff ran out: each gets one check.
@@ -965,5 +1065,136 @@ mod tests {
         reg.apply_refresh(&[api(vec![meta("grok-4.7")])], &[], 2);
         assert_eq!(reg.get("grok-dual").unwrap().state, ModelState::Live);
         assert!(reg.listed("grok-dual"));
+    }
+
+    fn or(models: &[&str]) -> Listing {
+        Listing::new(
+            SourceKind::OpenAiCompatible,
+            models.iter().map(|id| ModelMeta::bare(id)).collect(),
+        )
+    }
+
+    fn tryout(reg: &Registry, id: &str) -> Option<probation::Stage> {
+        reg.get(id)
+            .and_then(|r| r.probation.as_ref())
+            .map(|p| p.stage)
+    }
+
+    #[test]
+    fn a_new_model_from_a_known_provider_goes_on_a_tryout() {
+        let mut reg = Registry::default();
+        // The provider's first listing is its baseline: no tryouts.
+        let ev = reg.apply_refresh(&[or(&["openrouter/vendor/old"])], &[], 1);
+        assert_eq!(tryout(&reg, "openrouter/vendor/old"), None);
+        assert!(!ev.iter().any(|e| e.kind() == "probation"));
+        // A model it starts listing later is new.
+        let ev = reg.apply_refresh(
+            &[or(&["openrouter/vendor/old", "openrouter/vendor/new"])],
+            &[],
+            2,
+        );
+        assert_eq!(
+            tryout(&reg, "openrouter/vendor/new"),
+            Some(probation::Stage::Trial)
+        );
+        assert!(
+            reg.get("openrouter/vendor/new")
+                .unwrap()
+                .meta
+                .card
+                .probation
+        );
+        assert_eq!(tryout(&reg, "openrouter/vendor/old"), None);
+        let started: Vec<_> = ev.iter().filter(|e| e.kind() == "probation").collect();
+        assert_eq!(started.len(), 1, "{ev:?}");
+        // The next refresh keeps the tryout as it stands, with no new event.
+        let ev = reg.apply_refresh(
+            &[or(&["openrouter/vendor/old", "openrouter/vendor/new"])],
+            &[],
+            3,
+        );
+        assert!(!ev.iter().any(|e| e.kind() == "probation"));
+        assert_eq!(
+            reg.get("openrouter/vendor/new")
+                .and_then(|r| r.probation.as_ref())
+                .map(|p| p.since_ms),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn a_model_the_card_table_marks_starts_on_a_tryout() {
+        let mut reg = Registry::default();
+        let id = "openrouter/nvidia/nemotron-3-super-120b-a12b:free";
+        reg.apply_refresh(&[or(&[id])], &[], 1);
+        assert_eq!(tryout(&reg, id), Some(probation::Stage::Trial));
+        // xAI's own listing is not a provider tryout.
+        reg.apply_refresh(&[api(vec![meta("grok-4.7")])], &[], 2);
+        assert_eq!(tryout(&reg, "grok-4.7"), None);
+    }
+
+    #[test]
+    fn tryout_calls_count_and_the_judge_graduates_or_fails_on_them() {
+        let mut reg = Registry::default();
+        reg.apply_refresh(&[or(&["openrouter/vendor/old"])], &[], 1);
+        reg.apply_refresh(
+            &[or(&["openrouter/vendor/old", "openrouter/vendor/new"])],
+            &[],
+            2,
+        );
+        let o = |status| Observation {
+            model: "openrouter/vendor/new".into(),
+            ts_ms: 10,
+            status,
+            latency_ms: 500,
+            served_model: None,
+            endpoint_ok: true,
+            reasoning_tokens: 0,
+            cost_ticks: 0,
+            http: 0,
+        };
+        let obs: Vec<_> = (0..5).map(|_| o(CallStatus::Error)).collect();
+        reg.fold(&obs);
+        assert_eq!(
+            reg.get("openrouter/vendor/new")
+                .and_then(|r| r.probation.as_ref())
+                .map(|p| p.calls),
+            Some(5)
+        );
+        let unknown = |_: &str| probation::Quality::Unknown;
+        let ev = reg.judge_probation(&unknown, 3);
+        assert_eq!(ev.len(), 1, "{ev:?}");
+        let rec = reg.get("openrouter/vendor/new").unwrap();
+        assert!(rec.probation_failed());
+        assert!(rec.meta.card.probation);
+        // Judged again with nothing new: no second event.
+        assert!(reg.judge_probation(&unknown, 4).is_empty());
+        // A refresh keeps the failed stage (the card table can't undo it).
+        reg.apply_refresh(
+            &[or(&["openrouter/vendor/old", "openrouter/vendor/new"])],
+            &[],
+            5,
+        );
+        assert!(reg.get("openrouter/vendor/new").unwrap().probation_failed());
+    }
+
+    #[test]
+    fn a_close_expiry_is_logged_once_per_date() {
+        let mut reg = Registry::default();
+        reg.apply_refresh(&[api(vec![meta("grok-4.7")])], &[], 1);
+        reg.models.get_mut("grok-4.7").unwrap().meta.card.expires = Some("2026-11-20".into());
+        assert!(reg.note_expiring("2026-11-19").is_empty());
+        let ev = reg.note_expiring("2026-11-22");
+        assert_eq!(
+            ev,
+            vec![RegistryEvent::Expiring {
+                id: "grok-4.7".into(),
+                expires: "2026-11-20".into()
+            }]
+        );
+        assert!(reg.note_expiring("2026-11-23").is_empty());
+        // A new date is news again.
+        reg.models.get_mut("grok-4.7").unwrap().meta.card.expires = Some("2026-11-21".into());
+        assert_eq!(reg.note_expiring("2026-11-23").len(), 1);
     }
 }

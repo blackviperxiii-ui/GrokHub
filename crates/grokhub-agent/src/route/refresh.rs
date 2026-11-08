@@ -243,6 +243,14 @@ pub fn run_refresh(job: &RefreshJob<'_>) -> RefreshDone {
         &job.default_model,
         job.now_ms,
     );
+    // Failover step 9: a few probes for free models on tryout, then every
+    // tryout judged and close expiries logged.
+    super::trial::run_probes(dir, &mut reg, job.now_ms);
+    let judged = super::trial::judge(dir, &mut reg, job.now_ms);
+    for ev in &judged {
+        let _ = append_span(dir, &event_span(ev));
+    }
+    events.extend(judged);
     let _ = save_registry(dir, &reg);
     // Quota detection rides the refresh: each route re-reads its account
     // state when due (ten minutes, or at once after a 402, 403 or 429).
