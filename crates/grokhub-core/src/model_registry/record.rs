@@ -583,6 +583,12 @@ pub struct ModelRecord {
     /// When it became retired or pruned (0 otherwise).
     #[serde(default)]
     pub tombstone_ms: u64,
+    /// Its two-week tryout, when it is or was a new model on one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probation: Option<super::probation::Probation>,
+    /// The expiry date a heads-up was already logged for.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub expiry_noted: String,
 }
 
 /// Strip trailing date / snapshot / `latest` tokens so `grok-4.7`,
@@ -614,6 +620,13 @@ impl ModelRecord {
     /// health window (the last [`super::health::WINDOW_CALLS`] calls —
     /// the only call history the registry keeps). `None` when no call in
     /// the window is that fresh.
+    /// Its tryout failed: out of routing until the retry.
+    pub fn probation_failed(&self) -> bool {
+        self.probation
+            .as_ref()
+            .is_some_and(|p| p.stage == super::probation::Stage::Failed)
+    }
+
     pub fn reliability(&self, now_ms: u64) -> Option<Reliability> {
         let fresh: Vec<&CallMark> = self
             .health

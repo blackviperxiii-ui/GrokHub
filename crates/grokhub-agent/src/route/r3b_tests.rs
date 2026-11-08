@@ -3474,3 +3474,138 @@ fn provider_fallible_covers_limits_credit_and_outages_only() {
         assert!(!live::provider_fallible(err), "{err:?}");
     }
 }
+
+/// Failover step 9: a wire that answers every POST with one canned
+/// status and body, and keeps what it was sent.
+struct ProbeWire {
+    status: u16,
+    body: String,
+    sent: Mutex<Vec<String>>,
+}
+
+impl ProviderTransport for ProbeWire {
+    fn get(&self, _url: &str, _headers: &[(String, String)]) -> Result<HttpReply, String> {
+        Ok(HttpReply {
+            status: 200,
+            body: OR_LIST.into(),
+            headers: Vec::new(),
+        })
+    }
+    fn post(
+        &self,
+        _url: &str,
+        _headers: &[(String, String)],
+        body: &str,
+    ) -> Result<HttpReply, String> {
+        self.sent.lock().unwrap().push(body.into());
+        Ok(HttpReply {
+            status: self.status,
+            body: self.body.clone(),
+            headers: Vec::new(),
+        })
+    }
+}
+
+const TRIAL_MODEL: &str = "openrouter/vendor/new:free";
+
+/// A granted OpenRouter key, a registry with one free model on tryout
+/// (saved, as the send path reads it) and the canned wire.
+fn probe_setup(label: &str, status: u16, body: &str) -> (PathBuf, Arc<ProbeWire>, Registry) {
+    let dir = test_dir(label);
+    providers::use_vault_for(&dir, Arc::new(MemoryVault::default()));
+    let wire = Arc::new(ProbeWire {
+        status,
+        body: body.into(),
+        sent: Mutex::new(Vec::new()),
+    });
+    providers::use_transport_for(&dir, wire.clone());
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    grant_destination(&dir, OR_DEST, CALL_DATA, UserClick::from_click()).unwrap();
+    let or = |ids: &[&str]| {
+        Listing::new(
+            SourceKind::OpenAiCompatible,
+            ids.iter().map(|id| ModelMeta::bare(id)).collect(),
+        )
+    };
+    let mut reg = Registry::default();
+    reg.apply_refresh(&[or(&["openrouter/vendor/old:free"])], &[], NOW);
+    reg.apply_refresh(
+        &[or(&["openrouter/vendor/old:free", TRIAL_MODEL])],
+        &[],
+        NOW,
+    );
+    assert!(reg.get(TRIAL_MODEL).is_some_and(|r| r.probation.is_some()));
+    save_registry(&dir, &reg).unwrap();
+    (dir, wire, reg)
+}
+
+fn tally(reg: &Registry) -> (u32, u32, u32) {
+    let p = reg.get(TRIAL_MODEL).unwrap().probation.clone().unwrap();
+    (p.calls, p.ok, p.probes)
+}
+
+#[test]
+fn a_tryout_probe_counts_a_tool_call_that_answers_and_one_that_does_not() {
+    let call = r#"{"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"record_number","arguments":"{\"n\":7}"}}]}}]}"#;
+    let (dir, wire, mut reg) = probe_setup("trial-probe-pass", 200, call);
+    assert_eq!(super::trial::run_probes(&dir, &mut reg, NOW), 1);
+    assert_eq!(tally(&reg), (1, 1, 1));
+    // The probe goes as the model's own answer: no backup, a small cap, the tool.
+    let sent: serde_json::Value = serde_json::from_str(&wire.sent.lock().unwrap()[0]).unwrap();
+    assert!(sent.get("models").is_none(), "{sent}");
+    assert_eq!(sent["max_tokens"], json!(512));
+    assert!(sent.to_string().contains("record_number"));
+    // The second of the day is the text probe; a third waits for tomorrow.
+    super::trial::run_probes(&dir, &mut reg, NOW + 1);
+    assert_eq!(tally(&reg), (2, 1, 2));
+    assert_eq!(super::trial::run_probes(&dir, &mut reg, NOW + 2), 0);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_limit_on_a_probe_counts_against_the_account_not_the_model() {
+    let (dir, wire, mut reg) = probe_setup(
+        "trial-probe-limit",
+        429,
+        r#"{"error":{"code":429,"message":"Rate limit exceeded: free-models-per-day"}}"#,
+    );
+    assert_eq!(super::trial::run_probes(&dir, &mut reg, NOW), 1);
+    assert_eq!(tally(&reg), (0, 0, 0));
+    assert_eq!(wire.sent.lock().unwrap().len(), 1);
+    // A server error is the model's.
+    let (dir2, _wire, mut reg2) = probe_setup("trial-probe-502", 502, r#"{"error":{"code":502}}"#);
+    super::trial::run_probes(&dir2, &mut reg2, NOW);
+    assert_eq!(tally(&reg2), (1, 0, 1));
+    for d in [dir, dir2] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}
+
+#[test]
+fn no_grant_means_no_probe() {
+    let dir = test_dir("trial-probe-nogrant");
+    providers::use_vault_for(&dir, Arc::new(MemoryVault::default()));
+    let wire = Arc::new(ProbeWire {
+        status: 200,
+        body: OR_REPLY.into(),
+        sent: Mutex::new(Vec::new()),
+    });
+    providers::use_transport_for(&dir, wire.clone());
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    let or = |ids: &[&str]| {
+        Listing::new(
+            SourceKind::OpenAiCompatible,
+            ids.iter().map(|id| ModelMeta::bare(id)).collect(),
+        )
+    };
+    let mut reg = Registry::default();
+    reg.apply_refresh(&[or(&["openrouter/vendor/old:free"])], &[], NOW);
+    reg.apply_refresh(
+        &[or(&["openrouter/vendor/old:free", TRIAL_MODEL])],
+        &[],
+        NOW,
+    );
+    assert_eq!(super::trial::run_probes(&dir, &mut reg, NOW), 0);
+    assert!(wire.sent.lock().unwrap().is_empty());
+    let _ = std::fs::remove_dir_all(dir);
+}

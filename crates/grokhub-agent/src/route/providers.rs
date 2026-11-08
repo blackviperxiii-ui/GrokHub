@@ -2538,6 +2538,126 @@ fn read_openrouter_reply(
     Ok(turn)
 }
 
+/// A tryout probe's data: synthetic chat text, nothing of yours.
+pub const PROBE_DATA: &[DataClass] = &[DataClass::Chat];
+/// The tool a tryout probe asks the model to call.
+pub const PROBE_TOOL: &str = "record_number";
+
+/// What a tryout probe checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrialProbe {
+    /// Call [`PROBE_TOOL`] with `n` = 7, as valid JSON.
+    Tool,
+    /// Answer one word.
+    Text,
+}
+
+/// Send one small tryout probe to `model` (a provider model on its
+/// two-week tryout) and say whether it passed. It goes out only under a
+/// grant that already covers [`PROBE_DATA`] (the caller checks
+/// [`usable`] first; nothing here parks a card), with no OpenRouter
+/// backup, so the answer is the model's own.
+pub fn probe_model(
+    config_dir: &Path,
+    model: &str,
+    kind: TrialProbe,
+    span_id: &str,
+) -> Result<bool, ClientError> {
+    let (ask, tools) = match kind {
+        TrialProbe::Tool => (
+            format!("Call the {PROBE_TOOL} tool with n set to 7. Do not answer in text."),
+            vec![json!({
+                "type": "function",
+                "name": PROBE_TOOL,
+                "description": "Records one number.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"n": {"type": "integer"}},
+                    "required": ["n"],
+                },
+            })],
+        ),
+        TrialProbe::Text => ("Reply with the single word: ready".to_string(), Vec::new()),
+    };
+    let req = ResponsesRequest {
+        text_format: None,
+        model: model.to_string(),
+        effort: None,
+        input: vec![InputItem::Message {
+            role: "user".into(),
+            content: vec![ContentPart::InputText(ask)],
+        }],
+        conversation_id: String::new(),
+        tools,
+        hosted_search: false,
+        call_timeout: Some(Duration::from_secs(60)),
+    };
+    let cancel = CancelToken::new();
+    let mut ready = match prepare_call(
+        config_dir,
+        PROBE_CLASS,
+        model,
+        None,
+        &req,
+        PROBE_DATA,
+        span_id,
+        &cancel,
+        false,
+    )? {
+        // Held back before the wire (a cancel, a spend hold): that says
+        // nothing about the model.
+        Prep::Held(_) => return Err(ClientError::Protocol("the probe was held".into())),
+        Prep::Ready(r) => r,
+    };
+    // The model's own answer: no backup to stand in for it.
+    if let Some(body) = ready.body.as_object_mut() {
+        body.remove("models");
+        body.insert("max_tokens".into(), json!(PROBE_MAX_TOKENS));
+    }
+    let r = transport_for(config_dir)
+        .post_within(
+            &ready.url,
+            &ready.p.headers(&ready.key),
+            &ready.body.to_string(),
+            ready.call_timeout,
+        )
+        .map_err(|e| ClientError::Transport(grokhub_core::redact_secrets(&e)))?;
+    if !(200..300).contains(&r.status) {
+        super::quota::note_provider_error(
+            config_dir,
+            &ready.p,
+            model,
+            r.status,
+            &r.body,
+            &r.headers,
+            grokhub_core::now_ms(),
+        );
+        return Err(error_of(r.status, &r.body, ready.openrouter));
+    }
+    let turn = match ready.p.kind {
+        ProviderKind::OpenAiCompatible => parse_openai_reply(&r.body),
+        ProviderKind::Anthropic => parse_anthropic_reply(&r.body),
+    }?;
+    Ok(probe_passed(kind, &turn))
+}
+
+/// The class a tryout probe is sent under.
+pub const PROBE_CLASS: &str = "background:probe";
+/// Room for a probe's answer, thinking included.
+const PROBE_MAX_TOKENS: u64 = 512;
+
+/// A probe's answer passed its check.
+pub fn probe_passed(kind: TrialProbe, turn: &TurnOutput) -> bool {
+    match kind {
+        TrialProbe::Tool => turn.calls.iter().any(|c| {
+            c.name == PROBE_TOOL
+                && serde_json::from_str::<Value>(&c.arguments)
+                    .is_ok_and(|a| a["n"].as_i64() == Some(7) || a["n"].as_str() == Some("7"))
+        }),
+        TrialProbe::Text => turn.text.to_ascii_lowercase().contains("ready"),
+    }
+}
+
 /// The backup for an OpenRouter call of `class` to `model`: it must take what
 /// this request sends (`require_parameters`): tools when it carries them, an
 /// effort when one goes or the lane reasons, images when it has them.

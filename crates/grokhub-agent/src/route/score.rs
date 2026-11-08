@@ -97,6 +97,10 @@ pub struct ScoreCtx<'a> {
     pub quota: &'a QuotaLedger,
     pub ctx_tokens: u64,
     pub now_ms: u64,
+    /// Failover step 9: this turn is in the tryout canary (its episode
+    /// key), so a model on tryout leads a tiny or short turn. `None` on
+    /// every other turn.
+    pub canary: Option<&'a str>,
 }
 
 /// Why a candidate may not take this task at all, as the rule id the
@@ -143,13 +147,17 @@ fn bar(rec: &ModelRecord, ctx: &ScoreCtx<'_>) -> Option<&'static str> {
         // a long run never spends a free model's small allowance.
         return Some("score:long:free");
     }
+    if rec.probation_failed() {
+        // Failed its tryout: out of routing until its retry two weeks on.
+        return Some("score:probation:failed");
+    }
     if card.probation
         && ctx
             .size
             .is_some_and(|s| matches!(s.size, TaskSize::Medium | TaskSize::Long))
     {
-        // Probation is a few low-risk turns, not real work; the probe and
-        // canary machinery that graduates a model is a later step.
+        // A model on tryout takes tiny and short turns only: its probes,
+        // its canary turns and its own small work (see super::trial).
         return Some("score:probation");
     }
     if let Some(expires) = card.expires.as_deref() {
@@ -552,11 +560,44 @@ pub fn order(
             .then(a.2.cmp(&b.2))
             .then(a.3.total_cmp(&b.3))
     });
-    let out: Vec<String> = keyed.into_iter().map(|k| k.4).collect();
+    let mut out: Vec<String> = keyed.into_iter().map(|k| k.4).collect();
     if out.first() != head.as_ref() {
         rules.push("score:ladder".into());
     }
+    canary_lead(&mut out, reg, ctx, rules);
     out
+}
+
+/// Failover step 9's canary: on a tiny or short turn the canary drew,
+/// one model on tryout that the filters kept leads, picked by the
+/// episode so a whole episode stays on one model. Failover still runs
+/// down the rest of the ladder behind it.
+fn canary_lead(out: &mut Vec<String>, reg: &Registry, ctx: &ScoreCtx<'_>, rules: &mut Vec<String>) {
+    let Some(episode) = ctx.canary else {
+        return;
+    };
+    if !ctx
+        .size
+        .is_some_and(|s| matches!(s.size, TaskSize::Tiny | TaskSize::Short))
+    {
+        return;
+    }
+    let on_trial: Vec<usize> = out
+        .iter()
+        .enumerate()
+        .filter(|(_, id)| {
+            reg.get(id)
+                .is_some_and(|r| r.meta.card.probation && !r.probation_failed())
+        })
+        .map(|(i, _)| i)
+        .collect();
+    if on_trial.is_empty() {
+        return;
+    }
+    let pick = on_trial[(super::ladder::turn_hash(episode) % on_trial.len() as u64) as usize];
+    let id = out.remove(pick);
+    out.insert(0, id);
+    rules.push("probation:canary".into());
 }
 
 #[cfg(test)]
@@ -595,6 +636,7 @@ mod tests {
             quota,
             ctx_tokens: 0,
             now_ms: NOW,
+            canary: None,
         }
     }
 
@@ -847,5 +889,61 @@ mod tests {
         assert_eq!(bar(&r, &c), Some("score:need:vision"));
         let plain = ctx(&quota, Some(TaskSize::Short));
         assert_eq!(bar(&r, &plain), None);
+    }
+
+    #[test]
+    fn a_failed_tryout_is_barred_and_the_canary_hands_a_tryout_model_small_turns_only() {
+        use grokhub_core::model_registry::probation::{Probation, Stage};
+        let mut reg = Registry::default();
+        reg.entitlement.credential = Credential::Plan;
+        let trial = "openrouter/vendor/new:free";
+        let mut on_trial = rec(trial, &[SourceKind::OpenAiCompatible]);
+        on_trial.probation = Some(Probation::start(NOW));
+        on_trial.meta.card.probation = true;
+        for r in [rec("grok-4.7", &[SourceKind::XaiApi]), on_trial] {
+            reg.models.insert(r.meta.id.clone(), r);
+        }
+        let quota = QuotaLedger::default();
+        let table = RoutingTable::default();
+        let ranked = || vec!["grok-4.7".to_string(), trial.to_string()];
+        // No canary: the native model leads a short turn.
+        let c = ctx(&quota, Some(TaskSize::Short));
+        let mut rules = Vec::new();
+        assert_eq!(
+            order(ranked(), &reg, &table, &c, true, &mut rules)[0],
+            "grok-4.7"
+        );
+        // In the canary, the model on tryout leads it, with grok behind.
+        let canary = ScoreCtx {
+            canary: Some("episode-1"),
+            ..c
+        };
+        let mut rules = Vec::new();
+        let out = order(ranked(), &reg, &table, &canary, true, &mut rules);
+        assert_eq!(out, vec![trial.to_string(), "grok-4.7".to_string()]);
+        assert!(rules.contains(&"probation:canary".to_string()), "{rules:?}");
+        // A medium turn is real work: the canary doesn't touch it.
+        let medium = ScoreCtx {
+            size: Some(SizeEstimate {
+                size: TaskSize::Medium,
+                ..SizeEstimate::default()
+            }),
+            ..canary
+        };
+        let mut rules = Vec::new();
+        let out = order(ranked(), &reg, &table, &medium, true, &mut rules);
+        assert_eq!(out, vec!["grok-4.7".to_string()]);
+        assert!(!rules.contains(&"probation:canary".to_string()));
+        // Failed: barred on any turn, the canary included.
+        if let Some(p) = reg.models.get_mut(trial).unwrap().probation.as_mut() {
+            p.stage = Stage::Failed;
+        }
+        assert_eq!(
+            bar(reg.get(trial).unwrap(), &canary),
+            Some("score:probation:failed")
+        );
+        let mut rules = Vec::new();
+        let out = order(ranked(), &reg, &table, &canary, true, &mut rules);
+        assert_eq!(out, vec!["grok-4.7".to_string()]);
     }
 }

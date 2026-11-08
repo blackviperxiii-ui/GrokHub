@@ -925,6 +925,18 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         // (PR 3) and the turn's explicitness, decided by the call site.
         quota: load_quota(config_dir),
         adult: call.adult,
+        // Failover step 9: one low-risk episode in twenty that runs in the
+        // open (no tuner mark, nothing sensitive or explicit, no pinned
+        // model, no step-up) lets a model on tryout lead its small turns.
+        probation_canary: (tune::canary_eligible(&risk)
+            && st.mark.is_none()
+            && pin_turns.is_none()
+            && !call.step_up
+            && !call.sensitive
+            && !call.adult
+            && !key.is_empty()
+            && tune::in_canary(key, super::trial::CANARY))
+        .then_some(key),
     };
     let mut route = Router::choose(&input, &reg, &profiles, &table, now_ms);
     if let (Some(a), Some(p), Some((band, own))) = (&ask, &input.pick, chat_band)
@@ -933,6 +945,7 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         let model = route.base.as_deref().unwrap_or(&route.model);
         // C9: only a turn the read routed in the cloud, in the open, outside a canary.
         let ours = !route.no_route
+            && !route.rule_ids.iter().any(|r| r == "probation:canary")
             && !call.step_up
             && !call.sensitive
             && st.mark.is_none()
