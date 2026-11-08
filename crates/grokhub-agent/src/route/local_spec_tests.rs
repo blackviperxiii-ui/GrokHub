@@ -285,6 +285,7 @@ fn a_matching_catalog_drafter_waits_for_the_speed_test_then_runs() {
         keep: true,
         acceptance: 0.6,
         gain: 1.3,
+        retest_at: None,
     };
     ld::save_verdict(&rig.dir, key, keep).unwrap();
     let on = rig.plan(GovState::Normal);
@@ -586,4 +587,53 @@ fn a_drafter_in_another_download_folder_still_pairs() {
     let p = rig.plan(GovState::Normal);
     assert_eq!(p.decision, Decision::NeedsTest);
     assert_eq!(p.name.as_deref(), Some("Gemma 4 12B draft model"));
+}
+
+#[test]
+fn live_replies_that_keep_few_guesses_turn_the_drafter_off_until_a_retest() {
+    let rig = Rig::new("live", G12B_FILE, Some((G12B_MTP, VOCAB)));
+    let key = "NVIDIA GeForce RTX|Huihui-gemma-4-12B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf|Huihui-gemma-4-12B-it-abliterated-MTP-BF16.gguf";
+    let keep = Verdict {
+        keep: true,
+        acceptance: 0.6,
+        gain: 1.3,
+        retest_at: None,
+    };
+    ld::save_verdict(&rig.dir, key, keep).unwrap();
+    let on = rig.plan(GovState::Normal);
+    assert_eq!(on.decision, Decision::On);
+    launched(&on, &rig.dir);
+    assert_eq!(
+        draft_status(),
+        Some(("Gemma 4 12B draft model".to_string(), Decision::On))
+    );
+    let poor = Timing {
+        tok_s: 30.0,
+        drafted: 40,
+        accepted: 8,
+    };
+    let now = now_secs();
+    for _ in 1..ld::LIVE_REPLIES {
+        assert_eq!(live_verdict(&poor, now), None);
+    }
+    let (dir, k, v) = live_verdict(&poor, now).expect("off after the window");
+    assert_eq!((dir.as_path(), k.as_str()), (rig.dir.as_path(), key));
+    assert_eq!(v.retest_at, Some(now + ld::RETEST_SECS));
+    assert_eq!(live_verdict(&poor, now), None, "said once");
+    assert_eq!(draft_status().map(|s| s.1), Some(Decision::Off(LIVE_OFF)));
+    ld::save_verdict(&rig.dir, key, v).unwrap();
+    assert_eq!(rig.plan(GovState::Normal).decision, Decision::Off(LIVE_OFF));
+    // Once the retest is due the speed test runs again.
+    ld::save_verdict(
+        &rig.dir,
+        key,
+        Verdict {
+            retest_at: Some(1),
+            ..v
+        },
+    )
+    .unwrap();
+    assert_eq!(rig.plan(GovState::Normal).decision, Decision::NeedsTest);
+    forget_running();
+    assert_eq!(draft_status(), None);
 }

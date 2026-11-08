@@ -261,7 +261,11 @@ pub struct Timing {
 /// `timings` of a llama-server reply (`predicted_per_second`, `draft_n`,
 /// `draft_n_accepted`).
 pub fn parse_timings(json: &str) -> Option<Timing> {
-    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    timings_of(&serde_json::from_str(json).ok()?)
+}
+
+/// [`parse_timings`] for a reply or stream chunk already parsed.
+pub fn timings_of(v: &serde_json::Value) -> Option<Timing> {
     let t = v.get("timings")?;
     Some(Timing {
         tok_s: t.get("predicted_per_second")?.as_f64()?,
@@ -281,6 +285,91 @@ pub struct Verdict {
     pub acceptance: f64,
     /// Drafted speed over plain speed.
     pub gain: f64,
+    /// When a verdict from live replies expires (unix seconds), so the speed
+    /// test runs again; a speed test's own verdict stands until the pair
+    /// changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retest_at: Option<u64>,
+}
+
+impl Verdict {
+    /// Whether this verdict still decides, or is due for a new speed test.
+    pub fn standing(&self, now_secs: u64) -> bool {
+        self.retest_at.is_none_or(|t| now_secs < t)
+    }
+}
+
+/// How long a draft model turned off by live replies stays off before the
+/// speed test tries it again.
+pub const RETEST_SECS: u64 = 7 * 24 * 3600;
+/// Drafted replies the live check averages before it can turn drafting off.
+pub const LIVE_REPLIES: u32 = 20;
+
+/// Acceptance over the last [`LIVE_REPLIES`] drafted replies. The speed test
+/// times one short prompt; real chats can draft worse, and this catches it.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Live {
+    replies: u32,
+    drafted: u64,
+    accepted: u64,
+}
+
+impl Live {
+    /// Count one reply's timings. After [`LIVE_REPLIES`] drafted replies it
+    /// returns an Off verdict (due for a retest) when under [`MIN_ACCEPT`] of
+    /// the guesses were kept, and starts a fresh window either way.
+    pub fn add(&mut self, t: &Timing, now_secs: u64) -> Option<Verdict> {
+        if t.drafted == 0 {
+            return None;
+        }
+        self.replies += 1;
+        self.drafted += t.drafted;
+        self.accepted += t.accepted.min(t.drafted);
+        if self.replies < LIVE_REPLIES {
+            return None;
+        }
+        let acceptance = self.accepted as f64 / self.drafted as f64;
+        *self = Live::default();
+        (acceptance < MIN_ACCEPT).then_some(Verdict {
+            keep: false,
+            acceptance,
+            gain: 0.0,
+            retest_at: Some(now_secs + RETEST_SECS),
+        })
+    }
+}
+
+/// What the unattended speed test waits for: the machine at rest, on wall
+/// power, nobody using the model or the computer, and the model not keeping
+/// warm to cover for the cloud (the test stops it for a minute or two).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Quiet {
+    /// The governor is at Normal with no reason to slow down.
+    pub calm: bool,
+    pub on_battery: bool,
+    pub game: bool,
+    /// Seconds since the last keyboard or mouse input, when the OS says.
+    pub user_idle_secs: Option<u64>,
+    /// Seconds since the model last answered or was asked.
+    pub model_idle_secs: u64,
+    pub in_flight: usize,
+    pub warm_wanted: bool,
+}
+
+/// Idle time, at the keyboard and on the model, before the test may run.
+pub const AUTO_TEST_IDLE_SECS: u64 = 600;
+
+/// Whether the unattended speed test may start now (`next_at` is the
+/// earliest time it may look again, unix seconds).
+pub fn auto_test_due(q: &Quiet, next_at: u64, now_secs: u64) -> bool {
+    now_secs >= next_at
+        && q.calm
+        && !q.on_battery
+        && !q.game
+        && q.in_flight == 0
+        && !q.warm_wanted
+        && q.model_idle_secs >= AUTO_TEST_IDLE_SECS
+        && q.user_idle_secs.is_none_or(|s| s >= AUTO_TEST_IDLE_SECS)
 }
 
 pub fn judge(plain: &Timing, drafted: &Timing) -> Verdict {
@@ -298,6 +387,7 @@ pub fn judge(plain: &Timing, drafted: &Timing) -> Verdict {
         keep: acceptance >= MIN_ACCEPT && gain >= MIN_GAIN,
         acceptance,
         gain,
+        retest_at: None,
     }
 }
 

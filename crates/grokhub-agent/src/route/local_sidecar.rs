@@ -687,6 +687,51 @@ fn first_gguf(dir: &Path) -> Option<PathBuf> {
 /// Process-wide sidecar. Started lazily when paths resolve.
 static GLOBAL: OnceLock<Mutex<Option<Sidecar>>> = OnceLock::new();
 
+/// Held while the draft speed test runs servers of its own, so a request
+/// waits for it rather than loading a second copy of the model beside it.
+static SPEED_TEST: Mutex<()> = Mutex::new(());
+/// Requests waiting on [`SPEED_TEST`]; the test stops early for them.
+static WAITING: AtomicUsize = AtomicUsize::new(0);
+
+/// Hold while timing the model with servers of your own.
+pub fn speed_test_gate() -> std::sync::MutexGuard<'static, ()> {
+    SPEED_TEST.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Someone is waiting for the speed test to finish.
+pub fn speed_test_wanted_back() -> bool {
+    WAITING.load(Ordering::SeqCst) > 0
+}
+
+fn wait_for_speed_test(want: Want) {
+    if SPEED_TEST.try_lock().is_ok() {
+        return;
+    }
+    // A keep-warm load waits too, but doesn't hurry the test along.
+    let counted = !matches!(want, Want::Warm(_));
+    if counted {
+        WAITING.fetch_add(1, Ordering::SeqCst);
+    }
+    drop(speed_test_gate());
+    if counted {
+        WAITING.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Seconds since the model was last asked, answered or needed as the
+/// fallback.
+pub fn secs_since_use() -> u64 {
+    let side = global_slot()
+        .lock()
+        .ok()
+        .and_then(|s| s.as_ref().map(|s| s.last_used_secs.load(Ordering::SeqCst)))
+        .unwrap_or(0);
+    let last = side
+        .max(LAST_DONE_SECS.load(Ordering::SeqCst))
+        .max(LAST_NEEDED_SECS.load(Ordering::SeqCst));
+    unix_secs().saturating_sub(last)
+}
+
 fn global_slot() -> &'static Mutex<Option<Sidecar>> {
     GLOBAL.get_or_init(|| Mutex::new(None))
 }
@@ -730,6 +775,7 @@ pub fn acquire_for_request(config_dir: &Path) -> Result<Busy, String> {
 /// [`acquire`]; a keep-warm load passes the [`WARM_GEN`] it started under and
 /// gives up when Local AI was turned off or the sidecar stopped since.
 fn load(config_dir: &Path, want: Want) -> Result<Busy, String> {
+    wait_for_speed_test(want);
     tick_idle_unload();
     if local_gov::paused() {
         tick_governor();
@@ -1259,6 +1305,28 @@ mod tests {
     use super::*;
 
     /// A long-running stand-in child (not llama-server) in a [`Sidecar`].
+    #[test]
+    fn a_request_waits_for_the_speed_test_and_asks_it_to_stop() {
+        let gate = speed_test_gate();
+        assert!(!speed_test_wanted_back());
+        // A keep-warm load waits too, but doesn't count as someone waiting.
+        let warm = std::thread::spawn(|| wait_for_speed_test(Want::Warm(0)));
+        let req = std::thread::spawn(|| wait_for_speed_test(Want::Request));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !speed_test_wanted_back() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the request never waited"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(WAITING.load(Ordering::SeqCst), 1);
+        drop(gate);
+        req.join().unwrap();
+        warm.join().unwrap();
+        assert!(!speed_test_wanted_back());
+    }
+
     fn idle_child_sidecar(idle_unload_secs: u64, last_used_secs: u64) -> Sidecar {
         #[cfg(windows)]
         let child = Command::new("ping")

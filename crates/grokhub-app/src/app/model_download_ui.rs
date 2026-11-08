@@ -346,7 +346,7 @@ impl Cabin {
             Outcome::Done(_) if drafter => {
                 status = drafter_done_status(m);
                 // Next request reloads with the new drafter on disk (NeedsTest
-                // until Test speed keeps it, or Manual draft On forces it).
+                // until the speed test, run by hand or on its own, keeps it).
                 local_sidecar::stop_global();
             }
             Outcome::Done(rec) => {

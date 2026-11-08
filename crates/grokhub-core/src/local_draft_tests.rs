@@ -313,6 +313,7 @@ fn verdicts_are_kept_per_device_and_pair() {
         keep: true,
         acceptance: 0.6,
         gain: 1.3,
+        retest_at: None,
     };
     save_verdict(&dir, &key, v).unwrap();
     save_verdict(&dir, "cpu|a|b", Verdict { keep: false, ..v }).unwrap();
@@ -414,4 +415,100 @@ fn drafter_dirs_drop_repeats_when_the_model_sits_in_the_root() {
     let model = Path::new("/home/v/GrokHub/models/G12.gguf");
     let dirs = drafter_dirs(model, Some(Path::new("/home/v/GrokHub/models")), None);
     assert_eq!(dirs, vec![PathBuf::from("/home/v/GrokHub/models/drafters")]);
+}
+
+#[test]
+fn live_replies_turn_a_drafter_off_only_after_twenty_poor_ones() {
+    let poor = Timing {
+        tok_s: 30.0,
+        drafted: 100,
+        accepted: 30,
+    };
+    let mut live = Live::default();
+    // Replies that drafted nothing don't count.
+    let plain = Timing {
+        drafted: 0,
+        accepted: 0,
+        ..poor
+    };
+    assert_eq!(live.add(&plain, 0), None);
+    for _ in 1..LIVE_REPLIES {
+        assert_eq!(live.add(&poor, 0), None);
+    }
+    let v = live.add(&poor, 1_000).expect("off after twenty");
+    assert!(!v.keep && (v.acceptance - 0.3).abs() < 1e-9);
+    assert_eq!(v.retest_at, Some(1_000 + RETEST_SECS));
+    assert!(!v.standing(1_000 + RETEST_SECS), "due for a new test");
+    assert!(v.standing(1_000));
+    // A good window stays on, and the count starts again.
+    let good = Timing {
+        accepted: 70,
+        ..poor
+    };
+    for _ in 0..LIVE_REPLIES {
+        assert_eq!(live.add(&good, 0), None);
+    }
+}
+
+#[test]
+fn a_verdict_saved_before_retests_still_loads_and_stands() {
+    let v: Verdict = serde_json::from_str(r#"{"keep":true,"acceptance":0.6,"gain":1.3}"#).unwrap();
+    assert_eq!(v.retest_at, None);
+    assert!(v.standing(u64::MAX));
+}
+
+#[test]
+fn the_unattended_speed_test_waits_for_a_quiet_machine() {
+    let quiet = Quiet {
+        calm: true,
+        on_battery: false,
+        game: false,
+        user_idle_secs: Some(AUTO_TEST_IDLE_SECS),
+        model_idle_secs: AUTO_TEST_IDLE_SECS,
+        in_flight: 0,
+        warm_wanted: false,
+    };
+    assert!(auto_test_due(&quiet, 100, 100));
+    // An OS that can't tell input idle time still gets a test.
+    assert!(auto_test_due(
+        &Quiet {
+            user_idle_secs: None,
+            ..quiet
+        },
+        0,
+        100
+    ));
+    for busy in [
+        Quiet {
+            calm: false,
+            ..quiet
+        },
+        Quiet {
+            on_battery: true,
+            ..quiet
+        },
+        Quiet {
+            game: true,
+            ..quiet
+        },
+        Quiet {
+            user_idle_secs: Some(30),
+            ..quiet
+        },
+        Quiet {
+            model_idle_secs: 30,
+            ..quiet
+        },
+        Quiet {
+            in_flight: 1,
+            ..quiet
+        },
+        Quiet {
+            warm_wanted: true,
+            ..quiet
+        },
+    ] {
+        assert!(!auto_test_due(&busy, 0, 100), "{busy:?}");
+    }
+    assert!(!auto_test_due(&quiet, 101, 100), "not before next_at");
 }
