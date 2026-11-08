@@ -371,6 +371,7 @@ fn ai_models_holds_every_model_setting_once() {
         "self.ui_provider_rows(ui)",
         "paint_offline_row(ui)",
         "self.ui_local_model_rows(ui)",
+        "self.ui_download_models(ui)",
         "local_notes(",
         "self.ui_spend_rows(ui)",
         "\"Daily token budget\"",
