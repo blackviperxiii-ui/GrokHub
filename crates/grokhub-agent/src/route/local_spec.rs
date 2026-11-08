@@ -102,15 +102,20 @@ struct Candidate {
     name: String,
 }
 
-/// `models/drafters/` next to the model.
-pub fn drafters_dir(model: &Path) -> PathBuf {
-    model
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(ld::DRAFTERS_DIR)
+/// Every folder a drafter for `model` may sit in: beside the model, the
+/// shared `~/GrokHub/models/drafters`, then the desktop app's older
+/// `{config}/models/drafters` (`tune_dir` is the config folder).
+pub fn drafter_dirs(model: &Path, tune_dir: &Path) -> Vec<PathBuf> {
+    let legacy = tune_dir.join("models").join(ld::DRAFTERS_DIR);
+    ld::drafter_dirs(model, ld::models_root().as_deref(), Some(&legacy))
 }
 
-fn candidate(model: &Path, meta: &GgufMeta, flags: &DraftFlags) -> Option<Candidate> {
+fn candidate(
+    model: &Path,
+    meta: &GgufMeta,
+    flags: &DraftFlags,
+    dirs: &[PathBuf],
+) -> Option<Candidate> {
     if meta.nextn_layers > 0 && flags.supports(DraftKind::Mtp) {
         return Some(Candidate {
             kind: DraftKind::Mtp,
@@ -119,11 +124,14 @@ fn candidate(model: &Path, meta: &GgufMeta, flags: &DraftFlags) -> Option<Candid
             name: "the model's own prediction heads".into(),
         });
     }
-    let dir = drafters_dir(model);
     let file = model.file_name()?.to_str()?;
     if let Some(pair) = ld::pair_for_file(file) {
-        // An unreadable header can't pass the tokenizer and room checks.
-        let path = dir.join(pair.drafter.file);
+        // The first folder that holds the file; an unreadable header can't
+        // pass the tokenizer and room checks.
+        let path = dirs
+            .iter()
+            .map(|d| d.join(pair.drafter.file))
+            .find(|p| p.is_file())?;
         let m = header(&path)?;
         return Some(Candidate {
             kind: pair.kind,
@@ -133,9 +141,10 @@ fn candidate(model: &Path, meta: &GgufMeta, flags: &DraftFlags) -> Option<Candid
         });
     }
     // A model the catalog doesn't list: any drafter that tokenizes the same.
-    let mut found: Vec<PathBuf> = std::fs::read_dir(&dir)
-        .ok()?
-        .flatten()
+    let mut found: Vec<PathBuf> = dirs
+        .iter()
+        .filter_map(|d| std::fs::read_dir(d).ok())
+        .flat_map(|rd| rd.flatten())
         .map(|e| e.path())
         .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("gguf"))
         .collect();
@@ -253,7 +262,7 @@ pub fn plan(l: &Launch) -> Plan {
     if forced == Some(false) {
         return Plan::off("the speed test is timing the model alone");
     }
-    let Some(c) = candidate(model, meta, flags) else {
+    let Some(c) = candidate(model, meta, flags, &drafter_dirs(model, tune_dir)) else {
         return Plan::off("no draft model is installed");
     };
     let target = model

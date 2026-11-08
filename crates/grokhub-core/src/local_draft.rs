@@ -5,12 +5,12 @@
 //! same tokenizer. The engine's own `--help` says which flags it has. A
 //! drafter is used only in RampUp or Normal, only when both fit, and only
 //! after the speed test found it accepted at least 40% of its guesses and
-//! answered at least 10% faster; that verdict is kept per device. Drafter
-//! downloads are offered, never automatic. Everything here is pure apart
-//! from the verdict file.
+//! answered at least 10% faster; that verdict is kept per device. Every
+//! shell downloads drafters into one folder, `~/GrokHub/models/drafters`.
+//! Everything here is pure apart from the verdict file and the home folder.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -27,6 +27,43 @@ pub const DRAFT_MAX: u32 = 16;
 /// Where drafters download, under the models folder, so they never replace
 /// the model GrokHub runs.
 pub const DRAFTERS_DIR: &str = "drafters";
+
+/// The one models folder every shell downloads into: `~/GrokHub/models`.
+pub fn models_root() -> Option<PathBuf> {
+    Some(
+        crate::paths::user_home()?
+            .join(crate::brand::INTERNAL_ID)
+            .join("models"),
+    )
+}
+
+/// Where every shell downloads drafters: `~/GrokHub/models/drafters`.
+pub fn drafters_root() -> Option<PathBuf> {
+    models_root().map(|r| r.join(DRAFTERS_DIR))
+}
+
+/// Every folder a drafter for `model` may sit in, in search order: beside
+/// the model, the shared models root, then an older download folder (the
+/// desktop app's `{config}/models/drafters`). No repeats.
+pub fn drafter_dirs(model: &Path, root: Option<&Path>, legacy: Option<&Path>) -> Vec<PathBuf> {
+    let beside = model
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(DRAFTERS_DIR);
+    let mut dirs = vec![beside];
+    for d in [
+        root.map(|r| r.join(DRAFTERS_DIR)),
+        legacy.map(Path::to_path_buf),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !dirs.contains(&d) {
+            dirs.push(d);
+        }
+    }
+    dirs
+}
 
 /// How the engine drafts (`--spec-type`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

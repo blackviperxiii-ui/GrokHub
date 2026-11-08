@@ -399,3 +399,28 @@ fn a_drafter_is_offered_until_it_is_downloaded() {
     assert_eq!(offer(G26B, &dir), None);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn drafter_dirs_search_beside_then_shared_root_then_old_folder() {
+    let model = Path::new("/home/v/LM Studio/gemma/G12.gguf");
+    let dirs = drafter_dirs(
+        model,
+        Some(Path::new("/home/v/GrokHub/models")),
+        Some(Path::new("/home/v/.config/GrokHub/models/drafters")),
+    );
+    assert_eq!(
+        dirs,
+        vec![
+            PathBuf::from("/home/v/LM Studio/gemma/drafters"),
+            PathBuf::from("/home/v/GrokHub/models/drafters"),
+            PathBuf::from("/home/v/.config/GrokHub/models/drafters"),
+        ]
+    );
+}
+
+#[test]
+fn drafter_dirs_drop_repeats_when_the_model_sits_in_the_root() {
+    let model = Path::new("/home/v/GrokHub/models/G12.gguf");
+    let dirs = drafter_dirs(model, Some(Path::new("/home/v/GrokHub/models")), None);
+    assert_eq!(dirs, vec![PathBuf::from("/home/v/GrokHub/models/drafters")]);
+}
