@@ -125,6 +125,25 @@ pub fn parse_openrouter_key(v: &Value, now_ms: u64) -> OpenRouterQuota {
     }
 }
 
+impl OpenRouterQuota {
+    /// Whether a call may go out on this route under the account state
+    /// last detected, given the model's own route class (`free` from
+    /// [`super::discover::is_free_model`]): free models run in every
+    /// state but `Negative` (even free calls error there, until a
+    /// re-read shows recovery) and only while the day's free ceiling
+    /// lasts; paid models need paid credit (`Paid`, or `PaidLow` within
+    /// its remaining credit). `Unknown` permits both: detection simply
+    /// hasn't run yet, and an unchecked account is not a closed one.
+    pub fn permits(&self, free: bool) -> bool {
+        match self.state {
+            OpenRouterState::Negative => false,
+            OpenRouterState::FreeOnly => free && self.free_daily_remaining.is_none_or(|r| r > 0),
+            OpenRouterState::PaidLow => free || self.limit_remaining_usd.is_none_or(|r| r > 0.0),
+            OpenRouterState::Paid | OpenRouterState::Unknown => true,
+        }
+    }
+}
+
 // ---- xAI ----------------------------------------------------------------------
 
 /// The xAI key's blocked flags, from `GET /v1/api-key`. The balance needs
@@ -291,10 +310,11 @@ impl AnthropicSpend {
     }
 }
 
-/// The cost of one Anthropic call in ticks from the registry's prices,
-/// cache reads at the cached rate and cache writes at the prompt rate
-/// (the price table has no write rate; the bundled table may add one).
-/// `None` when the model has no usable prices.
+/// The cost of one Anthropic call in ticks from the registry's prices:
+/// cache reads at the cached rate and cache writes at the table's write
+/// rate ([`Prices::cache_write_at`], from the bundled model card table)
+/// when it names one, else at the prompt rate. `None` when the model
+/// has no usable prices.
 pub fn anthropic_call_ticks(
     prices: &Prices,
     input_tokens: u64,
@@ -306,9 +326,10 @@ pub fn anthropic_call_ticks(
         .saturating_add(cache_read_tokens)
         .saturating_add(cache_write_tokens);
     let (prompt, cached, completion) = prices.rates_at(prompt_total)?;
+    let write = prices.cache_write_at(prompt_total).unwrap_or(prompt);
     let ticks = input_tokens as i128 * prompt as i128
         + cache_read_tokens as i128 * cached as i128
-        + cache_write_tokens as i128 * prompt as i128
+        + cache_write_tokens as i128 * write as i128
         + output_tokens as i128 * completion as i128;
     i64::try_from(ticks).ok()
 }
@@ -725,5 +746,41 @@ mod tests {
             Some(1_000_000 * 300 + 1_000_000 * 30 + 1_000_000 * 300 + 1_000_000 * 1500)
         );
         assert_eq!(anthropic_call_ticks(&Prices::default(), 1, 1, 0, 0), None);
+        // With a write rate in the table (1.25x prompt, as the bundled
+        // Claude rows carry), writes pay it instead of the prompt rate.
+        let priced = Prices {
+            cache_write: Some(375),
+            ..prices
+        };
+        let t = anthropic_call_ticks(&priced, 1_000_000, 1_000_000, 1_000_000, 1_000_000);
+        assert_eq!(
+            t,
+            Some(1_000_000 * 300 + 1_000_000 * 30 + 1_000_000 * 375 + 1_000_000 * 1500)
+        );
+    }
+
+    #[test]
+    fn openrouter_permits_follow_the_account_state_and_the_models_own_class() {
+        let q = |state, rem, free_rem| OpenRouterQuota {
+            state,
+            limit_remaining_usd: rem,
+            free_daily_remaining: free_rem,
+            ..OpenRouterQuota::default()
+        };
+        // Unchecked: nothing is blocked on a guess.
+        assert!(q(OpenRouterState::Unknown, None, None).permits(true));
+        assert!(q(OpenRouterState::Unknown, None, None).permits(false));
+        // Free-only: free models while the day's ceiling lasts, paid never.
+        assert!(q(OpenRouterState::FreeOnly, None, Some(3)).permits(true));
+        assert!(!q(OpenRouterState::FreeOnly, None, Some(0)).permits(true));
+        assert!(!q(OpenRouterState::FreeOnly, None, None).permits(false));
+        // Paid and paid-low: both classes, paid only while credit remains.
+        assert!(q(OpenRouterState::Paid, Some(9.0), None).permits(false));
+        assert!(q(OpenRouterState::PaidLow, Some(0.2), None).permits(false));
+        assert!(!q(OpenRouterState::PaidLow, Some(0.0), None).permits(false));
+        assert!(q(OpenRouterState::PaidLow, Some(0.0), None).permits(true));
+        // Negative: even free models error until a re-read shows recovery.
+        assert!(!q(OpenRouterState::Negative, Some(9.0), Some(9)).permits(true));
+        assert!(!q(OpenRouterState::Negative, Some(9.0), Some(9)).permits(false));
     }
 }
