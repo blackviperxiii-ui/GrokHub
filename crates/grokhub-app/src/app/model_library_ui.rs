@@ -21,12 +21,12 @@ pub(super) fn dir_for(m: &LocalModel) -> PathBuf {
     if m.kind == ModelKind::Drafter {
         drafters_dir()
     } else {
-        models_dir()
+        md::kind_dir(&models_dir(), m.kind)
     }
 }
 
 pub(super) fn on_disk(m: &LocalModel) -> bool {
-    md::final_path(&dir_for(m), m).is_file()
+    md::complete(&dir_for(m), m)
 }
 
 impl Cabin {
@@ -206,6 +206,12 @@ mod tests {
         assert_eq!(app.advance_queue(), None);
         assert_eq!(dir_for(d12), drafters_dir());
         assert_eq!(dir_for(g12), models_dir());
+        // A voice model keeps out of the chat folder.
+        let voice = ls::LocalModel {
+            kind: ModelKind::SpeechToText,
+            ..*g12
+        };
+        assert_eq!(dir_for(&voice), models_dir().join("voice"));
     }
 
     fn texts(app: &mut Cabin) -> Vec<String> {

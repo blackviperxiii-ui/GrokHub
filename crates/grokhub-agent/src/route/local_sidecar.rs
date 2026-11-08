@@ -2161,7 +2161,7 @@ mod tests {
         assert_eq!(pick(&own.display().to_string()), Some(own.clone()));
         let m = grokhub_core::local_setup::local_models()
             .iter()
-            .find(|m| !m.is_drafter)
+            .find(|m| m.is_chat())
             .unwrap();
         std::fs::write(models.join(m.file), b"gguf").unwrap();
         assert_eq!(pick(m.id), Some(models.join(m.file)));

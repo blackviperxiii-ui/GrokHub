@@ -396,9 +396,7 @@ pub fn after_oom(prev: &LaunchArgs, attempt: u8) -> Retry {
 pub fn next_smaller(id: &str) -> Option<&'static LocalModel> {
     let models = local_setup::local_models();
     let at = models.iter().position(|m| m.id == id)?;
-    models[at + 1..]
-        .iter()
-        .find(|m| !m.optional && !m.is_drafter)
+    models[at + 1..].iter().find(|m| !m.optional && m.is_chat())
 }
 
 /// One launch that ran after backing off, kept per model + device + driver.

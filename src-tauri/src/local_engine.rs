@@ -195,7 +195,7 @@ pub fn draft_offer(config_dir: &Path, selected: &str) -> Option<DraftOffer> {
 pub fn draft_offers(config_dir: &Path) -> Vec<DraftOffer> {
     ls::local_models()
         .iter()
-        .filter(|m| !m.is_drafter)
+        .filter(|m| m.is_chat())
         .filter_map(|m| offer_for(config_dir, m))
         .collect()
 }
