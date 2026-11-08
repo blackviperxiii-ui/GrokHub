@@ -1263,6 +1263,234 @@ fn a_streamed_claude_failure_follows_the_shown_rules() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// A config dir whose OpenRouter provider answers with the canned stream.
+fn or_sse_setup(label: &str, sse: &str) -> (PathBuf, Arc<SseWire>) {
+    let dir = test_dir(label);
+    providers::use_vault_for(&dir, Arc::new(MemoryVault::default()));
+    let wire = Arc::new(SseWire {
+        posts: Mutex::new(Vec::new()),
+        sse: sse.into(),
+        status: 200,
+    });
+    providers::use_transport_for(&dir, wire.clone());
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    grant_destination(&dir, OR_DEST, CALL_DATA, UserClick::from_click()).unwrap();
+    (dir, wire)
+}
+
+fn or_stream_call(
+    dir: &Path,
+    shown: &mut Vec<String>,
+    thought: &mut Vec<String>,
+) -> Result<TurnOutput, ClientError> {
+    providers::stream_model(
+        dir,
+        "chat:default",
+        OR_MODEL,
+        Some("high"),
+        &hello(),
+        CALL_DATA,
+        "conv-1:12",
+        &CancelToken::new(),
+        &mut |ev| match ev {
+            StreamEvent::TextDelta(t) => shown.push(t),
+            StreamEvent::ReasoningDelta(t) => thought.push(t),
+            _ => {}
+        },
+    )
+}
+
+/// Failover PR 10: a streamed OpenRouter call reaches the chat delta by
+/// delta (keep-alive comments ignored), assembles its tool call from
+/// indexed pieces, merges its reasoning details, reads the usage chunk
+/// that comes after the finish reason (cost included), gives the
+/// reasoning back to the model the chunks name, and asks for the
+/// stream with its usage on.
+#[test]
+fn a_streamed_openrouter_call_arrives_in_deltas_with_its_tools_and_cost() {
+    let sse = concat!(
+        ": OPENROUTER PROCESSING\n\n",
+        "data: {\"model\":\"vendor/cheap\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning\":\"Think\",\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"Think\",\"index\":0}]}}]}\n\n",
+        "data: {\"model\":\"vendor/cheap\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning\":\"ing\",\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"ing\",\"signature\":\"sig\",\"index\":0}]}}]}\n\n",
+        "data: {\"model\":\"vendor/cheap\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello \"}}]}\n\n",
+        "data: {\"model\":\"vendor/cheap\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"there\"}}]}\n\n",
+        "data: {\"model\":\"vendor/cheap\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"type\":\"function\",\"function\":{\"name\":\"weather\",\"arguments\":\"\"}}]}}]}\n\n",
+        "data: {\"model\":\"vendor/cheap\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"city\\\":\"}}]}}]}\n\n",
+        "data: {\"model\":\"vendor/cheap\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"Oslo\\\"}\"}}]}}]}\n\n",
+        "data: {\"model\":\"vendor/cheap\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+        "data: {\"model\":\"vendor/cheap\",\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":4,\"completion_tokens_details\":{\"reasoning_tokens\":2},\"prompt_tokens_details\":{\"cached_tokens\":3},\"cost\":0.0000025}}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let (dir, wire) = or_sse_setup("or-stream", sse);
+    let (mut shown, mut thought) = (Vec::new(), Vec::new());
+    let out = or_stream_call(&dir, &mut shown, &mut thought).unwrap();
+    assert_eq!(shown, ["Hello ", "there"]);
+    assert_eq!(thought, ["Think", "ing"]);
+    assert_eq!(
+        (out.text.as_str(), out.reasoning.as_str()),
+        ("Hello there", "Thinking")
+    );
+    assert_eq!(
+        (
+            out.calls[0].call_id.as_str(),
+            out.calls[0].name.as_str(),
+            out.calls[0].arguments.as_str()
+        ),
+        ("c1", "weather", r#"{"city":"Oslo"}"#)
+    );
+    assert_eq!(
+        (
+            out.usage.input_tokens,
+            out.usage.output_tokens,
+            out.usage.reasoning_tokens,
+            out.usage.cached_tokens,
+            out.usage.cost_in_usd_ticks
+        ),
+        (12, 4, 2, 3, 25_000)
+    );
+    // The reasoning details merged into one piece, and they go back to
+    // the model that wrote them.
+    assert_eq!(out.reasoning_items.len(), 1);
+    let details = out.reasoning_items[0]
+        .reasoning_details("vendor/cheap")
+        .expect("tagged with the answering model");
+    assert_eq!(
+        (
+            details[0]["text"].as_str(),
+            details[0]["signature"].as_str()
+        ),
+        (Some("Thinking"), Some("sig"))
+    );
+    assert!(!out.truncated);
+    let body: serde_json::Value = serde_json::from_str(&wire.posts.lock().unwrap()[0]).unwrap();
+    assert_eq!(
+        (&body["stream"], &body["stream_options"]),
+        (&json!(true), &json!({"include_usage": true}))
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Failover PR 10: the streamed OpenRouter path keeps the native
+/// stream's failure rules — an error chunk before any text is the error
+/// itself (a rate limit the router fails over from, stamped on the
+/// quota ledger), one after text showed is a cut-off, a stream with no
+/// finish reason is a disconnect, a cut at the output limit is a
+/// truncation, and a host that answered with the whole reply is read
+/// whole.
+#[test]
+fn a_streamed_openrouter_failure_follows_the_shown_rules() {
+    // An error chunk before anything showed: the error class itself.
+    let (dir, _w) = or_sse_setup(
+        "or-stream-limit",
+        concat!(
+            ": OPENROUTER PROCESSING\n\n",
+            "data: {\"error\":{\"code\":429,\"message\":\"Rate limit exceeded: free-models-per-day\"},\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\"},\"finish_reason\":\"error\"}]}\n\n",
+        ),
+    );
+    let (mut shown, mut thought) = (Vec::new(), Vec::new());
+    let err = or_stream_call(&dir, &mut shown, &mut thought).unwrap_err();
+    assert!(shown.is_empty());
+    assert!(matches!(err, ClientError::RateLimited { .. }), "{err:?}");
+    // The limit is account news: the ledger asks for a re-read at once.
+    let ledger = grokhub_core::model_registry::store::load_quota(&dir);
+    assert!(ledger.openrouter.recheck_at_ms > 0);
+    let _ = std::fs::remove_dir_all(dir);
+
+    // Text showed, then the provider failed mid-stream: what showed is kept.
+    let (dir, _w) = or_sse_setup(
+        "or-stream-cutoff",
+        concat!(
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"}}]}\n\n",
+            "data: {\"error\":{\"code\":502,\"message\":\"Provider returned error\"},\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\"},\"finish_reason\":\"error\"}]}\n\n",
+        ),
+    );
+    let (mut shown, mut thought) = (Vec::new(), Vec::new());
+    let err = or_stream_call(&dir, &mut shown, &mut thought).unwrap_err();
+    assert_eq!(shown, ["partial"]);
+    assert!(matches!(err, ClientError::CutOff(_)), "{err:?}");
+    let _ = std::fs::remove_dir_all(dir);
+
+    // Nothing showed and the stream just ended: a disconnect.
+    let (dir, _w) = or_sse_setup("or-stream-dropped", ": OPENROUTER PROCESSING\n\n");
+    let (mut shown, mut thought) = (Vec::new(), Vec::new());
+    let err = or_stream_call(&dir, &mut shown, &mut thought).unwrap_err();
+    assert!(matches!(err, ClientError::Disconnect), "{err:?}");
+    let _ = std::fs::remove_dir_all(dir);
+
+    // Cut at the output limit: a truncation the run loop carries on from.
+    let (dir, _w) = or_sse_setup(
+        "or-stream-length",
+        concat!(
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"long\"}}]}\n\n",
+            "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"length\"}]}\n\n",
+            "data: [DONE]\n\n",
+        ),
+    );
+    let (mut shown, mut thought) = (Vec::new(), Vec::new());
+    let out = or_stream_call(&dir, &mut shown, &mut thought).unwrap();
+    assert_eq!(
+        (
+            out.text.as_str(),
+            out.truncated,
+            out.truncate_reason.as_deref()
+        ),
+        ("long", true, Some("max_output_tokens"))
+    );
+    let _ = std::fs::remove_dir_all(dir);
+
+    // The whole reply instead of a stream: read whole, sent as one delta.
+    let (dir, _w) = or_sse_setup("or-stream-whole", OR_REPLY);
+    let (mut shown, mut thought) = (Vec::new(), Vec::new());
+    let out = or_stream_call(&dir, &mut shown, &mut thought).unwrap();
+    assert_eq!(shown, ["hello from the provider"]);
+    assert_eq!(out.usage.cost_in_usd_ticks, 25_000);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Failover PR 10: an OpenAI-compatible host other than OpenRouter keeps
+/// the whole-reply call, its answer one delta, with no stream asked for.
+#[test]
+fn a_custom_openai_compatible_host_keeps_the_whole_reply() {
+    let dir = test_dir("custom-host-whole");
+    providers::use_vault_for(&dir, Arc::new(MemoryVault::default()));
+    let wire = Arc::new(SseWire {
+        posts: Mutex::new(Vec::new()),
+        sse: OR_REPLY.into(),
+        status: 200,
+    });
+    providers::use_transport_for(&dir, wire.clone());
+    let p = add_provider(&dir, "https://api.example.com/v1", KEY, NOW).unwrap();
+    grant_destination(&dir, "api.example.com", CALL_DATA, UserClick::from_click()).unwrap();
+    let model = format!("{}/vendor/cheap", p.id);
+    let mut shown: Vec<String> = Vec::new();
+    let out = providers::stream_model(
+        &dir,
+        "chat:default",
+        &model,
+        None,
+        &hello(),
+        CALL_DATA,
+        "conv-1:13",
+        &CancelToken::new(),
+        &mut |ev| {
+            if let StreamEvent::TextDelta(t) = ev {
+                shown.push(t);
+            }
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        (out.text.as_str(), shown.len()),
+        ("hello from the provider", 1)
+    );
+    let body: serde_json::Value = serde_json::from_str(&wire.posts.lock().unwrap()[0]).unwrap();
+    assert_eq!(
+        (&body["stream"], body.get("stream_options")),
+        (&json!(false), None)
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 // ---- End to end: the route record, and the key is nowhere ---------------------
 
 struct Never;
