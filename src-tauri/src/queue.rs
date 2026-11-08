@@ -231,7 +231,7 @@ mod tests {
         );
         assert_eq!(
             stop(&id, Some("s9")),
-            Err("task s9 not found. Known ids: s1, s2, s3".into())
+            Err("No task with id s9 was started in this chat. The ids started in this chat are: s1, s2, s3.".into())
         );
 
         stop(&id, None).unwrap();

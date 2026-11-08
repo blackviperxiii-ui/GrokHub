@@ -153,6 +153,11 @@ struct HubInner {
 }
 
 /// One session's background commands, monitors, and pending notices.
+/// How [`TaskHub`]'s error for an id this chat never started opens.
+pub(crate) const UNKNOWN_ID_OPENS: &str = "No task with id";
+/// What a tool adds to that error for the model.
+pub(crate) const UNKNOWN_ID_HINT: &str = "An id comes only from the result of the call that started it; don't make one up or report on a task that doesn't exist.";
+
 pub struct TaskHub {
     inner: Mutex<HubInner>,
 }
@@ -613,9 +618,10 @@ impl TaskHub {
         slot.ok_or_else(|| self.unknown(id))
     }
 
-    /// The error for an id this chat never started: what does exist, and
-    /// where ids come from, so a model that made one up can't read the
-    /// error as a task that's still running.
+    /// The error for an id this chat never started: what does exist, so a
+    /// made-up id can't read as a task that's still running. The Stop
+    /// button shows it too, so the model's own hint is the tool's
+    /// ([`crate::tools`]' control tools add [`UNKNOWN_ID_HINT`]).
     fn unknown(&self, id: &str) -> String {
         let known = self.known_ids();
         let started = if known.is_empty() {
@@ -623,9 +629,7 @@ impl TaskHub {
         } else {
             format!("The ids started in this chat are: {}.", known.join(", "))
         };
-        format!(
-            "No task with id {id} was started in this chat. {started} An id comes only from the result of the call that started it; don't make one up or report on a task that doesn't exist."
-        )
+        format!("{UNKNOWN_ID_OPENS} {id} was started in this chat. {started}")
     }
 
     fn stop_monitor(&self, id: &str) -> bool {
@@ -1318,7 +1322,6 @@ mod tests {
                 "{err}"
             );
             assert!(err.contains("No background command"), "{err}");
-            assert!(err.contains("don't make one up"), "{err}");
         }
     }
 
