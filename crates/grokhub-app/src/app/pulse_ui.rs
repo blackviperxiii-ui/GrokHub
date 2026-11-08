@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::Read as _;
 
 use super::*;
+use grokhub_core::card_chips::{card_chips, remind_later, ChipAct, DayShape};
 use grokhub_core::pulse::{
     self as pc, LedgerEntry, LedgerReason, PulseCategory, PulseType, Ranked,
 };
@@ -170,6 +171,12 @@ pub(super) enum PulseAct {
     Open(String),
     /// Show or hide a card's full report under its summary.
     Report(String),
+    /// A card's offered fix at this index: into the card's chat.
+    Offer(String, usize),
+    /// Remind me later: hidden until this unix ms.
+    RemindAt(String, u64),
+    /// Ignore for now: off the page, with no "less of this".
+    Ignore(String),
     Like(String),
     Discuss(String),
     Link(String),
@@ -601,9 +608,10 @@ fn paint_type_tag(ui: &mut egui::Ui, kind: PulseType) {
 }
 
 /// One Ideas row: icon, bold "I can …" line, two or three lines of detail, the
-/// type tag, and ···. Hovered or focused, its two buttons show inline: the
-/// primary (Run, Do it, Send…, Fix it or Options) and Snooze. Dismiss and the
-/// rest wait in ···. On a narrow page only the primary shows.
+/// type tag, and ···. Hovered or focused, its quick chips show inline: its
+/// fixes or primary (Run, Do it, Send…, Fix it or Options), Discuss, Ignore
+/// for now and Remind me later. The rest wait in ···. On a narrow page only
+/// the first chip shows.
 /// Returns the action, the row's rect, and whether the bold line is hovered.
 pub(super) fn paint_pulse_row(
     ui: &mut egui::Ui,
@@ -611,6 +619,7 @@ pub(super) fn paint_pulse_row(
     kind: PulseType,
     st: RowState,
     why: Option<&str>,
+    chips: &[(String, ChipAct)],
 ) -> (Option<PulseAct>, egui::Rect, bool) {
     let mut act = None;
     let mut title_hover = false;
@@ -669,15 +678,12 @@ pub(super) fn paint_pulse_row(
                     if active || st.compact {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.spacing_mut().item_spacing.x = 8.0;
-                            if !st.compact && quick_button(ui, "Snooze", Quick::Outline) {
-                                act = Some(PulseAct::Snooze(card.id.clone()));
-                            }
-                            if let Some(label) = super::pulse_fix_ui::fix_label(card) {
-                                if quick_button(ui, label, Quick::Primary) {
-                                    act = Some(PulseAct::Options(card.id.clone()));
+                            let shown = if st.compact { 1 } else { chips.len() };
+                            // Right to left: the last chip is laid down first.
+                            for (label, chip) in chips.iter().take(shown).rev() {
+                                if quick_button(ui, label, chip_style(chip)) {
+                                    act = Some(chip_act(card, chip));
                                 }
-                            } else if quick_button(ui, run_label(card), Quick::Primary) {
-                                act = Some(PulseAct::Run(card.id.clone()));
                             }
                         });
                     }
@@ -691,6 +697,37 @@ pub(super) fn paint_pulse_row(
         });
     });
     (act, resp.rect, title_hover)
+}
+
+/// A row's chips: its fixes, else its own primary (Fix it or Options, else
+/// Run), then Discuss, Ignore for now and Remind me later.
+pub(super) fn row_chips(card: &UpdateCard, day: &DayShape) -> Vec<(String, ChipAct)> {
+    let primary = super::pulse_fix_ui::fix_label(card).unwrap_or_else(|| run_label(card));
+    card_chips(card, day, Some(primary))
+        .into_iter()
+        .map(|c| (c.label, c.act))
+        .collect()
+}
+
+/// What a tapped chip does on the page.
+pub(super) fn chip_act(card: &UpdateCard, chip: &ChipAct) -> PulseAct {
+    let id = card.id.clone();
+    match chip {
+        ChipAct::Primary if super::pulse_fix_ui::fix_label(card).is_some() => PulseAct::Options(id),
+        ChipAct::Primary => PulseAct::Run(id),
+        ChipAct::Offer(i) => PulseAct::Offer(id, *i),
+        ChipAct::Discuss => PulseAct::Discuss(id),
+        ChipAct::Ignore => PulseAct::Ignore(id),
+        ChipAct::RemindAt(at) => PulseAct::RemindAt(id, *at),
+    }
+}
+
+/// The card's own fixes lead in amber; the rest are outlined.
+fn chip_style(chip: &ChipAct) -> Quick {
+    match chip {
+        ChipAct::Primary | ChipAct::Offer(_) => Quick::Primary,
+        _ => Quick::Outline,
+    }
 }
 
 /// "source · age" for the line above a post's title.
@@ -720,6 +757,8 @@ pub(super) enum FeedPostAct {
     Open,
     /// Show or hide the full report.
     Report,
+    /// One of the card's quick chips.
+    Chip(ChipAct),
     /// A digest's update: open that card.
     OpenCard(String),
     /// Crash card: run it again.
@@ -756,6 +795,7 @@ pub(super) fn feed_act(card: &UpdateCard, did: FeedPostAct) -> PulseAct {
         FeedPostAct::NeverAgain => PulseAct::NeverAgain(id),
         FeedPostAct::Open => PulseAct::Open(id),
         FeedPostAct::Report => PulseAct::Report(id),
+        FeedPostAct::Chip(chip) => chip_act(card, &chip),
         FeedPostAct::OpenCard(item) => PulseAct::Open(item),
         FeedPostAct::Retry => PulseAct::Retry(id),
         FeedPostAct::DeleteRecording => PulseAct::DeleteRecording(id),
@@ -847,6 +887,45 @@ pub(super) fn post_actions(card: &UpdateCard, looking_more: bool) -> Vec<(String
 /// How many of a post's actions sit on the post; the rest go in its ···.
 pub(super) const POST_BUTTONS: usize = 2;
 
+/// A post's actions with its chips. A post whose only actions were Discuss and
+/// Like gets the card's chips instead, and Like moves to its ···. Posts with
+/// their own buttons (Fix it, Undo, Save…) keep them.
+pub(super) fn post_buttons(
+    card: &UpdateCard,
+    looking_more: bool,
+    day: &DayShape,
+) -> Vec<(String, FeedPostAct)> {
+    let acts = post_actions(card, looking_more);
+    let plain = acts
+        .iter()
+        .all(|(_, did)| matches!(did, FeedPostAct::Discuss | FeedPostAct::Like));
+    if !plain || card.status == grokhub_core::UpdateStatus::Dismissed {
+        return acts;
+    }
+    let mut out: Vec<(String, FeedPostAct)> = card_chips(card, day, None)
+        .into_iter()
+        .map(|c| (c.label, FeedPostAct::Chip(c.act)))
+        .collect();
+    out.extend(
+        acts.into_iter()
+            .filter(|(_, did)| *did == FeedPostAct::Like),
+    );
+    out
+}
+
+/// How many of these actions sit on the post: every chip, else two.
+pub(super) fn post_shown(acts: &[(String, FeedPostAct)]) -> usize {
+    let chips = acts
+        .iter()
+        .take_while(|(_, did)| matches!(did, FeedPostAct::Chip(_)))
+        .count();
+    if chips > 0 {
+        chips
+    } else {
+        POST_BUTTONS
+    }
+}
+
 /// One card button, answering a pointer click only (Undo and Delete live
 /// here, and a stray key must never fire them).
 pub(super) fn card_button(ui: &mut egui::Ui, label: &str, style: Quick) -> bool {
@@ -864,11 +943,12 @@ fn paint_post_buttons(ui: &mut egui::Ui, acts: &[(String, FeedPostAct)]) -> Opti
     let mut hit = None;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
-        for (i, (label, did)) in acts.iter().take(POST_BUTTONS).enumerate() {
-            let style = if i == 0 && *did != FeedPostAct::Like {
-                Quick::Primary
-            } else {
-                Quick::Outline
+        for (i, (label, did)) in acts.iter().take(post_shown(acts)).enumerate() {
+            let style = match did {
+                FeedPostAct::Chip(chip) => chip_style(chip),
+                FeedPostAct::Like => Quick::Outline,
+                _ if i == 0 => Quick::Primary,
+                _ => Quick::Outline,
             };
             if card_button(ui, label, style) {
                 hit = Some(did.clone());
@@ -882,7 +962,7 @@ fn paint_post_buttons(ui: &mut egui::Ui, acts: &[(String, FeedPostAct)]) -> Opti
 /// Delete recording are left out: the ··· already has them.
 pub(super) fn post_overflow(acts: &[(String, FeedPostAct)]) -> Vec<(String, FeedPostAct)> {
     acts.iter()
-        .skip(POST_BUTTONS)
+        .skip(post_shown(acts))
         .filter(|(_, did)| {
             !matches!(
                 did,
@@ -902,6 +982,7 @@ pub(super) fn paint_post_body(
     thumbs: &[Thumb],
     looking_more: bool,
     report_open: bool,
+    day: &DayShape,
 ) -> Option<FeedPostAct> {
     let mut act = None;
     ui.add(
@@ -963,7 +1044,7 @@ pub(super) fn paint_post_body(
         paint_thumbs(ui, thumbs);
     }
     ui.add_space(2.0);
-    if let Some(did) = paint_post_buttons(ui, &post_actions(card, looking_more)) {
+    if let Some(did) = paint_post_buttons(ui, &post_buttons(card, looking_more, day)) {
         act = Some(did);
     }
     act
@@ -1492,10 +1573,11 @@ impl Cabin {
     ) -> Option<PulseAct> {
         let mut act = None;
         let kind = pc::pulse_type(card);
+        let day = self.card_day();
         let daily_drop = grokhub_core::daily_drop::is_daily_drop_card(card, &self.cfg.daily_drop);
         let why = self.reaction_why(card);
         let extra: Vec<(String, PulseAct)> =
-            post_overflow(&post_actions(card, self.sources.looking_more))
+            post_overflow(&post_buttons(card, self.sources.looking_more, &day))
                 .into_iter()
                 .map(|(label, did)| (label, feed_act(card, did)))
                 .collect();
@@ -1530,9 +1612,14 @@ impl Cabin {
                         });
                     });
                     let report_open = self.pulse_view.report_open.contains(&card.id);
-                    if let Some(did) =
-                        paint_post_body(ui, card, &thumbs, self.sources.looking_more, report_open)
-                    {
+                    if let Some(did) = paint_post_body(
+                        ui,
+                        card,
+                        &thumbs,
+                        self.sources.looking_more,
+                        report_open,
+                        &day,
+                    ) {
                         act = Some(feed_act(card, did));
                     }
                     if let Some(id) = self.paint_backup_one_taps(ui, card) {
@@ -1823,6 +1910,12 @@ impl Cabin {
                 let clock = Self::local_clock();
                 self.pulse_snooze_at(&id, clock.now_ms, clock.hour, clock.minute);
             }
+            PulseAct::RemindAt(id, at) => {
+                let day = self.card_day();
+                self.pulse_remind_at(&id, at, &day);
+            }
+            PulseAct::Ignore(id) => self.pulse_ignore(&id),
+            PulseAct::Offer(id, i) => self.pulse_offer(&id, i),
             PulseAct::Dismiss(id) => {
                 if self
                     .pulse_card(&id)
@@ -1932,6 +2025,74 @@ impl Cabin {
         }
         self.send_chat(line.clone());
         Some(line)
+    }
+
+    /// The person's day as the chips read it: the clock, when they wind down
+    /// (quiet hours, else learned) and when they usually sit down (learned).
+    pub(super) fn card_day(&mut self) -> DayShape {
+        let clock = Self::local_clock();
+        DayShape {
+            now_ms: clock.now_ms,
+            hour: clock.hour,
+            minute: clock.minute,
+            wind_down: self.wind_down_hour(),
+            start: self.rhythm_now().usual_start_hour(),
+        }
+    }
+
+    /// Remind me later: hidden until `at`, and the status says when it is back.
+    pub(super) fn pulse_remind_at(&mut self, id: &str, at: u64, day: &DayShape) {
+        if !pc::snooze_card(&mut self.updates, id, at) {
+            return;
+        }
+        self.persist_updates();
+        let later = remind_later(day);
+        self.status = if later.at_ms == at {
+            let mut label = later.label;
+            if let Some(first) = label.get(..1) {
+                let lower = first.to_lowercase();
+                label.replace_range(..1, &lower);
+            }
+            format!("Back {label}.")
+        } else {
+            "Reminder set.".into()
+        };
+    }
+
+    /// Ignore for now: the card leaves the page with no "less of this".
+    pub(super) fn pulse_ignore(&mut self, id: &str) {
+        let Some(card) = self.pulse_card(id) else {
+            return;
+        };
+        // An idea stays on the Ideas board; nothing is remembered as turned down.
+        self.ignore_feed_card(&card.id);
+        self.status = "Hidden for now.".into();
+    }
+
+    /// A card's offered fix: into the card's own chat (with its report), then
+    /// the fix's prompt. A card with no chat of its own runs it instead.
+    pub(super) fn pulse_offer(&mut self, id: &str, i: usize) {
+        let Some(card) = self.pulse_card(id) else {
+            return;
+        };
+        let Some(prompt) = card
+            .pulse
+            .report
+            .as_ref()
+            .and_then(|r| r.offers.get(i))
+            .map(|o| o.prompt.trim().to_string())
+            .filter(|p| !p.is_empty())
+        else {
+            return;
+        };
+        let discussable = matches!(card.kind, UpdateKind::Digest | UpdateKind::Suggestion)
+            && grokhub_core::paused_job_of(&card).is_none();
+        if !discussable {
+            self.pulse_run(id);
+            return;
+        }
+        self.discuss_card(id);
+        self.send_chat(prompt);
     }
 
     /// Snooze: hidden until the next 09:00 local. Returns that unix ms.

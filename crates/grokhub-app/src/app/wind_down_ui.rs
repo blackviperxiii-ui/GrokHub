@@ -114,7 +114,7 @@ impl Cabin {
     }
 
     /// The hour the user usually stops: their quiet hours, else the learned window.
-    fn wind_down_hour(&mut self) -> Option<u32> {
+    pub(super) fn wind_down_hour(&mut self) -> Option<u32> {
         let (start, end) = (self.cfg.quiet_start.trim(), self.cfg.quiet_end.trim());
         if !start.is_empty() && start != end {
             if let Some(min) = grokhub_core::organs::hm_min(start) {
