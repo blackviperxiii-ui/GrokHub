@@ -10,7 +10,7 @@
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
-use grokhub_agent::route::{local, local_sidecar};
+use grokhub_agent::route::{local, local_live, local_sidecar};
 use grokhub_core::model_download::{self as md, Control, Progress};
 use grokhub_core::runtime_download::{
     self as rd, Fetch as RuntimeFetch, Manifest, Outcome as RuntimeOutcome,
@@ -352,6 +352,29 @@ impl Cabin {
         }
         for line in local::status_lines(&self.config_dir()) {
             crate::cards::settings_note(ui, &line);
+        }
+        if installed {
+            self.ui_running_model_rows(ui);
+        }
+    }
+
+    /// What runs now, where, how fast, its draft model and when it unloads,
+    /// with the two controls the card allows: keep loaded and unload now.
+    fn ui_running_model_rows(&mut self, ui: &mut egui::Ui) {
+        let live = local_live::snapshot(&self.config_dir());
+        for line in local_live::lines(&live) {
+            crate::cards::settings_note(ui, &line);
+        }
+        let (hint, action) = keep_loaded_row(live.kept_loaded);
+        if crate::cards::settings_action(ui, "Keep the model loaded", hint, action) {
+            local_sidecar::set_keep_loaded(!live.kept_loaded);
+        }
+        if live.model.is_some() {
+            if crate::cards::settings_action(ui, "Unload the model", UNLOAD_HINT, "Unload now") {
+                local_sidecar::stop_global();
+            }
+            // The countdown and speed move on their own.
+            ui.ctx().request_repaint_after(Duration::from_secs(1));
         }
     }
 
@@ -707,9 +730,33 @@ fn speed_report_lines(report: &str) -> impl Iterator<Item = &str> {
     report.lines().map(str::trim).filter(|l| !l.is_empty())
 }
 
+const UNLOAD_HINT: &str = "Frees the memory it uses now. It loads again with the next reply.";
+
+/// The keep-loaded row's hint and button, by whether it is on.
+fn keep_loaded_row(kept: bool) -> (&'static str, &'static str) {
+    if kept {
+        (
+            "On: replies skip the load wait. A game that needs the memory still unloads it.",
+            "Let it unload",
+        )
+    } else {
+        (
+            "Off: it unloads after a while without replies, to give the memory back.",
+            "Keep loaded",
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_keep_loaded_button_offers_the_other_state() {
+        assert_eq!(keep_loaded_row(false).1, "Keep loaded");
+        assert_eq!(keep_loaded_row(true).1, "Let it unload");
+        assert!(keep_loaded_row(true).0.contains("game"));
+    }
 
     #[test]
     fn the_speed_report_keeps_the_draft_verdict_after_the_blank_line() {
