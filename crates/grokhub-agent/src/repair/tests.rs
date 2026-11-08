@@ -58,6 +58,18 @@ fn run_with(
     probes: &[ProbeId],
     answer: &dyn Fn(&ProbeSpec) -> ProbeRun,
 ) -> Run {
+    run_about(label, os, has_bin, probes, answer, grant, None)
+}
+
+fn run_about(
+    label: &str,
+    os: Os,
+    has_bin: &dyn Fn(&str) -> bool,
+    probes: &[ProbeId],
+    answer: &dyn Fn(&ProbeSpec) -> ProbeRun,
+    grant: bool,
+    subject: Option<&ProgramName>,
+) -> Run {
     let dir = test_dir(label);
     let ledger = if grant {
         granted(&dir)
@@ -78,6 +90,7 @@ fn run_with(
         os,
         has_bin,
         runner: &runner,
+        subject,
     };
     let report = diagnose(&ctx, probes);
     Run {
@@ -346,5 +359,217 @@ fn the_tool_schema_offers_ids_not_commands() {
             .unwrap()
             .len(),
         14
+    );
+}
+
+const CRASH_ASK: &str =
+    "Help me investigate why bluetoothd keeps crashing (read crash logs metadata only).";
+
+fn crash_answer(spec: &ProbeSpec) -> ProbeRun {
+    match spec.program.as_str() {
+        "coredumpctl" => done(
+            "Sun 2026-11-08 12:40:02 CST  1201 0 0 SIGSEGV present  /usr/lib/bluetooth/bluetoothd 1.1M\n\
+             Sun 2026-11-08 13:02:11 CST  1388 0 0 SIGABRT present  /usr/lib/bluetooth/bluetoothd 1.2M\n",
+        ),
+        "journalctl" => done("Nov 08 13:02:10 beast bluetoothd[1388]: adapter reset failed\n"),
+        "systemctl" => done(""),
+        other => panic!("unexpected program {other}"),
+    }
+}
+
+#[test]
+fn a_crash_card_chat_picks_that_programs_crash_history() {
+    let crash = Some(vec![
+        ProbeId::CrashDumps,
+        ProbeId::CrashLog,
+        ProbeId::FailedServices,
+    ]);
+    assert_eq!(probes_for_subject(CRASH_ASK, Os::Linux), crash);
+    assert_eq!(probes_for_subject("check into it for me", Os::Linux), crash);
+    assert_eq!(
+        probes_for_subject("why does it keep doing that?", Os::Linux),
+        crash
+    );
+    assert_eq!(
+        probes_for_subject("check into it for me", Os::Windows),
+        Some(vec![ProbeId::AppCrashes, ProbeId::ServicesStoppedAuto])
+    );
+    assert_eq!(probes_for_subject("thanks, that's all", Os::Linux), None);
+    assert_eq!(probes_for_subject("/diagnose", Os::Linux), None);
+    assert_eq!(
+        probes_for_subject("why does adapter.rs crash", Os::Linux),
+        None
+    );
+    // Without a card the old reading stands: no crash probes.
+    assert_eq!(
+        probes_for_intent(CRASH_ASK, Os::Linux),
+        Some(vec![ProbeId::FailedServices, ProbeId::BootErrors])
+    );
+}
+
+#[test]
+fn a_crash_card_reads_its_programs_crash_dumps_and_log_by_name() {
+    let name = ProgramName::parse("bluetoothd").unwrap();
+    let probes = probes_for_subject(CRASH_ASK, Os::Linux).unwrap();
+    let r = run_about(
+        "diag-crash-card",
+        Os::Linux,
+        &apt,
+        &probes,
+        &crash_answer,
+        true,
+        Some(&name),
+    );
+    assert_eq!(
+        r.calls,
+        vec![
+            "coredumpctl list --no-pager --no-legend bluetoothd",
+            "journalctl _COMM=bluetoothd -p warning -n 20 --no-pager -q -o short",
+            "systemctl --failed --no-legend --no-pager --plain",
+        ]
+    );
+    let plains: Vec<(&str, Severity)> = r
+        .report
+        .findings
+        .iter()
+        .map(|f| (f.plain.as_str(), f.severity))
+        .collect();
+    assert_eq!(
+        plains,
+        vec![
+            (
+                "bluetoothd has crashed: 2 crash dumps on record. The newest is from Sun 2026-11-08 13:02:11 CST, stopped by SIGABRT.",
+                Severity::Warning
+            ),
+            (
+                "bluetoothd logged 1 warning or error recently. The newest is from Nov 08 13:02:10.",
+                Severity::Info
+            ),
+            ("All background services are running.", Severity::Ok),
+        ]
+    );
+    // The same probes with no name from a card: the crash ones never run.
+    let bare = run_about(
+        "diag-crash-bare",
+        Os::Linux,
+        &apt,
+        &probes,
+        &crash_answer,
+        true,
+        None,
+    );
+    assert_eq!(
+        bare.calls,
+        vec!["systemctl --failed --no-legend --no-pager --plain"]
+    );
+}
+
+#[test]
+fn a_program_name_from_a_card_is_one_plain_word() {
+    for ok in [
+        "bluetoothd",
+        "getty@tty1",
+        "Discord.exe",
+        "pipewire-pulse",
+        "nm_applet",
+    ] {
+        assert_eq!(
+            ProgramName::parse(ok).map(|n| n.as_str().to_string()),
+            Some(ok.into())
+        );
+    }
+    for bad in [
+        "", "-rf", "--all", ".hidden", "../etc", "a b", "x;rm", "a'b", "a\"b", "$(id)", "a|b",
+        "über",
+    ] {
+        assert_eq!(ProgramName::parse(bad), None, "{bad}");
+    }
+    assert_eq!(ProgramName::parse(&"a".repeat(65)), None);
+    // The journal keeps 15 bytes of a process name.
+    let long = ProgramName::parse("systemd-resolved").unwrap();
+    assert_eq!(
+        subject_probe_spec(ProbeId::CrashLog, Os::Linux, &long)
+            .unwrap()
+            .argv[0],
+        "_COMM=systemd-resolve"
+    );
+    // Windows looks the exe up in the Application log, read only.
+    let discord = ProgramName::parse("Discord").unwrap();
+    let spec = subject_probe_spec(ProbeId::AppCrashes, Os::Windows, &discord).unwrap();
+    assert_eq!(read_only_violation(&spec), None);
+    assert!(
+        spec.argv[3].contains("EventData[Data[@Name=\"AppName\"]=\"Discord.exe\"]"),
+        "{}",
+        spec.argv[3]
+    );
+    // Not a Linux probe on Windows, and not a probe the model can name.
+    assert_eq!(
+        subject_probe_spec(ProbeId::CrashDumps, Os::Windows, &discord),
+        None
+    );
+    assert_eq!(ProbeId::parse("crash_dumps", Os::Linux), None);
+    assert_eq!(probe_spec_with(ProbeId::CrashLog, Os::Linux, &apt), None);
+    for os in [Os::Linux, Os::Windows] {
+        for id in ProbeId::for_subject(os) {
+            let spec = subject_probe_spec(*id, os, &long).unwrap();
+            assert_eq!(read_only_violation(&spec), None, "{}", spec.command_line());
+        }
+    }
+}
+
+#[test]
+fn crash_history_reads_as_plain_findings() {
+    let out = |code: i32, stdout: &str, stderr: &str| ProbeOutput {
+        program: "x".into(),
+        code: Some(code),
+        stdout: stdout.into(),
+        stderr: stderr.into(),
+    };
+    let plain = |id: ProbeId, o: ProbeOutput, name: &str| -> Vec<String> {
+        interpret_subject(id, &o, name)
+            .into_iter()
+            .map(|f| f.plain)
+            .collect()
+    };
+    assert_eq!(
+        plain(ProbeId::CrashDumps, out(1, "", "No coredumps found.\n"), "bluetoothd"),
+        vec!["I found no crash dumps of bluetoothd that I can read. A system program's dumps can need admin rights to see."]
+    );
+    assert_eq!(
+        plain(
+            ProbeId::CrashLog,
+            out(0, "", "Hint: You are currently not seeing messages from other users and the system.\n"),
+            "bluetoothd"
+        ),
+        vec!["I could only read your own logs, and bluetoothd logs to the system's, which needs admin rights."]
+    );
+    assert_eq!(
+        plain(
+            ProbeId::CrashLog,
+            out(0, "-- No entries --\n", ""),
+            "bluetoothd"
+        ),
+        vec!["bluetoothd logged no warnings or errors recently."]
+    );
+    assert_eq!(
+        plain(
+            ProbeId::AppCrashes,
+            out(
+                0,
+                "2026-11-08T13:02:11\tKERNELBASE.dll\t0xe0434352\n2026-11-07T09:00:00\tKERNELBASE.dll\t0xe0434352\n",
+                ""
+            ),
+            "Discord.exe"
+        ),
+        vec!["Discord.exe has crashed: 2 crashes in the Application log. The newest was 2026-11-08 13:02:11, in KERNELBASE.dll (code 0xe0434352)."]
+    );
+    assert_eq!(
+        plain(ProbeId::AppCrashes, out(0, "", ""), "Discord.exe"),
+        vec!["Windows has no crash of Discord.exe on record."]
+    );
+    let many = "Sun 2026-11-08 13:02:11 CST  1388 0 0 SIGABRT present  /usr/lib/bluetooth/bluetoothd 1.2M\n".repeat(20);
+    assert_eq!(
+        plain(ProbeId::CrashDumps, out(0, &many, ""), "bluetoothd"),
+        vec!["bluetoothd has crashed: 20 or more crash dumps on record. The newest is from Sun 2026-11-08 13:02:11 CST, stopped by SIGABRT."]
     );
 }

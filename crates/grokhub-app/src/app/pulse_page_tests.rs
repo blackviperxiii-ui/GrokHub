@@ -1726,3 +1726,35 @@ fn a_card_fix_tapped_mid_reply_waits_instead_of_cutting_the_reply_off() {
     assert_eq!(cabin.followup_queue.count_for(&card_chat.id), 1);
     assert_eq!(cabin.followup_queue.count_for(&hangout), 0);
 }
+
+/// In the crash card's chat, "check into it for me" reads bluetoothd's crash
+/// history by the card's name. In another chat the card's name never applies.
+#[test]
+fn a_crash_cards_chat_checks_that_program_by_the_cards_name() {
+    let mut quiet = QuietCabin::boot("pulse-crash-subject");
+    let cabin = &mut quiet.cabin;
+    cabin.updates.clear();
+    cabin
+        .live_mut()
+        .push(("user".into(), "lol that raid was wild".into()));
+    cabin.persist();
+    let hangout = cabin.threads[cabin.thread_idx].id.clone();
+    let crash = crash_card();
+    let id = crash.id.clone();
+    cabin.updates.push(crash);
+    assert_eq!(cabin.card_program_here(), None);
+    assert!(!cabin.try_diagnose_intent("check into it for me"));
+
+    cabin.discuss_card(&id);
+    assert_ne!(cabin.threads[cabin.thread_idx].id, hangout);
+    assert_eq!(
+        cabin.card_program_here().map(|n| n.as_str().to_string()),
+        Some("bluetoothd".into())
+    );
+    assert!(cabin.try_diagnose_intent("check into it for me"));
+    assert_eq!(cabin.status, "Checking your computer (read only)…");
+    assert_eq!(
+        cabin.threads[cabin.thread_idx].messages.last(),
+        Some(&("user".to_string(), "check into it for me".to_string()))
+    );
+}

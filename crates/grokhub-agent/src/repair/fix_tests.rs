@@ -767,6 +767,7 @@ fn my_wifi_doesnt_work_reaches_a_plain_proposal() {
         os: Os::Linux,
         has_bin: &nm,
         runner: &answer,
+        subject: None,
     };
     let found = diagnose(&dctx, &probes);
     let plans = plans_for(&found.findings, Os::Linux, &nm);
