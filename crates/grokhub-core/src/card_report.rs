@@ -126,6 +126,9 @@ pub struct FixOffer {
     pub prompt: String,
     #[serde(default, skip_serializing_if = "OfferKind::is_chat")]
     pub kind: OfferKind,
+    /// Its kind of fix, for the switch that lets it run without a tap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fix_type: Option<crate::auto_fix::FixType>,
 }
 
 /// What the card found: the report's headline, else the card's title.
@@ -582,6 +585,7 @@ You opened this from your feed and want to act on it."
         assert_eq!(old.kind, OfferKind::Chat);
         let look = FixOffer {
             kind: OfferKind::Look,
+            fix_type: None,
             ..old
         };
         assert_eq!(

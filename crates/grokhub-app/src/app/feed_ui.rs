@@ -112,8 +112,15 @@ impl Cabin {
     }
 
     pub(super) fn post_feed_card(&mut self, card: UpdateCard) {
+        let id = card.id.clone();
+        let auto = grokhub_core::auto_fix::auto_offer(&card, &self.cfg.auto_fixes);
         if !post_update(&mut self.updates, card) {
             return;
+        }
+        if auto.is_some() {
+            // Its kind of fix is switched on: the read-only look runs now and
+            // its receipt lands on the card.
+            self.start_card_look(&id);
         }
         let now = now_ms();
         let rank = grokhub_core::rank_home_events(
