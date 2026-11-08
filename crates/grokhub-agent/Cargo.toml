@@ -47,6 +47,9 @@ libc = "0.2.189"
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring", "pem"] }
 
 [target.'cfg(windows)'.dependencies]
+# Microsoft Execution Containers: the shell sandbox's process container on
+# Windows 11 (network only through the egress proxy). Pinned: the API is new.
+mxc-sdk = { version = "=1.0.1", default-features = false }
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
