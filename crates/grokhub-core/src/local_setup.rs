@@ -232,34 +232,35 @@ pub fn local_models() -> &'static [LocalModel] {
                     ModelKind::Chat
                 });
                 LocalModel {
-                id: leak(r.id),
-                name: leak(r.name),
-                repo: leak(r.repo),
-                file: leak(r.file),
-                sha256: leak(r.sha256),
-                download_mb: r.download_mb,
-                quant: leak(r.quant),
-                license: leak(r.license),
-                badges: r.badges.into_iter().map(leak).collect::<Vec<_>>().leak(),
-                tier: leak(r.tier),
-                route: leak(r.route),
-                ctx_default: r.ctx_default,
-                run_mb: r.run_mb,
-                needs_avx2: r.needs_avx2,
-                min_llama_build: r.min_llama_build,
-                optional: r.optional,
-                is_drafter: kind == ModelKind::Drafter,
-                kind,
-                pairs_with: r.pairs_with.map(leak),
-                abliterated: r.abliterated.map(|a| Abliteration {
-                    by: leak(a.by),
-                    method: leak(a.method),
-                }),
-                refusal_score: r.refusal_score,
-                drafter: r.drafter.map(leak),
-                min_budget: r.min_budget,
-                tok_s: r.tok_s,
-            }})
+                    id: leak(r.id),
+                    name: leak(r.name),
+                    repo: leak(r.repo),
+                    file: leak(r.file),
+                    sha256: leak(r.sha256),
+                    download_mb: r.download_mb,
+                    quant: leak(r.quant),
+                    license: leak(r.license),
+                    badges: r.badges.into_iter().map(leak).collect::<Vec<_>>().leak(),
+                    tier: leak(r.tier),
+                    route: leak(r.route),
+                    ctx_default: r.ctx_default,
+                    run_mb: r.run_mb,
+                    needs_avx2: r.needs_avx2,
+                    min_llama_build: r.min_llama_build,
+                    optional: r.optional,
+                    is_drafter: kind == ModelKind::Drafter,
+                    kind,
+                    pairs_with: r.pairs_with.map(leak),
+                    abliterated: r.abliterated.map(|a| Abliteration {
+                        by: leak(a.by),
+                        method: leak(a.method),
+                    }),
+                    refusal_score: r.refusal_score,
+                    drafter: r.drafter.map(leak),
+                    min_budget: r.min_budget,
+                    tok_s: r.tok_s,
+                }
+            })
             .collect()
     });
     &MODELS
