@@ -20,6 +20,7 @@ pub mod browser;
 pub mod cabin_engine;
 pub mod cabin_rules;
 pub mod capture;
+pub mod card_chips;
 pub mod card_prefs;
 pub mod card_report;
 pub mod card_signals;

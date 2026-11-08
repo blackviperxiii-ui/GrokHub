@@ -287,9 +287,26 @@ fn watcher_report(result: &WatcherResult) -> crate::card_report::CardReport {
         found: result.title.trim().to_string(),
         summary: result.body.trim().to_string(),
         evidence: result.evidence.clone(),
+        offers: crash_offers(result, subject.as_ref()),
         subject,
         ..Default::default()
     }
+}
+
+/// What a crash card offers: a look into the crashes, with the watcher's own
+/// read-only prompt. Other watchers keep their single action.
+fn crash_offers(
+    result: &WatcherResult,
+    subject: Option<&crate::card_report::CardSubject>,
+) -> Vec<crate::card_report::FixOffer> {
+    let prompt = result.prompt.as_deref().map(str::trim).unwrap_or_default();
+    if result.id != WatcherId::CrashSpike || subject.is_none() || prompt.is_empty() {
+        return Vec::new();
+    }
+    vec![crate::card_report::FixOffer {
+        label: "Look into the crashes".into(),
+        prompt: prompt.to_string(),
+    }]
 }
 
 pub fn nudge_watcher_card(result: &WatcherResult, now_ms: u64) -> UpdateCard {
@@ -790,6 +807,13 @@ mod tests {
                 kind: crate::card_report::SubjectKind::Program,
                 name: "bluetoothd".into(),
             })
+        );
+        assert_eq!(
+            report.offers,
+            vec![crate::card_report::FixOffer {
+                label: "Look into the crashes".into(),
+                prompt: "Help me investigate why bluetoothd keeps crashing (read crash logs metadata only).".into(),
+            }]
         );
     }
 

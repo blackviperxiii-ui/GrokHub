@@ -68,6 +68,19 @@ pub struct CardReport {
     /// A digest's updates, each with the card it opens.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub items: Vec<ReportItem>,
+    /// Up to two fixes the card offers, best first. Nothing runs until tapped.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub offers: Vec<FixOffer>,
+}
+
+/// One fix a card offers: the chip's words and the request it starts.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FixOffer {
+    /// Short and says what it does: "Find out why", "Restart bluetooth".
+    pub label: String,
+    /// What the fix run is asked to do, in the card's own chat.
+    pub prompt: String,
 }
 
 /// What the card found: the report's headline, else the card's title.
@@ -246,6 +259,7 @@ pub fn report_from_run(name: &str, reply: &str) -> Option<CardReport> {
             name: name.to_string(),
         }),
         items: Vec::new(),
+        offers: Vec::new(),
     })
 }
 
@@ -348,6 +362,7 @@ The third asks for a dark theme.\n- #12 crash on resume";
                 name: "bluetoothd".into(),
             }),
             items: Vec::new(),
+            offers: Vec::new(),
         });
         card.citations = vec!["https://example.com/a".into()];
         assert_eq!(card_headline(&card), "bluetoothd crashed 4 times today");

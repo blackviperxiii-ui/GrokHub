@@ -998,6 +998,16 @@ impl Cabin {
     }
 
     pub(super) fn dismiss_feed_card(&mut self, id: &str) {
+        self.close_feed_card(id, true);
+    }
+
+    /// Ignore for now: the card leaves the page, but its source and topic are
+    /// not remembered as turned down, so it can come back.
+    pub(super) fn ignore_feed_card(&mut self, id: &str) {
+        self.close_feed_card(id, false);
+    }
+
+    fn close_feed_card(&mut self, id: &str, turned_down: bool) {
         let prior = self.updates.iter().find(|c| c.id == id).cloned();
         let kind = prior.as_ref().map(|c| c.kind);
         let touched = prior.as_ref().is_some_and(|c| self.card_touched(c));
@@ -1011,12 +1021,12 @@ impl Cabin {
             dismiss_update_at(&mut self.updates, id, now_ms())
         };
         if removed {
-            if kind == Some(UpdateKind::Suggestion) {
+            if turned_down && kind == Some(UpdateKind::Suggestion) {
                 remember_dismissed_source(&mut self.cfg.feed_pulse, &source);
                 self.persist_cfg();
             }
             // The idea stays on the Ideas board. New ideas on its topic stay off.
-            if kind == Some(UpdateKind::Idea) {
+            if turned_down && kind == Some(UpdateKind::Idea) {
                 grokhub_core::remember_turned_down(&mut self.cfg.feed_pulse, &title);
                 self.persist_cfg();
             }
