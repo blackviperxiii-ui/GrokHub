@@ -910,7 +910,7 @@ impl Cabin {
             self.kick_repair();
             return;
         };
-        self.auto_sent_mark = None;
+        self.followup_queue.forget_try();
         self.harness_user_queued();
         self.send_chat(next);
     }
@@ -928,12 +928,9 @@ impl Cabin {
         if !self.followup_queue.ready_for(&here) {
             return;
         }
-        let mark = (here, self.followup_queue.len());
-        if self.auto_sent_mark.as_ref() == Some(&mark) {
-            return;
+        if self.followup_queue.first_try_for(&here) {
+            self.drain_followup_queue();
         }
-        self.auto_sent_mark = Some(mark);
-        self.drain_followup_queue();
     }
 
     pub(super) fn thinking_status(&self) -> String {

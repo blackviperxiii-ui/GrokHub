@@ -900,8 +900,6 @@ pub struct Cabin {
     grok_tasks: Vec<(String, String, bool)>,
     /// Messages typed while a reply runs, each tied to the chat it was typed in.
     followup_queue: followups::FollowupQueue,
-    /// The chat and line length [`Self::send_waiting_here`] last tried. Not saved.
-    auto_sent_mark: Option<(String, usize)>,
     /// `/workflow pause|resume|stop` waiting until the live turn ends. Not saved.
     /// Side answers: read-only runs beside the live reply, and their cards.
     side: side_run::SideRuns,
@@ -1521,7 +1519,6 @@ impl Cabin {
             grok_commands: Vec::new(),
             grok_tasks: Vec::new(),
             followup_queue: Default::default(),
-            auto_sent_mark: None,
             side: Default::default(),
             forced_route: None,
             last_turn_read: None,
@@ -2022,7 +2019,6 @@ impl Cabin {
             grok_commands: Vec::new(),
             grok_tasks: Vec::new(),
             followup_queue: Default::default(),
-            auto_sent_mark: None,
             side: Default::default(),
             forced_route: None,
             last_turn_read: None,
@@ -2099,14 +2095,6 @@ impl Cabin {
             .get(self.thread_idx)
             .map(|t| t.id.clone())
             .unwrap_or_default()
-    }
-
-    /// A chat's title by id, for lines that name another chat.
-    fn thread_title(&self, id: &str) -> Option<String> {
-        self.threads
-            .iter()
-            .find(|t| t.id == id)
-            .map(|t| t.title.clone())
     }
 
     fn thinking_here(&self) -> bool {
@@ -4887,20 +4875,6 @@ impl Cabin {
             _ => format!("{status} · your {handed_back} queued messages are back in the box"),
         };
         self.maybe_continue_ptt();
-    }
-
-    /// Moves queued follow-ups into the composer, after anything already
-    /// typed there. Returns how many moved.
-    fn queued_back_to_composer(&mut self) -> usize {
-        // Only the open chat's messages: another chat's wait for that chat.
-        let visible = self.visible_thread_id();
-        let queued = self.followup_queue.take_all_for(&visible);
-        let moved = queued.len();
-        if moved > 0 {
-            self.composer = composer_with_queued(&self.composer, queued);
-            self.composer_want_focus = true;
-        }
-        moved
     }
 
     /// Tray Halt and the halt hotkeys: the live turn and every background run.

@@ -2262,7 +2262,6 @@ fn quiet_cabin() -> Cabin {
         grok_commands: Vec::new(),
         grok_tasks: Vec::new(),
         followup_queue: Default::default(),
-        auto_sent_mark: None,
         side: Default::default(),
         forced_route: None,
         last_turn_read: None,

@@ -27,6 +27,9 @@ impl Queued {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct FollowupQueue {
     items: Vec<Queued>,
+    /// The chat and line length an open-chat send last tried, so a send that
+    /// never starts isn't tried again every frame. Not saved.
+    tried: Option<(String, usize)>,
 }
 
 impl FollowupQueue {
@@ -122,6 +125,45 @@ impl FollowupQueue {
     pub(super) fn contains_text(&self, text: &str) -> bool {
         self.items.iter().any(|q| q.text == text)
     }
+
+    /// True the first time for this chat and line length, false after.
+    pub(super) fn first_try_for(&mut self, thread: &str) -> bool {
+        let mark = (thread.to_string(), self.items.len());
+        if self.tried.as_ref() == Some(&mark) {
+            return false;
+        }
+        self.tried = Some(mark);
+        true
+    }
+
+    /// A send went out: the next open-chat send may try again.
+    pub(super) fn forget_try(&mut self) {
+        self.tried = None;
+    }
+}
+
+impl super::Cabin {
+    /// A chat's title by id, for lines that name another chat.
+    pub(super) fn thread_title(&self, id: &str) -> Option<String> {
+        self.threads
+            .iter()
+            .find(|t| t.id == id)
+            .map(|t| t.title.clone())
+    }
+
+    /// Moves queued follow-ups into the composer, after anything already
+    /// typed there. Returns how many moved. Only the open chat's messages
+    /// move: another chat's wait for that chat.
+    pub(super) fn queued_back_to_composer(&mut self) -> usize {
+        let visible = self.visible_thread_id();
+        let queued = self.followup_queue.take_all_for(&visible);
+        let moved = queued.len();
+        if moved > 0 {
+            self.composer = super::composer_with_queued(&self.composer, queued);
+            self.composer_want_focus = true;
+        }
+        moved
+    }
 }
 
 /// Untagged entries (they fit any chat), for tests and old call sites.
@@ -136,6 +178,7 @@ impl From<Vec<String>> for FollowupQueue {
                     paused: false,
                 })
                 .collect(),
+            tried: None,
         }
     }
 }
