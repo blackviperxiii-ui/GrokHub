@@ -93,6 +93,40 @@ pub fn card_summary(card: &UpdateCard) -> String {
         .to_string()
 }
 
+/// What the card opens to under its summary: the full report and the facts
+/// behind it, as markdown. `None` when there is nothing past the summary.
+/// A digest's updates are listed by the page itself, one row per card.
+pub fn report_more(card: &UpdateCard) -> Option<String> {
+    let report = card.pulse.report.as_ref()?;
+    let summary = report.summary.trim();
+    let mut out = String::new();
+    let details = report.details.trim();
+    if !details.is_empty() && details != summary {
+        out.push_str(details);
+    }
+    if !report.evidence.is_empty() {
+        if !out.is_empty() {
+            out.push_str("\n\n");
+        }
+        out.push_str("**What was checked**");
+        for fact in &report.evidence {
+            out.push_str("\n- ");
+            out.push_str(fact.trim());
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+/// The card opens to more than its summary: a report, its facts, or a digest's updates.
+pub fn has_more(card: &UpdateCard) -> bool {
+    report_more(card).is_some()
+        || card
+            .pulse
+            .report
+            .as_ref()
+            .is_some_and(|r| !r.items.is_empty())
+}
+
 /// Everything a chat opened from a reported card starts from: the finding,
 /// what it is about, the facts behind it and the full report. `None` when the
 /// card has no report.
@@ -333,6 +367,53 @@ Source: https://example.com/a\n\n\
 You opened this from your feed and want to act on it."
             )
         );
+    }
+
+    #[test]
+    fn the_card_opens_to_its_report_and_facts() {
+        let mut card = blank_card("c".into(), UpdateKind::Suggestion, "T".into(), None, 1);
+        assert_eq!(report_more(&card), None);
+        assert!(!has_more(&card));
+        card.pulse.report = Some(CardReport {
+            found: "Backup failed".into(),
+            summary: "Disk full.".into(),
+            details: "Disk full.".into(),
+            ..Default::default()
+        });
+        assert_eq!(
+            report_more(&card),
+            None,
+            "a report that is only its summary"
+        );
+        card.pulse.report = Some(CardReport {
+            found: "Backup failed".into(),
+            summary: "Disk full.".into(),
+            details: "## Disk\n/dev/sda1 is 100% used.".into(),
+            evidence: vec![
+                "Failed runs in a row: 3".into(),
+                "Last error: disk full".into(),
+            ],
+            ..Default::default()
+        });
+        assert_eq!(
+            report_more(&card).as_deref(),
+            Some(
+                "## Disk\n/dev/sda1 is 100% used.\n\n**What was checked**\n\
+- Failed runs in a row: 3\n- Last error: disk full"
+            )
+        );
+        assert!(has_more(&card));
+        card.pulse.report = Some(CardReport {
+            found: "2 updates".into(),
+            items: vec![ReportItem {
+                card_id: "a".into(),
+                found: "A".into(),
+                summary: String::new(),
+            }],
+            ..Default::default()
+        });
+        assert_eq!(report_more(&card), None);
+        assert!(has_more(&card), "a digest opens to its updates");
     }
 
     #[test]
