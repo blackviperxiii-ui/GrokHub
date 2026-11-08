@@ -187,7 +187,7 @@ fn image_generate_schema() -> Value {
     json!({
         "type": "function",
         "name": "image_generate",
-        "description": "Generate images. n is 1 to 10. resolution is 1k or 2k. quality is auto, low, or medium on grok-imagine-image-2.0. Spends credits and is not read-only. 18+ pictures are drawn on this computer only, one per call, with no credits spent.",
+        "description": "Generate images. n is 1 to 10. resolution is 1k or 2k. quality is auto, low, or medium on grok-imagine-image-2.0. Spends credits and is not read-only.",
         "parameters": {
             "type": "object",
             "properties": {
