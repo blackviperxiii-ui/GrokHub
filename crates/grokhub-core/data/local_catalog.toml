@@ -260,3 +260,42 @@ run_mb = 419
 needs_avx2 = false
 min_budget = {}
 tok_s = { gpu = 0, unified = 0, cpu = 0 }
+# Speech to text: NVIDIA's Parakeet TDT 0.6B v3 (25 European languages), the
+# sherpa-onnx int8 export. It runs in the speech engine (`voice_engine.rs`)
+# once per clip, so nothing stays loaded. Its four files go in their own
+# folder under the voice folder; the token list is a small git file, checked
+# by its git oid. Not a chat model, so no `abliterated`.
+[[model]]
+id = "parakeet-tdt-0.6b-v3-int8"
+name = "Parakeet v3 speech to text"
+repo = "csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"
+file = "parakeet-tdt-0.6b-v3-int8/encoder.int8.onnx"
+remote_file = "encoder.int8.onnx"
+sha256 = "1afbe69c1ffdabee94755f42e4daf1d93549131a3da11356bda84fcef0f2c479"
+download_mb = 640
+quant = "int8"
+license = "CC-BY-4.0"
+kind = "speech-to-text"
+badges = []
+tier = "T1"
+route = "local:voice"
+ctx_default = 0
+run_mb = 1_024
+needs_avx2 = false
+min_budget = {}
+tok_s = { gpu = 0, unified = 0, cpu = 0 }
+[[model.parts]]
+remote_file = "decoder.int8.onnx"
+file = "parakeet-tdt-0.6b-v3-int8/decoder.int8.onnx"
+sha256 = "0222a86147299d4dee90edf95b6d13827edb42ad8b7c9cf0b2582f030937c0b5"
+bytes = 11_845_274
+[[model.parts]]
+remote_file = "joiner.int8.onnx"
+file = "parakeet-tdt-0.6b-v3-int8/joiner.int8.onnx"
+sha256 = "cbd02f3696e9944970111fb439d9c3fd365a80374565f13f2b9c7007d253fc98"
+bytes = 6_355_277
+[[model.parts]]
+remote_file = "tokens.txt"
+file = "parakeet-tdt-0.6b-v3-int8/tokens.txt"
+git_oid = "fc43e1c723e262df60b70e1919614417162d1fe2"
+bytes = 93_939

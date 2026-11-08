@@ -260,6 +260,7 @@ mod self_review_tests;
 mod self_review_ui;
 mod settings;
 mod setup_wizard;
+pub(crate) use setup_wizard::models_dir;
 mod sidebar;
 mod skill_undo;
 mod slash;

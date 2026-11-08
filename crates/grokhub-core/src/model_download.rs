@@ -294,9 +294,14 @@ pub fn download(
             after -= m.parts[i - 1].bytes;
         }
         let fin = dir.join(it.file);
-        if i > 0
+        // A multi-file model's main file is kept too: its folder holds
+        // nothing else, and it was checked before its rename.
+        if (i > 0 || !m.parts.is_empty())
             && let Ok(md) = fs::metadata(&fin)
         {
+            if i == 0 {
+                main_bytes = md.len();
+            }
             base += md.len();
             continue;
         }
@@ -900,6 +905,13 @@ mod tests {
         let _ = fs::remove_file(dir.join("stt/encoder.onnx"));
         download(&dir, &m, &f, &Control::default(), &mut |_| {});
         assert_eq!(f.1.lock().unwrap().len(), 1, "only the missing file");
+        let again = files();
+        let out = download(&dir, &m, &again, &Control::default(), &mut |_| {});
+        assert!(matches!(out, Outcome::Done(ref r) if r.bytes == ENC.len() as u64));
+        assert!(
+            again.1.lock().unwrap().is_empty(),
+            "all kept, nothing fetched"
+        );
         remove(&dir, &m).unwrap();
         assert!(!dir.join("stt").exists());
         let _ = fs::remove_dir_all(&models);
