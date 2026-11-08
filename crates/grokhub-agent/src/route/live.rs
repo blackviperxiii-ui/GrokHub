@@ -586,6 +586,12 @@ fn episode_key<'a>(call: &RouteCall<'a>) -> &'a str {
     }
 }
 
+/// The sizing tracker's key for a call: its episode and turn, the same pair
+/// the ladder's step count uses ([`super::sizing`]).
+fn sizing_key(call: &RouteCall<'_>) -> String {
+    format!("{}\u{1f}{}", episode_key(call), turn_hash(call.text))
+}
+
 /// VerifyGate rejects so far in the episode, and whether its latest check passed.
 fn verify_counts(config_dir: &Path, call: &RouteCall<'_>) -> (Option<u32>, bool) {
     if call.episode.is_empty() || call.session.is_empty() {
@@ -859,6 +865,30 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         // Episode already on a model: treat as prior escalate when sticky differs from current.
         sticky.as_deref().is_some_and(|m| m != call.model)
     });
+    // Failover PR 5: size the turn before it runs (a long task goes to Grok,
+    // not to a free model's small allowance), folded with what this turn has
+    // already done — a turn that outgrows its size mid-flight is upgraded to
+    // long, so its remaining picks and failovers treat it as one.
+    let fresh_size = super::sizing::estimate(&super::sizing::SizeInput {
+        d,
+        planned_tools: call.planned_tools,
+        plan_mode: call.plan_mode,
+        needs_tools: call.needs_tools,
+        needs_image: call.needs_image,
+        reasoning: super::lane_needs_reasoning(lane.unwrap_or(call.class)),
+        ctx_tokens: call.ctx_tokens,
+        session_kept_tokens: if pin_turns.is_some() || steps > 1 {
+            call.ctx_tokens
+        } else {
+            0
+        },
+        learned_output_tokens: super::sizing::learned_output_tokens(config_dir, call.class, now_ms),
+    });
+    let (size_est, size_upgraded) = if key.is_empty() {
+        (fresh_size, false)
+    } else {
+        super::sizing::turn_estimate(&sizing_key(call), turn, fresh_size, call.ctx_tokens, now_ms)
+    };
     let input = RouteInput {
         provider: call.provider,
         class: call.class,
@@ -883,6 +913,7 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         prior_escalated,
         care_first,
         lane,
+        size: Some(size_est),
     };
     let mut route = Router::choose(&input, &reg, &profiles, &table, now_ms);
     if let (Some(a), Some(p), Some((band, own))) = (&ask, &input.pick, chat_band)
@@ -942,6 +973,11 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         if !route.no_route && !key.is_empty() {
             keep_session_model(key, turn, route.base.as_deref().unwrap_or(&route.model));
         }
+    }
+    if size_upgraded {
+        // The turn outgrew its size on this call (sizing::TurnSizer): from
+        // here on it is a long task, with a long task's routes.
+        route.rule_ids.push("size:upgrade:long".into());
     }
     laps.mark("route:choose");
     let mut tune_mark = st.mark.clone();
@@ -1437,6 +1473,17 @@ pub fn route_log(
                 now,
             )
         });
+        // Failover PR 5: what the call wrote and whether a free or on-device
+        // model carried it, for the turn's mid-flight size upgrade.
+        if done.ok {
+            super::sizing::note_served(
+                &sizing_key(call),
+                turn_hash(call.text),
+                done.usage.output_tokens,
+                super::local::is_local(&rec.used.model)
+                    || super::providers::is_free_model(&rec.used.model),
+            );
+        }
     }
     let args = serde_json::json!({
         "provider": rec.used.provider,

@@ -50,6 +50,7 @@ pub mod quota;
 pub mod refresh;
 pub mod session_metrics;
 pub mod signals;
+pub mod sizing;
 pub mod sources;
 pub mod spend;
 pub mod table;
@@ -403,6 +404,11 @@ pub struct RouteInput<'a> {
     /// drives the band, the model needs and the ranking. Eligibility (privacy,
     /// the local gate, cloud-only) stays on `class`.
     pub lane: Option<&'a str>,
+    /// Failover PR 5: the turn's size estimate ([`sizing`]), when the call
+    /// site sized it. A long task keeps free provider models out of the pick
+    /// while a carrier route exists and ranks Grok ahead of every provider.
+    /// `None` keeps every pre-sizing behavior.
+    pub size: Option<sizing::SizeEstimate>,
 }
 
 /// The lowest rung an xAI reasoning model takes without a listing that says otherwise.
@@ -710,6 +716,20 @@ impl Router {
                 policy::is_new_provider(reg, m) && table.row(input.lane(), m).is_none()
             });
         };
+        // Failover PR 5: on a long task Grok outranks every provider, table
+        // rows included — a free model's small allowance is not what a long
+        // task spends itself on. The full route ladder lands with the scorer.
+        let long_task = input.size.is_some_and(|s| s.size == sizing::TaskSize::Long);
+        let long_first = |ranked: &mut Vec<String>, rules: &mut Vec<String>| {
+            if !long_task {
+                return;
+            }
+            let before = ranked.first().cloned();
+            ranked.sort_by_key(|m| policy::is_new_provider(reg, m));
+            if ranked.first() != before.as_ref() {
+                rules.push("size:long:xai_first".into());
+            }
+        };
         let attn = attention::decide(&attention::AttentionInput {
             class: input.lane(),
             text: input.text,
@@ -819,6 +839,7 @@ impl Router {
             let mut ranked =
                 policy::rank(input.lane(), pool, table, reg, current, input.ctx_tokens);
             xai_first(&mut ranked);
+            long_first(&mut ranked, rules);
             let chain = policy::fallback_chain(from, pool);
             match chain.first().or(ranked.first()) {
                 Some(m) => {
@@ -859,6 +880,7 @@ impl Router {
                     input.ctx_tokens,
                 );
                 xai_first(&mut ranked);
+                long_first(&mut ranked, rules);
                 let stronger = attn.kind.breaks_episode_sticky()
                     && ranked.first().is_some_and(|m| m.as_str() != ep);
                 if !stronger {
@@ -972,6 +994,7 @@ impl Router {
             input.ctx_tokens,
         );
         xai_first(&mut ranked);
+        long_first(&mut ranked, rules);
         long_context_first(&mut ranked, reg, input.lane(), input.ctx_tokens, rules);
         if e2 {
             let away = input.episode_model.unwrap_or(current).trim().to_string();
@@ -1053,6 +1076,34 @@ impl Router {
             })
             .filter(|id| policy::fits(reg, profiles, id, fit_for(id), &input.spend, now_ms))
             .collect();
+        // Failover PR 5: a long task never spends itself on a free provider
+        // model (card §3.3) while a route that can carry it exists — an xAI
+        // model or a paid provider. Free models stay when they are the only
+        // cloud there is: a working free route beats a dead stop, and the
+        // on-device fallback below is untouched either way.
+        let ids: Vec<&str> = if input.size.is_some_and(|s| s.size == sizing::TaskSize::Long) {
+            rules.push("size:long".into());
+            let free_provider =
+                |id: &str| policy::is_new_provider(reg, id) && providers::is_free_model(id);
+            if ids
+                .iter()
+                .any(|id| !local::is_local(id) && !free_provider(id))
+            {
+                let kept: Vec<&str> = ids
+                    .iter()
+                    .copied()
+                    .filter(|id| !free_provider(id))
+                    .collect();
+                if kept.len() != ids.len() {
+                    rules.push("size:long:no_free".into());
+                }
+                kept
+            } else {
+                ids
+            }
+        } else {
+            ids
+        };
         let row = policy::class_row(input.lane());
         let band = row.map(|r| ladder::Band::tuned(r, input.bump, input.start));
         let mut pick = match (row, band) {
@@ -1549,6 +1600,9 @@ mod r2b_tests;
 
 #[cfg(test)]
 mod r3b_tests;
+
+#[cfg(test)]
+mod sizing_tests;
 
 #[cfg(test)]
 mod goal_tests;
