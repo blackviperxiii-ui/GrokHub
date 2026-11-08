@@ -23,6 +23,7 @@ pub mod difficulty;
 pub mod feedback;
 pub mod goal;
 pub mod guard;
+pub mod handoff;
 pub mod heal;
 pub mod host;
 pub mod identity;
@@ -328,6 +329,19 @@ pub fn call_model(
                 // router rerouted this call away from the caller's own model:
                 // a caller that named the provider model gets its error.
                 live::cool_down(&dir, &sent.model, now);
+                // Failover PR 7: the switch lands on this call's route
+                // record like the chat path's (no packet here: this path's
+                // callers re-plan their own retries).
+                handoff::log_switch(
+                    if call.session.is_empty() {
+                        &call.conversation_id
+                    } else {
+                        &call.session
+                    },
+                    &sent.model,
+                    &call.model,
+                    &err,
+                );
                 grok_model = call.model.clone();
                 sent.model = grok_model.clone();
                 client.stream(&sent.request(), cancel, &mut |_| {})
