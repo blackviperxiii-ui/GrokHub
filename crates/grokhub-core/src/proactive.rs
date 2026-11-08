@@ -275,7 +275,7 @@ pub struct ProactiveMeta {
 /// A failing automation: the card names it, says how often it failed and
 /// why, and offers to find out what is wrong.
 fn automation_candidate(alert: &crate::automation::AutomationAlert) -> Candidate {
-    use crate::card_report::{CardReport, CardSubject, SubjectKind};
+    use crate::card_report::{CardReport, CardSubject, FixOffer, SubjectKind};
     let name = alert.name.trim();
     let quoted = format!("\"{name}\"");
     let (who, who_lower) = if name.is_empty() {
@@ -322,6 +322,13 @@ fn automation_candidate(alert: &crate::automation::AutomationAlert) -> Candidate
             kind: SubjectKind::Automation,
             name: name.to_string(),
         }),
+        offers: vec![FixOffer {
+            label: "Find out why".into(),
+            prompt: format!(
+                "{}. Its last error was: {error}. Read its recent runs and say what broke and what would fix it. Change nothing yet.",
+                upper_first(&action)
+            ),
+        }],
         ..Default::default()
     });
     c
@@ -1187,6 +1194,13 @@ mod tests {
                 "Failed runs in a row: 3".to_string(),
                 "Last error: OpenRouter has no credits left".to_string(),
             ]
+        );
+        assert_eq!(
+            report.offers,
+            vec![crate::card_report::FixOffer {
+                label: "Find out why".into(),
+                prompt: "Find out why \"Morning brief\" keeps failing. Its last error was: OpenRouter has no credits left. Read its recent runs and say what broke and what would fix it. Change nothing yet.".into(),
+            }]
         );
         let once = automation_candidate(&crate::automation::AutomationAlert {
             name: String::new(),

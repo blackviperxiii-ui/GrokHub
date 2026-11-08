@@ -10,6 +10,7 @@ use grokhub_core::local_setup;
 use super::local_autoconfig::LaunchArgs;
 use super::local_sidecar;
 use super::local_spec;
+use super::local_swap::StandIn;
 
 /// Where the loaded model's layers run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +40,8 @@ pub struct LocalLive {
     pub draft: Option<(String, Decision, Option<f64>)>,
     pub unload_in_secs: Option<u64>,
     pub kept_loaded: bool,
+    /// Why a model other than the Settings pick runs.
+    pub stand_in: Option<StandIn>,
 }
 
 pub fn place_of(a: Option<&LaunchArgs>, bare_cpu: bool) -> Place {
@@ -69,6 +72,7 @@ pub fn snapshot(_config_dir: &Path) -> LocalLive {
             draft: None,
             unload_in_secs: None,
             kept_loaded,
+            stand_in: None,
         };
     };
     let file = l
@@ -93,6 +97,7 @@ pub fn snapshot(_config_dir: &Path) -> LocalLive {
         draft: local_spec::draft_status().map(|(n, d)| (n, d, kept)),
         unload_in_secs: (!busy && !kept_loaded).then(|| l.idle_unload_secs.saturating_sub(idle)),
         kept_loaded,
+        stand_in: l.stand_in,
     }
 }
 
@@ -130,6 +135,9 @@ pub fn lines(l: &LocalLive) -> Vec<String> {
         .unwrap_or_default();
     let doing = if l.busy { "answering" } else { "loaded" };
     let mut out = vec![format!("Running now: {name}, {doing} {place}{size}.")];
+    if let Some(why) = l.stand_in {
+        out.push(why.line().to_string());
+    }
     let mut speed = match l.tok_s {
         Some(t) => format!("Last reply: {t:.0} tok/s"),
         None => "Last reply: none since it loaded".to_string(),
@@ -192,6 +200,7 @@ mod tests {
             draft: Some(("Gemma 4 12B draft model".into(), Decision::On, Some(0.634))),
             unload_in_secs: Some(240),
             kept_loaded: false,
+            stand_in: None,
         }
     }
 
@@ -224,6 +233,7 @@ mod tests {
             )),
             unload_in_secs: None,
             kept_loaded: true,
+            stand_in: None,
             ..loaded()
         };
         let got = lines(&l);
@@ -269,6 +279,7 @@ mod tests {
             draft: None,
             unload_in_secs: None,
             kept_loaded,
+            stand_in: None,
         }
     }
 
@@ -276,5 +287,17 @@ mod tests {
     fn where_it_runs_follows_the_launch() {
         assert_eq!(place_of(None, true), Place::Cpu);
         assert_eq!(place_of(None, false), Place::Gpu);
+    }
+
+    #[test]
+    fn a_smaller_model_standing_in_for_the_pick_says_why() {
+        let l = LocalLive {
+            stand_in: Some(StandIn::LowBattery),
+            ..loaded()
+        };
+        let rows = lines(&l);
+        assert!(rows[0].starts_with("Running now: "));
+        assert_eq!(rows[1], StandIn::LowBattery.line());
+        assert!(!lines(&loaded()).iter().any(|r| r.contains("smaller model")));
     }
 }

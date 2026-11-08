@@ -100,6 +100,7 @@ impl Cabin {
         use super::pulse_ui::{PulseAct, SourceAct};
         let (id, outcome, more) = match act {
             PulseAct::Run(id)
+            | PulseAct::Offer(id, _)
             | PulseAct::Always(id)
             | PulseAct::Accept(id)
             | PulseAct::Like(id)
@@ -109,7 +110,7 @@ impl Cabin {
             | PulseAct::Report(id)
             | PulseAct::Discuss(id)
             | PulseAct::DayTap(id, ..) => (id, Outcome::Tapped, None),
-            PulseAct::Snooze(id) => (id, Outcome::Snoozed, None),
+            PulseAct::Snooze(id) | PulseAct::RemindAt(id, _) => (id, Outcome::Snoozed, None),
             PulseAct::Dismiss(id) => (id, Outcome::Dismissed, None),
             PulseAct::Wrong(id) => (id, Outcome::Dismissed, None),
             PulseAct::NotThis(id) | PulseAct::HobbySkip(id) | PulseAct::HobbyTooHard(id) => {

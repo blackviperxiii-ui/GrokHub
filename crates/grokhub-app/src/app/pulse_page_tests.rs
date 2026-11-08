@@ -597,7 +597,16 @@ fn pulse_feed_shows_posts_with_cached_source_images_and_a_placeholder() {
             "missing {want:?} in {texts:?}"
         );
     }
-    assert_eq!(texts.iter().filter(|t| t.as_str() == "Like").count(), 2);
+    // Plain posts carry the card chips; Like waits in their ···.
+    let count = |want: &str| texts.iter().filter(|t| t.as_str() == want).count();
+    assert_eq!(
+        (
+            count("Like"),
+            count("Ignore for now"),
+            count("Remind me later")
+        ),
+        (0, 2, 2)
+    );
     let posts: Vec<String> = cabin
         .pulse_feed_posts(now)
         .into_iter()
@@ -642,7 +651,15 @@ fn pulse_feed_shows_posts_with_cached_source_images_and_a_placeholder() {
             .count(),
         1
     );
-    assert!(pulse_texts(cabin, 1200.0).iter().any(|t| t == "Liked"));
+    // The heart stays on in the post's ··· (the post itself shows its chips).
+    let liked = cabin.updates[0].clone();
+    assert_eq!(
+        super::pulse_ui::post_overflow(&super::pulse_ui::post_buttons(&liked, false, &chip_day()))
+            .into_iter()
+            .map(|(label, _)| label)
+            .collect::<Vec<_>>(),
+        ["Liked"]
+    );
 }
 
 #[test]
@@ -774,7 +791,7 @@ fn pulse_header_shows_both_actions_and_no_tabs_at_every_width() {
 }
 
 #[test]
-fn pulse_rows_show_their_two_buttons_on_focus_and_keys_act_on_the_focused_row() {
+fn pulse_rows_show_their_chips_on_focus_and_keys_act_on_the_focused_row() {
     let mut quiet = QuietCabin::boot("pulse-keys");
     let cabin = &mut quiet.cabin;
     cabin.updates.clear();
@@ -812,24 +829,28 @@ fn pulse_rows_show_their_two_buttons_on_focus_and_keys_act_on_the_focused_row() 
     assert_eq!(
         (
             count(&rest, "Run"),
-            count(&rest, "Snooze"),
+            count(&rest, "Ignore for now"),
+            count(&rest, "Remind me later"),
             count(&rest, "Dismiss")
         ),
-        (0, 0, 0)
+        (0, 0, 0, 0)
     );
     assert_eq!(count(&rest, "···"), 3);
 
-    // Down focuses the first row; its two buttons, Run and Snooze, show
-    // inline. Dismiss waits in ··· like every card's extras.
+    // Down focuses the first row; its chips show inline: Run, Ignore for now
+    // and Remind me later. Snooze and Dismiss wait in ··· like every card's
+    // extras.
     let down = pulse_text_at(cabin, 1200.0, vec![pulse_key_event(egui::Key::ArrowDown)]);
     assert_eq!(cabin.pulse_view.focus.as_deref(), Some("idea-city"));
     assert_eq!(
         (
             count(&down, "Run"),
+            count(&down, "Ignore for now"),
+            count(&down, "Remind me later"),
             count(&down, "Snooze"),
             count(&down, "Dismiss")
         ),
-        (1, 1, 0)
+        (1, 1, 1, 0, 0)
     );
     // J moves down, K back up.
     assert_eq!(cabin.pulse_key(egui::Key::J, &rows), None);
@@ -1192,7 +1213,11 @@ fn pulse_mixes_ideas_and_posts_in_one_column_and_narrow_rows_keep_run() {
     // Rows rest without inline actions; every idea and post keeps its ···.
     assert_eq!((count(&wide, "Run"), count(&wide, "Snooze")), (0, 0));
     assert_eq!(count(&wide, "···"), 5);
-    assert_eq!(count(&wide, "Like"), 3);
+    // Posts show their chips at rest; Like waits in their ···.
+    assert_eq!(
+        (count(&wide, "Like"), count(&wide, "Remind me later")),
+        (0, 3)
+    );
 
     // Narrow: Run stays on every idea row; Snooze and Dismiss wait in ···.
     let narrow = pulse_text_pos(cabin, NARROW_W);
@@ -1495,4 +1520,178 @@ fn the_report_toggle_says_what_it_opens() {
         Some("Hide report")
     );
     assert_eq!(post_summary(&card), "2 updates: A · B");
+}
+
+/// 3:00 PM on a day that starts at local midnight 1_794_096_000_000, winding
+/// down at 10 PM and sitting down at 8 AM.
+fn chip_day() -> grokhub_core::card_chips::DayShape {
+    grokhub_core::card_chips::DayShape {
+        now_ms: 1_794_096_000_000 + 15 * 3_600_000,
+        hour: 15,
+        minute: 0,
+        wind_down: Some(22),
+        start: Some(8),
+    }
+}
+
+/// 9:30 PM that day, half an hour before winding down.
+const CHIP_TONIGHT: u64 = 1_794_096_000_000 + (21 * 60 + 30) * 60_000;
+
+fn crash_card() -> grokhub_core::UpdateCard {
+    use grokhub_core::nudge_watchers::{
+        detect_crash_spike, nudge_watcher_card, CrashCount, WatcherSnapshot,
+    };
+    let snap = WatcherSnapshot {
+        crashes: vec![CrashCount {
+            app: "bluetoothd".into(),
+            count: 4,
+        }],
+        ..Default::default()
+    };
+    nudge_watcher_card(&detect_crash_spike(&snap).expect("spike"), 7)
+}
+
+#[test]
+fn a_card_offers_its_fixes_as_chips_and_each_chip_says_what_it_does() {
+    use super::pulse_ui::{chip_act, row_chips, PulseAct};
+    use grokhub_core::card_chips::ChipAct;
+    let crash = crash_card();
+    let id = crash.id.clone();
+    let chips = row_chips(&crash, &chip_day());
+    assert_eq!(
+        chips,
+        vec![
+            ("Look into the crashes".to_string(), ChipAct::Offer(0)),
+            ("Discuss".to_string(), ChipAct::Discuss),
+            ("Ignore for now".to_string(), ChipAct::Ignore),
+            (
+                "Remind me later".to_string(),
+                ChipAct::RemindAt(CHIP_TONIGHT)
+            ),
+        ]
+    );
+    let acts: Vec<PulseAct> = chips.iter().map(|(_, c)| chip_act(&crash, c)).collect();
+    assert_eq!(
+        acts,
+        vec![
+            PulseAct::Offer(id.clone(), 0),
+            PulseAct::Discuss(id.clone()),
+            PulseAct::Ignore(id.clone()),
+            PulseAct::RemindAt(id, CHIP_TONIGHT),
+        ]
+    );
+    // An idea with no fixes leads with its own Run.
+    let idea = pulse_idea("idea-x", "Trail map", "print the trail map", 1);
+    assert_eq!(
+        row_chips(&idea, &chip_day()),
+        vec![
+            ("Run".to_string(), ChipAct::Primary),
+            ("Ignore for now".to_string(), ChipAct::Ignore),
+            (
+                "Remind me later".to_string(),
+                ChipAct::RemindAt(CHIP_TONIGHT)
+            ),
+        ]
+    );
+    assert_eq!(
+        chip_act(&idea, &ChipAct::Primary),
+        PulseAct::Run("idea-x".into())
+    );
+}
+
+#[test]
+fn a_plain_post_shows_its_chips_and_keeps_like_in_its_menu() {
+    use super::pulse_ui::{post_buttons, post_overflow, post_shown, FeedPostAct};
+    use grokhub_core::card_chips::ChipAct;
+    let done = grokhub_core::automation_done_card("a", "Nightly backup", "Copied 3 files.", 1);
+    let acts = post_buttons(&done, false, &chip_day());
+    assert_eq!(
+        acts,
+        vec![
+            (
+                "Ignore for now".to_string(),
+                FeedPostAct::Chip(ChipAct::Ignore)
+            ),
+            (
+                "Remind me later".to_string(),
+                FeedPostAct::Chip(ChipAct::RemindAt(CHIP_TONIGHT))
+            ),
+            ("Like".to_string(), FeedPostAct::Like),
+        ]
+    );
+    assert_eq!(post_shown(&acts), 2);
+    assert_eq!(
+        post_overflow(&acts),
+        vec![("Like".to_string(), FeedPostAct::Like)]
+    );
+    // A post with its own buttons keeps them.
+    let mut hobby = pulse_idea("hobby", "Try a new chord", "learn the chord", 1);
+    hobby.pulse.hobby_path = Some(grokhub_core::hobby_paths::HobbyPathMeta {
+        hobby: "guitar".into(),
+        step_id: "chord-1".into(),
+        answered: false,
+    });
+    let own: Vec<String> = post_buttons(&hobby, false, &chip_day())
+        .into_iter()
+        .map(|(l, _)| l)
+        .collect();
+    assert_eq!(own, ["Done", "Skip", "Too easy", "Too hard", "Like"]);
+}
+
+#[test]
+fn chips_send_the_fix_into_the_cards_chat_and_hide_or_bring_back_the_card() {
+    use super::pulse_ui::PulseAct;
+    let mut quiet = QuietCabin::boot("pulse-chips-act");
+    let cabin = &mut quiet.cabin;
+    cabin.updates.clear();
+    let crash = crash_card();
+    let id = crash.id.clone();
+    cabin.updates.push(crash);
+
+    // The fix opens the card's own chat with its report, then sends its prompt.
+    cabin.apply_pulse_act(PulseAct::Offer(id.clone(), 0));
+    assert_eq!(cabin.nav, Nav::Chat);
+    let thread = cabin
+        .threads
+        .iter()
+        .find(|t| t.title == "Discuss · bluetoothd crashed several times recently")
+        .expect("card chat");
+    assert_eq!(cabin.threads[cabin.thread_idx].id, thread.id);
+    let context = thread
+        .messages
+        .iter()
+        .find(|m| m.0 == "assistant")
+        .map(|m| m.1.clone())
+        .unwrap_or_default();
+    assert!(
+        context.starts_with("Pulse card: bluetoothd crashed several times recently\nAbout: the program \"bluetoothd\"."),
+        "{context}"
+    );
+    assert!(
+        thread.messages.iter().any(|m| m.0 == "user"
+            && m.1
+                == "Help me investigate why bluetoothd keeps crashing (read crash logs metadata only)."),
+        "{:?}",
+        thread.messages
+    );
+
+    // Remind me later: hidden until tonight, and the status says when.
+    cabin.pulse_remind_at(&id, CHIP_TONIGHT, &chip_day());
+    let card = cabin.updates.iter().find(|c| c.id == id).expect("card");
+    assert_eq!(card.pulse.snoozed_until, CHIP_TONIGHT);
+    assert_eq!(cabin.status, "Back tonight, 9:30 PM before you wind down.");
+
+    // Ignore for now: off the page, its source not remembered as turned down.
+    let source = card.source_id.clone();
+    cabin.apply_pulse_act(PulseAct::Ignore(id.clone()));
+    assert_eq!(cabin.status, "Hidden for now.");
+    assert_eq!(
+        cabin.updates.iter().find(|c| c.id == id).map(|c| c.status),
+        Some(grokhub_core::UpdateStatus::Dismissed)
+    );
+    assert!(
+        !cabin.cfg.feed_pulse.dismissed_sources.contains(&source),
+        "{:?}",
+        cabin.cfg.feed_pulse.dismissed_sources
+    );
 }
