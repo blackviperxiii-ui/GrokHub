@@ -21,6 +21,7 @@ pub mod cabin_engine;
 pub mod cabin_rules;
 pub mod capture;
 pub mod card_prefs;
+pub mod card_report;
 pub mod card_signals;
 pub mod channel;
 pub mod chat;
@@ -247,8 +248,8 @@ pub use attach::{
     PlusTarget, IMAGE_FILE_CAP, IMAGE_PIXEL_CAP, MEDIA_FILE_CAP, TEXT_FILE_CAP,
 };
 pub use automation::{
-    automation_blocked_by_policy, automation_health_line, automation_schedule_label,
-    automation_summary_line, chat_may_save_automation, compute_next_run, describe_automation,
+    automation_alert, automation_blocked_by_policy, automation_health_line, automation_schedule_label,
+    automation_summary_line, chat_may_save_automation, AutomationAlert, compute_next_run, describe_automation,
     due_automations, ensure_automation_schedule, mark_automation_failed, mark_automation_ok,
     mark_automation_ran, mark_automation_skipped, mark_automation_stopped, night_check_command,
     night_check_exit_code, night_check_may_fire, night_check_stdout, night_counts_run,
@@ -693,6 +694,7 @@ pub use update::{
 };
 pub use update_feed::{
     archive_digest, archived_digests, audio_check_card, automate_offer_card, automation_done_card,
+    automation_report_card,
     automation_failed_card, automation_home_note, board_covers_topic, clear_less_mute,
     collapse_feed, crash_card, digest_card, digest_lookup_prompt, digest_steer,
     digest_topic_refused, discuss_context, dismiss_idea, dismiss_update, dismiss_update_at,

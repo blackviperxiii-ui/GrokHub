@@ -963,9 +963,15 @@ fn follow_up_runs_update_one_feed_card() {
         feeds[0].action,
         Some(grokhub_core::UpdateAction::OpenWorkboard)
     );
+    // It says what the run found and opens to the whole report.
+    assert_eq!(feeds[0].title, "Report 3: crash on resume");
     assert_eq!(
         feeds[0].body.as_deref(),
-        Some("In Follow up on your workboard. Open it to read and reply.")
+        Some("The latest run of \"Morning issues\" reported this.")
+    );
+    assert_eq!(
+        feeds[0].pulse.report.as_ref().map(|r| r.details.as_str()),
+        Some("## Open issues\nReport 3: crash on resume.")
     );
     release_isolated(&root, cabin);
 }

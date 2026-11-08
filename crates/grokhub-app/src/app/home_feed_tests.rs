@@ -183,8 +183,8 @@ fn empty_home_pulse_stays_off_scratch_and_off_about() {
         .and_then(|s| s.split("fn fire_loop(").next())
         .expect("poll_grok_loop");
     assert!(
-        poll.contains("note_automation_done"),
-        "a finished /loop posts automation_done: {poll}"
+        poll.contains("note_automation_report"),
+        "a finished /loop posts an automation_done card with its report: {poll}"
     );
     let commit = night
         .split("fn commit_schedule(")

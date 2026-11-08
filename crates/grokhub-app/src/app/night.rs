@@ -829,8 +829,9 @@ impl Cabin {
                 } else {
                     text
                 };
-                self.note_automation_done(&id, &prompt, &summary);
-                self.file_automation_follow_up(&id, &loop_card_name(&prompt), &prompt, &summary);
+                let name = loop_card_name(&prompt);
+                self.note_automation_report(&id, &name, &summary);
+                self.file_automation_follow_up(&id, &name, &prompt, &summary);
                 true
             }
             Err(mpsc::TryRecvError::Empty) => {
