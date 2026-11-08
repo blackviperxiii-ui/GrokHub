@@ -299,10 +299,16 @@ pub fn plan(l: &Launch) -> Plan {
             fits(p, meta, args, state, m),
         ),
     };
+    // A verdict live replies set expires, and the speed test runs again.
+    let stored = ld::load_verdicts(tune_dir)
+        .get(&key)
+        .copied()
+        .filter(|v| v.standing(now_secs()));
     let verdict = match forced {
         Some(true) => Some(true),
-        _ => ld::load_verdicts(tune_dir).get(&key).map(|v| v.keep),
+        _ => stored.map(|v| v.keep),
     };
+    let live_off = forced.is_none() && stored.is_some_and(|v| !v.keep && v.retest_at.is_some());
     let decision = ld::decide(Check {
         // The speed test runs whatever the level; it asked for the drafter.
         level_ok: state != GovState::Throttle || forced == Some(true),
@@ -312,6 +318,13 @@ pub fn plan(l: &Launch) -> Plan {
         fits: on_gpu.is_some(),
         verdict,
     });
+    // Say which test turned it off.
+    let decision = match decision {
+        Decision::Off("the speed test found the draft model didn't help") if live_off => {
+            Decision::Off(LIVE_OFF)
+        }
+        d => d,
+    };
     let draft = (decision == Decision::On).then(|| DraftArgs {
         kind: c.kind,
         model: c.file.clone(),
@@ -324,6 +337,144 @@ pub fn plan(l: &Launch) -> Plan {
         key: Some(key),
         name: Some(c.name),
     }
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// The running server's draft: what [`draft_status`] reports and what live
+/// replies count toward.
+#[derive(Default)]
+struct Running {
+    /// The drafter's name and the launch's decision.
+    status: Option<(String, Decision)>,
+    /// The verdict key and folder while it drafts.
+    key: Option<(String, PathBuf)>,
+    live: ld::Live,
+}
+
+fn running() -> &'static Mutex<Running> {
+    static R: OnceLock<Mutex<Running>> = OnceLock::new();
+    R.get_or_init(|| Mutex::new(Running::default()))
+}
+
+/// A launch went ahead with `plan`: keep what it decided for Settings, and
+/// count its replies when it drafts.
+pub fn launched(plan: &Plan, tune_dir: &Path) {
+    if let Ok(mut r) = running().lock() {
+        r.status = plan.name.clone().map(|n| (n, plan.decision));
+        r.key = match (&plan.draft, &plan.key) {
+            (Some(_), Some(k)) => Some((k.clone(), tune_dir.to_path_buf())),
+            _ => None,
+        };
+        r.live = ld::Live::default();
+    }
+}
+
+/// The test's own servers are gone; the next launch says what runs.
+fn forget_running() {
+    if let Ok(mut r) = running().lock() {
+        *r = Running::default();
+    }
+}
+
+/// The drafter the running model launched with and whether it drafts, or why
+/// not. `None` before a launch, or with no drafter to consider.
+pub fn draft_status() -> Option<(String, Decision)> {
+    running().lock().ok()?.status.clone()
+}
+
+/// One finished reply's timings. When live replies keep too few of the
+/// drafter's guesses, drafting turns off until a retest, from the next
+/// launch (between requests).
+pub fn note_reply(t: &Timing) {
+    let Some((dir, key, v)) = live_verdict(t, now_secs()) else {
+        return;
+    };
+    if ld::save_verdict(&dir, &key, v).is_ok() {
+        super::local_gov::request_restart();
+    }
+}
+
+/// [`note_reply`]'s count: the verdict to save, once, when the window ends
+/// poorly. The running status says why from then on.
+fn live_verdict(t: &Timing, now: u64) -> Option<(PathBuf, String, ld::Verdict)> {
+    let mut r = running().lock().ok()?;
+    let (key, dir) = r.key.clone()?;
+    let v = r.live.add(t, now)?;
+    r.key = None;
+    if let Some((_, d)) = r.status.as_mut() {
+        *d = Decision::Off(LIVE_OFF);
+    }
+    Some((dir, key, v))
+}
+
+/// Why drafting stopped after live replies.
+pub const LIVE_OFF: &str = "too few of the draft model's guesses were kept in your chats";
+
+/// When the unattended speed test may look again, and what it said last.
+#[derive(Default)]
+struct Auto {
+    running: bool,
+    next_at: u64,
+    line: Option<String>,
+}
+
+fn auto() -> &'static Mutex<Auto> {
+    static A: OnceLock<Mutex<Auto>> = OnceLock::new();
+    A.get_or_init(|| Mutex::new(Auto::default()))
+}
+
+/// Seconds between looks while the plan doesn't need a test.
+const AUTO_LOOK_SECS: u64 = 15 * 60;
+/// Seconds before trying again after a test that ran.
+const AUTO_RETRY_SECS: u64 = 6 * 3600;
+
+/// Run the draft speed test on its own, once, while the machine is quiet
+/// (see [`ld::auto_test_due`]) and the model's drafter still needs one. The
+/// test runs on its own thread; a request that comes in meanwhile waits for
+/// the current timing and the test stops early.
+pub fn tick_auto_test(config_dir: &Path, q: &ld::Quiet) {
+    let now = now_secs();
+    {
+        let Ok(mut a) = auto().lock() else {
+            return;
+        };
+        if a.running || !ld::auto_test_due(q, a.next_at, now) {
+            return;
+        }
+        a.next_at = now + AUTO_LOOK_SECS;
+    }
+    let Some(paths) = super::local_sidecar::resolve_paths(config_dir) else {
+        return;
+    };
+    let needs = autoconfig::draft_plan(&paths.binary, &paths.model)
+        .is_some_and(|p| p.decision == Decision::NeedsTest);
+    if !needs {
+        return;
+    }
+    if let Ok(mut a) = auto().lock() {
+        a.running = true;
+        a.next_at = now + AUTO_RETRY_SECS;
+    }
+    let dir = config_dir.to_path_buf();
+    std::thread::spawn(move || {
+        let line = run_bench(&dir);
+        if let Ok(mut a) = auto().lock() {
+            a.running = false;
+            if line.is_some() {
+                a.line = line;
+            }
+        }
+    });
+}
+
+/// What the last unattended speed test found, in words.
+pub fn auto_test_line() -> Option<String> {
+    auto().lock().ok()?.line.clone()
 }
 
 const BENCH_PROMPT: &str =
@@ -360,6 +511,7 @@ pub fn run_bench(config_dir: &Path) -> Option<String> {
     match planned.decision {
         Decision::Off(r)
             if r != "the speed test found the draft model didn't help"
+                && r != LIVE_OFF
                 && r != "the machine is busy, so the draft model is off" =>
         {
             return None
@@ -367,6 +519,8 @@ pub fn run_bench(config_dir: &Path) -> Option<String> {
         _ => {}
     }
     let (key, name, dir) = (planned.key?, planned.name?, autoconfig::tune_dir()?);
+    // Requests wait for the test instead of loading the model beside it.
+    let _gate = super::local_sidecar::speed_test_gate();
     super::local_sidecar::stop_global();
     let timed = |force: Option<bool>| -> Result<(Timing, bool), String> {
         set_force(force);
@@ -377,6 +531,14 @@ pub fn run_bench(config_dir: &Path) -> Option<String> {
         t.map(|t| (t, drafting))
     };
     let plain = timed(Some(false));
+    // A reply is waiting: stop here and try another time.
+    if super::local_sidecar::speed_test_wanted_back() {
+        set_force(None);
+        forget_running();
+        return Some(format!(
+            "The {name} test stopped for a reply and runs again later."
+        ));
+    }
     let with = timed(Some(true));
     set_force(None);
     let line = match (plain, with) {
@@ -392,6 +554,7 @@ pub fn run_bench(config_dir: &Path) -> Option<String> {
         }
         (Err(e), _) | (_, Err(e)) => format!("The draft model test stopped: {e}"),
     };
+    forget_running();
     Some(line)
 }
 
