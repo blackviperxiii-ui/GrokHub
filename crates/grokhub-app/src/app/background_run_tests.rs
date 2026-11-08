@@ -1133,9 +1133,10 @@ fn a_scheduled_run_never_blocks_pauses_or_shows_in_your_chat() {
         .find(|u| grokhub_core::feed_group_key(u).as_deref() == Some("run:a-snap"))
         .expect("home card");
     assert_eq!(home.board_id.as_deref(), Some(card.id.as_str()));
+    assert_eq!(home.title, "bg finished");
     assert_eq!(
         home.body.as_deref(),
-        Some("In Follow up on your workboard. Open it to read and reply.")
+        Some("The latest run of \"Host snapshot\" reported this.")
     );
 
     // 3. A job is mid-turn: your next message goes out at once, not behind it.

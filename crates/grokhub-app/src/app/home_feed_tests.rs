@@ -183,8 +183,8 @@ fn empty_home_pulse_stays_off_scratch_and_off_about() {
         .and_then(|s| s.split("fn fire_loop(").next())
         .expect("poll_grok_loop");
     assert!(
-        poll.contains("note_automation_done"),
-        "a finished /loop posts automation_done: {poll}"
+        poll.contains("note_automation_report"),
+        "a finished /loop posts an automation_done card with its report: {poll}"
     );
     let commit = night
         .split("fn commit_schedule(")
@@ -1226,6 +1226,18 @@ fn every_home_card_the_cabin_posts_names_its_item() {
     rows.push((
         "note_automation_done",
         posted_card(&cabin, "note_automation_done", |c| c.source_id == "auto-1"),
+        "Nightly backup",
+    ));
+    cabin.note_automation_report(
+        "auto-2",
+        "Nightly backup",
+        "Copied 3 files to the NAS. Two were new photos.",
+    );
+    rows.push((
+        "note_automation_report",
+        posted_card(&cabin, "note_automation_report", |c| {
+            c.source_id == "auto-2"
+        }),
         "Nightly backup",
     ));
     cabin.note_schedule_created("sched-1", "Morning brief", "every day at 8:00");
