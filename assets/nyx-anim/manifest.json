@@ -1,0 +1,1158 @@
+{
+ "version": 1,
+ "release": "assets-nyx-anim-1",
+ "clips": {
+  "brand/nyx-doctor.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx-doctor.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx-doctor.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx-gaming.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx-gaming.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx-gaming.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx-hanging-out.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx-hanging-out.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx-hanging-out.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx-raunchy.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx-raunchy.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx-raunchy.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx-reading.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx-reading.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx-reading.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx-viper.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx-viper.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx-viper.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx-working.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx-working.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx-working.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/actions/coding/2.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__coding__2.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__coding__2.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/actions/coding/3.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__coding__3.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__coding__3.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/actions/coding/4.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__coding__4.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__coding__4.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/actions/coding/5.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__coding__5.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__coding__5.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/actions/fixing/2.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__fixing__2.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__fixing__2.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/actions/fixing/3.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__fixing__3.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__fixing__3.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/actions/fixing/4.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__fixing__4.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__fixing__4.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/actions/fixing/5.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__fixing__5.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__fixing__5.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/actions/gaming/2.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__gaming__2.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__gaming__2.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/actions/gaming/3.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__gaming__3.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__gaming__3.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/actions/gaming/4.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__gaming__4.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__gaming__4.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/actions/gaming/5.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__gaming__5.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__gaming__5.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/actions/reading/2.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__reading__2.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__reading__2.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/actions/reading/3.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__reading__3.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__reading__3.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/actions/reading/4.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__reading__4.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__reading__4.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/actions/reading/5.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__reading__5.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__reading__5.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/actions/thinking/1.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__thinking__1.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__thinking__1.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/actions/thinking/2.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__thinking__2.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__thinking__2.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/actions/thinking/3.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__thinking__3.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__thinking__3.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/actions/thinking/4.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__thinking__4.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__thinking__4.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/actions/thinking/5.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__thinking__5.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__thinking__5.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/actions/working/1.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__working__1.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__working__1.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/actions/working/2.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__working__2.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__working__2.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/actions/working/3.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__working__3.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__working__3.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/actions/working/4.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__working__4.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__working__4.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/actions/working/5.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__working__5.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__working__5.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/actions/writing/1.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__writing__1.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__writing__1.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/actions/writing/2.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__writing__2.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__writing__2.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/actions/writing/3.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__writing__3.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__writing__3.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/actions/writing/4.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__writing__4.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__writing__4.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/actions/writing/5.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__writing__5.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__actions__writing__5.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/bard/1.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__bard__1.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__bard__1.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/bard/2.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__bard__2.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__bard__2.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/bard/3.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__bard__3.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__bard__3.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/bard/4.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__bard__4.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__bard__4.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/bard/5.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__bard__5.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__bard__5.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/butler/1.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__butler__1.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__butler__1.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/butler/2.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__butler__2.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__butler__2.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/butler/3.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__butler__3.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__butler__3.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/butler/4.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__butler__4.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__butler__4.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/butler/5.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__butler__5.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__butler__5.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/chief-engineer/1.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__chief-engineer__1.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__chief-engineer__1.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/chief-engineer/2.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__chief-engineer__2.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__chief-engineer__2.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/chief-engineer/3.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__chief-engineer__3.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__chief-engineer__3.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/chief-engineer/4.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__chief-engineer__4.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__chief-engineer__4.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/chief-engineer/5.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__chief-engineer__5.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__chief-engineer__5.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/concise-pro/1.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__concise-pro__1.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__concise-pro__1.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/concise-pro/2.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__concise-pro__2.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__concise-pro__2.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/concise-pro/3.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__concise-pro__3.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__concise-pro__3.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/concise-pro/4.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__concise-pro__4.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__concise-pro__4.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/concise-pro/5.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__concise-pro__5.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__concise-pro__5.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/drill-sergeant/1.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__drill-sergeant__1.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__drill-sergeant__1.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/drill-sergeant/2.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__drill-sergeant__2.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__drill-sergeant__2.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/drill-sergeant/3.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__drill-sergeant__3.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__drill-sergeant__3.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/drill-sergeant/4.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__drill-sergeant__4.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__drill-sergeant__4.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/drill-sergeant/5.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__drill-sergeant__5.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__drill-sergeant__5.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/friendly-neighbor/1.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__friendly-neighbor__1.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__friendly-neighbor__1.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/friendly-neighbor/2.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__friendly-neighbor__2.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__friendly-neighbor__2.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/friendly-neighbor/3.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__friendly-neighbor__3.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__friendly-neighbor__3.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/friendly-neighbor/4.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__friendly-neighbor__4.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__friendly-neighbor__4.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/friendly-neighbor/5.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__friendly-neighbor__5.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__friendly-neighbor__5.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/genie/1.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__genie__1.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__genie__1.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/genie/2.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__genie__2.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__genie__2.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/genie/3.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__genie__3.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__genie__3.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/genie/4.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__genie__4.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__genie__4.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/genie/5.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__genie__5.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__genie__5.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/gentle-listener/1.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__gentle-listener__1.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__gentle-listener__1.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/gentle-listener/2.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__gentle-listener__2.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__gentle-listener__2.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/gentle-listener/3.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__gentle-listener__3.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__gentle-listener__3.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/gentle-listener/4.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__gentle-listener__4.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__gentle-listener__4.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/gentle-listener/5.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__gentle-listener__5.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__gentle-listener__5.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/hype-coach/1.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__hype-coach__1.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__hype-coach__1.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/hype-coach/2.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__hype-coach__2.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__hype-coach__2.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/hype-coach/3.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__hype-coach__3.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__hype-coach__3.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/hype-coach/4.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__hype-coach__4.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__hype-coach__4.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/hype-coach/5.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__hype-coach__5.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__hype-coach__5.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/lawyer-precise/1.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__lawyer-precise__1.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__lawyer-precise__1.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/lawyer-precise/2.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__lawyer-precise__2.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__lawyer-precise__2.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/lawyer-precise/3.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__lawyer-precise__3.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__lawyer-precise__3.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/lawyer-precise/4.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__lawyer-precise__4.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__lawyer-precise__4.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/lawyer-precise/5.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__lawyer-precise__5.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__lawyer-precise__5.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/mission-control/1.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__mission-control__1.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__mission-control__1.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/mission-control/2.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__mission-control__2.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__mission-control__2.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/mission-control/3.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__mission-control__3.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__mission-control__3.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/mission-control/4.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__mission-control__4.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__mission-control__4.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/mission-control/5.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__mission-control__5.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__mission-control__5.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/noir-detective/1.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__noir-detective__1.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__noir-detective__1.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/noir-detective/2.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__noir-detective__2.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__noir-detective__2.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/noir-detective/3.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__noir-detective__3.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__noir-detective__3.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/noir-detective/4.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__noir-detective__4.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__noir-detective__4.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/noir-detective/5.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__noir-detective__5.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__noir-detective__5.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/nyx/4.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__nyx__4.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__nyx__4.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/nyx/5.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__nyx__5.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__nyx__5.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/pirate/1.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__pirate__1.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__pirate__1.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/pirate/2.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__pirate__2.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__pirate__2.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/pirate/3.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__pirate__3.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__pirate__3.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/pirate/4.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__pirate__4.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__pirate__4.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/pirate/5.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__pirate__5.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__pirate__5.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/professor/1.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__professor__1.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__professor__1.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/professor/2.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__professor__2.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__professor__2.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/professor/3.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__professor__3.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__professor__3.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/professor/4.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__professor__4.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__professor__4.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/professor/5.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__professor__5.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__professor__5.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/retro-hacker/1.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__retro-hacker__1.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__retro-hacker__1.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/retro-hacker/2.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__retro-hacker__2.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__retro-hacker__2.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/retro-hacker/3.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__retro-hacker__3.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__retro-hacker__3.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/retro-hacker/4.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__retro-hacker__4.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__retro-hacker__4.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/retro-hacker/5.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__retro-hacker__5.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__retro-hacker__5.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/sarcastic-sidekick/1.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__sarcastic-sidekick__1.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__sarcastic-sidekick__1.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/sarcastic-sidekick/2.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__sarcastic-sidekick__2.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__sarcastic-sidekick__2.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/sarcastic-sidekick/3.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__sarcastic-sidekick__3.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__sarcastic-sidekick__3.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/sarcastic-sidekick/4.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__sarcastic-sidekick__4.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__sarcastic-sidekick__4.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/sarcastic-sidekick/5.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__sarcastic-sidekick__5.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__sarcastic-sidekick__5.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/southern-mechanic/1.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__southern-mechanic__1.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__southern-mechanic__1.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/southern-mechanic/2.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__southern-mechanic__2.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__southern-mechanic__2.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/southern-mechanic/3.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__southern-mechanic__3.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__southern-mechanic__3.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/southern-mechanic/4.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__southern-mechanic__4.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__southern-mechanic__4.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/southern-mechanic/5.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__southern-mechanic__5.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__southern-mechanic__5.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/surfer/1.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__surfer__1.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__surfer__1.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/surfer/2.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__surfer__2.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__surfer__2.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/surfer/3.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__surfer__3.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__surfer__3.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/surfer/4.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__surfer__4.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__surfer__4.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/surfer/5.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__surfer__5.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__surfer__5.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/viper/2.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__viper__2.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__viper__2.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/viper/3.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__viper__3.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__viper__3.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/viper/4.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__viper__4.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__viper__4.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/viper/5.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__viper__5.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__viper__5.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/whore/1.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__whore__1.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__whore__1.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/whore/2.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__whore__2.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__whore__2.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/whore/3.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__whore__3.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__whore__3.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/whore/4.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__whore__4.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__whore__4.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/whore/5.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__whore__5.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__whore__5.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/zen-mentor/1.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__zen-mentor__1.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__zen-mentor__1.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/zen-mentor/2.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__zen-mentor__2.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__zen-mentor__2.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/zen-mentor/3.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__zen-mentor__3.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__zen-mentor__3.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/zen-mentor/4.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__zen-mentor__4.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__zen-mentor__4.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  },
+  "brand/nyx/defaults/zen-mentor/5.jpg": {
+   "webm": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__zen-mentor__5.webm",
+   "mp4": "https://github.com/blackviperxiii-ui/GrokHub/releases/download/assets-nyx-anim-1/nyx__defaults__zen-mentor__5.mp4",
+   "duration": 14.967,
+   "fps": 60.0,
+   "width": 896,
+   "height": 672
+  }
+ }
+}
