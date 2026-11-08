@@ -156,7 +156,7 @@ pub type BenchCache = BTreeMap<String, f64>;
 pub fn score(p: &Profile, catalog: &'static [LocalModel], bench: &BenchCache) -> Vec<Pick> {
     let mut picks: Vec<Pick> = catalog
         .iter()
-        .filter(|m| !m.is_drafter)
+        .filter(|m| m.is_chat())
         .map(|m| {
             let (bucket, reason) = rate(p, m, bench.get(m.id).copied());
             Pick {
@@ -278,7 +278,7 @@ pub fn tier(p: &Profile) -> &'static str {
 
 /// The smallest model to chat with: what the wizard quotes when nothing fits.
 pub fn smallest() -> Option<&'static LocalModel> {
-    local_models().iter().rev().find(|m| !m.is_drafter)
+    local_models().iter().rev().find(|m| m.is_chat())
 }
 
 #[cfg(test)]

@@ -2,13 +2,14 @@
 //! cloud and registry credentials, browser profiles, the sign-in folder and
 //! Loadout's config folder. Linux covers them with an empty folder or
 //! `/dev/null` in the command's own mount namespace ([`super::netns`]);
-//! macOS denies them in the command's Seatbelt profile ([`super::seatbelt`]).
+//! macOS denies them in the command's Seatbelt profile ([`super::seatbelt`]);
+//! Windows keeps them out of the command's process container ([`super::mxc`]).
 
 use std::path::{Path, PathBuf};
 
 /// Folders under the home folder whose contents a sandboxed command never
-/// needs and a leak of which is costly. Missing ones are skipped, so the
-/// macOS folders cost nothing on Linux and the other way round.
+/// needs and a leak of which is costly. Missing ones are skipped, so each
+/// system's folders cost nothing on the others.
 pub const SECRET_DIRS: &[&str] = &[
     ".ssh",
     ".gnupg",
@@ -35,6 +36,21 @@ pub const SECRET_DIRS: &[&str] = &[
     "Library/Application Support/BraveSoftware",
     "Library/Application Support/Microsoft Edge",
     "Library/Application Support/Vivaldi",
+    // Windows keeps credentials, browser profiles and CLI sign-ins in AppData.
+    "AppData/Roaming/Microsoft/Credentials",
+    "AppData/Local/Microsoft/Credentials",
+    "AppData/Roaming/Microsoft/Protect",
+    "AppData/Roaming/Microsoft/Crypto",
+    "AppData/Roaming/Microsoft/SystemCertificates/My",
+    "AppData/Local/Google/Chrome/User Data",
+    "AppData/Local/Chromium/User Data",
+    "AppData/Local/Microsoft/Edge/User Data",
+    "AppData/Local/BraveSoftware",
+    "AppData/Local/Vivaldi/User Data",
+    "AppData/Roaming/Mozilla/Firefox",
+    "AppData/Roaming/gcloud",
+    "AppData/Roaming/GitHub CLI",
+    "AppData/Roaming/gnupg",
 ];
 
 /// Single files that hold tokens. Missing ones are skipped.
