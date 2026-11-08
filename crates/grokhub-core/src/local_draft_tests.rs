@@ -3,6 +3,8 @@ use super::*;
 const E2B: &str = "Huihui-gemma-4-E2B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf";
 const G12B: &str = "Huihui-gemma-4-12B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf";
 const G26B: &str = "Huihui-gemma-4-26B-A4B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf";
+const G26B_MTP: &str = "Huihui-gemma-4-26B-A4B-it-abliterated-MTP-BF16.gguf";
+const G12B_MTP: &str = "Huihui-gemma-4-12B-it-abliterated-MTP-BF16.gguf";
 
 /// Lines of llama.cpp b11602's `llama-server --help` (the build pinned before b12017).
 const B11602_HELP: &str = "\
@@ -168,38 +170,27 @@ fn an_older_engine_drafts_with_md_only() {
 }
 
 #[test]
-fn every_bigger_gemma_pairs_with_e2b() {
+fn every_gemma_pairs_with_its_own_mtp_heads() {
     let got: Vec<(&str, &str, DraftKind)> = pairs()
         .iter()
         .map(|p| (p.target.id, p.drafter.id, p.kind))
         .collect();
+    let want: Vec<(&str, &str, DraftKind)> = ["31b", "26b-a4b", "12b", "e4b", "e2b"]
+        .iter()
+        .map(|s| {
+            let t = format!("gemma-4-{s}-it-abliterated-q4_k").leak() as &str;
+            let d = format!("gemma-4-{s}-it-abliterated-mtp").leak() as &str;
+            (t, d, DraftKind::Mtp)
+        })
+        .collect();
+    assert_eq!(got, want);
+    assert_eq!(pair_for_file(G12B).map(|p| p.drafter.file), Some(G12B_MTP));
+    let e2b = pair_for_file(E2B).expect("even the smallest drafts");
     assert_eq!(
-        got,
-        vec![
-            (
-                "gemma-4-31b-it-abliterated-q4_k",
-                "gemma-4-e2b-it-abliterated-q4_k",
-                DraftKind::Simple
-            ),
-            (
-                "gemma-4-26b-a4b-it-abliterated-q4_k",
-                "gemma-4-e2b-it-abliterated-q4_k",
-                DraftKind::Simple
-            ),
-            (
-                "gemma-4-12b-it-abliterated-q4_k",
-                "gemma-4-e2b-it-abliterated-q4_k",
-                DraftKind::Simple
-            ),
-            (
-                "gemma-4-e4b-it-abliterated-q4_k",
-                "gemma-4-e2b-it-abliterated-q4_k",
-                DraftKind::Simple
-            ),
-        ]
+        pair_for_file(e2b.drafter.file),
+        None,
+        "a drafter has no drafter"
     );
-    assert_eq!(pair_for_file(G12B).map(|p| p.drafter.file), Some(E2B));
-    assert_eq!(pair_for_file(E2B), None, "E2B is the drafter");
     // A stock Gemma 4 file is not a catalog model, so it has no catalog pair.
     assert_eq!(pair_for_file("gemma-4-12B-it-Q4_K_M.gguf"), None);
     assert_eq!(pair_for_file("qwen2.5-7b-instruct-q4_k_m.gguf"), None);
@@ -389,13 +380,13 @@ fn a_drafter_is_offered_until_it_is_downloaded() {
     let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(
         offer(G26B, &dir).map(|m| m.id),
-        Some("gemma-4-e2b-it-abliterated-q4_k")
+        Some("gemma-4-26b-a4b-it-abliterated-mtp")
     );
-    assert_eq!(offer(E2B, &dir), None);
+    assert_eq!(offer(G26B_MTP, &dir), None, "a drafter isn't offered one");
     // A stock Gemma 4 file left from an older catalog is offered nothing.
     assert_eq!(offer("gemma-4-26B-A4B-it-Q4_K_M.gguf", &dir), None);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join(E2B), b"x").unwrap();
+    std::fs::write(dir.join(G26B_MTP), b"x").unwrap();
     assert_eq!(offer(G26B, &dir), None);
     let _ = std::fs::remove_dir_all(dir);
 }

@@ -132,6 +132,8 @@ pub struct LocalModel {
     /// The Hugging Face repo and GGUF file it downloads from.
     pub repo: &'static str,
     pub file: &'static str,
+    /// The name in the repo when it isn't `file` (see [`LocalModel::remote_name`]).
+    pub remote_file: Option<&'static str>,
     /// The file's pinned SHA-256 (its LFS oid).
     pub sha256: &'static str,
     pub download_mb: u64,
@@ -176,6 +178,8 @@ struct CatalogRow {
     name: String,
     repo: String,
     file: String,
+    #[serde(default)]
+    remote_file: Option<String>,
     sha256: String,
     download_mb: u64,
     quant: String,
@@ -236,6 +240,7 @@ pub fn local_models() -> &'static [LocalModel] {
                     name: leak(r.name),
                     repo: leak(r.repo),
                     file: leak(r.file),
+                    remote_file: r.remote_file.map(leak),
                     sha256: leak(r.sha256),
                     download_mb: r.download_mb,
                     quant: leak(r.quant),
@@ -264,6 +269,15 @@ pub fn local_models() -> &'static [LocalModel] {
             .collect()
     });
     &MODELS
+}
+
+impl LocalModel {
+    /// The file's name in the Hugging Face repo: `remote_file` when set, else
+    /// `file`. Several repos ship the same name, so a drafter can download
+    /// under a name of its own.
+    pub fn remote_name(&self) -> &'static str {
+        self.remote_file.unwrap_or(self.file)
+    }
 }
 
 /// A catalog id; an older install (a Qwen 2.5 or stock Gemma 4 id) finds
@@ -453,11 +467,11 @@ mod tests {
     #[test]
     fn the_catalog_stays_inside_25_uncensored_chat_models() {
         let all = local_models();
-        assert_eq!(all.len(), 5, "catalog parsed");
+        assert_eq!(all.len(), 10, "catalog parsed");
         let chat: Vec<_> = standard_models().map(|m| m.id).collect();
-        assert_eq!(chat.len(), 5);
+        assert_eq!(chat.len(), 5, "the five drafters don't count");
         assert!(chat.len() <= STANDARD_MODEL_CAP);
-        for m in all.iter().filter(|m| m.kind == ModelKind::Chat) {
+        for m in all {
             assert_eq!(
                 m.abliterated,
                 Some(Abliteration {
@@ -469,6 +483,12 @@ mod tests {
             );
             // No row claims vision until its projector downloads with it.
             assert!(!m.badges.contains(&"vision"), "{}", m.id);
+        }
+        // Every drafter names the chat model it drafts for, and that model
+        // names it back.
+        for d in all.iter().filter(|m| m.kind == ModelKind::Drafter) {
+            let t = model_by_id(d.pairs_with.unwrap()).unwrap();
+            assert_eq!(t.drafter, Some(d.id), "{}", d.id);
         }
     }
 

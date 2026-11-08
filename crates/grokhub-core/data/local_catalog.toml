@@ -10,8 +10,13 @@
 # speed from public llama.cpp benchmarks; the speed test replaces it.
 #
 # `drafter` pairs a model with a speculative-decoding draft model
-# (`local_draft.rs`): it is only used when the tokenizers hash the same, the
-# engine has the flags, both fit, and the speed test finds it faster.
+# (`local_draft.rs`): it is only used when the engine has the flags, both fit,
+# and the speed test finds it faster. Each model's drafter is its own
+# abliterated MTP heads file (an id with "mtp"), trained for that one model,
+# so the tokenizer check that a separate small model needs doesn't apply.
+#
+# `remote_file` is the name in the repo when it differs from `file`, the name
+# on disk: every repo calls its MTP file the same, and they share a folder.
 #
 # Every model is an abliterated (refusal-removed) build: huihui-ai's Gemma 4
 # QAT abliterated GGUFs (Q4_K quants of Google's QAT q4_0 unquantized weights),
@@ -49,8 +54,8 @@ route = "local:small"
 ctx_default = 32_768
 run_mb = 19_799
 needs_avx2 = true
-# Speculative decoding with E2B (same family; the tokenizer gate checks it).
-drafter = "gemma-4-e2b-it-abliterated-q4_k"
+# Its own abliterated MTP draft heads, from the same repo.
+drafter = "gemma-4-31b-it-abliterated-mtp"
 min_budget = { gpu = 20_480, unified = 40_960 }
 tok_s = { gpu = 35, unified = 25, cpu = 2 }
 
@@ -73,8 +78,8 @@ run_mb = 17_400
 needs_avx2 = true
 # Mixture of experts (about 4B active): on a 16 GB GPU the experts that don't
 # fit run from RAM and it stays fast.
-# Speculative decoding with E2B (same family; the tokenizer gate checks it).
-drafter = "gemma-4-e2b-it-abliterated-q4_k"
+# Its own abliterated MTP draft heads, from the same repo.
+drafter = "gemma-4-26b-a4b-it-abliterated-mtp"
 min_budget = { gpu = 15_360, unified = 20_480 }
 tok_s = { gpu = 60, unified = 50, cpu = 6 }
 
@@ -95,8 +100,8 @@ route = "local:small"
 ctx_default = 16_384
 run_mb = 8_399
 needs_avx2 = true
-# Speculative decoding with E2B (same family; the tokenizer gate checks it).
-drafter = "gemma-4-e2b-it-abliterated-q4_k"
+# Its own abliterated MTP draft heads, from the same repo.
+drafter = "gemma-4-12b-it-abliterated-mtp"
 min_budget = { gpu = 10_240, unified = 14_336 }
 tok_s = { gpu = 35, unified = 20, cpu = 3 }
 
@@ -117,8 +122,8 @@ route = "local:small"
 ctx_default = 8_192
 run_mb = 5_868
 needs_avx2 = true
-# Speculative decoding with E2B (same family; the tokenizer gate checks it).
-drafter = "gemma-4-e2b-it-abliterated-q4_k"
+# Its own abliterated MTP draft heads, from the same repo.
+drafter = "gemma-4-e4b-it-abliterated-mtp"
 min_budget = { gpu = 6_144, unified = 8_192, cpu = 6_144 }
 tok_s = { gpu = 40, unified = 30, cpu = 5 }
 
@@ -141,5 +146,117 @@ run_mb = 3_888
 # Runs on the AVX-only CPU build (the pinned llama.cpp ships sandybridge and
 # ivybridge CPU variants and loads the best one at start).
 needs_avx2 = false
+# Its own abliterated MTP draft heads, from the same repo.
+drafter = "gemma-4-e2b-it-abliterated-mtp"
 min_budget = { gpu = 3_072, unified = 3_072, cpu = 3_072 }
 tok_s = { gpu = 60, unified = 35, cpu = 7 }
+[[model]]
+id = "gemma-4-31b-it-abliterated-mtp"
+name = "Gemma 4 31B draft model"
+repo = "huihui-ai/Huihui-gemma-4-31B-it-qat-q4_0-unquantized-abliterated-GGUF"
+# Every repo names its MTP file the same, so it lands under its own name.
+file = "Huihui-gemma-4-31B-it-abliterated-MTP-BF16.gguf"
+remote_file = "mtp-ggml-model-bf16.gguf"
+sha256 = "4aa111212c930e4850a960168eb08384eb7653e16a4d3def587f78caabc24db1"
+download_mb = 911
+quant = "BF16"
+license = "Apache-2.0"
+kind = "drafter"
+pairs_with = "gemma-4-31b-it-abliterated-q4_k"
+abliterated = { by = "huihui-ai", method = "abliteration" }
+badges = []
+tier = "T4"
+route = "local:small"
+ctx_default = 32_768
+run_mb = 1_167
+needs_avx2 = true
+min_budget = {}
+tok_s = { gpu = 0, unified = 0, cpu = 0 }
+[[model]]
+id = "gemma-4-26b-a4b-it-abliterated-mtp"
+name = "Gemma 4 26B-A4B draft model"
+repo = "huihui-ai/Huihui-gemma-4-26B-A4B-it-qat-q4_0-unquantized-abliterated-GGUF"
+# Every repo names its MTP file the same, so it lands under its own name.
+file = "Huihui-gemma-4-26B-A4B-it-abliterated-MTP-BF16.gguf"
+remote_file = "mtp-ggml-model-bf16.gguf"
+sha256 = "9c2424cef7469d01035a906e84f606d13fc44a5b48d54e4a8d1d30c2b19d2cb3"
+download_mb = 816
+quant = "BF16"
+license = "Apache-2.0"
+kind = "drafter"
+pairs_with = "gemma-4-26b-a4b-it-abliterated-q4_k"
+abliterated = { by = "huihui-ai", method = "abliteration" }
+badges = []
+tier = "T3"
+route = "local:small"
+ctx_default = 16_384
+run_mb = 1_072
+needs_avx2 = true
+min_budget = {}
+tok_s = { gpu = 0, unified = 0, cpu = 0 }
+[[model]]
+id = "gemma-4-12b-it-abliterated-mtp"
+name = "Gemma 4 12B draft model"
+repo = "huihui-ai/Huihui-gemma-4-12B-it-qat-q4_0-unquantized-abliterated-GGUF"
+# Every repo names its MTP file the same, so it lands under its own name.
+file = "Huihui-gemma-4-12B-it-abliterated-MTP-BF16.gguf"
+remote_file = "mtp-ggml-model-bf16.gguf"
+sha256 = "c24069c9ea03da35c65cdf1d03d9f1dc3c69f962362bee02d79b51a0f4de2261"
+download_mb = 822
+quant = "BF16"
+license = "Apache-2.0"
+kind = "drafter"
+pairs_with = "gemma-4-12b-it-abliterated-q4_k"
+abliterated = { by = "huihui-ai", method = "abliteration" }
+badges = []
+tier = "T3"
+route = "local:small"
+ctx_default = 16_384
+run_mb = 1_078
+needs_avx2 = true
+min_budget = {}
+tok_s = { gpu = 0, unified = 0, cpu = 0 }
+[[model]]
+id = "gemma-4-e4b-it-abliterated-mtp"
+name = "Gemma 4 E4B draft model"
+repo = "huihui-ai/Huihui-gemma-4-E4B-it-qat-q4_0-unquantized-abliterated-GGUF"
+# Every repo names its MTP file the same, so it lands under its own name.
+file = "Huihui-gemma-4-E4B-it-abliterated-MTP-BF16.gguf"
+remote_file = "mtp-ggml-model-bf16.gguf"
+sha256 = "f784491087cdcbfdd2307648ccfc5af1c06d9aa17759587cd87078eb1c453c59"
+download_mb = 164
+quant = "BF16"
+license = "Apache-2.0"
+kind = "drafter"
+pairs_with = "gemma-4-e4b-it-abliterated-q4_k"
+abliterated = { by = "huihui-ai", method = "abliteration" }
+badges = []
+tier = "T2"
+route = "local:small"
+ctx_default = 8_192
+run_mb = 420
+needs_avx2 = true
+min_budget = {}
+tok_s = { gpu = 0, unified = 0, cpu = 0 }
+[[model]]
+id = "gemma-4-e2b-it-abliterated-mtp"
+name = "Gemma 4 E2B draft model"
+repo = "huihui-ai/Huihui-gemma-4-E2B-it-qat-q4_0-unquantized-abliterated-GGUF"
+# Every repo names its MTP file the same, so it lands under its own name.
+file = "Huihui-gemma-4-E2B-it-abliterated-MTP-BF16.gguf"
+remote_file = "mtp-ggml-model-bf16.gguf"
+sha256 = "390b21c811bb43665183f0eb8dd5d101ff2b2078b294de785ce8c550623b0452"
+download_mb = 163
+quant = "BF16"
+license = "Apache-2.0"
+kind = "drafter"
+pairs_with = "gemma-4-e2b-it-abliterated-q4_k"
+abliterated = { by = "huihui-ai", method = "abliteration" }
+badges = []
+tier = "T1"
+route = "local:tiny"
+ctx_default = 8_192
+run_mb = 419
+needs_avx2 = false
+min_budget = {}
+tok_s = { gpu = 0, unified = 0, cpu = 0 }

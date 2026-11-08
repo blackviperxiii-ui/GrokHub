@@ -40,9 +40,15 @@ impl DraftArgs {
                 a.extend([n.clone(), if self.on_gpu { "all" } else { "0" }.to_string()]);
             }
         }
-        // DFlash and MTP know their own draft length.
-        if let (Some(f), DraftKind::Simple) = (&self.flags.max, self.kind) {
-            a.extend([f.clone(), ld::DRAFT_MAX.to_string()]);
+        // DFlash and MTP heads inside the model know their own draft length;
+        // a separate MTP heads file drafts a few tokens ahead.
+        let max = match self.kind {
+            DraftKind::Simple => Some(ld::DRAFT_MAX),
+            DraftKind::Mtp if self.model.is_some() => Some(ld::MTP_FILE_DRAFT_MAX),
+            _ => None,
+        };
+        if let (Some(f), Some(n)) = (&self.flags.max, max) {
+            a.extend([f.clone(), n.to_string()]);
         }
         a
     }
@@ -132,7 +138,15 @@ fn candidate(
             .iter()
             .map(|d| d.join(pair.drafter.file))
             .find(|p| p.is_file())?;
-        let m = header(&path)?;
+        // An MTP heads file whose header this reader can't parse still runs
+        // (llama.cpp loads it) when it's the catalog's size; size it by that.
+        let m = header(&path).or_else(|| {
+            let mb = std::fs::metadata(&path).ok()?.len().div_ceil(1024 * 1024);
+            (pair.kind == DraftKind::Mtp && mb == pair.drafter.download_mb).then(|| GgufMeta {
+                file_mb: mb,
+                ..GgufMeta::default()
+            })
+        })?;
         return Some(Candidate {
             kind: pair.kind,
             meta: Some(m),
@@ -275,10 +289,13 @@ pub fn plan(l: &Launch) -> Plan {
         .and_then(|f| f.file_name())
         .map_or("mtp".to_string(), |f| f.to_string_lossy().into_owned());
     let key = ld::verdict_key(device, &target, &drafter);
+    // MTP heads are trained for this one model and carry no tokenizer of
+    // their own, so only a separate small model needs the tokenizer check.
     let (tokenizer_ok, on_gpu) = match &c.meta {
         None => (true, Some(args.ngl > 0)),
         Some(m) => (
-            ld::same_tokenizer(meta.tokenizer.as_deref(), m.tokenizer.as_deref()),
+            c.kind == DraftKind::Mtp
+                || ld::same_tokenizer(meta.tokenizer.as_deref(), m.tokenizer.as_deref()),
             fits(p, meta, args, state, m),
         ),
     };
@@ -289,7 +306,8 @@ pub fn plan(l: &Launch) -> Plan {
     let decision = ld::decide(Check {
         // The speed test runs whatever the level; it asked for the drafter.
         level_ok: state != GovState::Throttle || forced == Some(true),
-        engine_ok: flags.supports(c.kind),
+        // A drafter file also needs the flag that loads it.
+        engine_ok: flags.supports(c.kind) && (c.file.is_none() || flags.model.is_some()),
         tokenizer_ok,
         fits: on_gpu.is_some(),
         verdict,

@@ -24,6 +24,9 @@ pub const MIN_ACCEPT: f64 = 0.40;
 pub const MIN_GAIN: f64 = 1.10;
 /// Tokens drafted per step for a separate draft model.
 pub const DRAFT_MAX: u32 = 16;
+/// Tokens drafted per step from a separate MTP heads file: the heads predict
+/// a few tokens past the model's own, and acceptance falls off past that.
+pub const MTP_FILE_DRAFT_MAX: u32 = 4;
 /// Where drafters download, under the models folder, so they never replace
 /// the model GrokHub runs.
 pub const DRAFTERS_DIR: &str = "drafters";
@@ -85,10 +88,12 @@ impl DraftKind {
         }
     }
 
-    /// A drafter row's kind. DFlash drafters carry it in their id.
+    /// A drafter row's kind. DFlash and MTP drafters carry it in their id.
     pub fn of(drafter: &LocalModel) -> Self {
         if drafter.id.contains("dflash") {
             DraftKind::Dflash
+        } else if drafter.id.contains("mtp") {
+            DraftKind::Mtp
         } else {
             DraftKind::Simple
         }

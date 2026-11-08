@@ -33,7 +33,11 @@ pub trait Fetch {
 }
 
 pub fn download_url(m: &LocalModel) -> String {
-    format!("https://huggingface.co/{}/resolve/main/{}", m.repo, m.file)
+    format!(
+        "https://huggingface.co/{}/resolve/main/{}",
+        m.repo,
+        m.remote_name()
+    )
 }
 
 /// The Hugging Face tree listing that carries each file's LFS SHA-256.
@@ -202,7 +206,7 @@ pub fn download(
     }
     // A listing that drifted from the pin means the file was swapped upstream:
     // stop before pulling gigabytes that would fail the check anyway.
-    match fetch.sha256(m.repo, m.file) {
+    match fetch.sha256(m.repo, m.remote_name()) {
         Ok(h) if h == m.sha256 => {}
         Ok(_) => {
             return Outcome::Failed(format!(
@@ -358,6 +362,7 @@ mod tests {
             name: "Test Model",
             repo: "acme/test-GGUF",
             file: "test.gguf",
+            remote_file: None,
             sha256: sha(BODY).leak(),
             download_mb: 1,
             quant: "Q4_K_M",
