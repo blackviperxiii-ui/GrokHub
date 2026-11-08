@@ -1,8 +1,11 @@
 //! Failover PR 5: how big a turn is, sized before it runs and re-sized as
 //! it grows (card §3.3). OpenRouter's free allowance is small, so a long
-//! task belongs on Grok from the start, not on a free model that runs out
-//! mid-task; a turn that outgrows its class while running is upgraded to
-//! long so the rest of its picks and failovers treat it as one.
+//! task belongs on a paid route from the start (the plan first, local
+//! after paid), not on a free model that runs out mid-task; a turn that
+//! outgrows its class while running is upgraded to long so the rest of
+//! its picks and failovers treat it as one. The other end of the scale:
+//! less challenging work defaults to a local model that is already
+//! loaded ([`warm_local_default`]).
 //!
 //! The estimator is pure: difficulty, the ask read, planned tools, plan
 //! mode, context size and the class's learned output length go in, a
@@ -15,7 +18,7 @@
 //! The scorer that spends this in full (weights, the route ladder) is a
 //! later step; PR 5 lands the estimate, the long-task rules in
 //! [`super::Router::choose`] (no free provider models for a long task while
-//! a carrier route exists, Grok ahead of every provider) and the mid-turn
+//! a carrier route exists, paid routes ranked first) and the mid-turn
 //! upgrade state those rules read on the next call.
 
 use std::collections::BTreeMap;
@@ -173,6 +176,22 @@ pub fn estimate(input: &SizeInput) -> SizeEstimate {
             long_context: input.ctx_tokens > LONG_CTX_TOKENS,
             reasoning: input.reasoning,
         },
+    }
+}
+
+/// Whether a turn of this size defaults to the on-device model when one is
+/// already loaded (the warm-local rule, corrected 2026-11-07): less
+/// challenging work goes to the warm model instead of paying for cloud or
+/// spinning anything up. Under governor throttle — a game or another app
+/// keeping the GPU busy — only tiny work defaults there; anything bigger
+/// stays on the cloud rather than loading new local work. Medium and long
+/// work never defaults to the device: long runs belong to a paid route
+/// first, local only after paid.
+pub fn warm_local_default(size: Option<TaskSize>, throttled: bool) -> bool {
+    match size {
+        Some(TaskSize::Tiny) => true,
+        Some(TaskSize::Short) => !throttled,
+        _ => false,
     }
 }
 
@@ -415,6 +434,18 @@ mod tests {
         assert_eq!(est.expected_output_tokens, 300);
         // The output is tiny, but a hard ask is never a tiny task.
         assert_eq!(est.size, TaskSize::Short);
+    }
+
+    #[test]
+    fn warm_local_takes_less_challenging_work_only() {
+        assert!(warm_local_default(Some(TaskSize::Tiny), false));
+        assert!(warm_local_default(Some(TaskSize::Tiny), true));
+        assert!(warm_local_default(Some(TaskSize::Short), false));
+        // Throttled (a game, a busy GPU): short work stays off the device.
+        assert!(!warm_local_default(Some(TaskSize::Short), true));
+        assert!(!warm_local_default(Some(TaskSize::Medium), false));
+        assert!(!warm_local_default(Some(TaskSize::Long), false));
+        assert!(!warm_local_default(None, false));
     }
 
     #[test]

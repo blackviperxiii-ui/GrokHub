@@ -1,15 +1,19 @@
-//! Failover PR 5 acceptance: a long task is sized before it runs and sent
-//! to Grok — never to a free provider model while a route that can carry
-//! it exists, and Grok ahead of even a table-preferred paid provider. Free
-//! models stay when they are the only cloud there is (a working free route
-//! beats a dead stop), and a turn upgraded to long mid-flight leaves the
-//! free model it was riding.
+//! Failover PR 5 acceptance: a long task is sized before it runs and kept
+//! off free provider models while a route that can carry it exists — paid
+//! routes carry it (the plan, xAI, ahead of even a table-preferred paid
+//! provider), local only after paid. Free models stay when they are the
+//! only cloud there is (a working free route beats a dead stop), a turn
+//! upgraded to long mid-flight leaves the free model it was riding, and
+//! less challenging work defaults to a local model that is already loaded.
 
 use std::collections::BTreeMap;
 
 use grokhub_core::model_registry::profile::ModelProfile;
 use grokhub_core::model_registry::{Credential, Listing, ModelMeta, Prices, Registry, SourceKind};
 
+use grokhub_core::local_governor::Level;
+
+use super::local::{self, LocalCapacity, LocalGate};
 use super::sizing::{SizeEstimate, TaskSize};
 use super::spend::Spend;
 use super::table::{ClassTable, RoutingTable, SpeedQuality, TableRow};
@@ -68,6 +72,10 @@ fn fleet() -> Registry {
             Listing::new(
                 SourceKind::OpenAiCompatible,
                 vec![provider(FREE_MODEL, 0), provider(PAID_MODEL, 5_000)],
+            ),
+            Listing::new(
+                SourceKind::Local,
+                local::TIERS.iter().map(|t| local::tier_meta(t)).collect(),
             ),
         ],
         &[],
@@ -199,7 +207,8 @@ fn a_long_task_ranks_grok_ahead_of_a_table_preferred_paid_provider() {
         NOW,
     );
     assert_eq!(r.model, PAID_MODEL);
-    // Long: Grok first, the table's provider preference notwithstanding.
+    // Long: the plan (xAI) first within the paid routes, the table's
+    // provider preference notwithstanding.
     let r = Router::choose(
         &ask(
             "chat:default",
@@ -246,6 +255,134 @@ fn a_long_task_keeps_free_models_when_they_are_the_only_cloud() {
     assert!(!r.no_route, "a working free route beats a dead stop");
     assert_eq!(r.model, FREE_MODEL);
     assert!(!r.rule_ids.contains(&"size:long:no_free".to_string()));
+}
+
+/// An online gate that admits the small local tier at the given governor
+/// level. Online, only the background classes are locally eligible, so the
+/// warm tests ask as one of those.
+fn warm_gate(level: Level) -> LocalGate {
+    LocalGate {
+        enabled: true,
+        tier: "local:small".into(),
+        capacity: LocalCapacity { ready: true, level },
+        ..LocalGate::default()
+    }
+}
+
+fn warm_ask<'a>(size: TaskSize, level: Level, warm: bool) -> RouteInput<'a> {
+    let mut input = ask(
+        "background:classify",
+        "grok-4.7",
+        Spend::default(),
+        Some(size),
+    );
+    input.local = warm_gate(level);
+    input.local_warm = warm;
+    input
+}
+
+#[test]
+fn a_warm_local_model_takes_less_challenging_work_by_default() {
+    let reg = fleet();
+    for size in [TaskSize::Tiny, TaskSize::Short] {
+        let r = Router::choose(
+            &warm_ask(size, Level::Normal, true),
+            &reg,
+            &none(),
+            &RoutingTable::default(),
+            NOW,
+        );
+        assert_eq!(r.model, "local:small", "size {size:?}");
+        assert!(r.rule_ids.contains(&"size:warm_local".to_string()));
+    }
+    // Nothing loaded: the same tiny task takes the cloud pick as before.
+    let r = Router::choose(
+        &warm_ask(TaskSize::Tiny, Level::Normal, false),
+        &reg,
+        &none(),
+        &RoutingTable::default(),
+        NOW,
+    );
+    assert!(r.model.starts_with("grok-"), "got {}", r.model);
+    assert!(!r.rule_ids.contains(&"size:warm_local".to_string()));
+}
+
+#[test]
+fn a_warm_local_model_stays_off_long_work() {
+    let reg = fleet();
+    let r = Router::choose(
+        &warm_ask(TaskSize::Long, Level::Normal, true),
+        &reg,
+        &none(),
+        &RoutingTable::default(),
+        NOW,
+    );
+    assert!(
+        r.model.starts_with("grok-"),
+        "a long task goes to a paid route, got {}",
+        r.model
+    );
+    assert!(!r.rule_ids.contains(&"size:warm_local".to_string()));
+}
+
+#[test]
+fn governor_throttle_limits_the_warm_default_to_tiny_work() {
+    let reg = fleet();
+    // Throttled (a game, a busy GPU): short work stays on the cloud rather
+    // than loading new local work; tiny work still defaults to the warm model.
+    let r = Router::choose(
+        &warm_ask(TaskSize::Short, Level::Throttle, true),
+        &reg,
+        &none(),
+        &RoutingTable::default(),
+        NOW,
+    );
+    assert!(r.model.starts_with("grok-"), "got {}", r.model);
+    assert!(!r.rule_ids.contains(&"size:warm_local".to_string()));
+    let r = Router::choose(
+        &warm_ask(TaskSize::Tiny, Level::Throttle, true),
+        &reg,
+        &none(),
+        &RoutingTable::default(),
+        NOW,
+    );
+    assert_eq!(r.model, "local:small");
+    assert!(r.rule_ids.contains(&"size:warm_local".to_string()));
+}
+
+#[test]
+fn with_no_cloud_route_the_warm_model_is_a_fallback_not_a_default() {
+    // Every cloud model down: the device takes the step through the
+    // fallback path (its rules, its cabin note), never the warm default.
+    let mut reg = fleet();
+    for id in ["grok-4.7", "grok-4.3"] {
+        reg.models.get_mut(id).unwrap().state =
+            grokhub_core::model_registry::ModelState::Quarantined;
+    }
+    let r = Router::choose(
+        &warm_ask(TaskSize::Tiny, Level::Normal, true),
+        &reg,
+        &none(),
+        &RoutingTable::default(),
+        NOW,
+    );
+    assert_eq!(r.model, "local:small");
+    assert!(!r.rule_ids.contains(&"size:warm_local".to_string()));
+    assert!(
+        r.rule_ids.iter().any(|x| x.starts_with("local:")),
+        "the fallback path owns the pick: {:?}",
+        r.rule_ids
+    );
+}
+
+#[test]
+fn the_warm_default_yields_to_an_episode_pin() {
+    let reg = fleet();
+    let mut input = warm_ask(TaskSize::Tiny, Level::Normal, true);
+    input.episode_model = Some("grok-4.7");
+    let r = Router::choose(&input, &reg, &none(), &RoutingTable::default(), NOW);
+    assert_eq!(r.model, "grok-4.7");
+    assert!(!r.rule_ids.contains(&"size:warm_local".to_string()));
 }
 
 #[test]
