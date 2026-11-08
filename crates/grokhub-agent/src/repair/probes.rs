@@ -51,6 +51,8 @@ pub enum ProbeId {
     CrashLog,
     /// One program's crashes in the Application log (Windows).
     AppCrashes,
+    /// The fans (Linux hwmon), read by `fans` in-process. Never run as a probe.
+    Fans,
 }
 
 pub const LINUX_PROBES: &[ProbeId] = &[
@@ -154,6 +156,7 @@ impl ProbeId {
             Self::CrashDumps => "crash_dumps",
             Self::CrashLog => "crash_log",
             Self::AppCrashes => "app_crashes",
+            Self::Fans => "fans",
         }
     }
 
@@ -178,6 +181,7 @@ impl ProbeId {
             Self::WuPending => "Windows Update",
             Self::CrashDumps | Self::AppCrashes => "its crash history",
             Self::CrashLog => "its recent log",
+            Self::Fans => "your fans",
         }
     }
 
@@ -325,7 +329,7 @@ pub fn probe_spec_with(id: ProbeId, os: Os, has_bin: &dyn Fn(&str) -> bool) -> O
             "\"{0}`t{1}\" -f (Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Auto Update\\RebootRequired'), (New-Object -ComObject Microsoft.Update.Session).CreateUpdateSearcher().Search('IsInstalled=0 and IsHidden=0').Updates.Count",
         ),
         // Not in `all()`, so never reached: these need a name.
-        ProbeId::CrashDumps | ProbeId::CrashLog | ProbeId::AppCrashes => return None,
+        ProbeId::CrashDumps | ProbeId::CrashLog | ProbeId::AppCrashes | ProbeId::Fans => return None,
     };
     Some(spec)
 }

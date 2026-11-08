@@ -285,8 +285,78 @@ const REPAIR_FLOOR: &[(&[&str], &str)] = &[
     (&["diskpart"], "hard floor: disk partitioning"),
 ];
 
+/// Clock speeds, power limits and undervolts: never, in any fix.
+const CLOCK_FLOOR: &str = "hard floor: clock speeds";
+/// Tools whose whole job is clocks, voltages or power limits.
+const CLOCK_TOOLS: &[&str] = &[
+    "ryzenadj",
+    "intel-undervolt",
+    "wrmsr",
+    "throttlestop",
+    "msiafterburner",
+    "zenstates",
+];
+/// `nvidia-smi` flags that set or reset clocks and power limits.
+const NVIDIA_CLOCK_FLAGS: &[&str] = &[
+    "-lgc",
+    "--lock-gpu-clocks",
+    "-rgc",
+    "--reset-gpu-clocks",
+    "-lmc",
+    "--lock-memory-clocks",
+    "-rmc",
+    "--reset-memory-clocks",
+    "-ac",
+    "--applications-clocks",
+    "-rac",
+    "--reset-applications-clocks",
+    "-pl",
+    "--power-limit",
+];
+/// Files and settings that hold clocks, voltages or power limits.
+const CLOCK_FILES: &[&str] = &[
+    "cpufreq/",
+    "intel_pstate/",
+    "pp_od_clk_voltage",
+    "pp_dpm_",
+    "power_dpm_force_performance_level",
+    "power1_cap",
+    "graphicsclockoffset",
+    "memorytransferrateoffset",
+    "procthrottle",
+];
+/// Fan drivers that anti-cheats flag, and the ports they open.
+const FLAGGED_DRIVERS: &[&str] = &["winring0", "pawnio", "inpoutx64", "inpout32"];
+
+fn clock_or_driver_floor(words: &[String]) -> Option<&'static str> {
+    let flag = |w: &str| {
+        NVIDIA_CLOCK_FLAGS
+            .iter()
+            .any(|f| w == *f || w.strip_prefix(f).is_some_and(|r| r.starts_with('=')))
+    };
+    let nvidia = words.iter().any(|w| w == "nvidia-smi") && words.iter().any(|w| flag(w));
+    let cpupower =
+        has_seq(words, &["cpupower", "frequency-set"]) || has_seq(words, &["cpupower", "set"]);
+    if nvidia
+        || cpupower
+        || words.iter().any(|w| CLOCK_TOOLS.contains(&w.as_str()))
+        || words
+            .iter()
+            .any(|w| CLOCK_FILES.iter().any(|f| w.contains(f)))
+    {
+        return Some(CLOCK_FLOOR);
+    }
+    words
+        .iter()
+        .any(|w| FLAGGED_DRIVERS.iter().any(|d| w.contains(d)))
+        .then_some("hard floor: a driver that anti-cheats flag")
+}
+
 fn repair_floor(words: &[String]) -> Option<&'static str> {
     if let Some((_, why)) = REPAIR_FLOOR.iter().find(|(seq, _)| has_seq(words, seq)) {
+        return Some(why);
+    }
+    if let Some(why) = clock_or_driver_floor(words) {
         return Some(why);
     }
     // `format C:` (cmd's format, not PowerShell's Format-Table and friends).
