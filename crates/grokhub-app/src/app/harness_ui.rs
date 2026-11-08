@@ -242,6 +242,8 @@ pub(super) struct HarnessState {
     pub diagnose_slash: bool,
     /// The chat that asked for the running diagnose; its answer goes there.
     pub diagnose_chat: String,
+    /// A card's quiet look (crash history) on its way: card id, what, report.
+    pub card_look_rx: Option<mpsc::Receiver<super::repair_ui::CardLookDone>>,
     /// Spike-9 fix proposals and the fix being applied.
     pub fixes: super::repair_ui::FixUi,
     /// Settings → Permissions: the folder typed for a new files scope.

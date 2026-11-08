@@ -17,6 +17,10 @@ use grokhub_agent::repair;
 
 /// A diagnose answer, whether it needs the System state ask, and the fixes it found.
 pub(super) type DiagnoseDone = (String, bool, Vec<repair::FixPlan>);
+/// A card's quiet look: the card, what was checked, and what it found.
+pub(super) type CardLookDone = (String, String, repair::DiagnoseReport);
+/// The receipt line when the look couldn't read system state yet.
+pub(super) const LOOK_NEEDS_SCOPE: &str = "I need your OK to read system state first. Allow it on the card in your chat, then tap this again.";
 
 /// Fix proposals and the fix being applied.
 #[derive(Debug, Default)]
@@ -54,11 +58,34 @@ pub(super) struct FixCard {
     pub primary: Option<&'static str>,
     pub secondary: &'static str,
     pub hard: bool,
+    /// Steps are a live checklist: each row carries its own mark, no bullet.
+    pub checklist: bool,
 }
 
 pub(super) const FIX_EYEBROW: &str = "Fix proposal";
 pub(super) const FIX_PRIMARY: &str = "Fix it";
 pub(super) const UNDO_PRIMARY: &str = "Undo fix";
+/// The running fix's button: stops the step in flight, nothing after it runs.
+pub(super) const STOP_FIX: &str = "Stop fix";
+
+/// The live checklist's rows, each with the app's step mark in front.
+pub(super) fn checklist_rows(lines: &[repair::ChecklistLine]) -> Vec<(String, Option<String>)> {
+    use repair::StepMark;
+    lines
+        .iter()
+        .map(|l| {
+            let row = match l.mark {
+                StepMark::Done => format!("✓ {}", l.plain),
+                StepMark::Running => format!("→ {}", l.plain),
+                StepMark::NeedsOk => format!("→ Waiting for your OK: {}", l.plain),
+                StepMark::Pending => format!("· {}", l.plain),
+                StepMark::Skipped => format!("– {} (didn't run)", l.plain.trim_end_matches('.')),
+                StepMark::Failed => format!("× {} (didn't work)", l.plain.trim_end_matches('.')),
+            };
+            (row, None)
+        })
+        .collect()
+}
 /// The reply recorded when Grok Build couldn't take a step at all.
 const STEP_FAILED_NOTE: &str = "STEP_FAILED Grok Build didn't take the step:";
 
@@ -82,6 +109,7 @@ pub(super) fn fix_card(plan: &repair::FixPlan) -> FixCard {
         primary: runnable.then_some(FIX_PRIMARY),
         secondary: if runnable { "Not now" } else { "Got it" },
         hard: plan.has_hard(),
+        checklist: false,
     }
 }
 
@@ -166,7 +194,103 @@ impl Cabin {
         });
     }
 
+    /// A card's read-only look, run quietly: the card's program's crash
+    /// history and the background services. Its receipt lands on the card;
+    /// nothing goes to a chat. False when there is no program to look at.
+    pub(super) fn start_card_look(&mut self, card_id: &str) -> bool {
+        let Some(name) = self
+            .updates
+            .iter()
+            .find(|c| c.id == card_id)
+            .and_then(|c| c.pulse.report.as_ref()?.subject.as_ref())
+            .filter(|s| s.kind == grokhub_core::card_report::SubjectKind::Program)
+            .and_then(|s| repair::ProgramName::parse(&s.name))
+        else {
+            return false;
+        };
+        if self.harness.card_look_rx.is_some() {
+            self.status = "Already checking a card".into();
+            return true;
+        }
+        let os = repair::Os::current();
+        let mut probes = repair::ProbeId::for_subject(os).to_vec();
+        probes.push(if os == repair::Os::Windows {
+            repair::ProbeId::ServicesStoppedAuto
+        } else {
+            repair::ProbeId::FailedServices
+        });
+        let what = format!("Checked {}'s crash history", name.as_str());
+        let dir = crate::config::config_dir();
+        let session = format!("card-{card_id}");
+        let access = self.access_mode();
+        let (tx, rx) = mpsc::channel();
+        self.harness.card_look_rx = Some(rx);
+        self.status = format!("Checking {}'s crash history (read only)…", name.as_str());
+        let id = card_id.to_string();
+        std::thread::spawn(move || {
+            let ledger = hx::ConsentLedger::load(&dir);
+            let ctx = repair::DiagnoseCtx {
+                config_dir: &dir,
+                session_id: &session,
+                ledger: &ledger,
+                access,
+                os,
+                has_bin: &repair::on_path,
+                runner: &repair::run_spec,
+                subject: Some(&name),
+            };
+            let _ = tx.send((id, what, repair::diagnose(&ctx, &probes)));
+        });
+        true
+    }
+
+    /// The look's receipt goes on its card, which opens to show it.
+    pub(super) fn poll_card_look(&mut self) {
+        let Some(rx) = self.harness.card_look_rx.take() else {
+            return;
+        };
+        let (id, what, report) = match rx.try_recv() {
+            Ok(done) => done,
+            Err(mpsc::TryRecvError::Empty) => {
+                self.harness.card_look_rx = Some(rx);
+                return;
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.status = "Couldn't finish checking".into();
+                return;
+            }
+        };
+        let result = if report.ask.is_some() {
+            let ledger = hx::ConsentLedger::load_now(&crate::config::config_dir());
+            self.harness.indexer.asks.ask(
+                hx::Scope::SystemState,
+                repair::SCOPE_ASK_WHY,
+                &ledger,
+                now_ms(),
+            );
+            vec![LOOK_NEEDS_SCOPE.to_string()]
+        } else {
+            report.findings.iter().map(|f| f.plain.clone()).collect()
+        };
+        let Some(card) = self.updates.iter_mut().find(|c| c.id == id) else {
+            self.status.clear();
+            return;
+        };
+        grokhub_core::card_report::add_receipt(
+            card,
+            grokhub_core::card_report::CardReceipt {
+                at_ms: now_ms(),
+                what: what.clone(),
+                result,
+            },
+        );
+        self.pulse_view.report_open.insert(id);
+        self.status = format!("{what}. It's on the card.");
+        self.persist_updates();
+    }
+
     pub(super) fn poll_diagnose(&mut self) {
+        self.poll_card_look();
         self.poll_fix();
         let Some(rx) = self.harness.diagnose_rx.take() else {
             return;
@@ -405,12 +529,13 @@ impl Cabin {
                 let note = "One step at a time. If your computer asks for your password, type it yourself; I never do.";
                 let card = FixCard {
                     sections: vec![],
-                    steps: vec![],
+                    steps: checklist_rows(&run.checklist()),
                     primary: None,
-                    secondary: "",
+                    secondary: STOP_FIX,
                     hard: false,
+                    checklist: true,
                 };
-                fix_card_ui(
+                let answer = fix_card_ui(
                     ui,
                     ("fix-running", run.id.clone()),
                     "Fixing",
@@ -419,6 +544,10 @@ impl Cabin {
                     &card,
                     running,
                 );
+                if answer == Some(false) {
+                    // The chat's own Stop: it ends the step in flight and denies its card.
+                    self.halt_in_flight();
+                }
                 return;
             }
             if !self.harness.fixes.closed && !run.undone {
@@ -429,10 +558,11 @@ impl Cabin {
                 };
                 let card = FixCard {
                     sections: vec![],
-                    steps: vec![],
+                    steps: checklist_rows(&run.checklist()),
                     primary: Some(UNDO_PRIMARY),
                     secondary: "Done",
                     hard: false,
+                    checklist: true,
                 };
                 let (id, text) = (run.id.clone(), run.result_text());
                 match fix_card_ui(ui, ("fix-result", id), eyebrow, &text, "", &card, running) {
@@ -537,7 +667,11 @@ fn fix_card_ui(
                     ui.add_space(6.0);
                     ui.add(muted("Steps", 12.0));
                     for (line, cmd) in &card.steps {
-                        ui.add(strong(&format!("• {line}"), 13.0));
+                        if card.checklist {
+                            ui.add(strong(line, 13.0));
+                        } else {
+                            ui.add(strong(&format!("• {line}"), 13.0));
+                        }
                         if let Some(cmd) = cmd {
                             ui.add(
                                 egui::Label::new(
@@ -837,5 +971,47 @@ mod tests {
             "nothing went to Grok Build"
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn the_running_fix_shows_each_step_with_its_mark() {
+        use repair::{ChecklistLine, StepMark};
+        let line = |plain: &str, mark: StepMark| ChecklistLine {
+            plain: plain.into(),
+            mark,
+        };
+        let rows: Vec<String> = checklist_rows(&[
+            line("Save a system snapshot first.", StepMark::Done),
+            line("Restart the lookup service.", StepMark::Running),
+            line("Delete old installers.", StepMark::NeedsOk),
+            line("Clear the list.", StepMark::Pending),
+            line("Reset the adapter.", StepMark::Failed),
+            line("Check it worked.", StepMark::Skipped),
+        ])
+        .into_iter()
+        .map(|(row, cmd)| {
+            assert_eq!(cmd, None);
+            row
+        })
+        .collect();
+        assert_eq!(
+            rows,
+            vec![
+                "✓ Save a system snapshot first.",
+                "→ Restart the lookup service.",
+                "→ Waiting for your OK: Delete old installers.",
+                "· Clear the list.",
+                "× Reset the adapter (didn't work)",
+                "– Check it worked (didn't run)",
+            ]
+        );
+        // Every mark is in the bundled fonts.
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let _ = crate::theme::test_pass(&ctx, Default::default(), |_| {});
+        let font = egui::FontId::proportional(crate::theme::TYPE_BODY);
+        for c in "✓→·×–".chars() {
+            assert!(ctx.fonts_mut(|f| f.has_glyph(&font, c)), "{c}");
+        }
     }
 }
