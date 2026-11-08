@@ -134,6 +134,8 @@ pub const FILE_NOT_WRITTEN: &str = "file_not_written";
 pub const CHECK_FAILED: &str = "check_failed";
 pub const STILL_THERE: &str = "still_there";
 pub const FREED_MISMATCH: &str = "freed_mismatch";
+pub const UNCHECKED_CONNECTION: &str = "unchecked_connection";
+pub const PUSHED_TEST: &str = "pushed_test";
 
 /// Every check for a reply that ends a run.
 pub fn check(reply: &str, ran: &[Ran]) -> Vec<Finding> {
@@ -1132,6 +1134,121 @@ fn results(reply: &str, ran: &[Ran]) -> Vec<Finding> {
     out
 }
 
+// --- Online models ---------------------------------------------------------
+
+/// Words that put a sentence about the online models, a key or the router.
+const PROVIDER_WORDS: [&str; 9] = [
+    "claude",
+    "anthropic",
+    "openrouter",
+    "open router",
+    "api key",
+    "your key",
+    "online model",
+    "the router",
+    "auto router",
+];
+
+/// Words that state how one stands, or that something was done to it.
+const STATUS_WORDS: [&str; 14] = [
+    "connected",
+    "available",
+    "working",
+    " works",
+    " ready",
+    " active",
+    " live",
+    "tested",
+    "verified",
+    "confirmed",
+    "pinged",
+    "switched",
+    "triggered",
+    "routed",
+];
+
+/// Asks that hand a test or a setup step back to the user.
+const PUSHBACK_WORDS: [&str; 12] = [
+    "update the app",
+    "update loadout",
+    "restart",
+    "relaunch",
+    "sign in again",
+    "log in again",
+    "re-auth",
+    "reauth",
+    "re-enter",
+    "harder task",
+    "complex task",
+    "harder question",
+];
+
+/// A sentence that says it doesn't know, or asks.
+fn unsure(sentence: &str) -> bool {
+    let s = format!(" {} ", sentence.to_lowercase());
+    s.trim_end().ends_with('?')
+        || [
+            " whether ",
+            " if ",
+            "can't tell",
+            "cannot tell",
+            "don't know",
+            "haven't checked",
+            "not checked",
+            "not sure",
+            " might ",
+            " may ",
+            " would ",
+        ]
+        .iter()
+        .any(|w| s.contains(w))
+}
+
+/// A reply about the online models: one that says how a model or key
+/// stands with nothing this turn having checked (`checked`: a models_check
+/// ran, or the turn carried the app's own connection check), and one that
+/// asks the user to update, restart, sign in again or send a harder task to
+/// test it. The app picks the model and runs the test itself, so both are
+/// the reply making things up or handing the work back.
+pub fn connections(reply: &str, ran: &[Ran], checked: bool) -> Vec<Finding> {
+    let checked = checked || ran.iter().any(|r| r.name == "models_check" && r.ok);
+    let mut out = Vec::new();
+    for sentence in sentences(reply) {
+        let low = format!(" {}", sentence.to_lowercase());
+        if !PROVIDER_WORDS.iter().any(|w| low.contains(w)) {
+            continue;
+        }
+        if PUSHBACK_WORDS.iter().any(|w| low.contains(w)) && !kinds_has(&out, PUSHED_TEST) {
+            out.push(Finding {
+                kind: PUSHED_TEST,
+                detail: format!(
+                    "You asked the user to \"{}\". The app picks the model each turn and models_check is the test: run it if it's offered, and don't hand testing or setup back to them.",
+                    clip(&sentence)
+                ),
+            });
+            continue;
+        }
+        if !checked
+            && STATUS_WORDS.iter().any(|w| low.contains(w))
+            && !unsure(&sentence)
+            && !kinds_has(&out, UNCHECKED_CONNECTION)
+        {
+            out.push(Finding {
+                kind: UNCHECKED_CONNECTION,
+                detail: format!(
+                    "Your reply says \"{}\", but nothing this turn checked the online models. Call models_check if it's offered, or say you haven't checked.",
+                    clip(&sentence)
+                ),
+            });
+        }
+    }
+    out
+}
+
+fn kinds_has(found: &[Finding], kind: &str) -> bool {
+    found.iter().any(|f| f.kind == kind)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1436,6 +1553,50 @@ mod tests {
                 ("EXISTS".to_string(), "True".to_string()),
                 ("COUNT".to_string(), "3".to_string())
             ]
+        );
+    }
+
+    #[test]
+    fn an_unchecked_word_on_the_online_models_is_caught() {
+        // The reported chat: a status nobody checked, and the test handed back.
+        let reply = "Claude is connected and available. To test it, send a complex task and Auto will escalate to Claude.";
+        assert_eq!(
+            kinds(&connections(reply, &[], false)),
+            vec![UNCHECKED_CONNECTION, PUSHED_TEST]
+        );
+        // After the app's own check, the status is the check's: only the
+        // hand-back is still wrong.
+        assert_eq!(kinds(&connections(reply, &[], true)), vec![PUSHED_TEST]);
+        let check = Ran::new(
+            "models_check",
+            "{}",
+            true,
+            "Claude (Anthropic): Auto can use it.",
+        );
+        assert_eq!(
+            kinds(&connections(
+                "Claude is connected: Auto can use it.",
+                &[check],
+                false
+            )),
+            Vec::<&str>::new()
+        );
+        // Saying it hasn't checked, asking, or not talking about the models
+        // at all is fine.
+        for fine in [
+            "I can't tell whether Claude is connected from here.",
+            "Is your Claude key the one you added last week?",
+            "The build is ready and the tests are working.",
+        ] {
+            assert!(connections(fine, &[], false).is_empty(), "{fine}");
+        }
+        assert_eq!(
+            kinds(&connections(
+                "Please restart the app so the router picks up your key.",
+                &[],
+                true
+            )),
+            vec![PUSHED_TEST]
         );
     }
 }

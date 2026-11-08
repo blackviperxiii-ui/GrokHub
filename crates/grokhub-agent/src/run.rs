@@ -1115,7 +1115,14 @@ fn run_turn(
                     && post_mark.as_ref() != Some(&mark)
                 {
                     post_mark = Some(mark);
-                    let findings = crate::post_check::check(&last_assistant, &ran);
+                    let mut findings = crate::post_check::check(&last_assistant, &ran);
+                    // A turn that asked about the online models carried the
+                    // router's live check; any other word on them needs one.
+                    findings.extend(crate::post_check::connections(
+                        &last_assistant,
+                        &ran,
+                        crate::route::check::connection_question(user_text),
+                    ));
                     if let Some(note) = crate::post_check::note(&findings) {
                         post_notes += 1;
                         history.push(cabin_note(&note));
