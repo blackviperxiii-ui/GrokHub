@@ -26,8 +26,8 @@ use serde_json::{json, Value};
 use crate::harness::{self, AccessMode, ConsentLedger, GateOutcome, Origin, Scope, Span, Step};
 
 pub use apply::{
-    gb_prompt, step_ok, Action, ApplyCtx, ApplyRun, APPLY_TOOL, REPAIR_TOOL, RESTORE_TOOL,
-    STEP_FAILED, STEP_OK, UNATTENDED, UNDO_TOOL,
+    gb_prompt, step_ok, Action, ApplyCtx, ApplyRun, ChecklistLine, StepMark, APPLY_TOOL,
+    CHECK_LINE, REPAIR_TOOL, RESTORE_TOOL, STEP_FAILED, STEP_OK, UNATTENDED, UNDO_TOOL,
 };
 pub(crate) use fix::repair_hit;
 pub use fix::{

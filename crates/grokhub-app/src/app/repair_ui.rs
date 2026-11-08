@@ -58,11 +58,34 @@ pub(super) struct FixCard {
     pub primary: Option<&'static str>,
     pub secondary: &'static str,
     pub hard: bool,
+    /// Steps are a live checklist: each row carries its own mark, no bullet.
+    pub checklist: bool,
 }
 
 pub(super) const FIX_EYEBROW: &str = "Fix proposal";
 pub(super) const FIX_PRIMARY: &str = "Fix it";
 pub(super) const UNDO_PRIMARY: &str = "Undo fix";
+/// The running fix's button: stops the step in flight, nothing after it runs.
+pub(super) const STOP_FIX: &str = "Stop fix";
+
+/// The live checklist's rows, each with the app's step mark in front.
+pub(super) fn checklist_rows(lines: &[repair::ChecklistLine]) -> Vec<(String, Option<String>)> {
+    use repair::StepMark;
+    lines
+        .iter()
+        .map(|l| {
+            let row = match l.mark {
+                StepMark::Done => format!("✓ {}", l.plain),
+                StepMark::Running => format!("→ {}", l.plain),
+                StepMark::NeedsOk => format!("→ Waiting for your OK: {}", l.plain),
+                StepMark::Pending => format!("· {}", l.plain),
+                StepMark::Skipped => format!("– {} (didn't run)", l.plain.trim_end_matches('.')),
+                StepMark::Failed => format!("× {} (didn't work)", l.plain.trim_end_matches('.')),
+            };
+            (row, None)
+        })
+        .collect()
+}
 /// The reply recorded when Grok Build couldn't take a step at all.
 const STEP_FAILED_NOTE: &str = "STEP_FAILED Grok Build didn't take the step:";
 
@@ -86,6 +109,7 @@ pub(super) fn fix_card(plan: &repair::FixPlan) -> FixCard {
         primary: runnable.then_some(FIX_PRIMARY),
         secondary: if runnable { "Not now" } else { "Got it" },
         hard: plan.has_hard(),
+        checklist: false,
     }
 }
 
@@ -505,12 +529,13 @@ impl Cabin {
                 let note = "One step at a time. If your computer asks for your password, type it yourself; I never do.";
                 let card = FixCard {
                     sections: vec![],
-                    steps: vec![],
+                    steps: checklist_rows(&run.checklist()),
                     primary: None,
-                    secondary: "",
+                    secondary: STOP_FIX,
                     hard: false,
+                    checklist: true,
                 };
-                fix_card_ui(
+                let answer = fix_card_ui(
                     ui,
                     ("fix-running", run.id.clone()),
                     "Fixing",
@@ -519,6 +544,10 @@ impl Cabin {
                     &card,
                     running,
                 );
+                if answer == Some(false) {
+                    // The chat's own Stop: it ends the step in flight and denies its card.
+                    self.halt_in_flight();
+                }
                 return;
             }
             if !self.harness.fixes.closed && !run.undone {
@@ -529,10 +558,11 @@ impl Cabin {
                 };
                 let card = FixCard {
                     sections: vec![],
-                    steps: vec![],
+                    steps: checklist_rows(&run.checklist()),
                     primary: Some(UNDO_PRIMARY),
                     secondary: "Done",
                     hard: false,
+                    checklist: true,
                 };
                 let (id, text) = (run.id.clone(), run.result_text());
                 match fix_card_ui(ui, ("fix-result", id), eyebrow, &text, "", &card, running) {
@@ -637,7 +667,11 @@ fn fix_card_ui(
                     ui.add_space(6.0);
                     ui.add(muted("Steps", 12.0));
                     for (line, cmd) in &card.steps {
-                        ui.add(strong(&format!("• {line}"), 13.0));
+                        if card.checklist {
+                            ui.add(strong(line, 13.0));
+                        } else {
+                            ui.add(strong(&format!("• {line}"), 13.0));
+                        }
                         if let Some(cmd) = cmd {
                             ui.add(
                                 egui::Label::new(
@@ -937,5 +971,47 @@ mod tests {
             "nothing went to Grok Build"
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn the_running_fix_shows_each_step_with_its_mark() {
+        use repair::{ChecklistLine, StepMark};
+        let line = |plain: &str, mark: StepMark| ChecklistLine {
+            plain: plain.into(),
+            mark,
+        };
+        let rows: Vec<String> = checklist_rows(&[
+            line("Save a system snapshot first.", StepMark::Done),
+            line("Restart the lookup service.", StepMark::Running),
+            line("Delete old installers.", StepMark::NeedsOk),
+            line("Clear the list.", StepMark::Pending),
+            line("Reset the adapter.", StepMark::Failed),
+            line("Check it worked.", StepMark::Skipped),
+        ])
+        .into_iter()
+        .map(|(row, cmd)| {
+            assert_eq!(cmd, None);
+            row
+        })
+        .collect();
+        assert_eq!(
+            rows,
+            vec![
+                "✓ Save a system snapshot first.",
+                "→ Restart the lookup service.",
+                "→ Waiting for your OK: Delete old installers.",
+                "· Clear the list.",
+                "× Reset the adapter (didn't work)",
+                "– Check it worked (didn't run)",
+            ]
+        );
+        // Every mark is in the bundled fonts.
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let _ = crate::theme::test_pass(&ctx, Default::default(), |_| {});
+        let font = egui::FontId::proportional(crate::theme::TYPE_BODY);
+        for c in "✓→·×–".chars() {
+            assert!(ctx.fonts_mut(|f| f.has_glyph(&font, c)), "{c}");
+        }
     }
 }
