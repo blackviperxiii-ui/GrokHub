@@ -60,6 +60,16 @@ impl Cabin {
         self.post_feed_card(card);
     }
 
+    /// A finished run's card, titled with what its reply found.
+    pub(super) fn note_automation_report(&mut self, source_id: &str, name: &str, reply: &str) {
+        if name.trim().is_empty() && reply.trim().is_empty() {
+            return;
+        }
+        let mut card = grokhub_core::automation_report_card(source_id, name, reply, now_ms());
+        hold_if_quiet(&mut card, self.quiet_now());
+        self.post_feed_card(card);
+    }
+
     /// One Home card per store that would not load and was moved aside: a settings or
     /// feed file (`config::quarantine`), the hub state, or a damaged memory note.
     /// Notes for files outside this cabin's config folder are dropped.

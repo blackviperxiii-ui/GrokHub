@@ -1870,8 +1870,9 @@ impl Cabin {
                 && now_ms().saturating_sub(c.created_at) < 10 * 60 * 1000
         });
         if !fresh {
-            self.note_automation_done(automation_id, &card.title, &card.detail);
+            self.note_automation_report(automation_id, title, reply);
         }
+        let run_report = grokhub_core::card_report::report_from_run(title, reply);
         let mut followed = None;
         if let Some(feed) = self
             .updates
@@ -1884,7 +1885,12 @@ impl Cabin {
         {
             feed.action = Some(UpdateAction::OpenWorkboard);
             feed.board_id = Some(card_id.clone());
-            feed.body = Some("In Follow up on your workboard. Open it to read and reply.".into());
+            // The card says what the run found and opens to its report.
+            if let Some(report) = run_report {
+                feed.title = report.found.clone();
+                feed.body = Some(report.summary.clone());
+                feed.pulse.report = Some(report);
+            }
             grokhub_core::refresh_event_why(feed);
             followed = Some(feed.clone());
             self.persist_updates();

@@ -59,6 +59,9 @@ pub struct PulseMeta {
     /// One line on what the card's numbers mean, painted above its detail.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verdict: Option<PulseVerdict>,
+    /// What the card found: headline, summary and the full report it opens to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report: Option<crate::card_report::CardReport>,
 }
 
 /// How a verdict reads: normal, worth watching, or worth a look.
@@ -441,6 +444,16 @@ pub fn is_idea_card(card: &UpdateCard) -> bool {
 /// a card without one gets a plain line from its action: Do "I can {action}",
 /// Automate "I can {action} {cadence}", Learn "I can learn how you {action}".
 pub fn i_can_title(card: &UpdateCard) -> String {
+    // A card that found something leads with what it found.
+    if let Some(found) = card
+        .pulse
+        .report
+        .as_ref()
+        .map(|r| r.found.trim())
+        .filter(|found| !found.is_empty())
+    {
+        return found.to_string();
+    }
     let title = card.title.trim();
     // A written idea has its own short title; its "I can" line is the body.
     if crate::pulse_ideas::is_muse_idea(card) {
@@ -1364,10 +1377,16 @@ pub const QUIET_DIGEST_SOURCE: &str = "pulse:quiet";
 pub fn release_quiet_batch(cards: &mut Vec<UpdateCard>, now_ms: u64) -> (usize, Option<String>) {
     let mut titles = Vec::new();
     let mut ids = Vec::new();
+    let mut items = Vec::new();
     for card in cards.iter_mut().filter(|c| c.held) {
         card.held = false;
         titles.push(card.title.clone());
         ids.push(card.id.clone());
+        items.push(crate::card_report::ReportItem {
+            card_id: card.id.clone(),
+            found: crate::card_report::card_headline(card),
+            summary: crate::card_report::card_summary(card),
+        });
     }
     let n = titles.len();
     if n < 2 {
@@ -1389,6 +1408,12 @@ pub fn release_quiet_batch(cards: &mut Vec<UpdateCard>, now_ms: u64) -> (usize, 
     digest.id = id.clone();
     digest.source_id = QUIET_DIGEST_SOURCE.to_string();
     digest.pulse.source_name = Some("Quiet hours".into());
+    digest.pulse.report = Some(crate::card_report::CardReport {
+        found: format!("{n} updates came in during quiet hours"),
+        summary: body.clone(),
+        items,
+        ..Default::default()
+    });
     post_update(cards, digest);
     (n, Some(id))
 }
@@ -2275,6 +2300,23 @@ mod tests {
         );
         assert_eq!(cards.iter().filter(|c| c.held).count(), 0);
         assert_eq!(cards.iter().filter(|c| c.pulse.quiet_batched).count(), 4);
+        // Each update keeps its own line and opens its own card.
+        let report = digest.pulse.report.clone().expect("report");
+        assert_eq!(report.found, "4 updates came in during quiet hours");
+        let items: Vec<(&str, &str, &str)> = report
+            .items
+            .iter()
+            .map(|i| (i.card_id.as_str(), i.found.as_str(), i.summary.as_str()))
+            .collect();
+        assert_eq!(
+            items,
+            vec![
+                ("done-auto-0", "Backup ran", "ok"),
+                ("done-auto-1", "Price check ran", "ok"),
+                ("done-auto-2", "Brief ready", "ok"),
+                ("done-auto-3", "Repo synced", "ok"),
+            ]
+        );
         let mut one = vec![automation_done_card("solo", "Solo run", "ok", 1)];
         one[0].held = true;
         assert_eq!(release_quiet_batch(&mut one, 9_000), (1, None));

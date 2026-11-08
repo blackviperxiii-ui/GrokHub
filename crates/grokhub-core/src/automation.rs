@@ -139,6 +139,31 @@ pub fn automation_health_line(a: &Automation) -> Option<String> {
     })
 }
 
+/// A failing automation by name: what its Pulse card is about.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutomationAlert {
+    pub name: String,
+    pub fail_streak: u32,
+    pub error: String,
+}
+
+/// `None` while healthy. A nameless job reads as "An automation".
+pub fn automation_alert(a: &Automation) -> Option<AutomationAlert> {
+    if !a.health.failing() {
+        return None;
+    }
+    let error = if a.health.error.is_empty() {
+        "Run failed".to_string()
+    } else {
+        a.health.error.clone()
+    };
+    Some(AutomationAlert {
+        name: a.name.trim().to_string(),
+        fail_streak: a.health.fail_streak.max(1),
+        error,
+    })
+}
+
 fn default_enabled() -> bool {
     true
 }
