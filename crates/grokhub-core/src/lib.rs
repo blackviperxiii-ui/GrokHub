@@ -203,6 +203,7 @@ pub mod usage;
 pub mod user_files;
 pub mod verify;
 pub mod voice;
+pub mod voice_engine;
 pub mod voice_flow;
 pub mod voice_turn;
 pub mod watch_learn;

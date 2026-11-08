@@ -540,11 +540,20 @@ mod tests {
     #[test]
     fn the_catalog_stays_inside_25_uncensored_chat_models() {
         let all = local_models();
-        assert_eq!(all.len(), 10, "catalog parsed");
+        assert_eq!(all.len(), 11, "catalog parsed");
         let chat: Vec<_> = standard_models().map(|m| m.id).collect();
-        assert_eq!(chat.len(), 5, "the five drafters don't count");
+        assert_eq!(
+            chat.len(),
+            5,
+            "the drafters and the speech model don't count"
+        );
         assert!(chat.len() <= STANDARD_MODEL_CAP);
-        for m in all {
+        // Every model that writes replies is uncensored; a speech or image
+        // model only reads or draws, so it has no refusals to remove.
+        for m in all
+            .iter()
+            .filter(|m| matches!(m.kind, ModelKind::Chat | ModelKind::Drafter))
+        {
             assert_eq!(
                 m.abliterated,
                 Some(Abliteration {

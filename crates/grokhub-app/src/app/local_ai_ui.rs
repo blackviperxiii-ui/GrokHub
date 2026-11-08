@@ -90,7 +90,7 @@ pub(super) fn local_model_status(on: bool, installed: bool, tier: &str) -> Strin
     }
 }
 
-struct HttpRuntimeFetch;
+pub(super) struct HttpRuntimeFetch;
 
 fn runtime_agent() -> grokhub_core::http::Agent {
     // Redirects are followed by hand so every hop is checked; public IPs only.

@@ -70,7 +70,7 @@ pub(super) fn should_open_setup(setup_done: bool, has_history: bool) -> bool {
 }
 
 /// Where on-device models go: `~/GrokHub/models`.
-pub(super) fn models_dir() -> PathBuf {
+pub(crate) fn models_dir() -> PathBuf {
     grokhub_core::paths::user_home()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(grokhub_core::brand::INTERNAL_ID)
