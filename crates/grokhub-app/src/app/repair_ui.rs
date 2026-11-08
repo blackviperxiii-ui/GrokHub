@@ -92,20 +92,49 @@ impl Cabin {
         if self.running || self.scheduled_perm || self.harness.diagnose_rx.is_some() {
             return false;
         }
-        let Some(probes) = repair::probes_for_intent(text, repair::Os::current()) else {
+        let os = repair::Os::current();
+        // In a chat opened from a crash card, "check into it" reads that
+        // program's crash history, by the name on the card.
+        let subject = self.card_program_here();
+        let probes = subject
+            .as_ref()
+            .and_then(|_| repair::probes_for_subject(text, os))
+            .or_else(|| repair::probes_for_intent(text, os));
+        let Some(probes) = probes else {
             return false;
         };
         self.touch();
         self.live_mut().push(("user".into(), text.to_string()));
         self.stamp_current_access();
         self.persist();
-        self.run_diagnose(probes, false);
+        self.run_diagnose_about(probes, false, subject);
         true
+    }
+
+    /// The program the open chat's card is about, when it was opened from one.
+    pub(super) fn card_program_here(&self) -> Option<repair::ProgramName> {
+        let here = self.visible_thread_id();
+        self.updates
+            .iter()
+            .filter(|c| c.discuss_thread.as_deref() == Some(here.as_str()))
+            .filter_map(|c| c.pulse.report.as_ref()?.subject.as_ref())
+            .find(|s| s.kind == grokhub_core::card_report::SubjectKind::Program)
+            .and_then(|s| repair::ProgramName::parse(&s.name))
     }
 
     /// Run `probes` (every one for this OS when empty). `slash` marks the
     /// answer as a slash result; an intent answer is a plain reply.
     pub(super) fn run_diagnose(&mut self, probes: Vec<repair::ProbeId>, slash: bool) {
+        self.run_diagnose_about(probes, slash, None);
+    }
+
+    /// [`Self::run_diagnose`], with the program a card is about.
+    fn run_diagnose_about(
+        &mut self,
+        probes: Vec<repair::ProbeId>,
+        slash: bool,
+        subject: Option<repair::ProgramName>,
+    ) {
         if self.harness.diagnose_rx.is_some() {
             self.status = "Already checking your computer".into();
             return;
@@ -129,6 +158,7 @@ impl Cabin {
                 os,
                 has_bin: &repair::on_path,
                 runner: &repair::run_spec,
+                subject: subject.as_ref(),
             };
             let report = repair::diagnose(&ctx, &probes);
             let plans = repair::plans_for(&report.findings, os, &repair::on_path);
@@ -271,6 +301,7 @@ impl Cabin {
                         os: repair::Os::current(),
                         has_bin: &repair::on_path,
                         runner: &repair::run_spec,
+                        subject: None,
                     };
                     let _ = tx.send(repair::diagnose(&ctx, &[probe]));
                 });
