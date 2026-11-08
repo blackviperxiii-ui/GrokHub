@@ -1423,3 +1423,76 @@ fn every_post_shows_two_buttons_and_puts_the_rest_in_its_menu() {
     hobby.reaction = Some(grokhub_core::CardReaction::Up);
     assert_eq!(labels(&post_actions(&hobby, false)), ["Liked"]);
 }
+
+#[test]
+fn a_reported_card_shows_its_finding_then_opens_to_the_full_report() {
+    let mut quiet = QuietCabin::boot("pulse-report-open");
+    let cabin = &mut quiet.cabin;
+    cabin.updates.clear();
+    let reply = "## Open issues\nThree issues opened overnight: #12, #13 and #14. \
+Two are crashes on resume.\n\nThe crash happens after the laptop sleeps for an hour.";
+    let card = grokhub_core::automation_report_card("auto-r", "Morning issues", reply, now_ms());
+    let id = card.id.clone();
+    cabin.updates.push(card);
+    let shut = pulse_texts(cabin, 1600.0);
+    for want in [
+        "Three issues opened overnight: #12, #13 and #14",
+        "From \"Morning issues\": Two are crashes on resume. The crash happens after the laptop sleeps for an hour.",
+        "Full report",
+    ] {
+        assert!(shut.iter().any(|t| t == want), "{want:?} in {shut:?}");
+    }
+    assert!(
+        !shut.iter().any(|t| t == "Open issues"),
+        "the report stays shut until asked: {shut:?}"
+    );
+    cabin.apply_pulse_act(super::pulse_ui::PulseAct::Report(id.clone()));
+    let open = pulse_texts(cabin, 1600.0);
+    for want in ["Hide report", "Open issues"] {
+        assert!(open.iter().any(|t| t == want), "{want:?} in {open:?}");
+    }
+    cabin.apply_pulse_act(super::pulse_ui::PulseAct::Report(id));
+    assert!(
+        cabin.pulse_view.report_open.is_empty(),
+        "a second tap shuts it"
+    );
+}
+
+#[test]
+fn the_report_toggle_says_what_it_opens() {
+    use super::pulse_ui::{post_summary, report_toggle_label};
+    use grokhub_core::card_report::{CardReport, ReportItem};
+    let mut card = grokhub_core::automation_done_card("a", "Nightly backup", "Copied 3 files.", 1);
+    assert_eq!(report_toggle_label(&card, false), None);
+    assert_eq!(
+        post_summary(&card),
+        "Copied 3 files. Your automation “Nightly backup” finished.",
+        "no report: the short takeaway"
+    );
+    card.pulse.report = Some(CardReport {
+        found: "2 updates came in during quiet hours".into(),
+        summary: "2 updates: A · B".into(),
+        items: vec![
+            ReportItem {
+                card_id: "a".into(),
+                found: "A".into(),
+                summary: String::new(),
+            },
+            ReportItem {
+                card_id: "b".into(),
+                found: "B".into(),
+                summary: String::new(),
+            },
+        ],
+        ..Default::default()
+    });
+    assert_eq!(
+        report_toggle_label(&card, false).as_deref(),
+        Some("See the 2 updates")
+    );
+    assert_eq!(
+        report_toggle_label(&card, true).as_deref(),
+        Some("Hide report")
+    );
+    assert_eq!(post_summary(&card), "2 updates: A · B");
+}

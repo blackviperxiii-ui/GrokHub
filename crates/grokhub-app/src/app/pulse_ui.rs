@@ -142,6 +142,8 @@ pub(super) struct PulseView {
     image_failed: HashSet<String>,
     /// The Fix it sheet a PC health card's main button opened.
     pub fix: Option<super::pulse_fix_ui::FixSheet>,
+    /// Cards whose full report is open under their summary.
+    pub report_open: HashSet<String>,
 }
 
 /// How one Ideas row paints this frame.
@@ -152,6 +154,8 @@ pub(super) struct RowState {
     pub title_hot: bool,
     /// Narrow page: Run shows at rest, Snooze and Dismiss stay in ···.
     pub compact: bool,
+    /// The card's full report is open under its summary.
+    pub report_open: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -164,6 +168,8 @@ pub(super) enum PulseAct {
     Accept(String),
     Wrong(String),
     Open(String),
+    /// Show or hide a card's full report under its summary.
+    Report(String),
     Like(String),
     Discuss(String),
     Link(String),
@@ -396,6 +402,10 @@ fn clamp_label(ui: &mut egui::Ui, text: &str, size: f32, color: egui::Color32, r
 }
 
 fn idea_blurb(card: &UpdateCard) -> String {
+    let summary = grokhub_core::card_report::card_summary(card);
+    if card.pulse.report.is_some() && !summary.is_empty() {
+        return summary;
+    }
     card.body
         .as_deref()
         .filter(|b| !b.trim().is_empty())
@@ -649,6 +659,11 @@ pub(super) fn paint_pulse_row(
                         3,
                     );
                 }
+                match paint_report_more(ui, card, st.report_open) {
+                    Some(ReportTap::Toggle) => act = Some(PulseAct::Report(card.id.clone())),
+                    Some(ReportTap::Open(item)) => act = Some(PulseAct::Open(item)),
+                    None => {}
+                }
                 ui.horizontal(|ui| {
                     paint_type_tag(ui, kind);
                     if active || st.compact {
@@ -703,6 +718,10 @@ pub(super) enum FeedPostAct {
     NeverAgain,
     /// Crash card: open the chat the run was in.
     Open,
+    /// Show or hide the full report.
+    Report,
+    /// A digest's update: open that card.
+    OpenCard(String),
     /// Crash card: run it again.
     Retry,
     /// Screen recording card: delete its folder (after a confirm).
@@ -736,6 +755,8 @@ pub(super) fn feed_act(card: &UpdateCard, did: FeedPostAct) -> PulseAct {
         FeedPostAct::Undo => PulseAct::Undo(id),
         FeedPostAct::NeverAgain => PulseAct::NeverAgain(id),
         FeedPostAct::Open => PulseAct::Open(id),
+        FeedPostAct::Report => PulseAct::Report(id),
+        FeedPostAct::OpenCard(item) => PulseAct::Open(item),
         FeedPostAct::Retry => PulseAct::Retry(id),
         FeedPostAct::DeleteRecording => PulseAct::DeleteRecording(id),
         FeedPostAct::FixIt(fix) => PulseAct::FixIt(fix),
@@ -880,11 +901,12 @@ pub(super) fn paint_post_body(
     card: &UpdateCard,
     thumbs: &[Thumb],
     looking_more: bool,
+    report_open: bool,
 ) -> Option<FeedPostAct> {
     let mut act = None;
     ui.add(
         egui::Label::new(
-            RichText::new(&card.title)
+            RichText::new(grokhub_core::card_report::card_headline(card))
                 .size(crate::theme::FONT_UI)
                 .strong()
                 .color(crate::theme::fg()),
@@ -895,7 +917,7 @@ pub(super) fn paint_post_body(
     if let Some(v) = card.pulse.verdict.as_ref() {
         super::pulse_fix_ui::paint_verdict(ui, v);
     }
-    let takeaway = grokhub_core::short_takeaway(card);
+    let takeaway = post_summary(card);
     if !takeaway.is_empty() {
         clamp_label(
             ui,
@@ -904,6 +926,11 @@ pub(super) fn paint_post_body(
             crate::theme::muted(),
             3,
         );
+    }
+    match paint_report_more(ui, card, report_open) {
+        Some(ReportTap::Toggle) => act = Some(FeedPostAct::Report),
+        Some(ReportTap::Open(item)) => act = Some(FeedPostAct::OpenCard(item)),
+        None => {}
     }
     let why = pc::plain_why(card).or_else(|| card.pulse.because.as_deref().map(why_line));
     if let Some(why) = why {
@@ -940,6 +967,94 @@ pub(super) fn paint_post_body(
         act = Some(did);
     }
     act
+}
+
+/// The line under a post's headline: its report's summary, else the short takeaway.
+pub(super) fn post_summary(card: &UpdateCard) -> String {
+    if card.pulse.report.is_some() {
+        let summary = grokhub_core::card_report::card_summary(card);
+        if !summary.is_empty() {
+            return summary;
+        }
+    }
+    grokhub_core::short_takeaway(card)
+}
+
+/// What a tap under a card's summary asked for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum ReportTap {
+    Toggle,
+    Open(String),
+}
+
+/// The toggle's words: "Full report" (a digest: "See the N updates"), or "Hide report".
+pub(super) fn report_toggle_label(card: &UpdateCard, open: bool) -> Option<String> {
+    if !grokhub_core::card_report::has_more(card) {
+        return None;
+    }
+    if open {
+        return Some("Hide report".into());
+    }
+    let items = card.pulse.report.as_ref().map_or(0, |r| r.items.len());
+    Some(if items > 0 {
+        format!("See the {items} updates")
+    } else {
+        "Full report".into()
+    })
+}
+
+/// "Full report" under the summary; open, the report itself and, on a
+/// digest, one row per update that opens its own card.
+fn paint_report_more(ui: &mut egui::Ui, card: &UpdateCard, open: bool) -> Option<ReportTap> {
+    let label = report_toggle_label(card, open)?;
+    let mut tap = None;
+    let toggle = ui.add(
+        egui::Label::new(
+            RichText::new(label)
+                .size(crate::theme::FONT_TIP)
+                .underline()
+                .color(crate::theme::link()),
+        )
+        .sense(egui::Sense::click())
+        .selectable(false),
+    );
+    if toggle.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    if toggle.clicked() {
+        tap = Some(ReportTap::Toggle);
+    }
+    if !open {
+        return tap;
+    }
+    if let Some(more) = grokhub_core::card_report::report_more(card) {
+        ui.add_space(2.0);
+        crate::markdown::show(ui, &more);
+    }
+    for item in card.pulse.report.iter().flat_map(|r| r.items.iter()) {
+        let line = if item.summary.trim().is_empty() {
+            item.found.trim().to_string()
+        } else {
+            format!("{}: {}", item.found.trim(), item.summary.trim())
+        };
+        let row = ui.add(
+            egui::Label::new(
+                RichText::new(format!("• {line}"))
+                    .size(crate::theme::FONT_BODY)
+                    .color(crate::theme::fg()),
+            )
+            .wrap()
+            .sense(egui::Sense::click())
+            .selectable(false),
+        );
+        if row.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if row.clicked() {
+            tap = Some(ReportTap::Open(item.card_id.clone()));
+        }
+    }
+    tap
 }
 
 /// One-tap buttons under a Start my day Digest.
@@ -1414,7 +1529,9 @@ impl Cabin {
                             });
                         });
                     });
-                    if let Some(did) = paint_post_body(ui, card, &thumbs, self.sources.looking_more)
+                    let report_open = self.pulse_view.report_open.contains(&card.id);
+                    if let Some(did) =
+                        paint_post_body(ui, card, &thumbs, self.sources.looking_more, report_open)
                     {
                         act = Some(feed_act(card, did));
                     }
@@ -1677,6 +1794,7 @@ impl Cabin {
             focused: self.pulse_view.focus.as_deref() == Some(id),
             title_hot: self.pulse_view.title_hover.as_deref() == Some(id),
             compact: self.pulse_view.narrow,
+            report_open: self.pulse_view.report_open.contains(id),
         }
     }
 
@@ -1731,6 +1849,11 @@ impl Cabin {
             PulseAct::Wrong(id) => self.pulse_wrong(&id, &Self::local_day()),
             PulseAct::Like(id) => self.pulse_like(&id, &Self::local_day()),
             PulseAct::Open(id) => self.pulse_open(&id),
+            PulseAct::Report(id) => {
+                if !self.pulse_view.report_open.remove(&id) {
+                    self.pulse_view.report_open.insert(id);
+                }
+            }
             PulseAct::Discuss(id) => self.discuss_card(&id),
             PulseAct::Undo(id) => self.done_for_you_undo(&id),
             PulseAct::NeverAgain(id) => self.done_for_you_never(&id),
