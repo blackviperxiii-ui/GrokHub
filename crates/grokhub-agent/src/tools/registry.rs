@@ -612,6 +612,8 @@ mod tests {
     /// to Chat/Agent (10_503 → 10_975) and background (9_323 → 9_795).
     /// Grep's `-i` and `output_mode` args (R2-30: ask for paths or counts
     /// instead of 200 lines) added 143 to Chat/Agent and background, 146 to Plan/Ask.
+    /// The deferred `models_check` index line (the live key test) added 48 to
+    /// Chat/Agent and background, and 50 to Plan/Ask.
     #[test]
     fn eager_schema_payload_stays_within_budget_per_profile() {
         use super::super::set::ToolSet;
@@ -622,20 +624,20 @@ mod tests {
                 profile(PermMode::Ask, false, true),
                 full.clone(),
                 // +150 for the shell's outside_sandbox arg (HX-11), +143 for grep's modes.
-                11_268,
+                11_316,
             ),
             (
                 "agent",
                 profile(PermMode::Always, false, true),
                 full.clone(),
-                11_268,
+                11_316,
             ),
-            ("plan/ask", profile(PermMode::Ask, true, true), full, 6_970),
+            ("plan/ask", profile(PermMode::Ask, true, true), full, 7_020),
             (
                 "background",
                 profile(PermMode::Auto, false, false),
                 ToolSet::background(),
-                10_088,
+                10_136,
             ),
         ];
         for (label, gate, set, budget) in cases {

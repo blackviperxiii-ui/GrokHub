@@ -13,6 +13,7 @@ mod list_dir;
 pub(crate) mod local_ai;
 mod lock;
 mod media;
+mod models_check;
 pub(crate) mod mods;
 pub(crate) mod ports;
 mod read_file;
@@ -306,6 +307,7 @@ fn dispatch_readonly(ctx: &ToolCtx<'_>, name: &str, args: &Value) -> ToolOutput 
         "skill" => crate::skills::tool_run(ctx.workspace, args),
         "diagnose" => crate::repair::tool_run(args),
         local_ai::STATUS => local_ai::status(args),
+        models_check::NAME => models_check::run(args),
         mods::SEARCH | mods::DETAIL | mods::INSTALLED => mods::run(name, args),
         other => ToolOutput::err(format!("{READ_ONLY_PHASE}: `{other}` is not available.")),
     }

@@ -3609,3 +3609,112 @@ fn no_grant_means_no_probe() {
     assert!(wire.sent.lock().unwrap().is_empty());
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// The connection check's wire: a listing answer and a reply answer.
+struct CheckWire {
+    list_status: u16,
+    reply_body: String,
+    posts: Mutex<u32>,
+}
+
+impl ProviderTransport for CheckWire {
+    fn get(&self, _url: &str, _headers: &[(String, String)]) -> Result<HttpReply, String> {
+        Ok(HttpReply {
+            status: self.list_status,
+            body: if self.list_status == 200 {
+                OR_LIST.into()
+            } else {
+                r#"{"error":{"code":401,"message":"No auth credentials found"}}"#.into()
+            },
+            headers: Vec::new(),
+        })
+    }
+    fn post(
+        &self,
+        _url: &str,
+        _headers: &[(String, String)],
+        _body: &str,
+    ) -> Result<HttpReply, String> {
+        *self.posts.lock().unwrap() += 1;
+        Ok(HttpReply {
+            status: 200,
+            body: self.reply_body.clone(),
+            headers: Vec::new(),
+        })
+    }
+}
+
+fn check_setup(label: &str, list_status: u16, grant: bool) -> (PathBuf, Arc<CheckWire>) {
+    let dir = test_dir(label);
+    providers::use_vault_for(&dir, Arc::new(MemoryVault::default()));
+    let wire = Arc::new(CheckWire {
+        list_status,
+        reply_body: r#"{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"Ready"}}]}"#.into(),
+        posts: Mutex::new(0),
+    });
+    providers::use_transport_for(&dir, wire.clone());
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    if grant {
+        grant_destination(&dir, OR_DEST, CALL_DATA, UserClick::from_click()).unwrap();
+    }
+    let mut reg = Registry::default();
+    reg.apply_refresh(
+        &[Listing::new(
+            SourceKind::OpenAiCompatible,
+            vec![ModelMeta::bare("openrouter/vendor/cheap")],
+        )],
+        &[],
+        NOW,
+    );
+    save_registry(&dir, &reg).unwrap();
+    (dir, wire)
+}
+
+#[test]
+fn the_connection_check_asks_the_wire_and_reports_what_it_said() {
+    use super::check::{self, Wire};
+    // Allowed: the key lists models and the cheapest one says the word.
+    let (dir, wire) = check_setup("check-ready", 200, true);
+    let c = check::run(&dir, true, NOW);
+    let p = &c.providers[0];
+    assert_eq!(p.name, "OpenRouter");
+    assert_eq!(p.listing, Some(Wire::Listed(1)));
+    assert!(matches!(p.reply, Some(Wire::Replied(_))), "{:?}", p.reply);
+    assert_eq!(*wire.posts.lock().unwrap(), 1);
+    assert!(check::report(&c, false).contains("Auto can use it."));
+    // Saved settings only: nothing goes out.
+    let quiet = check::run(&dir, false, NOW);
+    assert_eq!(
+        (
+            quiet.providers[0].listing.clone(),
+            quiet.providers[0].reply.clone()
+        ),
+        (None, None)
+    );
+    assert_eq!(*wire.posts.lock().unwrap(), 1);
+    // Not allowed yet: nothing goes out, and the report says why.
+    let (dir2, wire2) = check_setup("check-ungranted", 200, false);
+    let c2 = check::run(&dir2, true, NOW);
+    assert_eq!(
+        (
+            c2.providers[0].listing.clone(),
+            c2.providers[0].reply.clone()
+        ),
+        (None, None)
+    );
+    assert_eq!(*wire2.posts.lock().unwrap(), 0);
+    assert!(check::report(&c2, false).contains("not allowed yet"));
+    // A rejected key says so, and no reply is tried.
+    let (dir3, wire3) = check_setup("check-badkey", 401, true);
+    let c3 = check::run(&dir3, true, NOW);
+    assert_eq!(c3.providers[0].listing, Some(Wire::KeyRejected));
+    assert_eq!(*wire3.posts.lock().unwrap(), 0);
+    let r3 = check::report(&c3, false);
+    assert!(
+        r3.contains("rejected the saved key") && !r3.contains("Auto can use it"),
+        "{r3}"
+    );
+    for d in [dir, dir2, dir3] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}
