@@ -150,6 +150,14 @@ pub(super) fn queue_place(i: usize) -> String {
     }
 }
 
+/// The detail of a queued row typed in a chat other than the running one.
+pub(super) fn waits_for_line(title: Option<&str>) -> String {
+    match title.map(str::trim).filter(|t| !t.is_empty()) {
+        Some(t) => format!("Waits for {}", clip_to(t, QUEUED_TITLE_MAX)),
+        None => "Waits for its chat".into(),
+    }
+}
+
 /// The rows for messages typed during a reply, in order. `at` falls by one
 /// per place so newest-first sorting keeps the line in order.
 pub(super) fn queued_items(
@@ -544,13 +552,21 @@ impl Cabin {
 
         // Messages and side questions typed during a reply wait their turn
         // here, and only here: the chat box above shows none of them.
-        if self.running {
-            let queued = queued_items(
-                &self.followup_queue,
-                ActivityKind::QueuedMessage,
-                "queue",
-                now,
-            );
+        // A message typed in another chat names the chat it waits for, and
+        // stays listed after the reply ends until that chat is opened.
+        if self.running || !self.followup_queue.is_empty() {
+            let texts = self.followup_queue.texts();
+            let mut queued = queued_items(&texts, ActivityKind::QueuedMessage, "queue", now);
+            let here = self
+                .chat_job_thread
+                .clone()
+                .filter(|_| self.running)
+                .unwrap_or_else(|| self.visible_thread_id());
+            for (item, q) in queued.iter_mut().zip(self.followup_queue.iter()) {
+                if !q.fits(&here) {
+                    item.detail = waits_for_line(self.thread_title(&q.thread).as_deref());
+                }
+            }
             for item in queued {
                 upsert(&mut map, item);
             }
@@ -671,6 +687,10 @@ impl Cabin {
         let more = total.saturating_sub(listed.len());
         let mut act: Option<DockAct> = None;
         let steerable = self.can_steer_live_turn();
+        // Steer now only for a message typed in the running chat.
+        let steer_rows: Vec<bool> = (0..self.followup_queue.len())
+            .map(|i| self.queued_steers_here(i))
+            .collect();
         let mut open_card: Option<String> = None;
         let list = egui::Area::new(egui::Id::new("activity-dock-list"))
             .order(egui::Order::Foreground)
@@ -769,7 +789,9 @@ impl Cabin {
                             };
                             let place = queue_index(&item.key);
                             ui.horizontal(|ui| {
-                                for (label, pick) in row_buttons(item, steerable) {
+                                let steers = item.kind != ActivityKind::QueuedMessage
+                                    || steer_rows.get(place).copied().unwrap_or(false);
+                                for (label, pick) in row_buttons(item, steerable && steers) {
                                     if row_btn(ui, label) {
                                         act = Some(match pick {
                                             RowPick::Open => DockAct::Open {
@@ -1139,13 +1161,19 @@ mod tests {
     }
 
     #[test]
-    fn the_cabin_lists_queued_messages_only_while_a_reply_runs() {
+    fn the_cabin_lists_queued_messages_while_they_wait() {
         let mut cabin = Cabin::quiet_for_test();
-        cabin.followup_queue = vec!["then deploy".into(), "and tell me".into()];
-        assert!(
-            cabin.activity_items().is_empty(),
-            "nothing runs, so nothing waits on it"
-        );
+        assert!(cabin.activity_items().is_empty(), "nothing runs or waits");
+        // A message waits for its own chat even while nothing runs.
+        cabin
+            .followup_queue
+            .push("other-chat", "for the other chat".into());
+        let idle = cabin.activity_items();
+        assert_eq!(idle.len(), 1, "{idle:?}");
+        assert_eq!(idle[0].key, "queue:0");
+        assert_eq!(idle[0].detail, waits_for_line(None));
+        cabin.followup_queue =
+            Vec::<String>::from(["then deploy".into(), "and tell me".into()]).into();
         cabin.running = true;
         cabin.chat_job_thread = Some(cabin.visible_thread_id());
         let shown = cabin.activity_items();
@@ -1163,7 +1191,8 @@ mod tests {
     #[test]
     fn remove_puts_the_text_back_in_an_empty_chat_box() {
         let mut cabin = Cabin::quiet_for_test();
-        cabin.followup_queue = vec!["then deploy".into(), "and tell me".into()];
+        cabin.followup_queue =
+            Vec::<String>::from(["then deploy".into(), "and tell me".into()]).into();
         cabin.drop_queued(0);
         assert_eq!(cabin.followup_queue, vec!["and tell me".to_string()]);
         assert_eq!(cabin.composer, "then deploy");

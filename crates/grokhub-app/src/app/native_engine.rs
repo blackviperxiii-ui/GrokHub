@@ -140,11 +140,12 @@ impl Cabin {
 
     /// Queue panel button intents as user-visible follow-ups (approval-gated).
     pub(super) fn queue_panel_actions(&mut self, actions: Vec<panels::PanelAction>) {
+        let here = self.visible_thread_id();
         for action in actions {
-            self.followup_queue.push(format!(
-                "[panel action] {} on {}",
-                action.action, action.panel_id
-            ));
+            self.followup_queue.push(
+                &here,
+                format!("[panel action] {} on {}", action.action, action.panel_id),
+            );
         }
     }
 

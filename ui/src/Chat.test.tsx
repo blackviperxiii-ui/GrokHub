@@ -1154,6 +1154,42 @@ describe("Chat queue", () => {
     expect(onQueue).toHaveBeenLastCalledWith(id, []);
   });
 
+  it("Clear chat mid-reply opens a chat that shows Send, and the old chat's waiting words go back in the box", async () => {
+    const ends = turns();
+    api.deleteChat.mockResolvedValue();
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "first{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    const old = api.sendChat.mock.calls[0][0];
+    await userEvent.type(screen.getByLabelText("Message"), "then deploy{Enter}");
+    rerender(<Chat onOpenSettings={() => {}} clear={{ n: 1 }} />);
+    await waitFor(() => expect(api.deleteChat).toHaveBeenCalledWith(old));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Stop" })).toBeNull());
+    expect(screen.getByLabelText("Message")).toHaveValue("then deploy");
+    // The old reply ends after the new chat is open: nothing of it sends here.
+    await act(async () => ends[0]("end_turn"));
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("Message")).toHaveValue("then deploy");
+  });
+
+  it("a message typed in the new chat while the old reply ends goes to the new chat", async () => {
+    const ends = turns();
+    api.deleteChat.mockResolvedValue();
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "first{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    const old = api.sendChat.mock.calls[0][0];
+    rerender(<Chat onOpenSettings={() => {}} clear={{ n: 1 }} />);
+    await waitFor(() => expect(api.deleteChat).toHaveBeenCalledWith(old));
+    await userEvent.type(screen.getByLabelText("Message"), "fresh start");
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
+    await act(async () => ends[0]("cancelled"));
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(2));
+    expect(api.sendChat.mock.calls[1][0]).not.toBe(old);
+    expect(api.sendChat.mock.calls[1][1]).toBe("fresh start");
+  });
+
   it("Stop puts what waited back in the box instead of sending it", async () => {
     const ends = turns();
     render(<Chat onOpenSettings={() => {}} />);

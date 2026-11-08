@@ -128,6 +128,7 @@ mod acp;
 mod amr_memory;
 mod auto_setup_ui;
 mod chat_kick;
+mod followups;
 mod helper_offers_ui;
 mod learn_notes_ui;
 mod native_engine;
@@ -897,7 +898,10 @@ pub struct Cabin {
     tokens_seen: (u64, u64, u64),
     grok_commands: Vec<SlashHit>,
     grok_tasks: Vec<(String, String, bool)>,
-    followup_queue: Vec<String>,
+    /// Messages typed while a reply runs, each tied to the chat it was typed in.
+    followup_queue: followups::FollowupQueue,
+    /// The chat and line length [`Self::send_waiting_here`] last tried. Not saved.
+    auto_sent_mark: Option<(String, usize)>,
     /// `/workflow pause|resume|stop` waiting until the live turn ends. Not saved.
     /// Side answers: read-only runs beside the live reply, and their cards.
     side: side_run::SideRuns,
@@ -1516,7 +1520,8 @@ impl Cabin {
             tokens_seen: (0, 0, 0),
             grok_commands: Vec::new(),
             grok_tasks: Vec::new(),
-            followup_queue: Vec::new(),
+            followup_queue: Default::default(),
+            auto_sent_mark: None,
             side: Default::default(),
             forced_route: None,
             last_turn_read: None,
@@ -2016,7 +2021,8 @@ impl Cabin {
             tokens_seen: (0, 0, 0),
             grok_commands: Vec::new(),
             grok_tasks: Vec::new(),
-            followup_queue: Vec::new(),
+            followup_queue: Default::default(),
+            auto_sent_mark: None,
             side: Default::default(),
             forced_route: None,
             last_turn_read: None,
@@ -2093,6 +2099,14 @@ impl Cabin {
             .get(self.thread_idx)
             .map(|t| t.id.clone())
             .unwrap_or_default()
+    }
+
+    /// A chat's title by id, for lines that name another chat.
+    fn thread_title(&self, id: &str) -> Option<String> {
+        self.threads
+            .iter()
+            .find(|t| t.id == id)
+            .map(|t| t.title.clone())
     }
 
     fn thinking_here(&self) -> bool {
@@ -4878,7 +4892,9 @@ impl Cabin {
     /// Moves queued follow-ups into the composer, after anything already
     /// typed there. Returns how many moved.
     fn queued_back_to_composer(&mut self) -> usize {
-        let queued = std::mem::take(&mut self.followup_queue);
+        // Only the open chat's messages: another chat's wait for that chat.
+        let visible = self.visible_thread_id();
+        let queued = self.followup_queue.take_all_for(&visible);
         let moved = queued.len();
         if moved > 0 {
             self.composer = composer_with_queued(&self.composer, queued);
@@ -5284,6 +5300,7 @@ impl eframe::App for Cabin {
         self.poll_file_writes();
         self.poll_host_diff();
         self.poll_acp();
+        self.send_waiting_here();
         self.poll_review();
         self.poll_self_review();
         if let Some(issue) = self.harness.self_review.copy_out.take() {

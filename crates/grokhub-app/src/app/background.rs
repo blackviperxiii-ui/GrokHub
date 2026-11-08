@@ -864,22 +864,40 @@ impl Cabin {
 
     /// Activity's Steer now: the queued message joins the live reply at its
     /// next step instead of waiting for it to end.
+    /// Only a message typed in the running chat can join its reply.
     pub(super) fn steer_queued(&mut self, i: usize) {
-        if i < self.followup_queue.len() && self.can_steer_live_turn() {
-            let text = self.followup_queue.remove(i);
+        if self.queued_steers_here(i) {
+            let Some(q) = self.followup_queue.remove(i) else {
+                return;
+            };
             self.bg.queue_next = false;
-            self.send_from_composer(text);
+            self.send_from_composer(q.text);
         }
+    }
+
+    /// Whether the message at place `i` can join the live reply: the reply
+    /// can be steered and the message was typed in that reply's chat.
+    pub(super) fn queued_steers_here(&self, i: usize) -> bool {
+        let Some(q) = self.followup_queue.get(i) else {
+            return false;
+        };
+        let job = self.chat_job_thread.as_deref().unwrap_or_default();
+        self.can_steer_live_turn() && q.fits(job)
     }
 
     /// Activity's Remove: the message leaves the line. An empty chat box gets
     /// the text back, so nothing typed is lost.
     pub(super) fn drop_queued(&mut self, i: usize) {
-        if i >= self.followup_queue.len() {
+        let Some(q) = self.followup_queue.remove(i) else {
             return;
+        };
+        let here = self.visible_thread_id();
+        if q.fits(&here) {
+            self.status = self.restore_to_composer(q.text);
+        } else {
+            // Another chat's message: its words can't go in this chat's box.
+            self.status = "Removed from the queue".into();
         }
-        let text = self.followup_queue.remove(i);
-        self.status = self.restore_to_composer(text);
     }
 
     fn restore_to_composer(&mut self, text: String) -> String {

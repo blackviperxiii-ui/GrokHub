@@ -51,9 +51,11 @@ impl Cabin {
         // Do all's next steps waiting) sends the next waiting step, not a
         // new turn that re-reads the whole chat to guess what was meant.
         let mut resumed_step = false;
-        if !self.running && is_bare_continue(&text) && !self.followup_queue.is_empty() {
-            text = self.followup_queue.remove(0);
-            resumed_step = true;
+        if !self.running && is_bare_continue(&text) {
+            if let Some(step) = self.followup_queue.take_next_for(&self.visible_thread_id()) {
+                text = step;
+                resumed_step = true;
+            }
         }
         // The app reads what the message is for: a side question, a
         // correction, stop, or a new job while a reply runs; plan first or
@@ -111,8 +113,9 @@ impl Cabin {
                         self.background_tasks_open(),
                     ) {
                         LiveSend::Queue => {
-                            self.followup_queue.push(text);
-                            self.status = match self.followup_queue.len() {
+                            let here = self.visible_thread_id();
+                            self.followup_queue.push(&here, text);
+                            self.status = match self.followup_queue.count_for(&here) {
                                 1 => TurnRoute::Queue.ack().into(),
                                 n => format!("{} ({n})", TurnRoute::Queue.ack()),
                             };
@@ -134,8 +137,11 @@ impl Cabin {
             ChatSendKind::Fresh => {
                 if self.running && self.chat_job_thread.is_some() {
                     if queue_asked || self.acp.is_some() || self.background_tasks_open() {
-                        self.followup_queue.push(text);
-                        self.status = format!("Queued ({})", self.followup_queue.len());
+                        // It waits for its own chat, the one on screen, not
+                        // for whichever chat is open when the other reply ends.
+                        let here = self.visible_thread_id();
+                        self.followup_queue.push(&here, text);
+                        self.status = format!("Queued ({})", self.followup_queue.count_for(&here));
                         return;
                     }
                     self.halt_in_flight();
@@ -170,7 +176,8 @@ impl Cabin {
             // Signed out: hand the typed text back and offer sign-in inline.
             // A waiting step it would have sent keeps its place.
             if resumed_step {
-                self.followup_queue.insert(0, text);
+                let here = self.visible_thread_id();
+                self.followup_queue.push_front(&here, text);
             }
             if self.composer.trim().is_empty() {
                 self.composer = typed;
@@ -571,7 +578,8 @@ mod continue_tests {
     #[test]
     fn continue_never_loses_a_waiting_do_all_step() {
         let mut cabin = Cabin::quiet_for_test();
-        cabin.followup_queue = vec!["Fix 2: Clear temp files".into(), "Do all summary".into()];
+        cabin.followup_queue =
+            Vec::<String>::from(["Fix 2: Clear temp files".into(), "Do all summary".into()]).into();
         cabin.send_chat("Continue".into());
         if cabin.signin_card {
             // Signed out: nothing ran, so the step keeps its place.

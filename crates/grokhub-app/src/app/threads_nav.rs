@@ -508,8 +508,12 @@ impl Cabin {
                                 t.messages.is_empty()
                             },
                         // Main is never handed out as a fresh draft.
+                        // A chat whose reply is still running is never a
+                        // fresh draft, even before its first line lands.
                         has_session: buried
                             || t.main
+                            || (self.running
+                                && self.chat_job_thread.as_deref() == Some(t.id.as_str()))
                             || t.grok_session
                                 .as_deref()
                                 .is_some_and(|s| !s.trim().is_empty()),

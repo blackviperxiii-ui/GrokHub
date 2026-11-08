@@ -2166,7 +2166,8 @@ fn stop_hands_queued_messages_back_instead_of_sending_them_later() {
     let mut cabin = Cabin::quiet_for_test();
     cabin.running = true;
     cabin.composer = "half typed".into();
-    cabin.followup_queue = vec!["also rename the folder".into(), "  ".into()];
+    cabin.followup_queue =
+        Vec::<String>::from(["also rename the folder".into(), "  ".into()]).into();
     cabin.halt_work("Stopped");
     assert!(cabin.followup_queue.is_empty());
     assert_eq!(cabin.composer, "half typed\n\nalso rename the folder");
@@ -2186,7 +2187,7 @@ fn a_redirect_keeps_the_queue_and_a_stop_with_none_keeps_its_status() {
     unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
     let mut cabin = Cabin::quiet_for_test();
     cabin.running = true;
-    cabin.followup_queue = vec!["next".into()];
+    cabin.followup_queue = Vec::<String>::from(["next".into()]).into();
     cabin.halt_work("Redirected");
     assert_eq!(cabin.followup_queue, vec!["next".to_string()]);
     assert!(cabin.composer.is_empty());
@@ -2281,4 +2282,116 @@ fn a_turn_that_cannot_start_stays_off_a_run() {
         assert!(cabin.pending_kick.is_none());
         assert!(cabin.chat_job_thread.is_none());
     }
+}
+
+/// Two chats, A then B, with A's reply running and B on screen.
+fn two_chats_a_running_b_open() -> (Cabin, String, String) {
+    let mut cabin = Cabin::quiet_for_test();
+    let a = crate::threads::ChatThread::new("Chat A", false);
+    let b = crate::threads::ChatThread::new("Chat B", false);
+    let (ida, idb) = (a.id.clone(), b.id.clone());
+    cabin.threads = vec![a, b];
+    cabin.thread_idx = 1;
+    cabin.running = true;
+    cabin.chat_job_thread = Some(ida.clone());
+    (cabin, ida, idb)
+}
+
+#[test]
+fn a_message_typed_in_chat_a_never_sends_into_chat_b() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("queue-per-chat");
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
+    let (mut cabin, ida, idb) = two_chats_a_running_b_open();
+    cabin.followup_queue.push(&ida, "then deploy A".into());
+    // A's reply ends while B is the chat on screen.
+    cabin.running = false;
+    cabin.chat_job_thread = None;
+    cabin.drain_followup_queue();
+    cabin.send_waiting_here();
+    assert_eq!(
+        cabin.followup_queue,
+        ["then deploy A"],
+        "A's message waits for A"
+    );
+    assert!(!cabin.followup_queue.ready_for(&idb));
+    assert!(cabin.composer.is_empty(), "nothing of A's lands in B's box");
+    // Opening A again lets it go, once.
+    cabin.thread_idx = 0;
+    cabin.send_waiting_here();
+    assert!(
+        !cabin.followup_queue.contains_text("then deploy A"),
+        "it left the line for A"
+    );
+    let after = cabin.followup_queue.len();
+    cabin.send_waiting_here();
+    assert_eq!(cabin.followup_queue.len(), after);
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
+}
+
+#[test]
+fn stop_hands_back_only_the_open_chats_queued_messages() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("stop-per-chat");
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
+    let (mut cabin, ida, idb) = two_chats_a_running_b_open();
+    cabin.thread_idx = 0;
+    cabin.followup_queue.push(&ida, "for A".into());
+    cabin.followup_queue.push(&idb, "for B".into());
+    cabin.halt_work("Stopped");
+    assert_eq!(cabin.composer, "for A");
+    assert_eq!(
+        cabin.followup_queue,
+        ["for B"],
+        "B's message keeps waiting for B"
+    );
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
+}
+
+#[test]
+fn steer_now_ignores_a_message_queued_for_another_chat() {
+    let (mut cabin, _ida, idb) = two_chats_a_running_b_open();
+    cabin.followup_queue.push(&idb, "for B".into());
+    assert!(
+        !cabin.queued_steers_here(0),
+        "B's line must not join A's reply"
+    );
+    cabin.steer_queued(0);
+    assert_eq!(cabin.followup_queue, ["for B"]);
+}
+
+#[test]
+fn a_failed_reply_holds_its_line_for_continue_when_its_chat_opens() {
+    let (mut cabin, ida, _idb) = two_chats_a_running_b_open();
+    cabin.followup_queue.push(&ida, "step 2".into());
+    cabin.followup_queue.pause_for(&ida);
+    cabin.running = false;
+    cabin.chat_job_thread = None;
+    cabin.thread_idx = 0;
+    cabin.send_waiting_here();
+    assert_eq!(
+        cabin.followup_queue,
+        ["step 2"],
+        "a paused line waits for continue"
+    );
+}
+
+#[test]
+fn only_the_running_chat_shows_stop_and_new_chat_never_reuses_it() {
+    let (mut cabin, ida, _idb) = two_chats_a_running_b_open();
+    assert!(!cabin.thinking_here(), "chat B shows Send while A works");
+    cabin.thread_idx = 0;
+    assert!(cabin.thinking_here(), "chat A shows Stop");
+    // A's reply is still starting, so A looks empty: New chat must not hand it out.
+    cabin.threads.truncate(1);
+    cabin.new_thread(false);
+    assert_ne!(
+        cabin.visible_thread_id(),
+        ida,
+        "New chat opened the running chat"
+    );
+    assert!(
+        !cabin.thinking_here(),
+        "a new chat shows Send while another chat works"
+    );
 }

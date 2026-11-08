@@ -1147,20 +1147,20 @@ fn followup_queue_drains_one_and_stays_off_a_run() {
     assert!(!cabin.running);
 
     let second = "second line stays queued".to_string();
-    cabin.followup_queue = vec!["/help".into(), second.clone()];
+    cabin.followup_queue = Vec::<String>::from(["/help".into(), second.clone()]).into();
     cabin.drain_followup_queue();
     assert_eq!(cabin.followup_queue, vec![second]);
     assert_eq!(cabin.status, help_status);
     assert_eq!(cabin.messages.as_ref(), composer.messages.as_ref());
     assert!(!cabin.running);
 
-    cabin.followup_queue = vec!["/approve".into()];
+    cabin.followup_queue = Vec::<String>::from(["/approve".into()]).into();
     cabin.drain_followup_queue();
     assert_eq!(cabin.status, "Unknown command — /help");
     assert!(!cabin.running);
 
     let sentence = "plain sentence with no grok".to_string();
-    cabin.followup_queue = vec![sentence.clone()];
+    cabin.followup_queue = Vec::<String>::from([sentence.clone()]).into();
     cabin.drain_followup_queue();
     assert_eq!(cabin.status, grokhub_core::XAI_NEED_SIGNIN);
     assert!(
