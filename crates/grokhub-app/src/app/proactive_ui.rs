@@ -111,10 +111,10 @@ impl Cabin {
     pub(super) fn proactive_candidates(&mut self, now: u64) -> Vec<Candidate> {
         let granted = self.proactive_granted();
         let work = self.proactive_work();
-        let health: Vec<String> = self
+        let health: Vec<grokhub_core::AutomationAlert> = self
             .automations
             .iter()
-            .filter_map(grokhub_core::automation_health_line)
+            .filter_map(grokhub_core::automation_alert)
             .collect();
         let watch = pro::Watch {
             cards: &self.updates,

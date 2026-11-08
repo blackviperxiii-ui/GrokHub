@@ -58,6 +58,10 @@ pub(super) struct SetupWizard {
     pub(super) speed_rx: Option<mpsc::Receiver<Result<String, String>>>,
     /// The last speed test's whole report, draft model verdict included.
     pub(super) speed_report: Option<String>,
+    /// The open Download models tab; Chat when none.
+    pub(super) lib_tab: Option<grokhub_core::local_setup::ModelTab>,
+    /// Models waiting their turn to download, next first.
+    pub(super) dl_queue: Vec<&'static grokhub_core::local_setup::LocalModel>,
 }
 
 /// Open on its own only on a fresh profile that hasn't finished or skipped it.
