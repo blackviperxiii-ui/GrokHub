@@ -718,6 +718,41 @@ fn wait_for_speed_test(want: Want) {
     }
 }
 
+/// Keep the model loaded through idle time ("Keep loaded" in Settings),
+/// until the app closes. The governor still unloads it for a game or when
+/// memory runs short.
+static KEEP_LOADED: AtomicBool = AtomicBool::new(false);
+
+pub fn set_keep_loaded(on: bool) {
+    KEEP_LOADED.store(on, Ordering::SeqCst);
+}
+
+pub fn keep_loaded() -> bool {
+    KEEP_LOADED.load(Ordering::SeqCst)
+}
+
+/// What the loaded model runs with, for the running-model rows.
+#[derive(Debug, Clone)]
+pub struct Loaded {
+    pub model: PathBuf,
+    pub launch: Option<LaunchArgs>,
+    /// The one-shot defaults with every GPU left out.
+    pub bare_cpu: bool,
+    pub idle_unload_secs: u64,
+}
+
+/// The loaded model, if one is.
+pub fn loaded() -> Option<Loaded> {
+    let slot = global_slot().lock().ok()?;
+    let side = slot.as_ref()?;
+    Some(Loaded {
+        model: side.model.clone(),
+        launch: side.launch.clone(),
+        bare_cpu: side.bare_cpu,
+        idle_unload_secs: side.idle_unload_secs,
+    })
+}
+
 /// Seconds since the model was last asked, answered or needed as the
 /// fallback.
 pub fn secs_since_use() -> u64 {
@@ -931,7 +966,7 @@ pub fn tick_idle_unload() {
         return;
     };
     // A request may have taken its guard while this waited for the lock.
-    if in_flight() > 0 {
+    if in_flight() > 0 || keep_loaded() {
         return;
     }
     let last = side
@@ -1463,6 +1498,31 @@ mod tests {
         LAST_DONE_SECS.store(now - 1_000, Ordering::SeqCst);
         tick_idle_unload();
         assert_eq!(global_pid(), None, "idle past the timeout unloads");
+    }
+
+    #[test]
+    fn a_kept_loaded_model_outlasts_the_idle_timeout_and_shows_as_loaded() {
+        let _one = SLOT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        stop_global();
+        let now = unix_secs();
+        *global_slot().lock().unwrap() = Some(idle_child_sidecar(600, now - 1_000));
+        LAST_DONE_SECS.store(now - 1_000, Ordering::SeqCst);
+        let l = loaded().expect("a running model shows as loaded");
+        assert_eq!(
+            (l.model, l.idle_unload_secs),
+            (PathBuf::from("m.gguf"), 600)
+        );
+        set_keep_loaded(true);
+        tick_idle_unload();
+        assert!(global_pid().is_some(), "keep loaded skips the idle unload");
+        set_keep_loaded(false);
+        tick_idle_unload();
+        assert_eq!(
+            global_pid(),
+            None,
+            "letting it unload goes back to the timeout"
+        );
+        assert!(loaded().is_none());
     }
 
     #[test]

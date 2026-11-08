@@ -354,6 +354,10 @@ struct Running {
     /// The verdict key and folder while it drafts.
     key: Option<(String, PathBuf)>,
     live: ld::Live,
+    /// The last reply's speed, and the guesses drafted and kept since launch.
+    tok_s: Option<f64>,
+    drafted: u64,
+    accepted: u64,
 }
 
 fn running() -> &'static Mutex<Running> {
@@ -371,7 +375,20 @@ pub fn launched(plan: &Plan, tune_dir: &Path) {
             _ => None,
         };
         r.live = ld::Live::default();
+        r.tok_s = None;
+        r.drafted = 0;
+        r.accepted = 0;
     }
+}
+
+/// The last reply's tokens per second, and the share of the drafter's
+/// guesses kept since the model loaded.
+pub fn reply_stats() -> (Option<f64>, Option<f64>) {
+    let Ok(r) = running().lock() else {
+        return (None, None);
+    };
+    let kept = (r.drafted > 0).then(|| r.accepted as f64 / r.drafted as f64);
+    (r.tok_s, kept)
 }
 
 /// The test's own servers are gone; the next launch says what runs.
@@ -403,6 +420,9 @@ pub fn note_reply(t: &Timing) {
 /// poorly. The running status says why from then on.
 fn live_verdict(t: &Timing, now: u64) -> Option<(PathBuf, String, ld::Verdict)> {
     let mut r = running().lock().ok()?;
+    r.tok_s = Some(t.tok_s);
+    r.drafted += t.drafted;
+    r.accepted += t.accepted.min(t.drafted);
     let (key, dir) = r.key.clone()?;
     let v = r.live.add(t, now)?;
     r.key = None;
