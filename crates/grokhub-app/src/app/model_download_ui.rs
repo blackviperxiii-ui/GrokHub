@@ -38,6 +38,9 @@ pub(super) struct ModelDl {
     pub(super) verifying: bool,
     /// A draft model: it doesn't become the installed model.
     drafter: bool,
+    /// When done, it becomes the model in use. Download models' later
+    /// chat models don't; the router picks among them.
+    pub(super) adopt: bool,
 }
 
 /// A download's progress as one Activity line.
@@ -200,7 +203,7 @@ impl Cabin {
     }
 
     /// `start_model_download` for a draft model, into its own folder.
-    fn start_drafter_download(&mut self, d: &'static LocalModel) {
+    pub(super) fn start_drafter_download(&mut self, d: &'static LocalModel) {
         #[cfg(test)]
         {
             tests::STARTED.with(|s| s.borrow_mut().push(d.id));
@@ -287,6 +290,7 @@ impl Cabin {
             total: Some(m.download_mb * MIB),
             verifying: false,
             drafter,
+            adopt: !drafter,
         });
     }
 
@@ -340,6 +344,7 @@ impl Cabin {
         };
         let m = dl.model;
         let drafter = dl.drafter;
+        let adopt = dl.adopt;
         let mut status = outcome_status(m, &out, &dl.dir);
         self.setup.dl = None;
         match out {
@@ -349,6 +354,7 @@ impl Cabin {
                 // until the speed test, run by hand or on its own, keeps it).
                 local_sidecar::stop_global();
             }
+            Outcome::Done(_) if !adopt => {}
             Outcome::Done(rec) => {
                 self.adopt_local_model(rec);
                 // Its draft model follows on its own; it's small, and the
@@ -360,7 +366,11 @@ impl Cabin {
                     return;
                 }
             }
-            _ => {}
+            Outcome::Paused { .. } => {}
+            _ => self.setup.dl_queue.clear(),
+        }
+        if let Some(next) = self.advance_queue() {
+            status.push_str(&format!(" Getting {next} next."));
         }
         self.status = status;
     }
@@ -501,7 +511,7 @@ impl Cabin {
 /// `free_mb` is `None` until the hardware read lands (or when it failed).
 /// Free disk on the drive that holds the models folder, read now. Tests use
 /// `tests::FREE_NOW` instead of the CI runner's disk.
-fn free_disk_now() -> Option<u64> {
+pub(super) fn free_disk_now() -> Option<u64> {
     #[cfg(test)]
     {
         tests::FREE_NOW.with(|f| f.get())
@@ -540,13 +550,13 @@ pub(super) fn download_confirm(m: &LocalModel, free_mb: Option<u64>) -> (String,
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::app) mod tests {
     use super::*;
     use std::io::Cursor;
 
     thread_local! {
         /// Models `start_model_download` was asked for in this test thread.
-        pub(super) static STARTED: std::cell::RefCell<Vec<&'static str>> =
+        pub(in crate::app) static STARTED: std::cell::RefCell<Vec<&'static str>> =
             const { std::cell::RefCell::new(Vec::new()) };
         /// What `free_disk_now` reads in this test thread.
         pub(super) static FREE_NOW: std::cell::Cell<Option<u64>> =
