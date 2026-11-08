@@ -72,10 +72,6 @@ impl FollowupQueue {
         self.items.iter().filter(|q| q.fits(thread)).count()
     }
 
-    pub(super) fn has_for(&self, thread: &str) -> bool {
-        self.items.iter().any(|q| q.fits(thread))
-    }
-
     /// A message typed in `thread` itself (not untagged) is ready to send
     /// the moment that chat is open and idle.
     pub(super) fn ready_for(&self, thread: &str) -> bool {
@@ -237,7 +233,7 @@ mod tests {
     fn untagged_messages_fit_any_chat_and_front_goes_first() {
         let mut q: FollowupQueue = vec!["x".to_string()].into();
         q.push_front("c", "first".into());
-        assert!(q.has_for("zzz"));
+        assert_eq!(q.count_for("zzz"), 1);
         assert_eq!(q.take_next_for("c").as_deref(), Some("first"));
         assert_eq!(q.take_next_for("zzz").as_deref(), Some("x"));
         assert!(q.is_empty());
