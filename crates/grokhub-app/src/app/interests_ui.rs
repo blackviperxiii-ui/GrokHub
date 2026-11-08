@@ -269,6 +269,8 @@ impl Cabin {
         self.ui_daily_drop(ui);
         self.ui_nudge_watchers(ui);
         ui.add_space(12.0);
+        self.ui_auto_fixes(ui);
+        ui.add_space(12.0);
         self.ui_pc_health_row(ui);
         self.ui_print_alerts(ui);
     }
@@ -287,6 +289,32 @@ pub(super) fn ledger_signal(reason: grokhub_core::pulse::LedgerReason) -> Option
         LedgerReason::Used | LedgerReason::Wrong => None,
     }
 }
+
+impl Cabin {
+    /// Offer first: every kind of fix waits for a tap until its switch is on.
+    pub(super) fn ui_auto_fixes(&mut self, ui: &mut egui::Ui) {
+        crate::cards::section_label(ui, AUTO_FIXES_TITLE);
+        crate::cards::help_text(ui, AUTO_FIXES_HELP);
+        ui.add_space(8.0);
+        for fix in grokhub_core::auto_fix::FixType::ALL {
+            let mut on = self.cfg.auto_fixes.is_on(fix);
+            if ui
+                .checkbox(
+                    &mut on,
+                    RichText::new(fix.label()).size(crate::theme::FONT_BODY),
+                )
+                .changed()
+            {
+                self.cfg.auto_fixes.set(fix, on);
+                self.persist_cfg();
+            }
+            crate::cards::settings_note(ui, fix.note());
+        }
+    }
+}
+
+pub(super) const AUTO_FIXES_TITLE: &str = "Fixes Loadout may apply on its own";
+pub(super) const AUTO_FIXES_HELP: &str = "Off means the card offers the fix and waits for your tap. On skips only the tap: anything that changes your computer still asks on its approval card first.";
 
 #[cfg(test)]
 mod tests {

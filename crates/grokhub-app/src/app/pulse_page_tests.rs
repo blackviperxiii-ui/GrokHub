@@ -1773,3 +1773,46 @@ fn a_crash_cards_chat_checks_that_program_by_the_cards_name() {
         Some(&("user".to_string(), "check into it for me".to_string()))
     );
 }
+
+#[test]
+fn a_crash_card_waits_for_a_tap_unless_its_switch_is_on() {
+    let mut quiet = QuietCabin::boot("pulse-auto-fix");
+    let cabin = &mut quiet.cabin;
+    cabin.updates.clear();
+    assert_eq!(cabin.cfg.auto_fixes, Default::default());
+
+    // Switch off (the default): the card posts and nothing runs.
+    let crash = crash_card();
+    let id = crash.id.clone();
+    cabin.post_feed_card(crash);
+    assert!(cabin.updates.iter().any(|c| c.id == id));
+    assert!(cabin.harness.card_look_rx.is_none());
+    assert!(!cabin.pulse_view.report_open.contains(&id));
+
+    // Switch on: the read-only look starts as the card arrives.
+    cabin.updates.clear();
+    cabin
+        .cfg
+        .auto_fixes
+        .set(grokhub_core::auto_fix::FixType::CrashCheck, true);
+    cabin.post_feed_card(crash_card());
+    assert!(cabin.harness.card_look_rx.is_some());
+    assert_eq!(
+        cabin.status,
+        "Checking bluetoothd's crash history (read only)…"
+    );
+    let start = std::time::Instant::now();
+    while cabin.harness.card_look_rx.is_some()
+        && start.elapsed() < std::time::Duration::from_secs(10)
+    {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        cabin.poll_card_look();
+    }
+    let receipts = cabin
+        .updates
+        .iter()
+        .find(|c| c.id == id)
+        .and_then(|c| c.pulse.report.as_ref())
+        .map(|r| r.receipts.len());
+    assert_eq!(receipts, Some(1));
+}

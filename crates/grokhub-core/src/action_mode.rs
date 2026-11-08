@@ -103,10 +103,12 @@ mod tests {
             label: "Look into the crashes".into(),
             prompt: "Read its crash history.".into(),
             kind: OfferKind::Look,
+            fix_type: None,
         };
         assert_eq!(action_mode(&offer_shape(&look)), ActionMode::Background);
         let ask = FixOffer {
             kind: OfferKind::Chat,
+            fix_type: None,
             ..look
         };
         assert_eq!(action_mode(&offer_shape(&ask)), ActionMode::Chat);

@@ -329,6 +329,7 @@ fn automation_candidate(alert: &crate::automation::AutomationAlert) -> Candidate
                 upper_first(&action)
             ),
             kind: crate::card_report::OfferKind::Chat,
+            fix_type: None,
         }],
         ..Default::default()
     });
@@ -1202,6 +1203,7 @@ mod tests {
                 label: "Find out why".into(),
                 prompt: "Find out why \"Morning brief\" keeps failing. Its last error was: OpenRouter has no credits left. Read its recent runs and say what broke and what would fix it. Change nothing yet.".into(),
                 kind: crate::card_report::OfferKind::Chat,
+                fix_type: None,
             }]
         );
         let once = automation_candidate(&crate::automation::AutomationAlert {
