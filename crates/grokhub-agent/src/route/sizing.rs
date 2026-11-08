@@ -15,8 +15,8 @@
 //! episode and turn, the same pair the ladder's step count uses. Nothing
 //! here is shown and nothing is a setting: the router just knows the size.
 //!
-//! The scorer that spends this in full (weights, the route ladder) is a
-//! later step; PR 5 lands the estimate, the long-task rules in
+//! The scorer that spends this in full (weights, the route ladder) is
+//! [`super::score`]; PR 5 lands the estimate, the long-task rules in
 //! [`super::Router::choose`] (no free provider models for a long task while
 //! a carrier route exists, paid routes ranked first) and the mid-turn
 //! upgrade state those rules read on the next call.

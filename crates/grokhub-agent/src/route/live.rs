@@ -19,7 +19,7 @@ use std::time::{Duration, SystemTime};
 use grokhub_core::model_registry::discover::split_provider_model;
 use grokhub_core::model_registry::profile::{read_profiles, ModelProfile};
 use grokhub_core::model_registry::store::{
-    append_observation, load_registry, profiles_dir, registry_path,
+    append_observation, load_quota, load_registry, profiles_dir, registry_path,
 };
 use grokhub_core::model_registry::{classify_status, health, CallStatus, Observation, Registry};
 
@@ -85,6 +85,10 @@ pub struct RouteCall<'a> {
     pub cloud_grant: bool,
     /// The step offers a send, delete, credential or other hard-class tool.
     pub hard_tool: bool,
+    /// Failover PR 6: the whole call is explicit (18+) — the router
+    /// keeps it on the device. Set by the call sites from the same
+    /// scrubbed input the send-time guard reads.
+    pub adult: bool,
     /// R3b: the call site can send to a provider you added (native calls only).
     pub providers: bool,
     /// The episode just re-planned: one model and one rung up for this call only.
@@ -917,6 +921,10 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         // Failover PR 5: whether a local model is already loaded, for the
         // warm-local default. Never starts the sidecar to find out.
         local_warm: super::local::warm_runtime().is_some(),
+        // Failover PR 6: the scorer's hard filters read the quota ledger
+        // (PR 3) and the turn's explicitness, decided by the call site.
+        quota: load_quota(config_dir),
+        adult: call.adult,
     };
     let mut route = Router::choose(&input, &reg, &profiles, &table, now_ms);
     if let (Some(a), Some(p), Some((band, own))) = (&ask, &input.pick, chat_band)
@@ -1645,6 +1653,9 @@ pub fn stream_routed(
         needs_image,
         needs_tools: !req.tools.is_empty() || req.hosted_search,
         providers: true,
+        // Failover PR 6: the router hears the turn is explicit up
+        // front, from the same scrubbed input the guard below reads.
+        adult: super::adult::explicit(&sent.input),
         ..RouteCall::default()
     };
     let now = grokhub_core::now_ms();

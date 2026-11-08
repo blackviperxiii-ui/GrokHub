@@ -48,6 +48,7 @@ pub mod policy;
 pub mod providers;
 pub mod quota;
 pub mod refresh;
+pub mod score;
 pub mod session_metrics;
 pub mod signals;
 pub mod sizing;
@@ -265,6 +266,9 @@ pub fn call_model(
         ..RouteCall::default()
     };
     rc.providers = true;
+    // Failover PR 6: the router hears the turn is explicit up front,
+    // from the same scrubbed input the guard below reads.
+    rc.adult = adult::explicit(&sent.input);
     let now = grokhub_core::now_ms();
     let decision = live::decide(&dir, &rc, now);
     if decision.paused() {
@@ -415,6 +419,14 @@ pub struct RouteInput<'a> {
     /// estimate, the warm model takes the turn by default
     /// ([`sizing::warm_local_default`]).
     pub local_warm: bool,
+    /// Failover PR 3's quota ledger, as last detected: the scorer's hard
+    /// filters read it, so a closed, spent or benched route is never
+    /// picked in the first place (failover PR 6).
+    pub quota: grokhub_core::model_registry::quota::QuotaLedger,
+    /// The whole call is explicit (18+): the device is its only route —
+    /// [`Router::choose`] keeps it local when the device is a candidate,
+    /// and the scorer bars every cloud candidate outright.
+    pub adult: bool,
 }
 
 /// The lowest rung an xAI reasoning model takes without a listing that says otherwise.
@@ -686,6 +698,7 @@ impl Router {
         table: &RoutingTable,
         e2: bool,
         stronger: bool,
+        now_ms: u64,
         rules: &mut Vec<String>,
     ) -> ModelPick {
         let current = input.current_model.trim();
@@ -722,22 +735,23 @@ impl Router {
                 policy::is_new_provider(reg, m) && table.row(input.lane(), m).is_none()
             });
         };
-        // Failover PR 5: on a long task the paid routes carry it, and within
-        // them the plan (xAI) outranks every provider, table rows included —
-        // a free model's small allowance is not what a long task spends
-        // itself on (rule corrected 2026-11-07: no free for long runs, paid
-        // before local; the order inside the paid routes is the scorer's
-        // call). The full route ladder lands with the scorer.
-        let long_task = input.size.is_some_and(|s| s.size == sizing::TaskSize::Long);
-        let long_first = |ranked: &mut Vec<String>, rules: &mut Vec<String>| {
-            if !long_task {
-                return;
-            }
-            let before = ranked.first().cloned();
-            ranked.sort_by_key(|m| policy::is_new_provider(reg, m));
-            if ranked.first() != before.as_ref() {
-                rules.push("size:long:xai_first".into());
-            }
+        // Failover PR 6: the scorer's read of this pick — the quota
+        // ledger, the task's size and needs, the turn's goal, and the
+        // hard facts (sensitive, explicit, the governor's level) its
+        // filters run on. It orders every ranked list below in place of
+        // PR 5's placeholder long-task sort: hard filters first, then
+        // the route ladder — tiers by route and size, the weighed score
+        // inside a tier (see score::order).
+        let score_ctx = score::ScoreCtx {
+            lane: input.lane(),
+            size: input.size,
+            goal: input.goal.as_ref().map(|g| g.goal),
+            sensitive: input.local.sensitive,
+            adult: input.adult,
+            level: input.local.capacity.level,
+            quota: &input.quota,
+            ctx_tokens: input.ctx_tokens,
+            now_ms,
         };
         let attn = attention::decide(&attention::AttentionInput {
             class: input.lane(),
@@ -775,8 +789,8 @@ impl Router {
             } else {
                 &fitting
             };
-            let mut ranked =
-                policy::rank(input.lane(), pool, table, reg, current, input.ctx_tokens);
+            let ranked = policy::rank(input.lane(), pool, table, reg, current, input.ctx_tokens);
+            let mut ranked = score::order(ranked, reg, table, &score_ctx, true, rules);
             if e2 {
                 let away = input.episode_model.unwrap_or(current).trim().to_string();
                 ranked.retain(|m| *m != away);
@@ -848,7 +862,7 @@ impl Router {
             let mut ranked =
                 policy::rank(input.lane(), pool, table, reg, current, input.ctx_tokens);
             xai_first(&mut ranked);
-            long_first(&mut ranked, rules);
+            let ranked = score::order(ranked, reg, table, &score_ctx, true, rules);
             let chain = policy::fallback_chain(from, pool);
             match chain.first().or(ranked.first()) {
                 Some(m) => {
@@ -889,7 +903,16 @@ impl Router {
                     input.ctx_tokens,
                 );
                 xai_first(&mut ranked);
-                long_first(&mut ranked, rules);
+                // Attention already ranked this turn when it speaks up:
+                // the scorer then filters only, never re-weighs it.
+                let ranked = score::order(
+                    ranked,
+                    reg,
+                    table,
+                    &score_ctx,
+                    attn.kind == attention::Attention::Stay,
+                    rules,
+                );
                 let stronger = attn.kind.breaks_episode_sticky()
                     && ranked.first().is_some_and(|m| m.as_str() != ep);
                 if !stronger {
@@ -1003,7 +1026,14 @@ impl Router {
             input.ctx_tokens,
         );
         xai_first(&mut ranked);
-        long_first(&mut ranked, rules);
+        let mut ranked = score::order(
+            ranked,
+            reg,
+            table,
+            &score_ctx,
+            attn.kind == attention::Attention::Stay,
+            rules,
+        );
         long_context_first(&mut ranked, reg, input.lane(), input.ctx_tokens, rules);
         if e2 {
             let away = input.episode_model.unwrap_or(current).trim().to_string();
@@ -1230,6 +1260,14 @@ impl Router {
         } else {
             None
         };
+        // Failover PR 6: an explicit (18+) call's only candidate is the
+        // device — the hard filter at the pick itself, ahead of the
+        // warm-local default and every cloud branch.
+        let adult_local = if input.adult {
+            ids.iter().find(|id| local::is_local(id)).copied()
+        } else {
+            None
+        };
         let chosen = if gov_paused && input.local.sensitive && !input.local.cloud_grant {
             // Sensitive data stays on the device, and the device is paused.
             local_paused(&mut rules)
@@ -1299,7 +1337,7 @@ impl Router {
             // PR E: on-device answer failed verify — pick cloud and name both models.
             let local_tier = input.local.tier.clone();
             let mut pick = Self::pick_model(
-                input, reg, profiles, &cloud_ids, table, e2, stronger, &mut rules,
+                input, reg, profiles, &cloud_ids, table, e2, stronger, now_ms, &mut rules,
             );
             let no_keys = no_cloud_route(&rules, &pick);
             if !pick.no_route && !local::is_local(&pick.model) && !no_keys {
@@ -1332,6 +1370,20 @@ impl Router {
                 }
             }
             pick
+        } else if let Some(id) = adult_local {
+            // The 18+ hard filter: an explicit call runs on the device,
+            // full stop — never OpenRouter, never Claude, never xAI, no
+            // score argues with it. The device has to be a candidate for
+            // the step; when it is not (the runtime off, the governor's
+            // Unload), the pick falls through and the send path's own
+            // guard still forces the turn local or answers with the
+            // notice, so no cloud model ever sees it either way.
+            rules.push("adult:local_only".into());
+            ModelPick {
+                model: id.to_string(),
+                no_route: false,
+                replaced: None,
+            }
         } else if let Some(id) = warm_local {
             // The warm-local default (above): the loaded device model takes
             // this less challenging turn. The one place the device wins over
@@ -1354,8 +1406,9 @@ impl Router {
             } else {
                 &cloud_ids
             };
-            let mut pick =
-                Self::pick_model(input, reg, profiles, pool, table, e2, stronger, &mut rules);
+            let mut pick = Self::pick_model(
+                input, reg, profiles, pool, table, e2, stronger, now_ms, &mut rules,
+            );
             // No sign-in or key and no provider you added took it: no cloud model can answer.
             let no_keys = no_cloud_route(&rules, &pick);
             // Cloud pool empty + local already won: retag as cloud_down.
@@ -1369,7 +1422,7 @@ impl Router {
                 rules.push("local:escalate_hard".into());
                 let from = pick.model.clone();
                 pick = Self::pick_model(
-                    input, reg, profiles, &cloud_ids, table, e2, stronger, &mut rules,
+                    input, reg, profiles, &cloud_ids, table, e2, stronger, now_ms, &mut rules,
                 );
                 if !pick.no_route {
                     pick.replaced = Some(from);
@@ -1648,6 +1701,9 @@ mod r3b_tests;
 
 #[cfg(test)]
 mod sizing_tests;
+
+#[cfg(test)]
+mod score_tests;
 
 #[cfg(test)]
 mod goal_tests;
