@@ -19,9 +19,18 @@
 # disk never matches a row. The banned-ask check (`adult_guard.rs` and the
 # agent's route screen) runs in front of these like any other model.
 #
+# `kind` says what a row is for: chat (the default), drafter,
+# vision-projector, image, image-guard, speech-to-text, text-to-speech, embed,
+# rerank, ocr or guard. Only chat rows count toward the 25 standard models
+# (`local_setup::STANDARD_MODEL_CAP`). A drafter or projector names its chat
+# model in `pairs_with`.
+#
+# `abliterated = { by, method }` is required on every chat row: who removed
+# the refusals and how (`abliteration` or `heretic`). `refusal_score` is the
+# share of the refusal check's prompts the model answered, once measured.
+#
 # Only the main GGUF downloads; the repos' vision projector
-# (`mmproj-model-bf16.gguf`) and MTP draft head (`mtp-ggml-model-bf16.gguf`)
-# are not fetched or pinned here.
+# (`mmproj-model-bf16.gguf`) isn't fetched yet, so no row claims vision.
 
 [[model]]
 id = "gemma-4-31b-it-abliterated-q4_k"
@@ -32,7 +41,9 @@ sha256 = "01fa18ad51c7d31ce738ec8206add7326a96d8a2db044a88f8df05c678c0f8c0"
 download_mb = 17_821
 quant = "Q4_K"
 license = "Apache-2.0"
-badges = ["tools", "vision"]
+kind = "chat"
+abliterated = { by = "huihui-ai", method = "abliteration" }
+badges = ["tools"]
 tier = "T4"
 route = "local:small"
 ctx_default = 32_768
@@ -52,7 +63,9 @@ sha256 = "4b4f9d4b448fca16230f08d50c18a95c81ecfaefede95d3bdfcf1880b4b620f5"
 download_mb = 16_018
 quant = "Q4_K"
 license = "Apache-2.0"
-badges = ["tools", "vision", "moe"]
+kind = "chat"
+abliterated = { by = "huihui-ai", method = "abliteration" }
+badges = ["tools", "moe"]
 tier = "T3"
 route = "local:small"
 ctx_default = 16_384
@@ -74,7 +87,9 @@ sha256 = "8cfe39c96b966b2bc99d908315404914e9128fb35e134ca36f1a199507d6da6b"
 download_mb = 7_039
 quant = "Q4_K"
 license = "Apache-2.0"
-badges = ["tools", "vision"]
+kind = "chat"
+abliterated = { by = "huihui-ai", method = "abliteration" }
+badges = ["tools"]
 tier = "T3"
 route = "local:small"
 ctx_default = 16_384
@@ -94,7 +109,9 @@ sha256 = "64434f2da081f912729e5c4732def7303eb5244d3fee493b9675bc4e9af52d4c"
 download_mb = 5_057
 quant = "Q4_K"
 license = "Apache-2.0"
-badges = ["tools", "vision"]
+kind = "chat"
+abliterated = { by = "huihui-ai", method = "abliteration" }
+badges = ["tools"]
 tier = "T2"
 route = "local:small"
 ctx_default = 8_192
@@ -114,7 +131,9 @@ sha256 = "6bc1f421ba870b01a2efbb6904a28bda0ae3ccde57b18eb5e9203c3db05effe9"
 download_mb = 3_258
 quant = "Q4_K"
 license = "Apache-2.0"
-badges = ["tools", "vision"]
+kind = "chat"
+abliterated = { by = "huihui-ai", method = "abliteration" }
+badges = ["tools"]
 tier = "T1"
 route = "local:tiny"
 ctx_default = 8_192
