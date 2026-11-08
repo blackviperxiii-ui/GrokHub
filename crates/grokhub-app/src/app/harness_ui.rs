@@ -290,6 +290,8 @@ pub(super) struct HarnessState {
     /// A retry / backtrack turn, sent once the live reply and the user's
     /// queued messages are done.
     pub repair: Option<String>,
+    /// The chat `repair` belongs to: it only ever sends there.
+    pub repair_thread: Option<String>,
     /// The last finished reply's prose, for the turn-end audit. `None` when
     /// that turn was not on the visible chat.
     pub last_reply: Option<String>,
@@ -1122,6 +1124,11 @@ impl Cabin {
         match step.rung {
             hx::Rung::Retry | hx::Rung::Backtrack | hx::Rung::Replan => {
                 self.harness.repair = step.prompt;
+                self.harness.repair_thread = Some(
+                    self.chat_job_thread
+                        .clone()
+                        .unwrap_or_else(|| self.visible_thread_id()),
+                );
                 if self.chrome_here() {
                     self.status = snap.status_line();
                 }
@@ -1182,13 +1189,24 @@ impl Cabin {
     /// The repair turn goes once nothing of the user's is waiting. Returns
     /// true when it was sent.
     pub(super) fn kick_repair(&mut self) -> bool {
-        match self.harness.repair.take() {
-            Some(prompt) => {
-                self.send_chat(prompt);
-                true
-            }
-            None => false,
+        let owner = self.harness.repair_thread.take();
+        let Some(prompt) = self.harness.repair.take() else {
+            return false;
+        };
+        // A retry for a chat that's no longer on screen is dropped, never
+        // sent into the chat that is.
+        let here = self.visible_thread_id();
+        if owner.as_deref().is_some_and(|t| !t.is_empty() && t != here) {
+            let trace = self.trace_id();
+            let mut span = hx::Span::deny(&trace, hx::RECOVERY_TOOL, "{}", "skip", "soft")
+                .from_origin(hx::Origin::Repair);
+            span.decision = "skip".into();
+            span.claim = "its chat is no longer on screen".into();
+            self.write_span(span, "audit");
+            return false;
         }
+        self.send_chat(prompt);
+        true
     }
 
     /// A message the user queued goes first; the pending repair turn is
@@ -2432,7 +2450,7 @@ mod tests {
         // and a pending repair turn gives way with a span.
         cabin.running = false;
         cabin.harness.repair = Some("GrokHub's check: retry".into());
-        cabin.followup_queue = vec!["also rename the folder".into()];
+        cabin.followup_queue = Vec::<String>::from(["also rename the folder".into()]).into();
         cabin.drain_followup_queue();
         assert!(cabin.followup_queue.is_empty());
         assert_eq!(cabin.harness.repair, None);

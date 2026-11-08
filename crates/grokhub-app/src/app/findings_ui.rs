@@ -143,7 +143,11 @@ impl Cabin {
         if !self.running && self.pending_kick.is_none() {
             return false;
         }
-        self.followup_queue.extend(rest);
+        let here = self
+            .chat_job_thread
+            .clone()
+            .unwrap_or_else(|| self.visible_thread_id());
+        self.followup_queue.extend(&here, rest);
         self.status = format!("{DO_ALL}: 1 of {fixes} running");
         true
     }

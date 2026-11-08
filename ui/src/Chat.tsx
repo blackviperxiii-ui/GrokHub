@@ -512,6 +512,15 @@ export function Chat({
   const touched = useRef(false);
 
   const [busy, setBusy] = useState(false);
+  /** The chat whose reply is running. Another chat opened meanwhile (Clear
+   * chat, or deleting the open one) shows Send, and its messages wait. */
+  const [runIn, setRunIn] = useState<string>();
+  /** The chat on screen now, read after a reply ends. */
+  const openNow = useRef(conversationId);
+  useEffect(() => {
+    openNow.current = conversationId;
+  }, [conversationId]);
+  const busyHere = busy && runIn === conversationId;
   const [error, setError] = useState<string | null>(null);
   const busyRef = useRef(false);
   /** Messages sent while a reply runs wait here, in order, and show only in
@@ -584,7 +593,19 @@ export function Chat({
   }
 
   /** A new conversation; the old one stays saved for History. */
+  function changeQueue(next: string[]) {
+    queueRef.current = next;
+    setQueue(next);
+  }
+
   function startFresh() {
+    // Messages lined up in the chat being left go back in the box, never
+    // into the new chat by themselves.
+    const waiting = queueRef.current;
+    if (waiting.length > 0) {
+      changeQueue([]);
+      setDraft((now) => withQueued(now, waiting));
+    }
     leaveSides();
     touched.current = true;
     setGoalAsk(null);
@@ -743,11 +764,6 @@ export function Chat({
     startFresh();
   }
 
-  function changeQueue(next: string[]) {
-    queueRef.current = next;
-    setQueue(next);
-  }
-
   /** Sends `text` and `files`. `as` (`/plan <text>`, a plan's follow-up chip)
    * names how it runs; otherwise `/plan` or `/chat` before it did, or the app
    * reads the message. `fromDraft` empties the box and its files; a tapped
@@ -776,6 +792,8 @@ export function Chat({
     setAck(null);
     busyRef.current = true;
     setBusy(true);
+    const from = conversationId;
+    setRunIn(from);
     const runs = as ?? nextAs.current;
     nextAs.current = undefined;
     let stop = "";
@@ -788,12 +806,16 @@ export function Chat({
     // After the catch rather than in a finally, which React Compiler can't compile yet.
     busyRef.current = false;
     setBusy(false);
-    setItems(stop === HALTED_STOP ? settleHalted : settle);
+    setRunIn(undefined);
+    // Another chat opened meanwhile: what waits now was typed there, so it
+    // goes, and the lines on screen are that chat's, not this reply's.
+    const moved = openNow.current !== from;
+    if (!moved) setItems(stop === HALTED_STOP ? settleHalted : settle);
     // The reply ended well: the next queued message goes. Halt, Stop or a
     // failure sends nothing more; what waited goes back in the box.
     const waiting = queueRef.current;
     if (waiting.length === 0) return;
-    if (stop && stop !== HALTED_STOP && stop !== "cancelled") {
+    if (moved || (stop && stop !== HALTED_STOP && stop !== "cancelled")) {
       changeQueue(waiting.slice(1));
       setNextUp((now) => ({ text: waiting[0], n: (now?.n ?? 0) + 1 }));
     } else {
@@ -1030,8 +1052,9 @@ export function Chat({
     if (busy) {
       if (!text || (isSlashCommand(text) && !/^\/(btw|side)\s+\S/i.test(text))) return;
       setDraft("");
-      // The web app lines messages up behind the reply, as before.
-      if (remote) {
+      // The web app lines messages up behind the reply, as before. In a chat
+      // opened while another chat's reply ends, the message waits for it.
+      if (remote || !busyHere) {
         changeQueue([...queueRef.current, text]);
         return;
       }
@@ -1253,7 +1276,7 @@ export function Chat({
         {!remote && (
           <Mic onText={(words) => setDraft((now) => appendDraft(now, words))} onError={setError} busy={busy} active={active} />
         )}
-        {busy ? (
+        {busyHere ? (
           <>
             {draft.trim() && !isSlashCommand(draft.trim()) && (
               <button
@@ -1269,7 +1292,7 @@ export function Chat({
             </button>
           </>
         ) : (
-          <button type="submit" disabled={!draft.trim() && attach.files.length === 0}>
+          <button type="submit" disabled={!draft.trim() && (busy || attach.files.length === 0)}>
             Send
           </button>
         )}

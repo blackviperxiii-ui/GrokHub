@@ -2261,7 +2261,7 @@ fn quiet_cabin() -> Cabin {
         tokens_seen: (0, 0, 0),
         grok_commands: Vec::new(),
         grok_tasks: Vec::new(),
-        followup_queue: Vec::new(),
+        followup_queue: Default::default(),
         side: Default::default(),
         forced_route: None,
         last_turn_read: None,

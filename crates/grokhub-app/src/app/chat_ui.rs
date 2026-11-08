@@ -985,11 +985,12 @@ impl Cabin {
         let settle = crate::theme::animate_selection_secs(
             ui,
             egui::Id::new("composer-glow-stream"),
-            self.running,
+            self.thinking_here(),
             grokhub_core::GLOW_SETTLE_SECS,
         );
-        if self.running || settle > 0.01 {
-            crate::fx::paint_composer_glow_at(ui, pill, self.running);
+        let here = self.thinking_here();
+        if here || settle > 0.01 {
+            crate::fx::paint_composer_glow_at(ui, pill, here);
         }
     }
 }
@@ -2383,7 +2384,8 @@ impl Cabin {
         }
         ui.ctx().data_mut(|d| d.insert_temp(row_h_id, next_heights));
         self.panels = panels;
-        self.followup_queue.extend(panel_followups);
+        let here = self.visible_thread_id();
+        self.followup_queue.extend(&here, panel_followups);
         act
     }
 
@@ -2679,7 +2681,7 @@ impl Cabin {
             crate::motion::paint_thinking_rim(
                 ui.painter(),
                 framed.response.rect,
-                self.running,
+                self.thinking_here(),
                 time,
             );
             // Primary one-shot breath envelope (Allow row); composer_breath while running.
@@ -2802,7 +2804,7 @@ impl Cabin {
     /// The last reply says an 18+ chat needs this computer's model and none is
     /// set up: one pill under the chat opens Local AI to download one.
     pub(super) fn needs_local_for_adult(&self) -> bool {
-        !self.running
+        !self.thinking_here()
             && self.messages.last().is_some_and(|(role, text)| {
                 role == "assistant" && text.trim() == grokhub_core::adult_guard::LOCAL_ONLY_MISSING
             })
@@ -3178,7 +3180,7 @@ impl Cabin {
                         ui.add_space(6.0);
                         // While a reply streams the row's chips are for the
                         // last turn, so the row waits for the turn to end.
-                        let chips = if self.running {
+                        let chips = if self.thinking_here() {
                             Vec::new()
                         } else {
                             self.composer_chips()

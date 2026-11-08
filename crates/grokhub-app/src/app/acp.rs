@@ -310,11 +310,16 @@ impl Cabin {
                     self.scheduled_perm = false;
                     self.status = self.apply_job_fail(&e);
                     // Queued steps (Do all's rest) wait; say how to pick them up.
-                    if !self.followup_queue.is_empty() {
+                    let failed_in = self
+                        .chat_job_thread
+                        .clone()
+                        .unwrap_or_else(|| self.visible_thread_id());
+                    self.followup_queue.pause_for(&failed_in);
+                    let waiting = self.followup_queue.count_for(&failed_in);
+                    if waiting > 0 {
                         self.status = format!(
                             "{} · {} waiting, say continue to carry on",
-                            self.status,
-                            self.followup_queue.len()
+                            self.status, waiting
                         );
                     }
                     self.interrupt_turn_card(InterruptCause::from_failure(&e));
@@ -894,17 +899,38 @@ impl Cabin {
         }
     }
 
+    /// The next message waiting for the chat on screen. A message typed in
+    /// another chat stays in line for that chat (see [`Self::send_waiting_here`]).
     pub(super) fn drain_followup_queue(&mut self) {
         if self.running {
             return;
         }
-        let Some(next) = self.followup_queue.first().cloned() else {
+        let here = self.visible_thread_id();
+        let Some(next) = self.followup_queue.take_next_for(&here) else {
             self.kick_repair();
             return;
         };
-        self.followup_queue.remove(0);
+        self.followup_queue.forget_try();
         self.harness_user_queued();
         self.send_chat(next);
+    }
+
+    /// Each frame: a chat is open with messages typed in it still waiting
+    /// (its reply ended while another chat was on screen) and nothing runs,
+    /// so its next message goes now. A failed reply's line waits for
+    /// "continue". One try per chat and line length, so a send that never
+    /// starts can't repeat every frame.
+    pub(super) fn send_waiting_here(&mut self) {
+        if self.running || self.pending_kick.is_some() || self.followup_queue.is_empty() {
+            return;
+        }
+        let here = self.visible_thread_id();
+        if !self.followup_queue.ready_for(&here) {
+            return;
+        }
+        if self.followup_queue.first_try_for(&here) {
+            self.drain_followup_queue();
+        }
     }
 
     pub(super) fn thinking_status(&self) -> String {

@@ -509,7 +509,7 @@ fn the_live_work_strip_offers_steer_and_queue_and_activity_holds_the_rest() {
     cabin.running = true;
     cabin.chat_job_thread = Some(id.clone());
     cabin.composer = "make it blue".into();
-    cabin.followup_queue = vec!["then deploy".into()];
+    cabin.followup_queue = Vec::<String>::from(["then deploy".into()]).into();
     cabin.bg.runs.push(super::background::BgRun {
         id: 7,
         thread_id: id.clone(),
