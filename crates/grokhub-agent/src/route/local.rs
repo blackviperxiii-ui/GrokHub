@@ -331,11 +331,19 @@ pub fn tier_for(d: Device) -> &'static str {
 
 /// The downshift ladder: only which tier is live changes.
 pub fn set_device(d: Device) {
+    LOW_BATTERY.store(d.battery_low, Ordering::SeqCst);
     let t = tier_for(d);
     TIER.store(
         TIERS.iter().position(|x| *x == t).unwrap_or(0),
         Ordering::SeqCst,
     );
+}
+
+static LOW_BATTERY: AtomicBool = AtomicBool::new(false);
+
+/// The device's battery is low (the last [`set_device`]).
+pub fn low_battery() -> bool {
+    LOW_BATTERY.load(Ordering::SeqCst)
 }
 
 pub fn live_tier() -> &'static str {

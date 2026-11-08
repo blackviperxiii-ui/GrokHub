@@ -22,6 +22,7 @@ import {
   type LocalManual,
   type LocalModelRow,
 } from "./api";
+import { ModelLibrary } from "./ModelLibrary";
 import { Toggle } from "./Toggle";
 import { PRODUCT_NAME } from "./brand";
 
@@ -641,6 +642,7 @@ export function LocalAi() {
           {note.text}
         </p>
       )}
+      <ModelLibrary />
     </section>
   );
 }

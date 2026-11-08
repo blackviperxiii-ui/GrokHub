@@ -54,6 +54,14 @@ pub(super) struct SetupWizard {
     pub(super) confirm_free_mb: Option<u64>,
     /// Auto setup's state for this launch.
     pub(super) auto: super::auto_setup_ui::AutoSetup,
+    /// The local speed test running off the UI thread.
+    pub(super) speed_rx: Option<mpsc::Receiver<Result<String, String>>>,
+    /// The last speed test's whole report, draft model verdict included.
+    pub(super) speed_report: Option<String>,
+    /// The open Download models tab; Chat when none.
+    pub(super) lib_tab: Option<grokhub_core::local_setup::ModelTab>,
+    /// Models waiting their turn to download, next first.
+    pub(super) dl_queue: Vec<&'static grokhub_core::local_setup::LocalModel>,
 }
 
 /// Open on its own only on a fresh profile that hasn't finished or skipped it.
@@ -243,6 +251,7 @@ impl Cabin {
         }
         self.poll_model_download();
         self.poll_runtime_download();
+        self.poll_speed_test();
         if self.cfg.local_model && !self.setup.engine_checked {
             self.setup.engine_checked = true;
             self.ensure_local_engine();
