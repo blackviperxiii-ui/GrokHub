@@ -1382,13 +1382,15 @@ pub fn policy_refusal(status: u16, message: &str) -> bool {
 }
 
 /// OpenRouter's own free router, a model id like any other.
-pub const OPENROUTER_FREE_ROUTER: &str = "openrouter/free";
+pub const OPENROUTER_FREE_ROUTER: &str =
+    grokhub_core::model_registry::discover::OPENROUTER_FREE_ROUTER;
 
 /// A free tier on OpenRouter: a `:free` variant or its free router. Takes the
 /// wire model (`google/x:free`) or the registry id (`openrouter/google/x:free`).
+/// The one definition lives in the core registry, where the model card's
+/// route classification reads it too.
 pub fn is_free_model(id: &str) -> bool {
-    let id = id.trim();
-    id.ends_with(":free") || id == OPENROUTER_FREE_ROUTER || id.ends_with("/openrouter/free")
+    grokhub_core::model_registry::discover::is_free_model(id)
 }
 
 /// One of OpenRouter's routers (`openrouter/free`, `openrouter/auto`, ...)

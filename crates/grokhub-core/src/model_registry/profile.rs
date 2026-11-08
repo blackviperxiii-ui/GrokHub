@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::record::{ModelMeta, Prices};
+use super::record::{ModelCard, ModelMeta, Prices};
 use super::store::{profiles_dir, read_json, safe_file_stem, write_json};
 use super::EFFORT_LADDER;
 
@@ -34,6 +34,9 @@ pub struct ProfileMeta {
     pub default_effort: Option<String>,
     pub api_shape: Option<String>,
     pub prices: Prices,
+    /// The model card as the refresh filled it (route, priors, roles).
+    #[serde(default, skip_serializing_if = "ModelCard::is_empty")]
+    pub card: ModelCard,
 }
 
 impl From<&ModelMeta> for ProfileMeta {
@@ -49,6 +52,7 @@ impl From<&ModelMeta> for ProfileMeta {
             default_effort: m.default_effort.clone(),
             api_shape: m.api_shape.clone(),
             prices: m.prices.clone(),
+            card: m.card.clone(),
         }
     }
 }
@@ -315,6 +319,7 @@ mod tests {
             prices: Prices {
                 prompt: Some(30_000),
                 cached: Some(7_500),
+                cache_write: None,
                 completion: Some(150_000),
                 prompt_long: None,
                 completion_long: None,

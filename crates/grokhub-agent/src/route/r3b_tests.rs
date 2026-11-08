@@ -2836,6 +2836,38 @@ fn an_openrouter_long_context_step_reaches_the_ceiling_and_the_cost() {
     );
 }
 
+#[test]
+fn a_claude_row_becomes_auto_pickable_once_the_bundled_table_prices_it() {
+    // Anthropic's own listing names no prices, so before the model card
+    // table the row could never enter Auto's pool.
+    let body = r#"{"data":[{"id":"claude-sonnet-5.5","type":"model","display_name":"Sonnet",
+        "max_input_tokens":1000000,"max_tokens":128000,
+        "capabilities":{"effort":{"levels":["low","medium","high"]}}}]}"#;
+    let rows = grokhub_core::model_registry::parse_anthropic_catalog("anthropic", body).unwrap();
+    let need = providers::PickNeed {
+        tools: true,
+        reasoning: true,
+        ctx_tokens: 10_000,
+        ceiling_usd_per_m: 15.0,
+    };
+    assert!(
+        !providers::auto_pickable("anthropic/claude-sonnet-5.5", &rows[0], &need),
+        "no prices in the listing: never pickable"
+    );
+    let mut reg = Registry::default();
+    reg.apply_refresh(&[Listing::new(SourceKind::Anthropic, rows)], &[], 1);
+    let rec = reg.get("anthropic/claude-sonnet-5.5").unwrap();
+    assert_eq!(rec.route(), grokhub_core::model_registry::Route::Anthropic);
+    // The bundled table priced it ($10/M out, under the $15 ceiling) and
+    // filled its window, so the same filter now lets it in.
+    assert!(providers::auto_pickable(
+        "anthropic/claude-sonnet-5.5",
+        &rec.meta,
+        &need
+    ));
+    assert_eq!(rec.meta.prices.cache_write, Some(25_000));
+}
+
 /// A wire that answers every call 402: the account is out of credit.
 #[derive(Default)]
 struct BrokeWire(Mutex<Vec<Sent>>);

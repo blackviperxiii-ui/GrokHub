@@ -3,6 +3,7 @@
 //! traffic moves health ([`health`]); nothing here touches the network.
 //! Stored at `{config}/models/registry.json`.
 
+pub mod card;
 pub mod cost_class;
 pub mod discover;
 pub mod entitlement;
@@ -27,7 +28,8 @@ pub use discover::{
 pub use entitlement::{tier_notice, Credential, Entitlement};
 pub use health::{classify_status, CallStatus, Observation};
 pub use record::{
-    model_id_stem, Breaker, ModelMeta, ModelRecord, ModelState, Notice, Prices, SourceKind,
+    model_id_stem, Breaker, CapabilityScores, DataPolicy, ModelCard, ModelMeta, ModelRecord,
+    ModelState, Notice, Prices, Reliability, Route, SourceKind,
 };
 
 pub const REGISTRY_SCHEMA: u32 = 1;
@@ -52,7 +54,7 @@ pub enum RegistryEvent {
     Removed {
         id: String,
     },
-    /// `what` is any of `price`, `context`, `efforts`, `endpoint`, `notice`.
+    /// `what` is any of `price`, `context`, `efforts`, `endpoint`, `notice`, `card`.
     Changed {
         id: String,
         what: Vec<String>,
@@ -120,6 +122,9 @@ fn changed_kinds(old: &ModelMeta, new: &ModelMeta) -> Vec<String> {
     }
     if (&old.notice, old.deprecated) != (&new.notice, new.deprecated) {
         what.push("notice".into());
+    }
+    if old.card != new.card {
+        what.push("card".into());
     }
     what
 }
@@ -295,6 +300,10 @@ impl Registry {
                 // ids): the known prices and window stand in. An API row keeps its own.
                 seed::fill(meta);
             }
+            // The model card: stamp the route and fill the priors the
+            // bundled table ships (Claude's prices among them — its own
+            // listing names none). A listing's own figures stay.
+            card::fill(meta, sources);
             let hash = meta.content_hash();
             let rec = match self.models.get_mut(id) {
                 Some(rec) => {

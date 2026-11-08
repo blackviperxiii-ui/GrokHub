@@ -582,6 +582,7 @@ mod tests {
         let p = Prices {
             prompt: Some(20_000),
             cached: Some(5_000),
+            cache_write: None,
             completion: Some(100_000),
             prompt_long: Some(40_000),
             completion_long: Some(200_000),
