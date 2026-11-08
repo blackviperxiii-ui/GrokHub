@@ -153,6 +153,11 @@ struct HubInner {
 }
 
 /// One session's background commands, monitors, and pending notices.
+/// How [`TaskHub`]'s error for an id this chat never started opens.
+pub(crate) const UNKNOWN_ID_OPENS: &str = "No task with id";
+/// What a tool adds to that error for the model.
+pub(crate) const UNKNOWN_ID_HINT: &str = "An id comes only from the result of the call that started it; don't make one up or report on a task that doesn't exist.";
+
 pub struct TaskHub {
     inner: Mutex<HubInner>,
 }
@@ -462,15 +467,7 @@ impl TaskHub {
         if self.stop_monitor(id) {
             return Ok(format!("stopped monitor {id}"));
         }
-        let known = self.known_ids();
-        if known.is_empty() {
-            Err(format!("task {id} not found"))
-        } else {
-            Err(format!(
-                "task {id} not found. Known ids: {}",
-                known.join(", ")
-            ))
-        }
+        Err(self.unknown(id))
     }
 
     pub fn start_monitor(
@@ -503,7 +500,7 @@ impl TaskHub {
             return Err("monitor needs a command or a task_id".into());
         };
         if launched.is_none() && self.task(&watched).is_err() {
-            return Err(format!("task {watched} not found"));
+            return Err(self.unknown(&watched));
         }
         let id = {
             let mut hub = self.lock();
@@ -617,11 +614,22 @@ impl TaskHub {
     }
 
     fn task(&self, id: &str) -> Result<Arc<TaskSlot>, String> {
-        self.lock()
-            .tasks
-            .get(id)
-            .cloned()
-            .ok_or_else(|| format!("task {id} not found"))
+        let slot = self.lock().tasks.get(id).cloned();
+        slot.ok_or_else(|| self.unknown(id))
+    }
+
+    /// The error for an id this chat never started: what does exist, so a
+    /// made-up id can't read as a task that's still running. The Stop
+    /// button shows it too, so the model's own hint is the tool's
+    /// ([`crate::tools`]' control tools add [`UNKNOWN_ID_HINT`]).
+    fn unknown(&self, id: &str) -> String {
+        let known = self.known_ids();
+        let started = if known.is_empty() {
+            "No background command, subagent or monitor has been started in this chat.".to_string()
+        } else {
+            format!("The ids started in this chat are: {}.", known.join(", "))
+        };
+        format!("{UNKNOWN_ID_OPENS} {id} was started in this chat. {started}")
     }
 
     fn stop_monitor(&self, id: &str) -> bool {
@@ -1300,6 +1308,21 @@ mod tests {
             "{stopped:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_id_this_chat_never_started_says_so_plainly() {
+        let hub = TaskHub::new("made-up");
+        for err in [
+            hub.read_output("t7", 0).unwrap_err(),
+            hub.kill("t7").unwrap_err(),
+        ] {
+            assert!(
+                err.starts_with("No task with id t7 was started in this chat."),
+                "{err}"
+            );
+            assert!(err.contains("No background command"), "{err}");
+        }
     }
 
     #[cfg(unix)]

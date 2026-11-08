@@ -156,7 +156,7 @@ pub fn output(tasks: Option<&Arc<TaskHub>>, args: &Value) -> ToolOutput {
     let timeout_ms = args.get("timeout_ms").and_then(|v| v.as_u64()).unwrap_or(0);
     match tasks.read_output(&id, timeout_ms) {
         Ok(text) => ToolOutput::ok(text),
-        Err(err) => ToolOutput::err(err),
+        Err(err) => ToolOutput::err(with_id_hint(err)),
     }
 }
 
@@ -169,7 +169,7 @@ pub fn kill(tasks: Option<&Arc<TaskHub>>, args: &Value) -> ToolOutput {
     };
     match tasks.kill(&id) {
         Ok(text) => ToolOutput::ok(text),
-        Err(err) => ToolOutput::err(err),
+        Err(err) => ToolOutput::err(with_id_hint(err)),
     }
 }
 
@@ -199,7 +199,7 @@ pub fn monitor(ctx: &ToolCtx<'_>, args: &Value) -> ToolOutput {
         description,
     ) {
         Ok(id) => ToolOutput::ok(format!("monitor id: {id}\nstatus: running")),
-        Err(err) => ToolOutput::err(err),
+        Err(err) => ToolOutput::err(with_id_hint(err)),
     }
 }
 
@@ -238,6 +238,15 @@ pub fn scheduler_list() -> ToolOutput {
     match list_automations() {
         Ok(text) => ToolOutput::ok(text),
         Err(err) => ToolOutput::err(err),
+    }
+}
+
+/// An id this chat never started: the model also hears where ids come from.
+fn with_id_hint(err: String) -> String {
+    if err.starts_with(crate::tasks::UNKNOWN_ID_OPENS) {
+        format!("{err} {}", crate::tasks::UNKNOWN_ID_HINT)
+    } else {
+        err
     }
 }
 
@@ -527,6 +536,25 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn a_made_up_task_id_tells_the_model_where_ids_come_from() {
+        let hub = crate::tasks::TaskHub::new("control-made-up");
+        let args = serde_json::json!({ "task_id": "t7" });
+        for out in [output(Some(&hub), &args), kill(Some(&hub), &args)] {
+            assert!(out.failed);
+            assert!(
+                out.text.starts_with("No task with id t7 was started"),
+                "{}",
+                out.text
+            );
+            assert!(
+                out.text.ends_with(crate::tasks::UNKNOWN_ID_HINT),
+                "{}",
+                out.text
+            );
+        }
     }
 
     #[test]

@@ -479,7 +479,7 @@ pub(crate) fn prompt_prefix_growth() -> usize {
 const LEAN_RULES: &str = "<rules>
 - Use only the tools in this turn's list, with paths inside the workspace. Don't invent tools or search results.
 - For a task with several parts, track it with todo_write and mark an item done only when a tool result shows it.
-- Claim done only when tool output shows it. If blocked, say so and use what you have; never offer a one-tap that claims to grant OS or path access or to activate a skill.
+- Claim done, or name an id or result, only from your own tool output. If blocked, say so and use what you have; never offer a one-tap that claims to grant OS or path access or to activate a skill.
 - Sealed learnings in a <memory-context> block (such as Installed app: lines) are real Memory: use them.
 - A <cabin-volatile> block is the app's note for the turn, not the person's words; their latest ask outranks it.
 - Lead with the answer. No generic closing question. For a real decision, call ask_user_question with 2 to 4 options and one `recommended`.
