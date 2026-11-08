@@ -141,6 +141,11 @@ pub struct BriefInput<'a> {
     pub recent: &'a [String],
     /// A scheduled, proactive or `/bg` run.
     pub background: bool,
+    /// What this chat is about, when it was opened from a Pulse card: the
+    /// card's finding ("bluetoothd crashed several times recently"). A line
+    /// that points back at it ("check into it for me") is read as that ask,
+    /// and earlier small talk never makes it chat.
+    pub anchor: Option<&'a str>,
 }
 
 const SYSTEM_WORDS: &[&str] = &[
@@ -339,6 +344,26 @@ const SMALL_TALK_PHRASES: &[&str] = &[
 ];
 /// Words after a task verb that are nothing to act on: "turn around",
 /// "stop it lol", "make me laugh" are banter, "turn off the lights" is a task.
+/// Words that point back at what the chat is about.
+const POINT_BACK: &[&str] = &["it", "this", "that", "them", "these", "those"];
+/// "check into it", "look at that": asks to look at something already named.
+const LOOK_VERBS: &[&str] = &[
+    "check",
+    "look",
+    "dig",
+    "investigate",
+    "see",
+    "handle",
+    "deal",
+    "sort",
+    "try",
+];
+/// A thing that crashes or hangs with no other domain is the computer's.
+/// A program that keeps failing ("keeps crashing"). The nouns "crash" and
+/// "freeze" are left out: "fix the crash in the pulse feed" is about the app.
+const CRASH_WORDS: &[&str] = &[
+    "crashes", "crashed", "crashing", "freezes", "freezing", "frozen", "hangs",
+];
 const NOT_AN_OBJECT: &[&str] = &[
     "around", "it", "that", "this", "me", "you", "us", "talking", "joking", "kidding", "laughing",
     "laugh", "smile", "lying", "yapping", "being", "over", "already", "now", "please", "lol",
@@ -779,9 +804,28 @@ fn domain_of(
         "web"
     } else if intent == Intent::Creative {
         "media"
+    } else if intent == Intent::Repair && any_word(ws, CRASH_WORDS) {
+        // "bluetoothd keeps crashing": a program on this computer.
+        "system"
     } else {
         "general"
     }
+}
+
+/// "check into it for me", "why does it do that": a short ask whose only
+/// object is a pronoun, so it carries on what the chat is about.
+fn points_back(t: &str, ws: &[&str], rest: &[&str], input: &BriefInput<'_>) -> bool {
+    let first = rest.first().copied().unwrap_or_default();
+    let asks = any_word(ws, LOOK_VERBS)
+        || TASK_VERBS.contains(&first)
+        || QUESTION_WORDS.contains(&first)
+        || any_word(ws, REPAIR_WORDS)
+        || any_word(ws, DIAGNOSE_WORDS);
+    ws.len() <= 8
+        && asks
+        && any_word(ws, POINT_BACK)
+        && !small_talk(t, rest)
+        && domain_of(t, ws, input, Intent::Chat, false) == "general"
 }
 
 /// A task verb only makes a task when it has something to act on.
@@ -852,11 +896,23 @@ pub fn rules(input: &BriefInput<'_>) -> Option<Brief> {
             ..*input
         });
     }
+    if !input.background && points_back(&t, &ws, &rest_words, input) {
+        let last_work = input.recent.last().filter(|_| last_was_work());
+        if let Some(back) = last_work.map(String::as_str).or(input.anchor) {
+            return rules(&BriefInput {
+                text: back,
+                recent: &[],
+                anchor: None,
+                ..*input
+            });
+        }
+    }
     if t.is_empty() && input.files == 0 {
         return None;
     }
-    // Hanging out, a plain line about nothing in particular stays chat.
-    let chatting = !input.background && hanging_out(input.recent);
+    // Hanging out, a plain line about nothing in particular stays chat. A
+    // chat opened from a card is about the card, whatever came before.
+    let chatting = !input.background && input.anchor.is_none() && hanging_out(input.recent);
     let topic = domain_of(&t, &ws, input, Intent::Chat, system);
     let generic = topic == "general";
     // "I'm crashing out" is a mood; "my game is crashing" is a repair.

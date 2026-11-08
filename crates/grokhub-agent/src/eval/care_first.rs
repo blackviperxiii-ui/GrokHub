@@ -242,6 +242,7 @@ fn brief_for(text: &str) -> Brief {
         tools: &[],
         recent: &[],
         background: false,
+        anchor: None,
     };
     rules(&input).unwrap_or_else(|| Brief {
         mood: "calm".into(),
