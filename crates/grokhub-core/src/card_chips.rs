@@ -230,14 +230,17 @@ mod tests {
                 FixOffer {
                     label: "Restart bluetooth".into(),
                     prompt: "Restart the bluetooth service.".into(),
+                    kind: crate::card_report::OfferKind::Chat,
                 },
                 FixOffer {
                     label: "Find out why".into(),
                     prompt: "Read its crash history.".into(),
+                    kind: crate::card_report::OfferKind::Chat,
                 },
                 FixOffer {
                     label: "Third".into(),
                     prompt: "never shown".into(),
+                    kind: crate::card_report::OfferKind::Chat,
                 },
             ],
             ..Default::default()

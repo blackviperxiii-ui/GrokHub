@@ -801,3 +801,92 @@ fn my_wifi_doesnt_work_reaches_a_plain_proposal() {
         "nmcli networking off; nmcli networking on"
     );
 }
+
+#[test]
+fn the_live_checklist_shows_each_step_as_it_runs() {
+    use StepMark::{Done, Failed, NeedsOk, Pending, Running, Skipped};
+    let marks = |run: &ApplyRun| -> Vec<(String, StepMark)> {
+        run.checklist()
+            .into_iter()
+            .map(|l| (l.plain, l.mark))
+            .collect()
+    };
+    let line = |plain: &str, mark: StepMark| (plain.to_string(), mark);
+    let dir = test_dir("fix-checklist");
+    let p = plan(vec![
+        DraftStep::new("ipconfig /flushdns", "Clear the list."),
+        DraftStep::new("resolvectl flush-caches", "Clear it again."),
+    ]);
+    let mut run = ApplyRun::begin(&ctx(&dir, true, AccessMode::Supervised, &none), p).unwrap();
+    assert_eq!(
+        marks(&run),
+        vec![
+            line("Clear the list.", Pending),
+            line("Clear it again.", Pending),
+            line(CHECK_LINE, Pending),
+        ]
+    );
+    assert!(matches!(run.next_action(), Action::Gb { .. }));
+    assert_eq!(
+        marks(&run),
+        vec![
+            line("Clear the list.", Running),
+            line("Clear it again.", Pending),
+            line(CHECK_LINE, Pending),
+        ]
+    );
+    assert!(run.step_finished(STEP_OK));
+    assert!(matches!(run.next_action(), Action::Gb { .. }));
+    assert!(!run.step_finished(STEP_FAILED));
+    assert_eq!(run.next_action(), Action::Done);
+    // A failed step stops the run; the re-check never ran.
+    assert_eq!(
+        marks(&run),
+        vec![
+            line("Clear the list.", Done),
+            line("Clear it again.", Failed),
+            line(CHECK_LINE, Skipped),
+        ]
+    );
+
+    // A step waiting on its card, then a no: it and the re-check never ran.
+    let dir = test_dir("fix-checklist-hard");
+    let disk = finding(
+        ProbeId::DiskUsage,
+        Severity::Critical,
+        "Your main disk is almost full (98% used).",
+        "",
+    );
+    let apt = |b: &str| b == "apt-get";
+    let mut run = ApplyRun::begin(
+        &ctx(&dir, true, AccessMode::Full, &apt),
+        plans_for(&[disk], Os::Linux, &apt).remove(0),
+    )
+    .unwrap();
+    assert!(matches!(run.next_action(), Action::Park { .. }));
+    let first = "Delete old copies of app installers kept after updates.";
+    assert_eq!(marks(&run)[0], line(first, NeedsOk));
+    run.answer_hard(false);
+    assert_eq!(run.next_action(), Action::Done);
+    assert_eq!(marks(&run)[0], line(first, Skipped));
+    assert_eq!(marks(&run).last().unwrap(), &line(CHECK_LINE, Skipped));
+
+    // The re-check runs, then passes.
+    let (_dir, mut run) = applied("fix-checklist-verify");
+    assert_eq!(
+        marks(&run),
+        vec![line("Clear the list.", Done), line(CHECK_LINE, Running)]
+    );
+    let ok = finding(
+        ProbeId::Dns,
+        Severity::Ok,
+        "Looking up website names works.",
+        "",
+    );
+    assert!(run.record_verify(&report(vec![ok], vec![ProbeId::Dns])));
+    assert_eq!(run.next_action(), Action::Done);
+    assert_eq!(
+        marks(&run),
+        vec![line("Clear the list.", Done), line(CHECK_LINE, Done)]
+    );
+}

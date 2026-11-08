@@ -71,6 +71,49 @@ pub struct CardReport {
     /// Up to two fixes the card offers, best first. Nothing runs until tapped.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub offers: Vec<FixOffer>,
+    /// What the app did for this card, oldest first: its audit trail.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub receipts: Vec<CardReceipt>,
+}
+
+/// Receipts a card keeps; older ones drop off.
+pub const RECEIPTS_MAX: usize = 5;
+
+/// One thing the app did for a card, and what came of it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardReceipt {
+    pub at_ms: u64,
+    /// "Checked bluetoothd's crash history".
+    pub what: String,
+    /// Plain lines: what it found, or why it couldn't.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub result: Vec<String>,
+}
+
+/// How a fix offer runs. A chat offer is asked in the card's chat; a look is
+/// read only and runs quietly, with its receipt on the card.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum OfferKind {
+    #[default]
+    Chat,
+    /// Read the card's program's crash history and services. Changes nothing.
+    Look,
+}
+
+impl OfferKind {
+    fn is_chat(&self) -> bool {
+        *self == Self::Chat
+    }
+}
+
+/// Add `receipt` to the card's report, keeping the last [`RECEIPTS_MAX`].
+pub fn add_receipt(card: &mut UpdateCard, receipt: CardReceipt) {
+    let report = card.pulse.report.get_or_insert_with(Default::default);
+    report.receipts.push(receipt);
+    let extra = report.receipts.len().saturating_sub(RECEIPTS_MAX);
+    report.receipts.drain(..extra);
 }
 
 /// One fix a card offers: the chip's words and the request it starts.
@@ -81,6 +124,8 @@ pub struct FixOffer {
     pub label: String,
     /// What the fix run is asked to do, in the card's own chat.
     pub prompt: String,
+    #[serde(default, skip_serializing_if = "OfferKind::is_chat")]
+    pub kind: OfferKind,
 }
 
 /// What the card found: the report's headline, else the card's title.
@@ -125,6 +170,16 @@ pub fn report_more(card: &UpdateCard) -> Option<String> {
         for fact in &report.evidence {
             out.push_str("\n- ");
             out.push_str(fact.trim());
+        }
+    }
+    for receipt in &report.receipts {
+        if !out.is_empty() {
+            out.push_str("\n\n");
+        }
+        out.push_str(&format!("**{}**", receipt.what.trim()));
+        for line in &receipt.result {
+            out.push_str("\n- ");
+            out.push_str(line.trim());
         }
     }
     (!out.is_empty()).then_some(out)
@@ -286,6 +341,7 @@ pub fn report_from_run(name: &str, reply: &str) -> Option<CardReport> {
         }),
         items: Vec::new(),
         offers: Vec::new(),
+        receipts: Vec::new(),
     })
 }
 
@@ -409,6 +465,7 @@ The third asks for a dark theme.\n- #12 crash on resume";
             }),
             items: Vec::new(),
             offers: Vec::new(),
+            receipts: Vec::new(),
         });
         card.citations = vec!["https://example.com/a".into()];
         assert_eq!(card_headline(&card), "bluetoothd crashed 4 times today");
@@ -475,6 +532,62 @@ You opened this from your feed and want to act on it."
         });
         assert_eq!(report_more(&card), None);
         assert!(has_more(&card), "a digest opens to its updates");
+    }
+
+    #[test]
+    fn receipts_go_on_the_card_and_the_oldest_drop_off() {
+        let mut card = blank_card("c".into(), UpdateKind::Suggestion, "T".into(), None, 1);
+        add_receipt(
+            &mut card,
+            CardReceipt {
+                at_ms: 5,
+                what: "Checked bluetoothd's crash history".into(),
+                result: vec![
+                    "bluetoothd has crashed: 2 crash dumps on record.".into(),
+                    "All background services are running.".into(),
+                ],
+            },
+        );
+        assert_eq!(
+            report_more(&card).as_deref(),
+            Some(
+                "**Checked bluetoothd's crash history**\n\
+- bluetoothd has crashed: 2 crash dumps on record.\n\
+- All background services are running."
+            )
+        );
+        for i in 0..6 {
+            add_receipt(
+                &mut card,
+                CardReceipt {
+                    at_ms: 10 + i,
+                    what: format!("Check {i}"),
+                    result: Vec::new(),
+                },
+            );
+        }
+        let kept: Vec<u64> = card
+            .pulse
+            .report
+            .as_ref()
+            .unwrap()
+            .receipts
+            .iter()
+            .map(|r| r.at_ms)
+            .collect();
+        assert_eq!(kept, vec![11, 12, 13, 14, 15]);
+        // An offer saved before kinds existed loads as a chat offer.
+        let old: FixOffer =
+            serde_json::from_str(r#"{"label":"Find out why","prompt":"Why?"}"#).unwrap();
+        assert_eq!(old.kind, OfferKind::Chat);
+        let look = FixOffer {
+            kind: OfferKind::Look,
+            ..old
+        };
+        assert_eq!(
+            serde_json::to_string(&look).unwrap(),
+            r#"{"label":"Find out why","prompt":"Why?","kind":"look"}"#
+        );
     }
 
     #[test]
