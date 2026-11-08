@@ -682,7 +682,7 @@ pub(crate) fn free_disk_mb(_dir: &Path) -> Option<u64> {
     None
 }
 
-fn models_dir() -> Option<PathBuf> {
+pub(crate) fn models_dir() -> Option<PathBuf> {
     Some(
         grokhub_core::paths::user_home()?
             .join(grokhub_core::brand::INTERNAL_ID)

@@ -31,6 +31,7 @@ pub mod local_engine;
 #[cfg(test)]
 mod md_fixtures;
 pub mod memory;
+pub mod model_library;
 #[cfg(desktop)]
 mod net_watch;
 pub mod nyx;
@@ -2194,6 +2195,41 @@ async fn unload_local_model(state: State<'_, ShellState>) -> Result<local_ai::Lo
 }
 
 #[tauri::command]
+async fn get_model_library(
+    state: State<'_, ShellState>,
+) -> Result<model_library::LibraryView, String> {
+    capabilities::needs(capabilities::current().local_ai, "Local AI")?;
+    let dir = state.config_dir.clone();
+    off_main(move || model_library::view(&dir)).await
+}
+
+#[tauri::command]
+async fn download_models(
+    app: AppHandle,
+    state: State<'_, ShellState>,
+    ids: Vec<String>,
+) -> Result<model_library::LibraryView, String> {
+    capabilities::needs(capabilities::current().local_ai, "Local AI")?;
+    let dir = state.config_dir.clone();
+    off_main(move || model_library::download(app, dir, ids)).await?
+}
+
+#[tauri::command]
+fn pause_model_downloads() -> Result<(), String> {
+    model_library::pause()
+}
+
+#[tauri::command]
+async fn remove_library_model(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<model_library::LibraryView, String> {
+    capabilities::needs(capabilities::current().local_ai, "Local AI")?;
+    let dir = state.config_dir.clone();
+    off_main(move || model_library::remove(&dir, &id)).await?
+}
+
+#[tauri::command]
 async fn run_local_speed_test(state: State<'_, ShellState>) -> Result<String, String> {
     capabilities::needs(capabilities::current().local_ai, "Local AI")?;
     let dir = state.config_dir.clone();
@@ -3258,6 +3294,10 @@ pub fn run() {
             run_local_speed_test,
             set_local_keep_loaded,
             unload_local_model,
+            get_model_library,
+            download_models,
+            pause_model_downloads,
+            remove_library_model,
             get_web_access,
             set_web_access,
             get_devices,

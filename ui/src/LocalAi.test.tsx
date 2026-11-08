@@ -50,6 +50,8 @@ function drafterEvent(event: LocalDrafterEvent) {
 }
 
 vi.mock("./api", () => api);
+// Download models has its own tests.
+vi.mock("./ModelLibrary", () => ({ ModelLibrary: () => null }));
 
 import { ABLITERATED_NOTICE, LocalAi, MODEL_NOTICE } from "./LocalAi";
 
