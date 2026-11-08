@@ -721,13 +721,16 @@ fn video_url_now(body: &Value) -> Result<Option<String>, String> {
     }
 }
 
+/// The prompt, once it passed the hard-ban and 18+ check: every media tool
+/// sends it to Grok Imagine, an online service.
 fn prompt_of(args: &Value) -> Result<String, String> {
     let prompt = super::str_field(args, "prompt");
     if prompt.is_empty() {
-        Err("prompt is required".into())
-    } else {
-        Ok(prompt)
+        return Err("prompt is required".into());
     }
+    grokhub_core::adult_guard::screen_media_prompt(&prompt, grokhub_core::adult_guard::Dest::Xai)
+        .map_err(str::to_owned)?;
+    Ok(prompt)
 }
 
 fn model_of(args: &Value) -> String {
@@ -1123,6 +1126,31 @@ pub(crate) mod tests {
                 "video": {"url": "https://cdn.example/cabin.mp4"}
             }))
         }
+    }
+
+    #[test]
+    fn a_banned_or_18_plus_media_prompt_never_reaches_grok_imagine() {
+        let fake = FakeImagine {
+            posts: Mutex::new(Vec::new()),
+            gets: Mutex::new(Vec::new()),
+        };
+        for (tool, prompt, why) in [
+            (
+                "image_generate",
+                "a nude teen on a beach",
+                grokhub_core::adult_guard::MEDIA_BANNED,
+            ),
+            (
+                "video_generate",
+                "an erotic nude dance",
+                grokhub_core::adult_guard::MEDIA_LOCAL_ONLY,
+            ),
+        ] {
+            let out = execute(tool, &json!({ "prompt": prompt }), &fake);
+            assert!(out.failed, "{tool}: {}", out.text);
+            assert!(out.text.contains(why), "{tool}: {}", out.text);
+        }
+        assert!(fake.posts.lock().unwrap().is_empty(), "nothing was posted");
     }
 
     #[test]

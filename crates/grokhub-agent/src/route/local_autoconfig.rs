@@ -659,7 +659,10 @@ fn engine_files(binary: &Path) -> Vec<String> {
 /// `None` (the one-shot `local_perf` defaults) before that or when the GGUF
 /// header can't be read. Also returns the `autotune.json` key and folder.
 pub fn launch_for(binary: &Path, model: &Path) -> Option<(LaunchArgs, String, PathBuf)> {
-    planned(binary, model).map(|(args, _, key, dir)| (args, key, dir))
+    planned(binary, model).map(|(args, plan, key, dir)| {
+        local_spec::launched(&plan, &dir);
+        (args, key, dir)
+    })
 }
 
 /// The draft half of [`launch_for`], for the speed test.

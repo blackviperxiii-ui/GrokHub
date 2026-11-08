@@ -808,6 +808,8 @@ impl Cabin {
                                                             ) {
                                                                 crate::cards::settings_note(ui, line);
                                                             }
+                                                            crate::ui_kit::section_header(ui, "Download models", None);
+                                                            self.ui_download_models(ui);
                                                             crate::ui_kit::section_header(ui, "Spend", None);
                                                             self.ui_spend_rows(ui);
                                                             let budgets = grokhub_core::TOKEN_BUDGETS;

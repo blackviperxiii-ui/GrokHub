@@ -81,6 +81,24 @@ pub const HELD_NOTICE: &str = "Not sent: nothing left this computer. 18+ chat ne
 /// What the chat shows in place of a reply that drifted into a hard limit.
 pub const REPLY_REPLACED: &str = "Reply hidden on this computer: it drifted into minors or age-play, non-consent, real people, or animals, which 18+ chat never covers.";
 
+/// What an image or video tool says in place of a banned prompt. Nothing was sent.
+pub const MEDIA_BANNED: &str = "Not made, and nothing was sent: images and videos never show minors or age-play, non-consent, real people in sexual content, or animals.";
+
+/// What an image or video tool says in place of an 18+ prompt bound for an
+/// online service. Nothing was sent.
+pub const MEDIA_LOCAL_ONLY: &str = "Not made, and nothing was sent: 18+ images and videos are only made on this computer, and on-device image making isn't set up yet.";
+
+/// The check every image or video prompt passes before it goes to `dest`:
+/// a banned ask is never sent, and an 18+ ask never goes online (the same
+/// rule as 18+ chat).
+pub fn screen_media_prompt(prompt: &str, dest: Dest) -> Result<(), &'static str> {
+    match check(prompt) {
+        Risk::Banned(_) => Err(MEDIA_BANNED),
+        Risk::Explicit if dest != Dest::Local => Err(MEDIA_LOCAL_ONLY),
+        Risk::Explicit | Risk::Clean => Ok(()),
+    }
+}
+
 /// Words that make a message sexual.
 const SEXUAL: &[&str] = &[
     "sex",
@@ -903,5 +921,30 @@ mod tests {
             format!("<cabin-volatile>\nHeat: spicy. {ADULT_VOICE}\n</cabin-volatile>\n\nroast me");
         assert!(explicit_conversation([("user", note.as_str())]));
         assert!(!explicit_conversation([("tool", "nsfw porn")]));
+    }
+
+    #[test]
+    fn a_media_prompt_with_a_hard_ban_is_never_sent_and_18_plus_stays_on_this_computer() {
+        assert_eq!(
+            screen_media_prompt("a castle at sunset, oil painting", Dest::Xai),
+            Ok(())
+        );
+        assert_eq!(
+            screen_media_prompt("a nude teen on a beach", Dest::Xai),
+            Err(MEDIA_BANNED)
+        );
+        assert_eq!(
+            screen_media_prompt("a nude teen on a beach", Dest::Local),
+            Err(MEDIA_BANNED),
+            "a ban holds on this computer too"
+        );
+        assert_eq!(
+            screen_media_prompt("an erotic nude portrait", Dest::Xai),
+            Err(MEDIA_LOCAL_ONLY)
+        );
+        assert_eq!(
+            screen_media_prompt("an erotic nude portrait", Dest::Local),
+            Ok(())
+        );
     }
 }
