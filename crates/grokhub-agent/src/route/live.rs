@@ -914,6 +914,9 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         care_first,
         lane,
         size: Some(size_est),
+        // Failover PR 5: whether a local model is already loaded, for the
+        // warm-local default. Never starts the sidecar to find out.
+        local_warm: super::local::warm_runtime().is_some(),
     };
     let mut route = Router::choose(&input, &reg, &profiles, &table, now_ms);
     if let (Some(a), Some(p), Some((band, own))) = (&ask, &input.pick, chat_band)
