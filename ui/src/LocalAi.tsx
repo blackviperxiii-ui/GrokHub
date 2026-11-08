@@ -9,8 +9,10 @@ import {
   resetLocalAi,
   runLocalSpeedTest,
   saveLocalAi,
+  setLocalKeepLoaded,
   startLocalDrafterDownload,
   startLocalEngineDownload,
+  unloadLocalModel,
   type LocalAiConfig,
   type LocalAiView,
   type LocalDraftOffer,
@@ -313,6 +315,23 @@ export function LocalAi() {
     }
   }
 
+  async function keepLoaded(on: boolean) {
+    try {
+      setView(await setLocalKeepLoaded(on));
+    } catch (err) {
+      fail(err);
+    }
+  }
+
+  async function unloadNow() {
+    try {
+      setView(await unloadLocalModel());
+      tell("Unloaded the model. It loads again with the next reply.");
+    } catch (err) {
+      fail(err);
+    }
+  }
+
   async function speedTest() {
     setTesting(true);
     try {
@@ -373,6 +392,21 @@ export function LocalAi() {
     <section className="local-ai" aria-label="Local AI">
       <h2>Local AI</h2>
       <p className="local-status">{status}</p>
+      <div className="local-running" aria-label="Running now">
+        {view.running.lines.map((line) => (
+          <p key={line} className="note">
+            {line}
+          </p>
+        ))}
+        <button type="button" className="quiet" onClick={() => void keepLoaded(!view.running.keptLoaded)}>
+          {view.running.keptLoaded ? "Let it unload" : "Keep loaded"}
+        </button>
+        {view.running.loaded && (
+          <button type="button" className="quiet" onClick={() => void unloadNow()}>
+            Unload now
+          </button>
+        )}
+      </div>
       {view.limits.length > 0 && (
         <div className="local-limits">
           <p className="note">Detection is limited on this PC:</p>
@@ -509,14 +543,6 @@ export function LocalAi() {
                     {label}
                   </option>
                 ))}
-              </select>
-            </label>
-            <label>
-              Draft model
-              <select value={manual.draft} onChange={(e) => setManual({ draft: e.target.value })}>
-                <option value="auto">Auto (after the speed test)</option>
-                <option value="on">On</option>
-                <option value="off">Off</option>
               </select>
             </label>
             <label>

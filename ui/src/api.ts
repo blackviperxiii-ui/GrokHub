@@ -1472,8 +1472,6 @@ export interface LocalCaps {
 export interface LocalManual {
   /** "auto", "cuda", "rocm", "vulkan", "metal", "sycl" or "cpu". */
   backend: string;
-  /** "auto", "on" or "off". */
-  draft: string;
   ngl: number | null;
   ctx: number | null;
   threads: number | null;
@@ -1589,6 +1587,14 @@ export interface LocalAiView {
   /** Offers for every catalog model still missing its draft pair. */
   draftOffers: LocalDraftOffer[];
   draftProgress: LocalDraftProgress | null;
+  running: LocalRunning;
+}
+
+/** What runs now, with its two controls: keep loaded and unload now. */
+export interface LocalRunning {
+  lines: string[];
+  loaded: boolean;
+  keptLoaded: boolean;
 }
 
 export type LocalEngineEvent = {
@@ -1620,6 +1626,14 @@ export function resetLocalAi(): Promise<LocalAiView> {
 
 export function checkModelFile(path: string): Promise<LocalFileRow> {
   return invoke<LocalFileRow>("check_model_file", { path });
+}
+
+export function setLocalKeepLoaded(on: boolean): Promise<LocalAiView> {
+  return invoke<LocalAiView>("set_local_keep_loaded", { on });
+}
+
+export function unloadLocalModel(): Promise<LocalAiView> {
+  return invoke<LocalAiView>("unload_local_model");
 }
 
 export function runLocalSpeedTest(): Promise<string> {

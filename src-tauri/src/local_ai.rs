@@ -10,7 +10,7 @@
 
 use std::path::{Path, PathBuf};
 
-use grokhub_agent::route::{local_autoconfig, local_gov, local_sidecar, local_spec};
+use grokhub_agent::route::{local_autoconfig, local_gov, local_live, local_sidecar};
 use grokhub_core::local_discover::{self, FoundModel, Source};
 use grokhub_core::local_governor::{Level, Rules};
 use grokhub_core::local_picker::{self, BenchCache, Bucket, CpuSimd, Memory, Pick, Profile};
@@ -65,8 +65,6 @@ impl Default for Caps {
 pub struct Manual {
     /// `auto`, or one of `cuda`, `rocm`, `vulkan`, `metal`, `sycl`, `cpu`.
     pub backend: String,
-    /// `auto`, `on` or `off`.
-    pub draft: String,
     pub ngl: Option<u32>,
     pub ctx: Option<u32>,
     pub threads: Option<u32>,
@@ -86,7 +84,6 @@ impl Default for Manual {
     fn default() -> Self {
         Manual {
             backend: "auto".into(),
-            draft: "auto".into(),
             ngl: None,
             ctx: None,
             threads: None,
@@ -163,7 +160,6 @@ impl LocalAiConfig {
             &m.backend,
             &["auto", "cuda", "rocm", "vulkan", "metal", "sycl", "cpu"],
         );
-        m.draft = one_of(&m.draft, &["auto", "on", "off"]);
         m.kv = one_of(&m.kv, &["auto", "q8", "q4"]);
         m.ngl = m.ngl.map(|n| n.min(NGL_MAX));
         m.ctx = m.ctx.map(|c| c.clamp(CTX_MIN, CTX_MAX));
@@ -234,19 +230,6 @@ fn write(path: &Path, text: &str) -> Result<(), String> {
     std::fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 
-/// Manual draft On/Off/Auto → the sidecar's draft preference.
-pub fn apply_draft_pref(config: &LocalAiConfig) {
-    if config.mode != Mode::Manual {
-        local_spec::prefer_draft(None);
-        return;
-    }
-    match config.manual.draft.as_str() {
-        "on" => local_spec::prefer_draft(Some(true)),
-        "off" => local_spec::prefer_draft(Some(false)),
-        _ => local_spec::prefer_draft(None),
-    }
-}
-
 /// Saves the choices and the governor's rules, and applies the overrides.
 pub fn save(config_dir: &Path, config: &LocalAiConfig) -> Result<(), String> {
     let raw = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
@@ -260,7 +243,6 @@ pub fn save(config_dir: &Path, config: &LocalAiConfig) -> Result<(), String> {
     let rules = serde_json::to_string_pretty(&rules).map_err(|e| e.to_string())?;
     write(&gov, &rules)?;
     local_autoconfig::set_overrides(config.overrides());
-    apply_draft_pref(config);
     Ok(())
 }
 
@@ -575,6 +557,38 @@ pub struct LocalAiView {
     pub draft_offers: Vec<DraftOffer>,
     /// In-flight draft download, when one is running.
     pub draft_progress: Option<DraftProgress>,
+    /// What runs now: model, where, speed, draft model, unload.
+    pub running: Running,
+}
+
+/// The running-model rows and their two controls.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Running {
+    pub lines: Vec<String>,
+    pub loaded: bool,
+    pub kept_loaded: bool,
+}
+
+pub fn running(config_dir: &Path) -> Running {
+    let live = local_live::snapshot(config_dir);
+    Running {
+        lines: local_live::lines(&live),
+        loaded: live.model.is_some(),
+        kept_loaded: live.kept_loaded,
+    }
+}
+
+/// Keep loaded / Let it unload, then the page again.
+pub fn set_keep_loaded(config_dir: &Path, on: bool) -> LocalAiView {
+    local_sidecar::set_keep_loaded(on);
+    refreshed(config_dir)
+}
+
+/// Unload now, then the page again.
+pub fn unload_now(config_dir: &Path) -> LocalAiView {
+    local_sidecar::stop_global();
+    refreshed(config_dir)
 }
 
 fn run(cmd: &str, args: &[&str]) -> Option<String> {
@@ -736,7 +750,6 @@ pub fn max_threads() -> u32 {
 /// Everything the page shows. Runs the hardware readers.
 pub fn view(config_dir: &Path) -> LocalAiView {
     let config = load(config_dir).clamped(max_threads());
-    apply_draft_pref(&config);
     let machine = read_machine(config_dir);
     let p = machine.profile();
     let bench = BenchCache::new();
@@ -762,6 +775,7 @@ pub fn view(config_dir: &Path) -> LocalAiView {
         draft_offer: local_engine::draft_offer(config_dir, selected),
         draft_offers: local_engine::draft_offers(config_dir),
         draft_progress: local_engine::draft_progress(),
+        running: running(config_dir),
         config,
         status,
         picker,
@@ -790,10 +804,7 @@ pub fn speed_test(config_dir: &Path) -> Result<String, String> {
     if local_sidecar::resolve_paths(config_dir).is_none() {
         return Err("Set up a local engine and model first, then run the speed test.".into());
     }
-    let out = grokhub_agent::route::local_bench::run_for_ui()?;
-    // The bench clears the in-memory force flag; put Manual draft back.
-    apply_draft_pref(&load(config_dir));
-    Ok(out)
+    grokhub_agent::route::local_bench::run_for_ui()
 }
 
 /// Saves the page's choices, clamped, and reads the page again.
