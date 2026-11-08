@@ -247,7 +247,7 @@ mod tests {
         let t = texts(&mut app);
         for want in [
             format!("Chat ({chat})"),
-            "Image (0)".to_string(),
+            "Image (2)".to_string(),
             "Download all".to_string(),
             "Download Gemma 4 12B".to_string(),
         ] {
@@ -255,9 +255,9 @@ mod tests {
         }
         app.setup.lib_tab = Some(ModelTab::Image);
         let t = texts(&mut app);
-        assert!(
-            t.iter().any(|x| x.starts_with("No image models yet")),
-            "{t:?}"
-        );
+        // The picture model and the guard that checks its pictures.
+        for want in ["Download Z-Image Turbo", "Download Picture guard"] {
+            assert!(t.iter().any(|x| x.starts_with(want)), "{want:?} in {t:?}");
+        }
     }
 }

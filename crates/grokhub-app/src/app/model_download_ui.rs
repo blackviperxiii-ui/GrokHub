@@ -53,24 +53,28 @@ pub(super) fn drafters_dir() -> std::path::PathBuf {
     models_dir().join(ld::DRAFTERS_DIR)
 }
 
-/// A speech model is only usable with the speech engine, so its download
-/// fetches the engine (about 27 MB) once it lands. The model's own files stay
+/// A speech or picture model is only usable with its engine, so its download
+/// fetches the engine (about 30 MB) once it lands. The model's own files stay
 /// if the engine stops; the next try fetches only the engine.
-fn with_speech_engine(done: Outcome, ctl: &Control, on: &mut dyn FnMut(Progress)) -> Outcome {
+fn with_engine(
+    done: Outcome,
+    tool: &'static grokhub_core::tool_engine::Tool,
+    ctl: &Control,
+    on: &mut dyn FnMut(Progress),
+) -> Outcome {
     #[cfg(test)]
     {
-        let _ = (ctl, on);
+        let _ = (tool, ctl, on);
         done
     }
     #[cfg(not(test))]
     {
         use grokhub_core::runtime_download::{self as rd, Outcome as Ro};
-        use grokhub_core::voice_engine as ve;
         let Some(key) = rd::platform_key() else {
             return done;
         };
         let fetch = super::local_ai_ui::HttpRuntimeFetch;
-        match ve::download(&crate::config::config_dir(), key, &fetch, ctl, on) {
+        match tool.download(&crate::config::config_dir(), key, &fetch, ctl, on) {
             Ok(_) => done,
             Err(Ro::Paused { done }) => Outcome::Paused { done },
             Err(Ro::Cancelled) => Outcome::Cancelled,
@@ -305,8 +309,10 @@ impl Cabin {
                 let _ = tx.send(DlEvent::Progress(p));
             };
             let mut out = md::download(&into, m, fetch.as_ref(), &worker, &mut on);
-            if matches!(out, Outcome::Done(_)) && m.kind == ls::ModelKind::SpeechToText {
-                out = with_speech_engine(out, &worker, &mut on);
+            if let (Outcome::Done(_), Some(tool)) =
+                (&out, grokhub_core::tool_engine::engine_for(m.kind))
+            {
+                out = with_engine(out, tool, &worker, &mut on);
             }
             let _ = tx.send(DlEvent::Finished(out));
         });

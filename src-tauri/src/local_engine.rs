@@ -318,7 +318,7 @@ pub fn draft_progress() -> Option<DraftProgress> {
 }
 
 /// The engine archive download; `download_engine` names each asset's URL.
-struct HttpEngineFetch;
+pub(crate) struct HttpEngineFetch;
 
 fn runtime_agent() -> grokhub_core::http::Agent {
     // Redirects are followed by hand so every hop is checked; public IPs only.

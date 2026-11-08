@@ -243,7 +243,11 @@ mod tests {
         assert_eq!(draft.why, "Comes with Gemma 4 12B.");
         assert_eq!(good_for(draft.model), "Makes Gemma 4 12B reply faster.");
         assert!(row_line(by_id(&rows, MID)).contains(" · Uncensored · "));
-        assert!(rows.iter().filter(|r| r.tab() == ModelTab::Image).count() == 0);
+        // The picture model and its guard share the Image tab.
+        assert_eq!(
+            rows.iter().filter(|r| r.tab() == ModelTab::Image).count(),
+            2
+        );
         assert!(empty_tab_line(ModelTab::Image).starts_with("No image models yet"));
     }
 

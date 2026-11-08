@@ -11,6 +11,7 @@ use grokhub_core::local_picker::BenchCache;
 use grokhub_core::local_setup::{self as ls, LocalModel, ModelKind, ModelTab};
 use grokhub_core::model_download::{self as md, Control, Outcome, Progress};
 use grokhub_core::model_library::{self as lib, Fit, Row};
+use grokhub_core::runtime_download as rd;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
@@ -355,6 +356,28 @@ fn fetch_one(app: &AppHandle, config_dir: &Path, m: &'static LocalModel) -> Resu
         }
         emit(app);
     });
+    // A speech or picture model needs its engine (about 30 MB) beside
+    // llama.cpp; its files stay if this stops, and the next try fetches only
+    // the engine.
+    let out = match (out, grokhub_core::tool_engine::engine_for(m.kind)) {
+        (Outcome::Done(r), Some(tool)) => match rd::platform_key() {
+            Some(key) => match tool.download(
+                config_dir,
+                key,
+                &local_engine::HttpEngineFetch,
+                &ctl,
+                &mut |_| {},
+            ) {
+                Ok(_) | Err(rd::Outcome::Done { .. }) => Outcome::Done(r),
+                Err(rd::Outcome::Paused { done }) => Outcome::Paused { done },
+                Err(rd::Outcome::Cancelled) => Outcome::Cancelled,
+                Err(rd::Outcome::BadChecksum) => Outcome::BadChecksum,
+                Err(rd::Outcome::Failed(e)) => Outcome::Failed(e),
+            },
+            None => Outcome::Done(r),
+        },
+        (out, _) => out,
+    };
     match out {
         Outcome::Done(_) => {
             if m.kind == ModelKind::Drafter {
@@ -448,9 +471,10 @@ mod tests {
         assert_eq!(labels, ["Chat", "Drafts", "Image", "Voice", "Other"]);
         assert_eq!(row(&v, MID).state, "inUse");
         assert_eq!(row(&v, MID_DRAFT).state, "download");
-        assert!(v.tabs[2]
-            .empty
-            .is_some_and(|e| e.starts_with("No image models yet")));
+        // The picture model and the guard that checks its pictures.
+        assert_eq!(v.tabs[2].empty, None);
+        assert_eq!(row(&v, "z-image-turbo-q4_k").state, "download");
+        assert_eq!(row(&v, "qwen3-vl-2b-guard-q8_0").state, "download");
         assert_eq!(
             v.tabs[1].all.as_ref().map(|o| o.ids.clone()),
             Some(vec![MID_DRAFT.to_string()])
