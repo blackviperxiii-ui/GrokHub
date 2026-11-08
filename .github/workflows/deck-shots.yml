@@ -38,9 +38,19 @@ jobs:
   shots:
     name: deck shots
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        timeout-minutes: 10
+        with:
+          fetch-depth: 1
+          lfs: false
+          # Sparse checkout implies blob:none: keep history without downloading videos.
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /*
+            !/assets/nyx-anim/raw/
+            !/assets/nyx-anim/app/
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable

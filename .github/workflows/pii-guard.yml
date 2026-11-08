@@ -12,11 +12,19 @@ concurrency:
 jobs:
   pii-guard:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        timeout-minutes: 10
         with:
           fetch-depth: 0
+          lfs: false
+          # Sparse checkout implies blob:none: keep history without downloading videos.
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /*
+            !/assets/nyx-anim/raw/
+            !/assets/nyx-anim/app/
       - name: Block personal info
         env:
           BASE_REF: ${{ github.base_ref }}

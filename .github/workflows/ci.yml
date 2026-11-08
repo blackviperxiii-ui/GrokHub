@@ -62,7 +62,7 @@ jobs:
   # included.
   changes:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     permissions:
       contents: read
       pull-requests: read
@@ -89,8 +89,17 @@ jobs:
       shell_os: ${{ steps.shell.outputs.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        timeout-minutes: 10
         with:
           ref: ${{ env.SOURCE_REF }}
+          fetch-depth: 1
+          lfs: false
+          # Sparse checkout implies blob:none: keep history without downloading videos.
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /*
+            !/assets/nyx-anim/raw/
+            !/assets/nyx-anim/app/
       - name: Source SHA
         id: sha
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
@@ -116,12 +125,14 @@ jobs:
               - '!**/*.md'
               - '!screenshots/**'
               - '!research/**'
+              - '!assets/nyx-anim/**'
             windows:
               - '**'
               - '!docs/**'
               - '!**/*.md'
               - '!screenshots/**'
               - '!research/**'
+              - '!assets/nyx-anim/**'
               - '!ui/**'
               - '!.github/**'
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
@@ -190,11 +201,20 @@ jobs:
   # other jobs; build jobs do not wait on it.
   fmt:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        timeout-minutes: 10
         with:
           ref: ${{ env.SOURCE_REF }}
+          fetch-depth: 1
+          lfs: false
+          # Sparse checkout implies blob:none: keep history without downloading videos.
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /*
+            !/assets/nyx-anim/raw/
+            !/assets/nyx-anim/app/
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
@@ -208,15 +228,23 @@ jobs:
   # no crates.io deps so the compile stays small.
   guards:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     permissions:
       contents: read
       pull-requests: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        timeout-minutes: 10
         with:
           ref: ${{ env.SOURCE_REF }}
           fetch-depth: 0
+          lfs: false
+          # Sparse checkout implies blob:none: keep history without downloading videos.
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /*
+            !/assets/nyx-anim/raw/
+            !/assets/nyx-anim/app/
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
@@ -248,8 +276,17 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        timeout-minutes: 10
         with:
           ref: ${{ env.SOURCE_REF }}
+          fetch-depth: 1
+          lfs: false
+          # Sparse checkout implies blob:none: keep history without downloading videos.
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /*
+            !/assets/nyx-anim/raw/
+            !/assets/nyx-anim/app/
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
@@ -289,8 +326,17 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        timeout-minutes: 10
         with:
           ref: ${{ env.SOURCE_REF }}
+          fetch-depth: 1
+          lfs: false
+          # Sparse checkout implies blob:none: keep history without downloading videos.
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /*
+            !/assets/nyx-anim/raw/
+            !/assets/nyx-anim/app/
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
@@ -331,8 +377,17 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        timeout-minutes: 10
         with:
           ref: ${{ env.SOURCE_REF }}
+          fetch-depth: 1
+          lfs: false
+          # Sparse checkout implies blob:none: keep history without downloading videos.
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /*
+            !/assets/nyx-anim/raw/
+            !/assets/nyx-anim/app/
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
@@ -376,8 +431,17 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        timeout-minutes: 10
         with:
           ref: ${{ env.SOURCE_REF }}
+          fetch-depth: 1
+          lfs: false
+          # Sparse checkout implies blob:none: keep history without downloading videos.
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /*
+            !/assets/nyx-anim/raw/
+            !/assets/nyx-anim/app/
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
@@ -474,8 +538,17 @@ jobs:
       VITE_PHONE_SMOKE: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        timeout-minutes: 10
         with:
           ref: ${{ env.SOURCE_REF }}
+          fetch-depth: 1
+          lfs: false
+          # Sparse checkout implies blob:none: keep history without downloading videos.
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /*
+            !/assets/nyx-anim/raw/
+            !/assets/nyx-anim/app/
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
@@ -534,8 +607,17 @@ jobs:
       VITE_PHONE_SMOKE: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        timeout-minutes: 10
         with:
           ref: ${{ env.SOURCE_REF }}
+          fetch-depth: 1
+          lfs: false
+          # Sparse checkout implies blob:none: keep history without downloading videos.
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /*
+            !/assets/nyx-anim/raw/
+            !/assets/nyx-anim/app/
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
@@ -581,8 +663,17 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        timeout-minutes: 10
         with:
           ref: ${{ env.SOURCE_REF }}
+          fetch-depth: 1
+          lfs: false
+          # Sparse checkout implies blob:none: keep history without downloading videos.
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /*
+            !/assets/nyx-anim/raw/
+            !/assets/nyx-anim/app/
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
@@ -608,8 +699,17 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        timeout-minutes: 10
         with:
           ref: ${{ env.SOURCE_REF }}
+          fetch-depth: 1
+          lfs: false
+          # Sparse checkout implies blob:none: keep history without downloading videos.
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /*
+            !/assets/nyx-anim/raw/
+            !/assets/nyx-anim/app/
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
