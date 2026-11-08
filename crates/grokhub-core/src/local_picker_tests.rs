@@ -425,7 +425,7 @@ fn budgets_from_2_gb_to_48_gb_map_to_one_tier_default() {
 
 #[test]
 fn the_catalog_is_huihui_ai_abliterated_gemma_4_all_pinned() {
-    let models = local_models();
+    let models: Vec<&LocalModel> = crate::local_setup::standard_models().collect();
     assert_eq!(models.len(), 5, "data/local_catalog.toml parses");
     assert!(models.iter().all(|m| !m.name.contains("Qwen")));
     assert!(models
@@ -459,6 +459,23 @@ fn the_catalog_is_huihui_ai_abliterated_gemma_4_all_pinned() {
     assert_eq!(
         crate::local_setup::model_by_id("gemma-4-12b-it-abliterated-q4_k").map(|m| m.sha256),
         Some("8cfe39c96b966b2bc99d908315404914e9128fb35e134ca36f1a199507d6da6b")
+    );
+    // Each one's drafter is the MTP heads file from its own repo, pinned.
+    for m in &models {
+        let d = crate::local_setup::model_by_id(m.drafter.unwrap()).unwrap();
+        assert!(
+            d.is_drafter && d.id.ends_with("-it-abliterated-mtp"),
+            "{}",
+            d.id
+        );
+        assert_eq!((d.repo, d.pairs_with), (m.repo, Some(m.id)));
+        assert_eq!(d.remote_name(), "mtp-ggml-model-bf16.gguf");
+        assert_ne!(d.file, d.remote_name(), "a name of its own on disk");
+        assert!(d.sha256.len() == 64 && d.quant == "BF16" && d.license == "Apache-2.0");
+    }
+    assert_eq!(
+        crate::local_setup::model_by_id("gemma-4-12b-it-abliterated-mtp").map(|m| m.sha256),
+        Some("c24069c9ea03da35c65cdf1d03d9f1dc3c69f962362bee02d79b51a0f4de2261")
     );
     // A stock Gemma 4 or a Muse Glimmer id from an older catalog finds nothing.
     for old in [

@@ -213,6 +213,7 @@ mod mission_page;
 mod mission_ui;
 mod model_download_ui;
 mod model_drop_ui;
+mod model_library_ui;
 mod model_wait_ui;
 mod mods_ui;
 #[cfg(test)]

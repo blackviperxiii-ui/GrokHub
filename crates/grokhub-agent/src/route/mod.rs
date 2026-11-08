@@ -41,6 +41,7 @@ pub mod local_fit;
 pub mod local_gov;
 pub mod local_health;
 pub mod local_http;
+pub mod local_live;
 pub mod local_perf;
 pub mod local_sidecar;
 pub mod local_spec;

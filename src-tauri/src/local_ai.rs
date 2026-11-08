@@ -650,12 +650,12 @@ fn ram_mb() -> Option<u64> {
 }
 
 #[cfg(unix)]
-fn free_disk_mb(dir: &Path) -> Option<u64> {
+pub(crate) fn free_disk_mb(dir: &Path) -> Option<u64> {
     ls::parse_df_avail_mb(&run("df", &["-Pk", &dir.to_string_lossy()])?)
 }
 
 #[cfg(windows)]
-fn free_disk_mb(dir: &Path) -> Option<u64> {
+pub(crate) fn free_disk_mb(dir: &Path) -> Option<u64> {
     let quoted = dir.display().to_string().replace('\'', "''");
     powershell_number(&format!(
         "([System.IO.DriveInfo]::new('{quoted}')).AvailableFreeSpace"
@@ -664,7 +664,7 @@ fn free_disk_mb(dir: &Path) -> Option<u64> {
 }
 
 #[cfg(not(any(unix, windows)))]
-fn free_disk_mb(_dir: &Path) -> Option<u64> {
+pub(crate) fn free_disk_mb(_dir: &Path) -> Option<u64> {
     None
 }
 
@@ -677,7 +677,7 @@ fn models_dir() -> Option<PathBuf> {
 }
 
 /// The nearest folder that exists, for the free-space read.
-fn existing(dir: &Path) -> PathBuf {
+pub(crate) fn existing(dir: &Path) -> PathBuf {
     dir.ancestors()
         .find(|d| d.is_dir())
         .map(Path::to_path_buf)
