@@ -126,7 +126,7 @@ fn state() -> &'static Mutex<State> {
 /// Where new draft downloads land: the shared `~/GrokHub/models/drafters`
 /// that the cabin uses and the engine searches (the config folder only when
 /// there is no home folder).
-fn drafters_dir(config_dir: &Path) -> PathBuf {
+pub(crate) fn drafters_dir(config_dir: &Path) -> PathBuf {
     ld::drafters_root().unwrap_or_else(|| legacy_drafters_dir(config_dir))
 }
 
@@ -363,7 +363,7 @@ impl rd::Fetch for HttpEngineFetch {
     }
 }
 
-struct HfFetch;
+pub(crate) struct HfFetch;
 
 /// Hosts a draft model download may touch: the Hub and its LFS CDN, which the
 /// Hub redirects to (`cdn-lfs.hf.co`, `cdn-lfs-us-1.hf.co`, …).
@@ -480,16 +480,16 @@ fn outcome_message(manifest: &Manifest, out: &EngineOutcome) -> String {
 }
 
 static ENGINE_BUSY: AtomicBool = AtomicBool::new(false);
-static DRAFTER_BUSY: AtomicBool = AtomicBool::new(false);
+pub(crate) static DRAFTER_BUSY: AtomicBool = AtomicBool::new(false);
 
 /// One download at a time. The flag clears when the guard drops, so an early
 /// error before the worker thread starts (a poisoned lock, say) never leaves
 /// the button wedged on a job that isn't running.
-struct Busy(&'static AtomicBool);
+pub(crate) struct Busy(&'static AtomicBool);
 
 impl Busy {
     /// `None` when a download already holds the flag.
-    fn claim(flag: &'static AtomicBool) -> Option<Self> {
+    pub(crate) fn claim(flag: &'static AtomicBool) -> Option<Self> {
         flag.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .is_ok()
             .then_some(Busy(flag))
