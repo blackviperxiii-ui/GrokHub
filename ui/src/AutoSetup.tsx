@@ -1,7 +1,7 @@
 // Auto setup on the page: the first-run window, the note in the corner,
 // Settings → Auto setup, and Settings → Appearance's text size and motion.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { autoSetup, TEXT_STEPS, type Act, type AutoReply, type Line, type Note } from "./autoSetup";
+import { autoSetup, TEXT_STEPS, type Act, type AutoReply, type Line, type Note } from "./autoSetupApi";
 import { PRODUCT_NAME } from "./brand";
 import { Toggle } from "./Toggle";
 

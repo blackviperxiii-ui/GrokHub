@@ -67,7 +67,7 @@ import { PRODUCT_NAME } from "./brand";
 import { isSlashCommand, SlashMenu, useSlashHits } from "./SlashMenu";
 import { needsSettings } from "./ui";
 import { SavedCard } from "./SavedCard";
-import { settingAsk } from "./autoSetup";
+import { settingAsk } from "./autoSetupApi";
 
 export type Item =
   | { kind: "user"; text: string }

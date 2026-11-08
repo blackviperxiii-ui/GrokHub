@@ -54,7 +54,7 @@ const api = vi.hoisted(() => ({
 const auto = vi.hoisted(() => ({
   settingAsk: vi.fn<(text: string) => Promise<string | null>>(() => Promise.resolve(null)),
 }));
-vi.mock("./autoSetup", () => auto);
+vi.mock("./autoSetupApi", () => auto);
 
 vi.mock("./api", () => ({
   sendChat: api.sendChat,
