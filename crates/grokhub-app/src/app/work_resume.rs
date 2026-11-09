@@ -27,6 +27,10 @@ use grokhub_core::{BgOrigin, BG_TASK_MAX};
 /// How often the auto-resume pass looks at the board.
 const AUTO_TICK: Duration = Duration::from_secs(5);
 
+/// Swap cuts in a row that resume one card by themselves; past that it waits
+/// for the Workboard.
+const SWAP_RESUME_MAX: u8 = 2;
+
 /// The resume turn and the ticks. Memory only.
 #[derive(Debug, Default)]
 pub(super) struct WorkResumeView {
@@ -39,6 +43,10 @@ pub(super) struct WorkResumeView {
     pub booted: bool,
     /// The route moved the live turn on or off the device: cut it next frame.
     pub swap_cut: bool,
+    /// The card a swap cut resumes once the halted turn has let go (LO-51).
+    pub swap_resume: Option<String>,
+    /// The card swap cuts last resumed, and how many times in a row.
+    pub swap_resumed: Option<(String, u8)>,
     pub next_auto: Option<Instant>,
 }
 
@@ -56,9 +64,30 @@ impl Cabin {
     pub(super) fn tick_work_resume(&mut self) {
         self.interrupt_boot_orphans();
         if std::mem::take(&mut self.work_resume.swap_cut) && self.running && self.inflight_open {
+            let card = self
+                .chat_job_thread
+                .as_deref()
+                .and_then(|thread| wr::run_card_index(&self.board, thread))
+                .map(|i| self.board[i].id.clone());
             self.interrupt_turn_card(InterruptCause::ModelSwap);
-            self.halt_in_flight();
-            self.status = "The model changed mid-run. Resume it from the Workboard.".into();
+            self.halt_in_flight_for(InterruptCause::ModelSwap.text());
+            // The cabin cut the turn, not the user: it picks the turn back up
+            // on the new model, a few times in a row at most.
+            let again = match (&card, &self.work_resume.swap_resumed) {
+                (Some(id), Some((last, n))) if last == id => *n < SWAP_RESUME_MAX,
+                (Some(_), _) => true,
+                (None, _) => false,
+            };
+            if again {
+                self.work_resume.swap_resume = card;
+                self.status = "Switched models, picking this back up".into();
+            } else {
+                self.status = "The model changed mid-run. Resume it from the Workboard.".into();
+            }
+        } else if !self.running {
+            if let Some(id) = self.work_resume.swap_resume.take() {
+                self.resume_after_swap(&id);
+            }
         }
         let now = Instant::now();
         if self.work_resume.next_auto.is_some_and(|at| now < at) {
@@ -66,6 +95,22 @@ impl Cabin {
         }
         self.work_resume.next_auto = Some(now + AUTO_TICK);
         self.tick_auto_resume();
+    }
+
+    /// Resume the card a swap cut, on the model the route now picks.
+    fn resume_after_swap(&mut self, id: &str) {
+        let n = match &self.work_resume.swap_resumed {
+            Some((last, n)) if last == id => n + 1,
+            _ => 1,
+        };
+        self.work_resume.swap_resumed = Some((id.to_string(), n));
+        if let Err(why) = self.resume_card_now(id, false) {
+            log_line(id, wr::LOG_NOTE, "swap resume failed");
+            self.status =
+                format!("The model changed mid-run. Resume it from the Workboard. ({why})");
+        } else {
+            log_line(id, wr::LOG_NOTE, "resumed after a model swap");
+        }
     }
 
     /// Once, after the bell first looked at the board (so these cards ring):

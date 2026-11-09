@@ -365,7 +365,7 @@ impl Cabin {
     /// from cloning every thread for it.
     pub(super) fn retake_permission_session(&mut self) {
         if self.running {
-            self.halt_in_flight();
+            self.halt_in_flight_for("the permission setting changed");
         }
         self.acp = None;
         if let Some(t) = self.threads.get_mut(self.thread_idx) {

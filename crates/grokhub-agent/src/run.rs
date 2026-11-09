@@ -587,7 +587,8 @@ fn run_turn(
         (input.depth == 0)
             .then(|| crate::voice_session::turn_block(input.conversation_id))
             .flatten(),
-    );
+    )
+    .superseding(history);
     crate::prefix_cache::push_user_turn(history, &volatile, user_text, image);
     // Item 31: the Auto judge weighs each call against the person's own asks.
     if input.depth == 0 {

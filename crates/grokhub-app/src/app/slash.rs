@@ -311,7 +311,7 @@ impl Cabin {
             Slash::Scratch => self.new_thread(true),
             Slash::Clear => {
                 if self.running {
-                    self.halt_in_flight();
+                    self.halt_in_flight_for("the chat was cleared");
                     self.finish_hub_dispatch("Cleared in-flight reply", false);
                 }
                 self.drop_leaving_thread_chrome();
@@ -329,7 +329,7 @@ impl Cabin {
             }
             Slash::Undo => {
                 if self.running {
-                    self.halt_in_flight();
+                    self.halt_in_flight_for("you undid the last turn");
                     self.finish_hub_dispatch("Undid in-flight reply", false);
                     self.status = "Undid in-flight reply".into();
                 } else if self.messages.iter().any(|m| m.0 == "assistant") {
@@ -469,7 +469,7 @@ impl Cabin {
                 self.project_sel = upsert_bound(&mut self.projects, &p);
                 self.touch_projects();
                 if self.running {
-                    self.halt_in_flight();
+                    self.halt_in_flight_for("the project folder changed");
                 }
                 self.acp = None;
                 if tree_changed {
@@ -488,7 +488,7 @@ impl Cabin {
                 self.cfg.project_dir.clear();
                 self.project_sel = None;
                 if self.running {
-                    self.halt_in_flight();
+                    self.halt_in_flight_for("the project folder changed");
                 }
                 self.acp = None;
                 if let Some(t) = self.threads.get_mut(self.thread_idx) {
@@ -563,7 +563,7 @@ impl Cabin {
                 self.project_sel = upsert_bound(&mut self.projects, &p);
                 self.touch_projects();
                 if self.running {
-                    self.halt_in_flight();
+                    self.halt_in_flight_for("the project folder changed");
                 }
                 self.acp = None;
                 if tree_changed {
