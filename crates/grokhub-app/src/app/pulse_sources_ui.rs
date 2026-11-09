@@ -768,7 +768,7 @@ impl Cabin {
             if on {
                 changed |= self.ui_source_list(ui, kind);
             }
-            ui.add_space(6.0);
+            ui.add_space(8.0);
         }
         self.ui_steam_source(ui);
         self.ui_wishlist_source(ui);
@@ -791,7 +791,7 @@ impl Cabin {
                     .color(crate::theme::muted()),
             );
         });
-        ui.add_space(6.0);
+        ui.add_space(8.0);
         ui.add_space(4.0);
         crate::cards::help_text(
             ui,

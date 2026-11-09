@@ -728,12 +728,12 @@ fn fix_card_ui(
                     .wrap(),
                 );
                 for (heading, text) in &card.sections {
-                    ui.add_space(6.0);
+                    ui.add_space(8.0);
                     ui.add(muted(heading, 12.0));
                     ui.add(strong(text, 13.0));
                 }
                 if !card.steps.is_empty() {
-                    ui.add_space(6.0);
+                    ui.add_space(8.0);
                     ui.add(muted("Steps", 12.0));
                     for (line, cmd) in &card.steps {
                         if card.checklist {

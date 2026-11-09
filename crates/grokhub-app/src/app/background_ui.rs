@@ -101,7 +101,7 @@ impl Cabin {
         let rows: Vec<BackgroundRow> = statuses.iter().map(|s| background_row(s, now)).collect();
         for row in &rows {
             paint_background_row(ui, row);
-            ui.add_space(6.0);
+            ui.add_space(8.0);
         }
         // Sub-minute "Next check in Ns" labels need a 1 s tick; otherwise the
         // cabin heartbeat (~15 s) is enough.
@@ -116,7 +116,7 @@ fn paint_background_row(ui: &mut egui::Ui, row: &BackgroundRow) {
         .fill(crate::theme::surface())
         .corner_radius(12.0)
         .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-        .inner_margin(egui::Margin::same(10))
+        .inner_margin(egui::Margin::same(12))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {

@@ -19,8 +19,6 @@ const ICON: f32 = 32.0;
 pub(super) const FOCUS_RING: egui::Color32 = egui::Color32::from_rgb(0x4a, 0x90, 0xe2);
 /// The sign-in line under the header.
 const NOTE_AMBER: egui::Color32 = egui::Color32::from_rgb(0xf4, 0xb7, 0x40);
-/// Left and right padding of the Pulse page.
-const PAGE_PAD_X: f32 = 24.0;
 /// The stream never grows wider than this; wider pages center it.
 pub(super) const STREAM_MAX_W: f32 = 800.0;
 /// Pages narrower than this keep Run on each idea row at rest.
@@ -46,7 +44,7 @@ pub(super) struct PulseColumn {
 
 /// One centered column at every width.
 pub(super) fn pulse_column(page_w: f32) -> PulseColumn {
-    let inner = (page_w - PAGE_PAD_X * 2.0).max(0.0);
+    let inner = (page_w - crate::theme::page_margin_for(page_w) * 2.0).max(0.0);
     PulseColumn {
         width: inner.min(STREAM_MAX_W),
         narrow: page_w < NARROW_W,
@@ -598,7 +596,7 @@ fn quick_button_resp(ui: &mut egui::Ui, label: &str, style: Quick) -> egui::Resp
 /// The row's type ("Do", "Learn"…) as a plain tag: a small dot in the type's
 /// color and the word in quiet text, so it never reads as a button.
 fn paint_type_tag(ui: &mut egui::Ui, kind: PulseType) {
-    ui.spacing_mut().item_spacing.x = 5.0;
+    ui.spacing_mut().item_spacing.x = 4.0;
     let (rect, _) = ui.allocate_exact_size(egui::vec2(6.0, 6.0), egui::Sense::hover());
     ui.painter()
         .circle_filled(rect.center(), 3.0, type_color(kind));
@@ -632,11 +630,11 @@ pub(super) fn paint_pulse_row(
         ui.horizontal_top(|ui| {
             ui.add_space(2.0);
             icon(ui, category_glyph(cat), category_tint(cat));
-            ui.add_space(10.0);
+            ui.add_space(12.0);
             let text_w = (ui.available_width() - 36.0).max(80.0);
             ui.vertical(|ui| {
                 ui.set_width(text_w);
-                ui.spacing_mut().item_spacing.y = 3.0;
+                ui.spacing_mut().item_spacing.y = 4.0;
                 let hot = st.title_hot || st.focused;
                 let mut title = RichText::new(pc::i_can_title(card))
                     .size(crate::theme::FONT_UI)
@@ -1290,11 +1288,12 @@ impl Cabin {
     pub(super) fn ui_pulse(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         self.poll_pulse_images();
+        let pad = crate::theme::page_margin(&ctx);
         let frame = egui::Frame::NONE
             .fill(crate::theme::bg())
-            .inner_margin(egui::Margin::symmetric(PAGE_PAD_X as i8, 20));
+            .inner_margin(egui::Margin::symmetric(pad as i8, 24));
         let _ = super::dock_ui::page_panel(ui, self.cfg.dock_panels, frame, |ui| {
-            let col = pulse_column(ui.available_width() + PAGE_PAD_X * 2.0);
+            let col = pulse_column(ui.available_width() + pad * 2.0);
             self.pulse_view.narrow = col.narrow;
             egui::ScrollArea::vertical()
                 .id_salt("pulse-scroll")
@@ -1329,7 +1328,7 @@ impl Cabin {
                     .color(crate::theme::fg()),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
+                ui.spacing_mut().item_spacing.x = 8.0;
                 if crate::cards::ghost_pill(ui, "Feed instructions") {
                     self.open_feed_instructions();
                 }
@@ -1349,7 +1348,7 @@ impl Cabin {
             self.pulse_view.signin_note = false;
         }
         if self.pulse_view.signin_note {
-            ui.add_space(6.0);
+            ui.add_space(8.0);
             ui.horizontal(|ui| {
                 ui.label(
                     RichText::new(pc::IDEAS_SIGN_IN)
@@ -1376,7 +1375,7 @@ impl Cabin {
         }
         self.paint_brief_offer(ui);
         self.ui_helper_offers(ui);
-        ui.add_space(14.0);
+        ui.add_space(16.0);
     }
 
     /// One subtle line under the header: how many posts are on Pulse, with
@@ -1479,10 +1478,10 @@ impl Cabin {
                     .size(crate::theme::FONT_BODY)
                     .color(crate::theme::muted()),
             );
-            ui.add_space(10.0);
+            ui.add_space(12.0);
             for _ in 0..3 {
                 paint_skeleton_row(ui);
-                ui.add_space(14.0);
+                ui.add_space(16.0);
             }
             // Poll the ideas channel only while a suggest is in flight.
             ui.ctx()
@@ -1645,7 +1644,7 @@ impl Cabin {
         super::feed_ui::kit_pulse_feed_post(ui, |ui| {
             ui.horizontal_top(|ui| {
                 paint_feed_icon(ui, card);
-                ui.add_space(10.0);
+                ui.add_space(12.0);
                 ui.vertical(|ui| {
                     ui.set_width(ui.available_width());
                     ui.spacing_mut().item_spacing.y = 4.0;
@@ -2391,7 +2390,7 @@ impl Cabin {
                     .fill(crate::theme::elevated())
                     .stroke(egui::Stroke::new(1.0_f32, crate::theme::border_strong()))
                     .corner_radius(16.0)
-                    .inner_margin(egui::Margin::same(22)),
+                    .inner_margin(egui::Margin::same(24)),
             )
             .show(ctx, |ui| {
                 ui.set_width(560.0_f32.min(ctx.content_rect().width() - 80.0));
@@ -2431,7 +2430,7 @@ impl Cabin {
                         .char_limit(pc::FEED_INSTRUCTIONS_CAP)
                         .font(egui::FontId::proportional(crate::theme::FONT_BODY)),
                 );
-                ui.add_space(6.0);
+                ui.add_space(8.0);
                 ui.label(
                     RichText::new(format!(
                         "I'll update these after {left} more {}.",

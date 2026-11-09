@@ -182,7 +182,7 @@ pub(super) fn paint_drag_ghost(ctx: &egui::Context, title: &str) {
                 .fill(crate::theme::panel())
                 .stroke(egui::Stroke::new(1.0_f32, crate::theme::link()))
                 .corner_radius(10.0)
-                .inner_margin(egui::Margin::symmetric(10, 6))
+                .inner_margin(egui::Margin::symmetric(12, 8))
                 .show(ui, |ui| {
                     ui.label(
                         RichText::new(title.chars().take(60).collect::<String>())
@@ -199,7 +199,7 @@ pub(super) const BOARD_DROP_MIN_H: f32 = 180.0;
 impl Cabin {
     pub(super) fn ui_command(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default()
-            .frame(crate::theme::page_frame())
+            .frame(crate::theme::page_frame(ui.ctx()))
             .show(ui, |ui| {
                 if crate::cards::page_header(ui, "Command", "Run") {
                     let line = self.cmd_line.trim().to_string();
@@ -219,7 +219,7 @@ impl Cabin {
                     .fill(crate::theme::elevated())
                     .corner_radius(12.0)
                     .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-                    .inner_margin(egui::Margin::symmetric(10, 6))
+                    .inner_margin(egui::Margin::symmetric(12, 8))
                     .show(ui, |ui| {
                         let enter = ui
                             .add(
@@ -315,7 +315,7 @@ impl Cabin {
                             Err(err) => self.status = err,
                         }
                     }
-                    ui.add_space(6.0);
+                    ui.add_space(8.0);
                 }
                 let hooks: Vec<grokhub_agent::HookInfo> = self
                     .native_hooks
@@ -384,7 +384,7 @@ impl Cabin {
 
     pub(super) fn ui_agents(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default()
-            .frame(crate::theme::page_frame())
+            .frame(crate::theme::page_frame(ui.ctx()))
             .show(ui, |ui| {
                 let _ = crate::cards::page_header(ui, "Queue", "");
                 ui.label(
@@ -420,7 +420,7 @@ impl Cabin {
                                 None,
                                 *done,
                             );
-                            ui.add_space(6.0);
+                            ui.add_space(8.0);
                         }
                         ui.add_space(12.0);
                     }
@@ -437,7 +437,7 @@ impl Cabin {
                                 None,
                                 done,
                             );
-                            ui.add_space(6.0);
+                            ui.add_space(8.0);
                         }
                         ui.add_space(12.0);
                     }
@@ -458,7 +458,7 @@ impl Cabin {
                             None,
                             false,
                         );
-                        ui.add_space(6.0);
+                        ui.add_space(8.0);
                         if crate::cards::ghost_pill(ui, "Run") {
                             run_at = Some(i);
                         }
@@ -497,7 +497,7 @@ impl Cabin {
 
     pub(super) fn ui_devices(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default()
-            .frame(crate::theme::page_frame())
+            .frame(crate::theme::page_frame(ui.ctx()))
             .show(ui, |ui| {
                 if crate::cards::page_header(
                     ui,
@@ -633,7 +633,7 @@ impl Cabin {
     pub(super) fn ui_memory(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default()
             .frame(
-                crate::theme::page_frame(),
+                crate::theme::page_frame(ui.ctx()),
             )
             .show(ui, |ui| {
                 let _ = crate::cards::page_header(ui, "Memory", "");
@@ -858,7 +858,7 @@ impl Cabin {
                         .fill(crate::theme::panel())
                         .corner_radius(crate::theme::SHEET_RADIUS)
                         .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-                        .inner_margin(egui::Margin::same(crate::theme::PAGE_MARGIN as i8))
+                        .inner_margin(egui::Margin::same(crate::theme::page_margin(ui.ctx()) as i8))
                         .show(ui, |ui| {
                             ui.set_max_width(520.0);
                             if crate::cards::get_started_panel(
@@ -917,12 +917,12 @@ impl Cabin {
             // Repaint so the button disarms on its own when the window lapses.
             ui.ctx().request_repaint_after(DELETE_ALL_ARM);
         }
-        ui.add_space(14.0);
+        ui.add_space(16.0);
     }
 
     pub(super) fn ui_history(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default()
-            .frame(crate::theme::page_frame())
+            .frame(crate::theme::page_frame(ui.ctx()))
             .show(ui, |ui| {
             self.history_header(ui);
 page_body(ui, "history", |ui| {
@@ -933,7 +933,7 @@ page_body(ui, "history", |ui| {
             let marks = session_markers(&self.threads, self.thread_idx);
             if !marks.is_empty() {
                 ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
+                    ui.spacing_mut().item_spacing.x = 8.0;
                     for mark in &marks {
                         if crate::cards::ghost_pill(ui, &mark.label) {
                             if let Some(i) = self.threads.iter().position(|t| t.id == mark.thread_id)
@@ -967,7 +967,7 @@ page_body(ui, "history", |ui| {
                     .fill(crate::theme::elevated())
                     .corner_radius(10.0)
                     .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-                    .inner_margin(egui::Margin::symmetric(10, 6))
+                    .inner_margin(egui::Margin::symmetric(12, 8))
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         ui.label(RichText::new(line).size(crate::theme::TYPE_BODY).color(crate::theme::fg()));
@@ -980,7 +980,7 @@ page_body(ui, "history", |ui| {
                 if hit.clicked() {
                     open = Some(target.clone());
                 }
-                ui.add_space(6.0);
+                ui.add_space(8.0);
             }
             if let Some(target) = open {
                 self.open_history_hit(&target);
@@ -1038,7 +1038,7 @@ page_body(ui, "history", |ui| {
                         crate::cards::TileHit::Add => del = Some(i),
                         crate::cards::TileHit::None => {}
                     }
-                    ui.add_space(6.0);
+                    ui.add_space(8.0);
                 }
                 if let Some(i) = open {
                     self.switch_thread(i);
@@ -1067,7 +1067,7 @@ page_body(ui, "history", |ui| {
             || self.palette_open
             || self.shortcuts_open
             || self.confirm.as_ref().is_some_and(|c| c.paints_overlay());
-        let frame = crate::theme::page_frame();
+        let frame = crate::theme::page_frame(ui.ctx());
         let _ = super::dock_ui::page_panel(ui, self.cfg.dock_panels, frame, |ui| {
             if crate::cards::page_header(ui, "Workboards", "New card") {
                 self.board_edit = None;
@@ -1091,7 +1091,7 @@ page_body(ui, "history", |ui| {
                     .fill(crate::theme::elevated())
                     .corner_radius(crate::theme::CARD_RADIUS)
                     .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-                    .inner_margin(egui::Margin::same(14))
+                    .inner_margin(egui::Margin::same(16))
                     .show(ui, |ui| {
                         ui.add(
                             egui::TextEdit::singleline(&mut self.board_title)
@@ -1194,7 +1194,7 @@ page_body(ui, "history", |ui| {
                                     .size(crate::theme::FONT_TIP)
                                     .color(crate::theme::muted()),
                             );
-                            ui.add_space(6.0);
+                            ui.add_space(8.0);
                             for (id, _) in &follow {
                                 self.paint_board_card(ui, id, true, &mut act);
                                 ui.add_space(8.0);
@@ -1238,7 +1238,7 @@ page_body(ui, "history", |ui| {
                                 let col_top = ui.cursor().min;
                                 let col_w = ui.available_width();
                                 crate::cards::section_label(ui, col.label());
-                                ui.add_space(6.0);
+                                ui.add_space(8.0);
                                 let ids: Vec<String> =
                                     grokhub_core::work_triage::in_column(&self.board, *col)
                                         .into_iter()
@@ -1606,14 +1606,14 @@ page_body(ui, "history", |ui| {
 
     pub(super) fn ui_skills(&mut self, ui: &mut egui::Ui) {
         self.ensure_native_listing();
-        let frame = crate::theme::page_frame();
+        let frame = crate::theme::page_frame(ui.ctx());
         let _ = super::dock_ui::page_panel(ui, self.cfg.dock_panels, frame, |ui| {
             if crate::cards::page_header(ui, "Skills", "Refresh") {
                 self.skills_tab_changed();
                 self.ensure_native_listing();
                 self.skill_list = skills::list_skills();
             }
-            ui.add_space(10.0);
+            ui.add_space(12.0);
             ui.horizontal(|ui| {
                 self.skills_tab_new_button(ui);
                 if crate::cards::ghost_pill(ui, "Connectors") {

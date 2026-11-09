@@ -313,7 +313,7 @@ impl Cabin {
                                 crate::theme::muted()
                             },
                         ));
-                        ui.add_space(6.0);
+                        ui.add_space(8.0);
                     }
                     if thinking {
                         let live = if stream.trim().is_empty() {
@@ -328,7 +328,7 @@ impl Cabin {
                         );
                     }
                 });
-            ui.add_space(6.0);
+            ui.add_space(8.0);
             ui.horizontal(|ui| {
                 let send_w = 64.0;
                 let edit = ui.add(

@@ -660,7 +660,7 @@ impl Cabin {
                     .color(crate::theme::muted()),
             );
         };
-        ui.add_space(6.0);
+        ui.add_space(8.0);
         ui.label(
             egui::RichText::new(format!(
                 "Battle.net · {} · {}",

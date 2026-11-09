@@ -186,7 +186,7 @@ impl Cabin {
                 self.open_memory_file("USER.md");
             }
         });
-        ui.add_space(6.0);
+        ui.add_space(8.0);
         let mut on = self.know_me().on;
         if ui
             .checkbox(
@@ -219,7 +219,7 @@ impl Cabin {
         if changed {
             self.save_know_me();
         }
-        ui.add_space(6.0);
+        ui.add_space(8.0);
         let scanning = self.sources.know_me.rx.is_some();
         if scanning {
             ui.ctx()

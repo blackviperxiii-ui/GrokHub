@@ -375,9 +375,9 @@ impl Cabin {
         if let Some((row, act)) = picked {
             self.take_connector_act(&row, act);
         }
-        ui.add_space(20.0);
+        ui.add_space(24.0);
         self.ui_github_connector(ui);
-        ui.add_space(20.0);
+        ui.add_space(24.0);
         self.ui_hooks_section(ui, &q);
     }
 

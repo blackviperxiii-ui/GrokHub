@@ -166,7 +166,7 @@ impl Cabin {
             ui,
             "From what you open, run, snooze, dismiss or skip. Only the outcome, the kind of card and its source are kept, on this computer.",
         );
-        ui.add_space(6.0);
+        ui.add_space(8.0);
         let cats: Vec<(String, reactions::CategoryScore)> = self
             .reactions_now()
             .categories

@@ -722,7 +722,7 @@ impl Cabin {
                         egui::vec2(chips_w, chip_h),
                         egui::Layout::left_to_right(egui::Align::Min).with_main_wrap(true),
                         |ui| {
-                            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                            ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
                             let (plus_r, plus) = ui.allocate_exact_size(
                                 egui::vec2(crate::theme::IMAGINE_HIT, crate::theme::IMAGINE_HIT),
                                 egui::Sense::click(),
@@ -874,7 +874,7 @@ impl Cabin {
                             let style_inner = egui::Frame::NONE
                                 .fill(crate::theme::panel())
                                 .corner_radius(crate::theme::IMAGINE_HIT)
-                                .inner_margin(egui::Margin::symmetric(10, 6))
+                                .inner_margin(egui::Margin::symmetric(12, 8))
                                 .show(ui, |ui| {
                                     ui.set_height(crate::theme::IMAGINE_HIT - 12.0);
                                     ui.set_min_width(56.0);
@@ -914,7 +914,7 @@ impl Cabin {
                             let aspect_inner = egui::Frame::NONE
                                 .fill(crate::theme::panel())
                                 .corner_radius(crate::theme::IMAGINE_HIT)
-                                .inner_margin(egui::Margin::symmetric(10, 6))
+                                .inner_margin(egui::Margin::symmetric(12, 8))
                                 .show(ui, |ui| {
                                     ui.set_height(crate::theme::IMAGINE_HIT - 12.0);
                                     ui.set_min_width(56.0);
@@ -953,7 +953,7 @@ impl Cabin {
                             let more_inner = egui::Frame::NONE
                                 .fill(crate::theme::panel())
                                 .corner_radius(crate::theme::IMAGINE_HIT)
-                                .inner_margin(egui::Margin::symmetric(10, 6))
+                                .inner_margin(egui::Margin::symmetric(12, 8))
                                 .show(ui, |ui| {
                                     ui.set_height(crate::theme::IMAGINE_HIT - 12.0);
                                     ui.horizontal_centered(|ui| {
@@ -1002,7 +1002,7 @@ impl Cabin {
                         egui::vec2(send_w, chip_h),
                         egui::Layout::right_to_left(egui::Align::Center),
                         |ui| {
-                            ui.spacing_mut().item_spacing.x = 6.0;
+                            ui.spacing_mut().item_spacing.x = 8.0;
                             let go = composer_go(self.running, ready);
                             let send = crate::icons::paint_bar_icon(
                                 ui,
@@ -1635,9 +1635,9 @@ impl Cabin {
             return false;
         }
         let mut settings = false;
-        ui.add_space(6.0);
+        ui.add_space(8.0);
         ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+            ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
             if !self.imagine_native.note.is_empty() {
                 ui.label(
                     RichText::new(&self.imagine_native.note)
@@ -1681,9 +1681,9 @@ impl Cabin {
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
                 egui::Frame::popup(ui.style())
-                    .inner_margin(egui::Margin::same(10))
+                    .inner_margin(egui::Margin::same(12))
                     .show(ui, |ui| {
-                        ui.spacing_mut().item_spacing = egui::vec2(6.0, 8.0);
+                        ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
                         self.ui_imagine_more_account(ui);
                         match self.imagine_kind {
                             ImagineKind::Image => self.ui_imagine_more_image(ui),

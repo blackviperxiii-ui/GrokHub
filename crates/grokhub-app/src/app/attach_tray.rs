@@ -545,7 +545,7 @@ impl Cabin {
                     .fill(crate::theme::surface())
                     .corner_radius(8.0)
                     .stroke(egui::Stroke::new(1.0, crate::theme::border()))
-                    .inner_margin(egui::Margin::same(6));
+                    .inner_margin(egui::Margin::same(8));
                 frame.show(ui, |ui| {
                     ui.horizontal(|ui| {
                         if let Some(id) = tex_id {

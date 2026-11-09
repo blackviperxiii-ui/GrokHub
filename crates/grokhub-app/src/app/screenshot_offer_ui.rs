@@ -148,7 +148,7 @@ impl Cabin {
             return;
         };
         // Same pills and spacing as the composer chips under it.
-        ui.add_space(6.0);
+        ui.add_space(8.0);
         let (explain, dismiss) = ui
             .horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;

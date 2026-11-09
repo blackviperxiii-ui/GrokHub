@@ -67,7 +67,7 @@ pub(super) fn show(
         .fill(crate::theme::surface())
         .stroke(egui::Stroke::new(1.0, crate::theme::border()))
         .corner_radius(crate::theme::RADIUS_SM)
-        .inner_margin(egui::Margin::same(14))
+        .inner_margin(egui::Margin::same(16))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
@@ -317,7 +317,7 @@ fn files_list(
         .map(|f| f.deps.iter().map(String::as_str).collect())
         .unwrap_or_default();
     if !deps.is_empty() {
-        ui.add_space(6.0);
+        ui.add_space(8.0);
         caption(ui, "NEEDS");
         ui.label(
             egui::RichText::new(deps.join(", "))
