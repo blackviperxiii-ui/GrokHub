@@ -1354,13 +1354,15 @@ mod tests {
         let page = load(&d.config, None, NOW).expect("load");
         let post = &page.feed[0];
         assert!(post.delete && !post.snooze, "{post:?}");
-        // A reminder gets Snooze only; an unclear card gets both.
-        let mut remind = reported();
-        remind.title = "Check the Bluetooth fix tomorrow".into();
-        let d = dirs("offers-remind", &[remind]);
+        // A schedule gets Snooze only; an unclear digest gets both.
+        let mut remind = sample();
+        remind[1].kind = UpdateKind::ScheduleCreated;
+        let d = dirs("offers-remind", &remind);
         let post = &load(&d.config, None, NOW).expect("load").feed[0];
         assert!(post.snooze && !post.delete, "{post:?}");
-        let d = dirs("offers-plain", &[reported()]);
+        let mut plain = sample();
+        plain[1].kind = UpdateKind::Digest;
+        let d = dirs("offers-plain", &plain);
         let post = &load(&d.config, None, NOW).expect("load").feed[0];
         assert!(post.snooze && post.delete, "{post:?}");
     }
