@@ -40,9 +40,11 @@ fn apple(ram_mb: u64) -> Machine {
 fn page(m: &Machine) -> (Vec<(String, &'static str)>, String, Picker) {
     let p = m.profile();
     let picker = picker(&p, &BenchCache::new(), &[], &LocalAiConfig::default());
+    // The default rows; the optional makers have their own test.
     let order = picker
         .models
         .iter()
+        .filter(|r| !r.optional)
         .map(|r| (r.name.clone(), r.bucket))
         .collect();
     (order, picker.selected.clone(), picker)
@@ -145,7 +147,10 @@ fn a_24_gb_gpu_recommends_every_model_and_preselects_31b() {
             ("Gemma 4 E2B", "recommended"),
         ]
     );
-    assert!(picker.models.iter().all(|r| !r.optional));
+    assert!(
+        order.len() < picker.models.len(),
+        "the optional makers show too"
+    );
     assert_eq!(
         why(&picker, "Gemma 4 31B"),
         "Fits in 24 GB of GPU memory, about 35 tok/s."
@@ -527,4 +532,29 @@ fn the_running_rows_offer_keep_loaded_and_say_when_nothing_runs() {
     let r = running(&dir);
     assert!(r.lines[0].starts_with("Running now: "), "{:?}", r.lines);
     assert_eq!(r.kept_loaded, local_sidecar::keep_loaded());
+}
+
+#[test]
+fn optional_makers_follow_the_defaults_and_are_never_preselected() {
+    for m in [
+        machine(Vec::new(), 8_192),
+        machine(vec![gpu("RTX 4090", 24_576)], 65_536),
+        apple(16_384),
+    ] {
+        let (_, selected, picker) = page(&m);
+        assert_eq!(picker.models.iter().filter(|r| r.optional).count(), 20);
+        assert!(!picker.models.iter().any(|r| r.optional && r.preselected));
+        assert!(!ls::model_by_id(&selected).is_some_and(|x| x.optional));
+        // Within a bucket, no optional row sits above a default one.
+        for w in picker.models.windows(2) {
+            if w[0].bucket == w[1].bucket {
+                assert!(
+                    !(w[0].optional && !w[1].optional),
+                    "{} before {}",
+                    w[0].name,
+                    w[1].name
+                );
+            }
+        }
+    }
 }
