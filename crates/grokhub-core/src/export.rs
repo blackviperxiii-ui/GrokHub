@@ -321,10 +321,10 @@ pub fn chat_transcript_markdown<'a>(
 /// For a debug read of an export: a reply the app itself gave on this
 /// computer, so the turn has no thoughts or tool rows to show.
 fn app_answer_note(content: &str) -> Option<&'static str> {
-    use crate::adult_guard::{HELD_NOTICE, LOCAL_ONLY_MISSING, LOCAL_ONLY_PAUSED, REPLY_REPLACED};
+    use crate::adult_guard::{HELD_NOTICE, REPLY_REPLACED, is_local_only_notice};
     let shown = crate::shown_text(content);
     let shown = shown.trim();
-    if [HELD_NOTICE, LOCAL_ONLY_MISSING, LOCAL_ONLY_PAUSED].contains(&shown) {
+    if shown == HELD_NOTICE || is_local_only_notice(shown) {
         Some("App note: the app's 18+ check answered this turn on this computer. No model ran, so it has no thoughts or tool calls.")
     } else if shown.ends_with(REPLY_REPLACED) {
         Some("App note: the model answered, and the app's hard-limit check hid the reply on this computer.")

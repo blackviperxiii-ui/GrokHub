@@ -83,16 +83,48 @@ pub fn to_local(input: &[InputItem], dest: Dest) -> bool {
 }
 
 /// The line an explicit call gets instead of a reply when this computer's
-/// model can't take it: paused by a game or low battery, or not set up.
-/// `None` when it's ready.
-pub fn no_local_notice() -> Option<&'static str> {
+/// model can't take it: paused by a game or low battery, on disk but not
+/// starting (with the self-check's reason, and that it tries again), or not
+/// set up. `None` when it's ready.
+pub fn no_local_notice() -> Option<String> {
     if super::local::available() {
-        None
-    } else if super::local::LocalCapacity::now().paused() {
-        Some(adult_guard::LOCAL_ONLY_PAUSED)
-    } else {
-        Some(adult_guard::LOCAL_ONLY_MISSING)
+        return None;
     }
+    if super::local::LocalCapacity::now().paused() {
+        return Some(adult_guard::LOCAL_ONLY_PAUSED.into());
+    }
+    // The files are there, so "none is set up" would be wrong: say why the
+    // check found it isn't running.
+    let dir = crate::perm::config_dir();
+    if super::local_sidecar::assets_present(&dir) {
+        let report = super::local_doctor::diagnose(&dir);
+        if !matches!(
+            report.verdict,
+            super::local_doctor::Verdict::Ready | super::local_doctor::Verdict::Off
+        ) {
+            return Some(adult_guard::local_only_broken(&report.summary()));
+        }
+    }
+    Some(adult_guard::LOCAL_ONLY_MISSING.into())
+}
+
+/// An 18+ voice is on for this call: its system prompt, or the app's note on
+/// a turn, carries [`adult_guard::ADULT_VOICE`]. Every turn of such a chat is
+/// an 18+ turn and runs only on this computer's model, a clean ask too.
+pub fn voice_on(input: &[InputItem]) -> bool {
+    input.iter().any(|item| {
+        let InputItem::Message { role, content } = item else {
+            return false;
+        };
+        content.iter().any(|p| match p {
+            ContentPart::InputText(t) if role == "user" => {
+                crate::prefix_cache::split_user_turn(t)
+                    .is_some_and(|(note, _)| note.contains(adult_guard::ADULT_VOICE))
+            }
+            ContentPart::InputText(t) => role != "assistant" && t.contains(adult_guard::ADULT_VOICE),
+            ContentPart::InputImage(_) => false,
+        })
+    })
 }
 
 /// The newest ask, as typed, is 18+. Decided per message: the app's own note

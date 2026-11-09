@@ -38,6 +38,18 @@ fn bootstrap_error_surfaces_when_sidecar_wont_start() {
     let reason = local::bootstrap_error().expect("bootstrap reason");
     assert!(!reason.is_empty(), "reason names the failure: {reason}");
     assert!(!local::installed(), "installed false once bootstrap failed");
+    assert_eq!(
+        local::start_failure().as_deref(),
+        Some(reason.as_str()),
+        "the self-check reads the same reason"
+    );
+    // One failed start no longer keeps the model away for the session: past
+    // the retry pause it reads as set up again and the next turn retries.
+    local::age_start_error(local::START_RETRY_SECS);
+    assert!(local::installed(), "a retry is due after the pause");
+    assert!(local::start_failure().is_some(), "the reason stays readable");
+    local::clear_start_error();
+    assert!(local::start_failure().is_none());
 
     local::set_enabled(false);
     stop_global();

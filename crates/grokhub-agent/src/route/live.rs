@@ -1387,6 +1387,9 @@ pub(crate) fn provider_fallible(err: &ClientError) -> bool {
             | ClientError::Disconnect
             | ClientError::IdleTimeout
     ) || matches!(err, ClientError::Transport(m) if !grokhub_core::offline::is_refusal(m))
+        // OpenRouter's own account settings left this model no endpoint: the
+        // next route can take the turn, so the raw notice never ends a chat.
+        || matches!(err, ClientError::Protocol(m) if m == super::providers::POLICY_REFUSED)
 }
 
 /// The provider model you set up that takes a turn xAI couldn't: its key and a
@@ -1724,17 +1727,20 @@ pub fn stream_routed(
         grokhub_core::adult_guard::Dest::Xai
     };
     // 18+ chat runs on this computer's model only, never online. With none
-    // ready, it's decided per message: a clean ask still goes online with the
-    // chat's 18+ parts left out; an 18+ ask gets the one-line notice and
-    // nothing is sent. The app's own background work never goes online with it.
+    // ready and an 18+ voice on, every turn gets the notice (with the
+    // self-check's reason) and nothing is sent: a clean ask in that voice is
+    // an 18+ turn too. With the voice off, it's decided per message: a clean
+    // ask still goes online with the chat's older 18+ parts left out; an 18+
+    // ask gets the notice. The app's own background work never goes online with it.
     if super::adult::to_local(&sent.input, dest) {
         match super::adult::no_local_notice() {
             None => on_device = true,
             Some(notice) => {
                 let online = !class.trim().starts_with("background:")
+                    && !super::adult::voice_on(&sent.input)
                     && super::adult::leave_adult_out(&mut sent.input);
                 if !online {
-                    let out = super::adult::notice_answer(class, notice)?;
+                    let out = super::adult::notice_answer(class, &notice)?;
                     sink(StreamEvent::TextDelta(out.text.clone()));
                     return Ok(out);
                 }
@@ -1780,10 +1786,17 @@ pub fn stream_routed(
             call.adult,
         ))
     });
+    // A turn that asks why this computer's model isn't ready, or to check its
+    // folder, gets the self-check's findings: the answer comes from the files,
+    // never "I can't reach your files, check it yourself".
+    let local_check = (!class.trim().starts_with("background:")
+        && super::local_doctor::question(&text))
+    .then(|| super::local_doctor::note(&super::local_doctor::diagnose(&dir)));
     let notes: Vec<String> = asks_route
         .then(|| route_note(&model, sent.effort.as_deref(), on_device))
         .into_iter()
         .chain(connections)
+        .chain(local_check)
         .collect();
     if !notes.is_empty() {
         super::ask::add_route_note(&mut sent.input, &notes.join("\n"));
