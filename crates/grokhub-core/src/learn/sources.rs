@@ -11,6 +11,7 @@
 
 use super::signal::{Kind, Signal, Subject};
 use crate::card_signals::{CardEvent, CardSignal};
+use crate::card_taste::Reaction;
 use crate::outcome::OutcomeResult;
 use crate::run_metrics::RunMetrics;
 
@@ -19,6 +20,45 @@ fn push(out: &mut Vec<Signal>, at_ms: u64, kind: Kind, area: &str, id: &str) {
         out.push(Signal::new(at_ms, kind, subject));
     }
 }
+
+/// A Pulse card reaction, one signal per card trait (`trait:topic/3f9c…`).
+/// The trait's words are hashed: a writer's tag can carry words from the
+/// web, so only its kind stays readable. Dismiss is never recorded.
+pub fn taste<'a>(
+    traits: impl IntoIterator<Item = &'a String>,
+    reaction: Reaction,
+    at_ms: u64,
+) -> Vec<Signal> {
+    let kind = match reaction {
+        Reaction::Like => Kind::Liked,
+        Reaction::Dislike => Kind::Disliked,
+        Reaction::Engage => Kind::Used,
+        Reaction::Snooze => Kind::Picked,
+        Reaction::Delete => Kind::Declined,
+    };
+    let mut out = Vec::new();
+    for key in traits {
+        if let Some(id) = trait_id(key) {
+            push(&mut out, at_ms, kind, "trait", &id);
+        }
+    }
+    out
+}
+
+/// `kind/<16 hex>` for a `kind:value` trait; the kind only when it is a
+/// short ASCII word.
+pub fn trait_id(key: &str) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let (kind, _) = key.split_once(':')?;
+    if kind.is_empty() || kind.len() > 16 || !kind.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return None;
+    }
+    let digest = Sha256::digest(key.as_bytes());
+    Some(format!("{kind}/{}", &hex::encode(digest)[..TRAIT_HEX]))
+}
+
+/// Hex digits kept from a trait's hash: enough to tell traits apart.
+const TRAIT_HEX: usize = 16;
 
 /// A chip row went up on `surface`. `keys` are the chips' log keys
 /// ([`crate::chip_log_key`]).
