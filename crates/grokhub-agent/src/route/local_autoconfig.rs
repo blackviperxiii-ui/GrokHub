@@ -396,9 +396,7 @@ pub fn after_oom(prev: &LaunchArgs, attempt: u8) -> Retry {
 pub fn next_smaller(id: &str) -> Option<&'static LocalModel> {
     let models = local_setup::local_models();
     let at = models.iter().position(|m| m.id == id)?;
-    models[at + 1..]
-        .iter()
-        .find(|m| !m.optional && !m.is_drafter)
+    models[at + 1..].iter().find(|m| !m.optional && m.is_chat())
 }
 
 /// One launch that ran after backing off, kept per model + device + driver.
@@ -659,7 +657,10 @@ fn engine_files(binary: &Path) -> Vec<String> {
 /// `None` (the one-shot `local_perf` defaults) before that or when the GGUF
 /// header can't be read. Also returns the `autotune.json` key and folder.
 pub fn launch_for(binary: &Path, model: &Path) -> Option<(LaunchArgs, String, PathBuf)> {
-    planned(binary, model).map(|(args, _, key, dir)| (args, key, dir))
+    planned(binary, model).map(|(args, plan, key, dir)| {
+        local_spec::launched(&plan, &dir);
+        (args, key, dir)
+    })
 }
 
 /// The draft half of [`launch_for`], for the speed test.

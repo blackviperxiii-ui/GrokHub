@@ -1608,8 +1608,19 @@ pub fn record_clip(device: Option<&str>) -> Result<(u32, Vec<u8>), String> {
 /// Local whisper on a 16 kHz mono WAV. The transcript lands next to the WAV
 /// (`voice.txt` beside `voice.wav`) and is read back from there.
 fn transcribe(wav: &Path) -> Result<String, String> {
+    // The downloaded Parakeet model comes first; whisper on PATH is the
+    // fallback when it isn't there or can't hear the clip.
+    let on_device = transcribe_on_device(wav);
+    if let Some(Ok(text)) = on_device {
+        return Ok(text);
+    }
     let dest = wav.to_str().ok_or("wav")?;
-    let bin = first_bin(TRANSCRIBERS).ok_or("install whisper (openai-whisper or whisper.cpp)")?;
+    let Some(bin) = first_bin(TRANSCRIBERS) else {
+        return Err(match on_device {
+            Some(Err(e)) => e,
+            _ => "download Parakeet in Download models, or install whisper (openai-whisper or whisper.cpp)".into(),
+        });
+    };
     let txt = wav.with_extension("txt");
     let dir = wav.parent().and_then(Path::to_str).ok_or("wav folder")?;
     let stem = wav.with_extension("");
@@ -1642,6 +1653,27 @@ fn transcribe(wav: &Path) -> Result<String, String> {
     let text = read_text_capped(&txt);
     let _ = std::fs::remove_file(&txt);
     text
+}
+
+/// Parakeet in the on-device speech engine, when both are downloaded: one
+/// run per clip, so nothing stays loaded. None when either is missing.
+fn transcribe_on_device(wav: &Path) -> Option<Result<String, String>> {
+    use grokhub_core::voice_engine as ve;
+    let cfg = crate::config::config_dir();
+    if !ve::installed(&cfg) {
+        return None;
+    }
+    let models = crate::app::models_dir();
+    let args = ve::transcribe_args(&models, ve::speech_model(&models)?, wav)?;
+    let mut cmd = Command::new(ve::offline_path(&cfg));
+    cmd.args(&args);
+    let Some(out) = run_limited(cmd, DESK_TRANSCRIBE_TIMEOUT) else {
+        return Some(Err("the speech engine timed out".into()));
+    };
+    // The engine writes its result line to stderr in some builds.
+    let mut all = String::from_utf8_lossy(&out.stdout).into_owned();
+    all.push_str(&String::from_utf8_lossy(&out.stderr));
+    Some(ve::transcript_from(&all).ok_or_else(|| "the speech engine heard no words".into()))
 }
 
 fn run_ok(bin: &str, args: &[&str]) -> Result<(), String> {

@@ -29,6 +29,7 @@ quick-xml = { version = "0.41", default-features = false }
 rusqlite = { workspace = true }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 tar = "0.4"
+bzip2 = "0.6"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 # Diagnostics: the real Desktop (Windows known folder / OneDrive, XDG user dirs).
 dirs = ">=6, <8"
