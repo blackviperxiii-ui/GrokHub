@@ -67,6 +67,10 @@ pub const HOST_SHELL_LINE: &str = if cfg!(windows) {
 };
 
 /// Headless GrokHub chat is the cabin assistant on this computer, not grok.com.
+/// How a chat turn looks things up. Chat prompts only: background jobs carry
+/// their playbook's steps instead, and stay lean.
+pub const LOOKUP_RULES: &str = "Look things up with web_search, then web_fetch the pages you rely on; the browser is for acting on a page. Call tools directly, never through the shell. Search a game question (quests, items, bosses, lore, patches) or anything that changes over time before answering, unasked. Link only pages a tool opened this turn. Never offer to look something up unless a search worked this turn; if none did, say so in one line and mark what is from memory.";
+
 /// The native engine puts these first in its system prompt.
 pub static CABIN_DESKTOP_RULES: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(
     || {
@@ -116,6 +120,16 @@ mod tests {
              sign-offs like \"your call\", \"ping me whenever\" or \"want me to queue something?\"."
         ));
         assert!(!(*CABIN_DESKTOP_RULES).contains("Be brief and warm."));
+    }
+
+    #[test]
+    fn lookups_search_first_and_never_go_through_the_shell() {
+        assert!(LOOKUP_RULES.contains("web_search, then web_fetch the pages you rely on"));
+        assert!(LOOKUP_RULES.contains("Call tools directly, never through the shell."));
+        assert!(
+            LOOKUP_RULES.contains("Search a game question (quests, items, bosses, lore, patches)")
+        );
+        assert!(LOOKUP_RULES.contains("Never offer to look something up unless a search worked"));
     }
 
     #[test]

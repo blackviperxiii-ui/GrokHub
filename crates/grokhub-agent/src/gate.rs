@@ -189,6 +189,13 @@ pub fn is_readonly(name: &str) -> bool {
     READONLY.contains(&name)
 }
 
+/// Web search and fetch read the web and change nothing here, so a read-only
+/// (Plan / Ask) session may still look things up. They still go through the
+/// normal ask, policy and egress checks.
+pub fn is_web_lookup(name: &str) -> bool {
+    name == WEB_SEARCH || name == WEB_FETCH
+}
+
 pub fn is_desktop(name: &str) -> bool {
     DESKTOP.contains(&name)
 }
@@ -260,7 +267,7 @@ pub fn decide(gate: &Gate, name: &str, latched_always: bool, desk: Option<DeskFl
     if is_readonly(name) || crate::self_manage::is_read(name) {
         return Decision::Run;
     }
-    if gate.readonly_session {
+    if gate.readonly_session && !is_web_lookup(name) {
         return Decision::Refuse(readonly_refusal(name));
     }
     if !is_known(name) {

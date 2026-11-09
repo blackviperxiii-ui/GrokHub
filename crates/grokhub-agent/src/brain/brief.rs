@@ -448,6 +448,30 @@ const GAMING_WORDS: &[&str] = &[
     "overwatch",
     "minecraft",
     "apex",
+    // MMOs and other lookup-heavy games.
+    "warcraft",
+    "mmo",
+    "mmorpg",
+    "ffxiv",
+    "runescape",
+    "osrs",
+    "diablo",
+    "destiny",
+    "hearthstone",
+    "dota",
+    "skyrim",
+    "pokemon",
+];
+/// Game titles of more than one word ("wow" alone is too often a gasp).
+const GAME_TITLE_PHRASES: &[&str] = &[
+    "in wow",
+    "wow classic",
+    "wow retail",
+    "world of warcraft",
+    "elden ring",
+    "league of legends",
+    "path of exile",
+    "baldur's gate",
 ];
 const GAMING_PHRASES: &[&str] = &[
     "frame rate",
@@ -481,8 +505,28 @@ const GAME_HELP_WORDS: &[&str] = &[
     "walkthrough",
     "guide",
     "guides",
+    // In-game lookups: where a quest, item or boss is.
+    "quest",
+    "quests",
+    "questline",
+    "boss",
+    "bosses",
+    "raid",
+    "dungeon",
+    "lore",
+    "vendor",
+    "reputation",
+    "achievement",
+    "farm",
 ];
 const GAME_HELP_PHRASES: &[&str] = &[
+    "where do i",
+    "where can i",
+    "where to",
+    "how to get",
+    "how do i get",
+    "turn in",
+    "turn them in",
     "how do i",
     "how do you",
     "how to",
@@ -586,7 +630,7 @@ const LOW_PHRASES: &[&str] = &[
 ];
 
 fn is_gaming(t: &str, ws: &[&str]) -> bool {
-    any_word(ws, GAMING_WORDS) || any_phrase(t, GAMING_PHRASES)
+    any_word(ws, GAMING_WORDS) || any_phrase(t, GAMING_PHRASES) || any_phrase(t, GAME_TITLE_PHRASES)
 }
 
 fn is_game_help(t: &str, ws: &[&str]) -> bool {
@@ -947,7 +991,9 @@ pub fn rules(input: &BriefInput<'_>) -> Option<Brief> {
         Intent::Task
     } else if any_word(&ws, CREATIVE_WORDS) {
         Intent::Creative
-    } else if any_word(&ws, RESEARCH_WORDS) || any_phrase(&t, RESEARCH_PHRASES) {
+    } else if !game_help && (any_word(&ws, RESEARCH_WORDS) || any_phrase(&t, RESEARCH_PHRASES)) {
+        // An in-game lookup ("aqir research tokens") is game help, which
+        // still searches, not the research playbook and its findings card.
         Intent::Research
     } else if is_plan_day(&t) {
         // "plan my day" / "what should I do today" → one plan, not a task dump.
@@ -1379,6 +1425,21 @@ mod tests {
             ),
             (
                 "tips for Minecraft mods this patch, no spoilers",
+                Intent::Question,
+                Care::Casual,
+                "game-help",
+                "calm",
+            ),
+            (
+                // A WoW item named "research tokens" is a game lookup, not research.
+                "where do i turn aqir research tokens in at in wow",
+                Intent::Question,
+                Care::Casual,
+                "game-help",
+                "calm",
+            ),
+            (
+                "where can i find the raid boss for that quest in world of warcraft",
                 Intent::Question,
                 Care::Casual,
                 "game-help",
