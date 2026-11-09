@@ -121,6 +121,13 @@ fn a_big_job_plans_first_and_a_question_is_just_answered() {
     cabin.settle_turn_mode_for_test("rename the button");
     assert_eq!(cabin.session_mode, SessionMode::Plan);
     assert!(!cabin.plan_next);
+    // A go runs the waiting plan instead of planning it again.
+    cabin.settle_turn_mode_for_test(grokhub_core::reply_chips::PLAN_GO_TEXT);
+    assert_eq!(cabin.session_mode, SessionMode::Chat);
+    cabin.run_slash(Slash::Plan);
+    cabin.settle_turn_mode_for_test("rename the button");
+    cabin.settle_turn_mode_for_test("Go ahead, but skip step 3");
+    assert_eq!(cabin.session_mode, SessionMode::Chat);
     release_isolated(&root, cabin);
 }
 

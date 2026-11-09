@@ -231,6 +231,10 @@ pub struct ChipMemory {
     /// the prompt; 0 while it is in. See [`crate::chip_trailer`].
     #[serde(default)]
     pub trailer_off_at: u64,
+    /// How often each predicted reply on a plan or question card was picked,
+    /// by reply kind (`plan:go`). See [`crate::reply_chips`].
+    #[serde(default)]
+    pub reply_picks: BTreeMap<String, u32>,
 }
 
 /// How often one intent was used, by local hour and weekday.
@@ -268,6 +272,7 @@ impl Default for ChipMemory {
             events: Vec::new(),
             ranker: crate::chip_rank::ChipRanker::default(),
             trailer_off_at: 0,
+            reply_picks: BTreeMap::new(),
         }
     }
 }

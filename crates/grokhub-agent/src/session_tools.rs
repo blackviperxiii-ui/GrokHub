@@ -584,14 +584,35 @@ fn exit_plan(call: SessionCall<'_>) -> ToolOutput {
     };
     (call.on_event)(LoopEvent::Elicit(view));
     match mcp::wait_elicit(call.session, &id, call.cancel, call.halted) {
-        mcp::ElicitAnswer::Accept(_) => {
+        mcp::ElicitAnswer::Accept(content) => {
+            // A typed or chip reply rides along. Anything that is not a go
+            // ("tell me more", "change step 2") keeps plan mode on and goes
+            // back to the agent in this same turn.
+            let reply = content
+                .get("reply")
+                .and_then(|value| value.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if !reply.is_empty() && !crate::route::intent::approves_plan(&reply) {
+                return ToolOutput::err(format!(
+                    "The user has not approved the plan yet. They replied: {reply}\n\
+                     Answer them or revise the plan, then call exit_plan_mode again."
+                ));
+            }
             set_plan_session(call.session, false);
             if call.plan_at_start || !call.base_readonly {
                 call.gate.readonly_session = false;
             } else {
                 call.gate.readonly_session = call.base_readonly;
             }
-            ToolOutput::ok("Plan approved. Plan mode is off.")
+            if reply.is_empty() || reply == grokhub_core::reply_chips::PLAN_GO_TEXT {
+                ToolOutput::ok("Plan approved. Plan mode is off.")
+            } else {
+                ToolOutput::ok(format!(
+                    "Plan approved. Plan mode is off. The user added: {reply}"
+                ))
+            }
         }
         mcp::ElicitAnswer::Decline => ToolOutput::err("User declined the plan"),
         mcp::ElicitAnswer::Cancel => ToolOutput::err("User cancelled the plan"),
@@ -961,6 +982,64 @@ mod tests {
             "{}",
             outputs(&history)
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_plan_reply_that_is_not_a_go_keeps_planning_in_the_same_turn() {
+        let dir = scratch("planreply");
+        let session = sid("planreply");
+        let (tx, inbox) = crate::mcp::ElicitInbox::pair();
+        crate::mcp::attach_elicit(&session, inbox);
+        let (_out, history) = run(
+            &dir,
+            &session,
+            chat(false, true),
+            vec![
+                call("1", "enter_plan_mode", "{}"),
+                call("2", "exit_plan_mode", r#"{"plan":"1. a\n2. b"}"#),
+                call("3", "write", r#"{"path":"early.txt","content":"no"}"#),
+            ],
+            &mut answer(
+                &tx,
+                "accept",
+                Some(serde_json::json!({"reply": "Tell me more about step 2"})),
+            ),
+        );
+        let text = outputs(&history);
+        assert!(
+            text.contains("They replied: Tell me more about step 2"),
+            "{text}"
+        );
+        assert!(text.contains("call exit_plan_mode again"), "{text}");
+        assert!(!dir.join("early.txt").exists());
+        assert!(plan_on(&session));
+
+        let go = sid("planreplygo");
+        let (tx, inbox) = crate::mcp::ElicitInbox::pair();
+        crate::mcp::attach_elicit(&go, inbox);
+        let (_out, history) = run(
+            &dir,
+            &go,
+            chat(false, true),
+            vec![
+                call("1", "enter_plan_mode", "{}"),
+                call("2", "exit_plan_mode", r#"{"plan":"1. a\n2. b"}"#),
+            ],
+            &mut answer(
+                &tx,
+                "accept",
+                Some(serde_json::json!({"reply": "Go ahead, but skip step 2"})),
+            ),
+        );
+        let text = outputs(&history);
+        assert!(
+            text.contains(
+                "Plan approved. Plan mode is off. The user added: Go ahead, but skip step 2"
+            ),
+            "{text}"
+        );
+        assert!(!plan_on(&go));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
