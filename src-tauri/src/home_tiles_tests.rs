@@ -151,18 +151,38 @@ fn frame_rate_setup_is_one_tap_with_the_steps_beside_it() {
 }
 
 #[test]
-fn feed_tiles_read_their_pulse_cards_and_say_where_the_switch_is() {
+fn feed_tiles_read_their_pulse_cards_and_turn_on_in_place() {
     let d = std::env::temp_dir().join(format!(
         "grokhub-shell-feed-{}-{}",
         std::process::id(),
         grokhub_core::now_ms()
     ));
     std::fs::create_dir_all(&d).unwrap();
+    // Achievements and Deals turn on right here, no other app needed.
     let off = feed("achievements", &d, NOW);
     assert_eq!(off.state, TileState::Off);
     assert_eq!(off.buttons.len(), 1);
-    assert_eq!(off.buttons[0].action, TileAction::nav("pulse"));
-    assert!(off.text.detail.as_deref().unwrap().contains("Pulse"));
+    assert_eq!(off.buttons[0].label, "Turn on");
+    assert_eq!(
+        off.buttons[0].action,
+        TileAction::setup("achievements", false)
+    );
+    assert_eq!(off.tap, Some(TileAction::setup("achievements", false)));
+    // Patch Notes turns on here too, with the launch companion's own switch.
+    let companion = feed("patch_notes", &d, NOW);
+    assert_eq!(companion.buttons[0].label, "Turn on");
+    assert_eq!(
+        companion.buttons[0].action,
+        TileAction::setup("patch_notes", false)
+    );
+    crate::game_companion::set(&d, true).unwrap();
+    let ours = feed("patch_notes", &d, NOW);
+    assert_ne!(ours.state, TileState::Off);
+    assert!(ours
+        .buttons
+        .iter()
+        .any(|b| b.action == TileAction::setup("patch_notes", true)));
+    crate::game_companion::set(&d, false).unwrap();
 
     std::fs::write(
         d.join("app.json"),
@@ -180,6 +200,11 @@ fn feed_tiles_read_their_pulse_cards_and_say_where_the_switch_is() {
     let on = feed("patch_notes", &d, NOW);
     assert_eq!(on.state, TileState::Ready);
     assert_eq!(on.text.big, "Back to Dota 2");
+    // Turned on in the desktop app: that app's to turn off, not this one's.
+    assert!(!on
+        .buttons
+        .iter()
+        .any(|b| b.action == TileAction::setup("patch_notes", true)));
     assert_eq!(feed("deals", &d, NOW).state, TileState::Off);
     let _ = std::fs::remove_dir_all(&d);
 }
@@ -214,6 +239,40 @@ fn a_playbooks_row_runs_its_playbook() {
         playbooks_view(&none).buttons[0].action,
         TileAction::settings("playbooks")
     );
+}
+
+#[test]
+fn an_on_feed_tile_says_what_its_check_found_and_can_turn_off() {
+    let on = tiles::feed_view("deals", true, &[], NOW);
+    let v = feed_turn(
+        "deals",
+        on,
+        Some("Checked 4 wishlisted games. No new sales.".into()),
+        true,
+    );
+    assert_eq!(
+        v.text.detail.as_deref(),
+        Some("Checked 4 wishlisted games. No new sales.")
+    );
+    assert!(v
+        .buttons
+        .iter()
+        .any(|b| b.label == "Turn off" && b.action == TileAction::setup("deals", true)));
+    // A turn-on that couldn't find an account says why on the Off tile.
+    let off = tiles::feed_view("achievements", false, &[], NOW);
+    let v = feed_turn(
+        "achievements",
+        off,
+        Some("Sign in to Steam on this PC once, then tap Turn on again.".into()),
+        true,
+    );
+    assert_eq!(v.buttons[0].label, "Turn on");
+    assert!(v
+        .text
+        .detail
+        .as_deref()
+        .unwrap()
+        .starts_with("Sign in to Steam"));
 }
 
 #[test]

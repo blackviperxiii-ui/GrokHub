@@ -457,6 +457,94 @@ impl Tracker {
     }
 }
 
+/// One achievements check's outcome.
+pub struct Run {
+    pub picks: Vec<Nudge>,
+    /// Unlocked and in all for each game read, for goals on Objectives.
+    pub counts: Vec<(u32, Count)>,
+    pub private: bool,
+    pub error: Option<String>,
+}
+
+/// The whole check for the given games, given a GET. Stops at the first
+/// private reply, since every game on the profile is hidden then. Never puts
+/// the SteamID in an error.
+pub fn run_check(
+    games: &[(u32, String)],
+    steam_id: u64,
+    get: &mut dyn FnMut(&str) -> Result<String, String>,
+) -> Run {
+    let mut picks = Vec::new();
+    let mut counts = Vec::new();
+    let mut failed = 0;
+    for (app_id, name) in games {
+        let list = match get(&player_url(steam_id, *app_id)).map(|b| parse_player(&b)) {
+            Ok(Some(Player::List(list))) => list,
+            Ok(Some(Player::Private)) => {
+                return Run {
+                    picks: Vec::new(),
+                    counts: Vec::new(),
+                    private: true,
+                    error: None,
+                }
+            }
+            Ok(Some(Player::NoStats)) => continue,
+            Ok(None) | Err(_) => {
+                failed += 1;
+                continue;
+            }
+        };
+        counts.push((*app_id, Count::of(&list)));
+        let rates = if worth_rates(&list) {
+            get(&global_url(*app_id))
+                .map(|b| parse_global(&b))
+                .unwrap_or_default()
+        } else {
+            Default::default()
+        };
+        picks.extend(pick(*app_id, name, &list, &rates));
+    }
+    let error = (failed > 0 && failed == games.len())
+        .then(|| "Steam's stats pages didn't answer".to_string());
+    Run {
+        picks,
+        counts,
+        private: false,
+        error,
+    }
+}
+
+/// The games to read: games with an achievements goal on Objectives first,
+/// then the most recently played installs that have play time.
+pub fn games_to_check(config_dir: &Path, steam_root: Option<&Path>) -> Vec<(u32, String)> {
+    let goals = crate::objectives::load(config_dir);
+    let mut games = crate::objectives::goal_steam_games(&goals);
+    if let Some(root) = steam_root {
+        let played = crate::steam::read_library(root)
+            .into_iter()
+            .filter(|g| g.playtime_min > 0)
+            .map(|g| (g.app_id, g.name));
+        for game in played {
+            if !games.iter().any(|(id, _)| *id == game.0) {
+                games.push(game);
+            }
+        }
+    }
+    games.truncate(GAMES_PER_CHECK);
+    games
+}
+
+/// The note after a check posted `added` cards.
+pub fn checked_note(private: bool, added: usize) -> String {
+    if private {
+        String::new()
+    } else if added == 0 {
+        "Checked your games. Nothing close to 100% yet.".into()
+    } else {
+        format!("Checked your games. {added} close to done.")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
