@@ -12,6 +12,8 @@ use crate::{config, skills};
 /// What the Skills tab holds between frames.
 #[derive(Default)]
 pub(super) struct SkillsTab {
+    /// The search box, shared with Settings → Connectors' skill list.
+    pub(super) q: String,
     /// Every cabin skill, off ones too. `None` reads them again.
     all: Option<Vec<SkillMd>>,
     new_open: bool,

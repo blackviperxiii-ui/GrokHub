@@ -1620,13 +1620,13 @@ page_body(ui, "history", |ui| {
                     self.open_connectors();
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    crate::cards::search_field(ui, &mut self.skill_q);
+                    crate::cards::search_field(ui, &mut self.skills_tab.q);
                 });
             });
             ui.add_space(12.0);
             self.skills_tab_undo_line(ui);
             self.skills_tab_new(ui);
-            let q = self.skill_q.to_ascii_lowercase();
+            let q = self.skills_tab.q.to_ascii_lowercase();
             let mut use_skill: Option<String> = None;
             let mut use_cabin_skill: Option<(String, String)> = None;
             let mut toggle_native: Option<(String, bool)> = None;
