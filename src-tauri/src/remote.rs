@@ -1063,6 +1063,8 @@ mod tests {
             "home_turn_on",
             "home_setup",
             "home_setup_steps",
+            "updates_page",
+            "run_update_offer",
             "set_mission_done",
         ] {
             assert!(!web_command(name), "{name}");
