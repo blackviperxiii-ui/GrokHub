@@ -600,7 +600,8 @@ pub fn typed_part(text: &str) -> &str {
 pub const LOCAL_ONLY_MISSING: &str = "18+ chats run only on this computer's model, and none is set up yet. Turn on Local AI in Settings to download one.";
 
 /// How an 18+ notice opens when the model is on disk but isn't starting.
-pub const LOCAL_ONLY_BROKEN_HEAD: &str = "18+ chats run only on this computer's model, and nothing went online. ";
+pub const LOCAL_ONLY_BROKEN_HEAD: &str =
+    "18+ chats run only on this computer's model, and nothing went online. ";
 
 /// The 18+ notice when the model is on disk but isn't running: the
 /// self-check's own words follow [`LOCAL_ONLY_BROKEN_HEAD`].
@@ -611,7 +612,9 @@ pub fn local_only_broken(why: &str) -> String {
 /// One of the app's own 18+ notices: nothing was sent and no model ran.
 pub fn is_local_only_notice(shown: &str) -> bool {
     let shown = shown.trim();
-    shown == LOCAL_ONLY_MISSING || shown == LOCAL_ONLY_PAUSED || shown.starts_with(LOCAL_ONLY_BROKEN_HEAD)
+    shown == LOCAL_ONLY_MISSING
+        || shown == LOCAL_ONLY_PAUSED
+        || shown.starts_with(LOCAL_ONLY_BROKEN_HEAD)
 }
 
 /// An 18+ chat while the local model is paused (a game, low battery, heat).

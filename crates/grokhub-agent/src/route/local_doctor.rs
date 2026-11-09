@@ -210,7 +210,10 @@ fn folder_facts(config_dir: &Path, facts: &mut Vec<String>) {
         }
         if let Some(rec) = grokhub_core::model_download::installed(&dir) {
             facts.push(format!("Last finished download there: {}.", rec.file));
-        } else if dir.join(grokhub_core::model_download::INSTALLED_FILE).is_file() {
+        } else if dir
+            .join(grokhub_core::model_download::INSTALLED_FILE)
+            .is_file()
+        {
             facts.push(
                 "The download record there names a file that's gone or a different size.".into(),
             );
@@ -223,7 +226,10 @@ fn folder_facts(config_dir: &Path, facts: &mut Vec<String>) {
 pub fn diagnose(config_dir: &Path) -> Report {
     let mut facts = Vec::new();
     let on = local::switched_on();
-    facts.push(format!("Local AI switch: {}.", if on { "on" } else { "off" }));
+    facts.push(format!(
+        "Local AI switch: {}.",
+        if on { "on" } else { "off" }
+    ));
     let binary = local_sidecar::find_binary(config_dir);
     facts.push(match &binary {
         Some(b) => format!("Engine: {}.", b.display()),
@@ -295,23 +301,8 @@ pub fn question(text: &str) -> bool {
         "models directory",
     ];
     const ASK: &[&str] = &[
-        "ready",
-        "working",
-        "work?",
-        "detect",
-        "pick",
-        "find",
-        "found",
-        "load",
-        "diagnose",
-        "check",
-        "why",
-        "broke",
-        "fix",
-        "see it",
-        "recogni",
-        "running",
-        "start",
+        "ready", "working", "work?", "detect", "pick", "find", "found", "load", "diagnose",
+        "check", "why", "broke", "fix", "see it", "recogni", "running", "start",
     ];
     LOCAL.iter().any(|w| t.contains(w)) && ASK.iter().any(|w| t.contains(w))
 }
@@ -384,12 +375,18 @@ mod tests {
         let mut facts = Vec::new();
         folder_facts(&dir, &mut facts);
         let all = facts.join("\n");
-        assert!(all.contains(&format!("{}: no chat model.", models.display())), "{all}");
+        assert!(
+            all.contains(&format!("{}: no chat model.", models.display())),
+            "{all}"
+        );
         assert!(all.contains("Unfinished downloads"), "{all}");
         assert!(all.contains("big.gguf.part (0 MB)"), "{all}");
         assert!(all.contains("Draft models: small.gguf (0 MB)."), "{all}");
         assert!(all.contains("gemma-26b.gguf"), "{all}");
-        assert!(all.contains("subfolder the engine doesn't look in"), "{all}");
+        assert!(
+            all.contains("subfolder the engine doesn't look in"),
+            "{all}"
+        );
         assert!(
             all.contains("never loaded as the chat model: vision-mmproj-f16.gguf"),
             "{all}"

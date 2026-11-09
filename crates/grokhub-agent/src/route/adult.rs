@@ -117,11 +117,11 @@ pub fn voice_on(input: &[InputItem]) -> bool {
             return false;
         };
         content.iter().any(|p| match p {
-            ContentPart::InputText(t) if role == "user" => {
-                crate::prefix_cache::split_user_turn(t)
-                    .is_some_and(|(note, _)| note.contains(adult_guard::ADULT_VOICE))
+            ContentPart::InputText(t) if role == "user" => crate::prefix_cache::split_user_turn(t)
+                .is_some_and(|(note, _)| note.contains(adult_guard::ADULT_VOICE)),
+            ContentPart::InputText(t) => {
+                role != "assistant" && t.contains(adult_guard::ADULT_VOICE)
             }
-            ContentPart::InputText(t) => role != "assistant" && t.contains(adult_guard::ADULT_VOICE),
             ContentPart::InputImage(_) => false,
         })
     })

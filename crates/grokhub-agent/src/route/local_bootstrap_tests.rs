@@ -47,7 +47,10 @@ fn bootstrap_error_surfaces_when_sidecar_wont_start() {
     // the retry pause it reads as set up again and the next turn retries.
     local::age_start_error(local::START_RETRY_SECS);
     assert!(local::installed(), "a retry is due after the pause");
-    assert!(local::start_failure().is_some(), "the reason stays readable");
+    assert!(
+        local::start_failure().is_some(),
+        "the reason stays readable"
+    );
     local::clear_start_error();
     assert!(local::start_failure().is_none());
 

@@ -344,9 +344,7 @@ pub fn installed() -> bool {
 
 /// The files are on disk but the last start failed: why, for the chat.
 pub fn start_failure() -> Option<String> {
-    production_assets_present()
-        .then(bootstrap_error)
-        .flatten()
+    production_assets_present().then(bootstrap_error).flatten()
 }
 
 fn production_assets_present() -> bool {

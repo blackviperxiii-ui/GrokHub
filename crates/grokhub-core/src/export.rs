@@ -321,7 +321,7 @@ pub fn chat_transcript_markdown<'a>(
 /// For a debug read of an export: a reply the app itself gave on this
 /// computer, so the turn has no thoughts or tool rows to show.
 fn app_answer_note(content: &str) -> Option<&'static str> {
-    use crate::adult_guard::{HELD_NOTICE, REPLY_REPLACED, is_local_only_notice};
+    use crate::adult_guard::{is_local_only_notice, HELD_NOTICE, REPLY_REPLACED};
     let shown = crate::shown_text(content);
     let shown = shown.trim();
     if shown == HELD_NOTICE || is_local_only_notice(shown) {
