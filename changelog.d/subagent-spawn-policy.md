@@ -1,0 +1,1 @@
+- The app now decides when Grok may start a helper: a small task gets none, a short one at most one helper that only reads, a chat runs at most four at once (eight across the app), a background helper that changes files runs alone, and a turn's helpers share one token allowance. Each helper also stops at a step and time limit and hands back what it found.
