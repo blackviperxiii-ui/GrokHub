@@ -168,10 +168,21 @@ fn feed_tiles_read_their_pulse_cards_and_turn_on_in_place() {
         TileAction::setup("achievements", false)
     );
     assert_eq!(off.tap, Some(TileAction::setup("achievements", false)));
-    // Patch Notes still points at the desktop app's Pulse settings.
+    // Patch Notes turns on here too, with the launch companion's own switch.
     let companion = feed("patch_notes", &d, NOW);
-    assert_eq!(companion.buttons[0].action, TileAction::nav("pulse"));
-    assert!(companion.text.detail.as_deref().unwrap().contains("Pulse"));
+    assert_eq!(companion.buttons[0].label, "Turn on");
+    assert_eq!(
+        companion.buttons[0].action,
+        TileAction::setup("patch_notes", false)
+    );
+    crate::game_companion::set(&d, true).unwrap();
+    let ours = feed("patch_notes", &d, NOW);
+    assert_ne!(ours.state, TileState::Off);
+    assert!(ours
+        .buttons
+        .iter()
+        .any(|b| b.action == TileAction::setup("patch_notes", true)));
+    crate::game_companion::set(&d, false).unwrap();
 
     std::fs::write(
         d.join("app.json"),
@@ -189,6 +200,11 @@ fn feed_tiles_read_their_pulse_cards_and_turn_on_in_place() {
     let on = feed("patch_notes", &d, NOW);
     assert_eq!(on.state, TileState::Ready);
     assert_eq!(on.text.big, "Back to Dota 2");
+    // Turned on in the desktop app: that app's to turn off, not this one's.
+    assert!(!on
+        .buttons
+        .iter()
+        .any(|b| b.action == TileAction::setup("patch_notes", true)));
     assert_eq!(feed("deals", &d, NOW).state, TileState::Off);
     let _ = std::fs::remove_dir_all(&d);
 }
@@ -200,6 +216,7 @@ fn an_on_feed_tile_says_what_its_check_found_and_can_turn_off() {
         "deals",
         on,
         Some("Checked 4 wishlisted games. No new sales.".into()),
+        true,
     );
     assert_eq!(
         v.text.detail.as_deref(),
@@ -215,6 +232,7 @@ fn an_on_feed_tile_says_what_its_check_found_and_can_turn_off() {
         "achievements",
         off,
         Some("Sign in to Steam on this PC once, then tap Turn on again.".into()),
+        true,
     );
     assert_eq!(v.buttons[0].label, "Turn on");
     assert!(v

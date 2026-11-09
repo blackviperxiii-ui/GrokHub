@@ -231,11 +231,16 @@ fn played(games: &[library::Game]) -> Vec<tiles::PlayedGame> {
 /// account signed in on this PC) and their checks run in this app; the game
 /// companion's switch still lives in the desktop app's settings.
 fn feed(module: &str, config_dir: &Path, now: u64) -> TileView {
-    let on = match module {
-        "achievements" => grokhub_core::steam_achievements::load(config_dir).on,
-        "deals" => grokhub_core::steam_wishlist::load(config_dir).on,
-        // app.json keeps its keys in camelCase.
-        _ => desktop_flag(config_dir, "gameCompanion"),
+    // Patch Notes counts as on when either app's companion is on; only this
+    // app's own switch can be turned off here.
+    let (on, ours) = match module {
+        "achievements" => (grokhub_core::steam_achievements::load(config_dir).on, true),
+        "deals" => (grokhub_core::steam_wishlist::load(config_dir).on, true),
+        _ => {
+            let ours = crate::game_companion::is_on(config_dir);
+            // app.json keeps its keys in camelCase.
+            (ours || desktop_flag(config_dir, "gameCompanion"), ours)
+        }
     };
     let cards = match pulse::cards(config_dir) {
         Ok(cards) => cards,
@@ -243,36 +248,31 @@ fn feed(module: &str, config_dir: &Path, now: u64) -> TileView {
     };
     let view = tiles::feed_view(module, on, &tiles::feed_items(&cards, module), now);
     let note = crate::steam_checks::note(module);
-    feed_turn(module, view, note)
+    feed_turn(module, view, note, ours)
 }
 
-/// The feed tile's switch: Turn on in place for Achievements and Deals (with
-/// what the last try or check said), Turn off once on; Patch Notes points at
-/// the desktop app's Pulse settings.
-pub fn feed_turn(module: &str, mut view: TileView, note: Option<String>) -> TileView {
-    let here = matches!(module, "achievements" | "deals");
-    if here {
-        if let Some(note) = note {
-            view.text.detail = Some(note);
+/// The feed tile's switch: Turn on in place (with what the last try or check
+/// said, for the Steam checks), and Turn off once on, when it was this app
+/// that turned it on (`ours`). Patch Notes turned on in the desktop app stays
+/// that app's to turn off.
+pub fn feed_turn(module: &str, mut view: TileView, note: Option<String>, ours: bool) -> TileView {
+    if let Some(note) = note.filter(|_| matches!(module, "achievements" | "deals")) {
+        view.text.detail = Some(note);
+    }
+    if view.state == TileState::Off {
+        view.buttons.clear();
+        if module == "patch_notes" {
+            view.text.detail =
+                Some("Shows what changed since you last played when a game starts".into());
         }
-        if view.state == TileState::Off {
-            view.buttons.clear();
-            return view
-                .on_tap(TileAction::setup(module, false))
-                .primary("Turn on", TileAction::setup(module, false));
-        }
+        return view
+            .on_tap(TileAction::setup(module, false))
+            .primary("Turn on", TileAction::setup(module, false));
+    }
+    if ours {
         return view.button("Turn off", TileAction::setup(module, true));
     }
-    if view.state != TileState::Off {
-        return view;
-    }
-    let mut off = view.on_tap(TileAction::nav("pulse"));
-    off.buttons.clear();
-    off.text.detail = Some(format!(
-        "Switch it on under Pulse in the {} desktop app",
-        grokhub_core::brand::product_name()
-    ));
-    off.primary("Open Pulse", TileAction::nav("pulse"))
+    view
 }
 
 /// One on/off setting from the desktop app's own settings file, read only.

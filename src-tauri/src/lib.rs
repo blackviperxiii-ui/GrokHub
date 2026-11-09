@@ -18,6 +18,7 @@ pub mod credential;
 pub mod export;
 pub mod goals;
 pub mod history;
+pub mod game_companion;
 pub mod home;
 #[cfg(desktop)]
 mod home_fps;
@@ -2014,6 +2015,11 @@ async fn home_setup(
             let dir = state.config_dir.clone();
             off_main(move || steam_checks::turn(&dir, &module, !undo)).await?
         }
+        // Patch Notes: the launch companion's own switch on this app.
+        "patch_notes" => {
+            let dir = state.config_dir.clone();
+            off_main(move || game_companion::set(&dir, !undo)).await?
+        }
         _ => {
             let _ = undo;
             Err("That module has no setup here.".into())
@@ -3260,6 +3266,7 @@ pub fn run() {
                 Ok((client, grokhub_agent::route::host::chat_start().0))
             });
             steam_checks::start(config_dir.clone());
+            game_companion::start(config_dir.clone());
             #[cfg(desktop)]
             os_extras::setup(app.handle(), &loaded);
             let text_size = loaded.text_size;
