@@ -123,6 +123,7 @@ pub mod local_governor;
 pub mod local_model_news;
 pub mod local_picker;
 pub mod local_profile;
+pub mod local_refusal;
 pub mod local_setup;
 pub mod mcp_catalog;
 pub mod mcp_oauth;

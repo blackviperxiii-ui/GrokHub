@@ -42,6 +42,8 @@ pub struct LocalLive {
     pub kept_loaded: bool,
     /// Why a model other than the Settings pick runs.
     pub stand_in: Option<StandIn>,
+    /// The model's refusal check on this PC, once it has run.
+    pub refusal: Option<String>,
 }
 
 pub fn place_of(a: Option<&LaunchArgs>, bare_cpu: bool) -> Place {
@@ -73,6 +75,7 @@ pub fn snapshot(_config_dir: &Path) -> LocalLive {
             unload_in_secs: None,
             kept_loaded,
             stand_in: None,
+            refusal: None,
         };
     };
     let file = l
@@ -98,6 +101,7 @@ pub fn snapshot(_config_dir: &Path) -> LocalLive {
         unload_in_secs: (!busy && !kept_loaded).then(|| l.idle_unload_secs.saturating_sub(idle)),
         kept_loaded,
         stand_in: l.stand_in,
+        refusal: local_spec::refusal_line(&l.model),
     }
 }
 
@@ -161,6 +165,9 @@ pub fn lines(l: &LocalLive) -> Vec<String> {
             Decision::Off(why) => format!("Draft model: {drafter} is off because {why}."),
         });
     }
+    if let Some(r) = &l.refusal {
+        out.push(r.clone());
+    }
     out.push(if l.kept_loaded {
         "Stays loaded until you close the app or a game needs the memory.".to_string()
     } else {
@@ -201,6 +208,7 @@ mod tests {
             unload_in_secs: Some(240),
             kept_loaded: false,
             stand_in: None,
+            refusal: None,
         }
     }
 
@@ -280,6 +288,7 @@ mod tests {
             unload_in_secs: None,
             kept_loaded,
             stand_in: None,
+            refusal: None,
         }
     }
 
@@ -299,5 +308,21 @@ mod tests {
         assert!(rows[0].starts_with("Running now: "));
         assert_eq!(rows[1], StandIn::LowBattery.line());
         assert!(!lines(&loaded()).iter().any(|r| r.contains("smaller model")));
+    }
+
+    #[test]
+    fn a_finished_refusal_check_shows_under_the_draft_model() {
+        let l = LocalLive {
+            refusal: Some("Refusal check: answered 12 of 12 everyday asks on this PC.".into()),
+            ..loaded()
+        };
+        let rows = lines(&l);
+        assert_eq!(
+            rows[3],
+            "Refusal check: answered 12 of 12 everyday asks on this PC."
+        );
+        assert!(!lines(&loaded())
+            .iter()
+            .any(|r| r.starts_with("Refusal check")));
     }
 }
