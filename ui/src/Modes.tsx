@@ -17,6 +17,8 @@ export type ElicitItem = {
   options?: ElicitChoice[];
   /** "ended": the turn stopped before anyone answered; "halted": Halt stopped it. */
   answer: ElicitAction | "ended" | "halted" | null;
+  /** A helper asked; it waits past the end of the reply. */
+  helper?: boolean;
 };
 
 const PLAN_ANSWERS: Record<ElicitAction | "ended" | "halted", string> = {
