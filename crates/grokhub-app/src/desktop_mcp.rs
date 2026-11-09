@@ -60,6 +60,17 @@ pub(crate) fn write_halt_stamp() {
     grokhub_desktop::write_halt_stamp();
 }
 
+/// Halt everything; background runs and loops read only this one.
+pub(crate) fn read_halt_all_stamp() -> Option<u64> {
+    install_host();
+    grokhub_desktop::read_halt_all_stamp()
+}
+
+pub(crate) fn write_halt_all_stamp() {
+    install_host();
+    grokhub_desktop::write_halt_all_stamp();
+}
+
 pub(crate) fn request_desktop_test(enabled: bool) -> String {
     install_host();
     grokhub_desktop::request_desktop_test(enabled)
@@ -129,6 +140,28 @@ mod tests {
         write_halt_stamp();
         assert!(root.join("desktop-halt.stamp").is_file());
         assert!(read_halt_stamp().is_some());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_chats_stop_leaves_background_runs_and_halt_stops_them() {
+        let root = crate::config::test_config_root("halt-all");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let _pin = crate::config::TestConfigDir::set(root.clone());
+        write_halt_stamp();
+        assert!(
+            read_halt_all_stamp().is_none(),
+            "Stop on one chat is not Halt everything"
+        );
+        let _ = std::fs::remove_file(root.join("desktop-halt.stamp"));
+        write_halt_all_stamp();
+        assert!(root.join("halt-all.stamp").is_file());
+        assert!(read_halt_all_stamp().is_some());
+        assert!(
+            read_halt_stamp().is_some(),
+            "Halt stops desktop control too"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
