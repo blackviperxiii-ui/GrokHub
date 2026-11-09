@@ -71,6 +71,13 @@ pub(crate) fn write_halt_all_stamp() {
     grokhub_desktop::write_halt_all_stamp();
 }
 
+/// Halt everything: the stamp background runs and loops read, then every
+/// session's run.
+pub(crate) fn halt_all_sessions() {
+    write_halt_all_stamp();
+    grokhub_agent::halt_all_sessions();
+}
+
 pub(crate) fn request_desktop_test(enabled: bool) -> String {
     install_host();
     grokhub_desktop::request_desktop_test(enabled)
