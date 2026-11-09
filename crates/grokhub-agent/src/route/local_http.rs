@@ -113,6 +113,7 @@ impl HttpLocalRuntime {
         let v: Value = resp
             .into_json()
             .map_err(|e| format!("local model JSON: {e}"))?;
+        note_timings(&v);
         content_from_completion(&v).ok_or_else(|| "local model returned no content".into())
     }
 
@@ -223,6 +224,7 @@ impl LocalRuntime for HttpLocalRuntime {
         let v: Value = resp
             .into_json()
             .map_err(|e| format!("local model JSON: {e}"))?;
+        note_timings(&v);
         let text = content_from_completion(&v)
             .ok_or_else(|| "local model returned no content".to_string())?;
         if !text.is_empty() {
@@ -346,6 +348,8 @@ fn read_sse(
 ) -> Result<String, String> {
     let reader = BufReader::new(resp.into_reader());
     let mut full = String::new();
+    // llama-server puts the reply's timings on its last chunk.
+    let mut timings = None;
     for line in reader.lines() {
         let line = line.map_err(|e| format!("local model stream: {e}"))?;
         let Some(data) = line.strip_prefix("data:") else {
@@ -358,6 +362,9 @@ fn read_sse(
         let Ok(v) = serde_json::from_str::<Value>(data) else {
             continue;
         };
+        if v.get("timings").is_some() {
+            timings = Some(v.clone());
+        }
         if let Some(piece) = v
             .get("choices")
             .and_then(|c| c.get(0))
@@ -371,10 +378,20 @@ fn read_sse(
             }
         }
     }
+    if let Some(v) = timings {
+        note_timings(&v);
+    }
     if full.is_empty() {
         return Err("local model stream ended with no content".into());
     }
     Ok(full)
+}
+
+/// Count a finished reply toward the live draft check.
+fn note_timings(v: &Value) {
+    if let Some(t) = grokhub_core::local_draft::timings_of(v) {
+        super::local_spec::note_reply(&t);
+    }
 }
 
 /// Build a runtime from a running sidecar endpoint, if any.
