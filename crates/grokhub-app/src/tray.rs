@@ -503,6 +503,14 @@ pub fn force_x11_for_close_to_tray(has_display: bool, wayland_set: bool) {
         return;
     }
     if should_clear_wayland(has_display, wayland_set) {
+        // Kept so a browser the cabin starts can still use Wayland (LO-51).
+        for (name, key) in grokhub_core::browser::SAVED_WAYLAND {
+            if let Some(value) = env::var_os(name) {
+                // SAFETY: cabin startup, before the window and the tray thread
+                // start; no other thread reads the environment yet.
+                unsafe { env::set_var(key, value) };
+            }
+        }
         // SAFETY: cabin startup, before the window and the tray thread start; no
         // other thread reads the environment yet.
         unsafe { env::remove_var("WAYLAND_DISPLAY") };

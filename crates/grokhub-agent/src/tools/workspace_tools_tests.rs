@@ -15,8 +15,8 @@ fn ws_with(sessions: u32, uses: &[(&str, &[u32])]) -> Ws {
 const BUILTINS: [(&str, bool); 6] = [
     ("read_file", false),
     ("skill", false),
-    ("web_search", false),
-    ("web_fetch", true),
+    ("diagnose", false),
+    ("scheduler_list", true),
     ("monitor", true),
     ("image_generate", true),
 ];
@@ -33,7 +33,7 @@ fn a_young_workspace_and_every_tenth_session_get_the_default_list() {
     }
     let plan = plan_for(&quiet, 11, &BUILTINS);
     // The coding core never leaves; the unused rest go to the index.
-    assert_eq!(plan.demoted, vec!["skill", "web_search"]);
+    assert_eq!(plan.demoted, vec!["skill", "diagnose"]);
     assert!(plan.promoted.is_empty());
 }
 
@@ -45,16 +45,16 @@ fn use_in_the_window_keeps_a_tool_and_brings_a_busy_one_up_front() {
             // Used once, 9 sessions back: still in the window.
             ("skill", &[16]),
             // Used only 11 sessions back: out of it.
-            ("web_search", &[14]),
-            ("web_fetch", &[16, 18, 20, 22, 24]),
+            ("diagnose", &[14]),
+            ("scheduler_list", &[16, 18, 20, 22, 24]),
             ("monitor", &[21, 22, 23, 24]),
             // A use in the session being started doesn't count yet.
             ("image_generate", &[20, 21, 22, 23, 25]),
         ],
     );
     let plan = plan_for(&ws, 25, &BUILTINS);
-    assert_eq!(plan.demoted, vec!["web_search"]);
-    assert_eq!(plan.promoted, vec!["web_fetch"]);
+    assert_eq!(plan.demoted, vec!["diagnose"]);
+    assert_eq!(plan.promoted, vec!["scheduler_list"]);
 }
 
 #[test]
@@ -129,7 +129,7 @@ fn a_demoted_tool_sits_in_the_index_and_loads_alone() {
         let session = format!("ws-offer-old-{i}");
         start(&dir, &session, &workspace);
         for _ in 0..PROMOTE_USES {
-            note_use(&dir, &session, "web_fetch");
+            note_use(&dir, &session, "scheduler_list");
         }
         forget(&session);
     }
@@ -144,19 +144,33 @@ fn a_demoted_tool_sits_in_the_index_and_loads_alone() {
     };
     let tools = super::super::registry::schemas_for(&gate);
     let listed = names(&tools);
-    assert!(!listed.iter().any(|n| n == "web_search"), "{listed:?}");
-    assert!(listed.iter().any(|n| n == "web_fetch"), "{listed:?}");
+    assert!(!listed.iter().any(|n| n == "skill"), "{listed:?}");
+    assert!(listed.iter().any(|n| n == "scheduler_list"), "{listed:?}");
+    // A lookup always has its tools, however long since the last search.
+    assert!(listed.iter().any(|n| n == "web_search"), "{listed:?}");
     let index = tools
         .iter()
         .find(|t| t["name"] == super::super::registry::LOAD_TOOL_SCHEMA)
         .map(|t| t.to_string())
         .unwrap_or_default();
-    assert!(index.contains("web_search"), "{index}");
+    assert!(index.contains("skill"), "{index}");
     let loaded =
-        super::super::registry::run_load_tool_schema(&serde_json::json!({ "name": "web_search" }));
+        super::super::registry::run_load_tool_schema(&serde_json::json!({ "name": "skill" }));
     assert!(!loaded.failed, "{}", loaded.text);
     let after = names(&super::super::registry::schemas_for(&gate));
-    assert_eq!(after.last().map(String::as_str), Some("web_search"));
+    assert_eq!(after.last().map(String::as_str), Some("skill"));
     forget(session);
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn web_lookup_tools_are_never_demoted() {
+    let quiet = ws_with(40, &[]);
+    let builtins = [
+        ("web_search", false),
+        ("web_fetch", false),
+        ("skill", false),
+    ];
+    let plan = plan_for(&quiet, 35, &builtins);
+    assert_eq!(plan.demoted, vec!["skill"]);
 }

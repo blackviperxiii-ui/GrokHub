@@ -352,3 +352,41 @@ fn brave_catalog_config_entry_keeps_args_and_token_env() {
     );
     assert_eq!(entry["tokenEnv"], json!("BRAVE_API_KEY"));
 }
+
+/// Imports a Playwright entry `name` whose browser dies at launch (the fake
+/// does that until it is started `--isolated`). `--browser` skips detection.
+fn import_dying_browser(name: &str, bin: &str, dies: &str) {
+    let doc = json!({
+        "mcpServers": {
+            name: {
+                "command": bin,
+                "args": ["@playwright/mcp@latest", "--browser=chromium"],
+                "env": {"FAKE_MCP_BROWSER_DIES": dies},
+            }
+        }
+    });
+    mcp::import_documents(&[doc.to_string()]).unwrap();
+}
+
+#[test]
+fn a_browser_that_dies_at_launch_is_retried_isolated_once() {
+    let bin = env!("CARGO_BIN_EXE_fake_mcp");
+    let (dir, _clean, _guard) = scratch("pw-dies");
+    import_dying_browser("pwdies", bin, "1");
+    let out = run_qualified(&dir, "pwdies__echo");
+    assert!(out.contains("pid="), "the isolated relaunch answers: {out}");
+}
+
+#[test]
+fn a_browser_that_keeps_dying_points_the_model_at_web_fetch() {
+    let bin = env!("CARGO_BIN_EXE_fake_mcp");
+    let (dir, _clean, _guard) = scratch("pw-always");
+    import_dying_browser("pwalways", bin, "always");
+    let out = run_qualified(&dir, "pwalways__echo");
+    assert!(
+        out.contains("The browser can't start on this computer"),
+        "{out}"
+    );
+    assert!(out.contains("web_fetch"), "{out}");
+    assert!(out.contains("has been closed"), "{out}");
+}

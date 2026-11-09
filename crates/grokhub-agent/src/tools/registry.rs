@@ -257,6 +257,7 @@ fn legacy_schemas(gate: &Gate) -> Vec<Value> {
     tools.extend(crate::session_tools::schemas());
     tools.push(crate::subagent::spawn_schema());
     if gate.readonly_session {
+        tools.extend(web_lookup_defs().map(|def| (def.schema)()));
         return tools;
     }
     for def in action_defs().iter().chain(desktop_tail_defs().iter()) {
@@ -274,10 +275,17 @@ fn legacy_schemas(gate: &Gate) -> Vec<Value> {
     tools
 }
 
-/// Native rows the gate offers: read-only sessions get the read rows only, as in legacy.
+/// Web search and fetch, which a read-only session may still use to look things up.
+fn web_lookup_defs() -> impl Iterator<Item = &'static ToolDef> {
+    action_defs()
+        .iter()
+        .filter(|def| crate::gate::is_web_lookup(def.name))
+}
+
+/// Native rows the gate offers: read-only sessions get the read rows plus web lookups.
 fn offered_defs(gate: &Gate) -> Vec<&'static ToolDef> {
     let rows: Vec<&'static ToolDef> = if gate.readonly_session {
-        read_defs().iter().collect()
+        read_defs().iter().chain(web_lookup_defs()).collect()
     } else {
         all_defs().collect()
     };
@@ -427,6 +435,27 @@ mod tests {
     const OFF: Settings = Settings { enabled: false };
 
     #[test]
+    fn read_only_sessions_still_offer_both_web_tools() {
+        let readonly = chat(true, false);
+        let names = |settings| -> Vec<String> {
+            schemas_for_settings(&readonly, settings)
+                .iter()
+                .filter_map(|t| t["name"].as_str().map(String::from))
+                .collect()
+        };
+        begin_turn("conv-readonly-web");
+        let legacy = names(OFF);
+        assert!(legacy.iter().any(|n| n == "web_search"), "{legacy:?}");
+        assert!(legacy.iter().any(|n| n == "web_fetch"), "{legacy:?}");
+        assert!(!legacy.iter().any(|n| n == "write"), "{legacy:?}");
+        let deferred = names(ON);
+        assert!(deferred.iter().any(|n| n == "web_search"), "{deferred:?}");
+        // web_fetch waits in the index there and loads on demand.
+        assert!(!run_load_tool_schema(&json!({"name": "web_fetch"})).failed);
+        assert!(names(ON).iter().any(|n| n == "web_fetch"));
+    }
+
+    #[test]
     fn settings_default_on_and_file_disables() {
         assert!(parse_file("").enabled);
         assert!(parse_file("enabled = true").enabled);
@@ -452,27 +481,27 @@ mod tests {
     }
 
     #[test]
-    fn enabled_defers_web_fetch_until_load_tool_schema() {
+    fn enabled_defers_models_check_until_load_tool_schema() {
         let gate = chat(false, false);
         begin_turn("conv-defer");
         let stable = stable_schemas(&gate, ON);
         assert!(
-            !stable.iter().any(|t| t["name"] == "web_fetch"),
-            "web_fetch must not be in the stable list"
+            !stable.iter().any(|t| t["name"] == "models_check"),
+            "models_check must not be in the stable list"
         );
         assert!(
             stable.iter().any(|t| t["name"] == LOAD_TOOL_SCHEMA),
             "meta loader must stay in the stable list"
         );
         assert!(volatile_schemas(&gate, ON).is_empty());
-        let out = run_load_tool_schema(&json!({"name": "web_fetch"}));
+        let out = run_load_tool_schema(&json!({"name": "models_check"}));
         assert!(!out.failed);
-        assert!(out.text.contains("\"web_fetch\""));
+        assert!(out.text.contains("\"models_check\""));
         let volatile = volatile_schemas(&gate, ON);
         assert_eq!(volatile.len(), 1);
-        assert_eq!(volatile[0]["name"], "web_fetch");
+        assert_eq!(volatile[0]["name"], "models_check");
         let full = schemas_for_settings(&gate, ON);
-        assert!(full.iter().any(|t| t["name"] == "web_fetch"));
+        assert!(full.iter().any(|t| t["name"] == "models_check"));
     }
 
     #[test]
@@ -480,7 +509,7 @@ mod tests {
         let gate = chat(false, false);
         begin_turn("conv-stable");
         let before = serde_json::to_string(&stable_schemas(&gate, ON)).unwrap();
-        run_load_tool_schema(&json!({"name": "web_fetch"}));
+        run_load_tool_schema(&json!({"name": "models_check"}));
         run_load_tool_schema(&json!({"name": "scheduler_list"}));
         let after = serde_json::to_string(&stable_schemas(&gate, ON)).unwrap();
         assert_eq!(before, after, "stable tool prefix must stay byte-identical");
@@ -491,18 +520,18 @@ mod tests {
     fn loaded_schemas_stay_for_the_chat_in_load_order() {
         let gate = chat(false, false);
         begin_turn("conv-keep");
-        run_load_tool_schema(&json!({"name": "web_fetch"}));
+        run_load_tool_schema(&json!({"name": "models_check"}));
         let first = serde_json::to_string(&schemas_for_settings(&gate, ON)).unwrap();
         // Next user turn in the same chat: the loaded tool is still offered and a
         // later load appends after it, so the earlier request is a byte prefix.
         begin_turn("conv-keep");
         run_load_tool_schema(&json!({"name": "scheduler_list"}));
-        run_load_tool_schema(&json!({"name": "web_fetch"}));
+        run_load_tool_schema(&json!({"name": "models_check"}));
         let names: Vec<_> = volatile_schemas(&gate, ON)
             .iter()
             .map(|t| t["name"].as_str().unwrap_or("").to_string())
             .collect();
-        assert_eq!(names, ["web_fetch", "scheduler_list"]);
+        assert_eq!(names, ["models_check", "scheduler_list"]);
         let second = serde_json::to_string(&schemas_for_settings(&gate, ON)).unwrap();
         assert!(
             second.starts_with(first.trim_end_matches(']')),
@@ -514,7 +543,7 @@ mod tests {
     fn begin_turn_clears_loaded_schemas() {
         let gate = chat(false, false);
         begin_turn("conv-clear-a");
-        run_load_tool_schema(&json!({"name": "web_fetch"}));
+        run_load_tool_schema(&json!({"name": "models_check"}));
         assert_eq!(volatile_schemas(&gate, ON).len(), 1);
         begin_turn("conv-clear-b");
         assert!(volatile_schemas(&gate, ON).is_empty());
@@ -632,7 +661,13 @@ mod tests {
                 full.clone(),
                 11_316,
             ),
-            ("plan/ask", profile(PermMode::Ask, true, true), full, 7_020),
+            (
+                "plan/ask",
+                profile(PermMode::Ask, true, true),
+                full,
+                // +506 for web_search: a read-only session can still look things up (LO-51).
+                7_526,
+            ),
             (
                 "background",
                 profile(PermMode::Auto, false, false),
