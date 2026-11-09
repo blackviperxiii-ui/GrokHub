@@ -804,7 +804,7 @@ mod tests {
                 "skills",
                 "mods",
                 "devices",
-                "profile"
+                "personal"
             ]
         );
         let cases = [

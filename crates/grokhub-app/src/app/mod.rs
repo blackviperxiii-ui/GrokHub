@@ -229,6 +229,7 @@ mod osrs_ui;
 mod pages;
 pub mod panels;
 mod pc_health_ui;
+mod personal_ui;
 mod personality_ui;
 mod playbook_ui;
 mod plus;
@@ -314,6 +315,7 @@ enum Nav {
     Chat,
     Devices,
     Memory,
+    Personal,
     Workboard,
     Pulse,
     Imagine,
@@ -778,6 +780,7 @@ pub struct Cabin {
     greeting_llm_at: u64,
     continue_hint: String,
     skill_q: String,
+    personal: personal_ui::PersonalPage,
     pending_connectors: Vec<(String, String, String)>,
     auto_compose: bool,
     board_compose: bool,
@@ -1421,6 +1424,7 @@ impl Cabin {
             greeting_llm_at: 0,
             continue_hint: String::new(),
             skill_q: String::new(),
+            personal: personal_ui::PersonalPage::default(),
             pending_connectors: vec![],
             auto_compose: false,
             board_compose: false,
@@ -1922,6 +1926,7 @@ impl Cabin {
             greeting_llm_at: 0,
             continue_hint: String::new(),
             skill_q: String::new(),
+            personal: personal_ui::PersonalPage::default(),
             pending_connectors: Vec::new(),
             auto_compose: false,
             board_compose: false,
@@ -5542,6 +5547,7 @@ impl eframe::App for Cabin {
                     }
                     Nav::Devices => self.ui_devices(ui),
                     Nav::Memory => self.ui_memory(ui),
+                    Nav::Personal => self.ui_personal(ui),
                     Nav::Workboard => self.ui_board(ui),
                     Nav::Pulse => self.ui_pulse(ui),
                     Nav::Imagine => self.ui_imagine(ui),
