@@ -154,6 +154,24 @@ fn the_shared_logs_feed_one_engine() {
             .standing,
         Standing::Wrong
     );
+    // Plan replies: a pick is counted by the engine, the engine orders the
+    // row, and Forget there puts the row back even though the old pick
+    // count is still saved.
+    use grokhub_core::reply_chips::{plan_reply_chips, remember_reply_pick};
+    let lead = |mem: &ChipMemory| plan_reply_chips("Just do it.", mem)[0].key.clone();
+    assert_eq!(lead(&mem), "plan:go");
+    remember_reply_pick(&mut mem, "plan:change", grokhub_core::now_ms());
+    remember_reply_pick(&mut mem, "plan:change", grokhub_core::now_ms());
+    assert_eq!(lead(&mem), "plan:change");
+    // A person with no saved counts gets the same row: the engine decides.
+    assert_eq!(lead(&ChipMemory::default()), "plan:change");
+    assert_eq!(
+        view::run("forget reply:plan/change", 0),
+        "Forgot `reply:plan/change`. It starts fresh from here."
+    );
+    assert_eq!(mem.reply_picks["plan:change"], 2);
+    assert_eq!(lead(&mem), "plan:go");
+
     // The desktop app's buttons run the same code and get the list back.
     let act: view::Act =
         serde_json::from_str(r#"{"kind":"forget","key":"card:automation_done"}"#).unwrap();

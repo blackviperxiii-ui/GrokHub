@@ -748,3 +748,46 @@ fn a_learned_command_names_one_belief_or_all() {
         assert_eq!(Command::parse(bad), Err(USAGE.to_string()), "{bad}");
     }
 }
+
+#[test]
+fn a_plan_reply_pick_counts_for_it_and_against_the_replies_passed_over() {
+    use super::sources::{reply_picked, reply_subject, PLAN_REPLIES};
+    let got: Vec<(Kind, String)> = reply_picked("plan:change", T0)
+        .into_iter()
+        .map(|s| (s.kind, s.subject.as_str().to_string()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            (Kind::Ignored, "reply:plan/go".to_string()),
+            (Kind::Ignored, "reply:plan/more".to_string()),
+            (Kind::Ignored, "reply:plan/go-but".to_string()),
+            (Kind::Ignored, "reply:plan/not-now".to_string()),
+            (Kind::Picked, "reply:plan/change".to_string()),
+        ]
+    );
+    // "More on step N" is not on every card, so picking it passes over the
+    // five that are, and nothing ever counts against it.
+    assert_eq!(reply_picked("plan:step", T0).len(), 6);
+    // A question's option is the agent's words: it never becomes a subject.
+    assert_eq!(reply_subject("ask:deploy to prod now"), None);
+    assert_eq!(reply_picked("ask:deploy to prod now", T0), Vec::new());
+    // Every reply counted as passed over is one a plan card always shows.
+    let shown = crate::reply_chips::plan_reply_chips("Just do it.", &crate::ChipMemory::default());
+    for id in PLAN_REPLIES {
+        assert!(shown.iter().any(|c| c.key == format!("plan:{id}")), "{id}");
+    }
+}
+
+#[test]
+fn the_learned_view_names_a_plan_reply_by_its_chip() {
+    use super::view::view;
+    let mut beliefs = Beliefs::default();
+    votes(&mut beliefs, &subject("reply:plan/go-but"), 3, 1, T0);
+    let got = view(&beliefs, T0);
+    assert_eq!(got.rows[0].title, "Plan reply: Go, but\u{2026}");
+    assert_eq!(
+        got.rows[0].says,
+        "You pick this about 8 times in 10 when a plan waits."
+    );
+}
