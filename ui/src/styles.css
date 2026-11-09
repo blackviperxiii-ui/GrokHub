@@ -39,6 +39,26 @@
   --space-96: 96px;
   /* Page side margin: roomy on wide windows, tighter under 900px (auto density). */
   --page-pad: 24px;
+  /* The one type scale, same as the cabin (docs/design/type.md). rem, so
+     Text size zoom and the OS text size scale it (WCAG 1.4.4). Every line
+     height sits on the 4px grid. */
+  --font-badge: 0.625rem;
+  --font-caption: 0.75rem;
+  --font-body: 0.875rem;
+  --font-prose: 1rem;
+  --font-section: 1.25rem;
+  --font-headline: 1.5rem;
+  --font-display: 2rem;
+  --lh-caption: 1rem;
+  --lh-body: 1.25rem;
+  --lh-prose: 1.5rem;
+  --lh-section: 1.75rem;
+  --lh-headline: 2rem;
+  --lh-display: 2.5rem;
+  /* Inter dynamic metrics: -0.0223 + 0.185 * e^(-0.1745 * px), in em. */
+  --tracking-section: -0.017em;
+  --tracking-headline: -0.019em;
+  --tracking-display: -0.022em;
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 16px;
@@ -197,6 +217,8 @@
 
 body {
   margin: 0;
+  font-size: var(--font-body);
+  line-height: var(--lh-body);
   background: var(--bg);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
@@ -371,6 +393,11 @@ select:focus-visible {
 @media (max-width: 899px) {
   :root {
     --page-pad: 16px;
+    /* Titles step down one level on a narrow window; body text never shrinks. */
+    --font-headline: 1.25rem;
+    --lh-headline: 1.75rem;
+    --font-display: 1.5rem;
+    --lh-display: 2rem;
   }
 }
 
@@ -525,13 +552,13 @@ select:focus-visible {
 
 .palette kbd {
   font: inherit;
-  font-size: 0.85em;
+  font-size: var(--font-body);
   color: var(--muted);
   white-space: nowrap;
 }
 
 .shortcuts h2 {
-  font-size: 1em;
+  font-size: var(--font-prose);
   margin: 0;
 }
 
@@ -547,7 +574,7 @@ select:focus-visible {
 }
 
 .shortcuts th {
-  font-weight: normal;
+  font-weight: 400;
 }
 
 .palette > button {
@@ -584,7 +611,8 @@ select:focus-visible {
   max-width: min(80%, 70ch);
   padding: 12px 16px;
   border-radius: var(--radius-lg);
-  line-height: 1.5;
+  font-size: var(--font-prose);
+  line-height: var(--lh-prose);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   background: var(--panel);
@@ -711,18 +739,20 @@ select:focus-visible {
 }
 
 .md-heading {
-  font-size: 1.05rem;
+  font-size: var(--font-prose);
   font-weight: 600;
-  line-height: 1.35;
+  line-height: var(--lh-prose);
   margin-top: 4px;
 }
 
 h1.md-heading {
-  font-size: 1.3rem;
+  font-size: var(--font-section);
+  line-height: var(--lh-section);
+  letter-spacing: var(--tracking-section);
 }
 
 h2.md-heading {
-  font-size: 1.15rem;
+  font-size: var(--font-prose);
 }
 
 .md-gap {
@@ -804,7 +834,7 @@ h2.md-heading {
 .md-inline-code,
 .md-code pre {
   font-family: ui-monospace, monospace;
-  font-size: 0.9em;
+  font-size: var(--font-body);
 }
 
 .md-inline-code {
@@ -832,13 +862,13 @@ h2.md-heading {
 }
 
 .md-code-lang {
-  font-size: 0.8rem;
+  font-size: var(--font-caption);
   color: var(--muted);
 }
 
 button.md-copy {
   padding: 2px 12px;
-  font-size: 0.8rem;
+  font-size: var(--font-caption);
 }
 
 .md-code pre {
@@ -925,6 +955,8 @@ button.md-copy {
   /* flex: 1 sizes it; its default width (cols) would hold the row wider than a phone. */
   width: 0;
   resize: none;
+  font-size: var(--font-prose);
+  line-height: var(--lh-prose);
 }
 
 /* Files waiting on the composer; they wrap on a phone. */
@@ -964,7 +996,8 @@ button.md-copy {
 .composer .attach-plus {
   min-width: 44px;
   min-height: 44px;
-  font-size: 1.2em;
+  font-size: var(--font-section);
+  letter-spacing: var(--tracking-section);
 }
 
 /* Settings: a Back button and the categories across the top, the open page
@@ -992,7 +1025,8 @@ button.md-copy {
 }
 
 .settings-title {
-  font-size: 1.3rem;
+  font-size: var(--font-section);
+  letter-spacing: var(--tracking-section);
   font-weight: 600;
 }
 
@@ -1007,7 +1041,7 @@ button.md-copy {
 .settings-tabs button {
   min-height: 44px;
   padding: 0 16px;
-  font-size: 1rem;
+  font-size: var(--font-prose);
 }
 
 .settings-body {
@@ -1039,7 +1073,8 @@ button.md-copy {
 
 .settings-head h1 {
   margin: 0;
-  font-size: 1.15rem;
+  font-size: var(--font-section);
+  letter-spacing: var(--tracking-section);
   font-weight: 600;
 }
 
@@ -1053,7 +1088,7 @@ button.md-copy {
 
 .settings-side h2 {
   margin: 4px 0 8px;
-  font-size: 0.85rem;
+  font-size: var(--font-body);
   font-weight: 600;
   color: var(--muted);
 }
@@ -1158,7 +1193,7 @@ button.md-copy {
 }
 
 .settings h2 {
-  font-size: 1rem;
+  font-size: var(--font-prose);
   margin: 0;
 }
 
@@ -1173,7 +1208,7 @@ button.md-copy {
 /* The app's one-line read of a message ("Answering on the side"). */
 .note.route-ack {
   margin: 0 0 4px;
-  font-size: 0.9em;
+  font-size: var(--font-body);
 }
 
 /* Answers to side questions, above the box; never part of the chat. */
@@ -1222,7 +1257,7 @@ button.md-copy {
   margin: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font-size: 0.9em;
+  font-size: var(--font-body);
 }
 
 .card-status,
@@ -1267,7 +1302,7 @@ button.md-copy {
 }
 
 .choice-detail {
-  font-size: 0.9em;
+  font-size: var(--font-body);
   opacity: 0.8;
 }
 
@@ -1320,7 +1355,7 @@ button.danger {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  font-size: 0.85rem;
+  font-size: var(--font-body);
   font-weight: 500;
   color: var(--steel);
 }
@@ -1417,7 +1452,7 @@ button.danger {
 
 .idea-group h3 {
   margin: 8px 0 4px;
-  font-size: 0.95em;
+  font-size: var(--font-prose);
   color: var(--muted);
 }
 
@@ -1432,12 +1467,12 @@ button.danger {
 }
 
 .local-ai h3 {
-  font-size: 0.95rem;
+  font-size: var(--font-prose);
   margin: 8px 0 0;
 }
 
 .local-ai h4 {
-  font-size: 0.85rem;
+  font-size: var(--font-body);
   margin: 4px 0;
   color: var(--muted);
 }
@@ -1494,7 +1529,7 @@ button.danger {
 .local-model-meta,
 .local-model-reason {
   color: var(--muted);
-  font-size: 0.9em;
+  font-size: var(--font-body);
   overflow-wrap: anywhere;
 }
 
@@ -1503,7 +1538,7 @@ button.danger {
 }
 
 .badge {
-  font-size: 0.8em;
+  font-size: var(--font-caption);
   border: 1px solid var(--border);
   border-radius: 999px;
   padding: 0 8px;
@@ -1599,7 +1634,8 @@ button.danger {
 }
 
 .pair h1 {
-  font-size: 1.4rem;
+  font-size: var(--font-headline);
+  letter-spacing: var(--tracking-headline);
   margin: 0;
 }
 
@@ -1665,7 +1701,7 @@ button.danger {
 }
 
 .web-access h2 {
-  font-size: 1rem;
+  font-size: var(--font-prose);
   margin: 0;
 }
 
@@ -1727,7 +1763,7 @@ button.danger {
 }
 
 .permissions h2 {
-  font-size: 1rem;
+  font-size: var(--font-prose);
   margin: 8px 0 0;
 }
 
@@ -1747,7 +1783,7 @@ button.danger {
 }
 
 .interests h2 {
-  font-size: 1rem;
+  font-size: var(--font-prose);
   margin: 0;
 }
 
@@ -1784,7 +1820,7 @@ button.danger {
 
 textarea.code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.85rem;
+  font-size: var(--font-body);
   width: 100%;
 }
 
@@ -1796,7 +1832,7 @@ textarea.code {
 
 .labs h2,
 .labs h3 {
-  font-size: 1rem;
+  font-size: var(--font-prose);
   margin: 0;
 }
 
@@ -1905,14 +1941,14 @@ textarea.code {
   flex-wrap: wrap;
   gap: 4px 8px;
   align-items: baseline;
-  font-size: 0.9em;
+  font-size: var(--font-body);
 }
 
 .work-badge {
   padding: 0 8px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
-  font-size: 0.85em;
+  font-size: var(--font-body);
 }
 
 .work-badge.agent {
@@ -1997,7 +2033,7 @@ textarea.code {
 }
 
 .work-log {
-  font-size: 0.9em;
+  font-size: var(--font-body);
   color: var(--muted);
 }
 
@@ -2014,7 +2050,7 @@ textarea.code {
 }
 
 .chip {
-  font-size: 0.85em;
+  font-size: var(--font-body);
   padding: 4px 12px;
   border-radius: 999px;
   background: transparent;
@@ -2055,7 +2091,7 @@ span.chip.quiet {
   flex: none;
   min-height: 48px;
   padding: 0 16px;
-  font-size: 16px;
+  font-size: var(--font-prose);
   white-space: nowrap;
   border-radius: 999px;
   background: transparent;
@@ -2079,7 +2115,8 @@ span.chip.quiet {
   min-height: 48px;
   margin-left: -8px;
   padding: 0;
-  font-size: 18px;
+  font-size: var(--font-section);
+  letter-spacing: var(--tracking-section);
   border: none;
   background: transparent;
   color: var(--muted);
@@ -2243,14 +2280,16 @@ label.toggle-row {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 28px;
+  font-size: var(--font-display);
+  letter-spacing: var(--tracking-display);
 }
 
 .feed-title {
   flex: 1;
   min-width: 0;
+  font-size: var(--font-prose);
   font-weight: 600;
-  line-height: 1.3;
+  line-height: var(--lh-prose);
   padding-top: 2px;
 }
 
@@ -2290,13 +2329,13 @@ label.toggle-row {
 
 .feed-menu-date {
   color: var(--muted);
-  font-size: 0.85em;
+  font-size: var(--font-body);
   padding: 8px 12px;
 }
 
 .snippet {
   margin: 0;
-  line-height: 1.45;
+  line-height: var(--lh-body);
 }
 
 .snippet a {
@@ -2374,14 +2413,14 @@ label.toggle-row {
 
 .feed-source {
   margin: 0;
-  font-size: 0.85em;
+  font-size: var(--font-body);
   color: var(--muted);
 }
 
 .pulse .day-end {
   list-style: none;
   text-align: center;
-  font-size: 0.85em;
+  font-size: var(--font-body);
   color: var(--muted);
   padding: 8px 0;
 }
@@ -2461,7 +2500,7 @@ label.toggle-row {
 
 .pulse .idea-group h3 {
   margin: 16px 12px 4px;
-  font-size: 0.85rem;
+  font-size: var(--font-body);
   font-weight: 600;
   color: var(--muted);
 }
@@ -2515,7 +2554,8 @@ label.toggle-row {
 .idea-icon.plain {
   display: grid;
   place-items: center;
-  font-size: 24px;
+  font-size: var(--font-headline);
+  letter-spacing: var(--tracking-headline);
 }
 
 .idea-text {
@@ -2530,7 +2570,7 @@ label.toggle-row {
 
 .idea-summary {
   color: var(--muted);
-  font-size: 0.9rem;
+  font-size: var(--font-body);
 }
 
 .idea-row .feed-corner {
@@ -2580,7 +2620,7 @@ label.toggle-row {
 
 .activity-summary {
   color: var(--muted);
-  font-size: 0.85em;
+  font-size: var(--font-body);
 }
 
 .activity-dot {
@@ -2662,7 +2702,7 @@ label.toggle-row {
 .activity-status {
   margin-left: auto;
   color: var(--muted);
-  font-size: 0.8em;
+  font-size: var(--font-caption);
   flex: none;
 }
 
@@ -2675,7 +2715,7 @@ label.toggle-row {
 .activity-steps,
 .activity-more {
   color: var(--muted);
-  font-size: 0.85em;
+  font-size: var(--font-body);
 }
 
 .activity-progress {
@@ -2743,10 +2783,12 @@ label.toggle-row {
   border-radius: 9px;
   background: var(--danger);
   color: #fff;
-  font-size: 0.72em;
-  font-weight: 700;
-  line-height: 18px;
-  text-align: center;
+  font-size: var(--font-badge);
+  font-weight: 600;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .notice-menu {
@@ -2958,7 +3000,7 @@ label.toggle-row {
 }
 
 .imagine-caption {
-  font-size: 0.85em;
+  font-size: var(--font-body);
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2985,7 +3027,7 @@ label.toggle-row {
 
 .devices h2 {
   margin: 8px 0 0;
-  font-size: 1rem;
+  font-size: var(--font-prose);
 }
 
 .devices .rows {
@@ -3121,7 +3163,7 @@ label.toggle-row {
 
 .history-group h3 {
   margin: 4px 0 8px;
-  font-size: 0.9em;
+  font-size: var(--font-body);
   color: var(--muted);
 }
 
@@ -3161,7 +3203,7 @@ label.toggle-row {
 .tools-ran {
   margin: 0;
   color: var(--muted);
-  font-size: 0.85em;
+  font-size: var(--font-body);
 }
 
 .log .earlier {
@@ -3194,7 +3236,7 @@ label.toggle-row {
 .halted-line {
   margin: 0;
   color: var(--danger-text);
-  font-size: 0.9em;
+  font-size: var(--font-body);
 }
 
 .connector-add {
@@ -3223,7 +3265,7 @@ label.toggle-row {
 }
 .device-code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 1.6rem;
+  font-size: var(--font-headline);
   letter-spacing: 0.15em;
   margin: 0.5rem 0;
   user-select: all;
@@ -3335,7 +3377,7 @@ label.toggle-row {
 
 .library-name {
   padding: 0 8px 8px;
-  font-size: 0.9em;
+  font-size: var(--font-body);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3368,7 +3410,7 @@ label.toggle-row {
     hsl(calc(var(--art-hue) + 40) 40% 16%)
   );
   color: #f2f2f4;
-  font-size: 1.6em;
+  font-size: var(--font-headline);
   font-weight: 600;
   letter-spacing: 0.04em;
 }
@@ -3382,7 +3424,8 @@ label.toggle-row {
 
 .library-detail h2 {
   margin: 4px 0 0;
-  font-size: 1.15em;
+  font-size: var(--font-section);
+  letter-spacing: var(--tracking-section);
 }
 
 .library-detail .card-status {
@@ -3450,7 +3493,7 @@ label.toggle-row {
 
 .board-column h2 {
   margin: 0;
-  font-size: 0.85rem;
+  font-size: var(--font-body);
   font-weight: 600;
   color: var(--muted);
 }
@@ -3482,7 +3525,7 @@ label.toggle-row {
 }
 
 .board-notes {
-  font-size: 0.9em;
+  font-size: var(--font-body);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -3556,7 +3599,7 @@ label.toggle-row {
 }
 
 .agents h2 {
-  font-size: 1rem;
+  font-size: var(--font-prose);
   margin: 0;
 }
 
@@ -3647,7 +3690,7 @@ label.toggle-row {
   gap: 8px;
   margin: 2px 0;
   color: var(--text);
-  font-size: 0.95rem;
+  font-size: var(--font-prose);
 }
 
 .verdict-dot {
@@ -3703,7 +3746,7 @@ label.toggle-row {
 
 .fix-head h2 {
   margin: 0;
-  font-size: 1.1rem;
+  font-size: var(--font-prose);
 }
 
 .fix-title {
@@ -3745,7 +3788,7 @@ label.toggle-row {
 .fix-row-why,
 .fix-note {
   color: var(--muted);
-  font-size: 0.9rem;
+  font-size: var(--font-body);
 }
 
 .fix-steps {
@@ -3757,7 +3800,7 @@ label.toggle-row {
   margin-top: 8px;
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.9rem;
+  font-size: var(--font-body);
 }
 
 .fix-compare th {
@@ -3806,7 +3849,7 @@ label.toggle-row {
   background: transparent;
   box-shadow: none;
   color: var(--muted);
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: 1px;
   opacity: 0;
   transition: opacity var(--t-base) var(--ease-out);
@@ -3859,7 +3902,8 @@ label.toggle-row {
 .home-head h2,
 .objectives-head h2 {
   margin: 0;
-  font-size: 1.6em;
+  font-size: var(--font-headline);
+  letter-spacing: var(--tracking-headline);
 }
 
 .home-head .xp-bar,
@@ -3907,7 +3951,7 @@ label.toggle-row {
 
 .home-tile h3 {
   margin: 0;
-  font-size: 0.8em;
+  font-size: var(--font-caption);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--muted);
@@ -3994,19 +4038,20 @@ label.toggle-row {
 }
 
 .home-caption {
-  font-size: 0.8em;
+  font-size: var(--font-caption);
   letter-spacing: 0.1em;
 }
 
 .home-count {
-  font-size: 1.4em;
+  font-size: var(--font-headline);
+  letter-spacing: var(--tracking-headline);
   font-weight: 600;
   color: var(--amber);
 }
 
 .home-cabin {
   margin-top: auto;
-  font-size: 0.85em;
+  font-size: var(--font-body);
   color: var(--muted);
 }
 
@@ -4035,7 +4080,7 @@ label.toggle-row {
 }
 
 .home-foot {
-  font-size: 0.85em;
+  font-size: var(--font-body);
 }
 
 .home-edit {
@@ -4076,7 +4121,7 @@ label.toggle-row {
   display: flex;
   justify-content: space-between;
   gap: 8px;
-  font-size: 0.8em;
+  font-size: var(--font-caption);
   letter-spacing: 0.06em;
 }
 
@@ -4170,7 +4215,7 @@ label.toggle-row {
 
 .objectives-tag {
   flex: none;
-  font-size: 0.8em;
+  font-size: var(--font-caption);
   letter-spacing: 0.06em;
   color: var(--amber);
 }
@@ -4238,7 +4283,8 @@ label.toggle-row {
 
 /* Shared-model Home tiles. */
 .home-big {
-  font-size: 1.4em;
+  font-size: var(--font-headline);
+  letter-spacing: var(--tracking-headline);
   font-weight: 600;
   overflow-wrap: anywhere;
 }
@@ -4286,7 +4332,7 @@ label.toggle-row {
 }
 
 .home-stale {
-  font-size: 0.75rem;
+  font-size: var(--font-caption);
   font-style: italic;
 }
 
@@ -4362,7 +4408,7 @@ label.toggle-row {
 .first-run-choices button,
 .first-run-big {
   padding: 12px 16px;
-  font-size: 1.05em;
+  font-size: var(--font-prose);
 }
 
 .first-run-bigger {
@@ -4491,7 +4537,7 @@ label.toggle-row {
   overflow: auto;
   max-height: 70vh;
   font-family: ui-monospace, monospace;
-  font-size: 12px;
+  font-size: var(--font-caption);
   white-space: pre;
 }
 
@@ -4516,7 +4562,7 @@ label.toggle-row {
   flex: 0 0 auto;
   min-height: 32px;
   padding: 0 12px;
-  font-size: 0.85rem;
+  font-size: var(--font-body);
   white-space: nowrap;
 }
 
