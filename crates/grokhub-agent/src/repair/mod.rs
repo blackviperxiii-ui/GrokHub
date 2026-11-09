@@ -13,6 +13,7 @@
 //! a probe that needs admin is skipped with a note.
 
 mod apply;
+mod fans;
 mod fix;
 mod interpret;
 mod probes;
@@ -28,6 +29,10 @@ use crate::harness::{self, AccessMode, ConsentLedger, GateOutcome, Origin, Scope
 pub use apply::{
     gb_prompt, step_ok, Action, ApplyCtx, ApplyRun, ChecklistLine, StepMark, APPLY_TOOL,
     CHECK_LINE, REPAIR_TOOL, RESTORE_TOOL, STEP_FAILED, STEP_OK, UNATTENDED, UNDO_TOOL,
+};
+pub use fans::{
+    fan_backend, fans_at_full, full_speed_plan, pwm_channels, restore_fans_plan, save_fans,
+    FanBackend, FanBlock, PwmChannel, SavedFan, HWMON_ROOT, PWM_FULL, PWM_MANUAL,
 };
 pub(crate) use fix::repair_hit;
 pub use fix::{
