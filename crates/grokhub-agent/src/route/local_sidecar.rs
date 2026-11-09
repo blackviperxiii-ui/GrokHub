@@ -2848,6 +2848,7 @@ mod tests {
         set_last_error(None);
     }
 
+    #[cfg(unix)]
     #[test]
     fn background_work_never_starts_the_model_and_rides_on_one_already_loaded() {
         use std::os::unix::fs::PermissionsExt;
@@ -2867,9 +2868,8 @@ mod tests {
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
         std::fs::write(dir.join("models").join("m.gguf"), b"x").unwrap();
         let _on = crate::route::local::ForceOn::with(None);
-        let _need = super::super::local_scale::NeedGuard::set(
-            super::super::local_scale::Need::Background,
-        );
+        let _need =
+            super::super::local_scale::NeedGuard::set(super::super::local_scale::Need::Background);
         let none = acquire_for_request(&dir).expect("no error, just no server");
         assert!(none.endpoint().is_none());
         drop(none);
