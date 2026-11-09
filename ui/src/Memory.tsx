@@ -1,19 +1,68 @@
 import { useEffect, useState, type FormEvent } from "react";
 import {
+  PERSONAL_ADD_GROUPS,
   addMemory,
+  addPersonalFact,
   approveMemoryRow,
   editMemoryRow,
+  exportPersonal,
   forgetMemoryRow,
   getMemory,
+  pauseMemoryRow,
   rejectMemoryRow,
   saveMemory,
   searchMemory,
   setMemoryWrites,
+  wipePersonal,
   type MemoryHit,
   type MemoryNotes,
+  type MemoryRow,
+  type PersonalGroupKey,
 } from "./api";
+import { PRODUCT_NAME } from "./brand";
 import { Toggle } from "./Toggle";
-import { StatusLine, useNote } from "./ui";
+import { inShell } from "./transport";
+import { ConfirmRow, StatusLine, useNote } from "./ui";
+
+/** Page order of the groups; a group the page doesn't know goes last. */
+export const PERSONAL_GROUP_ORDER = [
+  "About you",
+  "What you like",
+  "Your routines",
+  "What you need",
+  "How you like things done",
+  "Waiting for your OK",
+];
+
+/** Rows whose text, source or group holds every word of `query`. */
+export function searchRows(rows: MemoryRow[], query: string): MemoryRow[] {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return rows;
+  return rows.filter((row) => {
+    const hay = `${row.text} ${row.source} ${row.group}`.toLowerCase();
+    return words.every((word) => hay.includes(word));
+  });
+}
+
+/** Rows by group, in page order, skipping empty groups. */
+export function groupRows(rows: MemoryRow[]): [string, MemoryRow[]][] {
+  const names = [...PERSONAL_GROUP_ORDER];
+  for (const row of rows) if (!names.includes(row.group)) names.push(row.group);
+  return names
+    .map((name): [string, MemoryRow[]] => [name, rows.filter((row) => row.group === name)])
+    .filter(([, list]) => list.length > 0);
+}
+
+/** "Paused, not used · you wrote it · 2026-10-07". */
+export function rowMeta(row: MemoryRow): string {
+  const bits: string[] = [];
+  if (row.paused) bits.push("Paused, not used");
+  else if (row.proposed) bits.push("Waiting for your OK");
+  bits.push(row.source);
+  const day = row.updated.slice(0, 10);
+  if (day) bits.push(day);
+  return bits.join(" · ");
+}
 
 type Scope = "workspace" | "global";
 const SCOPES: Scope[] = ["workspace", "global"];
@@ -35,6 +84,11 @@ export function Memory() {
   const { note, ok, fail } = useNote();
   const [editId, setEditId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [find, setFind] = useState("");
+  const [fact, setFact] = useState("");
+  const [factGroup, setFactGroup] = useState<PersonalGroupKey>("about");
+  const [wipeAsk, setWipeAsk] = useState(false);
+  const [busy, setBusy] = useState(false);
 
   /** Shows what the files hold now. An editor with unsaved changes keeps
    * them (and its old base, so its save is checked) unless it is in `replace`. */
@@ -104,6 +158,44 @@ export function Memory() {
     }
   }
 
+  async function addFact(event: FormEvent) {
+    event.preventDefault();
+    if (!fact.trim()) return;
+    try {
+      show(await addPersonalFact(fact.trim(), factGroup), []);
+      setFact("");
+      ok("Added.");
+    } catch (err) {
+      fail(err);
+    }
+  }
+
+  async function exportCopy() {
+    try {
+      ok(`Saved to ${await exportPersonal()}.`);
+    } catch (err) {
+      fail(err);
+    }
+  }
+
+  async function wipe() {
+    setBusy(true);
+    try {
+      const done = await wipePersonal();
+      show(done.notes, SCOPES);
+      ok(
+        done.locked > 0
+          ? `Wiped ${done.removed} lines. ${done.locked} private lines were locked and stay until you open them.`
+          : `Wiped ${done.removed} lines. Personal is empty.`,
+      );
+    } catch (err) {
+      fail(err);
+    } finally {
+      setBusy(false);
+      setWipeAsk(false);
+    }
+  }
+
   async function search(event: FormEvent) {
     event.preventDefault();
     try {
@@ -114,7 +206,7 @@ export function Memory() {
   }
 
   if (!notes) {
-    return <section className="memory">{note?.text ?? "Loading memory…"}</section>;
+    return <section className="memory">{note?.text ?? "Loading…"}</section>;
   }
 
   const editor = (scope: Scope, title: string, path: string) => (
@@ -143,90 +235,186 @@ export function Memory() {
     </div>
   );
 
-  return (
-    <section className="memory" aria-label="Memory">
-      {notes.amr && (
-        <p className="note">
-          The cabin keeps memory in its AMR store, so chat recall does not read these files.
-        </p>
+  const shown = searchRows(notes.rows, find);
+  const row = (line: MemoryRow) => (
+    <li key={line.id} className={line.paused ? "card paused" : "card"}>
+      {editId === line.id ? (
+        <input
+          aria-label={`Edit text for ${line.text}`}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+        />
+      ) : (
+        <p>{line.text}</p>
       )}
+      <p className="card-status">{rowMeta(line)}</p>
+      {line.corrects && <p>Corrects: {line.corrects}</p>}
+      <div className="memory-row-actions">
+        {line.proposed ? (
+          <>
+            <button
+              type="button"
+              aria-label={`OK ${line.text}`}
+              disabled={!notes.writesOn}
+              onClick={() => void apply(approveMemoryRow(line.id), "Saved.")}
+            >
+              OK
+            </button>
+            <button
+              type="button"
+              className="quiet"
+              aria-label={`No ${line.text}`}
+              onClick={() => void apply(rejectMemoryRow(line.id), "Dropped.")}
+            >
+              No
+            </button>
+          </>
+        ) : editId === line.id ? (
+          <>
+            <button
+              type="button"
+              disabled={!notes.writesOn || !draft.trim()}
+              onClick={() => void apply(editMemoryRow(line.id, draft.trim()), "Saved in your words.")}
+            >
+              Save
+            </button>
+            <button type="button" className="quiet" onClick={() => setEditId(null)}>
+              Cancel
+            </button>
+          </>
+        ) : (
+          <>
+            {!line.paused && (
+              <button
+                type="button"
+                className="quiet"
+                aria-label={`Edit ${line.text}`}
+                disabled={!notes.writesOn}
+                onClick={() => {
+                  setEditId(line.id);
+                  setDraft(line.text);
+                }}
+              >
+                Edit
+              </button>
+            )}
+            <button
+              type="button"
+              className="quiet"
+              aria-label={`${line.paused ? "Use again" : "Don't use"} ${line.text}`}
+              onClick={() =>
+                void apply(
+                  pauseMemoryRow(line.id, !line.paused),
+                  line.paused ? "In use again." : "Kept, but not used until you say so.",
+                )
+              }
+            >
+              {line.paused ? "Use again" : "Don't use"}
+            </button>
+            <button
+              type="button"
+              className="quiet danger"
+              aria-label={`Forget ${line.text}`}
+              onClick={() => void apply(forgetMemoryRow(line.id), "Forgotten.")}
+            >
+              Forget
+            </button>
+          </>
+        )}
+      </div>
+    </li>
+  );
+
+  return (
+    <section className="memory" aria-label="Personal">
+      <p className="note">
+        What {PRODUCT_NAME} knows about you, and where it learned it. It all stays on this computer.
+      </p>
       <Toggle
         checked={notes.writesOn}
         onChange={(on) =>
           void apply(
             setMemoryWrites(on),
-            on ? "Memory is on." : "Memory is off. Nothing new is written.",
+            on ? "Learning from chats again." : "Not learning from chats. Nothing new is saved.",
           )
         }
       >
-        Remember new lines
+        Learn from chats
       </Toggle>
-      {notes.rows.length > 0 && (
-        <ul className="rows" aria-label="Learned lines">
-          {notes.rows.map((row) => (
-            <li key={row.id} className="card">
-              {editId === row.id ? (
-                <input
-                  aria-label={`Edit text for ${row.text}`}
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                />
-              ) : (
-                <p>{row.text}</p>
-              )}
-              <p>{row.source}</p>
-              <p>{row.updated}</p>
-              {row.corrects && <p>Corrects: {row.corrects}</p>}
-              {row.proposed && <p>Waiting for approval</p>}
-              <div className="memory-row-actions">
-                {editId === row.id ? (
-                  <button
-                    type="button"
-                    disabled={!notes.writesOn || !draft.trim()}
-                    onClick={() => void apply(editMemoryRow(row.id, draft.trim()), "Saved the line.")}
-                  >
-                    Save line
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    disabled={!notes.writesOn}
-                    onClick={() => {
-                      setEditId(row.id);
-                      setDraft(row.text);
-                    }}
-                  >
-                    Edit {row.text}
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => void apply(forgetMemoryRow(row.id), "Forgot the line.")}
-                >
-                  Delete {row.text}
-                </button>
-                {row.proposed && (
-                  <>
-                    <button
-                      type="button"
-                      disabled={!notes.writesOn}
-                      onClick={() => void apply(approveMemoryRow(row.id), "Approved the line.")}
-                    >
-                      Approve
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void apply(rejectMemoryRow(row.id), "Rejected the line.")}
-                    >
-                      Reject
-                    </button>
-                  </>
-                )}
-              </div>
-            </li>
+      <form className="add" onSubmit={addFact}>
+        <select
+          aria-label="Group"
+          value={factGroup}
+          onChange={(e) => setFactGroup(e.target.value as PersonalGroupKey)}
+        >
+          {PERSONAL_ADD_GROUPS.map(([key, name]) => (
+            <option key={key} value={key}>
+              {name}
+            </option>
           ))}
-        </ul>
+        </select>
+        <input
+          aria-label="Add something about you"
+          placeholder="In your words, like: I play after the kids are in bed"
+          value={fact}
+          onChange={(e) => setFact(e.target.value)}
+        />
+        <button type="submit" disabled={!fact.trim()}>
+          Add
+        </button>
+      </form>
+      <StatusLine note={note} className="note" />
+      {notes.rows.length === 0 ? (
+        <p className="empty">
+          Nothing learned yet. {PRODUCT_NAME} adds to this as you chat, or add something above.
+        </p>
+      ) : (
+        <>
+          <input
+            aria-label="Search what it knows"
+            placeholder="Search"
+            value={find}
+            onChange={(e) => setFind(e.target.value)}
+          />
+          {shown.length === 0 && <p className="empty">None matched.</p>}
+          {groupRows(shown).map(([group, list]) => (
+            <div key={group} className="memory-group">
+              <h3>{group}</h3>
+              <ul className="rows" aria-label={group}>
+                {list.map(row)}
+              </ul>
+            </div>
+          ))}
+        </>
       )}
+      {inShell() && (
+        <div className="memory-keep">
+          <button type="button" className="quiet" onClick={() => void exportCopy()}>
+            Export to Downloads
+          </button>
+          {wipeAsk ? (
+            <ConfirmRow
+              question="Wipe everything?"
+              detail={`This deletes every line ${PRODUCT_NAME} learned about you and empties your global notes. Project notes stay. It can't be undone, so export first if you want a copy.`}
+              action="Wipe for good"
+              busy={busy}
+              onConfirm={() => void wipe()}
+              onCancel={() => setWipeAsk(false)}
+            />
+          ) : (
+            <button type="button" className="quiet danger" onClick={() => setWipeAsk(true)}>
+              Wipe everything
+            </button>
+          )}
+        </div>
+      )}
+      <details className="memory-files">
+        <summary>Notes files</summary>
+        {notes.amr && (
+          <p className="note">
+            The cabin keeps memory in its AMR store, so chat recall does not read these files.
+          </p>
+        )}
       <form className="add" onSubmit={add}>
         <input
           aria-label="New note"
@@ -241,7 +429,6 @@ export function Memory() {
           Remember
         </button>
       </form>
-      <StatusLine note={note} className="note" />
       {editor("workspace", "Project notes", notes.workspacePath)}
       {editor("global", "Global notes", notes.globalPath)}
       <form className="add" onSubmit={search}>
@@ -266,6 +453,7 @@ export function Memory() {
           ))}
         </ul>
       )}
+      </details>
     </section>
   );
 }

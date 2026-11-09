@@ -408,13 +408,15 @@ async function automations(s, config) {
   if (!ran) throw new Error("the model never got the automation's instructions");
 }
 
-// Memory: Remember a line, check it lands in the work folder's MEMORY.md,
-// then search for it the way chat recall would.
+// Personal: open Notes files, Remember a line, check it lands in the work
+// folder's MEMORY.md, then search for it the way chat recall would.
 async function memory(s, workspace) {
-  await tab(s, "Memory");
-  const input = await waitFor("the memory page", () => find(s, "input[aria-label='New note']"));
+  await tab(s, "Personal");
+  await waitFor("the personal page", () => find(s, ".memory-files > summary"));
+  await click(s, ".memory-files > summary");
+  const input = await waitFor("the notes files", () => find(s, "input[aria-label='New note']"));
   await wd("POST", `${s}/element/${input}/value`, { text: MEMORY_NOTE });
-  await click(s, ".memory form.add button[type='submit']");
+  await click(s, ".memory-files form.add button[type='submit']");
   // Status is role=status; AMR-on installs also show a banner in p.note.
   await waitFor("the remembered note", async () => {
     const t = await textOf(s, ".memory [role='status']");
@@ -426,7 +428,7 @@ async function memory(s, workspace) {
 
   const search = await find(s, "input[aria-label='Search memory']");
   await wd("POST", `${s}/element/${search}/value`, { text: "kumquats" });
-  await click(s, ".memory form.add:last-of-type button[type='submit']");
+  await click(s, ".memory-files form.add:last-of-type button[type='submit']");
   const hit = await waitFor("the search hit", async () => {
     const t = await textOf(s, ".card.hit .card-detail");
     return t === MEMORY_NOTE ? t : null;

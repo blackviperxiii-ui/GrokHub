@@ -46,7 +46,7 @@ describe("paletteRows", () => {
       "Journal",
       "Automations",
       "Agents",
-      "Memory",
+      "Personal",
       "Skills",
       "Connectors",
       "Workboard",
@@ -79,7 +79,7 @@ describe("paletteRows", () => {
       "Journal",
       "Automations",
       "Agents",
-      "Memory",
+      "Personal",
       "Skills",
       "Connectors",
       "Workboard",
@@ -96,7 +96,7 @@ describe("paletteRows", () => {
       "Settings: Background",
       "Settings: About",
     ]);
-    expect(labels(WEB, "")).toEqual(["Home", "Objectives", "Chat", "Imagine", "Automations", "Agents", "Memory", "Skills", "Connectors", "Workboard", "Settings"]);
+    expect(labels(WEB, "")).toEqual(["Home", "Objectives", "Chat", "Imagine", "Automations", "Agents", "Personal", "Skills", "Connectors", "Workboard", "Settings"]);
   });
 
   it("puts the commands this shell can run after the pages", () => {
@@ -123,7 +123,7 @@ describe("paletteRows", () => {
       "Imagine",
       "Automations",
       "Agents",
-      "Memory",
+      "Personal",
       "Skills",
       "Connectors",
       "Workboard",

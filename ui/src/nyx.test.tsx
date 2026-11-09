@@ -39,6 +39,7 @@ vi.mock("./api", () => ({
     api.handler = handler;
     return Promise.resolve(() => {});
   },
+  helperQuestions: () => Promise.resolve([]),
   onEventGap: () => Promise.resolve(() => {}),
   // The rest of the composer has its own tests (Chat.test.tsx, AttachChips.test.tsx).
   slashHits: vi.fn(() => Promise.resolve([])),

@@ -1,26 +1,35 @@
 import { useEffect, useState } from "react";
-import { getSkills, openSkillFolder, type SkillRow, type SkillSource } from "./api";
+import {
+  getSkills,
+  openSkillFolder,
+  setSkillOn,
+  type SkillRow,
+  type SkillSource,
+} from "./api";
 import { PRODUCT_NAME } from "./brand";
+import { Toggle } from "./Toggle";
 import { StatusLine, useNote } from "./ui";
 
-/** The groups, in page order. */
+/** The groups, in page order. Built-in skills live in the Code tab, not here. */
 export const SKILL_GROUPS: { source: SkillSource; label: string }[] = [
   { source: "cabin", label: "Cabin skills" },
   { source: "project", label: "Project skills" },
   { source: "user", label: "User skills" },
   { source: "plugin", label: "Plugin skills" },
-  { source: "builtin", label: "Built-in skills" },
 ];
 
 export const SKILLS_EMPTY = "No skills found yet.";
 export const SKILLS_NONE_MATCHED = "No skills match that search.";
+export const SKILL_OFF_NOTE = "Off, chat won't use it.";
 
 /** Rows whose name, description or trigger hold `query`, ignoring case. */
 export function filterSkills(rows: SkillRow[], query: string): SkillRow[] {
   const q = query.trim().toLowerCase();
   if (!q) return rows;
   return rows.filter((row) =>
-    [row.name, row.description, row.trigger].some((text) => text.toLowerCase().includes(q)),
+    [row.name, row.description, row.trigger].some((text) =>
+      text.toLowerCase().includes(q),
+    ),
   );
 }
 
@@ -53,15 +62,21 @@ export function Skills({
   }
 
   useEffect(() => {
-    getSkills().then(
-      (page) => setRows(page.rows),
-      fail,
-    );
+    getSkills().then((page) => setRows(page.rows), fail);
   }, [fail]);
 
   async function openFolder(row: SkillRow) {
     try {
       await openSkillFolder(row.source, row.name);
+      clear();
+    } catch (err) {
+      fail(err);
+    }
+  }
+
+  async function switchSkill(row: SkillRow, on: boolean) {
+    try {
+      setRows((await setSkillOn(row.name, on)).rows);
       clear();
     } catch (err) {
       fail(err);
@@ -87,13 +102,16 @@ export function Skills({
         </button>
       </div>
       <p className="note">
-        Skills chat can use: this computer's cabin skills, the project's and your own, and the
-        ones enabled plugins bring. Create or edit them in the {PRODUCT_NAME} cabin.
+        Skills chat can use: this computer's cabin skills, the project's and
+        your own, and the ones enabled plugins bring. Switch one off to keep it
+        but stop chat using it. Create or edit them in the {PRODUCT_NAME} cabin.
       </p>
       <StatusLine note={note} />
       {rows === null && !note && <p className="empty">Loading skills…</p>}
       {rows?.length === 0 && <p className="empty">{SKILLS_EMPTY}</p>}
-      {rows && rows.length > 0 && shown.length === 0 && <p className="empty">{SKILLS_NONE_MATCHED}</p>}
+      {rows && rows.length > 0 && shown.length === 0 && (
+        <p className="empty">{SKILLS_NONE_MATCHED}</p>
+      )}
       {SKILL_GROUPS.map(({ source, label }) => {
         const group = shown.filter((row) => row.source === source);
         if (group.length === 0) return null;
@@ -102,14 +120,33 @@ export function Skills({
             <h3>{label}</h3>
             <ul className="rows" aria-label={label}>
               {group.map((row) => (
-                <li key={`${row.source}:${row.name}`} className="card skill" aria-label={row.name}>
+                <li
+                  key={`${row.source}:${row.name}`}
+                  className="card skill"
+                  aria-label={row.name}
+                >
                   <div className="card-title">{row.name}</div>
-                  {row.description && <div className="card-status">{row.description}</div>}
+                  {row.description && (
+                    <div className="card-status">{row.description}</div>
+                  )}
                   <div className="card-detail-line">{row.trigger}</div>
+                  {!row.on && (
+                    <div className="card-status">{SKILL_OFF_NOTE}</div>
+                  )}
+                  {!remote && (
+                    <Toggle
+                      checked={row.on}
+                      onChange={(on) => void switchSkill(row, on)}
+                    >
+                      Chat can use it
+                    </Toggle>
+                  )}
                   <div className="card-buttons">
-                    <button type="button" onClick={() => onUse(row.trigger)}>
-                      Use
-                    </button>
+                    {row.on && (
+                      <button type="button" onClick={() => onUse(row.trigger)}>
+                        Use
+                      </button>
+                    )}
                     {!remote && row.folder && (
                       <button
                         type="button"

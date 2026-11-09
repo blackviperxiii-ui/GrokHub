@@ -56,6 +56,7 @@ mod skills;
 mod slash_parity;
 mod sse;
 mod subagent;
+mod subagent_policy;
 pub mod sudo_pass;
 pub mod tasks;
 pub mod timing;
@@ -149,8 +150,9 @@ pub use session::{
 };
 pub use session_tools::{plan_on, set_plan_session, todos_for, TodoItem};
 pub use skills::{
-    builtin_names, discover as discover_skills, set_skill_off_in, skill_is_off_in, skill_name_key,
-    skills_off_in, Skill, SkillSource, BUILTIN_SKILL_BODIES,
+    builtin_names, discover as discover_skills, discover_all as discover_all_skills,
+    set_skill_off_in, skill_is_off_in, skill_name_key, skills_off_in, Skill, SkillSource,
+    BUILTIN_SKILL_BODIES,
 };
 pub use slash_parity::{slash_parity, unparsed_native_slash, SlashParity, UnparsedSlash};
 pub use sse::SseParser;

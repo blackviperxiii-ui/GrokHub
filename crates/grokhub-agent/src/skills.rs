@@ -273,7 +273,7 @@ pub fn set_skill_off_in(skills_dir: &Path, name: &str, off: bool) -> std::io::Re
 }
 
 pub fn discover(workspace: &Path, home: Option<&Path>, plugin_dirs: &[PathBuf]) -> Vec<Skill> {
-    let mut skills = discover_cached(workspace, home, plugin_dirs);
+    let mut skills = discover_all(workspace, home, plugin_dirs);
     // A skill switched off on the Skills tab never loads. Checked past the
     // cache so a switch takes hold on the next turn. Built-ins can't be off.
     let off = skills_off_in(&cabin_skills_dir());
@@ -282,6 +282,13 @@ pub fn discover(workspace: &Path, home: Option<&Path>, plugin_dirs: &[PathBuf]) 
             s.source == SkillSource::Builtin || !off.contains(&normalize_name(&s.name))
         });
     }
+    skills
+}
+
+/// Every skill chat could load, switched-off ones included, for a Skills page
+/// that lists an off skill so it can be switched back on.
+pub fn discover_all(workspace: &Path, home: Option<&Path>, plugin_dirs: &[PathBuf]) -> Vec<Skill> {
+    let mut skills = discover_cached(workspace, home, plugin_dirs);
     // Dream lessons show only once a paired eval passed them as they stand
     // (round 3 item 39). Checked past the cache so a pass shows at once.
     skills.retain(|s| {
@@ -984,6 +991,11 @@ mod tests {
         let now = names(discover(&repo, Some(&home), &[]));
         assert!(!now.contains(&"trim-clips".to_string()), "{now:?}");
         assert!(!now.contains(&"notes".to_string()), "{now:?}");
+        let all = names(discover_all(&repo, Some(&home), &[]));
+        assert!(
+            all.contains(&"trim-clips".to_string()) && all.contains(&"notes".to_string()),
+            "the Skills page still lists an off skill so it can come back on: {all:?}"
+        );
         let loaded = tool_run(&repo, &serde_json::json!({"name": "trim-clips"}));
         assert!(
             loaded.failed,

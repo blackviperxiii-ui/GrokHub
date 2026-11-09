@@ -19,6 +19,7 @@ import {
   forgetMessage,
   getLastChat,
   getSettings,
+  helperQuestions,
   loadChat,
   onChatEvent,
   onEventGap,
@@ -82,6 +83,8 @@ export type Item =
       /** "ended": the turn stopped before anyone answered, so nothing ran;
        * "halted": Halt stopped it. */
       answer: Answer | Ended | null;
+      /** A helper asked; it waits past the end of the reply. */
+      helper?: boolean;
     }
   /** A saved chat's tool steps, named on one muted line instead of cards. */
   | { kind: "tools"; text: string }
@@ -220,14 +223,23 @@ export function applyEvent(items: Item[], event: ChatEvent): Item[] {
   }
 }
 
-/** The turn ended: stop streaming, and retire cards nobody answered. */
+/** The turn ended: stop streaming, and retire cards nobody answered. A
+ * helper's question still waits, unless Halt stopped everything. */
 function settle(items: Item[], how: Ended = "ended"): Item[] {
   return items.map((item) => {
     if (item.kind === "assistant" && item.streaming) return { ...item, streaming: false };
-    if (item.kind === "permission" && item.answer === null) return { ...item, answer: how };
-    if (item.kind === "elicit" && item.answer === null) return { ...item, answer: how };
+    const asks = item.kind === "permission" || item.kind === "elicit";
+    if (asks && item.answer === null && (how === "halted" || !item.helper)) return { ...item, answer: how };
     return item;
   });
+}
+
+/** A helper's question, added once: it can come after the reply ended, and
+ * again when the chat opens. */
+export function withHelperAsk(items: Item[], event: ChatEvent): Item[] {
+  if (event.kind !== "permission" && event.kind !== "elicit") return items;
+  const shown = items.some((item) => (item.kind === "permission" || item.kind === "elicit") && item.id === event.id);
+  return shown ? items : [...items, { ...event, answer: null, helper: true }];
 }
 
 /** Halt ended the turn: its cards read halted, and one line says so. */
@@ -720,12 +732,17 @@ export function Chat({
     let dropped = false;
     let stopGap: (() => void) | undefined;
     const sidePrefix = `${conversationId}${SIDE_MARK}`;
-    void onChatEvent(({ conversationId: id, event }) => {
+    void onChatEvent(({ conversationId: id, event, helper }) => {
       // A side answer streams into its own card, never the chat.
       if (id.startsWith(sidePrefix)) {
         if (event.kind === "text")
           setSides((now) => now.map((s) => (s.id === id ? { ...s, answer: s.answer + event.text } : s)));
         else if (event.kind === "error") setSides((now) => now.map((s) => (s.id === id ? { ...s, failed: true } : s)));
+        return;
+      }
+      // A helper's question shows whether or not a reply runs.
+      if (helper) {
+        if (id === conversationId) startTransition(() => setItems((now) => withHelperAsk(now, event)));
         return;
       }
       // An event that lands after the turn ended must not reopen it.
@@ -741,6 +758,11 @@ export function Chat({
       if (dropped) unlisten();
       else stop = unlisten;
     });
+    helperQuestions(conversationId)
+      .then((asks) => {
+        if (!dropped && asks.length > 0) setItems((now) => asks.reduce(withHelperAsk, now));
+      })
+      .catch(() => {});
     void onEventGap(() => {
       if (busyRef.current) setError(EVENTS_LOST);
     }).then((unlisten) => {

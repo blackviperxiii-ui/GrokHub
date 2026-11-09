@@ -4,6 +4,7 @@
 
 use std::path::Path;
 
+use grokhub_core::amr::PersonalGroup;
 use serde::Serialize;
 
 /// Bigger than this is not a notes file; the editor refuses it.
@@ -35,9 +36,23 @@ pub struct Row {
     /// When the line was written or last changed.
     pub updated: String,
     pub proposed: bool,
+    /// Kept, but chat, the profile block and the nightly review skip it.
+    pub paused: bool,
+    /// Which Personal group it shows under, by its plain name.
+    pub group: String,
     /// Claims this line corrects, joined for the panel.
     pub corrects: String,
 }
+
+/// The groups a line can be added to, as (key the page sends, name it shows).
+/// "Waiting for your OK" is not one: only learning puts a line there.
+pub const ADD_GROUPS: [(&str, PersonalGroup); 5] = [
+    ("about", PersonalGroup::About),
+    ("likes", PersonalGroup::Likes),
+    ("routines", PersonalGroup::Routines),
+    ("needs", PersonalGroup::Needs),
+    ("thinking", PersonalGroup::Thinking),
+];
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -85,6 +100,8 @@ fn learned_rows() -> Vec<Row> {
     let (rows, _) = grokhub_core::amr::memory_rows(&store);
     rows.into_iter()
         .map(|row| Row {
+            group: row.group().label().to_string(),
+            paused: row.paused,
             id: row.id,
             text: row.text,
             source: row.source.label(),
@@ -141,6 +158,90 @@ pub fn reject_row(workspace: &Path, id: &str) -> Result<Notes, String> {
     )
     .map_err(|err| err.to_string())?;
     load(workspace)
+}
+
+/// Keep a line but stop using it (`paused`), or use it again.
+pub fn pause_row(workspace: &Path, id: &str, paused: bool) -> Result<Notes, String> {
+    let store = open_store()?;
+    grokhub_core::amr::pause_node(&store, id, paused).map_err(|err| err.to_string())?;
+    load(workspace)
+}
+
+/// Add a line about the user in their own words, under one group.
+pub fn add_fact(workspace: &Path, text: &str, group: &str) -> Result<Notes, String> {
+    let Some((_, group)) = ADD_GROUPS.iter().find(|(key, _)| *key == group) else {
+        return Err("Pick a group for the line.".into());
+    };
+    if text.trim().is_empty() {
+        return Err("Write the line first.".into());
+    }
+    let store = open_store()?;
+    grokhub_core::amr::add_fact(&store, text, *group, grokhub_core::now_ms())
+        .map_err(|err| err.to_string())?;
+    load(workspace)
+}
+
+/// The export file's name: dated, so a second export never replaces the first.
+fn export_name(now_ms: u64) -> String {
+    let day: String = grokhub_core::oauth::unix_ms_to_rfc3339(now_ms)
+        .chars()
+        .take(10)
+        .collect();
+    format!(
+        "{} - what it knows about you {day}.md",
+        grokhub_core::brand::product_name()
+    )
+}
+
+/// Everything learned about the user, as one readable file in `dir`.
+/// Returns where it went.
+pub fn export_to(dir: &Path) -> Result<String, String> {
+    let store = grokhub_agent::amr_store();
+    let now = grokhub_core::now_ms();
+    let text = grokhub_core::amr::personal_export(&store, now);
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let path = dir.join(export_name(now));
+    std::fs::write(&path, text).map_err(|e| e.to_string())?;
+    Ok(path.display().to_string())
+}
+
+/// What Wipe did, for the page's line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Wiped {
+    pub removed: usize,
+    pub locked: usize,
+    pub notes: Notes,
+}
+
+/// The notes files about the user that Wipe empties, beside the learned lines.
+/// SOUL.md is how the app talks, not about the user, so it stays.
+const WIPED_NOTES: [&str; 2] = ["USER.md", "MEMORY.md"];
+
+/// Delete every learned line about the user for good, and empty the global
+/// USER.md and MEMORY.md (and the `.prev` copy a save keeps). Project notes
+/// in the work folder are the project's, so they stay.
+pub fn wipe(workspace: &Path) -> Result<Wiped, String> {
+    let store = open_store()?;
+    let report =
+        grokhub_core::amr::wipe_user_model(&store, grokhub_core::amr::UserForget::from_click())
+            .map_err(|err| err.to_string())?;
+    let dir = grokhub_agent::global_memory_path()
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
+    for name in WIPED_NOTES {
+        let _ = std::fs::remove_file(dir.join(format!("{name}.prev")));
+        let path = dir.join(name);
+        if std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_file()) {
+            std::fs::write(&path, format!("# {name}\n")).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(Wiped {
+        removed: report.removed,
+        locked: report.locked,
+        notes: load(workspace)?,
+    })
 }
 
 /// The memory off switch. On removes the key. Returns the notes as they read now.
@@ -362,6 +463,38 @@ mod tests {
         let notes = forget_row(&d.workspace, &id).unwrap();
         assert!(notes.rows.is_empty());
         assert!(!notes.writes_on);
+    }
+
+    #[test]
+    fn personal_adds_pauses_exports_and_wipes_but_keeps_project_notes() {
+        let d = dirs("personal");
+        assert_eq!(
+            add_fact(&d.workspace, "I play after the kids are in bed", "routines")
+                .unwrap()
+                .rows
+                .iter()
+                .map(|r| (r.text.as_str(), r.group.as_str(), r.paused))
+                .collect::<Vec<_>>(),
+            vec![("I play after the kids are in bed", "Your routines", false)]
+        );
+        assert!(add_fact(&d.workspace, "x", "waiting").is_err());
+        assert!(add_fact(&d.workspace, "  ", "about").is_err());
+        let id = load(&d.workspace).unwrap().rows[0].id.clone();
+        assert!(pause_row(&d.workspace, &id, true).unwrap().rows[0].paused);
+
+        let out = d.workspace.join("downloads");
+        let path = export_to(&out).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("I play after the kids are in bed"), "{text}");
+        assert!(path.ends_with(".md"), "{path}");
+
+        save(&d.workspace, false, "the build needs node 22", "").unwrap();
+        save(&d.workspace, true, "I like short answers", "").unwrap();
+        let wiped = wipe(&d.workspace).unwrap();
+        assert_eq!(wiped.removed, 1);
+        assert!(wiped.notes.rows.is_empty());
+        assert_eq!(wiped.notes.global, "# MEMORY.md\n");
+        assert_eq!(wiped.notes.workspace, "the build needs node 22\n");
     }
 
     #[cfg(unix)]

@@ -13,11 +13,13 @@ pub mod background;
 mod brand_guard;
 pub mod capabilities;
 pub mod chips;
+pub mod code;
 pub mod connectors;
 pub mod credential;
 pub mod export;
 pub mod game_companion;
 pub mod goals;
+mod helper_asks;
 pub mod history;
 pub mod home;
 #[cfg(desktop)]
@@ -571,6 +573,7 @@ fn answer_permission(
     answer: String,
 ) -> Result<(), String> {
     let answer = agent::parse_answer(&answer)?;
+    helper_asks::answered(&conversation_id, &call_id);
     let session = state
         .chats
         .lock()
@@ -604,6 +607,7 @@ fn answer_elicit(
     if !matches!(action.as_str(), "accept" | "decline" | "cancel") {
         return Err(format!("unknown answer: {action}"));
     }
+    helper_asks::answered(&conversation_id, &id);
     let chats = state.chats.lock().unwrap_or_else(|e| e.into_inner());
     let session = chats
         .get(&conversation_id)
@@ -615,6 +619,12 @@ fn answer_elicit(
         value.as_deref().unwrap_or(""),
     );
     Ok(())
+}
+
+/// Helper questions a chat still waits on, for when the chat opens.
+#[tauri::command]
+fn helper_questions(conversation_id: String) -> Vec<agent::UiEvent> {
+    helper_asks::waiting(&conversation_id)
 }
 
 #[tauri::command]
@@ -734,6 +744,7 @@ fn drop_worker(state: &ShellState, conversation_id: &str) {
     if let Some(session) = removed {
         session.cancel();
     }
+    helper_asks::chat_ended(conversation_id);
 }
 
 /// The input kinds of the model a chat starts at, for the chips' notes.
@@ -1384,6 +1395,38 @@ fn set_memory_writes(state: State<'_, ShellState>, on: bool) -> Result<memory::N
     memory::set_writes(&workspace(&state), on)
 }
 
+#[tauri::command]
+fn pause_memory_row(
+    state: State<'_, ShellState>,
+    id: String,
+    paused: bool,
+) -> Result<memory::Notes, String> {
+    memory::pause_row(&workspace(&state), &id, paused)
+}
+
+#[tauri::command]
+fn add_personal_fact(
+    state: State<'_, ShellState>,
+    text: String,
+    group: String,
+) -> Result<memory::Notes, String> {
+    memory::add_fact(&workspace(&state), &text, &group)
+}
+
+/// Saves the readable copy in Downloads on this computer. Desktop only.
+#[tauri::command]
+fn export_personal() -> Result<String, String> {
+    let dir = grokhub_core::diagnostics::downloads_dir()
+        .ok_or_else(|| "Couldn't find your Downloads folder.".to_string())?;
+    memory::export_to(&dir)
+}
+
+/// Deletes every learned line for good. Desktop only; the page asks first.
+#[tauri::command]
+fn wipe_personal(state: State<'_, ShellState>) -> Result<memory::Wiped, String> {
+    memory::wipe(&workspace(&state))
+}
+
 /// Every connector call can wait on a server's slot while chat or a check
 /// holds it for up to the startup or tool timeout, so all of them run off
 /// the main thread.
@@ -1503,6 +1546,20 @@ async fn answer_connector_key(id: String, approve: bool) -> Result<connectors::C
 #[tauri::command]
 fn get_capabilities() -> capabilities::Capabilities {
     capabilities::current()
+}
+
+/// Code tab: the workspace's repo, read only.
+#[tauri::command]
+async fn code_repo(state: State<'_, ShellState>) -> Result<code::Repo, String> {
+    let dir = workspace(&state);
+    off_main(move || code::repo(&dir)).await
+}
+
+/// Code tab: one changed file's diff, read only.
+#[tauri::command]
+async fn code_diff(state: State<'_, ShellState>, path: String) -> Result<code::Diff, String> {
+    let dir = workspace(&state);
+    off_main(move || code::diff(&dir, &path)).await?
 }
 
 #[tauri::command]
@@ -1955,6 +2012,18 @@ async fn get_skills(state: State<'_, ShellState>) -> Result<skills::Page, String
     let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
     let home = grokhub_core::user_home();
     off_main(move || skills::load(&dir, &workspace, home.as_deref())).await
+}
+
+/// Switch a listed skill on or off for chat. Desktop only.
+#[tauri::command]
+async fn set_skill_on(
+    state: State<'_, ShellState>,
+    name: String,
+    on: bool,
+) -> Result<skills::Page, String> {
+    let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
+    let home = grokhub_core::user_home();
+    off_main(move || skills::set_on(&dir, &workspace, home.as_deref(), &name, on)).await?
 }
 
 /// The page names the skill; the shell finds its folder itself.
@@ -3336,6 +3405,8 @@ pub fn run() {
             });
             #[cfg(desktop)]
             start_scheduler(app);
+            // Questions from helpers that outlive their chat's reply.
+            helper_asks::start(app.handle().clone());
             // The internet log, when it's on and the cabin isn't running.
             #[cfg(desktop)]
             net_watch::start(app.state::<ShellState>().config_dir.clone());
@@ -3379,6 +3450,7 @@ pub fn run() {
             transcribe,
             answer_permission,
             answer_elicit,
+            helper_questions,
             cancel_chat,
             steer_chat,
             turns::read_turn,
@@ -3414,6 +3486,10 @@ pub fn run() {
             approve_memory_row,
             reject_memory_row,
             set_memory_writes,
+            pause_memory_row,
+            add_personal_fact,
+            export_personal,
+            wipe_personal,
             list_connectors,
             check_connectors,
             restart_connector,
@@ -3426,6 +3502,8 @@ pub fn run() {
             sign_in_connector,
             save_connector_key,
             answer_connector_key,
+            code_repo,
+            code_diff,
             get_journal,
             journal_add,
             journal_act,
@@ -3454,6 +3532,7 @@ pub fn run() {
             fetch_plugin_market,
             get_skills,
             open_skill_folder,
+            set_skill_on,
             get_interests,
             add_interest,
             interest_act,
