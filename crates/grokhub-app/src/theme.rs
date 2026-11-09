@@ -900,7 +900,7 @@ pub const LOADOUT_NAV: &[(&str, &str)] = &[
     ("skills", "Skills"),
     ("mods", "Mods"),
     ("devices", "Devices"),
-    ("profile", "Profile"),
+    ("personal", "Personal"),
 ];
 
 /// Avatar-menu destinations besides Help / Sign in / Sign out.

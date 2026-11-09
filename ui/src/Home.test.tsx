@@ -12,6 +12,8 @@ const api = vi.hoisted(() => ({
   libraryPlay: vi.fn<(appId: number) => Promise<string>>(),
   homeOpenClip: vi.fn<(index: number) => Promise<void>>(),
   libraryFriends: vi.fn<() => Promise<void>>(),
+  librarySteamSettings: vi.fn<() => Promise<void>>(),
+  homeRunPlaybook: vi.fn<(id: string) => Promise<{ prompt: string }>>(),
   homeTurnOn: vi.fn<(feature: string) => Promise<void>>(),
   homeSetup: vi.fn<(module: string, undo: boolean) => Promise<string>>(),
   homeSetupSteps: vi.fn<(module: string) => Promise<string>>(),
@@ -175,6 +177,8 @@ describe("Home", () => {
     api.libraryPlay.mockReset().mockResolvedValue("Starting");
     api.homeOpenClip.mockReset().mockResolvedValue();
     api.libraryFriends.mockReset().mockResolvedValue();
+    api.librarySteamSettings.mockReset().mockResolvedValue();
+    api.homeRunPlaybook.mockReset().mockResolvedValue({ prompt: "Work on this workboard card: Linux repair" });
     api.homeTurnOn.mockReset().mockResolvedValue();
     api.homeSetup.mockReset().mockResolvedValue("Frame Rate is set up and counting frames.");
     api.homeSetupSteps.mockReset().mockResolvedValue("sudo setcap cap_perfmon+ep /usr/local/lib/loadout/fps-probe");
@@ -372,6 +376,53 @@ describe("Home", () => {
     render(<Home {...routes()} remote />);
     await userEvent.click(await screen.findByRole("button", { name: "Friends list" }));
     expect(api.libraryFriends).toHaveBeenCalledTimes(1);
+  });
+
+  it("a Playbooks row starts it on a card and puts the ask in the chat box; Clips opens Steam's settings", async () => {
+    api.getHome.mockResolvedValue({
+      ...PAGE,
+      slots: [
+        slot({
+          slot: "medium-1",
+          size: "medium",
+          module: "clips",
+          name: "Clips",
+          tile: {
+            kind: "view",
+            view: view({
+              text: { big: "", caption: "", detail: null, tone: "normal" },
+              buttons: [{ label: "Steam settings", action: { kind: "steamSettings" }, primary: true }],
+            }),
+          },
+        }),
+        slot({
+          slot: "medium-2",
+          size: "medium",
+          module: "playbooks",
+          name: "Playbooks",
+          tile: {
+            kind: "view",
+            view: view({
+              buttons: [{ label: "Linux repair", action: { kind: "runPlaybook", id: "linux_repair" }, primary: true }],
+            }),
+          },
+        }),
+      ],
+    });
+    const go = routes();
+    const { unmount } = render(<Home {...go} remote={false} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Steam settings" }));
+    expect(api.librarySteamSettings).toHaveBeenCalledTimes(1);
+    await userEvent.click(screen.getByRole("button", { name: "Linux repair" }));
+    expect(api.homeRunPlaybook).toHaveBeenCalledWith("linux_repair");
+    await vi.waitFor(() => expect(go.onAsk).toHaveBeenCalledWith("Work on this workboard card: Linux repair"));
+    unmount();
+    // A paired browser starts nothing on the PC.
+    const far = routes();
+    render(<Home {...far} remote />);
+    await userEvent.click(await screen.findByRole("button", { name: "Linux repair" }));
+    expect(api.homeRunPlaybook).toHaveBeenCalledTimes(1);
+    expect(far.onSettings).toHaveBeenCalledWith("playbooks");
   });
 
   it("a tile this device can't read draws quiet, and Play never starts a game from a browser", async () => {

@@ -158,7 +158,7 @@ pub fn rail_icon_for(id: &str) -> RailIcon {
         "workboard" => RailIcon::Folder,
         "pulse" | "ideas" => RailIcon::Pulse,
         "devices" | "pc" => RailIcon::Pc,
-        "profile" => RailIcon::Profile,
+        "profile" | "personal" => RailIcon::Profile,
         "settings" => RailIcon::Settings,
         "history" => RailIcon::History,
         "search" => RailIcon::Search,

@@ -225,13 +225,34 @@ pub fn coach_tip_view(drives: &[DiskUse], guard: GameGuard) -> TileView {
     .button("Fix my stutter", TileAction::ask(HOME_CHIPS[0]))
 }
 
-/// The newest clips and captures on this PC; a tap opens one.
-pub fn clips_view(clips: &[Clip], now: u64) -> TileView {
+/// Steam's own download page, for a tile that needs Steam on a PC without it.
+pub const STEAM_DOWNLOAD: &str = "https://store.steampowered.com/about/";
+
+/// An empty tile on a PC without Steam: one tap to Steam's download page.
+pub fn no_steam_view(text: &str) -> TileView {
+    TileView::empty(
+        text,
+        "Get Steam",
+        TileAction::OpenUrl {
+            url: STEAM_DOWNLOAD.into(),
+        },
+    )
+}
+
+/// The newest clips and captures on this PC; a tap opens one. With none
+/// yet, Steam's Settings is where Game Recording turns on (`steam` is
+/// whether Steam is on this PC).
+pub fn clips_view(clips: &[Clip], steam: bool, now: u64) -> TileView {
     let Some(top) = clips.first() else {
+        if !steam {
+            return no_steam_view(
+                "Save a clip with your capture tool, or Steam's Game Recording, and it shows here",
+            );
+        }
         return TileView::empty(
-            "Save a clip with your capture tool and it shows here",
-            "Open Library",
-            TileAction::nav("library"),
+            "Turn on Game Recording in Steam's Settings and your clips show here",
+            "Steam settings",
+            TileAction::SteamSettings,
         );
     };
     let rows = clips
@@ -657,11 +678,7 @@ pub fn tonight_view(due: &[(String, u64)], now: u64) -> TileView {
 /// opens Steam's friends list rather than guess.
 pub fn squad_view(friends: Option<usize>) -> TileView {
     match friends {
-        None => TileView::empty(
-            "Your Steam friends show here once Steam is installed",
-            "Find a duo",
-            TileAction::ask(HOME_CHIPS[1]),
-        ),
+        None => no_steam_view("Your Steam friends show here once Steam is installed"),
         Some(0) => TileView::empty(
             "No Steam friends saved on this PC yet",
             "Friends list",
@@ -818,6 +835,13 @@ mod tests {
         assert_eq!(squad_view(Some(1)).text.big, "1 friend");
         assert_eq!(squad_view(None).state, TileState::Empty);
         assert_eq!(squad_view(None).buttons.len(), 1);
+        // No Steam: the one button gets it, not a chat ask.
+        assert_eq!(
+            squad_view(None).buttons[0].action,
+            TileAction::OpenUrl {
+                url: STEAM_DOWNLOAD.into()
+            }
+        );
         assert_eq!(squad_view(Some(0)).buttons.len(), 1);
         assert_eq!(
             squad_view(Some(0)).buttons[0].action,
@@ -962,11 +986,20 @@ mod tests {
             path: std::path::PathBuf::from(format!("/fake/{name}.mp4")),
             modified_ms: NOW - ago_h * 3_600_000,
         };
-        let v = clips_view(&[clip("Ace", 2), clip("Old one", 24 * 30)], NOW);
+        let v = clips_view(&[clip("Ace", 2), clip("Old one", 24 * 30)], true, NOW);
         assert_eq!(v.text.big, "Ace");
         assert_eq!(v.text.caption, "Newest clip · 2h ago · 1 this week");
         assert_eq!(v.rows[1].tap, Some(TileAction::OpenClip { index: 1 }));
         assert_eq!(v.buttons[0].action, TileAction::OpenClip { index: 0 });
-        assert_eq!(clips_view(&[], NOW).state, TileState::Empty);
+        // None yet: Steam's Settings turns Game Recording on; no Steam gets it.
+        let empty = clips_view(&[], true, NOW);
+        assert_eq!(empty.state, TileState::Empty);
+        assert_eq!(empty.buttons[0].action, TileAction::SteamSettings);
+        assert_eq!(
+            clips_view(&[], false, NOW).buttons[0].action,
+            TileAction::OpenUrl {
+                url: STEAM_DOWNLOAD.into()
+            }
+        );
     }
 }
