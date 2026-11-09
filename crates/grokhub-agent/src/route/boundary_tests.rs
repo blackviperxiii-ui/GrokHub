@@ -173,3 +173,17 @@ fn the_router_climbs_at_the_next_boundary_not_mid_run() {
     assert!(!rules.iter().any(|r| r == HELD_RULE), "{rules:?}");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn a_passed_eval_turns_boundary_routing_on_unless_the_user_already_chose() {
+    let dir = std::env::temp_dir().join(format!("grokhub-boundary-adopt-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(!super::enabled(&dir));
+    assert_eq!(super::adopt_after_pass(&dir), Ok(true));
+    assert!(super::enabled(&dir));
+    // A file already there, even one turned off by hand, stays as it is.
+    std::fs::write(dir.join(super::CONFIG), "enabled = false\n").unwrap();
+    assert_eq!(super::adopt_after_pass(&dir), Ok(false));
+    assert!(!super::enabled(&dir));
+    let _ = std::fs::remove_dir_all(dir);
+}

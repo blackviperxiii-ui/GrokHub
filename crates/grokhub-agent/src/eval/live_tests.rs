@@ -1,5 +1,6 @@
 use super::*;
 use crate::client::{ContentPart, InputItem};
+use crate::eval::live_shape::BOUNDARY_ROUTING;
 
 /// Answers each request from a fixed table keyed by the last user text, and
 /// charges the same cost for every response.
@@ -1047,14 +1048,27 @@ fn dream_lessons_pass_only_when_they_solve_more_or_cost_less() {
         .flat_map(|t| [a(t, true, true), a(t, false, true)])
         .collect();
     assert!(!dream_lessons_passed(&report(DREAM_LESSONS, same)));
-    let other: Vec<Attempt> = tasks
-        .iter()
-        .flat_map(|t| [a(t, true, true), a(t, false, false)])
-        .collect();
+    let other = || -> Vec<Attempt> {
+        tasks
+            .iter()
+            .flat_map(|t| [a(t, true, true), a(t, false, false)])
+            .collect()
+    };
     assert!(
-        !dream_lessons_passed(&report("age_out", other)),
+        !dream_lessons_passed(&report("age_out", other())),
         "only its own arm counts"
     );
+    assert!(ab_passed(
+        &report(BOUNDARY_ROUTING, other()),
+        BOUNDARY_ROUTING
+    ));
+    assert!(!ab_passed(
+        &report(DREAM_LESSONS, other()),
+        BOUNDARY_ROUTING
+    ));
+    let flag = ab_flag(BOUNDARY_ROUTING).unwrap();
+    assert_eq!(flag.file, crate::route::boundary::CONFIG);
+    assert_eq!(flag.key, "enabled");
 }
 
 #[test]
