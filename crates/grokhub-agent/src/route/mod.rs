@@ -46,6 +46,7 @@ pub mod local_live;
 pub mod local_perf;
 pub mod local_sidecar;
 pub mod local_spec;
+pub mod local_scale;
 pub mod local_swap;
 pub mod log;
 pub mod match_ask;
