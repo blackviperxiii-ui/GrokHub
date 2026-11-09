@@ -312,7 +312,7 @@ async function main() {
     await page.locator("nav.tabs button", { hasText: "Pulse" }).click();
     const post = page.getByRole("listitem", { name: POST_TITLE });
     await post.getByRole("button", { name: "Open image 1" }).waitFor({ timeout: 30000 });
-    await post.getByRole("button", { name: "Like" }).click();
+    await post.getByRole("button", { name: "Like", exact: true }).click();
     await post.locator("button[aria-label='Like'][aria-pressed='true']").waitFor({ timeout: 30000 });
     check(STATE.loved, "Like never reached the desktop");
     console.log("pulse: post with its image shown, Like sent");
@@ -320,7 +320,7 @@ async function main() {
     await page.getByRole("button", { name: "For You", exact: true }).click();
     const idea = page.getByRole("listitem", { name: IDEA_TITLE });
     await idea.locator(".card-row button").first().waitFor({ timeout: 30000 });
-    check((await idea.getByRole("button", { name: "More" }).count()) === 0, "the idea still has a menu");
+    check((await idea.getByRole("button", { name: "More", exact: true }).count()) === 0, "the idea still has a menu");
     const buttons = (await idea.locator(".card-row button").allTextContents()).map((t) =>
       t.replace(/[\u2661\u2665]/g, "").trim(),
     );
