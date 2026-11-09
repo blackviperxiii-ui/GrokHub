@@ -30,13 +30,6 @@ use super::setup_wizard::ram_mb;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::setup_wizard::run;
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
-
 /// Start the sampler once per process.
 pub(super) fn start(config_dir: PathBuf) {
     static STARTED: OnceLock<()> = OnceLock::new();
@@ -386,7 +379,7 @@ fn logind_idle_secs(conn: &zbus::blocking::Connection) -> Option<u64> {
         return None;
     }
     let since_us = u64::try_from(get("IdleSinceHint")?).ok()?;
-    Some((now_ms() * 1_000).saturating_sub(since_us) / 1_000_000)
+    Some((grokhub_core::now_ms() * 1_000).saturating_sub(since_us) / 1_000_000)
 }
 
 #[cfg(target_os = "linux")]
