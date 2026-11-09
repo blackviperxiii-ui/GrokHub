@@ -45,6 +45,8 @@ pub struct LocalLive {
     pub stand_in: Option<StandIn>,
     /// The scaling mode, as a read-only label.
     pub mode: Mode,
+    /// The model's refusal check on this PC, once it has run.
+    pub refusal: Option<String>,
 }
 
 pub fn place_of(a: Option<&LaunchArgs>, bare_cpu: bool) -> Place {
@@ -78,6 +80,7 @@ pub fn snapshot(_config_dir: &Path) -> LocalLive {
             kept_loaded,
             stand_in: None,
             mode: super::local_swap::mode(None, &scale),
+            refusal: None,
         };
     };
     let file = l
@@ -104,6 +107,7 @@ pub fn snapshot(_config_dir: &Path) -> LocalLive {
         kept_loaded,
         stand_in: l.stand_in,
         mode: super::local_swap::mode(l.stand_in, &scale),
+        refusal: local_spec::refusal_line(&l.model),
     }
 }
 
@@ -172,6 +176,9 @@ pub fn lines(l: &LocalLive) -> Vec<String> {
             Decision::Off(why) => format!("Draft model: {drafter} is off because {why}."),
         });
     }
+    if let Some(r) = &l.refusal {
+        out.push(r.clone());
+    }
     out.push(if l.kept_loaded {
         "Stays loaded until you close the app or a game needs the memory.".to_string()
     } else {
@@ -213,6 +220,7 @@ mod tests {
             kept_loaded: false,
             stand_in: None,
             mode: Mode::Balanced,
+            refusal: None,
         }
     }
 
@@ -295,6 +303,7 @@ mod tests {
             kept_loaded,
             stand_in: None,
             mode: Mode::Balanced,
+            refusal: None,
         }
     }
 
@@ -328,5 +337,25 @@ mod tests {
             ],
             "with nothing loaded only Gaming is worth a row"
         );
+    }
+
+    #[test]
+    fn a_finished_refusal_check_shows_under_the_draft_model() {
+        let l = LocalLive {
+            refusal: Some("Refusal check: answered 12 of 12 everyday asks on this PC.".into()),
+            ..loaded()
+        };
+        let rows = lines(&l);
+        let draft = rows
+            .iter()
+            .position(|r| r.starts_with("Draft model:"))
+            .unwrap();
+        assert_eq!(
+            rows[draft + 1],
+            "Refusal check: answered 12 of 12 everyday asks on this PC."
+        );
+        assert!(!lines(&loaded())
+            .iter()
+            .any(|r| r.starts_with("Refusal check")));
     }
 }
