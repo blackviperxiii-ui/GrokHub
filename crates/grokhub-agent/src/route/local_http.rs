@@ -408,21 +408,28 @@ impl LocalRuntime for HttpLocalRuntime {
         body["stream"] = json!(true);
         body["stream_options"] = json!({ "include_usage": true });
         self.effort(req.effort.as_deref()).apply(&mut body);
-        let resp = Self::agent()
-            .post(&format!("{}/v1/chat/completions", self.base_url))
-            .header("Authorization", &format!("Bearer {}", self.token))
-            .header("Content-Type", "application/json")
-            .send_json(body)
-            .map_err(request_failed)?;
+        // Stop also hangs up while the server is still reading the prompt,
+        // before any token, so the GPU goes back to the game at once.
+        let stop = cancel.stop_switch();
+        let sent = grokhub_core::http::with_stop(&stop, || {
+            Self::agent()
+                .post(&format!("{}/v1/chat/completions", self.base_url))
+                .header("Authorization", &format!("Bearer {}", self.token))
+                .header("Content-Type", "application/json")
+                .send_json(body)
+        });
+        if sent.is_err() && cancel.is_cancelled() {
+            return Err("cancelled".into());
+        }
+        let resp = sent.map_err(request_failed)?;
         if resp.status() >= 400 {
             let status = resp.status();
             let body = resp.into_string().unwrap_or_default();
             return Err(format!("local model HTTP {status}: {body}"));
         }
         let text = if resp.content_type().contains("event-stream") {
-            let reply = assemble_sse(BufReader::new(resp.into_reader()), &|| {
-                cancel.is_cancelled()
-            })?;
+            let body = grokhub_core::http::with_stop(&stop, || resp.into_reader());
+            let reply = assemble_sse(BufReader::new(body), &|| cancel.is_cancelled())?;
             note_chat_timings(&reply);
             reply.to_string()
         } else {
@@ -743,6 +750,56 @@ mod tests {
         let reply = assemble_sse(text, &|| false).unwrap();
         assert_eq!(reply["choices"][0]["message"]["content"], "hello");
         assert!(reply["choices"][0]["message"].get("tool_calls").is_none());
+    }
+
+    /// Stop while the local server still reads a long prompt (no token
+    /// yet): the turn ends at once and the socket closes, so the server
+    /// stops and the GPU goes back to the game.
+    #[test]
+    fn stop_during_a_long_prompt_hangs_up_the_local_server() {
+        use std::io::Read;
+        use std::time::{Duration, Instant};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", l.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut c, _) = l.accept().unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let mut buf = [0u8; 4096];
+            // Read the request and keep reading: a hang-up reads as EOF.
+            loop {
+                match c.read(&mut buf) {
+                    Ok(0) => return true,
+                    Ok(_) => {}
+                    Err(e) => return e.kind() == std::io::ErrorKind::ConnectionReset,
+                }
+            }
+        });
+        let rt = HttpLocalRuntime::new(&base, "t");
+        let cancel = CancelToken::new();
+        let pressed = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            pressed.cancel();
+        });
+        let req = ResponsesRequest {
+            model: "local".into(),
+            effort: None,
+            input: Vec::new(),
+            conversation_id: "c".into(),
+            tools: Vec::new(),
+            hosted_search: false,
+            call_timeout: None,
+            text_format: None,
+        };
+        let started = Instant::now();
+        let out = rt.chat_tools(&req, &cancel);
+        assert_eq!(out.err(), Some("cancelled".into()));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(server.join().unwrap(), "the server saw the hang-up");
     }
 
     #[test]

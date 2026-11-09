@@ -2436,14 +2436,21 @@ pub fn stream_model(
         Prep::Ready(r) => r,
     };
     let body = ready.body.to_string();
-    let mut s = transport_for(config_dir)
-        .post_streamed(
+    // Stop hangs up the socket even before the first byte, so the provider
+    // stops generating (and billing) a reply nobody will read.
+    let stop = cancel.stop_switch();
+    let opened = grokhub_core::http::with_stop(&stop, || {
+        transport_for(config_dir).post_streamed(
             &ready.url,
             &ready.p.headers(&ready.key),
             &body,
             ready.call_timeout,
         )
-        .map_err(|e| ClientError::Transport(grokhub_core::redact_secrets(&e)))?;
+    });
+    if opened.is_err() && cancel.is_cancelled() {
+        return Err(ClientError::Cancelled);
+    }
+    let mut s = opened.map_err(|e| ClientError::Transport(grokhub_core::redact_secrets(&e)))?;
     // Cancelled while the stream opened: drop it unread.
     if cancel.is_cancelled() {
         return Err(ClientError::Cancelled);
