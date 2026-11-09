@@ -459,7 +459,7 @@ mod tests {
         );
         assert_eq!(
             got[0].body(),
-            "Needs about 9.8 GB at Q4, fits your 16 GB of GPU memory, about 35 tok/s here like Gemma 4 12B. Not in Loadout's checked catalog yet, so this only links it."
+            "Needs about 9.8 GB at Q4, fits your 16 GB of GPU memory, about 50 tok/s here like Mistral Ministral 3 14B Reasoning. Not in Loadout's checked catalog yet, so this only links it."
         );
         let card = got[0].card(9);
         assert_eq!(

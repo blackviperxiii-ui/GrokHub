@@ -324,7 +324,16 @@ impl Cabin {
     /// turn it answers, when there is one.
     fn new_spoken(&mut self) -> crate::spoken::SpokenReply {
         let turn = self.voice_is_on().then(crate::spoken::take_turn).flatten();
-        crate::spoken::SpokenReply::xai(self.bearer(), self.speech_voice(), self.lips.clone(), turn)
+        let key = self.bearer();
+        // Without a Grok sign-in, Kokoro speaks on this PC when it's downloaded.
+        if key.is_empty() && crate::desktop::on_device_voice_ready() {
+            return crate::spoken::SpokenReply::on_device(
+                self.speech_voice(),
+                self.lips.clone(),
+                turn,
+            );
+        }
+        crate::spoken::SpokenReply::xai(key, self.speech_voice(), self.lips.clone(), turn)
     }
 
     fn show_speaking(&mut self) {

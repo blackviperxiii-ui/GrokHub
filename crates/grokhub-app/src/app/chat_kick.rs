@@ -144,7 +144,7 @@ impl Cabin {
                         self.status = format!("Queued ({})", self.followup_queue.count_for(&here));
                         return;
                     }
-                    self.halt_in_flight();
+                    self.halt_in_flight_for("you sent a new message");
                     self.finish_hub_dispatch("Interrupted", false);
                 }
             }
@@ -422,7 +422,7 @@ impl Cabin {
         // A retry re-runs the same ask: keep its background notes, which
         // halting clears and `send_chat` will not set again.
         let results = self.bg.results_follow.take();
-        self.halt_in_flight();
+        self.halt_in_flight_for("you asked to try again");
         self.bg.results_follow = results;
         self.active_skill_follow = None;
         if let Some(sk) = match_skill(&t, &self.skill_list).filter(|sk| {

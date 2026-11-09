@@ -343,7 +343,7 @@ fn apply_todos(todos: &mut Vec<TodoItem>, value: &Value) -> Result<(), String> {
     Ok(())
 }
 
-fn report_findings(arguments: &str, on_event: &mut dyn FnMut(LoopEvent)) -> ToolOutput {
+pub(crate) fn report_findings(arguments: &str, on_event: &mut dyn FnMut(LoopEvent)) -> ToolOutput {
     let card = serde_json::from_str::<Value>(arguments)
         .map_err(|_| "report_findings arguments must be a JSON object".to_string())
         .and_then(|value| grokhub_core::findings::Findings::from_json_dropping(&value));

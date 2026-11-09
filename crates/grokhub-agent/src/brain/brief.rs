@@ -392,6 +392,73 @@ const FOLLOW_UPS: &[&str] = &[
     "continue",
     "try again",
     "again",
+    "go on",
+    "go ahead",
+    "keep going",
+    "carry on",
+];
+/// Words that open a go-ahead: "yeah could use that info".
+const GO_AHEAD_LEADS: &[&str] = &[
+    "yes", "yeah", "yea", "yep", "yup", "sure", "ok", "okay", "please", "continue",
+];
+/// What may follow a go-ahead lead and still name nothing new.
+const GO_AHEAD_FILLER: &[&str] = &[
+    "could",
+    "would",
+    "use",
+    "that",
+    "this",
+    "it",
+    "info",
+    "information",
+    "please",
+    "go",
+    "ahead",
+    "do",
+    "the",
+    "me",
+    "be",
+    "great",
+    "nice",
+    "good",
+    "helpful",
+    "help",
+    "keep",
+    "going",
+    "on",
+    "look",
+    "up",
+    "search",
+    "find",
+    "out",
+    "for",
+    "sure",
+    "i",
+    "id",
+    "i'd",
+    "that'd",
+    "love",
+    "like",
+    "want",
+    "need",
+    "yes",
+    "yeah",
+    "yep",
+    "ok",
+    "okay",
+    "pls",
+    "plz",
+    "lol",
+    "bro",
+    "dude",
+    "man",
+    "again",
+    "try",
+    "a",
+    "an",
+    "and",
+    "to",
+    "of",
 ];
 const POLITE: &[&str] = &[
     "please",
@@ -901,7 +968,17 @@ fn small_talk(t: &str, ws: &[&str]) -> bool {
 /// "ok", "yes", "do it": a bare go-ahead that carries on the last ask.
 pub fn is_follow_up(text: &str) -> bool {
     let t = text.trim().to_lowercase();
-    FOLLOW_UPS.contains(&t.trim_end_matches(['.', '!']).trim())
+    FOLLOW_UPS.contains(&t.trim_end_matches(['.', '!']).trim()) || go_ahead(&words(&t))
+}
+
+/// "yeah could use that info": a go-ahead word, then nothing new named
+/// (LO-51). A new subject after it ("yeah what about the boss") is a new ask.
+fn go_ahead(ws: &[&str]) -> bool {
+    ws.len() <= 8
+        && ws.first().is_some_and(|w| GO_AHEAD_LEADS.contains(w))
+        && ws
+            .iter()
+            .all(|w| GO_AHEAD_FILLER.contains(w) || GO_AHEAD_LEADS.contains(w))
 }
 
 /// The rules' Brief, or `None` when they can't tell what the ask is.
@@ -916,7 +993,7 @@ pub fn rules(input: &BriefInput<'_>) -> Option<Brief> {
                 recent: &[],
                 ..*input
             })
-            .is_some_and(|b| matches!(b.intent, Intent::Task | Intent::Repair))
+            .is_some_and(|b| matches!(b.intent, Intent::Task | Intent::Repair | Intent::Research))
         })
     };
     let mut rest = t.as_str();
@@ -931,6 +1008,7 @@ pub fn rules(input: &BriefInput<'_>) -> Option<Brief> {
     if !input.background
         && !input.recent.is_empty()
         && (FOLLOW_UPS.contains(&t.trim_end_matches(['.', '!']).trim())
+            || go_ahead(&ws)
             || (bare_verb && last_was_work()))
     {
         let last = input.recent.last().map(String::as_str).unwrap_or_default();
@@ -1572,6 +1650,49 @@ mod tests {
             short(&rules(&follow).unwrap()),
             (Intent::Repair, Care::Critical, "system", "calm")
         );
+    }
+
+    #[test]
+    fn a_go_ahead_with_nothing_new_carries_the_open_lookup() {
+        // LO-51: the stopped WoW lookup, then "yeah could use that info".
+        let recent = ["where do i turn aqir research tokens in at in wow".to_string()];
+        let asked = rules(&BriefInput {
+            text: "where do i turn aqir research tokens in at in wow",
+            ..Default::default()
+        })
+        .unwrap();
+        for text in [
+            "yeah could use that info",
+            "yes please look it up",
+            "keep going",
+            "ok do it",
+        ] {
+            assert!(is_follow_up(text), "{text}");
+            let b = rules(&BriefInput {
+                text,
+                recent: &recent,
+                ..Default::default()
+            })
+            .unwrap_or_else(|| panic!("{text}: no brief"));
+            assert_eq!(short(&b), short(&asked), "{text}");
+        }
+        // A new subject after the go-ahead is a new ask; thanks is a sign-off.
+        for text in [
+            "yeah what about the raid boss",
+            "ok thanks",
+            "yeah lol you're funny",
+        ] {
+            assert!(!is_follow_up(text), "{text}");
+        }
+        // "yeah" after hanging out stays hanging out.
+        let chat = ["haha you're funny".to_string()];
+        let b = rules(&BriefInput {
+            text: "yeah",
+            recent: &chat,
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(b.intent, Intent::Chat);
     }
 
     #[test]

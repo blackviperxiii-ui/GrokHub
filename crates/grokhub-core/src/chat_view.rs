@@ -717,6 +717,8 @@ fn visible_assistant(text: &str) -> String {
     // Model-only untrusted fences (web_search / web_fetch / …) must never paint
     // in the user-facing bubble — drop open→close blocks and stray markers.
     let text = strip_untrusted_fences(text);
+    // LO-51: a tool call the model wrote as text is not for the user.
+    let text = crate::tool_tags::strip_tool_tags(&text);
     let mut lines: Vec<&str> = Vec::new();
     let mut skip_until: Option<String> = None;
     for line in text.lines() {

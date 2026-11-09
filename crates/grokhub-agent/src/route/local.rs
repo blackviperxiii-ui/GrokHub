@@ -817,6 +817,8 @@ pub fn serve_request(
         return serve(class, &text, cancel);
     }
     let tokens = (text.len() as u64).div_ceil(4);
+    let _need =
+        super::local_scale::NeedGuard::set(super::local_scale::need(class_norm, tokens, &text));
     if heavy(class_norm, tokens) && super::local_gov::level() != Level::RampUp {
         match super::local_gov::wait_for_ramp_up(HEAVY_WAIT, &|| cancel.is_cancelled()) {
             None => return Err(ClientError::Cancelled),
@@ -867,6 +869,7 @@ fn serve_within_at(
     cancel: &CancelToken,
 ) -> Result<TurnOutput, ClientError> {
     let tokens = (text.len() as u64).div_ceil(4);
+    let _need = super::local_scale::NeedGuard::set(super::local_scale::need(class, tokens, text));
     if heavy(class, tokens) && super::local_gov::level() != Level::RampUp {
         match super::local_gov::wait_for_ramp_up(heavy_wait, &|| cancel.is_cancelled()) {
             None => return Err(ClientError::Cancelled),

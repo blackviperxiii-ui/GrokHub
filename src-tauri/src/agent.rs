@@ -208,6 +208,11 @@ pub fn ui_event(event: AcpEvent) -> Option<UiEvent> {
         AcpEvent::Err(message) => UiEvent::Error { message },
         AcpEvent::Done { stop_reason } => UiEvent::Done { stop: stop_reason },
         AcpEvent::Plan(text) => UiEvent::Plan { text },
+        // The shell has no findings card yet: the card's plain list follows
+        // the reply, so it never shows raw JSON or nothing (LO-51).
+        AcpEvent::Findings(body) => UiEvent::Text {
+            text: format!("\n\n{}", body.trim()),
+        },
         AcpEvent::Elicit(ask) => UiEvent::Elicit {
             id: ask.tool_call_id,
             server: ask.server_name,
@@ -661,6 +666,8 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
         let mut trailer = grokhub_core::ChipTrailerFilter::default();
         // Game goal lines are read at the end and never shown.
         let mut markers = grokhub_core::objectives::MarkerFilter::default();
+        // A tool call the model wrote as text never shows (LO-51).
+        let mut tool_tags = grokhub_core::tool_tags::ToolTagFilter::new();
         let mut raw = String::new();
         let ran = engine.prompt(&message.text, message.image.as_deref(), &mut |event| {
             let Some(mut ui) = ui_event(event) else {
@@ -677,6 +684,7 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                     *text = trailer.feed(text);
                     raw.push_str(text);
                     *text = markers.feed(text);
+                    *text = tool_tags.feed(text);
                     if text.is_empty() {
                         return;
                     }
@@ -688,6 +696,8 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                     raw.push_str(&tail);
                     let mut tail = markers.feed(&tail);
                     tail.push_str(&markers.finish());
+                    let mut tail = tool_tags.feed(&tail);
+                    tail.push_str(&tool_tags.finish());
                     if !tail.is_empty() {
                         reply.push_str(&tail);
                         emit(UiEvent::Text { text: tail });
@@ -1269,6 +1279,15 @@ mod tests {
             ui_event(AcpEvent::Plan("1. Read".into())),
             Some(UiEvent::Plan {
                 text: "1. Read".into()
+            })
+        );
+        // No findings card in the shell yet: its plain list follows the reply.
+        assert_eq!(
+            ui_event(AcpEvent::Findings(
+                "Findings\n\n- Info: tokens go to the vendor".into()
+            )),
+            Some(UiEvent::Text {
+                text: "\n\nFindings\n\n- Info: tokens go to the vendor".into()
             })
         );
         let card = serde_json::to_value(UiEvent::Elicit {

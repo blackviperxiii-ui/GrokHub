@@ -116,6 +116,112 @@ pub fn nvidia_free_vram_now() -> Option<u64> {
     (!frees.is_empty()).then(|| frees.iter().sum())
 }
 
+/// Free VRAM right now (MB): `nvidia-smi`, else (Linux) the DRM sysfs of AMD
+/// and other cards with their own memory. `None` without either.
+pub fn free_vram_now() -> Option<u64> {
+    nvidia_free_vram_now().or_else(drm_free_vram_now)
+}
+
+/// Discrete cards carry at least this much VRAM; an APU's carve-out is less.
+const DISCRETE_VRAM_BYTES: u64 = 2 * 1_024 * 1_024 * 1_024;
+
+#[cfg(target_os = "linux")]
+fn drm_free_vram_now() -> Option<u64> {
+    let entries = std::fs::read_dir("/sys/class/drm").ok()?;
+    let cards: Vec<(u64, u64)> = entries
+        .flatten()
+        .filter(|e| {
+            let n = e.file_name().to_string_lossy().into_owned();
+            n.starts_with("card") && !n.contains('-')
+        })
+        .filter_map(|e| {
+            let dev = e.path().join("device");
+            Some((
+                read_u64(dev.join("mem_info_vram_total"))?,
+                read_u64(dev.join("mem_info_vram_used"))?,
+            ))
+        })
+        .collect();
+    drm_free_mb(&cards)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn drm_free_vram_now() -> Option<u64> {
+    None
+}
+
+/// Free MB across `(total, used)` byte pairs of discrete cards.
+pub fn drm_free_mb(cards: &[(u64, u64)]) -> Option<u64> {
+    let free: Vec<u64> = cards
+        .iter()
+        .filter(|(total, _)| *total >= DISCRETE_VRAM_BYTES)
+        .map(|(total, used)| total.saturating_sub(*used) / (1_024 * 1_024))
+        .collect();
+    (!free.is_empty()).then(|| free.iter().sum())
+}
+
+/// Idle and total CPU time from `/proc/stat`'s first line.
+pub fn parse_proc_stat(text: &str) -> Option<(u64, u64)> {
+    let line = text.lines().next()?.strip_prefix("cpu ")?;
+    let v: Vec<u64> = line
+        .split_whitespace()
+        .filter_map(|x| x.parse().ok())
+        .collect();
+    if v.len() < 4 {
+        return None;
+    }
+    // user nice system idle iowait irq softirq steal: idle + iowait is idle.
+    let idle = v[3] + v.get(4).copied().unwrap_or(0);
+    let total = v.iter().take(8).sum();
+    Some((idle, total))
+}
+
+/// Share of the CPU in use between two `(idle, total)` samples.
+pub fn busy_pct(prev: (u64, u64), now: (u64, u64)) -> Option<u8> {
+    let total = now.1.checked_sub(prev.1).filter(|t| *t > 0)?;
+    let idle = now.0.saturating_sub(prev.0).min(total);
+    u8::try_from((total - idle) * 100 / total).ok()
+}
+
+static CPU_LAST: std::sync::Mutex<Option<(u64, u64)>> = std::sync::Mutex::new(None);
+
+/// Share of the CPU in use since the last call; `None` on the first call and
+/// where the OS can't say.
+pub fn cpu_busy_pct() -> Option<u8> {
+    let now = cpu_times()?;
+    let mut last = CPU_LAST.lock().ok()?;
+    let prev = last.replace(now)?;
+    busy_pct(prev, now)
+}
+
+#[cfg(target_os = "linux")]
+fn cpu_times() -> Option<(u64, u64)> {
+    parse_proc_stat(&std::fs::read_to_string("/proc/stat").ok()?)
+}
+
+#[cfg(windows)]
+fn cpu_times() -> Option<(u64, u64)> {
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::System::Threading::GetSystemTimes;
+    let z = || FILETIME {
+        dwLowDateTime: 0,
+        dwHighDateTime: 0,
+    };
+    let (mut idle, mut kernel, mut user) = (z(), z(), z());
+    // SAFETY: three out-params the call fills in.
+    if unsafe { GetSystemTimes(&mut idle, &mut kernel, &mut user) } == 0 {
+        return None;
+    }
+    let v = |f: FILETIME| (u64::from(f.dwHighDateTime) << 32) | u64::from(f.dwLowDateTime);
+    // Kernel time includes idle time.
+    Some((v(idle), v(kernel) + v(user)))
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+fn cpu_times() -> Option<(u64, u64)> {
+    None
+}
+
 impl GpuProbe for NvidiaSmi {
     fn gpus(&self) -> Vec<Gpu> {
         run(
@@ -535,6 +641,29 @@ fn drm_gpu_temp_c() -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drm_free_vram_skips_small_carve_outs() {
+        let gib = 1_024 * 1_024 * 1_024;
+        // A 16 GiB card with 4 GiB used, and an APU's 512 MiB carve-out.
+        assert_eq!(
+            drm_free_mb(&[(16 * gib, 4 * gib), (gib / 2, 0)]),
+            Some(12_288)
+        );
+        assert_eq!(drm_free_mb(&[(gib / 2, 0)]), None);
+        assert_eq!(drm_free_mb(&[]), None);
+    }
+
+    #[test]
+    fn cpu_busy_from_two_proc_stat_samples() {
+        let a = parse_proc_stat("cpu  100 0 100 700 100 0 0 0 0 0\ncpu0 1 2 3 4\n").unwrap();
+        assert_eq!(a, (800, 1_000));
+        let b = parse_proc_stat("cpu  300 0 200 1300 200 0 0 0 0 0\n").unwrap();
+        // 1000 more ticks, 700 of them idle: 30% busy.
+        assert_eq!(busy_pct(a, b), Some(30));
+        assert_eq!(busy_pct(a, a), None);
+        assert_eq!(parse_proc_stat("intr 1 2 3"), None);
+    }
 
     #[test]
     fn this_machine_reads_without_panicking() {

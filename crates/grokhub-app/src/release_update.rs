@@ -181,6 +181,42 @@ fn fetch_text(get: Fetch, url: &str) -> Result<String, Refusal> {
     String::from_utf8(bytes).map_err(|_| Refusal::Download("not text".into()))
 }
 
+/// Save a newer signed model catalog from `channel`'s newest release
+/// (`grokhub_core::catalog_update`). `Ok(Some(version))` when one was saved;
+/// the app uses it from its next start.
+pub(crate) fn refresh_catalog(channel: Channel, config_dir: &Path) -> Result<Option<u32>, String> {
+    let Some(pubkey) = RELEASE_PUBKEY else {
+        return Ok(None);
+    };
+    let mut get = |url: &str, cap: u64, secs: u64| fetch(url, cap, Duration::from_secs(secs));
+    refresh_catalog_with(pubkey, channel, config_dir, &mut get)
+}
+
+fn refresh_catalog_with(
+    pubkey: &str,
+    channel: Channel,
+    config_dir: &Path,
+    get: Fetch,
+) -> Result<Option<u32>, String> {
+    use grokhub_core::catalog_update as cu;
+    let text = |get: Fetch, url: &str, cap: u64| -> Result<String, String> {
+        String::from_utf8(get(url, cap, 30)?).map_err(|_| "not text".to_string())
+    };
+    let releases = parse_releases(&text(&mut *get, releases_api(channel), TEXT_CAP)?);
+    let Some(rel) = pick_release(&releases, channel) else {
+        return Ok(None);
+    };
+    // Releases made before the catalog shipped have none: nothing to do.
+    let Some([cat, sums, sig]) = cu::assets(rel) else {
+        return Ok(None);
+    };
+    let sums = text(&mut *get, &sums.url, TEXT_CAP)?;
+    let sig = text(&mut *get, &sig.url, TEXT_CAP)?;
+    let cat = text(&mut *get, &cat.url, cu::MAX_BYTES)?;
+    let current = cu::current_version(config_dir);
+    cu::adopt(config_dir, pubkey, current, &cat, &sums, &sig)
+}
+
 /// [`install_release`] with the network, install folder and scratch folder
 /// passed in (and the trusted key, so tests can exercise unsigned flows).
 /// Nothing is written to `dest` until the asset verifies.
@@ -408,6 +444,57 @@ mod tests {
                 .map(|(_, b)| b.clone())
                 .ok_or_else(|| format!("HTTP 404 {url}"))
         }
+    }
+
+    #[test]
+    fn a_newer_signed_catalog_from_the_release_is_saved_and_a_tampered_one_is_not() {
+        const PUB: &str = include_str!("../../grokhub-core/data/test_catalog/test.pub");
+        const CAT: &str = include_str!("../../grokhub-core/data/test_catalog/local_catalog.toml");
+        const SUMS: &str = include_str!("../../grokhub-core/data/test_catalog/SHA256SUMS");
+        const SIG: &str = include_str!("../../grokhub-core/data/test_catalog/SHA256SUMS.minisig");
+        use grokhub_core::catalog_update as cu;
+        let tag = "v9.9.9";
+        let names = [cu::FILE, SUMS_NAME, SIG_NAME];
+        let assets: Vec<String> = names
+            .iter()
+            .map(|n| format!(r#"{{"name":"{n}","browser_download_url":"{DL}/{tag}/{n}"}}"#))
+            .collect();
+        let list = format!(
+            r#"[{{"tag_name":"{tag}","prerelease":false,"draft":false,"created_at":"2026-11-09T00:00:00Z","assets":[{}]}}]"#,
+            assets.join(",")
+        );
+        let pages = |cat: &str| {
+            let mut p = vec![(
+                releases_api(Channel::Stable).to_string(),
+                list.clone().into_bytes(),
+            )];
+            for (n, body) in names.iter().zip([cat, SUMS, SIG]) {
+                p.push((format!("{DL}/{tag}/{n}"), body.as_bytes().to_vec()));
+            }
+            p
+        };
+        let cfg = tmp("catalog-refresh");
+        let tampered = CAT.replace("Test Chat", "Other");
+        let mut bad = server(pages(&tampered));
+        assert!(refresh_catalog_with(PUB, Channel::Stable, &cfg, &mut bad).is_err());
+        assert!(!cu::dir(&cfg).join(cu::FILE).exists());
+        let mut good = server(pages(CAT));
+        assert_eq!(
+            refresh_catalog_with(PUB, Channel::Stable, &cfg, &mut good),
+            Ok(Some(99))
+        );
+        assert_eq!(cu::saved_with(&cfg, PUB, 2).as_deref(), Some(CAT));
+        // A release without a catalog changes nothing.
+        let none = r#"[{"tag_name":"v9.9.8","prerelease":false,"draft":false,"created_at":"2026-11-08T00:00:00Z","assets":[]}]"#;
+        let mut old = server(vec![(
+            releases_api(Channel::Stable).to_string(),
+            none.into(),
+        )]);
+        assert_eq!(
+            refresh_catalog_with(PUB, Channel::Stable, &cfg, &mut old),
+            Ok(None)
+        );
+        let _ = std::fs::remove_dir_all(&cfg);
     }
 
     #[test]

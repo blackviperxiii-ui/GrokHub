@@ -1676,6 +1676,47 @@ fn transcribe_on_device(wav: &Path) -> Option<Result<String, String>> {
     Some(ve::transcript_from(&all).ok_or_else(|| "the speech engine heard no words".into()))
 }
 
+/// One sentence can take this long to speak on the CPU.
+const DESK_SPEAK_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Kokoro and the speaking program are both downloaded.
+pub fn on_device_voice_ready() -> bool {
+    use grokhub_core::voice_engine as ve;
+    ve::tts_installed(&crate::config::config_dir())
+        && ve::voice_model(&crate::app::models_dir()).is_some()
+}
+
+/// Speak `text` in `voice` with Kokoro in the on-device speech engine: one
+/// run per piece, so nothing stays loaded. The WAV bytes, or None when the
+/// engine or the voice is missing.
+pub fn speak_on_device(text: &str, voice: &str) -> Option<Result<Vec<u8>, String>> {
+    use grokhub_core::voice_engine as ve;
+    let cfg = crate::config::config_dir();
+    if !ve::tts_installed(&cfg) {
+        return None;
+    }
+    let models = crate::app::models_dir();
+    let out = match private_temp("speak-out.wav") {
+        Ok(p) => p,
+        Err(e) => return Some(Err(e)),
+    };
+    let _ = std::fs::remove_file(&out);
+    let args = ve::speak_args(&models, ve::voice_model(&models)?, voice, text, &out)?;
+    let mut cmd = Command::new(ve::tts_path(&cfg));
+    cmd.args(&args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    crate::host::hide_windows_console(&mut cmd);
+    let done = match run_limited(cmd, DESK_SPEAK_TIMEOUT) {
+        None => Err("the speech engine timed out".to_string()),
+        Some(o) if !o.status.success() => Err("the speech engine couldn't speak that".to_string()),
+        Some(_) => std::fs::read(&out).map_err(|e| format!("spoken audio: {e}")),
+    };
+    let _ = std::fs::remove_file(&out);
+    Some(done)
+}
+
 fn run_ok(bin: &str, args: &[&str]) -> Result<(), String> {
     let mut cmd = spawn_bin(bin);
     cmd.args(args);
