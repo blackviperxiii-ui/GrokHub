@@ -276,9 +276,13 @@ pub fn tier(p: &Profile) -> &'static str {
     }
 }
 
-/// The smallest model to chat with: what the wizard quotes when nothing fits.
+/// The smallest model to chat with: what the wizard quotes when nothing fits
+/// (never an optional one, since nothing picks those for you).
 pub fn smallest() -> Option<&'static LocalModel> {
-    local_models().iter().rev().find(|m| m.is_chat())
+    local_models()
+        .iter()
+        .rev()
+        .find(|m| m.is_chat() && !m.optional)
 }
 
 #[cfg(test)]

@@ -173,8 +173,20 @@ fn an_older_engine_drafts_with_md_only() {
 fn every_gemma_pairs_with_its_own_mtp_heads() {
     let got: Vec<(&str, &str, DraftKind)> = pairs()
         .iter()
+        .filter(|p| p.target.id.starts_with("gemma-4-"))
         .map(|p| (p.target.id, p.drafter.id, p.kind))
         .collect();
+    // The other makers' small same-tokenizer drafters are plain drafts.
+    let others: Vec<(&str, DraftKind)> = pairs()
+        .iter()
+        .filter(|p| !p.target.id.starts_with("gemma-4-"))
+        .map(|p| (p.target.id, p.kind))
+        .collect();
+    assert_eq!(others.len(), 5, "{others:?}");
+    assert!(
+        others.iter().all(|(_, k)| *k == DraftKind::Simple),
+        "{others:?}"
+    );
     let want: Vec<(&str, &str, DraftKind)> = ["31b", "26b-a4b", "12b", "e4b", "e2b"]
         .iter()
         .map(|s| {
