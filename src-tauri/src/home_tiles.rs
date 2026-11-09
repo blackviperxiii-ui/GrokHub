@@ -505,19 +505,23 @@ pub fn speeds_view(log: &grokhub_core::net_log::NetLog, now: u64) -> TileView {
         )
         .detail(drops_line),
     };
-    let rows = log
-        .speed
-        .iter()
-        .rev()
-        .take(ROWS)
-        .map(|s| {
-            TileRow::new(
-                grokhub_core::pulse::ago_label(s.at_ms, now),
-                format!("{:.0} Mbps", s.mbps),
-                Tone::Normal,
-            )
-        })
-        .collect();
+    // Connect time to public DNS, measured by the probe once a minute.
+    let mut rows: Vec<TileRow> = Vec::new();
+    if let Some(ms) = log.ping(now) {
+        let slow = ms > grokhub_core::net_log::SLOW_MS;
+        let tone = if slow { Tone::Warn } else { Tone::Normal };
+        rows.push(TileRow::new("Ping", format!("{ms} ms"), tone));
+        if let Some(j) = log.jitter() {
+            rows.push(TileRow::new("Jitter", format!("{j} ms"), Tone::Normal));
+        }
+    }
+    rows.extend(log.speed.iter().rev().take(ROWS).map(|s| {
+        TileRow::new(
+            grokhub_core::pulse::ago_label(s.at_ms, now),
+            format!("{:.0} Mbps", s.mbps),
+            Tone::Normal,
+        )
+    }));
     let at = log.speed.last().map(|s| s.at_ms);
     let mut v = TileView::ready(text).rows(rows);
     v.updated_ms = at;

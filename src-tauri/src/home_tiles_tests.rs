@@ -45,6 +45,27 @@ fn speeds_is_off_until_the_internet_log_is_on() {
     assert_eq!(tested.text.big, "512 Mbps");
     assert_eq!(tested.text.caption, "Down · 2m ago");
     assert_eq!(tested.updated_ms, Some(NOW - 120_000));
+    assert_eq!(tested.rows.len(), 1, "no ping row before a probe");
+}
+
+#[test]
+fn speeds_shows_ping_and_jitter_from_the_probe() {
+    let mut log = grokhub_core::net_log::NetLog {
+        on: true,
+        ..Default::default()
+    };
+    for (i, ms) in [20u32, 30, 25].into_iter().enumerate() {
+        log.note(Some(ms), NOW - (3 - i as u64) * 60_000, 0);
+    }
+    let v = speeds_view(&log, NOW);
+    let row = |label: &str| {
+        v.rows
+            .iter()
+            .find(|r| r.label == label)
+            .map(|r| r.value.clone())
+    };
+    assert_eq!(row("Ping").as_deref(), Some("25 ms"));
+    assert_eq!(row("Jitter").as_deref(), Some("8 ms"));
 }
 
 #[test]
