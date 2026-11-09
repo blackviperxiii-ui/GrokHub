@@ -266,6 +266,7 @@ mod setup_wizard;
 pub(crate) use setup_wizard::models_dir;
 mod sidebar;
 mod skill_undo;
+mod skills_tab;
 mod slash;
 mod stardew_ui;
 mod status_toasts;
@@ -778,6 +779,7 @@ pub struct Cabin {
     greeting_llm_at: u64,
     continue_hint: String,
     skill_q: String,
+    skills_tab: skills_tab::SkillsTab,
     pending_connectors: Vec<(String, String, String)>,
     auto_compose: bool,
     board_compose: bool,
@@ -1421,6 +1423,7 @@ impl Cabin {
             greeting_llm_at: 0,
             continue_hint: String::new(),
             skill_q: String::new(),
+            skills_tab: skills_tab::SkillsTab::default(),
             pending_connectors: vec![],
             auto_compose: false,
             board_compose: false,
@@ -1922,6 +1925,7 @@ impl Cabin {
             greeting_llm_at: 0,
             continue_hint: String::new(),
             skill_q: String::new(),
+            skills_tab: skills_tab::SkillsTab::default(),
             pending_connectors: Vec::new(),
             auto_compose: false,
             board_compose: false,

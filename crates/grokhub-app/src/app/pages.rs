@@ -1609,12 +1609,13 @@ page_body(ui, "history", |ui| {
         let frame = crate::theme::page_frame();
         let _ = super::dock_ui::page_panel(ui, self.cfg.dock_panels, frame, |ui| {
             if crate::cards::page_header(ui, "Skills", "Refresh") {
-                self.native_listing_cwd.clear();
+                self.skills_tab_changed();
                 self.ensure_native_listing();
                 self.skill_list = skills::list_skills();
             }
             ui.add_space(10.0);
             ui.horizontal(|ui| {
+                self.skills_tab_new_button(ui);
                 if crate::cards::ghost_pill(ui, "Connectors") {
                     self.open_connectors();
                 }
@@ -1622,37 +1623,38 @@ page_body(ui, "history", |ui| {
                     crate::cards::search_field(ui, &mut self.skill_q);
                 });
             });
-            ui.add_space(16.0);
+            ui.add_space(12.0);
+            self.skills_tab_undo_line(ui);
+            self.skills_tab_new(ui);
             let q = self.skill_q.to_ascii_lowercase();
             let mut use_skill: Option<String> = None;
             let mut use_cabin_skill: Option<(String, String)> = None;
+            let mut toggle_native: Option<(String, bool)> = None;
             egui::ScrollArea::vertical().show(ui, |ui| {
+            // Every cabin skill, off ones too: `self.skill_list` holds only
+            // the ones chat may use.
             let cabin_skills: Vec<_> = self
-                .skill_list
-                .iter()
+                .skills_tab_all()
+                .into_iter()
                 .filter(|s| {
                     q.is_empty()
                         || s.name.to_ascii_lowercase().contains(&q)
                         || s.description.to_ascii_lowercase().contains(&q)
                         || s.trigger.to_ascii_lowercase().contains(&q)
                 })
-                .cloned()
                 .collect();
             crate::cards::section_label(ui, grokhub_core::brand::filled("{product} skills"));
-            ui.label(
-                RichText::new(format!(
-                    "SKILL.md under {}. {} follows these on a matching ask and writes new ones after a hard host run.",
-                    crate::config::config_dir().join("skills").display(),
-                    grokhub_core::brand::product_name()
-                ))
-                    .size(crate::theme::TYPE_CAPTION)
-                    .color(crate::theme::muted()),
+            crate::cards::help_text(
+                ui,
+                grokhub_core::brand::filled(
+                    "{product} follows these when an ask matches, and saves new ones after it works something out. Switch one off to keep it without chat using it.",
+                ),
             );
             ui.add_space(8.0);
             if cabin_skills.is_empty() {
                 ui.label(
-                    RichText::new(if self.skill_list.is_empty() {
-                        grokhub_core::brand::filled("None yet. {product} saves one after it works something out, or /skill <name> runs one you wrote.")
+                    RichText::new(if self.skills_tab_all().is_empty() {
+                        grokhub_core::brand::filled("None yet. Press New skill, or {product} saves one after it works something out.")
                     } else {
                         "None matched."
                     })
@@ -1660,103 +1662,28 @@ page_body(ui, "history", |ui| {
                     .color(crate::theme::muted()),
                 );
             } else {
-                crate::cards::tile_row(ui, cabin_skills.len(), |ui, i| {
-                    let s = &cabin_skills[i];
-                    let runs = match s.runs {
-                        0 => "never run".to_string(),
-                        1 => "1 run".to_string(),
-                        n => format!("{n} runs"),
-                    };
-                    let body = if s.description.trim().is_empty() {
-                        runs
-                    } else {
-                        format!("{runs} · {}", s.description)
-                    };
-                    if crate::cards::grok_tile(
-                        ui,
-                        crate::icons::icon_for_label(&s.name),
-                        &s.name,
-                        &body,
-                        Some("Use in chat"),
-                        false,
-                    ) == crate::cards::TileHit::Add
-                    {
-                        use_cabin_skill = Some((s.slash.clone(), s.name.clone()));
-                    }
-                });
-            }
-            ui.add_space(16.0);
-            crate::cards::section_label(ui, "Built-in skills");
-            crate::cards::help_text(
-                ui,
-                "Shipped with Loadout (vstack QA, AV QA, verify, follow-through). Use in chat sends /name.",
-            );
-            ui.add_space(8.0);
-            let builtins: Vec<_> = self
-                .native_skills
-                .iter()
-                .filter(|s| s.source == grokhub_agent::SkillSource::Builtin)
-                .filter(|s| {
-                    q.is_empty()
-                        || s.name.to_ascii_lowercase().contains(&q)
-                        || s.description.to_ascii_lowercase().contains(&q)
-                })
-                .cloned()
-                .collect();
-            if builtins.is_empty() {
-                ui.label(
-                    RichText::new(if q.is_empty() {
-                        "Built-ins load with the native engine."
-                    } else {
-                        "None matched."
-                    })
-                    .size(crate::theme::FONT_BODY)
-                    .color(crate::theme::muted()),
-                );
-            } else {
-                crate::cards::tile_row(ui, builtins.len(), |ui, i| {
-                    let s = &builtins[i];
-                    let body = if s.description.is_empty() {
-                        "builtin".to_string()
-                    } else {
-                        format!("builtin · {}", s.description)
-                    };
-                    if crate::cards::grok_tile(
-                        ui,
-                        crate::icons::icon_for_label(&s.name),
-                        &s.name,
-                        &body,
-                        Some("Use in chat"),
-                        false,
-                    ) == crate::cards::TileHit::Add
-                    {
-                        use_skill = Some(s.name.clone());
-                    }
-                });
+                use_cabin_skill = self.skills_tab_cabin_rows(ui, &cabin_skills);
             }
             ui.add_space(16.0);
             crate::cards::section_label(ui, "Project and user skills");
             crate::cards::help_text(
                 ui,
-                "Skills discovered for the native engine. Use in chat sends /name.",
+                "Skills from this project's folder, your own skills folder and your plugins.",
             );
             ui.add_space(8.0);
-            let skills: Vec<_> = self
-                .native_skills
-                .iter()
-                .filter(|s| s.source != grokhub_agent::SkillSource::Builtin)
+            let skills: Vec<_> = super::skills_tab::listed_native(&self.native_skills)
+                .into_iter()
                 .filter(|s| {
                     q.is_empty()
                         || s.name.to_ascii_lowercase().contains(&q)
                         || s.description.to_ascii_lowercase().contains(&q)
                         || s.path.display().to_string().to_ascii_lowercase().contains(&q)
                 })
-                .cloned()
                 .collect();
             if skills.is_empty() {
                 ui.label(
                     RichText::new(if q.is_empty() {
-                        "None found in this project or the user skills directory."
+                        "None found in this project or your skills folder."
                     } else {
                         "None matched."
                     })
@@ -1764,28 +1691,43 @@ page_body(ui, "history", |ui| {
                     .color(crate::theme::muted()),
                 );
             } else {
-                crate::cards::tile_row(ui, skills.len(), |ui, i| {
-                    let s = &skills[i];
-                    let src = format!("{} · {}", s.source.as_str(), s.path.display());
-                    let body = if s.description.is_empty() {
-                        src
-                    } else {
-                        format!("{src} · {}", s.description)
-                    };
-                    if crate::cards::grok_tile(
-                        ui,
-                        crate::icons::icon_for_label(&s.name),
-                        &s.name,
-                        &body,
-                        Some("Use in chat"),
-                        false,
-                    ) == crate::cards::TileHit::Add
-                    {
-                        use_skill = Some(s.name.clone());
+                for s in &skills {
+                    let on = !skills::skill_is_off(&s.name);
+                    let what = format!("{} · {}", s.source.as_str(), s.description);
+                    let body = super::skills_tab::skill_row_body(on, None, what.trim_end_matches(" · "));
+                    match super::skills_tab::skill_row(ui, &s.name, &body, on, false) {
+                        Some(super::skills_tab::RowAct::Toggle) => {
+                            toggle_native = Some((s.name.clone(), !on));
+                        }
+                        Some(super::skills_tab::RowAct::Use) => use_skill = Some(s.name.clone()),
+                        _ => {}
                     }
-                });
+                }
+            }
+            // An off project or user skill no longer comes back from the
+            // engine, so its row stays listed from the off file.
+            let off_native: Vec<String> = grokhub_agent::skills_off_in(&skills::skills_dir())
+                .into_iter()
+                .filter(|n| {
+                    !self
+                        .skills_tab_all()
+                        .iter()
+                        .any(|s| grokhub_agent::skill_name_key(&s.name) == *n)
+                })
+                .filter(|n| q.is_empty() || n.contains(&q))
+                .collect();
+            for name in &off_native {
+                let body = super::skills_tab::skill_row_body(false, None, "");
+                if let Some(super::skills_tab::RowAct::Toggle) =
+                    super::skills_tab::skill_row(ui, name, &body, false, false)
+                {
+                    toggle_native = Some((name.clone(), true));
+                }
             }
             });
+            if let Some((name, on)) = toggle_native {
+                self.skills_tab_toggle(&name, on);
+            }
             if let Some(name) = use_skill {
                 self.nav = Nav::Chat;
                 self.send_chat(skill_use_in_chat_prompt(&format!("/{name}"), &name));
