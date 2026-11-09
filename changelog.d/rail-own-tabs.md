@@ -1,0 +1,1 @@
+- Workboards, Automations and Skills each get their own row on the desktop rail, so none of them hides behind a button on another page.
