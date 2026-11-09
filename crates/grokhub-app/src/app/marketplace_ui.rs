@@ -439,7 +439,7 @@ impl Cabin {
 
     /// The next step after Install, by how the entry signs in.
     fn ui_market_sign_in(&mut self, ui: &mut egui::Ui, e: &CatalogEntry) {
-        ui.add_space(6.0);
+        ui.add_space(8.0);
         match e.auth {
             CatalogAuth::None | CatalogAuth::Own => {}
             CatalogAuth::Oauth => {

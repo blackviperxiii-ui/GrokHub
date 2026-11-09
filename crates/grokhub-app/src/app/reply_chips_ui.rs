@@ -18,7 +18,7 @@ const REPLY_HINT: &str = "Or type your own reply";
 fn paint_reply_row(ui: &mut egui::Ui, chips: &[ReplyChip]) -> Option<ReplyChip> {
     let mut picked = None;
     ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+        ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
         for (i, chip) in chips.iter().enumerate() {
             let hit = if i == 0 {
                 crate::cards::white_pill(ui, &chip.label)
@@ -81,7 +81,7 @@ impl Cabin {
             return;
         }
         let chips = reply_chips::plan_reply_chips(plan, &self.chip_memory);
-        ui.add_space(6.0);
+        ui.add_space(8.0);
         if let Some(chip) = paint_reply_row(ui, &chips) {
             self.take_plan_reply(chip);
         }
@@ -151,7 +151,7 @@ impl Cabin {
                 }
             }
         }
-        ui.add_space(6.0);
+        ui.add_space(8.0);
         let mut send = false;
         ui.horizontal(|ui| {
             let edit = ui.add(

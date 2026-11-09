@@ -462,7 +462,7 @@ impl Cabin {
                             cancel = true;
                         }
                     });
-                    ui.add_space(6.0);
+                    ui.add_space(8.0);
                     egui::ScrollArea::vertical()
                         .max_height(260.0)
                         .show(ui, |ui| {

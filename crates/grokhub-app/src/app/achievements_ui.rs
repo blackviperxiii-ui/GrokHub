@@ -190,7 +190,7 @@ impl Cabin {
             self.set_ach_on(on);
         }
         if !on {
-            ui.add_space(6.0);
+            ui.add_space(8.0);
             return;
         }
         ui.indent("pulse-achievements", |ui| {
@@ -216,7 +216,7 @@ impl Cabin {
                 crate::cards::help_text(ui, &self.sources.ach.note.clone());
             }
         });
-        ui.add_space(6.0);
+        ui.add_space(8.0);
     }
 }
 

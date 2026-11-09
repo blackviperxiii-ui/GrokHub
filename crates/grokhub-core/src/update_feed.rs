@@ -3966,7 +3966,9 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         assert_eq!(digest.title, "While you were in quiet hours");
         assert_eq!(
             digest.body.as_deref(),
-            Some("4 updates: Backup ran · Inbox sorted · Standup drafted · and 1 more")
+            Some(
+                "• Backup ran: ok\n• Inbox sorted: ok\n• Standup drafted: ok\n• Prices checked: ok"
+            )
         );
         assert_eq!(digest.source_id, "pulse:quiet");
         assert_eq!(cards.iter().filter(|c| c.pulse.quiet_batched).count(), 4);

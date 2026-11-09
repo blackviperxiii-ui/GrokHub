@@ -245,7 +245,7 @@ pub fn imagine_seg_chip(
     let resp = egui::Frame::NONE
         .fill(fill)
         .corner_radius(crate::theme::IMAGINE_HIT)
-        .inner_margin(egui::Margin::symmetric(10, 4))
+        .inner_margin(egui::Margin::symmetric(12, 4))
         .show(ui, |ui| {
             ui.set_min_size(egui::vec2(
                 crate::theme::IMAGINE_HIT - 8.0,
@@ -647,7 +647,7 @@ pub fn paint_run_pulse(ui: &mut egui::Ui, label: &str, hint: &str) {
     let fill = crate::theme::live();
     let color =
         Color32::from_rgba_unmultiplied(fill.r(), fill.g(), fill.b(), (pulse * 255.0) as u8);
-    ui.add_space(6.0);
+    ui.add_space(8.0);
     let row = ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
         let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), Sense::hover());
@@ -776,7 +776,7 @@ pub fn section_label(ui: &mut egui::Ui, label: &str) -> bool {
             .sense(egui::Sense::click()),
         )
         .clicked();
-    ui.add_space(6.0);
+    ui.add_space(8.0);
     hit
 }
 
@@ -829,7 +829,7 @@ pub fn settings_toggle(ui: &mut egui::Ui, title: &str, hint: &str, on: &mut bool
         ui.vertical(|ui| {
             // A long hint wraps before the switch instead of running under it.
             ui.set_max_width(text_w);
-            ui.add_space(6.0);
+            ui.add_space(8.0);
             ui.label(RichText::new(title).size(15.0).color(crate::theme::fg()));
             if !hint.is_empty() {
                 ui.label(RichText::new(hint).size(12.0).color(crate::theme::muted()));
@@ -842,7 +842,7 @@ pub fn settings_toggle(ui: &mut egui::Ui, title: &str, hint: &str, on: &mut bool
             }
         });
     });
-    ui.add_space(10.0);
+    ui.add_space(12.0);
     hit
 }
 
@@ -920,7 +920,7 @@ pub fn settings_dropdown(
     if !hint.is_empty() {
         ui.label(RichText::new(hint).size(12.0).color(crate::theme::muted()));
     }
-    ui.add_space(6.0);
+    ui.add_space(8.0);
     card_frame(ui, CardVariant::Outlined, true, |ui| {
         egui::ComboBox::from_id_salt(title)
             .selected_text(RichText::new(selected).size(15.0).color(crate::theme::fg()))
@@ -936,7 +936,7 @@ pub fn settings_dropdown(
                 }
             });
     });
-    ui.add_space(10.0);
+    ui.add_space(12.0);
     picked
 }
 
@@ -952,7 +952,7 @@ pub fn settings_field(
     if !hint.is_empty() {
         ui.label(RichText::new(hint).size(12.0).color(crate::theme::muted()));
     }
-    ui.add_space(6.0);
+    ui.add_space(8.0);
     card_frame(ui, CardVariant::Outlined, true, |ui| {
         let mut edit = egui::TextEdit::singleline(value)
             .desired_width(f32::INFINITY)
@@ -962,7 +962,7 @@ pub fn settings_field(
         }
         ui.add(edit);
     });
-    ui.add_space(10.0);
+    ui.add_space(12.0);
 }
 
 pub fn get_started_panel(
@@ -985,7 +985,7 @@ pub fn get_started_panel(
                 .size(15.0)
                 .color(crate::theme::muted()),
         );
-        ui.add_space(20.0);
+        ui.add_space(24.0);
         if let Some(p) = pending {
             settings_note(ui, p);
         }
@@ -1126,7 +1126,7 @@ pub fn settings_grant_row(
             pills(ui, &mut hit);
         });
     }
-    ui.add_space(10.0);
+    ui.add_space(12.0);
     hit
 }
 
@@ -1164,7 +1164,7 @@ fn settings_action_styled(
             hit = felt_pill(ui, action, style);
         });
     });
-    ui.add_space(10.0);
+    ui.add_space(12.0);
     hit
 }
 
@@ -1302,7 +1302,7 @@ fn tile_frame() -> egui::Frame {
         .fill,
         stroke: Stroke::NONE,
         shadow: crate::theme::kit_shadow(crate::theme::ShadowLevel::None),
-        inner_margin: egui::Margin::same(14),
+        inner_margin: egui::Margin::same(16),
         outer_margin: egui::Margin::ZERO,
         corner_radius: crate::ui_kit::recipe::CARD_RADIUS.into(),
     }
@@ -1520,7 +1520,7 @@ pub fn grok_tile(
         let ui = &mut prepared.content_ui;
         ui.horizontal(|ui| {
             icons::paint_icon(ui, icon, crate::theme::TILE_ICON);
-            ui.add_space(10.0);
+            ui.add_space(12.0);
             ui.vertical(|ui| {
                 let text_w = ui.available_width();
                 if text_w.is_finite() {
@@ -1534,7 +1534,7 @@ pub fn grok_tile(
                     )
                     .wrap(),
                 );
-                ui.add_space(3.0);
+                ui.add_space(4.0);
                 let body_w = ui.available_width().max(8.0);
                 let galley = ui.fonts_mut(|fonts| {
                     let painted = tile_body_text(fonts, body, body_w);
@@ -1660,7 +1660,7 @@ pub fn tile_row(ui: &mut egui::Ui, n: usize, mut each: impl FnMut(&mut egui::Ui,
         if changed {
             ui.ctx().request_repaint();
         }
-        ui.add_space(14.0);
+        ui.add_space(16.0);
     }
 }
 

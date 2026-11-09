@@ -1458,7 +1458,7 @@ impl Cabin {
             "Here · tap Talk to speak"
         };
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 10.0;
+            ui.spacing_mut().item_spacing.x = 12.0;
             super::loadout_home::paint_companion_face(ui, 36.0);
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
@@ -1474,7 +1474,7 @@ impl Cabin {
                 );
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
+                ui.spacing_mut().item_spacing.x = 8.0;
                 // Right-to-left: TYPE first so TALK lands on the left of the pair.
                 if hangout_mode_btn(ui, "TYPE", !voice_on) && voice_on {
                     self.leave_voice();
@@ -1484,7 +1484,7 @@ impl Cabin {
                 }
             });
         });
-        ui.add_space(10.0);
+        ui.add_space(12.0);
     }
 
     pub(super) fn ui_chat(&mut self, ui: &mut egui::Ui) {
@@ -1987,7 +1987,7 @@ impl Cabin {
                     .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                     .corner_radius(crate::theme::MENU_RADIUS)
                     .shadow(crate::theme::sheet_shadow())
-                    .inner_margin(egui::Margin::symmetric(8, 6))
+                    .inner_margin(egui::Margin::symmetric(8, 8))
                     .show(ui, |ui| {
                         ui.set_width(w - 16.0);
                         ui.horizontal(|ui| {
@@ -2406,7 +2406,7 @@ impl Cabin {
             self.paint_episode_header(ui);
             for card in &self.tool_cards {
                 paint_tool_card_body(ui, card);
-                ui.add_space(6.0);
+                ui.add_space(8.0);
             }
             let cards: Vec<&ToolCard> = self.tool_cards.iter().collect();
             super::harness_ui::paint_click_marker(ui, &cards);
@@ -2739,7 +2739,7 @@ impl Cabin {
                     );
                 }
                 if p.field_name.is_some() {
-                    ui.add_space(6.0);
+                    ui.add_space(8.0);
                     let hint = if p.field_title.is_empty() {
                         "Value"
                     } else {
@@ -2939,7 +2939,7 @@ impl Cabin {
             return;
         }
         ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing.x = 6.0;
+            ui.spacing_mut().item_spacing.x = 8.0;
             let label = if self.plan_open {
                 "Hide plan"
             } else {
@@ -2955,7 +2955,7 @@ impl Cabin {
                 .fill(crate::theme::elevated())
                 .corner_radius(12.0)
                 .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-                .inner_margin(egui::Margin::same(10))
+                .inner_margin(egui::Margin::same(12))
                 .show(ui, |ui| {
                     ui.label(
                         RichText::new("Plan")
@@ -3036,7 +3036,7 @@ impl Cabin {
     }
 
     pub(super) fn ui_composer_stack(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(6.0);
+        ui.add_space(8.0);
         ui.vertical_centered_justified(|ui| {
             // The dock can leave less than the window-based column; centring
             // a wider column would push it under the rail.
@@ -3173,7 +3173,7 @@ impl Cabin {
                                     self.send_chat(t);
                                 }
                             }
-                            ui.add_space(6.0);
+                            ui.add_space(8.0);
                         } else {
                             self.slash_pick = 0;
                             self.slash_filter_n = 0;
@@ -3186,7 +3186,7 @@ impl Cabin {
                     ComposerStackSlot::SavedFile => self.ui_saved_file_card(ui),
                     ComposerStackSlot::Chips if !self.cfg.suggestions => {}
                     ComposerStackSlot::Chips => {
-                        ui.add_space(6.0);
+                        ui.add_space(8.0);
                         // While a reply streams the row's chips are for the
                         // last turn, so the row waits for the turn to end.
                         let chips = if self.thinking_here() {

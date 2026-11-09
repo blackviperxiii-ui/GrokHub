@@ -22,7 +22,7 @@
 - Disk work in `Engine::record` (`recording_never_touches_the_disk`), or a longer `Subject` or higher cap (`the_files_stay_inside_the_disk_budget`).
 
 ## What depends on it
-- Writers: `log_chips_shown`, `log_chip_outcome`, `append_signal`, `append_run`, `card_taste::Taste::record`. Both apps call `start` at launch and `flush` on exit. Reader: the learned list (`view.rs`).
+- Writers: `log_chips_shown`, `log_chip_outcome`, `append_signal`, `append_run`, `remember_reply_pick`, `card_taste::Taste::record`. Both apps call `start` at launch and `flush` on exit. Readers: the learned list (`view.rs`) and the plan reply row (`reply_chips.rs`).
 - The ladder reads `ACT_AT` and `SUGGEST_AT` from `crates/grokhub-core/src/autotune/plan.rs`, so auto setup and the engine can't drift apart.
 
 ## Non-obvious

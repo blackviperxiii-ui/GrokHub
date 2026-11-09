@@ -225,7 +225,7 @@ impl Cabin {
             self.save_radar();
         }
         if !on {
-            ui.add_space(6.0);
+            ui.add_space(8.0);
             return;
         }
         ui.indent("pulse-release-radar", |ui| {
@@ -247,7 +247,7 @@ impl Cabin {
                 crate::cards::help_text(ui, &self.sources.radar.note);
             }
         });
-        ui.add_space(6.0);
+        ui.add_space(8.0);
     }
 }
 

@@ -1215,8 +1215,8 @@ fn projects_rename_row_lines_up_with_cancel() {
         "Name field is the pill height: {row}"
     );
     assert!(
-        row.contains("Margin::symmetric(") && row.contains("10, 6"),
-        "Name field has ~10px left padding: {row}"
+        row.contains("Margin::symmetric(") && row.contains("12, 8"),
+        "Name field has 12px left padding, on the spacing scale: {row}"
     );
     assert!(
         row.contains("crate::theme::elevated()"),

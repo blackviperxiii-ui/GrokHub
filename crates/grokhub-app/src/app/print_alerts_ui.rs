@@ -335,7 +335,7 @@ impl Cabin {
                 self.start_print_discover();
             }
         });
-        ui.add_space(6.0);
+        ui.add_space(8.0);
         let mut ledger = load_ledger();
         let keys: Vec<String> = ledger.printers.keys().cloned().collect();
         if keys.is_empty() {

@@ -710,9 +710,9 @@ impl Cabin {
         let mut stop = false;
         if let Some(live) = self.screen_rec.as_ref() {
             let line = sr::indicator_line(live.started.elapsed().as_secs().min(sr::MAX_SECS));
-            ui.add_space(6.0);
+            ui.add_space(8.0);
             stop = crate::cards::danger_pill(ui, "Stop");
-            ui.add_space(6.0);
+            ui.add_space(8.0);
             ui.label(
                 RichText::new(line)
                     .size(crate::theme::FONT_META)
@@ -811,13 +811,13 @@ impl Cabin {
                     .fill(crate::theme::elevated())
                     .corner_radius(crate::theme::CHROME_RADIUS)
                     .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-                    .inner_margin(egui::Margin::same(10))
+                    .inner_margin(egui::Margin::same(12))
                     .show(ui, |ui| {
                         ui.set_max_width(360.0);
                         ui.label(RichText::new(&title).size(13.0).color(crate::theme::fg()));
                         ui.add_space(4.0);
                         ui.label(RichText::new(&body).size(12.0).color(crate::theme::muted()));
-                        ui.add_space(6.0);
+                        ui.add_space(8.0);
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 8.0;
                             match kind {

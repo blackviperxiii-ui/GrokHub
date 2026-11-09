@@ -5640,7 +5640,7 @@ impl Cabin {
                     .size(crate::theme::FONT_TIP)
                     .color(crate::theme::muted()),
                 );
-                ui.add_space(6.0);
+                ui.add_space(8.0);
                 egui::ScrollArea::vertical()
                     .id_salt("slash-parity")
                     .max_height(280.0)

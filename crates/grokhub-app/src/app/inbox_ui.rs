@@ -353,7 +353,7 @@ impl Cabin {
         ui.scope(|ui| {
             ui.multiply_opacity(t);
             for row in &rows {
-                ui.add_space(6.0);
+                ui.add_space(8.0);
                 if let Some(a) = paint_row(ui, row) {
                     act = Some((row.key, a));
                 }
@@ -411,7 +411,7 @@ fn paint_row(ui: &mut egui::Ui, row: &InboxRow) -> Option<Option<bool>> {
         .fill(egui::Color32::TRANSPARENT)
         .corner_radius(crate::theme::CHROME_RADIUS)
         .stroke(stroke)
-        .inner_margin(egui::Margin::same(10))
+        .inner_margin(egui::Margin::same(12))
         .show(ui, |ui| {
             ui.set_min_width(inner);
             ui.set_max_width(inner);
@@ -440,7 +440,7 @@ fn paint_row(ui: &mut egui::Ui, row: &InboxRow) -> Option<Option<bool>> {
             if words.clicked() || from.clicked() {
                 out = Some(None);
             }
-            ui.add_space(6.0);
+            ui.add_space(8.0);
             ui.horizontal(|ui| {
                 let primary = if row.key == InboxKey::Elicit {
                     "Open"

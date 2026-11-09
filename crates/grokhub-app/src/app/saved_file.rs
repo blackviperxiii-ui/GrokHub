@@ -174,7 +174,7 @@ impl Cabin {
         let Some(saved) = self.saved_file.clone() else {
             return;
         };
-        ui.add_space(6.0);
+        ui.add_space(8.0);
         let mut close = false;
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;

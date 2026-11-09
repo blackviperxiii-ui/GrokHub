@@ -147,7 +147,7 @@ impl Cabin {
                     });
                 } else {
                     ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 6.0;
+                        ui.spacing_mut().item_spacing.x = 8.0;
                         if crate::cards::ghost_pill(ui, "Export") {
                             act = Some(NativeHistAct::Export(row.id.clone()));
                         }
@@ -160,7 +160,7 @@ impl Cabin {
                     });
                 }
             }
-            ui.add_space(6.0);
+            ui.add_space(8.0);
         }
         if matches!(act, Some(NativeHistAct::SaveRename(_, _))) {
             draft = RenameDraft::default();

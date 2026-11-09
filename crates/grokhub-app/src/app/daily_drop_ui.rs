@@ -130,7 +130,7 @@ impl Cabin {
             changed = true;
         }
         if self.cfg.daily_drop.enabled {
-            ui.add_space(6.0);
+            ui.add_space(8.0);
             for kind in SourceKind::ALL {
                 let mut source_on = self.cfg.daily_drop.on(kind);
                 if ui

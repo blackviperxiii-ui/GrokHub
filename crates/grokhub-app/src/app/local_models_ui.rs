@@ -264,7 +264,7 @@ impl Cabin {
             self.set_news_on(on);
         }
         if !on {
-            ui.add_space(6.0);
+            ui.add_space(8.0);
             return;
         }
         ui.indent("pulse-local-models", |ui| {
@@ -280,7 +280,7 @@ impl Cabin {
                 crate::cards::help_text(ui, &self.sources.models.note.clone());
             }
         });
-        ui.add_space(6.0);
+        ui.add_space(8.0);
     }
 }
 

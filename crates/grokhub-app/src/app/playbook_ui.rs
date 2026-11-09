@@ -139,7 +139,7 @@ impl Cabin {
             ui,
             "How the agent works through a task: look first, then safe steps, then risky ones, with a backup, a check and a way back. Risky steps still ask you first; a playbook never changes an approval.",
         );
-        ui.add_space(10.0);
+        ui.add_space(12.0);
         if self.playbooks.draft.is_some() {
             self.ui_playbook_editor(ui);
             ui.add_space(16.0);
@@ -152,7 +152,7 @@ impl Cabin {
             if let Some(act) = paint_playbook_card(ui, l) {
                 act_on = Some((act, l.playbook.id.clone()));
             }
-            ui.add_space(10.0);
+            ui.add_space(12.0);
         }
         if let Some((act, id)) = act_on {
             self.act_on_playbook(act, &id);
@@ -169,14 +169,14 @@ impl Cabin {
             .fill(crate::theme::surface())
             .corner_radius(12.0)
             .stroke(egui::Stroke::new(1.0_f32, crate::theme::fg()))
-            .inner_margin(egui::Margin::same(14))
+            .inner_margin(egui::Margin::same(16))
             .show(ui, |ui| {
                 crate::cards::section_label(ui, &format!("Edit {}", draft.name));
                 crate::cards::help_text(
                     ui,
                     &format!("Saved as playbooks/<id>.toml in the app's settings folder. Steps go look-only, then safe, then risky. A step that deletes, sends, pays, touches sign-ins or can't be undone must be risky, and commands {} never runs are refused.", grokhub_core::brand::product_name()),
                 );
-                ui.add_space(6.0);
+                ui.add_space(8.0);
                 ui.add(
                     egui::TextEdit::multiline(&mut draft.text)
                         .code_editor()
@@ -186,7 +186,7 @@ impl Cabin {
                 ui.add_space(8.0);
                 if !draft.error.is_empty() {
                     ui.label(RichText::new(&draft.error).size(crate::theme::FONT_META).color(crate::theme::offline()));
-                    ui.add_space(6.0);
+                    ui.add_space(8.0);
                 }
                 ui.horizontal(|ui| {
                     if crate::cards::white_pill(ui, "Save") {
@@ -238,7 +238,7 @@ fn paint_playbook_card(ui: &mut egui::Ui, l: &Loaded) -> Option<PlaybookAct> {
                     .size(crate::theme::FONT_META)
                     .color(crate::theme::muted()),
             );
-            ui.add_space(6.0);
+            ui.add_space(8.0);
             ui.horizontal(|ui| {
                 let edit = if l.source == Source::Shipped {
                     "View / Edit"

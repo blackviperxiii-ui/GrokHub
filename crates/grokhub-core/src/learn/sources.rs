@@ -103,6 +103,36 @@ pub fn chip_outcome(surface: &str, key: &str, picked: bool, at_ms: u64) -> Vec<S
     out
 }
 
+/// The plan replies every plan card offers. "More on step N" is left out:
+/// it shows only when the plan has steps.
+pub const PLAN_REPLIES: [&str; 5] = ["go", "more", "change", "go-but", "not-now"];
+
+/// The subject for a reply chip's key (`plan:go` is `reply:plan/go`). `None`
+/// for a question's option, whose key is the agent's own words.
+pub fn reply_subject(key: &str) -> Option<Subject> {
+    let id = key.strip_prefix("plan:")?;
+    Subject::new("reply", &format!("plan/{id}"))
+}
+
+/// The person answered a waiting plan with the reply chip `key`: one pick
+/// for it, and one pass for each other reply that is always on the row.
+pub fn reply_picked(key: &str, at_ms: u64) -> Vec<Signal> {
+    let mut out = Vec::new();
+    let Some(picked) = reply_subject(key) else {
+        return out;
+    };
+    for other in PLAN_REPLIES {
+        match reply_subject(&format!("plan:{other}")) {
+            Some(subject) if subject != picked => {
+                out.push(Signal::new(at_ms, Kind::Ignored, subject));
+            }
+            _ => {}
+        }
+    }
+    out.push(Signal::new(at_ms, Kind::Picked, picked));
+    out
+}
+
 fn card_kind(event: CardEvent) -> Kind {
     match event {
         CardEvent::Opened | CardEvent::FollowUp => Kind::Used,

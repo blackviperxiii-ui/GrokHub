@@ -19,15 +19,17 @@
 //! call site. `public_only` dials through [`crate::ssrf::public_only_resolve`],
 //! which refuses private addresses and every host while Offline only is on.
 
+use std::cell::RefCell;
 use std::fmt;
 use std::io::{self, Read};
 use std::net::{SocketAddr, ToSocketAddrs};
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use ureq::http::{Method, Uri};
 use ureq::unversioned::resolver::{ResolvedSocketAddrs, Resolver};
 use ureq::unversioned::transport::{
-    ConnectionDetails, Connector, DefaultConnector, NextTimeout, Transport,
+    Buffers, ConnectionDetails, Connector, DefaultConnector, NextTimeout, Transport,
 };
 
 /// Bytes of an error answer's body kept on [`Error::Status`].
@@ -245,12 +247,151 @@ impl Connector<()> for TagConnect {
         details: &ConnectionDetails,
         chained: Option<()>,
     ) -> Result<Option<Self::Out>, ureq::Error> {
-        self.0.connect(details, chained).map_err(|e| match e {
+        let open = self.0.connect(details, chained).map_err(|e| match e {
             ureq::Error::Timeout(_)
             | ureq::Error::ConnectProxyFailed(_)
             | ureq::Error::Other(_) => e,
             other => Fail::Connect(other).into_ureq(),
-        })
+        })?;
+        Ok(open.map(|inner| Box::new(StopAware::new(inner)) as Box<dyn Transport>))
+    }
+}
+
+/// How often a wait on the network looks at the Stop switch.
+pub const STOP_POLL: Duration = Duration::from_millis(100);
+
+/// The text of the error a call ends with when its Stop switch is pressed.
+pub const STOPPED: &str = "stopped";
+
+/// A Stop switch for the calls made inside [`with_stop`]: once it reads
+/// pressed, a call waiting on its answer, or a body read waiting on the next
+/// bytes, ends within [`STOP_POLL`] and the connection is closed, never kept
+/// for reuse. A closed connection is how the server learns to stop: a model
+/// server that keeps generating for a reader that left still bills for it,
+/// and a local model keeps the GPU busy.
+#[derive(Clone)]
+pub struct StopSwitch(Arc<dyn Fn() -> bool + Send + Sync>);
+
+impl StopSwitch {
+    /// A switch that reads `pressed` each time a wait looks.
+    pub fn new(pressed: impl Fn() -> bool + Send + Sync + 'static) -> Self {
+        Self(Arc::new(pressed))
+    }
+
+    fn pressed(&self) -> bool {
+        (self.0)()
+    }
+}
+
+impl fmt::Debug for StopSwitch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("StopSwitch").field(&self.pressed()).finish()
+    }
+}
+
+thread_local! {
+    static STOP: RefCell<Option<StopSwitch>> = const { RefCell::new(None) };
+}
+
+/// Run `f` with `stop` as the Stop switch of every call it makes on this
+/// thread. A body taken with [`Response::into_reader`] inside `f` keeps the
+/// switch, so a reader thread that reads it later still stops.
+pub fn with_stop<R>(stop: &StopSwitch, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<StopSwitch>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let before = self.0.take();
+            STOP.with(|s| *s.borrow_mut() = before);
+        }
+    }
+    let _restore = Restore(STOP.with(|s| s.replace(Some(stop.clone()))));
+    f()
+}
+
+fn current_stop() -> Option<StopSwitch> {
+    STOP.with(|s| s.borrow().clone())
+}
+
+/// True for the error a call or body read ends with once its switch is pressed.
+pub fn is_stopped(e: &io::Error) -> bool {
+    e.kind() == io::ErrorKind::ConnectionAborted && e.to_string() == STOPPED
+}
+
+fn stopped() -> ureq::Error {
+    ureq::Error::Io(io::Error::new(io::ErrorKind::ConnectionAborted, STOPPED))
+}
+
+/// Every connection, wrapped: with no switch on the thread that waits, each
+/// call goes straight through. With one, a wait is cut into [`STOP_POLL`]
+/// slices with the switch read between them, inside the same overall and
+/// per-read limits.
+#[derive(Debug)]
+struct StopAware {
+    inner: Box<dyn Transport>,
+    stopped: bool,
+}
+
+impl StopAware {
+    fn new(inner: Box<dyn Transport>) -> Self {
+        Self {
+            inner,
+            stopped: false,
+        }
+    }
+}
+
+impl Transport for StopAware {
+    fn buffers(&mut self) -> &mut dyn Buffers {
+        self.inner.buffers()
+    }
+
+    fn transmit_output(&mut self, amount: usize, timeout: NextTimeout) -> Result<(), ureq::Error> {
+        if current_stop().is_some_and(|s| s.pressed()) {
+            self.stopped = true;
+            return Err(stopped());
+        }
+        self.inner.transmit_output(amount, timeout)
+    }
+
+    fn await_input(&mut self, timeout: NextTimeout) -> Result<bool, ureq::Error> {
+        let Some(stop) = current_stop() else {
+            return self.inner.await_input(timeout);
+        };
+        let limit = timeout.for_read();
+        let started = Instant::now();
+        loop {
+            if stop.pressed() {
+                self.stopped = true;
+                return Err(stopped());
+            }
+            let (slice, last) = if limit.after.is_not_happening() {
+                (STOP_POLL, false)
+            } else {
+                let left = limit.after.saturating_sub(started.elapsed());
+                if left.is_zero() {
+                    return Err(ureq::Error::Timeout(limit.reason));
+                }
+                (left.min(STOP_POLL), left <= STOP_POLL)
+            };
+            let next = NextTimeout {
+                after: slice.into(),
+                reason: limit.reason,
+                per_read: None,
+                per_write: timeout.per_write,
+            };
+            match self.inner.await_input(next) {
+                Err(ureq::Error::Timeout(_)) if !last => continue,
+                other => return other,
+            }
+        }
+    }
+
+    fn is_open(&mut self) -> bool {
+        !self.stopped && self.inner.is_open()
+    }
+
+    fn is_tls(&self) -> bool {
+        self.inner.is_tls()
     }
 }
 
@@ -543,8 +684,12 @@ impl Response {
 
     /// The body, unbounded: cap it with `Read::take`. A read that times out
     /// is `io::ErrorKind::TimedOut`.
+    /// A [`with_stop`] switch around this call is kept by the reader.
     pub fn into_reader(self) -> Box<dyn Read + Send + Sync + 'static> {
-        Box::new(BodyReader(self.0.into_body().into_reader()))
+        Box::new(BodyReader {
+            body: self.0.into_body().into_reader(),
+            stop: current_stop(),
+        })
     }
 
     /// The body as text (invalid UTF-8 replaced), refused past 10 MB.
@@ -575,20 +720,40 @@ impl Response {
 }
 
 /// ureq 3's body reader, with a timeout (any of ureq's, wrapped in an
-/// `io::Error`) read back as `TimedOut` with ureq 2's text.
-struct BodyReader(ureq::BodyReader<'static>);
+/// `io::Error`) read back as `TimedOut` with ureq 2's text, and a pressed
+/// Stop switch as [`is_stopped`]. The switch the body was taken under goes
+/// with it to whichever thread reads it.
+struct BodyReader {
+    body: ureq::BodyReader<'static>,
+    stop: Option<StopSwitch>,
+}
 
 impl Read for BodyReader {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.0.read(buf).map_err(|e| {
-            let timed_out = e
+        let read = match &self.stop {
+            Some(stop) => with_stop(stop, || self.body.read(buf)),
+            None => self.body.read(buf),
+        };
+        // A body that runs to the close of the connection ends when Stop
+        // hangs up, which reads as a clean end. Name it as the Stop it was.
+        if matches!(read, Ok(0))
+            && !buf.is_empty()
+            && self.stop.as_ref().is_some_and(StopSwitch::pressed)
+        {
+            return Err(io::Error::new(io::ErrorKind::ConnectionAborted, STOPPED));
+        }
+        read.map_err(|e| {
+            let inner = e
                 .get_ref()
-                .and_then(|inner| inner.downcast_ref::<ureq::Error>())
-                .is_some_and(|inner| matches!(inner, ureq::Error::Timeout(_)));
-            if timed_out {
-                io::Error::new(io::ErrorKind::TimedOut, "timed out reading response")
-            } else {
-                e
+                .and_then(|inner| inner.downcast_ref::<ureq::Error>());
+            match inner {
+                Some(ureq::Error::Timeout(_)) => {
+                    io::Error::new(io::ErrorKind::TimedOut, "timed out reading response")
+                }
+                Some(ureq::Error::Io(io)) if is_stopped(io) => {
+                    io::Error::new(io::ErrorKind::ConnectionAborted, STOPPED)
+                }
+                _ => e,
             }
         })
     }
@@ -1786,5 +1951,170 @@ mod tests {
             "{err:?}"
         );
         assert!(listener.accept().is_err(), "nothing may connect");
+    }
+
+    /// A switch pressed from another thread, the way Stop presses it.
+    fn switch_pressed_after(wait: Duration) -> StopSwitch {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let pressed = Arc::new(AtomicBool::new(false));
+        let later = pressed.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(wait);
+            later.store(true, Ordering::SeqCst);
+        });
+        StopSwitch::new(move || pressed.load(Ordering::SeqCst))
+    }
+
+    /// How long the server waited, after the head, for the client to hang up.
+    fn wait_for_hang_up(sock: &mut std::net::TcpStream) -> Option<Duration> {
+        sock.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let started = Instant::now();
+        let mut bytes = [0u8; 256];
+        loop {
+            match sock.read(&mut bytes) {
+                Ok(0) => return Some(started.elapsed()),
+                Ok(_) => {}
+                Err(e) if e.kind() == io::ErrorKind::ConnectionReset => {
+                    return Some(started.elapsed())
+                }
+                Err(_) => return None,
+            }
+        }
+    }
+
+    /// Stop while the model is still thinking, before any answer: the call
+    /// ends and the socket closes, so the server stops (loopback only).
+    #[test]
+    fn stop_ends_a_wait_for_the_answer_and_hangs_up() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            read_head(&mut sock);
+            wait_for_hang_up(&mut sock)
+        });
+        let stop = switch_pressed_after(Duration::from_millis(300));
+        let started = Instant::now();
+        let err = with_stop(&stop, || {
+            agent(Opts::default())
+                .post(&format!("http://127.0.0.1:{port}/v1/responses"))
+                .send_string("{}")
+        })
+        .err()
+        .expect("no answer came, so the call fails");
+        let took = started.elapsed();
+        match &err {
+            Error::Transport {
+                kind: TransportKind::Io,
+                message,
+            } => {
+                assert!(message.ends_with("Network Error: stopped"), "{message}")
+            }
+            other => panic!("not a Stop: {other:?}"),
+        }
+        assert!(
+            took < Duration::from_secs(2),
+            "Stop ended the wait: {took:?}"
+        );
+        let hung_up = server.join().unwrap().expect("the client hung up");
+        assert!(hung_up < Duration::from_secs(2), "{hung_up:?}");
+    }
+
+    /// Stop while a streamed body has gone quiet, read on its own thread as
+    /// the model clients read it: the read ends and the socket closes.
+    #[test]
+    fn stop_ends_a_quiet_body_read_on_another_thread_and_hangs_up() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            read_head(&mut sock);
+            sock.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: keep-alive\r\n\r\ndata: 1\n\n",
+            )
+            .unwrap();
+            wait_for_hang_up(&mut sock)
+        });
+        let stop = switch_pressed_after(Duration::from_millis(400));
+        let started = Instant::now();
+        let body = with_stop(&stop, || {
+            agent(Opts::default())
+                .get(&format!("http://127.0.0.1:{port}/v1/responses"))
+                .call()
+                .unwrap()
+                .into_reader()
+        });
+        let reader = std::thread::spawn(move || {
+            let mut lines = io::BufReader::new(body).lines();
+            let first = lines.next().unwrap().unwrap();
+            let err = loop {
+                match lines.next() {
+                    Some(Ok(_)) => {}
+                    Some(Err(e)) => break e,
+                    None => panic!("the stream ended with no Stop"),
+                }
+            };
+            (first, err)
+        });
+        let (first, err) = reader.join().unwrap();
+        let took = started.elapsed();
+        assert_eq!(first, "data: 1");
+        assert!(is_stopped(&err), "{err:?}");
+        assert!(
+            took < Duration::from_secs(2),
+            "Stop ended the read: {took:?}"
+        );
+        let hung_up = server.join().unwrap().expect("the client hung up");
+        assert!(hung_up < Duration::from_secs(2), "{hung_up:?}");
+    }
+
+    /// A switch that is never pressed changes nothing: the answer reads in
+    /// full and the per-read limit still ends a stall at its own time.
+    #[test]
+    fn an_unpressed_switch_keeps_answers_and_read_limits_as_they_were() {
+        let (port, server) = serve(vec![
+            "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello".into(),
+        ]);
+        let idle = StopSwitch::new(|| false);
+        let text = with_stop(&idle, || {
+            agent(Opts::default())
+                .get(&format!("http://127.0.0.1:{port}/a"))
+                .call()
+                .unwrap()
+                .into_string()
+                .unwrap()
+        });
+        assert_eq!(text, "hello");
+        server.join().unwrap();
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let quiet = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            read_head(&mut sock);
+            sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n")
+                .unwrap();
+            std::thread::sleep(Duration::from_secs(3));
+        });
+        let started = Instant::now();
+        let err = with_stop(&idle, || {
+            let mut body = agent(Opts {
+                read: Some(Duration::from_millis(450)),
+                ..Opts::default()
+            })
+            .get(&format!("http://127.0.0.1:{port}/b"))
+            .call()
+            .unwrap()
+            .into_reader();
+            body.read(&mut [0u8; 16]).unwrap_err()
+        });
+        let took = started.elapsed();
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut, "{err}");
+        assert!(
+            took >= Duration::from_millis(450),
+            "not before the limit: {took:?}"
+        );
+        assert!(took < Duration::from_millis(1500), "at the limit: {took:?}");
+        quiet.join().unwrap();
     }
 }

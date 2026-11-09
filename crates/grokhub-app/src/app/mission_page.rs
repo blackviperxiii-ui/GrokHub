@@ -15,7 +15,6 @@ mod goals;
 
 pub(super) use goals::goal_summary;
 
-const PAGE_PAD: f32 = 24.0;
 const GAP: f32 = 16.0;
 const UP_NEXT_GAMES: usize = 3;
 /// Width of the level bar in the header.
@@ -99,7 +98,7 @@ impl Cabin {
         let mission = self.dock_mission(ui.ctx());
         egui::Frame::NONE
             .fill(crate::theme::bg())
-            .inner_margin(egui::Margin::same(PAGE_PAD as i8))
+            .inner_margin(egui::Margin::same(crate::theme::page_margin(ui.ctx()) as i8))
             .show(ui, |ui| {
                 ui.set_min_size(ui.available_size());
                 // Same width as the checklist, so the XP bar sits above its right edge.
@@ -149,7 +148,7 @@ impl Cabin {
                         egui::vec2(XP_W.min(ui.available_width()), 48.0),
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
-                            ui.add_space(14.0);
+                            ui.add_space(16.0);
                             paint_level_bar(ui, &xp, true);
                         },
                     );
@@ -198,7 +197,7 @@ fn objective_rows(ui: &mut egui::Ui, m: &MissionView) {
         egui::Frame::NONE
             .fill(fill)
             .corner_radius(6.0)
-            .inner_margin(egui::Margin::symmetric(10, 8))
+            .inner_margin(egui::Margin::symmetric(12, 8))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {

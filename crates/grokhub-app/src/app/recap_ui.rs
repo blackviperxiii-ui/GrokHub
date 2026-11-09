@@ -98,7 +98,7 @@ pub(super) fn paint_recap_card(ui: &mut egui::Ui, recap: &Recap, steps: &[ToolRo
     let look = recipe::look(recipe::Part::Card, recipe::State::Accent);
     let avail = grokhub_core::clamp_row_width(ui.available_width().min(ui.max_rect().width()));
     let w = crate::markdown::bubble_width(avail);
-    ui.add_space(6.0);
+    ui.add_space(8.0);
     egui::Frame::NONE
         .fill(look.fill)
         .stroke(look.stroke)

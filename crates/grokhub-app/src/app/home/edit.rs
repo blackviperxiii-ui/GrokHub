@@ -249,7 +249,7 @@ impl Cabin {
                                                 .size(crate::theme::TYPE_CAPTION)
                                                 .color(crate::theme::muted()),
                                         );
-                                        ui.add_space(6.0);
+                                        ui.add_space(8.0);
                                         for slot in [
                                             SlotId::Large,
                                             SlotId::Medium1,
@@ -284,7 +284,7 @@ impl Cabin {
                                                 });
                                             }
                                         }
-                                        ui.add_space(10.0);
+                                        ui.add_space(12.0);
                                         ui.label(
                                             RichText::new("PRESETS")
                                                 .size(crate::theme::TYPE_CAPTION)
@@ -347,7 +347,7 @@ impl Cabin {
                                                 }
                                             }
                                         });
-                                        ui.add_space(6.0);
+                                        ui.add_space(8.0);
                                         egui::ScrollArea::vertical()
                                             .id_salt("home-edit-catalog")
                                             .show(ui, |ui| {
