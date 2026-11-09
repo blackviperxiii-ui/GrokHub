@@ -298,6 +298,12 @@ impl Cabin {
                 }
             }
             Slash::LearnReflect => self.run_reflect(),
+            Slash::Learned(rest) => {
+                let text = grokhub_core::learn::view::run(&rest, grokhub_core::now_ms());
+                self.live_mut()
+                    .push(("assistant".into(), mark_slash_result(&text)));
+                self.persist();
+            }
             Slash::Update => self.queue_update(),
             Slash::Help => {
                 self.live_mut()

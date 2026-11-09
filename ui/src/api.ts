@@ -2070,6 +2070,38 @@ export function resetPlaybook(id: string): Promise<PlaybookPage> {
   return invoke<PlaybookPage>("reset_playbook", { id });
 }
 
+/** Settings → Privacy & data → What the app learned (grokhub_core::learn::view). */
+export type LearnedStage = "watching" | "suggesting" | "acting" | "measuring" | "wrong";
+
+export interface LearnedRow {
+  /** The belief's id, e.g. "card:suggestion". Forget and That's wrong take it. */
+  key: string;
+  title: string;
+  says: string;
+  /** How many times it was seen, after fading. */
+  evidence: number;
+  /** 0 to 100. */
+  sure: number;
+  stage: LearnedStage;
+  lastMs: number;
+}
+
+export interface LearnedView {
+  rows: LearnedRow[];
+  /** Single quick chips counted but not listed (their ids are hashes). */
+  singleChips: number;
+}
+
+export type LearnedAct = { kind: "forget"; key: string } | { kind: "wrong"; key: string } | { kind: "forgetAll" };
+
+export function getLearned(): Promise<LearnedView> {
+  return invoke<LearnedView>("get_learned");
+}
+
+export function learnedAct(act: LearnedAct): Promise<LearnedView> {
+  return invoke<LearnedView>("learned_act", { act });
+}
+
 /** Settings → Pulse → Interests (src-tauri/src/interests.rs). */
 export interface InterestTopic {
   topic: string;

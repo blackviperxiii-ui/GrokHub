@@ -23,6 +23,7 @@ pub mod ladder;
 pub mod signal;
 pub mod sources;
 pub mod store;
+pub mod view;
 
 #[cfg(test)]
 mod tests;

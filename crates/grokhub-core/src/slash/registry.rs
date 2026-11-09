@@ -74,6 +74,7 @@ pub const SLASH_REGISTRY: &[SlashEntry] = &[
     cmds::views::DASHBOARD,
     cmds::views::STATUS,
     cmds::views::LEARN,
+    cmds::views::LEARNED,
     cmds::views::HOST,
     cmds::views::HEALTH,
     cmds::views::BRIEF,

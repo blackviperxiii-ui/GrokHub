@@ -10,10 +10,10 @@
 ## Key files
 - `crates/grokhub-core/src/learn/mod.rs`: `Engine` (`record`, `tick`, `flush`, `forget`, `mark_wrong`, `forget_all`), `BELIEF_SAVE_MS`, `UNSAVED_MAX`.
 - `crates/grokhub-core/src/learn/hub.rs` and `sources.rs`: `start`, `note_all`, `flush`; `chips_shown`, `chip_outcome`, `card`, `run`.
+- `crates/grokhub-core/src/learn/view.rs`: `view` (beliefs as lines), `text`, `run` (the cabin's `/learned`), `act` (the desktop app's buttons). `ui/src/Learned.tsx` shows them in Settings, Privacy & data.
 - `crates/grokhub-core/src/learn/signal.rs`: `Subject`, `Kind`, `Signal`, `Stream`, `FLUSH_AT`, `FLUSH_MS`.
 - `crates/grokhub-core/src/learn/belief.rs`: `Beliefs`, `Shape`, `Standing`, `HALF_LIFE_MS`, `BELIEF_CAP`.
-- `crates/grokhub-core/src/learn/ladder.rs`: `step`, `Undo`, `ACT_RESTORE_AT`, `RESTORE_MIN_EVIDENCE`.
-- `crates/grokhub-core/src/learn/store.rs`: `append_signals`, `hold_lock`, `SIGNAL_BYTES`, `DISK_BUDGET`, `disk_used`.
+- `crates/grokhub-core/src/learn/ladder.rs` and `store.rs`: `step`, `Undo`, `ACT_RESTORE_AT`, `RESTORE_MIN_EVIDENCE`; `append_signals`, `hold_lock`, `SIGNAL_BYTES`, `DISK_BUDGET`.
 
 ## Change recipe
 - A new learner records signals and reads beliefs: no new log file or confidence rule. A new source is a pure function in `sources.rs` called from the log's own writer.
@@ -22,7 +22,7 @@
 - Disk work in `Engine::record` (`recording_never_touches_the_disk`), or a longer `Subject` or higher cap (`the_files_stay_inside_the_disk_budget`).
 
 ## What depends on it
-- Writers: `log_chips_shown`, `log_chip_outcome`, `append_signal`, `append_run`. Both apps call `start` at launch and `flush` on exit. No reader yet.
+- Writers: `log_chips_shown`, `log_chip_outcome`, `append_signal`, `append_run`. Both apps call `start` at launch and `flush` on exit. Reader: the learned list (`view.rs`).
 - The ladder reads `ACT_AT` and `SUGGEST_AT` from `crates/grokhub-core/src/autotune/plan.rs`, so auto setup and the engine can't drift apart.
 
 ## Non-obvious

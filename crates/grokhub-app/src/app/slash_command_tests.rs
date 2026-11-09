@@ -1163,3 +1163,29 @@ fn export_puts_the_whole_chat_in_the_chats_folder() {
     let _ = std::fs::remove_dir_all(&desktop);
     quiet.settle();
 }
+
+#[test]
+fn learned_answers_in_the_chat_and_explains_a_bad_line() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("learned-slash");
+    unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
+    let mut cabin = Cabin::quiet_for_test();
+    // No test starts the learning engine, so there is nothing to list.
+    cabin.run_slash_line("/learned");
+    let last = cabin.messages.last().expect("an answer").clone();
+    assert_eq!(last.0, "assistant");
+    assert!(
+        last.1.contains(grokhub_core::learn::view::NOTHING_YET),
+        "{}",
+        last.1
+    );
+    cabin.run_slash_line("/learned forget everything please");
+    let last = cabin.messages.last().expect("an answer").clone();
+    assert!(
+        last.1.contains(grokhub_core::learn::view::USAGE),
+        "{}",
+        last.1
+    );
+    assert_eq!(cabin.messages.len(), 2);
+    unsafe { std::env::remove_var("GROKHUB_CONFIG") };
+}

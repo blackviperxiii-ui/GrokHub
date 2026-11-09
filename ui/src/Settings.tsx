@@ -26,6 +26,7 @@ import { LocalAi } from "./LocalAi";
 import { Permissions } from "./Permissions";
 import { Personality } from "./Personality";
 import { Playbooks } from "./Playbooks";
+import { Learned } from "./Learned";
 import { Privacy } from "./Privacy";
 import {
   CATEGORY_LABELS,
@@ -271,6 +272,7 @@ export function Settings({
             {section === "playbooks" && <Playbooks />}
             {section === "permissions" && <Permissions />}
             {section === "privacy" && <Privacy />}
+            {section === "privacy" && <Learned />}
             {section === "background" && <Background />}
             {section === "autoSetup" && <AutoSetupPage />}
             {section === "pulse" && caps.pulse && <Interests />}
