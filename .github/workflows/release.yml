@@ -394,6 +394,10 @@ jobs:
           done
           rm -f "$key"
           ./scripts/shell-update-manifest.sh dist-release "$TAG" "$GITHUB_REPOSITORY"
+      # The model catalog ships with every release, covered by the signed
+      # SHA256SUMS, so older apps pick up new models (catalog_update.rs).
+      - name: Ship the model catalog
+        run: cp crates/grokhub-core/data/local_catalog.toml dist-release/local_catalog.toml
       - name: Write SHA256SUMS
         working-directory: dist-release
         run: |

@@ -195,6 +195,10 @@ pub struct LocalModel {
 
 #[derive(Deserialize)]
 struct CatalogFile {
+    /// Raised with every catalog change, so a newer signed catalog from a
+    /// release can replace the one built in (`catalog_update`).
+    #[serde(default)]
+    version: u32,
     model: Vec<CatalogRow>,
 }
 
@@ -324,16 +328,37 @@ fn to_model(r: CatalogRow) -> Option<LocalModel> {
     })
 }
 
-/// Every catalog row, biggest first. Parsed once; the strings live for the run.
-/// A catalog that fails to parse lists nothing (a test pins that it parses).
+/// A whole catalog: its version and every row, or `None` when it doesn't
+/// parse, any row doesn't load, or it has no default chat model. A catalog
+/// from outside the app is used only whole.
+pub(crate) fn parse_catalog(text: &str) -> Option<(u32, Vec<LocalModel>)> {
+    let file = toml::from_str::<CatalogFile>(text).ok()?;
+    let version = file.version;
+    let rows = file
+        .model
+        .into_iter()
+        .map(to_model)
+        .collect::<Option<Vec<_>>>()?;
+    rows.iter()
+        .any(|m| m.is_chat() && !m.optional)
+        .then_some((version, rows))
+}
+
+/// The version of the catalog built into this app.
+pub fn bundled_version() -> u32 {
+    parse_catalog(CATALOG_TOML).map_or(0, |(v, _)| v)
+}
+
+/// Every catalog row, biggest first. Parsed once; the strings live for the
+/// run. A newer signed catalog saved from a release wins over the built-in
+/// one; anything else uses the built-in one (a test pins that it parses).
 pub fn local_models() -> &'static [LocalModel] {
     static MODELS: LazyLock<Vec<LocalModel>> = LazyLock::new(|| {
-        toml::from_str::<CatalogFile>(CATALOG_TOML)
-            .map(|f| f.model)
+        crate::catalog_update::saved(&crate::paths::config_dir())
+            .and_then(|text| parse_catalog(&text))
+            .or_else(|| parse_catalog(CATALOG_TOML))
+            .map(|(_, rows)| rows)
             .unwrap_or_default()
-            .into_iter()
-            .filter_map(to_model)
-            .collect()
     });
     &MODELS
 }

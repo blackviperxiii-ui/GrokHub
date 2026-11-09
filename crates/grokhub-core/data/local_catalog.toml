@@ -37,6 +37,10 @@
 # Only the main GGUF downloads; the repos' vision projector
 # (`mmproj-model-bf16.gguf`) isn't fetched yet, so no row claims vision.
 
+# Raise with every change to this file: a release ships it signed, and an
+# older app swaps in a newer one (`catalog_update.rs`).
+version = 2
+
 [[model]]
 id = "gemma-4-31b-it-abliterated-q4_k"
 name = "Gemma 4 31B"

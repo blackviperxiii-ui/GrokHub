@@ -1,0 +1,20 @@
+# A test catalog: one row, nothing real.
+version = 99
+
+[[model]]
+id = "test-chat-q4_k"
+name = "Test Chat"
+repo = "example/test-chat-abliterated-GGUF"
+file = "test-chat-abliterated-Q4_K.gguf"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+download_mb = 1
+quant = "Q4_K"
+license = "Apache-2.0"
+badges = []
+tier = "T1"
+route = "local:tiny"
+ctx_default = 4_096
+run_mb = 1_024
+needs_avx2 = false
+min_budget = { ram = 1_024 }
+tok_s = { gpu = 1, unified = 1, cpu = 1 }
