@@ -6,7 +6,7 @@
 //! rare one next.
 
 use super::*;
-use grokhub_core::steam_achievements::{self as sa, Nudge, Player, Tracker};
+use grokhub_core::steam_achievements::{self as sa, Tracker};
 
 /// Deck shots (`scripts/deck-shots.ps1`) set this to run the check on canned
 /// Steam replies, since the runner has no SteamID or public profile.
@@ -19,61 +19,7 @@ pub(super) struct AchState {
     pub note: String,
 }
 
-struct AchRun {
-    picks: Vec<Nudge>,
-    /// Unlocked and in all for each game read, for goals on Objectives.
-    counts: Vec<(u32, sa::Count)>,
-    private: bool,
-    error: Option<String>,
-}
-
-/// The whole check for the given games, given a GET. Stops at the first
-/// private reply, since every game on the profile is hidden then. Never puts
-/// the SteamID in an error.
-fn run_check(
-    games: &[(u32, String)],
-    steam_id: u64,
-    get: &mut dyn FnMut(&str) -> Result<String, String>,
-) -> AchRun {
-    let mut picks = Vec::new();
-    let mut counts = Vec::new();
-    let mut failed = 0;
-    for (app_id, name) in games {
-        let list = match get(&sa::player_url(steam_id, *app_id)).map(|b| sa::parse_player(&b)) {
-            Ok(Some(Player::List(list))) => list,
-            Ok(Some(Player::Private)) => {
-                return AchRun {
-                    picks: Vec::new(),
-                    counts: Vec::new(),
-                    private: true,
-                    error: None,
-                }
-            }
-            Ok(Some(Player::NoStats)) => continue,
-            Ok(None) | Err(_) => {
-                failed += 1;
-                continue;
-            }
-        };
-        counts.push((*app_id, sa::Count::of(&list)));
-        let rates = if sa::worth_rates(&list) {
-            get(&sa::global_url(*app_id))
-                .map(|b| sa::parse_global(&b))
-                .unwrap_or_default()
-        } else {
-            Default::default()
-        };
-        picks.extend(sa::pick(*app_id, name, &list, &rates));
-    }
-    let error = (failed > 0 && failed == games.len())
-        .then(|| "Steam's stats pages didn't answer".to_string());
-    AchRun {
-        picks,
-        counts,
-        private: false,
-        error,
-    }
-}
+use sa::{run_check, Run as AchRun};
 
 fn deck_check() -> bool {
     super::loadout_home::deck_switch_is(DECK_ENV, "1")
@@ -100,27 +46,13 @@ fn deck_reply(url: &str) -> Result<String, String> {
     Ok(body)
 }
 
-/// The games to read: games with an achievements goal on Objectives first,
-/// then the most recently played installs that have play time.
+/// The games to read (`sa::games_to_check`), or the deck shot's one game.
 fn games_to_check() -> Vec<(u32, String)> {
     if deck_check() {
         return vec![(1145360, "Hades".into())];
     }
-    let goals = grokhub_core::objectives::load(&crate::config::config_dir());
-    let mut games = grokhub_core::objectives::goal_steam_games(&goals);
-    if let Some(root) = grokhub_core::steam::detect_root() {
-        let played = grokhub_core::steam::read_library(&root)
-            .into_iter()
-            .filter(|g| g.playtime_min > 0)
-            .map(|g| (g.app_id, g.name));
-        for game in played {
-            if !games.iter().any(|(id, _)| *id == game.0) {
-                games.push(game);
-            }
-        }
-    }
-    games.truncate(sa::GAMES_PER_CHECK);
-    games
+    let root = grokhub_core::steam::detect_root();
+    sa::games_to_check(&crate::config::config_dir(), root.as_deref())
 }
 
 impl Cabin {
@@ -211,13 +143,7 @@ impl Cabin {
         if added > 0 {
             self.persist_updates();
         }
-        self.sources.ach.note = if run.private {
-            String::new()
-        } else if added == 0 {
-            "Checked your games. Nothing close to 100% yet.".into()
-        } else {
-            format!("Checked your games. {added} close to done.")
-        };
+        self.sources.ach.note = sa::checked_note(run.private, added);
         self.save_ach();
         // Achievement goals on Objectives move to the new counts.
         grokhub_core::objectives::refresh_from_games(&crate::config::config_dir(), now);
