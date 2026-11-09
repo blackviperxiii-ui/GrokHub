@@ -417,6 +417,10 @@ fn compose(
         out.push_str("\n\n");
         out.push_str(rules);
     }
+    if profile == PromptProfile::Chat {
+        out.push_str("\n\n");
+        out.push_str(grokhub_core::cabin_rules::LOOKUP_RULES);
+    }
     if let Some(agents) = layered_agents(workspace, home) {
         out.push_str("\n\n<agents>\n");
         out.push_str(&agents);
@@ -976,6 +980,8 @@ mod tests {
             "Background must drop skills by default: {}",
             background.len()
         );
+        assert!(chat.contains(grokhub_core::cabin_rules::LOOKUP_RULES));
+        assert!(!background.contains(grokhub_core::cabin_rules::LOOKUP_RULES));
         let chat_bytes = chat.len();
         let bg_bytes = background.len();
         let saved = chat_bytes.saturating_sub(bg_bytes);
