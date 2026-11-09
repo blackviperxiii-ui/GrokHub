@@ -706,10 +706,32 @@ pub fn load_intentions(config_dir: &Path, conversation_id: &str) -> Intentions {
     let Ok(path) = intentions_path(config_dir, conversation_id) else {
         return Intentions::default();
     };
-    let Ok(text) = fs::read_to_string(path) else {
+    let Ok(text) = read_settled(&path) else {
         return Intentions::default();
     };
     serde_json::from_str(&text).unwrap_or_default()
+}
+
+/// Read a file that [`write_intentions`] may be replacing right now. On
+/// Windows, an open that lands in the instant the old copy is swapped out
+/// can fail with access denied though the file is there before and after;
+/// that read is tried again for up to about 100 ms, so a goal list never
+/// reads as empty (and is never saved back empty) because of the swap.
+fn read_settled(path: &Path) -> std::io::Result<String> {
+    let mut tries = 0;
+    loop {
+        match fs::read_to_string(path) {
+            Err(err)
+                if cfg!(windows)
+                    && err.kind() == std::io::ErrorKind::PermissionDenied
+                    && tries < 20 =>
+            {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            read => return read,
+        }
+    }
 }
 
 pub fn save_intentions(
@@ -872,7 +894,7 @@ mod tests {
             let (path, stop, missing) = (path.clone(), stop.clone(), missing.clone());
             std::thread::spawn(move || {
                 while !stop.load(Ordering::Relaxed) {
-                    if fs::read(&path).is_err() {
+                    if read_settled(&path).is_err() {
                         missing.fetch_add(1, Ordering::Relaxed);
                     }
                 }
