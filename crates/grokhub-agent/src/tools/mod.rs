@@ -238,6 +238,10 @@ pub fn dispatch_for_job(
 }
 
 fn run_shell(ctx: &ToolCtx<'_>, args: &Value) -> ToolOutput {
+    let typed = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
+    if let Some(why) = shell::names_a_tool(typed) {
+        return ToolOutput::err(why);
+    }
     let background = args
         .get("is_background")
         .and_then(|v| v.as_bool())

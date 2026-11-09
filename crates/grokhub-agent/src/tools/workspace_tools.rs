@@ -35,7 +35,7 @@ const WORKSPACES: usize = 64;
 /// Live chats remembered in memory.
 const LIVE: usize = 256;
 /// Eager tools every workspace keeps up front.
-pub const CORE: [&str; 8] = [
+pub const CORE: [&str; 10] = [
     "read_file",
     "list_dir",
     "grep",
@@ -44,6 +44,9 @@ pub const CORE: [&str; 8] = [
     "write",
     "search_replace",
     "run_terminal_command",
+    // A lookup always needs these; a workspace that never searched still can.
+    "web_search",
+    "web_fetch",
 ];
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

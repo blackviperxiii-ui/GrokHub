@@ -1056,6 +1056,29 @@ fn call_qualified(rec: &ToolRec, args: &Value, stop: &dyn Fn() -> bool) -> ToolO
                 .map_or_else(|err| !idem::maybe_ran(err), |_| true),
         );
     }
+    // A browser that died at launch gets one isolated relaunch, then the
+    // model is pointed at web_fetch instead of a dead tool (LO-51).
+    let died = match &result {
+        Ok((text, true)) => browser::launch_died(text).then(|| text.clone()),
+        Err(err) => browser::launch_died(err).then(|| err.clone()),
+        Ok(_) => None,
+    };
+    let playwright = matches!(
+        &inner.def.transport,
+        TransportDef::Stdio { command, args, .. } if browser::is_playwright(command, args)
+    );
+    if let Some(text) = died.filter(|_| playwright) {
+        eprintln!("grokhub mcp `{}` browser launch died: {text}", rec.server);
+        inner.conn.take();
+        inner.last_error = Some(clip_err(&text));
+        drop(inner);
+        if browser::isolate(&rec.server) && restart(&rec.server).is_ok() {
+            return call_qualified(rec, args, stop);
+        }
+        let mut out = fenced_error(&text);
+        out.text = format!("{}\n{}", browser::CANT_START, out.text);
+        return out;
+    }
     match result {
         Ok((text, true)) => fenced_error(&text),
         Ok((text, false)) => ToolOutput::ok(fence::fence("mcp", &text)),
