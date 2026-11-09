@@ -151,6 +151,9 @@ impl Taste {
         if traits.is_empty() {
             return;
         }
+        // The app-wide learning engine sees every reaction too (a no-op
+        // until the app starts it).
+        crate::learn::hub::note_all(crate::learn::sources::taste(&traits, reaction, now_ms));
         self.events.push(Event {
             card_id: card_id.to_string(),
             traits,

@@ -93,6 +93,10 @@ fn title(area: &str, id: &str) -> String {
         "card-group" => format!("Cards from {}", words(id)),
         "skill" => format!("Skill {id}"),
         "reply" => format!("Plan reply: {}", plan_reply(id)),
+        "trait" => format!(
+            "One Pulse card {}",
+            id.split_once('/').map_or(id, |(kind, _)| kind)
+        ),
         "model" => match id.rsplit_once('/') {
             Some((model, "run-ms")) => format!("How long {model} takes"),
             Some((model, "run-usd")) => format!("What {model} costs"),
@@ -131,6 +135,7 @@ fn says(area: &str, id: &str, belief: &Belief) -> String {
         "chips" | "chip" => format!("You tap one about {n} times in 10 when they show."),
         "card" | "card-group" => format!("You take these about {n} times in 10."),
         "reply" => format!("You pick this about {n} times in 10 when a plan waits."),
+        "trait" => format!("You like cards with it about {n} times in 10."),
         "model" | "skill" => format!("Runs go well about {n} times in 10."),
         _ => format!("It goes your way about {n} times in 10."),
     }
