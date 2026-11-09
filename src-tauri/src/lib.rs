@@ -13,6 +13,7 @@ pub mod background;
 mod brand_guard;
 pub mod capabilities;
 pub mod chips;
+pub mod code;
 pub mod connectors;
 pub mod credential;
 pub mod export;
@@ -1501,6 +1502,20 @@ async fn answer_connector_key(id: String, approve: bool) -> Result<connectors::C
 #[tauri::command]
 fn get_capabilities() -> capabilities::Capabilities {
     capabilities::current()
+}
+
+/// Code tab: the workspace's repo, read only.
+#[tauri::command]
+async fn code_repo(state: State<'_, ShellState>) -> Result<code::Repo, String> {
+    let dir = workspace(&state);
+    off_main(move || code::repo(&dir)).await
+}
+
+/// Code tab: one changed file's diff, read only.
+#[tauri::command]
+async fn code_diff(state: State<'_, ShellState>, path: String) -> Result<code::Diff, String> {
+    let dir = workspace(&state);
+    off_main(move || code::diff(&dir, &path)).await?
 }
 
 #[tauri::command]
@@ -3422,6 +3437,8 @@ pub fn run() {
             sign_in_connector,
             save_connector_key,
             answer_connector_key,
+            code_repo,
+            code_diff,
             get_journal,
             journal_add,
             journal_act,
