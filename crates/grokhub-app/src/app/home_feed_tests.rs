@@ -1413,7 +1413,7 @@ fn every_home_card_the_cabin_posts_names_its_item() {
     ));
     rows.push((
         "finish_wind_down",
-        grokhub_core::wind_down::Offer::Late { idle_min: 45 }.card(
+        grokhub_core::wind_down::Offer::Setup.card(
             &grokhub_core::LocalClock {
                 now_ms: now,
                 weekday: 3,
@@ -1422,7 +1422,7 @@ fn every_home_card_the_cabin_posts_names_its_item() {
             },
             grokhub_core::wind_down::Voice::Plain,
         ),
-        "Sleep the PC",
+        "PC sleep",
     ));
     rows.push((
         "finish_achievements",
