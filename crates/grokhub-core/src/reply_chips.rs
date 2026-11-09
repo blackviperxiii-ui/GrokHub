@@ -171,15 +171,54 @@ pub fn remember_reply_pick(memory: &mut ChipMemory, key: &str, now_ms: u64) {
     let n = memory.reply_picks.entry(key.to_string()).or_insert(0);
     *n = (*n + 1).min(PICK_CAP);
     memory.updated_at = now_ms;
+    // The learning engine counts it too, so the habit fades with time and
+    // shows under what the app learned.
+    crate::learn::hub::note_all(crate::learn::sources::reply_picked(key, now_ms));
 }
 
 fn picks(memory: &ChipMemory, key: &str) -> u32 {
     memory.reply_picks.get(key).copied().unwrap_or(0)
 }
 
-fn rank(chips: &mut [ReplyChip], memory: &ChipMemory) {
-    // `sort_by_key` is stable, so unpicked chips keep their written order.
-    chips.sort_by_key(|c| std::cmp::Reverse(picks(memory, &c.key)));
+/// How strongly this person picks each chip, in the chips' order. Once the
+/// learning engine holds a belief about a reply, that decides: its picks fade
+/// with time, and the user's Forget or "That's wrong" there brings it back
+/// to nothing. Until then, and for a question's options, the saved pick
+/// count stands. One look at the engine for the whole row.
+fn weights(chips: &[ReplyChip], memory: &ChipMemory) -> Vec<f32> {
+    let subjects: Vec<_> = chips
+        .iter()
+        .map(|c| crate::learn::sources::reply_subject(&c.key))
+        .collect();
+    let now_ms = crate::now_ms();
+    let learned = crate::learn::hub::read(|e| {
+        subjects
+            .iter()
+            .map(|subject| {
+                let belief = e.beliefs().get(subject.as_ref()?)?;
+                Some(belief.evidence(now_ms) * belief.rate().unwrap_or(0.0))
+            })
+            .collect::<Vec<Option<f32>>>()
+    });
+    chips
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            learned
+                .as_ref()
+                .and_then(|l| l[i])
+                .unwrap_or_else(|| picks(memory, &c.key) as f32)
+        })
+        .collect()
+}
+
+/// Heaviest first. Stable, so equal chips keep their written order.
+fn rank(chips: &mut Vec<ReplyChip>, memory: &ChipMemory) {
+    let weight = weights(chips, memory);
+    let mut order: Vec<usize> = (0..chips.len()).collect();
+    order.sort_by(|&a, &b| weight[b].total_cmp(&weight[a]));
+    let mut slots: Vec<Option<ReplyChip>> = chips.drain(..).map(Some).collect();
+    chips.extend(order.into_iter().filter_map(|i| slots[i].take()));
 }
 
 fn reply(key: &str, label: &str, act: ReplyAct) -> ReplyChip {

@@ -92,12 +92,26 @@ fn title(area: &str, id: &str) -> String {
         "card" => format!("{} cards", capital(&words(id))),
         "card-group" => format!("Cards from {}", words(id)),
         "skill" => format!("Skill {id}"),
+        "reply" => format!("Plan reply: {}", plan_reply(id)),
         "model" => match id.rsplit_once('/') {
             Some((model, "run-ms")) => format!("How long {model} takes"),
             Some((model, "run-usd")) => format!("What {model} costs"),
             _ => format!("Model {id}"),
         },
         _ => capital(&words(&format!("{area} {id}"))),
+    }
+}
+
+/// A plan reply's words, as on its chip.
+fn plan_reply(id: &str) -> String {
+    match id.strip_prefix("plan/").unwrap_or(id) {
+        "go" => "Yes, go".into(),
+        "more" => "Tell me more".into(),
+        "step" => "More on a step".into(),
+        "change" => "Change this".into(),
+        "go-but" => "Go, but\u{2026}".into(),
+        "not-now" => "Not now".into(),
+        other => words(other),
     }
 }
 
@@ -116,6 +130,7 @@ fn says(area: &str, id: &str, belief: &Belief) -> String {
     match area {
         "chips" | "chip" => format!("You tap one about {n} times in 10 when they show."),
         "card" | "card-group" => format!("You take these about {n} times in 10."),
+        "reply" => format!("You pick this about {n} times in 10 when a plan waits."),
         "model" | "skill" => format!("Runs go well about {n} times in 10."),
         _ => format!("It goes your way about {n} times in 10."),
     }
