@@ -337,12 +337,13 @@ async function main() {
 
     // Every view renders on what the desktop sends; a missing field here
     // once blanked the whole page.
-    for (const view of ["Automations", "Connectors", "Memory"]) {
+    for (const view of ["Automations", "Connectors", "Personal"]) {
       await page.locator("nav.tabs button", { hasText: view }).click();
       await page.getByRole("button", { name: "Chat" }).waitFor({ timeout: 10000 });
     }
-    await page.getByRole("textbox", { name: "New note" }).waitFor({ timeout: 10000 });
-    console.log("automations, memory and connectors render");
+    await page.getByLabel("Add something about you").waitFor({ timeout: 10000 });
+    check((await page.getByRole("button", { name: "Wipe everything" }).count()) === 0, "the web app offered Wipe");
+    console.log("automations, personal and connectors render");
 
     await page.getByRole("button", { name: "Settings" }).click();
     await page.getByText("Change settings and the API key there.").waitFor();

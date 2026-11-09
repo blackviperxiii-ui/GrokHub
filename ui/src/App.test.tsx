@@ -230,7 +230,7 @@ describe("App", () => {
       "Journal",
       "Automations",
       "Agents",
-      "Memory",
+      "Personal",
       "Skills",
       "Connectors",
       "Workboard",
@@ -296,14 +296,14 @@ describe("App", () => {
     render(<App />);
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
     expect(await screen.findByText("Settings for a phone")).toBeInTheDocument();
-    expect(tabs()).toEqual(["Home", "Chat", "History", "Imagine", "Journal", "Automations", "Agents", "Memory", "Skills", "Connectors", "Workboard", "Settings"]);
+    expect(tabs()).toEqual(["Home", "Chat", "History", "Imagine", "Journal", "Automations", "Agents", "Personal", "Skills", "Connectors", "Workboard", "Settings"]);
   });
 
   it("leaves the Journal and History off the web app and keeps Resume on the desktop", async () => {
     api.getCapabilities.mockResolvedValue({ ...api.CORE_ONLY, remote: true });
     render(<App />);
     await waitFor(() => expect(screen.queryByRole("button", { name: "Journal" })).toBeNull());
-    expect(tabs()).toEqual(["Home", "Chat", "Imagine", "Automations", "Agents", "Memory", "Skills", "Connectors", "Workboard", "Settings"]);
+    expect(tabs()).toEqual(["Home", "Chat", "Imagine", "Automations", "Agents", "Personal", "Skills", "Connectors", "Workboard", "Settings"]);
     await userEvent.click(screen.getByRole("button", { name: "Workboard" }));
     expect(await screen.findByText("Workboard page without Resume")).toBeVisible();
   });
@@ -439,7 +439,7 @@ describe("App", () => {
   it("Ctrl+N starts a new chat from any page", async () => {
     api.getCapabilities.mockResolvedValue(DESKTOP);
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: "Memory" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Personal" }));
     await userEvent.keyboard("{Control>}n{/Control}");
     expect(screen.getByText("Chat page: in shell-new")).toBeVisible();
     expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
@@ -624,7 +624,7 @@ describe("App", () => {
     it("Ctrl+Alt+H halts from any page, button shown or not", async () => {
       api.getCapabilities.mockResolvedValue(DESKTOP);
       render(<App />);
-      await userEvent.click(await screen.findByRole("button", { name: "Memory" }));
+      await userEvent.click(await screen.findByRole("button", { name: "Personal" }));
       await userEvent.keyboard("{Control>}{Alt>}h{/Alt}{/Control}");
       expect(api.haltDesktop).toHaveBeenCalledTimes(1);
       expect(await screen.findByText(HALT_DONE)).toBeInTheDocument();

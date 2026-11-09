@@ -102,7 +102,7 @@ export const VIEW_LABELS: Record<View, string> = {
   journal: "Journal",
   automations: "Automations",
   agents: "Agents",
-  memory: "Memory",
+  memory: "Personal",
   skills: "Skills",
   connectors: "Connectors",
   settings: "Settings",
