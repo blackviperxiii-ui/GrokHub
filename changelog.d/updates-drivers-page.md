@@ -1,0 +1,1 @@
+- Home's Updates & Drivers tile opens a real page in the new app: what waits to update on this PC (the app, Steam games, system packages on Linux, winget apps and Windows Update on Windows) with one offer per group. Update system runs your distro's own upgrade behind its password prompt and tries a snapshot first; nothing heavy starts while a game runs.

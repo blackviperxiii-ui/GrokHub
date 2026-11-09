@@ -2316,3 +2316,41 @@ export function libraryFriends(): Promise<void> {
 export function homeOpenClip(index: number): Promise<void> {
   return invoke<void>("home_open_clip", { index });
 }
+
+/** Home's Updates & Drivers page (src-tauri/src/home_updates.rs, core home::updates). */
+export type UpdateOffer =
+  | "updateLoadout"
+  | "openSteamDownloads"
+  | "updateSystem"
+  | "updateApps"
+  | "openWindowsUpdate";
+
+export interface UpdateItem {
+  name: string;
+  from: string | null;
+  to: string | null;
+}
+
+export interface UpdateGroup {
+  kind: "loadout" | "steam" | "system" | "apps" | "windows";
+  title: string;
+  line: string;
+  items: UpdateItem[];
+  offer: { offer: UpdateOffer; label: string; held: string | null } | null;
+}
+
+export interface UpdatesPage {
+  headline: string;
+  groups: UpdateGroup[];
+  driver: string | null;
+}
+
+/** Reads what waits to update on this PC (lists already on disk; no refresh). */
+export function getUpdatesPage(): Promise<UpdatesPage> {
+  return invoke<UpdatesPage>("updates_page");
+}
+
+/** Runs one offer: opens its page, or updates behind the OS prompt. Returns a sentence. */
+export function runUpdateOffer(offer: UpdateOffer): Promise<string> {
+  return invoke<string>("run_update_offer", { offer });
+}

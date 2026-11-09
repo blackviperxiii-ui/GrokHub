@@ -51,9 +51,9 @@ pub use interpret::{
     DISK_CRIT_PCT, DISK_WARN_PCT, LOG_WARN_LINES, MEM_WARN_PCT,
 };
 pub use probes::{
-    on_path, probe_spec_with, read_only_violation, subject_probe_spec, Os, PackageManager, ProbeId,
-    ProbeSpec, ProgramName, LINUX_PROBES, LINUX_SUBJECT_PROBES, LOG_LINE_CAP, OUTPUT_CAP,
-    PROBE_TIMEOUT, WINDOWS_PROBES, WINDOWS_SUBJECT_PROBES,
+    on_path, probe_spec_with, read_only_violation, subject_probe_spec, windows_update_titles_spec,
+    Os, PackageManager, ProbeId, ProbeSpec, ProgramName, LINUX_PROBES, LINUX_SUBJECT_PROBES,
+    LOG_LINE_CAP, OUTPUT_CAP, PROBE_TIMEOUT, WINDOWS_PROBES, WINDOWS_SUBJECT_PROBES,
 };
 pub use restore::{
     backup_dir, backup_files, detect_backends, restore_files, BackupEntry, FileBackup,
