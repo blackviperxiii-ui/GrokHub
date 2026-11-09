@@ -780,6 +780,7 @@ impl Router {
             ctx_tokens: input.ctx_tokens,
             now_ms,
             canary: input.probation_canary,
+            helper: live::in_helper(),
         };
         let attn = attention::decide(&attention::AttentionInput {
             class: input.lane(),

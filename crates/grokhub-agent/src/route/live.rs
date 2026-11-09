@@ -1592,6 +1592,35 @@ pub fn current_class() -> &'static str {
     CLASS.with(std::cell::Cell::get)
 }
 
+thread_local! {
+    static HELPER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Marks this thread's calls as a helper's (a subagent's) until dropped,
+/// so routing can keep helpers off a free route that is nearly spent.
+pub struct HelperScope {
+    prev: bool,
+}
+
+impl HelperScope {
+    pub fn enter() -> Self {
+        Self {
+            prev: HELPER.with(|h| h.replace(true)),
+        }
+    }
+}
+
+impl Drop for HelperScope {
+    fn drop(&mut self) {
+        HELPER.with(|h| h.set(self.prev));
+    }
+}
+
+/// This thread is running a helper's calls.
+pub fn in_helper() -> bool {
+    HELPER.with(std::cell::Cell::get)
+}
+
 /// The newest user text in a request (difficulty only; never stored), without
 /// the `<cabin-volatile>` notes, so style or playbook words never steer routing.
 /// Messages the app itself writes in the user's place (a cabin note, a
