@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { pulseImage, type PulseChip, type PulseIdea, type PulsePost } from "./api";
 import { Markdown } from "./Markdown";
 import { VerdictLine } from "./PulseFix";
-import { ConfirmRow, ExternalLink, useDismiss } from "./ui";
+import { ExternalLink } from "./ui";
 
 /** Topic emoji with a bundled 3D picture (Fluent Emoji 3D, MIT, see
  * public/emoji3d/LICENSE), by code point without variation selectors. */
@@ -166,118 +166,88 @@ export function fullDate(ms: number): string {
   });
 }
 
+/** The same row of buttons on every card, in one line: Like first (far
+ * left), the card's own buttons and I don't like in the middle, Dismiss last
+ * (far right). Like pressed again takes the like back. */
+export function CardButtons({
+  liked,
+  busy,
+  onLike,
+  onDislike,
+  onDismiss,
+  children,
+}: {
+  liked: boolean;
+  busy: boolean;
+  onLike: () => void;
+  onDislike: () => void;
+  onDismiss: () => void;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="card-buttons card-row feed-foot" role="group" aria-label="Card actions">
+      <button
+        type="button"
+        className="quiet card-like"
+        aria-label="Like"
+        aria-pressed={liked}
+        disabled={busy}
+        onClick={onLike}
+      >
+        <span aria-hidden="true">{liked ? "♥" : "♡"}</span> Like
+      </button>
+      {children}
+      <button type="button" className="quiet" disabled={busy} onClick={onDislike}>
+        I don't like
+      </button>
+      <button type="button" className="quiet card-dismiss" disabled={busy} onClick={onDismiss}>
+        Dismiss
+      </button>
+    </div>
+  );
+}
+
 export interface FeedCardProps {
   post: PulsePost;
   busy: boolean;
-  /** Love, or Unlove when the post is already loved. */
+  /** Like, or take it back when the post is already liked. */
   onLove: () => void;
   onDiscuss: () => void;
   /** Open the post's source page. */
   onOpen?: () => void;
-  onDelete: () => void;
-  onWhy: () => Promise<string>;
-  /** Hide it until tomorrow 9 AM. */
-  onSnooze?: () => void;
-  /** Take it off the page. */
-  onDismiss?: () => void;
-  /** Take it off and steer the writer away from posts like it. */
-  onNotThis?: () => void;
+  /** I don't like: off the page, and fewer posts like it. */
+  onDislike: () => void;
+  /** Off the page. Carries no weight. */
+  onDismiss: () => void;
   /** A chip under the card other than Discuss: a fix, Ignore for now, or
    * Remind me later. */
   onChip?: (chip: PulseChip) => void;
 }
 
-/** Opens the full report under a card's summary. */
-export const SHOW_REPORT = "Show the full report";
-export const HIDE_REPORT = "Hide the full report";
-
-/** One Feed post: icon, title, where it is from and why, verdict, cited
- * snippet, the full report on Show, media; its chips below (the card's fixes,
- * Discuss, Ignore for now, Remind me later; Discuss alone on an older page),
- * Love (pressed again it unloves) and Read it when it has a source page;
- * time and a menu (date, why, snooze, dismiss, not this, delete) top right.
- * Delete asks first. */
+/** One Feed post, always fully open: icon, title, where it is from and why,
+ * verdict, cited snippet, the full report, media; then one row of buttons
+ * (Like, the card's chips or Discuss, Read it, I don't like, Dismiss). No
+ * menu and nothing to collapse. */
 export function FeedCard({
   post,
   busy,
   onLove,
   onDiscuss,
   onOpen,
-  onDelete,
-  onWhy,
-  onSnooze,
+  onDislike,
   onDismiss,
-  onNotThis,
   onChip,
 }: FeedCardProps) {
-  const [menu, setMenu] = useState(false);
-  const [open, setOpen] = useState(false);
   const chips = post.chips ?? [];
-  const hasMore = Boolean(post.more) || (post.items?.length ?? 0) > 0;
-  const [why, setWhy] = useState<string | null>(null);
-  const [asking, setAsking] = useState(false);
-  const corner = useDismiss<HTMLDivElement>(menu, () => setMenu(false));
-  const pick = (f: () => void) => () => {
-    setMenu(false);
-    f();
-  };
-
-  async function askWhy() {
-    setMenu(false);
-    setWhy(await onWhy().catch((err) => String(err)));
-  }
-
   return (
     <li className="card post feed-card" aria-label={post.title}>
       <div className="feed-head">
         <TopicIcon icon={post.icon} />
         <div className="feed-title">{post.title}</div>
-        <div className="feed-corner" ref={corner}>
-          <span className="card-status">{post.ago}</span>
-          <button
-            type="button"
-            className="quiet icon-button"
-            aria-label="More"
-            aria-haspopup="menu"
-            aria-expanded={menu}
-            onClick={() => setMenu((m) => !m)}
-          >
-            ⋯
-          </button>
-          {menu && (
-            <div className="feed-menu" role="menu">
-              <div className="feed-menu-date" role="none">
-                {fullDate(post.createdAt)}
-              </div>
-              <button type="button" role="menuitem" onClick={() => void askWhy()}>
-                Why I created this
-              </button>
-              {onSnooze && (
-                <button type="button" role="menuitem" disabled={busy} onClick={pick(onSnooze)}>
-                  Snooze until 9 AM
-                </button>
-              )}
-              {onDismiss && (
-                <button type="button" role="menuitem" disabled={busy} onClick={pick(onDismiss)}>
-                  Dismiss
-                </button>
-              )}
-              {onNotThis && (
-                <button type="button" role="menuitem" disabled={busy} onClick={pick(onNotThis)}>
-                  Not this
-                </button>
-              )}
-              <button
-                type="button"
-                role="menuitem"
-                className="danger"
-                disabled={busy}
-                onClick={pick(() => setAsking(true))}
-              >
-                Delete…
-              </button>
-            </div>
-          )}
+        <div className="feed-corner">
+          <span className="card-status" title={fullDate(post.createdAt)}>
+            {post.ago}
+          </span>
         </div>
       </div>
       <p className="feed-source">
@@ -286,17 +256,7 @@ export function FeedCard({
       </p>
       <VerdictLine verdict={post.verdict} />
       {post.summary && <Snippet text={post.summary} />}
-      {hasMore && (
-        <button
-          type="button"
-          className="quiet link-button"
-          aria-expanded={open}
-          onClick={() => setOpen((o) => !o)}
-        >
-          {open ? HIDE_REPORT : SHOW_REPORT}
-        </button>
-      )}
-      {open && (
+      {(post.items?.length > 0 || post.more) && (
         <div className="feed-report">
           {post.items?.length > 0 && (
             <ul className="feed-items">
@@ -312,27 +272,15 @@ export function FeedCard({
         </div>
       )}
       <Media post={post} />
-      {why && (
-        <p className="card-status why" role="note">
-          {why}
-        </p>
-      )}
-      {asking && (
-        <ConfirmRow
-          question="Delete this post?"
-          detail="It won't come back."
-          action="Delete"
-          busy={busy}
-          onConfirm={() => {
-            setAsking(false);
-            onDelete();
-          }}
-          onCancel={() => setAsking(false)}
-        />
-      )}
-      <div className="card-buttons feed-foot">
+      <CardButtons
+        liked={post.loved}
+        busy={busy}
+        onLike={onLove}
+        onDislike={onDislike}
+        onDismiss={onDismiss}
+      >
         {chips.length === 0 ? (
-          <button type="button" disabled={busy} onClick={onDiscuss}>
+          <button type="button" className="quiet" disabled={busy} onClick={onDiscuss}>
             Discuss
           </button>
         ) : (
@@ -340,7 +288,7 @@ export function FeedCard({
             <button
               key={`${chip.act}-${chip.index}`}
               type="button"
-              className={chip.act === "offer" ? undefined : "quiet"}
+              className="quiet"
               disabled={busy}
               onClick={() => (chip.act === "discuss" ? onDiscuss() : onChip?.(chip))}
             >
@@ -348,22 +296,12 @@ export function FeedCard({
             </button>
           ))
         )}
-        <button
-          type="button"
-          className="quiet"
-          aria-label="Love"
-          aria-pressed={post.loved}
-          disabled={busy}
-          onClick={onLove}
-        >
-          <span aria-hidden="true">{post.loved ? "♥" : "♡"}</span> Love
-        </button>
         {post.link && onOpen && (
           <button type="button" className="quiet" disabled={busy} onClick={onOpen}>
             Read it
           </button>
         )}
-      </div>
+      </CardButtons>
     </li>
   );
 }
@@ -374,19 +312,22 @@ export interface IdeaRowProps {
   onDo: () => void;
   /** A PC health card's main button: open its options window. */
   onFix?: () => void;
+  /** Like: more ideas in its spirit. */
   onMoreLike: () => void;
+  /** I don't like: the idea goes, with some of its topics' weight. */
   onNotInterested: () => void;
+  /** Off the page. Carries no weight. */
+  onDismiss: () => void;
   /** A chip on a card that found something; Discuss goes to `onDiscuss`. */
   onChip?: (chip: PulseChip) => void;
   onDiscuss?: () => void;
 }
 
-/** One Ideas row: a clay icon, the title, its verdict and its grey "I can …"
- * line, then the same two buttons every card has. The main one is Let's do
- * it, or Fix it / Options on a PC health card; the second is Not interested.
- * A click on the row is the main button. More like this waits in the menu.
- * A card that found something shows Show the full report and its chips
- * instead, and Not interested moves to the menu. */
+/** One Ideas row, always fully open: a clay icon, the title, its verdict, its
+ * grey "I can …" line and any full report, then the same row of buttons as
+ * every card: Like, its own buttons (Let's do it, or Fix it / Options and
+ * Ask about it on a PC health card, or the chips of a card that found
+ * something), I don't like, Dismiss. A click on the row is the main button. */
 export function IdeaRow({
   idea,
   busy,
@@ -394,17 +335,11 @@ export function IdeaRow({
   onFix,
   onMoreLike,
   onNotInterested,
+  onDismiss,
   onChip,
   onDiscuss,
 }: IdeaRowProps) {
-  const [menu, setMenu] = useState(false);
-  const [open, setOpen] = useState(false);
   const chips = idea.chips ?? [];
-  const corner = useDismiss<HTMLDivElement>(menu, () => setMenu(false));
-  const pick = (f: () => void) => () => {
-    setMenu(false);
-    f();
-  };
   const fix = idea.fix && onFix ? onFix : null;
   const main = fix ?? onDo;
   return (
@@ -423,36 +358,34 @@ export function IdeaRow({
         </span>
       </button>
       {idea.more && (
-        <button
-          type="button"
-          className="quiet link-button"
-          aria-expanded={open}
-          onClick={() => setOpen((o) => !o)}
-        >
-          {open ? HIDE_REPORT : SHOW_REPORT}
-        </button>
-      )}
-      {open && idea.more && (
         <div className="feed-report">
           <Markdown text={idea.more} />
         </div>
       )}
-      <div className="card-buttons idea-buttons">
+      <CardButtons
+        liked={false}
+        busy={busy}
+        onLike={onMoreLike}
+        onDislike={onNotInterested}
+        onDismiss={onDismiss}
+      >
         {chips.length === 0 ? (
           <>
-            <button type="button" disabled={busy} onClick={main}>
+            <button type="button" className="quiet" disabled={busy} onClick={main}>
               {fix ? idea.fix : "Let's do it"}
             </button>
-            <button type="button" className="quiet" disabled={busy} onClick={onNotInterested}>
-              Not interested
-            </button>
+            {fix && (
+              <button type="button" className="quiet" disabled={busy} onClick={onDo}>
+                Ask about it
+              </button>
+            )}
           </>
         ) : (
           chips.map((chip) => (
             <button
               key={`${chip.act}-${chip.index}`}
               type="button"
-              className={chip.act === "offer" ? undefined : "quiet"}
+              className="quiet"
               disabled={busy}
               onClick={() => (chip.act === "discuss" ? onDiscuss?.() : onChip?.(chip))}
             >
@@ -460,36 +393,7 @@ export function IdeaRow({
             </button>
           ))
         )}
-      </div>
-      <div className="feed-corner" ref={corner}>
-        <button
-          type="button"
-          className="quiet icon-button"
-          aria-label="More"
-          aria-haspopup="menu"
-          aria-expanded={menu}
-          onClick={() => setMenu((m) => !m)}
-        >
-          ⋯
-        </button>
-        {menu && (
-          <div className="feed-menu" role="menu">
-            {fix && (
-              <button type="button" role="menuitem" disabled={busy} onClick={pick(onDo)}>
-                Ask about it
-              </button>
-            )}
-            <button type="button" role="menuitem" disabled={busy} onClick={pick(onMoreLike)}>
-              More like this
-            </button>
-            {chips.length > 0 && (
-              <button type="button" role="menuitem" disabled={busy} onClick={pick(onNotInterested)}>
-                Not interested
-              </button>
-            )}
-          </div>
-        )}
-      </div>
+      </CardButtons>
     </li>
   );
 }

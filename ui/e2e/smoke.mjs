@@ -476,12 +476,12 @@ async function connectors(s, config) {
 }
 
 // Pulse: a post and an idea in the cabin's updates.json show on Feed and
-// For You. Love on the post writes the ledger line to memory/pulse-ledger.md.
+// For You. Like on the post writes the ledger line to memory/pulse-ledger.md.
 // Saving the feed instructions makes the writer post at once: it reads the
 // mocked sources, asks the mocked model, and caches the story's image, which
-// opens in the lightbox. Delete… and its confirm take the first post away. After the post
-// the idea writer adds one idea; its menu holds Let's do it, More like this
-// and Not interested, and More like this is kept for the next run. A click on
+// opens in the lightbox. Dismiss takes the first post away. After the post
+// the idea writer adds one idea; its one row reads Like, Let's do it, I don't
+// like, Dismiss, with no menu, and Like is kept for the next run. A click on
 // the seeded idea's row puts its action in the chat box, unsent.
 async function pulse(s, config) {
   const now = Date.now();
@@ -515,9 +515,9 @@ async function pulse(s, config) {
     return t === "Smoke board summary" ? t : null;
   });
   const post = "//li[@aria-label='Smoke board summary']";
-  await click(s, ".pulse .feed-card .feed-foot button[aria-label='Love']");
+  await click(s, ".pulse .feed-card .feed-foot button[aria-label='Like']");
   await waitFor("the loved post", async () => {
-    const el = await find(s, ".pulse .feed-card .feed-foot button[aria-label='Love']");
+    const el = await find(s, ".pulse .feed-card .feed-foot button[aria-label='Like']");
     return (await wd("GET", `${s}/element/${el}/attribute/aria-pressed`)) === "true";
   });
   const ledger = readFileSync(join(config, "memory", "pulse-ledger.md"), "utf8");
@@ -566,30 +566,17 @@ async function pulse(s, config) {
   });
   await wd("POST", `${s}/element/${close[ELEMENT]}/click`, {});
 
-  const more = await wd("POST", `${s}/element`, {
+  // No menu: Dismiss, last in the row, takes the post away.
+  const dismiss = await wd("POST", `${s}/element`, {
     using: "xpath",
-    value: `${post}//button[@aria-label='More']`,
+    value: `${post}//div[contains(@class,'card-row')]/button[last()][normalize-space()='Dismiss']`,
   });
-  await wd("POST", `${s}/element/${more[ELEMENT]}/click`, {});
-  // The menu's Delete… asks first; the confirm row's Delete takes it away.
-  const del = await wd("POST", `${s}/element`, {
-    using: "xpath",
-    value: `${post}//button[@role='menuitem'][normalize-space()='Delete…']`,
-  });
-  await wd("POST", `${s}/element/${del[ELEMENT]}/click`, {});
-  const sure = await waitFor("the delete confirm", async () => {
-    const el = await wd("POST", `${s}/elements`, {
-      using: "xpath",
-      value: `${post}//div[contains(@class,'confirm-row')]//button[normalize-space()='Delete']`,
-    });
-    return el.length === 1 ? el[0][ELEMENT] : null;
-  });
-  await wd("POST", `${s}/element/${sure}/click`, {});
-  await waitFor("the deleted post", async () => {
+  await wd("POST", `${s}/element/${dismiss[ELEMENT]}/click`, {});
+  await waitFor("the dismissed post", async () => {
     const left = await wd("POST", `${s}/elements`, { using: "xpath", value: post });
     return left.length === 0;
   });
-  console.log("delete took the post away");
+  console.log("dismiss took the post away");
 
   const ideas = await wd("POST", `${s}/element`, {
     using: "xpath",
@@ -607,31 +594,25 @@ async function pulse(s, config) {
     },
     60000,
   );
-  const ideaMenu = await wd("POST", `${s}/element`, {
+  const menus = await wd("POST", `${s}/elements`, {
     using: "xpath",
     value: `${written}//button[@aria-label='More']`,
   });
-  await wd("POST", `${s}/element/${ideaMenu[ELEMENT]}/click`, {});
-  const items = await wd("POST", `${s}/elements`, {
-    using: "xpath",
-    value: `${written}//button[@role='menuitem']`,
-  });
-  const labels = [];
-  for (const item of items) labels.push(await wd("GET", `${s}/element/${item[ELEMENT]}/text`));
-  if (labels.join("|") !== "More like this") {
-    throw new Error(`the idea menu says ${JSON.stringify(labels)}`);
-  }
+  if (menus.length !== 0) throw new Error("the idea still has a menu");
   const rowButtons = await wd("POST", `${s}/elements`, {
     using: "xpath",
-    value: `${written}//div[contains(@class,'idea-buttons')]/button`,
+    value: `${written}//div[contains(@class,'card-row')]/button`,
   });
-  const buttonLabels = [];
-  for (const b of rowButtons) buttonLabels.push(await wd("GET", `${s}/element/${b[ELEMENT]}/text`));
-  if (buttonLabels.join("|") !== "Let's do it|Not interested") {
-    throw new Error(`the idea buttons say ${JSON.stringify(buttonLabels)}`);
+  const labels = [];
+  for (const b of rowButtons) {
+    const t = await wd("GET", `${s}/element/${b[ELEMENT]}/text`);
+    labels.push(t.replace(/[\u2661\u2665]/g, "").trim());
+  }
+  if (labels.join("|") !== "Like|Let's do it|I don't like|Dismiss") {
+    throw new Error(`the idea buttons say ${JSON.stringify(labels)}`);
   }
   await shot(s, "pulse-ideas");
-  await wd("POST", `${s}/element/${items[0][ELEMENT]}/click`, {});
+  await wd("POST", `${s}/element/${rowButtons[0][ELEMENT]}/click`, {});
   await waitFor("More like this kept", async () => {
     try {
       const state = JSON.parse(readFileSync(join(config, "pulse-ideas.json"), "utf8"));
@@ -640,7 +621,7 @@ async function pulse(s, config) {
       return null;
     }
   });
-  console.log(`idea menu: ${labels.join(", ")}; More like this kept for the next run`);
+  console.log(`idea row: ${labels.join(", ")}; Like kept for the next run`);
 
   // The rows stay disabled until More like this has returned, and the kept
   // file is written before it does, so a click right away can land on a

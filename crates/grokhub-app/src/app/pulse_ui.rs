@@ -178,6 +178,8 @@ pub(super) enum PulseAct {
     /// Ignore for now: off the page, with no "less of this".
     Ignore(String),
     Like(String),
+    /// I don't like on a feed post.
+    Dislike(String),
     Discuss(String),
     Link(String),
     Undo(String),
@@ -747,6 +749,10 @@ pub(super) fn paint_feed_icon(ui: &mut egui::Ui, card: &UpdateCard) {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum FeedPostAct {
     Like,
+    /// I don't like: off the page, and card taste learns from it.
+    Dislike,
+    /// Off the page. Carries no weight on a feed post.
+    Dismiss,
     Discuss,
     Link(String),
     /// Done-for-you Undo (pointer click only).
@@ -797,6 +803,8 @@ pub(super) fn feed_act(card: &UpdateCard, did: FeedPostAct) -> PulseAct {
     let id = card.id.clone();
     match did {
         FeedPostAct::Like => PulseAct::Like(id),
+        FeedPostAct::Dislike => PulseAct::Dislike(id),
+        FeedPostAct::Dismiss => PulseAct::Dismiss(id),
         FeedPostAct::Discuss => PulseAct::Discuss(id),
         FeedPostAct::Link(url) => PulseAct::Link(url),
         FeedPostAct::Undo => PulseAct::Undo(id),
@@ -894,9 +902,6 @@ pub(super) fn post_actions(card: &UpdateCard, looking_more: bool) -> Vec<(String
     acts
 }
 
-/// How many of a post's actions sit on the post; the rest go in its ···.
-pub(super) const POST_BUTTONS: usize = 2;
-
 /// A post's actions with its chips. A post whose only actions were Discuss and
 /// Like gets the card's chips instead, and Like moves to its ···. Posts with
 /// their own buttons (Fix it, Undo, Save…) keep them.
@@ -923,17 +928,52 @@ pub(super) fn post_buttons(
     out
 }
 
-/// How many of these actions sit on the post: every chip, else two.
-pub(super) fn post_shown(acts: &[(String, FeedPostAct)]) -> usize {
-    let chips = acts
-        .iter()
-        .take_while(|(_, did)| matches!(did, FeedPostAct::Chip(_)))
-        .count();
-    if chips > 0 {
-        chips
-    } else {
-        POST_BUTTONS
-    }
+/// Every post's one row of buttons: Like first, the post's own buttons, then
+/// I don't like, and Dismiss last.
+pub(super) fn post_row(
+    card: &UpdateCard,
+    looking_more: bool,
+    day: &DayShape,
+) -> Vec<(String, FeedPostAct)> {
+    let liked = card.reaction == Some(CardReaction::Up);
+    let mut row = vec![(
+        if liked { "Liked" } else { "Like" }.to_string(),
+        FeedPostAct::Like,
+    )];
+    row.extend(
+        post_buttons(card, looking_more, day)
+            .into_iter()
+            .filter(|(_, did)| *did != FeedPostAct::Like),
+    );
+    row.push(("I don't like".into(), FeedPostAct::Dislike));
+    row.push(("Dismiss".into(), FeedPostAct::Dismiss));
+    row
+}
+
+/// The row, painted: one line, every button the same size and outline,
+/// Dismiss pinned to the right. A narrow card scrolls the row sideways.
+fn paint_post_row(ui: &mut egui::Ui, row: &[(String, FeedPostAct)]) -> Option<FeedPostAct> {
+    let mut hit = None;
+    let ((last_label, last), rest) = row.split_last()?;
+    egui::ScrollArea::horizontal()
+        .id_salt(ui.next_auto_id())
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                for (label, did) in rest {
+                    if card_button(ui, label, Quick::Outline) {
+                        hit = Some(did.clone());
+                    }
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if card_button(ui, last_label, Quick::Outline) {
+                        hit = Some(last.clone());
+                    }
+                });
+            });
+        });
+    hit
 }
 
 /// One card button, answering a pointer click only (Undo and Delete live
@@ -941,46 +981,6 @@ pub(super) fn post_shown(acts: &[(String, FeedPostAct)]) -> usize {
 pub(super) fn card_button(ui: &mut egui::Ui, label: &str, style: Quick) -> bool {
     let resp = quick_button_resp(ui, label, style);
     resp.clicked_by(egui::PointerButton::Primary)
-}
-
-/// The post's two buttons: the first action as the amber primary, the second
-/// outlined. Like is never the primary, so a post with only Like shows it
-/// outlined.
-fn paint_post_buttons(ui: &mut egui::Ui, acts: &[(String, FeedPostAct)]) -> Option<FeedPostAct> {
-    if acts.is_empty() {
-        return None;
-    }
-    let mut hit = None;
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 8.0;
-        for (i, (label, did)) in acts.iter().take(post_shown(acts)).enumerate() {
-            let style = match did {
-                FeedPostAct::Chip(chip) => chip_style(chip),
-                FeedPostAct::Like => Quick::Outline,
-                _ if i == 0 => Quick::Primary,
-                _ => Quick::Outline,
-            };
-            if card_button(ui, label, style) {
-                hit = Some(did.clone());
-            }
-        }
-    });
-    hit
-}
-
-/// The post's actions past its two buttons, for its ···. Open, Retry and
-/// Delete recording are left out: the ··· already has them.
-pub(super) fn post_overflow(acts: &[(String, FeedPostAct)]) -> Vec<(String, FeedPostAct)> {
-    acts.iter()
-        .skip(post_shown(acts))
-        .filter(|(_, did)| {
-            !matches!(
-                did,
-                FeedPostAct::Open | FeedPostAct::Retry | FeedPostAct::DeleteRecording
-            )
-        })
-        .cloned()
-        .collect()
 }
 
 /// Title, short takeaway, Read at, images, then the post's two buttons.
@@ -1010,12 +1010,15 @@ pub(super) fn paint_post_body(
     }
     let takeaway = post_summary(card);
     if !takeaway.is_empty() {
-        clamp_label(
-            ui,
-            &takeaway,
-            crate::theme::FONT_BODY,
-            crate::theme::muted(),
-            3,
+        // Always fully visible: no clamp.
+        ui.add(
+            egui::Label::new(
+                RichText::new(&takeaway)
+                    .size(crate::theme::FONT_BODY)
+                    .color(crate::theme::muted()),
+            )
+            .wrap()
+            .selectable(false),
         );
     }
     match paint_report_more(ui, card, report_open) {
@@ -1054,7 +1057,7 @@ pub(super) fn paint_post_body(
         paint_thumbs(ui, thumbs);
     }
     ui.add_space(2.0);
-    if let Some(did) = paint_post_buttons(ui, &post_buttons(card, looking_more, day)) {
+    if let Some(did) = paint_post_row(ui, &post_row(card, looking_more, day)) {
         act = Some(did);
     }
     act
@@ -1099,21 +1102,26 @@ pub(super) fn report_toggle_label(card: &UpdateCard, open: bool) -> Option<Strin
 fn paint_report_more(ui: &mut egui::Ui, card: &UpdateCard, open: bool) -> Option<ReportTap> {
     let label = report_toggle_label(card, open)?;
     let mut tap = None;
-    let toggle = ui.add(
-        egui::Label::new(
-            RichText::new(label)
-                .size(crate::theme::FONT_TIP)
-                .underline()
-                .color(crate::theme::link()),
+    // Open is for good: there is no way to collapse it again.
+    let toggle = (!open).then(|| {
+        ui.add(
+            egui::Label::new(
+                RichText::new(&label)
+                    .size(crate::theme::FONT_TIP)
+                    .underline()
+                    .color(crate::theme::link()),
+            )
+            .sense(egui::Sense::click())
+            .selectable(false),
         )
-        .sense(egui::Sense::click())
-        .selectable(false),
-    );
-    if toggle.hovered() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-    }
-    if toggle.clicked() {
-        tap = Some(ReportTap::Toggle);
+    });
+    if let Some(toggle) = toggle {
+        if toggle.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if toggle.clicked() {
+            tap = Some(ReportTap::Toggle);
+        }
     }
     if !open {
         return tap;
@@ -1584,15 +1592,8 @@ impl Cabin {
         now: u64,
     ) -> Option<PulseAct> {
         let mut act = None;
-        let kind = pc::pulse_type(card);
         let day = self.card_day();
         let daily_drop = grokhub_core::daily_drop::is_daily_drop_card(card, &self.cfg.daily_drop);
-        let why = self.reaction_why(card);
-        let extra: Vec<(String, PulseAct)> =
-            post_overflow(&post_buttons(card, self.sources.looking_more, &day))
-                .into_iter()
-                .map(|(label, did)| (label, feed_act(card, did)))
-                .collect();
         let thumbs: Vec<Thumb> = card
             .pulse
             .image_urls
@@ -1617,13 +1618,9 @@ impl Cabin {
                                 .size(crate::theme::FONT_TIP)
                                 .color(crate::theme::subtle()),
                         );
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            crate::cards::dots_menu(ui, false, |ui| {
-                                pulse_menu(ui, card, kind, true, why.as_deref(), &extra, &mut act)
-                            });
-                        });
                     });
-                    let report_open = self.pulse_view.report_open.contains(&card.id);
+                    // Every post is fully open: no menu, nothing to collapse.
+                    let report_open = true;
                     if let Some(did) = paint_post_body(
                         ui,
                         card,
@@ -1953,6 +1950,7 @@ impl Cabin {
             PulseAct::Accept(id) => self.pulse_accept(&id, &Self::local_day()),
             PulseAct::Wrong(id) => self.pulse_wrong(&id, &Self::local_day()),
             PulseAct::Like(id) => self.pulse_like(&id, &Self::local_day()),
+            PulseAct::Dislike(id) => self.pulse_dislike(&id),
             PulseAct::Open(id) => self.pulse_open(&id),
             PulseAct::Report(id) => {
                 if !self.pulse_view.report_open.remove(&id) {
@@ -2220,6 +2218,17 @@ impl Cabin {
         self.persist_updates();
         self.pulse_note(&card.title, LedgerReason::Liked, day);
         self.learn_card_taste(&card, grokhub_core::card_taste::Reaction::Like);
+    }
+
+    /// I don't like: the post goes and card taste learns from its traits.
+    /// One or two clicks only nudge; repeats weigh more.
+    pub(super) fn pulse_dislike(&mut self, id: &str) {
+        let Some(card) = self.pulse_card(id) else {
+            return;
+        };
+        self.learn_card_taste(&card, grokhub_core::card_taste::Reaction::Dislike);
+        self.pulse_remove_dismiss(&card, false);
+        self.status = "Got it. A few less like that.".into();
     }
 
     /// Note a Like or I don't like in card taste (`card_taste.json`).

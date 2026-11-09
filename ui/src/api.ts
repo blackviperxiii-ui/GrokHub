@@ -970,6 +970,7 @@ export interface PulsePage {
 export type PulseAct =
   | "dismiss"
   | "notThis"
+  | "dislike"
   | "love"
   | "unlove"
   | "delete"
