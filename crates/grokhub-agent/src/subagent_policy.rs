@@ -42,7 +42,11 @@ pub fn turn_cap(size: Option<TaskSize>) -> u32 {
 
 /// Model turns a helper gets: its kind's cap, or the parent's when lower.
 pub fn child_turns(parent_max: u32, explore: bool) -> u32 {
-    let cap = if explore { EXPLORE_TURNS } else { GENERAL_TURNS };
+    let cap = if explore {
+        EXPLORE_TURNS
+    } else {
+        GENERAL_TURNS
+    };
     if parent_max == 0 {
         cap
     } else {
@@ -347,7 +351,10 @@ mod tests {
 
     #[test]
     fn small_and_short_turns_mostly_do_the_work_themselves() {
-        assert_eq!(rule(decide(&ask(true), &facts(TaskSize::Tiny))), "small-turn");
+        assert_eq!(
+            rule(decide(&ask(true), &facts(TaskSize::Tiny))),
+            "small-turn"
+        );
         assert_eq!(
             rule(decide(&ask(false), &facts(TaskSize::Short))),
             "short-turn-general"
@@ -366,7 +373,10 @@ mod tests {
             lead_model: "local:gemma-26b",
             ..ask(true)
         };
-        assert_eq!(rule(decide(&local, &facts(TaskSize::Long))), "lead-on-device");
+        assert_eq!(
+            rule(decide(&local, &facts(TaskSize::Long))),
+            "lead-on-device"
+        );
     }
 
     #[test]

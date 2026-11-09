@@ -354,7 +354,14 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || run_job(job, Some(tx)));
     let deadline = std::time::Instant::now() + crate::subagent_policy::wall(spec.explore);
-    let (done, timed_out) = pump(&rx, call.on_event, call.cancel, call.halt, &child_cancel, deadline);
+    let (done, timed_out) = pump(
+        &rx,
+        call.on_event,
+        call.cancel,
+        call.halt,
+        &child_cancel,
+        deadline,
+    );
     // Out of time reads as partial: the helper hands back what it found.
     let done = done.map(|mut done| {
         if timed_out && matches!(done.stop, StopReason::Cancelled) {
