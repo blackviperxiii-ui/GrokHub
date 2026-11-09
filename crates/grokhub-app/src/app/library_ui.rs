@@ -787,7 +787,10 @@ mod tests {
 
     #[test]
     fn workboards_automations_and_skills_each_have_a_rail_row_that_opens_them() {
-        let ids: Vec<&str> = crate::theme::LOADOUT_NAV.iter().map(|(id, _)| *id).collect();
+        let ids: Vec<&str> = crate::theme::LOADOUT_NAV
+            .iter()
+            .map(|(id, _)| *id)
+            .collect();
         assert_eq!(
             ids,
             [
@@ -822,7 +825,10 @@ mod tests {
     fn library_no_longer_carries_a_skills_button() {
         let src = include_str!("library_ui.rs");
         let code = src.split("#[cfg(test)]").next().expect("code");
-        assert!(!code.contains("ghost_pill(ui, \"Skills\")"), "Skills has its own rail row");
+        assert!(
+            !code.contains("ghost_pill(ui, \"Skills\")"),
+            "Skills has its own rail row"
+        );
     }
 
     #[test]
