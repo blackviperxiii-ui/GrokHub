@@ -2909,6 +2909,26 @@ mod tests {
         let _ = std::fs::remove_dir_all(&cfg);
     }
 
+    /// A folder opened so its times can be set. Windows opens a folder only
+    /// with backup semantics, and setting a time needs write-attributes.
+    fn dir_handle(path: &Path) -> std::fs::File {
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_WRITE_ATTRIBUTES: u32 = 0x0100;
+            const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+            std::fs::OpenOptions::new()
+                .access_mode(FILE_WRITE_ATTRIBUTES)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+                .open(path)
+                .unwrap()
+        }
+        #[cfg(not(windows))]
+        {
+            std::fs::File::open(path).unwrap()
+        }
+    }
+
     #[test]
     fn a_clean_worktree_is_removed_and_old_ones_are_pruned() {
         let dir = scratch("wtclean");
@@ -2918,10 +2938,7 @@ mod tests {
         let stale = cfg.join("worktrees").join("oldsession").join("a9");
         std::fs::create_dir_all(&stale).unwrap();
         let old = std::time::SystemTime::now() - Duration::from_secs(4 * 24 * 60 * 60);
-        std::fs::File::open(&stale)
-            .unwrap()
-            .set_modified(old)
-            .unwrap();
+        dir_handle(&stale).set_modified(old).unwrap();
         let sid = session("wtclean");
         let parent_id = sid.clone();
         let client = fake(&sid, move |req, _cancel, n| {
