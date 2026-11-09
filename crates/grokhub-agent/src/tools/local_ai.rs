@@ -9,7 +9,7 @@ use std::time::Instant;
 use serde_json::{json, Value};
 
 use crate::route::local_health::{self as health, Event};
-use crate::route::{connectivity, local, local_sidecar};
+use crate::route::{connectivity, local, local_doctor, local_sidecar};
 
 use super::ToolOutput;
 
@@ -23,7 +23,7 @@ pub fn status_schema() -> Value {
     json!({
         "type": "function",
         "name": STATUS,
-        "description": "Report the on-device (local) model: whether Local AI is on, the runtime and model paths, loaded or idle, the network state, recent health log lines and the last offline event. Read-only.",
+        "description": "Check the on-device (local) model: why it is or isn't ready, read from its model folders, plus engine, pick, drafter, loaded or idle, network and recent health. Use it when asked whether the local model works; never ask the user to check files.",
         "parameters": {
             "type": "object",
             "properties": {},
@@ -71,7 +71,9 @@ pub fn status_text(config_dir: &Path, now_ms: u64) -> String {
         None => "idle (starts on the next local request)".into(),
     };
     let events = health::read(config_dir);
+    let check = local_doctor::diagnose(config_dir);
     let mut out = vec![
+        format!("Check: {}", check.summary()),
         format!(
             "Local AI: {}",
             if local::switched_on() { "on" } else { "off" }
@@ -88,6 +90,14 @@ pub fn status_text(config_dir: &Path, now_ms: u64) -> String {
         format!("Loaded: {loaded}"),
         format!("Network: {}", connectivity::state().as_str()),
     ];
+    // The folders, the pick and the drafter; the switch and engine are above.
+    out.extend(
+        check
+            .facts
+            .iter()
+            .filter(|f| !f.starts_with("Local AI switch:") && !f.starts_with("Engine:"))
+            .map(|f| format!("- {f}")),
+    );
     let recent: Vec<String> = events
         .iter()
         .rev()
@@ -115,10 +125,15 @@ pub fn status_text(config_dir: &Path, now_ms: u64) -> String {
 }
 
 pub fn status(_args: &Value) -> ToolOutput {
-    ToolOutput::ok(status_text(
-        &crate::perm::config_dir(),
-        grokhub_core::now_ms(),
-    ))
+    let dir = crate::perm::config_dir();
+    let mut text = status_text(&dir, grokhub_core::now_ms());
+    // The reason is read: the next message starts the model again instead
+    // of waiting out the retry pause.
+    if local::start_failure().is_some() {
+        local::clear_start_error();
+        text.push_str("\nCleared the failed start, so the next message starts the model again.");
+    }
+    ToolOutput::ok(text)
 }
 
 /// Ask `rt` the one question; the report names the time and the answer.
@@ -202,14 +217,32 @@ mod tests {
         let now = health::read(&dir).last().map(|e| e.ts_ms).unwrap();
         let text = status_text(&dir, now + 120_000);
         let lines: Vec<&str> = text.lines().collect();
-        assert_eq!(lines[0], "Local AI: off");
-        assert!(lines[1].starts_with("Runtime: "), "{text}");
-        assert!(lines[2].starts_with("Engine: "), "{text}");
-        assert!(lines[3].starts_with("Model: "), "{text}");
-        assert_eq!(lines[4], "Loaded: idle (starts on the next local request)");
-        assert_eq!(lines[5], "Network: online");
         assert_eq!(
-            &lines[6..],
+            lines[0],
+            "Check: Local AI is switched off, so the model on disk isn't used."
+        );
+        assert_eq!(lines[1], "Local AI: off");
+        assert!(lines[2].starts_with("Runtime: "), "{text}");
+        assert!(lines[3].starts_with("Engine: "), "{text}");
+        assert!(lines[4].starts_with("Model: "), "{text}");
+        assert_eq!(lines[5], "Loaded: idle (starts on the next local request)");
+        assert_eq!(lines[6], "Network: online");
+        let health = lines
+            .iter()
+            .position(|l| *l == "Recent health:")
+            .expect("health lines");
+        assert!(
+            lines[7..health].iter().all(|l| l.starts_with("- ")),
+            "{text}"
+        );
+        assert!(
+            lines[7..health]
+                .iter()
+                .any(|l| l.starts_with("- The engine ")),
+            "{text}"
+        );
+        assert_eq!(
+            &lines[health..],
             [
                 "Recent health:",
                 "- 2m ago: net (offline)",

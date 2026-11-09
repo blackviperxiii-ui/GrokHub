@@ -1,0 +1,4 @@
+- A downloaded local model no longer reads as "not set up" for the rest of the session after one failed start: it tries again a minute later, a draft model that keeps it from starting is dropped (and stays off for that pair), and draft or vision helper files are never loaded as the chat model.
+- Chats with an 18+ voice stay on this computer for every turn, and when the local model can't answer, the chat says why in one line instead of going online or showing a raw provider error.
+- Ask the assistant why the local model isn't ready and it reads its own model folders and tells you what it found, instead of asking you to check files.
+- An OpenRouter privacy-settings refusal hands the turn to the next model instead of ending the chat with the raw notice.

@@ -116,7 +116,7 @@ pub fn read_defs() -> &'static [ToolDef] {
         },
         ToolDef {
             name: local_ai::STATUS,
-            blurb: "Report the on-device model's state and recent health",
+            blurb: "Diagnose the local model by reading its own folders",
             defer: true,
             schema: local_ai::status_schema,
             visible: always,

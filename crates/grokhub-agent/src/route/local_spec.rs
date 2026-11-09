@@ -305,7 +305,12 @@ pub fn plan(l: &Launch) -> Plan {
     // Say which test turned it off.
     let decision = match decision {
         Decision::Off("the speed test found the draft model didn't help") if live_off => {
-            Decision::Off(LIVE_OFF)
+            // A pair that never ran (it stopped the start) kept no guesses at all.
+            if stored.is_some_and(|v| v.acceptance == 0.0 && v.gain == 0.0) {
+                Decision::Off(START_OFF)
+            } else {
+                Decision::Off(LIVE_OFF)
+            }
         }
         d => d,
     };
@@ -418,6 +423,32 @@ fn live_verdict(t: &Timing, now: u64) -> Option<(PathBuf, String, ld::Verdict)> 
 
 /// Why drafting stopped after live replies.
 pub const LIVE_OFF: &str = "too few of the draft model's guesses were kept in your chats";
+
+/// Why drafting stopped after the drafter kept the model from starting.
+pub const START_OFF: &str = "the draft model kept this model from starting, so it runs alone";
+
+/// The model only started once its drafter came off: that pair stays off
+/// until the retest ([`ld::RETEST_SECS`]), and Settings says why.
+pub fn draft_broke_start() {
+    let Some((key, dir)) = running().lock().ok().and_then(|mut r| {
+        if let Some((_, d)) = r.status.as_mut() {
+            *d = Decision::Off(START_OFF);
+        }
+        r.key.take()
+    }) else {
+        return;
+    };
+    let _ = ld::save_verdict(
+        &dir,
+        &key,
+        ld::Verdict {
+            keep: false,
+            acceptance: 0.0,
+            gain: 0.0,
+            retest_at: Some(now_secs() + ld::RETEST_SECS),
+        },
+    );
+}
 
 /// When the unattended speed test may look again, and what it said last.
 #[derive(Default)]
