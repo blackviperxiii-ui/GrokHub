@@ -1380,6 +1380,38 @@ fn set_memory_writes(state: State<'_, ShellState>, on: bool) -> Result<memory::N
     memory::set_writes(&workspace(&state), on)
 }
 
+#[tauri::command]
+fn pause_memory_row(
+    state: State<'_, ShellState>,
+    id: String,
+    paused: bool,
+) -> Result<memory::Notes, String> {
+    memory::pause_row(&workspace(&state), &id, paused)
+}
+
+#[tauri::command]
+fn add_personal_fact(
+    state: State<'_, ShellState>,
+    text: String,
+    group: String,
+) -> Result<memory::Notes, String> {
+    memory::add_fact(&workspace(&state), &text, &group)
+}
+
+/// Saves the readable copy in Downloads on this computer. Desktop only.
+#[tauri::command]
+fn export_personal() -> Result<String, String> {
+    let dir = grokhub_core::diagnostics::downloads_dir()
+        .ok_or_else(|| "Couldn't find your Downloads folder.".to_string())?;
+    memory::export_to(&dir)
+}
+
+/// Deletes every learned line for good. Desktop only; the page asks first.
+#[tauri::command]
+fn wipe_personal(state: State<'_, ShellState>) -> Result<memory::Wiped, String> {
+    memory::wipe(&workspace(&state))
+}
+
 /// Every connector call can wait on a server's slot while chat or a check
 /// holds it for up to the startup or tool timeout, so all of them run off
 /// the main thread.
@@ -1932,6 +1964,18 @@ async fn get_skills(state: State<'_, ShellState>) -> Result<skills::Page, String
     let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
     let home = grokhub_core::user_home();
     off_main(move || skills::load(&dir, &workspace, home.as_deref())).await
+}
+
+/// Switch a listed skill on or off for chat. Desktop only.
+#[tauri::command]
+async fn set_skill_on(
+    state: State<'_, ShellState>,
+    name: String,
+    on: bool,
+) -> Result<skills::Page, String> {
+    let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
+    let home = grokhub_core::user_home();
+    off_main(move || skills::set_on(&dir, &workspace, home.as_deref(), &name, on)).await?
 }
 
 /// The page names the skill; the shell finds its folder itself.
@@ -3366,6 +3410,10 @@ pub fn run() {
             approve_memory_row,
             reject_memory_row,
             set_memory_writes,
+            pause_memory_row,
+            add_personal_fact,
+            export_personal,
+            wipe_personal,
             list_connectors,
             check_connectors,
             restart_connector,
@@ -3406,6 +3454,7 @@ pub fn run() {
             fetch_plugin_market,
             get_skills,
             open_skill_folder,
+            set_skill_on,
             get_interests,
             add_interest,
             interest_act,

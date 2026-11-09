@@ -31,6 +31,7 @@ vi.mock("./api", () => ({
   getCapabilities: api.getCapabilities,
   getSettings: api.getSettings,
   getMemory: api.getMemory,
+  PERSONAL_ADD_GROUPS: [["about", "About you"]],
   getWorkboard: () => Promise.resolve({ followUp: [], columns: [], archived: [], stamp: 0 }),
   onChatEvent: (handler: (envelope: ChatEnvelope) => void) => {
     api.chatHandlers.push(handler);
@@ -149,13 +150,13 @@ describe("App pages", () => {
     };
     api.getMemory.mockResolvedValue(notes);
     render(<App />);
-    await userEvent.click(tab("Memory"));
+    await userEvent.click(tab("Personal"));
     const project = await screen.findByLabelText("Project notes");
     await userEvent.type(project, "half typed");
 
     api.getMemory.mockResolvedValue({ ...notes, global: "I like long answers\n" });
     await userEvent.click(tab("Chat"));
-    await userEvent.click(tab("Memory"));
+    await userEvent.click(tab("Personal"));
 
     await waitFor(() => expect(screen.getByLabelText("Global notes")).toHaveValue("I like long answers\n"));
     expect(screen.getByLabelText("Project notes")).toHaveValue("the build needs node 22\nhalf typed");

@@ -90,6 +90,8 @@ pub const WEB_COMMANDS: &[&str] = &[
     "approve_memory_row",
     "reject_memory_row",
     "set_memory_writes",
+    "pause_memory_row",
+    "add_personal_fact",
     "list_connectors",
     "check_connectors",
     "restart_connector",
@@ -972,6 +974,8 @@ mod tests {
             "approve_memory_row",
             "reject_memory_row",
             "set_memory_writes",
+            "pause_memory_row",
+            "add_personal_fact",
             "list_connectors",
             "get_pulse",
             "pulse_act",
@@ -1001,6 +1005,9 @@ mod tests {
             assert!(web_command(name), "{name}");
         }
         for name in [
+            // Export saves on the computer and Wipe can't be undone: desktop only.
+            "export_personal",
+            "wipe_personal",
             "save_settings",
             "set_theme",
             "auto_setup",

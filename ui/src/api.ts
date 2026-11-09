@@ -562,6 +562,10 @@ export interface MemoryRow {
   /** When the line was written or last changed. */
   updated: string;
   proposed: boolean;
+  /** Kept, but chat, the profile block and the nightly review skip it. */
+  paused: boolean;
+  /** The Personal group it shows under, by its plain name. */
+  group: string;
   /** Claims this line corrects, joined for the panel. */
   corrects: string;
 }
@@ -677,6 +681,44 @@ export function rejectMemoryRow(id: string): Promise<MemoryNotes> {
 
 export function setMemoryWrites(on: boolean): Promise<MemoryNotes> {
   return invoke<MemoryNotes>("set_memory_writes", { on });
+}
+
+/** Keep a learned line but stop using it, or use it again. */
+export function pauseMemoryRow(id: string, paused: boolean): Promise<MemoryNotes> {
+  return invoke<MemoryNotes>("pause_memory_row", { id, paused });
+}
+
+/** The groups a line can be added to: the key sent, and the name shown. */
+export const PERSONAL_ADD_GROUPS = [
+  ["about", "About you"],
+  ["likes", "What you like"],
+  ["routines", "Your routines"],
+  ["needs", "What you need"],
+  ["thinking", "How you like things done"],
+] as const;
+
+export type PersonalGroupKey = (typeof PERSONAL_ADD_GROUPS)[number][0];
+
+/** Add a line about you in your own words. */
+export function addPersonalFact(text: string, group: PersonalGroupKey): Promise<MemoryNotes> {
+  return invoke<MemoryNotes>("add_personal_fact", { text, group });
+}
+
+/** Saves one readable copy in Downloads; returns where. Desktop only. */
+export function exportPersonal(): Promise<string> {
+  return invoke<string>("export_personal");
+}
+
+export interface PersonalWiped {
+  removed: number;
+  /** Private lines that were locked and stay until opened. */
+  locked: number;
+  notes: MemoryNotes;
+}
+
+/** Deletes every learned line for good. Desktop only. */
+export function wipePersonal(): Promise<PersonalWiped> {
+  return invoke<PersonalWiped>("wipe_personal");
 }
 
 /** One MCP server from `mcp.json`, as the Connectors page shows it. */
@@ -2114,7 +2156,7 @@ export function onUpdateAvailable(handler: (view: UpdateView) => void): Promise<
   return subscribe<UpdateView>(UPDATE_EVENT, handler);
 }
 
-/** The Skills page (src-tauri/src/skills.rs). Read only. */
+/** The Skills page (src-tauri/src/skills.rs). Built-in skills stay off it. */
 export type SkillSource = "cabin" | "project" | "user" | "plugin" | "builtin";
 
 export interface SkillRow {
@@ -2125,6 +2167,8 @@ export interface SkillRow {
   source: SkillSource;
   /** The skill's folder, empty for a built-in. */
   folder: string;
+  /** False when it's switched off: it stays listed but chat won't use it. */
+  on: boolean;
 }
 
 export interface SkillPage {
@@ -2133,6 +2177,11 @@ export interface SkillPage {
 
 export function getSkills(): Promise<SkillPage> {
   return invoke<SkillPage>("get_skills");
+}
+
+/** Switch a skill on or off for chat. Desktop only; returns the new page. */
+export function setSkillOn(name: string, on: boolean): Promise<SkillPage> {
+  return invoke<SkillPage>("set_skill_on", { name, on });
 }
 
 /** The shell finds the folder from the source and name itself. */
