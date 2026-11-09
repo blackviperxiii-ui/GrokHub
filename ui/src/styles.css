@@ -1505,7 +1505,8 @@ button.danger {
 
 /* Local engine and draft model: cards like .card, full width. */
 .local-engine,
-.local-draft-offer {
+.local-draft-offer,
+.local-library {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -1519,13 +1520,16 @@ button.danger {
 
 .local-engine h3,
 .local-draft-offer h3,
+.local-library h3,
 .local-engine p,
-.local-draft-offer p {
+.local-draft-offer p,
+.local-library p {
   margin: 0;
 }
 
 .local-engine button,
-.local-draft-offer button {
+.local-draft-offer button,
+.local-library button {
   align-self: flex-start;
 }
 
@@ -4412,4 +4416,22 @@ label.toggle-row {
 .feed-items {
   margin: 0 0 8px;
   padding-left: 18px;
+}
+
+/* Download models: kind tabs, then one row per model. */
+.local-library-tabs,
+.local-library-queue {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.local-library ul {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }

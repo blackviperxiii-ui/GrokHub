@@ -57,13 +57,12 @@ fn only_a_plan_that_holds_writes_and_the_network_counts_as_enforced() {
         ..held(true)
     };
     assert!(!bare.enforced(), "no isolation at all");
-    // Writes: Landlock on Linux, Seatbelt on macOS, nothing yet on Windows.
+    // Writes: Landlock on Linux; Seatbelt on macOS and the process container
+    // on Windows, which a plan has isolation only with.
     #[cfg(target_os = "linux")]
     assert_eq!(held(true).enforced(), landlock::abi().is_some());
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     assert!(held(true).enforced());
-    #[cfg(windows)]
-    assert!(!held(true).enforced());
 }
 
 #[test]

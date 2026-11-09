@@ -71,6 +71,8 @@ impl Manifest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArchiveFormat {
     TarGz,
+    /// The speech engine's archives.
+    TarBz2,
     Zip,
 }
 
@@ -78,6 +80,7 @@ impl PlatformAsset {
     pub fn archive_format(&self) -> Option<ArchiveFormat> {
         match self.format.as_str() {
             "tar.gz" => Some(ArchiveFormat::TarGz),
+            "tar.bz2" => Some(ArchiveFormat::TarBz2),
             "zip" => Some(ArchiveFormat::Zip),
             _ => None,
         }
@@ -423,7 +426,7 @@ pub fn download_engine(
 
 /// Download one archive into its `.part` file and check its SHA-256. A part
 /// that is already whole is only checked, never asked for again.
-fn fetch_asset(
+pub(crate) fn fetch_asset(
     bin: &Path,
     asset: &PlatformAsset,
     fetch: &dyn Fetch,
@@ -607,10 +610,18 @@ fn safe_join(base: &Path, entry: &Path) -> Option<PathBuf> {
     Some(base.join(entry))
 }
 
-fn extract_archive(archive: &Path, fmt: ArchiveFormat, into: &Path) -> Result<(), String> {
+pub(crate) fn extract_archive(
+    archive: &Path,
+    fmt: ArchiveFormat,
+    into: &Path,
+) -> Result<(), String> {
     fs::create_dir_all(into).map_err(|e| e.to_string())?;
     match fmt {
         ArchiveFormat::TarGz => extract_tar_gz(archive, into),
+        ArchiveFormat::TarBz2 => {
+            let file = File::open(archive).map_err(|e| e.to_string())?;
+            extract_tar(bzip2::read::BzDecoder::new(file), into)
+        }
         ArchiveFormat::Zip => extract_zip(archive, into),
     }
 }
@@ -620,7 +631,10 @@ fn extract_archive(archive: &Path, fmt: ArchiveFormat, into: &Path) -> Result<()
 /// nothing points outside the extract folder and the loader finds real files.
 fn extract_tar_gz(archive: &Path, into: &Path) -> Result<(), String> {
     let file = File::open(archive).map_err(|e| e.to_string())?;
-    let decoder = GzDecoder::new(file);
+    extract_tar(GzDecoder::new(file), into)
+}
+
+fn extract_tar(decoder: impl Read, into: &Path) -> Result<(), String> {
     let mut tar = tar::Archive::new(decoder);
     let mut links: Vec<(PathBuf, String)> = Vec::new();
     for entry in tar.entries().map_err(|e| e.to_string())? {
@@ -960,6 +974,7 @@ mod tests {
     fn test_manifest(body: &[u8], fmt: ArchiveFormat) -> Manifest {
         let format = match fmt {
             ArchiveFormat::TarGz => "tar.gz",
+            ArchiveFormat::TarBz2 => "tar.bz2",
             ArchiveFormat::Zip => "zip",
         };
         Manifest {

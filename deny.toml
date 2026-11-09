@@ -13,12 +13,18 @@ ignore = [
     { id = "RUSTSEC-2026-0370", reason = "unmaintained zbus 5 deps via ashpd and secret-service; remove with zbus 6" },
     { id = "RUSTSEC-2026-0371", reason = "unmaintained zbus 5 deps via ashpd and secret-service; remove with zbus 6" },
     { id = "RUSTSEC-2026-0372", reason = "unmaintained zbus 5 deps via ashpd and secret-service; remove with zbus 6" },
+    # glib 0.18 has unsound Iterator impls. It comes in through gtk-rs 0.18, which
+    # Tauri 2's Linux webview stack pins, and there is no patched 0.18 release.
+    # Drop this when Tauri moves to gtk4.
+    { id = "RUSTSEC-2024-0429", reason = "gtk-rs 0.18 via Tauri 2 Linux webview; no fix in 0.18; drop with the gtk4 move" },
 ]
 
 [licenses]
 version = 2
 # Permissive licenses, plus MPL-2.0 (file-level copyleft, used unchanged by
 # option-ext via dirs) and the OFL / Ubuntu font licenses for egui's bundled fonts.
+# bzip2-1.0.6 is libbzip2's BSD-style licence, carried by libbz2-rs-sys (the
+# pure-Rust bzip2 that unpacks the speech engine's .tar.bz2).
 allow = [
     "0BSD",
     "Apache-2.0",
@@ -26,6 +32,7 @@ allow = [
     "BSD-2-Clause",
     "BSD-3-Clause",
     "BSL-1.0",
+    "bzip2-1.0.6",
     "CDLA-Permissive-2.0",
     "ISC",
     "MIT",

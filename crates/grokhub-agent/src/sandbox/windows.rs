@@ -439,6 +439,21 @@ pub struct Prepared {
 }
 
 pub fn prepare(plan: &super::Plan) -> Prepared {
+    let env = proxy_env(plan);
+    let token = match plan.writable.first().map(|ws| grant(ws)) {
+        Some(Ok(())) => {
+            for root in &plan.writable[1..] {
+                let _ = grant(root);
+            }
+            restricted_token().ok()
+        }
+        _ => None,
+    };
+    Prepared { token, env }
+}
+
+/// The proxy variables for one command (and the ones it must not inherit).
+pub fn proxy_env(plan: &super::Plan) -> Vec<(String, String)> {
     let mut env: Vec<(String, String)> = Vec::new();
     if let Some(addr) = &plan.proxy {
         for (key, value) in super::proxy::env(addr) {
@@ -453,14 +468,5 @@ pub fn prepare(plan: &super::Plan) -> Prepared {
             }
         }
     }
-    let token = match plan.writable.first().map(|ws| grant(ws)) {
-        Some(Ok(())) => {
-            for root in &plan.writable[1..] {
-                let _ = grant(root);
-            }
-            restricted_token().ok()
-        }
-        _ => None,
-    };
-    Prepared { token, env }
+    env
 }
