@@ -190,7 +190,7 @@ pub fn action_defs() -> &'static [ToolDef] {
             blurb: "Fetch a public URL",
             defer: true,
             schema: web_fetch::schema,
-            visible: not_readonly,
+            visible: always,
         },
         ToolDef {
             // Eager so OpenRouter / local always see the schema (research playbook
@@ -199,7 +199,7 @@ pub fn action_defs() -> &'static [ToolDef] {
             blurb: "Search the public web (free by default)",
             defer: false,
             schema: web_search::schema,
-            visible: not_readonly,
+            visible: always,
         },
         ToolDef {
             name: "image_generate",

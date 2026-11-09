@@ -57,6 +57,30 @@ pub(crate) fn too_long(command: &str) -> Option<String> {
     None
 }
 
+/// Tools a model sometimes types into the shell as if they were programs
+/// (`bash: web_search: command not found`, then the same call twice more).
+const TOOLS_NOT_COMMANDS: [&str; 6] = [
+    "web_search",
+    "web_fetch",
+    "report_findings",
+    "todo_write",
+    "load_tool_schema",
+    "search_replace",
+];
+
+/// A plain answer for a command that starts with one of the cabin's own tool
+/// names, so the model calls the tool instead of retrying the shell.
+pub(crate) fn names_a_tool(command: &str) -> Option<String> {
+    let first = command
+        .split_whitespace()
+        .find(|word| !word.contains('='))?
+        .trim_matches(|c| c == '"' || c == '\'');
+    let tool = TOOLS_NOT_COMMANDS.iter().find(|name| **name == first)?;
+    Some(format!(
+        "`{tool}` is a tool you call directly, not a shell command. Nothing ran. Call the {tool} tool itself."
+    ))
+}
+
 pub fn run(workspace: &Path, args: &Value, stop: &dyn Fn() -> bool) -> ToolOutput {
     run_adoptable(workspace, args, stop, None)
 }
@@ -96,6 +120,9 @@ pub(crate) fn run_adoptable(
     }
     if crate::sudo_pass::names_helper(&command) {
         return ToolOutput::err(*crate::sudo_pass::HELPER_REFUSAL);
+    }
+    if let Some(why) = names_a_tool(&command) {
+        return ToolOutput::err(why);
     }
     if let Some(why) = too_long(&command) {
         return ToolOutput::err(why);
@@ -991,6 +1018,24 @@ pub(crate) fn plain_dir(path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_tool_typed_into_the_shell_is_turned_back() {
+        for typed in [
+            "web_search \"aqir research tokens\"",
+            "  web_fetch https://example.com",
+            "FOO=1 report_findings '{}'",
+        ] {
+            let why = super::names_a_tool(typed).unwrap_or_default();
+            assert!(
+                why.contains("is a tool you call directly"),
+                "{typed}: {why}"
+            );
+        }
+        for real in ["ls -la", "cargo test web_search", "echo web_fetch", ""] {
+            assert_eq!(super::names_a_tool(real), None, "{real}");
+        }
+    }
+
     #[test]
     fn output_of_a_command_that_fetched_is_fenced() {
         let before = crate::sandbox::proxy::let_out_count();

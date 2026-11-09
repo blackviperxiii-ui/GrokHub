@@ -529,7 +529,7 @@ pub fn public_only_resolve(netloc: &str) -> std::io::Result<Vec<std::net::Socket
 mod tests {
     use super::*;
     use crate::auto_review::{review, ReviewIn};
-    use crate::gate::{self, decide_with, Decision, Gate, PermMode};
+    use crate::gate::{decide_with, Decision, Gate, PermMode};
     use crate::perm::{parse_rule, Action, Policy};
     use crate::{
         CancelToken, ClientError, ModelClient, ResponsesRequest, StreamEvent, TurnOutput, Usage,
@@ -965,10 +965,8 @@ mod tests {
             ws,
             Some(&policy(vec![allow.clone()])),
         );
-        match plan {
-            Decision::Refuse(text) => assert!(text.contains(gate::READ_ONLY_PHASE), "{text}"),
-            other => panic!("plan mode must stay read-only: {other:?}"),
-        }
+        // Plan mode reads the web under the same rules: an allowed fetch runs.
+        assert!(matches!(plan, Decision::Run), "{plan:?}");
 
         let auto = chat(true, PermMode::Auto, false);
         let base = decide_with(
@@ -1015,7 +1013,11 @@ mod tests {
                 .collect()
         };
         let plan_names = names(Gate::phase_readonly());
-        assert!(!plan_names.iter().any(|n| n == "web_fetch"));
+        // Plan mode can look things up (LO-51) but still makes nothing.
+        assert!(
+            plan_names.iter().any(|n| n == "web_search"),
+            "{plan_names:?}"
+        );
         assert!(!plan_names.iter().any(|n| n == "image_generate"));
         let live = names(chat(true, PermMode::Ask, false));
         for name in [

@@ -4196,8 +4196,8 @@ mod tests {
         assert_eq!(hosted, vec![false]);
         assert_eq!(
             cabin,
-            vec![false],
-            "a read-only session has no search at all, as the gate already says"
+            vec![true],
+            "a read-only session still looks things up with the cabin tool, under the gate's checks"
         );
         crate::session_tools::set_plan_session("hosted-plan", true);
         let (hosted, _) = run_with("hosted-plan", chat(gate::PermMode::Ask, true, false));
