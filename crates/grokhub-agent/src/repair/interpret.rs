@@ -86,6 +86,8 @@ pub fn interpret(probe: ProbeId, out: &ProbeOutput) -> Vec<Finding> {
         ProbeId::WuPending => wu_pending(out),
         // They need the program's name: see [`interpret_subject`].
         ProbeId::CrashDumps | ProbeId::CrashLog | ProbeId::AppCrashes => Vec::new(),
+        // Read in-process by `fans`.
+        ProbeId::Fans => Vec::new(),
     }
 }
 
