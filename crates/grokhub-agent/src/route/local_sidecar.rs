@@ -848,11 +848,23 @@ fn load(config_dir: &Path, want: Want) -> Result<Busy, String> {
     // A dead sidecar restarts as it was (the crash breaker below counts it).
     let swap = match slot.as_ref() {
         Some(side) if !side.alive() => Plan::Keep,
-        running => swap_plan(config_dir, &paths.model, running),
+        running => swap_plan(config_dir, &paths.model, running, want),
+    };
+    // A step up waits for a quiet chat, so a reply never sits through a
+    // reload; a request after a quiet spell is a new task and takes it now.
+    let swap = match swap {
+        Plan::Later { model, stand_in } if secs_since_use() < QUIET_SECS => {
+            *PENDING_STEP_UP.lock().expect("pending step up") =
+                Some((model, stand_in, want_need(want)));
+            Plan::Keep
+        }
+        Plan::Later { model, stand_in } => Plan::Load { model, stand_in },
+        other => other,
     };
     let (model, stand_in) = match swap {
-        Plan::Keep => (paths.model.clone(), None),
+        Plan::Keep | Plan::Later { .. } => (paths.model.clone(), None),
         Plan::Load { model, stand_in } => {
+            PENDING_STEP_UP.lock().expect("pending step up").take();
             if let Some(side) = slot.take() {
                 health::log_to(config_dir, "swap", Some(&swap_note(&model, stand_in)), None);
                 LAST_SWAP_SECS.store(unix_secs(), Ordering::SeqCst);
@@ -922,6 +934,30 @@ fn load(config_dir: &Path, want: Want) -> Result<Busy, String> {
 /// How [`start`]'s out-of-memory error begins.
 const OUT_OF_MEMORY: &str = "the local model ran out of memory";
 
+/// A chat quiet this long has finished its task: a step up may load.
+pub const QUIET_SECS: u64 = 20;
+
+/// A bigger model [`super::local_swap::plan`] wants once the chat is quiet,
+/// and the need it was for.
+static PENDING_STEP_UP: Mutex<
+    Option<(
+        PathBuf,
+        Option<super::local_swap::StandIn>,
+        super::local_scale::Need,
+    )>,
+> = Mutex::new(None);
+
+/// A keep-warm load plans for the need it warms for; a request for its own.
+fn want_need(want: Want) -> super::local_scale::Need {
+    match want {
+        Want::Warm(_) => *WARM_NEED.lock().expect("warm need"),
+        Want::Any | Want::Request => super::local_scale::current_need(),
+    }
+}
+
+/// The need a keep-warm load plans for: a step up's, else Normal.
+static WARM_NEED: Mutex<super::local_scale::Need> = Mutex::new(super::local_scale::Need::Normal);
+
 /// When the running model was last swapped for another.
 static LAST_SWAP_SECS: AtomicU64 = AtomicU64::new(0);
 
@@ -937,27 +973,98 @@ fn on_disk(config_dir: &Path) -> Vec<(&'static LocalModel, PathBuf)> {
     super::local_swap::on_disk(&dirs)
 }
 
-/// What the next load runs: the pick, or a smaller model on disk for a reason
+/// What the next load runs: the pick, or another model on disk for a reason
 /// [`super::local_swap::plan`] gives. The caller holds the slot.
-fn swap_plan(config_dir: &Path, home: &Path, running: Option<&Sidecar>) -> Plan {
+fn swap_plan(config_dir: &Path, home: &Path, running: Option<&Sidecar>, want: Want) -> Plan {
     let loaded = running.map(|s| (s.model.as_path(), s.stand_in));
-    let low_battery = super::local::low_battery();
-    // Only a low battery swaps a running model: skip the disk scan otherwise.
-    let on_disk = if low_battery || running.is_none_or(|s| s.stand_in.is_some()) {
-        on_disk(config_dir)
-    } else {
-        Vec::new()
-    };
+    let on_disk = on_disk(config_dir);
     super::local_swap::plan(super::local_swap::Now {
         home,
         loaded,
         on_disk: &on_disk,
-        low_battery,
+        low_battery: super::local::low_battery(),
         kept_loaded: keep_loaded(),
         forced: std::env::var_os("GROKHUB_LOCAL_MODEL").is_some(),
         in_flight: in_flight(),
         secs_since_swap: unix_secs().saturating_sub(LAST_SWAP_SECS.load(Ordering::SeqCst)),
+        need: want_need(want),
+        scale: super::local_scale::scale_now(unix_ms()),
     })
+}
+
+/// The cabin sampler's tick for scaling, between requests: a step up the
+/// last task wanted loads once the chat is quiet, and a bigger model that no
+/// longer fits (the computer got busy) or a model that isn't the lightest
+/// while a game runs stops, so the next request starts the right one.
+pub fn tick_scale(config_dir: &Path) {
+    if in_flight() > 0 || local_gov::paused() || STARTING.load(Ordering::SeqCst) {
+        return;
+    }
+    let quiet = secs_since_use() >= QUIET_SECS;
+    let pending = PENDING_STEP_UP.lock().expect("pending step up").clone();
+    let mut slot = global_slot().lock().expect("sidecar global");
+    if in_flight() > 0 {
+        return;
+    }
+    let Some(side) = slot.as_ref().filter(|s| s.alive()) else {
+        return;
+    };
+    let scale = super::local_scale::scale_now(unix_ms());
+    let step_down = side.stand_in == Some(super::local_swap::StandIn::Performance)
+        && super::local_swap::catalog_for(&side.model)
+            .is_some_and(|m| super::local_scale::step_down_due(m, &scale));
+    let gaming = scale.gaming && side.stand_in != Some(super::local_swap::StandIn::Gaming);
+    if step_down || gaming {
+        if let Some(side) = slot.take() {
+            let why = if gaming {
+                "a game started"
+            } else {
+                "the computer got busy"
+            };
+            health::log_to(
+                config_dir,
+                "swap",
+                Some(&format!("stopped the bigger model: {why}")),
+                None,
+            );
+            LAST_SWAP_SECS.store(unix_secs(), Ordering::SeqCst);
+            retire(side);
+        }
+        PENDING_STEP_UP.lock().expect("pending step up").take();
+        return;
+    }
+    let Some((model, _, need)) = pending.filter(|_| quiet) else {
+        return;
+    };
+    if side.model == model || keep_loaded() || WARMING.swap(true, Ordering::SeqCst) {
+        PENDING_STEP_UP.lock().expect("pending step up").take();
+        return;
+    }
+    PENDING_STEP_UP.lock().expect("pending step up").take();
+    *WARM_NEED.lock().expect("warm need") = need;
+    if let Some(side) = slot.take() {
+        health::log_to(
+            config_dir,
+            "swap",
+            Some(&swap_note(
+                &model,
+                Some(super::local_swap::StandIn::Performance),
+            )),
+            None,
+        );
+        LAST_SWAP_SECS.store(unix_secs(), Ordering::SeqCst);
+        retire(side);
+    }
+    drop(slot);
+    let dir = config_dir.to_path_buf();
+    let generation = WARM_GEN.load(Ordering::SeqCst);
+    std::thread::spawn(move || {
+        if load(&dir, Want::Warm(generation)).is_ok() {
+            health::log_to(&dir, "warm", Some("stepped up for a hard task"), None);
+        }
+        *WARM_NEED.lock().expect("warm need") = super::local_scale::Need::Normal;
+        WARMING.store(false, Ordering::SeqCst);
+    });
 }
 
 /// The health log's note for a swap to `model`.
@@ -971,6 +1078,10 @@ fn swap_note(model: &Path, why: Option<super::local_swap::StandIn>) -> String {
         Some(super::local_swap::StandIn::OutOfMemory) => {
             format!("{name} because the pick ran out of memory")
         }
+        Some(super::local_swap::StandIn::Gaming) => format!("{name} while a game runs"),
+        Some(super::local_swap::StandIn::Lighter) => format!("{name} for a light task"),
+        Some(super::local_swap::StandIn::Tight) => format!("{name} because less memory is free"),
+        Some(super::local_swap::StandIn::Performance) => format!("{name} for a hard task"),
         None => format!("{name}, the Settings pick"),
     }
 }
@@ -1653,9 +1764,12 @@ mod tests {
         let dir = std::env::temp_dir();
         let side = idle_child_sidecar(600, unix_secs());
         let home = Path::new("m.gguf");
-        assert_eq!(swap_plan(&dir, home, Some(&side)), Plan::Keep);
         assert_eq!(
-            swap_plan(&dir, Path::new("other.gguf"), Some(&side)),
+            swap_plan(&dir, home, Some(&side), Want::Request),
+            Plan::Keep
+        );
+        assert_eq!(
+            swap_plan(&dir, Path::new("other.gguf"), Some(&side), Want::Request),
             Plan::Load {
                 model: PathBuf::from("other.gguf"),
                 stand_in: None
@@ -1664,7 +1778,7 @@ mod tests {
         );
         let held = busy();
         assert_eq!(
-            swap_plan(&dir, Path::new("other.gguf"), Some(&side)),
+            swap_plan(&dir, Path::new("other.gguf"), Some(&side), Want::Request),
             Plan::Keep,
             "a request in flight keeps its model"
         );
@@ -1823,6 +1937,24 @@ mod tests {
             draft: None,
             cpu_only: false,
         }
+    }
+
+    #[test]
+    fn gaming_runs_the_model_on_the_cpu_with_half_the_threads() {
+        let g = autoconfig::gaming_launch(&LaunchArgs {
+            threads: 16,
+            threads_batch: Some(16),
+            ..gpu_launch()
+        });
+        assert!(g.cpu_only);
+        assert_eq!(
+            (g.ngl, g.n_cpu_moe, g.tensor_split.clone()),
+            (0, None, None)
+        );
+        assert_eq!((g.threads, g.threads_batch), (8, Some(8)));
+        assert!(g.to_args().windows(2).any(|w| w == ["--device", "none"]));
+        let two = autoconfig::gaming_launch(&gpu_launch());
+        assert_eq!(two.threads, 2, "never under two threads");
     }
 
     #[test]

@@ -458,13 +458,16 @@ pub fn picker(
 ) -> Picker {
     let picks = local_picker::score(p, ls::local_models(), bench);
     let mut models: Vec<ModelRow> = Vec::new();
+    // In each bucket the defaults come first, then the optional makers.
     for bucket in [Bucket::Recommended, Bucket::MaySlow, Bucket::Hidden] {
-        models.extend(
-            picks
-                .iter()
-                .filter(|x| x.bucket == bucket)
-                .map(|x| row(p, x, bench)),
-        );
+        for optional in [false, true] {
+            models.extend(
+                picks
+                    .iter()
+                    .filter(|x| x.bucket == bucket && x.model.optional == optional)
+                    .map(|x| row(p, x, bench)),
+            );
+        }
     }
     let on_this_pc = found
         .iter()
