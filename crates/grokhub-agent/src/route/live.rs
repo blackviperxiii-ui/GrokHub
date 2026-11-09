@@ -893,6 +893,7 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     } else {
         super::sizing::turn_estimate(&sizing_key(call), turn, fresh_size, call.ctx_tokens, now_ms)
     };
+    super::sizing::note_latest(call.session, turn, size_est.size);
     let input = RouteInput {
         provider: call.provider,
         class: call.class,
