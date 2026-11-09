@@ -2254,7 +2254,7 @@ impl Cabin {
 
     /// Every native run and unattended loop, foreground and background alike.
     fn halt_background(&mut self) {
-        grokhub_agent::halt_all_sessions();
+        crate::desktop_mcp::halt_all_sessions();
         self.stop_native_unattended();
     }
 

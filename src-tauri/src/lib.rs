@@ -13,11 +13,13 @@ pub mod background;
 mod brand_guard;
 pub mod capabilities;
 pub mod chips;
+pub mod code;
 pub mod connectors;
 pub mod credential;
 pub mod export;
 pub mod game_companion;
 pub mod goals;
+mod helper_asks;
 pub mod history;
 pub mod home;
 #[cfg(desktop)]
@@ -30,6 +32,8 @@ pub mod journal;
 pub mod library;
 pub mod local_ai;
 pub mod local_engine;
+#[cfg(desktop)]
+mod local_governor;
 #[cfg(test)]
 mod md_fixtures;
 pub mod memory;
@@ -569,6 +573,7 @@ fn answer_permission(
     answer: String,
 ) -> Result<(), String> {
     let answer = agent::parse_answer(&answer)?;
+    helper_asks::answered(&conversation_id, &call_id);
     let session = state
         .chats
         .lock()
@@ -602,6 +607,7 @@ fn answer_elicit(
     if !matches!(action.as_str(), "accept" | "decline" | "cancel") {
         return Err(format!("unknown answer: {action}"));
     }
+    helper_asks::answered(&conversation_id, &id);
     let chats = state.chats.lock().unwrap_or_else(|e| e.into_inner());
     let session = chats
         .get(&conversation_id)
@@ -613,6 +619,12 @@ fn answer_elicit(
         value.as_deref().unwrap_or(""),
     );
     Ok(())
+}
+
+/// Helper questions a chat still waits on, for when the chat opens.
+#[tauri::command]
+fn helper_questions(conversation_id: String) -> Vec<agent::UiEvent> {
+    helper_asks::waiting(&conversation_id)
 }
 
 #[tauri::command]
@@ -732,6 +744,7 @@ fn drop_worker(state: &ShellState, conversation_id: &str) {
     if let Some(session) = removed {
         session.cancel();
     }
+    helper_asks::chat_ended(conversation_id);
 }
 
 /// The input kinds of the model a chat starts at, for the chips' notes.
@@ -1533,6 +1546,20 @@ async fn answer_connector_key(id: String, approve: bool) -> Result<connectors::C
 #[tauri::command]
 fn get_capabilities() -> capabilities::Capabilities {
     capabilities::current()
+}
+
+/// Code tab: the workspace's repo, read only.
+#[tauri::command]
+async fn code_repo(state: State<'_, ShellState>) -> Result<code::Repo, String> {
+    let dir = workspace(&state);
+    off_main(move || code::repo(&dir)).await
+}
+
+/// Code tab: one changed file's diff, read only.
+#[tauri::command]
+async fn code_diff(state: State<'_, ShellState>, path: String) -> Result<code::Diff, String> {
+    let dir = workspace(&state);
+    off_main(move || code::diff(&dir, &path)).await?
 }
 
 #[tauri::command]
@@ -3331,6 +3358,8 @@ pub fn run() {
                 grokhub_core::paths::user_home().unwrap_or_default(),
                 config_dir.clone(),
             );
+            #[cfg(desktop)]
+            local_governor::start(config_dir.clone());
             pulse_feed::start(config_dir.clone(), || {
                 let client: Box<dyn grokhub_agent::ModelClient> = Box::new(model_client()?.0);
                 Ok((client, grokhub_agent::route::host::chat_start().0))
@@ -3376,6 +3405,8 @@ pub fn run() {
             });
             #[cfg(desktop)]
             start_scheduler(app);
+            // Questions from helpers that outlive their chat's reply.
+            helper_asks::start(app.handle().clone());
             // The internet log, when it's on and the cabin isn't running.
             #[cfg(desktop)]
             net_watch::start(app.state::<ShellState>().config_dir.clone());
@@ -3419,6 +3450,7 @@ pub fn run() {
             transcribe,
             answer_permission,
             answer_elicit,
+            helper_questions,
             cancel_chat,
             steer_chat,
             turns::read_turn,
@@ -3470,6 +3502,8 @@ pub fn run() {
             sign_in_connector,
             save_connector_key,
             answer_connector_key,
+            code_repo,
+            code_diff,
             get_journal,
             journal_add,
             journal_act,

@@ -1,22 +1,24 @@
-//! Late-night wind-down (`grokhub_core::wind_down`), opt-in under Settings →
-//! Behavior. Once a minute, off the UI thread, read the PC's idle time and
-//! whether a game, a fullscreen app or another app's GPU work is on; the
-//! cabin adds its own downloads and agent tasks. One soft Pulse card a night
-//! offers to sleep the PC, and its button only opens the confirm sheet.
+//! Wind-down (`grokhub_core::wind_down`), opt-in under Settings → Behavior.
+//! Once a minute, off the UI thread, read the PC's idle time and whether a
+//! game, a fullscreen app or another app's GPU work is on; the cabin adds
+//! its own downloads and agent tasks. While the user is at the PC, one card
+//! offers to set up sleep-after-idle or open the OS sleep settings. Once an
+//! idle time is saved, the PC sleeps itself after that long idle.
 
-use grokhub_core::wind_down::{self as wd, Busy, Machine, Tracker, Voice};
+use grokhub_core::wind_down::{self as wd, Busy, Machine, Step, Tracker, Voice};
 use grokhub_core::LocalClock;
 
 use super::*;
 
 /// Under the switch when the PC can't report what's running.
-const WIND_UNKNOWN_NOTE: &str = "This PC doesn't say whether a game, a fullscreen app or GPU work is running, so the sleep offer stays off.";
+const WIND_UNKNOWN_NOTE: &str = "This PC doesn't say whether a game, a fullscreen app or GPU work is running, so it won't sleep on its own.";
 
 /// How often the PC is read while the reminder is on.
 const READ_EVERY: Duration = Duration::from_secs(60);
 
-/// Deck shots (`scripts/deck-shots.ps1`) set this to read a fixed late,
-/// idle machine instead of the runner's own; `confirm` also opens the sheet.
+/// Deck shots (`scripts/deck-shots.ps1`) set this to read a fixed machine
+/// with the user present instead of the runner's own; `confirm` also opens
+/// the older sleep sheet.
 const DECK_ENV: &str = "GROKHUB_DECK_WIND_DOWN";
 
 #[derive(Default)]
@@ -37,10 +39,10 @@ fn deck_confirm() -> bool {
     super::loadout_home::deck_switch_is(DECK_ENV, "confirm")
 }
 
-/// 2 AM, 45 min idle, nothing running.
+/// The user is here (30 s idle), nothing running.
 fn deck_machine() -> Machine {
     Machine {
-        idle_secs: Some(45 * 60),
+        idle_secs: Some(30),
         game: Some(false),
         fullscreen: Some(false),
         external_gpu_pct: Some(3),
@@ -91,6 +93,46 @@ fn run_sleep(cmd: &str, args: &[&str]) -> Result<(), String> {
         Ok(_) => Err(format!("{cmd} refused to sleep the PC.")),
         Err(e) => Err(format!("Couldn't run {cmd}: {e}")),
     }
+}
+
+/// Open the OS's own sleep settings page.
+fn open_os_sleep_settings() -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        crate::win_native::open_path("ms-settings:powersleep")
+    }
+    #[cfg(target_os = "macos")]
+    {
+        spawn_first(&[(
+            "open",
+            &["x-apple.systempreferences:com.apple.preference.energysaver"],
+        )])
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        spawn_first(&[
+            ("gnome-control-center", &["power"]),
+            ("systemsettings", &["kcm_powerdevilprofilesconfig"]),
+            ("xfce4-power-manager-settings", &[]),
+        ])
+    }
+}
+
+/// Start the first of these settings apps that exists.
+#[cfg(unix)]
+fn spawn_first(apps: &[(&str, &[&str])]) -> Result<(), String> {
+    for (cmd, args) in apps {
+        let started = std::process::Command::new(cmd)
+            .args(*args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        if started.is_ok() {
+            return Ok(());
+        }
+    }
+    Err("Couldn't open the sleep settings. Look for Power or Sleep in your system settings.".into())
 }
 
 impl Cabin {
@@ -175,37 +217,73 @@ impl Cabin {
     }
 
     fn finish_wind_down(&mut self, machine: Machine, clock: &LocalClock) {
-        // The deck runner has no quiet hours or rhythm: wind down at 11 PM.
-        let wind_down = if deck_check() {
-            Some(23)
-        } else {
-            self.wind_down_hour()
-        };
         self.focus.wind.unknown = machine.busy() == Some(Busy::Unknown);
         let busy = self.wind_down_busy().or(machine.busy());
-        let Some(offer) = self
+        match self
             .wind_now()
-            .decide(clock, wind_down, machine.idle_secs, busy)
-        else {
-            return;
-        };
-        let voice = Voice::for_personality(&self.personality_id());
-        if grokhub_core::post_update(&mut self.updates, offer.card(clock, voice)) {
-            self.persist_updates();
-        }
-        self.wind_now().offered(clock);
-        self.save_wind();
-        if deck_confirm() {
-            self.confirm = Some(super::confirm::ConfirmKind::SleepPc);
+            .decide(clock.now_ms, machine.idle_secs, busy)
+        {
+            Some(Step::OfferSetup) => {
+                let voice = Voice::for_personality(&self.personality_id());
+                if grokhub_core::post_update(&mut self.updates, wd::Offer::Setup.card(clock, voice))
+                {
+                    self.persist_updates();
+                }
+                self.wind_now().offered();
+                self.save_wind();
+                if deck_confirm() {
+                    self.confirm = Some(super::confirm::ConfirmKind::SleepPc);
+                }
+            }
+            Some(Step::Sleep { .. }) => {
+                self.wind_now().slept(clock.now_ms);
+                self.save_wind();
+                // Tests and deck shots never sleep the machine they run on.
+                if !deck_check() && !cfg!(test) {
+                    if let Err(err) = sleep_pc() {
+                        self.status = err;
+                    }
+                }
+            }
+            None => {}
         }
     }
 
-    /// The card's Sleep the PC link: the confirm sheet. False for any other link.
+    /// The card's links: sleep-after-idle, the OS settings, or the older
+    /// card's confirm sheet. False for any other link.
     pub(super) fn open_wind_down_link(&mut self, href: &str) -> bool {
-        if href.trim() != wd::SLEEP_LINK {
+        let href = href.trim();
+        if let Some(min) = wd::auto_link_minutes(href) {
+            self.set_auto_sleep(min);
+            return true;
+        }
+        if href == wd::OS_LINK {
+            self.status = match open_os_sleep_settings() {
+                Ok(()) => "Opened your sleep settings".into(),
+                Err(err) => err,
+            };
+            return true;
+        }
+        if href != wd::SLEEP_LINK {
             return false;
         }
         self.confirm = Some(super::confirm::ConfirmKind::SleepPc);
+        true
+    }
+
+    /// Save an idle time; the PC sleeps after that long idle from now on.
+    pub(super) fn set_auto_sleep(&mut self, min: u32) -> bool {
+        let before = self.wind_now().clone();
+        self.wind_now().set_auto_sleep(min);
+        if !self.save_wind() {
+            *self.wind_now() = before;
+            return false;
+        }
+        self.focus.wind.last_read = None;
+        self.status = format!(
+            "The PC sleeps after {} idle. Change it in Settings › Behavior.",
+            wd::idle_label(u64::from(min))
+        );
         true
     }
 
@@ -248,18 +326,38 @@ impl Cabin {
         true
     }
 
-    /// Settings → Behavior: the wind-down toggle.
+    /// Settings → Behavior: the wind-down toggle and its idle time.
     pub(super) fn ui_wind_down_row(&mut self, ui: &mut egui::Ui) {
         let mut on = self.wind_now().on;
         if crate::cards::settings_toggle(
             ui,
-            "Late-night wind-down",
-            "Well past your usual wind-down, or after an hour idle with nothing running, offer once a night to sleep the PC. Never during a game, a fullscreen app, a render, a download or an agent task, and only after you confirm.",
+            "Sleep when idle",
+            "Sleep the PC after it sits idle the time you pick. Never during a game, a fullscreen app, a render, a download or an agent task.",
             &mut on,
         ) {
             self.set_wind_on(on);
         }
-        if on && self.focus.wind.unknown {
+        if !on {
+            return;
+        }
+        let current = self.wind_now().auto_sleep_min;
+        let mut pick = None;
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Sleep after");
+            for min in wd::IDLE_CHOICES {
+                let label = wd::idle_label(u64::from(min));
+                if ui.selectable_label(current == Some(min), label).clicked() {
+                    pick = Some(min);
+                }
+            }
+        });
+        if let Some(min) = pick {
+            self.set_auto_sleep(min);
+        }
+        if ui.button("Open sleep settings").clicked() {
+            self.open_wind_down_link(wd::OS_LINK);
+        }
+        if self.focus.wind.unknown {
             crate::cards::settings_note(ui, WIND_UNKNOWN_NOTE);
         }
     }
@@ -309,71 +407,83 @@ mod tests {
         });
     }
 
+    fn away() -> Machine {
+        Machine {
+            idle_secs: Some(68 * 3600),
+            ..deck_machine()
+        }
+    }
+
     #[test]
-    fn late_and_idle_posts_one_card_a_night() {
+    fn an_idle_pc_gets_no_card_and_a_present_user_gets_the_set_up_once() {
         let _g = crate::config::hold_test_config();
         let mut cabin = Cabin::quiet_for_test();
         armed(&mut cabin);
         assert_eq!(cabin.wind_down_hour(), Some(23));
         let before = cabin.updates.len();
+        cabin.finish_wind_down(away(), &late());
+        assert_eq!(cabin.updates.len(), before, "nobody is there to see it");
         cabin.finish_wind_down(deck_machine(), &late());
         assert_eq!(cabin.updates.len(), before + 1);
         assert!(cabin
             .updates
             .iter()
-            .any(|c| c.title == "2 AM and you've been idle 45 min. Sleep the PC?"));
+            .any(|c| c.title == "Let the PC sleep on its own when you step away?"));
+        assert!(!cabin
+            .updates
+            .iter()
+            .any(|c| c.title.contains("Sleep the PC?")));
         cabin.finish_wind_down(deck_machine(), &late());
-        assert_eq!(cabin.updates.len(), before + 1, "once a night");
-        assert_eq!(
-            wd::load(&crate::config::config_dir()).last_night,
-            Some(wd::night_of(&late()))
-        );
+        assert_eq!(cabin.updates.len(), before + 1, "only once");
+        assert!(wd::load(&crate::config::config_dir()).setup_offered);
     }
 
     #[test]
-    fn an_agent_task_or_a_download_holds_the_card_back() {
+    fn a_saved_idle_time_sleeps_only_when_nothing_runs() {
         let _g = crate::config::hold_test_config();
         let mut cabin = Cabin::quiet_for_test();
         armed(&mut cabin);
+        assert!(cabin.open_wind_down_link(&wd::auto_link(30)));
+        assert_eq!(cabin.wind_now().auto_sleep_min, Some(30));
+        assert_eq!(
+            wd::load(&crate::config::config_dir()).auto_sleep_min,
+            Some(30)
+        );
+        assert!(cabin.status.contains("30 min"), "{}", cabin.status);
         let before = cabin.updates.len();
         cabin.running = true;
-        cabin.finish_wind_down(deck_machine(), &late());
-        assert_eq!(cabin.updates.len(), before);
+        cabin.finish_wind_down(away(), &late());
         assert_eq!(cabin.wind_down_busy(), Some(Busy::Task));
+        assert_eq!(
+            cabin.wind_now().last_sleep_ms,
+            None,
+            "an agent task holds it"
+        );
         cabin.running = false;
         let gaming = Machine {
             game: Some(true),
-            ..deck_machine()
+            ..away()
         };
         cabin.finish_wind_down(gaming, &late());
-        assert_eq!(cabin.updates.len(), before);
-        assert_eq!(cabin.wind_now().last_night, None, "nothing offered yet");
-    }
-
-    #[test]
-    fn an_unreadable_signal_posts_nothing_and_says_why() {
-        let _g = crate::config::hold_test_config();
-        let mut cabin = Cabin::quiet_for_test();
-        armed(&mut cabin);
-        let before = cabin.updates.len();
+        assert_eq!(cabin.wind_now().last_sleep_ms, None, "a game holds it");
         let blind = Machine {
             game: None,
-            ..deck_machine()
+            ..away()
         };
         cabin.finish_wind_down(blind, &late());
-        assert_eq!(cabin.updates.len(), before);
         assert!(cabin.focus.wind.unknown);
-        assert_eq!(cabin.wind_now().last_night, None, "nothing offered");
-        cabin.finish_wind_down(deck_machine(), &late());
-        assert_eq!(cabin.updates.len(), before + 1);
-        assert!(!cabin.focus.wind.unknown);
+        assert_eq!(cabin.wind_now().last_sleep_ms, None, "unknown fails closed");
+        cabin.finish_wind_down(away(), &late());
+        assert_eq!(cabin.wind_now().last_sleep_ms, Some(late().now_ms));
+        assert_eq!(cabin.updates.len(), before, "sleeping posts no card");
     }
 
     #[test]
-    fn the_link_opens_the_confirm_sheet_and_nothing_else() {
+    fn the_links_set_up_open_settings_or_confirm_and_nothing_else() {
         let _g = crate::config::hold_test_config();
         let mut cabin = Cabin::quiet_for_test();
         assert!(!cabin.open_wind_down_link("https://example.com"));
+        assert!(!cabin.open_wind_down_link("grokhub://wind-down/auto?min=0"));
         assert_eq!(cabin.confirm, None);
         assert!(cabin.open_wind_down_link("grokhub://wind-down/sleep"));
         assert_eq!(

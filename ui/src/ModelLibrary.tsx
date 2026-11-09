@@ -10,7 +10,7 @@ import {
   type LibraryView,
 } from "./api";
 
-/** Download models: every catalog model by tab, with Download all. */
+/** Download models: every catalog model by tab, with the best lineup for this PC. */
 export function ModelLibrary() {
   const [view, setView] = useState<LibraryView | null>(null);
   const [status, setStatus] = useState<LibraryStatus | null>(null);
@@ -122,19 +122,21 @@ export function ModelLibrary() {
         </div>
       ) : (
         <div className="local-library-queue">
-          {open.all && (
-            <button type="button" onClick={() => void run(() => downloadModels(open.all?.ids ?? []))}>
-              Download all on this tab ({open.all.line})
+          {view.lineup && <p className="note">Best lineup for this PC: {view.lineup.line}</p>}
+          {view.lineup && view.lineup.ids.length > 0 ? (
+            <button type="button" onClick={() => void run(() => downloadModels(view.lineup?.ids ?? []))}>
+              Download lineup
             </button>
-          )}
-          {view.everything && (view.everything.ids.length > (open.all?.ids.length ?? 0)) && (
-            <button
-              type="button"
-              className="quiet"
-              onClick={() => void run(() => downloadModels(view.everything?.ids ?? []))}
-            >
-              Download everything that fits ({view.everything.line})
-            </button>
+          ) : (
+            view.everything && (
+              <button
+                type="button"
+                className="quiet"
+                onClick={() => void run(() => downloadModels(view.everything?.ids ?? []))}
+              >
+                Download everything that fits ({view.everything.line})
+              </button>
+            )
           )}
         </div>
       )}

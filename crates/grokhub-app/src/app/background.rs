@@ -997,7 +997,8 @@ pub(super) fn run_native_bg(
         steer: grokhub_agent::SteerQueue::new(),
         halt: Box::new(grokhub_agent::StampHalt {
             started_ms: grokhub_core::now_ms(),
-            read: || crate::desktop_mcp::read_halt_stamp(),
+            // Only Halt everything stops a background run; a chat's Stop doesn't.
+            read: || crate::desktop_mcp::read_halt_all_stamp(),
         }),
         gate,
         desktop: None,

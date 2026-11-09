@@ -23,7 +23,7 @@ impl HelperOffer {
 
     pub(super) fn ask(self) -> &'static str {
         match self {
-            HelperOffer::WindDown => "Offer to sleep the PC late at night?",
+            HelperOffer::WindDown => "Let the PC sleep when it sits idle?",
             HelperOffer::Tidy => "Suggest Downloads cleanups?",
         }
     }
@@ -31,7 +31,7 @@ impl HelperOffer {
     fn hint(self) -> &'static str {
         match self {
             HelperOffer::WindDown => {
-                "Once a night, when you're well past your usual stop or idle, I offer to sleep the PC. Never during a game or a task, and only after you confirm."
+                "Pick how long the PC sits idle before it sleeps. Never during a game, a download or a task."
             }
             HelperOffer::Tidy => {
                 "Once a week I look at Downloads and suggest old installers, big old archives and duplicates. Nothing moves until you approve it."
@@ -42,7 +42,7 @@ impl HelperOffer {
     fn turned_on(self) -> &'static str {
         match self {
             HelperOffer::WindDown => {
-                "Late-night wind-down is on. Turn it off in Settings › Behavior."
+                "Sleep when idle is on. Pick the idle time in Settings › Behavior."
             }
             HelperOffer::Tidy => "Downloads cleanups are on. Turn them off in Settings › Behavior.",
         }

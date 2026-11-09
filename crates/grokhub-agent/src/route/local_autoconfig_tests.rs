@@ -622,3 +622,112 @@ fn the_vram_baseline_is_taken_with_our_model_loaded_so_loading_it_never_reads_as
     assert!(!vram_dropped_since_launch());
     reset_free_probe();
 }
+
+fn whole_gpu_12b() -> LaunchArgs {
+    LaunchArgs {
+        backend: Backend::Vulkan,
+        ngl: 49,
+        all_layers: 49,
+        n_cpu_moe: None,
+        ctx: 16_384,
+        kv: KvType::Q8,
+        threads: 8,
+        threads_batch: Some(16),
+        flash_attn: true,
+        mlock: false,
+        tensor_split: None,
+        draft: None,
+        cpu_only: false,
+    }
+}
+
+#[test]
+fn a_whole_gpu_launch_that_only_changes_threads_is_the_same_launch() {
+    let running = whole_gpu_12b();
+    assert!(same_launch(&running, &running.clone()));
+    let fewer_threads = LaunchArgs {
+        threads: 4,
+        threads_batch: None,
+        ..whole_gpu_12b()
+    };
+    assert!(same_launch(&running, &fewer_threads));
+    let shorter = LaunchArgs {
+        ctx: 8_192,
+        ..whole_gpu_12b()
+    };
+    assert!(!same_launch(&running, &shorter));
+    // Part of it on the CPU: threads do the work there, so they matter.
+    let partial = LaunchArgs {
+        ngl: 30,
+        ..whole_gpu_12b()
+    };
+    let partial_fewer = LaunchArgs {
+        threads: 4,
+        ..partial.clone()
+    };
+    assert!(!same_launch(&partial, &partial_fewer));
+}
+
+#[test]
+fn a_launch_needs_its_gpu_weights_kv_and_buffers_on_the_gpu_and_the_rest_in_ram() {
+    assert_eq!(
+        launch_need_mb(&dense_12b(), &whole_gpu_12b()),
+        (10_943, 512)
+    );
+    let moe = LaunchArgs {
+        ngl: 31,
+        all_layers: 31,
+        n_cpu_moe: Some(10),
+        ctx: 8_192,
+        ..whole_gpu_12b()
+    };
+    assert_eq!(launch_need_mb(&moe_26b(), &moe), (13_342, 4_784));
+    let cpu = on_cpu(&whole_gpu_12b());
+    assert_eq!(launch_need_mb(&dense_12b(), &cpu), (0, 10_943));
+}
+
+#[test]
+fn a_second_server_fits_beside_only_with_a_margin_and_a_known_reading() {
+    let free = |vram: Option<u64>, ram: Option<u64>| FreeNow {
+        vram_free_mb: vram,
+        ram_free_mb: ram,
+    };
+    assert!(fits_beside(free(Some(12_100), Some(3_000)), (11_000, 512)));
+    assert!(!fits_beside(free(Some(12_099), Some(3_000)), (11_000, 512)));
+    assert!(!fits_beside(free(None, Some(3_000)), (11_000, 512)));
+    assert!(!fits_beside(free(Some(20_000), Some(2_600)), (11_000, 512)));
+    assert!(fits_beside(free(None, Some(14_100)), (0, 10_943)));
+    assert!(!fits_beside(free(None, Some(14_000)), (0, 10_943)));
+}
+
+#[test]
+fn the_running_models_own_memory_is_added_back_for_a_fresh_plan() {
+    let before = FreeNow {
+        vram_free_mb: Some(8_000),
+        ram_free_mb: Some(30_000),
+    };
+    let resident = FreeNow {
+        vram_free_mb: Some(4_000),
+        ram_free_mb: Some(29_000),
+    };
+    let own = taken(before, resident);
+    assert_eq!(
+        own,
+        FreeNow {
+            vram_free_mb: Some(4_000),
+            ram_free_mb: Some(1_000),
+        }
+    );
+    let now = FreeNow {
+        vram_free_mb: Some(3_000),
+        ram_free_mb: None,
+    };
+    assert_eq!(
+        with_own(now, own),
+        FreeNow {
+            vram_free_mb: Some(7_000),
+            ram_free_mb: None,
+        }
+    );
+    assert_eq!(taken(FreeNow::default(), resident), FreeNow::default());
+}

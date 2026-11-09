@@ -61,6 +61,7 @@ import { AutoNote, FirstRun, useAutoSetup } from "./AutoSetup";
 // idle so that first click does not wait on the network or disk.
 const loaders = {
   agents: () => import("./Agents").then((m) => ({ default: m.Agents })),
+  code: () => import("./Code").then((m) => ({ default: m.Code })),
   connectors: () => import("./Connectors").then((m) => ({ default: m.Connectors })),
   imagine: () => import("./Imagine").then((m) => ({ default: m.Imagine })),
   devices: () => import("./Devices").then((m) => ({ default: m.Devices })),
@@ -83,6 +84,7 @@ const Devices = lazy(loaders.devices);
 const History = lazy(loaders.history);
 const Home = lazy(loaders.home);
 const Journal = lazy(loaders.journal);
+const Code = lazy(loaders.code);
 const Library = lazy(loaders.library);
 const Memory = lazy(loaders.memory);
 const Objectives = lazy(loaders.objectives);
@@ -657,6 +659,16 @@ export function App() {
             onCards={setCardChats}
             onSwept={noteSweep}
             onResume={({ prompt, conversationId }) => {
+              setPrefill((now) => ({ text: prompt, n: (now?.n ?? 0) + 1, conversationId }));
+              setView("chat");
+            }}
+          />
+        </Page>
+      )}
+      {opened.has("code") && !caps.remote && (
+        <Page shown={view === "code"}>
+          <Code
+            onTask={({ prompt, conversationId }) => {
               setPrefill((now) => ({ text: prompt, n: (now?.n ?? 0) + 1, conversationId }));
               setView("chat");
             }}

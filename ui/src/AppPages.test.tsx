@@ -37,6 +37,7 @@ vi.mock("./api", () => ({
     api.chatHandlers.push(handler);
     return Promise.resolve(() => {});
   },
+  helperQuestions: () => Promise.resolve([]),
   onEventGap: () => Promise.resolve(() => {}),
   // The scheduler has its own tests (App.test.tsx, Automations.test.tsx).
   onAutomationRan: () => Promise.resolve(() => {}),
