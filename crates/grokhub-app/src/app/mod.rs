@@ -128,6 +128,8 @@ mod acp;
 mod amr_memory;
 mod auto_setup_ui;
 mod chat_kick;
+mod halt_cause;
+use halt_cause::{stop_cause_of, stopped_seam};
 mod followups;
 mod helper_offers_ui;
 mod learn_notes_ui;
@@ -372,25 +374,6 @@ const DELETE_ALL_ARM: Duration = Duration::from_secs(5);
 const DELETE_ALL_MIN: Duration = Duration::from_millis(500);
 /// Closing line on a reply cut off by Stop, so it reads as stopped, not finished.
 const STOPPED_TURN_SEAM: &str = "\n\n*Stopped*";
-
-/// The closing line of a stopped reply: "*Stopped: <cause>*" when the halt
-/// named one, so nobody (the model included) has to guess why it ended.
-fn stopped_seam(cause: Option<&str>) -> String {
-    match cause.map(str::trim).filter(|c| !c.is_empty()) {
-        Some(cause) => format!("\n\n*Stopped: {cause}*"),
-        None => STOPPED_TURN_SEAM.to_string(),
-    }
-}
-
-/// The cause a [`Cabin::halt_work`] status names.
-fn stop_cause_of(status: &str) -> &'static str {
-    match status {
-        "Redirected" => "you sent a new message",
-        "Hands on — halted" => "you took the controls",
-        "Voice off" => "voice was turned off",
-        _ => "you stopped it",
-    }
-}
 const PALETTE_LIST_H: f32 = 280.0;
 const PROFILE_NAME_MAX: usize = 64;
 
@@ -2323,15 +2306,7 @@ impl Cabin {
         self.host_diff_kick = false;
         self.verify_rx = None;
         // Stop ends the run; it must not erase what the run already said and did.
-        let cause = self.halt_cause.take();
-        if self.chat_job_thread.is_some() {
-            eprintln!(
-                "grokhub halt: cause={} thread={} model={}",
-                cause.unwrap_or("unnamed"),
-                self.chat_job_thread.as_deref().unwrap_or(""),
-                self.run_model()
-            );
-        }
+        let cause = self.take_halt_cause();
         let kept = self.stopped_turn_transcript(cause);
         self.plan_pending = None;
         self.agents.clear();
@@ -2369,13 +2344,6 @@ impl Cabin {
         self.abandon_turn_card();
         self.chat_job_thread = None;
         self.persist();
-    }
-
-    /// [`Self::halt_in_flight`], with the cause its Stopped line names, so the
-    /// next turn (and the user) sees why the reply ended.
-    pub(super) fn halt_in_flight_for(&mut self, cause: &'static str) {
-        self.halt_cause.get_or_insert(cause);
-        self.halt_in_flight();
     }
 
     /// What a stopped run already streamed (thinking, reply, tool calls), with a
