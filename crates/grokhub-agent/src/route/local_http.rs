@@ -23,6 +23,12 @@ pub struct HttpLocalRuntime {
     thinking: super::local_effort::Thinking,
     /// Keeps the global sidecar's request count up while this runtime lives.
     busy: Option<Arc<super::local_sidecar::Busy>>,
+    /// Server slots; past one, slot 0 is left to the chat on screen.
+    slots: u32,
+    /// Busy slots split one KV pool's context.
+    unified: bool,
+    /// Requests on the server this runtime talks to.
+    in_flight: Option<Arc<std::sync::atomic::AtomicUsize>>,
 }
 
 impl std::fmt::Debug for HttpLocalRuntime {
@@ -45,7 +51,52 @@ impl HttpLocalRuntime {
             model: "local".into(),
             thinking: Default::default(),
             busy: None,
+            slots: 1,
+            unified: false,
+            in_flight: None,
         }
+    }
+
+    /// The server's slots and request count, for [`Self::share_of`] and
+    /// [`Self::background_slot`].
+    pub fn with_slots(
+        mut self,
+        slots: u32,
+        unified: bool,
+        in_flight: Arc<std::sync::atomic::AtomicUsize>,
+    ) -> Self {
+        self.slots = slots.max(1);
+        self.unified = unified;
+        self.in_flight = Some(in_flight);
+        self
+    }
+
+    /// A request guard for one call, unless this runtime already holds one
+    /// for its whole life: each request counts once.
+    fn call_busy(&self) -> Option<super::local_sidecar::Busy> {
+        self.busy.is_none().then(super::local_sidecar::busy)
+    }
+
+    /// One busy slot's part of `n_ctx`: the whole of it, or with a unified
+    /// pool an equal share among the requests running now (at most one per slot).
+    fn share_of(&self, n_ctx: u64) -> u64 {
+        if !self.unified || self.slots <= 1 {
+            return n_ctx;
+        }
+        let active = self
+            .in_flight
+            .as_ref()
+            .map_or(1, |n| n.load(std::sync::atomic::Ordering::SeqCst))
+            .clamp(1, self.slots as usize);
+        n_ctx / active as u64
+    }
+
+    /// The slot a background call takes: never slot 0, which stays free (and
+    /// keeps its cached prefix) for the chat on screen; `None` with one slot.
+    fn background_slot(&self) -> Option<u32> {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static NEXT: AtomicU32 = AtomicU32::new(0);
+        (self.slots > 1).then(|| 1 + NEXT.fetch_add(1, Ordering::Relaxed) % (self.slots - 1))
     }
 
     /// What `/props` said about thinking (see [`super::local_effort`]).
@@ -88,12 +139,16 @@ impl HttpLocalRuntime {
         messages: &[ChatMessage],
         stream: bool,
         effort: Option<&str>,
+        slot: Option<u32>,
     ) -> Result<grokhub_core::http::Response, String> {
         if !self.loopback_ok() {
             return Err("local model URL must be loopback (127.0.0.1 / localhost)".into());
         }
         super::local_sidecar::touch_global();
-        let body = chat_body(&self.model, messages, stream, &self.effort(effort));
+        let mut body = chat_body(&self.model, messages, stream, &self.effort(effort));
+        if let Some(id) = slot {
+            body["id_slot"] = json!(id);
+        }
         Self::agent()
             .post(&format!("{}/v1/chat/completions", self.base_url))
             .header("Authorization", &format!("Bearer {}", self.token))
@@ -102,9 +157,9 @@ impl HttpLocalRuntime {
             .map_err(request_failed)
     }
 
-    fn chat_once(&self, messages: &[ChatMessage]) -> Result<String, String> {
-        let _busy = super::local_sidecar::busy();
-        let resp = self.post_chat(messages, false, None)?;
+    fn chat_once(&self, messages: &[ChatMessage], slot: Option<u32>) -> Result<String, String> {
+        let _busy = self.call_busy();
+        let resp = self.post_chat(messages, false, None, slot)?;
         if resp.status() >= 400 {
             let status = resp.status();
             let body = resp.into_string().unwrap_or_default();
@@ -128,7 +183,7 @@ impl HttpLocalRuntime {
                 content: user.into(),
             },
         ];
-        let text = self.chat_once(&messages)?;
+        let text = self.chat_once(&messages, self.background_slot())?;
         parse_json_object(&text).ok_or_else(|| format!("local model did not return JSON: {text}"))
     }
 }
@@ -209,8 +264,8 @@ impl LocalRuntime for HttpLocalRuntime {
         effort: Option<&str>,
         on_delta: &mut dyn FnMut(&str),
     ) -> Result<String, String> {
-        let _busy = super::local_sidecar::busy();
-        let resp = self.post_chat(messages, true, effort)?;
+        let _busy = self.call_busy();
+        let resp = self.post_chat(messages, true, effort, None)?;
         if resp.status() >= 400 {
             let status = resp.status();
             let body = resp.into_string().unwrap_or_default();
@@ -241,7 +296,7 @@ impl LocalRuntime for HttpLocalRuntime {
             .get(&self.base_url)
         {
             if now.duration_since(*at) < PROPS_TTL {
-                return *n;
+                return n.map(|n| self.share_of(n));
             }
         }
         let n = self.fetch_n_ctx();
@@ -249,7 +304,7 @@ impl LocalRuntime for HttpLocalRuntime {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(self.base_url.clone(), (n, now));
-        n
+        n.map(|n| self.share_of(n))
     }
 
     fn chat_tools(
@@ -263,7 +318,7 @@ impl LocalRuntime for HttpLocalRuntime {
         if !self.loopback_ok() {
             return Err("local model URL must be loopback (127.0.0.1 / localhost)".into());
         }
-        let _busy = super::local_sidecar::busy();
+        let _busy = self.call_busy();
         super::local_sidecar::touch_global();
         // Streamed, so Stop (and a game starting) can end the turn between
         // tokens: dropping the stream closes the socket and the server stops
@@ -528,7 +583,9 @@ pub fn from_global_sidecar(busy: super::local_sidecar::Busy) -> Option<Arc<dyn L
         Some(end) => end.clone(),
         None => super::local_sidecar::global_endpoint()?,
     };
-    let mut rt = HttpLocalRuntime::new(end.base_url, end.token).with_thinking(end.thinking);
+    let mut rt = HttpLocalRuntime::new(end.base_url, end.token)
+        .with_thinking(end.thinking)
+        .with_slots(end.slots, end.unified, end.in_flight);
     rt.busy = Some(Arc::new(busy));
     Some(Arc::new(rt))
 }
@@ -608,6 +665,80 @@ mod tests {
         assert_eq!(rt.context_tokens(), Some(8_192));
         let wrong = HttpLocalRuntime::new(fake.base_url(), "not-the-token");
         assert_eq!(wrong.fetch_n_ctx(), None);
+    }
+
+    /// Answers `n` chat requests with a JSON object and hands back each body.
+    fn capture_server(n: usize) -> (String, std::thread::JoinHandle<Vec<Value>>) {
+        use std::io::{Read, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", l.local_addr().unwrap());
+        let h = std::thread::spawn(move || {
+            let mut bodies = Vec::new();
+            for _ in 0..n {
+                let (mut c, _) = l.accept().unwrap();
+                let mut r = BufReader::new(c.try_clone().unwrap());
+                let mut len = 0usize;
+                loop {
+                    let mut line = String::new();
+                    r.read_line(&mut line).unwrap();
+                    if line.trim().is_empty() {
+                        break;
+                    }
+                    if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        len = v.trim().parse().unwrap();
+                    }
+                }
+                let mut body = vec![0u8; len];
+                r.read_exact(&mut body).unwrap();
+                bodies.push(serde_json::from_slice(&body).unwrap());
+                let reply = r#"{"choices":[{"message":{"content":"{\"ok\":true}"}}]}"#;
+                write!(
+                    c,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                    reply.len()
+                )
+                .unwrap();
+            }
+            bodies
+        });
+        (base, h)
+    }
+
+    #[test]
+    fn background_calls_never_take_the_chats_slot_and_one_slot_pins_nothing() {
+        let (base, server) = capture_server(5);
+        let n = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let rt = HttpLocalRuntime::new(&base, "t").with_slots(3, true, n.clone());
+        for _ in 0..4 {
+            assert_eq!(rt.ask_json("s", "u").unwrap(), json!({"ok": true}));
+        }
+        let single = HttpLocalRuntime::new(&base, "t").with_slots(1, false, n);
+        single.ask_json("s", "u").unwrap();
+        let bodies = server.join().unwrap();
+        let slots: Vec<u64> = bodies[..4]
+            .iter()
+            .map(|b| b["id_slot"].as_u64().unwrap())
+            .collect();
+        assert!(slots.iter().all(|s| *s == 1 || *s == 2), "{slots:?}");
+        assert!(slots.contains(&1) && slots.contains(&2), "{slots:?}");
+        assert_eq!(bodies[4].get("id_slot"), None);
+    }
+
+    #[test]
+    fn busy_slots_in_one_pool_split_its_context_and_separate_slots_keep_theirs() {
+        let n = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let rt = HttpLocalRuntime::new("http://127.0.0.1:9", "t").with_slots(4, true, n.clone());
+        assert_eq!(rt.share_of(32_768), 32_768, "nothing running yet");
+        n.store(1, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(rt.share_of(32_768), 32_768);
+        n.store(2, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(rt.share_of(32_768), 16_384);
+        n.store(9, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(rt.share_of(32_768), 8_192, "at most one request per slot");
+        let own = HttpLocalRuntime::new("http://127.0.0.1:9", "t").with_slots(4, false, n.clone());
+        assert_eq!(own.share_of(8_192), 8_192);
+        let plain = HttpLocalRuntime::new("http://127.0.0.1:9", "t");
+        assert_eq!(plain.share_of(8_192), 8_192);
     }
 
     #[test]

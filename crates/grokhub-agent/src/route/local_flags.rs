@@ -10,6 +10,8 @@ use std::sync::{Arc, Mutex};
 
 use grokhub_core::local_profile::Backend;
 
+use super::local_autoconfig::GovState;
+
 /// The option names in `--help` text: the dash-led names that start each
 /// option's line (`-ub, --ubatch-size N` gives `-ub` and `--ubatch-size`).
 pub fn parse_options(help: &str) -> BTreeSet<String> {
@@ -91,6 +93,51 @@ pub struct RunFlags {
     pub vk_nodes_per_submit: Option<u32>,
     /// Start the child below normal priority (nice 10, `BELOW_NORMAL`).
     pub low_priority: bool,
+    /// Server slots and the prompt cache, on every launch.
+    pub slots: Slots,
+}
+
+/// `-np`, unified KV and prompt-cache reuse. Every field is `None` when the
+/// engine's `--help` doesn't list its flag.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Slots {
+    pub parallel: Option<u32>,
+    pub kv_unified: Option<bool>,
+    pub cache_reuse: Option<u32>,
+    pub cache_ram_mb: Option<u64>,
+}
+
+/// Smallest prompt chunk worth shifting back into place from the cache.
+pub const CACHE_REUSE: u32 = 256;
+/// The engine's own default host prompt cache; never more than a quarter of free RAM.
+pub const CACHE_RAM_MAX_MB: u64 = 8_192;
+
+/// Slots for a launch in `state` with `ctx` tokens: one when the machine is
+/// shared, the context is short or the model runs on the CPU; else two, or
+/// four in Ramp-up with 32k or more. One slot stays free for the chat on
+/// screen whenever there is more than one.
+pub fn slot_count(state: GovState, ctx: u32, on_cpu: bool) -> u32 {
+    match state {
+        _ if on_cpu || ctx < 16_384 => 1,
+        GovState::Throttle => 1,
+        GovState::Normal => 2,
+        GovState::RampUp if ctx >= 32_768 => 4,
+        GovState::RampUp => 2,
+    }
+}
+
+/// [`Slots`] for `n` slots, each flag only when `options` lists it. One slot
+/// keeps its KV to itself; more share one unified pool, so an idle slot's
+/// room goes to the busy one.
+pub fn slots(options: &BTreeSet<String>, n: u32, ram_free_mb: Option<u64>) -> Slots {
+    let has = |f: &str| options.contains(f);
+    Slots {
+        parallel: has("--parallel").then_some(n),
+        kv_unified: (has("--kv-unified") && has("--no-kv-unified")).then_some(n > 1),
+        cache_reuse: has("--cache-reuse").then_some(CACHE_REUSE),
+        cache_ram_mb: has("--cache-ram")
+            .then(|| ram_free_mb.map_or(CACHE_RAM_MAX_MB, |f| (f / 4).min(CACHE_RAM_MAX_MB))),
+    }
 }
 
 /// Ubatch size while the model shares the GPU under Throttle.
@@ -108,6 +155,7 @@ pub fn shared(options: &BTreeSet<String>, backend: Backend, on_gpu: bool) -> Run
         ubatch: (on_gpu && has("--ubatch-size")).then_some(SHARED_UBATCH),
         vk_nodes_per_submit: (on_gpu && backend == Backend::Vulkan).then_some(SHARED_VK_NODES),
         low_priority: true,
+        slots: Slots::default(),
     }
 }
 
@@ -124,7 +172,27 @@ impl RunFlags {
         if let Some(u) = self.ubatch {
             a.extend(["--ubatch-size".to_string(), u.to_string()]);
         }
+        let s = &self.slots;
+        if let Some(n) = s.parallel {
+            a.extend(["--parallel".to_string(), n.to_string()]);
+        }
+        match s.kv_unified {
+            Some(true) => a.push("--kv-unified".to_string()),
+            Some(false) => a.push("--no-kv-unified".to_string()),
+            None => {}
+        }
+        if let Some(n) = s.cache_reuse {
+            a.extend(["--cache-reuse".to_string(), n.to_string()]);
+        }
+        if let Some(mb) = s.cache_ram_mb {
+            a.extend(["--cache-ram".to_string(), mb.to_string()]);
+        }
         a
+    }
+
+    /// Sequences the KV cache holds at once (`-np`, 1 when unset).
+    pub fn seqs(&self) -> u32 {
+        self.slots.parallel.unwrap_or(1).max(1)
     }
 
     /// Environment the child starts with.
