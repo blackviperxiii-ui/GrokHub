@@ -22,6 +22,7 @@ pub mod home;
 #[cfg(desktop)]
 mod home_fps;
 pub mod home_tiles;
+mod home_updates;
 pub mod imagine;
 pub mod interests;
 pub mod journal;
@@ -2010,6 +2011,54 @@ async fn home_setup(module: String, undo: bool) -> Result<String, String> {
     }
 }
 
+/// Home's Updates & Drivers page. Asks the app's own updater first (when this
+/// install updates itself), then reads every other source off the main thread.
+#[tauri::command]
+async fn updates_page(
+    app: AppHandle,
+    state: State<'_, ShellState>,
+) -> Result<grokhub_core::home::updates::UpdatesPage, String> {
+    let dir = state.config_dir.clone();
+    let updatable = shell_update::UpdateView::now(&dir).updatable;
+    #[cfg(desktop)]
+    let newer = if updatable {
+        // Offline or a failed check: the page still lists the rest.
+        shell_update::plugin::check(&app, &dir)
+            .await
+            .ok()
+            .flatten()
+            .map(|u| u.version)
+    } else {
+        None
+    };
+    #[cfg(not(desktop))]
+    let newer = {
+        let _ = &app;
+        None
+    };
+    off_main(move || home_updates::page(&home_updates::read(&dir, newer, updatable))).await
+}
+
+/// One offer on the Updates page: opens its fixed page, or runs the system or
+/// app update (behind the OS prompt, never while a game runs).
+#[tauri::command]
+async fn run_update_offer(
+    app: AppHandle,
+    state: State<'_, ShellState>,
+    offer: grokhub_core::home::updates::Offer,
+) -> Result<String, String> {
+    if let Some(page) = home_updates::offer_page(offer) {
+        use tauri_plugin_opener::OpenerExt;
+        return app
+            .opener()
+            .open_url(page, None::<&str>)
+            .map(|_| String::new())
+            .map_err(|e| e.to_string());
+    }
+    let dir = state.config_dir.clone();
+    off_main(move || home_updates::run_offer(offer, &dir)).await?
+}
+
 /// A Home tile's Copy setup: the setup's steps, to paste by hand.
 #[tauri::command]
 fn home_setup_steps(module: String) -> Result<String, String> {
@@ -3448,6 +3497,8 @@ pub fn run() {
             home_turn_on,
             home_setup,
             home_setup_steps,
+            updates_page,
+            run_update_offer,
             home_catalog,
             set_home_layout,
             open_url

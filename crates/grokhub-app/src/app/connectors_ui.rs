@@ -300,7 +300,7 @@ impl Cabin {
         }
         self.ensure_native_listing();
         ui.horizontal(|ui| {
-            crate::cards::search_field(ui, &mut self.skill_q);
+            crate::cards::search_field(ui, &mut self.skills_tab.q);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if crate::cards::ghost_pill(ui, "Refresh") {
                     self.native_listing_cwd.clear();
@@ -310,7 +310,7 @@ impl Cabin {
             });
         });
         ui.add_space(12.0);
-        let q = self.skill_q.to_ascii_lowercase();
+        let q = self.skills_tab.q.to_ascii_lowercase();
         let mut picked: Option<(ConnectorRow, ConnectorAct)> = None;
         let snap = crate::native_mcp::snapshot();
         ui.horizontal(|ui| {
