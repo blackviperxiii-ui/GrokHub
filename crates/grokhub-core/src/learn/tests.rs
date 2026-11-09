@@ -791,3 +791,60 @@ fn the_learned_view_names_a_plan_reply_by_its_chip() {
         "You pick this about 8 times in 10 when a plan waits."
     );
 }
+
+#[test]
+fn auto_setup_reads_how_long_chips_went_unused() {
+    use super::setup::{chips_ignored_streak, usage};
+    let mut beliefs = Beliefs::default();
+    assert_eq!(chips_ignored_streak(&beliefs, T0), 0);
+    // 20 rows passed over on the composer and 12 on Home, none picked.
+    votes(&mut beliefs, &subject("chips:composer"), 0, 20, T0);
+    votes(&mut beliefs, &subject("chips:home"), 0, 12, T0);
+    // Single chips and other subjects are not rows.
+    votes(&mut beliefs, &subject("chip:0a1b2c3d4e5f"), 0, 50, T0);
+    votes(&mut beliefs, &subject("card:suggestion"), 0, 50, T0);
+    assert_eq!(chips_ignored_streak(&beliefs, T0), 32);
+    assert_eq!(usage(&beliefs, T0).chips_ignored_streak, 32);
+    assert_eq!(usage(&beliefs, T0).dismissed_week, 0);
+    // The streak fades with the evidence: half of it a half-life later.
+    assert_eq!(chips_ignored_streak(&beliefs, T0 + HALF_LIFE_MS), 16);
+
+    // One pick ends the run, until the pick itself has faded below one.
+    votes(&mut beliefs, &subject("chips:home"), 1, 0, T0);
+    assert_eq!(chips_ignored_streak(&beliefs, T0), 0);
+    assert_eq!(chips_ignored_streak(&beliefs, T0 + HALF_LIFE_MS), 16);
+
+    // A place the user marked wrong counts for nothing.
+    let mut beliefs = Beliefs::default();
+    votes(&mut beliefs, &subject("chips:composer"), 0, 40, T0);
+    votes(&mut beliefs, &subject("chips:home"), 0, 5, T0);
+    beliefs.mark_wrong(&subject("chips:composer"), T0);
+    assert_eq!(chips_ignored_streak(&beliefs, T0), 5);
+}
+
+#[test]
+fn enough_unused_chip_rows_make_auto_setup_offer_to_turn_them_off() {
+    use crate::autotune::rules::{propose, Signals};
+    use crate::autotune::settings::{Key, Value};
+    let mut beliefs = Beliefs::default();
+    votes(&mut beliefs, &subject("chips:composer"), 0, 29, T0);
+    let offers = |beliefs: &Beliefs| {
+        propose(&Signals {
+            usage: super::setup::usage(beliefs, T0),
+            ..Signals::default()
+        })
+        .into_iter()
+        .filter(|p| p.key == Key::Suggestions)
+        .map(|p| (p.rule, p.value, p.confidence))
+        .collect::<Vec<_>>()
+    };
+    assert_eq!(offers(&beliefs), Vec::new());
+    votes(&mut beliefs, &subject("chips:composer"), 0, 1, T0);
+    // 0.6 is above the offer line and below the act line: it is suggested,
+    // never switched off on its own.
+    assert_eq!(
+        offers(&beliefs),
+        [("chips_ignored", Value::Bool(false), 0.6)]
+    );
+    assert_eq!(step(0.6, 30.0, Undo::OneClick), Step::Suggest);
+}

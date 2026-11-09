@@ -297,9 +297,10 @@ impl Cabin {
             .then(|| rhythm.suggested_quiet())
             .flatten()
             .and_then(|(a, b)| Some((u8::try_from(a).ok()?, u8::try_from(b).ok()?)));
+        // The rest comes from the learning engine, the same in both apps.
         Usage {
             rhythm_quiet,
-            ..Usage::default()
+            ..grokhub_core::learn::hub::auto_usage(grokhub_core::now_ms())
         }
     }
 
