@@ -2939,6 +2939,7 @@ mod tests {
         set_last_error(None);
     }
 
+    #[cfg(unix)]
     #[test]
     fn background_work_never_starts_the_model_and_rides_on_one_already_loaded() {
         use std::os::unix::fs::PermissionsExt;
