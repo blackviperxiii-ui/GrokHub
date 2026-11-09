@@ -708,6 +708,13 @@ impl CancelToken {
         self.flag.store(false, Ordering::SeqCst);
     }
 
+    /// The Stop switch the HTTP layer polls while it waits on the network,
+    /// so a press hangs up the connection and the server stops generating.
+    pub fn stop_switch(&self) -> grokhub_core::http::StopSwitch {
+        let token = self.clone();
+        grokhub_core::http::StopSwitch::new(move || token.is_cancelled())
+    }
+
     pub fn is_cancelled(&self) -> bool {
         if self.flag.load(Ordering::SeqCst) {
             return true;
@@ -1344,21 +1351,34 @@ impl XaiClient {
         if let Some(turn) = self.over_socket(req, &body, wrote, cancel, idle, sink) {
             return turn;
         }
-        let response = self
-            .post_guarded(
+        // Stop hangs up the socket even while the model thinks with no bytes
+        // sent, so the server stops generating and billing (and a local
+        // server frees the GPU).
+        let stop = cancel.stop_switch();
+        let response = grokhub_core::http::with_stop(&stop, || {
+            self.post_guarded(
                 &self.url,
                 &req.conversation_id,
                 "text/event-stream",
                 req.call_timeout,
                 body,
             )
-            .inspect_err(|err| {
-                if matches!(err, ClientError::RateLimited { .. }) {
-                    crate::pace::note_limited(&req.model);
-                }
-            })?;
+        })
+        .map_err(|err| {
+            if cancel.is_cancelled() {
+                ClientError::Cancelled
+            } else {
+                err
+            }
+        })
+        .inspect_err(|err| {
+            if matches!(err, ClientError::RateLimited { .. }) {
+                crate::pace::note_limited(&req.model);
+            }
+        })?;
         crate::pace::note_ok(&req.model);
-        let mut turn = read_sse(response.into_reader(), cancel, idle, sink)?;
+        let reader = grokhub_core::http::with_stop(&stop, || response.into_reader());
+        let mut turn = read_sse(reader, cancel, idle, sink)?;
         for item in &mut turn.reasoning_items {
             if let InputItem::Reasoning { model, .. } = item {
                 *model = wrote.to_string();
@@ -1441,10 +1461,11 @@ impl XaiClient {
         };
         crate::harness::replay::note_request(&crate::perm::config_dir(), &body);
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let stop = cancel.stop_switch();
         let spawned = std::thread::Builder::new()
             .name("compact-read".into())
             .spawn(move || {
-                let reply = match call.send_json(body) {
+                let reply = grokhub_core::http::with_stop(&stop, || match call.send_json(body) {
                     Ok(resp) if resp.status() < 400 => {
                         let mut text = String::new();
                         CompactReply::Body(
@@ -1455,7 +1476,7 @@ impl XaiClient {
                         )
                     }
                     other => CompactReply::Answer(other),
-                };
+                });
                 let _ = tx.send(reply);
             });
         if let Err(e) = spawned {
