@@ -5,11 +5,14 @@
 //!     --budget-usd 1.00 [--k 3] [--model grok-4.3] [--effort low] [--only recall] \
 //!     [--ab prefix_cache] [--mde 10] [--provider grok|openrouter|local] [--out report.md]
 //!
-//! `--auth signin` (Grok only) uses the app's saved "Sign in with Grok"
-//! (the `xai-oauth` keychain entry, billed to the SuperGrok pool) instead of
-//! GROKHUB_EVAL_API_KEY. It only reads that entry and never refreshes it, so
-//! a token near expiry stops the run: open the app once so it renews the
-//! sign-in, then rerun. `--auth key` (the default) keeps the API key.
+//! `--auth signin` (Grok only) uses the app's saved "Sign in with Grok",
+//! billed to the SuperGrok pool, instead of GROKHUB_EVAL_API_KEY. It takes
+//! the first live one of: the `xai-oauth` keychain entry (Imagine), the
+//! shell's `shell-xai-oauth` entry, then the cabin's Settings > Account
+//! sign-in in your real config folder's `secrets.json`. It only reads them and
+//! never refreshes, writes or prints a token, so a token near expiry stops the
+//! run: open the app once so it renews the sign-in, then rerun. `--auth key`
+//! (the default) keeps the API key.
 //!
 //! `--provider openrouter` sends every call to `--provider-model` (an OpenRouter
 //! model id) with the key in GROKHUB_EVAL_OPENROUTER_KEY. `--provider local`
@@ -42,6 +45,7 @@ use grokhub_agent::{
 
 fn main() {
     // Read before the scratch folder takes over GROKHUB_CONFIG.
+    let real_config = grokhub_core::paths::config_dir();
     let lessons = grokhub_agent::dream_gate::skill_dir(&grokhub_agent::perm::config_dir());
     let scratch = scratch_config();
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -99,7 +103,7 @@ fn main() {
     }
     let client: Arc<dyn grokhub_agent::ModelClient + Send + Sync> = match opts.provider {
         Provider::Grok if signin => Arc::new(grokhub_agent::XaiClient::new(
-            signin_access(),
+            signin_access(&real_config),
             grokhub_agent::AuthKind::OAuth,
             Duration::from_secs(180),
         )),
@@ -194,23 +198,63 @@ impl grokhub_core::OAuthAccountStore for ReadOnlyKeychain {
     }
 }
 
-/// The saved sign-in's access token, or a plain reason to stop. Never printed.
-fn signin_access() -> String {
-    let tokens = match grokhub_core::load_xai_oauth(&ReadOnlyKeychain) {
-        Ok(Some(tokens)) => tokens,
-        Ok(None) => fail("--auth signin: no saved sign-in; use Sign in with Grok in the app first"),
-        Err(err) => fail(&format!(
-            "--auth signin: could not read the keychain: {err}"
-        )),
-    };
+/// The first live saved sign-in's access token, or a plain reason to stop.
+/// Read only: nothing is refreshed, written or printed.
+fn signin_access(real_config: &std::path::Path) -> String {
     let now = grokhub_core::now_ms();
-    if tokens.access_token.trim().is_empty()
-        || !grokhub_core::imagine_access_usable(&tokens, now)
-        || grokhub_core::imagine_needs_refresh(&tokens, now)
-    {
-        fail("--auth signin: the saved sign-in is expired or about to expire; open the app once so it renews, then rerun");
+    let mut stale = Vec::new();
+    match grokhub_core::load_xai_oauth(&ReadOnlyKeychain) {
+        Ok(Some(t))
+            if grokhub_core::imagine_access_usable(&t, now)
+                && !grokhub_core::imagine_needs_refresh(&t, now) =>
+        {
+            return t.access_token.trim().to_string();
+        }
+        Ok(Some(_)) => stale.push("Imagine sign-in"),
+        Ok(None) | Err(_) => {}
     }
-    tokens.access_token.trim().to_string()
+    let shell = shell_keychain_tokens();
+    let cabin = cabin_settings_tokens(real_config);
+    for (name, tokens) in [
+        ("shell sign-in", shell),
+        ("Settings > Account sign-in", cabin),
+    ] {
+        let Some(t) = tokens else { continue };
+        if grokhub_core::oauth_access_live(&t, now) && !grokhub_core::token_needs_refresh(&t, now) {
+            return t.access_token.trim().to_string();
+        }
+        stale.push(name);
+    }
+    if stale.is_empty() {
+        fail("--auth signin: no saved sign-in; use Sign in with Grok in the app first");
+    }
+    fail(&format!(
+        "--auth signin: expired or about to expire: {}; open the app once so it renews, then rerun",
+        stale.join(", ")
+    ));
+}
+
+/// The shell's own keychain sign-in, if any.
+fn shell_keychain_tokens() -> Option<grokhub_core::XaiOAuthTokens> {
+    let entry = keyring::Entry::new("GrokHub", "shell-xai-oauth").ok()?;
+    let raw = entry.get_password().ok()?;
+    serde_json::from_str::<grokhub_core::XaiOAuthTokens>(&raw)
+        .ok()
+        .filter(|t| !t.access_token.trim().is_empty())
+}
+
+/// The cabin's Settings > Account sign-in from the real `secrets.json`.
+fn cabin_settings_tokens(real_config: &std::path::Path) -> Option<grokhub_core::XaiOAuthTokens> {
+    const CAP: u64 = 1024 * 1024;
+    let path = real_config.join("secrets.json");
+    if std::fs::metadata(&path).ok()?.len() > CAP {
+        return None;
+    }
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    serde_json::from_value::<grokhub_core::XaiOAuthTokens>(v.get("oauth")?.clone())
+        .ok()
+        .filter(|t| !t.access_token.trim().is_empty())
 }
 
 fn env(name: &str) -> String {

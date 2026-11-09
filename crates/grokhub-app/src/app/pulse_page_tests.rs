@@ -1288,7 +1288,7 @@ fn pulse_offers_the_off_helpers_once_each() {
     );
     let texts = pulse_texts(cabin, 900.0);
     for ask in [
-        "Offer to sleep the PC late at night?",
+        "Let the PC sleep when it sits idle?",
         "Suggest Downloads cleanups?",
     ] {
         assert!(
@@ -1337,7 +1337,7 @@ fn pulse_offers_the_off_helpers_once_each() {
     assert!(cabin.wind_down_on());
     assert_eq!(
         cabin.status,
-        "Late-night wind-down is on. Turn it off in Settings › Behavior."
+        "Sleep when idle is on. Pick the idle time in Settings › Behavior."
     );
     cabin.set_wind_on(false);
 
@@ -1350,7 +1350,7 @@ fn pulse_offers_the_off_helpers_once_each() {
     assert!(!cabin.status.is_empty());
     assert_ne!(
         cabin.status,
-        "Late-night wind-down is on. Turn it off in Settings › Behavior."
+        "Sleep when idle is on. Pick the idle time in Settings › Behavior."
     );
     // The switch rolls back, so the offer and Settings still read it as off.
     assert!(!cabin.wind_down_on());

@@ -317,8 +317,16 @@ pub fn on_subagent_start(session: &str, workspace: &Path, name: &str) {
     observe(session, workspace, "SubagentStart", name, "", "", false);
 }
 
-pub fn on_subagent_stop(session: &str, workspace: &Path, name: &str) -> Option<String> {
-    fire_stop(session, workspace, "SubagentStop", false, name)
+/// A helper is about to stop. `Some(reason)` is a hook's block: the helper
+/// goes on once with that reason. `active` is set on that second stop, so a
+/// hook can't hold a helper forever.
+pub fn on_subagent_stop(
+    session: &str,
+    workspace: &Path,
+    name: &str,
+    active: bool,
+) -> Option<String> {
+    fire_stop(session, workspace, "SubagentStop", active, name)
 }
 
 pub fn on_stop(

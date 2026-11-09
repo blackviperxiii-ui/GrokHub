@@ -866,7 +866,9 @@ pub(super) fn post_actions(card: &UpdateCard, looking_more: bool) -> Vec<(String
         add("Too hard", FeedPostAct::HobbyTooHard);
     }
     if live && grokhub_core::wind_down::is_wind_down_card(card) {
-        add("Sleep the PC", FeedPostAct::Open);
+        for (label, link) in grokhub_core::wind_down::card_buttons() {
+            add(&label, FeedPostAct::Link(link));
+        }
     }
     if live && grokhub_core::local_model_news::is_upgrade_card(card) {
         add("Open in Settings", FeedPostAct::Open);

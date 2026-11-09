@@ -136,6 +136,7 @@ pub mod mission;
 pub mod model_download;
 pub mod model_drop;
 pub mod model_library;
+pub mod model_lineup;
 pub mod model_registry;
 pub mod mods;
 pub mod net_log;
