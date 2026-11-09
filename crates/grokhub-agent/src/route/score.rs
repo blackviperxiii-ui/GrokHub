@@ -101,7 +101,15 @@ pub struct ScoreCtx<'a> {
     /// key), so a model on tryout leads a tiny or short turn. `None` on
     /// every other turn.
     pub canary: Option<&'a str>,
+    /// The call is a helper's (a subagent's), which can spend a whole step
+    /// budget of calls.
+    pub helper: bool,
 }
+
+/// A helper may use the free OpenRouter day only while its whole step
+/// budget is at most a quarter of the free calls left, so a fan-out
+/// can't spend the day the chat itself needs.
+pub const HELPER_FREE_FLOOR: u64 = 4 * crate::subagent_policy::EXPLORE_TURNS as u64;
 
 /// Why a candidate may not take this task at all, as the rule id the
 /// route record carries. `None` weighs the candidate instead.
@@ -122,6 +130,14 @@ fn bar(rec: &ModelRecord, ctx: &ScoreCtx<'_>) -> Option<&'static str> {
                 || ctx.quota.openrouter_free_remaining() == Some(0)
             {
                 return Some("score:quota:openrouter");
+            }
+            if ctx.helper
+                && ctx
+                    .quota
+                    .openrouter_free_remaining()
+                    .is_some_and(|left| left < HELPER_FREE_FLOOR)
+            {
+                return Some("score:quota:helper-free");
             }
         }
         Route::OpenRouterPaid => {
@@ -637,6 +653,7 @@ mod tests {
             ctx_tokens: 0,
             now_ms: NOW,
             canary: None,
+            helper: false,
         }
     }
 
@@ -684,6 +701,61 @@ mod tests {
         };
         let c = ctx(&quota, Some(TaskSize::Short));
         assert_eq!(bar(&free, &c), Some("score:quota:openrouter"));
+    }
+
+    #[test]
+    fn a_helper_stays_off_a_free_day_that_is_nearly_spent() {
+        let free = rec(
+            "openrouter/nvidia/nemotron-3.5-super-vl:free",
+            &[SourceKind::OpenAiCompatible],
+        );
+        let left = |n: u64| QuotaLedger {
+            openrouter: OpenRouterQuota {
+                state: OpenRouterState::Paid,
+                free_daily_remaining: Some(n),
+                ..OpenRouterQuota::default()
+            },
+            ..QuotaLedger::default()
+        };
+        assert_eq!(HELPER_FREE_FLOOR, 80);
+        let quota = left(79);
+        let chat = ctx(&quota, Some(TaskSize::Short));
+        assert_eq!(bar(&free, &chat), None, "the chat itself may still use it");
+        let helper = ScoreCtx {
+            helper: true,
+            ..ctx(&quota, Some(TaskSize::Short))
+        };
+        assert_eq!(bar(&free, &helper), Some("score:quota:helper-free"));
+        let quota = left(80);
+        let helper = ScoreCtx {
+            helper: true,
+            ..ctx(&quota, Some(TaskSize::Short))
+        };
+        assert_eq!(bar(&free, &helper), None);
+        let quota = QuotaLedger::default();
+        let helper = ScoreCtx {
+            helper: true,
+            ..ctx(&quota, Some(TaskSize::Short))
+        };
+        assert_eq!(
+            bar(&free, &helper),
+            None,
+            "an unread day is not a spent one"
+        );
+    }
+
+    #[test]
+    fn helper_scope_marks_only_its_own_thread() {
+        assert!(!crate::route::live::in_helper());
+        {
+            let _helper = crate::route::live::HelperScope::enter();
+            assert!(crate::route::live::in_helper());
+            let other = std::thread::spawn(crate::route::live::in_helper)
+                .join()
+                .unwrap();
+            assert!(!other);
+        }
+        assert!(!crate::route::live::in_helper());
     }
 
     #[test]

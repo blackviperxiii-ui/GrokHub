@@ -590,6 +590,7 @@ fn run_child(job: &ChildJob, tx: &Option<Sender<ChildNote>>) -> ChildDone {
     };
     let agent_id = job.agent_id.clone();
     let _class = job.class.map(crate::route::live::ClassScope::enter);
+    let _helper = crate::route::live::HelperScope::enter();
     let _fork = job
         .fork
         .as_ref()
@@ -2338,8 +2339,8 @@ mod tests {
         let parent_id = sid.clone();
         let brief = "Goal: find the bug\nConstraints: read only\nEdge cases: none\n\
                      Done when: the cause is named\nFiles: src/lib.rs";
-        // (depth, input, class) of every request.
-        type Seen = Vec<(usize, Vec<InputItem>, &'static str)>;
+        // (depth, input, class, helper) of every request.
+        type Seen = Vec<(usize, Vec<InputItem>, &'static str, bool)>;
         let seen: Arc<Mutex<Seen>> = Arc::new(Mutex::new(Vec::new()));
         let log = Arc::clone(&seen);
         let brief_args = spawn_args(brief, "general", false, "none");
@@ -2349,6 +2350,7 @@ mod tests {
                 depth,
                 req.input.clone(),
                 crate::route::live::current_class(),
+                crate::route::live::in_helper(),
             ));
             match (depth, n) {
                 (0, 0) => Ok(calls_turn(
@@ -2381,12 +2383,14 @@ mod tests {
         assert!(outputs.contains("needs a brief"), "{outputs}");
         assert!(outputs.contains("child-done"), "{outputs}");
         let seen = seen.lock().unwrap();
-        let parent = &seen.iter().find(|(d, _, _)| *d == 0).unwrap().1;
-        let children: Vec<_> = seen.iter().filter(|(d, _, _)| *d == 1).collect();
+        let (_, parent, _, parent_helper) = seen.iter().find(|(d, ..)| *d == 0).unwrap();
+        assert!(!parent_helper, "the chat's own calls are not a helper's");
+        let children: Vec<_> = seen.iter().filter(|(d, ..)| *d == 1).collect();
         assert_eq!(children.len(), 1, "only the briefed helper ran");
-        let (_, input, class) = children[0];
+        let (_, input, class, helper) = children[0];
         assert!(!input.starts_with(parent), "a briefed helper starts fresh");
         assert_eq!(*class, crate::route::boundary::HELPER_CLASS);
+        assert!(*helper, "routing knows the call is a helper's");
         let _ = drain_side_events();
         let _ = std::fs::remove_dir_all(&dir);
     }
