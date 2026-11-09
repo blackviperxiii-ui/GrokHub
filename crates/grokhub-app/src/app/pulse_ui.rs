@@ -790,6 +790,12 @@ pub(super) enum FeedPostAct {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SourceAct {
     Save,
+    /// No longer a button: Not interested in the row (card taste) replaced
+    /// it. Kept for the source-feedback tests until that path is retired.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "replaced by the row's Not interested")
+    )]
     NotInterested,
     MoreLike,
 }
