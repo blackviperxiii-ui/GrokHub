@@ -36,6 +36,8 @@ pub struct Capabilities {
     /// Auto setup: the first-run window, Settings → Auto setup and the
     /// window's text size (a phone's webview can't zoom).
     pub auto_setup: bool,
+    /// The Code tab: this computer's repos, read through git. Desktops only.
+    pub code: bool,
 }
 
 /// The report for an OS name as `std::env::consts::OS` spells it. Linux,
@@ -63,6 +65,7 @@ pub fn for_env(os: &str, wayland: bool) -> Capabilities {
         notifications: desktop,
         voice: desktop || phone,
         library: desktop,
+        code: desktop,
         auto_setup: desktop,
     }
 }
@@ -114,6 +117,7 @@ mod tests {
             voice: true,
             library: true,
             auto_setup: true,
+            code: true,
         };
         assert_eq!(for_os("linux"), all);
         assert_eq!(for_os("windows"), all);
@@ -136,6 +140,7 @@ mod tests {
             voice: true,
             library: false,
             auto_setup: false,
+            code: false,
         };
         assert_eq!(for_os("android"), none);
         assert_eq!(
@@ -205,6 +210,7 @@ mod tests {
                 "voice": true,
                 "library": false,
                 "autoSetup": false,
+                "code": false,
             })
         );
     }

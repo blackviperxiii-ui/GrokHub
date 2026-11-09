@@ -1,0 +1,1 @@
+- Wind-down: no more "Idle … Sleep the PC?" card while nobody is at the PC. While you are there it offers once to sleep the PC after a chosen idle time, or to open the system sleep settings; Settings › Behavior picks the idle time.
