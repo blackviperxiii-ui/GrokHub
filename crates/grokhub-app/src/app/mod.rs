@@ -128,6 +128,8 @@ mod acp;
 mod amr_memory;
 mod auto_setup_ui;
 mod chat_kick;
+mod halt_cause;
+use halt_cause::{stop_cause_of, stopped_seam};
 mod followups;
 mod helper_offers_ui;
 mod learn_notes_ui;
@@ -501,6 +503,8 @@ pub struct Cabin {
     /// One SIGTERM retry per user send. kick_model sets Thinking, so the
     /// status text cannot be the guard or the cabin retries forever.
     turn_retried: bool,
+    /// Why the next halt stops the turn, in plain words for its Stopped line.
+    halt_cause: Option<&'static str>,
     /// The bearer xAI last turned away (401/403). While it is still the one
     /// on file, chats go to Local AI when it is ready; a new sign-in or key
     /// is a different bearer and goes back to the cloud. Memory only.
@@ -1191,6 +1195,7 @@ impl Cabin {
             web_search_key_draft: String::new(),
             running: false,
             turn_retried: false,
+            halt_cause: None,
             rejected_bearer: None,
             host_halt: Arc::new(AtomicBool::new(false)),
             rx: None,
@@ -1700,6 +1705,7 @@ impl Cabin {
             web_search_key_draft: String::new(),
             running: false,
             turn_retried: false,
+            halt_cause: None,
             rejected_bearer: None,
             host_halt: Arc::new(AtomicBool::new(false)),
             rx: None,
@@ -2300,7 +2306,8 @@ impl Cabin {
         self.host_diff_kick = false;
         self.verify_rx = None;
         // Stop ends the run; it must not erase what the run already said and did.
-        let kept = self.stopped_turn_transcript();
+        let cause = self.take_halt_cause();
+        let kept = self.stopped_turn_transcript(cause);
         self.plan_pending = None;
         self.agents.clear();
         self.active_skill_follow = None;
@@ -2342,7 +2349,7 @@ impl Cabin {
     /// What a stopped run already streamed (thinking, reply, tool calls), with a
     /// closing "Stopped" line, or None when nothing came in before the Stop.
     /// Takes the stream buffers, so call it before they are cleared.
-    fn stopped_turn_transcript(&mut self) -> Option<String> {
+    fn stopped_turn_transcript(&mut self, cause: Option<&str>) -> Option<String> {
         let thought = std::mem::take(&mut self.thought_buf);
         let stream = std::mem::take(&mut self.stream_buf);
         let tools = turn_needs_timeline(&self.turn_log);
@@ -2354,11 +2361,9 @@ impl Cabin {
         } else {
             merge_thinking_capped(&thought, &strip_thinking(&stream), IMAGE_FILE_CAP as usize)
         };
-        append_say(&mut self.turn_log, STOPPED_TURN_SEAM);
-        let text = self.turn_transcript(
-            format!("{}{STOPPED_TURN_SEAM}", merged.trim_end()),
-            IMAGE_FILE_CAP,
-        );
+        let seam = stopped_seam(cause);
+        append_say(&mut self.turn_log, &seam);
+        let text = self.turn_transcript(format!("{}{seam}", merged.trim_end()), IMAGE_FILE_CAP);
         self.turn_log.clear();
         Some(text)
     }
@@ -4862,7 +4867,7 @@ impl Cabin {
             self.end_episode(grokhub_agent::episode::EpisodeEnd::Stop);
         }
         self.heartbeat_turn_stopped();
-        self.halt_in_flight();
+        self.halt_in_flight_for(stop_cause_of(&status));
         self.finish_hub_dispatch(&status, false);
         // Messages queued behind the stopped turn would otherwise sit unseen
         // and send themselves after the next reply: hand them back instead.
@@ -5114,7 +5119,7 @@ impl Cabin {
         );
         self.kill_bg_runs();
         self.halt_background();
-        self.halt_in_flight();
+        self.halt_in_flight_for("the app closed");
         if self.hub_on {
             if let Ok(mut st) = self.hub.lock() {
                 st.sharing = false;
@@ -5207,7 +5212,7 @@ impl eframe::App for Cabin {
         // No background run outlives the cabin.
         self.kill_bg_runs();
         self.halt_background();
-        self.halt_in_flight();
+        self.halt_in_flight_for("the app closed");
         if self.hub_on {
             if let Ok(mut st) = self.hub.lock() {
                 st.sharing = false;

@@ -283,7 +283,7 @@ impl Cabin {
         // with no thread still halts so the next tab is not Thinking.
         let halt = self.running && self.leave_should_halt();
         if halt {
-            self.halt_in_flight();
+            self.halt_in_flight_for("you switched chats");
         }
         let keep_run = self.running && !halt;
         // A one-shot run, including the hidden background thread, is not the

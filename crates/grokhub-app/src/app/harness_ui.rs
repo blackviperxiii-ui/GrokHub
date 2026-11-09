@@ -1517,7 +1517,7 @@ impl Cabin {
         let parks = self.take_parks_for_stop(
             "turn stopped by the path D check — the card stays for a fresh approval",
         );
-        self.halt_in_flight();
+        self.halt_in_flight_for("a safety check stopped it");
         self.restore_parks_after_steer(parks);
     }
 

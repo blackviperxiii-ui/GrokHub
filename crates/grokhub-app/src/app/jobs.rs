@@ -579,7 +579,7 @@ impl Cabin {
             return;
         }
         if self.running {
-            self.halt_in_flight();
+            self.halt_in_flight_for("a consult started");
             self.finish_hub_dispatch("Interrupted by consult", false);
         }
         self.running = true;

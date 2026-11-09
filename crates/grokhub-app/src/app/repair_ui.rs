@@ -546,7 +546,7 @@ impl Cabin {
                 );
                 if answer == Some(false) {
                     // The chat's own Stop: it ends the step in flight and denies its card.
-                    self.halt_in_flight();
+                    self.halt_in_flight_for("you stopped it");
                 }
                 return;
             }
