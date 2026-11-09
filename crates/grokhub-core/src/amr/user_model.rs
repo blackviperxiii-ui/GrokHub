@@ -185,6 +185,8 @@ pub struct MemoryRow {
     pub updated: String,
     /// Waiting in the approval queue. Recall skips it.
     pub proposed: bool,
+    /// The user paused it on Personal. Recall, the USER block and dreams skip it.
+    pub paused: bool,
     /// Claims this row corrects or contradicts, in edge order.
     pub beside: Vec<String>,
 }
@@ -207,8 +209,194 @@ impl MemoryRow {
         if self.proposed {
             out.push_str(" · waiting for approval");
         }
+        if self.paused {
+            out.push_str(" · paused");
+        }
         out
     }
+
+    /// Whether the agent may use this row: approved and not paused.
+    pub fn in_use(&self) -> bool {
+        !self.proposed && !self.paused
+    }
+
+    /// Which Personal group the row shows under.
+    pub fn group(&self) -> PersonalGroup {
+        if self.proposed {
+            return PersonalGroup::Waiting;
+        }
+        match self.node_type {
+            NodeType::Preference => PersonalGroup::Likes,
+            NodeType::Routine => PersonalGroup::Routines,
+            NodeType::Need => PersonalGroup::Needs,
+            NodeType::MindPrior => PersonalGroup::Thinking,
+            _ => PersonalGroup::About,
+        }
+    }
+}
+
+/// The groups on Personal, in page order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PersonalGroup {
+    About,
+    Likes,
+    Routines,
+    Needs,
+    Thinking,
+    Waiting,
+}
+
+impl PersonalGroup {
+    pub const ALL: [Self; 6] = [
+        Self::About,
+        Self::Likes,
+        Self::Routines,
+        Self::Needs,
+        Self::Thinking,
+        Self::Waiting,
+    ];
+
+    /// The heading Personal shows.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::About => "About you",
+            Self::Likes => "What you like",
+            Self::Routines => "Your routines",
+            Self::Needs => "What you need",
+            Self::Thinking => "How you like things done",
+            Self::Waiting => "Waiting for your OK",
+        }
+    }
+
+    /// The kind of line a fact the user adds under this group becomes.
+    pub fn node_type(self) -> NodeType {
+        match self {
+            Self::Likes => NodeType::Preference,
+            Self::Routines => NodeType::Routine,
+            Self::Needs => NodeType::Need,
+            Self::Thinking => NodeType::MindPrior,
+            Self::About | Self::Waiting => NodeType::Fact,
+        }
+    }
+}
+
+/// Rows whose text or source holds `query`, ignoring case.
+pub fn search_rows<'a>(rows: &'a [MemoryRow], query: &str) -> Vec<&'a MemoryRow> {
+    let q = query.trim().to_lowercase();
+    rows.iter()
+        .filter(|r| {
+            q.is_empty()
+                || r.text.to_lowercase().contains(&q)
+                || r.source.label().to_lowercase().contains(&q)
+        })
+        .collect()
+}
+
+/// A fact the user adds on Personal, in their words: `source: user`,
+/// confidence 1, active at once. Returns the new id.
+pub fn add_fact(
+    store: &AmrStore,
+    text: &str,
+    group: PersonalGroup,
+    now_ms: u64,
+) -> Result<String, AmrError> {
+    if store.is_scratch() {
+        return Err(AmrError::Scratch);
+    }
+    let text = text.trim();
+    if text.is_empty() || text.contains(['\n', '\r']) {
+        return Err(AmrError::BadFrontmatter("body".into()));
+    }
+    let stamp = crate::oauth::unix_ms_to_rfc3339(now_ms);
+    let draft = NodeDraft {
+        id: line_id(text),
+        node_type: group.node_type(),
+        created: stamp.clone(),
+        updated: stamp,
+        source: "user".into(),
+        confidence: 1.0,
+        tags: vec!["added".into()],
+        body: format!("{text}\n"),
+        sensitivity: super::write::sensitivity_for(text),
+        consent_ref: String::new(),
+    };
+    let id = match store.remember(&draft) {
+        Ok(id) => id.as_str().to_string(),
+        Err(AmrError::DuplicateId(id)) => {
+            store.revive(&id)?;
+            store.set_paused(&id, false)?;
+            id
+        }
+        Err(err) => return Err(err),
+    };
+    supersede_same_topic(store, &id)?;
+    Ok(id)
+}
+
+/// Pause a row so the agent stops using it, or use it again.
+pub fn pause_node(store: &AmrStore, id: &str, paused: bool) -> Result<(), AmrError> {
+    store.set_paused(id, paused)
+}
+
+/// Everything Personal shows, as one readable Markdown file, grouped, with
+/// where each line came from and when. Nothing is sent anywhere.
+pub fn personal_export(store: &AmrStore, now_ms: u64) -> String {
+    let (rows, locked) = memory_rows(store);
+    let mut out = format!(
+        "# What {} knows about you\n\nSaved {}.\n",
+        crate::brand::product_name(),
+        crate::oauth::unix_ms_to_rfc3339(now_ms)
+    );
+    for group in PersonalGroup::ALL {
+        let mine: Vec<&MemoryRow> = rows.iter().filter(|r| r.group() == group).collect();
+        if mine.is_empty() {
+            continue;
+        }
+        out.push_str(&format!("\n## {}\n\n", group.label()));
+        for r in mine {
+            let paused = if r.paused { " (paused)" } else { "" };
+            out.push_str(&format!(
+                "- {}{paused} · {} · {}\n",
+                r.text,
+                r.source.label(),
+                r.updated
+            ));
+        }
+    }
+    if rows.is_empty() {
+        out.push_str("\nNothing learned yet.\n");
+    }
+    if locked > 0 {
+        out.push_str(&format!(
+            "\n{locked} private notes are locked and not listed.\n"
+        ));
+    }
+    out
+}
+
+/// What Wipe removed and what it couldn't open.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct WipeReport {
+    pub removed: usize,
+    pub locked: usize,
+}
+
+/// Delete every learned line about the user for good: facts, likes,
+/// routines, needs and how they like things done, forgotten ones too. Other
+/// memory (projects, game scans, lessons) stays. Only the user's confirmed
+/// click or typing can wipe.
+pub fn wipe_user_model(store: &AmrStore, _ask: UserForget) -> Result<WipeReport, AmrError> {
+    if store.is_scratch() {
+        return Err(AmrError::Scratch);
+    }
+    let (ids, locked) = store.user_model_ids_on_disk();
+    for id in &ids {
+        store.purge(id)?;
+    }
+    Ok(WipeReport {
+        removed: ids.len(),
+        locked,
+    })
 }
 
 /// Learned user-model rows (fact, preference, routine, need, mind prior),
@@ -249,6 +437,7 @@ pub fn memory_rows(store: &AmrStore) -> (Vec<MemoryRow>, usize) {
                 sensitivity: n.sensitivity,
                 updated: n.updated.clone(),
                 proposed: n.tags.iter().any(|t| t == PROPOSED_TAG),
+                paused: store.is_paused(&n.id),
                 beside,
             }
         })
