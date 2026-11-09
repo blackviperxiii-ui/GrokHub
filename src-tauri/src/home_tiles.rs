@@ -227,8 +227,9 @@ fn played(games: &[library::Game]) -> Vec<tiles::PlayedGame> {
 }
 
 /// Achievements, Deals and Patch Notes: the cards their Pulse source posted
-/// on this computer. Their switches live in the desktop app's Pulse
-/// settings, so an Off tile here says where and opens Pulse.
+/// on this computer. Achievements and Deals turn on right here (the Steam
+/// account signed in on this PC) and their checks run in this app; the game
+/// companion's switch still lives in the desktop app's settings.
 fn feed(module: &str, config_dir: &Path, now: u64) -> TileView {
     let on = match module {
         "achievements" => grokhub_core::steam_achievements::load(config_dir).on,
@@ -241,6 +242,27 @@ fn feed(module: &str, config_dir: &Path, now: u64) -> TileView {
         Err(e) => return TileView::error(&e),
     };
     let view = tiles::feed_view(module, on, &tiles::feed_items(&cards, module), now);
+    let note = crate::steam_checks::note(module);
+    feed_turn(module, view, note)
+}
+
+/// The feed tile's switch: Turn on in place for Achievements and Deals (with
+/// what the last try or check said), Turn off once on; Patch Notes points at
+/// the desktop app's Pulse settings.
+pub fn feed_turn(module: &str, mut view: TileView, note: Option<String>) -> TileView {
+    let here = matches!(module, "achievements" | "deals");
+    if here {
+        if let Some(note) = note {
+            view.text.detail = Some(note);
+        }
+        if view.state == TileState::Off {
+            view.buttons.clear();
+            return view
+                .on_tap(TileAction::setup(module, false))
+                .primary("Turn on", TileAction::setup(module, false));
+        }
+        return view.button("Turn off", TileAction::setup(module, true));
+    }
     if view.state != TileState::Off {
         return view;
     }

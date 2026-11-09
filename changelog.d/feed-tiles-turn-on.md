@@ -1,0 +1,1 @@
+- Home's Achievements and Deals tiles turn on right where they are in the new app: one tap uses the Steam account signed in on this PC, and the checks run in the app itself (wishlist sales daily, games close to 100% weekly). The tile says what the last check found, says what to do when Steam isn't sharing (a private profile), and has Turn off.
