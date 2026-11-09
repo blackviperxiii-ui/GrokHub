@@ -75,6 +75,11 @@ pub struct Post {
     /// The quick chips under the card: its fixes, Discuss, Ignore for now,
     /// Remind me later.
     pub chips: Vec<Chip>,
+    /// Offer Snooze in the row: the card is tied to a time, or it is unclear.
+    pub snooze: bool,
+    /// Offer Delete in the row: the card is stale, a repeat or a finished
+    /// one-off, or it is unclear.
+    pub delete: bool,
 }
 
 /// One update inside a digest card.
@@ -345,7 +350,8 @@ pub fn add_ideas(
     Ok(added)
 }
 
-fn post(config_dir: &Path, card: &UpdateCard, now_ms: u64) -> Post {
+fn post(config_dir: &Path, card: &UpdateCard, shown: &[UpdateCard], now_ms: u64) -> Post {
+    let offers = grokhub_core::card_offers::offers(card, shown, now_ms);
     let images = pulse_feed::images_dir(config_dir);
     let source = card
         .pulse
@@ -390,6 +396,8 @@ fn post(config_dir: &Path, card: &UpdateCard, now_ms: u64) -> Post {
             })
             .collect(),
         chips: chips(card, now_ms),
+        snooze: offers.snooze,
+        delete: offers.delete,
     }
 }
 
@@ -486,12 +494,12 @@ fn build(
         card_taste::rank_with(today, &weights),
         card_taste::rank_with(older, &weights),
     );
+    let shown: Vec<UpdateCard> = today.iter().chain(older.iter()).cloned().collect();
     Page {
         today: today.len(),
-        feed: today
+        feed: shown
             .iter()
-            .chain(older.iter())
-            .map(|c| post(config_dir, c, now_ms))
+            .map(|c| post(config_dir, c, &shown, now_ms))
             .collect(),
         note: pulse_feed::state(config_dir).note,
         ideas: pc::group_ideas(cards, &inputs)
@@ -1306,6 +1314,26 @@ mod tests {
         assert_eq!(taste.events.len(), 1);
         assert_eq!(taste.events[0].reaction, Reaction::Dislike);
         assert!(!taste.events[0].traits.is_empty());
+    }
+
+    #[test]
+    fn each_post_says_whether_its_row_offers_snooze_and_delete() {
+        // A finished run is a one-off: Delete only.
+        let d = dirs("offers", &sample());
+        let page = load(&d.config, None, NOW).expect("load");
+        let post = &page.feed[0];
+        assert!(post.delete && !post.snooze, "{post:?}");
+        // A schedule gets Snooze only; an unclear digest gets both.
+        let mut remind = sample();
+        remind[1].kind = UpdateKind::ScheduleCreated;
+        let d = dirs("offers-remind", &remind);
+        let post = &load(&d.config, None, NOW).expect("load").feed[0];
+        assert!(post.snooze && !post.delete, "{post:?}");
+        let mut plain = sample();
+        plain[1].kind = UpdateKind::Digest;
+        let d = dirs("offers-plain", &plain);
+        let post = &load(&d.config, None, NOW).expect("load").feed[0];
+        assert!(post.snooze && post.delete, "{post:?}");
     }
 
     #[test]

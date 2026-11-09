@@ -863,6 +863,10 @@ export interface PulsePost {
   items: PulseItem[];
   /** The chips under the card: its fixes, Discuss, Ignore for now, Remind me later. */
   chips: PulseChip[];
+  /** Offer Snooze in the row (time-bound card, or unsure). */
+  snooze: boolean;
+  /** Offer Delete in the row (stale, repeat or finished card, or unsure). */
+  delete: boolean;
 }
 
 /** One update inside a digest card. */

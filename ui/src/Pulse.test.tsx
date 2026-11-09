@@ -61,6 +61,8 @@ function post(over: Partial<PulsePost> = {}): PulsePost {
     more: "",
     items: [],
     chips: [],
+    snooze: false,
+    delete: false,
     ...over,
   };
 }
@@ -121,7 +123,7 @@ describe("Pulse", () => {
     expect(cite).toHaveAttribute("target", "_blank");
     expect(cite).toHaveAttribute("rel", "noopener noreferrer");
     expect(within(card).getByText("faster").tagName).toBe("STRONG");
-    for (const gone of ["Snooze", "Not this", "More"]) {
+    for (const gone of ["Snooze", "Delete", "Not this"]) {
       expect(within(card).queryByRole("button", { name: gone })).not.toBeInTheDocument();
     }
     // The raw link line is gone; the cite is the link.
@@ -163,13 +165,49 @@ describe("Pulse", () => {
     expect(container.querySelector(".lightbox")).toBeNull();
   });
 
-  it("every card has one row: Like first, its own buttons, I don't like, Dismiss last; no menu", async () => {
+  it("the menu holds only Why I created this", async () => {
+    api.getPulse.mockResolvedValue(PAGE);
+    api.pulseWhy.mockResolvedValue("You follow Rust.");
+    render(<Pulse onRun={() => {}} />);
+
+    const card = await screen.findByRole("listitem", { name: TITLE });
+    await userEvent.click(within(card).getByRole("button", { name: "More" }));
+    const items = within(card).getAllByRole("menuitem").map((b) => b.textContent);
+    expect(items).toEqual(["Why I created this"]);
+    await userEvent.click(within(card).getByRole("menuitem", { name: "Why I created this" }));
+    expect(api.pulseWhy).toHaveBeenCalledWith("post-1");
+    expect(await within(card).findByRole("note")).toHaveTextContent("You follow Rust.");
+    expect(within(card).queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("Snooze and Delete sit before I don't like when the card suits them", async () => {
+    const both = { ...PAGE, feed: [post({ snooze: true, delete: true })] };
+    api.getPulse.mockResolvedValue(both);
+    api.pulseAct.mockResolvedValue(both);
+    render(<Pulse onRun={() => {}} />);
+
+    const card = await screen.findByRole("listitem", { name: TITLE });
+    const row = within(card).getByRole("group", { name: "Card actions" });
+    const labels = within(row)
+      .getAllByRole("button")
+      .map((b) => b.getAttribute("aria-label") ?? b.textContent);
+    expect(labels).toEqual(["Like", "Discuss", "Read it", "Snooze", "Delete", "I don't like", "Dismiss"]);
+    await userEvent.click(within(row).getByRole("button", { name: "Snooze" }));
+    expect(api.pulseAct).toHaveBeenLastCalledWith("post-1", "snooze");
+    // Delete asks first.
+    await userEvent.click(within(row).getByRole("button", { name: "Delete" }));
+    expect(api.pulseAct).not.toHaveBeenLastCalledWith("post-1", "delete");
+    const confirm = within(card).getByRole("group", { name: "Delete this post?" });
+    await userEvent.click(within(confirm).getByRole("button", { name: "Delete" }));
+    expect(api.pulseAct).toHaveBeenLastCalledWith("post-1", "delete");
+  });
+
+  it("every card has one row: Like first, its own buttons, I don't like, Dismiss last", async () => {
     api.getPulse.mockResolvedValue(PAGE);
     api.pulseAct.mockResolvedValue(PAGE);
     render(<Pulse onRun={() => {}} />);
 
     const card = await screen.findByRole("listitem", { name: TITLE });
-    expect(within(card).queryByRole("button", { name: "More" })).not.toBeInTheDocument();
     expect(within(card).queryByRole("menu")).not.toBeInTheDocument();
     const row = within(card).getByRole("group", { name: "Card actions" });
     const labels = within(row)
