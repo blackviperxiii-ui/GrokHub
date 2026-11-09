@@ -1730,6 +1730,8 @@ export interface LibraryStatus {
 
 export interface LibraryView {
   tabs: LibraryTab[];
+  /** The best lineup for this PC, one model per goal for hot-swap; `ids` may be empty when it is all downloaded. */
+  lineup: LibraryQueueOffer | null;
   everything: LibraryQueueOffer | null;
   status: LibraryStatus;
 }
