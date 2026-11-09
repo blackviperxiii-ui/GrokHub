@@ -157,6 +157,52 @@ pub fn decode_mp3(bytes: &[u8]) -> Option<(Vec<f32>, u32)> {
     (rate > 0 && !mono.is_empty()).then_some((mono, rate))
 }
 
+/// Decode a PCM WAV (16-bit integer or 32-bit float, any channels) to mono:
+/// (samples, rate). `None` when it isn't one.
+pub fn decode_wav(bytes: &[u8]) -> Option<(Vec<f32>, u32)> {
+    if bytes.get(0..4)? != b"RIFF" || bytes.get(8..12)? != b"WAVE" {
+        return None;
+    }
+    let u16_at = |i: usize| Some(u16::from_le_bytes(bytes.get(i..i + 2)?.try_into().ok()?));
+    let u32_at = |i: usize| Some(u32::from_le_bytes(bytes.get(i..i + 4)?.try_into().ok()?));
+    let (mut at, mut fmt) = (12usize, None);
+    while at + 8 <= bytes.len() {
+        let id = &bytes[at..at + 4];
+        let len = u32_at(at + 4)? as usize;
+        let body = at + 8;
+        if id == b"fmt " {
+            fmt = Some((
+                u16_at(body)?,
+                u16_at(body + 2)?.max(1),
+                u32_at(body + 4)?,
+                u16_at(body + 14)?,
+            ));
+        } else if id == b"data" {
+            let (format, channels, rate, bits) = fmt?;
+            let data = bytes.get(body..(body + len).min(bytes.len()))?;
+            let samples: Vec<f32> = match (format, bits) {
+                (1, 16) => data
+                    .chunks_exact(2)
+                    .map(|b| f32::from(i16::from_le_bytes([b[0], b[1]])) / 32_768.0)
+                    .collect(),
+                (3, 32) => data
+                    .chunks_exact(4)
+                    .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                    .collect(),
+                _ => return None,
+            };
+            let ch = usize::from(channels);
+            let mono: Vec<f32> = samples
+                .chunks(ch)
+                .map(|f| f.iter().sum::<f32>() / f.len() as f32)
+                .collect();
+            return (rate > 0 && !mono.is_empty()).then_some((mono, rate));
+        }
+        at = body + len + (len & 1);
+    }
+    None
+}
+
 /// The envelope of an mp3 clip, or `None` when it can't be decoded.
 pub fn envelope_from_mp3(bytes: &[u8]) -> Option<Envelope> {
     let (pcm, rate) = decode_mp3(bytes)?;
@@ -209,9 +255,71 @@ pub fn speak_mp3(bytes: Vec<u8>, slot: &LipSlot, stop: &AtomicBool) -> Result<()
     played
 }
 
+/// Speak a WAV piece (the on-device voice), like [`speak_mp3`].
+pub fn speak_wav(bytes: Vec<u8>, slot: &LipSlot, stop: &AtomicBool) -> Result<(), String> {
+    let path = crate::desktop::private_temp("speak.wav")?;
+    std::fs::write(&path, &bytes).map_err(|e| format!("speech file: {e}"))?;
+    let env = decode_wav(&bytes)
+        .map(|(pcm, rate)| envelope_from_pcm(&pcm, rate))
+        .unwrap_or_default();
+    if let Ok(mut s) = slot.lock() {
+        *s = Some(Speaking {
+            started: Instant::now(),
+            env,
+        });
+    }
+    let played = crate::desktop::play_speech(&path, stop);
+    if let Ok(mut s) = slot.lock() {
+        *s = None;
+    }
+    played
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn wav16(rate: u32, channels: u16, frames: &[i16]) -> Vec<u8> {
+        let data: Vec<u8> = frames.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let mut w = b"RIFF".to_vec();
+        w.extend((36 + data.len() as u32).to_le_bytes());
+        w.extend(b"WAVEfmt ");
+        w.extend(16u32.to_le_bytes());
+        w.extend(1u16.to_le_bytes());
+        w.extend(channels.to_le_bytes());
+        w.extend(rate.to_le_bytes());
+        w.extend((rate * u32::from(channels) * 2).to_le_bytes());
+        w.extend((channels * 2).to_le_bytes());
+        w.extend(16u16.to_le_bytes());
+        // A chunk the reader has to step over.
+        w.extend(b"LIST");
+        w.extend(3u32.to_le_bytes());
+        w.extend([0u8; 4]);
+        w.extend(b"data");
+        w.extend((data.len() as u32).to_le_bytes());
+        w.extend(data);
+        w
+    }
+
+    #[test]
+    fn an_on_device_wav_moves_the_mouth() {
+        let loud: Vec<i16> = (0..24_000)
+            .map(|i| ((i as f32 * 0.3).sin() * 20_000.0) as i16)
+            .collect();
+        let (pcm, rate) = decode_wav(&wav16(24_000, 1, &loud)).expect("decodes");
+        assert_eq!((pcm.len(), rate), (24_000, 24_000));
+        assert!(envelope_from_pcm(&pcm, rate)
+            .levels
+            .iter()
+            .any(|l| *l > 0.1));
+
+        // Stereo folds to mono: opposite channels cancel.
+        let (mono, _) = decode_wav(&wav16(8_000, 2, &[1_000, -1_000, 1_000, -1_000])).unwrap();
+        assert_eq!(mono, vec![0.0, 0.0]);
+
+        assert!(decode_wav(b"ID3 not a wav at all").is_none());
+        assert!(decode_wav(&wav16(8_000, 1, &[])).is_none());
+    }
 
     fn tone(rate: u32, secs: f32, amp: f32) -> Vec<f32> {
         let n = (rate as f32 * secs) as usize;

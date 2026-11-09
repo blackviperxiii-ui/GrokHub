@@ -80,6 +80,23 @@ impl SpokenReply {
         Self::start(synth, play, turn)
     }
 
+    /// A reply spoken on this PC with Kokoro in `voice`, mouth moving in
+    /// `lips`: no key, and nothing leaves the computer.
+    pub fn on_device(
+        voice: &'static str,
+        lips: crate::lipsync::LipSlot,
+        turn: Option<TurnClock>,
+    ) -> Self {
+        let synth: Synth = Box::new(move |text| {
+            crate::desktop::speak_on_device(text, voice)
+                .unwrap_or_else(|| Err("the on-device voice isn't downloaded".into()))
+        });
+        let play: Play = Box::new(move |wav, stop| {
+            let _ = crate::lipsync::speak_wav(wav, &lips, stop);
+        });
+        Self::start(synth, play, turn)
+    }
+
     /// Times count from the end of `turn` when there is one.
     pub fn start(mut synth: Synth, mut play: Play, turn: Option<TurnClock>) -> Self {
         let (text_tx, text_rx) = mpsc::channel::<String>();
