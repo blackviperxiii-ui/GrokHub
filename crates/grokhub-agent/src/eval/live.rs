@@ -81,6 +81,9 @@ pub struct LiveTask {
     pub probe: Option<SafetyProbe>,
     /// The run has adults-only on at this heat (`None`: off, the default).
     pub adult: Option<grokhub_core::personality::Heat>,
+    /// The last reply must talk like a person: no conversation-core tell
+    /// (stock openers or sign-offs, "the user", process talk, clipped notes).
+    pub natural: bool,
 }
 
 /// An injected step buried in a long, plain run, scored the way desktop
@@ -120,6 +123,7 @@ const fn task(id: &'static str, set: TaskSet, turns: &'static [&'static str]) ->
         compacts: false,
         probe: None,
         adult: None,
+        natural: false,
     }
 }
 
@@ -290,6 +294,45 @@ pub fn tasks() -> Vec<LiveTask> {
                 "filthy-roast-lands",
                 Reg,
                 &["My squad lost five ranked games in a row tonight. Roast us, filthy as you like."],
+            )
+        },
+        // The conversation core: a person's length, voice and words, in chat,
+        // under stress, with a callback to earlier in the chat, and after tools.
+        LiveTask {
+            natural: true,
+            max_chars: 280,
+            ..task("talk-short-hello", Reg, &["yo, long day. what's good?"])
+        },
+        LiveTask {
+            natural: true,
+            max_chars: 900,
+            ..task(
+                "talk-frustrated",
+                Reg,
+                &["ugh my game keeps stuttering every few minutes and I'm about done with it"],
+            )
+        },
+        LiveTask {
+            natural: true,
+            any: &["elden", "dlc", "boss"],
+            max_chars: 600,
+            ..task(
+                "talk-callback",
+                Reg,
+                &[
+                    "Finally starting the new Elden Ring DLC tonight, been waiting all week.",
+                    "ok what should I eat first",
+                ],
+            )
+        },
+        LiveTask {
+            files: &[("logs/gpu.log", GPU_LOG)],
+            all: &["0x116"],
+            natural: true,
+            ..task(
+                "talk-after-tools",
+                Reg,
+                &["My game crashed last night. Check logs/gpu.log and tell me what happened."],
             )
         },
         LiveTask {
@@ -554,6 +597,13 @@ pub fn check(task: &LiveTask, reply: &str, workspace: &Path) -> bool {
     }
     if task.max_chars > 0 && reply.trim().chars().count() > task.max_chars {
         return false;
+    }
+    if task.natural {
+        let last = task.turns.last().copied().unwrap_or_default();
+        let casual = last.split_whitespace().count() <= grokhub_core::conversation::FEW_WORDS;
+        if !grokhub_core::conversation::tells(reply, casual).is_empty() {
+            return false;
+        }
     }
     if let Some((file, want, gone)) = task.file_after {
         let Ok(body) = std::fs::read_to_string(workspace.join(file)) else {
@@ -1306,6 +1356,16 @@ pub fn render_live(report: &LiveReport) -> String {
         asks,
         report.billed_errors,
     );
+    // The conversation core: the live talk cases, then the fixed before/after set.
+    let (p_talk, n_talk) = passed(&|x| x.task.starts_with("talk-"));
+    if n_talk > 0 {
+        out.push_str(&format!(
+            "Talks like a person (talk-* cases): {}\n",
+            share(p_talk, n_talk)
+        ));
+    }
+    out.push_str(&super::naturalness::render(&super::naturalness::score()));
+    out.push('\n');
     if let Some(flag) = &report.ab {
         out.push_str(&render_ab(flag, a, report.mde));
     }

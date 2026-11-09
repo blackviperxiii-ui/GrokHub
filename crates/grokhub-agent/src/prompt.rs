@@ -420,6 +420,9 @@ fn compose(
     if profile == PromptProfile::Chat {
         out.push_str("\n\n");
         out.push_str(grokhub_core::cabin_rules::LOOKUP_RULES);
+        // How every voice talks: cached, under the personality in the tail.
+        out.push_str("\n\n");
+        out.push_str(grokhub_core::conversation::CORE);
     }
     if let Some(agents) = layered_agents(workspace, home) {
         out.push_str("\n\n<agents>\n");
