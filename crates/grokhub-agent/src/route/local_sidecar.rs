@@ -2733,8 +2733,10 @@ mod tests {
         std::fs::write(dir.join("models").join("m.gguf"), b"x").unwrap();
         let load_dir = dir.clone();
         let loading = std::thread::spawn(move || acquire(&load_dir).map(drop));
+        // Wait for the cold start itself: a check that only sees the slot
+        // locked for a moment also reads as Loading.
         let until = Instant::now() + Duration::from_secs(5);
-        while runtime(&dir) != Runtime::Loading && Instant::now() < until {
+        while !STARTING.load(Ordering::SeqCst) && Instant::now() < until {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert_eq!(runtime(&dir), Runtime::Loading);
