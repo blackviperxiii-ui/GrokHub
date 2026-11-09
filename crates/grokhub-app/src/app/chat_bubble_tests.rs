@@ -175,7 +175,7 @@ fn ordinary_words_stay_whole_inside_a_narrow_bubble() {
     let words: Vec<&str> = body.split_whitespace().collect();
     with_fonts_ui(|ui| {
         let wrap = grokhub_core::bubble_wrap_width(280.0, grokhub_core::BUBBLE_PAD_X);
-        let job = crate::markdown::wrapped_job(ui, body, wrap, egui::Color32::WHITE);
+        let job = crate::markdown::wrapped_job(body, wrap, egui::Color32::WHITE);
         let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
         let rows: Vec<String> = galley.rows.iter().map(|row| row.text()).collect();
         for row in &rows {
@@ -539,7 +539,9 @@ fn markdown_reply_grows_past_plain_measure() {
     with_fonts_ui(|ui| {
         ui.allocate_ui(egui::vec2(800.0, 900.0), |ui| {
                 ui.set_max_width(800.0);
-                let body = "# Title\n## Heading\n\n- bullet one\n- bullet two\n\n```sh\nls -la\n```\n\nClosing line.";
+                // Headings and a table: taller as markdown than as plain lines, even
+                // with plain text at prose leading.
+                let body = "# Title\n# Second title\n## Heading\n## Another heading\n| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |";
                 let wrap = grokhub_core::bubble_wrap_width(800.0, grokhub_core::BUBBLE_PAD_X);
                 let measured = crate::markdown::measure_text(ui, body, wrap);
                 let mut md_h = 0.0;

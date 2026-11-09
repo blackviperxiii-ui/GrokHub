@@ -6,7 +6,7 @@ use eframe::egui::{self, Color32, FontId, RichText, Sense, Stroke};
 /// A big category button in Settings' top row: larger than a [`felt_tab`],
 /// so the categories read at a glance.
 pub fn settings_tab(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
-    let font = FontId::proportional(15.0);
+    let font = FontId::proportional(crate::theme::TYPE_TITLE);
     let galley = ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font, Color32::PLACEHOLDER));
     let size = egui::vec2((galley.size().x + 36.0).max(96.0), 40.0);
     let (_rect, resp) = ui.allocate_exact_size(size, Sense::click());
@@ -64,6 +64,10 @@ pub fn settings_back(ui: &mut egui::Ui, label: &str) -> bool {
 
 /// A muted line under a Settings row.
 pub fn settings_note(ui: &mut egui::Ui, text: &str) {
-    ui.label(RichText::new(text).size(13.0).color(crate::theme::muted()));
+    ui.label(
+        RichText::new(text)
+            .size(crate::theme::TYPE_BODY)
+            .color(crate::theme::muted()),
+    );
     ui.add_space(8.0);
 }

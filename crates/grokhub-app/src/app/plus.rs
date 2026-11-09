@@ -443,7 +443,7 @@ impl Cabin {
                 .show(ctx, |ui| {
                     ui.label(
                         RichText::new(dir.display().to_string())
-                            .size(12.0)
+                            .size(crate::theme::TYPE_CAPTION)
                             .color(crate::theme::muted()),
                     );
                     ui.horizontal(|ui| {
@@ -587,7 +587,7 @@ impl Cabin {
                     ui.horizontal(|ui| {
                         ui.label(
                             RichText::new(attach_chip_label(kind, &name))
-                                .size(12.0)
+                                .size(crate::theme::TYPE_CAPTION)
                                 .color(crate::theme::fg()),
                         );
                         if ui.small_button("×").clicked() {
@@ -601,7 +601,7 @@ impl Cabin {
                     ui.horizontal(|ui| {
                         ui.label(
                             RichText::new(format!("Reference {name}"))
-                                .size(12.0)
+                                .size(crate::theme::TYPE_CAPTION)
                                 .color(crate::theme::fg()),
                         );
                         if ui.small_button("×").clicked() {

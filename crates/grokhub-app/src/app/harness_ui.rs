@@ -1827,7 +1827,7 @@ pub(super) fn harness_card(
                 ui.add(
                     egui::Label::new(
                         RichText::new(eyebrow)
-                            .size(12.0)
+                            .size(crate::theme::TYPE_CAPTION)
                             .color(crate::theme::muted()),
                     )
                     .wrap(),
@@ -1836,7 +1836,7 @@ pub(super) fn harness_card(
                 ui.add(
                     egui::Label::new(
                         RichText::new(title)
-                            .size(14.0)
+                            .size(crate::theme::TYPE_BODY)
                             .strong()
                             .color(crate::theme::fg()),
                     )
@@ -1845,7 +1845,9 @@ pub(super) fn harness_card(
                 // Mono only for the literal command. Grant full passes an empty action.
                 if !action.trim().is_empty() {
                     ui.add_space(4.0);
-                    let mut line = RichText::new(action).size(13.0).color(crate::theme::fg());
+                    let mut line = RichText::new(action)
+                        .size(crate::theme::TYPE_BODY)
+                        .color(crate::theme::fg());
                     if hard {
                         line = line.monospace();
                     }
@@ -1853,8 +1855,12 @@ pub(super) fn harness_card(
                 }
                 ui.add_space(4.0);
                 ui.add(
-                    egui::Label::new(RichText::new(note).size(12.0).color(crate::theme::muted()))
-                        .wrap(),
+                    egui::Label::new(
+                        RichText::new(note)
+                            .size(crate::theme::TYPE_CAPTION)
+                            .color(crate::theme::muted()),
+                    )
+                    .wrap(),
                 );
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {

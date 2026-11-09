@@ -113,7 +113,11 @@ pub(super) fn paint_offline_row(ui: &mut egui::Ui) {
         ui.add_space(12.0);
     }
     if let Some(err) = &row.error {
-        ui.label(RichText::new(err).size(13.0).color(crate::theme::offline()));
+        ui.label(
+            RichText::new(err)
+                .size(crate::theme::TYPE_BODY)
+                .color(crate::theme::offline()),
+        );
         ui.add_space(8.0);
     }
     ui.ctx().data_mut(|d| d.insert_temp(id, row));

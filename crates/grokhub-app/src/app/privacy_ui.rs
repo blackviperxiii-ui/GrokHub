@@ -554,7 +554,7 @@ impl Cabin {
         if let Some(why) = &lock {
             ui.label(
                 RichText::new(why.message())
-                    .size(13.0)
+                    .size(crate::theme::TYPE_BODY)
                     .color(crate::theme::fg()),
             );
             ui.add_space(4.0);
@@ -562,7 +562,7 @@ impl Cabin {
             ui.horizontal(|ui| {
                 ui.label(
                     RichText::new(lock_next_step(why, hx::KeyringOs::current()))
-                        .size(13.0)
+                        .size(crate::theme::TYPE_BODY)
                         .color(crate::theme::fg()),
                 );
                 ui.add_enabled_ui(!checking, |ui| {

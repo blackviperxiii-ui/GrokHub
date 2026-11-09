@@ -5780,13 +5780,13 @@ fn paint_tool_rows(ui: &mut egui::Ui, rows: &[grokhub_core::ToolRow]) {
         ui.horizontal_wrapped(|ui| {
             ui.label(
                 RichText::new(tool_display_title(&row.title))
-                    .size(12.0)
+                    .size(crate::theme::TYPE_CAPTION)
                     .color(crate::theme::fg()),
             );
             if tool_status_failed(&row.status) {
                 ui.label(
                     RichText::new(row.status.trim())
-                        .size(12.0)
+                        .size(crate::theme::TYPE_CAPTION)
                         .color(tool_header_color(true)),
                 );
             }
@@ -5796,7 +5796,7 @@ fn paint_tool_rows(ui: &mut egui::Ui, rows: &[grokhub_core::ToolRow]) {
             if !detail.is_empty() && !detail.starts_with('{') && !detail.starts_with('[') {
                 ui.label(
                     RichText::new(detail.chars().take(160).collect::<String>())
-                        .size(12.0)
+                        .size(crate::theme::TYPE_CAPTION)
                         .color(crate::theme::muted()),
                 );
             }
@@ -5815,7 +5815,7 @@ fn paint_tool_card_body(ui: &mut egui::Ui, card: &ToolCard) {
             ui.horizontal(|ui| {
                 ui.label(
                     RichText::new(&card.title)
-                        .size(13.0)
+                        .size(crate::theme::TYPE_BODY)
                         .color(crate::theme::fg()),
                 );
                 crate::cards::status_chip(
@@ -5839,7 +5839,7 @@ fn paint_tool_card_body(ui: &mut egui::Ui, card: &ToolCard) {
                 ui.add_space(4.0);
                 ui.label(
                     RichText::new(card.diff.chars().take(800).collect::<String>())
-                        .size(12.0)
+                        .size(crate::theme::TYPE_CAPTION)
                         .monospace()
                         .color(crate::theme::muted()),
                 );
@@ -5852,7 +5852,7 @@ fn paint_tool_card_body(ui: &mut egui::Ui, card: &ToolCard) {
                 ui.add_space(4.0);
                 ui.label(
                     RichText::new(card.detail.chars().take(120).collect::<String>())
-                        .size(12.0)
+                        .size(crate::theme::TYPE_CAPTION)
                         .color(crate::theme::muted()),
                 );
             }
