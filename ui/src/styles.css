@@ -4399,6 +4399,25 @@ label.toggle-row {
   vertical-align: middle;
 }
 
+/* A card's full report, opened under its summary. */
+.feed-card .link-button {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-decoration: underline;
+}
+
+.feed-report {
+  margin: 4px 0 8px;
+  color: var(--muted);
+}
+
+.feed-items {
+  margin: 0 0 8px;
+  padding-left: 18px;
+}
+
 /* Download models: kind tabs, then one row per model. */
 .local-library-tabs,
 .local-library-queue {

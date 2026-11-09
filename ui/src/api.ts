@@ -804,6 +804,40 @@ export interface PulsePost {
   loved: boolean;
   /** What the card's numbers mean, when it has a read of them. */
   verdict: PulseVerdict | null;
+  /** The full report and the facts behind it (markdown). Empty when the
+   * card has nothing past its summary. */
+  more: string;
+  /** A digest's updates, each with the card it opens. */
+  items: PulseItem[];
+  /** The chips under the card: its fixes, Discuss, Ignore for now, Remind me later. */
+  chips: PulseChip[];
+}
+
+/** One update inside a digest card. */
+export interface PulseItem {
+  cardId: string;
+  found: string;
+  summary: string;
+}
+
+/** One chip under a card. `index` is the fix's place on the card. */
+export interface PulseChip {
+  label: string;
+  act: "offer" | "discuss" | "ignore" | "remind";
+  index: number;
+}
+
+/** What a card puts in the chat: its own conversation and the words for the
+ * box. The card's report rides along with the first message, unseen. */
+export interface PulseSeed {
+  conversationId: string;
+  text: string;
+}
+
+/** Remind me later: the page after, and when the card is back. */
+export interface PulseReminded {
+  page: PulsePage;
+  note: string;
 }
 
 /** A card's one-line read of its own numbers, and how worried to be. */
@@ -885,7 +919,8 @@ export type PulseAct =
   | "snooze"
   | "accept"
   | "moreLike"
-  | "notInterested";
+  | "notInterested"
+  | "ignore";
 
 /** Today's local date for the ledger line, and the time Snooze counts from. */
 export function localDay(now: Date = new Date()) {
@@ -906,9 +941,19 @@ export function pulseAct(id: string, act: PulseAct): Promise<PulsePage> {
   return invoke<PulsePage>("pulse_act", { id, act, day: localDay() });
 }
 
-/** Discuss: the text a chat starts from, carrying the post. */
-export function pulseDiscuss(id: string): Promise<string> {
-  return invoke<string>("pulse_discuss", { id });
+/** Discuss: the card's own chat and the words for its box. */
+export function pulseDiscuss(id: string): Promise<PulseSeed> {
+  return invoke<PulseSeed>("pulse_discuss", { id });
+}
+
+/** A card's fix chip: its words in the card's own chat. Nothing runs until sent. */
+export function pulseOffer(id: string, index: number): Promise<PulseSeed> {
+  return invoke<PulseSeed>("pulse_offer", { id, index });
+}
+
+/** Remind me later: hidden until a time that fits the day. */
+export function pulseRemind(id: string): Promise<PulseReminded> {
+  return invoke<PulseReminded>("pulse_remind", { id, day: localDay() });
 }
 
 export function pulseWhy(id: string): Promise<string> {

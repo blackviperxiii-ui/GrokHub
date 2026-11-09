@@ -5,9 +5,12 @@ import {
   openUrl,
   pulseAct,
   pulseDiscuss,
+  pulseOffer,
+  pulseRemind,
   pulseWhy,
   saveFeedPrompt,
   type PulseAct,
+  type PulseChip,
   type PulseIdea,
   type PulsePage,
 } from "./api";
@@ -24,6 +27,7 @@ export const NOT_INTERESTED_NOTE = "Got it. Fewer ideas like this.";
 export const FOR_YOU_LABEL = "For You";
 export const DAY_END = "That's all for today";
 export const ADD_INTERESTS = "Add interests";
+export const IGNORED_NOTE = "Hidden for now.";
 /** While Pulse is open, how often it looks for new posts. */
 export const REFRESH_MS = 60_000;
 /** Posts shown at first, and added each time the list's end scrolls into view. */
@@ -95,7 +99,8 @@ export function Pulse({
   onRun,
   onOpenInterests,
 }: {
-  onRun: (text: string) => void;
+  /** `conversationId`: the card's own chat, opened (or reopened) first. */
+  onRun: (text: string, conversationId?: string) => void;
   /** Settings → Pulse, where interests are added. */
   onOpenInterests?: () => void;
 }) {
@@ -179,7 +184,30 @@ export function Pulse({
 
   async function discuss(id: string) {
     try {
-      onRun(await pulseDiscuss(id));
+      const seed = await pulseDiscuss(id);
+      onRun(seed.text, seed.conversationId);
+    } catch (err) {
+      fail(err);
+    }
+  }
+
+  /** A chip under a post: a fix goes to the card's own chat (nothing runs
+   * until it is sent there), Ignore for now hides it, Remind me later brings
+   * it back at a time that fits the day. */
+  async function chip(id: string, c: PulseChip) {
+    if (c.act === "ignore") {
+      await act(id, "ignore", IGNORED_NOTE);
+      return;
+    }
+    try {
+      if (c.act === "offer") {
+        const seed = await pulseOffer(id, c.index);
+        onRun(seed.text, seed.conversationId);
+      } else if (c.act === "remind") {
+        const r = await pulseRemind(id);
+        setPage(r.page);
+        ok(r.note);
+      }
     } catch (err) {
       fail(err);
     }
@@ -275,6 +303,7 @@ export function Pulse({
                 onSnooze={() => void act(post.id, "snooze", "Snoozed until 9 AM.")}
                 onDismiss={() => void act(post.id, "dismiss", "Dismissed.")}
                 onNotThis={() => void act(post.id, "notThis", "Got it. Fewer posts like that.")}
+                onChip={(c) => void chip(post.id, c)}
               />
               {i === today - 1 && i < total - 1 && (
                 <li className="day-end" role="separator">
