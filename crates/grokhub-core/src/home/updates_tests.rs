@@ -101,6 +101,7 @@ fn linux_sources() -> Sources {
         windows: Some(Found::NotHere),
         gpu_driver: Some("NVIDIA 560.35".into()),
         gaming: false,
+        drivers: None,
     }
 }
 
@@ -199,4 +200,77 @@ fn every_upgrade_script_parses_as_sh() {
             .success();
         assert!(ok, "{pm}: {script}");
     }
+}
+
+fn driver(name: &str) -> UpdateItem {
+    item(name, Some("560.35.03-1"), Some("565.57.01-1"))
+}
+
+#[test]
+fn checked_drivers_offer_an_update_that_waits_for_the_game() {
+    let mut s = linux_sources();
+    s.drivers = Some(Drivers::Ready {
+        items: vec![driver("nvidia-utils")],
+        way_back: WayBack::OldPackages,
+    });
+    let p = page(&s);
+    assert_eq!(p.headline, "3 waiting");
+    let g = p.groups.iter().find(|g| g.kind == Kind::Drivers).unwrap();
+    assert_eq!(
+        g.line,
+        "1 driver update checked twice. The old version stays, so it can go back."
+    );
+    let chip = g.offer.as_ref().unwrap();
+    assert_eq!(
+        (chip.offer, chip.held.as_deref()),
+        (Offer::UpdateDrivers, None)
+    );
+    s.gaming = true;
+    let p = page(&s);
+    let g = p.groups.iter().find(|g| g.kind == Kind::Drivers).unwrap();
+    assert_eq!(
+        g.offer.as_ref().unwrap().held.as_deref(),
+        Some("Waits until your game closes")
+    );
+}
+
+#[test]
+fn an_updated_driver_offers_its_way_back() {
+    let mut s = linux_sources();
+    s.drivers = Some(Drivers::Updated {
+        items: vec![driver("nvidia-utils")],
+        way_back: WayBack::OldPackages,
+    });
+    let p = page(&s);
+    let g = p.groups.iter().find(|g| g.kind == Kind::Drivers).unwrap();
+    assert!(g.line.starts_with("Updated. Restart to load it."));
+    assert_eq!(g.offer.as_ref().unwrap().offer, Offer::RollBackDrivers);
+    // A snapshot goes back with its own tool: no chip, just the name.
+    s.drivers = Some(Drivers::Updated {
+        items: vec![driver("nvidia-utils")],
+        way_back: WayBack::Snapshot("Snapper".into()),
+    });
+    let p = page(&s);
+    let g = p.groups.iter().find(|g| g.kind == Kind::Drivers).unwrap();
+    assert!(g
+        .line
+        .ends_with("restore the before-driver-update snapshot in Snapper."));
+    assert_eq!(g.offer, None);
+}
+
+#[test]
+fn windows_drivers_open_optional_updates() {
+    let s = Sources {
+        version: "3.5.0".into(),
+        windows: Some(Found::NotHere),
+        drivers: Some(Drivers::Windows {
+            items: vec![UpdateItem::named("NVIDIA - Display - 32.0.15.6094")],
+        }),
+        ..Sources::default()
+    };
+    let p = page(&s);
+    assert_eq!(p.headline, "1 waiting");
+    let g = p.groups.iter().find(|g| g.kind == Kind::Drivers).unwrap();
+    assert_eq!(g.line, "1 driver update in Windows Update");
+    assert_eq!(g.offer.as_ref().unwrap().offer, Offer::OpenOptionalUpdates);
 }

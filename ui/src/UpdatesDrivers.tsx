@@ -5,9 +5,13 @@ import {
   runUpdateOffer,
   type UpdateGroup,
   type UpdateItem,
+  type UpdateOffer,
   type UpdatesPage,
 } from "./api";
 import { StatusLine, useNote } from "./ui";
+
+/** Offers that change what's installed: the page reads again after them. */
+const RE_READ = new Set<UpdateOffer>(["updateSystem", "updateApps", "updateDrivers", "rollBackDrivers"]);
 
 /** How many of a group's items show before "and N more". */
 export const SHOWN = 6;
@@ -45,7 +49,7 @@ export function UpdatesDrivers() {
         await installShellUpdate();
       } else {
         ok(await runUpdateOffer(offer.offer));
-        if (offer.offer === "updateSystem" || offer.offer === "updateApps") read();
+        if (RE_READ.has(offer.offer)) read();
       }
     } catch (err) {
       fail(err);

@@ -80,4 +80,27 @@ describe("Updates & Drivers", () => {
     expect(button).toBeDisabled();
     expect(screen.getByText("Waits until your game closes")).toBeInTheDocument();
   });
+
+  it("puts the old driver back after a driver update, then reads the page again", async () => {
+    api.getUpdatesPage.mockResolvedValue({
+      ...PAGE,
+      groups: [
+        {
+          kind: "drivers",
+          title: "Drivers",
+          line: "Updated. Restart to load it. Put old driver back if a game misbehaves.",
+          items: [{ name: "nvidia-utils", from: "560.35.03-1", to: "565.57.01-1" }],
+          offer: { offer: "rollBackDrivers", label: "Put old driver back", held: null },
+        },
+      ],
+    });
+    api.runUpdateOffer.mockResolvedValue("The old driver is back. Restart to load it.");
+    render(<UpdatesDrivers />);
+    const drivers = await screen.findByRole("generic", { name: "Drivers" });
+    expect(within(drivers).getByText("nvidia-utils 560.35.03-1 → 565.57.01-1")).toBeInTheDocument();
+    await userEvent.click(within(drivers).getByRole("button", { name: "Put old driver back" }));
+    expect(api.runUpdateOffer).toHaveBeenCalledWith("rollBackDrivers");
+    expect(await screen.findByText("The old driver is back. Restart to load it.")).toBeInTheDocument();
+    expect(api.getUpdatesPage).toHaveBeenCalledTimes(2);
+  });
 });

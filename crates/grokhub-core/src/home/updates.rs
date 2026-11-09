@@ -59,6 +59,7 @@ pub enum Kind {
     System,
     Apps,
     Windows,
+    Drivers,
 }
 
 /// What a chip on the page does. The shell runs it; nothing runs on its own.
@@ -75,6 +76,52 @@ pub enum Offer {
     UpdateApps,
     /// Windows Update's own page in Settings.
     OpenWindowsUpdate,
+    /// The driver update both checks agreed on, way back first, behind the
+    /// OS password prompt.
+    UpdateDrivers,
+    /// The old driver packages back, behind the OS password prompt.
+    RollBackDrivers,
+    /// Windows Update's Optional updates, where Windows lists drivers.
+    OpenOptionalUpdates,
+}
+
+/// How a driver update can be undone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WayBack {
+    /// A system snapshot by this tool (snapper, timeshift) is taken first.
+    Snapshot(String),
+    /// The old version stays available, so the page can put it back.
+    OldPackages,
+}
+
+/// What the driver check found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Drivers {
+    UpToDate,
+    /// Checked twice (update list, then installed and repo versions read
+    /// again), with a way back ready.
+    Ready {
+        items: Vec<UpdateItem>,
+        way_back: WayBack,
+    },
+    /// Listed, but it won't update; `why` in plain words.
+    Held {
+        items: Vec<UpdateItem>,
+        why: String,
+    },
+    /// The last update the page made is installed.
+    Updated {
+        items: Vec<UpdateItem>,
+        way_back: WayBack,
+    },
+    /// The page updated, but the re-check doesn't see the new version.
+    NotLanded {
+        items: Vec<UpdateItem>,
+    },
+    /// Windows: the driver updates Windows Update lists.
+    Windows {
+        items: Vec<UpdateItem>,
+    },
 }
 
 /// One group on the page.
@@ -111,6 +158,7 @@ pub struct Sources {
     pub windows: Option<Found>,
     pub gpu_driver: Option<String>,
     /// A game is running: nothing heavy starts now.
+    pub drivers: Option<Drivers>,
     pub gaming: bool,
 }
 
@@ -232,12 +280,19 @@ pub fn page(s: &Sources) -> UpdatesPage {
                 .and_then(|_| chip(offer, label, heavy && s.gaming)),
         });
     }
+    if let Some(d) = &s.drivers {
+        groups.push(drivers_group(d, s.gaming));
+    }
     let waiting = usize::from(s.loadout_newer.is_some())
         + s.steam.as_ref().map_or(0, Vec::len)
         + [&s.system, &s.apps, &s.windows]
             .iter()
             .map(|f| f.as_ref().map_or(0, Found::count))
-            .sum::<usize>();
+            .sum::<usize>()
+        + match &s.drivers {
+            Some(Drivers::Ready { items, .. } | Drivers::Windows { items }) => items.len(),
+            _ => 0,
+        };
     UpdatesPage {
         headline: if waiting == 0 {
             "Up to date".into()
@@ -251,6 +306,56 @@ pub fn page(s: &Sources) -> UpdatesPage {
             .map(str::trim)
             .filter(|d| !d.is_empty())
             .map(|d| format!("GPU driver {d}")),
+    }
+}
+
+fn drivers_group(d: &Drivers, gaming: bool) -> Group {
+    let n = |items: &[UpdateItem]| plural(items.len(), "driver update", "driver updates");
+    let (line, items, offer) = match d {
+        Drivers::UpToDate => ("Up to date".to_string(), Vec::new(), None),
+        Drivers::Ready { items, way_back } => (
+            format!(
+                "{} checked twice. {}",
+                n(items),
+                match way_back {
+                    WayBack::Snapshot(tool) => format!("A {tool} snapshot is taken first."),
+                    WayBack::OldPackages => "The old version stays, so it can go back.".into(),
+                }
+            ),
+            items.clone(),
+            chip(Offer::UpdateDrivers, "Update drivers", gaming),
+        ),
+        Drivers::Held { items, why } => (why.clone(), items.clone(), None),
+        Drivers::Updated { items, way_back } => match way_back {
+            WayBack::OldPackages => (
+                "Updated. Restart to load it. Put old driver back if a game misbehaves.".into(),
+                items.clone(),
+                chip(Offer::RollBackDrivers, "Put old driver back", gaming),
+            ),
+            WayBack::Snapshot(tool) => (
+                format!("Updated. Restart to load it. To go back, restore the before-driver-update snapshot in {tool}."),
+                items.clone(),
+                None,
+            ),
+        },
+        Drivers::NotLanded { items } => (
+            "The update ran, but the new version isn't installed. Nothing else changed.".into(),
+            items.clone(),
+            None,
+        ),
+        Drivers::Windows { items } if items.is_empty() => ("Up to date".into(), Vec::new(), None),
+        Drivers::Windows { items } => (
+            format!("{} in Windows Update", n(items)),
+            items.clone(),
+            chip(Offer::OpenOptionalUpdates, "Open optional updates", false),
+        ),
+    };
+    Group {
+        kind: Kind::Drivers,
+        title: "Drivers".into(),
+        line,
+        items,
+        offer,
     }
 }
 
@@ -367,8 +472,8 @@ pub fn parse_winget(stdout: &str) -> Vec<UpdateItem> {
         .collect()
 }
 
-/// The page's Windows Update read: one `title` per line (the search the
-/// Settings page itself runs: not installed, not hidden).
+/// The page's Windows Update read: one `title` per line (not installed, not
+/// hidden; software here, drivers in [`WINDOWS_DRIVER_TITLES`]).
 pub fn parse_windows_update(stdout: &str) -> Vec<UpdateItem> {
     stdout
         .lines()
@@ -378,9 +483,10 @@ pub fn parse_windows_update(stdout: &str) -> Vec<UpdateItem> {
         .collect()
 }
 
-/// The read-only Windows Update list for the page: titles only, no install.
-/// Runs as a standard user; the Settings page installs.
-pub const WINDOWS_UPDATE_TITLES: &str = "foreach ($u in (New-Object -ComObject Microsoft.Update.Session).CreateUpdateSearcher().Search('IsInstalled=0 and IsHidden=0').Updates) { $u.Title }";
+/// The read-only Windows Update lists for the page: titles only, no install.
+/// They run as a standard user; Windows Update's own page installs.
+pub const WINDOWS_UPDATE_TITLES: &str = "foreach ($u in (New-Object -ComObject Microsoft.Update.Session).CreateUpdateSearcher().Search('IsInstalled=0 and IsHidden=0 and Type=''Software''').Updates) { $u.Title }";
+pub const WINDOWS_DRIVER_TITLES: &str = "foreach ($u in (New-Object -ComObject Microsoft.Update.Session).CreateUpdateSearcher().Search('IsInstalled=0 and IsHidden=0 and Type=''Driver''').Updates) { $u.Title }";
 
 /// The distro's own full upgrade for `program` (the `PendingUpdates` probe's
 /// program), run as root behind the OS prompt. A snapper or timeshift

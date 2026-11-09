@@ -2044,6 +2044,7 @@ async fn updates_page(
 #[tauri::command]
 async fn run_update_offer(
     app: AppHandle,
+    state: State<'_, AppState>,
     offer: grokhub_core::home::updates::Offer,
 ) -> Result<String, String> {
     if let Some(page) = home_updates::offer_page(offer) {
@@ -2054,7 +2055,8 @@ async fn run_update_offer(
             .map(|_| String::new())
             .map_err(|e| e.to_string());
     }
-    off_main(move || home_updates::run_offer(offer)).await?
+    let dir = state.config_dir.clone();
+    off_main(move || home_updates::run_offer(offer, &dir)).await?
 }
 
 /// A Home tile's Copy setup: the setup's steps, to paste by hand.

@@ -2323,7 +2323,10 @@ export type UpdateOffer =
   | "openSteamDownloads"
   | "updateSystem"
   | "updateApps"
-  | "openWindowsUpdate";
+  | "openWindowsUpdate"
+  | "updateDrivers"
+  | "rollBackDrivers"
+  | "openOptionalUpdates";
 
 export interface UpdateItem {
   name: string;
@@ -2332,7 +2335,7 @@ export interface UpdateItem {
 }
 
 export interface UpdateGroup {
-  kind: "loadout" | "steam" | "system" | "apps" | "windows";
+  kind: "loadout" | "steam" | "system" | "apps" | "windows" | "drivers";
   title: string;
   line: string;
   items: UpdateItem[];
