@@ -99,7 +99,7 @@ impl HttpLocalRuntime {
             .header("Authorization", &format!("Bearer {}", self.token))
             .header("Content-Type", "application/json")
             .send_json(body)
-            .map_err(|e| format!("local model request failed: {e}"))
+            .map_err(request_failed)
     }
 
     fn chat_once(&self, messages: &[ChatMessage]) -> Result<String, String> {
@@ -265,26 +265,153 @@ impl LocalRuntime for HttpLocalRuntime {
         }
         let _busy = super::local_sidecar::busy();
         super::local_sidecar::touch_global();
-        // Non-streaming: tool_calls are unreliable on SSE for llama-server.
+        // Streamed, so Stop (and a game starting) can end the turn between
+        // tokens: dropping the stream closes the socket and the server stops
+        // generating. The deltas are put back together into one reply.
         let mut body = openai_body(&self.model, None, req);
-        body["stream"] = json!(false);
+        body["stream"] = json!(true);
+        body["stream_options"] = json!({ "include_usage": true });
         self.effort(req.effort.as_deref()).apply(&mut body);
         let resp = Self::agent()
             .post(&format!("{}/v1/chat/completions", self.base_url))
             .header("Authorization", &format!("Bearer {}", self.token))
             .header("Content-Type", "application/json")
             .send_json(body)
-            .map_err(|e| format!("local model request failed: {e}"))?;
+            .map_err(request_failed)?;
         if resp.status() >= 400 {
             let status = resp.status();
             let body = resp.into_string().unwrap_or_default();
             return Err(format!("local model HTTP {status}: {body}"));
         }
-        let text = resp
-            .into_string()
-            .map_err(|e| format!("local model read: {e}"))?;
+        let text = if resp.content_type().contains("event-stream") {
+            let reply = assemble_sse(BufReader::new(resp.into_reader()), &|| {
+                cancel.is_cancelled()
+            })?;
+            note_timings(&reply);
+            reply.to_string()
+        } else {
+            // A server (or the test fake) that answers in one body.
+            resp.into_string()
+                .map_err(|e| format!("local model read: {e}"))?
+        };
         parse_openai_reply(&text).map_err(|e| e.to_string())
     }
+}
+
+/// A failed request's message; a game cutting the server says so.
+fn request_failed(e: impl std::fmt::Display) -> String {
+    match super::local_sidecar::cut_reason() {
+        Some(why) => why.to_string(),
+        None => format!("local model request failed: {e}"),
+    }
+}
+
+/// One streamed tool call being put back together.
+#[derive(Default)]
+struct CallParts {
+    id: String,
+    name: String,
+    arguments: String,
+}
+
+/// Put a streamed `/v1/chat/completions` reply back into the one-body shape
+/// [`parse_openai_reply`] reads: content, reasoning and tool calls joined
+/// from their deltas (a call's arguments arrive in pieces, keyed by
+/// `index`), plus the last chunk's usage and timings. `cancelled` is asked
+/// between chunks; returning stops reading, which closes the stream.
+fn assemble_sse(reader: impl BufRead, cancelled: &dyn Fn() -> bool) -> Result<Value, String> {
+    let mut content = String::new();
+    let mut reasoning = String::new();
+    let mut calls: Vec<CallParts> = Vec::new();
+    let mut finish = Value::Null;
+    let mut usage = Value::Null;
+    let mut timings = Value::Null;
+    for line in reader.lines() {
+        if cancelled() {
+            return Err("cancelled".into());
+        }
+        let line = line.map_err(request_failed)?;
+        let Some(data) = line.strip_prefix("data:").map(str::trim) else {
+            continue;
+        };
+        if data.is_empty() || data == "[DONE]" {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(data) else {
+            continue;
+        };
+        if let Some(e) = v.get("error") {
+            return Err(format!("local model error: {e}"));
+        }
+        if !v["usage"].is_null() {
+            usage = v["usage"].clone();
+        }
+        if !v["timings"].is_null() {
+            timings = v["timings"].clone();
+        }
+        let choice = &v["choices"][0];
+        if !choice["finish_reason"].is_null() {
+            finish = choice["finish_reason"].clone();
+        }
+        let delta = &choice["delta"];
+        if let Some(t) = delta["content"].as_str() {
+            content.push_str(t);
+        }
+        if let Some(t) = delta["reasoning_content"].as_str() {
+            reasoning.push_str(t);
+        }
+        for c in delta["tool_calls"].as_array().into_iter().flatten() {
+            let at = c["index"]
+                .as_u64()
+                .and_then(|i| usize::try_from(i).ok())
+                .unwrap_or(calls.len());
+            if calls.len() <= at {
+                calls.resize_with(at + 1, CallParts::default);
+            }
+            let part = &mut calls[at];
+            if let Some(id) = c["id"].as_str().filter(|i| !i.is_empty()) {
+                part.id = id.to_string();
+            }
+            if let Some(n) = c["function"]["name"].as_str() {
+                part.name.push_str(n);
+            }
+            if let Some(a) = c["function"]["arguments"].as_str() {
+                part.arguments.push_str(a);
+            }
+        }
+    }
+    if cancelled() {
+        return Err("cancelled".into());
+    }
+    let calls: Vec<Value> = calls
+        .into_iter()
+        .filter(|c| !c.name.is_empty())
+        .map(|c| {
+            json!({
+                "id": c.id,
+                "type": "function",
+                "function": { "name": c.name, "arguments": c.arguments },
+            })
+        })
+        .collect();
+    if content.is_empty() && reasoning.is_empty() && calls.is_empty() {
+        return Err("local model stream ended with no content".into());
+    }
+    let mut message = json!({ "role": "assistant", "content": content });
+    if !reasoning.is_empty() {
+        message["reasoning_content"] = json!(reasoning);
+    }
+    if !calls.is_empty() {
+        message["tool_calls"] = json!(calls);
+    }
+    let mut reply = json!({
+        "choices": [{ "index": 0, "message": message, "finish_reason": finish }],
+        "usage": usage,
+    });
+    if !timings.is_null() {
+        reply["timings"] = timings;
+    }
+    Ok(reply)
 }
 
 /// A `/v1/chat/completions` body with what [`super::local_effort::Thinking::plan`]
@@ -410,6 +537,61 @@ pub fn from_global_sidecar(busy: super::local_sidecar::Busy) -> Option<Arc<dyn L
 mod tests {
     use super::*;
     use crate::route::local_sidecar::fake_server::FakeServer;
+
+    fn sse(lines: &[&str]) -> std::io::Cursor<Vec<u8>> {
+        let text: String = lines.iter().map(|l| format!("data: {l}\n\n")).collect();
+        std::io::Cursor::new(text.into_bytes())
+    }
+
+    #[test]
+    fn a_streamed_tool_turn_is_put_back_together_from_its_deltas() {
+        let stream = sse(&[
+            r#"{"choices":[{"delta":{"reasoning_content":"look "}}]}"#,
+            r#"{"choices":[{"delta":{"reasoning_content":"it up"}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"read_file","arguments":"{\"pa"}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"th\":\"a.rs\"}"}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":1,"id":"c2","function":{"name":"ls","arguments":"{}"}}]}}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":12,"completion_tokens":7}}"#,
+            "[DONE]",
+        ]);
+        let reply = assemble_sse(stream, &|| false).unwrap();
+        let msg = &reply["choices"][0]["message"];
+        assert_eq!(msg["reasoning_content"], "look it up");
+        assert_eq!(msg["tool_calls"][0]["id"], "c1");
+        assert_eq!(msg["tool_calls"][0]["function"]["name"], "read_file");
+        assert_eq!(
+            msg["tool_calls"][0]["function"]["arguments"],
+            r#"{"path":"a.rs"}"#
+        );
+        assert_eq!(msg["tool_calls"][1]["function"]["name"], "ls");
+        assert_eq!(reply["choices"][0]["finish_reason"], "tool_calls");
+        assert_eq!(reply["usage"]["prompt_tokens"], 12);
+        let out = parse_openai_reply(&reply.to_string()).unwrap();
+        assert_eq!(out.calls.len(), 2);
+        assert_eq!(out.calls[0].arguments, r#"{"path":"a.rs"}"#);
+        assert_eq!(out.reasoning, "look it up");
+    }
+
+    #[test]
+    fn a_streamed_turn_stops_reading_once_cancelled_and_an_empty_one_errs() {
+        let stream = sse(&[r#"{"choices":[{"delta":{"content":"hi"}}]}"#]);
+        assert_eq!(
+            assemble_sse(stream, &|| true).err(),
+            Some("cancelled".into())
+        );
+        let empty = sse(&["[DONE]"]);
+        assert_eq!(
+            assemble_sse(empty, &|| false).err(),
+            Some("local model stream ended with no content".into())
+        );
+        let text = sse(&[
+            r#"{"choices":[{"delta":{"content":"he"}}]}"#,
+            r#"{"choices":[{"delta":{"content":"llo"}}]}"#,
+        ]);
+        let reply = assemble_sse(text, &|| false).unwrap();
+        assert_eq!(reply["choices"][0]["message"]["content"], "hello");
+        assert!(reply["choices"][0]["message"].get("tool_calls").is_none());
+    }
 
     #[test]
     fn http_runtime_reads_json_helpers_from_fake() {

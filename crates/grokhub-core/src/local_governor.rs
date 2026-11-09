@@ -160,6 +160,16 @@ pub fn game_reason(reason: &str) -> bool {
     )
 }
 
+/// A [`busy`] reason sure enough to act on at the first sample: a known game
+/// (game process, Steam game, launcher) or a deny-list app. A fullscreen
+/// window alone may be a video, so it still waits out [`DOWN_SAMPLES`].
+pub fn known_game(reason: &str) -> bool {
+    matches!(
+        reason,
+        "a game is running" | "an app on your deny list is in front"
+    )
+}
+
 /// Another app is using the machine hard: a game, a fullscreen app, or a busy GPU.
 pub fn busy(s: &Signals, rules: &Rules) -> Option<&'static str> {
     if let Some(app) = s.foreground.as_deref() {
@@ -258,6 +268,19 @@ pub struct Governor {
 impl Governor {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// [`observe`](Self::observe) with the reason: a step down for a
+    /// [`known_game`] happens at its first sample, so the game gets the GPU
+    /// within one sample instead of five.
+    pub fn observe_want(&mut self, want: Option<Want>, now_ms: u64) -> Option<Level> {
+        if let Some(w) = want.filter(|w| w.level < self.level && known_game(w.reason)) {
+            self.level = w.level;
+            self.streak = None;
+            self.changed_ms = Some(now_ms);
+            return Some(w.level);
+        }
+        self.observe(want.map(|w| w.level), now_ms)
     }
 
     /// Feed one sample's target; returns the new level when it changes.

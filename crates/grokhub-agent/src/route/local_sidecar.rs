@@ -238,6 +238,15 @@ impl Sidecar {
         }
     }
 
+    /// This launch can put work on a GPU (the one-shot defaults offload
+    /// every layer unless they were started bare on the CPU).
+    pub fn on_gpu(&self) -> bool {
+        match &self.launch {
+            Some(l) => !l.cpu_only,
+            None => !self.bare_cpu,
+        }
+    }
+
     /// This launch runs a draft model (speculative decoding).
     pub fn drafting(&self) -> bool {
         self.launch.as_ref().is_some_and(|l| l.draft.is_some())
@@ -449,7 +458,10 @@ fn start_planned(
     let mut launch = planned.as_ref().map(|(l, _, _)| l.clone());
     let idle = super::local_perf::current_defaults().idle_unload_secs;
     let mut attempt: u8 = 0;
-    let mut bare_cpu = false;
+    // A game holds the GPU: the one-shot defaults would offload every layer,
+    // so they start on the CPU (a planned launch already did, see
+    // `autoconfig::gaming_launch`).
+    let mut bare_cpu = launch.is_none() && local_gov::gpu_contended();
     // The first start's error, kept when the CPU retry fails too.
     let mut gpu_err: Option<String> = None;
     loop {
@@ -899,6 +911,11 @@ fn load(config_dir: &Path, want: Want) -> Result<Busy, String> {
         }
         if let Some(why) = refused(want) {
             return Err(why.into());
+        }
+        // A game wants the GPU: no new work goes to a server on it. It stops
+        // and this request starts one on the CPU.
+        if local_gov::gpu_contended() && slot.as_ref().is_some_and(Sidecar::on_gpu) {
+            cut_for_game(&mut slot);
         }
         if local_gov::restart_due() && in_flight() == 0 {
             restart_locked(&mut slot, false);
@@ -1370,16 +1387,27 @@ fn learned_idle(config_dir: &Path, model: &Path, base: u64) -> u64 {
     next
 }
 
-/// The governor's sample tick: between requests, stop the sidecar when the
-/// level is Unload; when a restart is due, skip it for the same plan,
-/// relaunch warm when both servers fit, else stop it and load it again in
-/// the background.
+/// The governor's sample tick. A game wanting the GPU cuts a server running
+/// on it at once, requests in flight included, and (unless paused) loads it
+/// again on the CPU in the background. Otherwise, between requests, stop the
+/// sidecar when the level is Unload; when a restart is due, skip it for the
+/// same plan, relaunch warm when both servers fit, else stop it and load it
+/// again in the background.
 pub fn tick_governor() {
     let paused = local_gov::paused();
-    if !(paused || local_gov::restart_due()) || (paused && in_flight() > 0) {
+    let contended = local_gov::gpu_contended();
+    if !(paused || contended || local_gov::restart_due()) {
         return;
     }
     let mut slot = global_slot().lock().expect("sidecar global");
+    if contended && slot.as_ref().is_some_and(Sidecar::on_gpu) {
+        cut_for_game(&mut slot);
+        local_gov::clear_restart();
+        if !paused {
+            reload_in_background();
+        }
+        return;
+    }
     if paused {
         // A request may have taken its guard while this waited for the lock.
         if in_flight() > 0 {
@@ -1393,6 +1421,35 @@ pub fn tick_governor() {
         return;
     }
     restart_locked(&mut slot, true);
+}
+
+/// Unix ms when [`cut_for_game`] last cut requests in flight.
+static CUT_AT_MS: AtomicU64 = AtomicU64::new(0);
+/// A request that failed within this long of a cut failed because of it.
+const CUT_NOTE_MS: u64 = 30_000;
+
+/// Stop the server in `slot` now, requests in flight included: killing the
+/// child closes their sockets and frees the GPU at once.
+fn cut_for_game(slot: &mut Option<Sidecar>) {
+    let Some(side) = slot.take() else {
+        return;
+    };
+    let cut = side.in_flight.load(Ordering::SeqCst);
+    if cut > 0 {
+        CUT_AT_MS.store(unix_ms(), Ordering::SeqCst);
+    }
+    retire(side);
+    health::log(
+        "stop",
+        Some(&format!("a game wanted the GPU; cut {cut} running")),
+    );
+}
+
+/// Why a local request just failed, when a game cut it.
+pub fn cut_reason() -> Option<&'static str> {
+    let at = CUT_AT_MS.load(Ordering::SeqCst);
+    (at > 0 && unix_ms().saturating_sub(at) < CUT_NOTE_MS)
+        .then_some("the on-device model stopped because a game started")
 }
 
 /// Process id of the running sidecar.
@@ -2693,6 +2750,66 @@ mod tests {
             loading.join().unwrap(),
             Err("local model server stopped before it was ready".into())
         );
+        local_gov::reset_for_test();
+        set_last_error(None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_game_cuts_a_running_gpu_turn_at_once_and_says_why() {
+        let _one = SLOT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        stop_global();
+        local_gov::reset_for_test();
+        *global_slot().lock().unwrap() = Some(idle_child_sidecar(600, unix_secs()));
+        let pid = global_pid().unwrap();
+        let turn = busy();
+        local_gov::apply(
+            grokhub_core::local_governor::Level::Unload,
+            "a game is running",
+        );
+        let began = Instant::now();
+        tick_governor();
+        assert_eq!(global_pid(), None, "cut with a request still in flight");
+        assert!(!running(pid));
+        assert!(began.elapsed() < Duration::from_secs(2));
+        assert_eq!(
+            cut_reason(),
+            Some("the on-device model stopped because a game started")
+        );
+        drop(turn);
+        CUT_AT_MS.store(0, Ordering::SeqCst);
+        local_gov::reset_for_test();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn while_a_game_holds_the_gpu_a_new_request_starts_the_model_on_the_cpu() {
+        use std::os::unix::fs::PermissionsExt;
+        let _one = SLOT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        stop_global();
+        local_gov::reset_for_test();
+        let dir = crate::harness::test_dir("sidecar-game-cpu");
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        std::fs::create_dir_all(dir.join("models")).unwrap();
+        let bin = dir.join("bin").join("llama-server");
+        let seen = dir.join("args.txt");
+        std::fs::write(
+            &bin,
+            format!("#!/bin/sh\necho \"$@\" > {}\nexit 1\n", seen.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(dir.join("models").join("m.gguf"), b"x").unwrap();
+        *global_slot().lock().unwrap() = Some(idle_child_sidecar(600, unix_secs()));
+        let gpu_pid = global_pid().unwrap();
+        local_gov::apply(
+            grokhub_core::local_governor::Level::Throttle,
+            "a game is running",
+        );
+        assert!(acquire(&dir).is_err());
+        assert!(!running(gpu_pid), "the server on the GPU stopped");
+        let args = std::fs::read_to_string(&seen).unwrap();
+        assert!(args.contains("--device none"), "started on the CPU: {args}");
         local_gov::reset_for_test();
         set_last_error(None);
     }
