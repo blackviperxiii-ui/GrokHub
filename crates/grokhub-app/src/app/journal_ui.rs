@@ -112,7 +112,7 @@ impl Cabin {
                     .size(crate::theme::TYPE_CAPTION)
                     .color(crate::theme::subtle()),
                 );
-                ui.add_space(10.0);
+                ui.add_space(12.0);
                 super::pages::page_body(ui, "journal", |ui| {
 
                     let now = now_ms();
@@ -126,7 +126,7 @@ impl Cabin {
                             .fill(crate::theme::elevated())
                             .corner_radius(8.0)
                             .stroke(egui::Stroke::new(1.0, crate::theme::border()))
-                            .inner_margin(egui::Margin::symmetric(10, 8))
+                            .inner_margin(egui::Margin::symmetric(12, 8))
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     ui.label(
@@ -147,7 +147,7 @@ impl Cabin {
                                     );
                                 });
                             });
-                        ui.add_space(6.0);
+                        ui.add_space(8.0);
                     }
                     if let Some(id) = dismiss {
                         if dismiss_nudge(&mut self.journal, &id) {
@@ -219,7 +219,7 @@ impl Cabin {
                         };
                         let expanded = open.as_deref() == Some(id.as_str());
                         self.paint_journal_row(ui, &entry, expanded);
-                        ui.add_space(6.0);
+                        ui.add_space(8.0);
                     }
                 });
             });
@@ -231,7 +231,7 @@ impl Cabin {
             .fill(crate::theme::elevated())
             .corner_radius(10.0)
             .stroke(egui::Stroke::new(1.0, crate::theme::border()))
-            .inner_margin(egui::Margin::symmetric(12, 10))
+            .inner_margin(egui::Margin::symmetric(12, 12))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
@@ -412,7 +412,7 @@ impl Cabin {
 
                 ui.add_space(8.0);
                 ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
+                    ui.spacing_mut().item_spacing.x = 8.0;
                     if entry.status.is_active() {
                         if crate::cards::ghost_pill(ui, "Investigating") {
                             set_status(&mut self.journal, &id, JournalStatus::Investigating);
@@ -446,7 +446,7 @@ impl Cabin {
                 if entry.status != JournalStatus::Decided
                     && entry.status != JournalStatus::Abandoned
                 {
-                    ui.add_space(6.0);
+                    ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         ui.add(
                             egui::TextEdit::singleline(&mut self.journal_view.draft_learned)

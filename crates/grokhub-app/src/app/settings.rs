@@ -667,13 +667,13 @@ impl Cabin {
                             ui.set_min_size(modal.size());
                             ui.set_max_size(modal.size());
                             // Top: the way back, the title and Save.
-                            ui.add_space(14.0);
+                            ui.add_space(16.0);
                             ui.horizontal(|ui| {
-                                ui.add_space(20.0);
+                                ui.add_space(24.0);
                                 if crate::cards::settings_back(ui, &back) {
                                     close = true;
                                 }
-                                ui.add_space(14.0);
+                                ui.add_space(16.0);
                                 ui.label(
                                     RichText::new("Settings")
                                         .font(crate::theme::title_font(22.0))
@@ -682,7 +682,7 @@ impl Cabin {
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
-                                        ui.add_space(20.0);
+                                        ui.add_space(24.0);
                                         if settings_save_visible(sec)
                                             && crate::cards::ghost_pill(ui, "Save")
                                         {
@@ -694,7 +694,7 @@ impl Cabin {
                             ui.add_space(12.0);
                             // The big categories, one row across the top.
                             ui.horizontal_wrapped(|ui| {
-                                ui.add_space(20.0);
+                                ui.add_space(24.0);
                                 ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
                                 for (t, label) in SETTINGS_TABS {
                                     if crate::cards::settings_tab(ui, label, tab == t) {
@@ -876,7 +876,7 @@ impl Cabin {
                                                                     ) {
                                                                         self.choose_theme(*choice);
                                                                     }
-                                                                    ui.add_space(10.0);
+                                                                    ui.add_space(12.0);
                                                                 }
                                                             });
                                                             if crate::theme::is_loadout_paint() {
@@ -1071,7 +1071,7 @@ impl Cabin {
                                                                 .size(crate::theme::FONT_HEADING)
                                                                 .color(crate::theme::fg()),
                                                             );
-                                                            ui.add_space(6.0);
+                                                            ui.add_space(8.0);
                                                             crate::cards::settings_note(ui, &crate::update::build_detail_line());
                                                             crate::cards::settings_note(ui, &format!("Runs on {}'s own engine.", grokhub_core::brand::product_name()));
                                                             crate::cards::settings_note(ui, &doctor);
@@ -1271,7 +1271,7 @@ impl Cabin {
                                                                 .size(crate::theme::FONT_TIP)
                                                                 .color(crate::theme::muted()),
                                                             );
-                                                            ui.add_space(6.0);
+                                                            ui.add_space(8.0);
                                                             if crate::cards::ghost_pill(ui, "Preview cursor path") {
                                                                 let now = ui.ctx().input(|i| i.time);
                                                                 let origin = ui.ctx().content_rect().center()
@@ -1365,7 +1365,7 @@ impl Cabin {
         let Some(url) = support_link(&self.cfg.support_url) else {
             return;
         };
-        ui.add_space(6.0);
+        ui.add_space(8.0);
         let label =
             RichText::new(grokhub_core::brand::support_label()).size(crate::theme::FONT_META);
         if ui.link(label).on_hover_text(url).clicked() {
@@ -1381,7 +1381,7 @@ impl Cabin {
         let mut draft = ui
             .data_mut(|d| d.get_temp::<String>(id))
             .unwrap_or_else(|| self.cfg.support_url.clone());
-        ui.add_space(6.0);
+        ui.add_space(8.0);
         let edit = ui
             .horizontal(|ui| {
                 ui.label(

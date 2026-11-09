@@ -179,7 +179,7 @@ impl Cabin {
                     "What {product} knows about you, and where it learned it. It all stays on this computer.",
                 ),
             );
-            ui.add_space(10.0);
+            ui.add_space(12.0);
             self.personal_switches(ui);
             ui.add_space(8.0);
             ui.horizontal(|ui| {

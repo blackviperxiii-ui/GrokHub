@@ -723,13 +723,13 @@ pub const SPACING_16: f32 = 16.0;
 #[cfg_attr(not(test), allow(dead_code))]
 pub const SPACING_24: f32 = 24.0;
 
-/// UI kit corner radii — small matches quiet chrome.
+/// UI kit corner radii, the same steps as the shell's `--radius-sm/md/lg`.
 #[cfg_attr(not(test), allow(dead_code))]
-pub const RADIUS_SM: f32 = 6.0;
+pub const RADIUS_SM: f32 = 8.0;
 #[cfg_attr(not(test), allow(dead_code))]
-pub const RADIUS_MD: f32 = 10.0;
+pub const RADIUS_MD: f32 = 12.0;
 #[cfg_attr(not(test), allow(dead_code))]
-pub const RADIUS_LG: f32 = 14.0;
+pub const RADIUS_LG: f32 = 16.0;
 
 /// The one type scale (Inter). Every text size in the app is one of these
 /// steps; the `FONT_*` names below are older spellings of the same steps.
@@ -746,14 +746,41 @@ pub const TYPE_TITLE: f32 = 16.0;
 /// Page titles.
 pub const TYPE_HEADLINE: f32 = 22.0;
 
-/// The margin every full page keeps from the window edge.
+/// The margin every full page keeps from the window edge on a wide window.
 pub const PAGE_MARGIN: f32 = SPACING_24;
+/// The page margin on a narrow window (auto density, no setting).
+pub const PAGE_MARGIN_NARROW: f32 = SPACING_16;
+/// Below this window width (logical px) pages use [`PAGE_MARGIN_NARROW`].
+pub const NARROW_WINDOW_W: f32 = 900.0;
 
-/// The frame a full page draws in: the app background with [`PAGE_MARGIN`].
+static PAGE_MARGIN_NOW: AtomicU8 = AtomicU8::new(PAGE_MARGIN as u8);
+
+/// The page margin for a window this wide: roomy on a big screen, tighter on a
+/// small laptop window so content keeps its width.
+pub fn page_margin_for(window_w: f32) -> f32 {
+    if window_w < NARROW_WINDOW_W {
+        PAGE_MARGIN_NARROW
+    } else {
+        PAGE_MARGIN
+    }
+}
+
+/// Read the window width once per frame so every page uses the same margin.
+pub fn sync_page_margin(ctx: &egui::Context) {
+    let m = page_margin_for(ctx.content_rect().width());
+    PAGE_MARGIN_NOW.store(m as u8, Ordering::Relaxed);
+}
+
+/// This frame's page margin (see [`sync_page_margin`]).
+pub fn page_margin() -> f32 {
+    f32::from(PAGE_MARGIN_NOW.load(Ordering::Relaxed))
+}
+
+/// The frame a full page draws in: the app background with [`page_margin`].
 pub fn page_frame() -> egui::Frame {
     egui::Frame::NONE
         .fill(bg())
-        .inner_margin(egui::Margin::same(PAGE_MARGIN as i8))
+        .inner_margin(egui::Margin::same(page_margin() as i8))
 }
 
 /// Minimum interactive target for kit controls (settings rows, chips).
@@ -1158,8 +1185,10 @@ pub fn apply_palette(ctx: &egui::Context, palette: PaintPalette) {
         TextStyle::Monospace,
         FontId::new(12.0, FontFamily::Monospace),
     );
-    style.spacing.item_spacing = egui::vec2(8.0, 8.0);
-    style.spacing.button_padding = egui::vec2(12.0, 7.0);
+    style.spacing.item_spacing = egui::vec2(SPACING_8, SPACING_8);
+    style.spacing.button_padding = egui::vec2(SPACING_12, SPACING_8);
+    // WCAG 2.2 target size (2.5.8): no checkbox, slider or field shorter than 24px.
+    style.spacing.interact_size.y = SPACING_24;
     style.spacing.scroll.bar_width = 8.0;
     style.spacing.scroll.handle_min_length = 24.0;
     style.visuals = ctx.global_style().visuals.clone();
@@ -1914,9 +1943,9 @@ mod tests {
         assert_eq!(USER_BUBBLE_RADIUS, 20.0);
         assert!(USER_BUBBLE_RADIUS < QUERY_RADIUS);
         assert_eq!(CHROME_RADIUS, 6.0);
-        assert_eq!(RADIUS_SM, 6.0);
-        assert_eq!(RADIUS_MD, 10.0);
-        assert_eq!(RADIUS_LG, 14.0);
+        assert_eq!(RADIUS_SM, 8.0);
+        assert_eq!(RADIUS_MD, 12.0);
+        assert_eq!(RADIUS_LG, 16.0);
         assert_eq!(SPACING_4, 4.0);
         assert_eq!(SPACING_8, 8.0);
         assert_eq!(SPACING_12, 12.0);
@@ -1941,7 +1970,7 @@ mod tests {
         assert!(scale.windows(2).all(|w| w[0] < w[1]), "{scale:?}");
         assert_eq!(
             page_frame().inner_margin,
-            egui::Margin::same(PAGE_MARGIN as i8)
+            egui::Margin::same(page_margin() as i8)
         );
         assert_eq!(MIN_HIT, TILE_ICON);
         assert!(kit_shadow(ShadowLevel::None).blur == 0);
@@ -2310,3 +2339,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "theme_spacing_tests.rs"]
+mod spacing_tests;

@@ -314,7 +314,7 @@ impl Cabin {
                 }
             }
         }
-        ui.add_space(6.0);
+        ui.add_space(8.0);
     }
 }
 

@@ -248,7 +248,7 @@ pub(super) fn row(ui: &mut egui::Ui, rail: &Rail, view: &mut ModsView, all: &[Su
                 .color(crate::theme::muted()),
         );
     });
-    ui.add_space(6.0);
+    ui.add_space(8.0);
     let n = all.len().min(suggest::MAX_SUGGESTIONS);
     let w = card_width(ui.available_width(), n);
     let wrap = egui::Layout::left_to_right(egui::Align::TOP).with_main_wrap(true);
@@ -258,7 +258,7 @@ pub(super) fn row(ui: &mut egui::Ui, rail: &Rail, view: &mut ModsView, all: &[Su
             card(ui, rail, view, s, w);
         }
     });
-    ui.add_space(14.0);
+    ui.add_space(16.0);
 }
 
 /// Each card's inner width so `n` cards fill the row, within bounds.
@@ -330,7 +330,7 @@ fn card(ui: &mut egui::Ui, rail: &Rail, view: &mut ModsView, s: &Suggestion, w: 
                 );
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
+                    ui.spacing_mut().item_spacing.x = 8.0;
                     if crate::cards::ghost_pill(ui, "View") {
                         open = true;
                     }

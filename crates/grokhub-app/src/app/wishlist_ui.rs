@@ -188,7 +188,7 @@ impl Cabin {
             self.set_wish_on(on);
         }
         if !on {
-            ui.add_space(6.0);
+            ui.add_space(8.0);
             return;
         }
         ui.indent("pulse-wishlist", |ui| {
@@ -244,7 +244,7 @@ impl Cabin {
                 crate::cards::help_text(ui, &self.sources.wish.note.clone());
             }
         });
-        ui.add_space(6.0);
+        ui.add_space(8.0);
     }
 
     pub(super) fn ui_steam_id_entry(&mut self, ui: &mut egui::Ui) {

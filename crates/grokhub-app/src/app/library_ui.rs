@@ -23,7 +23,6 @@ const GRID_GAP: f32 = 16.0;
 const TILE_MIN_W: f32 = 150.0;
 /// Covers keep the deck's tall box art shape.
 const TILE_ASPECT: f32 = 1.52;
-const PAGE_PAD: f32 = 24.0;
 const LIBRARY_VIEW_ID: &str = "library-view";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -420,7 +419,7 @@ impl Cabin {
         }
         egui::Frame::NONE
             .fill(crate::theme::bg())
-            .inner_margin(egui::Margin::same(PAGE_PAD as i8))
+            .inner_margin(egui::Margin::same(crate::theme::page_margin() as i8))
             .show(ui, |ui| {
                 ui.set_min_size(ui.available_size());
                 if (!found || games.is_empty()) && bnet.is_empty() {
@@ -508,7 +507,7 @@ impl Cabin {
                 egui::Frame::NONE
                     .stroke(egui::Stroke::new(1.0, crate::theme::signal_red()))
                     .corner_radius(crate::theme::RADIUS_SM)
-                    .inner_margin(egui::Margin::symmetric(12, 6))
+                    .inner_margin(egui::Margin::symmetric(12, 8))
                     .show(ui, |ui| {
                         ui.add(
                             egui::TextEdit::singleline(&mut view.query)
@@ -562,11 +561,11 @@ impl Cabin {
                 .fill(crate::theme::surface())
                 .stroke(egui::Stroke::new(1.0, crate::theme::amber()))
                 .corner_radius(crate::theme::RADIUS_SM)
-                .inner_margin(egui::Margin::same(14))
+                .inner_margin(egui::Margin::same(16))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 6.0;
+                        ui.spacing_mut().item_spacing.x = 8.0;
                         card_mark(ui);
                         ui.label(
                             egui::RichText::new("OBJECTIVE")

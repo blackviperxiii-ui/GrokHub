@@ -598,7 +598,7 @@ pub(super) fn header(
 ) {
     ui.horizontal(|ui| {
         if mark {
-            ui.spacing_mut().item_spacing.x = 6.0;
+            ui.spacing_mut().item_spacing.x = 8.0;
             card_mark(ui);
         }
         ui.label(caption(title));
@@ -1362,7 +1362,7 @@ impl Cabin {
         let talk = ui.scope_builder(egui::UiBuilder::new().sense(egui::Sense::click()), |ui| {
             card(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
+                    ui.spacing_mut().item_spacing.x = 8.0;
                     card_mark(ui);
                     ui.label(caption(&dock_title(&shown.id, name)));
                     if desktop {

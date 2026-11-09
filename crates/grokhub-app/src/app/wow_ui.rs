@@ -404,7 +404,7 @@ impl Cabin {
     /// where it lives, Refresh and Open folder, and for WoW each flavor's
     /// addon and what it saved.
     pub(super) fn bnet_detail(&mut self, ui: &mut egui::Ui, game: &BnetGame) {
-        ui.spacing_mut().item_spacing.y = 10.0;
+        ui.spacing_mut().item_spacing.y = 12.0;
         let w = ui.available_width();
         let (rect, _) = ui.allocate_exact_size(egui::vec2(w, w * 0.6), egui::Sense::hover());
         let painter = ui.painter_at(rect);
@@ -494,13 +494,13 @@ impl Cabin {
             })
             .count();
         if missing > 1 {
-            ui.add_space(6.0);
+            ui.add_space(8.0);
             if crate::cards::white_pill(ui, &format!("Install addon in all {missing} versions")) {
                 self.install_addon_everywhere(install);
             }
         }
         for info in flavors {
-            ui.add_space(6.0);
+            ui.add_space(8.0);
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new(format!(

@@ -713,7 +713,7 @@ impl Cabin {
             ui,
             "How replies sound in chat. Tone only: approvals, warnings and facts stay plain in every personality. A chat can pick its own from the chat header.",
         );
-        ui.add_space(10.0);
+        ui.add_space(12.0);
         let mut adults = self.cfg.explicit_personalities;
         if crate::cards::settings_toggle(ui, ADULTS_ONLY, ADULTS_ONLY_HINT, &mut adults) {
             self.set_explicit_personalities(adults);
@@ -727,7 +727,7 @@ impl Cabin {
             }
         }
         if self.picker.age_check {
-            ui.add_space(6.0);
+            ui.add_space(8.0);
             crate::cards::settings_note(ui, &age_check_line());
             crate::cards::settings_note(ui, AGE_CHANGES);
             let mut answer = None;
@@ -743,7 +743,7 @@ impl Cabin {
                 self.answer_age_check(adult);
             }
         }
-        ui.add_space(10.0);
+        ui.add_space(12.0);
         // The switch or the 18+ answer may have just changed the gate.
         super::loadout_home::nyx_wardrobe::publish_explicit_ok(ui.ctx(), self.explicit_art_ok());
         if self.picker.draft.is_some() {
@@ -903,7 +903,7 @@ impl Cabin {
             self.set_dynamic_chat(dynamic);
         }
         if self.adult_heat().is_some() {
-            ui.add_space(10.0);
+            ui.add_space(12.0);
             crate::cards::settings_note(ui, &format!("{HEAT}: {HEAT_HINT}"));
             let mut pick = None;
             ui.horizontal(|ui| {
@@ -931,7 +931,7 @@ impl Cabin {
             .fill(crate::theme::surface())
             .corner_radius(12.0)
             .stroke(egui::Stroke::new(1.0_f32, crate::theme::fg()))
-            .inner_margin(egui::Margin::same(14))
+            .inner_margin(egui::Margin::same(16))
             .show(ui, |ui| {
                 crate::cards::section_label(ui, &format!("Edit {}", draft.saved.name));
                 crate::cards::help_text(
@@ -960,9 +960,9 @@ impl Cabin {
                     .size(12.0)
                     .color(crate::theme::muted()),
                 );
-                ui.add_space(6.0);
+                ui.add_space(8.0);
                 ui.add(egui::TextEdit::multiline(&mut e.tone_rules).desired_rows(4).desired_width(f32::INFINITY));
-                ui.add_space(10.0);
+                ui.add_space(12.0);
                 let emoji = [
                     (personality::Emoji::None, "None"),
                     (personality::Emoji::Light, "Light"),
@@ -1002,7 +1002,7 @@ impl Cabin {
                 e.voice_hint = Some(hint).filter(|h| !h.trim().is_empty());
                 if !draft.error.is_empty() {
                     ui.label(RichText::new(&draft.error).size(crate::theme::FONT_META).color(crate::theme::offline()));
-                    ui.add_space(6.0);
+                    ui.add_space(8.0);
                 }
                 ui.horizontal(|ui| {
                     if crate::cards::white_pill(ui, "Save") {
@@ -1078,7 +1078,7 @@ impl Cabin {
                     .fill(crate::theme::elevated())
                     .stroke(egui::Stroke::new(1.0_f32, crate::theme::border_strong()))
                     .corner_radius(16.0)
-                    .inner_margin(egui::Margin::same(22)),
+                    .inner_margin(egui::Margin::same(24)),
             )
             .show(ctx, |ui| {
                 ui.set_width(width);
@@ -1093,7 +1093,7 @@ impl Cabin {
                         .size(crate::theme::FONT_META)
                         .color(crate::theme::muted()),
                 );
-                ui.add_space(14.0);
+                ui.add_space(16.0);
                 egui::ScrollArea::vertical()
                     .id_salt("personality-sheet-list")
                     .max_height((ctx.content_rect().height() * 0.5).max(160.0))
@@ -1337,7 +1337,7 @@ fn paint_tag_chip(ui: &mut egui::Ui, label: &str, kind: TagKind) {
         .fill(fill)
         .stroke(stroke)
         .corner_radius(6.0)
-        .inner_margin(egui::Margin::symmetric(6, 2))
+        .inner_margin(egui::Margin::symmetric(8, 2))
         .show(ui, |ui| {
             ui.label(RichText::new(label).size(11.0).strong().color(ink));
         });
@@ -1353,7 +1353,7 @@ enum TagKind {
 
 fn paint_preset_tags(ui: &mut egui::Ui, p: &Personality, detail: bool) {
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 6.0;
+        ui.spacing_mut().item_spacing.x = 8.0;
         if p.id == personality::DEFAULT_ID {
             paint_tag_chip(ui, "Default", TagKind::Default);
         }
@@ -1428,7 +1428,7 @@ fn paint_grid_card(
                         12.0
                     })
                     .stroke(stroke)
-                    .inner_margin(egui::Margin::symmetric(12, 10))
+                    .inner_margin(egui::Margin::symmetric(12, 12))
                     .show(ui, |ui| {
                         ui.set_width(inner_w);
                         ui.set_max_width(inner_w);
@@ -1537,7 +1537,7 @@ fn paint_detail_panel(
                     paint_preset_tags(ui, p, true);
                 });
             });
-            ui.add_space(10.0);
+            ui.add_space(12.0);
             ui.label(
                 RichText::new(&p.description)
                     .size(crate::theme::FONT_BODY)
@@ -1554,7 +1554,7 @@ fn paint_detail_panel(
                     .fill(crate::theme::void_bg())
                     .stroke(sample_stroke)
                     .corner_radius(10.0)
-                    .inner_margin(egui::Margin::same(10))
+                    .inner_margin(egui::Margin::same(12))
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         ui.set_max_width(ui.available_width());

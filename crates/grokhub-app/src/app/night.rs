@@ -203,7 +203,7 @@ impl Cabin {
                     .fill(crate::theme::elevated())
                     .corner_radius(crate::theme::CARD_RADIUS)
                     .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-                    .inner_margin(egui::Margin::same(14))
+                    .inner_margin(egui::Margin::same(16))
                     .show(ui, |ui| {
                         ui.label(RichText::new("New job").strong());
                         let edit = ui.add(

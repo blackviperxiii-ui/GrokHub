@@ -33,7 +33,6 @@ const VIEW_ID: &str = "mods-view";
 /// How long typing must pause before a search goes out.
 const QUERY_WAIT_MS: u64 = 400;
 const RAIL_W: f32 = 230.0;
-const PAGE_PAD: f32 = 24.0;
 const DRAWER_W: f32 = 340.0;
 
 /// A game Loadout may mod, as this PC has it.
@@ -347,7 +346,7 @@ impl Cabin {
         }
         egui::Frame::NONE
             .fill(crate::theme::bg())
-            .inner_margin(egui::Margin::same(PAGE_PAD as i8))
+            .inner_margin(egui::Margin::same(crate::theme::page_margin() as i8))
             .show(ui, |ui| {
                 ui.set_min_size(ui.available_size());
                 install::recover_once(ui.ctx());
@@ -371,7 +370,7 @@ impl Cabin {
                     view.picked = rail.games.first().map(|g| g.entry.id.to_string());
                 }
                 ui.horizontal_top(|ui| {
-                    ui.spacing_mut().item_spacing.x = 20.0;
+                    ui.spacing_mut().item_spacing.x = 24.0;
                     ui.allocate_ui_with_layout(
                         egui::vec2(RAIL_W, ui.available_height()),
                         egui::Layout::top_down(egui::Align::Min),
@@ -438,7 +437,7 @@ impl Cabin {
         if game.last_played > 0 {
             suggest::toggle(ui, game);
         }
-        ui.add_space(10.0);
+        ui.add_space(12.0);
         let offline = grokhub_core::offline::enabled();
         search_row(ui, view, offline);
         ui.add_space(8.0);
@@ -792,7 +791,7 @@ fn requested_card(ui: &mut egui::Ui) -> Result<(), String> {
         .fill(crate::theme::surface())
         .stroke(egui::Stroke::new(1.0, crate::theme::amber()))
         .corner_radius(crate::theme::RADIUS_SM)
-        .inner_margin(egui::Margin::same(14))
+        .inner_margin(egui::Margin::same(16))
         .show(ui, |ui| {
             ui.set_width(ui.available_width().min(720.0));
             ui.label(
@@ -869,7 +868,7 @@ fn search_row(ui: &mut egui::Ui, view: &mut ModsView, offline: bool) {
     egui::Frame::NONE
         .stroke(egui::Stroke::new(1.0, crate::theme::border()))
         .corner_radius(crate::theme::RADIUS_SM)
-        .inner_margin(egui::Margin::symmetric(12, 6))
+        .inner_margin(egui::Margin::symmetric(12, 8))
         .show(ui, |ui| {
             let hint = if offline {
                 "Offline only is on"
@@ -965,7 +964,7 @@ fn rail_row(ui: &mut egui::Ui, name: &str, note: &str, on: bool, new: usize) -> 
     egui::Frame::NONE
         .fill(fill)
         .corner_radius(crate::theme::RADIUS_SM)
-        .inner_margin(egui::Margin::symmetric(10, 6))
+        .inner_margin(egui::Margin::symmetric(12, 8))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
@@ -1134,7 +1133,7 @@ fn mod_card(ui: &mut egui::Ui, m: &ModSummary, open: bool) -> bool {
         })
         .response
         .interact(egui::Sense::click());
-    ui.add_space(6.0);
+    ui.add_space(8.0);
     resp.clicked()
 }
 

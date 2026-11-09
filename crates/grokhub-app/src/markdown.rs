@@ -131,7 +131,7 @@ pub fn show(ui: &mut Ui, text: &str) {
                 table(ui, bi, &header, &align, &rows, wrap);
             }
             MdBlock::Code { lang, body } => code_block(ui, bi, &lang, &body, wrap),
-            MdBlock::Blank => ui.add_space(6.0),
+            MdBlock::Blank => ui.add_space(8.0),
             MdBlock::Para(line) => inline(ui, &line, wrap),
         }
     }

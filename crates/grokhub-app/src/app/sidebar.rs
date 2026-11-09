@@ -194,7 +194,7 @@ impl Cabin {
                 .fill(crate::theme::bg())
                 .stroke(egui::Stroke::new(1.0, stroke))
                 .corner_radius(20.0)
-                .inner_margin(egui::Margin::symmetric(8, 3))
+                .inner_margin(egui::Margin::symmetric(8, 4))
                 .show(ui, |ui| {
                     ui.add(
                         egui::Label::new(
@@ -732,7 +732,7 @@ impl Cabin {
                                                     2.0_f32,
                                                     crate::theme::fg(),
                                                 ))
-                                                .inner_margin(egui::Margin::symmetric(10, 6)),
+                                                .inner_margin(egui::Margin::symmetric(12, 8)),
                                         )
                                         .hint_text(crate::theme::hint("Name"))
                                         .font(egui::FontId::proportional(13.0))

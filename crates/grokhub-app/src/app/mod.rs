@@ -5514,6 +5514,7 @@ impl eframe::App for Cabin {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        crate::theme::sync_page_margin(&ctx);
         self.paint_drop_hint(&ctx);
         self.publish_shown_personality(&ctx);
         crate::titlebar::edge_resize(
@@ -5640,7 +5641,7 @@ impl Cabin {
                     .size(crate::theme::FONT_TIP)
                     .color(crate::theme::muted()),
                 );
-                ui.add_space(6.0);
+                ui.add_space(8.0);
                 egui::ScrollArea::vertical()
                     .id_salt("slash-parity")
                     .max_height(280.0)

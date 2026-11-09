@@ -177,7 +177,7 @@ impl Cabin {
                 .strong()
                 .color(crate::theme::fg()),
         );
-        ui.add_space(6.0);
+        ui.add_space(8.0);
         let mut add = false;
         // Field and Add share one centre line and one height.
         ui.horizontal(|ui| {
@@ -201,7 +201,7 @@ impl Cabin {
             let draft = std::mem::take(&mut self.interests.draft);
             self.add_interest(&draft);
         }
-        ui.add_space(10.0);
+        ui.add_space(12.0);
         let mut rows: Vec<interests::Interest> = self.interests_now().topics.clone();
         if rows.is_empty() {
             crate::cards::settings_note(

@@ -116,7 +116,7 @@ fn paint_view(
             }
         }
         if room.rows > 0 && !view.rows.is_empty() {
-            ui.add_space(6.0);
+            ui.add_space(8.0);
             for row in view.rows.iter().take(room.rows) {
                 let resp = ui
                     .horizontal(|ui| {
@@ -150,7 +150,7 @@ fn paint_view(
             }
         }
         if room.buttons > 0 && !view.buttons.is_empty() {
-            ui.add_space(6.0);
+            ui.add_space(8.0);
             ui.horizontal_wrapped(|ui| {
                 for b in view.buttons.iter().take(room.buttons) {
                     let pressed = if b.primary {

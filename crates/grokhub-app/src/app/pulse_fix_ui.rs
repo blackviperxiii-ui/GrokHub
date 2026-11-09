@@ -32,7 +32,7 @@ pub(super) fn tone_color(tone: VerdictTone) -> egui::Color32 {
 /// A dot and the verdict line, above a card's detail.
 pub(super) fn paint_verdict(ui: &mut egui::Ui, v: &PulseVerdict) {
     ui.horizontal_top(|ui| {
-        ui.spacing_mut().item_spacing.x = 6.0;
+        ui.spacing_mut().item_spacing.x = 8.0;
         let (rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 16.0), egui::Sense::hover());
         ui.painter()
             .circle_filled(rect.center(), 3.5, tone_color(v.tone));
@@ -239,7 +239,7 @@ impl Cabin {
                     .fill(crate::theme::elevated())
                     .stroke(egui::Stroke::new(1.0_f32, crate::theme::border_strong()))
                     .corner_radius(16.0)
-                    .inner_margin(egui::Margin::same(22)),
+                    .inner_margin(egui::Margin::same(24)),
             )
             .show(ctx, |ui| {
                 ui.set_width(600.0_f32.min(ctx.content_rect().width() - 80.0));
@@ -274,7 +274,7 @@ impl Cabin {
                             .color(crate::theme::muted()),
                     );
                 }
-                ui.add_space(10.0);
+                ui.add_space(12.0);
                 egui::ScrollArea::vertical()
                     .id_salt("pulse-fix-rows")
                     .max_height((ctx.content_rect().height() - 220.0).max(200.0))
@@ -284,7 +284,7 @@ impl Cabin {
                             egui::Frame::NONE
                                 .fill(crate::theme::raised())
                                 .corner_radius(10.0)
-                                .inner_margin(egui::Margin::symmetric(12, 10))
+                                .inner_margin(egui::Margin::symmetric(12, 12))
                                 .show(ui, |ui| {
                                     ui.set_width(ui.available_width());
                                     ui.horizontal_top(|ui| {
@@ -325,7 +325,7 @@ impl Cabin {
                                         );
                                     });
                                     if open {
-                                        ui.add_space(6.0);
+                                        ui.add_space(8.0);
                                         match o.kind {
                                             FixKind::Compare => paint_compare(ui, &sheet),
                                             FixKind::WarnLines => {
@@ -371,7 +371,7 @@ impl Cabin {
                                         }
                                     }
                                 });
-                            ui.add_space(6.0);
+                            ui.add_space(8.0);
                         }
                     });
                 ui.add_space(8.0);
