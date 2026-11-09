@@ -817,6 +817,46 @@ remote_file = "tokens.txt"
 file = "parakeet-tdt-0.6b-v3-int8/tokens.txt"
 git_oid = "fc43e1c723e262df60b70e1919614417162d1fe2"
 bytes = 93_939
+# Text to speech: Kokoro 82M (multi-language v1.0), the sherpa-onnx export,
+# spoken by the same engine as Parakeet (`sherpa-onnx-offline-tts`, one run
+# per sentence, so nothing stays loaded). sherpa-onnx v2 reads pronunciations
+# from the lexicon, so the espeak-ng data isn't needed. Each file is the one in
+# the release archive (kokoro-multi-lang-v1_0.tar.bz2, SHA-256 60703707...),
+# same bytes as the repo; the token list is a small git file.
+[[model]]
+id = "kokoro-82m-multi-lang-v1_0"
+name = "Kokoro text to speech"
+repo = "csukuangfj/kokoro-multi-lang-v1_0"
+file = "kokoro-multi-lang-v1_0/model.onnx"
+remote_file = "model.onnx"
+sha256 = "b40f62b166ac8164b0627ef48a0b358eda0985e272fb03ef5252e7206305da11"
+download_mb = 343
+quant = "fp32"
+license = "Apache-2.0"
+kind = "text-to-speech"
+badges = []
+tier = "T1"
+route = "local:voice"
+ctx_default = 0
+run_mb = 1_024
+needs_avx2 = false
+min_budget = {}
+tok_s = { gpu = 0, unified = 0, cpu = 0 }
+[[model.parts]]
+remote_file = "voices.bin"
+file = "kokoro-multi-lang-v1_0/voices.bin"
+sha256 = "1c5a5b983d3d50d8586d437a51f3faa2da7919ce76a013c081e65671a3447c29"
+bytes = 28_200_960
+[[model.parts]]
+remote_file = "lexicon-us-en.txt"
+file = "kokoro-multi-lang-v1_0/lexicon-us-en.txt"
+sha256 = "7daaab53a181be9885b853a8582bf1838186317e5dadacbcef9c426d6fa0da14"
+bytes = 5_956_885
+[[model.parts]]
+remote_file = "tokens.txt"
+file = "kokoro-multi-lang-v1_0/tokens.txt"
+git_oid = "4c5460434a54a6ce2b3fb6133d79dbc24f183e23"
+bytes = 687
 
 # Pictures: Tongyi's Z-Image Turbo (6B, 8 steps), leejet's Q4_K GGUF for
 # stable-diffusion.cpp (`image_engine.rs`). It loads for one picture and
