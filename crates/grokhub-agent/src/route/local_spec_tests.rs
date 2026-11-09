@@ -61,6 +61,11 @@ fn gemma_12b(tokenizer: Option<String>) -> GgufMeta {
         file_mb: 7_039,
         tokenizer,
         nextn_layers: 0,
+        sliding_window: 0,
+        swa_pattern: vec![],
+        kv_heads: vec![],
+        key_length_swa: 0,
+        value_length_swa: 0,
     }
 }
 
@@ -79,6 +84,11 @@ fn gemma_e2b() -> GgufMeta {
         file_mb: 3_100,
         tokenizer: None,
         nextn_layers: 0,
+        sliding_window: 0,
+        swa_pattern: vec![],
+        kv_heads: vec![],
+        key_length_swa: 0,
+        value_length_swa: 0,
     }
 }
 
@@ -503,6 +513,7 @@ fn every_launch_flag_is_live_in_the_pinned_engine() {
         tensor_split: Some(vec![3, 1]),
         draft: Some(Box::new(d)),
         cpu_only: false,
+        run: Default::default(),
     };
     let launches = [
         full(simple),

@@ -8,7 +8,6 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
@@ -66,11 +65,13 @@ pub fn fits(
     drafter: &GgufMeta,
 ) -> Option<bool> {
     let (gpu, ram) = autoconfig::budgets(p, a.backend, state);
-    let model =
-        meta.file_mb + autoconfig::kv_mb(meta, a.ctx, a.kv) + autoconfig::overhead_mb(a.ctx);
+    let seqs = a.run.seqs();
+    let model = meta.file_mb
+        + autoconfig::kv_mb_for(meta, a.ctx, a.kv, seqs)
+        + autoconfig::overhead_mb(a.ctx);
     let need = model
         + drafter.file_mb
-        + autoconfig::kv_mb(drafter, a.ctx, a.kv)
+        + autoconfig::kv_mb_for(drafter, a.ctx, a.kv, seqs)
         + autoconfig::overhead_mb(a.ctx);
     if gpu == 0 {
         return (need <= ram).then_some(false);
@@ -212,17 +213,7 @@ pub fn help_flags(binary: &Path) -> DraftFlags {
     {
         return f;
     }
-    let mut cmd = Command::new(binary);
-    cmd.arg("--help").stdin(Stdio::null());
-    grokhub_core::proc_util::hide_windows_console(&mut cmd);
-    let f = cmd
-        .output()
-        .map(|o| {
-            let mut text = String::from_utf8_lossy(&o.stdout).into_owned();
-            text.push_str(&String::from_utf8_lossy(&o.stderr));
-            ld::parse_help(&text)
-        })
-        .unwrap_or_default();
+    let f = ld::parse_help(&super::local_flags::help_text(binary));
     if let Ok(mut c) = cache().lock() {
         c.flags.insert(binary.to_path_buf(), f.clone());
     }

@@ -23,6 +23,12 @@ pub struct HttpLocalRuntime {
     thinking: super::local_effort::Thinking,
     /// Keeps the global sidecar's request count up while this runtime lives.
     busy: Option<Arc<super::local_sidecar::Busy>>,
+    /// Server slots; past one, slot 0 is left to the chat on screen.
+    slots: u32,
+    /// Busy slots split one KV pool's context.
+    unified: bool,
+    /// Requests on the server this runtime talks to.
+    in_flight: Option<Arc<std::sync::atomic::AtomicUsize>>,
 }
 
 impl std::fmt::Debug for HttpLocalRuntime {
@@ -45,7 +51,52 @@ impl HttpLocalRuntime {
             model: "local".into(),
             thinking: Default::default(),
             busy: None,
+            slots: 1,
+            unified: false,
+            in_flight: None,
         }
+    }
+
+    /// The server's slots and request count, for [`Self::share_of`] and
+    /// [`Self::background_slot`].
+    pub fn with_slots(
+        mut self,
+        slots: u32,
+        unified: bool,
+        in_flight: Arc<std::sync::atomic::AtomicUsize>,
+    ) -> Self {
+        self.slots = slots.max(1);
+        self.unified = unified;
+        self.in_flight = Some(in_flight);
+        self
+    }
+
+    /// A request guard for one call, unless this runtime already holds one
+    /// for its whole life: each request counts once.
+    fn call_busy(&self) -> Option<super::local_sidecar::Busy> {
+        self.busy.is_none().then(super::local_sidecar::busy)
+    }
+
+    /// One busy slot's part of `n_ctx`: the whole of it, or with a unified
+    /// pool an equal share among the requests running now (at most one per slot).
+    fn share_of(&self, n_ctx: u64) -> u64 {
+        if !self.unified || self.slots <= 1 {
+            return n_ctx;
+        }
+        let active = self
+            .in_flight
+            .as_ref()
+            .map_or(1, |n| n.load(std::sync::atomic::Ordering::SeqCst))
+            .clamp(1, self.slots as usize);
+        n_ctx / active as u64
+    }
+
+    /// The slot a background call takes: never slot 0, which stays free (and
+    /// keeps its cached prefix) for the chat on screen; `None` with one slot.
+    fn background_slot(&self) -> Option<u32> {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static NEXT: AtomicU32 = AtomicU32::new(0);
+        (self.slots > 1).then(|| 1 + NEXT.fetch_add(1, Ordering::Relaxed) % (self.slots - 1))
     }
 
     /// What `/props` said about thinking (see [`super::local_effort`]).
@@ -88,23 +139,27 @@ impl HttpLocalRuntime {
         messages: &[ChatMessage],
         stream: bool,
         effort: Option<&str>,
+        slot: Option<u32>,
     ) -> Result<grokhub_core::http::Response, String> {
         if !self.loopback_ok() {
             return Err("local model URL must be loopback (127.0.0.1 / localhost)".into());
         }
         super::local_sidecar::touch_global();
-        let body = chat_body(&self.model, messages, stream, &self.effort(effort));
+        let mut body = chat_body(&self.model, messages, stream, &self.effort(effort));
+        if let Some(id) = slot {
+            body["id_slot"] = json!(id);
+        }
         Self::agent()
             .post(&format!("{}/v1/chat/completions", self.base_url))
             .header("Authorization", &format!("Bearer {}", self.token))
             .header("Content-Type", "application/json")
             .send_json(body)
-            .map_err(|e| format!("local model request failed: {e}"))
+            .map_err(request_failed)
     }
 
-    fn chat_once(&self, messages: &[ChatMessage]) -> Result<String, String> {
-        let _busy = super::local_sidecar::busy();
-        let resp = self.post_chat(messages, false, None)?;
+    fn chat_once(&self, messages: &[ChatMessage], slot: Option<u32>) -> Result<String, String> {
+        let _busy = self.call_busy();
+        let resp = self.post_chat(messages, false, None, slot)?;
         if resp.status() >= 400 {
             let status = resp.status();
             let body = resp.into_string().unwrap_or_default();
@@ -128,7 +183,7 @@ impl HttpLocalRuntime {
                 content: user.into(),
             },
         ];
-        let text = self.chat_once(&messages)?;
+        let text = self.chat_once(&messages, self.background_slot())?;
         parse_json_object(&text).ok_or_else(|| format!("local model did not return JSON: {text}"))
     }
 }
@@ -209,8 +264,8 @@ impl LocalRuntime for HttpLocalRuntime {
         effort: Option<&str>,
         on_delta: &mut dyn FnMut(&str),
     ) -> Result<String, String> {
-        let _busy = super::local_sidecar::busy();
-        let resp = self.post_chat(messages, true, effort)?;
+        let _busy = self.call_busy();
+        let resp = self.post_chat(messages, true, effort, None)?;
         if resp.status() >= 400 {
             let status = resp.status();
             let body = resp.into_string().unwrap_or_default();
@@ -241,7 +296,7 @@ impl LocalRuntime for HttpLocalRuntime {
             .get(&self.base_url)
         {
             if now.duration_since(*at) < PROPS_TTL {
-                return *n;
+                return n.map(|n| self.share_of(n));
             }
         }
         let n = self.fetch_n_ctx();
@@ -249,7 +304,7 @@ impl LocalRuntime for HttpLocalRuntime {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(self.base_url.clone(), (n, now));
-        n
+        n.map(|n| self.share_of(n))
     }
 
     fn chat_tools(
@@ -263,28 +318,155 @@ impl LocalRuntime for HttpLocalRuntime {
         if !self.loopback_ok() {
             return Err("local model URL must be loopback (127.0.0.1 / localhost)".into());
         }
-        let _busy = super::local_sidecar::busy();
+        let _busy = self.call_busy();
         super::local_sidecar::touch_global();
-        // Non-streaming: tool_calls are unreliable on SSE for llama-server.
+        // Streamed, so Stop (and a game starting) can end the turn between
+        // tokens: dropping the stream closes the socket and the server stops
+        // generating. The deltas are put back together into one reply.
         let mut body = openai_body(&self.model, None, req);
-        body["stream"] = json!(false);
+        body["stream"] = json!(true);
+        body["stream_options"] = json!({ "include_usage": true });
         self.effort(req.effort.as_deref()).apply(&mut body);
         let resp = Self::agent()
             .post(&format!("{}/v1/chat/completions", self.base_url))
             .header("Authorization", &format!("Bearer {}", self.token))
             .header("Content-Type", "application/json")
             .send_json(body)
-            .map_err(|e| format!("local model request failed: {e}"))?;
+            .map_err(request_failed)?;
         if resp.status() >= 400 {
             let status = resp.status();
             let body = resp.into_string().unwrap_or_default();
             return Err(format!("local model HTTP {status}: {body}"));
         }
-        let text = resp
-            .into_string()
-            .map_err(|e| format!("local model read: {e}"))?;
+        let text = if resp.content_type().contains("event-stream") {
+            let reply = assemble_sse(BufReader::new(resp.into_reader()), &|| {
+                cancel.is_cancelled()
+            })?;
+            note_timings(&reply);
+            reply.to_string()
+        } else {
+            // A server (or the test fake) that answers in one body.
+            resp.into_string()
+                .map_err(|e| format!("local model read: {e}"))?
+        };
         parse_openai_reply(&text).map_err(|e| e.to_string())
     }
+}
+
+/// A failed request's message; a game cutting the server says so.
+fn request_failed(e: impl std::fmt::Display) -> String {
+    match super::local_sidecar::cut_reason() {
+        Some(why) => why.to_string(),
+        None => format!("local model request failed: {e}"),
+    }
+}
+
+/// One streamed tool call being put back together.
+#[derive(Default)]
+struct CallParts {
+    id: String,
+    name: String,
+    arguments: String,
+}
+
+/// Put a streamed `/v1/chat/completions` reply back into the one-body shape
+/// [`parse_openai_reply`] reads: content, reasoning and tool calls joined
+/// from their deltas (a call's arguments arrive in pieces, keyed by
+/// `index`), plus the last chunk's usage and timings. `cancelled` is asked
+/// between chunks; returning stops reading, which closes the stream.
+fn assemble_sse(reader: impl BufRead, cancelled: &dyn Fn() -> bool) -> Result<Value, String> {
+    let mut content = String::new();
+    let mut reasoning = String::new();
+    let mut calls: Vec<CallParts> = Vec::new();
+    let mut finish = Value::Null;
+    let mut usage = Value::Null;
+    let mut timings = Value::Null;
+    for line in reader.lines() {
+        if cancelled() {
+            return Err("cancelled".into());
+        }
+        let line = line.map_err(request_failed)?;
+        let Some(data) = line.strip_prefix("data:").map(str::trim) else {
+            continue;
+        };
+        if data.is_empty() || data == "[DONE]" {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(data) else {
+            continue;
+        };
+        if let Some(e) = v.get("error") {
+            return Err(format!("local model error: {e}"));
+        }
+        if !v["usage"].is_null() {
+            usage = v["usage"].clone();
+        }
+        if !v["timings"].is_null() {
+            timings = v["timings"].clone();
+        }
+        let choice = &v["choices"][0];
+        if !choice["finish_reason"].is_null() {
+            finish = choice["finish_reason"].clone();
+        }
+        let delta = &choice["delta"];
+        if let Some(t) = delta["content"].as_str() {
+            content.push_str(t);
+        }
+        if let Some(t) = delta["reasoning_content"].as_str() {
+            reasoning.push_str(t);
+        }
+        for c in delta["tool_calls"].as_array().into_iter().flatten() {
+            let at = c["index"]
+                .as_u64()
+                .and_then(|i| usize::try_from(i).ok())
+                .unwrap_or(calls.len());
+            if calls.len() <= at {
+                calls.resize_with(at + 1, CallParts::default);
+            }
+            let part = &mut calls[at];
+            if let Some(id) = c["id"].as_str().filter(|i| !i.is_empty()) {
+                part.id = id.to_string();
+            }
+            if let Some(n) = c["function"]["name"].as_str() {
+                part.name.push_str(n);
+            }
+            if let Some(a) = c["function"]["arguments"].as_str() {
+                part.arguments.push_str(a);
+            }
+        }
+    }
+    if cancelled() {
+        return Err("cancelled".into());
+    }
+    let calls: Vec<Value> = calls
+        .into_iter()
+        .filter(|c| !c.name.is_empty())
+        .map(|c| {
+            json!({
+                "id": c.id,
+                "type": "function",
+                "function": { "name": c.name, "arguments": c.arguments },
+            })
+        })
+        .collect();
+    if content.is_empty() && reasoning.is_empty() && calls.is_empty() {
+        return Err("local model stream ended with no content".into());
+    }
+    let mut message = json!({ "role": "assistant", "content": content });
+    if !reasoning.is_empty() {
+        message["reasoning_content"] = json!(reasoning);
+    }
+    if !calls.is_empty() {
+        message["tool_calls"] = json!(calls);
+    }
+    let mut reply = json!({
+        "choices": [{ "index": 0, "message": message, "finish_reason": finish }],
+        "usage": usage,
+    });
+    if !timings.is_null() {
+        reply["timings"] = timings;
+    }
+    Ok(reply)
 }
 
 /// A `/v1/chat/completions` body with what [`super::local_effort::Thinking::plan`]
@@ -394,10 +576,16 @@ fn note_timings(v: &Value) {
     }
 }
 
-/// Build a runtime from a running sidecar endpoint, if any.
+/// Build a runtime from a running sidecar endpoint, if any: the server the
+/// request was admitted to, so a warm relaunch never moves it mid-call.
 pub fn from_global_sidecar(busy: super::local_sidecar::Busy) -> Option<Arc<dyn LocalRuntime>> {
-    let end = super::local_sidecar::global_endpoint()?;
-    let mut rt = HttpLocalRuntime::new(end.base_url, end.token).with_thinking(end.thinking);
+    let end = match busy.endpoint() {
+        Some(end) => end.clone(),
+        None => super::local_sidecar::global_endpoint()?,
+    };
+    let mut rt = HttpLocalRuntime::new(end.base_url, end.token)
+        .with_thinking(end.thinking)
+        .with_slots(end.slots, end.unified, end.in_flight);
     rt.busy = Some(Arc::new(busy));
     Some(Arc::new(rt))
 }
@@ -406,6 +594,61 @@ pub fn from_global_sidecar(busy: super::local_sidecar::Busy) -> Option<Arc<dyn L
 mod tests {
     use super::*;
     use crate::route::local_sidecar::fake_server::FakeServer;
+
+    fn sse(lines: &[&str]) -> std::io::Cursor<Vec<u8>> {
+        let text: String = lines.iter().map(|l| format!("data: {l}\n\n")).collect();
+        std::io::Cursor::new(text.into_bytes())
+    }
+
+    #[test]
+    fn a_streamed_tool_turn_is_put_back_together_from_its_deltas() {
+        let stream = sse(&[
+            r#"{"choices":[{"delta":{"reasoning_content":"look "}}]}"#,
+            r#"{"choices":[{"delta":{"reasoning_content":"it up"}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"read_file","arguments":"{\"pa"}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"th\":\"a.rs\"}"}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":1,"id":"c2","function":{"name":"ls","arguments":"{}"}}]}}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":12,"completion_tokens":7}}"#,
+            "[DONE]",
+        ]);
+        let reply = assemble_sse(stream, &|| false).unwrap();
+        let msg = &reply["choices"][0]["message"];
+        assert_eq!(msg["reasoning_content"], "look it up");
+        assert_eq!(msg["tool_calls"][0]["id"], "c1");
+        assert_eq!(msg["tool_calls"][0]["function"]["name"], "read_file");
+        assert_eq!(
+            msg["tool_calls"][0]["function"]["arguments"],
+            r#"{"path":"a.rs"}"#
+        );
+        assert_eq!(msg["tool_calls"][1]["function"]["name"], "ls");
+        assert_eq!(reply["choices"][0]["finish_reason"], "tool_calls");
+        assert_eq!(reply["usage"]["prompt_tokens"], 12);
+        let out = parse_openai_reply(&reply.to_string()).unwrap();
+        assert_eq!(out.calls.len(), 2);
+        assert_eq!(out.calls[0].arguments, r#"{"path":"a.rs"}"#);
+        assert_eq!(out.reasoning, "look it up");
+    }
+
+    #[test]
+    fn a_streamed_turn_stops_reading_once_cancelled_and_an_empty_one_errs() {
+        let stream = sse(&[r#"{"choices":[{"delta":{"content":"hi"}}]}"#]);
+        assert_eq!(
+            assemble_sse(stream, &|| true).err(),
+            Some("cancelled".into())
+        );
+        let empty = sse(&["[DONE]"]);
+        assert_eq!(
+            assemble_sse(empty, &|| false).err(),
+            Some("local model stream ended with no content".into())
+        );
+        let text = sse(&[
+            r#"{"choices":[{"delta":{"content":"he"}}]}"#,
+            r#"{"choices":[{"delta":{"content":"llo"}}]}"#,
+        ]);
+        let reply = assemble_sse(text, &|| false).unwrap();
+        assert_eq!(reply["choices"][0]["message"]["content"], "hello");
+        assert!(reply["choices"][0]["message"].get("tool_calls").is_none());
+    }
 
     #[test]
     fn http_runtime_reads_json_helpers_from_fake() {
@@ -422,6 +665,80 @@ mod tests {
         assert_eq!(rt.context_tokens(), Some(8_192));
         let wrong = HttpLocalRuntime::new(fake.base_url(), "not-the-token");
         assert_eq!(wrong.fetch_n_ctx(), None);
+    }
+
+    /// Answers `n` chat requests with a JSON object and hands back each body.
+    fn capture_server(n: usize) -> (String, std::thread::JoinHandle<Vec<Value>>) {
+        use std::io::{Read, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", l.local_addr().unwrap());
+        let h = std::thread::spawn(move || {
+            let mut bodies = Vec::new();
+            for _ in 0..n {
+                let (mut c, _) = l.accept().unwrap();
+                let mut r = BufReader::new(c.try_clone().unwrap());
+                let mut len = 0usize;
+                loop {
+                    let mut line = String::new();
+                    r.read_line(&mut line).unwrap();
+                    if line.trim().is_empty() {
+                        break;
+                    }
+                    if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        len = v.trim().parse().unwrap();
+                    }
+                }
+                let mut body = vec![0u8; len];
+                r.read_exact(&mut body).unwrap();
+                bodies.push(serde_json::from_slice(&body).unwrap());
+                let reply = r#"{"choices":[{"message":{"content":"{\"ok\":true}"}}]}"#;
+                write!(
+                    c,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                    reply.len()
+                )
+                .unwrap();
+            }
+            bodies
+        });
+        (base, h)
+    }
+
+    #[test]
+    fn background_calls_never_take_the_chats_slot_and_one_slot_pins_nothing() {
+        let (base, server) = capture_server(5);
+        let n = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let rt = HttpLocalRuntime::new(&base, "t").with_slots(3, true, n.clone());
+        for _ in 0..4 {
+            assert_eq!(rt.ask_json("s", "u").unwrap(), json!({"ok": true}));
+        }
+        let single = HttpLocalRuntime::new(&base, "t").with_slots(1, false, n);
+        single.ask_json("s", "u").unwrap();
+        let bodies = server.join().unwrap();
+        let slots: Vec<u64> = bodies[..4]
+            .iter()
+            .map(|b| b["id_slot"].as_u64().unwrap())
+            .collect();
+        assert!(slots.iter().all(|s| *s == 1 || *s == 2), "{slots:?}");
+        assert!(slots.contains(&1) && slots.contains(&2), "{slots:?}");
+        assert_eq!(bodies[4].get("id_slot"), None);
+    }
+
+    #[test]
+    fn busy_slots_in_one_pool_split_its_context_and_separate_slots_keep_theirs() {
+        let n = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let rt = HttpLocalRuntime::new("http://127.0.0.1:9", "t").with_slots(4, true, n.clone());
+        assert_eq!(rt.share_of(32_768), 32_768, "nothing running yet");
+        n.store(1, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(rt.share_of(32_768), 32_768);
+        n.store(2, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(rt.share_of(32_768), 16_384);
+        n.store(9, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(rt.share_of(32_768), 8_192, "at most one request per slot");
+        let own = HttpLocalRuntime::new("http://127.0.0.1:9", "t").with_slots(4, false, n.clone());
+        assert_eq!(own.share_of(8_192), 8_192);
+        let plain = HttpLocalRuntime::new("http://127.0.0.1:9", "t");
+        assert_eq!(plain.share_of(8_192), 8_192);
     }
 
     #[test]

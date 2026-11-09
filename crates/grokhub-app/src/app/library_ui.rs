@@ -812,7 +812,7 @@ mod tests {
         let cases = [
             ("workboard", Nav::Workboard, crate::icons::RailIcon::Folder),
             ("automations", Nav::Night, crate::icons::RailIcon::Clock),
-            ("skills", Nav::Skills, crate::icons::RailIcon::Grid),
+            ("skills", Nav::Skills, crate::icons::RailIcon::Skills),
         ];
         for (id, nav, icon) in cases {
             let mut cabin = Cabin::quiet_for_test();

@@ -250,18 +250,43 @@ pub fn encode_rgba(rgba: &[u8], w: u32, h: u32) -> Result<(Vec<u8>, String, u32,
     Ok((png, "image/png".into(), nw, nh))
 }
 
-pub fn write_halt_stamp() {
-    let path = crate::host::config_dir().join("desktop-halt.stamp");
+/// A chat's Stop: desktop control and that chat's run stop.
+const HALT_STAMP: &str = "desktop-halt.stamp";
+/// Halt everything (tray, hotkey, quit): background runs and loops stop too.
+const HALT_ALL_STAMP: &str = "halt-all.stamp";
+
+fn write_stamp(name: &str) {
+    let path = crate::host::config_dir().join(name);
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     let _ = std::fs::write(path, grokhub_core::now_ms().to_string());
 }
 
-pub fn read_halt_stamp() -> Option<u64> {
-    let path = crate::host::config_dir().join("desktop-halt.stamp");
+fn read_stamp(name: &str) -> Option<u64> {
+    let path = crate::host::config_dir().join(name);
     let text = std::fs::read_to_string(path).ok()?;
     text.trim().parse().ok()
+}
+
+pub fn write_halt_stamp() {
+    write_stamp(HALT_STAMP);
+}
+
+pub fn read_halt_stamp() -> Option<u64> {
+    read_stamp(HALT_STAMP)
+}
+
+/// Halt everything. A chat's Stop doesn't write this, so a background run
+/// or loop that reads only it keeps going when one chat is stopped. It
+/// writes the desktop stamp too, so desktop control stops as well.
+pub fn write_halt_all_stamp() {
+    write_stamp(HALT_STAMP);
+    write_stamp(HALT_ALL_STAMP);
+}
+
+pub fn read_halt_all_stamp() -> Option<u64> {
+    read_stamp(HALT_ALL_STAMP)
 }
 
 /// A program on PATH or in the usual install places.
