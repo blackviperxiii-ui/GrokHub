@@ -619,3 +619,43 @@ fn a_game_unloads_the_model_unless_it_is_needed_or_unload_is_off() {
         vec![(5, Level::Unload)]
     );
 }
+
+#[test]
+fn a_known_game_unloads_at_its_first_sample_and_a_fullscreen_window_still_waits() {
+    let r = Rules::default();
+    let mut g = Governor::new();
+    let game = desk(|s| s.game = Some(true));
+    assert_eq!(
+        g.observe_want(target(&game, &r), 2_000),
+        Some(Level::Unload)
+    );
+    assert_eq!(g.level, Level::Unload);
+    // Coming back still waits out the step-up streak.
+    let calm = desk(|_| {});
+    assert_eq!(g.observe_want(target(&calm, &r), 4_000), None);
+    assert_eq!(g.level, Level::Unload);
+
+    let mut g = Governor::new();
+    let deny = Rules {
+        deny: vec!["mygame.exe".into()],
+        ..Rules::default()
+    };
+    let listed = desk(|s| s.foreground = Some("mygame.exe".into()));
+    assert_eq!(
+        g.observe_want(target(&listed, &deny), 2_000),
+        Some(Level::Unload)
+    );
+
+    let mut g = Governor::new();
+    let video = desk(|s| s.fullscreen = Some(true));
+    for i in 1..DOWN_SAMPLES {
+        assert_eq!(
+            g.observe_want(target(&video, &r), u64::from(i) * 2_000),
+            None
+        );
+    }
+    assert_eq!(
+        g.observe_want(target(&video, &r), u64::from(DOWN_SAMPLES) * 2_000),
+        Some(Level::Unload)
+    );
+}

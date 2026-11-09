@@ -9,7 +9,7 @@ use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use rand_token::random_token;
@@ -20,8 +20,23 @@ use super::local_health as health;
 use super::local_swap::Plan;
 use grokhub_core::local_setup::LocalModel;
 
-/// How long [`Sidecar::wait_healthy`] waits for `/health`.
+/// The shortest wait for `/health` (a small model on a fast disk).
 pub const HEALTH_TIMEOUT: Duration = Duration::from_secs(30);
+/// The longest wait for `/health`, whatever the file size.
+pub const HEALTH_TIMEOUT_MAX: Duration = Duration::from_secs(300);
+/// Disk speed a slow drive still reads a model at, in MB per second.
+const SLOW_DISK_MB_S: u64 = 200;
+
+/// How long a start waits for `/health`: [`HEALTH_TIMEOUT`] plus the time a
+/// slow disk takes to read `model_bytes`, at most [`HEALTH_TIMEOUT_MAX`].
+pub fn health_timeout(model_bytes: u64) -> Duration {
+    let read = model_bytes / (SLOW_DISK_MB_S * 1_024 * 1_024);
+    (HEALTH_TIMEOUT + Duration::from_secs(read)).min(HEALTH_TIMEOUT_MAX)
+}
+
+/// How long a retired server may finish the requests it still runs after a
+/// warm relaunch switched to the new one; past it they are cut.
+pub const DRAIN_DEADLINE: Duration = Duration::from_secs(20);
 /// Gap between health polls.
 pub const HEALTH_POLL: Duration = Duration::from_millis(50);
 
@@ -57,6 +72,10 @@ pub struct Sidecar {
     pub thinking: super::local_effort::Thinking,
     /// Why this isn't the Settings pick, when it isn't.
     stand_in: Option<super::local_swap::StandIn>,
+    /// Requests on this server; a retired one stops once it reaches 0.
+    in_flight: Arc<AtomicUsize>,
+    /// See [`health_timeout`].
+    health_timeout: Duration,
 }
 
 impl std::fmt::Debug for Sidecar {
@@ -105,11 +124,26 @@ static STOP_PENDING: AtomicBool = AtomicBool::new(false);
 /// stop sees the change under the slot lock and loads nothing.
 static WARM_GEN: AtomicU64 = AtomicU64::new(0);
 
-/// Held for the length of one request (see [`busy`]).
-pub struct Busy(());
+/// Held for the length of one request (see [`busy`]). Counts toward the
+/// server it was taken on, so a warm relaunch retires the old server only
+/// once its own requests are done.
+pub struct Busy {
+    side: Option<Arc<AtomicUsize>>,
+    end: Option<Endpoint>,
+}
+
+impl Busy {
+    /// The server this request was admitted to, when it was taken there.
+    pub fn endpoint(&self) -> Option<&Endpoint> {
+        self.end.as_ref()
+    }
+}
 
 impl Drop for Busy {
     fn drop(&mut self) {
+        if let Some(side) = &self.side {
+            side.fetch_sub(1, Ordering::SeqCst);
+        }
         LAST_DONE_SECS.store(unix_secs(), Ordering::SeqCst);
         if IN_FLIGHT.fetch_sub(1, Ordering::SeqCst) == 1 && STOP_PENDING.load(Ordering::SeqCst) {
             // Never block a request's teardown on the slot; if it's busy, the
@@ -121,10 +155,20 @@ impl Drop for Busy {
     }
 }
 
-/// Marks a request in flight until the guard drops.
+/// Marks a request in flight until the guard drops, on the running server
+/// when there is one.
 pub fn busy() -> Busy {
-    IN_FLIGHT.fetch_add(1, Ordering::SeqCst);
-    Busy(())
+    let slot = global_slot().lock().unwrap_or_else(|e| e.into_inner());
+    match slot.as_ref() {
+        Some(side) => side.busy(),
+        None => {
+            IN_FLIGHT.fetch_add(1, Ordering::SeqCst);
+            Busy {
+                side: None,
+                end: None,
+            }
+        }
+    }
 }
 
 pub fn in_flight() -> usize {
@@ -135,6 +179,24 @@ impl Sidecar {
     /// Base URL for OpenAI-compatible calls (`http://127.0.0.1:<port>`).
     pub fn base_url(&self) -> String {
         format!("http://{}:{}", self.host, self.port)
+    }
+
+    /// A request on this server (see [`Busy`]).
+    fn busy(&self) -> Busy {
+        IN_FLIGHT.fetch_add(1, Ordering::SeqCst);
+        self.in_flight.fetch_add(1, Ordering::SeqCst);
+        Busy {
+            side: Some(self.in_flight.clone()),
+            end: Some(self.endpoint()),
+        }
+    }
+
+    fn endpoint(&self) -> Endpoint {
+        Endpoint {
+            base_url: self.base_url(),
+            token: self.token.clone(),
+            thinking: self.thinking.clone(),
+        }
     }
 
     /// Restarts so far (crash recovery).
@@ -152,9 +214,9 @@ impl Sidecar {
         )
     }
 
-    /// Block until healthy or [`HEALTH_TIMEOUT`].
+    /// Block until healthy or its [`health_timeout`].
     pub fn wait_healthy(&self) -> Result<(), String> {
-        let deadline = Instant::now() + HEALTH_TIMEOUT;
+        let deadline = Instant::now() + self.health_timeout;
         while Instant::now() < deadline {
             if self.healthy() {
                 return Ok(());
@@ -176,23 +238,13 @@ impl Sidecar {
         }
     }
 
-    /// If the child has exited, spawn it again on the same port and token.
-    pub fn ensure_alive(&self) -> Result<(), String> {
-        if self.alive() {
-            return Ok(());
+    /// This launch can put work on a GPU (the one-shot defaults offload
+    /// every layer unless they were started bare on the CPU).
+    pub fn on_gpu(&self) -> bool {
+        match &self.launch {
+            Some(l) => !l.cpu_only,
+            None => !self.bare_cpu,
         }
-        let child = spawn_llama(
-            &self.binary,
-            &self.model,
-            &self.host,
-            self.port,
-            &self.token,
-            self.launch.as_ref(),
-            self.bare_cpu,
-        )?;
-        *self.child.lock().expect("sidecar lock") = child;
-        self.restarts.fetch_add(1, Ordering::SeqCst);
-        self.wait_healthy()
     }
 
     /// This launch runs a draft model (speculative decoding).
@@ -357,8 +409,18 @@ fn spawn_llama(
     let mut cmd = llama_command(binary, &args, token);
     cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(log);
     grokhub_core::proc_util::hide_windows_console(&mut cmd);
-    cmd.spawn()
-        .map_err(|e| format!("could not start local model server: {e}"))
+    let run = launch.map(|l| l.run.clone()).unwrap_or_default();
+    cmd.envs(run.env());
+    if run.low_priority {
+        super::local_flags::below_normal(&mut cmd);
+    }
+    let child = cmd
+        .spawn()
+        .map_err(|e| format!("could not start local model server: {e}"))?;
+    if run.low_priority {
+        super::local_flags::lower_priority(child.id());
+    }
+    Ok(child)
 }
 
 /// Appended to the one-shot defaults to keep the engine off every GPU.
@@ -378,6 +440,16 @@ pub fn retry_on_cpu(err: &str, log: &str, launch: Option<&LaunchArgs>, bare_cpu:
 
 /// Start llama-server on a fresh loopback port.
 pub fn start(paths: &SidecarPaths) -> Result<Sidecar, String> {
+    let planned = autoconfig::launch_for(&paths.binary, &paths.model);
+    start_planned(paths, planned)
+}
+
+/// [`start`] with the launch already planned (a warm relaunch plans it as a
+/// fresh start would, while the old server still holds its memory).
+fn start_planned(
+    paths: &SidecarPaths,
+    planned: Option<(LaunchArgs, String, PathBuf)>,
+) -> Result<Sidecar, String> {
     if !paths.binary.is_file() {
         return Err(format!(
             "local model binary missing: {}. In Settings, turn on Local AI or use Get engine to download it.",
@@ -392,11 +464,14 @@ pub fn start(paths: &SidecarPaths) -> Result<Sidecar, String> {
     }
     let host = "127.0.0.1".to_string();
     autoconfig::clear_resident();
-    let planned = autoconfig::launch_for(&paths.binary, &paths.model);
+    let wait = health_timeout(std::fs::metadata(&paths.model).map_or(0, |m| m.len()));
     let mut launch = planned.as_ref().map(|(l, _, _)| l.clone());
     let idle = super::local_perf::current_defaults().idle_unload_secs;
     let mut attempt: u8 = 0;
-    let mut bare_cpu = false;
+    // A game holds the GPU: the one-shot defaults would offload every layer,
+    // so they start on the CPU (a planned launch already did, see
+    // `autoconfig::gaming_launch`).
+    let mut bare_cpu = launch.is_none() && local_gov::gpu_contended();
     // The first start's error, kept when the CPU retry fails too.
     let mut gpu_err: Option<String> = None;
     loop {
@@ -425,6 +500,8 @@ pub fn start(paths: &SidecarPaths) -> Result<Sidecar, String> {
             bare_cpu,
             thinking: Default::default(),
             stand_in: None,
+            in_flight: Arc::new(AtomicUsize::new(0)),
+            health_timeout: wait,
         };
         let err = match side.wait_healthy() {
             Ok(()) => {
@@ -820,82 +897,147 @@ pub fn acquire_for_request(config_dir: &Path) -> Result<Busy, String> {
 fn load(config_dir: &Path, want: Want) -> Result<Busy, String> {
     wait_for_speed_test(want);
     tick_idle_unload();
-    if local_gov::paused() {
-        tick_governor();
-        return Err(format!(
-            "the on-device model is paused because {}",
-            local_gov::reason()
-        ));
-    }
-    let paths = match runtime(config_dir) {
-        r @ (Runtime::Missing | Runtime::NoModel) => {
-            let why = runtime_label(&r);
-            health::log_to(config_dir, health::start_failure(&why), Some(&why), None);
-            return Err(why);
+    *LAST_DIR.lock().unwrap_or_else(|e| e.into_inner()) = Some(config_dir.to_path_buf());
+    loop {
+        if local_gov::paused() {
+            tick_governor();
+            return Err(format!(
+                "the on-device model is paused because {}",
+                local_gov::reason()
+            ));
         }
-        _ => resolve_paths(config_dir).ok_or_else(|| runtime_label(&Runtime::Missing))?,
-    };
-    let mut slot = global_slot().lock().expect("sidecar global");
-    if let Some(why) = refused(want) {
-        return Err(why.into());
-    }
-    if local_gov::restart_due() && in_flight() == 0 {
-        if let Some(side) = slot.take() {
-            retire(side);
-        }
-        local_gov::clear_restart();
-    }
-    // A dead sidecar restarts as it was (the crash breaker below counts it).
-    let swap = match slot.as_ref() {
-        Some(side) if !side.alive() => Plan::Keep,
-        running => swap_plan(config_dir, &paths.model, running, want),
-    };
-    // A step up waits for a quiet chat, so a reply never sits through a
-    // reload; a request after a quiet spell is a new task and takes it now.
-    let swap = match swap {
-        Plan::Later { model, stand_in } if secs_since_use() < QUIET_SECS => {
-            *PENDING_STEP_UP.lock().expect("pending step up") =
-                Some((model, stand_in, want_need(want)));
-            Plan::Keep
-        }
-        Plan::Later { model, stand_in } => Plan::Load { model, stand_in },
-        other => other,
-    };
-    let (model, stand_in) = match swap {
-        Plan::Keep | Plan::Later { .. } => (paths.model.clone(), None),
-        Plan::Load { model, stand_in } => {
-            PENDING_STEP_UP.lock().expect("pending step up").take();
-            if let Some(side) = slot.take() {
-                health::log_to(config_dir, "swap", Some(&swap_note(&model, stand_in)), None);
-                LAST_SWAP_SECS.store(unix_secs(), Ordering::SeqCst);
-                retire(side);
+        let paths = match runtime_paths(config_dir) {
+            Ok(p) => p,
+            Err(why) => {
+                health::log_to(config_dir, health::start_failure(&why), Some(&why), None);
+                return Err(why);
             }
-            (model, stand_in)
+        };
+        let mut slot = global_slot().lock().expect("sidecar global");
+        // Another load is starting a server: wait for it rather than start a
+        // second copy, without holding the slot through its cold start.
+        while STARTING.load(Ordering::SeqCst) {
+            slot = LOAD_DONE.wait(slot).unwrap_or_else(|e| e.into_inner());
         }
-    };
-    let paths = SidecarPaths {
-        binary: paths.binary,
-        model,
-    };
-    if let Some(side) = slot.as_ref() {
-        if !side.alive() {
-            if let Err(e) = local_gov::may_start(unix_ms()) {
-                if let Some(dead) = slot.take() {
-                    retire(dead);
+        if let Some(why) = refused(want) {
+            return Err(why.into());
+        }
+        // A game wants the GPU: no new work goes to a server on it. It stops
+        // and this request starts one on the CPU.
+        if local_gov::gpu_contended() && slot.as_ref().is_some_and(Sidecar::on_gpu) {
+            cut_for_game(&mut slot);
+        }
+        if local_gov::restart_due() && in_flight() == 0 {
+            restart_locked(&mut slot, false);
+        }
+        // A dead sidecar starts again as it was (the crash breaker counts it).
+        let swap = match slot.as_ref() {
+            Some(side) if !side.alive() => {
+                if let Err(e) = local_gov::may_start(unix_ms()) {
+                    if let Some(dead) = slot.take() {
+                        retire(dead);
+                    }
+                    return Err(e);
                 }
+                local_gov::start_failed(unix_ms());
+                let dead = slot.take().expect("dead sidecar");
+                let again = Plan::Load {
+                    model: dead.model.clone(),
+                    stand_in: dead.stand_in,
+                };
+                retire(dead);
+                again
+            }
+            running => swap_plan(config_dir, &paths.model, running, want),
+        };
+        // A step up waits for a quiet chat, so a reply never sits through a
+        // reload; a request after a quiet spell is a new task and takes it now.
+        let swap = match swap {
+            Plan::Later { model, stand_in } if secs_since_use() < QUIET_SECS => {
+                *PENDING_STEP_UP.lock().expect("pending step up") =
+                    Some((model, stand_in, want_need(want)));
+                Plan::Keep
+            }
+            Plan::Later { model, stand_in } => Plan::Load { model, stand_in },
+            other => other,
+        };
+        let (model, stand_in) = match swap {
+            Plan::Keep | Plan::Later { .. } => (paths.model.clone(), None),
+            Plan::Load { model, stand_in } => {
+                PENDING_STEP_UP.lock().expect("pending step up").take();
+                if let Some(side) = slot.take() {
+                    health::log_to(config_dir, "swap", Some(&swap_note(&model, stand_in)), None);
+                    LAST_SWAP_SECS.store(unix_secs(), Ordering::SeqCst);
+                    retire(side);
+                }
+                (model, stand_in)
+            }
+        };
+        if let Some(side) = slot.as_ref() {
+            side.last_used_secs.store(unix_secs(), Ordering::SeqCst);
+            return Ok(side.busy());
+        }
+        local_gov::may_start(unix_ms())?;
+        STARTING.store(true, Ordering::SeqCst);
+        let generation = WARM_GEN.load(Ordering::SeqCst);
+        // The slot is free while the server loads: Settings, the governor
+        // and a stop never wait for a cold start.
+        drop(slot);
+        let began = Instant::now();
+        let paths = SidecarPaths {
+            binary: paths.binary,
+            model,
+        };
+        let (started, model, stand_in) = start_or_stand_in(config_dir, paths, stand_in);
+        let mut slot = global_slot().lock().expect("sidecar global");
+        STARTING.store(false, Ordering::SeqCst);
+        LOAD_DONE.notify_all();
+        match started {
+            // A stop or a switch came while it loaded: this server is out of
+            // date. Drop it and plan again (a request for a switched model
+            // loads the new one; a cancelled warm-up or Local AI off refuses).
+            Ok(side) if WARM_GEN.load(Ordering::SeqCst) != generation => drop(side),
+            Ok(mut side) => {
+                side.stand_in = stand_in;
+                side.idle_unload_secs =
+                    learned_idle(config_dir, &side.model, side.idle_unload_secs);
+                let name = model.file_name().map(|n| n.to_string_lossy());
+                let ms = u64::try_from(began.elapsed().as_millis()).unwrap_or(u64::MAX);
+                health::log_to(config_dir, "start", name.as_deref(), Some(ms));
+                set_last_error(None);
+                let busy = side.busy();
+                *slot = Some(side);
+                return Ok(busy);
+            }
+            Err(e) => {
+                local_gov::start_failed(unix_ms());
+                health::log_to(config_dir, health::start_failure(&e), Some(&e), None);
+                set_last_error(Some(e.clone()));
                 return Err(e);
             }
-            local_gov::start_failed(unix_ms());
         }
-        side.ensure_alive()?;
-        side.last_used_secs.store(unix_secs(), Ordering::SeqCst);
-        return Ok(busy());
     }
-    local_gov::may_start(unix_ms())?;
-    STARTING.store(true, Ordering::SeqCst);
-    let began = Instant::now();
-    let mut stand_in = stand_in;
-    let mut paths = paths;
+}
+
+/// Binary and model for a start, or why there are none.
+fn runtime_paths(config_dir: &Path) -> Result<SidecarPaths, String> {
+    match runtime(config_dir) {
+        r @ (Runtime::Missing | Runtime::NoModel) => Err(runtime_label(&r)),
+        _ => resolve_paths(config_dir).ok_or_else(|| runtime_label(&Runtime::Missing)),
+    }
+}
+
+/// [`start`], and on out-of-memory a smaller model on disk in its place.
+/// Returns what started, the model it loaded and why it stands in.
+fn start_or_stand_in(
+    config_dir: &Path,
+    mut paths: SidecarPaths,
+    mut stand_in: Option<super::local_swap::StandIn>,
+) -> (
+    Result<Sidecar, String>,
+    PathBuf,
+    Option<super::local_swap::StandIn>,
+) {
     let mut started = start(&paths);
     if let Err(e) = &started {
         let stand = e
@@ -910,25 +1052,170 @@ fn load(config_dir: &Path, want: Want) -> Result<Busy, String> {
             started = start(&paths);
         }
     }
-    STARTING.store(false, Ordering::SeqCst);
-    match started {
-        Ok(mut side) => {
-            side.stand_in = stand_in;
-            side.idle_unload_secs = learned_idle(config_dir, &side.model, side.idle_unload_secs);
-            let name = paths.model.file_name().map(|n| n.to_string_lossy());
-            let ms = u64::try_from(began.elapsed().as_millis()).unwrap_or(u64::MAX);
-            health::log_to(config_dir, "start", name.as_deref(), Some(ms));
-            set_last_error(None);
-            *slot = Some(side);
-            Ok(busy())
-        }
-        Err(e) => {
-            local_gov::start_failed(unix_ms());
-            health::log_to(config_dir, health::start_failure(&e), Some(&e), None);
-            set_last_error(Some(e.clone()));
-            Err(e)
-        }
+    (started, paths.model, stand_in)
+}
+
+/// Wakes loads waiting for another load to finish (see [`load`]).
+static LOAD_DONE: Condvar = Condvar::new();
+/// A warm relaunch is starting its new server on its own thread.
+static RELAUNCHING: AtomicBool = AtomicBool::new(false);
+/// The config folder the last load used, for a reload after a governor restart.
+static LAST_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// How a governor restart reaches the new launch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Relaunch {
+    /// The new plan matches the running one: nothing restarts.
+    Skip,
+    /// Start the new server beside the running one, switch, then retire the old.
+    Warm,
+    /// Not enough memory for both: stop, then start.
+    Cold,
+}
+
+/// How to relaunch from `running` to `next` (`None` is the one-shot
+/// defaults, which a level change never alters); `fits_beside` is only
+/// asked when the launches differ.
+pub fn relaunch_kind(
+    running: Option<&LaunchArgs>,
+    next: Option<&LaunchArgs>,
+    fits_beside: impl FnOnce(&LaunchArgs) -> bool,
+) -> Relaunch {
+    match (running, next) {
+        (None, None) => Relaunch::Skip,
+        (Some(r), Some(n)) if autoconfig::same_launch(r, n) => Relaunch::Skip,
+        (_, Some(n)) if fits_beside(n) => Relaunch::Warm,
+        _ => Relaunch::Cold,
     }
+}
+
+/// A restart is due and the slot is locked: skip it when the plan is the
+/// same, start a warm relaunch when both servers fit, else stop the running
+/// one (only with nothing in flight). `reload` starts the stopped model
+/// again in the background, so the next request finds it warm.
+fn restart_locked(slot: &mut Option<Sidecar>, reload: bool) {
+    let Some(side) = slot.as_ref().filter(|s| s.alive()) else {
+        if in_flight() == 0 {
+            local_gov::clear_restart();
+        }
+        return;
+    };
+    if RELAUNCHING.load(Ordering::SeqCst) {
+        return;
+    }
+    let next = autoconfig::replan_for(&side.binary, &side.model);
+    let kind = relaunch_kind(
+        side.launch.as_ref(),
+        next.as_ref().map(|(l, _, _)| l),
+        |n| autoconfig::warm_fits(&side.model, n),
+    );
+    match kind {
+        Relaunch::Skip => {
+            local_gov::clear_restart();
+            health::log("relaunch", Some("skipped: same launch"));
+        }
+        Relaunch::Warm => {
+            local_gov::clear_restart();
+            let paths = SidecarPaths {
+                binary: side.binary.clone(),
+                model: side.model.clone(),
+            };
+            relaunch_warm(paths, side.port, side.stand_in, side.idle_unload_secs);
+        }
+        Relaunch::Cold if in_flight() == 0 => {
+            local_gov::clear_restart();
+            if let Some(side) = slot.take() {
+                retire(side);
+                health::log("stop", Some("the governor restarted it"));
+            }
+            if reload {
+                reload_in_background();
+            }
+        }
+        Relaunch::Cold => {}
+    }
+}
+
+/// Start the relaunched server beside the running one on its own thread,
+/// then switch requests to it and drain the old one.
+fn relaunch_warm(
+    paths: SidecarPaths,
+    old_port: u16,
+    stand_in: Option<super::local_swap::StandIn>,
+    idle: u64,
+) {
+    if RELAUNCHING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let generation = WARM_GEN.load(Ordering::SeqCst);
+    std::thread::spawn(move || {
+        let planned =
+            autoconfig::launch_with(&paths.binary, &paths.model, Some(autoconfig::replan_free()));
+        let started = start_planned(&paths, planned);
+        let mut slot = global_slot().lock().expect("sidecar global");
+        match started {
+            Ok(mut new) => {
+                let current = slot.as_ref().is_some_and(|s| s.port == old_port)
+                    && WARM_GEN.load(Ordering::SeqCst) == generation;
+                if current {
+                    new.stand_in = stand_in;
+                    new.idle_unload_secs = idle;
+                    let old = slot.replace(new);
+                    drop(slot);
+                    health::log("relaunch", Some("warm"));
+                    if let Some(old) = old {
+                        drain(old, DRAIN_DEADLINE);
+                    }
+                } else {
+                    drop(slot);
+                    drop(new);
+                }
+            }
+            // The old server keeps answering; the next level change tries again.
+            Err(e) => {
+                drop(slot);
+                health::log("relaunch", Some(&e));
+            }
+        }
+        RELAUNCHING.store(false, Ordering::SeqCst);
+    });
+}
+
+/// Stop `old` once its own requests are done, or at `deadline` (the
+/// requests still running on it are cut), then take the free-VRAM baseline
+/// again now its memory is back.
+fn drain(old: Sidecar, deadline: Duration) {
+    std::thread::spawn(move || {
+        let until = Instant::now() + deadline;
+        while old.in_flight.load(Ordering::SeqCst) > 0 && Instant::now() < until {
+            std::thread::sleep(HEALTH_POLL);
+        }
+        old.stop();
+        drop(old);
+        autoconfig::refresh_resident();
+    });
+}
+
+/// Load the model again on its own thread after a governor stop.
+fn reload_in_background() {
+    let Some(dir) = LAST_DIR.lock().unwrap_or_else(|e| e.into_inner()).clone() else {
+        return;
+    };
+    if WARMING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let generation = WARM_GEN.load(Ordering::SeqCst);
+    std::thread::spawn(move || {
+        if load(&dir, Want::Warm(generation)).is_ok() {
+            health::log_to(
+                &dir,
+                "warm",
+                Some("reloaded after a governor restart"),
+                None,
+            );
+        }
+        WARMING.store(false, Ordering::SeqCst);
+    });
 }
 
 /// How [`start`]'s out-of-memory error begins.
@@ -1110,23 +1397,69 @@ fn learned_idle(config_dir: &Path, model: &Path, base: u64) -> u64 {
     next
 }
 
-/// The governor's sample tick: between requests, stop the sidecar when the
-/// level is Unload or a restart is due (the next request starts it with the
-/// new launch args).
+/// The governor's sample tick. A game wanting the GPU cuts a server running
+/// on it at once, requests in flight included, and (unless paused) loads it
+/// again on the CPU in the background. Otherwise, between requests, stop the
+/// sidecar when the level is Unload; when a restart is due, skip it for the
+/// same plan, relaunch warm when both servers fit, else stop it and load it
+/// again in the background.
 pub fn tick_governor() {
-    if in_flight() > 0 || !(local_gov::paused() || local_gov::restart_due()) {
+    let paused = local_gov::paused();
+    let contended = local_gov::gpu_contended();
+    if !(paused || contended || local_gov::restart_due()) {
         return;
     }
     let mut slot = global_slot().lock().expect("sidecar global");
-    // A request may have taken its guard while this waited for the lock.
-    if in_flight() > 0 {
+    if contended && slot.as_ref().is_some_and(Sidecar::on_gpu) {
+        cut_for_game(&mut slot);
+        local_gov::clear_restart();
+        if !paused {
+            reload_in_background();
+        }
         return;
     }
-    if let Some(side) = slot.take() {
-        retire(side);
-        health::log("stop", Some("the governor paused or restarted it"));
+    if paused {
+        // A request may have taken its guard while this waited for the lock.
+        if in_flight() > 0 {
+            return;
+        }
+        if let Some(side) = slot.take() {
+            retire(side);
+            health::log("stop", Some("the governor paused it"));
+        }
+        local_gov::clear_restart();
+        return;
     }
-    local_gov::clear_restart();
+    restart_locked(&mut slot, true);
+}
+
+/// Unix ms when [`cut_for_game`] last cut requests in flight.
+static CUT_AT_MS: AtomicU64 = AtomicU64::new(0);
+/// A request that failed within this long of a cut failed because of it.
+const CUT_NOTE_MS: u64 = 30_000;
+
+/// Stop the server in `slot` now, requests in flight included: killing the
+/// child closes their sockets and frees the GPU at once.
+fn cut_for_game(slot: &mut Option<Sidecar>) {
+    let Some(side) = slot.take() else {
+        return;
+    };
+    let cut = side.in_flight.load(Ordering::SeqCst);
+    if cut > 0 {
+        CUT_AT_MS.store(unix_ms(), Ordering::SeqCst);
+    }
+    retire(side);
+    health::log(
+        "stop",
+        Some(&format!("a game wanted the GPU; cut {cut} running")),
+    );
+}
+
+/// Why a local request just failed, when a game cut it.
+pub fn cut_reason() -> Option<&'static str> {
+    let at = CUT_AT_MS.load(Ordering::SeqCst);
+    (at > 0 && unix_ms().saturating_sub(at) < CUT_NOTE_MS)
+        .then_some("the on-device model stopped because a game started")
 }
 
 /// Process id of the running sidecar.
@@ -1148,11 +1481,7 @@ pub struct Endpoint {
 pub fn global_endpoint() -> Option<Endpoint> {
     tick_idle_unload();
     let slot = global_slot().lock().expect("sidecar global");
-    slot.as_ref().map(|s| Endpoint {
-        base_url: s.base_url(),
-        token: s.token.clone(),
-        thinking: s.thinking.clone(),
-    })
+    slot.as_ref().map(Sidecar::endpoint)
 }
 
 /// Mark the global sidecar as just used (keeps it warm).
@@ -1623,6 +1952,8 @@ mod tests {
             bare_cpu: false,
             thinking: Default::default(),
             stand_in: None,
+            in_flight: Arc::new(AtomicUsize::new(0)),
+            health_timeout: HEALTH_TIMEOUT,
         }
     }
 
@@ -1936,6 +2267,7 @@ mod tests {
             tensor_split: Some(vec![3, 1]),
             draft: None,
             cpu_only: false,
+            run: Default::default(),
         }
     }
 
@@ -2022,6 +2354,7 @@ mod tests {
             tensor_split: None,
             draft: None,
             cpu_only: false,
+            run: Default::default(),
         };
         for args in [
             llama_args(Path::new("/m.gguf"), "127.0.0.1", 4711),
@@ -2305,5 +2638,193 @@ mod tests {
         let saved = std::fs::read_to_string(dir.join("local_ai.json")).unwrap();
         assert!(saved.contains(r#""mode": "manual""#), "{saved}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_start_waits_longer_for_a_bigger_model_file() {
+        assert_eq!(health_timeout(0), Duration::from_secs(30));
+        assert_eq!(health_timeout(16 << 30), Duration::from_secs(111));
+        assert_eq!(health_timeout(100 << 30), Duration::from_secs(300));
+    }
+
+    #[test]
+    fn an_identical_plan_never_restarts_and_a_changed_one_relaunches_warm_when_both_fit() {
+        let a = gpu_launch();
+        let fits = |_: &LaunchArgs| true;
+        let full = |_: &LaunchArgs| false;
+        assert_eq!(
+            relaunch_kind(Some(&a), Some(&a.clone()), full),
+            Relaunch::Skip
+        );
+        assert_eq!(relaunch_kind(None, None, fits), Relaunch::Skip);
+        let b = LaunchArgs {
+            ctx: 4_096,
+            ..gpu_launch()
+        };
+        assert_eq!(relaunch_kind(Some(&a), Some(&b), fits), Relaunch::Warm);
+        assert_eq!(relaunch_kind(Some(&a), Some(&b), full), Relaunch::Cold);
+        assert_eq!(relaunch_kind(Some(&a), None, fits), Relaunch::Cold);
+    }
+
+    #[test]
+    fn a_level_change_with_the_same_launch_keeps_the_model_loaded() {
+        let _one = SLOT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        stop_global();
+        local_gov::reset_for_test();
+        *global_slot().lock().unwrap() = Some(idle_child_sidecar(600, unix_secs()));
+        let pid = global_pid();
+        local_gov::request_restart();
+        assert!(local_gov::restart_due());
+        tick_governor();
+        assert_eq!(global_pid(), pid, "the same launch never restarts");
+        assert!(!local_gov::restart_due());
+        stop_global();
+        local_gov::reset_for_test();
+    }
+
+    #[test]
+    fn a_request_counts_toward_the_server_it_was_admitted_to() {
+        let side = idle_child_sidecar(600, unix_secs());
+        let before = in_flight();
+        let held = side.busy();
+        assert_eq!(side.in_flight.load(Ordering::SeqCst), 1);
+        assert_eq!(in_flight(), before + 1);
+        assert_eq!(
+            held.endpoint().map(|e| e.base_url.as_str()),
+            Some("http://127.0.0.1:9")
+        );
+        drop(held);
+        assert_eq!(side.in_flight.load(Ordering::SeqCst), 0);
+    }
+
+    #[cfg(target_os = "linux")]
+    fn running(pid: u32) -> bool {
+        std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|st| !st.contains(") Z "))
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_retired_server_stops_only_once_its_requests_are_done_or_the_deadline_passes() {
+        let old = idle_child_sidecar(600, unix_secs());
+        let pid = old.pid();
+        let held = old.busy();
+        drain(old, Duration::from_secs(10));
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(running(pid), "a request still runs on it");
+        drop(held);
+        let until = Instant::now() + Duration::from_secs(5);
+        while running(pid) && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!running(pid), "stopped once its last request finished");
+
+        let stuck = idle_child_sidecar(600, unix_secs());
+        let pid = stuck.pid();
+        let _held = stuck.busy();
+        drain(stuck, Duration::from_millis(200));
+        let until = Instant::now() + Duration::from_secs(5);
+        while running(pid) && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!running(pid), "cut at the deadline");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_cold_start_never_holds_the_slot_so_a_stop_answers_at_once() {
+        use std::os::unix::fs::PermissionsExt;
+        let _one = SLOT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        stop_global();
+        local_gov::reset_for_test();
+        let dir = crate::harness::test_dir("sidecar-slow-start");
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        std::fs::create_dir_all(dir.join("models")).unwrap();
+        let bin = dir.join("bin").join("llama-server");
+        std::fs::write(&bin, "#!/bin/sh\nsleep 2\nexit 1\n").unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(dir.join("models").join("m.gguf"), b"x").unwrap();
+        let load_dir = dir.clone();
+        let loading = std::thread::spawn(move || acquire(&load_dir).map(drop));
+        // Wait for the cold start itself: a check that only sees the slot
+        // locked for a moment also reads as Loading.
+        let until = Instant::now() + Duration::from_secs(5);
+        while !STARTING.load(Ordering::SeqCst) && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(runtime(&dir), Runtime::Loading);
+        let began = Instant::now();
+        stop_global();
+        assert_eq!(global_pid(), None);
+        assert!(
+            began.elapsed() < Duration::from_millis(500),
+            "waited {:?} on a loading model",
+            began.elapsed()
+        );
+        assert_eq!(
+            loading.join().unwrap(),
+            Err("local model server stopped before it was ready".into())
+        );
+        local_gov::reset_for_test();
+        set_last_error(None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_game_cuts_a_running_gpu_turn_at_once_and_says_why() {
+        let _one = SLOT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        stop_global();
+        local_gov::reset_for_test();
+        *global_slot().lock().unwrap() = Some(idle_child_sidecar(600, unix_secs()));
+        let pid = global_pid().unwrap();
+        let turn = busy();
+        local_gov::apply(
+            grokhub_core::local_governor::Level::Unload,
+            "a game is running",
+        );
+        let began = Instant::now();
+        tick_governor();
+        assert_eq!(global_pid(), None, "cut with a request still in flight");
+        assert!(!running(pid));
+        assert!(began.elapsed() < Duration::from_secs(2));
+        assert_eq!(
+            cut_reason(),
+            Some("the on-device model stopped because a game started")
+        );
+        drop(turn);
+        CUT_AT_MS.store(0, Ordering::SeqCst);
+        local_gov::reset_for_test();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn while_a_game_holds_the_gpu_a_new_request_starts_the_model_on_the_cpu() {
+        use std::os::unix::fs::PermissionsExt;
+        let _one = SLOT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        stop_global();
+        local_gov::reset_for_test();
+        let dir = crate::harness::test_dir("sidecar-game-cpu");
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        std::fs::create_dir_all(dir.join("models")).unwrap();
+        let bin = dir.join("bin").join("llama-server");
+        let seen = dir.join("args.txt");
+        std::fs::write(
+            &bin,
+            format!("#!/bin/sh\necho \"$@\" > {}\nexit 1\n", seen.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(dir.join("models").join("m.gguf"), b"x").unwrap();
+        *global_slot().lock().unwrap() = Some(idle_child_sidecar(600, unix_secs()));
+        let gpu_pid = global_pid().unwrap();
+        local_gov::apply(
+            grokhub_core::local_governor::Level::Throttle,
+            "a game is running",
+        );
+        assert!(acquire(&dir).is_err());
+        assert!(!running(gpu_pid), "the server on the GPU stopped");
+        let args = std::fs::read_to_string(&seen).unwrap();
+        assert!(args.contains("--device none"), "started on the CPU: {args}");
+        local_gov::reset_for_test();
+        set_last_error(None);
     }
 }

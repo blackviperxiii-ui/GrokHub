@@ -130,6 +130,7 @@ fn a_12_gb_gpu_keeps_the_whole_12b_on_the_gpu_with_q4_kv() {
             tensor_split: None,
             draft: None,
             cpu_only: false,
+            run: Default::default(),
         }
     );
     assert_eq!(
@@ -621,4 +622,155 @@ fn the_vram_baseline_is_taken_with_our_model_loaded_so_loading_it_never_reads_as
     clear_resident();
     assert!(!vram_dropped_since_launch());
     reset_free_probe();
+}
+
+fn whole_gpu_12b() -> LaunchArgs {
+    LaunchArgs {
+        backend: Backend::Vulkan,
+        ngl: 49,
+        all_layers: 49,
+        n_cpu_moe: None,
+        ctx: 16_384,
+        kv: KvType::Q8,
+        threads: 8,
+        threads_batch: Some(16),
+        flash_attn: true,
+        mlock: false,
+        tensor_split: None,
+        draft: None,
+        cpu_only: false,
+        run: Default::default(),
+    }
+}
+
+#[test]
+fn a_whole_gpu_launch_that_only_changes_threads_is_the_same_launch() {
+    let running = whole_gpu_12b();
+    assert!(same_launch(&running, &running.clone()));
+    let fewer_threads = LaunchArgs {
+        threads: 4,
+        threads_batch: None,
+        ..whole_gpu_12b()
+    };
+    assert!(same_launch(&running, &fewer_threads));
+    let shorter = LaunchArgs {
+        ctx: 8_192,
+        ..whole_gpu_12b()
+    };
+    assert!(!same_launch(&running, &shorter));
+    // Part of it on the CPU: threads do the work there, so they matter.
+    let partial = LaunchArgs {
+        ngl: 30,
+        ..whole_gpu_12b()
+    };
+    let partial_fewer = LaunchArgs {
+        threads: 4,
+        ..partial.clone()
+    };
+    assert!(!same_launch(&partial, &partial_fewer));
+}
+
+#[test]
+fn a_launch_needs_its_gpu_weights_kv_and_buffers_on_the_gpu_and_the_rest_in_ram() {
+    assert_eq!(
+        launch_need_mb(&dense_12b(), &whole_gpu_12b()),
+        (10_943, 512)
+    );
+    let moe = LaunchArgs {
+        ngl: 31,
+        all_layers: 31,
+        n_cpu_moe: Some(10),
+        ctx: 8_192,
+        ..whole_gpu_12b()
+    };
+    assert_eq!(launch_need_mb(&moe_26b(), &moe), (13_342, 4_784));
+    let cpu = on_cpu(&whole_gpu_12b());
+    assert_eq!(launch_need_mb(&dense_12b(), &cpu), (0, 10_943));
+}
+
+#[test]
+fn a_second_server_fits_beside_only_with_a_margin_and_a_known_reading() {
+    let free = |vram: Option<u64>, ram: Option<u64>| FreeNow {
+        vram_free_mb: vram,
+        ram_free_mb: ram,
+    };
+    assert!(fits_beside(free(Some(12_100), Some(3_000)), (11_000, 512)));
+    assert!(!fits_beside(free(Some(12_099), Some(3_000)), (11_000, 512)));
+    assert!(!fits_beside(free(None, Some(3_000)), (11_000, 512)));
+    assert!(!fits_beside(free(Some(20_000), Some(2_600)), (11_000, 512)));
+    assert!(fits_beside(free(None, Some(14_100)), (0, 10_943)));
+    assert!(!fits_beside(free(None, Some(14_000)), (0, 10_943)));
+}
+
+#[test]
+fn the_running_models_own_memory_is_added_back_for_a_fresh_plan() {
+    let before = FreeNow {
+        vram_free_mb: Some(8_000),
+        ram_free_mb: Some(30_000),
+    };
+    let resident = FreeNow {
+        vram_free_mb: Some(4_000),
+        ram_free_mb: Some(29_000),
+    };
+    let own = taken(before, resident);
+    assert_eq!(
+        own,
+        FreeNow {
+            vram_free_mb: Some(4_000),
+            ram_free_mb: Some(1_000),
+        }
+    );
+    let now = FreeNow {
+        vram_free_mb: Some(3_000),
+        ram_free_mb: None,
+    };
+    assert_eq!(
+        with_own(now, own),
+        FreeNow {
+            vram_free_mb: Some(7_000),
+            ram_free_mb: None,
+        }
+    );
+    assert_eq!(taken(FreeNow::default(), resident), FreeNow::default());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_model_kept_up_under_throttle_gets_the_sharing_flags_its_engine_knows() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = std::env::temp_dir().join(format!("grokhub-throttle-flags-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    let binary = root.join("bin").join("llama-server");
+    std::fs::write(
+        &binary,
+        "#!/bin/sh\necho '--prio N   priority'\necho '--poll <0...100>   polling'\necho '-ub,   --ubatch-size N   ubatch'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(root.join("bin").join("libggml-cuda.so"), b"").unwrap();
+    let model = root.join("tiny.gguf");
+    std::fs::write(&model, tiny_gguf()).unwrap();
+    set_profile(rtx_4070_laptop(), root.join("local"));
+    set_state(GovState::Normal);
+    let (normal, _, _) = launch_for(&binary, &model).expect("planned");
+    assert_eq!(normal.run, super::super::local_flags::RunFlags::default());
+    set_state(GovState::Throttle);
+    let (shared, _, _) = launch_for(&binary, &model).expect("planned");
+    set_state(GovState::Normal);
+    assert_eq!(shared.run.poll, Some(0));
+    assert_eq!(shared.run.prio, Some(-1));
+    assert_eq!(shared.run.ubatch, Some(128));
+    assert_eq!(shared.run.vk_nodes_per_submit, None, "CUDA, not Vulkan");
+    assert!(shared.run.low_priority);
+    let args = shared.to_args();
+    assert!(args.windows(2).any(|w| w == ["--poll", "0"]));
+    assert!(args.windows(2).any(|w| w == ["--prio", "-1"]));
+    assert!(args.windows(2).any(|w| w == ["--ubatch-size", "128"]));
+    // Later tests start with no hardware read.
+    if let Ok(mut l) = live().lock() {
+        l.profile = None;
+        l.tune_dir = None;
+    }
+    let _ = std::fs::remove_dir_all(root);
 }

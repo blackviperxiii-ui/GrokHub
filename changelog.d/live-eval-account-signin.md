@@ -1,0 +1,1 @@
+- Live eval: `--auth signin` also reads the shell's sign-in and the cabin's Settings > Account sign-in (read only, never refreshed or printed).

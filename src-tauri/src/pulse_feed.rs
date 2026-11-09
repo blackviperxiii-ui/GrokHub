@@ -309,7 +309,13 @@ fn write_post(
             grokhub_core::update_feed::HONEST_EMPTY.into(),
         ));
     }
-    let taste = taste_summary(config_dir, model, client, state, &mut cache, day, now_ms);
+    let mut taste = taste_summary(config_dir, model, client, state, &mut cache, day, now_ms);
+    let liked = grokhub_core::card_taste::writer_line(
+        &grokhub_core::card_taste::load(config_dir).preferences(),
+    );
+    if !liked.is_empty() {
+        taste = format!("{}\n{liked}", taste.trim()).trim().to_string();
+    }
     if !cache.take_call_on(day) {
         ps::save_cache(&cache_path, &cache)?;
         return Ok(Outcome::Nothing(BUDGET_USED.into()));

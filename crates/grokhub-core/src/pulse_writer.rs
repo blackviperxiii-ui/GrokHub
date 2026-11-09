@@ -327,11 +327,12 @@ pub struct WriterInput<'a> {
 }
 
 const WRITER_RULES: &str = "You write one post for a person's news feed, in the style of a short briefing. Pick the single item below that fits them best, or combine items that are the same story. \
-Reply with JSON only: {\"title\":\"...\",\"snippet\":\"...\",\"icon\":\"...\",\"why\":\"...\"}. \
+Reply with JSON only: {\"title\":\"...\",\"snippet\":\"...\",\"icon\":\"...\",\"why\":\"...\",\"traits\":[\"...\"]}. \
 title: under 70 characters, plain, no clickbait. \
 snippet: one to three short sentences of markdown that say what happened and why it matters, citing sources inline as [site](url). Use only URLs from the list below, exactly as written; never invent a link, fact, name or number. \
 icon: one emoji for the topic. \
 why: one or two sentences to the reader, starting with \"You\", on why this is in their feed. \
+traits: two to five short lowercase kind:value tags that describe the post, using the kinds topic, subject (who or what it shows), and tone. \
 Never repeat a story from the recent titles. If nothing below is worth a post, reply {\"skip\":true}.";
 
 pub fn writer_messages(input: &WriterInput) -> Vec<(String, String)> {
@@ -379,6 +380,8 @@ pub struct Written {
     pub why: String,
     /// The fetched URLs the snippet cites, in order.
     pub cites: Vec<String>,
+    /// Canonical `kind:value` tags for taste learning (`card_taste`).
+    pub traits: Vec<String>,
 }
 
 pub const SKIPPED: &str = "Nothing new was worth a post.";
@@ -428,6 +431,21 @@ pub fn parse_written(
         icon: icon_or_default(&field("icon")),
         why: clip(&field("why"), WHY_CHARS),
         cites,
+        traits: v
+            .get("traits")
+            .and_then(|t| t.as_array())
+            .map(|a| {
+                let mut out: Vec<String> = Vec::new();
+                for t in a.iter().filter_map(|t| t.as_str()) {
+                    if let Some(t) = crate::card_taste::parse_trait(t) {
+                        if !out.contains(&t) && out.len() < 5 {
+                            out.push(t);
+                        }
+                    }
+                }
+                out
+            })
+            .unwrap_or_default(),
     })
 }
 
@@ -526,6 +544,7 @@ pub fn post_card(written: &Written, research: &[Research], now_ms: u64) -> Updat
         .filter(|s| !s.trim().is_empty())
         .or_else(|| source_host(first));
     card.pulse.icon = Some(written.icon.clone());
+    card.pulse.traits = written.traits.clone();
     card.why = (!written.why.is_empty()).then(|| written.why.clone());
     card
 }
@@ -663,6 +682,7 @@ mod tests {
                     icon: DEFAULT_ICON.into(),
                     why: String::new(),
                     cites: vec!["https://tauri.app/blog/tauri-2-5/".into()],
+                    traits: Vec::new(),
                 };
                 post_card(&w, &research(), NOW + n * MIN)
             })
@@ -822,6 +842,25 @@ mod tests {
     }
 
     #[test]
+    fn the_writer_tags_traits_and_the_card_keeps_them() {
+        let reply = r#"{"title":"A thing happened","snippet":"See [blog](https://blog.rust-lang.org/2026/10/20/Rust-1.99.html).","icon":"🦀","why":"You use it.","traits":["Topic: Alpha","tone:calm","topic:alpha","bad","subject:beta","a:b","c:d","e:f"]}"#;
+        let research = vec![Research {
+            title: "x".into(),
+            url: "https://blog.rust-lang.org/2026/10/20/Rust-1.99.html".into(),
+            source: "Blog".into(),
+            text: "x".into(),
+        }];
+        let post = parse_written(reply, &research, &[]).expect("post");
+        assert_eq!(
+            post.traits,
+            vec!["topic:alpha", "tone:calm", "subject:beta", "a:b", "c:d"]
+        );
+        let card = post_card(&post, &research, NOW);
+        assert_eq!(card.pulse.traits, post.traits);
+        assert!(WRITER_RULES.contains("traits"));
+    }
+
+    #[test]
     fn a_written_post_becomes_a_feed_card_with_icon_why_and_source() {
         let w = Written {
             title: "Tauri 2.5 speeds up Windows builds".into(),
@@ -829,6 +868,7 @@ mod tests {
             icon: "⚡".into(),
             why: "You ship a Tauri app.".into(),
             cites: vec!["https://tauri.app/blog/tauri-2-5/".into()],
+            traits: Vec::new(),
         };
         let card = post_card(&w, &research(), NOW);
         assert_eq!(card.source_id, format!("pulse:writer:{NOW}"));
