@@ -312,28 +312,28 @@ async function main() {
     await page.locator("nav.tabs button", { hasText: "Pulse" }).click();
     const post = page.getByRole("listitem", { name: POST_TITLE });
     await post.getByRole("button", { name: "Open image 1" }).waitFor({ timeout: 30000 });
-    await post.getByRole("button", { name: "Love" }).click();
-    await post.locator("button[aria-label='Love'][aria-pressed='true']").waitFor({ timeout: 30000 });
-    check(STATE.loved, "Love never reached the desktop");
-    console.log("pulse: post with its image shown, Love sent");
+    await post.getByRole("button", { name: "Like" }).click();
+    await post.locator("button[aria-label='Like'][aria-pressed='true']").waitFor({ timeout: 30000 });
+    check(STATE.loved, "Like never reached the desktop");
+    console.log("pulse: post with its image shown, Like sent");
 
     await page.getByRole("button", { name: "For You", exact: true }).click();
     const idea = page.getByRole("listitem", { name: IDEA_TITLE });
-    await idea.getByRole("button", { name: "More" }).click();
-    const items = await idea.getByRole("menuitem").allTextContents();
-    check(items.join("|") === "More like this", `the idea menu says ${JSON.stringify(items)}`);
-    const buttons = await idea.locator(".idea-buttons button").allTextContents();
+    await idea.locator(".card-row button").first().waitFor({ timeout: 30000 });
+    check((await idea.getByRole("button", { name: "More" }).count()) === 0, "the idea still has a menu");
+    const buttons = (await idea.locator(".card-row button").allTextContents()).map((t) =>
+      t.replace(/[\u2661\u2665]/g, "").trim(),
+    );
     check(
-      buttons.join("|") === "Let's do it|Not interested",
+      buttons.join("|") === "Like|Let's do it|I don't like|Dismiss",
       `the idea buttons say ${JSON.stringify(buttons)}`,
     );
-    await idea.getByRole("button", { name: "More" }).click();
     await idea.getByRole("button", { name: new RegExp(IDEA_TITLE) }).click();
     await page.getByRole("textbox", { name: "Message" }).waitFor({ timeout: 30000 });
     const typed = await page.getByRole("textbox", { name: "Message" }).inputValue();
     check(typed === IDEA_ACTION, `the chat box says ${JSON.stringify(typed)}`);
     check(STATE.acts.includes("web-idea:accept"), "Let's do it never reached the desktop");
-    console.log(`pulse: idea buttons ${buttons.join(", ")}, menu ${items.join(", ")}; the row filled the chat box`);
+    console.log(`pulse: idea buttons ${buttons.join(", ")}; the row filled the chat box`);
 
     // Every view renders on what the desktop sends; a missing field here
     // once blanked the whole page.
