@@ -168,7 +168,7 @@ impl Cabin {
 
     /// The Personal page.
     pub(super) fn ui_personal(&mut self, ui: &mut egui::Ui) {
-        let frame = crate::theme::page_frame();
+        let frame = crate::theme::page_frame(ui.ctx());
         let _ = super::dock_ui::page_panel(ui, self.cfg.dock_panels, frame, |ui| {
             if crate::cards::page_header(ui, "Personal", "Refresh") {
                 self.personal_changed();

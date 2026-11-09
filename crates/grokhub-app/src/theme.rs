@@ -753,8 +753,6 @@ pub const PAGE_MARGIN_NARROW: f32 = SPACING_16;
 /// Below this window width (logical px) pages use [`PAGE_MARGIN_NARROW`].
 pub const NARROW_WINDOW_W: f32 = 900.0;
 
-static PAGE_MARGIN_NOW: AtomicU8 = AtomicU8::new(PAGE_MARGIN as u8);
-
 /// The page margin for a window this wide: roomy on a big screen, tighter on a
 /// small laptop window so content keeps its width.
 pub fn page_margin_for(window_w: f32) -> f32 {
@@ -765,22 +763,16 @@ pub fn page_margin_for(window_w: f32) -> f32 {
     }
 }
 
-/// Read the window width once per frame so every page uses the same margin.
-pub fn sync_page_margin(ctx: &egui::Context) {
-    let m = page_margin_for(ctx.content_rect().width());
-    PAGE_MARGIN_NOW.store(m as u8, Ordering::Relaxed);
-}
-
-/// This frame's page margin (see [`sync_page_margin`]).
-pub fn page_margin() -> f32 {
-    f32::from(PAGE_MARGIN_NOW.load(Ordering::Relaxed))
+/// The page margin for this window.
+pub fn page_margin(ctx: &egui::Context) -> f32 {
+    page_margin_for(ctx.content_rect().width())
 }
 
 /// The frame a full page draws in: the app background with [`page_margin`].
-pub fn page_frame() -> egui::Frame {
+pub fn page_frame(ctx: &egui::Context) -> egui::Frame {
     egui::Frame::NONE
         .fill(bg())
-        .inner_margin(egui::Margin::same(page_margin() as i8))
+        .inner_margin(egui::Margin::same(page_margin(ctx) as i8))
 }
 
 /// Minimum interactive target for kit controls (settings rows, chips).
@@ -1969,8 +1961,8 @@ mod tests {
         ];
         assert!(scale.windows(2).all(|w| w[0] < w[1]), "{scale:?}");
         assert_eq!(
-            page_frame().inner_margin,
-            egui::Margin::same(page_margin() as i8)
+            page_frame(&egui::Context::default()).inner_margin,
+            egui::Margin::same(page_margin(&egui::Context::default()) as i8)
         );
         assert_eq!(MIN_HIT, TILE_ICON);
         assert!(kit_shadow(ShadowLevel::None).blur == 0);

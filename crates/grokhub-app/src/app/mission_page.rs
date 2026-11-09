@@ -98,7 +98,7 @@ impl Cabin {
         let mission = self.dock_mission(ui.ctx());
         egui::Frame::NONE
             .fill(crate::theme::bg())
-            .inner_margin(egui::Margin::same(crate::theme::page_margin() as i8))
+            .inner_margin(egui::Margin::same(crate::theme::page_margin(ui.ctx()) as i8))
             .show(ui, |ui| {
                 ui.set_min_size(ui.available_size());
                 // Same width as the checklist, so the XP bar sits above its right edge.

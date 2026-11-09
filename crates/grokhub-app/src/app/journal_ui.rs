@@ -101,7 +101,7 @@ impl Cabin {
     pub(super) fn ui_journal(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default()
             .frame(
-                crate::theme::page_frame(),
+                crate::theme::page_frame(ui.ctx()),
             )
             .show(ui, |ui| {
                 crate::cards::page_header(ui, "Journal", "");

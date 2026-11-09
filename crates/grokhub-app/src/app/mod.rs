@@ -5514,7 +5514,6 @@ impl eframe::App for Cabin {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        crate::theme::sync_page_margin(&ctx);
         self.paint_drop_hint(&ctx);
         self.publish_shown_personality(&ctx);
         crate::titlebar::edge_resize(

@@ -199,7 +199,7 @@ pub(super) const BOARD_DROP_MIN_H: f32 = 180.0;
 impl Cabin {
     pub(super) fn ui_command(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default()
-            .frame(crate::theme::page_frame())
+            .frame(crate::theme::page_frame(ui.ctx()))
             .show(ui, |ui| {
                 if crate::cards::page_header(ui, "Command", "Run") {
                     let line = self.cmd_line.trim().to_string();
@@ -384,7 +384,7 @@ impl Cabin {
 
     pub(super) fn ui_agents(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default()
-            .frame(crate::theme::page_frame())
+            .frame(crate::theme::page_frame(ui.ctx()))
             .show(ui, |ui| {
                 let _ = crate::cards::page_header(ui, "Queue", "");
                 ui.label(
@@ -497,7 +497,7 @@ impl Cabin {
 
     pub(super) fn ui_devices(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default()
-            .frame(crate::theme::page_frame())
+            .frame(crate::theme::page_frame(ui.ctx()))
             .show(ui, |ui| {
                 if crate::cards::page_header(
                     ui,
@@ -633,7 +633,7 @@ impl Cabin {
     pub(super) fn ui_memory(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default()
             .frame(
-                crate::theme::page_frame(),
+                crate::theme::page_frame(ui.ctx()),
             )
             .show(ui, |ui| {
                 let _ = crate::cards::page_header(ui, "Memory", "");
@@ -858,7 +858,7 @@ impl Cabin {
                         .fill(crate::theme::panel())
                         .corner_radius(crate::theme::SHEET_RADIUS)
                         .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-                        .inner_margin(egui::Margin::same(crate::theme::page_margin() as i8))
+                        .inner_margin(egui::Margin::same(crate::theme::page_margin(ui.ctx()) as i8))
                         .show(ui, |ui| {
                             ui.set_max_width(520.0);
                             if crate::cards::get_started_panel(
@@ -922,7 +922,7 @@ impl Cabin {
 
     pub(super) fn ui_history(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default()
-            .frame(crate::theme::page_frame())
+            .frame(crate::theme::page_frame(ui.ctx()))
             .show(ui, |ui| {
             self.history_header(ui);
 page_body(ui, "history", |ui| {
@@ -1067,7 +1067,7 @@ page_body(ui, "history", |ui| {
             || self.palette_open
             || self.shortcuts_open
             || self.confirm.as_ref().is_some_and(|c| c.paints_overlay());
-        let frame = crate::theme::page_frame();
+        let frame = crate::theme::page_frame(ui.ctx());
         let _ = super::dock_ui::page_panel(ui, self.cfg.dock_panels, frame, |ui| {
             if crate::cards::page_header(ui, "Workboards", "New card") {
                 self.board_edit = None;
@@ -1606,7 +1606,7 @@ page_body(ui, "history", |ui| {
 
     pub(super) fn ui_skills(&mut self, ui: &mut egui::Ui) {
         self.ensure_native_listing();
-        let frame = crate::theme::page_frame();
+        let frame = crate::theme::page_frame(ui.ctx());
         let _ = super::dock_ui::page_panel(ui, self.cfg.dock_panels, frame, |ui| {
             if crate::cards::page_header(ui, "Skills", "Refresh") {
                 self.skills_tab_changed();

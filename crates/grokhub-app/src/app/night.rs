@@ -189,7 +189,7 @@ impl Cabin {
     }
 
     pub(super) fn ui_night(&mut self, ui: &mut egui::Ui) {
-        let frame = crate::theme::page_frame();
+        let frame = crate::theme::page_frame(ui.ctx());
         super::dock_ui::page_panel(ui, self.cfg.dock_panels, frame, |ui| {
             if crate::cards::page_header(ui, "Automations", "New job") {
                 self.auto_compose = true;

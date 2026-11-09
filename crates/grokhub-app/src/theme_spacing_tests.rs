@@ -10,10 +10,6 @@ const SCALE: [f32; 14] = [
     0.0, 1.0, 2.0, 4.0, 8.0, 12.0, 16.0, 24.0, 32.0, 40.0, 48.0, 64.0, 80.0, 96.0,
 ];
 
-/// Files that still wait for their snap (an open PR owns them). Empty this list
-/// as each lands; never add to it.
-const NOT_YET: [&str; 1] = ["pulse_ui.rs"];
-
 fn on_scale(v: f32) -> bool {
     let a = v.abs();
     a > 96.0 || SCALE.contains(&a)
@@ -89,7 +85,7 @@ fn walk(dir: &Path, out: &mut Vec<String>) {
             walk(&path, out);
         } else if path.extension().is_some_and(|e| e == "rs") {
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if NOT_YET.contains(&name) || name == "theme_spacing_tests.rs" {
+            if name == "theme_spacing_tests.rs" {
                 continue;
             }
             let src = std::fs::read_to_string(&path).expect("read source");
