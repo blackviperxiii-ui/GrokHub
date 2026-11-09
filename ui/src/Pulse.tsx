@@ -346,6 +346,8 @@ export function Pulse({
                     onFix={() => setFixing(idea)}
                     onMoreLike={() => void act(idea.id, "moreLike", MORE_LIKE_NOTE)}
                     onNotInterested={() => void act(idea.id, "notInterested", NOT_INTERESTED_NOTE)}
+                    onChip={(c) => void chip(idea.id, c)}
+                    onDiscuss={() => void discuss(idea.id)}
                   />
                 ))}
               </ul>

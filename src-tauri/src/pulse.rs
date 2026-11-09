@@ -158,6 +158,11 @@ pub struct Idea {
     /// "Fix it" or "Options" on a PC health card, whose main button opens
     /// the options window instead of Let's do it. Empty on other ideas.
     pub fix: String,
+    /// A card that found something: its full report, opened under the summary.
+    pub more: String,
+    /// A card that found something: its chips in place of the two buttons.
+    /// Empty on other ideas.
+    pub chips: Vec<Chip>,
 }
 
 /// A PC health card's options window: the verdict, what to try, and the
@@ -382,13 +387,18 @@ fn post(config_dir: &Path, card: &UpdateCard, now_ms: u64) -> Post {
     }
 }
 
-fn idea(card: &UpdateCard) -> Idea {
+fn idea(card: &UpdateCard, now_ms: u64) -> Idea {
     let action = card.idea_action();
+    let reported = card.pulse.report.is_some();
     Idea {
         id: card.id.clone(),
         title: pc::i_can_title(card),
         icon: card.pulse.icon.clone().unwrap_or_default(),
-        summary: card.body.clone().unwrap_or_default().trim().to_string(),
+        summary: if reported {
+            card_summary(card)
+        } else {
+            card.body.clone().unwrap_or_default().trim().to_string()
+        },
         kind: pc::pulse_type(card).label().to_string(),
         action: if action.is_empty() {
             card.title.trim().to_string()
@@ -397,6 +407,12 @@ fn idea(card: &UpdateCard) -> Idea {
         },
         verdict: verdict(card),
         fix: advice::fix_label(card).unwrap_or_default().to_string(),
+        more: report_more(card).unwrap_or_default(),
+        chips: if reported {
+            chips(card, now_ms)
+        } else {
+            Vec::new()
+        },
     }
 }
 
@@ -470,7 +486,11 @@ fn build(
             .into_iter()
             .map(|(cat, rows)| Group {
                 label: cat.map(|c| c.label().to_string()).unwrap_or_default(),
-                ideas: rows.iter().filter_map(|r| by_id(&r.id)).map(idea).collect(),
+                ideas: rows
+                    .iter()
+                    .filter_map(|r| by_id(&r.id))
+                    .map(|c| idea(c, now_ms))
+                    .collect(),
             })
             .collect(),
     }
@@ -998,7 +1018,14 @@ mod tests {
     fn a_reported_card_shows_its_report_chips_and_own_chat() {
         let d = dirs("reported", &[reported()]);
         let page = load(&d.config, None, NOW).expect("load");
-        let post = &page.feed[0];
+        // A crash card is an idea row, not a feed post.
+        assert!(page.feed.is_empty(), "{page:?}");
+        let post = page
+            .ideas
+            .iter()
+            .flat_map(|g| &g.ideas)
+            .find(|i| i.id == "crash-1")
+            .expect("idea row");
         assert_eq!(post.title, "bluetoothd crashed 4 times today");
         assert_eq!(post.summary, "Your Bluetooth service keeps restarting.");
         assert_eq!(
@@ -1053,12 +1080,19 @@ mod tests {
         // 14:30 local, winds down at 10 PM: back tonight at 9:30.
         let r = remind(&d.config, "crash-1", &day(), NOW).expect("remind");
         assert_eq!(r.note, "Back tonight, 9:30 PM before you wind down.");
-        assert!(r.page.feed.is_empty(), "{:?}", r.page);
+        let shown = |p: &Page| {
+            p.ideas
+                .iter()
+                .flat_map(|g| &g.ideas)
+                .any(|i| i.id == "crash-1")
+        };
+        assert!(!shown(&r.page), "{:?}", r.page);
         assert_eq!(memory(), before, "Remind me later writes no ledger line");
 
         let d = dirs("ignore2", &[reported()]);
+        assert!(shown(&load(&d.config, None, NOW).expect("load")));
         let page = act(&d.config, "crash-1", Act::Ignore, &day(), NOW).expect("ignore");
-        assert!(page.feed.is_empty(), "{page:?}");
+        assert!(!shown(&page), "{page:?}");
         assert_eq!(memory(), before, "Ignore writes no ledger line");
         assert!(pulse_feed::state(&d.config).taste_events.is_empty());
         assert_eq!(

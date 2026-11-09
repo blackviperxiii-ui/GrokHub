@@ -376,14 +376,30 @@ export interface IdeaRowProps {
   onFix?: () => void;
   onMoreLike: () => void;
   onNotInterested: () => void;
+  /** A chip on a card that found something; Discuss goes to `onDiscuss`. */
+  onChip?: (chip: PulseChip) => void;
+  onDiscuss?: () => void;
 }
 
 /** One Ideas row: a clay icon, the title, its verdict and its grey "I can …"
  * line, then the same two buttons every card has. The main one is Let's do
  * it, or Fix it / Options on a PC health card; the second is Not interested.
- * A click on the row is the main button. More like this waits in the menu. */
-export function IdeaRow({ idea, busy, onDo, onFix, onMoreLike, onNotInterested }: IdeaRowProps) {
+ * A click on the row is the main button. More like this waits in the menu.
+ * A card that found something shows Show the full report and its chips
+ * instead, and Not interested moves to the menu. */
+export function IdeaRow({
+  idea,
+  busy,
+  onDo,
+  onFix,
+  onMoreLike,
+  onNotInterested,
+  onChip,
+  onDiscuss,
+}: IdeaRowProps) {
   const [menu, setMenu] = useState(false);
+  const [open, setOpen] = useState(false);
+  const chips = idea.chips ?? [];
   const corner = useDismiss<HTMLDivElement>(menu, () => setMenu(false));
   const pick = (f: () => void) => () => {
     setMenu(false);
@@ -406,13 +422,44 @@ export function IdeaRow({ idea, busy, onDo, onFix, onMoreLike, onNotInterested }
           {idea.summary && <span className="idea-summary">{idea.summary}</span>}
         </span>
       </button>
+      {idea.more && (
+        <button
+          type="button"
+          className="quiet link-button"
+          aria-expanded={open}
+          onClick={() => setOpen((o) => !o)}
+        >
+          {open ? HIDE_REPORT : SHOW_REPORT}
+        </button>
+      )}
+      {open && idea.more && (
+        <div className="feed-report">
+          <Markdown text={idea.more} />
+        </div>
+      )}
       <div className="card-buttons idea-buttons">
-        <button type="button" disabled={busy} onClick={main}>
-          {fix ? idea.fix : "Let's do it"}
-        </button>
-        <button type="button" className="quiet" disabled={busy} onClick={onNotInterested}>
-          Not interested
-        </button>
+        {chips.length === 0 ? (
+          <>
+            <button type="button" disabled={busy} onClick={main}>
+              {fix ? idea.fix : "Let's do it"}
+            </button>
+            <button type="button" className="quiet" disabled={busy} onClick={onNotInterested}>
+              Not interested
+            </button>
+          </>
+        ) : (
+          chips.map((chip) => (
+            <button
+              key={`${chip.act}-${chip.index}`}
+              type="button"
+              className={chip.act === "offer" ? undefined : "quiet"}
+              disabled={busy}
+              onClick={() => (chip.act === "discuss" ? onDiscuss?.() : onChip?.(chip))}
+            >
+              {chip.label}
+            </button>
+          ))
+        )}
       </div>
       <div className="feed-corner" ref={corner}>
         <button
@@ -435,6 +482,11 @@ export function IdeaRow({ idea, busy, onDo, onFix, onMoreLike, onNotInterested }
             <button type="button" role="menuitem" disabled={busy} onClick={pick(onMoreLike)}>
               More like this
             </button>
+            {chips.length > 0 && (
+              <button type="button" role="menuitem" disabled={busy} onClick={pick(onNotInterested)}>
+                Not interested
+              </button>
+            )}
           </div>
         )}
       </div>

@@ -76,6 +76,8 @@ const IDEA: PulseIdea = {
   action: "close every done card on the workboard",
   verdict: null,
   fix: "",
+  more: "",
+  chips: [],
 };
 
 const PAGE: PulsePage = {
@@ -509,6 +511,44 @@ describe("Pulse", () => {
     await userEvent.click(main);
     expect(api.pulseAct).toHaveBeenLastCalledWith("idea-2", "accept");
     expect(onRun).toHaveBeenCalledWith("close every done card on the workboard");
+  });
+
+  it("a crash idea shows its report and chips, and Discuss opens its own chat", async () => {
+    const crash: PulseIdea = {
+      ...IDEA,
+      id: "crash-1",
+      title: "bluetoothd crashed 4 times today",
+      summary: "Your Bluetooth service keeps restarting.",
+      more: "It stopped with a segfault each time.",
+      chips: [
+        { label: "Find out why", act: "offer", index: 0 },
+        { label: "Discuss", act: "discuss", index: 0 },
+        { label: "Ignore for now", act: "ignore", index: 0 },
+        { label: "Remind me later", act: "remind", index: 0 },
+      ],
+    };
+    api.getPulse.mockResolvedValue({ ...PAGE, feed: [], ideas: [{ label: "", ideas: [crash] }] });
+    api.pulseDiscuss.mockResolvedValue({ conversationId: "pulse-crash-1", text: "Tell me more about this." });
+    api.pulseOffer.mockResolvedValue({ conversationId: "pulse-crash-1", text: "Read bluetoothd's crash history." });
+    const onRun = vi.fn();
+    render(<Pulse onRun={onRun} />);
+    await userEvent.click(await screen.findByRole("button", { name: "For You" }));
+
+    const row = screen.getByRole("listitem", { name: "bluetoothd crashed 4 times today" });
+    expect(within(row).queryByRole("button", { name: "Let's do it" })).not.toBeInTheDocument();
+    expect(within(row).queryByRole("button", { name: "Not interested" })).not.toBeInTheDocument();
+    expect(row).not.toHaveTextContent("segfault");
+    await userEvent.click(within(row).getByRole("button", { name: SHOW_REPORT }));
+    expect(row).toHaveTextContent("It stopped with a segfault each time.");
+
+    await userEvent.click(within(row).getByRole("button", { name: "Discuss" }));
+    expect(onRun).toHaveBeenLastCalledWith("Tell me more about this.", "pulse-crash-1");
+    await userEvent.click(within(row).getByRole("button", { name: "Find out why" }));
+    expect(api.pulseOffer).toHaveBeenCalledWith("crash-1", 0);
+    expect(onRun).toHaveBeenLastCalledWith("Read bluetoothd's crash history.", "pulse-crash-1");
+
+    await userEvent.click(within(row).getByRole("button", { name: "More" }));
+    expect(screen.getByRole("menuitem", { name: "Not interested" })).toBeInTheDocument();
   });
 
   it("a PC health card reads its verdict and Fix it opens its options, which only advise", async () => {
