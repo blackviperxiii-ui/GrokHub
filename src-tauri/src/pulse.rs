@@ -1355,16 +1355,12 @@ mod tests {
         let post = &page.feed[0];
         assert!(post.delete && !post.snooze, "{post:?}");
         // A reminder gets Snooze only; an unclear card gets both.
-        let mut remind = sample();
-        remind[1].kind = UpdateKind::Suggestion;
-        remind[1].title = "Call the shop tomorrow".into();
-        let d = dirs("offers-remind", &remind);
+        let mut remind = reported();
+        remind.title = "Check the Bluetooth fix tomorrow".into();
+        let d = dirs("offers-remind", &[remind]);
         let post = &load(&d.config, None, NOW).expect("load").feed[0];
         assert!(post.snooze && !post.delete, "{post:?}");
-        let mut plain = sample();
-        plain[1].kind = UpdateKind::Suggestion;
-        plain[1].title = "Board".into();
-        let d = dirs("offers-plain", &plain);
+        let d = dirs("offers-plain", &[reported()]);
         let post = &load(&d.config, None, NOW).expect("load").feed[0];
         assert!(post.snooze && post.delete, "{post:?}");
     }
