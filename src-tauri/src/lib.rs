@@ -99,6 +99,9 @@ struct ShellState {
     notified: os_extras::Pending,
     /// Auto setup's state for this launch.
     auto: Mutex<auto_setup::Session>,
+    /// A Pulse card's report, by its chat, for that chat's next message to
+    /// carry unseen.
+    card_carry: Mutex<HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -428,6 +431,16 @@ async fn send_chat(
             grokhub_core::now_ms(),
         );
     });
+    // A chat opened from a Pulse card: its first message carries the card.
+    let carry = state
+        .card_carry
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&conversation_id);
+    let text = match carry {
+        Some(context) => format!("{}{text}", grokhub_core::card_report::card_carry(&context)),
+        None => text,
+    };
     let turn = Turn {
         text,
         mode,
@@ -2032,12 +2045,50 @@ async fn get_pulse(
     off_main(move || pulse::load(&dir, day.as_ref(), grokhub_core::now_ms())).await?
 }
 
-/// Discuss: the text the chat starts from, carrying the post.
+/// Keeps a card's report for its chat's next message and hands back the rest.
+fn card_seed(state: &ShellState, seed: pulse::Seed) -> pulse::Seed {
+    if let Some(carry) = seed.carry.clone() {
+        state
+            .card_carry
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(seed.conversation_id.clone(), carry);
+    }
+    seed
+}
+
+/// Discuss: the card's own chat and the words for its box, carrying the card.
 #[tauri::command]
-async fn pulse_discuss(state: State<'_, ShellState>, id: String) -> Result<String, String> {
+async fn pulse_discuss(state: State<'_, ShellState>, id: String) -> Result<pulse::Seed, String> {
     capabilities::needs(capabilities::current().pulse, "Pulse")?;
     let dir = state.config_dir.clone();
-    off_main(move || pulse::discuss(&dir, &id, grokhub_core::now_ms())).await?
+    let seed = off_main(move || pulse::discuss(&dir, &id, grokhub_core::now_ms())).await??;
+    Ok(card_seed(&state, seed))
+}
+
+/// A card's fix chip: its words in the card's own chat. Nothing runs until sent.
+#[tauri::command]
+async fn pulse_offer(
+    state: State<'_, ShellState>,
+    id: String,
+    index: usize,
+) -> Result<pulse::Seed, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    let seed = off_main(move || pulse::offer(&dir, &id, index, grokhub_core::now_ms())).await??;
+    Ok(card_seed(&state, seed))
+}
+
+/// Remind me later: hidden until a time that fits the day.
+#[tauri::command]
+async fn pulse_remind(
+    state: State<'_, ShellState>,
+    id: String,
+    day: pulse::Day,
+) -> Result<pulse::Reminded, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || pulse::remind(&dir, &id, &day, grokhub_core::now_ms())).await?
 }
 
 #[tauri::command]
@@ -2575,6 +2626,16 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             arg(args, "day")?,
         ))?),
         "pulse_discuss" => out(block_on(pulse_discuss(state, arg(args, "id")?))?),
+        "pulse_offer" => out(block_on(pulse_offer(
+            state,
+            arg(args, "id")?,
+            arg(args, "index")?,
+        ))?),
+        "pulse_remind" => out(block_on(pulse_remind(
+            state,
+            arg(args, "id")?,
+            arg(args, "day")?,
+        ))?),
         "pulse_why" => out(block_on(pulse_why(state, arg(args, "id")?))?),
         "pulse_fix" => out(block_on(pulse_fix(state, arg(args, "id")?))?),
         "get_feed_prompt" => out(block_on(get_feed_prompt(state))?),
@@ -3075,6 +3136,7 @@ pub fn run() {
                 #[cfg(desktop)]
                 notified: os_extras::Pending::default(),
                 auto: Mutex::default(),
+                card_carry: Mutex::default(),
             });
             if let Some(window) = app.get_webview_window("main") {
                 if text_size != 100 {
@@ -3221,6 +3283,8 @@ pub fn run() {
             get_pulse,
             pulse_act,
             pulse_discuss,
+            pulse_offer,
+            pulse_remind,
             pulse_why,
             pulse_fix,
             get_feed_prompt,

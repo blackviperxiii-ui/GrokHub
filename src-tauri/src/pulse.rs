@@ -10,6 +10,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
+use grokhub_core::card_chips::{card_chips, remind_later, ChipAct, DayShape};
+use grokhub_core::card_report::{card_context, card_headline, card_summary, report_more};
 use grokhub_core::interests::InterestSignal;
 use grokhub_core::pc_health_advice as advice;
 use grokhub_core::pulse::{self as pc, LedgerReason};
@@ -62,6 +64,61 @@ pub struct Post {
     pub loved: bool,
     /// One line on what the card's numbers mean, when it has one.
     pub verdict: Option<Verdict>,
+    /// The full report and the facts behind it, as markdown, for the card's
+    /// Show the full report. Empty when the card has nothing past its summary.
+    pub more: String,
+    /// A digest's updates, each with the card it opens.
+    pub items: Vec<Item>,
+    /// The quick chips under the card: its fixes, Discuss, Ignore for now,
+    /// Remind me later.
+    pub chips: Vec<Chip>,
+}
+
+/// One update inside a digest card.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Item {
+    pub card_id: String,
+    pub found: String,
+    pub summary: String,
+}
+
+/// One chip under a card. `act` is "offer", "discuss", "ignore" or "remind";
+/// `index` is the offer's place on the card.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Chip {
+    pub label: String,
+    pub act: &'static str,
+    pub index: usize,
+}
+
+fn chips(card: &UpdateCard, now_ms: u64) -> Vec<Chip> {
+    // Only the kinds of chip matter here; Remind me later's time is worked
+    // out from the page's clock when it is tapped.
+    let day = DayShape {
+        now_ms,
+        hour: 0,
+        minute: 0,
+        wind_down: None,
+        start: None,
+    };
+    card_chips(card, &day, None)
+        .into_iter()
+        .map(|c| {
+            let (act, index) = match c.act {
+                ChipAct::Offer(i) => ("offer", i),
+                ChipAct::Discuss | ChipAct::Primary => ("discuss", 0),
+                ChipAct::Ignore => ("ignore", 0),
+                ChipAct::RemindAt(_) => ("remind", 0),
+            };
+            Chip {
+                label: c.label,
+                act,
+                index,
+            }
+        })
+        .collect()
 }
 
 /// A card's one-line read of its own numbers, with how worried to be.
@@ -153,6 +210,8 @@ pub enum Act {
     MoreLike,
     /// Not interested: the idea goes, and so does some of its topics' weight.
     NotInterested,
+    /// Ignore for now: off the page, with no "less of this".
+    Ignore,
 }
 
 /// The local wall clock from the page: today's date for the ledger line and
@@ -285,8 +344,8 @@ fn post(config_dir: &Path, card: &UpdateCard, now_ms: u64) -> Post {
     Post {
         id: card.id.clone(),
         source,
-        title: card.title.trim().to_string(),
-        summary: card.body.clone().unwrap_or_default().trim().to_string(),
+        title: card_headline(card),
+        summary: card_summary(card),
         because: pc::plain_why(card).unwrap_or_default(),
         icon: card.pulse.icon.clone().unwrap_or_default(),
         why: card.why.clone().unwrap_or_default(),
@@ -307,6 +366,19 @@ fn post(config_dir: &Path, card: &UpdateCard, now_ms: u64) -> Post {
             .unwrap_or_default(),
         loved: card.reaction == Some(CardReaction::Up),
         verdict: verdict(card),
+        more: report_more(card).unwrap_or_default(),
+        items: card
+            .pulse
+            .report
+            .iter()
+            .flat_map(|r| r.items.iter())
+            .map(|i| Item {
+                card_id: i.card_id.clone(),
+                found: i.found.trim().to_string(),
+                summary: i.summary.trim().to_string(),
+            })
+            .collect(),
+        chips: chips(card, now_ms),
     }
 }
 
@@ -460,6 +532,7 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
         Act::Unlove => (None, None),
         Act::MoreLike => (Some(Outcome::Accepted), Some(true)),
         Act::Snooze => (Some(Outcome::Snoozed), None),
+        Act::Ignore => (None, None),
     };
     let remove = |cards: &mut Vec<UpdateCard>| {
         if card.kind == UpdateKind::Idea {
@@ -524,6 +597,7 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
             let until = pc::snooze_until(now_ms, day.hour, day.minute);
             pc::snooze_card(&mut cards, id, until)
         }
+        Act::Ignore => remove(&mut cards),
         Act::Accept => {
             note(&card.title, LedgerReason::Accepted, &day.date)?;
             grokhub_core::mark_update_opened(&mut cards, id)
@@ -575,15 +649,132 @@ fn find(config_dir: &Path, id: &str) -> Result<UpdateCard, String> {
         .ok_or_else(|| "That card is gone. The page now shows what is left.".to_string())
 }
 
-/// Discuss: the chat seed carrying the post. Counts as engagement and taste.
-pub fn discuss(config_dir: &Path, id: &str, now_ms: u64) -> Result<String, String> {
-    let card = find(config_dir, id)?;
-    react(config_dir, &card, Outcome::Tapped, None, now_ms);
+/// What a card puts in the chat: the card's own conversation, the words for
+/// the box, and the card's report, which the chat's first message carries
+/// unseen (see `card_report::card_carry`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Seed {
+    pub conversation_id: String,
+    pub text: String,
+    #[serde(skip)]
+    pub carry: Option<String>,
+}
+
+/// A card's own chat: the same conversation every time it is opened, so
+/// "check into it" means this card. Ids are folder names, so only letters,
+/// digits, `-` and `_` stay, 64 at most.
+pub fn card_chat_id(id: &str) -> String {
+    let clean: String = id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .collect();
+    let mut out = format!("pulse-{clean}");
+    out.truncate(64);
+    out
+}
+
+/// Words for the box when Discuss opens a reported card's chat.
+pub const DISCUSS_ASK: &str = "Tell me more about this.";
+
+fn engaged(config_dir: &Path, card: &UpdateCard, now_ms: u64) -> Result<(), String> {
+    react(config_dir, card, Outcome::Tapped, None, now_ms);
     pulse_feed::with_state(config_dir, |s| {
         s.note_engaged(now_ms);
         s.note_taste(TasteKind::Discuss, &card.title, now_ms);
-    })?;
-    Ok(grokhub_core::pulse_writer::discuss_seed(&card))
+    })
+}
+
+/// Discuss: the card's own chat, carrying its report. A post with no report
+/// puts the post itself in the box, as before. Counts as engagement and taste.
+pub fn discuss(config_dir: &Path, id: &str, now_ms: u64) -> Result<Seed, String> {
+    let card = find(config_dir, id)?;
+    engaged(config_dir, &card, now_ms)?;
+    let carry = card_context(&card);
+    let text = if carry.is_some() {
+        DISCUSS_ASK.to_string()
+    } else {
+        grokhub_core::pulse_writer::discuss_seed(&card)
+    };
+    Ok(Seed {
+        conversation_id: card_chat_id(&card.id),
+        text,
+        carry,
+    })
+}
+
+/// A card's offered fix: its words in the card's own chat, with the report.
+/// Nothing runs until the person sends it.
+pub fn offer(config_dir: &Path, id: &str, index: usize, now_ms: u64) -> Result<Seed, String> {
+    let card = find(config_dir, id)?;
+    let prompt = card
+        .pulse
+        .report
+        .as_ref()
+        .and_then(|r| r.offers.get(index))
+        .map(|o| o.prompt.trim().to_string())
+        .filter(|p| !p.is_empty())
+        .ok_or("That fix is gone from the card. The page now shows what is left.")?;
+    engaged(config_dir, &card, now_ms)?;
+    Ok(Seed {
+        conversation_id: card_chat_id(&card.id),
+        text: prompt,
+        carry: card_context(&card),
+    })
+}
+
+/// Remind me later, tapped: what the page shows after, and when it is back.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Reminded {
+    pub page: Page,
+    pub note: String,
+}
+
+/// The hour quiet hours start in the desktop app's `app.json`, the shell's
+/// wind-down hour. `None` when quiet hours are off.
+fn wind_down_hour(config_dir: &Path) -> Option<u32> {
+    let raw = std::fs::read_to_string(config_dir.join("app.json")).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let start = v.get("quietStart")?.as_str()?.trim().to_string();
+    let end = v
+        .get("quietEnd")
+        .and_then(|e| e.as_str())
+        .unwrap_or("")
+        .trim();
+    if start.is_empty() || start == end {
+        return None;
+    }
+    grokhub_core::organs::hm_min(&start).map(|m| m / 60)
+}
+
+/// Remind me later: the card hides until tonight before wind-down when there
+/// is time, else when they next sit down (9 AM until the cabin learns it).
+pub fn remind(config_dir: &Path, id: &str, day: &Day, now_ms: u64) -> Result<Reminded, String> {
+    let _store = store();
+    let mut cards = load_unlocked(config_dir)?;
+    if !cards.iter().any(|c| c.id == id) {
+        return Err("That card is gone. The page now shows what is left.".into());
+    }
+    let later = remind_later(&DayShape {
+        now_ms,
+        hour: day.hour,
+        minute: day.minute,
+        wind_down: wind_down_hour(config_dir),
+        start: None,
+    });
+    if pc::snooze_card(&mut cards, id, later.at_ms) {
+        save(config_dir, &cards)?;
+    }
+    let mut label = later.label;
+    if let Some(first) = label.get(..1) {
+        let lower = first.to_lowercase();
+        label.replace_range(..1, &lower);
+    }
+    Ok(Reminded {
+        page: page(config_dir, &cards, now_ms),
+        note: format!("Back {label}."),
+    })
 }
 
 /// The PC health settings the desktop app saved in its `app.json`, or the
@@ -766,6 +957,114 @@ mod tests {
         post.id = "post-1".into();
         post.citations = vec!["https://example.com/board".into()];
         vec![idea, post]
+    }
+
+    /// A crash card with a report: two fixes, the facts behind it.
+    fn reported() -> UpdateCard {
+        use grokhub_core::card_report::{CardReport, FixOffer, OfferKind};
+        let mut card = automation_done_card(
+            "watch-bt",
+            "Crash watch",
+            "bluetoothd crashed",
+            NOW - 60_000,
+        );
+        card.id = "crash-1".into();
+        card.kind = UpdateKind::Suggestion;
+        card.pulse.report = Some(CardReport {
+            found: "bluetoothd crashed 4 times today".into(),
+            summary: "Your Bluetooth service keeps restarting.".into(),
+            details: "It stopped with a segfault each time.".into(),
+            evidence: vec!["4 crash reports since 9 AM".into()],
+            offers: vec![
+                FixOffer {
+                    label: "Find out why".into(),
+                    prompt: "Read bluetoothd's crash history.".into(),
+                    kind: OfferKind::Look,
+                    fix_type: None,
+                },
+                FixOffer {
+                    label: "Restart bluetooth".into(),
+                    prompt: "Restart the bluetooth service.".into(),
+                    kind: OfferKind::Chat,
+                    fix_type: None,
+                },
+            ],
+            ..Default::default()
+        });
+        card
+    }
+
+    #[test]
+    fn a_reported_card_shows_its_report_chips_and_own_chat() {
+        let d = dirs("reported", &[reported()]);
+        let page = load(&d.config, None, NOW).expect("load");
+        let post = &page.feed[0];
+        assert_eq!(post.title, "bluetoothd crashed 4 times today");
+        assert_eq!(post.summary, "Your Bluetooth service keeps restarting.");
+        assert_eq!(
+            post.more,
+            "It stopped with a segfault each time.\n\n**What was checked**\n- 4 crash reports since 9 AM"
+        );
+        let chips: Vec<(&str, &str, usize)> = post
+            .chips
+            .iter()
+            .map(|c| (c.label.as_str(), c.act, c.index))
+            .collect();
+        assert_eq!(
+            chips,
+            vec![
+                ("Find out why", "offer", 0),
+                ("Restart bluetooth", "offer", 1),
+                ("Ignore for now", "ignore", 0),
+                ("Remind me later", "remind", 0),
+            ]
+        );
+
+        // Discuss and the fixes open the card's own chat, carrying its report.
+        let seed = discuss(&d.config, "crash-1", NOW).expect("discuss");
+        assert_eq!(seed.conversation_id, "pulse-crash-1");
+        assert_eq!(seed.text, DISCUSS_ASK);
+        let carry = seed.carry.expect("carry");
+        assert!(
+            carry.starts_with("Pulse card: bluetoothd crashed 4 times today"),
+            "{carry}"
+        );
+        let fix = offer(&d.config, "crash-1", 1, NOW).expect("offer");
+        assert_eq!(fix.conversation_id, "pulse-crash-1");
+        assert_eq!(fix.text, "Restart the bluetooth service.");
+        assert_eq!(fix.carry.as_deref(), Some(carry.as_str()));
+        assert_eq!(
+            offer(&d.config, "crash-1", 2, NOW).map(|s| s.text),
+            Err("That fix is gone from the card. The page now shows what is left.".to_string())
+        );
+        assert_eq!(card_chat_id("a/b:c"), "pulse-abc");
+        assert_eq!(card_chat_id(&"x".repeat(80)).len(), 64);
+    }
+
+    #[test]
+    fn ignore_for_now_and_remind_me_later_leave_no_less_of_this() {
+        let d = dirs("ignore", &[reported()]);
+        std::fs::write(
+            d.config.join("app.json"),
+            r#"{"quietStart":"22:00","quietEnd":"07:00"}"#,
+        )
+        .expect("app.json");
+        let before = memory();
+        // 14:30 local, winds down at 10 PM: back tonight at 9:30.
+        let r = remind(&d.config, "crash-1", &day(), NOW).expect("remind");
+        assert_eq!(r.note, "Back tonight, 9:30 PM before you wind down.");
+        assert!(r.page.feed.is_empty(), "{:?}", r.page);
+        assert_eq!(memory(), before, "Remind me later writes no ledger line");
+
+        let d = dirs("ignore2", &[reported()]);
+        let page = act(&d.config, "crash-1", Act::Ignore, &day(), NOW).expect("ignore");
+        assert!(page.feed.is_empty(), "{page:?}");
+        assert_eq!(memory(), before, "Ignore writes no ledger line");
+        assert!(pulse_feed::state(&d.config).taste_events.is_empty());
+        assert_eq!(
+            remind(&d.config, "gone-1", &day(), NOW),
+            Err("That card is gone. The page now shows what is left.".to_string())
+        );
     }
 
     #[test]
@@ -1013,8 +1312,10 @@ mod tests {
         let page = act(&d.config, "post-1", Act::Love, &day(), NOW).expect("love");
         assert!(page.feed[0].loved);
         let seed = discuss(&d.config, "post-1", NOW + 1).expect("discuss");
+        assert_eq!(seed.conversation_id, "pulse-post-1");
+        assert_eq!(seed.carry, None);
         assert_eq!(
-            seed,
+            seed.text,
             "Let's talk about this post from my Pulse feed.\n\n**Board**\nsummarized 3 cards\n\nSource: https://example.com/board\n"
         );
         let state = pulse_feed::state(&d.config);
@@ -1037,7 +1338,7 @@ mod tests {
         let saved = std::fs::read_to_string(d.config.join(FILE)).expect("read");
         assert!(!saved.contains("post-1"), "{saved}");
         assert_eq!(
-            discuss(&d.config, "post-1", NOW),
+            discuss(&d.config, "post-1", NOW).map(|s| s.text),
             Err("That card is gone. The page now shows what is left.".to_string())
         );
     }

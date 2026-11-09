@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { pulseImage, type PulseIdea, type PulsePost } from "./api";
+import { pulseImage, type PulseChip, type PulseIdea, type PulsePost } from "./api";
+import { Markdown } from "./Markdown";
 import { VerdictLine } from "./PulseFix";
 import { ConfirmRow, ExternalLink, useDismiss } from "./ui";
 
@@ -181,11 +182,19 @@ export interface FeedCardProps {
   onDismiss?: () => void;
   /** Take it off and steer the writer away from posts like it. */
   onNotThis?: () => void;
+  /** A chip under the card other than Discuss: a fix, Ignore for now, or
+   * Remind me later. */
+  onChip?: (chip: PulseChip) => void;
 }
 
+/** Opens the full report under a card's summary. */
+export const SHOW_REPORT = "Show the full report";
+export const HIDE_REPORT = "Hide the full report";
+
 /** One Feed post: icon, title, where it is from and why, verdict, cited
- * snippet, media; its buttons below, Discuss (the main one), Love (pressed
- * again it unloves) and Read it when it has a source page;
+ * snippet, the full report on Show, media; its chips below (the card's fixes,
+ * Discuss, Ignore for now, Remind me later; Discuss alone on an older page),
+ * Love (pressed again it unloves) and Read it when it has a source page;
  * time and a menu (date, why, snooze, dismiss, not this, delete) top right.
  * Delete asks first. */
 export function FeedCard({
@@ -199,8 +208,12 @@ export function FeedCard({
   onSnooze,
   onDismiss,
   onNotThis,
+  onChip,
 }: FeedCardProps) {
   const [menu, setMenu] = useState(false);
+  const [open, setOpen] = useState(false);
+  const chips = post.chips ?? [];
+  const hasMore = Boolean(post.more) || (post.items?.length ?? 0) > 0;
   const [why, setWhy] = useState<string | null>(null);
   const [asking, setAsking] = useState(false);
   const corner = useDismiss<HTMLDivElement>(menu, () => setMenu(false));
@@ -273,6 +286,31 @@ export function FeedCard({
       </p>
       <VerdictLine verdict={post.verdict} />
       {post.summary && <Snippet text={post.summary} />}
+      {hasMore && (
+        <button
+          type="button"
+          className="quiet link-button"
+          aria-expanded={open}
+          onClick={() => setOpen((o) => !o)}
+        >
+          {open ? HIDE_REPORT : SHOW_REPORT}
+        </button>
+      )}
+      {open && (
+        <div className="feed-report">
+          {post.items?.length > 0 && (
+            <ul className="feed-items">
+              {post.items.map((item) => (
+                <li key={item.cardId}>
+                  <strong>{item.found}</strong>
+                  {item.summary && ` ${item.summary}`}
+                </li>
+              ))}
+            </ul>
+          )}
+          {post.more && <Markdown text={post.more} />}
+        </div>
+      )}
       <Media post={post} />
       {why && (
         <p className="card-status why" role="note">
@@ -293,9 +331,23 @@ export function FeedCard({
         />
       )}
       <div className="card-buttons feed-foot">
-        <button type="button" disabled={busy} onClick={onDiscuss}>
-          Discuss
-        </button>
+        {chips.length === 0 ? (
+          <button type="button" disabled={busy} onClick={onDiscuss}>
+            Discuss
+          </button>
+        ) : (
+          chips.map((chip) => (
+            <button
+              key={`${chip.act}-${chip.index}`}
+              type="button"
+              className={chip.act === "offer" ? undefined : "quiet"}
+              disabled={busy}
+              onClick={() => (chip.act === "discuss" ? onDiscuss() : onChip?.(chip))}
+            >
+              {chip.label}
+            </button>
+          ))
+        )}
         <button
           type="button"
           className="quiet"

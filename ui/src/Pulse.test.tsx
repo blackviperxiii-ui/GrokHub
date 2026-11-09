@@ -1,12 +1,23 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { FeedPrompt, FixView, PulseAct, PulseIdea, PulsePage, PulsePost } from "./api";
+import type {
+  FeedPrompt,
+  FixView,
+  PulseAct,
+  PulseIdea,
+  PulsePage,
+  PulsePost,
+  PulseReminded,
+  PulseSeed,
+} from "./api";
 
 const api = vi.hoisted(() => ({
   getPulse: vi.fn<() => Promise<PulsePage>>(),
   pulseAct: vi.fn<(id: string, act: PulseAct) => Promise<PulsePage>>(),
-  pulseDiscuss: vi.fn<(id: string) => Promise<string>>(),
+  pulseDiscuss: vi.fn<(id: string) => Promise<PulseSeed>>(),
+  pulseOffer: vi.fn<(id: string, index: number) => Promise<PulseSeed>>(),
+  pulseRemind: vi.fn<(id: string) => Promise<PulseReminded>>(),
   pulseWhy: vi.fn<(id: string) => Promise<string>>(),
   pulseImage: vi.fn<(name: string) => Promise<string>>(),
   pulseFix: vi.fn<(id: string) => Promise<FixView>>(),
@@ -17,11 +28,12 @@ const api = vi.hoisted(() => ({
 
 vi.mock("./api", () => api);
 
-import { emojiImage, Snippet } from "./FeedCard";
+import { emojiImage, SHOW_REPORT, Snippet } from "./FeedCard";
 import {
   ADD_INTERESTS,
   DAY_END,
   FEED_EMPTY,
+  IGNORED_NOTE,
   MORE_LIKE_NOTE,
   NOT_INTERESTED_NOTE,
   PAGE_SIZE,
@@ -46,6 +58,9 @@ function post(over: Partial<PulsePost> = {}): PulsePost {
     link: "https://blog.rust-lang.org/1.99.html",
     loved: false,
     verdict: null,
+    more: "",
+    items: [],
+    chips: [],
     ...over,
   };
 }
@@ -214,7 +229,10 @@ describe("Pulse", () => {
   it("Love toggles on and off and Discuss hands the post to chat", async () => {
     api.getPulse.mockResolvedValue(PAGE);
     api.pulseAct.mockResolvedValue({ ...PAGE, feed: [post({ loved: true })] });
-    api.pulseDiscuss.mockResolvedValue("Let's talk about this post from my Pulse feed.");
+    api.pulseDiscuss.mockResolvedValue({
+      conversationId: "pulse-post-1",
+      text: "Let's talk about this post from my Pulse feed.",
+    });
     const onRun = vi.fn();
     render(<Pulse onRun={onRun} />);
 
@@ -244,7 +262,67 @@ describe("Pulse", () => {
 
     await userEvent.click(within(card).getByRole("button", { name: "Discuss" }));
     expect(api.pulseDiscuss).toHaveBeenCalledWith("post-1");
-    expect(onRun).toHaveBeenCalledWith("Let's talk about this post from my Pulse feed.");
+    expect(onRun).toHaveBeenCalledWith(
+      "Let's talk about this post from my Pulse feed.",
+      "pulse-post-1",
+    );
+  });
+
+  it("a reported card opens its full report and its chips act on the card", async () => {
+    const crash = post({
+      id: "crash-1",
+      title: "bluetoothd crashed 4 times today",
+      summary: "Your Bluetooth service keeps restarting.",
+      link: "",
+      more: "It stopped with a segfault each time.\n\n**What was checked**\n- 4 crash reports since 9 AM",
+      chips: [
+        { label: "Restart bluetooth", act: "offer", index: 1 },
+        { label: "Discuss", act: "discuss", index: 0 },
+        { label: "Ignore for now", act: "ignore", index: 0 },
+        { label: "Remind me later", act: "remind", index: 0 },
+      ],
+    });
+    api.getPulse.mockResolvedValue({ ...PAGE, feed: [crash] });
+    api.pulseOffer.mockResolvedValue({
+      conversationId: "pulse-crash-1",
+      text: "Restart the bluetooth service.",
+    });
+    api.pulseRemind.mockResolvedValue({
+      page: { ...PAGE, feed: [] },
+      note: "Back tonight, 9:30 PM before you wind down.",
+    });
+    api.pulseAct.mockResolvedValue({ ...PAGE, feed: [crash] });
+    const onRun = vi.fn();
+    render(<Pulse onRun={onRun} />);
+
+    const card = await screen.findByRole("listitem", { name: "bluetoothd crashed 4 times today" });
+    expect(card).not.toHaveTextContent("segfault");
+    await userEvent.click(within(card).getByRole("button", { name: SHOW_REPORT }));
+    expect(card).toHaveTextContent("It stopped with a segfault each time.");
+    expect(card).toHaveTextContent("4 crash reports since 9 AM");
+    // The fix leads; the rest are outlined.
+    const fix = within(card).getByRole("button", { name: "Restart bluetooth" });
+    expect(fix).not.toHaveClass("quiet");
+    expect(within(card).getByRole("button", { name: "Ignore for now" })).toHaveClass("quiet");
+
+    await userEvent.click(fix);
+    expect(api.pulseOffer).toHaveBeenCalledWith("crash-1", 1);
+    expect(onRun).toHaveBeenCalledWith("Restart the bluetooth service.", "pulse-crash-1");
+
+    await userEvent.click(within(card).getByRole("button", { name: "Ignore for now" }));
+    expect(api.pulseAct).toHaveBeenLastCalledWith("crash-1", "ignore");
+    expect(await screen.findByRole("status")).toHaveTextContent(IGNORED_NOTE);
+
+    await userEvent.click(within(card).getByRole("button", { name: "Remind me later" }));
+    expect(api.pulseRemind).toHaveBeenCalledWith("crash-1");
+    await vi.waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "Back tonight, 9:30 PM before you wind down.",
+      ),
+    );
+    expect(
+      screen.queryByRole("listitem", { name: "bluetoothd crashed 4 times today" }),
+    ).not.toBeInTheDocument();
   });
 
   it("a card says where it is from and why, and Read it opens the source", async () => {

@@ -415,8 +415,9 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [canHalt, halt]);
 
-  function ask(text: string) {
-    setPrefill((now) => ({ text, n: (now?.n ?? 0) + 1 }));
+  /** Text for the chat box; with `conversationId`, in that chat (a Pulse card's own). */
+  function ask(text: string, conversationId?: string) {
+    setPrefill((now) => ({ text, n: (now?.n ?? 0) + 1, ...(conversationId ? { conversationId } : {}) }));
     setView("chat");
   }
 
