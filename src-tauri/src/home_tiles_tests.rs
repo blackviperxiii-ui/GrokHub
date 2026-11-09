@@ -210,6 +210,38 @@ fn feed_tiles_read_their_pulse_cards_and_turn_on_in_place() {
 }
 
 #[test]
+fn a_playbooks_row_runs_its_playbook() {
+    let page = crate::playbooks::Page {
+        rows: vec![crate::playbooks::Row {
+            id: "linux_repair".into(),
+            name: "Linux repair".into(),
+            summary: "Fix a broken package".into(),
+            source: "shipped",
+            fits: "Fits repair · linux".into(),
+            steps: "3 steps, up to Safe".into(),
+            text: String::new(),
+        }],
+        problems: Vec::new(),
+    };
+    let v = playbooks_view(&page);
+    assert_eq!(
+        v.rows[0].tap,
+        Some(TileAction::RunPlaybook {
+            id: "linux_repair".into()
+        })
+    );
+    // With none yet, the tile still opens Playbooks to make one.
+    let none = crate::playbooks::Page {
+        rows: Vec::new(),
+        problems: Vec::new(),
+    };
+    assert_eq!(
+        playbooks_view(&none).buttons[0].action,
+        TileAction::settings("playbooks")
+    );
+}
+
+#[test]
 fn an_on_feed_tile_says_what_its_check_found_and_can_turn_off() {
     let on = tiles::feed_view("deals", true, &[], NOW);
     let v = feed_turn(

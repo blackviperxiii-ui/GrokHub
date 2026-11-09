@@ -1367,6 +1367,7 @@ export type TileAction =
   | { kind: "play"; appId: number }
   | { kind: "openClip"; index: number }
   | { kind: "steamFriends" }
+  | { kind: "steamSettings" }
   | { kind: "setup"; module: string; undo: boolean }
   | { kind: "copySetup"; module: string }
   | { kind: "reroll" }
@@ -2310,6 +2311,17 @@ export function homeSetupSteps(module: string): Promise<string> {
 /** Opens Steam's own friends list, for Home's Squad tile. */
 export function libraryFriends(): Promise<void> {
   return invoke<void>("library_friends");
+}
+
+/** Opens Steam's Settings (Game Recording), for Home's Clips tile. */
+export function librarySteamSettings(): Promise<void> {
+  return invoke<void>("library_steam_settings");
+}
+
+/** Starts a playbook on a new Workboard card, for Home's Playbooks tile;
+ * answers with the ask for the chat box. */
+export function homeRunPlaybook(id: string): Promise<BoardWork> {
+  return invoke<BoardWork>("home_run_playbook", { id });
 }
 
 /** Plays the clip at this place in Home's Clips tile with the PC's player. */

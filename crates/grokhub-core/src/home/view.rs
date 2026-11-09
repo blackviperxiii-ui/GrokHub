@@ -128,6 +128,8 @@ pub enum TileAction {
     OpenClip { index: usize },
     /// Open Steam's own friends list, where Steam shows who is online.
     SteamFriends,
+    /// Open Steam's Settings, where Game Recording saves clips.
+    SteamSettings,
     /// Run a module's one-time setup (or its undo) behind the OS's own
     /// password or admin prompt.
     Setup { module: String, undo: bool },

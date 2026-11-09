@@ -416,11 +416,13 @@ pub fn play_url(app_id: u32) -> Result<String, String> {
 
 /// Steam's own friends list, where Steam shows who is online.
 pub const FRIENDS_URL: &str = "steam://open/friends";
+/// Steam's Settings, where Game Recording turns on.
+pub const SETTINGS_URL: &str = "steam://open/settings";
 
 /// The program and arguments that hand a Play URL (or the friends list) to
 /// Steam on this OS, or `None` where there is no Steam client.
 pub fn launcher(os: &str, url: &str) -> Option<(&'static str, Vec<String>)> {
-    if url != FRIENDS_URL {
+    if url != FRIENDS_URL && url != SETTINGS_URL {
         let digits = url.strip_prefix("steam://rungameid/")?;
         if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
             return None;
@@ -486,6 +488,14 @@ pub fn open_friends(steam_root: Option<&Path>) -> Result<(), String> {
         return Err("Steam isn't installed on this computer.".into());
     }
     hand_to_steam(FRIENDS_URL, "your friends list")
+}
+
+/// Steam's Settings, for the Clips tile (Game Recording lives there).
+pub fn open_settings(steam_root: Option<&Path>) -> Result<(), String> {
+    if steam_root.is_none() {
+        return Err("Steam isn't installed on this computer.".into());
+    }
+    hand_to_steam(SETTINGS_URL, "Steam's settings")
 }
 
 #[cfg(test)]

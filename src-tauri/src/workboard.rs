@@ -763,6 +763,29 @@ pub fn start_playbook(
     work(config_dir, id)
 }
 
+/// Home's Playbooks row: a new card named for the playbook, linked to it and
+/// started as Work, like Start a flow on a card. The prompt goes to the chat
+/// box, so nothing runs until it is sent.
+pub fn start_playbook_card(
+    config_dir: &Path,
+    playbook: &str,
+    name: &str,
+    summary: &str,
+) -> Result<Work, String> {
+    if name.trim().is_empty() {
+        return Err("Pick a playbook.".into());
+    }
+    let (id, _) = change(config_dir, |cards| {
+        let mut new = BoardCard::new(&clip(name, TITLE_MAX), &clip(summary, DETAIL_MAX), "");
+        new.status = BoardStatus::Todo;
+        new.rank = end_rank(cards, KanbanColumn::Todo);
+        let id = new.id.clone();
+        cards.push(new);
+        Ok(id)
+    })?;
+    start_playbook(config_dir, &id, playbook, name)
+}
+
 /// Make it recurring: a new automation from the card's title on one of
 /// [`wt::RECUR_CHOICES`], which then owns the card. Its runs report here.
 pub fn make_recurring(

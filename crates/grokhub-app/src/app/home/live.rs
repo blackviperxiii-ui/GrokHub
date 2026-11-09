@@ -55,6 +55,8 @@ pub(super) struct LiveFacts {
     pub stream_app: Option<&'static str>,
     /// Steam friends saved on this PC; `None` with no Steam account here.
     pub steam_friends: Option<usize>,
+    /// Steam is installed on this PC.
+    pub steam_found: bool,
 }
 
 impl LiveFacts {
@@ -90,6 +92,7 @@ static SLOT: Mutex<Slot> = Mutex::new(Slot {
         },
         stream_app: None,
         steam_friends: None,
+        steam_found: false,
     },
     at: None,
     reading: false,
@@ -124,6 +127,7 @@ pub(super) fn live_facts() -> LiveFacts {
                 facts.clips =
                     grokhub_core::clips::recent(&grokhub_core::clips::roots(steam.as_deref()), 8);
                 facts.steam_friends = steam.as_deref().and_then(grokhub_core::steam::friend_count);
+                facts.steam_found = steam.is_some();
                 facts.audio = grokhub_core::audio_check::read_facts();
                 facts.stream_app = grokhub_core::home::tiles::stream_app(
                     &grokhub_desktop::game_guard::running_names(),
