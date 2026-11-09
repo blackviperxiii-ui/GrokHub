@@ -1,7 +1,7 @@
 //! Pulse (cross-platform recode, Phase 3f): the cabin's Feed and Ideas from
 //! the same `updates.json`, ranked by the same rules in `grokhub_core::pulse`.
 //! Not this, Love and Accept write the same MEMORY.md ledger line the cabin
-//! writes, so the next ranking learns from them. Like (Love) and I don't like
+//! writes, so the next ranking learns from them. Like (Love) and Not interested
 //! also train card taste (`grokhub_core::card_taste`), which orders the feed
 //! and steers the writer. Love and Discuss feed the writer's taste summary
 //! (`pulse_feed`). Dismiss and Delete only remove: they carry no weight.
@@ -209,7 +209,7 @@ pub struct Page {
 pub enum Act {
     /// Off the page. Carries no weight: nothing is noted or learned.
     Dismiss,
-    /// I don't like: off the page, and card taste learns from its traits.
+    /// Not interested: off the page, and card taste learns from its traits.
     Dislike,
     NotThis,
     /// Older pages still send "like".
@@ -217,9 +217,13 @@ pub enum Act {
     Love,
     /// Love pressed again: the heart goes. Writes no ledger line.
     Unlove,
-    /// Takes the post away. Not a taste signal: nothing is noted.
+    /// Takes the post away. A small "less of this" in card taste unless
+    /// the card was stale or a finished one-off (then it is housekeeping).
     Delete,
+    /// Hidden until 9 AM; a small "wanted, just not now" in card taste.
     Snooze,
+    /// Read it: the post's source opened. Counts as engagement.
+    Opened,
     /// Let's do it (or Run) took the idea to chat.
     Accept,
     /// More like this: the next idea run writes more in its spirit.
@@ -547,7 +551,7 @@ fn note_less(config_dir: &Path, card: &UpdateCard, now_ms: u64) -> Result<(), St
     })
 }
 
-/// Note a Like or I don't like in card taste, or take a Like back.
+/// Note a Like or Not interested in card taste, or take a Like back.
 fn learn_taste(
     config_dir: &Path,
     card: &UpdateCard,
@@ -575,7 +579,7 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
         return Err("That card is gone. The page now shows what is left.".into());
     };
     let (outcome, shift) = match act {
-        // Dismiss carries no weight; I don't like trains card taste only, so
+        // Dismiss carries no weight; Not interested trains card taste only, so
         // one or two clicks stay small.
         Act::Dismiss | Act::Dislike => (None, None),
         Act::Delete => (Some(Outcome::Dismissed), None),
@@ -584,7 +588,8 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
         Act::Unlove => (None, None),
         Act::MoreLike => (Some(Outcome::Accepted), Some(true)),
         Act::Snooze => (Some(Outcome::Snoozed), None),
-        Act::Ignore => (None, None),
+        // Opened goes through `engaged`, which notes the tap itself.
+        Act::Ignore | Act::Opened => (None, None),
     };
     let remove = |cards: &mut Vec<UpdateCard>| {
         if card.kind == UpdateKind::Idea {
@@ -641,13 +646,25 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
             }
         }
         Act::Delete => {
+            let housekeeping = grokhub_core::card_offers::stale(&card, now_ms)
+                || grokhub_core::card_offers::one_off(&card);
+            if card.kind != UpdateKind::Idea && !housekeeping {
+                learn_taste(config_dir, &card, Some(Reaction::Delete), None, now_ms)?;
+            }
             let before = cards.len();
             cards.retain(|c| c.id != id);
             cards.len() != before
         }
         Act::Snooze => {
+            if card.kind != UpdateKind::Idea {
+                learn_taste(config_dir, &card, Some(Reaction::Snooze), None, now_ms)?;
+            }
             let until = pc::snooze_until(now_ms, day.hour, day.minute);
             pc::snooze_card(&mut cards, id, until)
+        }
+        Act::Opened => {
+            engaged(config_dir, &card, now_ms)?;
+            grokhub_core::mark_update_opened(&mut cards, id)
         }
         Act::Ignore => remove(&mut cards),
         Act::Accept => {
@@ -662,6 +679,8 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
         }
         Act::NotInterested => {
             note(&card.title, LedgerReason::NotThis, &day.date)?;
+            // The one dislike button on an idea: card taste learns from it too.
+            learn_taste(config_dir, &card, Some(Reaction::Dislike), None, now_ms)?;
             idea_feedback(config_dir, &card, InterestSignal::NotInterested, now_ms)?;
             pulse_feed::with_ideas_state(config_dir, |s| s.note_not_interested(&card.title))?;
             remove(&mut cards)
@@ -731,6 +750,9 @@ pub const DISCUSS_ASK: &str = "Tell me more about this.";
 
 fn engaged(config_dir: &Path, card: &UpdateCard, now_ms: u64) -> Result<(), String> {
     react(config_dir, card, Outcome::Tapped, None, now_ms);
+    if card.kind != UpdateKind::Idea {
+        learn_taste(config_dir, card, Some(Reaction::Engage), None, now_ms)?;
+    }
     pulse_feed::with_state(config_dir, |s| {
         s.note_engaged(now_ms);
         s.note_taste(TasteKind::Discuss, &card.title, now_ms);
@@ -815,6 +837,12 @@ pub fn remind(config_dir: &Path, id: &str, day: &Day, now_ms: u64) -> Result<Rem
         wind_down: wind_down_hour(config_dir),
         start: None,
     });
+    if let Some(card) = cards
+        .iter()
+        .find(|c| c.id == id && c.kind != UpdateKind::Idea)
+    {
+        learn_taste(config_dir, card, Some(Reaction::Snooze), None, now_ms)?;
+    }
     if pc::snooze_card(&mut cards, id, later.at_ms) {
         save(config_dir, &cards)?;
     }
@@ -1289,7 +1317,12 @@ mod tests {
         let mem = memory().replace("\r\n", "\n");
         assert!(mem.ends_with("reason=liked\n"), "{mem:?}");
         let taste = card_taste::load(&d.config);
-        assert_eq!(taste.events.len(), 1, "only the Love: {taste:?}");
+        let kinds: Vec<Reaction> = taste.events.iter().map(|e| e.reaction).collect();
+        assert_eq!(
+            kinds,
+            [Reaction::Like, Reaction::Snooze],
+            "none from Dismiss"
+        );
         assert_eq!(
             act(&d.config, "nope", Act::Dismiss, &day(), NOW),
             Err("That card is gone. The page now shows what is left.".to_string())
@@ -1309,7 +1342,7 @@ mod tests {
             "Like taken back"
         );
         let page = act(&d.config, "post-1", Act::Dislike, &day(), NOW).expect("dislike");
-        assert!(page.feed.is_empty(), "I don't like takes it off the page");
+        assert!(page.feed.is_empty(), "Not interested takes it off the page");
         let taste = card_taste::load(&d.config);
         assert_eq!(taste.events.len(), 1);
         assert_eq!(taste.events[0].reaction, Reaction::Dislike);
@@ -1334,6 +1367,40 @@ mod tests {
         let d = dirs("offers-plain", &plain);
         let post = &load(&d.config, None, NOW).expect("load").feed[0];
         assert!(post.snooze && post.delete, "{post:?}");
+    }
+
+    #[test]
+    fn open_snooze_and_delete_feed_card_taste_lightly() {
+        let mut cards = sample();
+        cards[1].kind = UpdateKind::Suggestion;
+        let d = dirs("signals", &cards);
+        act(&d.config, "post-1", Act::Opened, &day(), NOW).expect("opened");
+        act(&d.config, "post-1", Act::Snooze, &day(), NOW).expect("snooze");
+        let kinds: Vec<Reaction> = card_taste::load(&d.config)
+            .events
+            .iter()
+            .map(|e| e.reaction)
+            .collect();
+        assert_eq!(kinds, [Reaction::Engage, Reaction::Snooze]);
+        // A fresh card deleted is a small "less of this".
+        let d = dirs("signals-delete", &cards);
+        act(&d.config, "post-1", Act::Delete, &day(), NOW).expect("delete");
+        let taste = card_taste::load(&d.config);
+        assert_eq!(taste.events.len(), 1);
+        assert_eq!(taste.events[0].reaction, Reaction::Delete);
+        // A finished run deleted is housekeeping: nothing learned.
+        let d = dirs("signals-housekeeping", &sample());
+        act(&d.config, "post-1", Act::Delete, &day(), NOW).expect("delete");
+        assert!(card_taste::load(&d.config).events.is_empty());
+    }
+
+    #[test]
+    fn not_interested_on_an_idea_is_the_one_dislike_for_card_taste() {
+        let d = dirs("idea-dislike", &sample());
+        act(&d.config, "idea-1", Act::NotInterested, &day(), NOW).expect("not interested");
+        let taste = card_taste::load(&d.config);
+        assert_eq!(taste.events.len(), 1);
+        assert_eq!(taste.events[0].reaction, Reaction::Dislike);
     }
 
     #[test]

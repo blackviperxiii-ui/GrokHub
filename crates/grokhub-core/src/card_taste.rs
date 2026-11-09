@@ -43,6 +43,26 @@ const RANK_CAP: f64 = 3.0;
 pub enum Reaction {
     Like,
     Dislike,
+    /// Opened the card's source or its own chat (Read it, Discuss, a fix).
+    Engage,
+    /// Hidden until later: wanted, just not now.
+    Snooze,
+    /// Removed for good: a little against what it is about.
+    Delete,
+}
+
+impl Reaction {
+    /// Which way the reaction leans (+1 or -1) and how much one counts
+    /// against a Like or I don't like (1.0). Dismiss is never recorded.
+    pub fn lean(self) -> (f64, f64) {
+        match self {
+            Self::Like => (1.0, 1.0),
+            Self::Dislike => (-1.0, 1.0),
+            Self::Engage => (1.0, 0.5),
+            Self::Snooze => (1.0, 0.15),
+            Self::Delete => (-1.0, 0.3),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -173,13 +193,10 @@ impl Taste {
         for _ in 0..STEPS {
             let mut grad: BTreeMap<String, f64> = w.keys().map(|k| (k.clone(), 0.0)).collect();
             for e in &self.events {
-                let y = match e.reaction {
-                    Reaction::Like => 1.0,
-                    Reaction::Dislike => -1.0,
-                };
+                let (y, weight) = e.reaction.lean();
                 let margin: f64 = e.traits.iter().map(|t| w[t]).sum();
-                // d/dw of log(1 + exp(-y·margin)).
-                let g = -y * sigmoid(-y * margin);
+                // d/dw of weight·log(1 + exp(-y·margin)).
+                let g = -y * weight * sigmoid(-y * margin);
                 for t in &e.traits {
                     if let Some(v) = grad.get_mut(t) {
                         *v += g;

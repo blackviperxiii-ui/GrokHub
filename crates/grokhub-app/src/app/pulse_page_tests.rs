@@ -593,14 +593,14 @@ fn pulse_feed_shows_posts_with_cached_source_images_and_a_placeholder() {
             "missing {want:?} in {texts:?}"
         );
     }
-    // Every post has one row: Like, its chips, I don't like, Dismiss.
+    // Every post has one row: Like, its chips, Not interested, Dismiss.
     let count = |want: &str| texts.iter().filter(|t| t.as_str() == want).count();
     assert_eq!(
         (
             count("Like"),
             count("Ignore for now"),
             count("Remind me later"),
-            count("I don't like"),
+            count("Not interested"),
             count("Dismiss"),
         ),
         (2, 2, 2, 2, 2)
@@ -1406,7 +1406,7 @@ fn every_post_shows_one_row_like_first_dismiss_last() {
     };
     let now = now_ms();
 
-    // Done for you: Like, Undo, "Don't do this again", I don't like, Dismiss.
+    // Done for you: Like, Undo, "Don't do this again", Not interested, Dismiss.
     let dfy = grokhub_core::done_for_you_card(
         "Turned off the notes connection",
         "It failed every start.",
@@ -1426,7 +1426,7 @@ fn every_post_shows_one_row_like_first_dismiss_last() {
             "Undo",
             "Don't do this again",
             "Delete",
-            "I don't like",
+            "Not interested",
             "Dismiss"
         ]
     );
@@ -1447,7 +1447,7 @@ fn every_post_shows_one_row_like_first_dismiss_last() {
             "Too easy",
             "Too hard",
             "Delete",
-            "I don't like",
+            "Not interested",
             "Dismiss"
         ]
     );
@@ -1618,7 +1618,7 @@ fn a_plain_post_shows_its_chips_between_like_and_dismiss() {
             ),
             // A finished run is a one-off: Delete, not Snooze.
             ("Delete".to_string(), FeedPostAct::Delete),
-            ("I don't like".to_string(), FeedPostAct::Dislike),
+            ("Not interested".to_string(), FeedPostAct::Dislike),
             ("Dismiss".to_string(), FeedPostAct::Dismiss),
         ]
     );
