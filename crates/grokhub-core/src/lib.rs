@@ -191,6 +191,7 @@ pub mod skill;
 pub mod slash;
 pub mod ssrf;
 pub mod stardew_saves;
+pub mod startup_apps;
 pub mod state;
 pub mod static_embed;
 pub mod steam;

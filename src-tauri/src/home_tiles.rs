@@ -49,7 +49,7 @@ pub fn view(module: &str, src: &Sources<'_>) -> Option<TileView> {
         }
     };
     let v = match module {
-        "pc_loadout" => pc_only(&|| pc_view(&machine(src.config_dir))),
+        "pc_loadout" => pc_only(&|| pc_view(&machine(src.config_dir), &pc_extras())),
         "speeds" => speeds_view(&grokhub_core::net_log::load(src.config_dir), now),
         "frame_rate" => frame_rate(),
         "storage" => pc_only(&|| storage_view(&drives())),
@@ -376,6 +376,64 @@ fn machine(config_dir: &Path) -> local_ai::Machine {
     m
 }
 
+/// Temperatures and what starts with the PC, for PC Loadout.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PcExtras {
+    pub cpu_c: Option<i32>,
+    pub gpu_c: Option<i32>,
+    /// `None` where this OS has no reader.
+    pub startup: Option<Vec<String>>,
+}
+
+/// Temps are read at most every half minute (`nvidia-smi` is a process),
+/// startup apps every ten minutes (`reg query` on Windows).
+fn pc_extras() -> PcExtras {
+    const TEMPS_EVERY: Duration = Duration::from_secs(30);
+    type Temps = (Option<i32>, Option<i32>);
+    static TEMPS: Mutex<Option<(Instant, Temps)>> = Mutex::new(None);
+    static STARTUP: Mutex<Option<(Instant, Option<Vec<String>>)>> = Mutex::new(None);
+    let (cpu_c, gpu_c) = {
+        let mut slot = TEMPS.lock().unwrap_or_else(|e| e.into_inner());
+        match slot.as_ref() {
+            Some((at, temps)) if at.elapsed() < TEMPS_EVERY => *temps,
+            _ => {
+                let (cpu, gpu) = (
+                    grokhub_agent::device::cpu_temp_c(),
+                    grokhub_agent::device::gpu_temp_c(),
+                );
+                *slot = Some((Instant::now(), (cpu, gpu)));
+                (cpu, gpu)
+            }
+        }
+    };
+    let startup = {
+        let mut slot = STARTUP.lock().unwrap_or_else(|e| e.into_inner());
+        match slot.as_ref() {
+            Some((at, apps)) if at.elapsed() < MACHINE_EVERY => apps.clone(),
+            _ => {
+                let home = grokhub_core::paths::user_home().unwrap_or_default();
+                let apps = grokhub_agent::device::startup_apps(&home);
+                *slot = Some((Instant::now(), apps.clone()));
+                apps
+            }
+        }
+    };
+    PcExtras {
+        cpu_c,
+        gpu_c,
+        startup,
+    }
+}
+
+fn temp_row(label: &str, c: i32, hot: f32) -> TileRow {
+    let tone = if c as f32 >= hot {
+        Tone::Warn
+    } else {
+        Tone::Normal
+    };
+    TileRow::new(label, format!("{c}°C"), tone)
+}
+
 fn mb_text(mb: u64) -> String {
     if mb >= 1024 {
         format!("{:.0} GB", mb as f64 / 1024.0)
@@ -391,7 +449,7 @@ fn main_gpu(gpus: &[Gpu]) -> Option<&Gpu> {
         .or_else(|| gpus.first())
 }
 
-pub fn pc_view(m: &local_ai::Machine) -> TileView {
+pub fn pc_view(m: &local_ai::Machine, extras: &PcExtras) -> TileView {
     let gpu = main_gpu(&m.gpus);
     let big = gpu.map_or_else(|| "This PC".to_string(), |g| g.name.clone());
     let caption = match (gpu.filter(|g| g.vram_mb > 0), m.ram_mb) {
@@ -401,6 +459,13 @@ pub fn pc_view(m: &local_ai::Machine) -> TileView {
         (None, None) => "Hardware not read yet".to_string(),
     };
     let mut rows = Vec::new();
+    use grokhub_core::pc_health::{CPU_HOT_C, GPU_HOT_C};
+    if let Some(c) = extras.gpu_c {
+        rows.push(temp_row("GPU temp", c, GPU_HOT_C));
+    }
+    if let Some(c) = extras.cpu_c {
+        rows.push(temp_row("CPU temp", c, CPU_HOT_C));
+    }
     if let Some(g) = gpu.filter(|g| !g.driver.trim().is_empty()) {
         rows.push(TileRow::new("GPU driver", g.driver.trim(), Tone::Normal));
     }
@@ -414,6 +479,13 @@ pub fn pc_view(m: &local_ai::Machine) -> TileView {
             Tone::Normal
         };
         rows.push(TileRow::new("Free for models", mb_text(free), tone));
+    }
+    if let Some(apps) = &extras.startup {
+        rows.push(TileRow::new(
+            "Startup apps",
+            grokhub_core::startup_apps::summary(apps),
+            Tone::Normal,
+        ));
     }
     TileView::ready(TileText::new(big, caption, Tone::Normal))
         .rows(rows)
@@ -457,19 +529,23 @@ pub fn speeds_view(log: &grokhub_core::net_log::NetLog, now: u64) -> TileView {
         )
         .detail(drops_line),
     };
-    let rows = log
-        .speed
-        .iter()
-        .rev()
-        .take(ROWS)
-        .map(|s| {
-            TileRow::new(
-                grokhub_core::pulse::ago_label(s.at_ms, now),
-                format!("{:.0} Mbps", s.mbps),
-                Tone::Normal,
-            )
-        })
-        .collect();
+    // Connect time to public DNS, measured by the probe once a minute.
+    let mut rows: Vec<TileRow> = Vec::new();
+    if let Some(ms) = log.ping(now) {
+        let slow = ms > grokhub_core::net_log::SLOW_MS;
+        let tone = if slow { Tone::Warn } else { Tone::Normal };
+        rows.push(TileRow::new("Ping", format!("{ms} ms"), tone));
+        if let Some(j) = log.jitter() {
+            rows.push(TileRow::new("Jitter", format!("{j} ms"), Tone::Normal));
+        }
+    }
+    rows.extend(log.speed.iter().rev().take(ROWS).map(|s| {
+        TileRow::new(
+            grokhub_core::pulse::ago_label(s.at_ms, now),
+            format!("{:.0} Mbps", s.mbps),
+            Tone::Normal,
+        )
+    }));
     let at = log.speed.last().map(|s| s.at_ms);
     let mut v = TileView::ready(text).rows(rows);
     v.updated_ms = at;
