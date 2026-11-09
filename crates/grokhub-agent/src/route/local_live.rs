@@ -8,6 +8,7 @@ use grokhub_core::local_draft::Decision;
 use grokhub_core::local_setup;
 
 use super::local_autoconfig::LaunchArgs;
+use super::local_scale::Mode;
 use super::local_sidecar;
 use super::local_spec;
 use super::local_swap::StandIn;
@@ -42,6 +43,8 @@ pub struct LocalLive {
     pub kept_loaded: bool,
     /// Why a model other than the Settings pick runs.
     pub stand_in: Option<StandIn>,
+    /// The scaling mode, as a read-only label.
+    pub mode: Mode,
     /// The model's refusal check on this PC, once it has run.
     pub refusal: Option<String>,
 }
@@ -62,6 +65,7 @@ pub fn place_of(a: Option<&LaunchArgs>, bare_cpu: bool) -> Place {
 /// The on-device model as it is now.
 pub fn snapshot(_config_dir: &Path) -> LocalLive {
     let kept_loaded = local_sidecar::keep_loaded();
+    let scale = super::local_scale::scale_now(local_sidecar::unix_ms());
     let Some(l) = local_sidecar::loaded() else {
         return LocalLive {
             model: None,
@@ -75,6 +79,7 @@ pub fn snapshot(_config_dir: &Path) -> LocalLive {
             unload_in_secs: None,
             kept_loaded,
             stand_in: None,
+            mode: super::local_swap::mode(None, &scale),
             refusal: None,
         };
     };
@@ -101,6 +106,7 @@ pub fn snapshot(_config_dir: &Path) -> LocalLive {
         unload_in_secs: (!busy && !kept_loaded).then(|| l.idle_unload_secs.saturating_sub(idle)),
         kept_loaded,
         stand_in: l.stand_in,
+        mode: super::local_swap::mode(l.stand_in, &scale),
         refusal: local_spec::refusal_line(&l.model),
     }
 }
@@ -115,12 +121,16 @@ fn minutes(secs: u64) -> String {
 /// The running-model rows, plainest first.
 pub fn lines(l: &LocalLive) -> Vec<String> {
     let Some(model) = &l.model else {
-        return vec![if l.kept_loaded {
+        let mut out = vec![if l.kept_loaded {
             "Running now: nothing. The model loads with the next reply and then stays loaded."
                 .to_string()
         } else {
             "Running now: nothing. The model loads with the next reply.".to_string()
         }];
+        if l.mode != Mode::Balanced {
+            out.push(l.mode.line().to_string());
+        }
+        return out;
     };
     let name = match &l.quant {
         Some(q) => format!("{model} ({q})"),
@@ -142,6 +152,7 @@ pub fn lines(l: &LocalLive) -> Vec<String> {
     if let Some(why) = l.stand_in {
         out.push(why.line().to_string());
     }
+    out.push(l.mode.line().to_string());
     let mut speed = match l.tok_s {
         Some(t) => format!("Last reply: {t:.0} tok/s"),
         None => "Last reply: none since it loaded".to_string(),
@@ -208,6 +219,7 @@ mod tests {
             unload_in_secs: Some(240),
             kept_loaded: false,
             stand_in: None,
+            mode: Mode::Balanced,
             refusal: None,
         }
     }
@@ -218,6 +230,7 @@ mod tests {
             lines(&loaded()),
             [
                 "Running now: Gemma 4 12B (Q4_K), loaded on the GPU, 6.9 GB.",
+                "Mode: Balanced. The model is picked for each task from what's free right now.",
                 "Last reply: 41 tok/s, with room for 16,384 tokens of chat.",
                 "Draft model: Gemma 4 12B draft model is on and kept 63% of its guesses so far.",
                 "Unloads after 4 minutes without replies.",
@@ -249,20 +262,21 @@ mod tests {
             got[0],
             "Running now: Gemma 4 12B (Q4_K), answering on the GPU and in RAM (20 of 49 layers on the GPU), 6.9 GB."
         );
+        assert_eq!(got[1], Mode::Balanced.line());
         assert_eq!(
-            got[1],
+            got[2],
             "Last reply: none since it loaded, with room for 16,384 tokens of chat."
         );
-        assert_eq!(got[2], "Draft model: Gemma 4 31B draft model is off because there isn't room for the model and its draft model together.");
+        assert_eq!(got[3], "Draft model: Gemma 4 31B draft model is off because there isn't room for the model and its draft model together.");
         assert_eq!(
-            got[3],
+            got[4],
             "Stays loaded until you close the app or a game needs the memory."
         );
         let needs = LocalLive {
             draft: Some(("X".into(), Decision::NeedsTest, None)),
             ..loaded()
         };
-        assert!(lines(&needs)[2].contains("happens on its own when the computer is idle"));
+        assert!(lines(&needs)[3].contains("happens on its own when the computer is idle"));
     }
 
     #[test]
@@ -288,6 +302,7 @@ mod tests {
             unload_in_secs: None,
             kept_loaded,
             stand_in: None,
+            mode: Mode::Balanced,
             refusal: None,
         }
     }
@@ -302,12 +317,26 @@ mod tests {
     fn a_smaller_model_standing_in_for_the_pick_says_why() {
         let l = LocalLive {
             stand_in: Some(StandIn::LowBattery),
+            mode: Mode::Balanced,
             ..loaded()
         };
         let rows = lines(&l);
         assert!(rows[0].starts_with("Running now: "));
         assert_eq!(rows[1], StandIn::LowBattery.line());
+        assert_eq!(rows[2], Mode::Balanced.line());
         assert!(!lines(&loaded()).iter().any(|r| r.contains("smaller model")));
+        let gaming = LocalLive {
+            mode: Mode::Gaming,
+            ..snapshot_empty(false)
+        };
+        assert_eq!(
+            lines(&gaming),
+            [
+                "Running now: nothing. The model loads with the next reply.",
+                "Mode: Gaming. A lighter model answers on the CPU, so your game keeps the GPU.",
+            ],
+            "with nothing loaded only Gaming is worth a row"
+        );
     }
 
     #[test]
@@ -317,8 +346,12 @@ mod tests {
             ..loaded()
         };
         let rows = lines(&l);
+        let draft = rows
+            .iter()
+            .position(|r| r.starts_with("Draft model:"))
+            .unwrap();
         assert_eq!(
-            rows[3],
+            rows[draft + 1],
             "Refusal check: answered 12 of 12 everyday asks on this PC."
         );
         assert!(!lines(&loaded())
