@@ -1032,6 +1032,10 @@ impl Cabin {
         }
         config::ensure_memory_seeds();
         grokhub_agent::device::start(setup_wizard::home(), config::config_dir());
+        // The learning engine: chips, cards and runs record to it from here
+        // on. Not from tests, whose config folder can be the real one.
+        #[cfg(not(test))]
+        grokhub_core::learn::hub::start(&config::config_dir());
         let mut hub = load_hub_state(&config::hub_state_path()).unwrap_or_else(HubState::empty);
         if !cfg.device_name.trim().is_empty() {
             hub.device_name = cfg.device_name.clone();
@@ -5218,6 +5222,8 @@ impl eframe::App for Cabin {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         // No background run outlives the cabin.
         self.kill_bg_runs();
+        // What the learning engine holds in memory is written on the way out.
+        grokhub_core::learn::hub::flush();
         self.halt_background();
         self.halt_in_flight_for("the app closed");
         if self.hub_on {
