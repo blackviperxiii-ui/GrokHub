@@ -103,6 +103,8 @@ jobs:
         with:
           ref: ${{ needs.plan.outputs.sha }}
           fetch-depth: 0
+          # Build scripts run here; keep the job token out of .git/config.
+          persist-credentials: false
       # The planned SHA checks out detached; name it beta so build.rs labels the
       # binaries `X.Y.Z-beta.N (beta @ sha)` like a beta checkout would.
       - name: Label the beta build
@@ -148,6 +150,8 @@ jobs:
         with:
           ref: ${{ needs.plan.outputs.sha }}
           fetch-depth: 0
+          # Build scripts run here; keep the job token out of .git/config.
+          persist-credentials: false
       # The planned SHA checks out detached; name it beta so build.rs labels the
       # binaries `X.Y.Z-beta.N (beta @ sha)` like a beta checkout would.
       - name: Label the beta build
@@ -290,6 +294,8 @@ jobs:
         with:
           ref: ${{ needs.plan.outputs.sha }}
           fetch-depth: 0
+          # Build scripts run here; keep the job token out of .git/config.
+          persist-credentials: false
       - name: Label the beta build
         if: needs.plan.outputs.beta == 'true'
         shell: bash
@@ -297,7 +303,9 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-          cache: npm
+          # Same rule as rust-cache: only beta pushes use a cache. Tags and the
+          # nightly can reach main's cache scope, so they never read or write one.
+          cache: ${{ github.ref == 'refs/heads/beta' && 'npm' || '' }}
           cache-dependency-path: ui/package-lock.json
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
