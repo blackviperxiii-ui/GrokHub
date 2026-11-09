@@ -15,7 +15,7 @@ use std::time::Instant;
 use grokhub_core::autotune::chat::{self as auto_chat, SettingAsk};
 use grokhub_core::autotune::plan::{self, Change, Moment};
 use grokhub_core::autotune::questions::{self, Pace, Qid};
-use grokhub_core::autotune::rules::{Signals, Usage};
+use grokhub_core::autotune::rules::Signals;
 use grokhub_core::autotune::settings::{
     self as auto_settings, describe, lower_first, Key, Target, Value,
 };
@@ -337,7 +337,8 @@ impl Tuner<'_> {
         Signals {
             device,
             answers: self.store().answers.clone(),
-            usage: Usage::default(),
+            // What the learning engine saw of how the app is used.
+            usage: grokhub_core::learn::hub::auto_usage(grokhub_core::now_ms()),
             current,
         }
     }

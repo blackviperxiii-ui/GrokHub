@@ -1,0 +1,1 @@
+- Auto setup now reads the learning engine in both apps. When about 30 rows of quick chips have gone by with none picked, it offers to turn suggestions off, and it never switches them off on its own. The desktop app used to pass auto setup no usage at all, and the cabin never filled this count.

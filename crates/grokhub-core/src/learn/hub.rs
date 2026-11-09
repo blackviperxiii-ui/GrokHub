@@ -106,3 +106,8 @@ pub fn forget_all() -> Result<(), String> {
         None => Ok(()),
     }
 }
+
+/// The usage counts auto setup reads. All zero before [`start`].
+pub fn auto_usage(now_ms: u64) -> crate::autotune::rules::Usage {
+    read(|e| super::setup::usage(e.beliefs(), now_ms)).unwrap_or_default()
+}

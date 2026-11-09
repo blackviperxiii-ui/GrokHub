@@ -20,6 +20,7 @@
 pub mod belief;
 pub mod hub;
 pub mod ladder;
+pub mod setup;
 pub mod signal;
 pub mod sources;
 pub mod store;
