@@ -1,6 +1,7 @@
 //! Settings → AI & chat → Download models: every catalog model by tab
 //! (Chat, Drafts, Image, Voice, Other) with its fit, what it is for, and
-//! Download, Remove or In use, plus Download all that fit. Downloads run one
+//! Download, Remove or In use, plus the best lineup for this PC (one model
+//! per goal for hot-swap) and Download everything that fits. Downloads run one
 //! at a time through the same downloader as the model picker; a queued chat
 //! model doesn't replace the one in use, the router picks among them.
 
@@ -11,6 +12,7 @@ use grokhub_core::local_picker::{BenchCache, Profile};
 use grokhub_core::local_setup::{CpuSimd, LocalModel, ModelKind, ModelTab};
 use grokhub_core::model_download as md;
 use grokhub_core::model_library::{self as lib, Fit, Row};
+use grokhub_core::model_lineup as lineup;
 
 use super::model_download_ui::{drafters_dir, free_disk_now};
 use super::setup_wizard::models_dir;
@@ -74,18 +76,26 @@ impl Cabin {
             return;
         }
         let free = free_disk_now().or(self.setup.hw.as_ref().map(|hw| hw.free_disk_mb));
-        let tab_q = lib::queue(&rows, Some(tab), free);
+        // The best lineup for this PC, one model per goal, for hot-swap to
+        // switch between. What it fetches shows before the click.
+        let lineup = self.library_lineup(&rows, free);
+        match lineup {
+            Some(l) if !l.queue.is_empty() => {
+                if crate::cards::settings_action(
+                    ui,
+                    "Best lineup for this PC",
+                    &lineup::lineup_line(&l),
+                    "Download lineup",
+                ) {
+                    self.download_all(l.queue);
+                }
+                return;
+            }
+            Some(l) => crate::cards::settings_note(ui, &lineup::lineup_line(&l)),
+            None => {}
+        }
         let all_q = lib::queue(&rows, None, free);
-        if !tab_q.is_empty()
-            && crate::cards::settings_action(
-                ui,
-                "Download all that fit on this tab",
-                &lib::queue_line(&tab_q),
-                "Download all",
-            )
-        {
-            self.download_all(tab_q);
-        } else if all_q.len() > tab_q.len()
+        if !all_q.is_empty()
             && crate::cards::settings_action(
                 ui,
                 "Download everything that fits",
@@ -95,6 +105,14 @@ impl Cabin {
         {
             self.download_all(all_q);
         }
+    }
+
+    /// The recommended lineup from the hardware reading the setup already
+    /// made on this PC; nothing is stored or sent.
+    fn library_lineup(&self, rows: &[Row], free: Option<u64>) -> Option<lineup::Lineup> {
+        let hw = self.setup.hw.as_ref()?;
+        let p = Profile::from_hardware(hw, CpuSimd::detect());
+        Some(lineup::recommend(rows, &p, free))
     }
 
     fn ui_library_row(&mut self, ui: &mut egui::Ui, r: &Row, rows: &[Row]) {
@@ -248,11 +266,17 @@ mod tests {
         for want in [
             format!("Chat ({chat})"),
             "Image (3)".to_string(),
-            "Download all".to_string(),
+            "Download lineup".to_string(),
             "Download Gemma 4 12B".to_string(),
         ] {
             assert!(t.contains(&want), "missing {want:?} in {t:?}");
         }
+        // The lineup says what it fetches and for which goal before the click.
+        assert!(
+            t.iter()
+                .any(|x| x.contains("Balance: ") && x.contains("Video: ")),
+            "{t:?}"
+        );
         app.setup.lib_tab = Some(ModelTab::Image);
         let t = texts(&mut app);
         // The picture models and the guard that checks their pictures.
