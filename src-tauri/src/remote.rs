@@ -1013,6 +1013,8 @@ mod tests {
             "auto_setup",
             "set_api_key",
             "clear_api_key",
+            "get_learned",
+            "learned_act",
             "get_interests",
             "add_interest",
             "interest_act",

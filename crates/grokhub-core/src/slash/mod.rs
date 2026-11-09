@@ -53,6 +53,9 @@ pub enum Slash {
     Compact,
     Skill(String),
     LearnReflect,
+    /// `/learned`, `/learned forget <id>`, `/learned wrong <id>`: what the
+    /// learning engine holds. The text after the command, as typed.
+    Learned(String),
     Update,
     Help,
     New,
@@ -236,6 +239,7 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::Compact => "compact",
         Slash::Skill(_) => "skill",
         Slash::LearnReflect => "reflect",
+        Slash::Learned(_) => "learned",
         Slash::Update => "update",
         Slash::Help => "help",
         Slash::New => "new",
@@ -383,6 +387,12 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
         cmd: "/learn",
         hint: "Run self-improve reflect",
         insert: "/learn",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/learned",
+        hint: "What the app learned, and how sure it is",
+        insert: "/learned",
         run_on_pick: true,
     },
     SlashDef {
@@ -907,6 +917,7 @@ pub fn slash_help() -> String {
         "/skills restore <name> — bring back a skill that was removed, from its kept copy",
         "/connections changes — connections {product} added, changed, or turned off on its own, each with Undo",
         "/automations changes — automations {product} made or changed on its own, each with Undo",
+        "/learned — what {product} learned from how you use it; /learned forget <id> or /learned wrong <id> to overrule a line",
         "/plugins /marketplace /mcps — connectors",
         "/hooks — open Connectors with the Hooks section in view",
         "/imagine-video <prompt> — Imagine video",
@@ -1069,6 +1080,12 @@ mod tests {
         assert_eq!(parse_slash("/learn reflect"), Some(Slash::LearnReflect));
         assert_eq!(parse_slash("/LEARN"), Some(Slash::LearnReflect));
         assert_eq!(parse_slash("/learn now"), Some(Slash::LearnReflect));
+        assert_eq!(parse_slash("/learned"), Some(Slash::Learned(String::new())));
+        assert_eq!(
+            parse_slash("/learned forget card:suggestion"),
+            Some(Slash::Learned("forget card:suggestion".into()))
+        );
+        assert_eq!(slash_kind(&Slash::Learned(String::new())), "learned");
         let learn = grok_command_hits(&["learn".into(), "create-skill".into()]);
         assert!(!learn.iter().any(|h| h.cmd == "/learn"), "{learn:?}");
         assert!(learn.iter().any(|h| h.cmd == "/create-skill"), "{learn:?}");

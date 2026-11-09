@@ -10,7 +10,8 @@ use std::path::Path;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
-use super::{Engine, Signal};
+use super::view::{self, View};
+use super::{Engine, Signal, Subject};
 
 /// How often the writer thread looks for work. It writes only what
 /// [`Engine::tick`] says is due, so most looks do nothing.
@@ -77,4 +78,31 @@ pub fn flush() {
 /// Reads the engine, e.g. to list the beliefs. `None` before [`start`].
 pub fn read<R>(f: impl FnOnce(&Engine) -> R) -> Option<R> {
     engine().map(|e| f(&e))
+}
+
+/// What the app learned, as lines. Empty before [`start`].
+pub fn view(now_ms: u64) -> View {
+    read(|e| view::view(e.beliefs(), now_ms)).unwrap_or_default()
+}
+
+/// The user's Forget on one belief. Saved at once.
+pub fn forget(key: &Subject) {
+    if let Some(mut e) = engine() {
+        e.forget(key, crate::now_ms());
+    }
+}
+
+/// The user's "That's wrong" on one belief. Saved at once.
+pub fn mark_wrong(key: &Subject) {
+    if let Some(mut e) = engine() {
+        e.mark_wrong(key, crate::now_ms());
+    }
+}
+
+/// The user's Forget everything.
+pub fn forget_all() -> Result<(), String> {
+    match engine() {
+        Some(mut e) => e.forget_all(),
+        None => Ok(()),
+    }
 }

@@ -2197,6 +2197,23 @@ async fn home_open_clip(index: usize) -> Result<(), String> {
     off_main(move || home_tiles::open_clip(index)).await?
 }
 
+/// Settings → Privacy & data → What the app learned: the learning engine's
+/// beliefs as lines (`grokhub_core::learn::view`), the same ones the cabin's
+/// `/learned` prints.
+#[tauri::command]
+async fn get_learned() -> Result<grokhub_core::learn::view::View, String> {
+    off_main(|| grokhub_core::learn::hub::view(grokhub_core::now_ms())).await
+}
+
+/// Forget, That's wrong or Forget everything. Saved at once; the list comes
+/// back as it is after.
+#[tauri::command]
+async fn learned_act(
+    act: grokhub_core::learn::view::Act,
+) -> Result<grokhub_core::learn::view::View, String> {
+    off_main(move || grokhub_core::learn::view::act(act, grokhub_core::now_ms())).await?
+}
+
 #[tauri::command]
 async fn get_interests(state: State<'_, ShellState>) -> Result<interests::Page, String> {
     capabilities::needs(capabilities::current().pulse, "Pulse")?;
@@ -3536,6 +3553,8 @@ pub fn run() {
             get_skills,
             open_skill_folder,
             set_skill_on,
+            get_learned,
+            learned_act,
             get_interests,
             add_interest,
             interest_act,
