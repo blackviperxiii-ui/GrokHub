@@ -183,3 +183,35 @@ fn feed_tiles_read_their_pulse_cards_and_say_where_the_switch_is() {
     assert_eq!(feed("deals", &d, NOW).state, TileState::Off);
     let _ = std::fs::remove_dir_all(&d);
 }
+
+#[test]
+fn a_playbooks_row_runs_its_playbook() {
+    let page = crate::playbooks::Page {
+        rows: vec![crate::playbooks::Row {
+            id: "linux_repair".into(),
+            name: "Linux repair".into(),
+            summary: "Fix a broken package".into(),
+            source: "shipped",
+            fits: "Fits repair · linux".into(),
+            steps: "3 steps, up to Safe".into(),
+            text: String::new(),
+        }],
+        problems: Vec::new(),
+    };
+    let v = playbooks_view(&page);
+    assert_eq!(
+        v.rows[0].tap,
+        Some(TileAction::RunPlaybook {
+            id: "linux_repair".into()
+        })
+    );
+    // With none yet, the tile still opens Playbooks to make one.
+    let none = crate::playbooks::Page {
+        rows: Vec::new(),
+        problems: Vec::new(),
+    };
+    assert_eq!(
+        playbooks_view(&none).buttons[0].action,
+        TileAction::settings("playbooks")
+    );
+}
