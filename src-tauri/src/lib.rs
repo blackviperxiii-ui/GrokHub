@@ -2044,7 +2044,7 @@ async fn updates_page(
 #[tauri::command]
 async fn run_update_offer(
     app: AppHandle,
-    state: State<'_, AppState>,
+    state: State<'_, ShellState>,
     offer: grokhub_core::home::updates::Offer,
 ) -> Result<String, String> {
     if let Some(page) = home_updates::offer_page(offer) {
