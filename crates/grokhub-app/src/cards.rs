@@ -2861,7 +2861,13 @@ mod tests {
                 && skills.contains("self.open_connectors()"),
             "Skills has no Connectors tab; its Connectors pill opens Settings: {skills}"
         );
-        assert!(skills.contains("grok_tile("), "skill cards stay grok_tile");
+        // Each skill is a row now (switch, Use, Edit, Remove), built by the
+        // Skills tab's one row painter for both its sections.
+        assert!(
+            skills.matches("skill_row(").count() >= 2
+                && include_str!("app/skills_tab.rs").contains("pub(super) fn skill_row("),
+            "skill rows come from skills_tab::skill_row: {skills}"
+        );
         let empty = src
             .split("pub fn empty_prompt_tile(")
             .nth(1)

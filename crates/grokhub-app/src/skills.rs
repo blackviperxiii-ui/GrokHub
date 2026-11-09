@@ -17,7 +17,20 @@ pub fn skills_dir() -> PathBuf {
     config::config_dir().join("skills")
 }
 
+/// The cabin skills chat may use. A skill switched off on the Skills tab is
+/// left out, so matching, offers and self-review never pick it up.
 pub fn list_skills() -> Vec<SkillMd> {
+    let dir = skills_dir();
+    let off = grokhub_agent::skills_off_in(&dir);
+    let mut all = list_all_skills();
+    if !off.is_empty() {
+        all.retain(|s| !grokhub_agent::skill_is_off_in(&dir, &s.name));
+    }
+    all
+}
+
+/// Every cabin skill, switched-off ones included, for the Skills tab.
+pub fn list_all_skills() -> Vec<SkillMd> {
     let mut out = vec![];
     let Ok(rd) = fs::read_dir(skills_dir()) else {
         return out;
@@ -32,6 +45,73 @@ pub fn list_skills() -> Vec<SkillMd> {
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
+}
+
+/// Whether a skill is switched off on the Skills tab.
+pub fn skill_is_off(name: &str) -> bool {
+    grokhub_agent::skill_is_off_in(&skills_dir(), name)
+}
+
+/// Switch a skill on or off. It stays on disk either way.
+pub fn set_skill_on(name: &str, on: bool) -> Result<(), String> {
+    grokhub_agent::set_skill_off_in(&skills_dir(), name, !on).map_err(|e| e.to_string())
+}
+
+/// A skill made on the Skills tab from a name and what it should do. The
+/// words become its description, when to use it and its steps; Edit adds more.
+pub fn new_skill(name: &str, what: &str) -> Result<SkillMd, String> {
+    let name = name.trim();
+    let what = what.trim();
+    if name.is_empty() {
+        return Err("Give the skill a name.".into());
+    }
+    if what.is_empty() {
+        return Err("Say what the skill should do.".into());
+    }
+    if skill_folder(name).join("SKILL.md").exists() {
+        return Err(format!("There's already a skill called {name}."));
+    }
+    let folder = skill_dir_name(name);
+    let skill = SkillMd {
+        name: name.to_string(),
+        description: what.to_string(),
+        slash: format!("/{folder}"),
+        trigger: what.to_string(),
+        instructions: what.to_string(),
+        ..SkillMd::default()
+    };
+    save_skill_logged(&skill, Origin::User, "made on the Skills tab")?;
+    Ok(skill)
+}
+
+/// Remove a skill from the Skills tab. Its folder moves to
+/// `skills/.retired`, logged in the ChangeLedger, so Undo brings it back.
+pub fn remove_skill(name: &str) -> Result<(), String> {
+    let root = config::config_dir();
+    let dir = skills_dir();
+    let folder = skill_dir_name(name);
+    let path = dir.join(&folder);
+    if !path.join("SKILL.md").exists() {
+        return Err(format!("{name} is already gone."));
+    }
+    let retired = dir.join(".retired");
+    fs::create_dir_all(&retired).map_err(|e| e.to_string())?;
+    let mut dest = retired.join(&folder);
+    let mut n = 1;
+    while dest.exists() {
+        n += 1;
+        dest = retired.join(format!("{folder}-{n}"));
+    }
+    hx::record_skill_change(
+        &root,
+        &dir,
+        &folder,
+        Origin::User,
+        "removed on the Skills tab",
+        || fs::rename(&path, &dest).map_err(|e| e.to_string()),
+    )?;
+    let _ = grokhub_agent::set_skill_off_in(&dir, name, false);
+    Ok(())
 }
 
 /// Auto-made skills that never ran and hold nothing reusable (see
@@ -374,6 +454,59 @@ mod tests {
         assert!(
             list.contains("read_text_capped") && !list.contains("read_to_string"),
             "listing skills must not slurp a huge SKILL.md on the UI thread: {list}"
+        );
+    }
+
+    #[test]
+    fn skills_tab_makes_switches_off_and_removes_with_undo() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("skills-tab");
+        let _ = fs::remove_dir_all(&root);
+        let _pin = crate::config::TestConfigDir::set(root.clone());
+        let names =
+            |list: Vec<SkillMd>| -> Vec<String> { list.into_iter().map(|s| s.name).collect() };
+
+        let made = new_skill("Clip Trimmer", "Trim my last game clip to 30 seconds").unwrap();
+        assert_eq!(made.slash, "/clip-trimmer");
+        assert_eq!(names(list_skills()), vec!["Clip Trimmer".to_string()]);
+        assert!(
+            new_skill("clip trimmer", "again").is_err(),
+            "no second skill of the same name"
+        );
+        assert!(new_skill("", "x").is_err() && new_skill("x", " ").is_err());
+
+        set_skill_on("Clip Trimmer", false).unwrap();
+        assert!(skill_is_off("clip-trimmer"));
+        assert!(
+            list_skills().is_empty(),
+            "an off skill is not one chat may use"
+        );
+        assert_eq!(
+            names(list_all_skills()),
+            vec!["Clip Trimmer".to_string()],
+            "but the tab still shows it"
+        );
+        set_skill_on("Clip Trimmer", true).unwrap();
+        assert_eq!(names(list_skills()), vec!["Clip Trimmer".to_string()]);
+
+        remove_skill("Clip Trimmer").unwrap();
+        assert!(list_all_skills().is_empty());
+        assert!(
+            skills_dir().join(".retired/clip-trimmer/SKILL.md").exists(),
+            "kept aside, not deleted"
+        );
+        assert!(remove_skill("Clip Trimmer").is_err());
+        hx::undo_skill_change(
+            &root,
+            &skills_dir(),
+            "clip-trimmer",
+            hx::UndoAsk::from_click(),
+        )
+        .unwrap();
+        assert_eq!(
+            names(list_skills()),
+            vec!["Clip Trimmer".to_string()],
+            "Undo brings it back"
         );
     }
 
