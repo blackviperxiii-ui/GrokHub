@@ -95,6 +95,7 @@ pub fn signal_for(
 /// rotates to `card_signals.jsonl.1` (replacing any older `.1`) and a new
 /// file starts. IO errors are ignored.
 pub fn append_signal(dir: &Path, signal: &CardSignal) {
+    crate::learn::hub::note_all(crate::learn::sources::card(signal));
     if let Err(_err) = append_signal_inner(dir, signal) {
         // A full disk or a locked folder must not panic or stall the UI.
     }

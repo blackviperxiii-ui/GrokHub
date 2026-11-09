@@ -243,7 +243,11 @@ pub fn log_chips_shown(mem: &mut ChipMemory, surface: &str, chips: &[QuickChip],
     {
         let shown = prev.shown.clone();
         crate::chip_rank::learn_from_row(&mut mem.ranker, &shown, None);
+        let keys = shown.iter().map(|s| s.key.as_str());
+        crate::learn::hub::note_all(crate::learn::sources::chips_passed_over(surface, keys, now));
     }
+    let keys = shown.iter().map(|s| s.key.as_str());
+    crate::learn::hub::note_all(crate::learn::sources::chips_shown(surface, keys, now));
     mem.events.push(ChipEvent {
         at: now,
         surface: surface.to_string(),
@@ -276,6 +280,9 @@ pub fn log_chip_outcome(
         .iter()
         .find(|s| s.key == key)
         .map_or(0, |s| s.slot);
+    crate::learn::hub::note_all(crate::learn::sources::chip_outcome(
+        surface, &key, picked, now,
+    ));
     let outcome = if picked {
         ChipOutcome::Picked { key, slot, at: now }
     } else {

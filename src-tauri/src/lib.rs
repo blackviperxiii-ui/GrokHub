@@ -3366,6 +3366,9 @@ pub fn run() {
             });
             steam_checks::start(config_dir.clone());
             game_companion::start(config_dir.clone());
+            // The learning engine: chips, cards and runs record to it from
+            // here on. Memory only, with one small write when one is due.
+            grokhub_core::learn::hub::start(&config_dir);
             #[cfg(desktop)]
             os_extras::setup(app.handle(), &loaded);
             let text_size = loaded.text_size;
@@ -3632,13 +3635,21 @@ pub fn run() {
             set_home_layout,
             open_url
         ])
-        .run(tauri::generate_context!());
-    if let Err(err) = built {
-        eprintln!(
-            "{} failed to start: {err}",
-            grokhub_core::brand::product_name()
-        );
-        std::process::exit(1);
+        .build(tauri::generate_context!());
+    match built {
+        Ok(app) => app.run(|_, event| {
+            // What the learning engine holds in memory is written on the way out.
+            if let tauri::RunEvent::Exit = event {
+                grokhub_core::learn::hub::flush();
+            }
+        }),
+        Err(err) => {
+            eprintln!(
+                "{} failed to start: {err}",
+                grokhub_core::brand::product_name()
+            );
+            std::process::exit(1);
+        }
     }
 }
 

@@ -112,6 +112,8 @@ mod cabin_async {
 /// After the cabin window closes: stop the async runtime, then leave the process.
 /// Tray teardown runs in `Cabin::on_exit` (icon dropped on the UI thread) before this.
 fn cabin_shutdown_last_resort() {
+    // What the learning engine holds in memory is written on the way out.
+    grokhub_core::learn::hub::flush();
     cabin_async::shutdown();
     std::process::exit(0);
 }
@@ -430,6 +432,8 @@ fn run_cabin(hidden: bool) -> eframe::Result<()> {
         return Ok(());
     }
     cabin_async::install();
+    // The learning engine: chips, cards and runs record to it from here on.
+    grokhub_core::learn::hub::start(&config::config_dir());
     // Round 3 item 37: the router holds gameplay advice during a Riot match.
     #[cfg(windows)]
     grokhub_core::game_profile::set_exe_probe(grokhub_desktop::game_guard::exe_names);

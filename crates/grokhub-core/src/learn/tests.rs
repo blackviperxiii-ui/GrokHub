@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use super::belief::{BELIEF_CAP, HALF_LIFE_MS};
 use super::signal::{FLUSH_AT, FLUSH_MS, RING, SUBJECT_MAX};
-use super::store::{self, DISK_BUDGET, SIGNAL_CAP};
+use super::store::{self, DISK_BUDGET, SIGNAL_BYTES};
 use super::*;
 
 const T0: u64 = 1_800_000_000_000;
@@ -348,10 +348,11 @@ fn flush_saves_what_waits_and_the_users_choices_save_at_once() {
     );
 
     e.forget_all().unwrap();
-    assert!(!store::dir(&dir).exists());
+    assert_eq!(store::disk_used(&dir), 0);
+    assert!(store::read_signals(&dir).is_empty());
     assert!(e.beliefs().is_empty());
     e.flush(T0 + 6);
-    assert!(!store::dir(&dir).exists());
+    assert_eq!(store::disk_used(&dir), 0);
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -359,10 +360,10 @@ fn flush_saves_what_waits_and_the_users_choices_save_at_once() {
 fn the_files_stay_inside_the_disk_budget() {
     let dir = temp("budget");
     let mut e = Engine::open(&dir);
-    // The worst case: every subject as long as one may be, more signals than
-    // both files hold and more subjects than the belief store keeps.
+    // The worst case: every subject as long as one may be, enough signals to
+    // rotate the log three times and more subjects than the store keeps.
     let pad = "x".repeat(SUBJECT_MAX - "model:".len() - 6);
-    let total = SIGNAL_CAP * 2 + SIGNAL_CAP / 2;
+    let total = 15_000;
     for i in 0..total {
         let key = subject(&format!("model:{pad}{:06}", i % (BELIEF_CAP + 500)));
         let at = T0 + i as u64;
@@ -375,42 +376,101 @@ fn the_files_stay_inside_the_disk_budget() {
     assert_eq!(e.dropped(), 0);
     assert_eq!(e.beliefs().len(), BELIEF_CAP);
 
-    let active = fs::read_to_string(store::dir(&dir).join(store::SIGNALS)).unwrap();
-    let old = fs::read_to_string(store::dir(&dir).join(store::SIGNALS_OLD)).unwrap();
-    assert!(active.lines().count() <= SIGNAL_CAP);
-    assert!(old.lines().count() <= SIGNAL_CAP);
-    assert_eq!(
-        store::read_signals(&dir).len(),
-        active.lines().count() + old.lines().count()
-    );
+    let size = |name: &str| fs::metadata(store::dir(&dir).join(name)).unwrap().len();
+    // A file rotates at the first write after it reaches the cap, so it can
+    // pass the cap by one batch at most.
+    let batch = (FLUSH_AT * 120) as u64;
+    assert!(size(store::SIGNALS) < SIGNAL_BYTES + batch);
+    assert!(size(store::SIGNALS_OLD) >= SIGNAL_BYTES);
+    assert!(size(store::SIGNALS_OLD) < SIGNAL_BYTES + batch);
     // The newest signal is on disk and the oldest has rotated out.
-    assert!(active.contains(&format!("\"t\":{}", T0 + total as u64 - 1)));
-    assert!(!old.contains(&format!("\"t\":{T0},")));
+    let kept = store::read_signals(&dir);
+    assert_eq!(kept.last().unwrap().at_ms, T0 + total as u64 - 1);
+    assert!(kept.first().unwrap().at_ms > T0);
+    assert!(kept.len() < total);
 
     let used = store::disk_used(&dir);
-    assert!(used > 0);
+    assert!(used > SIGNAL_BYTES);
     assert!(used <= DISK_BUDGET, "{used} bytes is over the budget");
     let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
-fn a_restart_keeps_counting_lines_from_the_file() {
-    let dir = temp("restart");
-    let mut log = store::Log::new(&dir);
-    let batch: Vec<Signal> = (0..SIGNAL_CAP as u64 - 1)
-        .map(|i| Signal::new(T0 + i, Kind::Used, subject("page:home")))
-        .collect();
-    log.append(&batch).unwrap();
-    // A new process has no count in memory: it reads it once from the file.
-    let mut log = store::Log::new(&dir);
-    let two: Vec<Signal> = (0..2)
-        .map(|i| Signal::new(T0 + 9_000 + i, Kind::Used, subject("page:pulse")))
-        .collect();
-    log.append(&two).unwrap();
-    let active = fs::read_to_string(store::dir(&dir).join(store::SIGNALS)).unwrap();
-    let old = fs::read_to_string(store::dir(&dir).join(store::SIGNALS_OLD)).unwrap();
-    assert_eq!(active.lines().count(), 2);
-    assert_eq!(old.lines().count(), SIGNAL_CAP - 1);
+fn two_apps_on_one_folder_keep_what_each_learned() {
+    let dir = temp("two-apps");
+    let key = subject("chip:shared");
+    let mut cabin = Engine::open(&dir);
+    let mut shell = Engine::open(&dir);
+    for i in 0..3 {
+        cabin.record(Signal::new(T0 + i, Kind::Picked, key.clone()));
+    }
+    for i in 0..2 {
+        shell.record(Signal::new(T0 + 10 + i, Kind::Ignored, key.clone()));
+    }
+    cabin.flush(T0 + 20);
+    shell.flush(T0 + 21);
+    // The later save added its own two to the three already there.
+    let merged = Shape::Rate { yes: 3.0, no: 2.0 };
+    assert_eq!(shell.beliefs().get(&key).unwrap().shape, merged);
+    assert_eq!(
+        Engine::open(&dir).beliefs().get(&key).unwrap().shape,
+        merged
+    );
+    assert_eq!(store::read_signals(&dir).len(), 5);
+
+    // The other app sees it at its own next save, without counting twice.
+    cabin.record(Signal::new(T0 + 30, Kind::Picked, key.clone()));
+    cabin.flush(T0 + 31);
+    assert_eq!(
+        cabin.beliefs().get(&key).unwrap().shape,
+        Shape::Rate { yes: 4.0, no: 2.0 }
+    );
+
+    // "That's wrong" in one app holds in the other: its unsaved votes are
+    // replayed onto the locked line and change nothing.
+    shell.record(Signal::new(T0 + 40, Kind::Picked, key.clone()));
+    cabin.mark_wrong(&key, T0 + 41);
+    shell.flush(T0 + 42);
+    assert_eq!(shell.beliefs().get(&key).unwrap().standing, Standing::Wrong);
+    assert_eq!(
+        Engine::open(&dir).beliefs().get(&key).unwrap().standing,
+        Standing::Wrong
+    );
+
+    // Forget everything in one app: the other keeps nothing it had saved.
+    let other = subject("chip:other");
+    shell.record(Signal::new(T0 + 50, Kind::Picked, other.clone()));
+    shell.flush(T0 + 51);
+    cabin.forget_all().unwrap();
+    shell.record(Signal::new(T0 + 60, Kind::Picked, subject("chip:new")));
+    shell.flush(T0 + 61);
+    assert!(shell.beliefs().get(&other).is_none());
+    assert!(shell.beliefs().get(&key).is_none());
+    assert_eq!(shell.beliefs().len(), 1);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn many_signals_between_ticks_bring_the_belief_save_forward() {
+    let dir = temp("save-forward");
+    let mut e = Engine::open(&dir);
+    e.record(Signal::new(T0, Kind::Picked, subject("chip:a")));
+    assert!(e.tick(T0));
+    assert_eq!(e.writes(), 2);
+    for i in 0..UNSAVED_MAX as u64 {
+        e.record(Signal::new(T0 + 1 + i, Kind::Picked, subject("chip:a")));
+    }
+    // Well inside the five minutes, but the replay list is full.
+    assert!(e.tick(T0 + 2_000));
+    assert_eq!(e.writes(), 4);
+    close(
+        Engine::open(&dir)
+            .beliefs()
+            .get(&subject("chip:a"))
+            .unwrap()
+            .evidence(T0 + 2_000),
+        1.0 + UNSAVED_MAX as f32,
+    );
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -425,4 +485,141 @@ fn an_unreadable_belief_file_starts_empty() {
     fs::write(store::dir(&dir).join(store::BELIEFS), text).unwrap();
     assert!(Engine::open(&dir).beliefs().is_empty());
     let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn chip_rows_become_signals_for_the_chip_and_its_surface() {
+    use super::sources;
+    let subjects = |v: &[Signal]| -> Vec<(Kind, String)> {
+        v.iter()
+            .map(|s| (s.kind, s.subject.as_str().to_string()))
+            .collect()
+    };
+    assert_eq!(
+        subjects(&sources::chips_shown("composer", ["3fa9c1", "77aa01"], T0)),
+        vec![
+            (Kind::Shown, "chips:composer".to_string()),
+            (Kind::Shown, "chip:3fa9c1".to_string()),
+            (Kind::Shown, "chip:77aa01".to_string()),
+        ]
+    );
+    assert_eq!(
+        subjects(&sources::chips_passed_over("home", ["3fa9c1"], T0)),
+        vec![
+            (Kind::Ignored, "chips:home".to_string()),
+            (Kind::Ignored, "chip:3fa9c1".to_string()),
+        ]
+    );
+    assert_eq!(
+        subjects(&sources::chip_outcome("composer", "3fa9c1", true, T0)),
+        vec![
+            (Kind::Picked, "chips:composer".to_string()),
+            (Kind::Picked, "chip:3fa9c1".to_string()),
+        ]
+    );
+    // Hiding one chip is not a verdict on chips there.
+    assert_eq!(
+        subjects(&sources::chip_outcome("composer", "3fa9c1", false, T0)),
+        vec![(Kind::Hidden, "chip:3fa9c1".to_string())]
+    );
+    // A key that isn't an id never becomes a subject.
+    assert_eq!(
+        subjects(&sources::chips_shown("composer", ["two words"], T0)),
+        vec![(Kind::Shown, "chips:composer".to_string())]
+    );
+}
+
+#[test]
+fn card_events_become_signals_and_a_read_card_closed_is_not_a_no() {
+    use super::sources;
+    use crate::card_signals::{signal_for, CardEvent};
+    use crate::update_feed::automation_done_card;
+    let card = automation_done_card("nightly", "ZephyrTitle9f3a", "ZephyrBody9f3a", 1);
+    let of = |event, after| {
+        sources::card(&signal_for(&card, event, T0, after))
+            .into_iter()
+            .map(|s| (s.kind, s.subject.as_str().to_string()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        of(CardEvent::More, None),
+        vec![
+            (Kind::Liked, "card:automation_done".to_string()),
+            (Kind::Liked, "card-group:run:nightly".to_string()),
+        ]
+    );
+    assert_eq!(of(CardEvent::Less, None)[0].0, Kind::Disliked);
+    assert_eq!(of(CardEvent::Ran, None)[0].0, Kind::Accepted);
+    assert_eq!(of(CardEvent::Rejected, None)[0].0, Kind::Declined);
+    assert_eq!(of(CardEvent::Dismissed, Some(false))[0].0, Kind::Dismissed);
+    assert_eq!(of(CardEvent::Dismissed, Some(true)), vec![]);
+    // The card's words are nowhere in what is recorded.
+    let opened = sources::card(&signal_for(&card, CardEvent::Opened, T0, None));
+    let line = serde_json::to_string(&opened).unwrap();
+    assert!(!line.contains("Zephyr"), "{line}");
+}
+
+#[test]
+fn a_run_counts_for_its_model_and_skill_and_a_late_line_counts_against() {
+    use super::sources;
+    use crate::outcome::OutcomeResult;
+    use crate::run_metrics::RunMetrics;
+    let run = RunMetrics {
+        run: "chat-a:3".into(),
+        class: "skill:weekly-report".into(),
+        result: OutcomeResult::Success,
+        wall_ms: 4_200,
+        cost_usd: 0.25,
+        model: "grok-code".into(),
+        finished_at: T0,
+        at: T0,
+        ..RunMetrics::default()
+    };
+    let of = |m: &RunMetrics| {
+        sources::run(m)
+            .into_iter()
+            .map(|s| (s.kind, s.subject.as_str().to_string(), s.value))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        of(&run),
+        vec![
+            (Kind::Succeeded, "model:grok-code".to_string(), 1.0),
+            (Kind::Succeeded, "skill:weekly-report".to_string(), 1.0),
+            (
+                Kind::Measured,
+                "model:grok-code/run-ms".to_string(),
+                4_200.0
+            ),
+            (Kind::Measured, "model:grok-code/run-usd".to_string(), 0.25),
+        ]
+    );
+    // The correction is a new line for the same run: one vote against, and
+    // the run's time and cost are not measured twice.
+    assert_eq!(
+        of(&run.corrected(T0 + 5)),
+        vec![
+            (Kind::Corrected, "model:grok-code".to_string(), 1.0),
+            (Kind::Corrected, "skill:weekly-report".to_string(), 1.0),
+        ]
+    );
+    assert_eq!(of(&run.undone(T0 + 9))[0].0, Kind::Undone);
+    // A topic class is made of the user's words: it never becomes a subject.
+    let topic = RunMetrics {
+        class: "topic:my private plans".into(),
+        result: OutcomeResult::Failure,
+        ..run.clone()
+    };
+    assert_eq!(
+        of(&topic)[0],
+        (Kind::Failed, "model:grok-code".to_string(), 1.0)
+    );
+    assert!(of(&topic).iter().all(|(_, s, _)| !s.contains("private")));
+    // A run still inside its undo window votes nothing yet.
+    let pending = RunMetrics {
+        result: OutcomeResult::Pending,
+        model: String::new(),
+        ..run
+    };
+    assert_eq!(of(&pending), vec![]);
 }

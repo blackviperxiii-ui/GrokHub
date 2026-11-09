@@ -9,6 +9,8 @@
 //! - [`ladder`]: the one rule for what a confidence allows: watch, suggest
 //!   or act.
 //! - [`store`]: the files, under `{config}/learn`, capped.
+//! - [`sources`]: what the app's existing logs mean as signals.
+//! - [`hub`]: the one engine a running app shares.
 //!
 //! The budget is fixed. [`Engine::record`] touches memory only: no disk, no
 //! model, no network. [`Engine::tick`] writes one batch at most every
@@ -16,14 +18,16 @@
 //! engine stays under [`store::DISK_BUDGET`].
 
 pub mod belief;
+pub mod hub;
 pub mod ladder;
 pub mod signal;
+pub mod sources;
 pub mod store;
 
 #[cfg(test)]
 mod tests;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub use belief::{Belief, Beliefs, Shape, Standing};
 pub use ladder::{step, Step, Undo};
@@ -32,15 +36,25 @@ pub use signal::{Kind, Signal, Stream, Subject};
 /// How often the belief file is rewritten while beliefs keep changing. The
 /// signals behind them are on disk sooner, so a crash loses counts only.
 pub const BELIEF_SAVE_MS: u64 = 5 * 60 * 1_000;
+/// Signals kept to replay onto the belief file at the next save. Past this
+/// the save is due at once.
+pub const UNSAVED_MAX: usize = 1_024;
 
 /// The engine one app holds: the waiting signals, the beliefs and the files.
+///
+/// Two apps can run on one config folder. The belief file is the shared
+/// truth: each save reads it, replays this app's signals since its last save
+/// onto it and writes it back, under [`store::hold_lock`]. So neither app
+/// loses what the other learned, and a Forget in one reaches the other at its
+/// next save.
 #[derive(Debug)]
 pub struct Engine {
+    config_dir: PathBuf,
     stream: Stream,
+    /// The belief file as last read, plus every signal recorded since.
     beliefs: Beliefs,
-    log: store::Log,
-    /// Beliefs changed since they were last saved.
-    dirty: bool,
+    /// Signals the belief file has not seen yet.
+    unsaved: Vec<Signal>,
     beliefs_saved_ms: u64,
     writes: u64,
 }
@@ -50,10 +64,10 @@ impl Engine {
     /// file starts empty.
     pub fn open(config_dir: &Path) -> Self {
         Self {
+            config_dir: config_dir.to_path_buf(),
             stream: Stream::default(),
             beliefs: store::load_beliefs(config_dir),
-            log: store::Log::new(config_dir),
-            dirty: false,
+            unsaved: Vec::new(),
             beliefs_saved_ms: 0,
             writes: 0,
         }
@@ -62,8 +76,8 @@ impl Engine {
     /// Takes one signal: the beliefs learn from it now and the line waits in
     /// memory for the next [`Engine::tick`]. Never touches the disk.
     pub fn record(&mut self, signal: Signal) {
-        if self.beliefs.apply(&signal) {
-            self.dirty = true;
+        if self.beliefs.apply(&signal) && self.unsaved.len() < UNSAVED_MAX {
+            self.unsaved.push(signal.clone());
         }
         self.stream.record(signal);
     }
@@ -75,8 +89,9 @@ impl Engine {
         if self.stream.due(now_ms) {
             self.write_signals(now_ms);
         }
-        if self.dirty && now_ms.saturating_sub(self.beliefs_saved_ms) >= BELIEF_SAVE_MS {
-            self.write_beliefs(now_ms);
+        let waited = now_ms.saturating_sub(self.beliefs_saved_ms) >= BELIEF_SAVE_MS;
+        if !self.unsaved.is_empty() && (waited || self.unsaved.len() >= UNSAVED_MAX) {
+            self.sync_beliefs(now_ms, |_| {});
         }
         self.writes > before
     }
@@ -86,8 +101,8 @@ impl Engine {
         if self.stream.waiting() > 0 {
             self.write_signals(now_ms);
         }
-        if self.dirty {
-            self.write_beliefs(now_ms);
+        if !self.unsaved.is_empty() {
+            self.sync_beliefs(now_ms, |_| {});
         }
     }
 
@@ -95,18 +110,17 @@ impl Engine {
         &self.beliefs
     }
 
-    /// The user's Forget on one line.
+    /// The user's Forget on one line. Saved at once.
     pub fn forget(&mut self, key: &Subject, now_ms: u64) {
-        if self.beliefs.forget(key, now_ms) {
-            self.write_beliefs(now_ms);
-        }
+        self.sync_beliefs(now_ms, |b| {
+            b.forget(key, now_ms);
+        });
     }
 
     /// The user's "That's wrong" on one line: it is never learned or acted
-    /// on again.
+    /// on again. Saved at once.
     pub fn mark_wrong(&mut self, key: &Subject, now_ms: u64) {
-        self.beliefs.mark_wrong(key, now_ms);
-        self.write_beliefs(now_ms);
+        self.sync_beliefs(now_ms, |b| b.mark_wrong(key, now_ms));
     }
 
     /// The user's Forget everything: the beliefs, the waiting signals and
@@ -114,8 +128,8 @@ impl Engine {
     pub fn forget_all(&mut self) -> Result<(), String> {
         self.beliefs = Beliefs::default();
         self.stream = Stream::default();
-        self.dirty = false;
-        self.log.forget_all()
+        self.unsaved.clear();
+        store::forget_all(&self.config_dir)
     }
 
     /// Disk writes so far, for the budget tests.
@@ -132,16 +146,25 @@ impl Engine {
         let batch = self.stream.drain(now_ms);
         // A full disk or a locked folder must not stall the app: the beliefs
         // already learned from these lines.
-        if self.log.append(&batch).is_ok() {
+        if store::append_signals(&self.config_dir, &batch).is_ok() {
             self.writes += 1;
         }
     }
 
-    fn write_beliefs(&mut self, now_ms: u64) {
+    /// Reads the belief file, replays this app's unsaved signals onto it,
+    /// applies `change`, and writes it back, all under the lock.
+    fn sync_beliefs(&mut self, now_ms: u64, change: impl FnOnce(&mut Beliefs)) {
         self.beliefs_saved_ms = now_ms;
-        if store::save_beliefs(self.log.config_dir(), &self.beliefs).is_ok() {
-            self.dirty = false;
+        let _lock = store::hold_lock(&self.config_dir);
+        let mut shared = store::load_beliefs(&self.config_dir);
+        for s in &self.unsaved {
+            shared.apply(s);
+        }
+        change(&mut shared);
+        if store::save_beliefs(&self.config_dir, &shared).is_ok() {
+            self.unsaved.clear();
             self.writes += 1;
         }
+        self.beliefs = shared;
     }
 }
