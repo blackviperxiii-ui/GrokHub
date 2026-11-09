@@ -178,7 +178,7 @@ pub(super) enum PulseAct {
     /// Ignore for now: off the page, with no "less of this".
     Ignore(String),
     Like(String),
-    /// I don't like on a feed post.
+    /// Not interested on a feed post.
     Dislike(String),
     Discuss(String),
     Link(String),
@@ -749,7 +749,7 @@ pub(super) fn paint_feed_icon(ui: &mut egui::Ui, card: &UpdateCard) {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum FeedPostAct {
     Like,
-    /// I don't like: off the page, and card taste learns from it.
+    /// Not interested: off the page, and card taste learns from it.
     Dislike,
     /// Off the page. Carries no weight on a feed post.
     Dismiss,
@@ -886,10 +886,7 @@ pub(super) fn post_actions(card: &UpdateCard, looking_more: bool) -> Vec<(String
             if liked { "Saved" } else { "Save" },
             FeedPostAct::Source(SourceAct::Save),
         );
-        add(
-            "Not interested",
-            FeedPostAct::Source(SourceAct::NotInterested),
-        );
+        // Not interested is the row's one dislike button (card taste).
         add(
             if looking_more {
                 "Looking…"
@@ -935,8 +932,8 @@ pub(super) fn post_buttons(
 }
 
 /// Every post's one row of buttons: Like first, the post's own buttons,
-/// Snooze and Delete when the card suits them (both when unsure), then I
-/// don't like, and Dismiss last.
+/// Snooze and Delete when the card suits them (both when unsure), then Not
+/// interested (the one dislike), and Dismiss last.
 pub(super) fn post_row(
     card: &UpdateCard,
     looking_more: bool,
@@ -959,7 +956,7 @@ pub(super) fn post_row(
     if offers.delete {
         row.push(("Delete".into(), FeedPostAct::Delete));
     }
-    row.push(("I don't like".into(), FeedPostAct::Dislike));
+    row.push(("Not interested".into(), FeedPostAct::Dislike));
     row.push(("Dismiss".into(), FeedPostAct::Dismiss));
     row
 }
@@ -2200,7 +2197,7 @@ impl Cabin {
     }
 
     /// Dismiss. On a feed post it carries no weight: the card goes and
-    /// nothing is learned (Like and I don't like are the taste signals).
+    /// nothing is learned (Like and Not interested are the taste signals).
     /// Ideas and proactive rows keep their quiet-for-a-day throttle.
     pub(super) fn pulse_dismiss(&mut self, id: &str, day: &str) {
         let Some(card) = self.pulse_card(id) else {
@@ -2263,7 +2260,7 @@ impl Cabin {
         self.learn_card_taste(&card, grokhub_core::card_taste::Reaction::Like);
     }
 
-    /// I don't like: the post goes and card taste learns from its traits.
+    /// Not interested: the post goes and card taste learns from its traits.
     /// One or two clicks only nudge; repeats weigh more.
     pub(super) fn pulse_dislike(&mut self, id: &str) {
         let Some(card) = self.pulse_card(id) else {
@@ -2274,7 +2271,7 @@ impl Cabin {
         self.status = "Got it. A few less like that.".into();
     }
 
-    /// Note a Like or I don't like in card taste (`card_taste.json`).
+    /// Note a Like or Not interested in card taste (`card_taste.json`).
     pub(super) fn learn_card_taste(
         &mut self,
         card: &UpdateCard,

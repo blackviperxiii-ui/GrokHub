@@ -1,7 +1,7 @@
 //! Pulse (cross-platform recode, Phase 3f): the cabin's Feed and Ideas from
 //! the same `updates.json`, ranked by the same rules in `grokhub_core::pulse`.
 //! Not this, Love and Accept write the same MEMORY.md ledger line the cabin
-//! writes, so the next ranking learns from them. Like (Love) and I don't like
+//! writes, so the next ranking learns from them. Like (Love) and Not interested
 //! also train card taste (`grokhub_core::card_taste`), which orders the feed
 //! and steers the writer. Love and Discuss feed the writer's taste summary
 //! (`pulse_feed`). Dismiss and Delete only remove: they carry no weight.
@@ -209,7 +209,7 @@ pub struct Page {
 pub enum Act {
     /// Off the page. Carries no weight: nothing is noted or learned.
     Dismiss,
-    /// I don't like: off the page, and card taste learns from its traits.
+    /// Not interested: off the page, and card taste learns from its traits.
     Dislike,
     NotThis,
     /// Older pages still send "like".
@@ -551,7 +551,7 @@ fn note_less(config_dir: &Path, card: &UpdateCard, now_ms: u64) -> Result<(), St
     })
 }
 
-/// Note a Like or I don't like in card taste, or take a Like back.
+/// Note a Like or Not interested in card taste, or take a Like back.
 fn learn_taste(
     config_dir: &Path,
     card: &UpdateCard,
@@ -579,7 +579,7 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
         return Err("That card is gone. The page now shows what is left.".into());
     };
     let (outcome, shift) = match act {
-        // Dismiss carries no weight; I don't like trains card taste only, so
+        // Dismiss carries no weight; Not interested trains card taste only, so
         // one or two clicks stay small.
         Act::Dismiss | Act::Dislike => (None, None),
         Act::Delete => (Some(Outcome::Dismissed), None),
@@ -679,6 +679,8 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
         }
         Act::NotInterested => {
             note(&card.title, LedgerReason::NotThis, &day.date)?;
+            // The one dislike button on an idea: card taste learns from it too.
+            learn_taste(config_dir, &card, Some(Reaction::Dislike), None, now_ms)?;
             idea_feedback(config_dir, &card, InterestSignal::NotInterested, now_ms)?;
             pulse_feed::with_ideas_state(config_dir, |s| s.note_not_interested(&card.title))?;
             remove(&mut cards)
@@ -1340,7 +1342,7 @@ mod tests {
             "Like taken back"
         );
         let page = act(&d.config, "post-1", Act::Dislike, &day(), NOW).expect("dislike");
-        assert!(page.feed.is_empty(), "I don't like takes it off the page");
+        assert!(page.feed.is_empty(), "Not interested takes it off the page");
         let taste = card_taste::load(&d.config);
         assert_eq!(taste.events.len(), 1);
         assert_eq!(taste.events[0].reaction, Reaction::Dislike);
@@ -1390,6 +1392,15 @@ mod tests {
         let d = dirs("signals-housekeeping", &sample());
         act(&d.config, "post-1", Act::Delete, &day(), NOW).expect("delete");
         assert!(card_taste::load(&d.config).events.is_empty());
+    }
+
+    #[test]
+    fn not_interested_on_an_idea_is_the_one_dislike_for_card_taste() {
+        let d = dirs("idea-dislike", &sample());
+        act(&d.config, "idea-1", Act::NotInterested, &day(), NOW).expect("not interested");
+        let taste = card_taste::load(&d.config);
+        assert_eq!(taste.events.len(), 1);
+        assert_eq!(taste.events[0].reaction, Reaction::Dislike);
     }
 
     #[test]
