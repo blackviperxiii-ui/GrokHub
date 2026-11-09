@@ -30,6 +30,19 @@ pub struct GgufMeta {
     pub tokenizer: Option<String>,
     /// Multi-token-prediction layers (`{arch}.nextn_predict_layers`).
     pub nextn_layers: u32,
+    /// Tokens a sliding-window layer attends to (`attention.sliding_window`);
+    /// 0 when every layer sees the whole context.
+    pub sliding_window: u32,
+    /// Per layer, whether it uses the sliding window: from
+    /// `attention.sliding_window_pattern` (an array, or every n-th layer
+    /// full), or the architecture's known pattern. Empty when unknown, and
+    /// then every layer is counted at the full context.
+    pub swa_pattern: Vec<bool>,
+    /// Per-layer KV heads when the header lists them; empty for one count.
+    pub kv_heads: Vec<u32>,
+    /// Sliding-window layers' key and value widths when they differ (0: same).
+    pub key_length_swa: u32,
+    pub value_length_swa: u32,
 }
 
 impl GgufMeta {
@@ -61,6 +74,47 @@ impl GgufMeta {
             self.head_dim()
         });
         kv_heads * (k + v)
+    }
+
+    /// Cached K + V values for `ctx` tokens: each layer's KV heads times its
+    /// key and value widths, a full layer at `ctx` and a sliding-window layer
+    /// at `swa_cells` (at most `ctx`).
+    pub fn kv_values(&self, ctx: u64, swa_cells: u64) -> u64 {
+        let max_heads = u64::from(if self.head_count_kv > 0 {
+            self.head_count_kv
+        } else {
+            self.head_count
+        });
+        let width = self.kv_width() / max_heads.max(1);
+        let swa_width = match (self.key_length_swa, self.value_length_swa) {
+            (0, 0) => width,
+            (k, v) => u64::from(if k > 0 { k } else { v }) + u64::from(if v > 0 { v } else { k }),
+        };
+        (0..self.block_count as usize)
+            .map(|il| {
+                let heads = self.kv_heads.get(il).map_or(max_heads, |h| u64::from(*h));
+                let swa = self.sliding_window > 0 && self.swa_pattern.get(il) == Some(&true);
+                if swa {
+                    heads * swa_width * ctx.min(swa_cells)
+                } else {
+                    heads * width * ctx
+                }
+            })
+            .sum()
+    }
+}
+
+/// `swa_pattern` for "every `n`-th layer is full" over `layers` layers (as
+/// llama.cpp reads a scalar pattern: layer `il` slides when `il % n < n - 1`).
+pub fn every_nth_full(n: u32, layers: u32) -> Vec<bool> {
+    (0..layers).map(|il| n > 0 && il % n < n - 1).collect()
+}
+
+/// The sliding-window pattern an architecture uses when its header gives none.
+fn known_pattern(arch: &str) -> Option<u32> {
+    match arch {
+        "gemma3" => Some(6),
+        _ => None,
     }
 }
 
@@ -97,9 +151,11 @@ fn string(r: &mut impl Read) -> Result<String, String> {
 }
 
 /// A value: its integer when it is one (the largest item of an integer
-/// array), its text when it is a string.
+/// array), its text when it is a string, every item of an integer array
+/// that was asked for.
 enum Value {
     Int(u64),
+    Ints(Vec<u64>),
     Text(String),
     Other,
 }
@@ -123,8 +179,25 @@ fn int_of(t: u32, r: &mut impl Read) -> Result<Option<u64>, String> {
     Ok(matches!(t, 0..=5 | 10 | 11).then_some(v))
 }
 
-/// `tokens` hashes each item of a string array instead of skipping it.
-fn value(t: u32, r: &mut impl Read, tokens: Option<&mut Sha256>) -> Result<Value, String> {
+/// An array item as a number, a bool as 0 or 1 (a sliding-window pattern
+/// is a bool per layer).
+fn item_of(t: u32, r: &mut impl Read) -> Result<u64, String> {
+    if t == 7 {
+        let mut b = [0u8; 1];
+        r.read_exact(&mut b).map_err(|e| e.to_string())?;
+        return Ok(u64::from(b[0] != 0));
+    }
+    Ok(int_of(t, r)?.unwrap_or(0))
+}
+
+/// `tokens` hashes each item of a string array instead of skipping it;
+/// `keep` returns every item of a number array.
+fn value(
+    t: u32,
+    r: &mut impl Read,
+    tokens: Option<&mut Sha256>,
+    keep: bool,
+) -> Result<Value, String> {
     match t {
         8 => Ok(Value::Text(string(r)?)),
         9 => {
@@ -150,6 +223,13 @@ fn value(t: u32, r: &mut impl Read, tokens: Option<&mut Sha256>) -> Result<Value
             }
             if item == 9 {
                 return Err("GGUF nested array".into());
+            }
+            if keep && len <= MAX_KV {
+                let mut all = Vec::with_capacity(len as usize);
+                for _ in 0..len {
+                    all.push(item_of(item, r)?);
+                }
+                return Ok(Value::Ints(all));
             }
             let mut best = None;
             for _ in 0..len {
@@ -180,6 +260,8 @@ pub fn parse_meta(r: &mut impl Read, file_bytes: u64) -> Result<GgufMeta, String
         return Err(format!("GGUF header lists {kv} keys"));
     }
     let mut ints = Vec::new();
+    let mut pattern: Option<Vec<u64>> = None;
+    let mut heads: Vec<u64> = Vec::new();
     let mut arch = String::new();
     let mut vocab_model = String::new();
     let mut vocab: Option<Sha256> = None;
@@ -187,10 +269,20 @@ pub fn parse_meta(r: &mut impl Read, file_bytes: u64) -> Result<GgufMeta, String
         let key = string(r)?;
         let t = u32_le(r)?;
         let sink = (key == "tokenizer.ggml.tokens").then(|| vocab.insert(Sha256::new()));
-        match value(t, r, sink)? {
+        let is_pattern = key.ends_with(".attention.sliding_window_pattern");
+        let is_heads = key.ends_with(".attention.head_count_kv");
+        match value(t, r, sink, is_pattern || is_heads)? {
             Value::Text(s) if key == "general.architecture" => arch = s,
             Value::Text(s) if key == "tokenizer.ggml.model" => vocab_model = s,
             Value::Int(v) => ints.push((key, v)),
+            Value::Ints(all) => {
+                ints.push((key, all.iter().copied().max().unwrap_or(0)));
+                if is_pattern {
+                    pattern = Some(all);
+                } else {
+                    heads = all;
+                }
+            }
             _ => {}
         }
     }
@@ -207,8 +299,22 @@ pub fn parse_meta(r: &mut impl Read, file_bytes: u64) -> Result<GgufMeta, String
     if arch.is_empty() {
         return Err("GGUF header has no general.architecture".into());
     }
+    let block_count = get("block_count");
+    let sliding_window = get("attention.sliding_window");
+    let swa_pattern = match pattern {
+        Some(all) => all.iter().map(|v| *v != 0).collect(),
+        None => match get("attention.sliding_window_pattern") {
+            0 => known_pattern(&arch).map_or_else(Vec::new, |n| every_nth_full(n, block_count)),
+            n => every_nth_full(n, block_count),
+        },
+    };
+    let swa_pattern = if sliding_window > 0 {
+        swa_pattern
+    } else {
+        Vec::new()
+    };
     Ok(GgufMeta {
-        block_count: get("block_count"),
+        block_count,
         context_length: get("context_length"),
         embedding_length: get("embedding_length"),
         head_count: get("attention.head_count"),
@@ -219,6 +325,14 @@ pub fn parse_meta(r: &mut impl Read, file_bytes: u64) -> Result<GgufMeta, String
         file_mb: file_bytes / (1_024 * 1_024),
         tokenizer,
         nextn_layers: get("nextn_predict_layers"),
+        sliding_window,
+        swa_pattern,
+        kv_heads: heads
+            .into_iter()
+            .map(|h| u32::try_from(h).unwrap_or(u32::MAX))
+            .collect(),
+        key_length_swa: get("attention.key_length_swa"),
+        value_length_swa: get("attention.value_length_swa"),
         arch,
     })
 }
@@ -278,6 +392,14 @@ mod tests {
             s
         }
 
+        fn bool_array(self, k: &str, v: &[bool]) -> Self {
+            let mut s = self.key(k, 9);
+            s.0.extend(7u32.to_le_bytes());
+            s.0.extend((v.len() as u64).to_le_bytes());
+            s.0.extend(v.iter().map(|b| u8::from(*b)));
+            s
+        }
+
         fn text_array(self, k: &str, v: &[&str]) -> Self {
             let mut s = self.key(k, 9);
             s.0.extend(8u32.to_le_bytes());
@@ -329,6 +451,11 @@ mod tests {
                 file_mb: 7_039,
                 tokenizer: meta.tokenizer.clone(),
                 nextn_layers: 0,
+                sliding_window: 0,
+                swa_pattern: vec![],
+                kv_heads: vec![8, 8, 16, 8],
+                key_length_swa: 0,
+                value_length_swa: 0,
             }
         );
         assert_eq!(
@@ -338,6 +465,83 @@ mod tests {
         );
         assert!(!meta.is_moe());
         assert_eq!(meta.kv_width(), 16 * 512);
+    }
+
+    #[test]
+    fn a_sliding_window_header_counts_its_window_layers_at_the_window_only() {
+        // Gemma-4-style: a bool per layer, narrower sliding-window heads.
+        let h = Header::new()
+            .text("general.architecture", "gemma4")
+            .u32("gemma4.block_count", 6)
+            .u32("gemma4.attention.head_count", 16)
+            .i32_array("gemma4.attention.head_count_kv", &[8, 8, 8, 8, 8, 2])
+            .u32("gemma4.attention.key_length", 512)
+            .u32("gemma4.attention.value_length", 512)
+            .u32("gemma4.attention.key_length_swa", 256)
+            .u32("gemma4.attention.value_length_swa", 256)
+            .u32("gemma4.attention.sliding_window", 1_024)
+            .bool_array(
+                "gemma4.attention.sliding_window_pattern",
+                &[true, true, true, true, true, false],
+            );
+        let meta = parse_meta(&mut h.bytes().as_slice(), 0).unwrap();
+        assert_eq!(meta.sliding_window, 1_024);
+        assert_eq!(meta.swa_pattern, vec![true, true, true, true, true, false]);
+        assert_eq!(meta.kv_heads, vec![8, 8, 8, 8, 8, 2]);
+        assert_eq!(meta.head_count_kv, 8);
+        // Five window layers at 1,536 cells of 8 x 512, one full layer at
+        // 32,768 cells of 2 x 1,024.
+        assert_eq!(
+            meta.kv_values(32_768, 1_536),
+            5 * 8 * 512 * 1_536 + 2 * 1_024 * 32_768
+        );
+        // A context under the window counts every layer at the context.
+        assert_eq!(
+            meta.kv_values(1_024, 1_536),
+            5 * 8 * 512 * 1_024 + 2 * 1_024 * 1_024
+        );
+
+        // Gemma-3 carries no pattern: every sixth layer is full.
+        let h = Header::new()
+            .text("general.architecture", "gemma3")
+            .u32("gemma3.block_count", 12)
+            .u32("gemma3.attention.head_count", 8)
+            .u32("gemma3.attention.head_count_kv", 4)
+            .u32("gemma3.attention.key_length", 256)
+            .u32("gemma3.attention.value_length", 256)
+            .u32("gemma3.attention.sliding_window", 1_024);
+        let meta = parse_meta(&mut h.bytes().as_slice(), 0).unwrap();
+        assert_eq!(
+            meta.swa_pattern,
+            vec![true, true, true, true, true, false, true, true, true, true, true, false]
+        );
+        assert_eq!(
+            meta.kv_values(8_192, 1_536),
+            4 * 512 * (10 * 1_536 + 2 * 8_192)
+        );
+
+        // A scalar pattern n: layer il slides when il % n < n - 1.
+        let h = Header::new()
+            .text("general.architecture", "cohere2")
+            .u32("cohere2.block_count", 8)
+            .u32("cohere2.attention.head_count", 8)
+            .u32("cohere2.attention.sliding_window", 4_096)
+            .u32("cohere2.attention.sliding_window_pattern", 4);
+        let meta = parse_meta(&mut h.bytes().as_slice(), 0).unwrap();
+        assert_eq!(
+            meta.swa_pattern,
+            vec![true, true, true, false, true, true, true, false]
+        );
+
+        // No window: every layer counts at the full context.
+        let h = Header::new()
+            .text("general.architecture", "llama")
+            .u32("llama.block_count", 4)
+            .u32("llama.attention.head_count", 8)
+            .u32("llama.attention.sliding_window_pattern", 4);
+        let meta = parse_meta(&mut h.bytes().as_slice(), 0).unwrap();
+        assert_eq!(meta.swa_pattern, Vec::<bool>::new());
+        assert_eq!(meta.kv_values(1_000, 10), 4 * meta.kv_width() * 1_000);
     }
 
     #[test]

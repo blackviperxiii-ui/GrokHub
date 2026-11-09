@@ -18,6 +18,15 @@ fn first_text(item: &InputItem) -> &str {
     }
 }
 
+/// A chat of its own per request, so one test's sticky cuts never reach another.
+fn chat_id() -> String {
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    format!(
+        "local-fit-{}",
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    )
+}
+
 /// The real chat prompt: the composed system and every tool a chat offers.
 fn real_request(history: Vec<InputItem>) -> ResponsesRequest {
     let ws = crate::harness::test_dir("local-fit");
@@ -41,7 +50,7 @@ fn real_request(history: Vec<InputItem>) -> ResponsesRequest {
         model: "local".into(),
         effort: None,
         input,
-        conversation_id: "local-fit".into(),
+        conversation_id: chat_id(),
         tools,
         hosted_search: false,
         call_timeout: None,
@@ -207,7 +216,7 @@ fn a_huge_agents_md_is_cut_at_a_line_and_says_so() {
         model: "local".into(),
         effort: None,
         input: vec![text("system", &system), text("user", "hi")],
-        conversation_id: "local-fit".into(),
+        conversation_id: chat_id(),
         tools: Vec::new(),
         hosted_search: false,
         call_timeout: None,
@@ -332,4 +341,86 @@ fn a_clip_drops_the_newest_notes_first_and_never_cuts_a_short_message() {
     let mut input = vec![text("user", &short)];
     assert!(!clip_newest_user(&mut input, 50_000));
     assert_eq!(first_text(&input[0]), short);
+}
+
+fn long_chat(turns: usize) -> Vec<InputItem> {
+    let mut history = Vec::new();
+    for i in 0..turns {
+        history.push(text(
+            "user",
+            &format!("question {i} {}", "filler ".repeat(60)),
+        ));
+        history.push(InputItem::FunctionCall {
+            call_id: format!("c{i}"),
+            name: "read_file".into(),
+            arguments: r#"{"path":"notes.txt"}"#.into(),
+        });
+        history.push(InputItem::FunctionCallOutput {
+            call_id: format!("c{i}"),
+            output: "line ".repeat(80),
+        });
+        history.push(text("assistant", &format!("answer {i}")));
+    }
+    history.push(text("user", "what next?"));
+    history
+}
+
+#[test]
+fn a_chats_cuts_stay_put_so_the_next_turn_only_appends() {
+    let mut req = real_request(long_chat(30));
+    let (first, done) = fit(&req, 8_192);
+    assert!(fits(&first, 8_192));
+    assert!(done.tools_cut && done.turns_dropped > 0);
+    // Two short turns later the same messages lead the request, unchanged.
+    for i in 0..2 {
+        req.input.push(text("assistant", "ok"));
+        req.input.push(text("user", &format!("and then {i}?")));
+        let (next, again) = fit(&req, 8_192);
+        assert!(fits(&next, 8_192));
+        assert_eq!(again.turns_dropped, done.turns_dropped);
+        assert_eq!(
+            format!("{:?}", &next.input[..first.input.len() - 1]),
+            format!("{:?}", &first.input[..first.input.len() - 1])
+        );
+    }
+    // A fresh chat with the same history cuts the same way from scratch.
+    let mut fresh = req.clone();
+    fresh.conversation_id = chat_id();
+    assert_eq!(fit(&fresh, 8_192).1.turns_dropped, done.turns_dropped);
+}
+
+#[test]
+fn when_the_history_must_move_it_moves_by_a_quarter_of_the_room() {
+    let mut req = real_request(long_chat(30));
+    let (_, done) = fit(&req, 8_192);
+    let mut moved = None;
+    for i in 0..40 {
+        req.input.push(text("assistant", "ok"));
+        req.input
+            .push(text("user", &format!("more {i} {}", "filler ".repeat(60))));
+        let (out, now) = fit(&req, 8_192);
+        assert!(fits(&out, 8_192));
+        assert!(now.turns_dropped >= done.turns_dropped, "never moves back");
+        if now.turns_dropped != done.turns_dropped {
+            moved = Some((i, now.turns_dropped - done.turns_dropped));
+            break;
+        }
+    }
+    let (after, step) = moved.expect("the boundary moved");
+    // Several turns went by before it moved, and it moved several turns at once.
+    assert!(after >= 3, "moved after {after} turns");
+    assert!(step >= 8, "moved {step} messages");
+}
+
+#[test]
+fn a_bigger_window_or_another_chat_start_begins_clean() {
+    let req = real_request(long_chat(30));
+    let (_, small) = fit(&req, 8_192);
+    let (_, big) = fit(&req, 131_072);
+    assert_eq!((small.tools_cut, big.tools_cut), (true, false));
+    assert_eq!(big.turns_dropped, 0);
+    let mut other = real_request(long_chat(3));
+    other.conversation_id = req.conversation_id.clone();
+    let (_, clean) = fit(&other, 131_072);
+    assert_eq!(clean, Fitted::default());
 }

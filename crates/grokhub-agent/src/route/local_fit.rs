@@ -14,6 +14,11 @@
 //!    were left out. If even the newest turn is too big, AGENTS.md gives way.
 //!
 //! The saved chat is never changed; only the request sent to the device is.
+//!
+//! Trims are sticky per chat: what one turn cut stays cut on the next, and
+//! the history boundary only moves forward, in steps that leave a quarter of
+//! the room free. The prefix the server cached then stays the same from turn
+//! to turn, so it reuses its KV instead of reading the whole prompt again.
 
 use crate::client::{ContentPart, InputItem, ResponsesRequest};
 use crate::compact::estimate_input_tokens;
@@ -73,46 +78,121 @@ pub struct Fitted {
     pub newest_clipped: bool,
 }
 
-/// Shrink `req` until it fits `n_ctx` with [`reply_reserve`] left over.
+/// What earlier turns of one chat cut, applied again before anything else.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Sticky {
+    /// The chat's first message after the system ones; another start (a
+    /// new or rewound chat) begins clean.
+    start: u64,
+    /// The largest window these cuts were made for; a bigger one starts clean.
+    n_ctx: u64,
+    tools: bool,
+    /// How many of [`OPTIONAL_SECTIONS`], in order, are cut.
+    sections: usize,
+    notes: bool,
+    /// AGENTS.md's token cap.
+    agents: Option<u64>,
+    /// Messages after the system ones left out.
+    dropped: usize,
+}
+
+/// Chats remembered at once; the oldest goes first.
+const STICKY_CHATS: usize = 64;
+
+type StickyMap = std::sync::Mutex<std::collections::VecDeque<(String, Sticky)>>;
+
+fn sticky_map() -> &'static StickyMap {
+    static M: std::sync::OnceLock<StickyMap> = std::sync::OnceLock::new();
+    M.get_or_init(Default::default)
+}
+
+/// A hash of the first message after the system ones.
+fn chat_start(input: &[InputItem]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    input
+        .iter()
+        .find(|item| !matches!(item, InputItem::Message { role, .. } if role == "system"))
+        .map(|item| format!("{item:?}"))
+        .hash(&mut h);
+    h.finish()
+}
+
+/// Shrink `req` until it fits `n_ctx` with [`reply_reserve`] left over,
+/// starting from what this chat's earlier turns already cut.
 pub fn fit(req: &ResponsesRequest, n_ctx: u64) -> (ResponsesRequest, Fitted) {
+    let key = req.conversation_id.as_str();
+    let start = chat_start(&req.input);
+    let prior = (!key.is_empty())
+        .then(|| {
+            let m = sticky_map().lock().unwrap_or_else(|e| e.into_inner());
+            m.iter().find(|(k, _)| k == key).map(|(_, s)| s.clone())
+        })
+        .flatten()
+        .filter(|s| s.start == start && n_ctx <= s.n_ctx)
+        .unwrap_or(Sticky {
+            start,
+            n_ctx,
+            ..Default::default()
+        });
+    let (out, done, next) = fit_from(req, n_ctx, prior);
+    if !key.is_empty() {
+        let mut m = sticky_map().lock().unwrap_or_else(|e| e.into_inner());
+        m.retain(|(k, _)| k != key);
+        if m.len() >= STICKY_CHATS {
+            m.pop_front();
+        }
+        m.push_back((key.to_string(), next));
+    }
+    (out, done)
+}
+
+fn fit_from(
+    req: &ResponsesRequest,
+    n_ctx: u64,
+    mut s: Sticky,
+) -> (ResponsesRequest, Fitted, Sticky) {
     let budget = n_ctx.saturating_sub(reply_reserve(n_ctx));
     let mut out = req.clone();
     let mut done = Fitted::default();
-    if request_tokens(&out) <= budget {
-        return (out, done);
+    let fits = |out: &ResponsesRequest| request_tokens(out) <= budget;
+    if s.tools || !fits(&out) {
+        let before = out.tools.len();
+        out.tools.retain(|t| {
+            t["name"]
+                .as_str()
+                .is_some_and(|name| CORE_TOOLS.contains(&name))
+        });
+        done.tools_cut = out.tools.len() < before;
+        s.tools = true;
     }
-    let before = out.tools.len();
-    out.tools.retain(|t| {
-        t["name"]
-            .as_str()
-            .is_some_and(|name| CORE_TOOLS.contains(&name))
-    });
-    done.tools_cut = out.tools.len() < before;
-    if request_tokens(&out) <= budget {
-        return (out, done);
-    }
-    for section in OPTIONAL_SECTIONS {
-        if strip_system_section(&mut out.input, section) {
-            done.system_cut = true;
-            if request_tokens(&out) <= budget {
-                return (out, done);
-            }
+    for (i, section) in OPTIONAL_SECTIONS.iter().enumerate() {
+        if i >= s.sections && fits(&out) {
+            break;
         }
+        done.system_cut |= strip_system_section(&mut out.input, section);
+        s.sections = s.sections.max(i + 1);
     }
-    done.notes_cut = strip_older_notes(&mut out.input);
-    if request_tokens(&out) <= budget {
-        return (out, done);
+    if s.notes || !fits(&out) {
+        done.notes_cut = strip_older_notes(&mut out.input);
+        s.notes = true;
     }
     // AGENTS.md can be many thousand tokens: give it at most a quarter first.
-    done.agents_cut = cap_agents(&mut out.input, budget / 4);
-    if request_tokens(&out) <= budget {
-        return (out, done);
+    if s.agents.is_some() || !fits(&out) {
+        let cap = s.agents.map_or(budget / 4, |c| c.min(budget / 4));
+        done.agents_cut = cap_agents(&mut out.input, cap);
+        s.agents = Some(cap);
     }
-    done.turns_dropped = keep_recent_turns(&mut out, budget);
+    if s.dropped > 0 || !fits(&out) {
+        done.turns_dropped = keep_recent_turns(&mut out, budget, s.dropped);
+        s.dropped = done.turns_dropped;
+    }
     let over = request_tokens(&out).saturating_sub(budget);
     if over > 0 {
         let agents = agents_tokens(&out.input);
-        done.agents_cut |= cap_agents(&mut out.input, agents.saturating_sub(over));
+        let cap = agents.saturating_sub(over);
+        done.agents_cut |= cap_agents(&mut out.input, cap);
+        s.agents = Some(s.agents.map_or(cap, |c| c.min(cap)));
     }
     // One message alone longer than the window (a pasted log): its cabin
     // notes go first (the next turn brings fresh ones), then its middle, so
@@ -124,7 +204,7 @@ pub fn fit(req: &ResponsesRequest, n_ctx: u64) -> (ResponsesRequest, Fitted) {
     if over > 0 {
         done.newest_clipped = clip_newest_user(&mut out.input, over);
     }
-    (out, done)
+    (out, done, s)
 }
 
 /// The newest user message's text, when it has one.
@@ -317,8 +397,11 @@ fn without_notes(text: &str) -> &str {
 
 /// Keep the system messages and the newest whole turns that fit `budget`.
 /// A turn starts at a user message, so a tool result never loses its call.
-/// The newest turn always stays. Returns how many messages were left out.
-fn keep_recent_turns(req: &mut ResponsesRequest, budget: u64) -> usize {
+/// The newest turn always stays. `prior` messages already left out stay
+/// out; when more must go, the cut moves to where the rest fills at most
+/// three quarters of the room, so the next turns fit without moving it
+/// again. Returns how many messages are left out.
+fn keep_recent_turns(req: &mut ResponsesRequest, budget: u64, prior: usize) -> usize {
     let lead = req
         .input
         .iter()
@@ -337,11 +420,27 @@ fn keep_recent_turns(req: &mut ResponsesRequest, budget: u64) -> usize {
         ..req.clone()
     });
     let room = budget.saturating_sub(fixed);
-    let cut = starts
-        .iter()
-        .copied()
-        .find(|&start| estimate_input_tokens(&req.input[start..]) <= room)
-        .unwrap_or(newest);
+    let rest = |start: usize| estimate_input_tokens(&req.input[start..]);
+    // A cut that no longer starts a turn (the chat changed) starts over.
+    let held = Some(lead + prior).filter(|c| prior > 0 && starts.contains(c));
+    let from = held.unwrap_or(lead);
+    let cut = match held {
+        Some(c) if rest(c) <= room => c,
+        _ if held.is_none() && rest(lead) <= room => lead,
+        _ => starts
+            .iter()
+            .copied()
+            .filter(|&start| start >= from)
+            .find(|&start| rest(start) <= room * 3 / 4)
+            .or_else(|| {
+                starts
+                    .iter()
+                    .copied()
+                    .filter(|&start| start >= from)
+                    .find(|&start| rest(start) <= room)
+            })
+            .unwrap_or(newest),
+    };
     if cut == lead {
         return 0;
     }

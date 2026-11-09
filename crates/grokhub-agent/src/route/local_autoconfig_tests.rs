@@ -57,6 +57,11 @@ fn dense_12b() -> GgufMeta {
         file_mb: 7_039,
         tokenizer: None,
         nextn_layers: 0,
+        sliding_window: 0,
+        swa_pattern: vec![],
+        kv_heads: vec![],
+        key_length_swa: 0,
+        value_length_swa: 0,
     }
 }
 
@@ -105,6 +110,58 @@ fn kv_cache_size_follows_layers_heads_and_type() {
     assert_eq!(kv_mb(&dense_31b(), 32_768, KvType::Q8), 16_320);
 }
 
+/// [`dense_12b`] with Gemma-style sliding windows: five of every six layers
+/// see only the last 1,024 tokens.
+fn swa_12b() -> GgufMeta {
+    GgufMeta {
+        sliding_window: 1_024,
+        swa_pattern: grokhub_core::gguf::every_nth_full(6, 48),
+        ..dense_12b()
+    }
+}
+
+#[test]
+fn sliding_window_layers_cost_their_window_and_each_extra_slot_one_more() {
+    // 40 window layers at 1,536 cells and 8 full layers at 32k, against
+    // 6,528 MB with every layer at the full context.
+    assert_eq!(kv_mb(&swa_12b(), 32_768, KvType::Q8), 1_343);
+    assert_eq!(kv_mb(&dense_12b(), 32_768, KvType::Q8), 6_528);
+    // Four slots in one pool: 4 x 1,024 + 512 window cells.
+    assert_eq!(kv_mb_for(&swa_12b(), 32_768, KvType::Q8, 4), 1_853);
+    // Full layers don't grow with slots.
+    assert_eq!(kv_mb_for(&dense_12b(), 32_768, KvType::Q8, 4), 6_528);
+    assert_eq!(swa_cells(1_024, 1, 32_768), 1_536);
+    assert_eq!(swa_cells(1_000, 1, 32_768), 1_536);
+    assert_eq!(swa_cells(1_024, 4, 32_768), 4_608);
+    assert_eq!(swa_cells(1_024, 1, 1_024), 1_024);
+    assert_eq!(swa_cells(0, 2, 8_192), 512);
+}
+
+#[test]
+fn a_sliding_window_12b_on_a_12_gb_gpu_gets_twice_the_context_at_q8_and_two_slots() {
+    let a = autoconfig(
+        &rtx_4070_laptop(),
+        &swa_12b(),
+        Backend::Cuda,
+        GovState::Normal,
+        &Overrides::default(),
+    );
+    assert_eq!(
+        (a.ngl, a.ctx, a.kv, a.run.seqs()),
+        (49, 16_384, KvType::Q8, 2)
+    );
+    assert_eq!(a.run.slots.kv_unified, Some(true));
+    // The same card with every layer at the full context stops at 8k.
+    let dense = autoconfig(
+        &rtx_4070_laptop(),
+        &dense_12b(),
+        Backend::Cuda,
+        GovState::Normal,
+        &Overrides::default(),
+    );
+    assert_eq!((dense.ctx, dense.run.seqs()), (8_192, 1));
+}
+
 #[test]
 fn a_12_gb_gpu_keeps_the_whole_12b_on_the_gpu_with_q4_kv() {
     let a = autoconfig(
@@ -130,12 +187,12 @@ fn a_12_gb_gpu_keeps_the_whole_12b_on_the_gpu_with_q4_kv() {
             tensor_split: None,
             draft: None,
             cpu_only: false,
-            run: Default::default(),
+            run: run_with_slots(1),
         }
     );
     assert_eq!(
         a.to_args().join(" "),
-        "-ngl 49 -c 8192 --threads 4 --cache-type-k q4_0 --cache-type-v q4_0 --flash-attn on --load-mode mmap+mlock --cache-prompt"
+        "-ngl 49 -c 8192 --threads 4 --cache-type-k q4_0 --cache-type-v q4_0 --flash-attn on --load-mode mmap+mlock --parallel 1 --no-kv-unified --cache-prompt"
     );
 }
 
@@ -185,7 +242,7 @@ fn moe_on_a_16_gb_gpu_keeps_every_layer_and_moves_experts_to_ram() {
     );
     assert_eq!(
         a.to_args().join(" "),
-        "-ngl 31 -c 16384 --threads 8 --cache-type-k q8_0 --cache-type-v q8_0 --flash-attn on --n-cpu-moe 14 --load-mode mmap+mlock --cache-prompt"
+        "-ngl 31 -c 16384 --threads 8 --cache-type-k q8_0 --cache-type-v q8_0 --flash-attn on --n-cpu-moe 14 --load-mode mmap+mlock --parallel 2 --kv-unified --cache-prompt"
     );
     // Idle: 90% of memory, every P-core, all threads for prompt batches.
     let r = autoconfig(

@@ -65,11 +65,13 @@ pub fn fits(
     drafter: &GgufMeta,
 ) -> Option<bool> {
     let (gpu, ram) = autoconfig::budgets(p, a.backend, state);
-    let model =
-        meta.file_mb + autoconfig::kv_mb(meta, a.ctx, a.kv) + autoconfig::overhead_mb(a.ctx);
+    let seqs = a.run.seqs();
+    let model = meta.file_mb
+        + autoconfig::kv_mb_for(meta, a.ctx, a.kv, seqs)
+        + autoconfig::overhead_mb(a.ctx);
     let need = model
         + drafter.file_mb
-        + autoconfig::kv_mb(drafter, a.ctx, a.kv)
+        + autoconfig::kv_mb_for(drafter, a.ctx, a.kv, seqs)
         + autoconfig::overhead_mb(a.ctx);
     if gpu == 0 {
         return (need <= ram).then_some(false);

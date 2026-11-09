@@ -47,6 +47,7 @@ fn a_model_sharing_the_gpu_sleeps_runs_low_and_submits_short_batches() {
             ubatch: Some(128),
             vk_nodes_per_submit: Some(20),
             low_priority: true,
+            slots: Slots::default(),
         }
     );
     assert_eq!(
@@ -76,6 +77,86 @@ fn a_build_without_a_flag_never_gets_it() {
         Some(20),
         "an env var is safe on any build"
     );
+}
+
+/// The pinned engine's own `--help`.
+const PINNED_HELP: &str =
+    include_str!("../../../grokhub-core/tests/fixtures/llama_server_help_b12017.txt");
+
+#[test]
+fn the_pinned_engine_knows_every_slot_and_cache_flag() {
+    let o = parse_options(PINNED_HELP);
+    for want in [
+        "--parallel",
+        "--kv-unified",
+        "--no-kv-unified",
+        "--cache-reuse",
+        "--cache-ram",
+        "--poll",
+        "--prio",
+        "--ubatch-size",
+    ] {
+        assert!(o.contains(want), "missing {want}");
+    }
+}
+
+#[test]
+fn slots_follow_the_state_and_context_with_one_on_the_cpu_or_a_short_context() {
+    assert_eq!(slot_count(GovState::RampUp, 65_536, false), 4);
+    assert_eq!(slot_count(GovState::RampUp, 16_384, false), 2);
+    assert_eq!(slot_count(GovState::Normal, 65_536, false), 2);
+    assert_eq!(slot_count(GovState::Throttle, 65_536, false), 1);
+    assert_eq!(slot_count(GovState::RampUp, 8_192, false), 1);
+    assert_eq!(slot_count(GovState::RampUp, 65_536, true), 1);
+}
+
+#[test]
+fn more_than_one_slot_shares_one_kv_pool_and_the_prompt_cache_is_reused() {
+    let o = parse_options(PINNED_HELP);
+    let mut f = RunFlags {
+        slots: slots(&o, 2, Some(20_000)),
+        ..Default::default()
+    };
+    assert_eq!(
+        f.to_args(),
+        [
+            "--parallel",
+            "2",
+            "--kv-unified",
+            "--cache-reuse",
+            "256",
+            "--cache-ram",
+            "5000"
+        ]
+    );
+    assert_eq!(f.seqs(), 2);
+    f.slots = slots(&o, 1, Some(64_000));
+    assert_eq!(
+        f.to_args(),
+        [
+            "--parallel",
+            "1",
+            "--no-kv-unified",
+            "--cache-reuse",
+            "256",
+            "--cache-ram",
+            "8192"
+        ]
+    );
+    // An unknown free RAM keeps the engine's own cap.
+    assert_eq!(slots(&o, 1, None).cache_ram_mb, Some(8_192));
+    // A build without the flags gets none of them, and one sequence.
+    let old = RunFlags {
+        slots: slots(&parse_options(HELP), 4, Some(20_000)),
+        ..Default::default()
+    };
+    assert_eq!(old.to_args(), ["--parallel", "4"]);
+    let none = RunFlags {
+        slots: slots(&parse_options("-t, --threads N\n"), 4, None),
+        ..Default::default()
+    };
+    assert_eq!(none.to_args(), Vec::<String>::new());
+    assert_eq!(none.seqs(), 1);
 }
 
 #[cfg(target_os = "linux")]

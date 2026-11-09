@@ -192,10 +192,14 @@ impl Sidecar {
     }
 
     fn endpoint(&self) -> Endpoint {
+        let slots = self.launch.as_ref().map(|l| &l.run.slots);
         Endpoint {
             base_url: self.base_url(),
             token: self.token.clone(),
             thinking: self.thinking.clone(),
+            slots: slots.and_then(|s| s.parallel).unwrap_or(1).max(1),
+            unified: slots.is_some_and(|s| s.kv_unified == Some(true)),
+            in_flight: self.in_flight.clone(),
         }
     }
 
@@ -507,6 +511,11 @@ fn start_planned(
             Ok(()) => {
                 // Free VRAM with the model loaded: the governor's drop baseline.
                 autoconfig::mark_resident();
+                // The router sizes local turns by the context this server
+                // really has, not a fixed default.
+                if let Some(l) = launch.as_ref() {
+                    super::local::set_ctx_cap(u64::from(l.ctx));
+                }
                 side.thinking = super::local_effort::fetch_thinking(
                     &side.host,
                     side.port,
@@ -1475,6 +1484,12 @@ pub struct Endpoint {
     pub token: String,
     /// [`Sidecar::thinking`].
     pub thinking: super::local_effort::Thinking,
+    /// Server slots (`-np`); 1 when the launch set none.
+    pub slots: u32,
+    /// The slots share one KV pool, so busy slots split its context.
+    pub unified: bool,
+    /// Requests on this server right now.
+    pub in_flight: Arc<AtomicUsize>,
 }
 
 /// Base URL, token and how the model thinks of the global sidecar, when running.

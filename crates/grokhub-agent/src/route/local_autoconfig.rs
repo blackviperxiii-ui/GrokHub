@@ -132,6 +132,7 @@ impl LaunchArgs {
             a.extend(["--split-mode".into(), "layer".into()]);
             a.extend(["--tensor-split".into(), s.join(",")]);
         }
+        a.extend(self.run.to_args());
         if let Some(d) = &self.draft {
             a.extend(d.to_args());
         }
@@ -140,7 +141,6 @@ impl LaunchArgs {
             // the engine off every GPU device.
             a.extend(["--device".into(), "none".into()]);
         }
-        a.extend(self.run.to_args());
         a.push("--cache-prompt".into());
         a
     }
@@ -166,7 +166,7 @@ pub fn same_launch(running: &LaunchArgs, next: &LaunchArgs) -> bool {
 /// (GPU, RAM) MB one launch takes, for deciding whether a second server
 /// fits beside the running one during a warm relaunch.
 pub fn launch_need_mb(meta: &GgufMeta, l: &LaunchArgs) -> (u64, u64) {
-    let kv = kv_mb(meta, l.ctx, l.kv);
+    let kv = kv_mb_for(meta, l.ctx, l.kv, l.run.seqs());
     let over = overhead_mb(l.ctx);
     if l.cpu_only || l.ngl == 0 {
         return (0, meta.file_mb + kv + over);
@@ -205,6 +205,7 @@ pub fn on_cpu(prev: &LaunchArgs) -> LaunchArgs {
         tensor_split: None,
         draft: None,
         cpu_only: true,
+        run: run_with_slots(1),
         ..prev.clone()
     }
 }
@@ -234,8 +235,27 @@ pub fn overhead_mb(ctx: u32) -> u64 {
     512 + u64::from(ctx) / 128
 }
 
+/// KV cache MB for one sequence; see [`kv_mb_for`].
 pub fn kv_mb(meta: &GgufMeta, ctx: u32, kv: KvType) -> u64 {
-    let values = u64::from(meta.block_count) * meta.kv_width() * u64::from(ctx);
+    kv_mb_for(meta, ctx, kv, 1)
+}
+
+/// The engine's default micro-batch, which a sliding-window cache adds room for.
+const DEFAULT_UBATCH: u32 = 512;
+
+/// Cells a sliding-window layer keeps for `seqs` sequences in one unified
+/// cache: the window per sequence plus a micro-batch, padded to 256 as
+/// llama.cpp sizes it, and never more than the context.
+pub fn swa_cells(window: u32, seqs: u32, ctx: u32) -> u64 {
+    let want = u64::from(window) * u64::from(seqs.max(1)) + u64::from(DEFAULT_UBATCH);
+    want.div_ceil(256).saturating_mul(256).min(u64::from(ctx))
+}
+
+/// KV cache MB for `ctx` tokens shared by `seqs` slots: full-attention
+/// layers hold the whole context, sliding-window layers only their window.
+pub fn kv_mb_for(meta: &GgufMeta, ctx: u32, kv: KvType, seqs: u32) -> u64 {
+    let cells = swa_cells(meta.sliding_window, seqs, ctx);
+    let values = meta.kv_values(u64::from(ctx), cells);
     values / 1_024 * kv.bytes_per_1k() / (1_024 * 1_024)
 }
 
@@ -286,8 +306,9 @@ fn ctx_steps(
     CTX_STEPS.into_iter().filter(move |c| *c <= cap.max(4_096))
 }
 
-fn fits(meta: &GgufMeta, ctx: u32, kv: KvType, total_mb: u64) -> bool {
-    meta.file_mb + kv_mb(meta, ctx, kv) + overhead_mb(ctx) <= total_mb
+/// Whether the model and its KV fit `total_mb`, at the slots `slots(ctx)` gives.
+fn fits(meta: &GgufMeta, ctx: u32, kv: KvType, total_mb: u64, slots: &dyn Fn(u32) -> u32) -> bool {
+    meta.file_mb + kv_mb_for(meta, ctx, kv, slots(ctx)) + overhead_mb(ctx) <= total_mb
 }
 
 /// Context past this splits KV across GPU and RAM badly; partial offload stops here.
@@ -303,8 +324,14 @@ fn pick_ctx(
     limit: u64,
     floor: u32,
     kv: Option<KvType>,
+    slots: &dyn Fn(u32) -> u32,
 ) -> Option<(u32, KvType)> {
-    let largest = |kv: KvType| steps.iter().copied().find(|c| fits(meta, *c, kv, limit));
+    let largest = |kv: KvType| {
+        steps
+            .iter()
+            .copied()
+            .find(|c| fits(meta, *c, kv, limit, slots))
+    };
     if let Some(kv) = kv {
         return largest(kv).map(|c| (c, kv));
     }
@@ -330,8 +357,10 @@ pub fn autoconfig(
     let floor = Q8_FLOOR_CTX
         .min(meta.context_length.max(4_096))
         .min(o.ctx.unwrap_or(u32::MAX).max(4_096));
+    let on_cpu = gpu_mb == 0;
+    let slots = |ctx: u32| super::local_flags::slot_count(state, ctx, on_cpu);
     let full = (gpu_mb > 0)
-        .then(|| pick_ctx(meta, &steps, gpu_mb, floor, o.kv))
+        .then(|| pick_ctx(meta, &steps, gpu_mb, floor, o.kv, &slots))
         .flatten()
         .filter(|(c, _)| *c >= floor);
     let cap = if gpu_mb > 0 {
@@ -341,10 +370,11 @@ pub fn autoconfig(
     };
     let capped: Vec<u32> = steps.iter().copied().filter(|c| *c <= cap).collect();
     let (ctx, kv) = full
-        .or_else(|| pick_ctx(meta, &capped, gpu_mb + ram_mb, floor, o.kv))
+        .or_else(|| pick_ctx(meta, &capped, gpu_mb + ram_mb, floor, o.kv, &slots))
         .unwrap_or((4_096, o.kv.unwrap_or(KvType::Q4)));
     let all_layers = meta.block_count + 1;
-    let (ngl, n_cpu_moe) = offload(meta, gpu_mb, ctx, kv);
+    let seqs = slots(ctx);
+    let (ngl, n_cpu_moe) = offload(meta, gpu_mb, ctx, kv, seqs);
     let ngl = o.ngl.map_or(ngl, |n| n.min(all_layers));
     let p_cores = p.cpu.p_cores.max(1);
     let threads = match state {
@@ -371,15 +401,28 @@ pub fn autoconfig(
         tensor_split: p.device_plan().tensor_split,
         draft: None,
         cpu_only: false,
-        run: Default::default(),
+        run: run_with_slots(seqs),
+    }
+}
+
+/// Engine flags with `n` slots (unified KV past one); [`planned`] keeps only
+/// the flags the engine lists.
+pub fn run_with_slots(n: u32) -> super::local_flags::RunFlags {
+    super::local_flags::RunFlags {
+        slots: super::local_flags::Slots {
+            parallel: Some(n),
+            kv_unified: Some(n > 1),
+            ..Default::default()
+        },
+        ..Default::default()
     }
 }
 
 /// `-ngl` and `--n-cpu-moe` for the GPU memory left after KV and buffers.
-fn offload(meta: &GgufMeta, gpu_mb: u64, ctx: u32, kv: KvType) -> (u32, Option<u32>) {
+fn offload(meta: &GgufMeta, gpu_mb: u64, ctx: u32, kv: KvType, seqs: u32) -> (u32, Option<u32>) {
     let all = meta.block_count + 1;
     let blocks = u64::from(meta.block_count.max(1));
-    let room = gpu_mb.saturating_sub(kv_mb(meta, ctx, kv) + overhead_mb(ctx));
+    let room = gpu_mb.saturating_sub(kv_mb_for(meta, ctx, kv, seqs) + overhead_mb(ctx));
     if gpu_mb == 0 {
         return (0, None);
     }
@@ -871,13 +914,24 @@ fn planned(
     if super::local_scale::gaming_reason(super::local_gov::reason()) {
         args = gaming_launch(&args);
     }
+    let options = super::local_flags::engine_options(binary);
+    // A tuned or gaming launch may have cut the context or left the GPU:
+    // never more slots than memory was planned for, nor than now fit.
+    let on_cpu = args.cpu_only || args.ngl == 0;
+    let n = args
+        .run
+        .seqs()
+        .min(super::local_flags::slot_count(state, args.ctx, on_cpu));
+    let slots = super::local_flags::slots(&options, n, p.free_ram_mb);
     // Kept up under Throttle, it shares the machine: no spinning threads,
     // low priority, and short GPU submissions so other apps' frames wait less.
-    if state == GovState::Throttle {
-        let options = super::local_flags::engine_options(binary);
+    args.run = if state == GovState::Throttle {
         let on_gpu = !args.cpu_only && args.ngl > 0;
-        args.run = super::local_flags::shared(&options, args.backend, on_gpu);
-    }
+        super::local_flags::shared(&options, args.backend, on_gpu)
+    } else {
+        Default::default()
+    };
+    args.run.slots = slots;
     Some((args, plan, key, dir))
 }
 
