@@ -32,6 +32,7 @@ vi.mock("./api", () => ({
     seen.handler = handler;
     return Promise.resolve(() => {});
   },
+  helperQuestions: () => Promise.resolve([]),
   onEventGap: () => Promise.resolve(() => {}),
   onFileDrop: () => Promise.resolve(() => {}),
 }));

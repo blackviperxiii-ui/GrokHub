@@ -84,6 +84,7 @@ vi.mock("./api", () => ({
     api.handler = handler;
     return Promise.resolve(() => {});
   },
+  helperQuestions: () => Promise.resolve([]),
   onEventGap: (handler: () => void) => {
     api.gap = handler;
     return Promise.resolve(() => {});
@@ -623,6 +624,43 @@ describe("Chat", () => {
     expect(screen.queryByText("late")).toBeNull();
     expect(screen.queryByRole("group", { name: "Approve write" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+  });
+
+  it("shows a helper's question after the turn ended, once, and sends its answer", async () => {
+    api.sendChat.mockResolvedValue("end_turn");
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("look into it");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeDisabled());
+
+    const ask: ChatEvent = { kind: "permission", id: "h1", title: "write", action: "notes.md", reason: "" };
+    act(() => api.handler?.({ conversationId: id, event: ask, helper: true }));
+    act(() => api.handler?.({ conversationId: id, event: ask, helper: true }));
+    act(() => api.handler?.({ conversationId: "another-chat", event: { ...ask, id: "h2" }, helper: true }));
+
+    expect(screen.getAllByRole("group", { name: "Approve write" })).toHaveLength(1);
+    await userEvent.click(screen.getByRole("button", { name: "Allow once" }));
+    expect(api.answerPermission).toHaveBeenLastCalledWith(id, "h1", "allow");
+  });
+
+  it("a turn's end retires its own cards but leaves a helper's question open", async () => {
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("go");
+
+    emit(id, { kind: "permission", id: "own", title: "write", action: "a.txt", reason: "" });
+    act(() =>
+      api.handler?.({
+        conversationId: id,
+        event: { kind: "permission", id: "h", title: "delete", action: "b.txt", reason: "" },
+        helper: true,
+      }),
+    );
+    act(() => finish());
+
+    const own = screen.getByRole("group", { name: "Approve write" });
+    await waitFor(() => expect(own).toHaveTextContent("Not run: the turn ended"));
+    const helper = screen.getByRole("group", { name: "Approve delete" });
+    expect(within(helper).getByRole("button", { name: "Allow once" })).toBeInTheDocument();
   });
 
   it("shows the error and links to Settings", async () => {

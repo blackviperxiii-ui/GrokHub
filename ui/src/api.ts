@@ -162,6 +162,8 @@ export type ElicitAction = "accept" | "decline" | "cancel";
 export interface ChatEnvelope {
   conversationId: string;
   event: ChatEvent;
+  /** From a helper that can outlive the reply: shown even when no reply runs. */
+  helper?: boolean;
 }
 
 export const CHAT_EVENT = "chat://event";
@@ -337,6 +339,12 @@ export function answerPermission(
   answer: Answer,
 ): Promise<void> {
   return invoke<void>("answer_permission", { conversationId, callId, answer });
+}
+
+/** Helper questions this chat still waits on, for when it opens. */
+export function helperQuestions(conversationId: string): Promise<ChatEvent[]> {
+  if (!inShell()) return Promise.resolve([]);
+  return invoke<ChatEvent[]>("helper_questions", { conversationId });
 }
 
 export function cancelChat(conversationId: string): Promise<void> {

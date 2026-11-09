@@ -19,6 +19,7 @@ pub mod credential;
 pub mod export;
 pub mod game_companion;
 pub mod goals;
+mod helper_asks;
 pub mod history;
 pub mod home;
 #[cfg(desktop)]
@@ -572,6 +573,7 @@ fn answer_permission(
     answer: String,
 ) -> Result<(), String> {
     let answer = agent::parse_answer(&answer)?;
+    helper_asks::answered(&conversation_id, &call_id);
     let session = state
         .chats
         .lock()
@@ -605,6 +607,7 @@ fn answer_elicit(
     if !matches!(action.as_str(), "accept" | "decline" | "cancel") {
         return Err(format!("unknown answer: {action}"));
     }
+    helper_asks::answered(&conversation_id, &id);
     let chats = state.chats.lock().unwrap_or_else(|e| e.into_inner());
     let session = chats
         .get(&conversation_id)
@@ -616,6 +619,12 @@ fn answer_elicit(
         value.as_deref().unwrap_or(""),
     );
     Ok(())
+}
+
+/// Helper questions a chat still waits on, for when the chat opens.
+#[tauri::command]
+fn helper_questions(conversation_id: String) -> Vec<agent::UiEvent> {
+    helper_asks::waiting(&conversation_id)
 }
 
 #[tauri::command]
@@ -735,6 +744,7 @@ fn drop_worker(state: &ShellState, conversation_id: &str) {
     if let Some(session) = removed {
         session.cancel();
     }
+    helper_asks::chat_ended(conversation_id);
 }
 
 /// The input kinds of the model a chat starts at, for the chips' notes.
@@ -3351,6 +3361,8 @@ pub fn run() {
             });
             #[cfg(desktop)]
             start_scheduler(app);
+            // Questions from helpers that outlive their chat's reply.
+            helper_asks::start(app.handle().clone());
             // The internet log, when it's on and the cabin isn't running.
             #[cfg(desktop)]
             net_watch::start(app.state::<ShellState>().config_dir.clone());
@@ -3394,6 +3406,7 @@ pub fn run() {
             transcribe,
             answer_permission,
             answer_elicit,
+            helper_questions,
             cancel_chat,
             steer_chat,
             turns::read_turn,
