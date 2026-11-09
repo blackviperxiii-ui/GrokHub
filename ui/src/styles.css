@@ -24,6 +24,21 @@
 
 /* Shared shape, depth and focus tokens. Colors come from the theme blocks below. */
 :root {
+  /* The one spacing scale, same as the cabin (docs/design/spacing.md). */
+  --space-2: 2px;
+  --space-4: 4px;
+  --space-8: 8px;
+  --space-12: 12px;
+  --space-16: 16px;
+  --space-24: 24px;
+  --space-32: 32px;
+  --space-40: 40px;
+  --space-48: 48px;
+  --space-64: 64px;
+  --space-80: 80px;
+  --space-96: 96px;
+  /* Page side margin: roomy on wide windows, tighter under 900px (auto density). */
+  --page-pad: 24px;
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 16px;
@@ -206,7 +221,7 @@ button {
   background: var(--accent);
   color: var(--accent-text);
   border-radius: var(--radius-sm);
-  padding: 6px 14px;
+  padding: 8px 16px;
   cursor: pointer;
   transition:
     background-color var(--t-fast) var(--ease-out),
@@ -289,7 +304,7 @@ button.link {
   border: none;
   color: inherit;
   text-decoration: underline;
-  padding: 0 6px;
+  padding: 0 8px;
 }
 
 input,
@@ -300,7 +315,7 @@ select {
   background: var(--panel);
   border: 1px solid var(--field-border);
   border-radius: var(--radius-sm);
-  padding: 8px 10px;
+  padding: 8px 12px;
   transition:
     border-color var(--t-fast) var(--ease-out),
     box-shadow var(--t-fast) var(--ease-out);
@@ -314,7 +329,7 @@ textarea::placeholder {
 /* The dropdown matches the other fields; the arrow is two gradients so it follows the theme. */
 select {
   appearance: none;
-  padding-right: 34px;
+  padding-right: 32px;
   cursor: pointer;
   background-image:
     linear-gradient(45deg, transparent 50%, var(--muted) 50%),
@@ -349,8 +364,14 @@ select:focus-visible {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  padding: 12px 16px;
+  padding: 12px var(--page-pad);
   gap: 12px;
+}
+
+@media (max-width: 899px) {
+  :root {
+    --page-pad: 16px;
+  }
 }
 
 .app > div:not([hidden]) {
@@ -480,7 +501,7 @@ select:focus-visible {
 }
 
 .palette li {
-  padding: 8px 10px;
+  padding: 8px 12px;
   border-radius: var(--radius-sm);
   cursor: pointer;
   transition: background-color var(--t-fast) var(--ease-out);
@@ -546,7 +567,7 @@ select:focus-visible {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
   padding: 4px 2px 8px;
 }
 
@@ -561,7 +582,7 @@ select:focus-visible {
 
 .bubble {
   max-width: min(80%, 70ch);
-  padding: 10px 14px;
+  padding: 12px 16px;
   border-radius: var(--radius-lg);
   line-height: 1.5;
   white-space: pre-wrap;
@@ -716,7 +737,7 @@ h2.md-heading {
 .md-item {
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: 8px;
 }
 
 .md-marker {
@@ -730,7 +751,7 @@ h2.md-heading {
   width: 5px;
   height: 5px;
   min-width: 5px;
-  margin: 0 5px 0 4px;
+  margin: 0 4px 0 4px;
   border-radius: 50%;
   background: var(--muted);
   transform: translateY(-2px);
@@ -752,7 +773,7 @@ h2.md-heading {
 }
 
 .md-quote {
-  padding: 2px 0 2px 10px;
+  padding: 2px 0 2px 12px;
   border-left: 3px solid var(--field-border);
   color: var(--muted);
 }
@@ -761,7 +782,7 @@ h2.md-heading {
   width: 100%;
   border: 0;
   border-top: 1px solid var(--border);
-  margin: 6px 0;
+  margin: 8px 0;
 }
 
 .md-link {
@@ -787,7 +808,7 @@ h2.md-heading {
 }
 
 .md-inline-code {
-  padding: 1px 5px;
+  padding: 1px 4px;
   border-radius: 5px;
   background: var(--bg);
   border: 1px solid var(--border);
@@ -806,7 +827,7 @@ h2.md-heading {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 4px 6px 4px 10px;
+  padding: 4px 8px 4px 12px;
   border-bottom: 1px solid var(--border);
 }
 
@@ -816,13 +837,13 @@ h2.md-heading {
 }
 
 button.md-copy {
-  padding: 2px 10px;
+  padding: 2px 12px;
   font-size: 0.8rem;
 }
 
 .md-code pre {
   margin: 0;
-  padding: 8px 10px;
+  padding: 8px 12px;
   overflow-x: auto;
   white-space: pre;
   color: var(--text);
@@ -861,7 +882,7 @@ button.md-copy {
 
 .md-table th,
 .md-table td {
-  padding: 4px 10px;
+  padding: 4px 12px;
   vertical-align: top;
   overflow-wrap: normal;
 }
@@ -899,7 +920,7 @@ button.md-copy {
 .composer textarea {
   flex: 1;
   min-height: 52px;
-  padding: 12px 14px;
+  padding: 12px 16px;
   border-radius: var(--radius-md);
   /* flex: 1 sizes it; its default width (cols) would hold the row wider than a phone. */
   width: 0;
@@ -910,13 +931,13 @@ button.md-copy {
 .attach-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   align-items: center;
 }
 
 .chip.attach {
   display: inline-flex;
-  gap: 6px;
+  gap: 8px;
   align-items: center;
   max-width: 100%;
 }
@@ -966,7 +987,7 @@ button.md-copy {
 /* Big and labelled, so leaving Settings is never a hunt for a small ×. */
 .settings-back {
   min-height: 44px;
-  padding: 0 18px;
+  padding: 0 16px;
   font-weight: 600;
 }
 
@@ -985,7 +1006,7 @@ button.md-copy {
 
 .settings-tabs button {
   min-height: 44px;
-  padding: 0 18px;
+  padding: 0 16px;
   font-size: 1rem;
 }
 
@@ -1159,8 +1180,8 @@ button.md-copy {
 .side-cards {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin-bottom: 6px;
+  gap: 8px;
+  margin-bottom: 8px;
 }
 
 .side-card {
@@ -1298,7 +1319,7 @@ button.danger {
 .memory-file label {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   font-size: 0.85rem;
   font-weight: 500;
   color: var(--steel);
@@ -1427,12 +1448,12 @@ button.danger {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
 .local-limits ul {
   list-style: disc;
-  padding-left: 20px;
+  padding-left: 24px;
 }
 
 .local-mode {
@@ -1455,14 +1476,14 @@ button.danger {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 6px 10px;
+  padding: 8px 12px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--panel);
 }
 
 .local-model .check {
-  gap: 6px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
@@ -1510,7 +1531,7 @@ button.danger {
 .local-library {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   width: 100%;
   box-sizing: border-box;
   padding: 8px 12px;
@@ -1552,7 +1573,7 @@ button.danger {
 }
 
 .local-ai .notice p {
-  margin: 0 0 6px;
+  margin: 0 0 8px;
 }
 
 .local-grid {
@@ -1599,7 +1620,7 @@ button.danger {
 .settings dl {
   display: grid;
   grid-template-columns: max-content 1fr;
-  gap: 6px 16px;
+  gap: 8px 16px;
   margin: 0;
 }
 
@@ -1650,7 +1671,7 @@ button.danger {
 
 .web-access .links {
   margin: 0;
-  padding-left: 18px;
+  padding-left: 16px;
   overflow-wrap: anywhere;
 }
 
@@ -1716,7 +1737,7 @@ button.danger {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
 .interests {
@@ -1736,7 +1757,7 @@ button.danger {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
 /* A muted topic reads as set aside without fading its text below contrast. */
@@ -1844,8 +1865,8 @@ textarea.code {
 .choices {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin: 6px 0;
+  gap: 8px;
+  margin: 8px 0;
 }
 
 .choices button[aria-pressed="true"] {
@@ -1888,7 +1909,7 @@ textarea.code {
 }
 
 .work-badge {
-  padding: 0 6px;
+  padding: 0 8px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   font-size: 0.85em;
@@ -1918,7 +1939,7 @@ textarea.code {
 .board-steps-edit {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
 .board-steps-edit textarea {
@@ -1983,7 +2004,7 @@ textarea.code {
 .chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px 12px;
+  gap: 8px 12px;
   align-items: center;
 }
 
@@ -1994,7 +2015,7 @@ textarea.code {
 
 .chip {
   font-size: 0.85em;
-  padding: 3px 10px;
+  padding: 4px 12px;
   border-radius: 999px;
   background: transparent;
   color: var(--text);
@@ -2033,7 +2054,7 @@ span.chip.quiet {
 .quick-chip {
   flex: none;
   min-height: 48px;
-  padding: 0 18px;
+  padding: 0 16px;
   font-size: 16px;
   white-space: nowrap;
   border-radius: 999px;
@@ -2056,7 +2077,7 @@ span.chip.quiet {
   flex: none;
   min-width: 36px;
   min-height: 48px;
-  margin-left: -6px;
+  margin-left: -8px;
   padding: 0;
   font-size: 18px;
   border: none;
@@ -2077,7 +2098,7 @@ span.chip.quiet {
   max-width: 420px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
   align-items: flex-start;
 }
 
@@ -2203,13 +2224,13 @@ label.toggle-row {
   flex-direction: column;
   align-items: stretch;
   gap: 8px;
-  padding: 12px 14px;
+  padding: 12px 16px;
 }
 
 .feed-head {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
+  gap: 12px;
 }
 
 .topic-icon {
@@ -2270,7 +2291,7 @@ label.toggle-row {
 .feed-menu-date {
   color: var(--muted);
   font-size: 0.85em;
-  padding: 6px 10px;
+  padding: 8px 12px;
 }
 
 .snippet {
@@ -2295,7 +2316,7 @@ label.toggle-row {
 .media.gallery {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 6px;
+  gap: 8px;
 }
 
 .media.gallery .media-item img {
@@ -2343,7 +2364,7 @@ label.toggle-row {
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 6px 12px;
+  padding: 8px 12px;
   text-decoration: none;
 }
 
@@ -2718,7 +2739,7 @@ label.toggle-row {
   right: -6px;
   min-width: 18px;
   height: 18px;
-  padding: 0 5px;
+  padding: 0 4px;
   border-radius: 9px;
   background: var(--danger);
   color: #fff;
@@ -2734,7 +2755,7 @@ label.toggle-row {
   top: calc(100% + 6px);
   z-index: 6;
   width: min(340px, calc(100vw - 32px));
-  padding: 10px 12px 12px;
+  padding: 12px 12px 12px;
   max-height: 60vh;
   overflow-y: auto;
   background: var(--panel);
@@ -2888,7 +2909,7 @@ label.toggle-row {
 .imagine-bar {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
 }
 
 .imagine-prompt {
@@ -2908,7 +2929,7 @@ label.toggle-row {
   padding: 0;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  gap: 10px;
+  gap: 12px;
 }
 
 .imagine-tile {
@@ -3012,7 +3033,7 @@ label.toggle-row {
   flex: none;
   align-items: center;
   gap: 8px;
-  padding: 6px 4px;
+  padding: 8px 4px;
   font-weight: 600;
   color: var(--text);
 }
@@ -3024,7 +3045,7 @@ label.toggle-row {
 .tabs button {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
 
 .tab-icon {
@@ -3061,7 +3082,7 @@ label.toggle-row {
 
   .tabs button {
     flex: none;
-    padding-inline: 10px;
+    padding-inline: 12px;
   }
 
   .tab-label {
@@ -3231,7 +3252,7 @@ label.toggle-row {
   display: flex;
   gap: 8px;
   align-items: baseline;
-  padding: 6px 8px;
+  padding: 8px 8px;
   border-radius: 6px;
   cursor: pointer;
 }
@@ -3294,7 +3315,7 @@ label.toggle-row {
   width: 100%;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   padding: 0;
   background: transparent;
   border: 2px solid transparent;
@@ -3313,7 +3334,7 @@ label.toggle-row {
 }
 
 .library-name {
-  padding: 0 6px 6px;
+  padding: 0 8px 8px;
   font-size: 0.9em;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3449,7 +3470,7 @@ label.toggle-row {
   flex-direction: column;
   flex-wrap: nowrap;
   align-items: stretch;
-  gap: 6px;
+  gap: 8px;
 }
 
 .card.board-card[draggable="true"] {
@@ -3469,7 +3490,7 @@ label.toggle-row {
 .board-notes-edit {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
 .board-notes-edit textarea {
@@ -3623,7 +3644,7 @@ label.toggle-row {
 .verdict {
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: 8px;
   margin: 2px 0;
   color: var(--text);
   font-size: 0.95rem;
@@ -3695,13 +3716,13 @@ label.toggle-row {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
 .fix-row {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  padding: 8px 10px;
+  padding: 8px 12px;
 }
 
 .fix-row-head {
@@ -3729,7 +3750,7 @@ label.toggle-row {
 
 .fix-steps {
   margin: 8px 0 0;
-  padding-left: 20px;
+  padding-left: 24px;
 }
 
 .fix-compare {
@@ -3764,7 +3785,7 @@ label.toggle-row {
 }
 
 .confirm-window p {
-  margin: 0 0 10px;
+  margin: 0 0 12px;
 }
 
 .confirm-window .confirm-keeps {
@@ -3780,7 +3801,7 @@ label.toggle-row {
 .msg-more {
   position: absolute;
   top: 2px;
-  padding: 0 6px;
+  padding: 0 8px;
   border: none;
   background: transparent;
   box-shadow: none;
@@ -3897,7 +3918,7 @@ label.toggle-row {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 6px;
+  gap: 8px;
   padding: 0;
   border: none;
   background: transparent;
@@ -3919,7 +3940,7 @@ label.toggle-row {
 .home-steps {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -4020,7 +4041,7 @@ label.toggle-row {
 .home-edit {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
   padding: 12px;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -4036,7 +4057,7 @@ label.toggle-row {
 .home-edit-slot {
   display: grid;
   grid-template-columns: minmax(110px, auto) 1fr;
-  gap: 4px 10px;
+  gap: 4px 12px;
   align-items: center;
 }
 
@@ -4048,7 +4069,7 @@ label.toggle-row {
 .home-streak {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
 .xp-line {
@@ -4087,7 +4108,7 @@ label.toggle-row {
   padding: 0;
   display: grid;
   grid-template-columns: repeat(7, 1fr);
-  gap: 6px;
+  gap: 8px;
 }
 
 .streak-days li {
@@ -4117,7 +4138,7 @@ label.toggle-row {
   align-self: center;
   flex-direction: column;
   align-items: stretch;
-  gap: 10px;
+  gap: 12px;
   padding: 16px;
 }
 
@@ -4134,7 +4155,7 @@ label.toggle-row {
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  padding: 8px 10px;
+  padding: 8px 12px;
   border-radius: var(--radius-sm);
 }
 
@@ -4390,7 +4411,7 @@ label.toggle-row {
   bottom: 16px;
   z-index: 50;
   max-width: 340px;
-  padding: 14px;
+  padding: 16px;
   flex-direction: column;
 }
 
@@ -4416,7 +4437,7 @@ label.toggle-row {
 
 .feed-items {
   margin: 0 0 8px;
-  padding-left: 18px;
+  padding-left: 16px;
 }
 
 /* Download models: kind tabs, then one row per model. */
@@ -4424,7 +4445,7 @@ label.toggle-row {
 .local-library-queue {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   align-items: center;
 }
 
