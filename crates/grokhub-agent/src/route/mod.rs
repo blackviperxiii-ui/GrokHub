@@ -36,6 +36,7 @@ pub mod live;
 pub mod local;
 pub mod local_autoconfig;
 pub mod local_bench;
+pub mod local_doctor;
 pub mod local_effort;
 pub mod local_fit;
 pub mod local_flags;
@@ -298,7 +299,7 @@ pub fn call_model(
     // 18+ chat runs on this computer's model only, never online.
     if adult::to_local(&sent.input, dest) {
         if let Some(notice) = adult::no_local_notice() {
-            let out = adult::notice_answer(&call.class, notice)?;
+            let out = adult::notice_answer(&call.class, &notice)?;
             let tokens = CallTokens::of(&sent, &out.usage);
             return Ok(Routed { out, tokens });
         }

@@ -35,6 +35,7 @@ mod models;
 mod pace;
 pub mod package_age;
 pub mod perm;
+pub mod plan_room;
 mod plan_skills;
 pub mod plugins;
 mod post_check;

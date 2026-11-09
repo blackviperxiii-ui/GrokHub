@@ -295,7 +295,7 @@ impl Cabin {
                     if self.note_cloud_rejection(&e) && !self.turn_retried {
                         self.turn_retried = true;
                         self.kick_model(false);
-                        self.status = super::native_engine::LOCAL_FALLBACK_NOTE.into();
+                        self.status = super::native_engine::local_fallback_note().into();
                         continue;
                     }
                     if grokhub_core::proc_util::is_sigterm_status(&e) && !self.turn_retried {

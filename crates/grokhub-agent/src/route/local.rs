@@ -275,22 +275,63 @@ pub const HEAVY_WAIT: std::time::Duration = std::time::Duration::from_secs(15 * 
 
 /// Last `ensure_global` failure when production assets are present (cleared on success).
 pub fn bootstrap_error() -> Option<String> {
-    bootstrap_slot().lock().ok().and_then(|g| g.clone())
+    bootstrap_slot()
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|(e, _)| e.clone()))
 }
 
-fn bootstrap_slot() -> &'static Mutex<Option<String>> {
-    static SLOT: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+/// How long a failed start keeps the route off before a request tries again.
+/// One failure used to keep it off until the app restarted, so a model and
+/// drafter on disk read as "none set up" for the rest of the session.
+pub const START_RETRY_SECS: u64 = 60;
+
+fn bootstrap_slot() -> &'static Mutex<Option<(String, u64)>> {
+    static SLOT: OnceLock<Mutex<Option<(String, u64)>>> = OnceLock::new();
     SLOT.get_or_init(|| Mutex::new(None))
 }
 
 fn set_bootstrap_error(err: Option<String>) {
     if let Ok(mut slot) = bootstrap_slot().lock() {
-        *slot = err;
+        *slot = err.map(|e| (e, unix_secs_now()));
+    }
+}
+
+fn unix_secs_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// The last start failed less than [`START_RETRY_SECS`] ago: the route waits
+/// before it tries again (the governor's crash breaker still caps retries).
+pub fn start_failed_recently() -> bool {
+    bootstrap_slot()
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|(_, at)| *at))
+        .is_some_and(|at| unix_secs_now().saturating_sub(at) < START_RETRY_SECS)
+}
+
+/// Forget the last start failure, so the next request starts the model again
+/// (the self-check does this once it has read why).
+pub fn clear_start_error() {
+    set_bootstrap_error(None);
+}
+
+/// Tests only: the last start failed `secs` ago.
+#[cfg(test)]
+pub(crate) fn age_start_error(secs: u64) {
+    if let Ok(mut slot) = bootstrap_slot().lock() {
+        if let Some((_, at)) = slot.as_mut() {
+            *at = at.saturating_sub(secs);
+        }
     }
 }
 
 /// An on-device runtime and model are present: a test fake, or a binary + GGUF
-/// under the config dir / env overrides (not when bootstrap failed).
+/// under the config dir / env overrides. Not for [`START_RETRY_SECS`] after a
+/// start failed; then the next request tries again.
 pub fn installed() -> bool {
     if test_runtime().is_some() {
         return true;
@@ -298,7 +339,12 @@ pub fn installed() -> bool {
     if !production_assets_present() {
         return false;
     }
-    bootstrap_error().is_none()
+    !start_failed_recently()
+}
+
+/// The files are on disk but the last start failed: why, for the chat.
+pub fn start_failure() -> Option<String> {
+    production_assets_present().then(bootstrap_error).flatten()
 }
 
 fn production_assets_present() -> bool {

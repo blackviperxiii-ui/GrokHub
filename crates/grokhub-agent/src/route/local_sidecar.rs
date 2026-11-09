@@ -478,6 +478,8 @@ fn start_planned(
     let mut bare_cpu = launch.is_none() && local_gov::gpu_contended();
     // The first start's error, kept when the CPU retry fails too.
     let mut gpu_err: Option<String> = None;
+    // The drafter came off after it stopped a start (see below).
+    let mut dropped_draft = false;
     loop {
         let port = free_loopback_port()?;
         let token = random_token();
@@ -525,6 +527,9 @@ fn start_planned(
                 if let Some(why) = gpu_err.as_deref() {
                     health::log("gpu_fallback", Some(why));
                 }
+                if dropped_draft {
+                    super::local_spec::draft_broke_start();
+                }
                 if let (Some(l), Some((_, key, dir))) = (launch.as_ref(), planned.as_ref()) {
                     if attempt > 0 || gpu_err.is_some() {
                         let tuned = autoconfig::Tuned {
@@ -553,6 +558,18 @@ fn start_planned(
         };
         side.stop();
         let log = std::fs::read_to_string(server_log_path(&paths.binary)).unwrap_or_default();
+        // A drafter that won't load beside this model (another tokenizer, a
+        // broken or half-written file) stops the whole start, and the model
+        // and drafter on disk read as not ready. The model starts alone first,
+        // before a CPU retry; once that works the pair stays off until a retest.
+        if !autoconfig::oom_in_log(&log)
+            && let Some(l) = launch.as_mut().filter(|l| l.draft.is_some())
+        {
+            health::log("draft_off", Some(&err));
+            l.draft = None;
+            dropped_draft = true;
+            continue;
+        }
         if gpu_err.is_none() && retry_on_cpu(&err, &log, launch.as_ref(), bare_cpu) {
             gpu_err = Some(err);
             match launch.as_ref() {
@@ -834,12 +851,27 @@ fn llama_server_name() -> &'static str {
     }
 }
 
+/// A GGUF that can't be the chat model: a catalog drafter or vision
+/// projector, or any `mmproj` file. Loading one as the model fails the start.
+pub fn helper_gguf(path: &Path) -> bool {
+    use grokhub_core::local_setup::{local_models, ModelKind};
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    name.to_ascii_lowercase().contains("mmproj")
+        || local_models().iter().any(|m| {
+            matches!(m.kind, ModelKind::Drafter | ModelKind::VisionProjector)
+                && m.file.eq_ignore_ascii_case(name)
+        })
+}
+
 fn first_gguf(dir: &Path) -> Option<PathBuf> {
     let mut entries: Vec<_> = std::fs::read_dir(dir)
         .ok()?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
         .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("gguf"))
+        .filter(|p| p.is_file() && !helper_gguf(p))
         .collect();
     entries.sort();
     entries.into_iter().next()

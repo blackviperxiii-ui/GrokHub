@@ -223,7 +223,13 @@ impl WsPool {
                 close(guard.take());
             }
             if guard.is_none() {
-                match connect_within(&self.url, bearer, chat, cancel) {
+                match connect_within(
+                    &self.url,
+                    bearer,
+                    chat,
+                    auth_kind == AuthKind::OAuth,
+                    cancel,
+                ) {
                     Ok(socket) => {
                         *guard = Some(Conn {
                             socket,
@@ -484,6 +490,9 @@ fn read_turn(
                 .and_then(Value::as_str)
                 .unwrap_or("model stream error");
             let message = grokhub_core::redact_secrets(message);
+            if auth_kind == AuthKind::OAuth && crate::plan_room::plan_refusal(status, &message) {
+                crate::plan_room::note_refused(grokhub_core::now_ms());
+            }
             return Read::Failed(
                 crate::client::map_http_status(status, &message, None, auth_kind),
                 true,
@@ -515,7 +524,9 @@ fn read_turn(
 
 /// Open a socket: TCP with a timeout, TLS (rustls, ring, webpki roots) for
 /// `wss`, then the upgrade with the bearer and the chat's cache key.
-fn connect(url: &str, bearer: &str, chat: &str) -> Result<Socket, String> {
+/// `signed_in`: the bearer is a Sign in with Grok token, so the upgrade's
+/// rate-limit headers update the SuperGrok room ([`crate::plan_room`]).
+fn connect(url: &str, bearer: &str, chat: &str, signed_in: bool) -> Result<Socket, String> {
     let mut request = url.into_client_request().map_err(|e| e.to_string())?;
     let headers = request.headers_mut();
     let header =
@@ -556,8 +567,21 @@ fn connect(url: &str, bearer: &str, chat: &str) -> Result<Socket, String> {
     } else {
         None
     };
-    let (socket, _) = tungstenite::client_tls_with_config(request, stream, None, connector)
+    let (socket, upgrade) = tungstenite::client_tls_with_config(request, stream, None, connector)
         .map_err(|e| e.to_string())?;
+    if signed_in {
+        let headers = upgrade.headers();
+        crate::plan_room::note_reply(
+            upgrade.status().as_u16(),
+            &|name| {
+                headers
+                    .get(name)
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_string)
+            },
+            grokhub_core::now_ms(),
+        );
+    }
     tcp_of(&socket)
         .ok_or("unknown stream")?
         .set_read_timeout(Some(READ_POLL))
@@ -588,6 +612,7 @@ fn connect_within(
     url: &str,
     bearer: &str,
     chat: &str,
+    signed_in: bool,
     cancel: &CancelToken,
 ) -> Result<Socket, Opened> {
     use std::sync::mpsc::RecvTimeoutError;
@@ -596,7 +621,7 @@ fn connect_within(
     std::thread::Builder::new()
         .name("ws-connect".into())
         .spawn(move || {
-            let _ = tx.send(connect(&url, &bearer, &chat));
+            let _ = tx.send(connect(&url, &bearer, &chat, signed_in));
         })
         .map_err(|_| Opened::Failed)?;
     let deadline = Instant::now() + CONNECT_DEADLINE;
