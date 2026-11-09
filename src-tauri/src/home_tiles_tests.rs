@@ -183,3 +183,26 @@ fn feed_tiles_read_their_pulse_cards_and_say_where_the_switch_is() {
     assert_eq!(feed("deals", &d, NOW).state, TileState::Off);
     let _ = std::fs::remove_dir_all(&d);
 }
+
+#[test]
+fn updates_opens_its_page_and_shows_what_the_page_last_found() {
+    use grokhub_core::home::updates::{Found, Sources, UpdateItem};
+    let fresh = updates_view("3.5.0", None);
+    assert_eq!(fresh.text.caption, "Tap to see what's waiting to update");
+    assert_eq!(fresh.tap, Some(TileAction::nav("updates")));
+    assert_eq!(fresh.buttons[0].action, TileAction::nav("updates"));
+    let read = Sources {
+        version: "3.5.0".into(),
+        steam: Some(vec!["Hades II".into()]),
+        system: Some(Found::items(vec![
+            UpdateItem::named("linux"),
+            UpdateItem::named("mesa"),
+        ])),
+        gpu_driver: Some("560.35".into()),
+        ..Sources::default()
+    };
+    let v = updates_view("3.5.0", Some(&read));
+    assert_eq!(v.text.big, "2 waiting");
+    assert_eq!(v.text.caption, "Hades II · 2 system packages");
+    assert_eq!(v.text.detail.as_deref(), Some("GPU driver 560.35"));
+}

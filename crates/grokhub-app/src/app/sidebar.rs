@@ -498,20 +498,31 @@ impl Cabin {
                 ui.add_space(4.0);
                 crate::theme::glide_paint(ui, "rail");
                 let cur = self.rail_id();
-                for (id, label) in crate::theme::LOADOUT_NAV {
-                    let active = cur == *id;
-                    let resp =
-                        Self::icon_nav_row(ui, active, crate::icons::rail_icon_for(id), label);
-                    if resp.clicked() {
-                        match *id {
-                            "home" => self.open_mission_home(),
-                            "profile" => self.open_profile(),
-                            // Chat rail restores the last-used tab. Tabs live under the title bar.
-                            "chat" => self.set_nav_id(id),
-                            _ => self.set_nav_id(id),
+                // Eleven rows just fit the smallest window; a shorter one
+                // scrolls the rail instead of cutting the last rows off.
+                egui::ScrollArea::vertical()
+                    .id_salt("rail-rows")
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                    .show(ui, |ui| {
+                        for (id, label) in crate::theme::LOADOUT_NAV {
+                            let active = cur == *id;
+                            let resp = Self::icon_nav_row(
+                                ui,
+                                active,
+                                crate::icons::rail_icon_for(id),
+                                label,
+                            );
+                            if resp.clicked() {
+                                match *id {
+                                    "home" => self.open_mission_home(),
+                                    "profile" => self.open_profile(),
+                                    // Chat rail restores the last-used tab. Tabs live under the title bar.
+                                    "chat" => self.set_nav_id(id),
+                                    _ => self.set_nav_id(id),
+                                }
+                            }
                         }
-                    }
-                }
+                    });
                 crate::theme::glide_aim(ui, "rail");
             });
     }
