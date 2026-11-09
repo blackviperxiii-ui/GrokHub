@@ -393,6 +393,7 @@ fn only_typing_or_a_click_builds_an_undo_ask() {
             "grokhub-app/src/app/skill_undo.rs: UndoAsk::from_click(",
             "grokhub-app/src/app/skill_undo.rs: UndoAsk::from_typing(",
             "grokhub-app/src/app/skill_undo.rs: UndoAsk::from_typing(",
+            "grokhub-app/src/app/skills_tab.rs: UndoAsk::from_click(",
         ]
     );
 }

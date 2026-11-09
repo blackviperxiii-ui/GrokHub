@@ -76,10 +76,11 @@ pub use signal::{
 };
 pub use store::{AmrStore, ForgetReport, RecallReport};
 pub use user_model::{
-    approval_samples, approve_node, calibrate_reflect_min, edit_node, forget_node, memory_rows,
-    memory_text, reflect_diff, reflect_threshold_log, reject_node, strip_forgotten,
-    supersede_same_topic, topic_slug, ApprovalSample, MemoryRow, ReflectDiff, SourceLink,
-    UserForget, PROPOSED_TAG, REFLECT_MIN_CONFIDENCE,
+    add_fact, approval_samples, approve_node, calibrate_reflect_min, edit_node, forget_node,
+    memory_rows, memory_text, pause_node, personal_export, reflect_diff, reflect_threshold_log,
+    reject_node, search_rows, strip_forgotten, supersede_same_topic, topic_slug, wipe_user_model,
+    ApprovalSample, MemoryRow, PersonalGroup, ReflectDiff, SourceLink, UserForget, WipeReport,
+    PROPOSED_TAG, REFLECT_MIN_CONFIDENCE,
 };
 pub use write::{
     line_id, node_type_for, remember_line, sensitivity_for, trail_id, LineWrite, Remembered,

@@ -483,7 +483,7 @@ fn quiet_now(config_dir: &Path, state: &WriterState, now_ms: u64) -> bool {
 }
 
 /// The live network, or the loopback mock when [`NET_ENV`] names one.
-fn net() -> Box<dyn Net> {
+pub(crate) fn net() -> Box<dyn Net> {
     match std::env::var(NET_ENV)
         .ok()
         .and_then(|raw| LoopbackNet::new(&raw))

@@ -16,6 +16,7 @@ pub mod chips;
 pub mod connectors;
 pub mod credential;
 pub mod export;
+pub mod game_companion;
 pub mod goals;
 pub mod history;
 pub mod home;
@@ -57,6 +58,7 @@ pub mod settings;
 pub mod shell_update;
 pub mod skills;
 pub mod slash;
+mod steam_checks;
 mod turns;
 pub mod voice;
 pub mod workboard;
@@ -1615,6 +1617,25 @@ async fn workboard_playbook(
     off_main(move || workboard::start_playbook(&dir, &id, &playbook, &name)).await?
 }
 
+/// Home's Playbooks row: start that playbook on a new Workboard card.
+#[tauri::command]
+async fn home_run_playbook(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<workboard::Work, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        let page = playbooks::load(&dir);
+        let row = page
+            .rows
+            .iter()
+            .find(|r| r.id == id)
+            .ok_or("That playbook is gone. Open Playbooks to pick another.")?;
+        workboard::start_playbook_card(&dir, &row.id, &row.name, &row.summary)
+    })
+    .await?
+}
+
 /// Make it recurring: an automation from the card that then owns it.
 #[tauri::command]
 async fn workboard_recur(
@@ -2000,10 +2021,24 @@ async fn home_turn_on(state: State<'_, ShellState>, feature: String) -> Result<(
 /// the OS's own password or admin prompt. Answers with one plain sentence on
 /// how it went; the tile shows the rest on its next read.
 #[tauri::command]
-async fn home_setup(module: String, undo: bool) -> Result<String, String> {
+async fn home_setup(
+    state: State<'_, ShellState>,
+    module: String,
+    undo: bool,
+) -> Result<String, String> {
     match module.as_str() {
         #[cfg(desktop)]
         "frame_rate" => off_main(move || home_fps::run_setup(undo).sentence(undo)).await,
+        // Achievements and Deals: the Steam account on this PC, then a check.
+        "achievements" | "deals" => {
+            let dir = state.config_dir.clone();
+            off_main(move || steam_checks::turn(&dir, &module, !undo)).await?
+        }
+        // Patch Notes: the launch companion's own switch on this app.
+        "patch_notes" => {
+            let dir = state.config_dir.clone();
+            off_main(move || game_companion::set(&dir, !undo)).await?
+        }
         _ => {
             let _ = undo;
             Err("That module has no setup here.".into())
@@ -2076,6 +2111,13 @@ fn home_setup_steps(module: String) -> Result<String, String> {
 async fn library_friends() -> Result<(), String> {
     capabilities::needs(capabilities::current().library, "Library")?;
     off_main(move || library::open_friends(grokhub_core::steam::detect_root().as_deref())).await?
+}
+
+/// Home's Clips tile: Steam's Settings, where Game Recording turns on.
+#[tauri::command]
+async fn library_steam_settings() -> Result<(), String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(move || library::open_settings(grokhub_core::steam::detect_root().as_deref())).await?
 }
 
 /// Home's Clips tile: play the clip at this place in its list.
@@ -3249,6 +3291,8 @@ pub fn run() {
                 let client: Box<dyn grokhub_agent::ModelClient> = Box::new(model_client()?.0);
                 Ok((client, grokhub_agent::route::host::chat_start().0))
             });
+            steam_checks::start(config_dir.clone());
+            game_companion::start(config_dir.clone());
             #[cfg(desktop)]
             os_extras::setup(app.handle(), &loaded);
             let text_size = loaded.text_size;
@@ -3463,6 +3507,7 @@ pub fn run() {
             workboard_act,
             workboard_work,
             workboard_playbook,
+            home_run_playbook,
             workboard_recur,
             workboard_stamp,
             workboard_log,
@@ -3494,6 +3539,7 @@ pub fn run() {
             library_play,
             home_open_clip,
             library_friends,
+            library_steam_settings,
             home_turn_on,
             home_setup,
             home_setup_steps,

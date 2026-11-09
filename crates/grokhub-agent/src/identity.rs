@@ -46,7 +46,7 @@ fn active_user_lines(config_dir: &Path) -> Vec<String> {
     let store = user_store(config_dir);
     let (rows, _) = memory_rows(&store);
     rows.into_iter()
-        .filter(|row| !row.proposed)
+        .filter(|row| row.in_use())
         .map(|row| row.text)
         .filter(|text| !text.trim().is_empty())
         .collect()
@@ -178,6 +178,14 @@ mod tests {
         assert!(!block.contains("secret triangles"), "{block}");
         assert!(!block.contains("from the markdown file only"), "{block}");
         assert!(!block.contains("waiting for approval"), "{block}");
+        // A line paused on Personal leaves the block until it is used again.
+        let paused = remember_line(&store, &line("rides a blue bike"), 3).unwrap();
+        assert!(identity_blocks(&dir).contains("rides a blue bike"));
+        grokhub_core::amr::pause_node(&store, paused.id(), true).unwrap();
+        let block = identity_blocks(&dir);
+        assert!(!block.contains("rides a blue bike"), "{block}");
+        grokhub_core::amr::pause_node(&store, paused.id(), false).unwrap();
+        assert!(identity_blocks(&dir).contains("rides a blue bike"));
     }
 
     #[test]

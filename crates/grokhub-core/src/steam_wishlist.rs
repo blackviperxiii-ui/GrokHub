@@ -159,6 +159,63 @@ pub fn local_accounts(steam_root: &Path) -> Vec<u64> {
     ids
 }
 
+/// The account Steam marks as signed in most recently on this PC, from
+/// `config/loginusers.vdf` (read-only; only the SteamID64 is kept).
+pub fn most_recent_account(steam_root: &Path) -> Option<u64> {
+    let text = std::fs::read_to_string(steam_root.join("config").join("loginusers.vdf")).ok()?;
+    most_recent_in_vdf(&text)
+}
+
+/// [`most_recent_account`] on the file's text.
+pub fn most_recent_in_vdf(text: &str) -> Option<u64> {
+    let mut depth = 0usize;
+    let mut words: Vec<String> = Vec::new();
+    let mut user: Option<u64> = None;
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '{' => {
+                depth += 1;
+                if depth == 2 {
+                    user = words
+                        .last()
+                        .and_then(|w| w.parse().ok())
+                        .filter(|id| *id > ID64_BASE);
+                }
+                words.clear();
+            }
+            '}' => {
+                depth = depth.saturating_sub(1);
+                words.clear();
+            }
+            '"' => {
+                let word: String = chars.by_ref().take_while(|c| *c != '"').collect();
+                words.push(word);
+                if depth == 2 && words.len() == 2 {
+                    if words[0].eq_ignore_ascii_case("MostRecent") && words[1] == "1" {
+                        if let Some(id) = user {
+                            return Some(id);
+                        }
+                    }
+                    words.clear();
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The account a one-tap turn-on uses: the only one signed in here, or the
+/// one Steam marks most recent. `None` when there is none to pick.
+pub fn pick_account(local: &[u64], most_recent: Option<u64>) -> Option<u64> {
+    match local {
+        [] => None,
+        [one] => Some(*one),
+        _ => most_recent.filter(|id| local.contains(id)),
+    }
+}
+
 pub fn wishlist_url(steam_id: u64) -> String {
     format!("https://api.steampowered.com/IWishlistService/GetWishlist/v1/?steamid={steam_id}")
 }
@@ -369,8 +426,92 @@ impl Alert {
     }
 }
 
+/// Where the SteamID lives, sealed with the private-data key, and the
+/// sealing's bound label. Both apps read and write the same file.
+pub const ID_FILE: &str = "steam-id.sealed";
+pub const ID_AAD: &str = "grokhub-steam-id:v1";
+
+/// One wishlist check's outcome.
+pub struct Run {
+    pub list: Wishlist,
+    pub alerts: Vec<Alert>,
+    pub error: Option<String>,
+}
+
+/// The whole check, given a GET. Never puts the SteamID in an error.
+pub fn run_check(
+    mut list: Wishlist,
+    steam_id: u64,
+    allowed: usize,
+    now: u64,
+    get: &mut dyn FnMut(&str) -> Result<String, String>,
+) -> Run {
+    let failed = |list: Wishlist, why: String| Run {
+        list,
+        alerts: Vec::new(),
+        error: Some(why),
+    };
+    let ids = match get(&wishlist_url(steam_id)).map(|b| parse_wishlist(&b)) {
+        Ok(Some(ids)) => ids,
+        Ok(None) => return failed(list, "Steam's wishlist reply wasn't readable".into()),
+        Err(why) => return failed(list, format!("wishlist: {why}")),
+    };
+    let mut prices = BTreeMap::new();
+    for chunk in ids.chunks(PRICE_BATCH) {
+        match get(&prices_url(chunk)) {
+            Ok(body) => prices.extend(parse_prices(&body)),
+            Err(why) => return failed(list, format!("prices: {why}")),
+        }
+    }
+    let mut alerts = list.check(&ids, &prices, allowed, now);
+    for alert in alerts.iter_mut().filter(|a| a.name.is_empty()) {
+        if let Some(name) = get(&name_url(alert.app_id))
+            .ok()
+            .and_then(|b| parse_name(&b, alert.app_id))
+        {
+            list.note_name(alert.app_id, &name);
+            alert.name = name;
+        }
+    }
+    Run {
+        list,
+        alerts,
+        error: None,
+    }
+}
+
+/// The note after a check posted `added` cards.
+pub fn checked_note(list: &Wishlist, added: usize) -> String {
+    if list.private {
+        String::new()
+    } else if added == 0 {
+        format!(
+            "Checked {} wishlisted games. No new sales.",
+            list.apps.len()
+        )
+    } else {
+        format!(
+            "Checked {} wishlisted games. {added} on sale.",
+            list.apps.len()
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_most_recent_steam_account_is_read_from_loginusers() {
+        let vdf = "\"users\"\n{\n\t\"76561197960265729\"\n\t{\n\t\t\"AccountName\"\t\t\"a\"\n\t\t\"MostRecent\"\t\t\"0\"\n\t}\n\t\"76561197960265730\"\n\t{\n\t\t\"AccountName\"\t\t\"b\"\n\t\t\"MostRecent\"\t\t\"1\"\n\t}\n}\n";
+        assert_eq!(most_recent_in_vdf(vdf), Some(76_561_197_960_265_730));
+        assert_eq!(most_recent_in_vdf("\"users\"\n{\n}\n"), None);
+        let both = [76_561_197_960_265_729, 76_561_197_960_265_730];
+        assert_eq!(pick_account(&both[..1], None), Some(both[0]));
+        assert_eq!(pick_account(&both, Some(both[1])), Some(both[1]));
+        // Steam's pick must be an account that signed in here.
+        assert_eq!(pick_account(&both, Some(7)), None);
+        assert_eq!(pick_account(&[], Some(both[0])), None);
+    }
+
     use super::*;
 
     // Fake ids only: account 12345 and made-up app ids.

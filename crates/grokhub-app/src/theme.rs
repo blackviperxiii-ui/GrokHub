@@ -887,12 +887,17 @@ pub const GROK_NAV: &[(&str, &str)] = &[
 ];
 
 /// Loadout deck icon rail (slide 02). Settings sits in the footer row.
+/// Every page the user names gets its own row: Workboards, Automations and
+/// Skills used to hide behind a pill on another page.
 pub const LOADOUT_NAV: &[(&str, &str)] = &[
     ("home", "Home"),
     ("chat", "Chat"),
     ("objectives", "Objectives"),
+    ("workboard", "Workboards"),
     ("pulse", "Pulse"),
+    ("automations", "Automations"),
     ("library", "Library"),
+    ("skills", "Skills"),
     ("mods", "Mods"),
     ("devices", "Devices"),
     ("profile", "Profile"),

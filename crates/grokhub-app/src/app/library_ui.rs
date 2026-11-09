@@ -217,6 +217,8 @@ pub(super) fn last_played_label(last_played: u64, now_secs: u64) -> String {
 
 /// Steam's own friends list, where Steam shows who is online.
 pub(super) const FRIENDS_LINK: &str = "steam://open/friends";
+/// Steam's Settings, where Game Recording turns on (Home's Clips tile).
+pub(super) const SETTINGS_LINK: &str = "steam://open/settings";
 
 /// Steam's own launch link for a game.
 pub(super) fn play_link(app_id: u32) -> String {
@@ -422,9 +424,9 @@ impl Cabin {
             .show(ui, |ui| {
                 ui.set_min_size(ui.available_size());
                 if (!found || games.is_empty()) && bnet.is_empty() {
-                    // Nothing installed is not a dead end: the header and its
-                    // Skills button stay, and the empty state says what the
-                    // library reads and where to go next.
+                    // Nothing installed is not a dead end: the header stays,
+                    // and the empty state says what the library reads and
+                    // where to go next.
                     self.library_empty_header(ui);
                     ui.add_space(16.0);
                     let (title, body) = library_empty_copy(found);
@@ -482,21 +484,14 @@ impl Cabin {
         ui.ctx().data_mut(|d| d.insert_temp(id, view));
     }
 
-    /// The header with no games to filter: the title and the Skills button,
-    /// which used to vanish with the rest of the page when Steam wasn't found.
+    /// The header with no games to filter: just the title. Skills has its
+    /// own rail row now, so the page no longer carries a Skills button.
     fn library_empty_header(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new("Library")
-                    .font(crate::theme::title_font(28.0))
-                    .color(crate::theme::fg()),
-            );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if crate::cards::ghost_pill(ui, "Skills") {
-                    self.set_nav_id("skills");
-                }
-            });
-        });
+        ui.label(
+            egui::RichText::new("Library")
+                .font(crate::theme::title_font(28.0))
+                .color(crate::theme::fg()),
+        );
     }
 
     fn library_header(&mut self, ui: &mut egui::Ui, view: &mut LibraryView) {
@@ -509,10 +504,6 @@ impl Cabin {
                 }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // Skills had this rail slot before; it stays one click away.
-                if crate::cards::ghost_pill(ui, "Skills") {
-                    self.set_nav_id("skills");
-                }
                 let w = (ui.available_width() - 40.0).clamp(120.0, 300.0);
                 egui::Frame::NONE
                     .stroke(egui::Stroke::new(1.0, crate::theme::signal_red()))
@@ -794,6 +785,52 @@ mod tests {
         assert_eq!(cabin.nav_id(), "library");
         cabin.set_nav_id("skills");
         assert_eq!(cabin.nav, Nav::Skills);
+    }
+
+    #[test]
+    fn workboards_automations_and_skills_each_have_a_rail_row_that_opens_them() {
+        let ids: Vec<&str> = crate::theme::LOADOUT_NAV
+            .iter()
+            .map(|(id, _)| *id)
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                "home",
+                "chat",
+                "objectives",
+                "workboard",
+                "pulse",
+                "automations",
+                "library",
+                "skills",
+                "mods",
+                "devices",
+                "profile"
+            ]
+        );
+        let cases = [
+            ("workboard", Nav::Workboard, crate::icons::RailIcon::Folder),
+            ("automations", Nav::Night, crate::icons::RailIcon::Clock),
+            ("skills", Nav::Skills, crate::icons::RailIcon::Grid),
+        ];
+        for (id, nav, icon) in cases {
+            let mut cabin = Cabin::quiet_for_test();
+            cabin.set_nav_id(id);
+            assert_eq!(cabin.nav, nav, "{id}");
+            assert_eq!(cabin.rail_id(), id, "{id} lights its own row");
+            assert_eq!(crate::icons::rail_icon_for(id), icon, "{id}");
+        }
+    }
+
+    #[test]
+    fn library_no_longer_carries_a_skills_button() {
+        let src = include_str!("library_ui.rs");
+        let code = src.split("#[cfg(test)]").next().expect("code");
+        assert!(
+            !code.contains("ghost_pill(ui, \"Skills\")"),
+            "Skills has its own rail row"
+        );
     }
 
     #[test]

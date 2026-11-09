@@ -177,7 +177,7 @@ Do not agree with a wrong claim. Do not drop a stored fact. Stay under {cap} out
 fn user_prompt(store: &grokhub_core::amr::AmrStore, report: &DreamReport) -> String {
     let (rows, _) = memory_rows(store);
     let mut lines = String::new();
-    for row in rows.into_iter().filter(|row| !row.proposed).take(24) {
+    for row in rows.into_iter().filter(|row| row.in_use()).take(24) {
         let text: String = row.text.chars().take(120).collect();
         lines.push_str(&text);
         lines.push('\n');
