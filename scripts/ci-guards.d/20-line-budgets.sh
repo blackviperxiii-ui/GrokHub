@@ -19,7 +19,7 @@ budget() {
   fi
 }
 
-budget "crates/grokhub-app/src/app/mod.rs" 5979 # + Nav::Personal page (mod, variant, dispatch, state); + reply chips stream filter (quick chips PR5); Nav::Home + home_layout (Order -38) + web_search_ui (#974) + wind_down_ui + game_watch_ui (#1110) + desktop_nyx hooks
+budget "crates/grokhub-app/src/app/mod.rs" 5980 # + Nav::Personal page (mod, variant, dispatch, state); + mod skills_tab (Skills tab state; skill_q moved into it); + reply chips stream filter (quick chips PR5); Nav::Home + home_layout (Order -38) + web_search_ui (#974) + wind_down_ui + game_watch_ui (#1110) + desktop_nyx hooks
 budget "crates/grokhub-app/src/cards.rs" 4400
 budget "crates/grokhub-core/src/slash/mod.rs" 1650
 budget "crates/grokhub-app/src/app/tests.rs" 2805 # + quiet cabin composer_chip_text (quick chips keep a typed draft)
