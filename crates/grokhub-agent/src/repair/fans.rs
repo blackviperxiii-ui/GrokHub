@@ -297,6 +297,9 @@ mod tests {
         }
     }
 
+    // The fan fix writes Linux sysfs paths, so its fake hwmon tree needs
+    // Linux paths too. Windows gets only the vendor-app answer, tested below.
+    #[cfg(target_os = "linux")]
     #[test]
     fn full_speed_saves_each_fan_and_undo_puts_it_back() {
         let root = hwmon("plan");
