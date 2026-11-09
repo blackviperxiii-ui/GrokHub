@@ -4,7 +4,7 @@
 //! Output is a 1 MiB tail. Completion and monitor lines are queued once
 //! and injected at the start of the next model turn.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Read;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -20,6 +20,8 @@ const NOTICE_TAIL: usize = 2_000;
 const POLL: Duration = Duration::from_millis(20);
 pub const MONITOR_CAP_MS: u64 = 10 * 60 * 60 * 1000;
 const WAIT_CAP_MS: u64 = 120_000;
+/// The most tasks one output read waits on.
+pub(crate) const JOIN_MAX: usize = 8;
 /// After an adopted command ends, how long its foreground readers get to
 /// pass on the last of its output before the finished notice is written.
 const ADOPTED_SETTLE: Duration = Duration::from_millis(200);
@@ -90,6 +92,8 @@ pub struct Notice {
     head: String,
     body: String,
     source: &'static str,
+    /// The subagent whose result this notice carries, if any.
+    agent: Option<String>,
 }
 
 impl Notice {
@@ -98,6 +102,7 @@ impl Notice {
             head: head.into().trim().to_string(),
             body: String::new(),
             source: "background-task",
+            agent: None,
         }
     }
 
@@ -148,6 +153,9 @@ struct HubInner {
     tasks: HashMap<String, Arc<TaskSlot>>,
     monitors: HashMap<String, MonitorSlot>,
     notices: VecDeque<Notice>,
+    /// Subagents whose finished result the model already read, so their
+    /// finish notice would only repeat it.
+    joined: HashSet<String>,
     halted: bool,
     pending_usage: crate::Usage,
 }
@@ -188,6 +196,7 @@ impl TaskHub {
                 tasks: HashMap::new(),
                 monitors: HashMap::new(),
                 notices: VecDeque::new(),
+                joined: HashSet::new(),
                 halted: false,
                 pending_usage: crate::Usage::default(),
             }),
@@ -339,10 +348,57 @@ impl TaskHub {
             let slot = self.task(id)?;
             let phase = *slot.phase.lock().unwrap_or_else(|err| err.into_inner());
             if !matches!(phase, Phase::Running) || timeout_ms == 0 || Instant::now() >= deadline {
-                return Ok(format_output(&slot, phase));
+                return Ok(self.output_of(id, &slot, phase));
             }
             thread::sleep(POLL);
         }
+    }
+
+    /// Waits for several tasks at once, up to `timeout_ms`, and returns each
+    /// one's output under its id. It returns when all have ended or the time
+    /// is up, so a chat that started helpers side by side reads them in one
+    /// step. Every id must exist.
+    pub fn read_outputs(&self, ids: &[String], timeout_ms: u64) -> Result<String, String> {
+        let mut slots = Vec::new();
+        for id in ids {
+            if slots.iter().any(|(seen, _)| *seen == id) {
+                continue;
+            }
+            slots.push((id, self.task(id)?));
+            if slots.len() == JOIN_MAX {
+                break;
+            }
+        }
+        let timeout_ms = timeout_ms.min(WAIT_CAP_MS);
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+        loop {
+            let running = slots.iter().any(|(_, slot)| {
+                matches!(
+                    *slot.phase.lock().unwrap_or_else(|err| err.into_inner()),
+                    Phase::Running
+                )
+            });
+            if !running || timeout_ms == 0 || Instant::now() >= deadline {
+                break;
+            }
+            thread::sleep(POLL);
+        }
+        let parts: Vec<String> = slots
+            .iter()
+            .map(|(id, slot)| {
+                let phase = *slot.phase.lock().unwrap_or_else(|err| err.into_inner());
+                format!("{id}:\n{}", self.output_of(id, slot, phase))
+            })
+            .collect();
+        Ok(parts.join("\n\n"))
+    }
+
+    fn output_of(&self, id: &str, slot: &TaskSlot, phase: Phase) -> String {
+        let text = format_output(slot, phase);
+        if slot.agent && !matches!(phase, Phase::Running) {
+            self.joined(id);
+        }
+        text
     }
 
     /// Register a running subagent. `sN` ids share the counter with commands and monitors.
@@ -416,16 +472,28 @@ impl TaskHub {
         drop(phase);
         // A fenced result longer than the notice would lose its opening
         // marker in a tail, so it is read whole with the output tool instead.
-        let note = if crate::tools::fence::looks_fenced(text) && text.chars().count() > NOTICE_TAIL
-        {
-            Notice::new(format!(
+        let mut note =
+            if crate::tools::fence::looks_fenced(text) && text.chars().count() > NOTICE_TAIL {
+                Notice::new(format!(
                 "Subagent {id} finished. Read its result with get_command_or_subagent_output({id})."
             ))
-        } else {
-            Notice::new(format!("Subagent {id} finished."))
-                .with_body("subagent", notice_tail(&slot))
-        };
-        self.push_notice(note);
+            } else {
+                Notice::new(format!("Subagent {id} finished."))
+                    .with_body("subagent", notice_tail(&slot))
+            };
+        note.agent = Some(id.to_string());
+        let mut hub = self.lock();
+        if !hub.joined.contains(id) {
+            hub.notices.push_back(note);
+        }
+    }
+
+    /// The model read subagent `id`'s finished result: its finish notice,
+    /// queued or still to come, would only repeat it.
+    fn joined(&self, id: &str) {
+        let mut hub = self.lock();
+        hub.joined.insert(id.to_string());
+        hub.notices.retain(|note| note.agent.as_deref() != Some(id));
     }
 
     /// Kill commands and child agents started by `owner`.
@@ -1209,6 +1277,61 @@ mod tests {
         assert!(crate::tools::fence::looks_fenced(&note), "{note}");
         assert!(note.contains("evil.example/x"), "{note}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn one_read_waits_for_several_helpers_and_their_notices_are_not_repeated() {
+        let hub = TaskHub::new("join");
+        let first = hub.register_agent(None, "one", Arc::new(|| {})).unwrap();
+        let second = hub.register_agent(None, "two", Arc::new(|| {})).unwrap();
+        hub.finish_agent(&first, "found the config");
+        let finisher = {
+            let hub = Arc::clone(&hub);
+            let second = second.clone();
+            thread::spawn(move || {
+                thread::sleep(Duration::from_millis(150));
+                hub.finish_agent(&second, "found the tests");
+            })
+        };
+        let ids = [first.clone(), second.clone(), first.clone()];
+        let read = hub.read_outputs(&ids, 5_000).expect("both read");
+        finisher.join().unwrap();
+        assert_eq!(read.matches("status: exited").count(), 2, "{read}");
+        assert!(
+            read.starts_with(&format!("{first}:\nstatus: exited")),
+            "{read}"
+        );
+        assert!(
+            read.contains(&format!("\n\n{second}:\nstatus: exited")),
+            "{read}"
+        );
+        assert!(read.contains("found the config") && read.contains("found the tests"));
+        assert!(
+            hub.drain_notices().is_empty(),
+            "a result the chat already read gets no finish notice"
+        );
+        let missing = hub
+            .read_outputs(&[first.clone(), "s99".to_string()], 0)
+            .unwrap_err();
+        assert!(missing.starts_with("No task with id s99"), "{missing}");
+    }
+
+    #[test]
+    fn a_helper_nobody_waited_on_still_gets_its_notice() {
+        let hub = TaskHub::new("unjoined");
+        let id = hub.register_agent(None, "look", Arc::new(|| {})).unwrap();
+        let snapshot = hub.read_output(&id, 0).expect("still running");
+        assert_eq!(snapshot, "status: running");
+        hub.finish_agent(&id, "done looking");
+        let notes = hub.drain_notices();
+        assert_eq!(notes.len(), 1);
+        assert!(
+            notes[0]
+                .render()
+                .starts_with(&format!("Subagent {id} finished.")),
+            "{:?}",
+            notes[0]
+        );
     }
 
     #[test]

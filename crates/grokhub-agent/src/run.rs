@@ -2007,13 +2007,21 @@ fn inject_notices(input: &LoopIn<'_>, history: &mut Vec<InputItem>) {
     let Some(tasks) = &input.tasks else {
         return;
     };
-    for note in tasks.drain_notices() {
-        let text = format!(
-            "<background-notice>\n{}\n</background-notice>",
-            note.render()
-        );
-        history.push(user_message(&text, None));
+    // Everything that finished since the last step goes in as one message,
+    // so helpers that end together cost one turn item, not one each.
+    let notes: Vec<String> = tasks
+        .drain_notices()
+        .iter()
+        .map(|note| note.render())
+        .collect();
+    if notes.is_empty() {
+        return;
     }
+    let text = format!(
+        "<background-notice>\n{}\n</background-notice>",
+        notes.join("\n\n")
+    );
+    history.push(user_message(&text, None));
 }
 
 fn usage_pending(usage: &Usage) -> bool {
