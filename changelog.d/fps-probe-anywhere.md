@@ -1,0 +1,1 @@
+- Home Frame Rate: the frame probe is now a tiny stand-alone binary that the Linux shell bundles ship as `/usr/lib/loadout/fps-probe`, so the one-time setup works from the AppImage and the deb, and the shell answers `--fps-probe` like the desktop app.

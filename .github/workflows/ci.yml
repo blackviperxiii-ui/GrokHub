@@ -144,7 +144,9 @@ jobs:
               - 'crates/grokhub-core/**'
               - 'crates/grokhub-agent/**'
               - 'crates/grokhub-desktop/**'
+              - 'crates/grokhub-fps-probe/**'
               - 'crates/grokhub-proto/**'
+              - 'scripts/shell-fps-probe.mjs'
               - '.github/workflows/ci.yml'
       # Shell matrix: PRs run ubuntu only, when shell/UI paths change (the
       # Windows WebView2 smoke runs on merge_group, push to main, tags, nightly

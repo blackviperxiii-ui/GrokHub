@@ -36,6 +36,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 grokhub-core = { path = "../crates/grokhub-core" }
 grokhub-agent = { path = "../crates/grokhub-agent" }
+grokhub-fps-probe = { path = "../crates/grokhub-fps-probe" }
 tauri = { version = "2", features = ["tray-icon"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

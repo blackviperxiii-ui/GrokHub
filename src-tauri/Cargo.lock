@@ -1984,6 +1984,7 @@ dependencies = [
  "base64 0.23.1",
  "globset",
  "grokhub-core",
+ "grokhub-fps-probe",
  "ignore",
  "image",
  "keyring",
@@ -2051,6 +2052,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "grokhub-fps-probe"
+version = "3.5.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "grokhub-proto"
 version = "3.5.0"
 dependencies = [
@@ -2066,6 +2074,7 @@ dependencies = [
  "grokhub-agent",
  "grokhub-core",
  "grokhub-desktop",
+ "grokhub-fps-probe",
  "image",
  "keyring",
  "minisign-verify",
