@@ -137,22 +137,76 @@ pub struct PermitNote {
 
 pub struct PermitInbox {
     rx: Mutex<Receiver<PermitNote>>,
+    /// A chat and its helpers share this inbox, so one waiter can read an
+    /// answer meant for another. It is kept here for its owner, not dropped.
+    parked: Mutex<Vec<PermitNote>>,
+    /// Call ids someone waits on now. `drain` keeps their answers.
+    waiting: Mutex<Vec<String>>,
 }
+
+/// Answers kept for other waiters, at most; the oldest goes first.
+const PARKED_MAX: usize = 64;
 
 impl PermitInbox {
     pub fn pair() -> (Sender<PermitNote>, Self) {
         let (tx, rx) = std::sync::mpsc::channel();
-        (tx, Self { rx: Mutex::new(rx) })
+        let inbox = Self {
+            rx: Mutex::new(rx),
+            parked: Mutex::new(Vec::new()),
+            waiting: Mutex::new(Vec::new()),
+        };
+        (tx, inbox)
+    }
+
+    fn park(&self, note: PermitNote) {
+        let mut parked = self.parked.lock().unwrap_or_else(|err| err.into_inner());
+        if parked.len() >= PARKED_MAX {
+            parked.remove(0);
+        }
+        parked.push(note);
+    }
+
+    fn take_parked(&self, call_id: &str) -> Option<PermAnswer> {
+        let mut parked = self.parked.lock().unwrap_or_else(|err| err.into_inner());
+        let at = parked.iter().position(|note| note.id == call_id)?;
+        Some(parked.remove(at).answer)
+    }
+}
+
+/// Takes the call id off the waiting list however the wait ends.
+struct Waiting<'a>(&'a PermitInbox, String);
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        let mut waiting = self.0.waiting.lock().unwrap_or_else(|err| err.into_inner());
+        if let Some(at) = waiting.iter().position(|id| *id == self.1) {
+            waiting.remove(at);
+        }
     }
 }
 
 impl PermitWait for PermitInbox {
+    /// Drops answers nobody waits on (cards from an earlier turn). A helper
+    /// still waiting keeps its answer.
     fn drain(&self) {
         let rx = self.rx.lock().unwrap_or_else(|err| err.into_inner());
-        while rx.try_recv().is_ok() {}
+        while let Ok(note) = rx.try_recv() {
+            self.park(note);
+        }
+        drop(rx);
+        let waiting = self.waiting.lock().unwrap_or_else(|err| err.into_inner());
+        self.parked
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .retain(|note| waiting.contains(&note.id));
     }
 
     fn wait(&self, call_id: &str, cancel: &CancelToken, halted: &dyn Fn() -> bool) -> Waited {
+        self.waiting
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .push(call_id.to_string());
+        let _waiting = Waiting(self, call_id.to_string());
         loop {
             if cancel.is_cancelled() {
                 return Waited::Cancelled;
@@ -160,10 +214,16 @@ impl PermitWait for PermitInbox {
             if halted() {
                 return Waited::Halted;
             }
+            if let Some(answer) = self.take_parked(call_id) {
+                return Waited::Answer(answer);
+            }
             let rx = self.rx.lock().unwrap_or_else(|err| err.into_inner());
             match rx.recv_timeout(Duration::from_millis(30)) {
                 Ok(note) if note.id == call_id => return Waited::Answer(note.answer),
-                Ok(_) => continue,
+                Ok(note) => {
+                    drop(rx);
+                    self.park(note);
+                }
                 Err(RecvTimeoutError::Timeout) => continue,
                 Err(RecvTimeoutError::Disconnected) => return Waited::Cancelled,
             }
@@ -608,5 +668,52 @@ mod tests {
             None,
         );
         assert_eq!(d, Decision::Refuse("hard floor: rm -rf /".into()));
+    }
+
+    fn note(id: &str, answer: PermAnswer) -> PermitNote {
+        PermitNote {
+            id: id.into(),
+            answer,
+        }
+    }
+
+    #[test]
+    fn two_waiters_on_one_inbox_each_get_their_own_answer() {
+        let (tx, inbox) = PermitInbox::pair();
+        let inbox = std::sync::Arc::new(inbox);
+        let cancel = CancelToken::new();
+        let waiter = |id: &'static str| {
+            let inbox = std::sync::Arc::clone(&inbox);
+            let cancel = cancel.clone();
+            std::thread::spawn(move || inbox.wait(id, &cancel, &|| false))
+        };
+        let a = waiter("helper-a");
+        let b = waiter("helper-b");
+        while inbox.waiting.lock().unwrap().len() < 2 {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        tx.send(note("helper-b", PermAnswer::Deny)).unwrap();
+        tx.send(note("helper-a", PermAnswer::Allow)).unwrap();
+        assert_eq!(a.join().unwrap(), Waited::Answer(PermAnswer::Allow));
+        assert_eq!(b.join().unwrap(), Waited::Answer(PermAnswer::Deny));
+        assert!(inbox.waiting.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn drain_drops_stale_answers_but_keeps_a_waiting_helpers() {
+        let (tx, inbox) = PermitInbox::pair();
+        inbox.waiting.lock().unwrap().push("helper".into());
+        tx.send(note("old-card", PermAnswer::Allow)).unwrap();
+        tx.send(note("helper", PermAnswer::Always)).unwrap();
+        inbox.drain();
+        inbox.waiting.lock().unwrap().clear();
+        let cancel = CancelToken::new();
+        assert_eq!(
+            inbox.wait("helper", &cancel, &|| false),
+            Waited::Answer(PermAnswer::Always)
+        );
+        let tries = std::sync::atomic::AtomicUsize::new(0);
+        let gave_up = || tries.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= 3;
+        assert_eq!(inbox.wait("old-card", &cancel, &gave_up), Waited::Halted);
     }
 }

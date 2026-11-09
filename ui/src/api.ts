@@ -59,6 +59,8 @@ export interface Capabilities {
   remote?: boolean;
   /** Auto setup: the first-run window, Settings → Auto setup, text size. */
   autoSetup?: boolean;
+  /** The Code tab: this computer's repos (desktops). */
+  code?: boolean;
 }
 
 /** Until the report loads, or if it fails, only the core features show. */
@@ -160,6 +162,8 @@ export type ElicitAction = "accept" | "decline" | "cancel";
 export interface ChatEnvelope {
   conversationId: string;
   event: ChatEvent;
+  /** From a helper that can outlive the reply: shown even when no reply runs. */
+  helper?: boolean;
 }
 
 export const CHAT_EVENT = "chat://event";
@@ -335,6 +339,12 @@ export function answerPermission(
   answer: Answer,
 ): Promise<void> {
   return invoke<void>("answer_permission", { conversationId, callId, answer });
+}
+
+/** Helper questions this chat still waits on, for when it opens. */
+export function helperQuestions(conversationId: string): Promise<ChatEvent[]> {
+  if (!inShell()) return Promise.resolve([]);
+  return invoke<ChatEvent[]>("helper_questions", { conversationId });
 }
 
 export function cancelChat(conversationId: string): Promise<void> {
@@ -1728,6 +1738,8 @@ export interface LibraryStatus {
 
 export interface LibraryView {
   tabs: LibraryTab[];
+  /** The best lineup for this PC, one model per goal for hot-swap; `ids` may be empty when it is all downloaded. */
+  lineup: LibraryQueueOffer | null;
   everything: LibraryQueueOffer | null;
   status: LibraryStatus;
 }
@@ -2368,4 +2380,37 @@ export function getUpdatesPage(): Promise<UpdatesPage> {
 /** Runs one offer: opens its page, or updates behind the OS prompt. Returns a sentence. */
 export function runUpdateOffer(offer: UpdateOffer): Promise<string> {
   return invoke<string>("run_update_offer", { offer });
+}
+
+/** Code tab: one changed file in the workspace's repo. */
+export interface CodeChanged {
+  path: string;
+  status: "modified" | "added" | "deleted" | "renamed" | "untracked" | "conflict" | "changed";
+  staged: boolean;
+}
+
+/** Code tab: the workspace's repo, read only. */
+export interface CodeRepo {
+  workspace: string;
+  isRepo: boolean;
+  branch: string | null;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  files: CodeChanged[];
+  more: boolean;
+}
+
+export interface CodeDiff {
+  path: string;
+  text: string;
+  cut: boolean;
+}
+
+export function codeRepo(): Promise<CodeRepo> {
+  return invoke<CodeRepo>("code_repo");
+}
+
+export function codeDiff(path: string): Promise<CodeDiff> {
+  return invoke<CodeDiff>("code_diff", { path });
 }

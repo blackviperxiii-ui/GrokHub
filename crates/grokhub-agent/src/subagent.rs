@@ -22,8 +22,6 @@ use crate::tools::{DesktopOps, ToolOutput};
 use crate::{CancelToken, InputItem, ModelClient, Usage};
 
 const DEPTH_LIMIT: u32 = 2;
-/// Turns a subagent gets when its parent runs with no cap (`max_turns` 0).
-const SUBAGENT_MAX_TURNS: u32 = 50;
 
 pub struct SpawnCall<'a> {
     pub name: &'a str,
@@ -105,14 +103,8 @@ pub fn drain_side_events() -> Vec<SideEvent> {
 }
 
 pub fn spawn_schema() -> Value {
-    let mut description = String::from(
-        "Run a child agent. type is explore (read-only) or general (same permissions as the parent). isolation worktree uses git worktree add. background returns a task id.",
-    );
-    if crate::route::boundary::enabled(&crate::perm::config_dir()) {
-        description.push_str(
-            " A general helper's prompt needs a brief, one labeled line each: Goal:, Constraints:, Edge cases:, Done when:, Files:.",
-        );
-    }
+    // One fixed text, so a setting never rewrites the cached tool list.
+    let description = "Start a helper; do small or sequential work yourself. type explore: read-only, wide reading. general: your permissions. isolation worktree. background: task id.";
     json!({
         "type": "function",
         "name": "spawn_subagent",
@@ -226,6 +218,17 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
             );
         }
     }
+    // The harness decides: the model only proposed this helper.
+    let ticket = match crate::subagent_policy::admit(&crate::subagent_policy::Ask {
+        session: root_session(call.session),
+        explore: spec.explore,
+        background: spec.background,
+        worktree: spec.worktree,
+        lead_model: call.model,
+    }) {
+        Ok(ticket) => ticket,
+        Err(text) => return (ToolOutput::err(text), Usage::default()),
+    };
     let child_cancel = CancelToken::child_of(call.cancel);
     let steer = SteerQueue::new();
     let wt_cell: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
@@ -260,6 +263,7 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
     *id_cell.lock().unwrap_or_else(|err| err.into_inner()) = id.clone();
     remember_steer(&steer_key(&tasks, &id), steer.clone());
     let worktree = if spec.worktree {
+        prune_old_worktrees(call.workspace, &crate::perm::config_dir().join("worktrees"));
         match prepare_worktree(call.workspace, call.session, &id) {
             Ok(path) => {
                 *wt_cell.lock().unwrap_or_else(|err| err.into_inner()) = Some(path.clone());
@@ -315,11 +319,7 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         parent_session: call.session.to_string(),
         parent_workspace: call.workspace.to_path_buf(),
         trace: crate::harness::provenance::current(),
-        max_turns: if call.max_turns == 0 {
-            SUBAGENT_MAX_TURNS
-        } else {
-            call.max_turns
-        },
+        max_turns: crate::subagent_policy::child_turns(call.max_turns, spec.explore),
         context_length: call.context_length,
         cancel: child_cancel.clone(),
         steer,
@@ -341,7 +341,8 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         origin: crate::harness::current_origin(),
         fork,
         config: crate::perm::pinned_config(),
-        class: briefed.then_some(crate::route::boundary::HELPER_CLASS),
+        class: child_class(crate::route::live::current_class(), briefed),
+        ticket,
     };
     if spec.background {
         thread::spawn(move || run_job(job, None));
@@ -352,7 +353,22 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
     }
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || run_job(job, Some(tx)));
-    let done = pump(&rx, call.on_event, call.cancel, call.halt, &child_cancel);
+    let deadline = std::time::Instant::now() + crate::subagent_policy::wall(spec.explore);
+    let (done, timed_out) = pump(
+        &rx,
+        call.on_event,
+        call.cancel,
+        call.halt,
+        &child_cancel,
+        deadline,
+    );
+    // Out of time reads as partial: the helper hands back what it found.
+    let done = done.map(|mut done| {
+        if timed_out && matches!(done.stop, StopReason::Cancelled) {
+            done.stop = StopReason::MaxTurns;
+        }
+        done
+    });
     let done = done.unwrap_or_else(|| {
         child_cancel.cancel();
         let _ = tasks.kill(&id);
@@ -367,8 +383,27 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         title,
         done: true,
     });
-    let text = format_result(&done.text, &id, worktree.as_deref(), &done.stop);
+    // A worktree the helper left clean is removed; one with changes stays for
+    // the parent to look at and copy from.
+    let kept = worktree.filter(|path| {
+        let changed = worktree_changed(path);
+        if !changed {
+            remove_worktree(call.workspace, path);
+        }
+        changed
+    });
+    let text = format_result(&done.text, &id, kept.as_deref(), &done.stop);
     (ToolOutput::ok(text), done.usage)
+}
+
+/// The route class a child runs under. A child of a background, scheduled or
+/// eval run stays in its parent's class (budget share, pause rules, the 18+
+/// guard's background rule); only a chat's briefed helper takes the cheap lane.
+fn child_class(parent: &'static str, briefed: bool) -> Option<&'static str> {
+    if parent != crate::route::live::DEFAULT_CLASS {
+        return Some(parent);
+    }
+    briefed.then_some(crate::route::boundary::HELPER_CLASS)
 }
 
 fn send(call: &SpawnCall<'_>) -> ToolOutput {
@@ -435,6 +470,8 @@ struct ChildJob {
     config: Option<PathBuf>,
     /// Item 34: the route class a briefed helper runs under.
     class: Option<&'static str>,
+    /// Its place in the spawn policy's counts, freed when the job ends.
+    ticket: crate::subagent_policy::Ticket,
 }
 
 struct ChildDone {
@@ -462,7 +499,13 @@ fn run_job(job: ChildJob, tx: Option<Sender<ChildNote>>) {
     let _origin = crate::harness::OriginScope::enter(job.origin);
     let _trace = crate::harness::provenance::enter(job.trace.clone());
     let _config = job.config.clone().map(crate::perm::ConfigGuard::set);
-    let mut done = run_child(&job, &tx);
+    let mut done = run_child_retrying(&job, &tx);
+    job.ticket.spent(
+        done.usage
+            .input_tokens
+            .saturating_sub(done.usage.cached_tokens)
+            .saturating_add(done.usage.output_tokens),
+    );
     done.text = guard_result(
         &job.parent_workspace,
         &job.parent_session,
@@ -492,6 +535,28 @@ fn run_job(job: ChildJob, tx: Option<Sender<ChildNote>>) {
         let _ = tx.send(ChildNote::Finished(done));
     }
 }
+
+/// A child that crashes gets one fresh try; a second crash comes back as a
+/// failed result the parent can read, not as a silent "no result".
+fn run_child_retrying(job: &ChildJob, tx: &Option<Sender<ChildNote>>) -> ChildDone {
+    let attempt = || std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_child(job, tx)));
+    match attempt() {
+        Ok(done) => done,
+        Err(_) if job.cancel.is_cancelled() => ChildDone {
+            stop: StopReason::Cancelled,
+            usage: Usage::default(),
+            text: String::new(),
+        },
+        Err(_) => attempt().unwrap_or_else(|_| ChildDone {
+            stop: StopReason::Error(CRASHED_TWICE.into()),
+            usage: Usage::default(),
+            text: String::new(),
+        }),
+    }
+}
+
+/// What the parent reads when a child crashed on both tries.
+const CRASHED_TWICE: &str = "the helper crashed twice and stopped";
 
 fn run_child(job: &ChildJob, tx: &Option<Sender<ChildNote>>) -> ChildDone {
     let _ports = crate::tools::ports::enter(job.ports.clone());
@@ -547,10 +612,26 @@ fn run_child(job: &ChildJob, tx: &Option<Sender<ChildNote>>) -> ChildDone {
     };
     let background = job.background;
     let parent_session = job.parent_session.clone();
-    let out = crate::run_loop(&input, &mut history, &job.prompt, None, &mut |ev| {
+    let mut out = crate::run_loop(&input, &mut history, &job.prompt, None, &mut |ev| {
         emit_child(ev, background, &parent_session, tx)
     });
-    let _ = crate::hooks::on_subagent_stop(&job.parent_session, &job.workspace, &job.kind_name);
+    let blocked =
+        crate::hooks::on_subagent_stop(&job.parent_session, &job.workspace, &job.kind_name, false);
+    // A SubagentStop hook that blocks sends the helper on once with its reason.
+    if let Some(reason) = blocked.filter(|_| matches!(out.stop, StopReason::EndTurn)) {
+        let again = crate::run_loop(&input, &mut history, &reason, None, &mut |ev| {
+            emit_child(ev, background, &parent_session, tx)
+        });
+        let _ = crate::hooks::on_subagent_stop(
+            &job.parent_session,
+            &job.workspace,
+            &job.kind_name,
+            true,
+        );
+        out.usage.add(&again.usage);
+        out.compacted |= again.compacted;
+        out.stop = again.stop;
+    }
     // A fork's answer is what it added, not the chat it inherited. Once it
     // compacted, the inherited part is a summary and the whole is its own.
     let own = if out.compacted || history.len() < inherited {
@@ -635,23 +716,30 @@ fn side_from(session: &str, ev: LoopEvent) -> Option<SideEvent> {
     })
 }
 
+/// Forwards a foreground helper's events until it finishes. Past `deadline`
+/// the helper is stopped and the second value is true.
 fn pump(
     rx: &Receiver<ChildNote>,
     on_event: &mut dyn FnMut(LoopEvent),
     parent_cancel: &CancelToken,
     halt: &dyn HaltCheck,
     child_cancel: &CancelToken,
-) -> Option<ChildDone> {
+    deadline: std::time::Instant,
+) -> (Option<ChildDone>, bool) {
+    let mut timed_out = false;
     loop {
         match rx.recv_timeout(Duration::from_millis(30)) {
             Ok(ChildNote::Event(ev)) => on_event(ev),
-            Ok(ChildNote::Finished(done)) => return Some(done),
+            Ok(ChildNote::Finished(done)) => return (Some(done), timed_out),
             Err(RecvTimeoutError::Timeout) => {
                 if parent_cancel.is_cancelled() || halt.halted() {
                     child_cancel.cancel();
+                } else if !timed_out && std::time::Instant::now() >= deadline {
+                    timed_out = true;
+                    child_cancel.cancel();
                 }
             }
-            Err(RecvTimeoutError::Disconnected) => return None,
+            Err(RecvTimeoutError::Disconnected) => return (None, timed_out),
         }
     }
 }
@@ -879,21 +967,30 @@ fn guard_result(workspace: &Path, session: &str, id: &str, text: &str) -> String
 
 fn format_result(text: &str, id: &str, worktree: Option<&Path>, stop: &StopReason) -> String {
     let mut out = text.trim().to_string();
-    if !matches!(stop, StopReason::EndTurn) {
-        if !out.is_empty() {
-            out.push('\n');
-        }
-        out.push_str(&format!("stop: {stop:?}"));
-    }
     if !out.is_empty() {
         out.push('\n');
     }
+    out.push_str(&format!("status: {}", status_line(stop)));
+    out.push('\n');
     out.push_str(&format!("task id: {id}"));
     if let Some(path) = worktree {
         out.push('\n');
         out.push_str(&format!("worktree: {}", path.display()));
     }
     out
+}
+
+/// How a child ended, in words the parent can act on.
+fn status_line(stop: &StopReason) -> String {
+    match stop {
+        StopReason::EndTurn => "done".into(),
+        StopReason::MaxTurns => {
+            "partial (it hit its step or time limit; this is what it found so far)".into()
+        }
+        StopReason::Cancelled => "stopped (cancelled before it finished)".into(),
+        StopReason::Halted => "stopped (Halt)".into(),
+        StopReason::Error(err) => format!("failed ({})", err.trim()),
+    }
 }
 
 fn usage_empty(usage: &Usage) -> bool {
@@ -961,6 +1058,47 @@ fn remove_worktree(workspace: &Path, dest: &Path) {
         &["worktree", "remove", "--force", &dest.display().to_string()],
     );
     let _ = std::fs::remove_dir_all(dest);
+}
+
+/// True when the helper changed, added or removed a file in its worktree.
+/// A worktree git can't read counts as changed, so nothing is lost.
+fn worktree_changed(path: &Path) -> bool {
+    match git(path, &["status", "--porcelain"]) {
+        Ok(out) if out.status.success() => !out.stdout.iter().all(u8::is_ascii_whitespace),
+        _ => true,
+    }
+}
+
+/// Helper worktrees older than this are removed when the next one is made.
+const WORKTREE_KEEP: Duration = Duration::from_secs(3 * 24 * 60 * 60);
+
+/// `root/<session>/<id>` folders untouched for [`WORKTREE_KEEP`] are removed,
+/// and git forgets them.
+fn prune_old_worktrees(workspace: &Path, root: &Path) {
+    let Ok(sessions) = std::fs::read_dir(root) else {
+        return;
+    };
+    let mut removed = false;
+    for session in sessions.flatten() {
+        let Ok(children) = std::fs::read_dir(session.path()) else {
+            continue;
+        };
+        for child in children.flatten() {
+            let old = child
+                .metadata()
+                .and_then(|meta| meta.modified())
+                .ok()
+                .and_then(|at| at.elapsed().ok())
+                .is_some_and(|age| age > WORKTREE_KEEP);
+            if old {
+                remove_worktree(workspace, &child.path());
+                removed = true;
+            }
+        }
+    }
+    if removed {
+        let _ = git(workspace, &["worktree", "prune"]);
+    }
 }
 
 fn git(workspace: &Path, args: &[&str]) -> Result<std::process::Output, String> {
@@ -1267,8 +1405,12 @@ mod tests {
         dir
     }
 
+    /// A fresh chat, sized long so the spawn policy's caps don't read the
+    /// tests' one-word prompts as small turns.
     fn session(tag: &str) -> String {
-        format!("sub{tag}{}{}", std::process::id(), unique())
+        let id = format!("sub{tag}{}{}", std::process::id(), unique());
+        crate::subagent_policy::pin_size(&id, crate::route::sizing::TaskSize::Long);
+        id
     }
 
     fn call(id: &str, name: &str, args: &str) -> FunctionCall {
@@ -2602,5 +2744,312 @@ mod tests {
         let spec = parse_spec(&workspace, r#"{"prompt":"look","persona":"not-a-plugin"}"#).unwrap();
         assert_eq!(spec.persona, "not-a-plugin");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_child_keeps_a_background_parents_route_class() {
+        use crate::route::live::DEFAULT_CLASS;
+        assert_eq!(
+            child_class("background:unattended", false),
+            Some("background:unattended")
+        );
+        assert_eq!(child_class("eval:item", true), Some("eval:item"));
+        assert_eq!(child_class(DEFAULT_CLASS, true), Some("chat:quick"));
+        assert_eq!(child_class(DEFAULT_CLASS, false), None);
+
+        let dir = scratch("class");
+        let cfg = scratch("classcfg");
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        let sid = session("class");
+        let parent_id = sid.clone();
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        let saw = Arc::clone(&seen);
+        let client = fake(&sid, move |req, _cancel, n| {
+            let depth = depth_of(&parent_id, &req.conversation_id);
+            if depth == 0 && n == 0 {
+                return Ok(calls_turn(
+                    vec![call(
+                        "s",
+                        "spawn_subagent",
+                        &spawn_args("look", "explore", false, "none"),
+                    )],
+                    Usage::default(),
+                ));
+            }
+            if depth >= 1 {
+                saw.lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .push(crate::route::live::current_class().to_string());
+            }
+            Ok(text_turn("done", Usage::default()))
+        });
+        let _class = crate::route::live::ClassScope::enter(crate::unattended::UNATTENDED_CLASS);
+        let _ = run_parent(
+            &client,
+            &dir,
+            &sid,
+            chat(PermMode::Always, false, false),
+            &closed(),
+            &CancelToken::new(),
+            &mut |_| {},
+        );
+        assert_eq!(
+            *seen.lock().unwrap_or_else(|err| err.into_inner()),
+            vec!["background:unattended".to_string()]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn a_child_that_crashes_gets_one_fresh_try() {
+        let dir = scratch("crash");
+        let cfg = scratch("crashcfg");
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        let sid = session("crash");
+        let parent_id = sid.clone();
+        let crashed = Arc::new(AtomicBool::new(false));
+        let once = Arc::clone(&crashed);
+        let client = fake(&sid, move |req, _cancel, n| {
+            let depth = depth_of(&parent_id, &req.conversation_id);
+            if depth == 0 && n == 0 {
+                return Ok(calls_turn(
+                    vec![call(
+                        "s",
+                        "spawn_subagent",
+                        &spawn_args("look", "explore", false, "none"),
+                    )],
+                    Usage::default(),
+                ));
+            }
+            if depth >= 1 && !once.swap(true, Ordering::SeqCst) {
+                panic!("helper blew up");
+            }
+            if depth >= 1 {
+                return Ok(text_turn("found it on the second try", Usage::default()));
+            }
+            Ok(text_turn("done", Usage::default()))
+        });
+        let (_out, history) = run_parent(
+            &client,
+            &dir,
+            &sid,
+            chat(PermMode::Always, false, true),
+            &closed(),
+            &CancelToken::new(),
+            &mut |_| {},
+        );
+        let text = joined_outputs(&history);
+        assert!(crashed.load(Ordering::SeqCst));
+        assert!(text.contains("found it on the second try"), "{text}");
+        assert_eq!(
+            task_line(&text, "status:").as_deref(),
+            Some("done"),
+            "{text}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn stop_reasons_read_as_plain_words() {
+        assert_eq!(status_line(&StopReason::EndTurn), "done");
+        assert_eq!(
+            status_line(&StopReason::MaxTurns),
+            "partial (it hit its step or time limit; this is what it found so far)"
+        );
+        assert_eq!(
+            status_line(&StopReason::Cancelled),
+            "stopped (cancelled before it finished)"
+        );
+        assert_eq!(status_line(&StopReason::Halted), "stopped (Halt)");
+        assert_eq!(
+            status_line(&StopReason::Error(" provider timed out ".into())),
+            "failed (provider timed out)"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_blocking_subagent_stop_hook_sends_the_helper_on_once() {
+        let dir = scratch("stophook");
+        let cfg = scratch("stophookcfg");
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        let sid = session("stophook");
+        let _hooks = crate::hooks::install_test_hooks(
+            &sid,
+            vec![crate::hooks::TestHook {
+                event: "SubagentStop".into(),
+                matcher: String::new(),
+                command: "echo 'run the tests too' >&2; exit 2".into(),
+                timeout: Duration::from_secs(5),
+                source_dir: dir.clone(),
+            }],
+        );
+        let parent_id = sid.clone();
+        let client = fake(&sid, move |req, _cancel, n| {
+            let depth = depth_of(&parent_id, &req.conversation_id);
+            if depth == 0 && n == 0 {
+                return Ok(calls_turn(
+                    vec![call(
+                        "s",
+                        "spawn_subagent",
+                        &spawn_args("look", "explore", false, "none"),
+                    )],
+                    Usage::default(),
+                ));
+            }
+            if depth >= 1 && n == 0 {
+                return Ok(text_turn("first pass", Usage::default()));
+            }
+            if depth >= 1 {
+                let asked = req.input.iter().rev().find_map(|item| match item {
+                    InputItem::Message { role, .. } if role == "user" => {
+                        Some(crate::compact::message_text(item))
+                    }
+                    _ => None,
+                });
+                return Ok(text_turn(
+                    &format!("second pass after: {}", asked.unwrap_or_default().trim()),
+                    Usage::default(),
+                ));
+            }
+            Ok(text_turn("done", Usage::default()))
+        });
+        let (_out, history) = run_parent(
+            &client,
+            &dir,
+            &sid,
+            chat(PermMode::Always, false, true),
+            &closed(),
+            &CancelToken::new(),
+            &mut |_| {},
+        );
+        let text = joined_outputs(&history);
+        assert!(
+            text.contains("second pass after: run the tests too"),
+            "{text}"
+        );
+        let child_calls: u32 = client
+            .counts
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .iter()
+            .filter(|(conv, _)| conv.as_str() != sid)
+            .map(|(_, n)| *n)
+            .sum();
+        assert_eq!(child_calls, 2, "the hook blocks once, not forever");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    /// A folder opened so its times can be set. Windows opens a folder only
+    /// with backup semantics, and setting a time needs write-attributes.
+    fn dir_handle(path: &Path) -> std::fs::File {
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_WRITE_ATTRIBUTES: u32 = 0x0100;
+            const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+            std::fs::OpenOptions::new()
+                .access_mode(FILE_WRITE_ATTRIBUTES)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+                .open(path)
+                .unwrap()
+        }
+        #[cfg(not(windows))]
+        {
+            std::fs::File::open(path).unwrap()
+        }
+    }
+
+    #[test]
+    fn a_clean_worktree_is_removed_and_old_ones_are_pruned() {
+        let dir = scratch("wtclean");
+        git_repo(&dir);
+        let cfg = scratch("wtcleancfg");
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        let stale = cfg.join("worktrees").join("oldsession").join("a9");
+        std::fs::create_dir_all(&stale).unwrap();
+        let old = std::time::SystemTime::now() - Duration::from_secs(4 * 24 * 60 * 60);
+        dir_handle(&stale).set_modified(old).unwrap();
+        let sid = session("wtclean");
+        let parent_id = sid.clone();
+        let client = fake(&sid, move |req, _cancel, n| {
+            let depth = depth_of(&parent_id, &req.conversation_id);
+            if depth == 0 && n == 0 {
+                return Ok(calls_turn(
+                    vec![call(
+                        "s",
+                        "spawn_subagent",
+                        &spawn_args("read", "general", false, "worktree"),
+                    )],
+                    Usage::default(),
+                ));
+            }
+            Ok(text_turn("nothing to change", Usage::default()))
+        });
+        let (_out, history) = run_parent(
+            &client,
+            &dir,
+            &sid,
+            chat(PermMode::Always, false, true),
+            &closed(),
+            &CancelToken::new(),
+            &mut |_| {},
+        );
+        let text = joined_outputs(&history);
+        assert_eq!(task_line(&text, "worktree:"), None, "{text}");
+        let id = task_line(&text, "task id:").expect(&text);
+        let made = cfg.join("worktrees").join(path_part(&sid)).join(&id);
+        assert!(
+            !made.exists(),
+            "a clean worktree is removed: {}",
+            made.display()
+        );
+        assert!(
+            !stale.exists(),
+            "a worktree older than three days is pruned"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn a_foreground_helper_past_its_time_is_stopped_once() {
+        struct NoHalt;
+        impl HaltCheck for NoHalt {
+            fn halted(&self) -> bool {
+                false
+            }
+        }
+        let (tx, rx) = mpsc::channel();
+        let child = CancelToken::new();
+        let watch = child.clone();
+        thread::spawn(move || {
+            while !watch.is_cancelled() {
+                thread::sleep(Duration::from_millis(5));
+            }
+            let _ = tx.send(ChildNote::Finished(ChildDone {
+                stop: StopReason::Cancelled,
+                usage: Usage::default(),
+                text: "found two of three".into(),
+            }));
+        });
+        let past = std::time::Instant::now();
+        let (done, timed_out) = pump(&rx, &mut |_| {}, &CancelToken::new(), &NoHalt, &child, past);
+        assert!(timed_out);
+        assert!(child.is_cancelled());
+        assert_eq!(done.map(|d| d.text).as_deref(), Some("found two of three"));
+    }
+
+    #[test]
+    fn the_spawn_tool_text_never_changes_with_settings() {
+        let cfg = scratch("tooltext").join("cfg");
+        std::fs::create_dir_all(&cfg).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        let before = spawn_schema();
+        std::fs::write(cfg.join(crate::route::boundary::CONFIG), "enabled = true\n").unwrap();
+        assert_eq!(spawn_schema(), before);
     }
 }

@@ -255,6 +255,7 @@ fn on_click(app: &AppHandle, performed: &ActionPerformed) {
             .unwrap_or_else(|e| e.into_inner())
             .get(&ask.conversation_id)
             .cloned();
+        crate::helper_asks::answered(&ask.conversation_id, &ask.call_id);
         if let Some(session) = session {
             session.answer(&ask.call_id, answer);
         }

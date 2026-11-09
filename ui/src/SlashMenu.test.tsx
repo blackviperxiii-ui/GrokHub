@@ -27,6 +27,7 @@ vi.mock("./api", () => ({
   getLastChat: () => Promise.resolve(null),
   loadChat: vi.fn(),
   onChatEvent: () => Promise.resolve(() => {}),
+  helperQuestions: () => Promise.resolve([]),
   onEventGap: () => Promise.resolve(() => {}),
   // Composer attachments have their own tests (AttachChips.test.tsx).
   onFileDrop: () => Promise.resolve(() => {}),
