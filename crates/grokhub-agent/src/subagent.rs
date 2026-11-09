@@ -358,7 +358,14 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || run_job(job, Some(tx)));
     let deadline = std::time::Instant::now() + crate::subagent_policy::wall(spec.explore);
-    let (done, timed_out) = pump(&rx, call.on_event, call.cancel, call.halt, &child_cancel, deadline);
+    let (done, timed_out) = pump(
+        &rx,
+        call.on_event,
+        call.cancel,
+        call.halt,
+        &child_cancel,
+        deadline,
+    );
     // Out of time reads as partial: the helper hands back what it found.
     let done = done.map(|mut done| {
         if timed_out && matches!(done.stop, StopReason::Cancelled) {
@@ -545,9 +552,7 @@ fn run_job(job: ChildJob, tx: Option<Sender<ChildNote>>) {
 /// A child that crashes gets one fresh try; a second crash comes back as a
 /// failed result the parent can read, not as a silent "no result".
 fn run_child_retrying(job: &ChildJob, tx: &Option<Sender<ChildNote>>) -> ChildDone {
-    let attempt = || {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_child(job, tx)))
-    };
+    let attempt = || std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_child(job, tx)));
     match attempt() {
         Ok(done) => done,
         Err(_) if job.cancel.is_cancelled() => ChildDone {
@@ -625,12 +630,8 @@ fn run_child(job: &ChildJob, tx: &Option<Sender<ChildNote>>) -> ChildDone {
     let mut out = crate::run_loop(&input, &mut history, &job.prompt, None, &mut |ev| {
         emit_child(ev, background, &parent_session, tx)
     });
-    let blocked = crate::hooks::on_subagent_stop(
-        &job.parent_session,
-        &job.workspace,
-        &job.kind_name,
-        false,
-    );
+    let blocked =
+        crate::hooks::on_subagent_stop(&job.parent_session, &job.workspace, &job.kind_name, false);
     // A SubagentStop hook that blocks sends the helper on once with its reason.
     if let Some(reason) = blocked.filter(|_| matches!(out.stop, StopReason::EndTurn)) {
         let again = crate::run_loop(&input, &mut history, &reason, None, &mut |ev| {
@@ -2835,7 +2836,11 @@ mod tests {
             let depth = depth_of(&parent_id, &req.conversation_id);
             if depth == 0 && n == 0 {
                 return Ok(calls_turn(
-                    vec![call("s", "spawn_subagent", &spawn_args("look", "explore", false, "none"))],
+                    vec![call(
+                        "s",
+                        "spawn_subagent",
+                        &spawn_args("look", "explore", false, "none"),
+                    )],
                     Usage::default(),
                 ));
             }
@@ -2877,7 +2882,11 @@ mod tests {
             let depth = depth_of(&parent_id, &req.conversation_id);
             if depth == 0 && n == 0 {
                 return Ok(calls_turn(
-                    vec![call("s", "spawn_subagent", &spawn_args("look", "explore", false, "none"))],
+                    vec![call(
+                        "s",
+                        "spawn_subagent",
+                        &spawn_args("look", "explore", false, "none"),
+                    )],
                     Usage::default(),
                 ));
             }
@@ -2901,7 +2910,11 @@ mod tests {
         let text = joined_outputs(&history);
         assert!(crashed.load(Ordering::SeqCst));
         assert!(text.contains("found it on the second try"), "{text}");
-        assert_eq!(task_line(&text, "status:").as_deref(), Some("done"), "{text}");
+        assert_eq!(
+            task_line(&text, "status:").as_deref(),
+            Some("done"),
+            "{text}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&cfg);
     }
@@ -2946,7 +2959,11 @@ mod tests {
             let depth = depth_of(&parent_id, &req.conversation_id);
             if depth == 0 && n == 0 {
                 return Ok(calls_turn(
-                    vec![call("s", "spawn_subagent", &spawn_args("look", "explore", false, "none"))],
+                    vec![call(
+                        "s",
+                        "spawn_subagent",
+                        &spawn_args("look", "explore", false, "none"),
+                    )],
                     Usage::default(),
                 ));
             }
@@ -2977,7 +2994,10 @@ mod tests {
             &mut |_| {},
         );
         let text = joined_outputs(&history);
-        assert!(text.contains("second pass after: run the tests too"), "{text}");
+        assert!(
+            text.contains("second pass after: run the tests too"),
+            "{text}"
+        );
         let child_calls: u32 = client
             .counts
             .lock()
@@ -3000,14 +3020,21 @@ mod tests {
         let stale = cfg.join("worktrees").join("oldsession").join("a9");
         std::fs::create_dir_all(&stale).unwrap();
         let old = std::time::SystemTime::now() - Duration::from_secs(4 * 24 * 60 * 60);
-        std::fs::File::open(&stale).unwrap().set_modified(old).unwrap();
+        std::fs::File::open(&stale)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
         let sid = session("wtclean");
         let parent_id = sid.clone();
         let client = fake(&sid, move |req, _cancel, n| {
             let depth = depth_of(&parent_id, &req.conversation_id);
             if depth == 0 && n == 0 {
                 return Ok(calls_turn(
-                    vec![call("s", "spawn_subagent", &spawn_args("read", "general", false, "worktree"))],
+                    vec![call(
+                        "s",
+                        "spawn_subagent",
+                        &spawn_args("read", "general", false, "worktree"),
+                    )],
                     Usage::default(),
                 ));
             }
@@ -3026,8 +3053,15 @@ mod tests {
         assert_eq!(task_line(&text, "worktree:"), None, "{text}");
         let id = task_line(&text, "task id:").expect(&text);
         let made = cfg.join("worktrees").join(path_part(&sid)).join(&id);
-        assert!(!made.exists(), "a clean worktree is removed: {}", made.display());
-        assert!(!stale.exists(), "a worktree older than three days is pruned");
+        assert!(
+            !made.exists(),
+            "a clean worktree is removed: {}",
+            made.display()
+        );
+        assert!(
+            !stale.exists(),
+            "a worktree older than three days is pruned"
+        );
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&cfg);
     }
