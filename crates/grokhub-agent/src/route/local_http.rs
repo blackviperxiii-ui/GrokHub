@@ -360,7 +360,7 @@ impl LocalRuntime for HttpLocalRuntime {
         let v: Value = resp
             .into_json()
             .map_err(|e| format!("local model JSON: {e}"))?;
-        note_timings(&v);
+        note_chat_timings(&v);
         let text = content_from_completion(&v)
             .ok_or_else(|| "local model returned no content".to_string())?;
         if !text.is_empty() {
@@ -423,7 +423,7 @@ impl LocalRuntime for HttpLocalRuntime {
             let reply = assemble_sse(BufReader::new(resp.into_reader()), &|| {
                 cancel.is_cancelled()
             })?;
-            note_timings(&reply);
+            note_chat_timings(&reply);
             reply.to_string()
         } else {
             // A server (or the test fake) that answers in one body.
@@ -642,7 +642,7 @@ fn read_sse(
         }
     }
     if let Some(v) = timings {
-        note_timings(&v);
+        note_chat_timings(&v);
     }
     if full.is_empty() {
         return Err("local model stream ended with no content".into());
@@ -654,6 +654,20 @@ fn read_sse(
 fn note_timings(v: &Value) {
     if let Some(t) = grokhub_core::local_draft::timings_of(v) {
         super::local_spec::note_reply(&t);
+    }
+}
+
+/// [`note_timings`] for a chat reply, which also scores the auto-tune arm
+/// the server runs (a background label is too short to say much).
+fn note_chat_timings(v: &Value) {
+    note_timings(v);
+    let t = &v["timings"];
+    if let Some(tok_s) = t["predicted_per_second"].as_f64() {
+        super::local_tune::observe(
+            tok_s,
+            t["prompt_per_second"].as_f64().unwrap_or(0.0),
+            t["predicted_n"].as_u64().unwrap_or(0),
+        );
     }
 }
 

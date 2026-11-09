@@ -39,6 +39,7 @@ pub mod local_bench;
 pub mod local_effort;
 pub mod local_fit;
 pub mod local_flags;
+pub mod local_tune;
 pub mod local_gov;
 pub mod local_health;
 pub mod local_http;
