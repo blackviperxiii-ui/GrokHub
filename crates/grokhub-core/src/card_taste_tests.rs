@@ -194,12 +194,7 @@ fn weak_signals_lean_less_than_a_like_or_dislike() {
         w(&t, "topic:a")
     };
     let like = one(Reaction::Like);
-    for r in [
-        Reaction::Engage,
-        Reaction::Use,
-        Reaction::Dwell,
-        Reaction::Snooze,
-    ] {
+    for r in [Reaction::Engage, Reaction::Snooze] {
         let v = one(r);
         assert!(v > 0.0 && v < like, "{r:?}: {v} vs like {like}");
     }
@@ -234,37 +229,4 @@ fn old_files_with_only_likes_and_dislikes_still_load() {
     let raw = r#"{"events":[{"cardId":"c","traits":["topic:a"],"reaction":"like","atMs":1}]}"#;
     let t: Taste = serde_json::from_str(raw).expect("old file");
     assert_eq!(t.events[0].reaction, Reaction::Like);
-}
-
-#[test]
-fn home_events_map_to_taste_and_closing_carries_no_weight() {
-    use crate::CardEvent as E;
-    assert_eq!(from_card_event(E::Opened), Some(Reaction::Engage));
-    assert_eq!(from_card_event(E::FollowUp), Some(Reaction::Engage));
-    assert_eq!(from_card_event(E::More), Some(Reaction::Like));
-    assert_eq!(from_card_event(E::Less), Some(Reaction::Dislike));
-    assert_eq!(from_card_event(E::Ran), Some(Reaction::Use));
-    for closed in [E::Dismissed, E::Rejected, E::Unhidden] {
-        assert_eq!(from_card_event(closed), None);
-    }
-}
-
-#[test]
-fn home_ranking_reads_the_same_taste_as_pulse() {
-    let liked = crate::automation_done_card("a", "Loop", "ran", 1_000);
-    let other = crate::automation_done_card("b", "Loop", "ran", 1_000);
-    let traits = card_traits(&liked);
-    let mut t = Taste::default();
-    for i in 0..4 {
-        t.record(&format!("x{i}"), traits.clone(), Reaction::Like, 0);
-    }
-    let mut prefs = crate::CardPrefs::default();
-    let plain = crate::card_score(&other, &prefs, 2_000, false);
-    prefs.taste = std::sync::Arc::new(t.weights());
-    let lifted = crate::card_score(&liked, &prefs, 2_000, false);
-    assert!(lifted > plain, "{lifted} > {plain}");
-    assert!(
-        lifted - plain
-            <= crate::card_prefs::HOME_TASTE_CAP * crate::card_prefs::HOME_TASTE_PER_POINT + 1e-9
-    );
 }

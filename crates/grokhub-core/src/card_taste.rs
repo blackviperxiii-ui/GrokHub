@@ -49,10 +49,6 @@ pub enum Reaction {
     Snooze,
     /// Removed for good: a little against what it is about.
     Delete,
-    /// Read for a while on screen.
-    Dwell,
-    /// A Home card used (opened, ran, finished) from the older Home learning.
-    Use,
 }
 
 impl Reaction {
@@ -63,8 +59,6 @@ impl Reaction {
             Self::Like => (1.0, 1.0),
             Self::Dislike => (-1.0, 1.0),
             Self::Engage => (1.0, 0.5),
-            Self::Use => (1.0, 0.4),
-            Self::Dwell => (1.0, 0.25),
             Self::Snooze => (1.0, 0.15),
             Self::Delete => (-1.0, 0.3),
         }
@@ -114,20 +108,6 @@ pub fn trait_key(kind: &str, value: &str) -> Option<String> {
 pub fn parse_trait(tag: &str) -> Option<String> {
     let (kind, value) = tag.split_once(':')?;
     trait_key(kind, value)
-}
-
-/// The older Home learning's card events, as card taste reactions. Closing
-/// a card (Dismissed, or Rejected before it was opened) carries no weight,
-/// like Dismiss; Unhidden only undoes, so it adds nothing.
-pub fn from_card_event(event: crate::CardEvent) -> Option<Reaction> {
-    use crate::CardEvent as E;
-    match event {
-        E::Opened | E::FollowUp => Some(Reaction::Engage),
-        E::More => Some(Reaction::Like),
-        E::Less | E::Hidden => Some(Reaction::Dislike),
-        E::Ran | E::Completed => Some(Reaction::Use),
-        E::Dismissed | E::Rejected | E::Unhidden => None,
-    }
 }
 
 /// The card's traits: its own tags first, then what every card has (its

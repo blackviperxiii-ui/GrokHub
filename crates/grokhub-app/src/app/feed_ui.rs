@@ -123,8 +123,6 @@ impl Cabin {
             self.start_card_look(&id);
         }
         let now = now_ms();
-        self.card_prefs.taste =
-            grokhub_core::card_taste::cached_weights(&crate::config::config_dir());
         let rank = grokhub_core::rank_home_events(
             &self.updates,
             &self.cfg.feed_pulse,
@@ -148,10 +146,6 @@ impl Cabin {
         grokhub_core::append_signal(&crate::config::config_dir(), &row);
         grokhub_core::apply_card_event(&mut self.card_prefs, card, event, after_open, now);
         let _ = crate::card_prefs::save(&self.card_prefs);
-        // One taste for the whole app: Home's events teach card taste too.
-        if let Some(reaction) = grokhub_core::card_taste::from_card_event(event) {
-            self.learn_card_taste(card, reaction);
-        }
     }
 
     /// Learn how far the user took a card. The same step twice logs once.
@@ -168,7 +162,6 @@ impl Cabin {
         let row = grokhub_core::signal_for(card, grokhub_core::use_event(depth), now, None);
         grokhub_core::append_signal(&crate::config::config_dir(), &row);
         let _ = crate::card_prefs::save(&self.card_prefs);
-        self.learn_card_taste(card, grokhub_core::card_taste::Reaction::Use);
     }
 
     /// A workboard card filed from a Home card reached Done: that use is complete.
