@@ -119,6 +119,7 @@ pub mod gw2_api;
 pub mod interests;
 pub mod journal;
 pub mod know_me;
+pub mod learn;
 pub mod learn_notes;
 pub mod learning;
 pub mod live_coaching;

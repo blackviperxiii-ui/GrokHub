@@ -107,6 +107,10 @@ pub struct Now<'a> {
 
 /// The model the next load should run.
 pub fn plan(n: Now<'_>) -> Plan {
+    // Background work rides on what is loaded; it never swaps a model.
+    if n.need == Need::Background && n.loaded.is_some() {
+        return Plan::Keep;
+    }
     let (target, stand_in) = target(&n);
     let Some((running, why)) = n.loaded else {
         return Plan::Load {
@@ -218,7 +222,7 @@ fn target(n: &Now<'_>) -> (PathBuf, Option<StandIn>) {
     if n.scale.saving {
         let lighter = match n.need {
             Need::Hard => None,
-            Need::Light => smallest(),
+            Need::Light | Need::Background => smallest(),
             Need::Normal => n
                 .on_disk
                 .iter()

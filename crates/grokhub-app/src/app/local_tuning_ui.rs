@@ -95,12 +95,17 @@ pub(super) fn launch_changed(a: &LocalTuning, b: &LocalTuning) -> bool {
 fn apply(t: &LocalTuning, prev: Option<&LocalTuning>) {
     local_autoconfig::set_overrides(overrides_for(t, local_perf::physical_cores()));
     local_perf::set_ctx_override((t.ctx > 0).then(|| u64::from(t.ctx)));
-    if t.ctx > 0 {
-        local::set_ctx_cap(u64::from(t.ctx));
-    } else if prev.is_some_and(|p| p.ctx > 0) {
-        // Back to Auto: the hardware probe's cap again. Never touch it
-        // otherwise, so startup keeps the probe's value, not the 4k floor.
-        local::set_ctx_cap(local_perf::current_defaults().ctx);
+    // A running server's launch set the cap to the context it really has
+    // (the plan can give less than asked), and a relaunch sets it again,
+    // so the pick only stands in while no server runs.
+    if local_sidecar::global_pid().is_none() {
+        if t.ctx > 0 {
+            local::set_ctx_cap(u64::from(t.ctx));
+        } else if prev.is_some_and(|p| p.ctx > 0) {
+            // Back to Auto: the hardware probe's cap again. Never touch it
+            // otherwise, so startup keeps the probe's value, not the 4k floor.
+            local::set_ctx_cap(local_perf::current_defaults().ctx);
+        }
     }
     let idle = if t.keep_loaded {
         u64::MAX

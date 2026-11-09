@@ -12,7 +12,7 @@ fn the_task_class_and_size_set_the_need() {
     assert_eq!(need("code:multi-file", 50, "x"), Need::Hard);
     assert_eq!(need("chat:quick", 50, "hi"), Need::Light);
     assert_eq!(need("desktop:soft", 50, "click"), Need::Light);
-    assert_eq!(need("background:summarize", 900, "text"), Need::Light);
+    assert_eq!(need("background:summarize", 900, "text"), Need::Background);
     assert_eq!(need("chat:turn", 5, "what's up"), Need::Normal);
     assert_eq!(need("chat:default", HARD_TOKENS + 1, "x"), Need::Hard);
 }

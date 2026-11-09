@@ -140,6 +140,7 @@ impl HttpLocalRuntime {
         stream: bool,
         effort: Option<&str>,
         slot: Option<u32>,
+        lean: Option<&Lean>,
     ) -> Result<grokhub_core::http::Response, String> {
         if !self.loopback_ok() {
             return Err("local model URL must be loopback (127.0.0.1 / localhost)".into());
@@ -149,6 +150,9 @@ impl HttpLocalRuntime {
         if let Some(id) = slot {
             body["id_slot"] = json!(id);
         }
+        if let Some(lean) = lean {
+            lean.apply(&mut body);
+        }
         Self::agent()
             .post(&format!("{}/v1/chat/completions", self.base_url))
             .header("Authorization", &format!("Bearer {}", self.token))
@@ -157,9 +161,14 @@ impl HttpLocalRuntime {
             .map_err(request_failed)
     }
 
-    fn chat_once(&self, messages: &[ChatMessage], slot: Option<u32>) -> Result<String, String> {
+    fn chat_once(
+        &self,
+        messages: &[ChatMessage],
+        slot: Option<u32>,
+        lean: Option<&Lean>,
+    ) -> Result<String, String> {
         let _busy = self.call_busy();
-        let resp = self.post_chat(messages, false, None, slot)?;
+        let resp = self.post_chat(messages, false, None, slot, lean)?;
         if resp.status() >= 400 {
             let status = resp.status();
             let body = resp.into_string().unwrap_or_default();
@@ -172,7 +181,7 @@ impl HttpLocalRuntime {
         content_from_completion(&v).ok_or_else(|| "local model returned no content".into())
     }
 
-    fn ask_json(&self, system: &str, user: &str) -> Result<Value, String> {
+    fn ask_json(&self, system: &str, user: &str, lean: &Lean) -> Result<Value, String> {
         let messages = [
             ChatMessage {
                 role: "system".into(),
@@ -183,8 +192,80 @@ impl HttpLocalRuntime {
                 content: user.into(),
             },
         ];
-        let text = self.chat_once(&messages, self.background_slot())?;
+        let text = self.chat_once(&messages, self.background_slot(), Some(lean))?;
         parse_json_object(&text).ok_or_else(|| format!("local model did not return JSON: {text}"))
+    }
+}
+
+/// What a background call asks the server for: no thinking, a short reply,
+/// and JSON in one shape only (the server turns the schema into a grammar),
+/// so a label costs a few tokens instead of a thought-out answer.
+struct Lean {
+    max_tokens: u32,
+    schema: Value,
+}
+
+/// Room for a JSON label and score, or a difficulty.
+const LABEL_TOKENS: u32 = 48;
+
+impl Lean {
+    fn classify(labels: &[&str]) -> Self {
+        Lean {
+            max_tokens: LABEL_TOKENS,
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "label": { "type": "string", "enum": labels },
+                    "score": { "type": "number" },
+                },
+                "required": ["label", "score"],
+                "additionalProperties": false,
+            }),
+        }
+    }
+
+    /// About two tokens a word, plus the JSON around it.
+    fn summarize(max_words: u32) -> Self {
+        Lean {
+            max_tokens: max_words.saturating_mul(2).saturating_add(32),
+            schema: json!({
+                "type": "object",
+                "properties": { "summary": { "type": "string" } },
+                "required": ["summary"],
+                "additionalProperties": false,
+            }),
+        }
+    }
+
+    fn difficulty() -> Self {
+        Lean {
+            max_tokens: LABEL_TOKENS,
+            schema: json!({
+                "type": "object",
+                "properties": { "d": { "type": "number" } },
+                "required": ["d"],
+                "additionalProperties": false,
+            }),
+        }
+    }
+
+    fn apply(&self, body: &mut Value) {
+        let Some(o) = body.as_object_mut() else {
+            return;
+        };
+        o.remove("reasoning_effort");
+        o.insert("max_tokens".into(), json!(self.max_tokens));
+        o.insert(
+            "response_format".into(),
+            json!({
+                "type": "json_schema",
+                "json_schema": { "name": "reply", "strict": true, "schema": self.schema },
+            }),
+        );
+        let kwargs = o.entry("chat_template_kwargs").or_insert_with(|| json!({}));
+        if let Some(k) = kwargs.as_object_mut() {
+            k.insert("enable_thinking".into(), json!(false));
+        }
     }
 }
 
@@ -234,20 +315,20 @@ impl LocalRuntime for HttpLocalRuntime {
         let system = format!(
             "Reply with one JSON object only: {{\"label\": \"<one of: {labels_csv}>\", \"score\": <0.0-1.0>}}. No markdown."
         );
-        self.ask_json(&system, text)
+        self.ask_json(&system, text, &Lean::classify(labels))
     }
 
     fn summarize(&self, text: &str, max_words: u32) -> Result<Value, String> {
         let system = format!(
             "Reply with one JSON object only: {{\"summary\": \"...\"}} of at most {max_words} words. No markdown."
         );
-        self.ask_json(&system, text)
+        self.ask_json(&system, text, &Lean::summarize(max_words))
     }
 
     fn difficulty(&self, text: &str) -> Result<Value, String> {
         let system =
             "Reply with one JSON object only: {\"d\": <0.0-1.0>} for task difficulty. No markdown.";
-        self.ask_json(system, text)
+        self.ask_json(system, text, &Lean::difficulty())
     }
 
     fn chat_stream(
@@ -265,7 +346,7 @@ impl LocalRuntime for HttpLocalRuntime {
         on_delta: &mut dyn FnMut(&str),
     ) -> Result<String, String> {
         let _busy = self.call_busy();
-        let resp = self.post_chat(messages, true, effort, None)?;
+        let resp = self.post_chat(messages, true, effort, None, None)?;
         if resp.status() >= 400 {
             let status = resp.status();
             let body = resp.into_string().unwrap_or_default();
@@ -279,7 +360,7 @@ impl LocalRuntime for HttpLocalRuntime {
         let v: Value = resp
             .into_json()
             .map_err(|e| format!("local model JSON: {e}"))?;
-        note_timings(&v);
+        note_chat_timings(&v);
         let text = content_from_completion(&v)
             .ok_or_else(|| "local model returned no content".to_string())?;
         if !text.is_empty() {
@@ -342,7 +423,7 @@ impl LocalRuntime for HttpLocalRuntime {
             let reply = assemble_sse(BufReader::new(resp.into_reader()), &|| {
                 cancel.is_cancelled()
             })?;
-            note_timings(&reply);
+            note_chat_timings(&reply);
             reply.to_string()
         } else {
             // A server (or the test fake) that answers in one body.
@@ -561,7 +642,7 @@ fn read_sse(
         }
     }
     if let Some(v) = timings {
-        note_timings(&v);
+        note_chat_timings(&v);
     }
     if full.is_empty() {
         return Err("local model stream ended with no content".into());
@@ -573,6 +654,20 @@ fn read_sse(
 fn note_timings(v: &Value) {
     if let Some(t) = grokhub_core::local_draft::timings_of(v) {
         super::local_spec::note_reply(&t);
+    }
+}
+
+/// [`note_timings`] for a chat reply, which also scores the auto-tune arm
+/// the server runs (a background label is too short to say much).
+fn note_chat_timings(v: &Value) {
+    note_timings(v);
+    let t = &v["timings"];
+    if let Some(tok_s) = t["predicted_per_second"].as_f64() {
+        super::local_tune::observe(
+            tok_s,
+            t["prompt_per_second"].as_f64().unwrap_or(0.0),
+            t["predicted_n"].as_u64().unwrap_or(0),
+        );
     }
 }
 
@@ -710,10 +805,13 @@ mod tests {
         let n = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let rt = HttpLocalRuntime::new(&base, "t").with_slots(3, true, n.clone());
         for _ in 0..4 {
-            assert_eq!(rt.ask_json("s", "u").unwrap(), json!({"ok": true}));
+            assert_eq!(
+                rt.ask_json("s", "u", &Lean::difficulty()).unwrap(),
+                json!({"ok": true})
+            );
         }
         let single = HttpLocalRuntime::new(&base, "t").with_slots(1, false, n);
-        single.ask_json("s", "u").unwrap();
+        single.ask_json("s", "u", &Lean::difficulty()).unwrap();
         let bodies = server.join().unwrap();
         let slots: Vec<u64> = bodies[..4]
             .iter()
@@ -722,6 +820,37 @@ mod tests {
         assert!(slots.iter().all(|s| *s == 1 || *s == 2), "{slots:?}");
         assert!(slots.contains(&1) && slots.contains(&2), "{slots:?}");
         assert_eq!(bodies[4].get("id_slot"), None);
+    }
+
+    #[test]
+    fn background_calls_think_not_answer_short_and_only_in_their_json_shape() {
+        let (base, server) = capture_server(3);
+        let rt = HttpLocalRuntime::new(&base, "t");
+        rt.classify("hello", &["routine", "sensitive"]).unwrap();
+        rt.summarize("long text", 40).unwrap();
+        rt.difficulty("hard bug").unwrap();
+        let bodies = server.join().unwrap();
+        for b in &bodies {
+            assert_eq!(b["chat_template_kwargs"]["enable_thinking"], json!(false));
+            assert_eq!(b["stream"], json!(false));
+            assert_eq!(b.get("reasoning_effort"), None);
+            assert_eq!(b["response_format"]["type"], json!("json_schema"));
+        }
+        assert_eq!(bodies[0]["max_tokens"], json!(48));
+        assert_eq!(
+            bodies[0]["response_format"]["json_schema"]["schema"]["properties"]["label"]["enum"],
+            json!(["routine", "sensitive"])
+        );
+        assert_eq!(bodies[1]["max_tokens"], json!(112));
+        assert_eq!(
+            bodies[1]["response_format"]["json_schema"]["schema"]["required"],
+            json!(["summary"])
+        );
+        assert_eq!(bodies[2]["max_tokens"], json!(48));
+        assert_eq!(
+            bodies[2]["response_format"]["json_schema"]["schema"]["required"],
+            json!(["d"])
+        );
     }
 
     #[test]

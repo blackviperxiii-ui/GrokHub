@@ -50,6 +50,7 @@ pub mod local_scale;
 pub mod local_sidecar;
 pub mod local_spec;
 pub mod local_swap;
+pub mod local_tune;
 pub mod log;
 pub mod match_ask;
 pub mod policy;
@@ -780,6 +781,7 @@ impl Router {
             ctx_tokens: input.ctx_tokens,
             now_ms,
             canary: input.probation_canary,
+            helper: live::in_helper(),
         };
         let attn = attention::decide(&attention::AttentionInput {
             class: input.lane(),

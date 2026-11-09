@@ -146,7 +146,11 @@ impl Cabin {
         if let Err(e) = local_sidecar::set_pick(&crate::config::config_dir(), &id) {
             self.status = e;
         }
-        local_sidecar::stop_global();
+        // Stopping waits on the engine's lock, which a reply in flight
+        // holds, so it never runs on the UI thread.
+        let _ = std::thread::Builder::new()
+            .name("local-stop".into())
+            .spawn(local_sidecar::stop_global);
         self.set_local_model(true);
     }
 
