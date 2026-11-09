@@ -7,7 +7,6 @@ import {
   pulseDiscuss,
   pulseOffer,
   pulseRemind,
-  pulseWhy,
   saveFeedPrompt,
   type PulseAct,
   type PulseChip,
@@ -24,6 +23,7 @@ export const PROMPT_LABEL = "What should your feed cover?";
 export const SAVED_NOTE = "Saved. A new post is on its way.";
 export const MORE_LIKE_NOTE = "Got it. More ideas like this next time.";
 export const NOT_INTERESTED_NOTE = "Got it. Fewer ideas like this.";
+export const DISLIKE_NOTE = "Got it. A few less like that.";
 export const FOR_YOU_LABEL = "For You";
 export const DAY_END = "That's all for today";
 export const ADD_INTERESTS = "Add interests";
@@ -298,11 +298,8 @@ export function Pulse({
                 onLove={() => void act(post.id, post.loved ? "unlove" : "love")}
                 onDiscuss={() => void discuss(post.id)}
                 onOpen={() => void openUrl(post.link).catch(fail)}
-                onDelete={() => void act(post.id, "delete", "Deleted.")}
-                onWhy={() => pulseWhy(post.id)}
-                onSnooze={() => void act(post.id, "snooze", "Snoozed until 9 AM.")}
+                onDislike={() => void act(post.id, "dislike", DISLIKE_NOTE)}
                 onDismiss={() => void act(post.id, "dismiss", "Dismissed.")}
-                onNotThis={() => void act(post.id, "notThis", "Got it. Fewer posts like that.")}
                 onChip={(c) => void chip(post.id, c)}
               />
               {i === today - 1 && i < total - 1 && (
@@ -346,6 +343,7 @@ export function Pulse({
                     onFix={() => setFixing(idea)}
                     onMoreLike={() => void act(idea.id, "moreLike", MORE_LIKE_NOTE)}
                     onNotInterested={() => void act(idea.id, "notInterested", NOT_INTERESTED_NOTE)}
+                    onDismiss={() => void act(idea.id, "dismiss", "Dismissed.")}
                     onChip={(c) => void chip(idea.id, c)}
                     onDiscuss={() => void discuss(idea.id)}
                   />

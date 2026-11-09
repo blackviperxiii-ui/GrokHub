@@ -7,10 +7,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use grokhub_agent::route::local_sidecar;
-use grokhub_core::local_picker::BenchCache;
+use grokhub_core::local_picker::{BenchCache, Profile};
 use grokhub_core::local_setup::{self as ls, LocalModel, ModelKind, ModelTab};
 use grokhub_core::model_download::{self as md, Control, Outcome, Progress};
 use grokhub_core::model_library::{self as lib, Fit, Row};
+use grokhub_core::model_lineup as lineup;
 use grokhub_core::runtime_download as rd;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -74,6 +75,9 @@ pub struct LibraryStatus {
 #[serde(rename_all = "camelCase")]
 pub struct LibraryView {
     pub tabs: Vec<LibraryTab>,
+    /// The best lineup for this PC, one model per goal for hot-swap: what it
+    /// fetches (`ids`, maybe none left) and the line that says so first.
+    pub lineup: Option<QueueOffer>,
     pub everything: Option<QueueOffer>,
     pub status: LibraryStatus,
 }
@@ -144,6 +148,7 @@ fn offer(q: Vec<&'static LocalModel>) -> Option<QueueOffer> {
 /// The page from catalog rows: pure, so the tests drive it.
 fn build(
     rows: &[Row],
+    p: &Profile,
     free_mb: Option<u64>,
     in_use: Option<&str>,
     partial: impl Fn(&LocalModel) -> bool,
@@ -192,8 +197,13 @@ fn build(
             }
         })
         .collect();
+    let l = lineup::recommend(rows, p, free_mb);
     LibraryView {
         tabs,
+        lineup: Some(QueueOffer {
+            line: lineup::lineup_line(&l),
+            ids: l.queue.iter().map(|m| m.id.to_string()).collect(),
+        }),
         everything: offer(lib::queue(rows, None, free_mb)),
         status,
     }
@@ -221,6 +231,7 @@ pub fn view(config_dir: &Path) -> LibraryView {
     };
     build(
         &rows,
+        &p,
         free_mb(config_dir),
         loaded.as_deref(),
         |m| md::partial_bytes(&dir_for(config_dir, m), m).is_some(),
@@ -426,22 +437,24 @@ pub fn remove(config_dir: &Path, id: &str) -> Result<LibraryView, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use grokhub_core::local_picker::Profile;
     use grokhub_core::local_setup::CpuSimd;
 
     const MID: &str = "gemma-4-12b-it-abliterated-q4_k";
     const MID_DRAFT: &str = "gemma-4-12b-it-abliterated-mtp";
 
-    fn rows(on: &[&str]) -> Vec<Row> {
-        let p = Profile {
+    fn pc() -> Profile {
+        Profile {
             gpus_vram_mb: vec![12_288],
             unified: false,
             ram_mb: 32_768,
             free_disk_mb: 500_000,
             simd: CpuSimd::Avx2,
             llama_build: None,
-        };
-        lib::rows(&p, &BenchCache::new(), |m| on.contains(&m.id))
+        }
+    }
+
+    fn rows(on: &[&str]) -> Vec<Row> {
+        lib::rows(&pc(), &BenchCache::new(), |m| on.contains(&m.id))
     }
 
     fn idle() -> LibraryStatus {
@@ -461,6 +474,7 @@ mod tests {
         let mid = ls::model_by_id(MID).unwrap();
         let v = build(
             &rows(&[MID]),
+            &pc(),
             Some(500_000),
             Some(mid.file),
             |_| false,
@@ -481,6 +495,7 @@ mod tests {
         );
         let v = build(
             &rows(&[MID]),
+            &pc(),
             Some(500_000),
             None,
             |m| m.id == MID_DRAFT,
@@ -489,9 +504,25 @@ mod tests {
         );
         assert_eq!(row(&v, MID).state, "downloaded");
         assert_eq!(row(&v, MID_DRAFT).state, "resume");
-        let v = build(&rows(&[]), Some(500_000), None, |_| false, idle(), &[MID]);
+        let v = build(
+            &rows(&[]),
+            &pc(),
+            Some(500_000),
+            None,
+            |_| false,
+            idle(),
+            &[MID],
+        );
         assert_eq!(row(&v, MID).state, "queued");
         assert!(v.everything.is_some());
+        // The lineup says what it fetches and for which goal before the click.
+        let l = v.lineup.expect("a lineup");
+        assert!(!l.ids.is_empty());
+        assert!(
+            l.line.contains("Balance: ") && l.line.contains("Video: "),
+            "{}",
+            l.line
+        );
     }
 
     #[test]

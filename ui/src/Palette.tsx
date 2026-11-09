@@ -23,6 +23,7 @@ export type View =
   | "home"
   | "objectives"
   | "chat"
+  | "code"
   | "history"
   | "pulse"
   | "imagine"
@@ -94,13 +95,14 @@ export const VIEW_LABELS: Record<View, string> = {
   home: "Home",
   objectives: "Objectives",
   chat: "Chat",
+  code: "Code",
   history: "History",
   pulse: "Pulse",
   imagine: "Imagine",
   journal: "Journal",
   automations: "Automations",
   agents: "Agents",
-  memory: "Memory",
+  memory: "Personal",
   skills: "Skills",
   connectors: "Connectors",
   settings: "Settings",
@@ -110,7 +112,7 @@ export const VIEW_LABELS: Record<View, string> = {
   updates: "Updates & Drivers",
 };
 
-/** The pages this platform shows, in tab order. History and the journal
+/** The pages this platform shows, in tab order. Code, History and the journal
  * are this computer's files, so the web app leaves them on the desktop (a
  * browser sees only the chats it started); Devices is about this computer's
  * Web access, so only a desktop that has it shows it. */
@@ -118,6 +120,7 @@ export function views(caps: Capabilities): View[] {
   return [
     "home",
     "chat",
+    ...(caps.code && !caps.remote ? (["code"] as const) : []),
     ...(caps.remote ? [] : (["history"] as const)),
     ...(caps.pulse ? (["pulse"] as const) : []),
     "imagine",

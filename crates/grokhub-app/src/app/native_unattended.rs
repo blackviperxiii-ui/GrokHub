@@ -221,7 +221,9 @@ fn execute(job: Prepared) -> grokhub_agent::UnattendedDone {
         cancel,
         halt: Box::new(grokhub_agent::StampHalt {
             started_ms: now_ms(),
-            read: crate::desktop_mcp::read_halt_stamp,
+            // Only Halt everything stops a loop; its desktop steps still
+            // stop on any Stop, since desktop control reads its own stamp.
+            read: crate::desktop_mcp::read_halt_all_stamp,
         }),
         desktop_ops,
         imagine_bearer: job.ready.bearer,

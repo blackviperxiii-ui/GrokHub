@@ -46,7 +46,7 @@ pub fn output_schema() -> Value {
     json!({
         "type": "function",
         "name": "get_command_or_subagent_output",
-        "description": "Read new output from a background command or subagent. Pass the task id. timeout_ms waits up to 120000 milliseconds. Omit it or pass 0 for a snapshot of what is new since the last read.",
+        "description": "Read new output from background commands or subagents. task_id: an id, or ids joined by commas to wait for all. timeout_ms waits up to 120000 ms; 0 or none: a snapshot of what is new.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -150,11 +150,13 @@ pub fn output(tasks: Option<&Arc<TaskHub>>, args: &Value) -> ToolOutput {
     let Some(tasks) = tasks else {
         return ToolOutput::err("background tasks are not available on this run");
     };
-    let Some(id) = task_id(args) else {
-        return ToolOutput::err("task_id is required");
-    };
     let timeout_ms = args.get("timeout_ms").and_then(|v| v.as_u64()).unwrap_or(0);
-    match tasks.read_output(&id, timeout_ms) {
+    let read = match task_ids(args).as_slice() {
+        [] => return ToolOutput::err("task_id is required"),
+        [one] => tasks.read_output(one, timeout_ms),
+        many => tasks.read_outputs(many, timeout_ms),
+    };
+    match read {
         Ok(text) => ToolOutput::ok(text),
         Err(err) => ToolOutput::err(with_id_hint(err)),
     }
@@ -248,6 +250,31 @@ fn with_id_hint(err: String) -> String {
     } else {
         err
     }
+}
+
+/// The ids an output read waits on: `task_id` split at commas, or every
+/// entry of a `task_ids` list.
+fn task_ids(args: &Value) -> Vec<String> {
+    let listed: Vec<String> = match text_field(args, "task_id") {
+        Some(id) => id.split(',').map(String::from).collect(),
+        None => args
+            .get("task_ids")
+            .and_then(|v| v.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .map(String::from)
+                    .collect()
+            })
+            .unwrap_or_default(),
+    };
+    listed
+        .iter()
+        .map(|id| id.trim())
+        .filter(|id| !id.is_empty())
+        .map(String::from)
+        .collect()
 }
 
 fn task_id(args: &Value) -> Option<String> {

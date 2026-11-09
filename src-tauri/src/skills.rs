@@ -1,8 +1,10 @@
 //! The Skills page (shell parity with the cabin's Skills page): the skills
-//! chat can use, read only. Cabin skills are `{config}/skills/*/SKILL.md`;
-//! the rest come from the native engine's own discovery (project, user,
-//! plugin and built-in skills). Creating or editing skills stays in the
-//! cabin, and a skill's verify script never runs from here.
+//! chat can use, each with an on/off switch. Cabin skills are
+//! `{config}/skills/*/SKILL.md`; the rest come from the native engine's own
+//! discovery (project, user and plugin skills). Built-in skills live in the
+//! Code tab, so they are not listed here, though they still run by name.
+//! Creating or editing skills stays in the cabin, and a skill's verify
+//! script never runs from here.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -46,6 +48,8 @@ pub struct Row {
     pub source: Source,
     /// The skill's folder, empty for a built-in.
     pub folder: String,
+    /// Off: chat won't load it until it is switched back on.
+    pub on: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -96,6 +100,7 @@ fn cabin_rows(config_dir: &Path) -> Vec<(Row, PathBuf)> {
             phrase => phrase.to_string(),
         };
         let row = Row {
+            on: !grokhub_agent::skill_is_off_in(&config_dir.join("skills"), &name),
             description: skill.description.trim().to_string(),
             trigger,
             source: Source::Cabin,
@@ -116,7 +121,10 @@ fn gather(config_dir: &Path, workspace: &Path, home: Option<&Path>) -> Vec<(Row,
         .into_iter()
         .map(|(row, dir)| (row, Some(dir)))
         .collect();
-    let found = grokhub_agent::discover_skills(workspace, home, &plugins::skill_dirs(workspace));
+    // Off skills too, so the page can switch one back on.
+    let found =
+        grokhub_agent::discover_all_skills(workspace, home, &plugins::skill_dirs(workspace));
+    let skills_dir = config_dir.join("skills");
     for skill in found {
         // The cabin rows above read the same folder with its trigger.
         if skill.source == SkillSource::Cabin {
@@ -126,6 +134,8 @@ fn gather(config_dir: &Path, workspace: &Path, home: Option<&Path>) -> Vec<(Row,
         let dir = (source != Source::Builtin).then_some(skill.dir);
         out.push((
             Row {
+                on: source == Source::Builtin
+                    || !grokhub_agent::skill_is_off_in(&skills_dir, &skill.name),
                 trigger: by_name(&skill.name),
                 description: skill.description,
                 source,
@@ -141,13 +151,34 @@ fn gather(config_dir: &Path, workspace: &Path, home: Option<&Path>) -> Vec<(Row,
     out
 }
 
+/// The listed skills. Built-ins stay off this page; they live in the Code tab.
 pub fn load(config_dir: &Path, workspace: &Path, home: Option<&Path>) -> Page {
     Page {
         rows: gather(config_dir, workspace, home)
             .into_iter()
             .map(|(row, _)| row)
+            .filter(|row| row.source != Source::Builtin)
             .collect(),
     }
+}
+
+/// Switch a listed skill on or off for chat, then list again. A name that
+/// isn't listed, or a built-in, is refused, so the off list only names real
+/// skills.
+pub fn set_on(
+    config_dir: &Path,
+    workspace: &Path,
+    home: Option<&Path>,
+    name: &str,
+    on: bool,
+) -> Result<Page, String> {
+    let page = load(config_dir, workspace, home);
+    if !page.rows.iter().any(|row| row.name == name) {
+        return Err(format!("{name} isn't in the skills list any more."));
+    }
+    grokhub_agent::set_skill_off_in(&config_dir.join("skills"), name, !on)
+        .map_err(|e| e.to_string())?;
+    Ok(load(config_dir, workspace, home))
 }
 
 /// The folder of the listed skill `name` from `source`, found again here so
@@ -285,13 +316,44 @@ mod tests {
         assert_eq!(notes.source, Source::User);
         assert_eq!(notes.description, "Take meeting notes");
 
-        let qa = find(&page, "qa-walkthrough");
-        assert_eq!(qa.source, Source::Builtin);
-        assert_eq!(qa.folder, "");
+        // Built-ins live in the Code tab, so the Skills page leaves them out.
+        assert!(
+            page.rows.iter().all(|r| r.source != Source::Builtin),
+            "{:?}",
+            page.rows
+        );
+        assert!(!page.rows.iter().any(|r| r.name == "qa-walkthrough"));
+        assert!(page.rows.iter().all(|r| r.on));
 
         // The engine also finds the cabin folder; it is listed once.
         let cabin: Vec<_> = page.rows.iter().filter(|r| r.name == "tidy").collect();
         assert_eq!(cabin.len(), 1);
+    }
+
+    #[test]
+    fn a_switched_off_skill_stays_listed_and_comes_back_on() {
+        let root = scratch("on-off");
+        let (cfg, home, ws) = (root.join("cfg"), root.join("home"), root.join("ws"));
+        write(
+            &cfg.join("skills/tidy/SKILL.md"),
+            b"---\nname: tidy\ndescription: Tidy the repo\n---\n",
+        );
+        write(
+            &ws.join(".grok/skills/lint-fix/SKILL.md"),
+            skill("lint-fix", "Fix lint warnings").as_bytes(),
+        );
+        let page = set_on(&cfg, &ws, Some(&home), "lint-fix", false).expect("off");
+        assert!(
+            !find(&page, "lint-fix").on,
+            "an off skill is still listed, switched off"
+        );
+        assert!(find(&page, "tidy").on);
+        let page = set_on(&cfg, &ws, Some(&home), "tidy", false).expect("off");
+        assert!(!find(&page, "tidy").on);
+        let page = set_on(&cfg, &ws, Some(&home), "lint-fix", true).expect("on");
+        assert!(find(&page, "lint-fix").on);
+        assert!(set_on(&cfg, &ws, Some(&home), "qa-walkthrough", false).is_err());
+        assert!(set_on(&cfg, &ws, Some(&home), "no-such-skill", false).is_err());
     }
 
     #[test]

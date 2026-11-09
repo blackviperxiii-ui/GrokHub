@@ -35,6 +35,7 @@ vi.mock("./api", () => ({
   cancelChat: vi.fn(),
   closeChat: vi.fn(() => Promise.resolve()),
   onChatEvent: () => Promise.resolve(() => {}),
+  helperQuestions: () => Promise.resolve([]),
   onEventGap: () => Promise.resolve(() => {}),
   // Attachments have their own tests (AttachChips.test.tsx).
   onFileDrop: () => Promise.resolve(() => {}),

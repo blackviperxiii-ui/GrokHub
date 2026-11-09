@@ -434,23 +434,19 @@ fn used_idea_dismiss_and_liked_feed_dismiss_are_not_negative() {
         cabin.reactions_now().log
     );
 
-    // Liked / discussed Feed then dismiss: used (never a bury in the ledger).
-    cabin.react_to_act(&super::pulse_ui::PulseAct::Dismiss("feed-liked".into()));
-    cabin.pulse_dismiss("feed-liked", "2026-10-28");
-    assert!(
-        pulse_memory().contains("- [2026-10-28] pulse: used \"Rust 1.95 ships\" reason=used"),
-        "{}",
-        pulse_memory()
-    );
-    cabin.react_to_act(&super::pulse_ui::PulseAct::Dismiss("feed-talk".into()));
-    cabin.pulse_dismiss("feed-talk", "2026-10-28");
-    assert!(pulse_memory().contains("- [2026-10-28] pulse: used \"NFL scores\" reason=used"));
-
-    // Untouched Feed dismiss: dismiss.
-    cabin.react_to_act(&super::pulse_ui::PulseAct::Dismiss("feed-fresh".into()));
-    cabin.pulse_dismiss("feed-fresh", "2026-10-28");
-    assert!(pulse_memory()
-        .contains("- [2026-10-28] pulse: dismissed \"Nightly backup\" reason=dismiss"));
+    // Feed posts: Dismiss carries no weight at all, liked, discussed or not.
+    let before = pulse_memory();
+    let log = cabin.reactions_now().log.len();
+    for id in ["feed-liked", "feed-talk", "feed-fresh"] {
+        cabin.react_to_act(&super::pulse_ui::PulseAct::Dismiss(id.into()));
+        cabin.pulse_dismiss(id, "2026-10-28");
+        assert!(!cabin
+            .updates
+            .iter()
+            .any(|c| c.id == id && c.status != UpdateStatus::Dismissed));
+    }
+    assert_eq!(pulse_memory(), before, "no ledger line");
+    assert_eq!(cabin.reactions_now().log.len(), log, "no reaction");
 }
 
 #[test]
@@ -597,15 +593,17 @@ fn pulse_feed_shows_posts_with_cached_source_images_and_a_placeholder() {
             "missing {want:?} in {texts:?}"
         );
     }
-    // Plain posts carry the card chips; Like waits in their ···.
+    // Every post has one row: Like, its chips, I don't like, Dismiss.
     let count = |want: &str| texts.iter().filter(|t| t.as_str() == want).count();
     assert_eq!(
         (
             count("Like"),
             count("Ignore for now"),
-            count("Remind me later")
+            count("Remind me later"),
+            count("I don't like"),
+            count("Dismiss"),
         ),
-        (0, 2, 2)
+        (2, 2, 2, 2, 2)
     );
     let posts: Vec<String> = cabin
         .pulse_feed_posts(now)
@@ -651,14 +649,13 @@ fn pulse_feed_shows_posts_with_cached_source_images_and_a_placeholder() {
             .count(),
         1
     );
-    // The heart stays on in the post's ··· (the post itself shows its chips).
+    // The heart stays on, first in the post's row.
     let liked = cabin.updates[0].clone();
     assert_eq!(
-        super::pulse_ui::post_overflow(&super::pulse_ui::post_buttons(&liked, false, &chip_day()))
-            .into_iter()
-            .map(|(label, _)| label)
-            .collect::<Vec<_>>(),
-        ["Liked"]
+        super::pulse_ui::post_row(&liked, false, &chip_day())
+            .first()
+            .map(|(label, _)| label.as_str()),
+        Some("Liked")
     );
 }
 
@@ -1210,16 +1207,18 @@ fn pulse_mixes_ideas_and_posts_in_one_column_and_narrow_rows_keep_run() {
     for gone in ["UP NEXT", "FROM YOUR FEED", "Feed", "For You"] {
         assert_eq!(count(&wide, gone), 0, "{gone}: {wide:?}");
     }
-    // Rows rest without inline actions; every idea and post keeps its ···.
+    // Idea rows rest without inline actions and keep their ···; posts have
+    // no ··· at all, only their one row of buttons.
     assert_eq!((count(&wide, "Run"), count(&wide, "Snooze")), (0, 0));
-    assert_eq!(count(&wide, "···"), 5);
-    // Posts show their chips at rest; Like waits in their ···.
+    assert_eq!(count(&wide, "···"), 2);
+    // Posts show Like first and their chips at rest.
     assert_eq!(
         (count(&wide, "Like"), count(&wide, "Remind me later")),
-        (0, 3)
+        (3, 3)
     );
 
-    // Narrow: Run stays on every idea row; Snooze and Dismiss wait in ···.
+    // Narrow: Run stays on every idea row; idea rows keep Snooze and Dismiss
+    // in ···, and every post keeps its Dismiss in its row.
     let narrow = pulse_text_pos(cabin, NARROW_W);
     assert!(cabin.pulse_view.narrow);
     assert_eq!(
@@ -1229,7 +1228,7 @@ fn pulse_mixes_ideas_and_posts_in_one_column_and_narrow_rows_keep_run() {
             count(&narrow, "Dismiss"),
             count(&narrow, "···")
         ),
-        (2, 0, 0, 5),
+        (2, 0, 3, 2),
         "{narrow:?}"
     );
     assert!(at(&narrow, "I can sort the beach photos").y < at(&narrow, "Rust 1.92 ships").y);
@@ -1289,7 +1288,7 @@ fn pulse_offers_the_off_helpers_once_each() {
     );
     let texts = pulse_texts(cabin, 900.0);
     for ask in [
-        "Offer to sleep the PC late at night?",
+        "Let the PC sleep when it sits idle?",
         "Suggest Downloads cleanups?",
     ] {
         assert!(
@@ -1338,7 +1337,7 @@ fn pulse_offers_the_off_helpers_once_each() {
     assert!(cabin.wind_down_on());
     assert_eq!(
         cabin.status,
-        "Late-night wind-down is on. Turn it off in Settings › Behavior."
+        "Sleep when idle is on. Pick the idle time in Settings › Behavior."
     );
     cabin.set_wind_on(false);
 
@@ -1351,7 +1350,7 @@ fn pulse_offers_the_off_helpers_once_each() {
     assert!(!cabin.status.is_empty());
     assert_ne!(
         cabin.status,
-        "Late-night wind-down is on. Turn it off in Settings › Behavior."
+        "Sleep when idle is on. Pick the idle time in Settings › Behavior."
     );
     // The switch rolls back, so the offer and Settings still read it as off.
     assert!(!cabin.wind_down_on());
@@ -1399,14 +1398,14 @@ fn behavior_settings_list_the_pc_helpers_first() {
 /// Every post gets the same two buttons, weightiest first, and its other
 /// actions go in its ···. Like is never the amber primary.
 #[test]
-fn every_post_shows_two_buttons_and_puts_the_rest_in_its_menu() {
-    use super::pulse_ui::{post_actions, post_overflow, FeedPostAct, POST_BUTTONS};
+fn every_post_shows_one_row_like_first_dismiss_last() {
+    use super::pulse_ui::{post_actions, post_row, FeedPostAct};
     let labels = |acts: &[(String, FeedPostAct)]| -> Vec<String> {
         acts.iter().map(|(l, _)| l.clone()).collect()
     };
     let now = now_ms();
 
-    // Done for you: Undo leads, "Don't do this again" second, Like spills over.
+    // Done for you: Like, Undo, "Don't do this again", I don't like, Dismiss.
     let dfy = grokhub_core::done_for_you_card(
         "Turned off the notes connection",
         "It failed every start.",
@@ -1419,30 +1418,38 @@ fn every_post_shows_two_buttons_and_puts_the_rest_in_its_menu() {
         },
         now,
     );
-    let acts = post_actions(&dfy, false);
     assert_eq!(
-        labels(&acts[..POST_BUTTONS]),
-        ["Undo", "Don't do this again"]
+        labels(&post_row(&dfy, false, &chip_day())),
+        [
+            "Like",
+            "Undo",
+            "Don't do this again",
+            "I don't like",
+            "Dismiss"
+        ]
     );
-    assert_eq!(labels(&post_overflow(&acts)), ["Like"]);
 
-    // A hobby tip: Done and Skip on the post; Too easy and Too hard in ···.
+    // A hobby tip keeps all its own buttons in the one row.
     let mut hobby = pulse_idea("hobby", "Try a new chord", "learn the chord", 1);
     hobby.pulse.hobby_path = Some(grokhub_core::hobby_paths::HobbyPathMeta {
         hobby: "guitar".into(),
         step_id: "chord-1".into(),
         answered: false,
     });
-    let acts = post_actions(&hobby, false);
-    assert_eq!(labels(&acts[..POST_BUTTONS]), ["Done", "Skip"]);
     assert_eq!(
-        labels(&post_overflow(&acts)),
-        ["Too easy", "Too hard", "Like"]
+        labels(&post_row(&hobby, false, &chip_day())),
+        [
+            "Like",
+            "Done",
+            "Skip",
+            "Too easy",
+            "Too hard",
+            "I don't like",
+            "Dismiss"
+        ]
     );
-    // Answered, its tip buttons go and Like is all that is left.
     hobby.pulse.hobby_path.as_mut().unwrap().answered = true;
     assert_eq!(labels(&post_actions(&hobby, false)), ["Like"]);
-    assert!(post_overflow(&post_actions(&hobby, false)).is_empty());
 
     // A plain post that is liked reads Liked.
     hobby.reaction = Some(grokhub_core::CardReaction::Up);
@@ -1459,28 +1466,18 @@ Two are crashes on resume.\n\nThe crash happens after the laptop sleeps for an h
     let card = grokhub_core::automation_report_card("auto-r", "Morning issues", reply, now_ms());
     let id = card.id.clone();
     cabin.updates.push(card);
-    let shut = pulse_texts(cabin, 1600.0);
+    // Always fully open: the report shows at once and there is no toggle.
+    let open = pulse_texts(cabin, 1600.0);
     for want in [
         "Three issues opened overnight: #12, #13 and #14",
-        "From \"Morning issues\": Two are crashes on resume. The crash happens after the laptop sleeps for an hour.",
-        "Full report",
+        "Open issues",
     ] {
-        assert!(shut.iter().any(|t| t == want), "{want:?} in {shut:?}");
-    }
-    assert!(
-        !shut.iter().any(|t| t == "Open issues"),
-        "the report stays shut until asked: {shut:?}"
-    );
-    cabin.apply_pulse_act(super::pulse_ui::PulseAct::Report(id.clone()));
-    let open = pulse_texts(cabin, 1600.0);
-    for want in ["Hide report", "Open issues"] {
         assert!(open.iter().any(|t| t == want), "{want:?} in {open:?}");
     }
-    cabin.apply_pulse_act(super::pulse_ui::PulseAct::Report(id));
-    assert!(
-        cabin.pulse_view.report_open.is_empty(),
-        "a second tap shuts it"
-    );
+    for gone in ["Full report", "Hide report", "···"] {
+        assert!(!open.iter().any(|t| t == gone), "{gone:?} in {open:?}");
+    }
+    let _ = id;
 }
 
 #[test]
@@ -1600,14 +1597,14 @@ fn a_card_offers_its_fixes_as_chips_and_each_chip_says_what_it_does() {
 }
 
 #[test]
-fn a_plain_post_shows_its_chips_and_keeps_like_in_its_menu() {
-    use super::pulse_ui::{post_buttons, post_overflow, post_shown, FeedPostAct};
+fn a_plain_post_shows_its_chips_between_like_and_dismiss() {
+    use super::pulse_ui::{post_buttons, post_row, FeedPostAct};
     use grokhub_core::card_chips::ChipAct;
     let done = grokhub_core::automation_done_card("a", "Nightly backup", "Copied 3 files.", 1);
-    let acts = post_buttons(&done, false, &chip_day());
     assert_eq!(
-        acts,
+        post_row(&done, false, &chip_day()),
         vec![
+            ("Like".to_string(), FeedPostAct::Like),
             (
                 "Ignore for now".to_string(),
                 FeedPostAct::Chip(ChipAct::Ignore)
@@ -1616,13 +1613,9 @@ fn a_plain_post_shows_its_chips_and_keeps_like_in_its_menu() {
                 "Remind me later".to_string(),
                 FeedPostAct::Chip(ChipAct::RemindAt(CHIP_TONIGHT))
             ),
-            ("Like".to_string(), FeedPostAct::Like),
+            ("I don't like".to_string(), FeedPostAct::Dislike),
+            ("Dismiss".to_string(), FeedPostAct::Dismiss),
         ]
-    );
-    assert_eq!(post_shown(&acts), 2);
-    assert_eq!(
-        post_overflow(&acts),
-        vec![("Like".to_string(), FeedPostAct::Like)]
     );
     // A post with its own buttons keeps them.
     let mut hobby = pulse_idea("hobby", "Try a new chord", "learn the chord", 1);

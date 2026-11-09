@@ -1,0 +1,1 @@
+- Cards: every Pulse post and idea has one neat row of buttons — Like first, the card's own buttons, I don't like, Dismiss last at the right — in both apps. Posts are always fully open (no ··· menu, no collapsing the report). In the cabin, idea rows keep their ··· for now.
