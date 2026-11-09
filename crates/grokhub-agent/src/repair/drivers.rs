@@ -309,9 +309,12 @@ pub fn rollback_for(
             for d in drivers {
                 let file = ["x86_64", "any"]
                     .iter()
+                    // A Linux path on every build, so "/" and not the host's separator.
                     .map(|arch| {
-                        Path::new(PACMAN_CACHE)
-                            .join(format!("{}-{}-{arch}.pkg.tar.zst", d.pkg, d.from))
+                        PathBuf::from(format!(
+                            "{PACMAN_CACHE}/{}-{}-{arch}.pkg.tar.zst",
+                            d.pkg, d.from
+                        ))
                     })
                     .find(|f| cached(f))?;
                 files.push(file);
