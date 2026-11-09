@@ -1,0 +1,1 @@
+- Under the hood for the new Personal tab: a learned line can be paused, which keeps it saved but stops chat, the profile block and the nightly review from using it. You can also add a line in your own words, export everything to one readable file, and wipe every learned line about you for good.

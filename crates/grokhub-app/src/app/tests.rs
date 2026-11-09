@@ -2156,7 +2156,7 @@ fn quiet_cabin() -> Cabin {
         greeting_busy: false,
         greeting_llm_at: 0,
         continue_hint: String::new(),
-        skill_q: String::new(),
+        skills_tab: super::skills_tab::SkillsTab::default(),
         pending_connectors: Vec::new(),
         auto_compose: false,
         board_compose: false,

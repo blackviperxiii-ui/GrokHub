@@ -9,10 +9,7 @@ use std::path::Path;
 use super::*;
 use grokhub_core::amr::Sealer as _;
 use grokhub_core::pulse_sources::{Fetched, SourceKind, SourceReq};
-use grokhub_core::steam_wishlist::{self as sw, Alert, Threshold, Wishlist};
-
-const ID_FILE: &str = "steam-id.sealed";
-const ID_AAD: &str = "grokhub-steam-id:v1";
+use grokhub_core::steam_wishlist::{self as sw, Threshold, Wishlist};
 
 #[derive(Default)]
 pub(super) struct WishState {
@@ -26,11 +23,7 @@ pub(super) struct WishState {
     pub note: String,
 }
 
-struct WishRun {
-    list: Wishlist,
-    alerts: Vec<Alert>,
-    error: Option<String>,
-}
+use sw::{run_check, Run as WishRun, ID_AAD, ID_FILE};
 
 fn seal_steam_id(dir: &Path, id: u64) -> Result<(), String> {
     let sealed = grokhub_agent::harness::LearnedVault::new(dir).seal(ID_AAD, &id.to_string())?;
@@ -58,48 +51,6 @@ pub(super) fn get(url: &str) -> Result<String, String> {
         Fetched::Body { body, .. } => Ok(body),
         Fetched::NotModified => Err("no reply".into()),
         Fetched::Failed(why) => Err(why),
-    }
-}
-
-/// The whole check, given a GET. Never puts the SteamID in an error.
-fn run_check(
-    mut list: Wishlist,
-    steam_id: u64,
-    allowed: usize,
-    now: u64,
-    get: &mut dyn FnMut(&str) -> Result<String, String>,
-) -> WishRun {
-    let failed = |list: Wishlist, why: String| WishRun {
-        list,
-        alerts: Vec::new(),
-        error: Some(why),
-    };
-    let ids = match get(&sw::wishlist_url(steam_id)).map(|b| sw::parse_wishlist(&b)) {
-        Ok(Some(ids)) => ids,
-        Ok(None) => return failed(list, "Steam's wishlist reply wasn't readable".into()),
-        Err(why) => return failed(list, format!("wishlist: {why}")),
-    };
-    let mut prices = std::collections::BTreeMap::new();
-    for chunk in ids.chunks(sw::PRICE_BATCH) {
-        match get(&sw::prices_url(chunk)) {
-            Ok(body) => prices.extend(sw::parse_prices(&body)),
-            Err(why) => return failed(list, format!("prices: {why}")),
-        }
-    }
-    let mut alerts = list.check(&ids, &prices, allowed, now);
-    for alert in alerts.iter_mut().filter(|a| a.name.is_empty()) {
-        if let Some(name) = get(&sw::name_url(alert.app_id))
-            .ok()
-            .and_then(|b| sw::parse_name(&b, alert.app_id))
-        {
-            list.note_name(alert.app_id, &name);
-            alert.name = name;
-        }
-    }
-    WishRun {
-        list,
-        alerts,
-        error: None,
     }
 }
 
@@ -189,19 +140,7 @@ impl Cabin {
         if added > 0 {
             self.persist_updates();
         }
-        self.sources.wish.note = if list.private {
-            String::new()
-        } else if added == 0 {
-            format!(
-                "Checked {} wishlisted games. No new sales.",
-                list.apps.len()
-            )
-        } else {
-            format!(
-                "Checked {} wishlisted games. {added} on sale.",
-                list.apps.len()
-            )
-        };
+        self.sources.wish.note = sw::checked_note(&list, added);
         self.sources.wish.list = Some(list);
         self.save_wish();
     }
