@@ -23,6 +23,7 @@ pub mod landlock;
 pub mod mask;
 #[cfg(unix)]
 pub mod mitm;
+pub mod mxc;
 pub mod net_allow;
 #[cfg(target_os = "linux")]
 pub mod netns;
@@ -128,7 +129,8 @@ pub struct Plan {
     pub proxy: Option<String>,
     /// Linux, where unprivileged namespaces are allowed: the command's own
     /// namespaces (see [`netns`]). macOS: its Seatbelt profile (see
-    /// [`seatbelt`]). None elsewhere.
+    /// [`seatbelt`]). Windows 11: its process container (see [`mxc`]). None
+    /// elsewhere.
     pub isolation: Option<Isolation>,
 }
 
@@ -136,14 +138,15 @@ impl Plan {
     /// Whether the command is fully held: writes confined, the network only
     /// through the proxy and secret folders hidden. Linux needs Landlock and
     /// its own network namespace; macOS its Seatbelt profile with the proxy
-    /// port. Windows doesn't fence the network yet.
+    /// port; Windows its process container with the proxy port.
     pub fn enforced(&self) -> bool {
         let net = self.isolation.as_ref().is_some_and(|i| i.net_confined);
         #[cfg(target_os = "linux")]
         let writes = landlock::abi().is_some();
-        #[cfg(target_os = "macos")]
+        // macOS and Windows have isolation only with their write fence.
+        #[cfg(any(target_os = "macos", windows))]
         let writes = true;
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
         let writes = false;
         net && writes
     }
@@ -243,7 +246,23 @@ fn isolation(
     })
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(windows)]
+fn isolation(
+    config_dir: &Path,
+    workspace: &Path,
+    home: Option<&Path>,
+    proxy: Option<&str>,
+) -> Option<Isolation> {
+    mxc::available().then(|| Isolation {
+        hide: secrets::hidden(home, config_dir, workspace),
+        bridge: None,
+        net_confined: proxy
+            .and_then(|a| a.rsplit(':').next()?.parse::<u16>().ok())
+            .is_some(),
+    })
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn isolation(_: &Path, _: &Path, _: Option<&Path>, _: Option<&str>) -> Option<Isolation> {
     None
 }
@@ -322,12 +341,22 @@ pub fn status(config_dir: &Path) -> String {
     }
     #[cfg(windows)]
     {
+        if mxc::available() {
+            let net = if settings.network_guard {
+                "network only through the egress proxy (process container)"
+            } else {
+                "network open (network_guard = false)"
+            };
+            return format!(
+                "Shell sandbox: writes confined (Windows process container); {net}; secret folders hidden"
+            );
+        }
         let net = if settings.network_guard {
             "network through the proxy variables only"
         } else {
             "network open (network_guard = false)"
         };
-        format!("Shell sandbox: writes confined (restricted token); {net}; reads open")
+        format!("Shell sandbox: writes confined (restricted token); {net}; reads open (no process container on this Windows)")
     }
     #[cfg(target_os = "macos")]
     {
