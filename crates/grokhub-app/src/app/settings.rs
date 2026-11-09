@@ -125,6 +125,7 @@ pub(super) fn nav_name(nav: Nav) -> &'static str {
         Nav::Command => "Command",
         Nav::Agents => "Queue",
         Nav::Memory => "Memory",
+        Nav::Personal => "Personal",
     }
 }
 

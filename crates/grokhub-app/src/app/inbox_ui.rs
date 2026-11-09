@@ -905,6 +905,7 @@ mod tests {
                 Nav::Chat => "chat",
                 Nav::Devices => "devices",
                 Nav::Memory => "memory",
+                Nav::Personal => "personal",
                 Nav::Workboard => "workboard",
                 Nav::Pulse => "pulse",
                 Nav::Imagine => "imagine",
@@ -925,6 +926,7 @@ mod tests {
             Nav::Chat,
             Nav::Devices,
             Nav::Memory,
+            Nav::Personal,
             Nav::Workboard,
             Nav::Pulse,
             Nav::Imagine,
@@ -939,7 +941,11 @@ mod tests {
             Nav::Agents,
             Nav::Settings,
         ];
-        assert_eq!(all.len(), 17);
+        assert_eq!(
+            all.len(),
+            18,
+            "Personal is the one page added since; still no inbox page"
+        );
         assert!(all.iter().all(|n| !page(*n).contains("inbox")));
         let cards: Vec<_> = [
             InboxKey::Hard(0),
