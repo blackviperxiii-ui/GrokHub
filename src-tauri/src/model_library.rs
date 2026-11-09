@@ -518,7 +518,11 @@ mod tests {
         // The lineup says what it fetches and for which goal before the click.
         let l = v.lineup.expect("a lineup");
         assert!(!l.ids.is_empty());
-        assert!(l.line.contains("Balance: ") && l.line.contains("Video: "), "{}", l.line);
+        assert!(
+            l.line.contains("Balance: ") && l.line.contains("Video: "),
+            "{}",
+            l.line
+        );
     }
 
     #[test]
