@@ -191,6 +191,7 @@ pub mod skill;
 pub mod slash;
 pub mod ssrf;
 pub mod stardew_saves;
+pub mod startup_apps;
 pub mod state;
 pub mod static_embed;
 pub mod steam;
@@ -263,13 +264,13 @@ pub use attach::{
 pub use automation::{
     automation_alert, automation_blocked_by_policy, automation_health_line,
     automation_schedule_label, automation_summary_line, chat_may_save_automation, compute_next_run,
-    describe_automation, due_automations, ensure_automation_schedule, mark_automation_failed,
-    mark_automation_ok, mark_automation_ran, mark_automation_skipped, mark_automation_stopped,
-    night_check_command, night_check_exit_code, night_check_may_fire, night_check_stdout,
-    night_counts_run, parse_clock_token, parse_nl_automation, replay_automation_target,
-    route_schedule, skip_automation, skip_night_check_receipt, teach_routine, teachable_steps,
-    user_asked_to_schedule, watch_once_keeps_running, AutoHealth, AutoOutcome, Automation,
-    AutomationAlert, ScheduleRoute,
+    describe_automation, due_automations, ensure_automation_schedule, loop_summary_line,
+    mark_automation_failed, mark_automation_ok, mark_automation_ran, mark_automation_skipped,
+    mark_automation_stopped, night_check_command, night_check_exit_code, night_check_may_fire,
+    night_check_stdout, night_counts_run, parse_clock_token, parse_nl_automation,
+    replay_automation_target, route_schedule, skip_automation, skip_night_check_receipt,
+    teach_routine, teachable_steps, user_asked_to_schedule, watch_once_keeps_running, AutoHealth,
+    AutoOutcome, Automation, AutomationAlert, ScheduleRoute,
 };
 pub use autonomy::{
     anticipate_consumes_slot, anticipated_need, cabin_system_prompt, host_plan_autorun,

@@ -638,6 +638,126 @@ fn drm_gpu_temp_c() -> Option<i32> {
     None
 }
 
+/// The CPU's temperature in °C from the Linux hwmon sensors (k10temp,
+/// coretemp, zenpower and the like). `None` elsewhere: Windows has no
+/// reading a normal user can take without a vendor driver.
+pub fn cpu_temp_c() -> Option<i32> {
+    #[cfg(target_os = "linux")]
+    {
+        let rows = hwmon_temps(Path::new("/sys/class/hwmon"));
+        grokhub_core::pc_health::temps_from_hwmon(&rows)
+            .0
+            .map(|c| c.round() as i32)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
+/// Every hwmon chip's name and its first few `tempN_input` readings, in
+/// millidegrees.
+#[cfg(target_os = "linux")]
+pub fn hwmon_temps(root: &Path) -> Vec<(String, i64)> {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for ent in entries.flatten().take(24) {
+        let name = read(ent.path().join("name")).unwrap_or_default();
+        let name = name.trim();
+        if name.is_empty() {
+            continue;
+        }
+        for i in 1..=5 {
+            if let Some(milli) = read(ent.path().join(format!("temp{i}_input")))
+                .and_then(|t| t.trim().parse::<i64>().ok())
+            {
+                out.push((name.to_string(), milli));
+            }
+        }
+    }
+    out
+}
+
+/// The apps that start with this PC, by name (`grokhub_core::startup_apps`).
+/// Linux: the autostart folder. Windows: the `Run` keys and Startup folders,
+/// minus what Task Manager turned off. Slow on Windows (`reg query`).
+pub fn startup_apps(home: &Path) -> Option<Vec<String>> {
+    #[cfg(target_os = "linux")]
+    {
+        use grokhub_core::startup_apps as sa;
+        let dir = std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .unwrap_or_else(|| home.join(".config"))
+            .join("autostart");
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            // No folder: nothing starts from it.
+            return Some(Vec::new());
+        };
+        let mut names: Vec<String> = entries
+            .flatten()
+            .take(sa::MAX_FILES)
+            .filter(|e| e.path().extension().is_some_and(|x| x == "desktop"))
+            .filter_map(|e| {
+                let stem = e.path().file_stem()?.to_string_lossy().into_owned();
+                sa::desktop_autostart(&stem, &read(e.path())?)
+            })
+            .collect();
+        names.sort();
+        names.dedup();
+        Some(names)
+    }
+    #[cfg(windows)]
+    {
+        use grokhub_core::startup_apps as sa;
+        let _ = home;
+        const APPROVED: &str =
+            r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved";
+        const RUN: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+        let query = |key: String| run("reg", &["query", &key]).unwrap_or_default();
+        let mut names = Vec::new();
+        for hive in ["HKCU", "HKLM"] {
+            names.extend(sa::run_key_apps(
+                &query(format!(r"{hive}\{RUN}")),
+                &query(format!(r"{hive}\{APPROVED}\Run")),
+            ));
+        }
+        // 32-bit apps on 64-bit Windows; Task Manager keeps their switch as Run32.
+        names.extend(sa::run_key_apps(
+            &query(r"HKLM\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run".into()),
+            &query(format!(r"HKLM\{APPROVED}\Run32")),
+        ));
+        let folders = [
+            (std::env::var_os("APPDATA"), "HKCU"),
+            (std::env::var_os("ProgramData"), "HKLM"),
+        ];
+        for (base, hive) in folders {
+            let Some(base) = base else { continue };
+            let dir = PathBuf::from(base).join(r"Microsoft\Windows\Start Menu\Programs\Startup");
+            let files: Vec<String> = std::fs::read_dir(dir)
+                .map(|it| {
+                    it.flatten()
+                        .take(sa::MAX_FILES)
+                        .map(|e| e.file_name().to_string_lossy().into_owned())
+                        .collect()
+                })
+                .unwrap_or_default();
+            names.extend(sa::startup_folder_apps(
+                &files,
+                &query(format!(r"{hive}\{APPROVED}\StartupFolder")),
+            ));
+        }
+        Some(names)
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
+    {
+        let _ = home;
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
