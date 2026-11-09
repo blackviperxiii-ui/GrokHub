@@ -811,7 +811,7 @@ fn paint_frame_rate(ui: &mut egui::Ui, size: ModuleSize) {
                 fps::windows_setup(&windows_account())
             } else {
                 let exe = std::env::current_exe()
-                    .map(|p| p.to_string_lossy().into_owned())
+                    .map(|p| fps::probe_source(&p).to_string_lossy().into_owned())
                     .unwrap_or_else(|_| "/usr/bin/grokhub".into());
                 fps::linux_setup(&exe)
             };

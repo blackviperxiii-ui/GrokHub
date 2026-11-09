@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 grokhub-core = { path = "../grokhub-core" }
+grokhub-fps-probe = { path = "../grokhub-fps-probe" }
 serde.workspace = true
 # `raw_value`: an xAI compaction item is kept as the exact JSON text it came in.
 serde_json = { workspace = true, features = ["raw_value"] }

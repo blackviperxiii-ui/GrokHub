@@ -154,21 +154,23 @@ fn check_reference_text(text: &str, version: &str) -> Result<(), String> {
     Ok(())
 }
 
-const LOCK_PACKAGES: [&str; 6] = [
+const LOCK_PACKAGES: [&str; 7] = [
     "grokhub-app",
     "grokhub-agent",
     "grokhub-core",
     "grokhub-desktop",
+    "grokhub-fps-probe",
     "grokhub-hub",
     "grokhub-proto",
 ];
 
 /// The Tauri shell (`src-tauri/`) is its own Cargo workspace, so its lockfile
 /// holds its own copies of the grokhub-* crates it builds on, plus the shell.
-const SHELL_LOCK_PACKAGES: [&str; 5] = [
+const SHELL_LOCK_PACKAGES: [&str; 6] = [
     "grokhub-agent",
     "grokhub-core",
     "grokhub-desktop",
+    "grokhub-fps-probe",
     "grokhub-proto",
     "grokhub-shell",
 ];
@@ -756,6 +758,7 @@ mod tests {
             "[[package]]\nname = \"grokhub-agent\"\nversion = \"3.1.0\"\n\n\
              [[package]]\nname = \"grokhub-core\"\nversion = \"3.1.0\"\n\n\
              [[package]]\nname = \"grokhub-desktop\"\nversion = \"3.1.0\"\n\n\
+             [[package]]\nname = \"grokhub-fps-probe\"\nversion = \"3.1.0\"\n\n\
              [[package]]\nname = \"grokhub-proto\"\nversion = \"3.1.0\"\n\n\
              [[package]]\nname = \"grokhub-shell\"\nversion = \"3.1.0\"\n\n"
         );

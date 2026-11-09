@@ -1,0 +1,18 @@
+[package]
+name = "grokhub-fps-probe"
+version.workspace = true
+rust-version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Home frame-rate probe: counts screen flips with libc only."
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "loadout-fps-probe"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2.189"
