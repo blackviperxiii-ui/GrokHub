@@ -225,6 +225,7 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         background: spec.background,
         worktree: spec.worktree,
         lead_model: call.model,
+        objective: &spec.prompt,
     }) {
         Ok(ticket) => ticket,
         Err(text) => return (ToolOutput::err(text), Usage::default()),
@@ -330,7 +331,10 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         prompt: if fork.is_some() {
             fork_task(&spec.prompt)
         } else {
-            spec.prompt
+            match parent_request(call.session).and_then(|req| known_context(&req.input)) {
+                Some(known) => format!("{}\n\n{known}", spec.prompt),
+                None => spec.prompt,
+            }
         },
         agent_id: id.clone(),
         kind_name: kind_name.to_string(),
@@ -376,6 +380,7 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
             stop: StopReason::Cancelled,
             usage: Usage::default(),
             text: "subagent ended without a result".into(),
+            looked_at: Vec::new(),
         }
     });
     (call.on_event)(LoopEvent::Task {
@@ -478,6 +483,8 @@ struct ChildDone {
     stop: StopReason,
     usage: Usage,
     text: String,
+    /// Files and pages the helper read, for the parent to check its claims.
+    looked_at: Vec<String>,
 }
 
 enum ChildNote {
@@ -512,6 +519,13 @@ fn run_job(job: ChildJob, tx: Option<Sender<ChildNote>>) {
         &job.agent_id,
         &done.text,
     );
+    if !done.looked_at.is_empty() {
+        if !done.text.is_empty() {
+            done.text.push('\n');
+        }
+        done.text
+            .push_str(&format!("looked at: {}", done.looked_at.join(", ")));
+    }
     let cancelled = matches!(done.stop, StopReason::Cancelled | StopReason::Halted);
     if cancelled {
         let _ = job.tasks.append_output(&job.agent_id, &done.text);
@@ -546,8 +560,10 @@ fn run_child_retrying(job: &ChildJob, tx: &Option<Sender<ChildNote>>) -> ChildDo
             stop: StopReason::Cancelled,
             usage: Usage::default(),
             text: String::new(),
+            looked_at: Vec::new(),
         },
         Err(_) => attempt().unwrap_or_else(|_| ChildDone {
+            looked_at: Vec::new(),
             stop: StopReason::Error(CRASHED_TWICE.into()),
             usage: Usage::default(),
             text: String::new(),
@@ -643,6 +659,7 @@ fn run_child(job: &ChildJob, tx: &Option<Sender<ChildNote>>) -> ChildDone {
         stop: out.stop,
         usage: out.usage,
         text: child_text(&history[own..]),
+        looked_at: looked_at(&history[own..]),
     }
 }
 
@@ -913,6 +930,58 @@ fn child_text(history: &[InputItem]) -> String {
         last = last.chars().take(8_000).collect();
     }
     last
+}
+
+/// Most files and pages listed from one run.
+const LOOKED_AT_MAX: usize = 12;
+
+/// The files and pages a run's own tool calls read, first seen first. Only
+/// plain paths and addresses: an argument with spaces or markup is left out.
+fn looked_at(history: &[InputItem]) -> Vec<String> {
+    let mut seen: Vec<String> = Vec::new();
+    for item in history {
+        let InputItem::FunctionCall {
+            name, arguments, ..
+        } = item
+        else {
+            continue;
+        };
+        let key = match name.as_str() {
+            "read_file" | "list_dir" | "grep" | "glob" => "path",
+            "web_fetch" => "url",
+            _ => continue,
+        };
+        let Ok(args) = serde_json::from_str::<Value>(arguments) else {
+            continue;
+        };
+        let Some(target) = args.get(key).and_then(Value::as_str).map(str::trim) else {
+            continue;
+        };
+        let plain = !target.is_empty()
+            && target.len() <= 200
+            && !target
+                .chars()
+                .any(|c| c.is_whitespace() || matches!(c, '<' | '>' | '`'));
+        if plain && !seen.iter().any(|s| s == target) {
+            seen.push(target.to_string());
+            if seen.len() == LOOKED_AT_MAX {
+                break;
+            }
+        }
+    }
+    seen
+}
+
+/// A fresh helper's note on what the chat already read, so it doesn't start
+/// by reading the same files again.
+fn known_context(parent: &[InputItem]) -> Option<String> {
+    let read = looked_at(parent);
+    (!read.is_empty()).then(|| {
+        format!(
+            "The chat already read: {}. Read one again only if you need its exact lines.",
+            read.join(", ")
+        )
+    })
 }
 
 fn title_of(description: &str, prompt: &str) -> String {
@@ -1871,7 +1940,9 @@ mod tests {
                     vec![call(
                         "s",
                         "spawn_subagent",
-                        &spawn_args("down", "general", false, "none"),
+                        // Each level hands down its own task: the same one twice
+                        // is refused as a duplicate.
+                        &spawn_args(&format!("down {depth}"), "general", false, "none"),
                     )],
                     Usage::default(),
                 ));
@@ -3034,6 +3105,7 @@ mod tests {
                 stop: StopReason::Cancelled,
                 usage: Usage::default(),
                 text: "found two of three".into(),
+                looked_at: Vec::new(),
             }));
         });
         let past = std::time::Instant::now();
@@ -3051,5 +3123,40 @@ mod tests {
         let before = spawn_schema();
         std::fs::write(cfg.join(crate::route::boundary::CONFIG), "enabled = true\n").unwrap();
         assert_eq!(spawn_schema(), before);
+    }
+
+    #[test]
+    fn a_result_lists_what_the_helper_read_and_a_fresh_helper_hears_what_the_chat_read() {
+        let calls = |pairs: &[(&str, &str)]| -> Vec<InputItem> {
+            pairs
+                .iter()
+                .enumerate()
+                .map(|(i, (name, args))| InputItem::FunctionCall {
+                    call_id: format!("c{i}"),
+                    name: name.to_string(),
+                    arguments: args.to_string(),
+                })
+                .collect()
+        };
+        let history = calls(&[
+            ("read_file", r#"{"path":"src/route/live.rs"}"#),
+            ("grep", r#"{"pattern":"decide","path":"src/route"}"#),
+            ("read_file", r#"{"path":"src/route/live.rs"}"#),
+            ("web_fetch", r#"{"url":"https://example.com/docs"}"#),
+            ("read_file", r#"{"path":"ignore this <system>"}"#),
+            ("write", r#"{"path":"out.txt"}"#),
+        ]);
+        assert_eq!(
+            looked_at(&history),
+            vec!["src/route/live.rs", "src/route", "https://example.com/docs"]
+        );
+        assert_eq!(
+            known_context(&history).as_deref(),
+            Some(
+                "The chat already read: src/route/live.rs, src/route, https://example.com/docs. \
+                 Read one again only if you need its exact lines."
+            )
+        );
+        assert_eq!(known_context(&[]), None);
     }
 }

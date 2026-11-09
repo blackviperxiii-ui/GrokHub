@@ -72,6 +72,8 @@ pub struct Ask<'a> {
     pub worktree: bool,
     /// The model running the parent turn.
     pub lead_model: &'a str,
+    /// The helper's prompt: a running sibling with the same one is a duplicate.
+    pub objective: &'a str,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,6 +94,8 @@ pub struct Facts {
     /// write alongside other work.
     pub writer_running_here: bool,
     pub running_in_app: usize,
+    /// A helper with the same objective already runs in this chat.
+    pub duplicate_running: bool,
 }
 
 /// The decision itself. Pure, so every rule has a test.
@@ -150,6 +154,13 @@ pub fn decide(ask: &Ask<'_>, facts: &Facts) -> Verdict {
              or try again when one finishes.",
         );
     }
+    if facts.duplicate_running {
+        return refuse(
+            "duplicate",
+            "A helper with this same task is already running in this chat. Wait for its \
+             result instead of starting another.",
+        );
+    }
     let writer = !ask.explore && !ask.worktree;
     if writer && facts.writer_running_here {
         return refuse(
@@ -167,14 +178,19 @@ pub fn decide(ask: &Ask<'_>, facts: &Facts) -> Verdict {
     })
 }
 
+struct Running {
+    number: u64,
+    /// It writes in place in the background.
+    background_writer: bool,
+    objective: String,
+}
+
 #[derive(Default)]
 struct Chat {
     turn: u64,
     spawned: u32,
     tokens: u64,
-    /// Running helpers: ticket number and whether it writes in place in the
-    /// background.
-    running: Vec<(u64, bool)>,
+    running: Vec<Running>,
 }
 
 static CHATS: Mutex<BTreeMap<String, Chat>> = Mutex::new(BTreeMap::new());
@@ -205,7 +221,7 @@ impl Drop for Ticket {
     fn drop(&mut self) {
         let mut chats = CHATS.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(chat) = chats.get_mut(&self.session) {
-            chat.running.retain(|(n, _)| *n != self.number);
+            chat.running.retain(|run| run.number != self.number);
         }
     }
 }
@@ -231,8 +247,12 @@ pub fn admit(ask: &Ask<'_>) -> Result<Ticket, String> {
         spawned_this_turn: chat.spawned,
         tokens_this_turn: chat.tokens,
         running_here: chat.running.len(),
-        writer_running_here: chat.running.iter().any(|(_, writer)| *writer),
+        writer_running_here: chat.running.iter().any(|run| run.background_writer),
         running_in_app,
+        duplicate_running: chat
+            .running
+            .iter()
+            .any(|run| run.objective == objective_key(ask.objective)),
     };
     let verdict = decide(ask, &facts);
     log(ask, &facts, &verdict);
@@ -241,8 +261,11 @@ pub fn admit(ask: &Ask<'_>) -> Result<Ticket, String> {
         Verdict::Allow(_) => {
             let number = NEXT.fetch_add(1, Ordering::Relaxed);
             chat.spawned += 1;
-            let background_writer = ask.background && !ask.explore && !ask.worktree;
-            chat.running.push((number, background_writer));
+            chat.running.push(Running {
+                number,
+                background_writer: ask.background && !ask.explore && !ask.worktree,
+                objective: objective_key(ask.objective),
+            });
             Ok(Ticket {
                 session: ask.session.to_string(),
                 turn,
@@ -250,6 +273,15 @@ pub fn admit(ask: &Ask<'_>) -> Result<Ticket, String> {
             })
         }
     }
+}
+
+/// An objective with case and spacing folded, so a re-worded copy of a
+/// running helper's prompt still counts as the same.
+fn objective_key(text: &str) -> String {
+    text.split_whitespace()
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// The router's size for the chat's latest turn.
@@ -333,6 +365,7 @@ mod tests {
             background: false,
             worktree: false,
             lead_model: "grok-4.7",
+            objective: "read the router",
         }
     }
 
@@ -446,7 +479,11 @@ mod tests {
             ..ask(false)
         };
         let outer = admit(&nested).expect("outer helper");
-        assert!(admit(&nested).is_ok());
+        let inner = Ask {
+            objective: "check one file",
+            ..nested
+        };
+        assert!(admit(&inner).is_ok());
         drop(outer);
     }
 
@@ -470,8 +507,24 @@ mod tests {
             ..ask(false)
         };
         let first = admit(&general).expect("first writer runs");
+        let same_task = Ask {
+            session,
+            objective: "  Read the   ROUTER ",
+            ..ask(true)
+        };
         assert_eq!(
-            admit(&general).err().as_deref(),
+            admit(&same_task).err().as_deref(),
+            Some(
+                "A helper with this same task is already running in this chat. Wait for its \
+                 result instead of starting another."
+            )
+        );
+        let other_writer = Ask {
+            objective: "fix the other bug",
+            ..general
+        };
+        assert_eq!(
+            admit(&other_writer).err().as_deref(),
             Some(
                 "Another helper may be changing files here, and writes stay one at a time. Wait \
                  for it, use an explore helper to read, or give this helper isolation worktree."
