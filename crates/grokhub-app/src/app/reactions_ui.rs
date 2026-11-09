@@ -111,7 +111,13 @@ impl Cabin {
             | PulseAct::Discuss(id)
             | PulseAct::DayTap(id, ..) => (id, Outcome::Tapped, None),
             PulseAct::Snooze(id) | PulseAct::RemindAt(id, _) => (id, Outcome::Snoozed, None),
-            PulseAct::Dismiss(id) => (id, Outcome::Dismissed, None),
+            PulseAct::Dismiss(id)
+                if self
+                    .pulse_card(id)
+                    .is_some_and(|c| super::pulse_ui::weighted_dismiss(&c)) =>
+            {
+                (id, Outcome::Dismissed, None)
+            }
             PulseAct::Wrong(id) => (id, Outcome::Dismissed, None),
             PulseAct::NotThis(id) | PulseAct::HobbySkip(id) | PulseAct::HobbyTooHard(id) => {
                 (id, Outcome::Dismissed, Some(false))

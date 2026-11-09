@@ -434,23 +434,19 @@ fn used_idea_dismiss_and_liked_feed_dismiss_are_not_negative() {
         cabin.reactions_now().log
     );
 
-    // Liked / discussed Feed then dismiss: used (never a bury in the ledger).
-    cabin.react_to_act(&super::pulse_ui::PulseAct::Dismiss("feed-liked".into()));
-    cabin.pulse_dismiss("feed-liked", "2026-10-28");
-    assert!(
-        pulse_memory().contains("- [2026-10-28] pulse: used \"Rust 1.95 ships\" reason=used"),
-        "{}",
-        pulse_memory()
-    );
-    cabin.react_to_act(&super::pulse_ui::PulseAct::Dismiss("feed-talk".into()));
-    cabin.pulse_dismiss("feed-talk", "2026-10-28");
-    assert!(pulse_memory().contains("- [2026-10-28] pulse: used \"NFL scores\" reason=used"));
-
-    // Untouched Feed dismiss: dismiss.
-    cabin.react_to_act(&super::pulse_ui::PulseAct::Dismiss("feed-fresh".into()));
-    cabin.pulse_dismiss("feed-fresh", "2026-10-28");
-    assert!(pulse_memory()
-        .contains("- [2026-10-28] pulse: dismissed \"Nightly backup\" reason=dismiss"));
+    // Feed posts: Dismiss carries no weight at all, liked, discussed or not.
+    let before = pulse_memory();
+    let log = cabin.reactions_now().log.len();
+    for id in ["feed-liked", "feed-talk", "feed-fresh"] {
+        cabin.react_to_act(&super::pulse_ui::PulseAct::Dismiss(id.into()));
+        cabin.pulse_dismiss(id, "2026-10-28");
+        assert!(!cabin
+            .updates
+            .iter()
+            .any(|c| c.id == id && c.status != UpdateStatus::Dismissed));
+    }
+    assert_eq!(pulse_memory(), before, "no ledger line");
+    assert_eq!(cabin.reactions_now().log.len(), log, "no reaction");
 }
 
 #[test]
