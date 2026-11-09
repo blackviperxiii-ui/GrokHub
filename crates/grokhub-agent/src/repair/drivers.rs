@@ -34,7 +34,7 @@ pub struct DriverUpdate {
 }
 
 /// A driver update both checks agree on.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct VerifiedDriver {
     pub pkg: String,
     pub from: String,
@@ -61,7 +61,8 @@ pub enum DriverDoubt {
 }
 
 /// The way back if the new driver misbehaves.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Rollback {
     /// The fix takes this snapshot first.
     Snapshot(SnapshotBackend),
@@ -326,10 +327,15 @@ pub fn rollback_for(
     }
 }
 
-/// The update step. pacman upgrades everything from the lists already on
-/// disk (the versions just checked), because Arch doesn't support updating
-/// one package alone; apt and dnf update just the driver packages.
-fn update_step(pm: PackageManager, drivers: &[VerifiedDriver]) -> Option<DraftStep> {
+/// The update command (run as root). pacman upgrades everything from the
+/// lists already on disk (the versions just checked), because Arch doesn't
+/// support updating one package alone; apt and dnf update just the driver
+/// packages, apt at the exact version both checks agreed on.
+pub fn update_cmd(pm: PackageManager, drivers: &[VerifiedDriver]) -> Option<String> {
+    update_cmd_plain(pm, drivers).map(|(cmd, _)| cmd)
+}
+
+fn update_cmd_plain(pm: PackageManager, drivers: &[VerifiedDriver]) -> Option<(String, String)> {
     let names: Vec<String> = drivers
         .iter()
         .map(|d| ProgramName::parse(&d.pkg).map(|p| p.as_str().to_string()))
@@ -341,7 +347,7 @@ fn update_step(pm: PackageManager, drivers: &[VerifiedDriver]) -> Option<DraftSt
     if !drivers.iter().all(plain_versions) {
         return None;
     }
-    let (cmd, plain) = match pm {
+    Some(match pm {
         PackageManager::Pacman => (
             "pacman -Su --noconfirm".to_string(),
             "Update your system from Arch's signed repos, the new driver included. Arch updates everything together so the driver matches the rest.".to_string(),
@@ -358,7 +364,12 @@ fn update_step(pm: PackageManager, drivers: &[VerifiedDriver]) -> Option<DraftSt
             format!("Update {} from your distro's signed repos.", names.join(", ")),
         ),
         PackageManager::Zypper => return None,
-    };
+    })
+}
+
+/// The update step for the driver card.
+fn update_step(pm: PackageManager, drivers: &[VerifiedDriver]) -> Option<DraftStep> {
+    let (cmd, plain) = update_cmd_plain(pm, drivers)?;
     Some(DraftStep::new(elevate(Os::Linux, &cmd), plain).elevated())
 }
 
@@ -416,21 +427,7 @@ pub fn driver_rollback_plan(
     if game_running {
         return Err(DriverBlock::GameRunning);
     }
-    let cmd = match rollback {
-        Rollback::Snapshot(_) => return Err(DriverBlock::NoWayBack),
-        Rollback::Cached(files) => {
-            let paths: Vec<&str> = files.iter().filter_map(|f| f.to_str()).collect();
-            format!("pacman -U --noconfirm {}", paths.join(" "))
-        }
-        Rollback::AptVersions => format!(
-            "apt-get install -y --allow-downgrades {}",
-            drivers
-                .iter()
-                .map(|d| format!("{}={}", d.pkg, d.from))
-                .collect::<Vec<_>>()
-                .join(" ")
-        ),
-    };
+    let cmd = rollback_cmd(rollback, drivers).ok_or(DriverBlock::NoWayBack)?;
     let step = DraftStep::new(elevate(Os::Linux, &cmd), "Put the old driver back.").elevated();
     FixPlan::new(
         finding,
@@ -441,6 +438,26 @@ pub fn driver_rollback_plan(
         vec![step],
     )
     .map_err(|_| DriverBlock::Unsupported)
+}
+
+/// The command (run as root) that puts the old drivers back, when the way
+/// back is the old packages. A snapshot is rolled back with its own tool.
+pub fn rollback_cmd(rollback: &Rollback, drivers: &[VerifiedDriver]) -> Option<String> {
+    match rollback {
+        Rollback::Snapshot(_) => None,
+        Rollback::Cached(files) => {
+            let paths: Vec<&str> = files.iter().filter_map(|f| f.to_str()).collect();
+            Some(format!("pacman -U --noconfirm {}", paths.join(" ")))
+        }
+        Rollback::AptVersions => Some(format!(
+            "apt-get install -y --allow-downgrades {}",
+            drivers
+                .iter()
+                .map(|d| format!("{}={}", d.pkg, d.from))
+                .collect::<Vec<_>>()
+                .join(" ")
+        )),
+    }
 }
 
 /// The re-check: the installed version now is the new one.

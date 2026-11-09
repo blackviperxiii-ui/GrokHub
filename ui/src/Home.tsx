@@ -112,6 +112,7 @@ const VIEWS: readonly string[] = [
   "connectors",
   "library",
   "workboard",
+  "updates",
 ];
 
 /** Where a feature's switch lives when the tile can't turn it on itself. */
@@ -136,7 +137,8 @@ export function runAction(a: TileAction, go: HomeRoutes, remote: boolean, reload
     case "openChat":
       return go.onOpenChat(a.id);
     case "nav":
-      if (VIEWS.includes(a.page)) go.onOpen(a.page as View);
+      // Updates & Drivers reads this computer, so a paired browser stays put.
+      if (VIEWS.includes(a.page) && !(remote && a.page === "updates")) go.onOpen(a.page as View);
       return;
     case "settings":
       return go.onSettings(a.section as Section);

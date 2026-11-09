@@ -74,6 +74,7 @@ const loaders = {
   skills: () => import("./Skills").then((m) => ({ default: m.Skills })),
   pulse: () => import("./Pulse").then((m) => ({ default: m.Pulse })),
   settings: () => import("./Settings").then((m) => ({ default: m.Settings })),
+  updates: () => import("./UpdatesDrivers").then((m) => ({ default: m.UpdatesDrivers })),
 };
 const Agents = lazy(loaders.agents);
 const Connectors = lazy(loaders.connectors);
@@ -89,6 +90,7 @@ const Pulse = lazy(loaders.pulse);
 const Skills = lazy(loaders.skills);
 const Settings = lazy(loaders.settings);
 const Workboard = lazy(loaders.workboard);
+const UpdatesDrivers = lazy(loaders.updates);
 
 /** How often the window tells the scheduler its clock. */
 const CLOCK_SHARE_MS = 5 * 60 * 1000;
@@ -692,6 +694,11 @@ export function App() {
       {opened.has("connectors") && (
         <Page shown={view === "connectors"}>
           <Connectors remote={Boolean(caps.remote)} />
+        </Page>
+      )}
+      {opened.has("updates") && !caps.remote && (
+        <Page shown={view === "updates"}>
+          <UpdatesDrivers />
         </Page>
       )}
       {opened.has("library") && caps.library && (

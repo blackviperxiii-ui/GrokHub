@@ -9,6 +9,7 @@ mod layout;
 mod registry;
 pub mod text;
 pub mod tiles;
+pub mod updates;
 mod view;
 
 pub use config::{
