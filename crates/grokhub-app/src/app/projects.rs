@@ -61,7 +61,7 @@ impl Cabin {
         // session stay. Creating or binding a project must not wipe History.
         if tree_changed {
             if self.running {
-                self.halt_in_flight();
+                self.halt_in_flight_for("the project folder changed");
             }
             self.acp = None;
             self.persist();
@@ -120,7 +120,7 @@ impl Cabin {
         if out.unbound {
             self.cfg.project_dir.clear();
             if self.running {
-                self.halt_in_flight();
+                self.halt_in_flight_for("the project folder changed");
             }
             self.acp = None;
             if let Some(t) = self.threads.get_mut(self.thread_idx) {

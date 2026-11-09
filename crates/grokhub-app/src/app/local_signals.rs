@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use grokhub_agent::route::{local, local_gov, local_sidecar};
+use grokhub_agent::route::{local, local_gov, local_scale, local_sidecar};
 use grokhub_core::local_governor::{self as g, Governor, Level, Memory, Rules, Signals};
 use grokhub_core::local_profile::{PowerInfo, Thermal};
 
@@ -54,6 +54,7 @@ pub(super) fn start(config_dir: PathBuf) {
             let profile = super::local_probe::read_profile(&home);
             // The GPU micro-fact: re-checked each launch, retired if it changes.
             let gpu = grokhub_core::env_facts::gpu_reading(&profile.gpus);
+            let unified = profile.gpus.iter().any(|g| g.unified);
             grokhub_core::env_facts::observe_machine(
                 &config_dir,
                 grokhub_core::env_facts::Kind::Gpu,
@@ -65,15 +66,15 @@ pub(super) fn start(config_dir: PathBuf) {
             // Every launch plans against the memory free right now.
             grokhub_agent::route::local_autoconfig::set_free_probe(std::sync::Arc::new(|| {
                 grokhub_agent::route::local_autoconfig::FreeNow {
-                    vram_free_mb: super::local_probe::nvidia_free_vram_now(),
+                    vram_free_mb: super::local_probe::free_vram_now(),
                     ram_free_mb: super::local_probe::free_ram_now(),
                 }
             }));
-            sample_loop(&config_dir)
+            sample_loop(&config_dir, unified)
         });
 }
 
-fn sample_loop(config_dir: &Path) {
+fn sample_loop(config_dir: &Path, unified: bool) {
     let rules_path = config_dir.join("local").join("governor.json");
     let mut gov = Governor::new();
     let mut reader = Reader::default();
@@ -118,6 +119,23 @@ fn sample_loop(config_dir: &Path) {
             local_gov::request_restart();
         }
         local_sidecar::tick_governor();
+        // What is free right now picks the model size for the next task (the
+        // automatic Balanced, Gaming and Performance scaling), and steps a
+        // bigger model up or back down between requests.
+        // Without a RAM reading the room goes stale and scaling keeps the pick.
+        if let Some(free_ram_mb) = slow.then(super::local_probe::free_ram_now).flatten() {
+            local_scale::set_room(
+                local_scale::Room {
+                    free_vram_mb: super::local_probe::free_vram_now(),
+                    free_ram_mb,
+                    cpu_busy_pct: super::local_probe::cpu_busy_pct(),
+                    on_battery: s.power.as_ref().is_some_and(|p| p.battery && !p.on_ac),
+                    unified,
+                },
+                now_ms(),
+            );
+        }
+        local_sidecar::tick_scale(config_dir);
         // Offline or with the cloud down, have the model loaded before it's asked.
         local_sidecar::tick_keep_warm(config_dir, local::warm_wanted());
         // The idle rule runs here too, so an unused model unloads on time

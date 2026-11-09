@@ -40,7 +40,7 @@ const MARK: &str = "version.txt";
 pub fn engine_for(kind: crate::local_setup::ModelKind) -> Option<&'static Tool> {
     use crate::local_setup::ModelKind as K;
     match kind {
-        K::SpeechToText => Some(&crate::voice_engine::SHERPA),
+        K::SpeechToText | K::TextToSpeech => Some(&crate::voice_engine::SHERPA),
         K::Image => Some(&crate::image_engine::SD_CPP),
         _ => None,
     }
