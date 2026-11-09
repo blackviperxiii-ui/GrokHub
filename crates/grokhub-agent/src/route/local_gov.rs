@@ -189,6 +189,14 @@ pub fn reason() -> &'static str {
     gov().lock().map(|g| g.reason).unwrap_or("normal use")
 }
 
+/// A game (or another app holding the GPU) wants the GPU now: the governor
+/// is at Throttle or Unload for a gaming reason. Nothing new runs on the GPU
+/// then, and what runs there is cut.
+pub fn gpu_contended() -> bool {
+    matches!(level(), Level::Throttle | Level::Unload)
+        && super::local_scale::gaming_reason(reason())
+}
+
 pub fn restart_due() -> bool {
     gov().lock().map(|g| g.restart_due).unwrap_or(false)
 }

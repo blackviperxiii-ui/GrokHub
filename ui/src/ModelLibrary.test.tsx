@@ -61,6 +61,10 @@ function library(over: Partial<LibraryView> = {}): LibraryView {
       { label: "Voice", rows: [], empty: "No voice models yet. They arrive with on-device voice.", all: null },
       { label: "Other", rows: [], empty: "Nothing here yet.", all: null },
     ],
+    lineup: {
+      ids: ["g12", "g12-mtp", "zimg"],
+      line: "3 models, 14.6 GB in all. Speed: Gemma 4 E2B (downloaded) · Balance: Gemma 4 12B · Video: No on-device video models yet.",
+    },
     everything: { ids: ["g12", "g12-mtp"], line: "2 models, 8.4 GB in all." },
     status: idle,
     ...over,
@@ -75,6 +79,17 @@ describe("ModelLibrary", () => {
       return () => undefined;
     });
     events.length = 0;
+  });
+
+  it("offers everything that fits once the lineup is downloaded", async () => {
+    api.getModelLibrary.mockResolvedValue(
+      library({ lineup: { ids: [], line: "This PC has its best lineup. Balance: Gemma 4 12B (downloaded)." } }),
+    );
+    render(<ModelLibrary />);
+    expect(await screen.findByText(/This PC has its best lineup\./)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Download lineup" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Download everything that fits (2 models, 8.4 GB in all.)" }));
+    expect(api.downloadModels).toHaveBeenCalledWith(["g12", "g12-mtp"]);
   });
 
   it("shows the tabs and the rows, with In use and Download", async () => {
@@ -98,7 +113,7 @@ describe("ModelLibrary", () => {
     expect(api.removeLibraryModel).toHaveBeenCalledWith("e2b-mtp");
   });
 
-  it("downloads all on the tab and shows progress until the queue ends", async () => {
+  it("downloads the lineup it described and shows progress until the queue ends", async () => {
     api.getModelLibrary.mockResolvedValue(library());
     const busy: LibraryStatus = {
       job: { id: "g12", line: "Downloading Gemma 4 12B: 1.0 of 6.9 GB", pct: 14 },
@@ -108,10 +123,10 @@ describe("ModelLibrary", () => {
     };
     api.downloadModels.mockResolvedValue(library({ status: busy }));
     render(<ModelLibrary />);
-    await userEvent.click(
-      await screen.findByRole("button", { name: "Download all on this tab (2 models, 8.4 GB in all.)" }),
-    );
-    expect(api.downloadModels).toHaveBeenCalledWith(["g12", "g12-mtp"]);
+    expect(await screen.findByText(/^Best lineup for this PC: 3 models, 14.6 GB in all\. Speed: /)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Download everything/ })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Download lineup" }));
+    expect(api.downloadModels).toHaveBeenCalledWith(["g12", "g12-mtp", "zimg"]);
     expect(await screen.findByText("1 more after this one.")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Pause downloads" }));
     expect(api.pauseModelDownloads).toHaveBeenCalled();

@@ -62,6 +62,10 @@ pub struct PulseMeta {
     /// What the card found: headline, summary and the full report it opens to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report: Option<crate::card_report::CardReport>,
+    /// Generic `kind:value` tags (topic, subject, tone…) that taste learning
+    /// reads (`card_taste`). Empty on cards nobody tagged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub traits: Vec<String>,
 }
 
 /// How a verdict reads: normal, worth watching, or worth a look.
