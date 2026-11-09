@@ -862,6 +862,11 @@ export interface PulseIdea {
   /** "Fix it" or "Options" on a PC health card: its main button opens the
    * options window. Empty on other ideas. */
   fix: string;
+  /** A card that found something: its full report, opened under the summary. */
+  more: string;
+  /** A card that found something: its chips in place of the two buttons.
+   * Empty on other ideas. */
+  chips: PulseChip[];
 }
 
 export type FixKind =
