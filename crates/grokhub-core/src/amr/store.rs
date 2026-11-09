@@ -26,6 +26,9 @@ index.sqlite is a full-text index of the plain nodes. Delete it any time; it is 
 const RECALL_CAP: usize = 20;
 const SEALED_EXT: &str = "sealed";
 const TOMBSTONE_EXT: &str = "tombstone";
+/// `nodes/<id>.paused`: the user said not to use this line. It stays on disk
+/// and on Personal, but recall, the USER block and dreams skip it.
+const PAUSED_EXT: &str = "paused";
 
 /// Associated data for one sealed node: it can't be renamed to another id.
 fn node_aad(id: &str) -> String {
@@ -179,7 +182,7 @@ impl AmrStore {
         for node in loaded
             .nodes
             .iter()
-            .filter(|n| !superseded.contains(&n.id) && !is_proposed(n))
+            .filter(|n| !superseded.contains(&n.id) && !self.held_back(n))
         {
             hits.extend(match_lines(node, &query));
         }
@@ -212,7 +215,7 @@ impl AmrStore {
         for node in loaded
             .nodes
             .iter()
-            .filter(|n| !superseded.contains(&n.id) && !is_proposed(n))
+            .filter(|n| !superseded.contains(&n.id) && !self.held_back(n))
         {
             for (seq, (count, line)) in score_lines(node, &words).into_iter().enumerate() {
                 hits.push((count, node.updated.as_str(), node.id.as_str(), seq, line));
@@ -254,7 +257,7 @@ impl AmrStore {
         for node in loaded
             .nodes
             .iter()
-            .filter(|n| !superseded.contains(&n.id) && !is_proposed(n))
+            .filter(|n| !superseded.contains(&n.id) && !self.held_back(n))
         {
             let best = node
                 .body
@@ -359,6 +362,90 @@ impl AmrStore {
         }
         report.forgotten.sort();
         Ok(report)
+    }
+
+    /// True when the user paused this node on Personal.
+    pub fn is_paused(&self, id: &str) -> bool {
+        NodeId::parse(id)
+            .and_then(|id| self.node_path(&id))
+            .is_ok_and(|path| path.with_extension(PAUSED_EXT).is_file())
+    }
+
+    /// Pause a node (the agent stops using it) or let it be used again. The
+    /// node file is not rewritten, so a sealed note pauses too. Pausing twice
+    /// or resuming a live node is a no-op. Refuses scratch.
+    pub fn set_paused(&self, id: &str, paused: bool) -> Result<(), AmrError> {
+        if self.scratch {
+            return Err(AmrError::Scratch);
+        }
+        let id = NodeId::parse(id)?;
+        if !self.node_exists(&id)? {
+            return Err(AmrError::MissingNode(id.as_str().to_string()));
+        }
+        let marker = self.node_path(&id)?.with_extension(PAUSED_EXT);
+        if paused {
+            if !marker.is_file() {
+                fs::write(&marker, "paused: you asked\n").map_err(io_err)?;
+            }
+            return self.unindex(id.as_str());
+        }
+        match fs::remove_file(&marker) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(err) => return Err(io_err(err)),
+        }
+        if self.index_path().is_file() && !self.is_sealed(&id) {
+            if let Some(node) = self
+                .load_live()
+                .nodes
+                .into_iter()
+                .find(|n| n.id == id.as_str())
+            {
+                if !is_proposed(&node) {
+                    AmrIndex::open(&self.index_path())?.add(&node)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Delete a node for good: its file, sealed copy, tombstone and pause
+    /// marker, and its index row. Only Personal's Wipe calls this, after the
+    /// user confirmed. No file is a no-op. Refuses scratch.
+    pub fn purge(&self, id: &str) -> Result<(), AmrError> {
+        if self.scratch {
+            return Err(AmrError::Scratch);
+        }
+        let id = NodeId::parse(id)?;
+        let path = self.node_path(&id)?;
+        for ext in ["md", SEALED_EXT, TOMBSTONE_EXT, PAUSED_EXT] {
+            match fs::remove_file(path.with_extension(ext)) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(io_err(err)),
+            }
+        }
+        self.unindex(id.as_str())
+    }
+
+    /// A node recall leaves out though it is live: proposed or paused.
+    fn held_back(&self, node: &Node) -> bool {
+        is_proposed(node) || self.is_paused(&node.id)
+    }
+
+    /// Every user-model node on disk, forgotten ones too, for Wipe. Sealed
+    /// nodes that can't be opened are counted, not listed.
+    pub(super) fn user_model_ids_on_disk(&self) -> (Vec<String>, usize) {
+        let live = self.load_live();
+        let gone = self.load_forgotten();
+        let ids = live
+            .nodes
+            .iter()
+            .chain(gone.nodes.iter())
+            .filter(|n| n.node_type.is_user_model())
+            .map(|n| n.id.clone())
+            .collect();
+        (ids, live.locked + gone.locked)
     }
 
     /// Lift a tombstone so an explicit remember of the same line counts again.
@@ -506,7 +593,7 @@ impl AmrStore {
         let nodes = loaded
             .nodes
             .into_iter()
-            .filter(|n| !superseded.contains(&n.id) && !is_proposed(n))
+            .filter(|n| !superseded.contains(&n.id) && !self.held_back(n))
             .collect();
         (nodes, loaded.locked)
     }
