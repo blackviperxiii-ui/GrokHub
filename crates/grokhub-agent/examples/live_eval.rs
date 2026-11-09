@@ -31,8 +31,13 @@
 //! config: a `PASSED` mark beside the lessons, for exactly the lessons it
 //! tested. A lesson added during the run means no mark.
 //!
+//! `--ab boundary_routing` tests effort held between boundaries plus briefed
+//! helpers on the cheap lane. A pass writes `enabled = true` to your own
+//! `boundary_routing.toml`, only when that file isn't there yet, so a choice
+//! you made by hand stands.
+//!
 //! Run it before changing a default; it is never part of pull-request CI.
-//! Apart from that mark it runs against a throwaway config folder, so your
+//! Apart from those two writes it runs against a throwaway config folder, so your
 //! own rules, grants, memory and logs are never read or written.
 
 use std::sync::Arc;
@@ -46,7 +51,8 @@ use grokhub_agent::{
 fn main() {
     // Read before the scratch folder takes over GROKHUB_CONFIG.
     let real_config = grokhub_core::paths::config_dir();
-    let lessons = grokhub_agent::dream_gate::skill_dir(&grokhub_agent::perm::config_dir());
+    let app_config = grokhub_agent::perm::config_dir();
+    let lessons = grokhub_agent::dream_gate::skill_dir(&app_config);
     let scratch = scratch_config();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut budget = None;
@@ -148,6 +154,15 @@ fn main() {
             }
         } else {
             eprintln!("dream lessons passed, but they changed during the run: not marked");
+        }
+    }
+    if grokhub_agent::live_ab_passed(&report, "boundary_routing") {
+        match grokhub_agent::route::boundary::adopt_after_pass(&app_config) {
+            Ok(true) => eprintln!("boundary routing passed: it is now on"),
+            Ok(false) => {
+                eprintln!("boundary routing passed; your own boundary_routing.toml stays as it is")
+            }
+            Err(err) => eprintln!("boundary routing passed but turning it on failed: {err}"),
         }
     }
     let md = grokhub_agent::render_live(&report);

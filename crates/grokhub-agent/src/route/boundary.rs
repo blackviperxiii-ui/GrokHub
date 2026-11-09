@@ -31,6 +31,23 @@ pub const BRIEF: [&str; 5] = ["goal", "constraints", "edge cases", "done when", 
 /// Keys kept at once before the oldest go.
 const KEYS: usize = 512;
 
+/// Turn boundary routing on after a paired live eval passed it, unless the
+/// user's own [`CONFIG`] already says either way: their word stands. True
+/// when this wrote the file.
+pub fn adopt_after_pass(config_dir: &Path) -> Result<bool, String> {
+    let path = config_dir.join(CONFIG);
+    if path.exists() {
+        return Ok(false);
+    }
+    std::fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
+    std::fs::write(
+        &path,
+        "# Turned on by a paired live eval (--ab boundary_routing) that passed it.\nenabled = true\n",
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
 /// Whether boundary routing is on (`enabled = true` in [`CONFIG`]).
 pub fn enabled(config_dir: &Path) -> bool {
     std::fs::read_to_string(config_dir.join(CONFIG))

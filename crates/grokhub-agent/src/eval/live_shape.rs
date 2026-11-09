@@ -137,6 +137,11 @@ pub const AB_FLAGS: &[AbFlag] = &[
         file: crate::diet::CONFIG_NAME,
         key: "sparse_line_numbers",
     },
+    AbFlag {
+        name: BOUNDARY_ROUTING,
+        file: crate::route::boundary::CONFIG,
+        key: "enabled",
+    },
     // Not a setting: the on arm gets a copy of the user's own dream lessons,
     // shown in its throwaway folder; the off arm gets none.
     AbFlag {
@@ -145,6 +150,10 @@ pub const AB_FLAGS: &[AbFlag] = &[
         key: crate::dream_gate::LESSON_SKILL,
     },
 ];
+
+/// The `--ab` arm that tests effort held between boundaries and briefed
+/// helpers on the cheap lane (round 3 item 34), off until a run passes it.
+pub const BOUNDARY_ROUTING: &str = "boundary_routing";
 
 /// The `--ab` arm that tests the user's dream lessons (round 3 item 39).
 pub const DREAM_LESSONS: &str = "dream_lessons";

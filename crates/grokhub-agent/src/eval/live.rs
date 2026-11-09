@@ -1490,10 +1490,16 @@ fn ab_summary(a: &[Attempt], mde: f64) -> super::paired::Summary {
     summarize(pairs, mde)
 }
 
-/// True when an `--ab dream_lessons` run passed the lessons: on cost less
-/// solving no fewer, or solved more (the whole 95% interval above zero).
+/// True when an `--ab dream_lessons` run passed the lessons ([`ab_passed`]).
 pub fn dream_lessons_passed(report: &LiveReport) -> bool {
-    if report.ab.as_deref() != Some(DREAM_LESSONS) {
+    ab_passed(report, DREAM_LESSONS)
+}
+
+/// True when an `--ab <flag>` run passed the switch: on cost less solving
+/// no fewer, or solved more (the whole 95% interval above zero). A run of
+/// any other arm, or with no arm, passes nothing.
+pub fn ab_passed(report: &LiveReport, flag: &str) -> bool {
+    if report.ab.as_deref() != Some(flag) {
         return false;
     }
     let summary = ab_summary(&report.attempts, report.mde);
