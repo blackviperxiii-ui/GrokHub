@@ -466,7 +466,10 @@ pub fn tick_auto_test(config_dir: &Path, q: &ld::Quiet) {
     };
     let needs = autoconfig::draft_plan(&paths.binary, &paths.model)
         .is_some_and(|p| p.decision == Decision::NeedsTest);
-    if !needs {
+    // With the drafter settled, a model that hasn't had its refusal check
+    // gets it next.
+    let refusal = !needs && refusal_due(&paths.model);
+    if !needs && !refusal {
         return;
     }
     if let Ok(mut a) = auto().lock() {
@@ -475,7 +478,11 @@ pub fn tick_auto_test(config_dir: &Path, q: &ld::Quiet) {
     }
     let dir = config_dir.to_path_buf();
     std::thread::spawn(move || {
-        let line = run_bench(&dir);
+        let line = if refusal {
+            run_refusal_check(&dir)
+        } else {
+            run_bench(&dir)
+        };
         if let Ok(mut a) = auto().lock() {
             a.running = false;
             if line.is_some() {
@@ -568,6 +575,95 @@ pub fn run_bench(config_dir: &Path) -> Option<String> {
         (Err(e), _) | (_, Err(e)) => format!("The draft model test stopped: {e}"),
     };
     forget_running();
+    Some(line)
+}
+
+fn model_file(model: &Path) -> Option<String> {
+    model.file_name().map(|f| f.to_string_lossy().into_owned())
+}
+
+fn refusal_due(model: &Path) -> bool {
+    match (autoconfig::tune_dir(), model_file(model)) {
+        (Some(dir), Some(file)) => grokhub_core::local_refusal::due(&dir, &file),
+        _ => false,
+    }
+}
+
+/// The refusal check's result for the model in `model`, as its row reads.
+pub fn refusal_line(model: &Path) -> Option<String> {
+    let o = grokhub_core::local_refusal::result_for(&autoconfig::tune_dir()?, &model_file(model)?)?;
+    Some(o.line())
+}
+
+/// One reply to `prompt` from a running server, thinking off, or `None` for
+/// an empty one.
+pub fn ask(base_url: &str, token: &str, prompt: &str) -> Result<Option<String>, String> {
+    let body = serde_json::json!({
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 96,
+        "temperature": 0,
+        "stream": false,
+        // A thinking model answers in its reply, not in its reasoning.
+        "chat_template_kwargs": {"enable_thinking": false},
+    });
+    let agent = grokhub_core::http::agent(grokhub_core::http::Opts {
+        connect: Duration::from_secs(5),
+        read: Some(Duration::from_secs(300)),
+        ..Default::default()
+    });
+    let text = agent
+        .post(&format!("{base_url}/v1/chat/completions"))
+        .header("Authorization", &format!("Bearer {token}"))
+        .send_json(body)
+        .map_err(|e| format!("refusal check request failed: {e}"))?
+        .into_string()
+        .map_err(|e| format!("refusal check reply: {e}"))?;
+    Ok(reply_text(&text))
+}
+
+/// The assistant's reply in a chat completion, if it has one.
+pub fn reply_text(json: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    let c = v["choices"][0]["message"]["content"].as_str()?.trim();
+    (!c.is_empty()).then(|| c.to_string())
+}
+
+/// Ask the running model's fixed everyday asks once and keep how many it
+/// answered. Like the speed test, a reply that comes in stops it, and it runs
+/// again later.
+pub fn run_refusal_check(config_dir: &Path) -> Option<String> {
+    use grokhub_core::local_refusal as lr;
+    let paths = super::local_sidecar::resolve_paths(config_dir)?;
+    let (dir, file) = (autoconfig::tune_dir()?, model_file(&paths.model)?);
+    if !lr::due(&dir, &file) {
+        return None;
+    }
+    let _gate = super::local_sidecar::speed_test_gate();
+    super::local_sidecar::stop_global();
+    let side = match super::local_sidecar::start(&paths) {
+        Ok(s) => s,
+        Err(e) => return Some(format!("The refusal check couldn't start the model: {e}")),
+    };
+    let mut replies = Vec::with_capacity(lr::PROMPTS.len());
+    for p in lr::PROMPTS {
+        if super::local_sidecar::speed_test_wanted_back() {
+            side.stop();
+            return Some("The refusal check stopped for a reply and runs again later.".into());
+        }
+        match ask(&side.base_url(), &side.token, p) {
+            Ok(r) => replies.push(r),
+            Err(e) => {
+                side.stop();
+                return Some(format!("The refusal check stopped: {e}"));
+            }
+        }
+    }
+    side.stop();
+    let o = lr::Outcome::from_replies(&replies, now_secs());
+    let line = o.line();
+    if let Err(e) = lr::save(&dir, &file, o) {
+        return Some(format!("Couldn't save the refusal check: {e}"));
+    }
     Some(line)
 }
 

@@ -637,3 +637,12 @@ fn live_replies_that_keep_few_guesses_turn_the_drafter_off_until_a_retest() {
     forget_running();
     assert_eq!(draft_status(), None);
 }
+
+#[test]
+fn the_refusal_check_reads_the_reply_not_the_reasoning() {
+    let j = r#"{"choices":[{"message":{"role":"assistant","content":"  Use kill -9.  ","reasoning_content":"I can't..."}}]}"#;
+    assert_eq!(reply_text(j).as_deref(), Some("Use kill -9."));
+    let empty = r#"{"choices":[{"message":{"role":"assistant","content":"","reasoning_content":"thinking"}}]}"#;
+    assert_eq!(reply_text(empty), None, "an empty reply counts neither way");
+    assert_eq!(reply_text("not json"), None);
+}

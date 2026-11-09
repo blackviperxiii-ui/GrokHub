@@ -2,15 +2,21 @@
 //!
 //! The Settings pick is the home model. Another downloaded chat model runs
 //! instead only for a reason the running-model rows can say: the battery is
-//! low (the smallest one on disk saves power), or the home model ran out of
-//! memory at start (the largest smaller one stands in). A model in use is
-//! never swapped: a request in flight keeps its model, and the swap waits for
-//! the next request with nothing in flight. Only one model runs at a time,
-//! because two models on one memory bus lose more than a third of their speed.
+//! low, a game is running, the machine saves power or memory, less memory is
+//! free than the pick needs, the pick ran out of memory at start, or the
+//! computer is free and the task is hard ([`super::local_scale`]). A model in
+//! use is never swapped: a request in flight keeps its model, and the swap
+//! waits for the next request with nothing in flight. A step up to a bigger
+//! model never makes a reply wait: the reply starts on the model that runs,
+//! and the bigger one loads once the chat goes quiet. Only one model runs at
+//! a time, because two models on one memory bus lose more than a third of
+//! their speed.
 
 use std::path::{Path, PathBuf};
 
 use grokhub_core::local_setup::{self, LocalModel};
+
+use super::local_scale::{self, Need, Scale};
 
 /// Why a model other than the Settings pick runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,6 +25,14 @@ pub enum StandIn {
     LowBattery,
     /// The Settings pick ran out of memory at start.
     OutOfMemory,
+    /// A game runs: the lightest model on disk.
+    Gaming,
+    /// The machine saves power or memory, and the task is light.
+    Lighter,
+    /// Less memory is free than the pick needs right now.
+    Tight,
+    /// The computer is free and the task is hard: a bigger model.
+    Performance,
 }
 
 impl StandIn {
@@ -30,6 +44,18 @@ impl StandIn {
             }
             StandIn::OutOfMemory => {
                 "Running a smaller model because your pick ran out of memory. It tries your pick again after the next unload."
+            }
+            StandIn::Gaming => {
+                "Running the lightest model while a game runs. Your pick comes back after the game."
+            }
+            StandIn::Lighter => {
+                "Running a smaller model for light tasks while the computer saves power. Hard tasks get your pick."
+            }
+            StandIn::Tight => {
+                "Running a smaller model because less memory is free than your pick needs. Your pick comes back when there's room."
+            }
+            StandIn::Performance => {
+                "Running a bigger model than your pick for hard tasks while the computer is free. It steps back down when the computer gets busy."
             }
         }
     }
@@ -49,6 +75,12 @@ pub enum Plan {
         model: PathBuf,
         stand_in: Option<StandIn>,
     },
+    /// A bigger model fits: this request keeps what runs, and `model` loads
+    /// once the chat is quiet.
+    Later {
+        model: PathBuf,
+        stand_in: Option<StandIn>,
+    },
 }
 
 /// What [`plan`] looks at.
@@ -61,20 +93,21 @@ pub struct Now<'a> {
     /// The chat models on disk, with their files.
     pub on_disk: &'a [(&'static LocalModel, PathBuf)],
     pub low_battery: bool,
-    /// "Keep the model loaded" is on: the pick stays even on a low battery.
+    /// "Keep the model loaded" is on: the pick stays, whatever happens.
     pub kept_loaded: bool,
     /// A model file was forced (`GROKHUB_LOCAL_MODEL`): nothing swaps.
     pub forced: bool,
     pub in_flight: usize,
     pub secs_since_swap: u64,
+    /// What this request's task needs.
+    pub need: Need,
+    /// The governor and the room the machine has.
+    pub scale: Scale,
 }
 
 /// The model the next load should run.
 pub fn plan(n: Now<'_>) -> Plan {
-    let (target, stand_in) = match low_battery_pick(&n) {
-        Some(p) => (p, Some(StandIn::LowBattery)),
-        None => (n.home.to_path_buf(), None),
-    };
+    let (target, stand_in) = target(&n);
     let Some((running, why)) = n.loaded else {
         return Plan::Load {
             model: target,
@@ -84,9 +117,20 @@ pub fn plan(n: Now<'_>) -> Plan {
     let settled = running == target
         // The stand-in for a pick that ran out of memory stays until the next
         // unload, so a request doesn't retry a start that just failed.
-        || (why == Some(StandIn::OutOfMemory) && stand_in.is_none());
+        || (why == Some(StandIn::OutOfMemory) && stand_in.is_none())
+        || stays_big(&n, running, why, stand_in);
     if settled || n.in_flight > 0 || n.secs_since_swap < SWAP_COOLDOWN_SECS {
         return Plan::Keep;
+    }
+    let bigger = match (catalog_for(&target), catalog_for(running)) {
+        (Some(t), Some(r)) => t.run_mb > r.run_mb,
+        _ => false,
+    };
+    if bigger {
+        return Plan::Later {
+            model: target,
+            stand_in,
+        };
     }
     Plan::Load {
         model: target,
@@ -94,18 +138,99 @@ pub fn plan(n: Now<'_>) -> Plan {
     }
 }
 
-/// On a low battery, the smallest chat model on disk when it is smaller than
-/// the pick.
-fn low_battery_pick(n: &Now<'_>) -> Option<PathBuf> {
-    if !n.low_battery || n.kept_loaded || n.forced {
-        return None;
+/// A bigger model loaded for hard work stays for lighter asks in between
+/// while the computer is still free and it still fits: swapping down and
+/// back up would cost two loads.
+fn stays_big(
+    n: &Now<'_>,
+    running: &Path,
+    why: Option<StandIn>,
+    target_why: Option<StandIn>,
+) -> bool {
+    if why != Some(StandIn::Performance) || target_why.is_some() {
+        return false;
     }
-    let home = catalog_for(n.home)?;
-    n.on_disk
-        .iter()
-        .filter(|(m, _)| m.run_mb < home.run_mb)
-        .min_by_key(|(m, _)| m.run_mb)
-        .map(|(_, p)| p.clone())
+    let (Some(room), Some(m)) = (n.scale.room, catalog_for(running)) else {
+        return false;
+    };
+    !n.scale.gaming
+        && !n.scale.saving
+        && local_scale::performance_ready(&room)
+        && local_scale::fits(m, &room, m.run_mb, 0)
+}
+
+/// The model this request should run on, and why when it isn't the pick.
+fn target(n: &Now<'_>) -> (PathBuf, Option<StandIn>) {
+    let home_path = n.home.to_path_buf();
+    if n.kept_loaded || n.forced {
+        return (home_path, None);
+    }
+    let Some(home) = catalog_for(n.home) else {
+        return (home_path, None);
+    };
+    let smallest = || {
+        n.on_disk
+            .iter()
+            .filter(|(m, _)| m.run_mb < home.run_mb)
+            .min_by_key(|(m, _)| m.run_mb)
+            .map(|(_, p)| p.clone())
+    };
+    if n.low_battery {
+        if let Some(p) = smallest() {
+            return (p, Some(StandIn::LowBattery));
+        }
+    }
+    if n.scale.gaming {
+        return smallest().map_or((home_path, None), |p| (p, Some(StandIn::Gaming)));
+    }
+    let resident = n
+        .loaded
+        .and_then(|(p, _)| catalog_for(p))
+        .map_or(0, |m| m.run_mb);
+    if let Some(room) = n.scale.room {
+        if n.need == Need::Hard && !n.scale.saving && local_scale::performance_ready(&room) {
+            let bigger = n
+                .on_disk
+                .iter()
+                .filter(|(m, _)| m.run_mb > home.run_mb)
+                .filter(|(m, _)| local_scale::fits(m, &room, resident, local_scale::HEADROOM_MB))
+                .filter(|(m, _)| {
+                    local_scale::est_tok_s(m, &room, resident)
+                        >= local_scale::PERFORMANCE_FLOOR_TOK_S
+                })
+                .max_by_key(|(m, _)| m.run_mb);
+            if let Some((_, p)) = bigger {
+                return (p.clone(), Some(StandIn::Performance));
+            }
+        }
+        if !local_scale::fits(home, &room, resident, 0) {
+            let fitting = n
+                .on_disk
+                .iter()
+                .filter(|(m, _)| m.run_mb < home.run_mb)
+                .filter(|(m, _)| local_scale::fits(m, &room, resident, 0))
+                .max_by_key(|(m, _)| m.run_mb);
+            if let Some((_, p)) = fitting {
+                return (p.clone(), Some(StandIn::Tight));
+            }
+        }
+    }
+    if n.scale.saving {
+        let lighter = match n.need {
+            Need::Hard => None,
+            Need::Light => smallest(),
+            Need::Normal => n
+                .on_disk
+                .iter()
+                .filter(|(m, _)| m.run_mb * 2 <= home.run_mb)
+                .max_by_key(|(m, _)| m.run_mb)
+                .map(|(_, p)| p.clone()),
+        };
+        if let Some(p) = lighter {
+            return (p, Some(StandIn::Lighter));
+        }
+    }
+    (home_path, None)
 }
 
 /// The model to start when `failed` ran out of memory: the largest chat model
@@ -122,7 +247,19 @@ pub fn out_of_memory_stand_in(
         .map(|(_, p)| p.clone())
 }
 
-fn catalog_for(file: &Path) -> Option<&'static LocalModel> {
+/// The running-model row's mode: Gaming while a game holds the GPU,
+/// Performance while a bigger model runs for hard work, else Balanced.
+pub fn mode(stand_in: Option<StandIn>, scale: &Scale) -> local_scale::Mode {
+    if scale.gaming || stand_in == Some(StandIn::Gaming) {
+        local_scale::Mode::Gaming
+    } else if stand_in == Some(StandIn::Performance) {
+        local_scale::Mode::Performance
+    } else {
+        local_scale::Mode::Balanced
+    }
+}
+
+pub(crate) fn catalog_for(file: &Path) -> Option<&'static LocalModel> {
     let name = file.file_name()?.to_str()?;
     local_setup::local_models().iter().find(|m| m.file == name)
 }

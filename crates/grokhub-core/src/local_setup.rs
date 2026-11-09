@@ -565,37 +565,58 @@ mod tests {
     #[test]
     fn the_catalog_stays_inside_25_uncensored_chat_models() {
         let all = local_models();
-        assert_eq!(all.len(), 13, "catalog parsed");
+        assert_eq!(all.len(), 39, "catalog parsed");
         let chat: Vec<_> = standard_models().map(|m| m.id).collect();
         assert_eq!(
             chat.len(),
-            5,
+            STANDARD_MODEL_CAP,
             "the drafters, speech, picture and guard models don't count"
         );
-        assert!(chat.len() <= STANDARD_MODEL_CAP);
-        // Every model that writes replies is uncensored; a speech or image
-        // model only reads or draws, so it has no refusals to remove.
+        // Every model that writes replies is uncensored (abliterated, or
+        // Heretic's refusal-direction removal); a speech or image model only
+        // reads or draws, so it has no refusals to remove.
         for m in all
             .iter()
             .filter(|m| matches!(m.kind, ModelKind::Chat | ModelKind::Drafter))
         {
-            assert_eq!(
-                m.abliterated,
-                Some(Abliteration {
-                    by: "huihui-ai",
-                    method: "abliteration"
-                }),
-                "{} must be an uncensored build",
-                m.id
+            let a = m
+                .abliterated
+                .unwrap_or_else(|| panic!("{} must be an uncensored build", m.id));
+            assert!(
+                matches!(a.method, "abliteration" | "heretic"),
+                "{}: {}",
+                m.id,
+                a.method
             );
             // No row claims vision until its projector downloads with it.
             assert!(!m.badges.contains(&"vision"), "{}", m.id);
         }
+        // The defaults stay huihui-ai's Gemma 4 builds.
+        for m in all.iter().filter(|m| m.is_chat() && !m.optional) {
+            assert_eq!(m.abliterated.map(|a| a.by), Some("huihui-ai"), "{}", m.id);
+        }
+        // Chat rows run biggest first (the picker and the step-down read them
+        // in order).
+        let sizes: Vec<u64> = all
+            .iter()
+            .filter(|m| m.is_chat())
+            .map(|m| m.run_mb)
+            .collect();
+        assert!(sizes.windows(2).all(|w| w[0] >= w[1]), "{sizes:?}");
         // Every drafter names the chat model it drafts for, and that model
         // names it back.
         for d in all.iter().filter(|m| m.kind == ModelKind::Drafter) {
             let t = model_by_id(d.pairs_with.unwrap()).unwrap();
             assert_eq!(t.drafter, Some(d.id), "{}", d.id);
+        }
+        // Every drafter a chat row names is in the catalog.
+        for m in all.iter().filter(|m| m.is_chat()) {
+            if let Some(d) = m.drafter {
+                assert!(
+                    model_by_id(d).is_some_and(|d| d.kind == ModelKind::Drafter),
+                    "{d}"
+                );
+            }
         }
     }
 
