@@ -895,6 +895,41 @@ remote_file = "split_files/vae/ae.safetensors"
 file = "z-image-turbo/ae.safetensors"
 sha256 = "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38"
 bytes = 335_304_388
+# A second picture model: Chroma1-HD (Apache-2.0, 8.9B, Flux-family), for
+# when Z-Image isn't on disk. Optional, so nothing pushes it. Its T5 text
+# encoder and the Flux VAE are parts in its own folder.
+[[model]]
+id = "chroma1-hd-q4_k_m"
+name = "Chroma1-HD pictures"
+repo = "silveroxides/Chroma1-HD-GGUF"
+file = "chroma1-hd/Chroma1-HD-Q4_K_M.gguf"
+remote_file = "Chroma1-HD-Q4_K_M.gguf"
+sha256 = "086f561e371d442b82b2c3689149da75046754c62a35293932cda397fc2bf9d2"
+download_mb = 8_859
+quant = "Q4_K_M"
+license = "Apache-2.0"
+kind = "image"
+optional = true
+badges = []
+tier = "T2"
+route = "local:image"
+ctx_default = 0
+run_mb = 8_192
+needs_avx2 = false
+min_budget = {}
+tok_s = { gpu = 0, unified = 0, cpu = 0 }
+[[model.parts]]
+repo = "city96/t5-v1_1-xxl-encoder-gguf"
+remote_file = "t5-v1_1-xxl-encoder-Q5_K_M.gguf"
+file = "chroma1-hd/t5-v1_1-xxl-encoder-Q5_K_M.gguf"
+sha256 = "b51cbb10b1a7aac6dd1c3b62f0ed908bfd06e0b42d2f3577d43e061361f51dae"
+bytes = 3_386_856_640
+[[model.parts]]
+repo = "Comfy-Org/z_image_turbo"
+remote_file = "split_files/vae/ae.safetensors"
+file = "chroma1-hd/ae.safetensors"
+sha256 = "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38"
+bytes = 335_304_388
 
 # The picture guard: Qwen3-VL 2B looks at every finished local picture
 # against the hard bans before it is shown (llama.cpp with its image

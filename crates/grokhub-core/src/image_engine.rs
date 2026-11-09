@@ -3,8 +3,8 @@
 //! per picture and exits, so the image model loads on demand and nothing
 //! stays in memory beside a game.
 //!
-//! Both builds are the Vulkan ones (any recent GPU, no CUDA install). The
-//! archives are flat: the program and its libraries side by side, found
+//! Linux and Windows use the Vulkan builds (any recent GPU, no CUDA
+//! install); Apple silicon uses Metal. The archives are flat: the program and its libraries side by side, found
 //! through `$ORIGIN` on Linux and the program's folder on Windows.
 
 use std::path::{Path, PathBuf};
@@ -35,6 +35,14 @@ pub const SD_CPP: Tool = Tool {
             url: "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-929-3f8527a/sd-master-3f8527a-bin-win-vulkan-x64.zip",
             size: 30_067_605,
             sha256: "60e6850d650417409f18c2170ab5e27335db96da70cd3d1ad1e930bcffc2fd35",
+            format: "zip",
+        },
+        // Apple silicon: Metal is built in (ggml's Apple default).
+        Build {
+            key: "macos-aarch64",
+            url: "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-929-3f8527a/sd-master-3f8527a-bin-Darwin-macOS-26.6.2-arm64.zip",
+            size: 35_049_086,
+            sha256: "1c8ee6c8e413e3335b1223bbc657ea5d86dae1819f8426a98b84c265587eb192",
             format: "zip",
         },
     ],
@@ -107,10 +115,12 @@ pub fn size_for(aspect: &str) -> (u32, u32) {
 /// few CPU threads are plenty and leave the rest of the machine free.
 const THREADS: u32 = 4;
 
-/// The `sd-cli` arguments for one picture with a Z-Image style row: the
-/// diffusion model is the main file, the Qwen text encoder and the VAE are
-/// parts. Turbo wants guidance off (cfg 1) and 8 steps; the encoder and VAE
-/// wait in system memory until their stage, so a game keeps its VRAM.
+/// The `sd-cli` arguments for one picture. The diffusion model is the main
+/// file and the VAE is a part. A Z-Image style row has a Qwen text encoder
+/// (`--llm`) and runs with guidance off (cfg 1) and 8 steps; a Chroma row
+/// has a T5 encoder (`--t5xxl`), guidance 4 and the Euler sampler, as
+/// stable-diffusion.cpp's Chroma notes ask. Encoders and VAE wait in system
+/// memory until their stage, so a game keeps its VRAM.
 pub fn generate_args(
     models_dir: &Path,
     m: &LocalModel,
@@ -121,21 +131,41 @@ pub fn generate_args(
 ) -> Option<Vec<String>> {
     let dir = md::kind_dir(models_dir, m.kind);
     let s = |p: PathBuf| p.display().to_string();
-    let llm = part(models_dir, m, ".gguf")?;
     let vae = part(models_dir, m, "ae.safetensors")?;
-    Some(vec![
-        "--diffusion-model".into(),
-        s(md::final_path(&dir, m)),
-        "--llm".into(),
-        s(llm),
+    let t5 = m
+        .parts
+        .iter()
+        .find(|p| p.file.contains("t5"))
+        .map(|p| dir.join(p.file));
+    let mut a: Vec<String> = vec!["--diffusion-model".into(), s(md::final_path(&dir, m))];
+    match t5 {
+        Some(t5) => a.extend([
+            "--t5xxl".into(),
+            s(t5),
+            "--cfg-scale".into(),
+            "4.0".into(),
+            "--sampling-method".into(),
+            "euler".into(),
+            "--steps".into(),
+            "26".into(),
+            "--model-args".into(),
+            "chroma_use_dit_mask=false".into(),
+            "--clip-on-cpu".into(),
+        ]),
+        None => a.extend([
+            "--llm".into(),
+            s(part(models_dir, m, ".gguf")?),
+            "--cfg-scale".into(),
+            "1.0".into(),
+            "--steps".into(),
+            "8".into(),
+        ]),
+    }
+    a.extend([
         "--vae".into(),
         s(vae),
         "-p".into(),
         prompt.into(),
-        "--cfg-scale".into(),
-        "1.0".into(),
-        "--steps".into(),
-        "8".into(),
         "-W".into(),
         width.to_string(),
         "-H".into(),
@@ -148,7 +178,8 @@ pub fn generate_args(
         "--offload-to-cpu".into(),
         "-o".into(),
         s(out.to_path_buf()),
-    ])
+    ]);
+    Some(a)
 }
 
 /// The guard's model and image reader, for `llama-server -m … --mmproj …`.
@@ -184,16 +215,19 @@ mod tests {
     use crate::runtime_download as rd;
 
     #[test]
-    fn linux_and_windows_x64_pin_the_vulkan_release_and_other_platforms_have_none() {
+    fn linux_windows_and_apple_silicon_pin_the_release_and_others_have_none() {
         for b in SD_CPP.builds {
             let a = asset_for(b.key).unwrap();
             assert_eq!(a.archive_format(), Some(rd::ArchiveFormat::Zip));
             assert!(crate::ssrf::runtime_download_url_ok(b.url).is_ok());
-            assert!(b.url.contains(VERSION) && b.url.contains("vulkan"));
+            assert!(b.url.contains(VERSION));
+            assert_eq!(b.url.contains("vulkan"), !b.key.starts_with("macos"));
             assert!(b.size > 1_000_000);
             assert!(b.sha256.len() == 64 && b.sha256.bytes().all(|c| c.is_ascii_hexdigit()));
         }
-        assert!(asset_for("macos-aarch64").is_none());
+        assert!(asset_for("macos-aarch64").is_some());
+        assert!(asset_for("macos-x86_64").is_none());
+        assert!(asset_for("linux-aarch64").is_none());
         assert!(cli_path(Path::new("/c")).starts_with(rd::bin_dir(Path::new("/c")).join("sd-cpp")));
         assert!(!installed(Path::new("/nowhere")));
     }
@@ -269,5 +303,38 @@ mod tests {
         assert_eq!(guard_verdict("Safe? No: BANNED"), Some(true));
         assert_eq!(guard_verdict("I can't tell"), None);
         assert_eq!(guard_model(Path::new("/nowhere")), None);
+    }
+
+    #[test]
+    fn a_chroma_picture_uses_its_t5_encoder_and_guidance() {
+        let models = Path::new("/m");
+        let m = crate::local_setup::model_by_id("chroma1-hd-q4_k_m").expect("chroma row");
+        assert!(m.optional && m.kind == ModelKind::Image);
+        let first = crate::local_setup::local_models()
+            .iter()
+            .find(|x| x.kind == ModelKind::Image)
+            .unwrap();
+        assert_ne!(first.id, m.id, "Z-Image stays the first picture model");
+        let a = generate_args(
+            models,
+            m,
+            "a lighthouse",
+            size_for(""),
+            1,
+            Path::new("/o.png"),
+        )
+        .unwrap();
+        let after = |k: &str| a[a.iter().position(|x| x == k).unwrap() + 1].clone();
+        assert!(after("--t5xxl").ends_with("t5-v1_1-xxl-encoder-Q5_K_M.gguf"));
+        assert!(after("--vae").starts_with(
+            &md::kind_dir(models, ModelKind::Image)
+                .join("chroma1-hd")
+                .display()
+                .to_string()
+        ));
+        assert_eq!(after("--cfg-scale"), "4.0");
+        assert_eq!(after("--sampling-method"), "euler");
+        assert_eq!(after("--model-args"), "chroma_use_dit_mask=false");
+        assert!(!a.iter().any(|x| x == "--llm"));
     }
 }

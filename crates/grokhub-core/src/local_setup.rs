@@ -540,7 +540,7 @@ mod tests {
     #[test]
     fn the_catalog_stays_inside_25_uncensored_chat_models() {
         let all = local_models();
-        assert_eq!(all.len(), 38, "catalog parsed");
+        assert_eq!(all.len(), 39, "catalog parsed");
         let chat: Vec<_> = standard_models().map(|m| m.id).collect();
         assert_eq!(
             chat.len(),

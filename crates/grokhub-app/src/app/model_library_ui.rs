@@ -247,7 +247,7 @@ mod tests {
         let t = texts(&mut app);
         for want in [
             format!("Chat ({chat})"),
-            "Image (2)".to_string(),
+            "Image (3)".to_string(),
             "Download all".to_string(),
             "Download Gemma 4 12B".to_string(),
         ] {
@@ -255,8 +255,12 @@ mod tests {
         }
         app.setup.lib_tab = Some(ModelTab::Image);
         let t = texts(&mut app);
-        // The picture model and the guard that checks its pictures.
-        for want in ["Download Z-Image Turbo", "Download Picture guard"] {
+        // The picture models and the guard that checks their pictures.
+        for want in [
+            "Download Z-Image Turbo",
+            "Download Chroma1-HD",
+            "Download Picture guard",
+        ] {
             assert!(t.iter().any(|x| x.starts_with(want)), "{want:?} in {t:?}");
         }
     }
