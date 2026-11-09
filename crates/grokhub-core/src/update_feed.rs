@@ -5362,6 +5362,7 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             icon: "🦀".into(),
             why: "You follow Rust.".into(),
             cites: vec!["https://blog.rust-lang.org/".into()],
+            traits: Vec::new(),
         };
         rows.push((
             "post_card",

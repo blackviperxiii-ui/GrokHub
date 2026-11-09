@@ -784,6 +784,14 @@ pub(super) enum SourceAct {
     MoreLike,
 }
 
+/// Whether Dismiss on this card still teaches something: ideas and
+/// proactive or watcher rows keep their throttles; feed posts carry no weight.
+pub(super) fn weighted_dismiss(card: &UpdateCard) -> bool {
+    card.kind == UpdateKind::Idea
+        || card.pulse.proactive.is_some()
+        || card.pulse.nudge_watcher.is_some()
+}
+
 /// What a post's action does on the page.
 pub(super) fn feed_act(card: &UpdateCard, did: FeedPostAct) -> PulseAct {
     let id = card.id.clone();
@@ -1562,7 +1570,9 @@ impl Cabin {
             }
             posts.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(a.id.cmp(&b.id)));
         }
-        posts
+        // Card taste: liked kinds rise, disliked kinds sink, the worst leave.
+        let weights = grokhub_core::card_taste::cached_weights(&crate::config::config_dir());
+        grokhub_core::card_taste::rank_with(posts, &weights)
     }
 
     /// One post: "source · age" with ··· on top, the headline, the short
@@ -2148,10 +2158,17 @@ impl Cabin {
         self.pulse_remove_dismiss(card, true);
     }
 
+    /// Dismiss. On a feed post it carries no weight: the card goes and
+    /// nothing is learned (Like and I don't like are the taste signals).
+    /// Ideas and proactive rows keep their quiet-for-a-day throttle.
     pub(super) fn pulse_dismiss(&mut self, id: &str, day: &str) {
         let Some(card) = self.pulse_card(id) else {
             return;
         };
+        if !weighted_dismiss(&card) {
+            self.pulse_remove_dismiss(&card, false);
+            return;
+        }
         let used_depth = grokhub_core::used_depth(&self.card_prefs, &card);
         let kind = pc::dismiss_kind(&card, used_depth);
         self.pulse_note(&card.title, kind.ledger_reason(), day);
@@ -2202,6 +2219,22 @@ impl Cabin {
         }
         self.persist_updates();
         self.pulse_note(&card.title, LedgerReason::Liked, day);
+        self.learn_card_taste(&card, grokhub_core::card_taste::Reaction::Like);
+    }
+
+    /// Note a Like or I don't like in card taste (`card_taste.json`).
+    pub(super) fn learn_card_taste(
+        &mut self,
+        card: &UpdateCard,
+        reaction: grokhub_core::card_taste::Reaction,
+    ) {
+        use grokhub_core::card_taste as ct;
+        let dir = crate::config::config_dir();
+        let mut taste = ct::load(&dir);
+        taste.record(&card.id, ct::card_traits(card), reaction, now_ms());
+        if let Err(err) = ct::save(&dir, &taste) {
+            self.status = err;
+        }
     }
 
     /// Always do this: an automation idea is scheduled, an offer is taken, and
