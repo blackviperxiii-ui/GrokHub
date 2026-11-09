@@ -50,6 +50,7 @@ pub mod local_scale;
 pub mod local_sidecar;
 pub mod local_spec;
 pub mod local_swap;
+pub mod local_tune;
 pub mod log;
 pub mod match_ask;
 pub mod policy;

@@ -443,6 +443,7 @@ fn autotune_records_cap_the_next_plan_per_model_device_and_driver() {
         ctx: 8_192,
         kv: KvType::Q4,
         cpu_only: false,
+        clean: 0,
     };
     save_tuned(&dir, &key, &t).unwrap();
     assert_eq!(load_tuned(&dir).get(&key), Some(&t));
@@ -491,6 +492,7 @@ fn tiny_gguf() -> Vec<u8> {
 
 #[test]
 fn launch_for_reads_the_header_the_engine_and_the_stored_profile() {
+    let _one = LIVE_TESTS.lock().unwrap_or_else(|e| e.into_inner());
     let root = std::env::temp_dir().join(format!("grokhub-launch-for-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("bin")).unwrap();
@@ -569,6 +571,7 @@ fn a_remembered_cpu_fallback_keeps_the_next_start_off_the_gpu() {
         ctx: gpu.ctx,
         kv: gpu.kv,
         cpu_only: true,
+        clean: 0,
     };
     save_tuned(&dir, "k", &t).unwrap();
     let next = apply_tuned(gpu, load_tuned(&dir).get("k").unwrap());
@@ -791,10 +794,14 @@ fn the_running_models_own_memory_is_added_back_for_a_fresh_plan() {
     assert_eq!(taken(FreeNow::default(), resident), FreeNow::default());
 }
 
+/// Tests that set the global profile run one at a time.
+static LIVE_TESTS: Mutex<()> = Mutex::new(());
+
 #[cfg(unix)]
 #[test]
 fn a_model_kept_up_under_throttle_gets_the_sharing_flags_its_engine_knows() {
     use std::os::unix::fs::PermissionsExt;
+    let _one = LIVE_TESTS.lock().unwrap_or_else(|e| e.into_inner());
     let root = std::env::temp_dir().join(format!("grokhub-throttle-flags-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("bin")).unwrap();
@@ -811,7 +818,16 @@ fn a_model_kept_up_under_throttle_gets_the_sharing_flags_its_engine_knows() {
     set_profile(rtx_4070_laptop(), root.join("local"));
     set_state(GovState::Normal);
     let (normal, _, _) = launch_for(&binary, &model).expect("planned");
-    assert_eq!(normal.run, super::super::local_flags::RunFlags::default());
+    // Normal is tuned (one slot at 8k, no drafter); Throttle never is.
+    let tag = normal.run.tune.clone().expect("tuned");
+    assert_eq!(tag.arm.label(), "np1-plain-ub512");
+    assert_eq!(
+        normal.run,
+        super::super::local_flags::RunFlags {
+            tune: Some(tag),
+            ..Default::default()
+        }
+    );
     set_state(GovState::Throttle);
     let (shared, _, _) = launch_for(&binary, &model).expect("planned");
     set_state(GovState::Normal);
@@ -820,6 +836,7 @@ fn a_model_kept_up_under_throttle_gets_the_sharing_flags_its_engine_knows() {
     assert_eq!(shared.run.ubatch, Some(128));
     assert_eq!(shared.run.vk_nodes_per_submit, None, "CUDA, not Vulkan");
     assert!(shared.run.low_priority);
+    assert_eq!(shared.run.tune, None);
     let args = shared.to_args();
     assert!(args.windows(2).any(|w| w == ["--poll", "0"]));
     assert!(args.windows(2).any(|w| w == ["--prio", "-1"]));
@@ -830,4 +847,53 @@ fn a_model_kept_up_under_throttle_gets_the_sharing_flags_its_engine_knows() {
         l.tune_dir = None;
     }
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn an_out_of_memory_cap_grows_back_a_step_after_two_clean_starts() {
+    let dir = crate::harness::test_dir("autotune-grow");
+    let capped = Tuned {
+        ngl: 30,
+        n_cpu_moe: Some(12),
+        ctx: 16_384,
+        kv: KvType::Q8,
+        cpu_only: false,
+        clean: 0,
+    };
+    save_tuned(&dir, "k", &capped).unwrap();
+    clean_start(&dir, "k", 31).unwrap();
+    assert_eq!(load_tuned(&dir).get("k").map(|t| t.clean), Some(1));
+    clean_start(&dir, "k", 31).unwrap();
+    assert_eq!(
+        load_tuned(&dir).get("k"),
+        Some(&Tuned {
+            ngl: 31,
+            n_cpu_moe: Some(9),
+            ctx: 32_768,
+            kv: KvType::Q8,
+            cpu_only: false,
+            clean: 0,
+        })
+    );
+    // Once nothing is capped any more, the record goes.
+    let near = Tuned {
+        ngl: 31,
+        n_cpu_moe: None,
+        ctx: 65_536,
+        kv: KvType::Q8,
+        cpu_only: false,
+        clean: 1,
+    };
+    save_tuned(&dir, "k", &near).unwrap();
+    clean_start(&dir, "k", 31).unwrap();
+    assert_eq!(load_tuned(&dir).get("k"), None);
+    // A GPU crash record stays: a clean CPU start says nothing about the GPU.
+    let crashed = Tuned {
+        cpu_only: true,
+        ..capped
+    };
+    save_tuned(&dir, "c", &crashed).unwrap();
+    clean_start(&dir, "c", 31).unwrap();
+    clean_start(&dir, "c", 31).unwrap();
+    assert_eq!(load_tuned(&dir).get("c"), Some(&crashed));
 }

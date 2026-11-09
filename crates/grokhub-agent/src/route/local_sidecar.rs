@@ -533,8 +533,18 @@ fn start_planned(
                             ctx: l.ctx,
                             kv: l.kv,
                             cpu_only: l.cpu_only,
+                            clean: 0,
                         };
                         let _ = autoconfig::save_tuned(dir, key, &tuned);
+                    } else {
+                        let _ = autoconfig::clean_start(dir, key, l.all_layers);
+                    }
+                    if let Some(tag) = &l.run.tune {
+                        let on_gpu = !l.cpu_only && l.ngl > 0;
+                        let headroom = on_gpu
+                            .then(|| autoconfig::free_now().vram_free_mb)
+                            .flatten();
+                        super::local_tune::started(dir, tag, headroom);
                     }
                 }
                 return Ok(side);
@@ -605,10 +615,70 @@ pub fn health_ok(host: &str, port: u16, token: &str, timeout: Duration) -> bool 
 ///   `model_download::installed` under `~/GrokHub/models` (or
 ///   `{config}/models`), then the first `*.gguf` in those folders
 pub fn resolve_paths(config_dir: &Path) -> Option<SidecarPaths> {
-    let binary = find_binary(config_dir)?;
-    let model = find_model(config_dir)?;
-    Some(SidecarPaths { binary, model })
+    let stamp = paths_stamp(config_dir);
+    let mut cache = PATHS_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((dir, at, when, paths)) = cache.as_ref() {
+        // Nothing found looks again now and then: an engine put on `PATH`
+        // changes no time stamped here.
+        let still = match paths {
+            Some(p) => p.binary.is_file() && p.model.is_file(),
+            None => when.elapsed() < MISSING_RECHECK,
+        };
+        if dir == config_dir && *at == stamp && still {
+            return paths.clone();
+        }
+    }
+    let paths = find_binary(config_dir)
+        .zip(find_model(config_dir))
+        .map(|(binary, model)| SidecarPaths { binary, model });
+    *cache = Some((
+        config_dir.to_path_buf(),
+        stamp,
+        Instant::now(),
+        paths.clone(),
+    ));
+    paths
 }
+
+/// How long "no engine or no model" stands before looking again.
+const MISSING_RECHECK: Duration = Duration::from_secs(5);
+
+/// What [`resolve_paths`] reads: the override variables, `PATH`, and the
+/// modification times of the folders and files it looks in. The routing
+/// hot path asks many times a second; while none of these changed, the
+/// answer it found last stands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PathsStamp {
+    env: [Option<std::ffi::OsString>; 3],
+    mtimes: Vec<Option<std::time::SystemTime>>,
+}
+
+fn paths_stamp(config_dir: &Path) -> PathsStamp {
+    let mtime = |p: PathBuf| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    let mut looked = vec![
+        config_dir.join("bin"),
+        config_dir.join("local_ai.json"),
+        config_dir.join("models"),
+        config_dir
+            .join("models")
+            .join(grokhub_core::model_download::INSTALLED_FILE),
+    ];
+    if let Some(user) = user_models_dir() {
+        looked.push(user.join(grokhub_core::model_download::INSTALLED_FILE));
+        looked.push(user);
+    }
+    PathsStamp {
+        env: [
+            std::env::var_os("GROKHUB_LLAMA_SERVER"),
+            std::env::var_os("GROKHUB_LOCAL_MODEL"),
+            std::env::var_os("PATH"),
+        ],
+        mtimes: looked.into_iter().map(mtime).collect(),
+    }
+}
+
+type PathsCache = Mutex<Option<(PathBuf, PathsStamp, Instant, Option<SidecarPaths>)>>;
+static PATHS_CACHE: PathsCache = Mutex::new(None);
 
 /// `llama-server` from `GROKHUB_LLAMA_SERVER`, `{config}/bin`, then `PATH`.
 pub fn find_binary(config_dir: &Path) -> Option<PathBuf> {
@@ -2525,6 +2595,27 @@ mod tests {
         assert!(p.binary.ends_with(llama_server_name()));
         assert!(p.model.ends_with("a.gguf"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolved_paths_are_reused_until_a_folder_or_file_they_came_from_changes() {
+        let dir = crate::harness::test_dir("sidecar-paths-cache");
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        std::fs::create_dir_all(dir.join("models")).unwrap();
+        std::fs::write(dir.join("bin").join(llama_server_name()), b"x").unwrap();
+        std::fs::write(dir.join("models").join("a.gguf"), b"gguf").unwrap();
+        let first = resolve_paths(&dir).expect("paths");
+        assert_eq!(resolve_paths(&dir), Some(first.clone()));
+        assert_eq!(paths_stamp(&dir), paths_stamp(&dir), "nothing changed");
+        // Swapping the model file changes the folder: the new file is found.
+        std::fs::remove_file(dir.join("models").join("a.gguf")).unwrap();
+        std::fs::write(dir.join("models").join("b.gguf"), b"gguf").unwrap();
+        let next = resolve_paths(&dir).expect("paths");
+        assert!(next.model.ends_with("b.gguf"), "{:?}", next.model);
+        // A pick saved in Settings is a file it reads, so it counts too.
+        let before = paths_stamp(&dir);
+        set_pick(&dir, "x").unwrap();
+        assert_ne!(paths_stamp(&dir), before);
     }
 
     #[test]

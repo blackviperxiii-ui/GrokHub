@@ -517,6 +517,60 @@ pub struct Tuned {
     /// The GPU backend crashed the engine here, so it runs on the CPU.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cpu_only: bool,
+    /// Clean starts at these caps since they were set or last grew.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub clean: u8,
+}
+
+fn is_zero(n: &u8) -> bool {
+    *n == 0
+}
+
+/// Clean starts at a memory cap before it grows back a step.
+pub const GROW_AFTER_CLEAN: u8 = 2;
+
+/// The caps one step looser: a tenth more layers on the GPU (or a tenth
+/// fewer layers' experts in RAM) and twice the context. `None` once nothing
+/// is capped any more, and the record can go.
+pub fn grow(t: &Tuned, all_layers: u32) -> Option<Tuned> {
+    let step = (all_layers / 10).max(1);
+    let blocks = all_layers.saturating_sub(1);
+    let ctx_max = CTX_STEPS[0];
+    let next = Tuned {
+        ngl: (t.ngl + step).min(all_layers),
+        n_cpu_moe: t
+            .n_cpu_moe
+            .and_then(|n| n.checked_sub((blocks / 10).max(1)))
+            .filter(|n| *n > 0),
+        ctx: t.ctx.saturating_mul(2).min(ctx_max),
+        kv: t.kv,
+        cpu_only: false,
+        clean: 0,
+    };
+    let free = next.ngl >= all_layers && next.n_cpu_moe.is_none() && next.ctx >= ctx_max;
+    (!free).then_some(next)
+}
+
+/// A start ran clean at `key`'s stored caps: after [`GROW_AFTER_CLEAN`] of
+/// them the caps grow a step, so one bad night doesn't cap a model for good.
+/// A CPU-only record (the GPU backend crashed) stays.
+pub fn clean_start(dir: &Path, key: &str, all_layers: u32) -> Result<(), String> {
+    let mut all = load_tuned(dir);
+    let Some(t) = all.get_mut(key).filter(|t| !t.cpu_only) else {
+        return Ok(());
+    };
+    t.clean = t.clean.saturating_add(1);
+    if t.clean >= GROW_AFTER_CLEAN {
+        match grow(t, all_layers) {
+            Some(next) => *t = next,
+            None => {
+                all.remove(key);
+            }
+        }
+    }
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string_pretty(&all).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join(AUTOTUNE_FILE), json).map_err(|e| e.to_string())
 }
 
 pub const AUTOTUNE_FILE: &str = "autotune.json";
@@ -898,7 +952,7 @@ fn planned(
     };
     let flags = local_spec::help_flags(binary);
     let device = device_label(&p, backend);
-    let plan = local_spec::plan(&local_spec::Launch {
+    let mut plan = local_spec::plan(&local_spec::Launch {
         flags: &flags,
         model,
         meta: &meta,
@@ -923,6 +977,7 @@ fn planned(
         .seqs()
         .min(super::local_flags::slot_count(state, args.ctx, on_cpu));
     let slots = super::local_flags::slots(&options, n, p.free_ram_mb);
+    let shared = state == GovState::Throttle;
     // Kept up under Throttle, it shares the machine: no spinning threads,
     // low priority, and short GPU submissions so other apps' frames wait less.
     args.run = if state == GovState::Throttle {
@@ -932,7 +987,56 @@ fn planned(
         Default::default()
     };
     args.run.slots = slots;
+    if !shared {
+        tune(
+            &mut args,
+            &mut plan,
+            &options,
+            &dir,
+            &key,
+            state,
+            p.free_ram_mb,
+        );
+    }
     Some((args, plan, key, dir))
+}
+
+/// Runs the auto-tune arm for this device × model × mode on `args` (see
+/// [`super::local_tune`]); Throttle launches are never tuned.
+fn tune(
+    args: &mut LaunchArgs,
+    plan: &mut local_spec::Plan,
+    options: &std::collections::BTreeSet<String>,
+    dir: &Path,
+    key: &str,
+    state: GovState,
+    ram_free_mb: Option<u64>,
+) {
+    use super::local_tune::{self as t, Arm};
+    let base = Arm {
+        slots: args.run.seqs(),
+        draft: args.draft.is_some(),
+        ubatch: args.run.ubatch.unwrap_or(t::UBATCH_DEFAULT),
+    };
+    let cands = t::candidates(base, options.contains("--ubatch-size"));
+    let key = format!("{key}|{state:?}");
+    let arm = t::current(dir, &key, &cands, base);
+    if arm.slots != base.slots {
+        args.run.slots = super::local_flags::slots(options, arm.slots, ram_free_mb);
+    }
+    if !arm.draft {
+        args.draft = None;
+        plan.draft = None;
+    }
+    if arm.ubatch != base.ubatch {
+        args.run.ubatch = Some(arm.ubatch);
+    }
+    args.run.tune = Some(Box::new(t::Tag {
+        key,
+        arm,
+        base,
+        cands,
+    }));
 }
 
 /// The catalog row for a model file, for [`next_smaller`].

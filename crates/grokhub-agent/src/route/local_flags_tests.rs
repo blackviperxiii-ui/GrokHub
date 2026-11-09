@@ -48,6 +48,7 @@ fn a_model_sharing_the_gpu_sleeps_runs_low_and_submits_short_batches() {
             vk_nodes_per_submit: Some(20),
             low_priority: true,
             slots: Slots::default(),
+            tune: None,
         }
     );
     assert_eq!(

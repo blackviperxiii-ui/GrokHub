@@ -95,6 +95,8 @@ pub struct RunFlags {
     pub low_priority: bool,
     /// Server slots and the prompt cache, on every launch.
     pub slots: Slots,
+    /// The auto-tune arm this launch runs, when it is tuned.
+    pub tune: Option<Box<super::local_tune::Tag>>,
 }
 
 /// `-np`, unified KV and prompt-cache reuse. Every field is `None` when the
@@ -156,6 +158,7 @@ pub fn shared(options: &BTreeSet<String>, backend: Backend, on_gpu: bool) -> Run
         vk_nodes_per_submit: (on_gpu && backend == Backend::Vulkan).then_some(SHARED_VK_NODES),
         low_priority: true,
         slots: Slots::default(),
+        tune: None,
     }
 }
 
