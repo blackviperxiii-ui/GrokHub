@@ -409,8 +409,18 @@ fn spawn_llama(
     let mut cmd = llama_command(binary, &args, token);
     cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(log);
     grokhub_core::proc_util::hide_windows_console(&mut cmd);
-    cmd.spawn()
-        .map_err(|e| format!("could not start local model server: {e}"))
+    let run = launch.map(|l| l.run.clone()).unwrap_or_default();
+    cmd.envs(run.env());
+    if run.low_priority {
+        super::local_flags::below_normal(&mut cmd);
+    }
+    let child = cmd
+        .spawn()
+        .map_err(|e| format!("could not start local model server: {e}"))?;
+    if run.low_priority {
+        super::local_flags::lower_priority(child.id());
+    }
+    Ok(child)
 }
 
 /// Appended to the one-shot defaults to keep the engine off every GPU.
@@ -2257,6 +2267,7 @@ mod tests {
             tensor_split: Some(vec![3, 1]),
             draft: None,
             cpu_only: false,
+            run: Default::default(),
         }
     }
 
@@ -2343,6 +2354,7 @@ mod tests {
             tensor_split: None,
             draft: None,
             cpu_only: false,
+            run: Default::default(),
         };
         for args in [
             llama_args(Path::new("/m.gguf"), "127.0.0.1", 4711),

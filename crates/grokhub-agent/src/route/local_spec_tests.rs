@@ -503,6 +503,7 @@ fn every_launch_flag_is_live_in_the_pinned_engine() {
         tensor_split: Some(vec![3, 1]),
         draft: Some(Box::new(d)),
         cpu_only: false,
+        run: Default::default(),
     };
     let launches = [
         full(simple),
