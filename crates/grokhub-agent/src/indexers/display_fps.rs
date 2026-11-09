@@ -24,6 +24,7 @@ use std::time::Instant;
 
 #[cfg(windows)]
 mod present;
+pub mod setup;
 
 #[cfg(target_os = "linux")]
 use grokhub_fps_probe::Counters;
@@ -52,32 +53,66 @@ pub fn probe_source(exe: &Path) -> PathBuf {
         .unwrap_or_else(|| exe.to_path_buf())
 }
 
-/// The setup, as commands the user pastes into a terminal: a copy of `exe`
-/// (from [`probe_source`]) as
-/// the probe (root-owned, runnable only by the user's group) with CAP_PERFMON
-/// on that file alone, and tracefs opened just far enough to read the one
-/// tracepoint id (folders traversable, not listable). Re-running it after an
-/// update refreshes the probe.
-pub fn linux_setup(exe: &str) -> String {
-    let dirs = [
-        "/sys/kernel/tracing",
-        "/sys/kernel/tracing/events",
-        "/sys/kernel/tracing/events/drm",
-        "/sys/kernel/tracing/events/drm/drm_vblank_event_delivered",
-    ];
-    let mut tmpfiles: String = dirs
+/// The tracefs folders the setup makes traversable (not listable), and the
+/// one tracepoint id it makes readable.
+const TRACE_DIRS: [&str; 4] = [
+    "/sys/kernel/tracing",
+    "/sys/kernel/tracing/events",
+    "/sys/kernel/tracing/events/drm",
+    "/sys/kernel/tracing/events/drm/drm_vblank_event_delivered",
+];
+const TRACE_ID: &str = "/sys/kernel/tracing/events/drm/drm_vblank_event_delivered/id";
+/// The boot-time rule that keeps those modes.
+pub const TMPFILES_RULE: &str = "/etc/tmpfiles.d/loadout-fps.conf";
+
+/// The tmpfiles rule's text, with `\n` escapes for `printf`.
+fn tmpfiles_text() -> String {
+    let mut out: String = TRACE_DIRS
         .iter()
         .map(|d| format!("z {d} 0711 - - -\\n"))
         .collect();
-    tmpfiles
-        .push_str("z /sys/kernel/tracing/events/drm/drm_vblank_event_delivered/id 0444 - - -\\n");
+    out.push_str(&format!("z {TRACE_ID} 0444 - - -\\n"));
+    out
+}
+
+/// The setup, as commands the user pastes into a terminal: a copy of `exe`
+/// (from [`probe_source`]) as the probe (root-owned, runnable only by the
+/// user's group) with CAP_PERFMON on that file alone, and tracefs opened just
+/// far enough to read the one tracepoint id (folders traversable, not
+/// listable). The file is copied to a private temp file first, as the user:
+/// root can't read inside an AppImage's mount. Re-running it after an update
+/// refreshes the probe.
+pub fn linux_setup(exe: &str) -> String {
     format!(
-        "sudo install -D -m 0750 -o root -g \"$(id -gn)\" {exe} {PROBE_PATH}\n\
+        "t=\"$(mktemp)\" && cp {exe} \"$t\"\n\
+         sudo install -D -m 0750 -o root -g \"$(id -gn)\" \"$t\" {PROBE_PATH}; rm -f \"$t\"\n\
          sudo setcap cap_perfmon+ep {PROBE_PATH}\n\
-         printf '{tmpfiles}' | sudo tee /etc/tmpfiles.d/loadout-fps.conf\n\
-         sudo systemd-tmpfiles --create /etc/tmpfiles.d/loadout-fps.conf",
+         printf '{tmpfiles}' | sudo tee {TMPFILES_RULE}\n\
+         sudo systemd-tmpfiles --create {TMPFILES_RULE}",
         exe = shell_quote(exe),
+        tmpfiles = tmpfiles_text(),
     )
+}
+
+/// The same setup as one root script (run with `sh -e` behind the polkit
+/// prompt): `file` is the private copy, `gid` the user's group. Without
+/// systemd-tmpfiles it sets the modes itself, until the next boot.
+pub fn linux_root_script(file: &str, gid: u32) -> String {
+    let dirs = TRACE_DIRS.join(" ");
+    format!(
+        "install -D -m 0750 -o root -g {gid} {file} {PROBE_PATH}\n\
+         setcap cap_perfmon+ep {PROBE_PATH}\n\
+         printf '{tmpfiles}' > {TMPFILES_RULE}\n\
+         if command -v systemd-tmpfiles >/dev/null 2>&1; then systemd-tmpfiles --create {TMPFILES_RULE} || true; \
+         else chmod 0711 {dirs} 2>/dev/null || true; chmod 0444 {TRACE_ID} 2>/dev/null || true; fi",
+        file = shell_quote(file),
+        tmpfiles = tmpfiles_text(),
+    )
+}
+
+/// The lines that undo the Linux setup.
+pub fn linux_undo() -> String {
+    format!("sudo rm -f {PROBE_PATH} {TMPFILES_RULE}")
 }
 
 fn shell_quote(s: &str) -> String {
@@ -109,6 +144,38 @@ pub fn windows_undo(account: &str) -> String {
         "Remove-LocalGroupMember -SID '{PERF_LOG_USERS_SID}' -Member {}",
         ps_quote(account)
     )
+}
+
+/// The setup as one admin PowerShell script (run behind the UAC prompt).
+/// Already being in the group counts as done.
+pub fn windows_script(account: &str) -> String {
+    format!(
+        "$ErrorActionPreference = 'Stop'\n\
+         try {{ Add-LocalGroupMember -SID '{PERF_LOG_USERS_SID}' -Member {} }} \
+         catch [Microsoft.PowerShell.Commands.MemberExistsException] {{ }}",
+        ps_quote(account)
+    )
+}
+
+/// The undo as one admin PowerShell script. Not being in the group counts
+/// as done.
+pub fn windows_undo_script(account: &str) -> String {
+    format!(
+        "$ErrorActionPreference = 'Stop'\n\
+         try {{ Remove-LocalGroupMember -SID '{PERF_LOG_USERS_SID}' -Member {} }} \
+         catch [Microsoft.PowerShell.Commands.PrincipalNotFoundException], \
+         [Microsoft.PowerShell.Commands.MemberNotFoundException] {{ }}",
+        ps_quote(account)
+    )
+}
+
+/// The signed-in Windows account as `DOMAIN\user`, from the environment.
+pub fn windows_account() -> String {
+    let user = std::env::var("USERNAME").unwrap_or_default();
+    match std::env::var("USERDOMAIN") {
+        Ok(d) if !d.is_empty() => format!("{d}\\{user}"),
+        _ => user,
+    }
 }
 
 fn ps_quote(s: &str) -> String {
@@ -375,11 +442,56 @@ mod tests {
     }
 
     #[test]
+    fn the_root_script_installs_the_private_copy_without_sudo() {
+        let s = linux_root_script("/tmp/loadout-fps-probe-1-2", 1000);
+        assert!(s.starts_with(
+            "install -D -m 0750 -o root -g 1000 '/tmp/loadout-fps-probe-1-2' /usr/local/lib/loadout/fps-probe\n"
+        ));
+        assert!(s.contains("setcap cap_perfmon+ep /usr/local/lib/loadout/fps-probe\n"));
+        assert!(s.contains("> /etc/tmpfiles.d/loadout-fps.conf\n"));
+        assert!(!s.contains("sudo"), "{s}");
+        assert!(!s.contains("perf_event_paranoid"));
+        assert!(!s.contains("0755") && !s.contains("chmod -R"), "{s}");
+        assert_eq!(
+            linux_undo(),
+            "sudo rm -f /usr/local/lib/loadout/fps-probe /etc/tmpfiles.d/loadout-fps.conf"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn both_linux_forms_parse_as_shell() {
+        for script in [
+            linux_setup("/opt/Loadout's/grokhub"),
+            linux_root_script("/tmp/a b", 1000),
+            linux_undo(),
+        ] {
+            let ok = std::process::Command::new("sh")
+                .args(["-n", "-c", &script])
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "{script}");
+        }
+    }
+
+    #[test]
+    fn the_windows_scripts_treat_no_change_as_done() {
+        let set = windows_script("PC\\O'Brien");
+        assert!(set.contains("Add-LocalGroupMember -SID 'S-1-5-32-559' -Member 'PC\\O''Brien'"));
+        assert!(set.contains("MemberExistsException"));
+        let undo = windows_undo_script("PC\\O'Brien");
+        assert!(undo.contains("Remove-LocalGroupMember -SID 'S-1-5-32-559'"));
+        assert!(undo.contains("MemberNotFoundException"));
+    }
+
+    #[test]
     fn setup_scopes_the_grant_to_the_probe() {
         let s = linux_setup("/opt/Loadout's/grokhub");
         assert!(!s.contains("perf_event_paranoid"), "{s}");
         assert!(s.contains("setcap cap_perfmon+ep /usr/local/lib/loadout/fps-probe"));
         assert!(s.contains("-m 0750 -o root"));
+        assert!(s.starts_with("t=\"$(mktemp)\" && cp "), "{s}");
         assert!(s.contains("'/opt/Loadout'\\''s/grokhub'"), "{s}");
         assert!(s.contains("drm_vblank_event_delivered 0711"));
         assert!(s.contains("drm_vblank_event_delivered/id 0444"));

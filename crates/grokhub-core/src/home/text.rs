@@ -336,6 +336,21 @@ pub enum FpsRead {
     NeedsSetup,
     /// The OS or driver doesn't report frames.
     NoTrace,
+    /// How the last one-tap setup went, while frames still aren't counted.
+    Setup(FpsSetup),
+}
+
+/// What the Frame Rate tile says after its one-tap setup ran.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FpsSetup {
+    /// Windows: the group change lands at the next sign-in.
+    SignOut,
+    /// The user closed the password or admin prompt.
+    Dismissed,
+    /// No prompt can show on this desktop; the steps go in a terminal.
+    NoPrompt,
+    /// The steps ran and frames still can't be counted.
+    Failed,
 }
 
 /// The Frame Rate tile in words. `None` where frames can't be read on this
@@ -373,10 +388,26 @@ pub fn frame_rate_text(read: Option<FpsRead>, windows: bool, presenter: Option<&
         FpsRead::Starting => TileText::new("...", "Counting frames on screen", Tone::Quiet),
         FpsRead::NeedsSetup if windows => {
             TileText::new("Not read", "Needs a one-time admin setup", Tone::Warn)
-                .detail("Copy setup, read it, run it in an admin PowerShell")
+                .detail("Set up asks Windows for admin once")
         }
-        FpsRead::NeedsSetup => TileText::new("Not read", "Needs a sudo setup first", Tone::Warn)
-            .detail("Copy setup, read it, run it in a terminal"),
+        FpsRead::NeedsSetup => TileText::new("Not read", "Needs a one-time setup", Tone::Warn)
+            .detail("Set up asks for your password once"),
+        FpsRead::Setup(FpsSetup::SignOut) => {
+            TileText::new("Almost", "Sign out of Windows to finish", Tone::Warn)
+                .detail("Windows adds the permission at your next sign-in")
+        }
+        FpsRead::Setup(FpsSetup::Dismissed) => {
+            TileText::new("Not read", "The password prompt was closed", Tone::Quiet)
+                .detail("Nothing changed. Set up again whenever you like")
+        }
+        FpsRead::Setup(FpsSetup::NoPrompt) => {
+            TileText::new("Not read", "No password prompt on this desktop", Tone::Warn)
+                .detail("Copy setup and paste it into a terminal")
+        }
+        FpsRead::Setup(FpsSetup::Failed) => {
+            TileText::new("Not read", "The setup didn't finish", Tone::Warn)
+                .detail("Copy setup to run each step by hand")
+        }
         FpsRead::NoTrace if windows => TileText::new(
             "Not read",
             "Windows didn't start the frame trace",

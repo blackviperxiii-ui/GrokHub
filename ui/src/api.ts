@@ -1367,6 +1367,8 @@ export type TileAction =
   | { kind: "play"; appId: number }
   | { kind: "openClip"; index: number }
   | { kind: "steamFriends" }
+  | { kind: "setup"; module: string; undo: boolean }
+  | { kind: "copySetup"; module: string }
   | { kind: "reroll" }
   | { kind: "retry" };
 
@@ -2292,6 +2294,17 @@ export function libraryPlay(appId: number): Promise<string> {
 /** A Home tile's Turn on, for a switch that needs nothing else. */
 export function homeTurnOn(feature: string): Promise<void> {
   return invoke<void>("home_turn_on", { feature });
+}
+
+/** A tile's Set up (or Undo setup) behind the OS's own password or admin
+ * prompt; answers with one plain sentence on how it went. */
+export function homeSetup(module: string, undo: boolean): Promise<string> {
+  return invoke<string>("home_setup", { module, undo });
+}
+
+/** A tile's setup steps, to paste into a terminal by hand. */
+export function homeSetupSteps(module: string): Promise<string> {
+  return invoke<string>("home_setup_steps", { module });
 }
 
 /** Opens Steam's own friends list, for Home's Squad tile. */

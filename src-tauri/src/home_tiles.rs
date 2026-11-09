@@ -454,15 +454,32 @@ pub fn speeds_view(log: &grokhub_core::net_log::NetLog, now: u64) -> TileView {
 
 /// Frames on screen, as the OS counts them. Where it can't, the tile says
 /// so and points at a safe counter, never a hook into the game.
+/// `installed`: the Linux probe is in place, so Undo setup has something
+/// to undo.
 pub fn frame_rate_view(
     read: Option<tt::FpsRead>,
     windows: bool,
     presenter: Option<&str>,
+    installed: bool,
 ) -> TileView {
+    use tt::{FpsRead, FpsSetup};
     let text = tt::frame_rate_text(read, windows, presenter);
+    let set_up = TileAction::setup("frame_rate", false);
+    let copy = TileAction::copy_setup("frame_rate");
     match read {
-        Some(tt::FpsRead::Rate(_)) => TileView::ready(text).tag("LIVE"),
-        Some(tt::FpsRead::Starting) => TileView::ready(text),
+        Some(FpsRead::Rate(_)) if installed => TileView::ready(text)
+            .tag("LIVE")
+            .button("Undo setup", TileAction::setup("frame_rate", true)),
+        Some(FpsRead::Rate(_)) => TileView::ready(text).tag("LIVE"),
+        Some(FpsRead::Starting) => TileView::ready(text),
+        Some(FpsRead::Setup(FpsSetup::SignOut)) => TileView::ready(text),
+        Some(FpsRead::Setup(FpsSetup::NoPrompt)) => TileView::ready(text)
+            .primary("Copy setup", copy.clone())
+            .on_tap(copy),
+        Some(FpsRead::NeedsSetup | FpsRead::Setup(_)) => TileView::ready(text)
+            .primary("Set up", set_up.clone())
+            .button("Copy setup", copy)
+            .on_tap(set_up),
         _ => TileView::ready(text).button("Fix my stutter", TileAction::ask(HOME_CHIPS[0])),
     }
 }
@@ -471,10 +488,11 @@ pub fn frame_rate_view(
 fn frame_rate() -> TileView {
     let windows = cfg!(windows);
     if !(windows || cfg!(target_os = "linux")) {
-        return frame_rate_view(None, false, None);
+        return frame_rate_view(None, false, None, false);
     }
     let (read, presenter) = crate::home_fps::read();
-    frame_rate_view(Some(read), windows, presenter.as_deref())
+    let installed = grokhub_agent::indexers::display_fps::setup::installed();
+    frame_rate_view(Some(read), windows, presenter.as_deref(), installed)
 }
 
 #[cfg(mobile)]

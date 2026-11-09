@@ -325,7 +325,11 @@ fn frame_rate_tile_is_honest_about_not_reading_games() {
         false,
         None,
     );
-    assert_eq!(t.caption, "Needs a sudo setup first");
+    assert_eq!(t.caption, "Needs a one-time setup");
+    assert_eq!(
+        t.detail.as_deref(),
+        Some("Set up asks for your password once")
+    );
     let t = frame_rate_text(Some(FpsState::Blocked(FpsBlock::NoTracepoint)), false, None);
     assert_eq!(t.caption, "This driver doesn't report screen frames");
 }

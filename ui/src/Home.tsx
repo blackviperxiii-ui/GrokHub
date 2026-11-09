@@ -3,6 +3,8 @@ import {
   getHome,
   homeOpenClip,
   homeTurnOn,
+  homeSetup,
+  homeSetupSteps,
   libraryFriends,
   libraryPlay,
   openUrl,
@@ -162,6 +164,17 @@ export function runAction(a: TileAction, go: HomeRoutes, remote: boolean, reload
       return;
     case "steamFriends":
       if (!remote) void libraryFriends().catch(() => {});
+      return;
+    case "setup":
+      // The OS prompt shows on the computer, so a paired browser can't run it.
+      if (!remote) void homeSetup(a.module, a.undo).then(reload, reload);
+      return;
+    case "copySetup":
+      if (!remote) {
+        void homeSetupSteps(a.module)
+          .then((steps) => navigator.clipboard.writeText(steps))
+          .catch(() => {});
+      }
       return;
     case "reroll":
     case "retry":

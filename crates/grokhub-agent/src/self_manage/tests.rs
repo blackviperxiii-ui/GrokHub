@@ -30,7 +30,7 @@ fn native(g: &Gate, name: &str, args: &serde_json::Value) -> Decision {
 #[test]
 fn class_table_names_every_tool_once() {
     let names: Vec<&str> = SELF_TOOLS.iter().map(|(n, _)| *n).collect();
-    assert_eq!(names.len(), 18);
+    assert_eq!(names.len(), 19);
     let schema_names: Vec<String> = mcp_tools()
         .iter()
         .map(|t| t["name"].as_str().unwrap().to_string())
@@ -57,6 +57,7 @@ fn class_table_names_every_tool_once() {
             ("automation_disable", "soft"),
             ("automation_delete", "delete"),
             ("pulse_steam", "soft"),
+            ("module_setup", "soft"),
             ("know_me_tags", "read"),
         ]
     );
@@ -624,6 +625,47 @@ fn automation_tools_use_the_scheduler_writer_and_its_weekly_cap() {
     let _ = crate::tools::control::take_automation_changes();
     let _ = crate::harness::take_self_changes(&root);
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn module_setup_runs_the_tiles_setup_and_reports_it_plainly() {
+    use crate::indexers::display_fps::setup::Outcome;
+    let done = ops::module_setup(
+        &json!({ "module": "frame_rate", "reason": "asked" }),
+        |undo| {
+            assert!(!undo);
+            Outcome::Done
+        },
+    );
+    assert_eq!(done.unwrap(), "Frame Rate is set up and counting frames.");
+    let undone = ops::module_setup(
+        &json!({ "module": "frame_rate", "undo": true, "reason": "asked" }),
+        |undo| {
+            assert!(undo);
+            Outcome::Done
+        },
+    );
+    assert_eq!(undone.unwrap(), "The Frame Rate setup is undone.");
+    let closed = ops::module_setup(&json!({ "module": "frame_rate" }), |_| Outcome::Dismissed);
+    assert_eq!(
+        closed.unwrap(),
+        "The password prompt was closed, so nothing changed."
+    );
+    let by_hand =
+        ops::module_setup(&json!({ "module": "frame_rate" }), |_| Outcome::NoPrompt).unwrap();
+    assert!(by_hand.contains("```sh\n"), "{by_hand}");
+    let failed = ops::module_setup(&json!({ "module": "frame_rate" }), |_| {
+        Outcome::Failed("setcap: not found".into())
+    });
+    assert_eq!(
+        failed.unwrap_err(),
+        "The setup didn't finish: setcap: not found"
+    );
+    let other = ops::module_setup(&json!({ "module": "speeds" }), |_| unreachable!());
+    assert_eq!(
+        other.unwrap_err(),
+        "`speeds` has no setup. Only frame_rate does."
+    );
 }
 
 #[test]

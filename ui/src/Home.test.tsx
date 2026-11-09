@@ -13,6 +13,8 @@ const api = vi.hoisted(() => ({
   homeOpenClip: vi.fn<(index: number) => Promise<void>>(),
   libraryFriends: vi.fn<() => Promise<void>>(),
   homeTurnOn: vi.fn<(feature: string) => Promise<void>>(),
+  homeSetup: vi.fn<(module: string, undo: boolean) => Promise<string>>(),
+  homeSetupSteps: vi.fn<(module: string) => Promise<string>>(),
   homeCatalog: vi.fn(),
   setHomeLayout: vi.fn(),
   openUrl: vi.fn<(url: string) => Promise<void>>(),
@@ -174,6 +176,8 @@ describe("Home", () => {
     api.homeOpenClip.mockReset().mockResolvedValue();
     api.libraryFriends.mockReset().mockResolvedValue();
     api.homeTurnOn.mockReset().mockResolvedValue();
+    api.homeSetup.mockReset().mockResolvedValue("Frame Rate is set up and counting frames.");
+    api.homeSetupSteps.mockReset().mockResolvedValue("sudo setcap cap_perfmon+ep /usr/local/lib/loadout/fps-probe");
     api.openUrl.mockReset().mockResolvedValue();
   });
 
@@ -300,6 +304,45 @@ describe("Home", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Edit Home" }));
     expect(screen.getByRole("region", { name: "Edit Home" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Edit Home" })).not.toBeInTheDocument();
+  });
+
+  it("Frame Rate's Set up runs the setup on the PC, then reads Home again", async () => {
+    const setupPage = {
+      ...PAGE,
+      slots: [
+        slot({
+          slot: "medium-1",
+          size: "medium",
+          module: "frame_rate",
+          name: "Frame Rate",
+          tile: {
+            kind: "view",
+            view: view({
+              text: { big: "Not read", caption: "Needs a one-time setup", detail: null, tone: "warn" },
+              buttons: [
+                { label: "Set up", action: { kind: "setup", module: "frame_rate", undo: false }, primary: true },
+                { label: "Copy setup", action: { kind: "copySetup", module: "frame_rate" }, primary: false },
+              ],
+            }),
+          },
+        }),
+      ],
+    };
+    api.getHome.mockResolvedValue(setupPage);
+    const user = userEvent.setup();
+    const { unmount } = render(<Home {...routes()} remote={false} />);
+    await user.click(await screen.findByRole("button", { name: "Set up" }));
+    expect(api.homeSetup).toHaveBeenCalledWith("frame_rate", false);
+    await vi.waitFor(() => expect(api.getHome.mock.calls.length).toBeGreaterThan(1));
+    await user.click(screen.getByRole("button", { name: "Copy setup" }));
+    expect(api.homeSetupSteps).toHaveBeenCalledWith("frame_rate");
+    await vi.waitFor(async () =>
+      expect(await navigator.clipboard.readText()).toBe("sudo setcap cap_perfmon+ep /usr/local/lib/loadout/fps-probe"),
+    );
+    unmount();
+    render(<Home {...routes()} remote />);
+    await user.click(await screen.findByRole("button", { name: "Set up" }));
+    expect(api.homeSetup).toHaveBeenCalledTimes(1);
   });
 
   it("the Squad tile opens Steam's friends list on the PC only", async () => {
