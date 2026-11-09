@@ -31,6 +31,8 @@ pub mod journal;
 pub mod library;
 pub mod local_ai;
 pub mod local_engine;
+#[cfg(desktop)]
+mod local_governor;
 #[cfg(test)]
 mod md_fixtures;
 pub mod memory;
@@ -3302,6 +3304,8 @@ pub fn run() {
                 grokhub_core::paths::user_home().unwrap_or_default(),
                 config_dir.clone(),
             );
+            #[cfg(desktop)]
+            local_governor::start(config_dir.clone());
             pulse_feed::start(config_dir.clone(), || {
                 let client: Box<dyn grokhub_agent::ModelClient> = Box::new(model_client()?.0);
                 Ok((client, grokhub_agent::route::host::chat_start().0))
