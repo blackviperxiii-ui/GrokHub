@@ -4,6 +4,7 @@
 //! follows, never changes the app makes.
 
 use super::*;
+use grokhub_agent::repair;
 use grokhub_core::pc_health_advice::{self as advice, FixKind, FixOption, SessionStat};
 use grokhub_core::pulse::{PulseVerdict, VerdictTone};
 
@@ -88,6 +89,7 @@ fn row_button(kind: FixKind, open: bool, quiet_on: bool) -> &'static str {
                 "Change"
             }
         }
+        FixKind::FansFull => "Run",
         FixKind::Pause => "Pause",
         FixKind::Ask => "Ask",
     }
@@ -162,6 +164,43 @@ impl Cabin {
                 self.pulse_view.fix = None;
                 self.pulse_run(&id);
             }
+            FixKind::FansFull => self.pulse_fix_fans(),
+        }
+    }
+
+    /// Run the fans at full speed: save each fan's setting, then one step the
+    /// user types the password for, in the card's own chat. Blocked during a
+    /// game, under CoolerControl and on Windows, with the reason in the status.
+    fn pulse_fix_fans(&mut self) {
+        let Some(id) = self.pulse_view.fix.as_ref().map(|s| s.card_id.clone()) else {
+            return;
+        };
+        let plain = self
+            .pulse_card(&id)
+            .map(|c| c.title.trim().to_string())
+            .unwrap_or_default();
+        let os = repair::Os::current();
+        let channels = if matches!(os, repair::Os::Linux) {
+            repair::pwm_channels(std::path::Path::new(repair::HWMON_ROOT))
+        } else {
+            Vec::new()
+        };
+        let saved = repair::save_fans(&channels);
+        let backend = repair::fan_backend(os, &repair::on_path, channels);
+        let finding = repair::Finding {
+            severity: repair::Severity::Warning,
+            plain,
+            detail: String::new(),
+            probe: repair::ProbeId::Fans,
+        };
+        let game = self.game_running().is_some();
+        match repair::full_speed_plan(finding, &backend, &saved, game) {
+            Ok(plan) => {
+                self.pulse_view.fix = None;
+                self.discuss_card(&id);
+                self.start_fan_fix(plan, saved, repair::FanGoal::Full);
+            }
+            Err(block) => self.status = block.plain().into(),
         }
     }
 
@@ -337,11 +376,9 @@ impl Cabin {
                     });
                 ui.add_space(8.0);
                 ui.label(
-                    RichText::new(grokhub_core::brand::filled(
-                        "{product} only reads sensors. It never changes fans, clocks or drivers, and never touches a game.",
-                    ))
-                    .size(crate::theme::FONT_TIP)
-                    .color(crate::theme::subtle()),
+                    RichText::new(grokhub_core::pc_health::SAFETY_FOOTER)
+                        .size(crate::theme::FONT_TIP)
+                        .color(crate::theme::subtle()),
                 );
             });
         if let Some(s) = self.pulse_view.fix.as_mut() {
@@ -515,7 +552,7 @@ mod tests {
             "Warm for a light load.",
             "Only post when something's off",
             "Pause these cards for a week",
-            "never changes fans, clocks or drivers",
+            "Changes fans only with a backup you can restore.",
         ] {
             assert!(all.contains(want), "missing {want:?} in {all}");
         }

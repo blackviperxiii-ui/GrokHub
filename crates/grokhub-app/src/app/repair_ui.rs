@@ -22,6 +22,10 @@ pub(super) type CardLookDone = (String, String, repair::DiagnoseReport);
 /// The receipt line when the look couldn't read system state yet.
 pub(super) const LOOK_NEEDS_SCOPE: &str = "I need your OK to read system state first. Allow it on the card in your chat, then tap this again.";
 
+/// After undoing the fan undo: the fans keep the settings they had.
+const FANS_BACK_NOTE: &str =
+    "Your fans keep the settings I saved. Run the fan fix on the card to set full speed again.";
+
 /// Fix proposals and the fix being applied.
 #[derive(Debug, Default)]
 pub(super) struct FixUi {
@@ -38,6 +42,15 @@ pub(super) struct FixUi {
     pub closed: bool,
     /// The result went to the chat once.
     pub announced: bool,
+    /// The fan fix's saved settings, for its re-check and its Undo.
+    pub fans: Option<FanFix>,
+}
+
+/// What a fan fix saved before it ran, and what its re-check looks for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct FanFix {
+    pub saved: Vec<repair::SavedFan>,
+    pub goal: repair::FanGoal,
 }
 
 impl FixUi {
@@ -408,6 +421,15 @@ impl Cabin {
             repair::Action::Park { class, command, .. } => {
                 self.park_repair(class, command);
             }
+            repair::Action::Verify(repair::ProbeId::Fans) => {
+                // The fan files read back as they are; no probe, no admin.
+                let report = match self.harness.fixes.fans.as_ref() {
+                    Some(f) => repair::fans_check(&f.saved, f.goal),
+                    None => repair::DiagnoseReport::default(),
+                };
+                run.record_verify(&report);
+                self.advance_fix();
+            }
             repair::Action::Verify(probe) => {
                 let dir = crate::config::config_dir();
                 let session = self.fix_session();
@@ -515,10 +537,57 @@ impl Cabin {
         let Some(run) = self.harness.fixes.run.as_mut() else {
             return;
         };
+        if run.plan.finding.probe == repair::ProbeId::Fans {
+            if let Some(fans) = self.harness.fixes.fans.clone() {
+                let finding = run.plan.finding.clone();
+                self.undo_fans(fans, finding);
+                return;
+            }
+        }
         let text = run.undo(hx::UndoAsk::from_click());
         self.harness.fixes.closed = true;
         self.live_mut().push(("assistant".into(), text));
         self.persist();
+    }
+
+    /// Start a fan fix (or its undo) with the settings it saved.
+    pub(super) fn start_fan_fix(
+        &mut self,
+        plan: repair::FixPlan,
+        saved: Vec<repair::SavedFan>,
+        goal: repair::FanGoal,
+    ) {
+        self.harness.fixes.fans = Some(FanFix { saved, goal });
+        self.harness.fixes.proposals.push(plan);
+        let last = self.harness.fixes.proposals.len() - 1;
+        self.apply_fix(last);
+    }
+
+    /// Undo for a fan fix: writing the fans back needs admin, so it runs as
+    /// its own step the user types the password for, then reads them back.
+    fn undo_fans(&mut self, fans: FanFix, finding: repair::Finding) {
+        if fans.goal == repair::FanGoal::Saved {
+            if let Some(run) = self.harness.fixes.run.as_mut() {
+                run.undone = true;
+            }
+            self.harness.fixes.closed = true;
+            self.live_mut()
+                .push(("assistant".into(), FANS_BACK_NOTE.into()));
+            self.persist();
+            return;
+        }
+        let game = self.game_running().is_some();
+        match repair::restore_fans_plan(finding, &fans.saved, game) {
+            Ok(plan) => {
+                if let Some(run) = self.harness.fixes.run.as_mut() {
+                    run.undone = true;
+                }
+                self.harness.fixes.closed = true;
+                self.start_fan_fix(plan, fans.saved, repair::FanGoal::Saved);
+            }
+            // The fans stay at full speed and Undo fix stays on the card.
+            Err(block) => self.status = block.plain().into(),
+        }
     }
 
     /// Proposal cards, or the running fix, or its result with Undo fix.
@@ -919,6 +988,78 @@ mod tests {
             cabin.messages.last().unwrap().1,
             "Undone. I put back the one file this fix changed, exactly as it was."
         );
+        assert!(cabin.harness.fixes.closed);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    // Fan fixes write Linux sysfs paths, so the fake hwmon tree needs Linux paths.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_fan_fix_rechecks_the_fans_and_undo_runs_its_own_step() {
+        let (_pin, root) = pinned("fix-cabin-fans");
+        let _grok = NoGrok::set(&root);
+        let mut cabin = Cabin::quiet_for_test();
+        let chip = root.join("hwmon").join("hwmon0");
+        std::fs::create_dir_all(&chip).unwrap();
+        std::fs::write(chip.join("pwm1"), "90\n").unwrap();
+        std::fs::write(chip.join("pwm1_enable"), "5\n").unwrap();
+        let channels = repair::pwm_channels(&root.join("hwmon"));
+        let saved = repair::save_fans(&channels);
+        let backend = repair::fan_backend(repair::Os::Linux, &|_: &str| false, channels);
+        let hot = Finding {
+            severity: Severity::Warning,
+            plain: "Your CPU reached 96°C while gaming.".into(),
+            detail: String::new(),
+            probe: ProbeId::Fans,
+        };
+        let p = repair::full_speed_plan(hot, &backend, &saved, false).unwrap();
+        let ctx = repair::ApplyCtx {
+            config_dir: &root,
+            session_id: "session",
+            os: repair::Os::Linux,
+            attended: true,
+            access: cabin.access_mode(),
+            has_bin: &|_: &str| false,
+        };
+        let run = repair::ApplyRun::begin(&ctx, p).unwrap();
+        cabin.harness.fixes.run = Some(run);
+        cabin.harness.fixes.fans = Some(FanFix {
+            saved: saved.clone(),
+            goal: repair::FanGoal::Full,
+        });
+        assert!(matches!(
+            cabin.harness.fixes.run.as_mut().unwrap().next_action(),
+            repair::Action::Gb { .. }
+        ));
+        // The step ran: both files read full speed, then Grok Build replied.
+        std::fs::write(chip.join("pwm1_enable"), "1\n").unwrap();
+        std::fs::write(chip.join("pwm1"), "255\n").unwrap();
+        cabin.running = true;
+        cabin.poll_fix();
+        cabin.running = false;
+        cabin
+            .live_mut()
+            .push(("assistant".into(), "Ran it.\nSTEP_OK".into()));
+        cabin.poll_fix();
+        assert_eq!(
+            cabin.messages.last().unwrap().1,
+            "Fixed. I checked again: Every fan reads full speed now. If anything seems off, press Undo fix."
+        );
+        // Undo is its own elevated step, never a file copy over sysfs.
+        cabin.undo_fix();
+        let c = chip.display();
+        let undo = cabin.harness.fixes.run.as_ref().unwrap();
+        assert_eq!(
+            undo.plan.steps[0].command,
+            format!("pkexec sh -c 'echo 5 > {c}/pwm1_enable'")
+        );
+        assert_eq!(
+            cabin.harness.fixes.fans.as_ref().map(|f| f.goal),
+            Some(repair::FanGoal::Saved)
+        );
+        // Undo on the undo leaves the fans where the saved settings put them.
+        cabin.undo_fix();
+        assert_eq!(cabin.messages.last().unwrap().1, FANS_BACK_NOTE);
         assert!(cabin.harness.fixes.closed);
         let _ = std::fs::remove_dir_all(root);
     }
