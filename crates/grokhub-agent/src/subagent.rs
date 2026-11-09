@@ -523,7 +523,8 @@ fn run_job(job: ChildJob, tx: Option<Sender<ChildNote>>) {
         if !done.text.is_empty() {
             done.text.push('\n');
         }
-        done.text.push_str(&format!("looked at: {}", done.looked_at.join(", ")));
+        done.text
+            .push_str(&format!("looked at: {}", done.looked_at.join(", ")));
     }
     let cancelled = matches!(done.stop, StopReason::Cancelled | StopReason::Halted);
     if cancelled {
@@ -958,7 +959,9 @@ fn looked_at(history: &[InputItem]) -> Vec<String> {
         };
         let plain = !target.is_empty()
             && target.len() <= 200
-            && !target.chars().any(|c| c.is_whitespace() || matches!(c, '<' | '>' | '`'));
+            && !target
+                .chars()
+                .any(|c| c.is_whitespace() || matches!(c, '<' | '>' | '`'));
         if plain && !seen.iter().any(|s| s == target) {
             seen.push(target.to_string());
             if seen.len() == LOOKED_AT_MAX {
