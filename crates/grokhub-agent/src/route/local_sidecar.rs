@@ -986,6 +986,13 @@ fn load(config_dir: &Path, want: Want) -> Result<Busy, String> {
             side.last_used_secs.store(unix_secs(), Ordering::SeqCst);
             return Ok(side.busy());
         }
+        // Background work never wakes the model: with none loaded it gets
+        // no server, and the caller answers without the device.
+        if matches!(want, Want::Request) && want_need(want) == super::local_scale::Need::Background
+        {
+            drop(slot);
+            return Ok(busy());
+        }
         local_gov::may_start(unix_ms())?;
         STARTING.store(true, Ordering::SeqCst);
         let generation = WARM_GEN.load(Ordering::SeqCst);
@@ -2840,6 +2847,44 @@ mod tests {
         let args = std::fs::read_to_string(&seen).unwrap();
         assert!(args.contains("--device none"), "started on the CPU: {args}");
         local_gov::reset_for_test();
+        set_last_error(None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn background_work_never_starts_the_model_and_rides_on_one_already_loaded() {
+        use std::os::unix::fs::PermissionsExt;
+        let _one = SLOT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        stop_global();
+        local_gov::reset_for_test();
+        let dir = crate::harness::test_dir("sidecar-background");
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        std::fs::create_dir_all(dir.join("models")).unwrap();
+        let bin = dir.join("bin").join("llama-server");
+        let seen = dir.join("args.txt");
+        std::fs::write(
+            &bin,
+            format!("#!/bin/sh\necho \"$@\" > {}\nexit 1\n", seen.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(dir.join("models").join("m.gguf"), b"x").unwrap();
+        let _on = crate::route::local::ForceOn::with(None);
+        let _need =
+            super::super::local_scale::NeedGuard::set(super::super::local_scale::Need::Background);
+        let none = acquire_for_request(&dir).expect("no error, just no server");
+        assert!(none.endpoint().is_none());
+        drop(none);
+        assert!(!seen.exists(), "no engine started");
+        assert!(global_pid().is_none());
+        *global_slot().lock().unwrap() = Some(idle_child_sidecar(600, unix_secs()));
+        let pid = global_pid().unwrap();
+        let on = acquire_for_request(&dir).expect("the loaded model answers");
+        assert!(on.endpoint().is_some());
+        drop(on);
+        assert_eq!(global_pid(), Some(pid), "the loaded model stayed");
+        assert!(!seen.exists(), "still no engine started");
+        stop_global();
         set_last_error(None);
     }
 }

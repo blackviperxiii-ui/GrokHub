@@ -21,8 +21,11 @@ use grokhub_core::local_setup::LocalModel;
 /// How much model a task needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Need {
-    /// A quick answer, a desktop step or the app's own background work.
+    /// A quick answer or a desktop step.
     Light,
+    /// The app's own background work (a label, a summary, a difficulty):
+    /// it uses a model already loaded and never starts or swaps one.
+    Background,
     #[default]
     Normal,
     /// Code, debugging, planning, design, math and logic, or a long context.
@@ -77,7 +80,10 @@ pub fn need(class: &str, ctx_tokens: u64, text: &str) -> Need {
     if HARD_CLASSES.contains(&class) || ctx_tokens > HARD_TOKENS {
         return Need::Hard;
     }
-    if LIGHT_CLASSES.contains(&class) || class.starts_with("background:") {
+    if class.starts_with("background:") {
+        return Need::Background;
+    }
+    if LIGHT_CLASSES.contains(&class) {
         return Need::Light;
     }
     let d = super::difficulty::difficulty(&super::difficulty::DifficultyInput {
