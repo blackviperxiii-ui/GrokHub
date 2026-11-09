@@ -16,6 +16,7 @@ pub mod chips;
 pub mod connectors;
 pub mod credential;
 pub mod export;
+pub mod game_companion;
 pub mod goals;
 pub mod history;
 pub mod home;
@@ -57,6 +58,7 @@ pub mod settings;
 pub mod shell_update;
 pub mod skills;
 pub mod slash;
+mod steam_checks;
 mod turns;
 pub mod voice;
 pub mod workboard;
@@ -2000,10 +2002,24 @@ async fn home_turn_on(state: State<'_, ShellState>, feature: String) -> Result<(
 /// the OS's own password or admin prompt. Answers with one plain sentence on
 /// how it went; the tile shows the rest on its next read.
 #[tauri::command]
-async fn home_setup(module: String, undo: bool) -> Result<String, String> {
+async fn home_setup(
+    state: State<'_, ShellState>,
+    module: String,
+    undo: bool,
+) -> Result<String, String> {
     match module.as_str() {
         #[cfg(desktop)]
         "frame_rate" => off_main(move || home_fps::run_setup(undo).sentence(undo)).await,
+        // Achievements and Deals: the Steam account on this PC, then a check.
+        "achievements" | "deals" => {
+            let dir = state.config_dir.clone();
+            off_main(move || steam_checks::turn(&dir, &module, !undo)).await?
+        }
+        // Patch Notes: the launch companion's own switch on this app.
+        "patch_notes" => {
+            let dir = state.config_dir.clone();
+            off_main(move || game_companion::set(&dir, !undo)).await?
+        }
         _ => {
             let _ = undo;
             Err("That module has no setup here.".into())
@@ -3249,6 +3265,8 @@ pub fn run() {
                 let client: Box<dyn grokhub_agent::ModelClient> = Box::new(model_client()?.0);
                 Ok((client, grokhub_agent::route::host::chat_start().0))
             });
+            steam_checks::start(config_dir.clone());
+            game_companion::start(config_dir.clone());
             #[cfg(desktop)]
             os_extras::setup(app.handle(), &loaded);
             let text_size = loaded.text_size;
