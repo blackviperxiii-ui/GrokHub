@@ -13,6 +13,7 @@
 //! a probe that needs admin is skipped with a note.
 
 mod apply;
+mod drivers;
 mod fans;
 mod fix;
 mod interpret;
@@ -29,6 +30,11 @@ use crate::harness::{self, AccessMode, ConsentLedger, GateOutcome, Origin, Scope
 pub use apply::{
     gb_prompt, step_ok, Action, ApplyCtx, ApplyRun, ChecklistLine, StepMark, APPLY_TOOL,
     CHECK_LINE, REPAIR_TOOL, RESTORE_TOOL, STEP_FAILED, STEP_OK, UNATTENDED, UNDO_TOOL,
+};
+pub use drivers::{
+    apt_versions, candidate_spec, driver_plan, driver_rollback_plan, driver_updated,
+    driver_updates, installed_spec, is_driver_pkg, parse_candidate, parse_installed, rollback_for,
+    verify_driver, DriverBlock, DriverDoubt, DriverUpdate, Rollback, VerifiedDriver, PACMAN_CACHE,
 };
 pub use fans::{
     fan_backend, fans_at_full, full_speed_plan, pwm_channels, restore_fans_plan, save_fans,

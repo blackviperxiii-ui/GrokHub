@@ -53,6 +53,10 @@ pub enum ProbeId {
     AppCrashes,
     /// The fans (Linux hwmon), read by `fans` in-process. Never run as a probe.
     Fans,
+    /// A driver package's installed version, read by `drivers`.
+    DriverInstalled,
+    /// The version a driver package's signed repo offers, read by `drivers`.
+    DriverCandidate,
 }
 
 pub const LINUX_PROBES: &[ProbeId] = &[
@@ -157,6 +161,8 @@ impl ProbeId {
             Self::CrashLog => "crash_log",
             Self::AppCrashes => "app_crashes",
             Self::Fans => "fans",
+            Self::DriverInstalled => "driver_installed",
+            Self::DriverCandidate => "driver_candidate",
         }
     }
 
@@ -182,6 +188,7 @@ impl ProbeId {
             Self::CrashDumps | Self::AppCrashes => "its crash history",
             Self::CrashLog => "its recent log",
             Self::Fans => "your fans",
+            Self::DriverInstalled | Self::DriverCandidate => "your drivers",
         }
     }
 
@@ -237,7 +244,7 @@ pub struct ProbeSpec {
 }
 
 impl ProbeSpec {
-    fn new(id: ProbeId, program: &str, argv: &[&str]) -> Self {
+    pub(super) fn new(id: ProbeId, program: &str, argv: &[&str]) -> Self {
         Self {
             id,
             program: program.into(),
@@ -329,7 +336,10 @@ pub fn probe_spec_with(id: ProbeId, os: Os, has_bin: &dyn Fn(&str) -> bool) -> O
             "\"{0}`t{1}\" -f (Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Auto Update\\RebootRequired'), (New-Object -ComObject Microsoft.Update.Session).CreateUpdateSearcher().Search('IsInstalled=0 and IsHidden=0').Updates.Count",
         ),
         // Not in `all()`, so never reached: these need a name.
-        ProbeId::CrashDumps | ProbeId::CrashLog | ProbeId::AppCrashes | ProbeId::Fans => return None,
+        ProbeId::CrashDumps | ProbeId::CrashLog | ProbeId::AppCrashes
+        | ProbeId::Fans
+        | ProbeId::DriverInstalled
+        | ProbeId::DriverCandidate => return None,
     };
     Some(spec)
 }
