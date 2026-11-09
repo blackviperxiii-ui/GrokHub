@@ -157,6 +157,17 @@ pub fn on_cpu(prev: &LaunchArgs) -> LaunchArgs {
     }
 }
 
+/// [`on_cpu`] for Gaming mode: half the threads (at least two), so the
+/// game keeps the GPU and most of the CPU.
+pub fn gaming_launch(prev: &LaunchArgs) -> LaunchArgs {
+    let threads = (prev.threads / 2).max(2).min(prev.threads.max(1));
+    LaunchArgs {
+        threads,
+        threads_batch: prev.threads_batch.map(|t| (t / 2).max(threads)),
+        ..on_cpu(prev)
+    }
+}
+
 /// Context sizes tried, biggest first.
 const CTX_STEPS: [u32; 6] = [131_072, 65_536, 32_768, 16_384, 8_192, 4_096];
 /// The smallest context worth keeping q8 KV for; below it q4 buys room.
@@ -713,6 +724,11 @@ fn planned(binary: &Path, model: &Path) -> Option<(LaunchArgs, local_spec::Plan,
         device: &device,
     });
     args.draft = plan.draft.clone().map(Box::new);
+    // Gaming mode: a game holds the GPU, so the model runs on the CPU with
+    // half the threads and the game keeps its frame rate.
+    if super::local_scale::gaming_reason(super::local_gov::reason()) {
+        args = gaming_launch(&args);
+    }
     Some((args, plan, key, dir))
 }
 
