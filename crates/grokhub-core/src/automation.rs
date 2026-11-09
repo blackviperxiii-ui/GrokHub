@@ -658,9 +658,41 @@ pub fn automation_summary_line(a: &Automation, clock: LocalClock) -> String {
     } else if let Some(next) = a.next_run {
         bits.push(format!("next {}", relative_when(next, clock)));
     }
+    if let Some(words) = last_result_words(a.health.outcome) {
+        bits.push(words.into());
+    }
     if a.run_count > 0 {
-        let plural = if a.run_count == 1 { "" } else { "s" };
-        bits.push(format!("{} run{plural}", a.run_count));
+        bits.push(runs_label(a.run_count));
+    }
+    bits.join(" · ")
+}
+
+/// How the last run went, in plain words. A failure gets the red line under
+/// the row instead, and a run that never reported back says nothing.
+fn last_result_words(outcome: AutoOutcome) -> Option<&'static str> {
+    match outcome {
+        AutoOutcome::Ok => Some("last run went fine"),
+        AutoOutcome::Stopped => Some("you stopped the last run"),
+        AutoOutcome::None | AutoOutcome::Started | AutoOutcome::Failed => None,
+    }
+}
+
+fn runs_label(count: u32) -> String {
+    let plural = if count == 1 { "" } else { "s" };
+    format!("{count} run{plural}")
+}
+
+/// The line under a repeating job: "every 30m · next today 9:30 AM · 3 runs".
+/// A job that is off says "paused" and no next run.
+pub fn loop_summary_line(l: &crate::grok_loop::GrokLoop, clock: LocalClock) -> String {
+    let mut bits = vec![format!("every {}", l.interval)];
+    if !l.enabled {
+        bits.push("paused".into());
+    } else if let Some(next) = l.next_run {
+        bits.push(format!("next {}", relative_when(next, clock)));
+    }
+    if l.run_count > 0 {
+        bits.push(runs_label(l.run_count));
     }
     bits.join(" · ")
 }
@@ -859,6 +891,14 @@ mod tests {
                 prompt: "summarize commits".into()
             })
         );
+        // The hint on the Automations page must be a line that works.
+        assert_eq!(
+            route_schedule("every 30 minutes check the deploy"),
+            Some(ScheduleRoute::Interval {
+                interval: "30m".into(),
+                prompt: "check the deploy".into()
+            })
+        );
         assert_eq!(route_schedule("what is rust"), None);
     }
 
@@ -908,6 +948,18 @@ mod tests {
         assert!(automation_summary_line(&a, morning).ends_with("· 1 run"));
         a.run_count = 4;
         assert!(automation_summary_line(&a, morning).ends_with("· 4 runs"));
+        a.health.outcome = AutoOutcome::Ok;
+        assert_eq!(
+            automation_summary_line(&a, morning),
+            "weekdays at 09:00 · next today 7:30 AM · last run went fine · 4 runs"
+        );
+        a.health.outcome = AutoOutcome::Stopped;
+        assert!(automation_summary_line(&a, morning).contains("you stopped the last run"));
+        a.health.outcome = AutoOutcome::Failed;
+        assert!(
+            !automation_summary_line(&a, morning).contains("last run"),
+            "a failure gets the red line, not the summary"
+        );
         a.enabled = false;
         let paused = automation_summary_line(&a, morning);
         assert!(
@@ -928,6 +980,29 @@ mod tests {
             minute: 0,
         };
         assert!(automation_summary_line(&due, later).contains("next now"));
+    }
+
+    #[test]
+    fn a_repeating_job_says_when_it_runs_next() {
+        let clock = LocalClock {
+            now_ms: 0,
+            weekday: 3,
+            hour: 9,
+            minute: 0,
+        };
+        let mut l = crate::grok_loop::new_loop("30m".into(), "check deploy".into(), 0);
+        l.next_run = Some(30 * 60_000);
+        assert_eq!(
+            loop_summary_line(&l, clock),
+            "every 30m · next today 9:30 AM"
+        );
+        l.run_count = 3;
+        assert_eq!(
+            loop_summary_line(&l, clock),
+            "every 30m · next today 9:30 AM · 3 runs"
+        );
+        l.enabled = false;
+        assert_eq!(loop_summary_line(&l, clock), "every 30m · paused · 3 runs");
     }
 
     #[test]

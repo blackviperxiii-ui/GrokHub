@@ -588,14 +588,14 @@ fn healthy_Run_uses_ghost_pill_and_Retry_stays_white() {
 }
 
 #[test]
-fn automations_intro_says_loops_repeat_on_an_interval() {
+fn automations_intro_says_repeating_jobs_run_every_few_minutes() {
     let src = include_str!("night.rs");
     let page = src
         .split("fn ui_night(")
         .nth(1)
         .and_then(|s| s.split("pub(super) fn ui_scheduled_automations(").next())
         .expect("ui_night");
-    let line = "Loops repeat on an interval. Scheduled jobs run at a clock time. Stop a job when its work is done.";
+    let line = "Repeating jobs run every few minutes or hours. Scheduled jobs run at a clock time. Turn a job off when its work is done.";
     assert!(page.contains(line), "{page}");
     assert!(
         !page.contains("Interval prompts run as Grok Build"),
@@ -707,7 +707,7 @@ fn automations_page_paints_plain_intro_and_Suggested_from_recent_work() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        blob.contains("Loops repeat on an interval. Scheduled jobs run at a clock time. Stop a job when its work is done."),
+        blob.contains("Repeating jobs run every few minutes or hours. Scheduled jobs run at a clock time. Turn a job off when its work is done."),
         "{blob}"
     );
     assert!(blob.contains("Suggested from your recent work"), "{blob}");
