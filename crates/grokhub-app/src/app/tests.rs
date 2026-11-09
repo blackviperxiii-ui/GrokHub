@@ -1153,7 +1153,7 @@ fn cabin_2109_must_ships() {
     );
     assert!(
         night.contains("New job")
-            && night.contains("Loops")
+            && night.contains("Repeating")
             && night.contains("Suggested")
             && night.contains("ui_scheduled_automations"),
         "{night}"
