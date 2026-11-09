@@ -62,6 +62,11 @@ pub fn set_idle_unload_secs(secs: Option<u64>) {
 
 static IDLE_OVERRIDE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// No idle timeout was set in Settings, so the learned one applies.
+pub fn idle_is_default() -> bool {
+    idle_override().is_none()
+}
+
 fn idle_override() -> Option<u64> {
     match IDLE_OVERRIDE.load(std::sync::atomic::Ordering::SeqCst) {
         0 => None,

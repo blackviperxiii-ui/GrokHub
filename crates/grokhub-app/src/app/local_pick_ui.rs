@@ -14,10 +14,7 @@ use super::*;
 
 /// The models a person can pick: the catalog without draft models.
 pub(super) fn choices() -> Vec<&'static LocalModel> {
-    ls::local_models()
-        .iter()
-        .filter(|m| !m.is_drafter)
-        .collect()
+    ls::local_models().iter().filter(|m| m.is_chat()).collect()
 }
 
 /// One dropdown line: name, download size, memory it needs, and whether it is
@@ -57,7 +54,7 @@ pub(super) fn default_choice(
     picked
         .or(installed.map(|r| r.id.as_str()))
         .and_then(ls::model_by_id)
-        .filter(|m| !m.is_drafter)
+        .filter(|m| m.is_chat())
         .or(suggested)
         .or_else(|| {
             if cpu_runs_local {
@@ -169,7 +166,7 @@ mod tests {
     fn the_dropdown_marks_the_suggestion_and_starts_on_the_running_model() {
         let all = choices();
         assert!(all.len() >= 2, "the catalog offers a choice");
-        assert!(all.iter().all(|m| !m.is_drafter));
+        assert!(all.iter().all(|m| m.is_chat()));
         let (a, b) = (all[0], all[1]);
         assert_eq!(
             choice_label(a, Some(a)),

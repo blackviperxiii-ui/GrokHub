@@ -17,6 +17,8 @@ const api = vi.hoisted(() => ({
   resetLocalAi: vi.fn<() => Promise<LocalAiView>>(),
   checkModelFile: vi.fn<(path: string) => Promise<LocalFileRow>>(),
   runLocalSpeedTest: vi.fn<() => Promise<string>>(),
+  setLocalKeepLoaded: vi.fn<(on: boolean) => Promise<LocalAiView>>(),
+  unloadLocalModel: vi.fn<() => Promise<LocalAiView>>(),
   startLocalEngineDownload: vi.fn(),
   cancelLocalEngineDownload: vi.fn(),
   startLocalDrafterDownload: vi.fn(),
@@ -48,6 +50,8 @@ function drafterEvent(event: LocalDrafterEvent) {
 }
 
 vi.mock("./api", () => api);
+// Download models has its own tests.
+vi.mock("./ModelLibrary", () => ({ ModelLibrary: () => null }));
 
 import { ABLITERATED_NOTICE, LocalAi, MODEL_NOTICE } from "./LocalAi";
 
@@ -112,7 +116,6 @@ function config(over: Partial<LocalAiConfig> = {}): LocalAiConfig {
     throttleOnBattery: true,
     manual: {
       backend: "auto",
-      draft: "auto",
       ngl: null,
       ctx: null,
       threads: null,
@@ -175,6 +178,11 @@ function view(
     draftOffer: null,
     draftOffers: [],
     draftProgress: null,
+    running: {
+      lines: ["Running now: nothing. The model loads with the next reply."],
+      loaded: false,
+      keptLoaded: false,
+    },
     ...over,
   };
 }
@@ -338,6 +346,31 @@ describe("LocalAi", () => {
     expect(within(top).getByText("Default for this PC")).toBeInTheDocument();
   });
 
+  it("shows what runs now and keeps it loaded or unloads it on a press", async () => {
+    const v = PROFILES["16 GB GPU"];
+    const running = {
+      lines: [
+        "Running now: Gemma 4 12B (Q4_K), loaded on the GPU, 6.9 GB.",
+        "Unloads after 4 minutes without replies.",
+      ],
+      loaded: true,
+      keptLoaded: false,
+    };
+    api.getLocalAi.mockResolvedValue({ ...v, running });
+    api.setLocalKeepLoaded.mockResolvedValue({ ...v, running: { ...running, keptLoaded: true } });
+    api.unloadLocalModel.mockResolvedValue(v);
+    render(<LocalAi />);
+    const rows = await screen.findByLabelText("Running now");
+    expect(rows).toHaveTextContent("Running now: Gemma 4 12B (Q4_K), loaded on the GPU, 6.9 GB.");
+    await userEvent.click(within(rows).getByRole("button", { name: "Keep loaded" }));
+    expect(api.setLocalKeepLoaded).toHaveBeenCalledWith(true);
+    expect(await within(rows).findByRole("button", { name: "Let it unload" })).toBeInTheDocument();
+    await userEvent.click(within(rows).getByRole("button", { name: "Unload now" }));
+    expect(api.unloadLocalModel).toHaveBeenCalled();
+    expect(await screen.findByText(/Unloaded the model/)).toBeInTheDocument();
+    expect(within(rows).queryByRole("button", { name: "Unload now" })).toBeNull();
+  });
+
   it("shows the Auto status line and what detection couldn't see", async () => {
     api.getLocalAi.mockResolvedValue({
       ...PROFILES["16 GB GPU"],
@@ -447,7 +480,6 @@ describe("LocalAi", () => {
     render(<LocalAi />);
     await openManual();
     await userEvent.selectOptions(screen.getByLabelText("Device"), "vulkan");
-    await userEvent.selectOptions(screen.getByLabelText("Draft model"), "off");
     await userEvent.type(screen.getByLabelText("GPU layers"), "20");
     await userEvent.type(screen.getByLabelText("Context"), "16384");
     await userEvent.selectOptions(screen.getByLabelText("KV cache"), "q4");
@@ -469,7 +501,6 @@ describe("LocalAi", () => {
         localModel: { selected: "gemma-4-12b-it-abliterated-q4_k" },
         manual: {
           backend: "vulkan",
-          draft: "off",
           ngl: 20,
           ctx: 16384,
           threads: null,

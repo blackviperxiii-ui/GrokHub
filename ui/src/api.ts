@@ -1472,8 +1472,6 @@ export interface LocalCaps {
 export interface LocalManual {
   /** "auto", "cuda", "rocm", "vulkan", "metal", "sycl" or "cpu". */
   backend: string;
-  /** "auto", "on" or "off". */
-  draft: string;
   ngl: number | null;
   ctx: number | null;
   threads: number | null;
@@ -1589,6 +1587,14 @@ export interface LocalAiView {
   /** Offers for every catalog model still missing its draft pair. */
   draftOffers: LocalDraftOffer[];
   draftProgress: LocalDraftProgress | null;
+  running: LocalRunning;
+}
+
+/** What runs now, with its two controls: keep loaded and unload now. */
+export interface LocalRunning {
+  lines: string[];
+  loaded: boolean;
+  keptLoaded: boolean;
 }
 
 export type LocalEngineEvent = {
@@ -1620,6 +1626,78 @@ export function resetLocalAi(): Promise<LocalAiView> {
 
 export function checkModelFile(path: string): Promise<LocalFileRow> {
   return invoke<LocalFileRow>("check_model_file", { path });
+}
+
+export function setLocalKeepLoaded(on: boolean): Promise<LocalAiView> {
+  return invoke<LocalAiView>("set_local_keep_loaded", { on });
+}
+
+export function unloadLocalModel(): Promise<LocalAiView> {
+  return invoke<LocalAiView>("unload_local_model");
+}
+
+/** Settings → Local AI → Download models (src-tauri/src/model_library.rs). */
+export type LibraryRowState =
+  | "download"
+  | "resume"
+  | "queued"
+  | "downloading"
+  | "downloaded"
+  | "inUse"
+  | "wontRun";
+
+export interface LibraryRow {
+  id: string;
+  name: string;
+  line: string;
+  about: string;
+  state: LibraryRowState;
+}
+
+export interface LibraryQueueOffer {
+  ids: string[];
+  line: string;
+}
+
+export interface LibraryTab {
+  label: string;
+  rows: LibraryRow[];
+  empty: string | null;
+  all: LibraryQueueOffer | null;
+}
+
+export interface LibraryStatus {
+  job: { id: string; line: string; pct: number } | null;
+  queued: number;
+  message: string | null;
+  running: boolean;
+}
+
+export interface LibraryView {
+  tabs: LibraryTab[];
+  everything: LibraryQueueOffer | null;
+  status: LibraryStatus;
+}
+
+/** Reads the hardware, so it can take a moment. */
+export function getModelLibrary(): Promise<LibraryView> {
+  return invoke<LibraryView>("get_model_library");
+}
+
+export function downloadModels(ids: string[]): Promise<LibraryView> {
+  return invoke<LibraryView>("download_models", { ids });
+}
+
+export function pauseModelDownloads(): Promise<void> {
+  return invoke<void>("pause_model_downloads");
+}
+
+export function removeLibraryModel(id: string): Promise<LibraryView> {
+  return invoke<LibraryView>("remove_library_model", { id });
+}
+
+export function onModelLibraryEvent(handler: (status: LibraryStatus) => void): Promise<UnlistenFn> {
+  return subscribe<LibraryStatus>("model-library", handler);
 }
 
 export function runLocalSpeedTest(): Promise<string> {
