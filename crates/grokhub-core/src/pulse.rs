@@ -1374,6 +1374,8 @@ pub fn recent_taste(ledger: &[LedgerEntry], n: usize) -> Vec<LedgerEntry> {
 
 pub const QUIET_DIGEST_TITLE: &str = "While you were in quiet hours";
 pub const QUIET_DIGEST_SOURCE: &str = "pulse:quiet";
+/// How much of each held update the roll-up repeats.
+pub const QUIET_LINE_MAX: usize = 220;
 
 /// Quiet hours ended: release every held card. Two or more become one digest
 /// card (and ping nothing on their own); a single card is released as is.
@@ -1401,19 +1403,29 @@ pub fn release_quiet_batch(cards: &mut Vec<UpdateCard>, now_ms: u64) -> (usize, 
     }
     // Yesterday's dismissed digest must not swallow today's.
     cards.retain(|c| !(c.source_id == QUIET_DIGEST_SOURCE && c.status == UpdateStatus::Dismissed));
-    let shown: Vec<&str> = titles.iter().take(3).map(String::as_str).collect();
-    let mut body = format!("{n} updates: {}", shown.join(" · "));
-    if n > 3 {
-        body.push_str(&format!(" · and {} more", n - 3));
-    }
+    // Every held update, named, with what it said.
+    let body = items
+        .iter()
+        .map(|item| {
+            let said = crate::card_report::clip(&item.summary, QUIET_LINE_MAX);
+            if said.is_empty() || said == item.found {
+                format!("• {}", item.found)
+            } else {
+                format!("• {}: {said}", item.found)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     let id = format!("pulse-quiet-{now_ms}");
     let mut digest =
         crate::update_feed::suggestion_card(QUIET_DIGEST_SOURCE, QUIET_DIGEST_TITLE, &body, now_ms);
+    // Kept whole: one line per update, never clipped to a single line.
+    digest.body = Some(body.clone());
     digest.id = id.clone();
     digest.source_id = QUIET_DIGEST_SOURCE.to_string();
     digest.pulse.source_name = Some("Quiet hours".into());
     digest.pulse.report = Some(crate::card_report::CardReport {
-        found: format!("{n} updates came in during quiet hours"),
+        found: format!("Held during quiet hours: {}", titles.join(" · ")),
         summary: body.clone(),
         items,
         ..Default::default()
@@ -2300,13 +2312,16 @@ mod tests {
         assert_eq!(digest.title, "While you were in quiet hours");
         assert_eq!(
             digest.body.as_deref(),
-            Some("4 updates: Backup ran · Price check ran · Brief ready · and 1 more")
+            Some("• Backup ran: ok\n• Price check ran: ok\n• Brief ready: ok\n• Repo synced: ok")
         );
         assert_eq!(cards.iter().filter(|c| c.held).count(), 0);
         assert_eq!(cards.iter().filter(|c| c.pulse.quiet_batched).count(), 4);
         // Each update keeps its own line and opens its own card.
         let report = digest.pulse.report.clone().expect("report");
-        assert_eq!(report.found, "4 updates came in during quiet hours");
+        assert_eq!(
+            report.found,
+            "Held during quiet hours: Backup ran · Price check ran · Brief ready · Repo synced"
+        );
         let items: Vec<(&str, &str, &str)> = report
             .items
             .iter()
@@ -2498,7 +2513,7 @@ mod tests {
         assert_eq!(digest.status, UpdateStatus::Unread);
         assert_eq!(
             digest.body.as_deref(),
-            Some("2 updates: Repo synced · Price check ran")
+            Some("• Repo synced: ok\n• Price check ran: ok")
         );
     }
 
