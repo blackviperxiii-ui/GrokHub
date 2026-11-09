@@ -608,7 +608,7 @@ async function pulse(s, config) {
     const t = await wd("GET", `${s}/element/${b[ELEMENT]}/text`);
     labels.push(t.replace(/[\u2661\u2665]/g, "").trim());
   }
-  if (labels.join("|") !== "Like|Let's do it|I don't like|Dismiss") {
+  if (labels.join("|") !== "Like|Let's do it|Not interested|Dismiss") {
     throw new Error(`the idea buttons say ${JSON.stringify(labels)}`);
   }
   await shot(s, "pulse-ideas");

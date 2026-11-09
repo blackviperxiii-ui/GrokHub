@@ -185,3 +185,48 @@ fn taste_round_trips_on_disk() {
     assert_eq!(load(&dir), t);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn weak_signals_lean_less_than_a_like_or_dislike() {
+    let one = |r: Reaction| {
+        let mut t = Taste::default();
+        ev(&mut t, "c", &["topic:a"], r);
+        w(&t, "topic:a")
+    };
+    let like = one(Reaction::Like);
+    for r in [Reaction::Engage, Reaction::Snooze] {
+        let v = one(r);
+        assert!(v > 0.0 && v < like, "{r:?}: {v} vs like {like}");
+    }
+    let dislike = one(Reaction::Dislike);
+    let delete = one(Reaction::Delete);
+    assert!(delete < 0.0 && delete > dislike, "{delete} vs {dislike}");
+}
+
+#[test]
+fn opens_across_cards_add_up_and_a_dislike_still_wins_its_trait() {
+    let mut t = Taste::default();
+    for i in 0..6 {
+        ev(
+            &mut t,
+            &format!("o{i}"),
+            &["topic:a", "tone:calm"],
+            Reaction::Engage,
+        );
+    }
+    assert!(w(&t, "topic:a") > LIKE_AT, "many opens make a like");
+    ev(&mut t, "d1", &["tone:calm", "topic:b"], Reaction::Dislike);
+    ev(&mut t, "d2", &["tone:calm", "topic:c"], Reaction::Dislike);
+    ev(&mut t, "d3", &["tone:calm", "topic:d"], Reaction::Dislike);
+    assert!(
+        w(&t, "topic:a") > w(&t, "tone:calm"),
+        "the shared tone carries the blame"
+    );
+}
+
+#[test]
+fn old_files_with_only_likes_and_dislikes_still_load() {
+    let raw = r#"{"events":[{"cardId":"c","traits":["topic:a"],"reaction":"like","atMs":1}]}"#;
+    let t: Taste = serde_json::from_str(raw).expect("old file");
+    assert_eq!(t.events[0].reaction, Reaction::Like);
+}

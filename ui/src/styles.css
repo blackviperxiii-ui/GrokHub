@@ -4481,7 +4481,7 @@ label.toggle-row {
 }
 
 /* Every card's buttons: one neat row. Like first, Dismiss last at the far
-   right, the card's own buttons and I don't like between them. Same size and
+   right, the card's own buttons and Not interested between them. Same size and
    spacing everywhere; a narrow card scrolls the row instead of wrapping. */
 .card-buttons.card-row {
   flex-wrap: nowrap;

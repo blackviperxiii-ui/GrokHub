@@ -167,7 +167,7 @@ export function fullDate(ms: number): string {
 }
 
 /** The same row of buttons on every card, in one line: Like first (far
- * left), the card's own buttons and I don't like in the middle, Dismiss last
+ * left), the card's own buttons and Not interested in the middle, Dismiss last
  * (far right). Like pressed again takes the like back. */
 export function CardButtons({
   liked,
@@ -198,7 +198,7 @@ export function CardButtons({
       </button>
       {children}
       <button type="button" className="quiet" disabled={busy} onClick={onDislike}>
-        I don't like
+        Not interested
       </button>
       <button type="button" className="quiet card-dismiss" disabled={busy} onClick={onDismiss}>
         Dismiss
@@ -215,7 +215,7 @@ export interface FeedCardProps {
   onDiscuss: () => void;
   /** Open the post's source page. */
   onOpen?: () => void;
-  /** I don't like: off the page, and fewer posts like it. */
+  /** Not interested: off the page, and fewer posts like it. */
   onDislike: () => void;
   /** Off the page. Carries no weight. */
   onDismiss: () => void;
@@ -233,7 +233,7 @@ export interface FeedCardProps {
 /** One Feed post, always fully open: icon, title, where it is from and why,
  * verdict, cited snippet, the full report, media; then one row of buttons
  * (Like, the card's chips or Discuss, Read it, Snooze and Delete when they
- * suit the card, I don't like, Dismiss). The ⋯ menu holds only "Why I
+ * suit the card, Not interested, Dismiss). The ⋯ menu holds only "Why I
  * created this"; nothing collapses. */
 export function FeedCard({
   post,
@@ -379,7 +379,7 @@ export interface IdeaRowProps {
   onFix?: () => void;
   /** Like: more ideas in its spirit. */
   onMoreLike: () => void;
-  /** I don't like: the idea goes, with some of its topics' weight. */
+  /** Not interested: the idea goes, with some of its topics' weight. */
   onNotInterested: () => void;
   /** Off the page. Carries no weight. */
   onDismiss: () => void;
@@ -392,7 +392,7 @@ export interface IdeaRowProps {
  * grey "I can …" line and any full report, then the same row of buttons as
  * every card: Like, its own buttons (Let's do it, or Fix it / Options and
  * Ask about it on a PC health card, or the chips of a card that found
- * something), I don't like, Dismiss. A click on the row is the main button. */
+ * something), Not interested, Dismiss. A click on the row is the main button. */
 export function IdeaRow({
   idea,
   busy,

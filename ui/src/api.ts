@@ -979,6 +979,7 @@ export type PulseAct =
   | "unlove"
   | "delete"
   | "snooze"
+  | "opened"
   | "accept"
   | "moreLike"
   | "notInterested"

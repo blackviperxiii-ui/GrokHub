@@ -180,7 +180,7 @@ describe("Pulse", () => {
     expect(within(card).queryByRole("menu")).not.toBeInTheDocument();
   });
 
-  it("Snooze and Delete sit before I don't like when the card suits them", async () => {
+  it("Snooze and Delete sit before Not interested when the card suits them", async () => {
     const both = { ...PAGE, feed: [post({ snooze: true, delete: true })] };
     api.getPulse.mockResolvedValue(both);
     api.pulseAct.mockResolvedValue(both);
@@ -191,7 +191,7 @@ describe("Pulse", () => {
     const labels = within(row)
       .getAllByRole("button")
       .map((b) => b.getAttribute("aria-label") ?? b.textContent);
-    expect(labels).toEqual(["Like", "Discuss", "Read it", "Snooze", "Delete", "I don't like", "Dismiss"]);
+    expect(labels).toEqual(["Like", "Discuss", "Read it", "Snooze", "Delete", "Not interested", "Dismiss"]);
     await userEvent.click(within(row).getByRole("button", { name: "Snooze" }));
     expect(api.pulseAct).toHaveBeenLastCalledWith("post-1", "snooze");
     // Delete asks first.
@@ -202,7 +202,7 @@ describe("Pulse", () => {
     expect(api.pulseAct).toHaveBeenLastCalledWith("post-1", "delete");
   });
 
-  it("every card has one row: Like first, its own buttons, I don't like, Dismiss last", async () => {
+  it("every card has one row: Like first, its own buttons, Not interested, Dismiss last", async () => {
     api.getPulse.mockResolvedValue(PAGE);
     api.pulseAct.mockResolvedValue(PAGE);
     render(<Pulse onRun={() => {}} />);
@@ -214,13 +214,15 @@ describe("Pulse", () => {
       .getAllByRole("button")
       .map((b) => b.getAttribute("aria-label") ?? b.textContent);
     expect(labels[0]).toBe("Like");
-    expect(labels[labels.length - 2]).toBe("I don't like");
+    expect(labels[labels.length - 2]).toBe("Not interested");
+    // One dislike button only.
+    expect(labels.filter((l) => l === "Not interested" || l === "I don't like")).toHaveLength(1);
     expect(labels[labels.length - 1]).toBe("Dismiss");
     expect(labels).toContain("Discuss");
 
     for (const [label, act, note] of [
       ["Dismiss", "dismiss", "Dismissed."],
-      ["I don't like", "dislike", "Got it. A few less like that."],
+      ["Not interested", "dislike", "Got it. A few less like that."],
     ] as const) {
       await userEvent.click(within(row).getByRole("button", { name: label }));
       expect(api.pulseAct).toHaveBeenLastCalledWith("post-1", act);
@@ -351,6 +353,7 @@ describe("Pulse", () => {
       feed: [post({ source: "Helldivers 2 on Steam", because: "You play Helldivers 2" })],
     });
     api.openUrl.mockResolvedValue();
+    api.pulseAct.mockResolvedValue(PAGE);
     render(<Pulse onRun={() => {}} />);
 
     const card = await screen.findByRole("listitem", { name: TITLE });
@@ -359,6 +362,8 @@ describe("Pulse", () => {
     );
     await userEvent.click(within(card).getByRole("button", { name: "Read it" }));
     expect(api.openUrl).toHaveBeenCalledWith("https://blog.rust-lang.org/1.99.html");
+    // Reading counts toward card taste, quietly.
+    expect(api.pulseAct).toHaveBeenCalledWith("post-1", "opened");
   });
 
   it("a post with no source page has no Read it", async () => {
@@ -490,7 +495,7 @@ describe("Pulse", () => {
     expect(onRun).toHaveBeenCalledWith("close every done card on the workboard");
   });
 
-  it("an idea shows the same row as every card: Like, Let's do it, I don't like, Dismiss", async () => {
+  it("an idea shows the same row as every card: Like, Let's do it, Not interested, Dismiss", async () => {
     const written = { ...IDEA, id: "idea-2", title: "Rust 1.99 upgrade plan", icon: "🦀" };
     const page: PulsePage = {
       ...PAGE,
@@ -512,7 +517,7 @@ describe("Pulse", () => {
     const buttons = within(within(row).getByRole("group", { name: "Card actions" }))
       .getAllByRole("button")
       .map((b) => b.getAttribute("aria-label") ?? b.textContent);
-    expect(buttons).toEqual(["Like", "Let's do it", "I don't like", "Dismiss"]);
+    expect(buttons).toEqual(["Like", "Let's do it", "Not interested", "Dismiss"]);
     expect(within(row).queryByRole("button", { name: "More" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Snooze" })).toBeNull();
     const main = within(row).getByRole("button", { name: "Let's do it" });
@@ -521,7 +526,7 @@ describe("Pulse", () => {
     expect(api.pulseAct).toHaveBeenLastCalledWith("idea-2", "moreLike");
     expect(await screen.findByRole("status")).toHaveTextContent(MORE_LIKE_NOTE);
 
-    await userEvent.click(within(row).getByRole("button", { name: "I don't like" }));
+    await userEvent.click(within(row).getByRole("button", { name: "Not interested" }));
     expect(api.pulseAct).toHaveBeenLastCalledWith("idea-2", "notInterested");
     expect(await screen.findByRole("status")).toHaveTextContent(NOT_INTERESTED_NOTE);
 
@@ -556,7 +561,8 @@ describe("Pulse", () => {
 
     const row = screen.getByRole("listitem", { name: "bluetoothd crashed 4 times today" });
     expect(within(row).queryByRole("button", { name: "Let's do it" })).not.toBeInTheDocument();
-    expect(within(row).queryByRole("button", { name: "Not interested" })).not.toBeInTheDocument();
+    // Not interested is the row's one dislike button.
+    expect(within(row).getAllByRole("button", { name: "Not interested" })).toHaveLength(1);
     expect(row).toHaveTextContent("It stopped with a segfault each time.");
 
     await userEvent.click(within(row).getByRole("button", { name: "Discuss" }));
@@ -565,7 +571,7 @@ describe("Pulse", () => {
     expect(api.pulseOffer).toHaveBeenCalledWith("crash-1", 0);
     expect(onRun).toHaveBeenLastCalledWith("Read bluetoothd's crash history.", "pulse-crash-1");
 
-    expect(within(row).getByRole("button", { name: "I don't like" })).toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: "Not interested" })).toBeInTheDocument();
   });
 
   it("a PC health card reads its verdict and Fix it opens its options, which only advise", async () => {
