@@ -16,9 +16,9 @@ pub mod chips;
 pub mod connectors;
 pub mod credential;
 pub mod export;
+pub mod game_companion;
 pub mod goals;
 pub mod history;
-pub mod game_companion;
 pub mod home;
 #[cfg(desktop)]
 mod home_fps;
