@@ -2319,7 +2319,7 @@ export function homeOpenClip(index: number): Promise<void> {
 
 /** Home's Updates & Drivers page (src-tauri/src/home_updates.rs, core home::updates). */
 export type UpdateOffer =
-  | "updateLoadout"
+  | "updateThisApp"
   | "openSteamDownloads"
   | "updateSystem"
   | "updateApps"

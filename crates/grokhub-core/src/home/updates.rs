@@ -67,7 +67,7 @@ pub enum Kind {
 #[serde(rename_all = "camelCase")]
 pub enum Offer {
     /// The app's own signed updater.
-    UpdateLoadout,
+    UpdateThisApp,
     /// Steam's Downloads page, where its game updates queue.
     OpenSteamDownloads,
     /// The distro's package upgrade, behind the OS password prompt.
@@ -213,7 +213,7 @@ pub fn page(s: &Sources) -> UpdatesPage {
             .loadout_newer
             .as_ref()
             .filter(|_| s.loadout_updatable)
-            .and_then(|_| chip(Offer::UpdateLoadout, "Update", false)),
+            .and_then(|_| chip(Offer::UpdateThisApp, "Update", false)),
     });
     if let Some(games) = &s.steam {
         groups.push(Group {

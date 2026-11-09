@@ -17,7 +17,7 @@ const PAGE: UpdatesPage = {
   headline: "3 waiting",
   driver: "GPU driver 560.35",
   groups: [
-    { kind: "loadout", title: "Loadout", line: "3.6.0 is ready (you have 3.5.0)", items: [], offer: { offer: "updateLoadout", label: "Update", held: null } },
+    { kind: "loadout", title: "Loadout", line: "3.6.0 is ready (you have 3.5.0)", items: [], offer: { offer: "updateThisApp", label: "Update", held: null } },
     {
       kind: "steam",
       title: "Steam games",

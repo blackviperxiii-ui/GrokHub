@@ -469,7 +469,7 @@ mod tests {
             Some("ms-settings:windowsupdate")
         );
         assert_eq!(offer_page(Offer::UpdateSystem), None);
-        assert_eq!(offer_page(Offer::UpdateLoadout), None);
+        assert_eq!(offer_page(Offer::UpdateThisApp), None);
     }
 
     #[test]

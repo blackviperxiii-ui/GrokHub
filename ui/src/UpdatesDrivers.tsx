@@ -44,7 +44,7 @@ export function UpdatesDrivers() {
     if (!offer || offer.held) return;
     setBusy(group.kind);
     try {
-      if (offer.offer === "updateLoadout") {
+      if (offer.offer === "updateThisApp") {
         // Downloads, verifies and restarts into the new version.
         await installShellUpdate();
       } else {
