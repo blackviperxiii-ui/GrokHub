@@ -2709,18 +2709,26 @@ impl Cabin {
             .show(ui, |ui| {
                 ui.set_min_width(inner);
                 ui.set_max_width(inner);
+                if p.server_name == super::reply_chips_ui::PLAN_ELICIT_SERVER {
+                    self.paint_plan_elicit(ui, &p);
+                    return;
+                }
                 ui.label(
                     RichText::new(format!("{} wants input", p.server_name))
                         .size(14.0)
                         .color(crate::theme::fg()),
                 );
-                if !p.message.trim().is_empty() {
+                let message = super::reply_chips_ui::question_text(&p);
+                if !message.is_empty() {
                     ui.add_space(4.0);
                     ui.label(
-                        RichText::new(&p.message)
+                        RichText::new(message)
                             .size(13.0)
                             .color(crate::theme::muted()),
                     );
+                }
+                if self.paint_question_chips(ui, &p) {
+                    return;
                 }
                 if p.mode == "url" && !p.url.is_empty() {
                     ui.add_space(4.0);
@@ -2956,12 +2964,13 @@ impl Cabin {
                             .color(crate::theme::fg()),
                     );
                     ui.label(
-                        RichText::new(plan)
+                        RichText::new(&plan)
                             .size(crate::theme::FONT_META)
                             .color(crate::theme::fg()),
                     );
                 });
         }
+        self.paint_plan_reply_chips(ui, &plan);
     }
 
     /// Compact, Copy session, Export, Archive. Titlebar, immediately left of minimize.

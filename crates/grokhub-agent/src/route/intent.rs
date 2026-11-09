@@ -891,6 +891,54 @@ pub fn correction_of_previous(text: &str) -> Option<TurnRoute> {
     }
 }
 
+/// A reply right after a plan that says go: the plan runs instead of being
+/// planned again. "Go ahead, but skip step 3" still says go; "yes but change
+/// step 2" asks for a change and keeps planning.
+pub fn approves_plan(text: &str) -> bool {
+    let b = bare(&text.to_lowercase());
+    const EXACT: [&str; 25] = [
+        "yes",
+        "go ahead",
+        "yes go",
+        "yes do it",
+        "yep",
+        "yeah",
+        "y",
+        "ok",
+        "okay",
+        "go",
+        "do it",
+        "approved",
+        "approve",
+        "lgtm",
+        "looks good",
+        "sounds good",
+        "ship it",
+        "let's go",
+        "lets go",
+        "let's do it",
+        "lets do it",
+        "go for it",
+        "send it",
+        "yes please",
+        "make it so",
+    ];
+    if EXACT.contains(&b.as_str()) {
+        return true;
+    }
+    [
+        "go ahead",
+        "yes go",
+        "yes do it",
+        "do it but",
+        "do it and",
+        "approved",
+        "lgtm",
+    ]
+    .iter()
+    .any(|p| b.starts_with(&format!("{p} ")))
+}
+
 /// How much of the main task's ask a side answer is shown.
 const SIDE_ASK_CLIP: usize = 400;
 /// How much of the reply so far a side answer is shown, from its end.

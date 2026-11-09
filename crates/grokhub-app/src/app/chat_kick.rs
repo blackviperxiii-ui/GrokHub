@@ -527,7 +527,10 @@ impl Cabin {
             }
         }
         let route = fix.unwrap_or(route);
-        let pending_plan = self.session_mode == SessionMode::Plan && fix != Some(TurnRoute::Chat);
+        // A go ("yes", "go ahead, but skip step 3") runs the waiting plan.
+        let pending_plan = self.session_mode == SessionMode::Plan
+            && fix != Some(TurnRoute::Chat)
+            && !intent::approves_plan(typed);
         let plan = std::mem::take(&mut self.plan_next) || route == TurnRoute::Plan || pending_plan;
         let mode = if plan {
             SessionMode::Plan

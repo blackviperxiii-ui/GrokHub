@@ -73,6 +73,26 @@ fn chip_chat_runs_immediately(chip: &QuickChip, composer_draft: &str) -> bool {
     false
 }
 
+/// Status after the `/plan` chip fills the box.
+pub(super) const PLAN_CHIP_NOTE: &str =
+    "Say what to plan, then press Enter. You get a plan to approve before anything changes";
+
+fn is_bare_plan_chip(value: &str) -> bool {
+    value.trim().eq_ignore_ascii_case("/plan")
+}
+
+/// The box after the `/plan` chip: `/plan ` then whatever was typed, so
+/// Enter plans that ask and nothing typed is lost.
+fn plan_chip_draft(typed: &str) -> String {
+    let typed = typed.trim();
+    let typed = typed
+        .strip_prefix("/plan")
+        .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+        .map(str::trim)
+        .unwrap_or(typed);
+    format!("/plan {typed}")
+}
+
 /// The composer text a shell chip leaves: one `/sh` line, ready to check
 /// and run with Enter.
 fn shell_chip_draft(value: &str) -> String {
@@ -1054,6 +1074,16 @@ impl Cabin {
                 {
                     self.take_follow_up_mode();
                 }
+                // A bare `/plan` chip used to flip a hidden flag and clear the
+                // box: it looked like nothing happened. It now puts `/plan`
+                // in the box, before what was typed, ready for Enter.
+                if is_bare_plan_chip(&chip.value) {
+                    self.composer = plan_chip_draft(&self.composer);
+                    self.composer_chip_text = self.composer.clone();
+                    self.composer_want_focus = true;
+                    self.status = PLAN_CHIP_NOTE.into();
+                    return;
+                }
                 // Slash chips use the typed send path so `/learn` click and Enter
                 // both parse locally instead of inserting a no-op or hitting Grok.
                 if chip_chat_runs_immediately(&chip, &self.composer) {
@@ -1855,6 +1885,25 @@ mod chip_apply_tests {
         assert!(!cabin.running, "a tap only fills the box");
         assert!(cabin.messages.is_empty());
         assert!(cabin.composer_want_focus);
+    }
+
+    #[test]
+    fn the_plan_chip_fills_the_box_before_what_was_typed() {
+        assert_eq!(plan_chip_draft(""), "/plan ");
+        assert_eq!(plan_chip_draft("  fix my fps "), "/plan fix my fps");
+        assert_eq!(plan_chip_draft("/plan fix my fps"), "/plan fix my fps");
+        assert_eq!(plan_chip_draft("/planet facts"), "/plan /planet facts");
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.new_thread(false);
+        cabin.composer = "speed up boot".into();
+        cabin.apply_chip(chat_chip("home-slash-plan", "/plan", "/plan"));
+        assert_eq!(cabin.composer, "/plan speed up boot");
+        assert!(cabin.composer_want_focus);
+        assert_eq!(cabin.status, PLAN_CHIP_NOTE);
+        assert!(!cabin.plan_next, "nothing is armed out of sight");
+        // A second tap does not stack another `/plan`.
+        cabin.apply_chip(chat_chip("home-slash-plan", "/plan", "/plan"));
+        assert_eq!(cabin.composer, "/plan speed up boot");
     }
 
     #[test]

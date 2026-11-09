@@ -250,6 +250,7 @@ mod release_radar_ui;
 #[cfg(test)]
 mod repaint_timer_tests;
 mod repair_ui;
+mod reply_chips_ui;
 mod rhythm_ui;
 mod rl_ui;
 mod router_ui;

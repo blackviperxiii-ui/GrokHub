@@ -312,3 +312,30 @@ fn the_shell_smoke_plan_prompt_plans() {
     let read = read_turn("make a plan to tidy the smoke notes", &IDLE);
     assert_eq!(read.route, TurnRoute::Plan);
 }
+
+#[test]
+fn a_go_after_a_plan_is_told_apart_from_a_change() {
+    for go in [
+        "yes",
+        "Go.",
+        "go ahead",
+        "Go ahead with the plan.",
+        "Go ahead, but skip step 3",
+        "do it but add a backup first",
+        "LGTM!",
+        "sounds good",
+        "yes, go",
+    ] {
+        assert!(approves_plan(go), "{go}");
+    }
+    for not_go in [
+        "Tell me more about this plan before I say go.",
+        "Change the plan: drop step 2",
+        "yes but change step 2",
+        "no",
+        "going to bed",
+        "what does step 3 do?",
+    ] {
+        assert!(!approves_plan(not_go), "{not_go}");
+    }
+}
