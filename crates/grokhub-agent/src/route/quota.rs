@@ -16,6 +16,7 @@
 //! with content. A failed check keeps the last known state.
 
 use std::path::Path;
+use std::sync::Mutex;
 
 use grokhub_core::model_registry::quota::{
     anthropic_call_ticks, parse_openrouter_key, parse_xai_api_key, QuotaLedger,
@@ -31,32 +32,54 @@ use super::sources;
 /// Run every due route's check and persist what changed. Called by the
 /// registry refresh with the sign-in's bearer (a key or plan token; the
 /// xAI check is skipped without one). Never fails the refresh.
-pub fn run_quota_checks(config_dir: &Path, xai_bearer: Option<&str>, now_ms: u64) -> QuotaLedger {
+/// One writer at a time for `quota.json`. Chats, helpers and background
+/// runs note replies at once; a read-modify-write without this lets one
+/// note overwrite another's, and both share the save's temp file.
+static WRITER: Mutex<()> = Mutex::new(());
+
+/// Load, change and save the ledger as one step. Returns the saved ledger.
+fn update(config_dir: &Path, change: impl FnOnce(&mut QuotaLedger) -> bool) -> QuotaLedger {
+    let _one = WRITER.lock().unwrap_or_else(|e| e.into_inner());
     let mut ledger = load_quota(config_dir);
-    let mut changed = false;
-    if ledger.openrouter_due(now_ms) {
+    if change(&mut ledger) {
+        let _ = save_quota(config_dir, &ledger);
+    }
+    ledger
+}
+
+pub fn run_quota_checks(config_dir: &Path, xai_bearer: Option<&str>, now_ms: u64) -> QuotaLedger {
+    // The account reads go out without the writer held, so a slow endpoint
+    // never holds up a reply's note; what they found is applied under it.
+    let before = load_quota(config_dir);
+    let mut openrouter = None;
+    if before.openrouter_due(now_ms) {
         for p in providers::load_providers(config_dir) {
             if !p.is_openrouter() || !providers::has_key(config_dir, &p.id) {
                 continue;
             }
             if let Ok(v) = providers::fetch_openrouter_key(config_dir, &p) {
-                ledger.openrouter = parse_openrouter_key(&v, now_ms);
-                changed = true;
+                openrouter = Some(parse_openrouter_key(&v, now_ms));
             }
         }
     }
-    if ledger.xai_due(now_ms) {
+    let mut xai = None;
+    if before.xai_due(now_ms) {
         if let Some(bearer) = xai_bearer.filter(|b| !b.trim().is_empty()) {
             if let Ok(v) = sources::fetch_xai_api_key(config_dir, bearer) {
-                ledger.xai = parse_xai_api_key(&v, now_ms);
-                changed = true;
+                xai = Some(parse_xai_api_key(&v, now_ms));
             }
         }
     }
-    if changed {
-        let _ = save_quota(config_dir, &ledger);
-    }
-    ledger
+    update(config_dir, |ledger| {
+        let changed = openrouter.is_some() || xai.is_some();
+        if let Some(read) = openrouter {
+            ledger.openrouter = read;
+        }
+        if let Some(read) = xai {
+            ledger.xai = read;
+        }
+        changed
+    })
 }
 
 /// A provider call failed. OpenRouter account errors stamp a re-read
@@ -75,19 +98,21 @@ pub fn note_provider_error(
     if !matches!(status, 400 | 402 | 403 | 429) {
         return;
     }
-    let mut ledger = load_quota(config_dir);
-    if p.is_openrouter() {
-        ledger.note_openrouter_error(providers::is_free_model(model), status, now_ms);
-    } else if p.kind == ProviderKind::Anthropic {
-        let retry_after = headers
-            .iter()
-            .find(|(k, _)| k.eq_ignore_ascii_case("retry-after"))
-            .map(|(_, v)| v.as_str());
-        ledger.note_anthropic_error(status, body, retry_after, now_ms);
-    } else {
+    if !p.is_openrouter() && p.kind != ProviderKind::Anthropic {
         return;
     }
-    let _ = save_quota(config_dir, &ledger);
+    update(config_dir, |ledger| {
+        if p.is_openrouter() {
+            ledger.note_openrouter_error(providers::is_free_model(model), status, now_ms);
+        } else {
+            let retry_after = headers
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("retry-after"))
+                .map(|(_, v)| v.as_str());
+            ledger.note_anthropic_error(status, body, retry_after, now_ms);
+        }
+        true
+    });
 }
 
 /// An Anthropic call answered: keep its rate-limit headers and fold its
@@ -110,18 +135,19 @@ pub fn note_anthropic_reply(
             cache_write_tokens,
         )
     });
-    let mut ledger = load_quota(config_dir);
-    ledger.note_anthropic_reply(
-        headers,
-        ticks,
-        usage
-            .input_tokens
-            .saturating_add(usage.cached_tokens)
-            .saturating_add(cache_write_tokens),
-        usage.output_tokens,
-        now_ms,
-    );
-    let _ = save_quota(config_dir, &ledger);
+    update(config_dir, |ledger| {
+        ledger.note_anthropic_reply(
+            headers,
+            ticks,
+            usage
+                .input_tokens
+                .saturating_add(usage.cached_tokens)
+                .saturating_add(cache_write_tokens),
+            usage.output_tokens,
+            now_ms,
+        );
+        true
+    });
 }
 
 /// A native (non-provider) call failed with an account-shaped status:
@@ -136,9 +162,10 @@ pub fn note_native_error(config_dir: &Path, model: &str, status: u16, now_ms: u6
             return;
         }
     }
-    let mut ledger = load_quota(config_dir);
-    ledger.note_xai_error(status, now_ms);
-    let _ = save_quota(config_dir, &ledger);
+    update(config_dir, |ledger| {
+        ledger.note_xai_error(status, now_ms);
+        true
+    });
 }
 
 #[cfg(test)]
@@ -235,6 +262,26 @@ mod tests {
         // A native failure stamps the xAI re-read the same way.
         note_native_error(&dir, "grok-4.7", 429, NOON + 2);
         assert_eq!(load_quota(&dir).xai.recheck_at_ms, NOON + 2);
+    }
+
+    #[test]
+    fn replies_noted_at_once_from_many_chats_all_count() {
+        let dir = test_dir("quota-writers");
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                let dir = dir.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..10 {
+                        note_anthropic_reply(&dir, None, &Usage::default(), 0, &[], NOON);
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        assert_eq!(load_quota(&dir).anthropic.spend.day_requests, 80);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
