@@ -111,6 +111,32 @@ pub fn peek() -> GameGuard {
     last.map(|(_, g)| g).unwrap_or_default()
 }
 
+/// The Steam game running now, as Steam itself says: its launch wrapper's
+/// command line on Linux (or Steam's `registry.vdf`), `RunningAppID` on
+/// Windows. Reads process names and Steam's own files only; nothing opens
+/// or touches the game.
+pub fn steam_app_now() -> Option<u32> {
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(id) =
+            processes().and_then(|p| grokhub_core::game_companion::running_from_cmdlines(&p))
+        {
+            return Some(id);
+        }
+        let home = std::env::var_os("HOME").map(std::path::PathBuf::from)?;
+        let text = std::fs::read_to_string(home.join(".steam").join("registry.vdf")).ok()?;
+        grokhub_core::game_companion::running_from_registry_vdf(&text)
+    }
+    #[cfg(windows)]
+    {
+        steam_running_app().filter(|id| *id != 0)
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
+    {
+        None
+    }
+}
+
 /// The governor's deny list ("always counts as a game"), lowercase.
 #[cfg(any(target_os = "linux", windows))]
 fn deny_list() -> Vec<String> {
