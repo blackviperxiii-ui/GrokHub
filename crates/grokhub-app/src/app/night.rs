@@ -3,8 +3,8 @@
 use super::*;
 use grokhub_agent::harness::Origin;
 use grokhub_core::{
-    automation_failed_card, automation_health_line, hold_if_quiet, mark_automation_failed,
-    mark_automation_ok, mark_automation_stopped, BgEnd, BgOrigin,
+    automation_failed_card, automation_health_line, hold_if_quiet, loop_summary_line,
+    mark_automation_failed, mark_automation_ok, mark_automation_stopped, BgEnd, BgOrigin,
 };
 
 /// Primary pill on a scheduled row. A failing job retries; a healthy one runs.
@@ -82,7 +82,11 @@ impl Cabin {
                     self.persist_suggestions();
                 }
             }
-            None => self.status = "Need `/loop 30m …`, `every 2h …`, or `every day at 9 …`".into(),
+            None => {
+                self.status =
+                    "Say how often, like `every 30 minutes …`, `every 2h …` or `every day at 9 …`"
+                        .into()
+            }
         }
     }
 
@@ -170,7 +174,7 @@ impl Cabin {
             }
             ScheduleRoute::Interval { interval, prompt } => {
                 if self.grok_loops.len() >= LOOP_MAX {
-                    return "Maximum 50 scheduled loops".into();
+                    return "You can have up to 50 repeating jobs".into();
                 }
                 let title = prompt.clone();
                 let mut row = new_loop(interval.clone(), prompt, now_ms());
@@ -179,7 +183,7 @@ impl Cabin {
                 self.grok_loops.push(row);
                 self.persist_loops();
                 self.note_schedule_created(&id, &title, &format!("every {interval}"));
-                format!("Loop added · every {interval}")
+                format!("Repeating job added · every {interval}")
             }
         }
     }
@@ -191,7 +195,7 @@ impl Cabin {
                 self.auto_compose = true;
             }
             egui::ScrollArea::vertical().show(ui, |ui| {
-            crate::cards::help_text(ui, "Loops repeat on an interval. Scheduled jobs run at a clock time. Stop a job when its work is done.");
+            crate::cards::help_text(ui, "Repeating jobs run every few minutes or hours. Scheduled jobs run at a clock time. Turn a job off when its work is done.");
             ui.add_space(12.0);
             if self.auto_compose {
                 ui.add_space(12.0);
@@ -204,7 +208,7 @@ impl Cabin {
                         ui.label(RichText::new("New job").strong());
                         let edit = ui.add(
                             egui::TextEdit::singleline(&mut self.night_nl)
-                                .hint_text(crate::theme::hint("/loop 30m check deploy · every weekday at 9, summarize the board"))
+                                .hint_text(crate::theme::hint("every 30 minutes check the deploy · every weekday at 9, summarize the board"))
                                 .desired_width(f32::INFINITY),
                         );
                         let enter = edit.lost_focus()
@@ -226,7 +230,7 @@ impl Cabin {
             }
             ui.add_space(8.0);
             self.ui_scheduled_automations(ui);
-            crate::cards::section_label(ui, "Loops");
+            crate::cards::section_label(ui, "Repeating");
             if self.status.starts_with("Loop:") {
                 crate::cards::status_chip(ui, &self.status, crate::cards::ChipTone::Live);
                 ui.add_space(8.0);
@@ -239,19 +243,16 @@ impl Cabin {
                     ui,
                     crate::icons::TileIcon::Moon,
                     "None yet",
-                    "Pick a suggestion or add `/loop 30m …`.",
+                    "Pick a suggestion, or add one like `every 30 minutes check the deploy`.",
                 ) {
                     self.auto_compose = true;
                 }
                 ui.add_space(16.0);
             } else {
+                let clock = Self::local_clock();
                 for i in 0..self.grok_loops.len() {
                     let title = self.grok_loops[i].prompt.clone();
-                    let body = format!(
-                        "every {} · {} runs",
-                        self.grok_loops[i].interval,
-                        self.grok_loops[i].run_count
-                    );
+                    let body = loop_summary_line(&self.grok_loops[i], clock);
                     egui::Frame::NONE
                         .fill(crate::theme::elevated())
                         .corner_radius(crate::theme::CARD_RADIUS)

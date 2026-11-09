@@ -457,8 +457,11 @@ fn nightly_review_stays_quiet() {
         "night review status stays off the Automations Suggested line: {night}"
     );
     assert!(
-        night.contains("/loop") && night.contains("New job") && night.contains("grok_loops"),
-        "Automations page still owns the Grok Build /loop list: {night}"
+        night.contains("loop_summary_line")
+            && night.contains("New job")
+            && night.contains("grok_loops")
+            && !night.contains("`/loop"),
+        "Automations still owns the repeating list, in plain words with no /loop hint: {night}"
     );
     assert!(
         !night.contains("Follow along")
@@ -468,7 +471,7 @@ fn nightly_review_stays_quiet() {
             && !night.contains("teach_nl")
             && night.contains("New job")
             && night.contains("Suggested")
-            && night.contains("Loops")
+            && night.contains("Repeating")
             && !night.contains("thread::spawn"),
         "Automations must drop Follow along / Teach this once: {night}"
     );
@@ -629,7 +632,7 @@ fn add_automation_seed_daily_clock_and_loop() {
     assert_eq!(cabin.grok_loops.len(), 1);
     assert_eq!(cabin.automations.len(), 1, "the clock row must stay");
     assert!(
-        cabin.status.contains("Loop added") && cabin.status.contains("30m"),
+        cabin.status.contains("Repeating job added") && cabin.status.contains("30m"),
         " /loop must show the interval, got {}",
         cabin.status
     );
@@ -691,13 +694,13 @@ fn night_add_lands_a_daily_job_and_a_loop() {
     assert_eq!(cabin.automations[0].time, "09:00");
     assert!(cabin.grok_loops.is_empty());
     cabin.add_automation_seed("/loop 30m check deploy");
-    assert_eq!(cabin.status, "Loop added · every 30m");
+    assert_eq!(cabin.status, "Repeating job added · every 30m");
     assert_eq!(cabin.grok_loops.len(), 1);
     assert_eq!(cabin.grok_loops[0].interval, "30m");
     cabin.add_automation_seed("what is rust");
     assert_eq!(
         cabin.status,
-        "Need `/loop 30m …`, `every 2h …`, or `every day at 9 …`"
+        "Say how often, like `every 30 minutes …`, `every 2h …` or `every day at 9 …`"
     );
     assert_eq!(cabin.automations.len(), 1);
     assert_eq!(cabin.grok_loops.len(), 1);
@@ -716,7 +719,7 @@ fn full_loop_list_stays_off_a_run() {
         .map(|_| grokhub_core::new_loop("30m".into(), "check".into(), 0))
         .collect();
     cabin.add_automation_seed("/loop 30m check deploy");
-    assert_eq!(cabin.status, "Maximum 50 scheduled loops");
+    assert_eq!(cabin.status, "You can have up to 50 repeating jobs");
     assert_eq!(cabin.grok_loops.len(), 50);
     assert!(cabin.automations.is_empty());
     assert!(!cabin.running);
