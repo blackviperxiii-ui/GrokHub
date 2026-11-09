@@ -639,9 +639,13 @@ fn run_turn(
     // Where `ran` stood at the last check, and how many notes it sent.
     let mut post_mark: Option<(usize, Option<crate::post_check::Ran>)> = None;
     let mut post_notes = 0usize;
+    // LO-51: pages hosted search cited this run, for the link check.
+    let mut cited: Vec<String> = Vec::new();
     let mut close_continued = false;
     let mut close_steps: Vec<String> = Vec::new();
     let mut close_surfaced = false;
+    // LO-51: tool calls the model wrote into its reply as text were handled.
+    let mut written_handled = false;
     // Brain 2: the turn's Brief and the changes still waiting on a check.
     let brief = drive
         .as_ref()
@@ -1023,15 +1027,22 @@ fn run_turn(
         emit_usage(on_event, &usage, history, input.context_length);
         // Close-check reads this after the reply is stored on the history.
         let last_assistant = turn.text.clone();
+        for url in &turn.sources {
+            if !cited.contains(url) {
+                cited.push(url.clone());
+            }
+        }
         // xAI's sealed reasoning goes first, as it came: the next request sends it
         // back so the model keeps its working and the prompt cache keeps matching.
         history.extend(turn.reasoning_items.iter().cloned());
         if !turn.text.is_empty() {
             history.push(InputItem::Message {
                 role: "assistant".into(),
-                content: vec![ContentPart::InputText(grokhub_core::strip_turn_labels(
-                    &turn.text,
-                ))],
+                content: vec![ContentPart::InputText(
+                    grokhub_core::tool_tags::strip_tool_tags(&grokhub_core::strip_turn_labels(
+                        &turn.text,
+                    )),
+                )],
             });
         }
         if turn.truncated {
@@ -1106,6 +1117,15 @@ fn run_turn(
         }
         if turn.calls.is_empty() {
             let notes = input.steer.drain();
+            if notes.is_empty() && !written_handled {
+                written_handled = true;
+                if let Some(note) =
+                    handle_written_calls(&last_assistant, &mut fresh, &mut *on_event)
+                {
+                    history.push(cabin_note(&note));
+                    continue;
+                }
+            }
             if notes.is_empty() {
                 // Item 24: the reply's totals, test counts, claimed commits,
                 // pushes and edits, and what it says the checks found meet
@@ -1124,6 +1144,15 @@ fn run_turn(
                         &ran,
                         crate::route::check::connection_question(user_text),
                     ));
+                    // LO-51: links in a chat reply are pages this run opened.
+                    if input.depth == 0 {
+                        findings.extend(crate::post_check::sources(
+                            &last_assistant,
+                            &ran,
+                            &cited,
+                            user_text,
+                        ));
+                    }
                     if let Some(note) = crate::post_check::note(&findings) {
                         post_notes += 1;
                         history.push(cabin_note(&note));
@@ -1698,6 +1727,38 @@ fn emit_usage(
 /// A note the app adds to the chat for the model (a nudge to keep going, a
 /// checkpoint, a stop hook), tagged so it never reads as the person's words:
 /// not to the model, not to the summary, and not to the rules compaction pins.
+/// LO-51: tool calls the model wrote into its reply as text. A findings card
+/// written that way is posted as the real card (it only shows a card); any
+/// other written call is not run, and the model gets one note to call the tool
+/// properly or answer without it. The text itself never reaches the user.
+fn handle_written_calls(
+    reply: &str,
+    fresh: &mut crate::checkpoint::Fresh,
+    on_event: &mut dyn FnMut(LoopEvent),
+) -> Option<String> {
+    let calls = grokhub_core::tool_tags::written_calls(reply);
+    let mut others: Vec<String> = Vec::new();
+    for call in calls {
+        if call.name == "report_findings" {
+            if !crate::session_tools::report_findings(&call.body, on_event).failed {
+                fresh.note_findings();
+            }
+        } else if !others.contains(&call.name) {
+            others.push(call.name);
+        }
+    }
+    (!others.is_empty()).then(|| {
+        format!(
+            "Your reply wrote {} as text. The person never sees that. Call tools as tool calls, or answer without them, in plain words.",
+            others
+                .iter()
+                .map(|n| format!("<{n}>"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    })
+}
+
 fn cabin_note(text: &str) -> InputItem {
     user_message(&crate::compact::cabin_note_text(text), None)
 }
@@ -5964,6 +6025,43 @@ mod tests {
         assert_eq!(script.seen.lock().unwrap().len(), 3);
         assert_eq!(user_texts(&history), ["scan my computer"]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_findings_card_written_as_text_becomes_the_card_and_other_tags_get_a_note() {
+        let dir = workspace("written-calls");
+        let conv = format!("written-calls-{}", std::process::id());
+        let leak = "Here's what I found.\n\n<report_findings>{\"findings\":[{\"severity\":\"info\",\"text\":\"Aqir tokens go to the camp vendor\"}]}</report_findings>";
+        let script = scripted(vec![turn(leak, Vec::new())]);
+        let (out, history, events) = run_drive(&script, &dir, &conv);
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert!(events.iter().any(|e| matches!(
+            e,
+            LoopEvent::Findings(body) if body.contains("Aqir tokens go to the camp vendor")
+        )));
+        // The stored reply carries no tag, so a later turn can't copy it.
+        let stored = history.iter().any(|item| matches!(
+            item,
+            InputItem::Message { role, content } if role == "assistant"
+                && matches!(&content[0], ContentPart::InputText(t) if t.contains("report_findings"))
+        ));
+        assert!(!stored);
+        // Any other written call is not run: one note, then the reply.
+        let conv = format!("written-other-{}", std::process::id());
+        let script = scripted(vec![
+            turn("<web_search>{\"query\":\"aqir\"}</web_search>", Vec::new()),
+            turn("I couldn't search just now.", Vec::new()),
+        ]);
+        let (out, history, _) = run_drive(&script, &dir, &conv);
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(script.seen.lock().unwrap().len(), 2);
+        assert!(
+            user_texts(&history)
+                .iter()
+                .any(|t| t.contains("Your reply wrote <web_search> as text")),
+            "{:?}",
+            user_texts(&history)
+        );
     }
 
     #[test]
