@@ -321,7 +321,7 @@ fn spawn(
     if command.trim().is_empty() {
         return Err(format!("MCP server `{server}` has no command"));
     }
-    let args = super::browser::launch_args(command, args, env, cwd)?;
+    let args = super::browser::launch_args(server, command, args, env, cwd)?;
     let mut cmd = Command::new(command);
     cmd.args(&args)
         .current_dir(cwd)
@@ -333,6 +333,14 @@ fn spawn(
         .envs(crate::package_age::env());
     for (key, value) in env {
         cmd.env(key, value);
+    }
+    // The cabin's window runs on X11; its children get Wayland back.
+    let wayland = grokhub_core::browser::wayland_for_child(
+        |key| std::env::var(key).ok(),
+        |name| env.contains_key(name) || std::env::var_os(name).is_some(),
+    );
+    for (name, value) in wayland {
+        cmd.env(name, value);
     }
     #[cfg(unix)]
     {
