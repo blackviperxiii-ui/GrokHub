@@ -1,0 +1,1 @@
+- Local AI: the app's own background calls (labels, summaries, difficulty) now ask the on-device model for no thinking, a short reply (`max_tokens`) and JSON in one fixed shape (a JSON schema the server turns into a grammar). They use whatever model is already loaded and never start one or swap the loaded one out; with none loaded they answer without the device.

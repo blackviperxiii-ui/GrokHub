@@ -464,3 +464,39 @@ fn the_mode_label_follows_the_game_and_the_stand_in() {
         local_scale::Mode::Balanced
     );
 }
+
+#[test]
+fn background_work_keeps_whatever_is_loaded() {
+    let disk = disk();
+    let home = file(BIG);
+    let small = file(SMALL);
+    let base = Now {
+        need: Need::Background,
+        ..now(&home, &disk)
+    };
+    // The small stand-in stays, though the pick would come back for a chat.
+    let on_small = Now {
+        loaded: Some((&small, Some(StandIn::LowBattery))),
+        ..base
+    };
+    assert_eq!(plan(on_small), Plan::Keep);
+    assert_eq!(
+        plan(Now {
+            need: Need::Normal,
+            ..on_small
+        }),
+        Plan::Later {
+            model: home.clone(),
+            stand_in: None
+        }
+    );
+    // A low battery doesn't swap the loaded pick out for it either.
+    assert_eq!(
+        plan(Now {
+            loaded: Some((&home, None)),
+            low_battery: true,
+            ..base
+        }),
+        Plan::Keep
+    );
+}
