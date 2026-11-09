@@ -26,6 +26,7 @@ pub mod card_chips;
 pub mod card_prefs;
 pub mod card_report;
 pub mod card_signals;
+pub mod card_taste;
 pub mod catalog_update;
 pub mod channel;
 pub mod chat;
