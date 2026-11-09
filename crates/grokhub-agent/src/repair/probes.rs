@@ -279,6 +279,25 @@ fn powershell(id: ProbeId, script: &str) -> ProbeSpec {
     )
 }
 
+/// The Updates page's Windows Update list: each waiting update's title, from
+/// the same read-only search as [`ProbeId::WuPending`] (a standard user may run
+/// it; installing stays with Windows Update's own page).
+pub fn windows_update_titles_spec() -> ProbeSpec {
+    powershell(
+        ProbeId::WuPending,
+        grokhub_core::home::updates::WINDOWS_UPDATE_TITLES,
+    )
+}
+
+/// The Updates page's Windows driver list: driver updates Windows Update
+/// offers, by title (read-only, as a standard user).
+pub fn windows_driver_titles_spec() -> ProbeSpec {
+    powershell(
+        ProbeId::WuPending,
+        grokhub_core::home::updates::WINDOWS_DRIVER_TITLES,
+    )
+}
+
 /// The spec for `id` on `os`. `has_bin` answers whether a program is on PATH.
 /// `None` when the id isn't for this OS or no known package manager is there.
 pub fn probe_spec_with(id: ProbeId, os: Os, has_bin: &dyn Fn(&str) -> bool) -> Option<ProbeSpec> {
@@ -760,6 +779,18 @@ mod tests {
             probe_spec_with(ProbeId::Volumes, Os::Linux, &|_| true),
             None
         );
+    }
+
+    #[test]
+    fn the_updates_pages_windows_update_list_is_read_only() {
+        let spec = windows_update_titles_spec();
+        assert_eq!(spec.program, "powershell");
+        assert_eq!(read_only_violation(&spec), None);
+        assert!(spec.argv[3].ends_with("$u.Title }"));
+        assert!(spec.argv[3].contains("Type=''Software''"));
+        let drivers = windows_driver_titles_spec();
+        assert_eq!(read_only_violation(&drivers), None);
+        assert!(drivers.argv[3].contains("Type=''Driver''"));
     }
 
     #[test]

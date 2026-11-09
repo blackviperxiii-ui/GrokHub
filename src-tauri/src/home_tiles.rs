@@ -53,7 +53,10 @@ pub fn view(module: &str, src: &Sources<'_>) -> Option<TileView> {
         "speeds" => speeds_view(&grokhub_core::net_log::load(src.config_dir), now),
         "frame_rate" => frame_rate(),
         "storage" => pc_only(&|| storage_view(&drives())),
-        "updates" => updates_view(&crate::shell_update::version()),
+        "updates" => updates_view(
+            &crate::shell_update::version(),
+            crate::home_updates::last().as_ref(),
+        ),
         "game_mode" => pc_only(&|| {
             game_mode_view(
                 guard(),
@@ -585,14 +588,49 @@ pub fn storage_view(drives: &[grokhub_core::disk::DiskUse]) -> TileView {
         .primary("Free up storage", TileAction::ask(FREE_STORAGE_ASK))
 }
 
-pub fn updates_view(version: &str) -> TileView {
-    TileView::ready(TileText::new(
-        format!("{} {version}", brand()),
-        "Settings → About checks for a newer one",
-        Tone::Normal,
-    ))
-    .button("Check for updates", TileAction::settings("about"))
-    .on_tap(TileAction::settings("about"))
+/// The Updates & Drivers tile: what the page last found, or a plain "tap to
+/// check" before the page has been opened this run (nothing is read from
+/// the tile itself). Tap and button open the page.
+pub fn updates_view(
+    version: &str,
+    last: Option<&grokhub_core::home::updates::Sources>,
+) -> TileView {
+    let open = TileAction::nav("updates");
+    let text = match last {
+        None => TileText::new(
+            format!("{} {version}", brand()),
+            "Tap to see what's waiting to update",
+            Tone::Normal,
+        ),
+        Some(s) => {
+            let os = match &s.system {
+                Some(f @ grokhub_core::home::updates::Found::Items { .. }) => {
+                    tt::OsUpdates::Pending(f.count())
+                }
+                _ => tt::OsUpdates::NoChecker,
+            };
+            let facts = tt::UpdateFacts {
+                os,
+                steam: s.steam.clone().unwrap_or_default(),
+            };
+            tt::updates_text(s.loadout_newer.is_some(), &facts, s.gpu_driver.as_deref())
+        }
+    };
+    TileView::ready(text)
+        .button("See updates", open.clone())
+        .on_tap(open)
+}
+
+/// The main GPU's driver version, from the machine read Home already keeps.
+pub fn gpu_driver(config_dir: &Path) -> Option<String> {
+    let m = machine(config_dir);
+    m.gpus
+        .iter()
+        .filter(|g| !g.integrated)
+        .max_by_key(|g| g.vram_mb)
+        .or_else(|| m.gpus.first())
+        .map(|g| g.driver.clone())
+        .filter(|d| !d.trim().is_empty())
 }
 
 pub fn game_mode_view(guard: grokhub_core::game_guard::GameGuard, local_paused: bool) -> TileView {

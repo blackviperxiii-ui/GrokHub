@@ -35,7 +35,8 @@ export type View =
   | "settings"
   | "library"
   | "workboard"
-  | "devices";
+  | "devices"
+  | "updates";
 
 /** What a palette row does. */
 export type PaletteAction =
@@ -106,6 +107,7 @@ export const VIEW_LABELS: Record<View, string> = {
   workboard: "Workboard",
   devices: "Devices",
   library: "Library",
+  updates: "Updates & Drivers",
 };
 
 /** The pages this platform shows, in tab order. History and the journal
@@ -133,7 +135,8 @@ export function views(caps: Capabilities): View[] {
 }
 
 /** Every page the palette opens: the tabs, and Objectives right after Home.
- * Objectives has no tab of its own; Home's objectives tiles open it too. */
+ * Objectives has no tab of its own; Home's objectives tiles open it too.
+ * Updates & Drivers opens from its Home tile only. */
 export function pageViews(caps: Capabilities): View[] {
   const tabs = views(caps);
   const at = tabs.indexOf("home") + 1;

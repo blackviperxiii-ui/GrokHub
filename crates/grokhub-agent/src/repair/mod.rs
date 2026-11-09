@@ -13,6 +13,7 @@
 //! a probe that needs admin is skipped with a note.
 
 mod apply;
+pub mod driver_update;
 mod drivers;
 mod fans;
 mod fix;
@@ -33,8 +34,9 @@ pub use apply::{
 };
 pub use drivers::{
     apt_versions, candidate_spec, driver_plan, driver_rollback_plan, driver_updated,
-    driver_updates, installed_spec, is_driver_pkg, parse_candidate, parse_installed, rollback_for,
-    verify_driver, DriverBlock, DriverDoubt, DriverUpdate, Rollback, VerifiedDriver, PACMAN_CACHE,
+    driver_updates, installed_spec, is_driver_pkg, parse_candidate, parse_installed, rollback_cmd,
+    rollback_for, update_cmd, verify_driver, DriverBlock, DriverDoubt, DriverUpdate, Rollback,
+    VerifiedDriver, PACMAN_CACHE,
 };
 pub use fans::{
     fan_backend, fans_at_full, fans_check, fans_restored, full_speed_plan, pwm_channels,
@@ -51,9 +53,10 @@ pub use interpret::{
     DISK_CRIT_PCT, DISK_WARN_PCT, LOG_WARN_LINES, MEM_WARN_PCT,
 };
 pub use probes::{
-    on_path, probe_spec_with, read_only_violation, subject_probe_spec, Os, PackageManager, ProbeId,
-    ProbeSpec, ProgramName, LINUX_PROBES, LINUX_SUBJECT_PROBES, LOG_LINE_CAP, OUTPUT_CAP,
-    PROBE_TIMEOUT, WINDOWS_PROBES, WINDOWS_SUBJECT_PROBES,
+    on_path, probe_spec_with, read_only_violation, subject_probe_spec, windows_driver_titles_spec,
+    windows_update_titles_spec, Os, PackageManager, ProbeId, ProbeSpec, ProgramName, LINUX_PROBES,
+    LINUX_SUBJECT_PROBES, LOG_LINE_CAP, OUTPUT_CAP, PROBE_TIMEOUT, WINDOWS_PROBES,
+    WINDOWS_SUBJECT_PROBES,
 };
 pub use restore::{
     backup_dir, backup_files, detect_backends, restore_files, BackupEntry, FileBackup,
