@@ -19,8 +19,9 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use grokhub_agent::route::local_sampler::{Sampler, SLOW_EVERY};
 use grokhub_agent::route::{local, local_gov, local_scale, local_sidecar};
-use grokhub_core::local_governor::{self as g, Governor, Level, Memory, Rules, Signals};
+use grokhub_core::local_governor::{self as g, Memory, Signals};
 use grokhub_core::local_profile::{PowerInfo, Thermal};
 
 #[cfg(any(target_os = "linux", windows))]
@@ -28,9 +29,6 @@ use super::local_probe;
 use super::setup_wizard::ram_mb;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::setup_wizard::run;
-
-/// Slow signals are read every this many samples.
-const SLOW_EVERY: u32 = 5;
 
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
@@ -75,95 +73,38 @@ pub(super) fn start(config_dir: PathBuf) {
 }
 
 fn sample_loop(config_dir: &Path, unified: bool) {
-    let rules_path = config_dir.join("local").join("governor.json");
-    let mut gov = Governor::new();
+    let mut sampler = Sampler::new();
     let mut reader = Reader::default();
     loop {
         let on = local::switched_on() && local_sidecar::assets_present(config_dir);
         if !on {
-            // Switched off: forget any pause so switching on starts normally.
-            if gov.level != Level::Normal {
-                gov = Governor::new();
-                local_gov::apply(Level::Normal, "normal use");
-            }
-            // A speed test can load the model while the switch is off.
-            local_sidecar::tick_idle_unload();
+            sampler.idle();
             std::thread::sleep(Duration::from_secs(10));
             continue;
         }
-        let slow = reader.tick.is_multiple_of(SLOW_EVERY);
-        if slow {
-            reader.rules = std::fs::read_to_string(&rules_path)
-                .map(|t| Rules::from_json(&t))
-                .unwrap_or_default();
-        }
         let s = reader.sample(local_sidecar::global_pid());
-        let want = g::target(&s, &reader.rules);
-        if let Some(level) = gov.observe(want.map(|w| w.level), now_ms()) {
-            local_gov::apply(level, want.map_or("normal use", |w| w.reason));
-        }
-        // Sharing the GPU with a game: when the game takes much more VRAM than
-        // was free with the model loaded, relaunch into what is left (between
-        // requests, like a level change). What this sample sees decides, not
-        // the reason the level last changed for: battery or heat alone never
-        // restarts it.
-        if slow
-            && local_gov::level() == Level::Throttle
-            && want.is_some_and(|w| {
-                w.level == Level::Throttle
-                    && (g::game_reason(w.reason)
-                        || w.reason == "another app is keeping the GPU busy")
-            })
-            && grokhub_agent::route::local_autoconfig::vram_dropped_since_launch()
-        {
-            local_gov::request_restart();
-        }
-        local_sidecar::tick_governor();
-        // What is free right now picks the model size for the next task (the
-        // automatic Balanced, Gaming and Performance scaling), and steps a
-        // bigger model up or back down between requests.
+        // This shell's readers see no game on Windows; the game guard does,
+        // every sample, so a game frees the GPU within one.
+        #[cfg(windows)]
+        let s = Signals {
+            game: Some(grokhub_desktop::game_guard::current().gaming),
+            ..s
+        };
+        // What is free right now picks the model size for the next task.
         // Without a RAM reading the room goes stale and scaling keeps the pick.
-        if let Some(free_ram_mb) = slow.then(super::local_probe::free_ram_now).flatten() {
-            local_scale::set_room(
-                local_scale::Room {
-                    free_vram_mb: super::local_probe::free_vram_now(),
-                    free_ram_mb,
-                    cpu_busy_pct: super::local_probe::cpu_busy_pct(),
-                    on_battery: s.power.as_ref().is_some_and(|p| p.battery && !p.on_ac),
-                    unified,
-                },
-                now_ms(),
-            );
-        }
-        local_sidecar::tick_scale(config_dir);
-        // Offline or with the cloud down, have the model loaded before it's asked.
-        local_sidecar::tick_keep_warm(config_dir, local::warm_wanted());
-        // The idle rule runs here too, so an unused model unloads on time
-        // even when nothing asks for it again.
-        local_sidecar::tick_idle_unload();
-        // A drafter nobody has timed yet gets its speed test while the
-        // machine sits quiet, so nobody has to press Test speed.
-        if slow {
-            grokhub_agent::route::local_spec::tick_auto_test(
-                config_dir,
-                &quiet(&s, want.is_none()),
-            );
-        }
+        let room = sampler
+            .slow()
+            .then(super::local_probe::free_ram_now)
+            .flatten()
+            .map(|free_ram_mb| local_scale::Room {
+                free_vram_mb: super::local_probe::free_vram_now(),
+                free_ram_mb,
+                cpu_busy_pct: super::local_probe::cpu_busy_pct(),
+                on_battery: s.power.as_ref().is_some_and(|p| p.battery && !p.on_ac),
+                unified,
+            });
+        sampler.step(config_dir, &s, room);
         std::thread::sleep(Duration::from_millis(g::interval_ms(s.power.as_ref())));
-    }
-}
-
-/// What the unattended draft speed test reads from one sample: `calm` when
-/// the governor wants nothing slowed.
-fn quiet(s: &Signals, calm: bool) -> grokhub_core::local_draft::Quiet {
-    grokhub_core::local_draft::Quiet {
-        calm: calm && local_gov::level() == Level::Normal,
-        on_battery: s.power.as_ref().is_some_and(|p| p.battery && !p.on_ac),
-        game: s.game == Some(true) || s.fullscreen == Some(true),
-        user_idle_secs: s.idle_secs,
-        model_idle_secs: local_sidecar::secs_since_use(),
-        in_flight: local_sidecar::in_flight(),
-        warm_wanted: local::warm_wanted(),
     }
 }
 
@@ -194,7 +135,6 @@ fn windows_game() -> Option<bool> {
 #[derive(Default)]
 struct Reader {
     tick: u32,
-    rules: Rules,
     /// Slow signals from the last slow sample.
     slow: Slow,
     total_mb: Option<u64>,
