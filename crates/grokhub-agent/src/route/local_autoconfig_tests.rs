@@ -130,6 +130,7 @@ fn a_12_gb_gpu_keeps_the_whole_12b_on_the_gpu_with_q4_kv() {
             tensor_split: None,
             draft: None,
             cpu_only: false,
+            run: Default::default(),
         }
     );
     assert_eq!(
@@ -638,6 +639,7 @@ fn whole_gpu_12b() -> LaunchArgs {
         tensor_split: None,
         draft: None,
         cpu_only: false,
+        run: Default::default(),
     }
 }
 
@@ -730,4 +732,45 @@ fn the_running_models_own_memory_is_added_back_for_a_fresh_plan() {
         }
     );
     assert_eq!(taken(FreeNow::default(), resident), FreeNow::default());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_model_kept_up_under_throttle_gets_the_sharing_flags_its_engine_knows() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = std::env::temp_dir().join(format!("grokhub-throttle-flags-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    let binary = root.join("bin").join("llama-server");
+    std::fs::write(
+        &binary,
+        "#!/bin/sh\necho '--prio N   priority'\necho '--poll <0...100>   polling'\necho '-ub,   --ubatch-size N   ubatch'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(root.join("bin").join("libggml-cuda.so"), b"").unwrap();
+    let model = root.join("tiny.gguf");
+    std::fs::write(&model, tiny_gguf()).unwrap();
+    set_profile(rtx_4070_laptop(), root.join("local"));
+    set_state(GovState::Normal);
+    let (normal, _, _) = launch_for(&binary, &model).expect("planned");
+    assert_eq!(normal.run, super::super::local_flags::RunFlags::default());
+    set_state(GovState::Throttle);
+    let (shared, _, _) = launch_for(&binary, &model).expect("planned");
+    set_state(GovState::Normal);
+    assert_eq!(shared.run.poll, Some(0));
+    assert_eq!(shared.run.prio, Some(-1));
+    assert_eq!(shared.run.ubatch, Some(128));
+    assert_eq!(shared.run.vk_nodes_per_submit, None, "CUDA, not Vulkan");
+    assert!(shared.run.low_priority);
+    let args = shared.to_args();
+    assert!(args.windows(2).any(|w| w == ["--poll", "0"]));
+    assert!(args.windows(2).any(|w| w == ["--prio", "-1"]));
+    assert!(args.windows(2).any(|w| w == ["--ubatch-size", "128"]));
+    // Later tests start with no hardware read.
+    if let Ok(mut l) = live().lock() {
+        l.profile = None;
+        l.tune_dir = None;
+    }
+    let _ = std::fs::remove_dir_all(root);
 }

@@ -302,6 +302,31 @@ pub fn turn_estimate(
     (slot.1.estimate, upgraded)
 }
 
+/// Each chat's latest turn and its size, for the spawn policy: a helper's
+/// caps follow the size of the turn that starts it.
+static LATEST: Mutex<BTreeMap<String, (u64, TaskSize)>> = Mutex::new(BTreeMap::new());
+
+/// The router sized `session`'s turn `turn` as `size`.
+pub fn note_latest(session: &str, turn: u64, size: TaskSize) {
+    if session.is_empty() {
+        return;
+    }
+    let mut latest = LATEST.lock().unwrap_or_else(|e| e.into_inner());
+    if latest.len() >= TURNS_CAP && !latest.contains_key(session) {
+        latest.clear();
+    }
+    latest.insert(session.to_string(), (turn, size));
+}
+
+/// `session`'s latest turn and its size, if the router has sized one.
+pub fn latest(session: &str) -> Option<(u64, TaskSize)> {
+    LATEST
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(session)
+        .copied()
+}
+
 /// Record what a finished call spent and where it ran, for the turn's next
 /// sizing. Unknown or finished turns are ignored.
 pub fn note_served(key: &str, turn: u64, output_tokens: u64, free_or_local: bool) {

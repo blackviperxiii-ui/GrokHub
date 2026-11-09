@@ -22,8 +22,6 @@ use crate::tools::{DesktopOps, ToolOutput};
 use crate::{CancelToken, InputItem, ModelClient, Usage};
 
 const DEPTH_LIMIT: u32 = 2;
-/// Turns a subagent gets when its parent runs with no cap (`max_turns` 0).
-const SUBAGENT_MAX_TURNS: u32 = 50;
 
 pub struct SpawnCall<'a> {
     pub name: &'a str,
@@ -105,14 +103,8 @@ pub fn drain_side_events() -> Vec<SideEvent> {
 }
 
 pub fn spawn_schema() -> Value {
-    let mut description = String::from(
-        "Run a child agent. type is explore (read-only) or general (same permissions as the parent). isolation worktree uses git worktree add. background returns a task id.",
-    );
-    if crate::route::boundary::enabled(&crate::perm::config_dir()) {
-        description.push_str(
-            " A general helper's prompt needs a brief, one labeled line each: Goal:, Constraints:, Edge cases:, Done when:, Files:.",
-        );
-    }
+    // One fixed text, so a setting never rewrites the cached tool list.
+    let description = "Start a helper; do small or sequential work yourself. type explore: read-only, wide reading. general: your permissions. isolation worktree. background: task id.";
     json!({
         "type": "function",
         "name": "spawn_subagent",
@@ -226,6 +218,17 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
             );
         }
     }
+    // The harness decides: the model only proposed this helper.
+    let ticket = match crate::subagent_policy::admit(&crate::subagent_policy::Ask {
+        session: root_session(call.session),
+        explore: spec.explore,
+        background: spec.background,
+        worktree: spec.worktree,
+        lead_model: call.model,
+    }) {
+        Ok(ticket) => ticket,
+        Err(text) => return (ToolOutput::err(text), Usage::default()),
+    };
     let child_cancel = CancelToken::child_of(call.cancel);
     let steer = SteerQueue::new();
     let wt_cell: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
@@ -316,11 +319,7 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         parent_session: call.session.to_string(),
         parent_workspace: call.workspace.to_path_buf(),
         trace: crate::harness::provenance::current(),
-        max_turns: if call.max_turns == 0 {
-            SUBAGENT_MAX_TURNS
-        } else {
-            call.max_turns
-        },
+        max_turns: crate::subagent_policy::child_turns(call.max_turns, spec.explore),
         context_length: call.context_length,
         cancel: child_cancel.clone(),
         steer,
@@ -343,6 +342,7 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         fork,
         config: crate::perm::pinned_config(),
         class: child_class(crate::route::live::current_class(), briefed),
+        ticket,
     };
     if spec.background {
         thread::spawn(move || run_job(job, None));
@@ -353,7 +353,22 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
     }
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || run_job(job, Some(tx)));
-    let done = pump(&rx, call.on_event, call.cancel, call.halt, &child_cancel);
+    let deadline = std::time::Instant::now() + crate::subagent_policy::wall(spec.explore);
+    let (done, timed_out) = pump(
+        &rx,
+        call.on_event,
+        call.cancel,
+        call.halt,
+        &child_cancel,
+        deadline,
+    );
+    // Out of time reads as partial: the helper hands back what it found.
+    let done = done.map(|mut done| {
+        if timed_out && matches!(done.stop, StopReason::Cancelled) {
+            done.stop = StopReason::MaxTurns;
+        }
+        done
+    });
     let done = done.unwrap_or_else(|| {
         child_cancel.cancel();
         let _ = tasks.kill(&id);
@@ -455,6 +470,8 @@ struct ChildJob {
     config: Option<PathBuf>,
     /// Item 34: the route class a briefed helper runs under.
     class: Option<&'static str>,
+    /// Its place in the spawn policy's counts, freed when the job ends.
+    ticket: crate::subagent_policy::Ticket,
 }
 
 struct ChildDone {
@@ -483,6 +500,12 @@ fn run_job(job: ChildJob, tx: Option<Sender<ChildNote>>) {
     let _trace = crate::harness::provenance::enter(job.trace.clone());
     let _config = job.config.clone().map(crate::perm::ConfigGuard::set);
     let mut done = run_child_retrying(&job, &tx);
+    job.ticket.spent(
+        done.usage
+            .input_tokens
+            .saturating_sub(done.usage.cached_tokens)
+            .saturating_add(done.usage.output_tokens),
+    );
     done.text = guard_result(
         &job.parent_workspace,
         &job.parent_session,
@@ -693,23 +716,30 @@ fn side_from(session: &str, ev: LoopEvent) -> Option<SideEvent> {
     })
 }
 
+/// Forwards a foreground helper's events until it finishes. Past `deadline`
+/// the helper is stopped and the second value is true.
 fn pump(
     rx: &Receiver<ChildNote>,
     on_event: &mut dyn FnMut(LoopEvent),
     parent_cancel: &CancelToken,
     halt: &dyn HaltCheck,
     child_cancel: &CancelToken,
-) -> Option<ChildDone> {
+    deadline: std::time::Instant,
+) -> (Option<ChildDone>, bool) {
+    let mut timed_out = false;
     loop {
         match rx.recv_timeout(Duration::from_millis(30)) {
             Ok(ChildNote::Event(ev)) => on_event(ev),
-            Ok(ChildNote::Finished(done)) => return Some(done),
+            Ok(ChildNote::Finished(done)) => return (Some(done), timed_out),
             Err(RecvTimeoutError::Timeout) => {
                 if parent_cancel.is_cancelled() || halt.halted() {
                     child_cancel.cancel();
+                } else if !timed_out && std::time::Instant::now() >= deadline {
+                    timed_out = true;
+                    child_cancel.cancel();
                 }
             }
-            Err(RecvTimeoutError::Disconnected) => return None,
+            Err(RecvTimeoutError::Disconnected) => return (None, timed_out),
         }
     }
 }
@@ -955,7 +985,7 @@ fn status_line(stop: &StopReason) -> String {
     match stop {
         StopReason::EndTurn => "done".into(),
         StopReason::MaxTurns => {
-            "partial (it hit its step limit; this is what it found so far)".into()
+            "partial (it hit its step or time limit; this is what it found so far)".into()
         }
         StopReason::Cancelled => "stopped (cancelled before it finished)".into(),
         StopReason::Halted => "stopped (Halt)".into(),
@@ -1375,8 +1405,12 @@ mod tests {
         dir
     }
 
+    /// A fresh chat, sized long so the spawn policy's caps don't read the
+    /// tests' one-word prompts as small turns.
     fn session(tag: &str) -> String {
-        format!("sub{tag}{}{}", std::process::id(), unique())
+        let id = format!("sub{tag}{}{}", std::process::id(), unique());
+        crate::subagent_policy::pin_size(&id, crate::route::sizing::TaskSize::Long);
+        id
     }
 
     fn call(id: &str, name: &str, args: &str) -> FunctionCall {
@@ -2822,7 +2856,7 @@ mod tests {
         assert_eq!(status_line(&StopReason::EndTurn), "done");
         assert_eq!(
             status_line(&StopReason::MaxTurns),
-            "partial (it hit its step limit; this is what it found so far)"
+            "partial (it hit its step or time limit; this is what it found so far)"
         );
         assert_eq!(
             status_line(&StopReason::Cancelled),
@@ -2979,5 +3013,43 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn a_foreground_helper_past_its_time_is_stopped_once() {
+        struct NoHalt;
+        impl HaltCheck for NoHalt {
+            fn halted(&self) -> bool {
+                false
+            }
+        }
+        let (tx, rx) = mpsc::channel();
+        let child = CancelToken::new();
+        let watch = child.clone();
+        thread::spawn(move || {
+            while !watch.is_cancelled() {
+                thread::sleep(Duration::from_millis(5));
+            }
+            let _ = tx.send(ChildNote::Finished(ChildDone {
+                stop: StopReason::Cancelled,
+                usage: Usage::default(),
+                text: "found two of three".into(),
+            }));
+        });
+        let past = std::time::Instant::now();
+        let (done, timed_out) = pump(&rx, &mut |_| {}, &CancelToken::new(), &NoHalt, &child, past);
+        assert!(timed_out);
+        assert!(child.is_cancelled());
+        assert_eq!(done.map(|d| d.text).as_deref(), Some("found two of three"));
+    }
+
+    #[test]
+    fn the_spawn_tool_text_never_changes_with_settings() {
+        let cfg = scratch("tooltext").join("cfg");
+        std::fs::create_dir_all(&cfg).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        let before = spawn_schema();
+        std::fs::write(cfg.join(crate::route::boundary::CONFIG), "enabled = true\n").unwrap();
+        assert_eq!(spawn_schema(), before);
     }
 }

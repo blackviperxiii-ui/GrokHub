@@ -67,6 +67,9 @@ fn rail_phosphor(icon: RailIcon) -> &'static str {
         RailIcon::Objectives => ph::regular::TARGET,
         RailIcon::Pulse => ph::regular::PULSE,
         RailIcon::Library => ph::regular::SQUARES_FOUR,
+        // A lightning bolt reads as an ability you can call up, and stays
+        // apart from Library's tiles and Mods' puzzle piece.
+        RailIcon::Skills => ph::regular::LIGHTNING,
         RailIcon::Mods => ph::regular::PUZZLE_PIECE,
         RailIcon::Pc => ph::regular::DESKTOP,
         RailIcon::Profile => ph::regular::USER,
@@ -139,6 +142,7 @@ pub enum RailIcon {
     Objectives,
     Pulse,
     Library,
+    Skills,
     Mods,
     Pc,
     Profile,
@@ -151,7 +155,8 @@ pub fn rail_icon_for(id: &str) -> RailIcon {
         "chat" => RailIcon::Chat,
         "imagine" => RailIcon::Imagine,
         "automations" => RailIcon::Clock,
-        "skills" | "connectors" => RailIcon::Grid,
+        "skills" => RailIcon::Skills,
+        "connectors" => RailIcon::Grid,
         "library" => RailIcon::Library,
         "mods" => RailIcon::Mods,
         "objectives" => RailIcon::Objectives,
@@ -188,6 +193,7 @@ pub fn rail_kick(icon: RailIcon) -> Kick {
         | RailIcon::Objectives
         | RailIcon::Pulse
         | RailIcon::Library
+        | RailIcon::Skills
         | RailIcon::Mods
         | RailIcon::Pc
         | RailIcon::Profile => Kick::Lift,
@@ -1090,7 +1096,15 @@ mod tests {
             rail_icon_for("automations"),
             "History and Automations must not share one rail glyph"
         );
-        assert_eq!(rail_icon_for("skills"), RailIcon::Grid);
+        assert_eq!(rail_icon_for("skills"), RailIcon::Skills);
+        assert_eq!(rail_icon_for("connectors"), RailIcon::Grid);
+        for other in ["library", "mods", "connectors"] {
+            assert_ne!(
+                rail_phosphor(rail_icon_for("skills")),
+                rail_phosphor(rail_icon_for(other)),
+                "Skills must not share a rail glyph with {other}"
+            );
+        }
         assert_eq!(rail_icon_for("workboard"), RailIcon::Folder);
         assert_ne!(RailIcon::Search, RailIcon::Compose);
         assert_ne!(RailIcon::Imagine, RailIcon::Grid);

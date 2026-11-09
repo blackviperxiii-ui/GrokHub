@@ -409,8 +409,18 @@ fn spawn_llama(
     let mut cmd = llama_command(binary, &args, token);
     cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(log);
     grokhub_core::proc_util::hide_windows_console(&mut cmd);
-    cmd.spawn()
-        .map_err(|e| format!("could not start local model server: {e}"))
+    let run = launch.map(|l| l.run.clone()).unwrap_or_default();
+    cmd.envs(run.env());
+    if run.low_priority {
+        super::local_flags::below_normal(&mut cmd);
+    }
+    let child = cmd
+        .spawn()
+        .map_err(|e| format!("could not start local model server: {e}"))?;
+    if run.low_priority {
+        super::local_flags::lower_priority(child.id());
+    }
+    Ok(child)
 }
 
 /// Appended to the one-shot defaults to keep the engine off every GPU.
@@ -2257,6 +2267,7 @@ mod tests {
             tensor_split: Some(vec![3, 1]),
             draft: None,
             cpu_only: false,
+            run: Default::default(),
         }
     }
 
@@ -2343,6 +2354,7 @@ mod tests {
             tensor_split: None,
             draft: None,
             cpu_only: false,
+            run: Default::default(),
         };
         for args in [
             llama_args(Path::new("/m.gguf"), "127.0.0.1", 4711),
@@ -2733,8 +2745,10 @@ mod tests {
         std::fs::write(dir.join("models").join("m.gguf"), b"x").unwrap();
         let load_dir = dir.clone();
         let loading = std::thread::spawn(move || acquire(&load_dir).map(drop));
+        // Wait for the cold start itself: a check that only sees the slot
+        // locked for a moment also reads as Loading.
         let until = Instant::now() + Duration::from_secs(5);
-        while runtime(&dir) != Runtime::Loading && Instant::now() < until {
+        while !STARTING.load(Ordering::SeqCst) && Instant::now() < until {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert_eq!(runtime(&dir), Runtime::Loading);
