@@ -1208,9 +1208,9 @@ fn pulse_mixes_ideas_and_posts_in_one_column_and_narrow_rows_keep_run() {
         assert_eq!(count(&wide, gone), 0, "{gone}: {wide:?}");
     }
     // Idea rows rest without inline actions and keep their ···; posts have
-    // no ··· at all, only their one row of buttons.
-    assert_eq!((count(&wide, "Run"), count(&wide, "Snooze")), (0, 0));
-    assert_eq!(count(&wide, "···"), 2);
+    // a ··· too, holding only Why I created this.
+    assert_eq!(count(&wide, "Run"), 0);
+    assert!(count(&wide, "···") > 2, "{wide:?}");
     // Posts show Like first and their chips at rest.
     assert_eq!(
         (count(&wide, "Like"), count(&wide, "Remind me later")),
@@ -1218,7 +1218,8 @@ fn pulse_mixes_ideas_and_posts_in_one_column_and_narrow_rows_keep_run() {
     );
 
     // Narrow: Run stays on every idea row; idea rows keep Snooze and Dismiss
-    // in ···, and every post keeps its Dismiss in its row.
+    // in ···, every post keeps its Dismiss in its row, and posts that suit
+    // it show Snooze there; each post has its own ··· (Why).
     let narrow = pulse_text_pos(cabin, NARROW_W);
     assert!(cabin.pulse_view.narrow);
     assert_eq!(
@@ -1228,7 +1229,7 @@ fn pulse_mixes_ideas_and_posts_in_one_column_and_narrow_rows_keep_run() {
             count(&narrow, "Dismiss"),
             count(&narrow, "···")
         ),
-        (2, 0, 3, 2),
+        (2, 3, 3, 5),
         "{narrow:?}"
     );
     assert!(at(&narrow, "I can sort the beach photos").y < at(&narrow, "Rust 1.92 ships").y);
@@ -1424,6 +1425,7 @@ fn every_post_shows_one_row_like_first_dismiss_last() {
             "Like",
             "Undo",
             "Don't do this again",
+            "Delete",
             "I don't like",
             "Dismiss"
         ]
@@ -1444,6 +1446,7 @@ fn every_post_shows_one_row_like_first_dismiss_last() {
             "Skip",
             "Too easy",
             "Too hard",
+            "Delete",
             "I don't like",
             "Dismiss"
         ]
@@ -1474,7 +1477,7 @@ Two are crashes on resume.\n\nThe crash happens after the laptop sleeps for an h
     ] {
         assert!(open.iter().any(|t| t == want), "{want:?} in {open:?}");
     }
-    for gone in ["Full report", "Hide report", "···"] {
+    for gone in ["Full report", "Hide report"] {
         assert!(!open.iter().any(|t| t == gone), "{gone:?} in {open:?}");
     }
     let _ = id;
@@ -1613,6 +1616,8 @@ fn a_plain_post_shows_its_chips_between_like_and_dismiss() {
                 "Remind me later".to_string(),
                 FeedPostAct::Chip(ChipAct::RemindAt(CHIP_TONIGHT))
             ),
+            // A finished run is a one-off: Delete, not Snooze.
+            ("Delete".to_string(), FeedPostAct::Delete),
             ("I don't like".to_string(), FeedPostAct::Dislike),
             ("Dismiss".to_string(), FeedPostAct::Dismiss),
         ]
@@ -1808,4 +1813,29 @@ fn a_crash_card_waits_for_a_tap_unless_its_switch_is_on() {
         .and_then(|c| c.pulse.report.as_ref())
         .map(|r| r.receipts.len());
     assert_eq!(receipts, Some(1));
+}
+
+#[test]
+fn a_post_offers_snooze_or_delete_as_it_suits_and_both_when_unsure() {
+    use super::pulse_ui::{post_row, post_why, FeedPostAct};
+    let day = chip_day();
+    let has = |card: &grokhub_core::UpdateCard, did: FeedPostAct| {
+        post_row(card, false, &day).iter().any(|(_, d)| *d == did)
+    };
+    let mut soon = pulse_idea("soon", "Sale ends tomorrow", "a deal", day.now_ms);
+    soon.kind = grokhub_core::UpdateKind::Suggestion;
+    assert!(has(&soon, FeedPostAct::Snooze) && !has(&soon, FeedPostAct::Delete));
+    let mut plain = pulse_idea("plain", "Three garden posts", "reading", day.now_ms);
+    plain.kind = grokhub_core::UpdateKind::Digest;
+    assert!(has(&plain, FeedPostAct::Snooze) && has(&plain, FeedPostAct::Delete));
+    let row = post_row(&plain, false, &day);
+    let at = |did: FeedPostAct| row.iter().position(|(_, d)| *d == did);
+    assert!(at(FeedPostAct::Snooze) < at(FeedPostAct::Delete));
+    assert!(at(FeedPostAct::Delete) < at(FeedPostAct::Dislike));
+    assert_eq!(
+        row.last().map(|(_, d)| d.clone()),
+        Some(FeedPostAct::Dismiss)
+    );
+    plain.why = Some("You read garden posts.".into());
+    assert_eq!(post_why(&plain).as_deref(), Some("You read garden posts."));
 }

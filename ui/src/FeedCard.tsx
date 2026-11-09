@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { pulseImage, type PulseChip, type PulseIdea, type PulsePost } from "./api";
 import { Markdown } from "./Markdown";
 import { VerdictLine } from "./PulseFix";
-import { ExternalLink } from "./ui";
+import { ConfirmRow, ExternalLink, useDismiss } from "./ui";
 
 /** Topic emoji with a bundled 3D picture (Fluent Emoji 3D, MIT, see
  * public/emoji3d/LICENSE), by code point without variation selectors. */
@@ -219,6 +219,12 @@ export interface FeedCardProps {
   onDislike: () => void;
   /** Off the page. Carries no weight. */
   onDismiss: () => void;
+  /** The ⋯ menu's only item: why this card was made. */
+  onWhy?: () => Promise<string>;
+  /** Hidden until the next 9 AM. Shown when the card says it suits. */
+  onSnooze?: () => void;
+  /** Gone for good, after a confirm. Shown when the card says it suits. */
+  onDelete?: () => void;
   /** A chip under the card other than Discuss: a fix, Ignore for now, or
    * Remind me later. */
   onChip?: (chip: PulseChip) => void;
@@ -226,8 +232,9 @@ export interface FeedCardProps {
 
 /** One Feed post, always fully open: icon, title, where it is from and why,
  * verdict, cited snippet, the full report, media; then one row of buttons
- * (Like, the card's chips or Discuss, Read it, I don't like, Dismiss). No
- * menu and nothing to collapse. */
+ * (Like, the card's chips or Discuss, Read it, Snooze and Delete when they
+ * suit the card, I don't like, Dismiss). The ⋯ menu holds only "Why I
+ * created this"; nothing collapses. */
 export function FeedCard({
   post,
   busy,
@@ -236,18 +243,48 @@ export function FeedCard({
   onOpen,
   onDislike,
   onDismiss,
+  onWhy,
+  onSnooze,
+  onDelete,
   onChip,
 }: FeedCardProps) {
   const chips = post.chips ?? [];
+  const [menu, setMenu] = useState(false);
+  const [why, setWhy] = useState<string | null>(null);
+  const [asking, setAsking] = useState(false);
+  const corner = useDismiss<HTMLDivElement>(menu, () => setMenu(false));
+  async function askWhy() {
+    setMenu(false);
+    if (onWhy) setWhy(await onWhy().catch((err) => String(err)));
+  }
   return (
     <li className="card post feed-card" aria-label={post.title}>
       <div className="feed-head">
         <TopicIcon icon={post.icon} />
         <div className="feed-title">{post.title}</div>
-        <div className="feed-corner">
+        <div className="feed-corner" ref={corner}>
           <span className="card-status" title={fullDate(post.createdAt)}>
             {post.ago}
           </span>
+          {onWhy && (
+            <button
+              type="button"
+              className="quiet icon-button"
+              aria-label="More"
+              aria-haspopup="menu"
+              aria-expanded={menu}
+              onClick={() => setMenu((m) => !m)}
+            >
+              ⋯
+            </button>
+          )}
+          {menu && (
+            <div className="feed-menu" role="menu">
+              <button type="button" role="menuitem" onClick={() => void askWhy()}>
+                Why I created this
+              </button>
+            </div>
+          )}
         </div>
       </div>
       <p className="feed-source">
@@ -272,6 +309,24 @@ export function FeedCard({
         </div>
       )}
       <Media post={post} />
+      {why && (
+        <p className="card-status why" role="note">
+          {why}
+        </p>
+      )}
+      {asking && onDelete && (
+        <ConfirmRow
+          question="Delete this post?"
+          detail="It won't come back."
+          action="Delete"
+          busy={busy}
+          onConfirm={() => {
+            setAsking(false);
+            onDelete();
+          }}
+          onCancel={() => setAsking(false)}
+        />
+      )}
       <CardButtons
         liked={post.loved}
         busy={busy}
@@ -299,6 +354,16 @@ export function FeedCard({
         {post.link && onOpen && (
           <button type="button" className="quiet" disabled={busy} onClick={onOpen}>
             Read it
+          </button>
+        )}
+        {post.snooze && onSnooze && (
+          <button type="button" className="quiet" disabled={busy} onClick={onSnooze}>
+            Snooze
+          </button>
+        )}
+        {post.delete && onDelete && (
+          <button type="button" className="quiet" disabled={busy} onClick={() => setAsking(true)}>
+            Delete
           </button>
         )}
       </CardButtons>

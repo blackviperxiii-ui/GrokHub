@@ -7,6 +7,7 @@ import {
   pulseDiscuss,
   pulseOffer,
   pulseRemind,
+  pulseWhy,
   saveFeedPrompt,
   type PulseAct,
   type PulseChip,
@@ -300,6 +301,9 @@ export function Pulse({
                 onOpen={() => void openUrl(post.link).catch(fail)}
                 onDislike={() => void act(post.id, "dislike", DISLIKE_NOTE)}
                 onDismiss={() => void act(post.id, "dismiss", "Dismissed.")}
+                onWhy={() => pulseWhy(post.id)}
+                onSnooze={() => void act(post.id, "snooze", "Snoozed until 9 AM.")}
+                onDelete={() => void act(post.id, "delete", "Deleted.")}
                 onChip={(c) => void chip(post.id, c)}
               />
               {i === today - 1 && i < total - 1 && (

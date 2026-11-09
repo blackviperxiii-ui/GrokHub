@@ -753,6 +753,10 @@ pub(super) enum FeedPostAct {
     Dislike,
     /// Off the page. Carries no weight on a feed post.
     Dismiss,
+    /// Hidden until the next 09:00, when the card suits it.
+    Snooze,
+    /// Gone from the page for good, when the card suits it.
+    Delete,
     Discuss,
     Link(String),
     /// Done-for-you Undo (pointer click only).
@@ -805,6 +809,8 @@ pub(super) fn feed_act(card: &UpdateCard, did: FeedPostAct) -> PulseAct {
         FeedPostAct::Like => PulseAct::Like(id),
         FeedPostAct::Dislike => PulseAct::Dislike(id),
         FeedPostAct::Dismiss => PulseAct::Dismiss(id),
+        FeedPostAct::Snooze => PulseAct::Snooze(id),
+        FeedPostAct::Delete => PulseAct::Ignore(id),
         FeedPostAct::Discuss => PulseAct::Discuss(id),
         FeedPostAct::Link(url) => PulseAct::Link(url),
         FeedPostAct::Undo => PulseAct::Undo(id),
@@ -928,8 +934,9 @@ pub(super) fn post_buttons(
     out
 }
 
-/// Every post's one row of buttons: Like first, the post's own buttons, then
-/// I don't like, and Dismiss last.
+/// Every post's one row of buttons: Like first, the post's own buttons,
+/// Snooze and Delete when the card suits them (both when unsure), then I
+/// don't like, and Dismiss last.
 pub(super) fn post_row(
     card: &UpdateCard,
     looking_more: bool,
@@ -945,9 +952,39 @@ pub(super) fn post_row(
             .into_iter()
             .filter(|(_, did)| *did != FeedPostAct::Like),
     );
+    let offers = grokhub_core::card_offers::offers(card, &[], day.now_ms);
+    if offers.snooze {
+        row.push(("Snooze".into(), FeedPostAct::Snooze));
+    }
+    if offers.delete {
+        row.push(("Delete".into(), FeedPostAct::Delete));
+    }
     row.push(("I don't like".into(), FeedPostAct::Dislike));
     row.push(("Dismiss".into(), FeedPostAct::Dismiss));
     row
+}
+
+/// Why this post was made, in words, for its ··· menu.
+pub(super) fn post_why(card: &UpdateCard) -> Option<String> {
+    card.why
+        .clone()
+        .filter(|w| !w.trim().is_empty())
+        .or_else(|| pc::plain_why(card))
+        .or_else(|| card.pulse.because.as_deref().map(why_line))
+}
+
+/// A post's ··· menu: only "Why I created this" and its answer.
+fn post_why_menu(ui: &mut egui::Ui, why: Option<&str>) {
+    ui.label(
+        RichText::new("Why I created this")
+            .size(crate::theme::FONT_TIP)
+            .color(crate::theme::muted()),
+    );
+    ui.label(
+        RichText::new(why.unwrap_or("I made it from your recent activity."))
+            .size(crate::theme::FONT_TIP)
+            .color(crate::theme::subtle()),
+    );
 }
 
 /// The row, painted: one line, every button the same size and outline,
@@ -1594,6 +1631,7 @@ impl Cabin {
         let mut act = None;
         let day = self.card_day();
         let daily_drop = grokhub_core::daily_drop::is_daily_drop_card(card, &self.cfg.daily_drop);
+        let why = post_why(card).or_else(|| self.reaction_why(card));
         let thumbs: Vec<Thumb> = card
             .pulse
             .image_urls
@@ -1618,8 +1656,13 @@ impl Cabin {
                                 .size(crate::theme::FONT_TIP)
                                 .color(crate::theme::subtle()),
                         );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            crate::cards::dots_menu(ui, false, |ui| {
+                                post_why_menu(ui, why.as_deref())
+                            });
+                        });
                     });
-                    // Every post is fully open: no menu, nothing to collapse.
+                    // Every post is fully open: the ··· holds only Why.
                     let report_open = true;
                     if let Some(did) = paint_post_body(
                         ui,
