@@ -6,7 +6,7 @@ use std::fs;
 
 use grokhub_core::card_signals::{append_signal, signal_for, CardEvent};
 use grokhub_core::chips::{ChipKind, QuickChip};
-use grokhub_core::learn::{hub, store, Kind, Shape, Subject};
+use grokhub_core::learn::{hub, store, Kind, Shape, Standing, Subject};
 use grokhub_core::outcome::OutcomeResult;
 use grokhub_core::run_metrics::{append_run, RunMetrics};
 use grokhub_core::update_feed::automation_done_card;
@@ -135,5 +135,60 @@ fn the_shared_logs_feed_one_engine() {
             .shape,
         Shape::Rate { yes: 1.0, no: 0.0 }
     );
+
+    // `/learned` reads the same engine, and the user's word is saved at once.
+    use grokhub_core::learn::view;
+    let listed = view::run("", grokhub_core::now_ms());
+    assert!(
+        listed.contains("- **Skill weekly-report**: Runs go well about 10 times in 10."),
+        "{listed}"
+    );
+    assert_eq!(
+        view::run("wrong skill:weekly-report", 0),
+        "Marked `skill:weekly-report` wrong. It won't be counted or used again."
+    );
+    assert_eq!(
+        store::load_beliefs(&dir)
+            .get(&subject("skill:weekly-report"))
+            .unwrap()
+            .standing,
+        Standing::Wrong
+    );
+    // The desktop app's buttons run the same code and get the list back.
+    let act: view::Act =
+        serde_json::from_str(r#"{"kind":"forget","key":"card:automation_done"}"#).unwrap();
+    let before = hub::view(grokhub_core::now_ms());
+    assert!(
+        before.rows.iter().any(|r| r.key == "card:automation_done"),
+        "{before:?}"
+    );
+    let after = view::act(act, grokhub_core::now_ms()).unwrap();
+    assert!(
+        !after.rows.iter().any(|r| r.key == "card:automation_done"),
+        "{after:?}"
+    );
+    assert_eq!(after.rows.len(), before.rows.len() - 1);
+    assert_eq!(
+        view::act(
+            view::Act::Wrong {
+                key: "two words".into()
+            },
+            0
+        ),
+        Err(view::NO_SUCH_LINE.to_string())
+    );
+    let json = serde_json::to_value(&after.rows[0]).unwrap();
+    for field in [
+        "key", "title", "says", "evidence", "sure", "stage", "lastMs",
+    ] {
+        assert!(json.get(field).is_some(), "{field} missing from {json}");
+    }
+    assert_eq!(
+        view::run("forget all", 0),
+        "Forgot everything the app learned."
+    );
+    assert!(store::load_beliefs(&dir).is_empty());
+    assert_eq!(store::read_signals(&dir), Vec::new());
+    assert_eq!(view::run("", grokhub_core::now_ms()), view::NOTHING_YET);
     let _ = fs::remove_dir_all(&dir);
 }

@@ -33,6 +33,7 @@ vi.mock("./Labs", () => ({ Labs: () => <p>Labs panel</p> }));
 vi.mock("./Personality", () => ({ Personality: () => <p>Personality panel</p> }));
 vi.mock("./Playbooks", () => ({ Playbooks: () => <p>Playbooks panel</p> }));
 vi.mock("./Interests", () => ({ Interests: () => <p>Interests panel</p> }));
+vi.mock("./Learned", () => ({ Learned: () => <p>Learned panel</p> }));
 vi.mock("./Permissions", () => ({ Permissions: () => <p>Permissions panel</p> }));
 // Behavior, Privacy and Background have their own tests.
 vi.mock("./WorkboardTidy", () => ({ WorkboardTidy: () => <p>Workboard tidy</p> }));
@@ -369,11 +370,13 @@ describe("Settings", () => {
 
     await openSection("Privacy & data");
     expect(screen.getByText("Privacy panel")).toBeInTheDocument();
+    expect(screen.getByText("Learned panel")).toBeInTheDocument();
     expect(screen.queryByText("Permissions panel")).toBeNull();
 
     await openSection("Background");
     expect(screen.getByText("Background panel")).toBeInTheDocument();
     expect(screen.queryByText("Privacy panel")).toBeNull();
+    expect(screen.queryByText("Learned panel")).toBeNull();
 
     await openSection("Pulse");
     expect(screen.getByText("Interests panel")).toBeInTheDocument();
