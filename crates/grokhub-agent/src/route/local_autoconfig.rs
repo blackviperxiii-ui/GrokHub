@@ -97,6 +97,8 @@ pub struct LaunchArgs {
     /// Keep every GPU out of it (`--device none`): set after the GPU backend
     /// crashed the engine at start. See [`on_cpu`].
     pub cpu_only: bool,
+    /// How the engine shares the machine (poll, priority, batch size).
+    pub run: super::local_flags::RunFlags,
 }
 
 impl LaunchArgs {
@@ -138,6 +140,7 @@ impl LaunchArgs {
             // the engine off every GPU device.
             a.extend(["--device".into(), "none".into()]);
         }
+        a.extend(self.run.to_args());
         a.push("--cache-prompt".into());
         a
     }
@@ -368,6 +371,7 @@ pub fn autoconfig(
         tensor_split: p.device_plan().tensor_split,
         draft: None,
         cpu_only: false,
+        run: Default::default(),
     }
 }
 
@@ -866,6 +870,13 @@ fn planned(
     // half the threads and the game keeps its frame rate.
     if super::local_scale::gaming_reason(super::local_gov::reason()) {
         args = gaming_launch(&args);
+    }
+    // Kept up under Throttle, it shares the machine: no spinning threads,
+    // low priority, and short GPU submissions so other apps' frames wait less.
+    if state == GovState::Throttle {
+        let options = super::local_flags::engine_options(binary);
+        let on_gpu = !args.cpu_only && args.ngl > 0;
+        args.run = super::local_flags::shared(&options, args.backend, on_gpu);
     }
     Some((args, plan, key, dir))
 }
