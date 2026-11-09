@@ -81,6 +81,7 @@ pub fn run(
         ),
         "automation_delete" => control::delete_automation(&arg(args, "id")),
         "pulse_steam" => pulse_steam(ctx, args, grokhub_core::steam::detect_root()),
+        "module_setup" => module_setup(args, crate::indexers::display_fps::setup::run),
         "work_get" | "work_list" | "work_update" | "work_add" | "work_archive" => {
             super::work::run(ctx, tool, args)
         }
@@ -93,6 +94,31 @@ pub fn run(
     match out {
         Ok(text) => ToolOutput::ok(text),
         Err(e) => ToolOutput::err(e),
+    }
+}
+
+/// `module_setup`: the Home tile's Set up, from the chat. `run` is the
+/// setup runner (it waits on the OS prompt). Closing the prompt is an
+/// answer, not an error; no prompt at all hands back the steps to paste.
+pub(super) fn module_setup(
+    args: &Value,
+    run: impl FnOnce(bool) -> crate::indexers::display_fps::setup::Outcome,
+) -> Result<String, String> {
+    use crate::indexers::display_fps::setup::{copy_text, Outcome};
+    let undo = args.get("undo").and_then(Value::as_bool).unwrap_or(false);
+    let module = arg(args, "module");
+    if module != "frame_rate" {
+        return Err(format!(
+            "`{}` has no setup. Only frame_rate does.",
+            line(&module)
+        ));
+    }
+    let outcome = run(undo);
+    let said = outcome.sentence(undo);
+    match outcome {
+        Outcome::Done | Outcome::SignOut | Outcome::Dismissed => Ok(said),
+        Outcome::NoPrompt => Ok(format!("{said}\n\n```sh\n{}\n```", copy_text(undo))),
+        Outcome::Failed(_) | Outcome::Unsupported => Err(said),
     }
 }
 

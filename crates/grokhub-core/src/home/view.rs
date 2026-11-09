@@ -128,6 +128,11 @@ pub enum TileAction {
     OpenClip { index: usize },
     /// Open Steam's own friends list, where Steam shows who is online.
     SteamFriends,
+    /// Run a module's one-time setup (or its undo) behind the OS's own
+    /// password or admin prompt.
+    Setup { module: String, undo: bool },
+    /// Copy a module's setup steps, to paste into a terminal by hand.
+    CopySetup { module: String },
     /// Ask the tile for another pick.
     Reroll,
     /// Read the tile again.
@@ -146,6 +151,19 @@ impl TileAction {
     pub fn settings(section: &str) -> Self {
         Self::Settings {
             section: section.into(),
+        }
+    }
+
+    pub fn setup(module: &str, undo: bool) -> Self {
+        Self::Setup {
+            module: module.into(),
+            undo,
+        }
+    }
+
+    pub fn copy_setup(module: &str) -> Self {
+        Self::CopySetup {
+            module: module.into(),
         }
     }
 

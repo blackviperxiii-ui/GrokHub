@@ -1995,6 +1995,33 @@ async fn home_turn_on(state: State<'_, ShellState>, feature: String) -> Result<(
     }
 }
 
+/// A Home tile's Set up (or Undo setup): the module's one-time setup behind
+/// the OS's own password or admin prompt. Answers with one plain sentence on
+/// how it went; the tile shows the rest on its next read.
+#[tauri::command]
+async fn home_setup(module: String, undo: bool) -> Result<String, String> {
+    match module.as_str() {
+        #[cfg(desktop)]
+        "frame_rate" => off_main(move || home_fps::run_setup(undo).sentence(undo)).await,
+        _ => {
+            let _ = undo;
+            Err("That module has no setup here.".into())
+        }
+    }
+}
+
+/// A Home tile's Copy setup: the setup's steps, to paste by hand.
+#[tauri::command]
+fn home_setup_steps(module: String) -> Result<String, String> {
+    match module.as_str() {
+        #[cfg(desktop)]
+        "frame_rate" => Ok(grokhub_agent::indexers::display_fps::setup::copy_text(
+            false,
+        )),
+        _ => Err("That module has no setup here.".into()),
+    }
+}
+
 /// Home's Squad tile: open Steam's own friends list.
 #[tauri::command]
 async fn library_friends() -> Result<(), String> {
@@ -3419,6 +3446,8 @@ pub fn run() {
             home_open_clip,
             library_friends,
             home_turn_on,
+            home_setup,
+            home_setup_steps,
             home_catalog,
             set_home_layout,
             open_url

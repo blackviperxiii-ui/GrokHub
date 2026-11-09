@@ -15,6 +15,7 @@ mod diet;
 pub mod dream_gate;
 mod dream_model;
 mod drive;
+pub mod elevate;
 pub mod episode;
 mod eval;
 mod events;

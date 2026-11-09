@@ -311,6 +311,8 @@ impl Cabin {
                     let _ = crate::desktop::open_path(&path.to_string_lossy());
                 }
             }
+            TileAction::Setup { undo, .. } => super::fps::start_setup(undo),
+            TileAction::CopySetup { .. } => super::fps::queue_copy(),
             TileAction::Reroll => super::views::reroll(),
             TileAction::Retry => {}
         }

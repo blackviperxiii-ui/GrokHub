@@ -1059,6 +1059,8 @@ mod tests {
             "home_open_clip",
             "library_friends",
             "home_turn_on",
+            "home_setup",
+            "home_setup_steps",
             "set_mission_done",
         ] {
             assert!(!web_command(name), "{name}");

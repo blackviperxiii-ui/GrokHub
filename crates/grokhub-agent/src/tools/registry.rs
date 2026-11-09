@@ -643,6 +643,8 @@ mod tests {
     /// instead of 200 lines) added 143 to Chat/Agent and background, 146 to Plan/Ask.
     /// The deferred `models_check` index line (the live key test) added 48 to
     /// Chat/Agent and background, and 50 to Plan/Ask.
+    /// The deferred `module_setup` index line (Home's one-tap Frame Rate setup)
+    /// added 36 to Chat/Agent and background.
     #[test]
     fn eager_schema_payload_stays_within_budget_per_profile() {
         use super::super::set::ToolSet;
@@ -653,13 +655,13 @@ mod tests {
                 profile(PermMode::Ask, false, true),
                 full.clone(),
                 // +150 for the shell's outside_sandbox arg (HX-11), +143 for grep's modes.
-                11_316,
+                11_352,
             ),
             (
                 "agent",
                 profile(PermMode::Always, false, true),
                 full.clone(),
-                11_316,
+                11_352,
             ),
             (
                 "plan/ask",
@@ -672,7 +674,7 @@ mod tests {
                 "background",
                 profile(PermMode::Auto, false, false),
                 ToolSet::background(),
-                10_136,
+                10_172,
             ),
         ];
         for (label, gate, set, budget) in cases {

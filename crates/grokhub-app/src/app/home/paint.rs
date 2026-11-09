@@ -776,17 +776,10 @@ pub(super) fn frame_rate_text(
         FpsState::Rate(r) => FpsRead::Rate(r),
         FpsState::Blocked(FpsBlock::NeedsPermission) => FpsRead::NeedsSetup,
         FpsState::Blocked(_) => FpsRead::NoTrace,
+        FpsState::Note(n) => FpsRead::Setup(n),
+        FpsState::SettingUp => FpsRead::Starting,
     });
     grokhub_core::home::text::frame_rate_text(read, windows, presenter)
-}
-
-/// The Windows account the setup adds to Performance Log Users.
-fn windows_account() -> String {
-    let user = std::env::var("USERNAME").unwrap_or_default();
-    match std::env::var("USERDOMAIN") {
-        Ok(d) if !d.is_empty() => format!("{d}\\{user}"),
-        _ => user,
-    }
 }
 
 fn paint_frame_rate(ui: &mut egui::Ui, size: ModuleSize) {
@@ -799,32 +792,41 @@ fn paint_frame_rate(ui: &mut egui::Ui, size: ModuleSize) {
         None
     };
     let t = frame_rate_text(reading, windows, presenter.as_deref());
-    let needs_setup = matches!(
-        reading,
+    use grokhub_core::home::text::FpsSetup;
+    let (set_up, copy) = match reading {
         Some(FpsState::Blocked(fps::FpsBlock::NeedsPermission))
-    );
+        | Some(FpsState::Note(FpsSetup::Dismissed | FpsSetup::Failed)) => {
+            (true, size != ModuleSize::Small)
+        }
+        Some(FpsState::Note(FpsSetup::NoPrompt)) => (false, true),
+        _ => (false, false),
+    };
     card(ui, |ui| {
         header(ui, false, "Frame Rate", "", crate::theme::muted());
         paint_tile_text(ui, &t, size);
-        if needs_setup && size != ModuleSize::Small && crate::cards::ghost_pill(ui, "Copy setup") {
-            let setup = if windows {
-                fps::windows_setup(&windows_account())
-            } else {
-                let exe = std::env::current_exe()
-                    .map(|p| fps::probe_source(&p).to_string_lossy().into_owned())
-                    .unwrap_or_else(|_| "/usr/bin/grokhub".into());
-                fps::linux_setup(&exe)
-            };
-            ui.ctx().copy_text(setup);
+        if reading == Some(FpsState::SettingUp) {
+            ui.label(
+                egui::RichText::new("Waiting for your password")
+                    .small()
+                    .color(crate::theme::muted()),
+            );
         }
+        ui.horizontal(|ui| {
+            if set_up && crate::cards::ghost_pill(ui, "Set up") {
+                super::fps::start_setup(false);
+            }
+            if (copy && crate::cards::ghost_pill(ui, "Copy setup")) || super::fps::take_copy() {
+                ui.ctx().copy_text(fps::setup::copy_text(false));
+            }
+        });
     })
     .on_hover_text(if windows {
         format!(
-            "Loadout counts frames from Windows' own graphics event log (the one PresentMon reads), never from inside the game, so anti-cheat has nothing to see. It shows the busiest app drawing frames, which is your game while you play. The setup (run once in an admin PowerShell, then sign out and back in) adds your account to Windows' built-in Performance Log Users group, which lets you start event traces without admin. Undo: {}",
-            fps::windows_undo(&windows_account())
+            "Loadout counts frames from Windows' own graphics event log (the one PresentMon reads), never from inside the game, so anti-cheat has nothing to see. It shows the busiest app drawing frames, which is your game while you play. Set up asks Windows for admin once (then you sign out and back in) and adds your account to Windows' built-in Performance Log Users group, which lets you start event traces without admin. Undo: {}",
+            fps::windows_undo(&fps::windows_account())
         )
     } else if reading.is_some() {
-        "Loadout counts the frames your screen shows from the kernel's display driver, never from inside the game, so anti-cheat has nothing to see. It matches the game's FPS when the game is what's moving on that screen, and tops out at your refresh rate. The setup (needs sudo) installs a frame probe that only your user group can run and gives that one file the kernel's perf-counter permission. The probe opens the frame counters and then drops it, Loadout itself never runs with it, and the system-wide perf setting stays as it is. Undo: sudo rm -f /usr/local/lib/loadout/fps-probe /etc/tmpfiles.d/loadout-fps.conf".to_owned()
+        "Loadout counts the frames your screen shows from the kernel's display driver, never from inside the game, so anti-cheat has nothing to see. It matches the game's FPS when the game is what's moving on that screen, and tops out at your refresh rate. Set up asks for your password once and installs a frame probe that only your user group can run and gives that one file the kernel's perf-counter permission. The probe opens the frame counters and then drops it, Loadout itself never runs with it, and the system-wide perf setting stays as it is. Undo: sudo rm -f /usr/local/lib/loadout/fps-probe /etc/tmpfiles.d/loadout-fps.conf".to_owned()
     } else {
         "Reading FPS from inside a game can trip anti-cheat (Vanguard, EAC, BattlEye), so Loadout leaves games alone.".to_owned()
     });

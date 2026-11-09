@@ -101,18 +101,53 @@ fn disk_scanning_tiles_are_kept_for_their_refresh_time_only() {
 #[test]
 fn frame_rate_reads_the_os_count_and_never_the_game() {
     use grokhub_core::home::text::FpsRead;
-    let live = frame_rate_view(Some(FpsRead::Rate(143.6)), false, None);
+    let live = frame_rate_view(Some(FpsRead::Rate(143.6)), false, None, false);
     assert_eq!(live.text.big, "144 FPS");
     assert_eq!(live.tag.as_deref(), Some("LIVE"));
     assert!(live.buttons.is_empty());
-    let win = frame_rate_view(Some(FpsRead::Rate(239.7)), true, Some("cs2.exe"));
+    let win = frame_rate_view(Some(FpsRead::Rate(239.7)), true, Some("cs2.exe"), false);
     assert_eq!(win.text.caption, "From cs2");
-    let none = frame_rate_view(None, false, None);
+    let none = frame_rate_view(None, false, None, false);
     assert_eq!(none.text.big, "Not read");
     assert!(none.text.caption.ends_with("never hooks into games"));
     assert_eq!(none.buttons.len(), 1);
-    let setup = frame_rate_view(Some(FpsRead::NeedsSetup), true, None);
+    let setup = frame_rate_view(Some(FpsRead::NeedsSetup), true, None, false);
     assert_eq!(setup.text.caption, "Needs a one-time admin setup");
+}
+
+#[test]
+fn frame_rate_setup_is_one_tap_with_the_steps_beside_it() {
+    use grokhub_core::home::text::{FpsRead, FpsSetup};
+    let run = TileAction::setup("frame_rate", false);
+    let copy = TileAction::copy_setup("frame_rate");
+    let need = frame_rate_view(Some(FpsRead::NeedsSetup), false, None, false);
+    assert_eq!(need.text.caption, "Needs a one-time setup");
+    assert_eq!(need.buttons[0].label, "Set up");
+    assert!(need.buttons[0].primary);
+    assert_eq!(need.buttons[0].action, run);
+    assert_eq!(need.buttons[1].action, copy);
+    // Small tiles show no buttons, so the tap runs it too.
+    assert_eq!(need.tap, Some(run.clone()));
+    let closed = frame_rate_view(
+        Some(FpsRead::Setup(FpsSetup::Dismissed)),
+        false,
+        None,
+        false,
+    );
+    assert_eq!(closed.text.caption, "The password prompt was closed");
+    assert_eq!(closed.tap, Some(run));
+    let no_agent = frame_rate_view(Some(FpsRead::Setup(FpsSetup::NoPrompt)), false, None, false);
+    assert_eq!(no_agent.buttons.len(), 1);
+    assert_eq!(no_agent.buttons[0].action, copy);
+    let sign_out = frame_rate_view(Some(FpsRead::Setup(FpsSetup::SignOut)), true, None, false);
+    assert_eq!(sign_out.text.caption, "Sign out of Windows to finish");
+    assert!(sign_out.buttons.is_empty());
+    let undo = frame_rate_view(Some(FpsRead::Rate(60.0)), false, None, true);
+    assert_eq!(undo.buttons[0].label, "Undo setup");
+    assert_eq!(
+        undo.buttons[0].action,
+        TileAction::setup("frame_rate", true)
+    );
 }
 
 #[test]

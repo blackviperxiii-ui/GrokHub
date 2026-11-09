@@ -80,6 +80,7 @@ pub const SELF_TOOLS: &[(&str, SelfClass)] = &[
     ("automation_disable", SelfClass::Soft),
     ("automation_delete", SelfClass::Delete),
     ("pulse_steam", SelfClass::Soft),
+    ("module_setup", SelfClass::Soft),
     ("know_me_tags", SelfClass::Read),
 ];
 
@@ -287,6 +288,11 @@ pub fn mcp_tools() -> Vec<Value> {
             "unmute": { "type": "array", "items": { "type": "string" }, "description": "Game names to let back in." },
             "reason": reason,
         }), &[])),
+        tool("module_setup", grokhub_core::brand::filled("Set up Frame Rate. Runs its one-time setup on this PC, like its Set up button, so {product} counts frames from the OS, never inside a game. The OS shows its own password prompt; never ask for the password. Quote the result."), obj(json!({
+            "module": { "type": "string", "enum": ["frame_rate"], "description": "Only frame_rate." },
+            "undo": { "type": "boolean", "description": "true removes the setup instead." },
+            "reason": reason,
+        }), &["module", "reason"])),
         tool("know_me_tags", "Know me tags from this PC, with sources. Cite them, never guess.", obj(json!({}), &[])),
     ]
 }
