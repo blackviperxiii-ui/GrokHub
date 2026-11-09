@@ -176,7 +176,7 @@ impl Cabin {
         }
         let r = self.rhythm_now().clone();
         if r.total_minutes() > 0 {
-            ui.add_space(6.0);
+            ui.add_space(8.0);
             paint_week(ui, &r);
         }
         let summary = if r.enough() {

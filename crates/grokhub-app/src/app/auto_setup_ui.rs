@@ -550,7 +550,7 @@ impl Cabin {
                     .fill(crate::theme::elevated())
                     .stroke(egui::Stroke::new(1.0_f32, crate::theme::border_strong()))
                     .corner_radius(12.0)
-                    .inner_margin(egui::Margin::same(14))
+                    .inner_margin(egui::Margin::same(16))
                     .show(ui, |ui| {
                         ui.set_max_width(340.0);
                         let (title, reason, yes, no) = match &note {
@@ -567,7 +567,7 @@ impl Cabin {
                                 .size(crate::theme::FONT_BODY)
                                 .color(crate::theme::muted()),
                         );
-                        ui.add_space(6.0);
+                        ui.add_space(8.0);
                         ui.horizontal(|ui| {
                             if crate::cards::white_pill(ui, yes) {
                                 act = Some(true);

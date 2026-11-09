@@ -238,7 +238,8 @@ fn fresh_home_fits_without_clipping_at_both_qa_sizes() {
         let texts = home_texts(w, h, false);
         let hint = fully_shown(&texts, "Assign an objective or ask anything…", h);
         assert!(
-            hint.max.y <= h - 24.0,
+            // 24 on the wide size, 16 on the narrow one (auto density).
+            hint.max.y <= h - crate::theme::page_margin_for(w),
             "composer sits above the page padding at {w}x{h}"
         );
         fully_shown(&texts, "UP NEXT", h);

@@ -1,0 +1,1 @@
+- Spacing: the new app uses the same spacing scale as the cabin (`--space-*` tokens), every gap and padding sits on it, and the page margin is 24px on wide windows and 16px on narrow ones.

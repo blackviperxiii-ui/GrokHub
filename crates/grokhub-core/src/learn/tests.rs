@@ -623,3 +623,171 @@ fn a_run_counts_for_its_model_and_skill_and_a_late_line_counts_against() {
     };
     assert_eq!(of(&pending), vec![]);
 }
+
+#[test]
+fn the_learned_view_says_each_belief_in_plain_words() {
+    use super::view::{view, Stage};
+    let mut beliefs = Beliefs::default();
+    votes(&mut beliefs, &subject("card:suggestion"), 8, 2, T0);
+    votes(&mut beliefs, &subject("skill:weekly-report"), 30, 0, T0);
+    votes(&mut beliefs, &subject("chips:home"), 1, 3, T0);
+    votes(&mut beliefs, &subject("chip:0a1b2c3d4e5f"), 2, 0, T0);
+    beliefs.measure(&subject("model:grok-code/run-ms"), 3_000.0, T0, "test");
+    beliefs.mark_wrong(&subject("card:news"), T0);
+    votes(&mut beliefs, &subject("card:old"), 4, 0, T0);
+    beliefs.forget(&subject("card:old"), T0);
+
+    let got = view(&beliefs, T0);
+    let keys: Vec<&str> = got.rows.iter().map(|r| r.key.as_str()).collect();
+    // Surest first, the user's "wrong" last, the forgotten one and the
+    // hashed chip not listed.
+    assert_eq!(
+        keys,
+        [
+            "skill:weekly-report",
+            "card:suggestion",
+            "chips:home",
+            "model:grok-code/run-ms",
+            "card:news"
+        ]
+    );
+    assert_eq!(got.single_chips, 1);
+
+    let skill = &got.rows[0];
+    assert_eq!(skill.title, "Skill weekly-report");
+    assert_eq!(skill.says, "Runs go well about 10 times in 10.");
+    assert_eq!(
+        (skill.evidence, skill.sure, skill.stage),
+        (30, 92, Stage::Acting)
+    );
+
+    let card = &got.rows[1];
+    assert_eq!(card.title, "Suggestion cards");
+    assert_eq!(card.says, "You take these about 8 times in 10.");
+    assert_eq!(
+        (card.evidence, card.sure, card.stage),
+        (10, 54, Stage::Suggesting)
+    );
+
+    let speed = &got.rows[3];
+    assert_eq!(speed.title, "How long grok-code takes");
+    assert_eq!(speed.says, "A run takes about 3.0 seconds.");
+    assert_eq!(speed.stage, Stage::Measuring);
+
+    let chips = &got.rows[2];
+    assert_eq!(chips.title, "Quick chips on home");
+    assert_eq!(
+        chips.says,
+        "You tap one about 3 times in 10 when they show."
+    );
+    assert_eq!(chips.stage, Stage::Watching);
+
+    let wrong = &got.rows[4];
+    assert_eq!(
+        wrong.says,
+        "You said this is wrong. It is not counted or used."
+    );
+    assert_eq!(
+        (wrong.evidence, wrong.sure, wrong.stage),
+        (0, 0, Stage::Wrong)
+    );
+}
+
+#[test]
+fn a_belief_that_faded_away_has_no_line() {
+    use super::view::view;
+    let mut beliefs = Beliefs::default();
+    votes(&mut beliefs, &subject("card:suggestion"), 2, 0, T0);
+    assert_eq!(view(&beliefs, T0).rows.len(), 1);
+    // Two half-lives later 2 sightings count as 0.5, three later as 0.25.
+    assert_eq!(view(&beliefs, T0 + 2 * HALF_LIFE_MS).rows.len(), 1);
+    assert_eq!(view(&beliefs, T0 + 3 * HALF_LIFE_MS).rows.len(), 0);
+}
+
+#[test]
+fn the_learned_text_lists_ids_and_how_to_change_them() {
+    use super::view::{text, view, HOW_TO_CHANGE, NOTHING_YET};
+    assert_eq!(text(&view(&Beliefs::default(), T0)), NOTHING_YET);
+    let mut beliefs = Beliefs::default();
+    votes(&mut beliefs, &subject("card:suggestion"), 8, 2, T0);
+    votes(&mut beliefs, &subject("chip:0a1b2c3d4e5f"), 2, 0, T0);
+    beliefs.mark_wrong(&subject("card:news"), T0);
+    assert_eq!(
+        text(&view(&beliefs, T0)),
+        format!(
+            "**What I've learned**\n\
+             - **Suggestion cards**: You take these about 8 times in 10. Seen 10 times, 54% sure, sure enough to suggest. `card:suggestion`\n\
+             - **News cards**: You said this is wrong. It is not counted or used. `card:news`\n\
+             - Counts for 1 single quick chips, which rank the chip rows.\n\n{HOW_TO_CHANGE}"
+        )
+    );
+}
+
+#[test]
+fn a_learned_command_names_one_belief_or_all() {
+    use super::view::{Command, USAGE};
+    assert_eq!(Command::parse(""), Ok(Command::List));
+    assert_eq!(Command::parse("  "), Ok(Command::List));
+    assert_eq!(
+        Command::parse("forget card:suggestion"),
+        Ok(Command::Forget(subject("card:suggestion")))
+    );
+    assert_eq!(
+        Command::parse("WRONG model:grok-code/run-ms"),
+        Ok(Command::Wrong(subject("model:grok-code/run-ms")))
+    );
+    assert_eq!(Command::parse("forget All"), Ok(Command::ForgetAll));
+    for bad in [
+        "forget",
+        "wrong",
+        "forget suggestion",
+        "wrong all",
+        "list",
+        "forget a:b c:d",
+    ] {
+        assert_eq!(Command::parse(bad), Err(USAGE.to_string()), "{bad}");
+    }
+}
+
+#[test]
+fn a_plan_reply_pick_counts_for_it_and_against_the_replies_passed_over() {
+    use super::sources::{reply_picked, reply_subject, PLAN_REPLIES};
+    let got: Vec<(Kind, String)> = reply_picked("plan:change", T0)
+        .into_iter()
+        .map(|s| (s.kind, s.subject.as_str().to_string()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            (Kind::Ignored, "reply:plan/go".to_string()),
+            (Kind::Ignored, "reply:plan/more".to_string()),
+            (Kind::Ignored, "reply:plan/go-but".to_string()),
+            (Kind::Ignored, "reply:plan/not-now".to_string()),
+            (Kind::Picked, "reply:plan/change".to_string()),
+        ]
+    );
+    // "More on step N" is not on every card, so picking it passes over the
+    // five that are, and nothing ever counts against it.
+    assert_eq!(reply_picked("plan:step", T0).len(), 6);
+    // A question's option is the agent's words: it never becomes a subject.
+    assert_eq!(reply_subject("ask:deploy to prod now"), None);
+    assert_eq!(reply_picked("ask:deploy to prod now", T0), Vec::new());
+    // Every reply counted as passed over is one a plan card always shows.
+    let shown = crate::reply_chips::plan_reply_chips("Just do it.", &crate::ChipMemory::default());
+    for id in PLAN_REPLIES {
+        assert!(shown.iter().any(|c| c.key == format!("plan:{id}")), "{id}");
+    }
+}
+
+#[test]
+fn the_learned_view_names_a_plan_reply_by_its_chip() {
+    use super::view::view;
+    let mut beliefs = Beliefs::default();
+    votes(&mut beliefs, &subject("reply:plan/go-but"), 3, 1, T0);
+    let got = view(&beliefs, T0);
+    assert_eq!(got.rows[0].title, "Plan reply: Go, but\u{2026}");
+    assert_eq!(
+        got.rows[0].says,
+        "You pick this about 8 times in 10 when a plan waits."
+    );
+}

@@ -960,7 +960,7 @@ fn culled_row_does_not_steal_the_next_rows_widget_id() {
             egui::CentralPanel::default().show(ui, |ui| {
                 for i in 0..2 {
                     if skip_earlier && i == 0 {
-                        ui.add_space(20.0);
+                        ui.add_space(24.0);
                         if use_stable_id {
                             ui.skip_ahead_auto_ids(1);
                         }

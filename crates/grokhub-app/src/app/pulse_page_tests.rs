@@ -1031,8 +1031,8 @@ fn pulse_is_one_centered_column_at_every_width() {
         (2560.0, STREAM_MAX_W, false),
         (1600.0, STREAM_MAX_W, false),
         (1100.0, STREAM_MAX_W, false),
-        (720.0, 672.0, false),
-        (400.0, 352.0, true),
+        (720.0, 688.0, false),
+        (400.0, 368.0, true),
     ] {
         let col = pulse_column(page_w);
         assert_eq!((col.width, col.narrow), (width, narrow), "at {page_w}");

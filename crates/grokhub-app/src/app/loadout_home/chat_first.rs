@@ -61,7 +61,7 @@ impl Cabin {
         let (left, right) = sidebars_for(ui.available_width());
         let frame = egui::Frame::NONE
             .fill(crate::theme::bg())
-            .inner_margin(egui::Margin::symmetric(16, 20));
+            .inner_margin(egui::Margin::symmetric(16, 24));
         if right {
             egui::Panel::right("chat-first-snapshot")
                 .exact_size(RIGHT_W)
@@ -84,7 +84,7 @@ impl Cabin {
 
     fn chat_objectives_column(&mut self, ui: &mut egui::Ui) {
         ui.label(caption("Objectives"));
-        ui.add_space(10.0);
+        ui.add_space(12.0);
         let mission = self.dock_mission(ui.ctx());
         let steps: Vec<_> = mission
             .as_ref()
@@ -119,7 +119,7 @@ impl Cabin {
             egui::Frame::NONE
                 .fill(fill)
                 .corner_radius(6.0)
-                .inner_margin(egui::Margin::symmetric(10, 9))
+                .inner_margin(egui::Margin::symmetric(12, 8))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
@@ -134,9 +134,9 @@ impl Cabin {
                     });
                 });
         }
-        ui.add_space(20.0);
+        ui.add_space(24.0);
         ui.label(caption("Recent"));
-        ui.add_space(6.0);
+        ui.add_space(8.0);
         let recent = recent_chats(&self.threads, self.thread_idx);
         if recent.is_empty() {
             ui.label(
@@ -162,7 +162,7 @@ impl Cabin {
             {
                 open = Some(idx);
             }
-            ui.add_space(6.0);
+            ui.add_space(8.0);
         }
         if let Some(idx) = open {
             self.switch_thread(idx);
@@ -174,7 +174,7 @@ impl Cabin {
 fn chat_snapshot(ui: &mut egui::Ui) {
     use crate::ui_kit::recipe;
     ui.label(caption("Snapshot"));
-    ui.add_space(10.0);
+    ui.add_space(12.0);
     let Some(p) = pc_profile() else {
         ui.label(
             egui::RichText::new("Reading this PC…")
@@ -202,7 +202,7 @@ fn chat_snapshot(ui: &mut egui::Ui) {
             .fill(crate::theme::surface())
             .stroke(stroke)
             .corner_radius(recipe::BUTTON_RADIUS)
-            .inner_margin(egui::Margin::same(14))
+            .inner_margin(egui::Margin::same(16))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.label(caption(t.label));
@@ -216,7 +216,7 @@ fn chat_snapshot(ui: &mut egui::Ui) {
                 )
                 .on_hover_text(&t.value);
             });
-        ui.add_space(10.0);
+        ui.add_space(12.0);
     }
 }
 

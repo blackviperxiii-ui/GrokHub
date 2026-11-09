@@ -9,7 +9,6 @@ use super::edit::HomeEditDraft;
 use super::paint::{paint_module, ModuleAction};
 use grokhub_core::home::TileAction;
 
-const PAGE_PAD: f32 = 24.0;
 /// Chips + composer height before the first frame measures it.
 const COMPOSE_H: f32 = 140.0;
 const DRAFT_ID: &str = "home-mission-draft";
@@ -24,7 +23,7 @@ impl Cabin {
         let mut actions = Vec::new();
         egui::Frame::NONE
             .fill(crate::theme::bg())
-            .inner_margin(egui::Margin::same(PAGE_PAD as i8))
+            .inner_margin(egui::Margin::same(crate::theme::page_margin(ui.ctx()) as i8))
             .show(ui, |ui| {
                 ui.set_min_size(ui.available_size());
                 self.home_header(ui);
@@ -180,7 +179,7 @@ impl Cabin {
                         egui::vec2(280.0_f32.min(ui.available_width()), 48.0),
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
-                            ui.add_space(14.0);
+                            ui.add_space(16.0);
                             paint_level_bar(ui, &xp, true);
                         },
                     );
@@ -208,13 +207,13 @@ impl Cabin {
                 self.take_home_chip_act(act, &chips);
             }
         }
-        ui.add_space(10.0);
+        ui.add_space(12.0);
         let mut send = false;
         egui::Frame::NONE
             .fill(crate::theme::surface())
             .stroke(egui::Stroke::new(1.0, crate::theme::signal_red()))
             .corner_radius(8.0)
-            .inner_margin(egui::Margin::symmetric(14, 8))
+            .inner_margin(egui::Margin::symmetric(16, 8))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     let field_w = ui.available_width() - 48.0;

@@ -401,7 +401,7 @@ impl Cabin {
                     .fill(crate::theme::elevated())
                     .stroke(egui::Stroke::new(1.0_f32, crate::theme::border_strong()))
                     .corner_radius(16.0)
-                    .inner_margin(egui::Margin::same(22)),
+                    .inner_margin(egui::Margin::same(24)),
             )
             .show(ctx, |ui| {
                 ui.set_width(width);

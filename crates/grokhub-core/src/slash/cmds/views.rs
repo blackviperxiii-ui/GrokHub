@@ -85,6 +85,15 @@ register_slash! {
 }
 
 register_slash! {
+    LEARNED {
+        names: ["/learned"],
+        effect: Local,
+        sample: "/learned",
+        parse: |rest| Some(Slash::Learned(rest.to_string())),
+    }
+}
+
+register_slash! {
     HOST {
         names: ["/host", "/tools"],
         effect: Local,

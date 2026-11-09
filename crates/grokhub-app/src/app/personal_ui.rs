@@ -168,7 +168,7 @@ impl Cabin {
 
     /// The Personal page.
     pub(super) fn ui_personal(&mut self, ui: &mut egui::Ui) {
-        let frame = crate::theme::page_frame();
+        let frame = crate::theme::page_frame(ui.ctx());
         let _ = super::dock_ui::page_panel(ui, self.cfg.dock_panels, frame, |ui| {
             if crate::cards::page_header(ui, "Personal", "Refresh") {
                 self.personal_changed();
@@ -179,7 +179,7 @@ impl Cabin {
                     "What {product} knows about you, and where it learned it. It all stays on this computer.",
                 ),
             );
-            ui.add_space(10.0);
+            ui.add_space(12.0);
             self.personal_switches(ui);
             ui.add_space(8.0);
             ui.horizontal(|ui| {

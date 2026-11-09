@@ -291,7 +291,7 @@ impl Cabin {
                         .color(crate::theme::fg()),
                 );
                 ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
+                    ui.spacing_mut().item_spacing.x = 8.0;
                     if run.live() {
                         if crate::cards::ghost_pill(ui, "Stop") {
                             act = Some(SideAct::Stop(run.id));

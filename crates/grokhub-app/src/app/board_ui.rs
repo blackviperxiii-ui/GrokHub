@@ -573,7 +573,7 @@ fn paint_status_chip(ui: &mut egui::Ui, status: BoardStatus) {
     egui::Frame::NONE
         .fill(bg)
         .corner_radius(999.0)
-        .inner_margin(egui::Margin::symmetric(8, 3))
+        .inner_margin(egui::Margin::symmetric(8, 4))
         .show(ui, |ui| {
             ui.add(
                 egui::Label::new(
@@ -930,7 +930,7 @@ impl Cabin {
                 );
             }
             if editing_notes {
-                ui.add_space(6.0);
+                ui.add_space(8.0);
                 if let Some((_, buf)) = self.board_notes_edit.as_mut() {
                     ui.add(
                         egui::TextEdit::multiline(buf)
@@ -959,7 +959,7 @@ impl Cabin {
                     }
                 });
             } else if !card.notes.trim().is_empty() {
-                ui.add_space(6.0);
+                ui.add_space(8.0);
                 ui.label(
                     RichText::new("Notes")
                         .size(crate::theme::FONT_TIP)

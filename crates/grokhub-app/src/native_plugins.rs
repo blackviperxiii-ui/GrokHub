@@ -52,7 +52,7 @@ pub fn paint(ui: &mut eframe::egui::Ui, workspace: &Path) {
         ui,
         "Bundles stay off until you trust this version and enable them. Trust covers the hook commands, MCP server commands, skills, and agents listed here. Fetching a marketplace list does not install anything.",
     );
-    ui.add_space(6.0);
+    ui.add_space(8.0);
     let workspace = workspace.to_path_buf();
     // Plugin discovery takes its own lock. Do not hold the paint lock across it.
     let reload = {

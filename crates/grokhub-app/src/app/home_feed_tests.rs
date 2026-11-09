@@ -87,13 +87,13 @@ fn empty_home_paints_faint_greeting() {
         "empty-home composer sits in the vertical center, not the upper third: {slice}"
     );
     assert!(
-        slice.contains("12.0") && !slice.contains("add_space(28.0)"),
+        slice.contains("12.0") && !slice.contains("add_space(32.0)"),
         "greeting-to-composer gap stays tight: {slice}"
     );
     let chips = src.find("ComposerStackSlot::Chips =>").expect("chips arm");
     let chips = &src[chips..chips + 700];
     assert!(
-        chips.contains("add_space(6.0)"),
+        chips.contains("add_space(8.0)"),
         "chips sit a tight gap under the pill: {chips}"
     );
     assert!(

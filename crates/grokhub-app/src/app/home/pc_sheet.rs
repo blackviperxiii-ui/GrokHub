@@ -129,7 +129,7 @@ pub(super) fn show_pc_sheet(ctx: &egui::Context, profile: Option<&LocalProfile>)
                 .fill(crate::theme::elevated())
                 .stroke(egui::Stroke::new(1.0_f32, crate::theme::border_strong()))
                 .corner_radius(16.0)
-                .inner_margin(egui::Margin::same(22)),
+                .inner_margin(egui::Margin::same(24)),
         )
         .show(ctx, |ui| {
             ui.set_width(480.0_f32.min(ctx.content_rect().width() - 80.0));
@@ -171,7 +171,7 @@ pub(super) fn show_pc_sheet(ctx: &egui::Context, profile: Option<&LocalProfile>)
                                 .size(crate::theme::TYPE_BODY)
                                 .color(crate::theme::fg()),
                         );
-                        ui.add_space(6.0);
+                        ui.add_space(8.0);
                     }
                 }
             }

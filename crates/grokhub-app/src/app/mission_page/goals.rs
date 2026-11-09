@@ -78,11 +78,11 @@ pub(in crate::app) fn goal_summary(ui: &mut egui::Ui, g: &Goal) {
 fn goal_row(ui: &mut egui::Ui, g: &Goal, acts: &mut Vec<GoalAct>) {
     egui::Frame::NONE
         .corner_radius(6.0)
-        .inner_margin(egui::Margin::symmetric(10, 8))
+        .inner_margin(egui::Margin::symmetric(12, 8))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             goal_summary(ui, g);
-            ui.add_space(6.0);
+            ui.add_space(8.0);
             ui.horizontal(|ui| {
                 if steps_by_one(g) && crate::cards::ghost_pill(ui, "+1") {
                     acts.push(GoalAct::Bump { id: g.id.clone() });
@@ -471,7 +471,7 @@ impl Cabin {
                         .color(crate::theme::signal_red()),
                 );
             }
-            ui.add_space(6.0);
+            ui.add_space(8.0);
             if tracking.is_empty() {
                 muted_line(ui, MINE_EMPTY);
             }

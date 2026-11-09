@@ -656,7 +656,7 @@ fn list(ui: &mut egui::Ui, title: &str, rows: &[String]) {
                 .color(crate::theme::fg()),
         );
     }
-    ui.add_space(6.0);
+    ui.add_space(8.0);
 }
 
 /// The sheet that lists every file and waits for a pointer click.
@@ -673,7 +673,7 @@ pub(super) fn sheet(ctx: &egui::Context) {
                 .fill(crate::theme::surface())
                 .stroke(egui::Stroke::new(1.0, crate::theme::border()))
                 .corner_radius(12.0)
-                .inner_margin(egui::Margin::same(20)),
+                .inner_margin(egui::Margin::same(24)),
         )
         .show(ctx, |ui| {
             ui.set_width(560.0_f32.min(ctx.content_rect().width() - 80.0));
@@ -698,7 +698,7 @@ pub(super) fn sheet(ctx: &egui::Context) {
                     .font(crate::theme::title_font(20.0))
                     .color(crate::theme::fg()),
             );
-            ui.add_space(6.0);
+            ui.add_space(8.0);
             egui::ScrollArea::vertical()
                 .max_height(320.0)
                 .show(ui, |ui| match &sheet {
@@ -745,7 +745,7 @@ pub(super) fn sheet(ctx: &egui::Context) {
                         }
                     }
                 });
-            ui.add_space(10.0);
+            ui.add_space(12.0);
             ui.horizontal(|ui| {
                 if super::super::change_undo::click_pill(ui, primary) {
                     act = Some(true);

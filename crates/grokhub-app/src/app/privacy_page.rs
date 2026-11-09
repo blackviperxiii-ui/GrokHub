@@ -110,7 +110,7 @@ pub(super) fn paint_offline_row(ui: &mut egui::Ui) {
                 row.cancel();
             }
         });
-        ui.add_space(10.0);
+        ui.add_space(12.0);
     }
     if let Some(err) = &row.error {
         ui.label(RichText::new(err).size(13.0).color(crate::theme::offline()));
@@ -480,7 +480,7 @@ pub(super) fn paint_privacy_story(ui: &mut egui::Ui, week: &Week, cloud: Cloud) 
 fn paint_story_body(ui: &mut egui::Ui, week: &Week, cloud: Cloud) {
     // A row, so the tag hugs its text.
     ui.horizontal(|ui| mode_chip(ui, mode_tag(week, cloud)));
-    ui.add_space(14.0);
+    ui.add_space(16.0);
     ui.label(
         RichText::new(hero(week, cloud))
             .font(crate::theme::title_font(32.0))
@@ -516,7 +516,7 @@ pub(super) fn paint_ledger(ui: &mut egui::Ui, week: &Week, now: u64) {
                 );
             });
         });
-        ui.add_space(10.0);
+        ui.add_space(12.0);
         let w = ui.available_width();
         let (rect, _) = ui.allocate_exact_size(egui::vec2(w, BARS_H + 22.0), egui::Sense::hover());
         let p = ui.painter_at(rect);
@@ -570,7 +570,7 @@ impl Cabin {
             });
         } else {
             paint_privacy_story(ui, &week, cloud);
-            ui.add_space(20.0);
+            ui.add_space(24.0);
             self.privacy_switches(ui, &week, now);
         }
     }
@@ -597,7 +597,7 @@ impl Cabin {
         ui.add_enabled_ui(false, |ui| {
             crate::cards::settings_toggle(ui, "Encrypted memory", sealed_hint, &mut sealed);
         });
-        ui.add_space(14.0);
+        ui.add_space(16.0);
         let armed_id = egui::Id::new(WIPE_ARMED_ID);
         let armed = ui
             .ctx()
@@ -631,9 +631,9 @@ impl Cabin {
                 "Click again to turn Know me off and delete every tag it learned.",
             );
         }
-        ui.add_space(14.0);
+        ui.add_space(16.0);
         self.ui_storage_block(ui);
-        ui.add_space(14.0);
+        ui.add_space(16.0);
         paint_ledger(ui, week, now);
     }
 }
