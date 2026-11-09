@@ -2511,7 +2511,7 @@ mod tests {
         cabin.apply_deck_shot_seed();
         assert_eq!(cabin.nav, Nav::Settings);
         assert_eq!(cabin.settings_sec, SettingsSec::Account);
-        assert_eq!(cabin.rail_id(), "profile");
+        assert_eq!(cabin.rail_id(), "settings");
         assert!(!cabin.activity.open, "profile is a known page");
         cabin.settings_menu_open = false;
         unsafe { std::env::remove_var("GROKHUB_DECK_NAV") };

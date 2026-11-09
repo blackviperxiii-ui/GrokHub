@@ -863,6 +863,7 @@ mod tests {
                 | Nav::Chat
                 | Nav::Devices
                 | Nav::Memory
+                | Nav::Personal
                 | Nav::Workboard
                 | Nav::Pulse
                 | Nav::Imagine

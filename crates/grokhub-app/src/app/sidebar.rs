@@ -537,16 +537,11 @@ impl Cabin {
         self.nav = Nav::Settings;
     }
 
-    /// The rail row to light: Profile while Settings shows Account, and no
-    /// page row on any other Settings page (the gear lights instead), so the
-    /// rail never claims the page hidden under Settings.
+    /// The rail row to light: the gear on every Settings page, Account
+    /// included, so the rail never claims the page hidden under Settings.
     pub(super) fn rail_id(&self) -> &'static str {
         if self.nav == Nav::Settings && !self.settings_menu_open {
-            return if self.settings_sec == SettingsSec::Account {
-                "profile"
-            } else {
-                "settings"
-            };
+            return "settings";
         }
         self.nav_id()
     }
@@ -584,6 +579,7 @@ impl Cabin {
             Nav::Agents => "queue",
             Nav::Devices => "devices",
             Nav::Memory => "memory",
+            Nav::Personal => "personal",
         }
     }
 
@@ -602,6 +598,7 @@ impl Cabin {
             "objectives" | "mission" => Nav::Objectives,
             "automations" => Nav::Night,
             "devices" => Nav::Devices,
+            "personal" => Nav::Personal,
             "home" => Nav::Home,
             "chat" => Nav::Chat,
             _ => return,
@@ -634,6 +631,7 @@ impl Cabin {
             "queue" => Nav::Agents,
             "devices" => Nav::Devices,
             "memory" => Nav::Memory,
+            "personal" => Nav::Personal,
             "eyes" => {
                 self.open_recent_chat();
                 Nav::Chat

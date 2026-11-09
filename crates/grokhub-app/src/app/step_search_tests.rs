@@ -202,6 +202,7 @@ fn spike3a_adds_no_nav_page() {
             Nav::Chat => "chat",
             Nav::Devices => "devices",
             Nav::Memory => "memory",
+            Nav::Personal => "personal",
             Nav::Workboard => "workboard",
             Nav::Pulse => "pulse",
             Nav::Imagine => "imagine",

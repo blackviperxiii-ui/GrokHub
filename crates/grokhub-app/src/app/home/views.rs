@@ -50,7 +50,10 @@ pub(super) fn desktop_view(cabin: &mut Cabin, module: &str) -> Option<TileView> 
         "coach_tip" => {
             tiles::coach_tip_view(&live_facts().drives, grokhub_desktop::game_guard::peek())
         }
-        "clips" => tiles::clips_view(&live_facts().clips, now),
+        "clips" => {
+            let facts = live_facts();
+            tiles::clips_view(&facts.clips, facts.steam_found, now)
+        }
         "achievements" | "deals" | "patch_notes" => {
             let on = match module {
                 "achievements" => cabin.ach_now().on,
@@ -66,11 +69,7 @@ pub(super) fn desktop_view(cabin: &mut Cabin, module: &str) -> Option<TileView> 
             if cabin.sources.steam.reading() {
                 TileView::ready(TileText::new("—", "Reading your library…", Tone::Quiet))
             } else if !found {
-                TileView::empty(
-                    "Install Steam to see your games here",
-                    "Open Library",
-                    TileAction::nav("library"),
-                )
+                tiles::no_steam_view("Install Steam to see your games here")
             } else {
                 match module {
                     "now_playing" => tiles::now_playing_view(&games, now, running),
