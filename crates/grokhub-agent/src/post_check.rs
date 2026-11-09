@@ -34,6 +34,9 @@ pub struct Ran {
     pub args: String,
     pub ok: bool,
     pub output: String,
+    /// Pages this call opened or listed (LO-51): web_search results, the
+    /// page web_fetch read, the page a browser went to.
+    pub urls: Vec<String>,
 }
 
 /// Notes one run can get from these checks: one per new round of calls, so a
@@ -77,6 +80,19 @@ impl Ran {
         } else {
             String::new()
         };
+        let urls = if !ok {
+            Vec::new()
+        } else if name == "web_search" {
+            urls_in(output)
+        } else if name == "web_fetch" || name.contains("navigate") {
+            value
+                .get("url")
+                .and_then(serde_json::Value::as_str)
+                .map(|u| vec![u.trim().to_string()])
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         // Only a command's output is read (test summaries, git's lines).
         let output = if command.is_empty() {
             String::new()
@@ -89,6 +105,7 @@ impl Ran {
             args: arguments.chars().take(HEAD_KEEP).collect(),
             ok,
             output,
+            urls,
         }
     }
 
@@ -136,6 +153,7 @@ pub const STILL_THERE: &str = "still_there";
 pub const FREED_MISMATCH: &str = "freed_mismatch";
 pub const UNCHECKED_CONNECTION: &str = "unchecked_connection";
 pub const PUSHED_TEST: &str = "pushed_test";
+pub const UNOPENED_LINK: &str = "unopened_link";
 
 /// Every check for a reply that ends a run.
 pub fn check(reply: &str, ran: &[Ran]) -> Vec<Finding> {
@@ -162,6 +180,95 @@ pub fn note(findings: &[Finding]) -> Option<String> {
         "Check each one. If the work isn't done, finish it. If the reply was wrong, say what is actually true.",
     );
     Some(text)
+}
+
+// --- Sources -------------------------------------------------------------
+
+/// Links named in one note, at most.
+const LINKS_NOTED: usize = 3;
+
+/// LO-51: every link in the reply is a page this run opened or listed (a
+/// web_search result, a web_fetch, a browser visit, a hosted search
+/// citation) or one the person gave. A link from memory, or from an earlier
+/// turn's half-finished lookup, reads as checked when it isn't.
+pub fn sources(reply: &str, ran: &[Ran], cited: &[String], asked: &str) -> Vec<Finding> {
+    let seen: Vec<String> = ran
+        .iter()
+        .flat_map(|r| r.urls.iter())
+        .chain(cited)
+        .chain(urls_in(asked).iter())
+        .map(|u| link_key(u))
+        .collect();
+    let mut unopened: Vec<String> = Vec::new();
+    for url in urls_in(reply) {
+        let key = link_key(&url);
+        let opened = seen
+            .iter()
+            .any(|s| *s == key || (s.contains('/') && key.starts_with(&format!("{s}/"))));
+        if !opened && !unopened.contains(&url) {
+            unopened.push(url);
+        }
+    }
+    if unopened.is_empty() {
+        return Vec::new();
+    }
+    let shown: Vec<&str> = unopened
+        .iter()
+        .take(LINKS_NOTED)
+        .map(String::as_str)
+        .collect();
+    let more = unopened.len().saturating_sub(LINKS_NOTED);
+    vec![Finding {
+        kind: UNOPENED_LINK,
+        detail: format!(
+            "the reply links {}{}, which no tool opened this turn. web_fetch the page, drop the link, or say that part is from memory, not checked.",
+            shown.join(", "),
+            if more > 0 {
+                format!(" and {more} more")
+            } else {
+                String::new()
+            }
+        ),
+    }]
+}
+
+/// The http(s) links in `text`, without trailing punctuation.
+pub(crate) fn urls_in(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find("http") {
+        let tail = &rest[at..];
+        if !(tail.starts_with("https://") || tail.starts_with("http://")) {
+            rest = &rest[at + 4..];
+            continue;
+        }
+        let end = tail
+            .find(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '`' | '|'))
+            .unwrap_or(tail.len());
+        let url = tail[..end]
+            .trim_end_matches(['.', ',', ';', ':', '!', '?', ')', ']', '}', '\'', '*', '_']);
+        if url.len() > "https://".len() && !out.iter().any(|u| u == url) {
+            out.push(url.to_string());
+        }
+        rest = &tail[end..];
+    }
+    out
+}
+
+/// A link as it is compared: no scheme, no `www.`, no fragment, no trailing
+/// slash, lower-case host.
+fn link_key(url: &str) -> String {
+    let url = url.trim();
+    let url = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url);
+    let url = url.strip_prefix("www.").unwrap_or(url);
+    let url = url.split('#').next().unwrap_or(url).trim_end_matches('/');
+    match url.split_once('/') {
+        Some((host, path)) => format!("{}/{path}", host.to_ascii_lowercase()),
+        None => url.to_ascii_lowercase(),
+    }
 }
 
 // --- Totals --------------------------------------------------------------
@@ -1278,6 +1385,57 @@ mod tests {
     const CARGO_OK: &str = "running 3 tests\ntest result: ok. 3 passed; 0 failed; 0 ignored\n\nrunning 9 tests\ntest result: ok. 9 passed; 0 failed; 0 ignored\n";
     const CARGO_RED: &str =
         "test result: FAILED. 11 passed; 1 failed; 0 ignored\nerror: test failed\n";
+
+    #[test]
+    fn a_link_no_tool_opened_gets_a_note_and_an_opened_one_does_not() {
+        let fetched = Ran::new(
+            "web_fetch",
+            r#"{"url":"https://www.wowhead.com/item=226995/aqir-research-token"}"#,
+            true,
+            "page text",
+        );
+        let searched = Ran::new(
+            "web_search",
+            r#"{"query":"aqir research token turn in"}"#,
+            true,
+            "1. Aqir token guide - https://www.icy-veins.com/wow/aqir-tokens\n",
+        );
+        let reply = "Turn them in at the vendor ([Wowhead](https://wowhead.com/item=226995/aqir-research-token)), see https://www.icy-veins.com/wow/aqir-tokens.";
+        assert!(sources(reply, &[fetched.clone(), searched.clone()], &[], "").is_empty());
+        // The old turn's link nobody opened this turn.
+        let stale = "Per https://www.wowhead.com/guide/old-aqir-guide, go to the camp.";
+        let found = sources(stale, std::slice::from_ref(&fetched), &[], "");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].kind, UNOPENED_LINK);
+        assert!(
+            found[0].detail.contains("old-aqir-guide"),
+            "{}",
+            found[0].detail
+        );
+        // Hosted citations and links the person gave count as seen.
+        assert!(sources(
+            stale,
+            &[],
+            &["https://wowhead.com/guide/old-aqir-guide".into()],
+            ""
+        )
+        .is_empty());
+        assert!(sources(
+            stale,
+            &[],
+            &[],
+            "is https://www.wowhead.com/guide/old-aqir-guide right?"
+        )
+        .is_empty());
+        // A failed fetch opened nothing.
+        let failed = Ran::new(
+            "web_fetch",
+            r#"{"url":"https://www.wowhead.com/guide/old-aqir-guide"}"#,
+            false,
+            "404",
+        );
+        assert_eq!(sources(stale, &[failed], &[], "").len(), 1);
+    }
 
     #[test]
     fn a_table_total_that_doesnt_add_up_is_caught_and_a_right_one_is_not() {

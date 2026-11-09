@@ -198,6 +198,7 @@ pub mod talk;
 pub mod task;
 pub mod thread_tab;
 pub mod tool_engine;
+pub mod tool_tags;
 pub mod trajectory;
 pub mod tui_gaps;
 pub mod turn_timeline;
