@@ -429,7 +429,7 @@ impl Cabin {
             // the device, so the engine starts with no bearer at all.
             _ if local_chat_available() => {
                 if self.agent_ready() {
-                    self.status = LOCAL_FALLBACK_NOTE.into();
+                    self.status = local_fallback_note().into();
                 }
                 (String::new(), AuthKind::ApiKey)
             }
@@ -949,9 +949,29 @@ pub(super) fn panic_mid_turn_for_test(session_id: &str) {
 pub(super) const LOCAL_FALLBACK_NOTE: &str =
     "Your Grok sign-in needs renewing, so Local AI is answering. Sign in again in Settings → AI models to use Grok.";
 
+/// The same, when the sign-in is fine but xAI's plan gate refused it: the
+/// Grok plan doesn't include app use, or its pool is used up. Signing in
+/// again wouldn't help, so this note doesn't ask for it.
+pub(super) const PLAN_FALLBACK_NOTE: &str =
+    "Your Grok plan can't take chats from apps right now (it doesn't include app use, or its pool is used up), so Local AI is answering. Your sign-in is fine.";
+
+/// The note for a turn Local AI took after xAI turned the cloud bearer away.
+pub(super) fn local_fallback_note() -> &'static str {
+    let now = grokhub_core::now_ms();
+    if grokhub_agent::plan_room::refused_since()
+        .is_some_and(|t| now.saturating_sub(t) <= grokhub_agent::plan_room::FRESH_MS)
+    {
+        PLAN_FALLBACK_NOTE
+    } else {
+        LOCAL_FALLBACK_NOTE
+    }
+}
+
 /// xAI turned the bearer away (`client::ClientError` 401/403 wording).
 fn is_cloud_rejection(err: &str) -> bool {
-    err.contains("sign-in was rejected (HTTP") || err.contains("API key rejected (HTTP")
+    err.contains("sign-in was rejected (HTTP")
+        || err.contains("Grok plan refused this (HTTP")
+        || err.contains("API key rejected (HTTP")
 }
 
 fn local_chat_available() -> bool {

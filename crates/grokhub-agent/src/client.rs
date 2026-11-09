@@ -476,6 +476,11 @@ pub enum ClientError {
 impl std::fmt::Display for ClientError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            ClientError::KeyOffer { status, message }
+                if crate::plan_room::plan_refusal(*status, message) =>
+            {
+                write!(f, "Grok plan refused this (HTTP {status}): {message}")
+            }
             ClientError::KeyOffer { status, message } => {
                 write!(f, "sign-in was rejected (HTTP {status}): {message}")
             }
@@ -1273,6 +1278,13 @@ impl XaiClient {
         &self,
         response: Result<grokhub_core::http::Response, grokhub_core::http::Error>,
     ) -> Result<grokhub_core::http::Response, ClientError> {
+        if let (Ok(resp), AuthKind::OAuth) = (&response, self.auth_kind) {
+            crate::plan_room::note_reply(
+                resp.status(),
+                &|name| resp.header(name).map(str::to_string),
+                grokhub_core::now_ms(),
+            );
+        }
         match response {
             Ok(resp) if resp.status() < 400 => {
                 grokhub_core::connectivity::note_global_transport_success(grokhub_core::now_ms());
@@ -1286,6 +1298,11 @@ impl XaiClient {
                 );
                 let retry_after = retry_after_header(&resp);
                 let message = read_error_body(resp);
+                if self.auth_kind == AuthKind::OAuth
+                    && crate::plan_room::plan_refusal(status, &message)
+                {
+                    crate::plan_room::note_refused(grokhub_core::now_ms());
+                }
                 Err(map_http_status(
                     status,
                     &message,
@@ -2331,6 +2348,25 @@ mod tests {
         );
         assert!(out.is_ok());
         assert_eq!(seen, vec![StreamEvent::RateWait(Duration::from_secs(1))]);
+    }
+
+    #[test]
+    fn plan_gate_403_reads_as_the_plan_not_the_sign_in() {
+        let tier = "You have either run out of available resources or do not have an active Grok subscription.";
+        let plan = map_http_status(403, tier, None, AuthKind::OAuth);
+        assert!(matches!(plan, ClientError::KeyOffer { status: 403, .. }));
+        assert!(plan
+            .to_string()
+            .starts_with("Grok plan refused this (HTTP 403)"));
+        let dead = map_http_status(
+            401,
+            "The OAuth2 access token could not be validated.",
+            None,
+            AuthKind::OAuth,
+        );
+        assert!(dead
+            .to_string()
+            .starts_with("sign-in was rejected (HTTP 401)"));
     }
 
     #[test]

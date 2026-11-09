@@ -114,6 +114,28 @@ pub(super) fn account_connected_hint(tokens: &grokhub_core::XaiOAuthTokens) -> S
     }
 }
 
+/// Settings → Account, connected, after xAI's plan gate refused the sign-in.
+pub(super) const ACCOUNT_PLAN_HINT: &str = "Signed in, but xAI says your Grok plan can't take chats from apps right now: it doesn't include app use, or its pool is used up. Check your plan on x.ai, or add an API key.";
+
+/// A connected Account row also says what xAI last reported about the
+/// SuperGrok pool: refused by the plan gate, or how much room is left.
+pub(super) fn with_plan_room(
+    mut chrome: AccountConnectChrome,
+    refused_ms: Option<u64>,
+    room: Option<&grokhub_agent::plan_room::PlanRoom>,
+    now_ms: u64,
+) -> AccountConnectChrome {
+    if !chrome.connected {
+        return chrome;
+    }
+    if refused_ms.is_some_and(|t| now_ms.saturating_sub(t) <= grokhub_agent::plan_room::FRESH_MS) {
+        chrome.hint = ACCOUNT_PLAN_HINT.into();
+    } else if let Some(line) = room.and_then(|r| grokhub_agent::plan_room::room_line(r, now_ms)) {
+        chrome.hint = format!("{}\n{line}", chrome.hint);
+    }
+    chrome
+}
+
 /// Settings → Account title for a stored sign-in that has run out.
 pub(super) const ACCOUNT_EXPIRED_TITLE: &str = "Sign-in expired";
 const ACCOUNT_RENEWING_HINT: &str =
@@ -169,10 +191,17 @@ pub(super) fn account_connect_chrome(
 impl Cabin {
     /// Settings → Account chrome for the sign-in held now.
     pub(super) fn account_chrome_now(&self) -> AccountConnectChrome {
-        account_connect_chrome(
+        let now = now_ms();
+        let chrome = account_connect_chrome(
             self.secrets.oauth.as_ref(),
-            now_ms(),
+            now,
             crate::oauth::cabin_refresh_failed(),
+        );
+        with_plan_room(
+            chrome,
+            grokhub_agent::plan_room::refused_since(),
+            grokhub_agent::plan_room::latest().as_ref(),
+            now,
         )
     }
 
@@ -753,5 +782,40 @@ mod tests {
             (c.title, c.action, c.connected),
             ("Connected", "Sign out", true)
         );
+    }
+
+    #[test]
+    fn connected_row_shows_supergrok_room_or_plan_refusal() {
+        use grokhub_agent::plan_room::PlanRoom;
+        let connected = || AccountConnectChrome {
+            title: "Connected",
+            hint: "Viper · v@example.com".into(),
+            action: "Sign out",
+            connected: true,
+        };
+        let room = PlanRoom {
+            requests_left: Some(40),
+            requests_limit: Some(50),
+            seen_ms: 1_000,
+            ..Default::default()
+        };
+        let c = with_plan_room(connected(), None, Some(&room), 1_000);
+        assert_eq!(
+            c.hint,
+            "Viper · v@example.com\nSuperGrok room: 40 of 50 requests left"
+        );
+        // A plan refusal wins over the room, and keeps the row connected.
+        let c = with_plan_room(connected(), Some(900), Some(&room), 1_000);
+        assert_eq!(c.hint, ACCOUNT_PLAN_HINT);
+        assert!(c.connected);
+        // Nothing reported: the identity line alone.
+        assert_eq!(
+            with_plan_room(connected(), None, None, 1_000).hint,
+            "Viper · v@example.com"
+        );
+        // A signed-out row is left as it is.
+        let out = account_connect_chrome(None, 2, false);
+        let hint = out.hint.clone();
+        assert_eq!(with_plan_room(out, Some(1), Some(&room), 2).hint, hint);
     }
 }
