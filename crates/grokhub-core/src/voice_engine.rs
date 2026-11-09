@@ -103,6 +103,71 @@ pub fn transcribe_args(models_dir: &Path, m: &LocalModel, wav: &Path) -> Option<
     ])
 }
 
+/// The speaking program in the same archive, with `.exe` on Windows.
+pub fn tts_path(config_dir: &Path) -> PathBuf {
+    let p = SHERPA.dir(config_dir).join("bin/sherpa-onnx-offline-tts");
+    if cfg!(windows) {
+        p.with_extension("exe")
+    } else {
+        p
+    }
+}
+
+/// The engine and its speaking program are both there.
+pub fn tts_installed(config_dir: &Path) -> bool {
+    installed(config_dir) && tts_path(config_dir).is_file()
+}
+
+/// The first catalog voice whose files are all in `models_dir`'s voice folder.
+pub fn voice_model(models_dir: &Path) -> Option<&'static LocalModel> {
+    let dir = md::kind_dir(models_dir, ModelKind::TextToSpeech);
+    crate::local_setup::local_models()
+        .iter()
+        .find(|m| m.kind == ModelKind::TextToSpeech && md::complete(&dir, m))
+}
+
+/// Kokoro's speaker for each of the app's voices (the speaker list of the
+/// multi-language v1.0 export): Ara is af_heart, Eve af_bella, Leo
+/// am_michael, Rex am_fenrir, Sal am_puck.
+pub fn kokoro_speaker(voice: &str) -> u32 {
+    match voice {
+        "eve" => 2,
+        "leo" => 16,
+        "rex" => 14,
+        "sal" => 18,
+        _ => 3,
+    }
+}
+
+/// The arguments that speak `text` with a Kokoro row into `out` (a WAV
+/// file). None when a file is missing from the row.
+pub fn speak_args(
+    models_dir: &Path,
+    m: &LocalModel,
+    voice: &str,
+    text: &str,
+    out: &Path,
+) -> Option<Vec<String>> {
+    let dir = md::kind_dir(models_dir, m.kind);
+    let part = |end: &str| {
+        m.parts
+            .iter()
+            .find(|p| p.file.ends_with(end))
+            .map(|p| dir.join(p.file))
+    };
+    let arg = |k: &str, p: PathBuf| format!("--{k}={}", p.display());
+    Some(vec![
+        arg("kokoro-model", md::final_path(&dir, m)),
+        arg("kokoro-voices", part("voices.bin")?),
+        arg("kokoro-tokens", part("tokens.txt")?),
+        arg("kokoro-lexicon", part("lexicon-us-en.txt")?),
+        format!("--sid={}", kokoro_speaker(voice)),
+        format!("--num-threads={THREADS}"),
+        arg("output-filename", out.to_path_buf()),
+        text.to_string(),
+    ])
+}
+
 /// The transcript in the engine's output: its result line is JSON with a
 /// `text` field (it may go to stdout or stderr, so both are passed in).
 pub fn transcript_from(output: &str) -> Option<String> {
@@ -173,5 +238,40 @@ mod tests {
         assert_eq!(args[4], "--model-type=nemo_transducer");
         assert_eq!(args.last().unwrap(), "/t/clip.wav");
         assert_eq!(speech_model(Path::new("/nowhere")), None);
+    }
+
+    #[test]
+    fn the_kokoro_row_turns_into_the_speaking_command() {
+        let models = Path::new("/m");
+        let k = crate::local_setup::local_models()
+            .iter()
+            .find(|m| m.kind == ModelKind::TextToSpeech)
+            .expect("a voice row");
+        let args = speak_args(models, k, "leo", "Hello there.", Path::new("/t/out.wav")).unwrap();
+        let voice = md::kind_dir(models, ModelKind::TextToSpeech);
+        assert_eq!(
+            args[0],
+            format!("--kokoro-model={}", voice.join(k.file).display())
+        );
+        assert!(args[1].starts_with("--kokoro-voices=") && args[1].ends_with("voices.bin"));
+        assert!(args[2].ends_with("tokens.txt"));
+        assert!(args[3].starts_with("--kokoro-lexicon=") && args[3].ends_with("lexicon-us-en.txt"));
+        assert_eq!(args[4], "--sid=16");
+        assert_eq!(args[6], "--output-filename=/t/out.wav");
+        assert_eq!(args.last().unwrap(), "Hello there.");
+        // No espeak-ng data: sherpa-onnx v2 ignores it.
+        assert!(!args.iter().any(|a| a.contains("data-dir")));
+        assert_eq!(voice_model(Path::new("/nowhere")), None);
+        assert_eq!(kokoro_speaker("ara"), 3);
+        assert_eq!(kokoro_speaker("unknown"), 3);
+        assert_eq!(
+            crate::tool_engine::engine_for(ModelKind::TextToSpeech).map(|t| t.name),
+            Some("sherpa-onnx")
+        );
+        assert!(tts_path(Path::new("/c")).ends_with(if cfg!(windows) {
+            "bin/sherpa-onnx-offline-tts.exe"
+        } else {
+            "bin/sherpa-onnx-offline-tts"
+        }));
     }
 }

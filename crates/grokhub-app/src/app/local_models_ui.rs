@@ -117,6 +117,28 @@ fn this_machine() -> Machine {
     }
 }
 
+/// Once a day, off the UI thread: save a newer signed model catalog from
+/// the newest release, for the next start. Always on: it only reads a signed
+/// file from GrokHub's own releases and sends nothing about this PC.
+fn refresh_catalog_daily(now: u64) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static RUNNING: AtomicBool = AtomicBool::new(false);
+    let cfg = crate::config::config_dir();
+    // Tests never reach the network.
+    if cfg!(test)
+        || deck_check()
+        || !grokhub_core::catalog_update::due(&cfg, now)
+        || RUNNING.swap(true, Ordering::SeqCst)
+    {
+        return;
+    }
+    grokhub_core::catalog_update::stamp(&cfg, now);
+    std::thread::spawn(move || {
+        let _ = crate::release_update::refresh_catalog(crate::update::installed_channel(), &cfg);
+        RUNNING.store(false, Ordering::SeqCst);
+    });
+}
+
 impl Cabin {
     fn news_now(&mut self) -> &mut Tracker {
         self.sources
@@ -134,6 +156,7 @@ impl Cabin {
 
     /// Every frame with the source poll: finish a check, or start the weekly one.
     pub(super) fn tick_local_models(&mut self, now: u64) {
+        refresh_catalog_daily(now);
         if let Some(rx) = self.sources.models.rx.take() {
             match rx.try_recv() {
                 Ok(run) => self.finish_local_models(run, now),

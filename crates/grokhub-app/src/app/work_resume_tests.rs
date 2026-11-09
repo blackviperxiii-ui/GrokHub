@@ -250,7 +250,40 @@ fn a_cut_turn_is_interrupted_and_a_swap_cut_halts_the_turn() {
         Some(InterruptCause::ModelSwap)
     );
     assert_eq!(card(&cabin, &swap).status, BoardStatus::Blocked);
+    // The cabin cut it, so the next frame picks it back up by itself.
+    assert_eq!(
+        cabin.work_resume.swap_resume.as_deref(),
+        Some(swap.as_str())
+    );
+    assert_eq!(cabin.status, "Switched models, picking this back up");
+    cabin.tick_work_resume();
+    assert!(cabin.work_resume.swap_resume.is_none());
+    assert_eq!(cabin.work_resume.swap_resumed, Some((swap.clone(), 1)));
+    // Past two cuts in a row the turn waits for the Workboard.
+    cabin.work_resume.swap_resumed = Some((swap.clone(), 2));
+    cabin.chat_job_thread = card(&cabin, &swap).thread_id.clone();
+    cabin.inflight_open = true;
+    cabin.running = true;
+    cabin.work_resume.swap_cut = true;
+    cabin.tick_work_resume();
+    assert!(cabin.work_resume.swap_resume.is_none());
+    assert!(
+        cabin.status.contains("Resume it from the Workboard"),
+        "{}",
+        cabin.status
+    );
     release_isolated(&root, cabin);
+}
+
+#[test]
+fn a_stopped_reply_names_why_it_stopped() {
+    assert_eq!(
+        super::stopped_seam(Some("the model changed mid-run")),
+        "\n\n*Stopped: the model changed mid-run*"
+    );
+    assert_eq!(super::stopped_seam(None), "\n\n*Stopped*");
+    assert_eq!(super::stop_cause_of("Redirected"), "you sent a new message");
+    assert_eq!(super::stop_cause_of("Stopped"), "you stopped it");
 }
 
 /// The agent's own background card, interrupted, with the run it last had.

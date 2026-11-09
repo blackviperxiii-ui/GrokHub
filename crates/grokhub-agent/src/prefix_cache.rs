@@ -62,6 +62,10 @@ pub struct TurnVolatile {
     /// The turn's voice note: a guest voice, the depth note, a quip slot
     /// ([`crate::voice_session`]).
     pub voice: Option<String>,
+    /// This turn steers differently from the last one (LO-51): its notes open
+    /// with a line that earlier turns' notes are old. Old notes stay in the
+    /// history so the cached prefix stays append-only.
+    pub supersedes: bool,
 }
 
 impl TurnVolatile {
@@ -94,6 +98,7 @@ impl TurnVolatile {
             memory,
             intentions,
             voice: None,
+            supersedes: false,
         }
     }
 
@@ -103,8 +108,18 @@ impl TurnVolatile {
         self
     }
 
+    /// Mark the notes as replacing the last turn's when its style or playbook
+    /// is not among them.
+    pub fn superseding(mut self, history: &[InputItem]) -> Self {
+        self.supersedes = steering_changed(history, &self);
+        self
+    }
+
     pub fn format(&self) -> String {
         let mut parts: Vec<String> = Vec::new();
+        if self.supersedes {
+            parts.push(SUPERSEDES_NOTE.to_string());
+        }
         if let Some(v) = &self.voice {
             parts.push(v.clone());
         }
@@ -122,6 +137,34 @@ impl TurnVolatile {
         }
         parts.join("\n\n")
     }
+}
+
+/// Lead line of a turn whose notes replace the last turn's.
+pub const SUPERSEDES_NOTE: &str =
+    "Notes from earlier turns are old. Follow only these, for this message.";
+
+/// This turn's talk style or playbook is not in the newest stored user turn's
+/// notes, so the two would steer differently.
+pub fn steering_changed(items: &[InputItem], volatile: &TurnVolatile) -> bool {
+    let Some(notes) = items.iter().rev().find_map(|item| match item {
+        InputItem::Message { role, content } if role == "user" => Some(
+            content
+                .iter()
+                .find_map(|part| match part {
+                    ContentPart::InputText(text) => split_user_turn(text).map(|(n, _)| n),
+                    _ => None,
+                })
+                .unwrap_or(""),
+        ),
+        _ => None,
+    }) else {
+        return false;
+    };
+    !notes.is_empty()
+        && [&volatile.style, &volatile.playbook]
+            .into_iter()
+            .flatten()
+            .any(|block| !notes.contains(block.as_str()))
 }
 
 pub fn push_stable_system(history: &mut Vec<InputItem>, stable_system: &str) {
@@ -241,6 +284,28 @@ mod tests {
     use super::*;
     use crate::client::input_wire_value;
     #[test]
+    fn a_turn_that_steers_differently_says_older_notes_are_old() {
+        let turn = |playbook: &str| TurnVolatile {
+            playbook: Some(playbook.to_string()),
+            ..Default::default()
+        };
+        let mut history = Vec::new();
+        let first = turn("research playbook").superseding(&history);
+        assert!(!first.supersedes, "nothing earlier to replace");
+        push_user_turn(&mut history, &first, "where do i turn these in", None);
+        let same = turn("research playbook").superseding(&history);
+        assert!(!same.supersedes);
+        push_user_turn(&mut history, &same, "and the vendor?", None);
+        let hangout = turn("hangout playbook").superseding(&history);
+        assert!(hangout.supersedes);
+        assert!(hangout.format().starts_with(SUPERSEDES_NOTE));
+        let before: Vec<_> = history.clone();
+        push_user_turn(&mut history, &hangout, "yeah", None);
+        // Append-only: earlier turns go out byte for byte.
+        assert_eq!(history[..2], before[..]);
+    }
+
+    #[test]
     fn an_old_enabled_line_is_ignored() {
         let dir = crate::harness::test_dir("prefix-cache-settings");
         let path = config_path(&dir);
@@ -318,6 +383,7 @@ mod tests {
             memory: None,
             intentions: None,
             voice: None,
+            supersedes: false,
         };
         let v_b = TurnVolatile {
             style: Some("Talk style for this turn: concise.".into()),
@@ -325,6 +391,7 @@ mod tests {
             memory: None,
             intentions: None,
             voice: None,
+            supersedes: false,
         };
         let mut history_a: Vec<InputItem> = Vec::new();
         push_stable_system(&mut history_a, "STABLE_RULES");
@@ -362,6 +429,7 @@ mod tests {
                 memory: None,
                 intentions: None,
                 voice: None,
+                supersedes: false,
             },
             "turn two",
             None,
