@@ -6,6 +6,8 @@ import {
   homeSetup,
   homeSetupSteps,
   libraryFriends,
+  librarySteamSettings,
+  homeRunPlaybook,
   libraryPlay,
   openUrl,
   pulseAct,
@@ -141,7 +143,13 @@ export function runAction(a: TileAction, go: HomeRoutes, remote: boolean, reload
     case "settings":
       return go.onSettings(a.section as Section);
     case "runPlaybook":
-      return go.onSettings("playbooks");
+      // A new Workboard card runs it; its ask lands in the chat box unsent.
+      if (remote) return go.onSettings("playbooks");
+      void homeRunPlaybook(a.id).then(
+        (work) => go.onAsk(work.prompt),
+        () => go.onSettings("playbooks"),
+      );
+      return;
     case "review":
       return go.onOpen("workboard");
     case "turnOn":
@@ -164,6 +172,9 @@ export function runAction(a: TileAction, go: HomeRoutes, remote: boolean, reload
       return;
     case "steamFriends":
       if (!remote) void libraryFriends().catch(() => {});
+      return;
+    case "steamSettings":
+      if (!remote) void librarySteamSettings().catch(() => {});
       return;
     case "setup":
       // The OS prompt shows on the computer, so a paired browser can't run it.

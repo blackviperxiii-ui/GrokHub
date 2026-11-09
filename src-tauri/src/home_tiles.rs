@@ -94,7 +94,10 @@ pub fn view(module: &str, src: &Sources<'_>) -> Option<TileView> {
         },
         "systems_brief" => pc_only(&|| tiles::systems_brief_view(&drives(), guard())),
         "coach_tip" => pc_only(&|| tiles::coach_tip_view(&drives(), guard())),
-        "clips" => pc_only(&|| tiles::clips_view(&recent_clips(), now)),
+        "clips" => pc_only(&|| {
+            let steam = grokhub_core::steam::detect_root().is_some();
+            tiles::clips_view(&recent_clips(), steam, now)
+        }),
         "achievements" | "patch_notes" | "deals" => feed(module, src.config_dir, now),
         "session_timer" => pc_only(&|| {
             let clock = session(guard().gaming.then_some(0), now);
@@ -324,11 +327,7 @@ fn library_or(src: &Sources<'_>, build: impl Fn(&[library::Game]) -> TileView) -
     }
     let page = library::page(grokhub_core::steam::detect_root().as_deref());
     if !page.steam_found {
-        return TileView::empty(
-            "Install Steam to see your games here",
-            "Open Library",
-            TileAction::nav("library"),
-        );
+        return tiles::no_steam_view("Install Steam to see your games here");
     }
     build(&page.games)
 }
@@ -768,8 +767,10 @@ pub fn playbooks_view(page: &playbooks::Page) -> TileView {
         .iter()
         .take(ROWS)
         .map(|r| {
+            // A tap starts it on a new Workboard card; the chat box gets the
+            // ask, and the run's own approvals still apply.
             TileRow::new(r.name.clone(), r.steps.clone(), Tone::Normal)
-                .on_tap(TileAction::settings("playbooks"))
+                .on_tap(TileAction::RunPlaybook { id: r.id.clone() })
         })
         .collect();
     let caption = match page.problems.len() {

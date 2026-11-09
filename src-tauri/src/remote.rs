@@ -1058,6 +1058,8 @@ mod tests {
             "library_play",
             "home_open_clip",
             "library_friends",
+            "library_steam_settings",
+            "home_run_playbook",
             "home_turn_on",
             "home_setup",
             "home_setup_steps",

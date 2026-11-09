@@ -1614,6 +1614,25 @@ async fn workboard_playbook(
     off_main(move || workboard::start_playbook(&dir, &id, &playbook, &name)).await?
 }
 
+/// Home's Playbooks row: start that playbook on a new Workboard card.
+#[tauri::command]
+async fn home_run_playbook(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<workboard::Work, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        let page = playbooks::load(&dir);
+        let row = page
+            .rows
+            .iter()
+            .find(|r| r.id == id)
+            .ok_or("That playbook is gone. Open Playbooks to pick another.")?;
+        workboard::start_playbook_card(&dir, &row.id, &row.name, &row.summary)
+    })
+    .await?
+}
+
 /// Make it recurring: an automation from the card that then owns it.
 #[tauri::command]
 async fn workboard_recur(
@@ -2027,6 +2046,13 @@ fn home_setup_steps(module: String) -> Result<String, String> {
 async fn library_friends() -> Result<(), String> {
     capabilities::needs(capabilities::current().library, "Library")?;
     off_main(move || library::open_friends(grokhub_core::steam::detect_root().as_deref())).await?
+}
+
+/// Home's Clips tile: Steam's Settings, where Game Recording turns on.
+#[tauri::command]
+async fn library_steam_settings() -> Result<(), String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(move || library::open_settings(grokhub_core::steam::detect_root().as_deref())).await?
 }
 
 /// Home's Clips tile: play the clip at this place in its list.
@@ -3414,6 +3440,7 @@ pub fn run() {
             workboard_act,
             workboard_work,
             workboard_playbook,
+            home_run_playbook,
             workboard_recur,
             workboard_stamp,
             workboard_log,
@@ -3445,6 +3472,7 @@ pub fn run() {
             library_play,
             home_open_clip,
             library_friends,
+            library_steam_settings,
             home_turn_on,
             home_setup,
             home_setup_steps,
