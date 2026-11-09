@@ -552,7 +552,11 @@ impl Cabin {
                             ui.image((id, egui::vec2(40.0, 40.0)));
                         }
                         ui.vertical(|ui| {
-                            ui.label(RichText::new(name).size(12.0).color(crate::theme::fg()));
+                            ui.label(
+                                RichText::new(name)
+                                    .size(crate::theme::TYPE_CAPTION)
+                                    .color(crate::theme::fg()),
+                            );
                             let meta = if preparing {
                                 "Preparing…"
                             } else if let Some(e) = err.as_deref() {
@@ -570,7 +574,11 @@ impl Cabin {
                             } else {
                                 crate::theme::muted()
                             };
-                            ui.label(RichText::new(meta).size(11.0).color(color));
+                            ui.label(
+                                RichText::new(meta)
+                                    .size(crate::theme::TYPE_CAPTION)
+                                    .color(color),
+                            );
                         });
                         if ui.small_button("×").clicked() {
                             remove = Some(idx);

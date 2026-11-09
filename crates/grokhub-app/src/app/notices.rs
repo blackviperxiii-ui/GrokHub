@@ -408,7 +408,7 @@ impl Cabin {
             // The unread number, so "something new" also says how much.
             let galley = ui.painter().layout_no_wrap(
                 unread_badge(self.notices.unread),
-                egui::FontId::proportional(9.0),
+                egui::FontId::proportional(crate::theme::TYPE_BADGE),
                 egui::Color32::WHITE,
             );
             let w = (galley.size().x + 6.0).max(13.0);

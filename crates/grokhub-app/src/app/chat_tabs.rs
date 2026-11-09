@@ -80,7 +80,7 @@ impl Cabin {
                     if !hidden.is_empty() {
                         let label = format!("+{}", hidden.len());
                         let overflow = RichText::new(&label)
-                            .size(13.0)
+                            .size(crate::theme::TYPE_BODY)
                             .color(crate::theme::muted());
                         let force_open = super::loadout_home::deck_overflow_open();
                         let btn = ui.menu_button(overflow, |ui| {
@@ -128,7 +128,9 @@ impl Cabin {
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // ASCII-only label — missing-glyph fonts turn "⋯" into a square.
-                        let tools = RichText::new("...").size(14.0).color(crate::theme::muted());
+                        let tools = RichText::new("...")
+                            .size(crate::theme::TYPE_BODY)
+                            .color(crate::theme::muted());
                         ui.menu_button(tools, |ui| {
                             if ui.button(format!("Search ({SEARCH_KEY_HINT})")).clicked() {
                                 open_search = true;

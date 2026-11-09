@@ -188,7 +188,11 @@ fn paint_market_row(
                 ui.add_space(8.0);
                 ui.vertical(|ui| {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(&e.name).size(15.0).color(crate::theme::fg()));
+                        ui.label(
+                            RichText::new(&e.name)
+                                .size(crate::theme::TYPE_TITLE)
+                                .color(crate::theme::fg()),
+                        );
                         if let Some((label, tone)) = market_chip(installed) {
                             crate::cards::status_chip(ui, label, tone);
                         }
@@ -198,12 +202,12 @@ fn paint_market_row(
                     });
                     ui.label(
                         RichText::new(format!("{} · {}", e.publisher, e.category))
-                            .size(12.0)
+                            .size(crate::theme::TYPE_CAPTION)
                             .color(crate::theme::muted()),
                     );
                     ui.label(
                         RichText::new(&e.description)
-                            .size(12.0)
+                            .size(crate::theme::TYPE_CAPTION)
                             .color(crate::theme::fg()),
                     );
                 });
@@ -374,7 +378,11 @@ impl Cabin {
             ui.add_space(8.0);
             ui.vertical(|ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(&e.name).size(18.0).color(crate::theme::fg()));
+                    ui.label(
+                        RichText::new(&e.name)
+                            .size(crate::theme::TYPE_SECTION)
+                            .color(crate::theme::fg()),
+                    );
                     if let Some((label, tone)) = market_chip(installed) {
                         crate::cards::status_chip(ui, label, tone);
                     }
@@ -384,7 +392,7 @@ impl Cabin {
                 });
                 ui.label(
                     RichText::new(format!("{} · {}", e.publisher, e.category))
-                        .size(12.0)
+                        .size(crate::theme::TYPE_CAPTION)
                         .color(crate::theme::muted()),
                 );
             });
@@ -397,7 +405,7 @@ impl Cabin {
         ui.add_space(8.0);
         ui.label(
             RichText::new(&e.description)
-                .size(13.0)
+                .size(crate::theme::TYPE_BODY)
                 .color(crate::theme::fg()),
         );
         ui.add_space(12.0);
@@ -405,7 +413,7 @@ impl Cabin {
         for cap in &e.capabilities {
             ui.label(
                 RichText::new(format!("•  {cap}"))
-                    .size(13.0)
+                    .size(crate::theme::TYPE_BODY)
                     .color(crate::theme::fg()),
             );
         }
@@ -432,7 +440,10 @@ impl Cabin {
         crate::cards::help_text(ui, &format!("`{}`", e.target()));
         ui.add_space(12.0);
         crate::cards::section_label(ui, "Source");
-        if ui.link(RichText::new(&e.source).size(13.0)).clicked() {
+        if ui
+            .link(RichText::new(&e.source).size(crate::theme::TYPE_BODY))
+            .clicked()
+        {
             let _ = crate::desktop::open_url(&e.source);
         }
     }

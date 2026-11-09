@@ -603,7 +603,7 @@ fn paint_presence_stack(ui: &mut egui::Ui, chips: &[(char, egui::Color32, egui::
             c,
             egui::Align2::CENTER_CENTER,
             ch.to_string(),
-            egui::FontId::proportional(11.0),
+            egui::FontId::proportional(crate::theme::TYPE_CAPTION),
             fg,
         );
     }
@@ -883,9 +883,12 @@ impl Cabin {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     // Middle dots: the UI font has no "⋯" glyph.
                     menu_rect = ui
-                        .menu_button(RichText::new("···").size(16.0).strong(), |ui| {
-                            self.board_card_menu(ui, card, thread.is_some(), act);
-                        })
+                        .menu_button(
+                            RichText::new("···").size(crate::theme::TYPE_TITLE).strong(),
+                            |ui| {
+                                self.board_card_menu(ui, card, thread.is_some(), act);
+                            },
+                        )
                         .response
                         .rect;
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {

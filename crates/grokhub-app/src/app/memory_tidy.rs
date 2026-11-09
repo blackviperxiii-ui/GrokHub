@@ -114,14 +114,14 @@ impl Cabin {
             ui.label(
                 RichText::new(line)
                     .monospace()
-                    .size(12.0)
+                    .size(crate::theme::TYPE_CAPTION)
                     .color(crate::theme::muted()),
             );
         }
         if lines.len() > 5 {
             ui.label(
                 RichText::new(format!("and {} more", lines.len() - 5))
-                    .size(12.0)
+                    .size(crate::theme::TYPE_CAPTION)
                     .color(crate::theme::subtle()),
             );
         }
