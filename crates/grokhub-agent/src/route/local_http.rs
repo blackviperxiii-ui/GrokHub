@@ -394,9 +394,13 @@ fn note_timings(v: &Value) {
     }
 }
 
-/// Build a runtime from a running sidecar endpoint, if any.
+/// Build a runtime from a running sidecar endpoint, if any: the server the
+/// request was admitted to, so a warm relaunch never moves it mid-call.
 pub fn from_global_sidecar(busy: super::local_sidecar::Busy) -> Option<Arc<dyn LocalRuntime>> {
-    let end = super::local_sidecar::global_endpoint()?;
+    let end = match busy.endpoint() {
+        Some(end) => end.clone(),
+        None => super::local_sidecar::global_endpoint()?,
+    };
     let mut rt = HttpLocalRuntime::new(end.base_url, end.token).with_thinking(end.thinking);
     rt.busy = Some(Arc::new(busy));
     Some(Arc::new(rt))
