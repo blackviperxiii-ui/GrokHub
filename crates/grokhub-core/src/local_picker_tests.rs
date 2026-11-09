@@ -35,8 +35,22 @@ fn apple(ram_mb: u64) -> Profile {
     }
 }
 
+/// The catalog rows the picker may choose for you: the Gemma 4 defaults. The
+/// other makers' rows are optional, so they never change a pick (pinned by
+/// `optional_makers_never_change_the_pick`).
+fn defaults() -> &'static [LocalModel] {
+    static ROWS: std::sync::LazyLock<Vec<LocalModel>> = std::sync::LazyLock::new(|| {
+        local_models()
+            .iter()
+            .filter(|m| !m.optional)
+            .copied()
+            .collect()
+    });
+    &ROWS
+}
+
 fn run(p: &Profile) -> Vec<Pick> {
-    score(p, local_models(), &BenchCache::new())
+    score(p, defaults(), &BenchCache::new())
 }
 
 fn buckets(picks: &[Pick]) -> Vec<Bucket> {
@@ -261,7 +275,7 @@ fn with_optional_row() -> &'static [LocalModel] {
         ..*big
     };
     let mut rows = vec![optional];
-    rows.extend(local_models().iter().copied());
+    rows.extend(defaults().iter().copied());
     rows.leak()
 }
 
@@ -388,7 +402,7 @@ fn an_old_engine_hides_a_row_that_needs_a_newer_one_and_an_unknown_one_does_not(
 fn a_slow_speed_test_demotes_the_default_to_the_next_model() {
     let p = gpu(&[16_384], 32_768);
     let bench: BenchCache = [("gemma-4-26b-a4b-it-abliterated-q4_k".to_string(), 7.5)].into();
-    let picks = score(&p, local_models(), &bench);
+    let picks = score(&p, defaults(), &bench);
     assert_eq!(buckets(&picks), [S, S, R, R, R]);
     assert_eq!(pre(&picks), Some("Gemma 4 12B"));
     assert_eq!(
@@ -397,7 +411,7 @@ fn a_slow_speed_test_demotes_the_default_to_the_next_model() {
     );
     let fast: BenchCache = [("gemma-4-26b-a4b-it-abliterated-q4_k".to_string(), 72.0)].into();
     assert_eq!(
-        why(&score(&p, local_models(), &fast), "Gemma 4 26B-A4B"),
+        why(&score(&p, defaults(), &fast), "Gemma 4 26B-A4B"),
         "Fits in 16 GB of GPU memory, measured 72 tok/s."
     );
 }
@@ -425,8 +439,28 @@ fn budgets_from_2_gb_to_48_gb_map_to_one_tier_default() {
 
 #[test]
 fn the_catalog_is_huihui_ai_abliterated_gemma_4_all_pinned() {
-    let models: Vec<&LocalModel> = crate::local_setup::standard_models().collect();
-    assert_eq!(models.len(), 5, "data/local_catalog.toml parses");
+    let all: Vec<&LocalModel> = crate::local_setup::standard_models().collect();
+    assert_eq!(all.len(), 25, "data/local_catalog.toml parses");
+    // The other makers' rows: optional, uncensored, pinned, and never claiming
+    // an engine newer than they need.
+    for m in all.iter().filter(|m| m.optional) {
+        assert!(
+            m.id.contains("-heretic-") || m.id.contains("-abliterated-"),
+            "{}",
+            m.id
+        );
+        assert!(m.abliterated.is_some(), "{}", m.id);
+        assert!(
+            m.sha256.len() == 64 && m.sha256.bytes().all(|b| b.is_ascii_hexdigit()),
+            "{}",
+            m.id
+        );
+        assert!(m.download_mb > 0 && m.run_mb > m.download_mb, "{}", m.id);
+        assert!(m.min_llama_build.is_none_or(|b| b <= 12_017), "{}", m.id);
+    }
+    // The defaults the picker chooses from stay the five Gemma 4 builds.
+    let models: Vec<&LocalModel> = all.into_iter().filter(|m| !m.optional).collect();
+    assert_eq!(models.len(), 5);
     assert!(models.iter().all(|m| !m.name.contains("Qwen")));
     assert!(models
         .iter()
@@ -442,7 +476,7 @@ fn the_catalog_is_huihui_ai_abliterated_gemma_4_all_pinned() {
             .ends_with("-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf")));
     assert!(models
         .iter()
-        .all(|m| !m.optional && !m.is_drafter && m.min_llama_build.is_none()));
+        .all(|m| !m.is_drafter && m.min_llama_build.is_none()));
     assert_eq!(
         models
             .iter()
@@ -499,4 +533,36 @@ fn the_catalog_is_huihui_ai_abliterated_gemma_4_all_pinned() {
     // the AVX-only CPU variants.
     let pinned = crate::runtime_download::manifest_for_key("linux-x86_64").expect("pinned");
     assert_eq!(build_number(&pinned.version), Some(12_017));
+}
+
+#[test]
+fn optional_makers_never_change_the_pick() {
+    let machines = [
+        gpu(&[16_384], 32_768),
+        gpu(&[24_576], 65_536),
+        gpu(&[8_192], 16_384),
+        gpu(&[4_096], 16_384),
+        gpu(&[16_384, 16_384], 65_536),
+        cpu_only(16_384),
+        cpu_only(65_536),
+        apple(16_384),
+        apple(65_536),
+    ];
+    for p in machines {
+        let full = score(&p, local_models(), &BenchCache::new());
+        let picked = full.iter().find(|x| x.preselected).map(|x| x.model.id);
+        assert_eq!(picked, pre_id(&run(&p)), "{p:?}");
+        // An optional row that fits says nothing picks it for you.
+        for x in full.iter().filter(|x| x.model.optional && x.bucket == R) {
+            assert!(
+                x.reason.contains("never picks it for you"),
+                "{}",
+                x.model.id
+            );
+        }
+    }
+}
+
+fn pre_id(picks: &[Pick]) -> Option<&'static str> {
+    picks.iter().find(|x| x.preselected).map(|x| x.model.id)
 }
