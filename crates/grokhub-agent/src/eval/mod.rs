@@ -34,6 +34,7 @@ pub mod live_shape;
 pub mod longmem;
 pub mod memory_index;
 pub mod metrics;
+pub mod naturalness;
 pub mod paired;
 pub mod recall_set;
 pub mod sycophancy;

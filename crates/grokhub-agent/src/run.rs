@@ -1116,6 +1116,11 @@ fn run_turn(
             return finish(input, StopReason::MaxTurns, usage, compacted_once, true);
         }
         if turn.calls.is_empty() {
+            // The conversation core reads the reply the person sees; the next
+            // turn's note names any slip. No model call, no edit.
+            if input.depth == 0 {
+                crate::voice_session::note_reply(input.conversation_id, &last_assistant);
+            }
             let notes = input.steer.drain();
             if notes.is_empty() && !written_handled {
                 written_handled = true;

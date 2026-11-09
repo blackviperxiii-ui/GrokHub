@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use grokhub_core::conversation::{self, Tell};
 use grokhub_core::personality::{Heat, Personality};
 use grokhub_core::quips::{self, Moment, Planner, Trigger};
 use grokhub_core::voice_flow::{self, Flow, Signals};
@@ -52,6 +53,48 @@ const CAP: usize = 64;
 
 static SESSIONS: Mutex<Vec<(String, Session)>> = Mutex::new(Vec::new());
 static TURN: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+
+/// Per chat, for the conversation core: whether this turn's ask was casual
+/// and what the last finished reply slipped on ([`note_reply`]).
+#[derive(Debug, Default)]
+struct Talk {
+    casual: bool,
+    tells: Vec<Tell>,
+}
+
+static TALK: Mutex<Option<HashMap<String, Talk>>> = Mutex::new(None);
+
+/// The last reply's tells, taken (each is named once), and this turn's shape kept.
+fn take_tells(conversation_id: &str, casual: bool) -> Vec<Tell> {
+    let mut talk = TALK.lock().unwrap_or_else(|e| e.into_inner());
+    let m = talk.get_or_insert_with(HashMap::new);
+    if m.len() >= CAP && !m.contains_key(conversation_id) {
+        m.clear();
+    }
+    let entry = m.entry(conversation_id.to_string()).or_default();
+    entry.casual = casual;
+    std::mem::take(&mut entry.tells)
+}
+
+/// Reads a chat's finished reply for the conversation core's tells; the next
+/// turn's note names them. Never edits the reply, never calls a model. Only a
+/// chat whose turn [`step`] saw in the foreground is read.
+pub fn note_reply(conversation_id: &str, reply: &str) {
+    let mut talk = TALK.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(entry) = talk.as_mut().and_then(|m| m.get_mut(conversation_id)) {
+        entry.tells = conversation::tells(reply, entry.casual);
+    }
+}
+
+/// What the chat's last finished reply slipped on, not yet named in a note.
+pub fn pending_tells(conversation_id: &str) -> Vec<Tell> {
+    TALK.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .and_then(|m| m.get(conversation_id))
+        .map(|t| t.tells.clone())
+        .unwrap_or_default()
+}
 
 fn seed_of(id: &str) -> u64 {
     // FNV-1a: stable across runs, no dependency.
@@ -98,6 +141,9 @@ pub fn forget(conversation_id: &str) {
         .unwrap_or_else(|e| e.into_inner())
         .retain(|(id, _)| id != conversation_id);
     if let Some(m) = TURN.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+        m.remove(conversation_id);
+    }
+    if let Some(m) = TALK.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
         m.remove(conversation_id);
     }
 }
@@ -154,13 +200,29 @@ fn asks_for_a_style(text: &str) -> bool {
 }
 
 /// Steps the chat's voice for one user turn and stores the turn's note for
-/// [`turn_block`]. Returns the note (empty when nothing applies).
+/// [`turn_block`]. Returns the note (empty for a background run). Every
+/// foreground chat gets the conversation core's cue, registered or not, so
+/// the core holds in both shells; a registered chat's voice lines come first.
 pub fn step(conversation_id: &str, view: TurnView) -> String {
-    let block = {
+    let block = if view.background || conversation_id.is_empty() {
+        String::new()
+    } else {
+        let talk = conversation::Turn {
+            text: view.text,
+            intent: view.intent,
+            care: view.care,
+            mood: view.mood,
+        };
+        let cue = conversation::cue(&talk, &take_tells(conversation_id, talk.casual()));
         let mut all = SESSIONS.lock().unwrap_or_else(|e| e.into_inner());
-        match all.iter_mut().find(|(id, _)| id == conversation_id) {
-            Some((_, s)) if !view.background => s.step(view),
-            _ => String::new(),
+        let voice = match all.iter_mut().find(|(id, _)| id == conversation_id) {
+            Some((_, s)) => s.step(view),
+            None => String::new(),
+        };
+        if voice.is_empty() {
+            cue
+        } else {
+            format!("{voice}\n{cue}")
         }
     };
     let mut turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
@@ -300,8 +362,17 @@ mod tests {
     }
 
     #[test]
-    fn an_unregistered_chat_or_a_background_run_gets_no_note() {
-        assert_eq!(step("vs-none", view("hey", "chat", "calm")), "");
+    fn an_unregistered_chat_gets_only_the_talk_cue_and_a_background_run_no_note() {
+        assert_eq!(turn_block("vs-none"), None);
+        assert_eq!(
+            step("vs-none", view("hey", "chat", "calm")),
+            grokhub_core::conversation::SHORT
+        );
+        assert_eq!(
+            turn_block("vs-none").as_deref(),
+            Some(grokhub_core::conversation::SHORT)
+        );
+        forget("vs-none");
         assert_eq!(turn_block("vs-none"), None);
         register("vs-bg", cfg("nyx", None));
         let mut bg = view("still broken error crash", "repair", "frustrated");
@@ -465,5 +536,35 @@ mod tests {
         }
         assert_eq!(heat(id), Some(Heat::Filthy));
         forget(id);
+    }
+
+    #[test]
+    fn a_slipped_reply_is_named_once_in_the_next_turns_note() {
+        let id = "vs-talk";
+        register(id, cfg("nyx", None));
+        let first = step(id, view("yo", "chat", "calm"));
+        assert!(
+            first.ends_with(grokhub_core::conversation::SHORT),
+            "{first}"
+        );
+        note_reply(id, "Certainly! Task complete.");
+        assert_eq!(
+            pending_tells(id),
+            vec![Tell::StockOpener, Tell::ProcessTalk]
+        );
+        let next = step(id, view("cool, thanks", "chat", "calm"));
+        assert!(next.contains("Stay in voice:"), "{next}");
+        assert!(
+            next.ends_with("Your last reply slipped: it opened with a stock phrase, so start with the answer; it narrated checklists, cards or limits, so say what happened in plain words."),
+            "{next}"
+        );
+        assert_eq!(pending_tells(id), Vec::<Tell>::new());
+        let third = step(id, view("nice", "chat", "calm"));
+        assert!(!third.contains("slipped"), "named once: {third}");
+        // A reply to a chat no foreground turn saw is not read.
+        note_reply("vs-never-stepped", "Certainly!");
+        assert_eq!(pending_tells("vs-never-stepped"), Vec::<Tell>::new());
+        forget(id);
+        assert_eq!(pending_tells(id), Vec::<Tell>::new());
     }
 }

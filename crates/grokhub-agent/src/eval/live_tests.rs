@@ -55,17 +55,18 @@ fn find(id: &str) -> LiveTask {
 }
 
 #[test]
-fn thirty_four_tasks_with_both_sets_recall_and_probes() {
+fn thirty_eight_tasks_with_both_sets_recall_probes_and_talk() {
     let all = tasks();
-    assert_eq!(all.len(), 34);
+    assert_eq!(all.len(), 38);
     let mut ids: Vec<&str> = all.iter().map(|t| t.id).collect();
     ids.sort_unstable();
     ids.dedup();
-    assert_eq!(ids.len(), 34);
+    assert_eq!(ids.len(), 38);
     assert_eq!(
         all.iter().filter(|t| t.set == TaskSet::Regression).count(),
-        16
+        20
     );
+    assert_eq!(all.iter().filter(|t| t.natural).count(), 4);
     assert_eq!(all.iter().filter(|t| t.adult.is_some()).count(), 1);
     assert_eq!(all.iter().filter(|t| t.probe.is_some()).count(), 2);
     assert_eq!(all.iter().filter(|t| t.recall).count(), 4);
@@ -1053,5 +1054,48 @@ fn dream_lessons_pass_only_when_they_solve_more_or_cost_less() {
     assert!(
         !dream_lessons_passed(&report("age_out", other)),
         "only its own arm counts"
+    );
+}
+
+#[test]
+fn the_talk_cases_fail_a_bot_sounding_reply() {
+    let ws = std::env::temp_dir();
+    let ws = ws.as_path();
+    let find = |id: &str| tasks().into_iter().find(|t| t.id == id).unwrap();
+    let hello = find("talk-short-hello");
+    assert!(check(
+        &hello,
+        "Not much, just hanging out. How was the long day?",
+        ws
+    ));
+    assert!(!check(
+        &hello,
+        "Certainly! I'm doing well. How can I help you today?",
+        ws
+    ));
+    assert!(
+        !check(&hello, &"word ".repeat(80), ws),
+        "a wall of text for a hello"
+    );
+    let after = find("talk-after-tools");
+    assert!(check(
+        &after,
+        "Your GPU driver hung and Windows stopped with 0x116. Updating the driver usually fixes it.",
+        ws
+    ));
+    assert!(!check(
+        &after,
+        "Log checked. Stop code 0x116. Card posted with fixes.",
+        ws
+    ));
+    let callback = find("talk-callback");
+    assert!(check(
+        &callback,
+        "Something easy you can eat with one hand, since the Elden DLC won't pause for you. A wrap or leftovers is perfect.",
+        ws
+    ));
+    assert!(
+        !check(&callback, "Something light, like a sandwich.", ws),
+        "forgot the DLC"
     );
 }

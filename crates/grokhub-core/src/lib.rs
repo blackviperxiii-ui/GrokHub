@@ -110,6 +110,8 @@ pub mod imagine_auth;
 pub mod imagine_pick;
 pub use grokhub_proto::inhabit;
 pub mod ask_offers;
+/// The conversation core under every personality.
+pub mod conversation;
 pub mod day_brief;
 pub mod gw2_api;
 pub mod interests;
