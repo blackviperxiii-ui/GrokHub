@@ -182,12 +182,16 @@ pub fn decode_wav(bytes: &[u8]) -> Option<(Vec<f32>, u32)> {
             let data = bytes.get(body..(body + len).min(bytes.len()))?;
             let samples: Vec<f32> = match (format, bits) {
                 (1, 16) => data
-                    .chunks_exact(2)
-                    .map(|b| f32::from(i16::from_le_bytes([b[0], b[1]])) / 32_768.0)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|b| f32::from(i16::from_le_bytes(*b)) / 32_768.0)
                     .collect(),
                 (3, 32) => data
-                    .chunks_exact(4)
-                    .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|b| f32::from_le_bytes(*b))
                     .collect(),
                 _ => return None,
             };
