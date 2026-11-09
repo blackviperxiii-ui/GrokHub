@@ -3,7 +3,10 @@
 use crate::config;
 
 pub fn load() -> grokhub_core::CardPrefs {
-    grokhub_core::load_card_prefs(&config::config_dir())
+    let dir = config::config_dir();
+    let mut prefs = grokhub_core::load_card_prefs(&dir);
+    prefs.taste = grokhub_core::card_taste::cached_weights(&dir);
+    prefs
 }
 
 pub fn save(prefs: &grokhub_core::CardPrefs) -> Result<(), String> {

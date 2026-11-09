@@ -127,6 +127,24 @@ pub struct CardPrefs {
     /// Group key → how the user used cards from that group. At most [`USE_CAP`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub uses: BTreeMap<String, CardUse>,
+    /// Card taste weights (`card-taste.json`, shared with Pulse), set by the
+    /// app before ranking. Never written to `card_prefs.json`.
+    #[serde(skip)]
+    pub taste: std::sync::Arc<BTreeMap<String, f64>>,
+}
+
+/// How much one point of card taste moves a Home card's score, and the cap.
+pub const HOME_TASTE_PER_POINT: f64 = 0.5;
+pub const HOME_TASTE_CAP: f64 = 3.0;
+
+/// The card's card-taste term for Home: liked traits lift it, disliked sink it.
+pub fn taste_term(card: &UpdateCard, prefs: &CardPrefs) -> f64 {
+    if prefs.taste.is_empty() {
+        return 0.0;
+    }
+    let traits = crate::card_taste::card_traits(card);
+    crate::card_taste::Taste::score(&prefs.taste, &traits).clamp(-HOME_TASTE_CAP, HOME_TASTE_CAP)
+        * HOME_TASTE_PER_POINT
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -576,7 +594,13 @@ pub fn card_score(card: &UpdateCard, prefs: &CardPrefs, now: u64, novelty: bool)
     let age_h = now.saturating_sub(card.created_at) as f64 / HOUR_MS;
     let recency = 0.3 * 0.5_f64.powf(age_h / 12.0);
     let novelty_term = if novelty { NOVELTY_BONUS } else { 0.0 };
-    base_score(card) + kind_a + 1.5 * group_a + topics.mean + recency + novelty_term
+    base_score(card)
+        + kind_a
+        + 1.5 * group_a
+        + topics.mean
+        + recency
+        + novelty_term
+        + taste_term(card, prefs)
 }
 
 struct HintTerm {

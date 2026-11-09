@@ -351,6 +351,7 @@ describe("Pulse", () => {
       feed: [post({ source: "Helldivers 2 on Steam", because: "You play Helldivers 2" })],
     });
     api.openUrl.mockResolvedValue();
+    api.pulseAct.mockResolvedValue(PAGE);
     render(<Pulse onRun={() => {}} />);
 
     const card = await screen.findByRole("listitem", { name: TITLE });
@@ -359,6 +360,8 @@ describe("Pulse", () => {
     );
     await userEvent.click(within(card).getByRole("button", { name: "Read it" }));
     expect(api.openUrl).toHaveBeenCalledWith("https://blog.rust-lang.org/1.99.html");
+    // Reading counts toward card taste, quietly.
+    expect(api.pulseAct).toHaveBeenCalledWith("post-1", "opened");
   });
 
   it("a post with no source page has no Read it", async () => {

@@ -298,7 +298,11 @@ export function Pulse({
                 busy={busy}
                 onLove={() => void act(post.id, post.loved ? "unlove" : "love")}
                 onDiscuss={() => void discuss(post.id)}
-                onOpen={() => void openUrl(post.link).catch(fail)}
+                onOpen={() => {
+                  void openUrl(post.link).catch(fail);
+                  // Read it counts as engagement for card taste; quietly.
+                  void pulseAct(post.id, "opened").catch(() => {});
+                }}
                 onDislike={() => void act(post.id, "dislike", DISLIKE_NOTE)}
                 onDismiss={() => void act(post.id, "dismiss", "Dismissed.")}
                 onWhy={() => pulseWhy(post.id)}
