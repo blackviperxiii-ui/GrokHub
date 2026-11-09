@@ -16,8 +16,9 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::fix::{elevate, DraftStep, FixPlan};
-use super::interpret::Finding;
-use super::probes::Os;
+use super::interpret::{Finding, Severity};
+use super::probes::{Os, ProbeId};
+use super::DiagnoseReport;
 
 /// Where Linux lists its hardware monitors.
 pub const HWMON_ROOT: &str = "/sys/class/hwmon";
@@ -267,10 +268,54 @@ pub fn fans_at_full(saved: &[SavedFan]) -> bool {
         })
 }
 
+/// Every saved fan reads the mode it had, and a manual one its speed too:
+/// the re-check after Undo.
+pub fn fans_restored(saved: &[SavedFan]) -> bool {
+    !saved.is_empty()
+        && saved.iter().all(|s| {
+            read_u8(&s.channel.enable) == Some(s.enable)
+                && (s.enable != PWM_MANUAL || read_u8(&s.channel.pwm) == Some(s.pwm))
+        })
+}
+
+/// What a fan fix's re-check looks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FanGoal {
+    /// Full speed, after the fix.
+    Full,
+    /// The saved settings, after Undo.
+    Saved,
+}
+
+/// The fan re-check as a report the fix run reads. It reads the fan files
+/// back, so it needs no probe and no admin.
+pub fn fans_check(saved: &[SavedFan], goal: FanGoal) -> DiagnoseReport {
+    let ok = match goal {
+        FanGoal::Full => fans_at_full(saved),
+        FanGoal::Saved => fans_restored(saved),
+    };
+    let plain = match (goal, ok) {
+        (FanGoal::Full, true) => "Every fan reads full speed now.",
+        (FanGoal::Full, false) => "The fans don't read full speed yet.",
+        (FanGoal::Saved, true) => "Every fan is back on the setting I saved.",
+        (FanGoal::Saved, false) => "Some fans aren't back on the setting I saved yet.",
+    };
+    DiagnoseReport {
+        ask: None,
+        findings: vec![Finding {
+            severity: if ok { Severity::Ok } else { Severity::Warning },
+            plain: plain.into(),
+            detail: String::new(),
+            probe: ProbeId::Fans,
+        }],
+        ran: vec![ProbeId::Fans],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::repair::{classify_step, ProbeId, Severity, StepClass};
+    use crate::repair::{classify_step, StepClass};
 
     fn hwmon(tag: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!("grokhub-fans-{tag}-{}", std::process::id()));
@@ -297,6 +342,9 @@ mod tests {
         }
     }
 
+    // The fan fix writes Linux sysfs paths, so its fake hwmon tree needs
+    // Linux paths too. Windows gets only the vendor-app answer, tested below.
+    #[cfg(target_os = "linux")]
     #[test]
     fn full_speed_saves_each_fan_and_undo_puts_it_back() {
         let root = hwmon("plan");
@@ -361,6 +409,24 @@ mod tests {
             fs::write(chip.join(f), "255\n").unwrap();
         }
         assert!(fans_at_full(&saved));
+        let full = fans_check(&saved, FanGoal::Full);
+        assert_eq!(full.ran, vec![ProbeId::Fans]);
+        assert_eq!(full.findings[0].severity, Severity::Ok);
+        assert_eq!(full.findings[0].plain, "Every fan reads full speed now.");
+        let back = fans_check(&saved, FanGoal::Saved);
+        assert_eq!(back.findings[0].severity, Severity::Warning);
+        assert_eq!(
+            back.findings[0].plain,
+            "Some fans aren't back on the setting I saved yet."
+        );
+        // Undo ran: the automatic fan reads 5 again, the manual one 120.
+        fs::write(chip.join("pwm1_enable"), "5\n").unwrap();
+        fs::write(chip.join("pwm2"), "120\n").unwrap();
+        assert!(fans_restored(&saved));
+        assert_eq!(
+            fans_check(&saved, FanGoal::Saved).findings[0].plain,
+            "Every fan is back on the setting I saved."
+        );
         let _ = fs::remove_dir_all(&root);
     }
 

@@ -37,8 +37,9 @@ pub use drivers::{
     verify_driver, DriverBlock, DriverDoubt, DriverUpdate, Rollback, VerifiedDriver, PACMAN_CACHE,
 };
 pub use fans::{
-    fan_backend, fans_at_full, full_speed_plan, pwm_channels, restore_fans_plan, save_fans,
-    FanBackend, FanBlock, PwmChannel, SavedFan, HWMON_ROOT, PWM_FULL, PWM_MANUAL,
+    fan_backend, fans_at_full, fans_check, fans_restored, full_speed_plan, pwm_channels,
+    restore_fans_plan, save_fans, FanBackend, FanBlock, FanGoal, PwmChannel, SavedFan, HWMON_ROOT,
+    PWM_FULL, PWM_MANUAL,
 };
 pub(crate) use fix::repair_hit;
 pub use fix::{

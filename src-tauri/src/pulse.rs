@@ -613,7 +613,8 @@ pub fn fix(config_dir: &Path, id: &str) -> Result<FixView, String> {
     let stat = advice::card_session(&card.source_id, &ledger.history);
     let options = advice::sheet_options(stat, &ledger.history, &settings)
         .into_iter()
-        .filter(|o| !o.kind.is_setting())
+        // The fan fix runs in the desktop app only until the shell can run fixes.
+        .filter(|o| !o.kind.is_setting() && o.kind != advice::FixKind::FansFull)
         .collect();
     let compare = if stat.is_some() {
         advice::compare_rows(stat, &ledger.history)

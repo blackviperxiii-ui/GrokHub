@@ -1,7 +1,7 @@
 //! What a PC health summary means, and what to do about it. Pure rules, no
 //! model call: a one-line verdict against this PC's own recent sessions, and
 //! the options a card's Fix it sheet offers. Report and guidance only — this
-//! module never changes fans, clocks, or drivers, and nothing here touches a
+//! module never touches clock speeds, and nothing here touches a
 //! game.
 
 use serde::{Deserialize, Serialize};
@@ -282,6 +282,8 @@ pub enum FixKind {
     Upscale,
     /// Steps to clear dust and check airflow.
     Airflow,
+    /// Run every fan at full speed now, saved first so Undo puts it back.
+    FansFull,
     /// Steps to check the fan curve in the vendor tool.
     FanCurve,
     /// Steps to think about fresh thermal paste.
@@ -357,6 +359,13 @@ pub fn fix_options(
             "See this run next to your recent ones: time, peak temps and how busy each part was.",
         ));
     }
+    if warm {
+        out.push(opt(
+            FixKind::FansFull,
+            "Run the fans at full speed",
+            "The quickest way to cool down. I save each fan's setting first, and Undo puts it back. Not while a game runs.",
+        ));
+    }
     if warm || gpu_warm {
         let mut fps = opt(
             FixKind::FpsCap,
@@ -400,7 +409,7 @@ pub fn fix_options(
             FixKind::FanCurve,
             "Check the fan curve",
             crate::brand::filled(
-                "A quiet fan profile can let parts run hot. {product} only reads sensors and never changes fans itself.",
+                "A quiet fan profile can let parts run hot. The curve itself lives in your vendor tool or BIOS.",
             ),
         );
         fans.steps = vec![
@@ -639,6 +648,7 @@ mod tests {
         assert_eq!(
             kinds,
             vec![
+                FixKind::FansFull,
                 FixKind::FpsCap,
                 FixKind::Airflow,
                 FixKind::FanCurve,
@@ -668,7 +678,7 @@ mod tests {
         assert_eq!(opts[0].kind, FixKind::Compare);
         assert!(opts.iter().all(|o| !matches!(
             o.kind,
-            FixKind::Airflow | FixKind::FanCurve | FixKind::Repaste
+            FixKind::FansFull | FixKind::Airflow | FixKind::FanCurve | FixKind::Repaste
         )));
     }
 
