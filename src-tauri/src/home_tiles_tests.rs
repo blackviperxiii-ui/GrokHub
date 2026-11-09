@@ -183,3 +183,33 @@ fn feed_tiles_read_their_pulse_cards_and_say_where_the_switch_is() {
     assert_eq!(feed("deals", &d, NOW).state, TileState::Off);
     let _ = std::fs::remove_dir_all(&d);
 }
+
+#[test]
+fn pc_loadout_shows_temps_and_what_starts_with_the_pc() {
+    let m = local_ai::Machine {
+        gpus: Vec::new(),
+        reader: local_ai::GpuReader::None,
+        unified: false,
+        ram_mb: Some(32 * 1024),
+        free_disk_mb: None,
+        simd: grokhub_core::local_picker::CpuSimd::Avx2,
+        llama_build: None,
+    };
+    let extras = PcExtras {
+        cpu_c: Some(55),
+        gpu_c: Some(86),
+        startup: Some(vec!["Discord".into(), "Steam".into(), "Spotify".into()]),
+    };
+    let v = pc_view(&m, &extras);
+    let row = |label: &str| v.rows.iter().find(|r| r.label == label).cloned();
+    let gpu = row("GPU temp").unwrap();
+    assert_eq!(gpu.value, "86°C");
+    // Past the hot line: the row says so.
+    assert_eq!(gpu.tone, Tone::Warn);
+    assert_eq!(row("CPU temp").unwrap().tone, Tone::Normal);
+    assert_eq!(row("Startup apps").unwrap().value, "3 apps");
+    // Nothing read: no rows invented.
+    let bare = pc_view(&m, &PcExtras::default());
+    assert!(bare.rows.iter().all(|r| !r.label.contains("temp")));
+    assert!(bare.rows.iter().all(|r| r.label != "Startup apps"));
+}
