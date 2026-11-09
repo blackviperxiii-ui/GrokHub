@@ -37,6 +37,10 @@
 # Only the main GGUF downloads; the repos' vision projector
 # (`mmproj-model-bf16.gguf`) isn't fetched yet, so no row claims vision.
 
+# Raise with every change to this file: a release ships it signed, and an
+# older app swaps in a newer one (`catalog_update.rs`).
+version = 2
+
 [[model]]
 id = "nvidia-nemotron3.5-lightning-30b-a3b-heretic-q4_k_m"
 name = "NVIDIA Nemotron 3.5 Lightning 30B-A3B"

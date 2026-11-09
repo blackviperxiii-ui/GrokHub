@@ -6,3 +6,6 @@ scripts/deck-shots.list.ps1 merge=union
 # would add a byte per line and push it past the prompt growth budget. Keep
 # it LF everywhere so both builds send the same prompt bytes.
 crates/grokhub-agent/src/prompt_template.md text eol=lf
+
+# The signed test catalog: its signature covers these exact bytes.
+crates/grokhub-core/data/test_catalog/** -text
