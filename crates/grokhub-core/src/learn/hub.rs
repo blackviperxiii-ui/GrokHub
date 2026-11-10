@@ -348,6 +348,14 @@ pub fn decisions_text(now_ms: u64) -> String {
     decide::text(&state.unwrap_or_default(), now_ms)
 }
 
+/// How each area's offers and changes went in the last four weeks, for the
+/// week recap. Empty before [`start`] and while nothing has a score.
+pub fn score_lines(now_ms: u64) -> Vec<String> {
+    engine().map_or_else(Vec::new, |e| {
+        decide::score_lines(&decide::load(e.config_dir()), now_ms)
+    })
+}
+
 /// The quick chips for what the user usually does around `now_ms`: each due
 /// habit goes through the decision engine, and the ones it would offer or
 /// act on become chips, at most [`habit::CHIPS_MAX`]. Empty before [`start`].

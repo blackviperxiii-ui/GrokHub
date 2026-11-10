@@ -737,6 +737,25 @@ pub(super) fn verdict_words(v: Verdict) -> &'static str {
     }
 }
 
+/// One line per area that has a score: the share of its offers and changes
+/// that went the user's way in the last four weeks, and how that moved.
+pub fn score_lines(state: &State, now_ms: u64) -> Vec<String> {
+    Area::ALL
+        .into_iter()
+        .filter_map(|area| {
+            let score = state.score.score(area, now_ms);
+            let now = score.now?;
+            let was = match (score.trend, score.before) {
+                (Trend::TooEarly, _) | (_, None) => String::new(),
+                (Trend::Better, Some(b)) => format!(", up from {b}%"),
+                (Trend::Worse, Some(b)) => format!(", down from {b}%"),
+                (Trend::Steady, Some(b)) => format!(", about the same as before ({b}%)"),
+            };
+            Some(format!("{}: {now}% went your way{was}", area.label()))
+        })
+        .collect()
+}
+
 /// The dials and the newest decisions as Markdown, for the cabin's chat.
 pub fn text(state: &State, now_ms: u64) -> String {
     let mut out = String::from("**How far each area may go**\n");
@@ -764,23 +783,12 @@ pub fn text(state: &State, now_ms: u64) -> String {
     if state.paused(now_ms) {
         out.push_str("\nToo much was undone lately, so everything asks first for now.\n");
     }
-    let scored: Vec<String> = Area::ALL
-        .into_iter()
-        .filter_map(|area| {
-            let score = state.score.score(area, now_ms);
-            let now = score.now?;
-            let was = match (score.trend, score.before) {
-                (Trend::TooEarly, _) | (_, None) => String::new(),
-                (Trend::Better, Some(b)) => format!(", up from {b}%"),
-                (Trend::Worse, Some(b)) => format!(", down from {b}%"),
-                (Trend::Steady, Some(b)) => format!(", about the same as before ({b}%)"),
-            };
-            Some(format!("- {}: {now}% went your way{was}\n", area.label()))
-        })
-        .collect();
+    let scored = score_lines(state, now_ms);
     if !scored.is_empty() {
         out.push_str("\n**The last four weeks**\n");
-        out.extend(scored);
+        for line in &scored {
+            out.push_str(&format!("- {line}\n"));
+        }
     }
     let asks = state.asks(now_ms);
     if !asks.is_empty() {

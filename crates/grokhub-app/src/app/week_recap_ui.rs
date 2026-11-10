@@ -158,6 +158,7 @@ impl Cabin {
             disk_freed_bytes: counters.disk_freed_bytes,
             top_tasks,
             suggestion,
+            learned: grokhub_core::learn::hub::score_lines(now),
             tone,
         };
         wr::build_recap(&input)
