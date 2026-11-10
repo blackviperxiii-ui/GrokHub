@@ -1,1 +1,1 @@
-- The GrokHub cabin and GrokHub Shell no longer run on the same profile at once: the cabin explains that the shell is open (a login or tray start just exits quietly). A different profile folder is not affected.
+- The egui cabin and the Tauri shell no longer run on the same profile at once: whichever opens second says the other app is open (a login or tray start just exits quietly). A different profile folder is not affected.

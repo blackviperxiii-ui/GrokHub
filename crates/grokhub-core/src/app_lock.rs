@@ -23,15 +23,6 @@ pub enum AppKind {
     Cabin,
 }
 
-impl AppKind {
-    fn described(self) -> &'static str {
-        match self {
-            AppKind::Shell => "GrokHub Shell",
-            AppKind::Cabin => "The GrokHub cabin",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Owner {
     pub app: AppKind,
@@ -133,13 +124,18 @@ pub fn claim(dir: &Path, me: AppKind) -> Result<AppLock, Held> {
     })
 }
 
-/// The sentence shown when `me` finds the lock held by `other`.
+/// The sentence shown when `me` finds the lock held by `other`. Both apps
+/// carry the brand's product name today, so the other one is "the other app".
 pub fn held_message(me: AppKind, other: Option<AppKind>) -> String {
-    let who = match other {
-        Some(app) if app != me => app.described(),
-        _ => "Another GrokHub app",
-    };
-    format!("{who} is already open with this profile. Quit it from its tray, then try again.")
+    let name = crate::brand::product_name();
+    match other {
+        Some(app) if app != me => format!(
+            "The other {name} app is already open with this profile. Quit it from its tray, then try again."
+        ),
+        _ => format!(
+            "Another copy of {name} is already open with this profile. Quit it from its tray, then try again."
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -226,15 +222,15 @@ mod tests {
     fn held_messages_name_the_other_app() {
         assert_eq!(
             held_message(AppKind::Cabin, Some(AppKind::Shell)),
-            "GrokHub Shell is already open with this profile. Quit it from its tray, then try again."
+            "The other Loadout app is already open with this profile. Quit it from its tray, then try again."
         );
         assert_eq!(
             held_message(AppKind::Shell, Some(AppKind::Cabin)),
-            "The GrokHub cabin is already open with this profile. Quit it from its tray, then try again."
+            "The other Loadout app is already open with this profile. Quit it from its tray, then try again."
         );
         assert_eq!(
             held_message(AppKind::Shell, None),
-            "Another GrokHub app is already open with this profile. Quit it from its tray, then try again."
+            "Another copy of Loadout is already open with this profile. Quit it from its tray, then try again."
         );
     }
 

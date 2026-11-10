@@ -5,6 +5,8 @@
 #![cfg_attr(not(test), warn(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod agent;
+#[cfg(desktop)]
+mod app_guard;
 pub mod attach;
 pub mod auto_setup;
 pub mod automations;
@@ -3493,6 +3495,11 @@ pub fn run() {
             #[cfg(mobile)]
             phone_home(app)?;
             let config_dir = grokhub_agent::perm::config_dir();
+            // One app per profile: the egui cabin may hold this config dir.
+            #[cfg(desktop)]
+            if !app_guard::take_profile(app.handle(), &config_dir) {
+                return Ok(());
+            }
             let loaded = settings::load(&config_dir);
             #[cfg(desktop)]
             {
