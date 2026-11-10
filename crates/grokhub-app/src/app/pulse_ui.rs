@@ -574,11 +574,15 @@ pub(super) fn quick_button(ui: &mut egui::Ui, label: &str, style: Quick) -> bool
 
 /// The same button, handing back its response so a caller can pick which
 /// clicks count.
-fn quick_button_resp(ui: &mut egui::Ui, label: &str, style: Quick) -> egui::Response {
-    let text = RichText::new(label)
+fn quick_button_text(label: &str) -> RichText {
+    RichText::new(label)
         .size(crate::theme::FONT_TIP)
         .strong()
-        .extra_letter_spacing(0.8);
+        .extra_letter_spacing(0.8)
+}
+
+fn quick_button_resp(ui: &mut egui::Ui, label: &str, style: Quick) -> egui::Response {
+    let text = quick_button_text(label);
     use crate::ui_kit::recipe::{look, Part, State, BUTTON_RADIUS};
     let state = match style {
         Quick::Primary => State::Accent,
@@ -1000,36 +1004,64 @@ fn post_why_menu(ui: &mut egui::Ui, why: Option<&str>) {
 }
 
 /// The row, painted: one line, every button the same size and outline,
-/// Dismiss pinned to the right. A narrow card scrolls the row sideways.
-/// A liked Like slot shows ♥; the frame it flips on, a short scale tween
-/// runs unless reduced motion is on.
+/// Dismiss pinned to the right, beside the row and never on top of it. When
+/// the rest doesn't fit beside Dismiss, the rest scrolls sideways. A liked
+/// Like slot shows ♥; the frame it flips on, a short scale tween runs unless
+/// reduced motion is on.
 fn paint_post_row(ui: &mut egui::Ui, row: &[(String, FeedPostAct)]) -> Option<FeedPostAct> {
+    paint_post_row_rects(ui, row).0
+}
+
+/// [`paint_post_row`], with the part of each button that shows (what the
+/// sideways scroll leaves in view), in row order.
+fn paint_post_row_rects(
+    ui: &mut egui::Ui,
+    row: &[(String, FeedPostAct)],
+) -> (Option<FeedPostAct>, Vec<egui::Rect>) {
     let mut hit = None;
-    let ((last_label, last), rest) = row.split_last()?;
-    egui::ScrollArea::horizontal()
-        .id_salt(ui.next_auto_id())
-        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
-                for (label, did) in rest {
-                    let clicked = if *did == FeedPostAct::Like {
-                        paint_like_slot(ui, label)
-                    } else {
-                        card_button(ui, label, Quick::Outline)
-                    };
-                    if clicked {
-                        hit = Some(did.clone());
-                    }
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if card_button(ui, last_label, Quick::Outline) {
-                        hit = Some(last.clone());
-                    }
-                });
+    let mut rects = Vec::new();
+    let Some(((last_label, last), rest)) = row.split_last() else {
+        return (None, rects);
+    };
+    let mut last_rect = egui::Rect::NOTHING;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+            let resp = quick_button_resp(ui, last_label, Quick::Outline);
+            last_rect = resp.rect;
+            if resp.clicked_by(egui::PointerButton::Primary) {
+                hit = Some(last.clone());
+            }
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                egui::ScrollArea::horizontal()
+                    .id_salt(ui.next_auto_id())
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            for (label, did) in rest {
+                                let (clicked, rect) = if *did == FeedPostAct::Like {
+                                    let x0 = ui.cursor().min.x;
+                                    let clicked = paint_like_slot(ui, label);
+                                    let x1 = ui.cursor().min.x - ui.spacing().item_spacing.x;
+                                    let ys = ui.min_rect().y_range();
+                                    (clicked, egui::Rect::from_x_y_ranges(x0..=x1, ys))
+                                } else {
+                                    let resp = quick_button_resp(ui, label, Quick::Outline);
+                                    (resp.clicked_by(egui::PointerButton::Primary), resp.rect)
+                                };
+                                rects.push(rect.intersect(ui.clip_rect()));
+                                if clicked {
+                                    hit = Some(did.clone());
+                                }
+                            }
+                        });
+                    });
             });
         });
-    hit
+    });
+    rects.push(last_rect);
+    (hit, rects)
 }
 
 /// Like stays the same outlined size as its neighbours. When the label is the
@@ -3049,5 +3081,89 @@ mod stream_tests {
         assert_eq!(ids(pulse_stream([], ["1", "2"])), ["p:1", "p:2"]);
         assert_eq!(ids(pulse_stream(["a", "b"], [])), ["i:a", "i:b"]);
         assert!(pulse_stream::<&str, &str>([], []).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod post_row_tests {
+    use super::{paint_post_row_rects, FeedPostAct};
+    use eframe::egui;
+
+    /// The daily digest's row, the longest a post gets.
+    fn digest_row() -> Vec<(String, FeedPostAct)> {
+        [
+            ("Like", FeedPostAct::Like),
+            ("Discuss", FeedPostAct::Discuss),
+            ("Ignore for now", FeedPostAct::Snooze),
+            ("Remind me later", FeedPostAct::Snooze),
+            ("Snooze", FeedPostAct::Snooze),
+            ("Delete", FeedPostAct::Delete),
+            ("Not interested", FeedPostAct::Dislike),
+            ("Dismiss", FeedPostAct::Dismiss),
+        ]
+        .into_iter()
+        .map(|(label, did)| (label.to_string(), did))
+        .collect()
+    }
+
+    fn row_rects(width: f32) -> (Vec<egui::Rect>, f32) {
+        let _paint = crate::theme::hold_paint_test();
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(width, 200.0),
+            )),
+            ..Default::default()
+        };
+        let row = digest_row();
+        let (mut rects, mut right) = (Vec::new(), 0.0);
+        for _ in 0..2 {
+            crate::theme::test_pass(&ctx, raw.clone(), |ui| {
+                right = ui.max_rect().right();
+                rects = paint_post_row_rects(ui, &row).1;
+            });
+        }
+        (rects, right)
+    }
+
+    #[test]
+    fn a_narrow_digest_row_keeps_dismiss_in_view_and_off_not_interested() {
+        let (rects, right) = row_rects(600.0);
+        assert_eq!(rects.len(), 8);
+        // What shows: a button scrolled out of view shows nothing.
+        let shown: Vec<egui::Rect> = rects.iter().copied().filter(|r| r.width() > 0.0).collect();
+        assert!(shown.len() >= 6, "most of the row shows: {rects:?}");
+        for pair in shown.windows(2) {
+            assert!(
+                pair[1].min.x >= pair[0].max.x + 7.0,
+                "buttons overlap or touch: {pair:?}"
+            );
+        }
+        // One line: every button that shows sits at the same height.
+        for r in &shown {
+            assert!(
+                (r.center().y - shown[0].center().y).abs() <= 1.0,
+                "{shown:?}"
+            );
+        }
+        // Dismiss stays in view at the right; the rest scrolls beside it.
+        assert!(
+            (rects[7].max.x - right).abs() <= 1.0,
+            "{rects:?} vs {right}"
+        );
+    }
+
+    #[test]
+    fn a_wide_digest_row_still_pins_dismiss_to_the_right() {
+        let (rects, right) = row_rects(1400.0);
+        let dismiss = rects[7];
+        let not_interested = rects[6];
+        assert!(
+            (dismiss.max.x - right).abs() <= 1.0,
+            "{dismiss:?} vs {right}"
+        );
+        assert!(dismiss.min.x > not_interested.max.x + 100.0, "{rects:?}");
     }
 }
