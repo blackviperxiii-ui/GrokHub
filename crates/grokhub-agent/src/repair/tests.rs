@@ -400,11 +400,130 @@ fn a_crash_card_chat_picks_that_programs_crash_history() {
         probes_for_subject("why does adapter.rs crash", Os::Linux),
         None
     );
-    // Without a card the old reading stands: no crash probes.
+    // Without a card or a name, the generic reading stands: services only.
     assert_eq!(
-        probes_for_intent(CRASH_ASK, Os::Linux),
+        probes_for_intent("my bluetooth keeps crashing", Os::Linux),
         Some(vec![ProbeId::FailedServices, ProbeId::BootErrors])
     );
+}
+
+/// The bluetoothd transcript: with no card, a crash ask that names its
+/// program reads that program's crash history, then the services.
+#[test]
+fn a_crash_ask_that_names_its_program_reads_its_crash_history() {
+    let named =
+        |text: &str, os: Os| probes_for_named(text, os).map(|(n, p)| (n.as_str().to_string(), p));
+    let service = vec![
+        ProbeId::CrashDumps,
+        ProbeId::CrashLog,
+        ProbeId::FailedServices,
+        ProbeId::BootErrors,
+    ];
+    assert_eq!(
+        named("why does bluetoothd keep crashing?", Os::Linux),
+        Some(("bluetoothd".into(), service.clone()))
+    );
+    assert_eq!(
+        named(CRASH_ASK, Os::Linux),
+        Some(("bluetoothd".into(), service))
+    );
+    assert_eq!(
+        named("Firefox crashed again", Os::Linux),
+        Some((
+            "Firefox".into(),
+            vec![ProbeId::CrashDumps, ProbeId::CrashLog]
+        ))
+    );
+    assert_eq!(
+        named("steam keeps dying", Os::Linux),
+        Some(("steam".into(), vec![ProbeId::CrashDumps, ProbeId::CrashLog]))
+    );
+    assert_eq!(
+        named("what's wrong with Discord.exe?", Os::Windows),
+        Some(("Discord.exe".into(), vec![ProbeId::AppCrashes]))
+    );
+    assert_eq!(
+        named("why is the Spooler service crashing", Os::Windows),
+        Some((
+            "Spooler".into(),
+            vec![
+                ProbeId::AppCrashes,
+                ProbeId::ServicesStoppedAuto,
+                ProbeId::EventErrors24h
+            ]
+        ))
+    );
+    // Not a program: the usual paths keep these.
+    for text in [
+        "my bluetooth keeps crashing",
+        "it keeps crashing",
+        "my game crashed",
+        "I was in a car crash",
+        "what's wrong with you",
+        "why does adapter.rs crash",
+        "my dog died",
+        "/diagnose crash",
+    ] {
+        assert_eq!(named(text, Os::Linux), None, "{text}");
+    }
+}
+
+/// A hostile ask never becomes a shell string: it names no program, or a
+/// plain word that reaches the probe as one argv entry.
+#[test]
+fn a_crash_ask_with_shell_characters_names_no_program_or_a_plain_word() {
+    for text in [
+        "why does foo; rm -rf ~ keep crashing",
+        "why does foo;rm keep crashing",
+        "why does $(reboot) keep crashing",
+        "why does a|b keep crashing",
+        "why does -rf keep crashing",
+        "why does ../etc/passwd keep crashing",
+    ] {
+        assert_eq!(program_in_ask(text), None, "{text}");
+    }
+    let name = program_in_ask("what's wrong with foo.exe; rm -rf ~").expect("a plain word");
+    assert_eq!(name.as_str(), "foo.exe");
+    let spec = subject_probe_spec(ProbeId::CrashDumps, Os::Linux, &name).unwrap();
+    assert_eq!(spec.program, "coredumpctl");
+    assert_eq!(spec.argv, ["list", "--no-pager", "--no-legend", "foo.exe"]);
+    let name = program_in_ask("rm -rf ~; foo keeps crashing").expect("a plain word");
+    assert_eq!(name.as_str(), "foo");
+    let spec = subject_probe_spec(ProbeId::CrashLog, Os::Linux, &name).unwrap();
+    assert_eq!(spec.argv[0], "_COMM=foo");
+}
+
+/// The named ask, run end to end: the report names the program, how many
+/// times it crashed and when, and the likely cause.
+#[test]
+fn a_named_crash_ask_reports_the_count_dates_and_likely_cause() {
+    let (name, probes) = probes_for_named("why does bluetoothd keep crashing", Os::Linux).unwrap();
+    let r = run_about(
+        "diag-crash-named",
+        Os::Linux,
+        &apt,
+        &probes,
+        &crash_answer,
+        true,
+        Some(&name),
+    );
+    assert_eq!(
+        r.calls,
+        vec![
+            "coredumpctl list --no-pager --no-legend bluetoothd",
+            "journalctl _COMM=bluetoothd -p warning -n 20 --no-pager -q -o short",
+            "systemctl --failed --no-legend --no-pager --plain",
+            "journalctl -p err -b --no-pager -q -n 20 -o short",
+        ]
+    );
+    let text = report_text(&r.report);
+    assert!(
+        text.starts_with(
+            "I checked your computer and found one thing worth fixing.\n- bluetoothd has crashed: 2 crash dumps on record, from Sun 2026-11-08 12:40:02 CST to Sun 2026-11-08 13:02:11 CST. The likely cause of the newest is the program stopping itself after an error it couldn't recover from (SIGABRT)."
+        ),
+        "{text}"
+    );
+    assert!(text.ends_with("I only looked. Nothing on your computer was changed."));
 }
 
 #[test]
@@ -438,7 +557,7 @@ fn a_crash_card_reads_its_programs_crash_dumps_and_log_by_name() {
         plains,
         vec![
             (
-                "bluetoothd has crashed: 2 crash dumps on record. The newest is from Sun 2026-11-08 13:02:11 CST, stopped by SIGABRT.",
+                "bluetoothd has crashed: 2 crash dumps on record, from Sun 2026-11-08 12:40:02 CST to Sun 2026-11-08 13:02:11 CST. The likely cause of the newest is the program stopping itself after an error it couldn't recover from (SIGABRT).",
                 Severity::Warning
             ),
             (
@@ -561,7 +680,7 @@ fn crash_history_reads_as_plain_findings() {
             ),
             "Discord.exe"
         ),
-        vec!["Discord.exe has crashed: 2 crashes in the Application log. The newest was 2026-11-08 13:02:11, in KERNELBASE.dll (code 0xe0434352)."]
+        vec!["Discord.exe has crashed: 2 crashes in the Application log, from 2026-11-07 09:00:00 to 2026-11-08 13:02:11. The newest was in KERNELBASE.dll (code 0xe0434352)."]
     );
     assert_eq!(
         plain(ProbeId::AppCrashes, out(0, "", ""), "Discord.exe"),
@@ -570,6 +689,6 @@ fn crash_history_reads_as_plain_findings() {
     let many = "Sun 2026-11-08 13:02:11 CST  1388 0 0 SIGABRT present  /usr/lib/bluetooth/bluetoothd 1.2M\n".repeat(20);
     assert_eq!(
         plain(ProbeId::CrashDumps, out(0, &many, ""), "bluetoothd"),
-        vec!["bluetoothd has crashed: 20 or more crash dumps on record. The newest is from Sun 2026-11-08 13:02:11 CST, stopped by SIGABRT."]
+        vec!["bluetoothd has crashed: 20 or more crash dumps on record, from Sun 2026-11-08 13:02:11 CST. The likely cause of the newest is the program stopping itself after an error it couldn't recover from (SIGABRT)."]
     );
 }
