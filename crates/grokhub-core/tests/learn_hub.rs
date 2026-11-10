@@ -728,5 +728,15 @@ fn the_shared_logs_feed_one_engine() {
         view::run("restore", at),
         grokhub_core::learn::backup::NO_RESTORE
     );
+    // The desktop page runs those four lines for their text, and no other.
+    assert_eq!(
+        view::page_say("restore", at),
+        Ok(grokhub_core::learn::backup::NO_RESTORE.to_string())
+    );
+    assert_eq!(view::page_say("report", at), Ok(view::run("report", at)));
+    for line in ["forget all", "", "pause", "report now"] {
+        assert_eq!(view::page_say(line, at), Err(view::USAGE.to_string()));
+    }
+    assert!(store::load_beliefs(&dir).len() > 1);
     let _ = fs::remove_dir_all(&dir);
 }

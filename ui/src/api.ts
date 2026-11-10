@@ -2199,6 +2199,14 @@ export function learnedAct(act: LearnedAct): Promise<LearnedView> {
   return invoke<LearnedView>("learned_act", { act });
 }
 
+/** The fault report, and backup and move (learn/view.rs `PAGE_LINES`). */
+export type LearnedLine = "report" | "backup" | "import" | "restore";
+
+/** Runs one of those and returns the text to show. Nothing is sent anywhere. */
+export function learnedSay(line: LearnedLine): Promise<string> {
+  return invoke<string>("learned_say", { line });
+}
+
 /** Settings → Pulse → Interests (src-tauri/src/interests.rs). */
 export interface InterestTopic {
   topic: string;

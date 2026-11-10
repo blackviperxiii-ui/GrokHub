@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getLearned, learnedAct, type LearnedAct, type LearnedRow, type LearnedStage, type LearnedTrust, type LearnedView, type TrustDial, type TrustGoal, type TrustRow } from "./api";
+import { getLearned, learnedAct, learnedSay, type LearnedAct, type LearnedLine, type LearnedRow, type LearnedStage, type LearnedTrust, type LearnedView, type TrustDial, type TrustGoal, type TrustRow } from "./api";
 import { PRODUCT_NAME } from "./brand";
 
 export const LEARNED_NOTE = `What ${PRODUCT_NAME} worked out from how you use it: which quick chips and cards you take, and how runs go. It stays on this computer and holds counts only, never what you typed. Forget clears a line so it starts fresh. That's wrong stops a line from being counted or used again. Always makes a line your own rule, whatever is counted.`;
@@ -9,6 +9,8 @@ export const LEARNED_EMPTY = "Nothing learned yet. It builds up as you use quick
 export const TRUST_NOTE = `How far ${PRODUCT_NAME} may go in each area. Watch only keeps learning and shows nothing. Offer only asks every time. Act when sure makes a change once you've said yes to it three times, and it can always be undone. Deleting, spending, sending and permissions always ask.`;
 export const TRUST_ASKING = "Too much was undone lately, so everything asks first for a few days.";
 export const TRUST_RESTING = "An area that got worse asks first for a month.";
+export const CARRY_NOTE = `A backup is one file on this computer with everything ${PRODUCT_NAME} learned. Copy it into the config folder on another computer and take it in there. The fault report lists what ${PRODUCT_NAME} measured going wrong with itself, in ids and counts only. Nothing here is sent anywhere.`;
+export const IMPORT_WARN = "Taking in a backup replaces what was learned on this computer. What is here now is kept once, so you can put it back.";
 export const DECISIONS_EMPTY = "No decisions yet. They show up here once there is something it could change for you.";
 
 const DIAL: Record<TrustDial, string> = {
@@ -150,6 +152,8 @@ export function Learned() {
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [said, setSaid] = useState<string | null>(null);
 
   useEffect(() => {
     getLearned().then(setView, (err) => setNote(String(err)));
@@ -163,6 +167,21 @@ export function Learned() {
       setNote(done);
     } catch (err) {
       setNote(String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** One of the page's four lines. An import or a put-back changes the
+   * list, so it is read again after. */
+  async function say(line: LearnedLine) {
+    setBusy(true);
+    setImporting(false);
+    try {
+      setSaid(await learnedSay(line));
+      if (line === "import" || line === "restore") setView(await getLearned());
+    } catch (err) {
+      setSaid(String(err));
     } finally {
       setBusy(false);
     }
@@ -221,6 +240,42 @@ export function Learned() {
         </p>
       )}
       {view && <Trust trust={view.trust} busy={busy} run={run} />}
+      {view && (
+        <>
+          <h3>Backup and report</h3>
+          <p className="note">{CARRY_NOTE}</p>
+          <div className="card-buttons">
+            <button type="button" className="quiet" disabled={busy} onClick={() => void say("backup")}>
+              Save a backup
+            </button>
+            <button type="button" className="quiet" disabled={busy} onClick={() => setImporting(true)}>
+              Take in a backup…
+            </button>
+            <button type="button" className="quiet" disabled={busy} onClick={() => void say("restore")}>
+              Put back what was here
+            </button>
+            <button type="button" className="quiet" disabled={busy} onClick={() => void say("report")}>
+              Show the fault report
+            </button>
+          </div>
+          {importing && (
+            <div className="confirm">
+              <p className="note warn">{IMPORT_WARN}</p>
+              <button type="button" disabled={busy} onClick={() => void say("import")}>
+                Take in the backup
+              </button>
+              <button type="button" className="quiet" onClick={() => setImporting(false)}>
+                Cancel
+              </button>
+            </div>
+          )}
+          {said && (
+            <pre className="note" role="status" aria-label="Backup and report" style={{ whiteSpace: "pre-wrap" }}>
+              {said}
+            </pre>
+          )}
+        </>
+      )}
       {view && !empty && !confirming && (
         <div className="card-buttons">
           <button type="button" className="quiet" disabled={busy} onClick={() => setConfirming(true)}>
