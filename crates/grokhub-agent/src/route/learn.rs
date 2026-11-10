@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
-use grokhub_core::learn::decide::{Outcome, Verdict as Decided};
+use grokhub_core::learn::decide::{Outcome, Reason, Verdict as Decided};
 use grokhub_core::model_registry::profile::{read_profiles, ModelProfile};
 use grokhub_core::model_registry::store::{load_registry, models_dir, read_json, write_json};
 use grokhub_core::model_registry::Registry;
@@ -549,7 +549,9 @@ pub fn tick_under(
                     .filter(|d| d.verdict != Decided::Act);
                 if let Some(d) = held {
                     let c = &mut state.candidates[i];
-                    if d.verdict == Decided::Never {
+                    // Never: two undos turned this kind of change off.
+                    // Resting: the user said no to it. Either way it ends.
+                    if d.verdict == Decided::Never || d.reason == Reason::Resting {
                         c.stage = Stage::Rejected;
                         c.reason = d.reason.why().into();
                         c.ended_at = Some(now_ms);

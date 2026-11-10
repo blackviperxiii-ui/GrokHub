@@ -2176,6 +2176,8 @@ export interface LearnedTrust {
   askingFirst: boolean;
   /** Changes the app may still make on its own today. */
   leftToday: number;
+  /** Offers waiting for a yes or a no (model choice has no card of its own). */
+  asks: { key: string; title: string; why: string }[];
   /** Newest first. */
   decisions: LearnedDecision[];
 }
@@ -2189,7 +2191,8 @@ export type LearnedAct =
   | { kind: "resume" }
   | { kind: "trust"; area: TrustArea; dial: TrustDial }
   | { kind: "goals"; goals: TrustGoal[] }
-  | { kind: "carryOn" };
+  | { kind: "carryOn" }
+  | { kind: "answer"; key: string; yes: boolean };
 
 export function getLearned(): Promise<LearnedView> {
   return invoke<LearnedView>("get_learned");
