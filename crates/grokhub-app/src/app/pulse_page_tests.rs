@@ -275,6 +275,66 @@ fn pulse_run_sends_the_ideas_prompt_as_bg() {
         .unwrap_or_default();
     assert!(sent.contains("Task: run the checks"), "{sent}");
     assert_eq!(cabin.updates[0].status, UpdateStatus::Opened);
+    // You tapped Run on the card, so its receipt lands there, not in the chat.
+    let receipts = feed_receipts(&cabin, "idea-run");
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(receipts[0].what, "Ran run the checks");
+    assert_eq!(receipts[0].result, vec!["bg finished".to_string()]);
+    assert!(cabin.pulse_view.report_open.contains("idea-run"));
+    assert!(
+        cabin.messages.iter().all(|m| !m.1.contains("bg finished")),
+        "{:?}",
+        cabin.messages
+    );
+    end_bg_test(root, cabin);
+}
+
+#[cfg(unix)]
+fn feed_receipts(cabin: &Cabin, id: &str) -> Vec<grokhub_core::card_report::CardReceipt> {
+    cabin
+        .updates
+        .iter()
+        .find(|c| c.id == id)
+        .and_then(|c| c.pulse.report.as_ref())
+        .map(|r| r.receipts.clone())
+        .unwrap_or_default()
+}
+
+#[cfg(unix)]
+#[test]
+fn a_report_card_run_works_on_the_hidden_background_chat_and_answers_on_the_card() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = bg_cabin("pulse-report-run");
+    let crash = crash_card();
+    let id = crash.id.clone();
+    cabin.updates.push(crash);
+    let before = feed_receipts(&cabin, &id).len();
+    let tabs = cabin.threads.len();
+    assert!(cabin.pulse_run(&id).is_some(), "{}", cabin.status);
+    assert!(!cabin.running, "Run never takes the composer");
+    assert_eq!(cabin.bg.runs.len(), 1, "{}", cabin.status);
+    assert!(
+        !cabin
+            .threads
+            .iter()
+            .any(|t| t.title.starts_with("Discuss ·")),
+        "no new chat tab for a Run"
+    );
+    let hidden = cabin.ensure_background_history_thread();
+    assert_eq!(cabin.bg.runs[0].thread_id, cabin.threads[hidden].id);
+    assert!(
+        cabin.threads.len() <= tabs + 1,
+        "only the hidden Background chat"
+    );
+    assert!(poll_until(&mut cabin, 8, |c| c.bg.runs.is_empty()));
+    let got = feed_receipts(&cabin, &id);
+    assert_eq!(got.len(), before + 1, "{}", cabin.status);
+    assert!(got.last().unwrap().what.starts_with("Ran "));
+    assert!(
+        cabin.messages.iter().all(|m| !m.1.contains("bg finished")),
+        "{:?}",
+        cabin.messages
+    );
     end_bg_test(root, cabin);
 }
 

@@ -29,7 +29,8 @@ pub(super) struct DiagnosisFixRun {
     pub step: usize,
     pub waiting_hard: bool,
     pub stopped: bool,
-    pub chat_id: String,
+    /// The report card you tapped Fix it on; the plan's receipt lands there.
+    pub card_id: String,
     pub notes: Vec<String>,
 }
 
@@ -165,28 +166,16 @@ impl Cabin {
             PlanBuild::Plan(p) => p,
             PlanBuild::Empty { reason } => {
                 self.status = reason.clone();
-                self.live_mut().push(("assistant".into(), reason));
-                self.persist();
+                self.diagnosis_receipt(card_id, "Fix it: nothing to run", vec![reason]);
                 return;
             }
         };
-        let chat = self
-            .updates
-            .iter()
-            .find(|c| c.id == card_id)
-            .and_then(|c| c.action.as_ref())
-            .and_then(|a| match a {
-                grokhub_core::UpdateAction::OpenSession { thread_id } => Some(thread_id.clone()),
-                _ => None,
-            })
-            .filter(|t| !t.is_empty())
-            .unwrap_or_else(|| self.visible_thread_id());
         self.harness.fixes.diagnosis.run = Some(DiagnosisFixRun {
             plan,
             step: 0,
             waiting_hard: false,
             stopped: false,
-            chat_id: chat,
+            card_id: card_id.to_string(),
             notes: Vec::new(),
         });
         self.status = format!("Fix plan ready for {} — one step at a time.", card_id);
@@ -203,12 +192,10 @@ impl Cabin {
         run.waiting_hard = false;
         if !approve {
             run.stopped = true;
+            let card_id = run.card_id.clone();
             self.status = "Fix stopped at your request.".into();
-            self.live_mut().push((
-                "assistant".into(),
-                "Fix stopped. Nothing else will run.".into(),
-            ));
-            self.persist();
+            let note = "Fix stopped. Nothing else will run.";
+            self.diagnosis_receipt(&card_id, note, vec![]);
             return true;
         }
         let step = self
@@ -318,22 +305,29 @@ impl Cabin {
         let Some(run) = self.harness.fixes.diagnosis.run.take() else {
             return;
         };
-        let mut body = if run.stopped {
-            "Fix stopped before every step ran.".to_string()
+        let what = if run.stopped {
+            "Fix stopped before every step ran."
         } else {
-            "Fix plan finished.".to_string()
+            "Fix plan finished."
         };
-        for n in &run.notes {
-            body.push('\n');
-            body.push_str(n);
-        }
-        if !run.chat_id.is_empty() && run.chat_id == self.visible_thread_id() {
-            self.live_mut().push(("assistant".into(), body));
-        } else if let Some(t) = self.threads.iter_mut().find(|t| t.id == run.chat_id) {
-            Arc::make_mut(&mut t.messages).push(("assistant".into(), body));
-        }
-        self.persist();
+        self.diagnosis_receipt(&run.card_id, what, run.notes);
         self.status.clear();
+    }
+
+    /// You tapped Fix it on a report card, so the plan's word goes on that
+    /// card as a receipt, never into a chat tab.
+    fn diagnosis_receipt(&mut self, card_id: &str, what: &str, result: Vec<String>) {
+        let Some(card) = self.updates.iter_mut().find(|c| c.id == card_id) else {
+            return;
+        };
+        let receipt = grokhub_core::card_report::CardReceipt {
+            at_ms: grokhub_core::now_ms(),
+            what: what.to_string(),
+            result,
+        };
+        grokhub_core::card_report::add_receipt(card, receipt);
+        self.pulse_view.report_open.insert(card_id.to_string());
+        self.persist_updates();
     }
 
     #[cfg(test)]
@@ -404,10 +398,32 @@ mod tests {
             cause: String::new(),
             steps: vec![],
         };
+        cabin.updates.push(report_card("c1"));
+        let before = cabin.messages.len();
         cabin.remember_diagnosis("c1".into(), StoredDiagnosis::Screen(report));
         cabin.tap_diagnosis_fix("c1");
         assert!(cabin.harness.fixes.diagnosis.run.is_none());
         assert!(cabin.status.contains("didn't suggest any fix steps"));
+        let got = receipts(&cabin, "c1");
+        assert_eq!(got.len(), 1);
+        assert!(got[0].result[0].contains("didn't suggest any fix steps"));
+        assert_eq!(cabin.messages.len(), before, "the reason stays on the card");
+    }
+
+    fn report_card(id: &str) -> grokhub_core::UpdateCard {
+        let mut card = grokhub_core::automation_done_card(id, "", "", grokhub_core::now_ms());
+        card.id = id.into();
+        card
+    }
+
+    fn receipts(cabin: &Cabin, id: &str) -> Vec<grokhub_core::card_report::CardReceipt> {
+        cabin
+            .updates
+            .iter()
+            .find(|c| c.id == id)
+            .and_then(|c| c.pulse.report.as_ref())
+            .map(|r| r.receipts.clone())
+            .unwrap_or_default()
     }
 
     #[test]
@@ -415,6 +431,8 @@ mod tests {
         let mut cabin = Cabin::quiet_for_test();
         let raw = "Fix steps:\n1. HOST_CMD: rm -f x\n";
         let report = parse_report(raw);
+        cabin.updates.push(report_card("c2"));
+        let before = cabin.messages.len();
         cabin.remember_diagnosis("c2".into(), StoredDiagnosis::Screen(report));
         cabin.tap_diagnosis_fix("c2");
         assert!(cabin.harness.park.is_some());
@@ -432,6 +450,13 @@ mod tests {
         assert!(cabin.fix_plan_hard_answered(false));
         assert!(cabin.harness.fixes.diagnosis.run.as_ref().unwrap().stopped);
         assert!(exec.shells.is_empty());
+        let got = receipts(&cabin, "c2");
+        assert_eq!(
+            got.last().map(|r| r.what.as_str()),
+            Some("Fix stopped. Nothing else will run.")
+        );
+        assert!(cabin.pulse_view.report_open.contains("c2"));
+        assert_eq!(cabin.messages.len(), before, "the stop stays on the card");
     }
 
     #[test]
@@ -467,7 +492,7 @@ mod tests {
             step: 0,
             waiting_hard: false,
             stopped: false,
-            chat_id: String::new(),
+            card_id: String::new(),
             notes: Vec::new(),
         });
         let mut exec = FakeExecutor::default();

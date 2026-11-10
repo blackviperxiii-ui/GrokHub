@@ -67,6 +67,41 @@ pub(super) fn hide_background_session(id: &str) {
     }
 }
 
+/// Lines a run's receipt keeps on a feed card.
+const RECEIPT_LINES: usize = 6;
+const RECEIPT_LINE_MAX: usize = 200;
+
+/// The receipt a Pulse card's Run leaves on that card: what ran, how it ended,
+/// and the first lines of what it said.
+pub(super) fn run_receipt(
+    title: &str,
+    end: &BgEnd,
+    reply: &str,
+    at_ms: u64,
+) -> grokhub_core::card_report::CardReceipt {
+    let what = match end {
+        BgEnd::Done => format!("Ran {}", title.trim()),
+        BgEnd::Failed(_) => format!("Run failed: {}", title.trim()),
+        BgEnd::Stopped => format!("Run stopped: {}", title.trim()),
+    };
+    let result = bg_result_body(end, reply)
+        .lines()
+        .map(|l| {
+            l.trim()
+                .trim_start_matches(['#', '*', '-', '>', ' '])
+                .trim()
+        })
+        .filter(|l| !l.is_empty())
+        .take(RECEIPT_LINES)
+        .map(|l| l.chars().take(RECEIPT_LINE_MAX).collect())
+        .collect();
+    grokhub_core::card_report::CardReceipt {
+        at_ms,
+        what,
+        result,
+    }
+}
+
 /// One background engine run. Not saved: it stops with the cabin.
 pub(super) struct BgRun {
     pub id: u64,
@@ -128,6 +163,8 @@ pub(super) struct BgWork {
     pub unread: Vec<(String, String)>,
     /// Runs whose `/bg` text asked for the result in the chat that started them.
     pub post_here: Vec<u64>,
+    /// `(run id, feed card id)`: a Pulse card's Run. Its receipt lands on that card.
+    pub feed_cards: Vec<(u64, String)>,
     /// Background results for the turn being kicked. Set on each send.
     pub results_follow: Option<String>,
     /// Alt+Enter (or `/queue`): this send waits for the live reply instead of steering it.
@@ -666,6 +703,7 @@ impl Cabin {
                         .unread
                         .push((hears, bg_result_note(&run.title, &end, &reply, Some(&card))));
                 }
+                self.receipt_on_feed_card(run.id, &run.title, &end, &reply);
                 self.notify_bg_end(&run, &end, Some(&card_id), &vis);
             }
             if run.origin == BgOrigin::Detached {
@@ -724,6 +762,21 @@ impl Cabin {
                 );
             }
         }
+    }
+
+    /// A Pulse card's Run ended: its receipt goes on that feed card, which opens
+    /// to show it. Nothing goes to a chat.
+    fn receipt_on_feed_card(&mut self, run_id: u64, title: &str, end: &BgEnd, reply: &str) {
+        let Some(at) = self.bg.feed_cards.iter().position(|(r, _)| *r == run_id) else {
+            return;
+        };
+        let (_, feed_id) = self.bg.feed_cards.remove(at);
+        let Some(card) = self.updates.iter_mut().find(|c| c.id == feed_id) else {
+            return;
+        };
+        grokhub_core::card_report::add_receipt(card, run_receipt(title, end, reply, now_ms()));
+        self.pulse_view.report_open.insert(feed_id);
+        self.persist_updates();
     }
 
     /// Write a run's result on card `id` and return the card's title (the run's

@@ -1211,6 +1211,13 @@ impl Cabin {
             return false;
         }
         self.send_chat(prompt);
+        if self.running {
+            // The retry's prompt is the app's, not yours: name it plainly.
+            self.status = format!(
+                "{}'s own check is retrying the last step.",
+                grokhub_core::brand::product_name()
+            );
+        }
         true
     }
 
@@ -2527,6 +2534,13 @@ mod tests {
             "the retry goes once nothing else waits"
         );
         assert_eq!(cabin.harness.repair, None);
+        // The retry's prompt is the app's own, and the status line says so
+        // whenever it started a turn.
+        let named = format!(
+            "{}'s own check is retrying the last step.",
+            grokhub_core::brand::product_name()
+        );
+        assert_eq!(cabin.running, cabin.status == named, "{}", cabin.status);
 
         click(2);
         cabin.harness_turn_end("Clicked Save again, done.", turn);

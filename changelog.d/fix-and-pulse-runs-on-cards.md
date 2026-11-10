@@ -1,0 +1,4 @@
+- A fix you start from the Fix card now answers on that card: why it couldn't start, its result and what Undo fix put back stay with the card's Done, not in the chat tab.
+- Fix it on a screen or audio report card leaves its receipt on that card (finished, stopped, or nothing to run) instead of posting into a chat.
+- Run on a Pulse card leaves a receipt on the card when the background run ends. A card with a report now runs on the hidden Background chat instead of opening a new "Discuss" chat tab.
+- When the app's own check retries the last step in your chat, the status line says it was the app's check, not you.
