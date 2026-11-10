@@ -1536,7 +1536,7 @@ impl Cabin {
             forced_route: None,
             last_turn_read: None,
             plan_next: false,
-            bg: BgWork::default(),
+            bg: BgWork::with_saved_unread(),
             plan_open: false,
             tool_cards: Vec::new(),
             panels: panels::PanelStore::default(),

@@ -1,0 +1,5 @@
+- Background work runs on its workboard card instead of a chat: scheduled automation runs, `/bg` tasks, tasks the assistant starts, and queued or resumed cards put their result on the card, and no chat gets a post you did not ask for. Main no longer gets scheduled reports, and the hidden Background and Follow up chats no longer get copies.
+- An open card shows its run live (the current step and what it has said so far), then the result with a Send to chat button that posts it once into the chat that started it, or Main. `/bg … post the result here` (or "tell me here") still posts in that chat.
+- The chat that started a run still knows what it found: its next turn is told the result and the card it is on, and that note now survives a restart.
+- Activity's Open and the bell for a finished background task open its card, not its chat. A queued card no longer opens a new chat tab to run in.
+- The shell's Workboard shows a card's run result.

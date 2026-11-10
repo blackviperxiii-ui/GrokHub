@@ -98,22 +98,41 @@ fn slash_bg_runs_beside_the_chat_on_a_forked_session() {
         "{}",
         cabin.status
     );
-    assert_eq!(
-        cabin.messages.last().map(|m| m.1.as_str()),
-        Some("**Background task done** · run the checks\n\nbg finished")
+    assert!(
+        cabin.messages.iter().all(|m| !m.1.contains("bg finished")),
+        "a /bg result never lands in the chat: {:?}",
+        cabin.messages
     );
+    let card = cabin
+        .board
+        .iter()
+        .find(|c| c.title == "run the checks")
+        .expect("the run's card")
+        .clone();
+    assert_eq!(card.result, "bg finished", "the result lives on the card");
+    assert_eq!(
+        card.result_chat.as_deref(),
+        Some(cabin.threads[0].id.as_str())
+    );
+    assert_eq!(card.status, grokhub_core::BoardStatus::Done);
     assert_eq!(
         cabin.notices.items.first().map(|n| n.text.as_str()),
         Some("Background task done · run the checks"),
         "the bell keeps the finished task"
     );
     assert_eq!(
-        cabin.notices.items.first().and_then(|n| n.from.clone()),
-        Some(super::notices::NoticePlace::Chat {
-            id: cabin.threads[0].id.clone(),
-            title: cabin.threads[0].title.clone(),
-        }),
-        "the bell row names the chat it ran beside and opens it"
+        cabin.notices.items.first().and_then(|n| n.action.clone()),
+        Some(super::notices::NoticeAction::OpenCard(card.id.clone())),
+        "the bell row opens the run's card, not the chat"
+    );
+    let note = cabin
+        .take_bg_results_follow(&cabin.threads[0].id.clone())
+        .expect("the next turn hears it");
+    assert!(
+        note.contains(
+            "- run the checks (done; result on workboard card \"run the checks\"): bg finished"
+        ),
+        "{note}"
     );
     assert_eq!(
         cabin.threads[0].grok_session.as_deref(),
@@ -145,31 +164,31 @@ fn grok_can_start_background_tasks_from_its_reply() {
     assert!(
         cabin
             .messages
-            .last()
-            .is_some_and(|m| m.1.starts_with("**Background task done** · index the docs")),
-        "{:?}",
+            .iter()
+            .all(|m| !m.1.contains("Background task done")),
+        "a model-started run posts nothing into the chat: {:?}",
         cabin.messages
     );
+    let card = cabin
+        .board
+        .iter()
+        .find(|c| c.title == "index the docs")
+        .expect("the run's card");
+    assert_eq!(card.result, "bg finished");
+    assert!(cabin.bg.unread.iter().any(|(tid, note)| tid == &id
+        && note
+            .starts_with("- index the docs (done; result on workboard card \"index the docs\")")));
     end_bg_test(root, cabin);
 }
 
-#[test]
-fn a_background_result_waits_while_its_chat_is_mid_turn() {
-    let _g = crate::config::hold_test_config();
-    let (root, mut cabin) = isolated_cabin("bg-hold");
-    // Focused on this chat: the post needs no desktop notification.
-    cabin.window_focused = true;
-    cabin.threads = vec![crate::threads::ChatThread::new("Chat", false)];
-    cabin.thread_idx = 0;
-    cabin.messages = std::sync::Arc::new(vec![("user".into(), "hi".into())]);
-    let id = cabin.threads[0].id.clone();
-    cabin.bg.runs.push(super::background::BgRun {
-        id: 1,
-        thread_id: id.clone(),
-        title: "checks".into(),
+fn done_run(id: u64, thread_id: &str, title: &str, say: &str) -> super::background::BgRun {
+    super::background::BgRun {
+        id,
+        thread_id: thread_id.to_string(),
+        title: title.into(),
         origin: grokhub_core::BgOrigin::User,
         rx: None,
-        say: "all green".into(),
+        say: say.into(),
         action: String::new(),
         started: std::time::Instant::now(),
         end: Some(grokhub_core::BgEnd::Done),
@@ -178,9 +197,46 @@ fn a_background_result_waits_while_its_chat_is_mid_turn() {
         fork_hold: false,
         native_session: None,
         automation: None,
-    });
+    }
+}
+
+#[test]
+fn a_bg_result_lands_on_its_card_mid_turn_and_a_post_here_ask_waits() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("bg-hold");
+    std::fs::create_dir_all(&root).expect("config root");
+    // Focused on this chat: the post needs no desktop notification.
+    cabin.window_focused = true;
+    cabin.board.clear();
+    cabin.threads = vec![crate::threads::ChatThread::new("Chat", false)];
+    cabin.thread_idx = 0;
+    cabin.messages = std::sync::Arc::new(vec![("user".into(), "hi".into())]);
+    let id = cabin.threads[0].id.clone();
+    cabin.open_bg_card(1, "checks", "", true);
+    cabin.bg.runs.push(done_run(1, &id, "checks", "all green"));
     cabin.running = true;
     cabin.chat_job_thread = Some(id.clone());
+    cabin.post_finished_bg_runs();
+    assert!(
+        cabin.bg.runs.is_empty(),
+        "a result for the card never waits on the chat"
+    );
+    assert_eq!(cabin.messages.len(), 1, "nothing lands in the chat");
+    let card = cabin.board.iter().find(|c| c.title == "checks").unwrap();
+    assert_eq!(card.result, "all green");
+    let block = cabin
+        .take_bg_results_follow(&id)
+        .expect("next turn hears it");
+    assert!(
+        block.contains("- checks (done; result on workboard card \"checks\"): all green"),
+        "{block}"
+    );
+    assert!(cabin.take_bg_results_follow(&id).is_none(), "told once");
+
+    // "/bg ... post the result here": that one does post, after the live reply.
+    cabin.open_bg_card(2, "lint", "", true);
+    cabin.bg.post_here.push(2);
+    cabin.bg.runs.push(done_run(2, &id, "lint", "no warnings"));
     cabin.post_finished_bg_runs();
     assert_eq!(
         cabin.bg.runs.len(),
@@ -194,13 +250,135 @@ fn a_background_result_waits_while_its_chat_is_mid_turn() {
     assert!(cabin.bg.runs.is_empty());
     assert_eq!(
         cabin.messages.last().map(|m| m.1.as_str()),
-        Some("**Background task done** · checks\n\nall green")
+        Some("**Background task done** · lint\n\nno warnings"),
+        "you asked for it here"
     );
-    let block = cabin
-        .take_bg_results_follow(&id)
-        .expect("next turn hears it");
-    assert!(block.contains("- checks (done): all green"), "{block}");
-    assert!(cabin.take_bg_results_follow(&id).is_none(), "told once");
+    assert_eq!(cabin.messages.len(), 2, "posted once");
+    let lint = cabin.board.iter().find(|c| c.title == "lint").unwrap();
+    assert_eq!(lint.result, "no warnings", "the card keeps it too");
+    assert!(lint.result_sent, "Send to chat would post it a second time");
+    assert!(cabin.bg.post_here.is_empty());
+    let block = cabin.take_bg_results_follow(&id).expect("next turn");
+    assert!(
+        block.contains("- lint (done; posted in this chat): no warnings"),
+        "{block}"
+    );
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn slash_bg_that_asks_for_the_result_here_remembers_it() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = bg_cabin("bg-post-here");
+    cabin.run_bg_slash("run the checks and post the result here");
+    assert_eq!(cabin.bg.runs.len(), 1, "{}", cabin.status);
+    let run = cabin.bg.runs[0].id;
+    assert_eq!(cabin.bg.post_here, vec![run]);
+    cabin.run_bg_slash("run the checks again");
+    assert_eq!(cabin.bg.runs.len(), 2, "{}", cabin.status);
+    assert_eq!(
+        cabin.bg.post_here,
+        vec![run],
+        "a plain /bg keeps it on the card"
+    );
+    end_bg_test(root, cabin);
+}
+
+#[test]
+fn send_to_chat_posts_a_card_result_once() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("bg-send-to-chat");
+    std::fs::create_dir_all(&root).expect("config root");
+    cabin.board.clear();
+    cabin.threads = vec![crate::threads::ChatThread::new("Chat", false)];
+    let main = crate::threads::ensure_main_thread(&mut cabin.threads);
+    let chat = cabin
+        .threads
+        .iter()
+        .position(|t| !t.main)
+        .expect("your chat");
+    cabin.thread_idx = chat;
+    cabin.messages = cabin.threads[chat].messages.clone();
+    let chat_id = cabin.threads[chat].id.clone();
+    cabin.open_bg_card(1, "checks", "", true);
+    cabin
+        .bg
+        .runs
+        .push(done_run(1, &chat_id, "checks", "all green"));
+    cabin.post_finished_bg_runs();
+    let card = cabin
+        .board
+        .iter()
+        .find(|c| c.title == "checks")
+        .unwrap()
+        .id
+        .clone();
+    assert!(cabin.messages.is_empty(), "nothing until you ask");
+    let send = || Some(super::pages::BoardAct::SendResult(card.clone()));
+    assert!(cabin.apply_board_act(send()));
+    assert!(
+        !cabin.apply_board_act(send()),
+        "a second press does nothing"
+    );
+    let posts: Vec<_> = cabin
+        .messages
+        .iter()
+        .filter(|m| m.1.contains("all green"))
+        .collect();
+    assert_eq!(
+        posts,
+        vec![&(
+            "assistant".to_string(),
+            "**Background task result** · checks\n\nall green".to_string()
+        )],
+        "posted exactly once, into the chat that started it"
+    );
+    assert!(cabin.threads[main].messages.is_empty());
+
+    // A card with no starting chat sends to Main.
+    cabin.open_bg_card(2, "tidy", "", false);
+    let tidy = cabin
+        .board
+        .iter()
+        .find(|c| c.title == "tidy")
+        .unwrap()
+        .id
+        .clone();
+    grokhub_core::work_run::set_run_result(&mut cabin.board, &tidy, "Moved 4 files.", None, 1);
+    assert!(cabin.apply_board_act(Some(super::pages::BoardAct::SendResult(tidy))));
+    assert_eq!(
+        cabin.threads[main].messages.last().map(|m| m.1.as_str()),
+        Some("**Background task result** · tidy\n\nMoved 4 files.")
+    );
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn unread_background_notes_survive_a_restart() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("bg-unread-saved");
+    std::fs::create_dir_all(&root).expect("config root");
+    cabin.board.clear();
+    cabin.threads = vec![crate::threads::ChatThread::new("Chat", false)];
+    cabin.thread_idx = 0;
+    let id = cabin.threads[0].id.clone();
+    cabin.open_bg_card(1, "checks", "", true);
+    cabin.bg.runs.push(done_run(1, &id, "checks", "all green"));
+    cabin.post_finished_bg_runs();
+    let saved = super::background::load_bg_unread();
+    assert_eq!(
+        saved,
+        vec![(
+            id.clone(),
+            "- checks (done; result on workboard card \"checks\"): all green".to_string()
+        )]
+    );
+    // A restart reads them back; the next turn there takes them once.
+    let mut again = Cabin::quiet_for_test();
+    again.bg.unread = super::background::load_bg_unread();
+    assert!(again.take_bg_results_follow(&id).is_some());
+    assert!(super::background::load_bg_unread().is_empty(), "taken once");
+    drop(again);
     release_isolated(&root, cabin);
 }
 
@@ -258,19 +436,30 @@ fn a_scheduled_run_ends_on_follow_up_and_never_touches_your_chat() {
         .expect("follow up card")
         .clone();
     assert_eq!(card.status, grokhub_core::BoardStatus::FollowUp);
-    let chat = card.thread_id.expect("its chat");
+    assert!(card.report.contains("Disk at 91% on /home."));
+    assert_eq!(
+        card.result, "## Host snapshot\nDisk at 91% on /home.",
+        "the run's result is on its card"
+    );
+    let chat = card.thread_id.clone().expect("its chat");
     let thread = cabin.threads.iter().find(|t| t.id == chat).expect("thread");
     assert!(thread.background && thread.title == "Follow up · Host snapshot");
-    assert!(thread
-        .messages
-        .last()
-        .unwrap()
-        .1
-        .contains("Disk at 91% on /home."));
+    assert!(
+        thread.messages.is_empty(),
+        "the card's own chat is for talking about it, not for the report"
+    );
     let main = crate::threads::main_thread_index(&cabin.threads).expect("Main chat");
+    assert!(
+        cabin.threads[main].messages.is_empty(),
+        "Main gets no unasked report"
+    );
     assert_eq!(
-        cabin.threads[main].messages.last().map(|m| m.1.as_str()),
-        Some("**Background task done** · Host snapshot\n\n## Host snapshot\nDisk at 91% on /home.")
+        cabin.bg.unread,
+        vec![(
+            cabin.threads[main].id.clone(),
+            "- Host snapshot (done; result on workboard card \"Host snapshot\"): ## Host snapshot Disk at 91% on /home.".to_string()
+        )],
+        "Main's next turn still hears it, and where it is"
     );
     assert_eq!(
         crate::threads::chat_section_indices(&cabin.threads, Some(0), false),
@@ -278,6 +467,10 @@ fn a_scheduled_run_ends_on_follow_up_and_never_touches_your_chat() {
         "History lists your chat and Main, never the background ones"
     );
     let bg = cabin.threads.iter().find(|t| t.id == bg_id).unwrap();
+    assert!(
+        bg.messages.is_empty(),
+        "the hidden Background chat gets no copy"
+    );
     assert!(
         bg.retired_sessions.contains(&fork),
         "its session is filed off History"
@@ -437,6 +630,17 @@ fn deleting_a_follow_up_card_brings_its_chat_back_to_history() {
         .position(|t| t.id == chat)
         .expect("thread");
     assert!(cabin.threads[at].background);
+    assert!(
+        cabin.threads[at].messages.is_empty(),
+        "the report is on the card, not in its chat"
+    );
+    // You talked about the report on the card: that talk is what comes back.
+    cabin.threads[at]
+        .messages_mut()
+        .push(("user".into(), "which one is the crash?".into()));
+    cabin.threads[at]
+        .messages_mut()
+        .push(("assistant".into(), "The crash on resume.".into()));
     assert_eq!(
         crate::threads::chat_section_indices(&cabin.threads, Some(0), false),
         vec![0]
@@ -561,7 +765,7 @@ fn the_live_work_strip_offers_steer_and_queue_and_activity_holds_the_rest() {
             .iter()
             .map(|(l, _)| *l)
             .collect::<Vec<_>>(),
-        ["Open chat", "Stop"]
+        ["Open card", "Stop"]
     );
     cabin.composer.clear();
     assert_eq!(
@@ -1186,7 +1390,7 @@ fn a_scheduled_run_never_blocks_pauses_or_shows_in_your_chat() {
 
 /// 2.10.90: a report never lands in the middle of your reply in its own chat.
 #[test]
-fn a_scheduled_report_waits_while_you_reply_in_its_follow_up_chat() {
+fn a_scheduled_report_lands_on_its_card_while_you_reply_in_its_follow_up_chat() {
     let _g = crate::config::hold_test_config();
     let (root, mut cabin) = isolated_cabin("bg-cron-follow-up");
     std::fs::create_dir_all(&root).expect("config root");
@@ -1215,7 +1419,10 @@ fn a_scheduled_report_waits_while_you_reply_in_its_follow_up_chat() {
         .iter()
         .position(|t| t.id == chat)
         .expect("thread");
-    assert_eq!(cabin.threads[at].messages.len(), 1);
+    assert!(
+        cabin.threads[at].messages.is_empty(),
+        "the report is on the card, not in its chat"
+    );
     // You answer the report in its chat; the next run ends while your reply streams.
     cabin.thread_idx = at;
     cabin.messages = cabin.threads[at].messages.clone();
@@ -1246,26 +1453,33 @@ fn a_scheduled_report_waits_while_you_reply_in_its_follow_up_chat() {
         automation: Some("a-snap".into()),
     });
     cabin.post_finished_bg_runs();
-    assert_eq!(cabin.bg.runs.len(), 1, "the report waits for your reply");
+    assert!(
+        cabin.bg.runs.is_empty(),
+        "the report goes to the card at once: it never touches your reply"
+    );
     assert_eq!(
         cabin.messages.last().map(|m| m.1.as_str()),
         Some("/home grew by"),
         "your live reply is untouched"
     );
+    assert_eq!(cabin.messages.len(), 2, "nothing was added to the chat");
+    let card = cabin
+        .board
+        .iter()
+        .find(|c| c.automation.as_deref() == Some("a-snap"))
+        .unwrap();
+    assert!(
+        card.report.ends_with("Disk at 91% on /home."),
+        "{}",
+        card.report
+    );
+    assert!(
+        card.result.ends_with("Disk at 91% on /home."),
+        "{}",
+        card.result
+    );
     cabin.running = false;
     cabin.chat_job_thread = None;
-    cabin.post_finished_bg_runs();
-    assert!(cabin.bg.runs.is_empty());
-    let last = cabin
-        .messages
-        .last()
-        .map(|m| m.1.clone())
-        .unwrap_or_default();
-    assert!(
-        last.ends_with("## Host snapshot\nDisk at 91% on /home."),
-        "{last}"
-    );
-    assert_eq!(cabin.messages.len(), 4);
     release_isolated(&root, cabin);
 }
 

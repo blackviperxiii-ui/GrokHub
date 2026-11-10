@@ -113,6 +113,8 @@ pub(super) enum BoardAct {
     HandBack(String),
     /// Open or close a card's log drawer.
     ToggleLog(String),
+    /// Post the card's run result into the chat that started it, or Main. Once.
+    SendResult(String),
     /// Agent: do this, now (Work on it) or on the queue.
     Assign {
         id: String,
@@ -1562,6 +1564,7 @@ page_body(ui, "history", |ui| {
                 self.status = "The card is yours now. It is in To do.".into();
                 true
             }
+            BoardAct::SendResult(id) => self.send_card_result(&id),
             BoardAct::ToggleLog(id) => {
                 let open = self.board_view.log.as_ref().is_some_and(|(l, _)| *l == id);
                 self.board_view.log = if open {

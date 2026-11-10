@@ -15,7 +15,7 @@ use crate::work_item::{
     StepStatus, WorkKind, WorkOrigin, WorkStep, CHECKPOINT_BLOCKER_MAX, CHECKPOINT_NEXT_MAX,
     CHECKPOINT_REFS_MAX, CHECKPOINT_REF_MAX,
 };
-use crate::workboard::{follow_up_title, BoardCard, BoardStatus};
+use crate::workboard::{follow_up_title, BoardCard, BoardStatus, CARD_RESULT_MAX};
 
 /// A `todo_write` status as a step status.
 pub fn step_status(status: &str) -> StepStatus {
@@ -329,6 +329,46 @@ pub fn finish_run_card(cards: &mut [BoardCard], id: &str, end: &RunEnd, now: u64
     true
 }
 
+/// A run's result lands on its card `id`, not in a chat. `chat` is the chat
+/// that started the run, where Send to chat posts it. A new result is not yet
+/// sent, and unread unless the card is archived. True when the card is there.
+pub fn set_run_result(
+    cards: &mut [BoardCard],
+    id: &str,
+    result: &str,
+    chat: Option<&str>,
+    now: u64,
+) -> bool {
+    let Some(c) = cards.iter_mut().find(|c| c.id == id) else {
+        return false;
+    };
+    c.result = result.trim().chars().take(CARD_RESULT_MAX).collect();
+    c.result_chat = chat
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    c.result_sent = false;
+    c.fresh |= c.status != BoardStatus::Dismissed;
+    c.updated_ms = now;
+    true
+}
+
+/// Send to chat: the message to post for card `id`'s result, once. Marks it
+/// sent, so a second press posts nothing. `None` when there is no result or it
+/// was already sent.
+pub fn take_result_post(cards: &mut [BoardCard], id: &str) -> Option<String> {
+    let c = cards.iter_mut().find(|c| c.id == id)?;
+    if c.result_sent || c.result.trim().is_empty() {
+        return None;
+    }
+    c.result_sent = true;
+    Some(format!(
+        "**Background task result** · {}\n\n{}",
+        c.title.trim(),
+        c.result.trim()
+    ))
+}
+
 /// `workboard.json` in the config folder.
 pub fn board_path(config_dir: &Path) -> PathBuf {
     config_dir.join("workboard.json")
@@ -573,6 +613,47 @@ mod tests {
         // A later task turn on the same card keeps its kind.
         begin_run(&mut ep, WorkKind::Task, "", "", 8);
         assert_eq!(ep.kind, WorkKind::Episode);
+    }
+
+    #[test]
+    fn a_run_result_lives_on_its_card_and_sends_to_chat_once() {
+        let mut cards = Vec::new();
+        let id = open_run_card(&mut cards, WorkKind::Background, "check disk", "s1", "m", 1);
+        assert!(take_result_post(&mut cards, &id).is_none(), "no result yet");
+        assert!(set_run_result(
+            &mut cards,
+            &id,
+            "  Disk at 91%.  ",
+            Some("chat-1"),
+            5
+        ));
+        let c = &cards[0];
+        assert_eq!(c.result, "Disk at 91%.");
+        assert_eq!(c.result_chat.as_deref(), Some("chat-1"));
+        assert!(c.fresh && !c.result_sent);
+        assert_eq!(
+            take_result_post(&mut cards, &id).as_deref(),
+            Some("**Background task result** · check disk\n\nDisk at 91%.")
+        );
+        assert!(cards[0].result_sent);
+        assert!(take_result_post(&mut cards, &id).is_none(), "posts once");
+        // A new run's result can be sent again; a blank chat means Main.
+        assert!(set_run_result(
+            &mut cards,
+            &id,
+            &"x".repeat(9000),
+            Some(" "),
+            9
+        ));
+        assert_eq!(cards[0].result.chars().count(), CARD_RESULT_MAX);
+        assert_eq!(cards[0].result_chat, None);
+        assert!(take_result_post(&mut cards, &id).is_some());
+        assert!(!set_run_result(&mut cards, "gone", "r", None, 9));
+        // An archived card keeps the result without coming back as unread.
+        cards[0].fresh = false;
+        cards[0].status = BoardStatus::Dismissed;
+        set_run_result(&mut cards, &id, "quiet", None, 10);
+        assert!(!cards[0].fresh);
     }
 
     #[test]

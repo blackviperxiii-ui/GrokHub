@@ -123,6 +123,9 @@ pub struct Card {
     pub fresh: bool,
     /// A Follow up card's latest report from its automation.
     pub report: String,
+    /// What the card's last background run came back with. Results live on
+    /// the card; the shell has no cabin chat to send it into, so it shows only.
+    pub result: String,
     /// "Agent" or "You", as the cabin's badge reads.
     pub owner: &'static str,
     /// Automation, Background, Episode or Flow; a plain task has none.
@@ -340,6 +343,7 @@ fn card(c: &BoardCard, all: &[BoardCard]) -> Card {
         priority: c.priority.clone(),
         fresh: c.fresh,
         report: c.report.clone(),
+        result: c.result.clone(),
         owner: match c.origin {
             Some(WorkOrigin::Agent) => "Agent",
             Some(WorkOrigin::User) | None => "You",
@@ -893,7 +897,7 @@ mod tests {
   {"id":"w-1","title":"Fix the build","detail":"CI is red","status":"in_progress","priority":"high","threadId":"t-1","run":true,"notes":"Start with the lint job","notesSent":42},
   {"id":"w-2","title":"Write release notes","detail":"","status":"proposed","priority":""},
   {"id":"w-3","title":"Wait on review","detail":"","status":"blocked","priority":""},
-  {"id":"w-4","title":"Inbox digest","detail":"Two new mails","status":"follow_up","priority":"","automation":"auto-1","report":"Two new mails need a reply.","fresh":true,"updatedMs":1800000000000},
+  {"id":"w-4","title":"Inbox digest","detail":"Two new mails","status":"follow_up","priority":"","automation":"auto-1","report":"Two new mails need a reply.","result":"Two new mails need a reply.","fresh":true,"updatedMs":1800000000000},
   {"id":"w-5","title":"Old idea","detail":"","status":"dismissed","priority":"","updatedMs":1700000000000}
 ]"#;
 
@@ -1002,6 +1006,14 @@ mod tests {
         assert_eq!(
             (digest.report.as_str(), digest.fresh),
             ("Two new mails need a reply.", true)
+        );
+        assert_eq!(
+            digest.result, "Two new mails need a reply.",
+            "the run's result shows on the card"
+        );
+        assert_eq!(
+            page.columns[2].cards[0].result, "",
+            "a card with no run shows none"
         );
         assert_eq!(page.columns[2].cards[0].notes, "Start with the lint job");
         assert!(page.stamp > 0);

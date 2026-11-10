@@ -153,7 +153,9 @@ impl Cabin {
         }
     }
 
-    /// Start a queued card as a background run on its own card and chat.
+    /// Start a queued card as a background run on its own card. A card with no
+    /// chat gets a hidden one as the run's working session: no new chat tab,
+    /// and its result lands on the card.
     fn start_queued_card(&mut self, card: &BoardCard) -> Result<u64, String> {
         let thread_id = match card
             .thread_id
@@ -161,7 +163,7 @@ impl Cabin {
             .filter(|tid| self.threads.iter().any(|t| &t.id == tid))
         {
             Some(tid) => tid,
-            None => self.make_card_thread(&card.title, false),
+            None => self.make_card_thread(&card.title, true),
         };
         let task = grokhub_core::card_work_prompt(card);
         let gate = self.native_bg_gate();

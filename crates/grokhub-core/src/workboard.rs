@@ -134,6 +134,16 @@ pub struct BoardCard {
     /// Fingerprint of the report last handed to the linked chat.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub report_sent: u64,
+    /// What the card's last background run came back with. Results live here,
+    /// not in a chat; Send to chat posts it on request.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub result: String,
+    /// The chat that started that run. Send to chat posts there (Main when unset).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_chat: Option<String>,
+    /// Send to chat already posted this result, so it posts once.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub result_sent: bool,
     /// A new report or reply you have not opened yet.
     #[serde(default, skip_serializing_if = "is_false")]
     pub fresh: bool,
@@ -196,6 +206,9 @@ fn is_zero(v: &u64) -> bool {
 
 /// Longest note kept on a card.
 pub const CARD_NOTES_MAX: usize = 4000;
+
+/// Longest run result kept on a card.
+pub const CARD_RESULT_MAX: usize = 8000;
 
 /// Stable fingerprint of a card's notes (FNV-1a). Empty notes are 0.
 pub fn card_notes_hash(notes: &str) -> u64 {
@@ -452,6 +465,9 @@ impl BoardCard {
             automation: None,
             report: String::new(),
             report_sent: 0,
+            result: String::new(),
+            result_chat: None,
+            result_sent: false,
             fresh: false,
             updated_ms: 0,
             origin: Some(WorkOrigin::User),

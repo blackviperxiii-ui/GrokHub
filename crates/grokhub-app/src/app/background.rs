@@ -2,8 +2,11 @@
 //!
 //! The composer owns one live turn. A background run is a separate native
 //! engine session with its own receiver: `/bg <task>` or a `BACKGROUND_TASK:`
-//! line in Grok's reply. It forks the chat's session instead of writing into it, and its
-//! reply is posted on the chat that started it once that chat is not mid-turn.
+//! line in Grok's reply. It forks the chat's session instead of writing into it.
+//! Its result lands on its workboard card, never in a chat; the chat that
+//! started it hears what came back on its next turn. It posts in that chat only
+//! when you asked for it there (`/bg … post the result here`) or press Send to
+//! chat on the card.
 //!
 //! Steering is a message typed while this chat's reply runs: the engine takes
 //! it at the next tool boundary and the turn keeps going.
@@ -12,9 +15,23 @@ use super::*;
 use grokhub_agent::harness as hx;
 use grokhub_agent::Engine;
 use grokhub_core::{
-    bg_result_note, bg_result_post, bg_results_follow, bg_task_prompt, bg_task_title,
-    extract_background_tasks, BgEnd, BgOrigin, BG_TASK_MAX,
+    bg_asks_for_chat_post, bg_result_body, bg_result_note, bg_result_post, bg_results_follow,
+    bg_task_prompt, bg_task_title, extract_background_tasks, BgEnd, BgOrigin, BG_TASK_MAX,
 };
+
+/// Unread background notes kept across restarts, so the next turn still hears
+/// a result that came back just before you closed the cabin.
+const BG_UNREAD_FILE: &str = "bg_unread.json";
+/// Notes kept at most; the oldest go first.
+const BG_UNREAD_MAX: usize = 40;
+
+/// The unread notes saved by the last cabin. Empty when there are none.
+pub(super) fn load_bg_unread() -> Vec<(String, String)> {
+    crate::config::load_json(
+        &crate::config::config_dir().join(BG_UNREAD_FILE),
+        crate::config::JSON_STORE_CAP,
+    )
+}
 
 /// `/bg` and a model `BACKGROUND_TASK:` line while Ask is on. A background run
 /// has nobody to approve a tool, so it does not start.
@@ -99,7 +116,7 @@ pub(super) enum BgSession {
     Fresh,
 }
 
-/// Background runs and the blocks the next turn carries. Not saved.
+/// Background runs and the blocks the next turn carries. Only `unread` is saved.
 #[derive(Default)]
 pub(super) struct BgWork {
     pub runs: Vec<BgRun>,
@@ -107,7 +124,10 @@ pub(super) struct BgWork {
     /// `(run id, card id)`: the board card each live run checkpoints (KB-02).
     pub cards: Vec<(u64, String)>,
     /// `(thread id, note)` for runs that ended since that chat's last turn.
+    /// Saved in `bg_unread.json` so a restart keeps them.
     pub unread: Vec<(String, String)>,
+    /// Runs whose `/bg` text asked for the result in the chat that started them.
+    pub post_here: Vec<u64>,
     /// Background results for the turn being kicked. Set on each send.
     pub results_follow: Option<String>,
     /// Alt+Enter (or `/queue`): this send waits for the live reply instead of steering it.
@@ -115,6 +135,14 @@ pub(super) struct BgWork {
 }
 
 impl BgWork {
+    /// A new cabin's background state, with the unread notes the last one saved.
+    pub fn with_saved_unread() -> Self {
+        Self {
+            unread: load_bg_unread(),
+            ..Self::default()
+        }
+    }
+
     /// Your live background tasks. Scheduled runs have their own slot and do not count.
     pub fn live_count(&self) -> usize {
         self.runs
@@ -136,6 +164,16 @@ impl BgWork {
 }
 
 impl Cabin {
+    /// Save the unread notes, newest `BG_UNREAD_MAX`, for the next cabin.
+    pub(super) fn save_bg_unread(&mut self) {
+        let over = self.bg.unread.len().saturating_sub(BG_UNREAD_MAX);
+        self.bg.unread.drain(..over);
+        if let Ok(body) = serde_json::to_vec(&self.bg.unread) {
+            let path = crate::config::config_dir().join(BG_UNREAD_FILE);
+            let _ = crate::config::atomic_write(&path, &body);
+        }
+    }
+
     /// A message onto `thread_id`, visible tab or not. A new message is activity.
     pub(super) fn push_msg_on(&mut self, thread_id: &str, role: &str, content: String) {
         let content = self.scrub_transcript(take_ui_text(content, IMAGE_FILE_CAP));
@@ -350,6 +388,7 @@ impl Cabin {
                     format!("- {title} (not started: background tasks are off while Ask is on)"),
                 ));
             }
+            self.save_bg_unread();
             if thread_id == self.visible_thread_id() {
                 self.status = BG_ASK_OFF.into();
             }
@@ -368,6 +407,9 @@ impl Cabin {
                 thread_id.to_string(),
                 format!("- {title} (not started: {why})"),
             ));
+        }
+        if !refused.is_empty() {
+            self.save_bg_unread();
         }
         if thread_id == self.visible_thread_id() {
             self.status = match (started, refused.len()) {
@@ -511,13 +553,12 @@ impl Cabin {
         self.post_finished_bg_runs();
     }
 
-    /// Post each ended run on its chat. A chat that is mid-turn waits: its live
-    /// reply rewrites the last assistant message, so a post there would be lost.
+    /// Settle each ended run. Its result lands on its card, never in a chat, and
+    /// the chat that started it hears it on its next turn. A run you asked to
+    /// post its result here also posts in that chat, and that one waits while
+    /// the chat is mid-turn: its live reply rewrites the last assistant message.
     pub(super) fn post_finished_bg_runs(&mut self) {
         let busy = self.running.then(|| self.chat_job_thread.clone()).flatten();
-        let main_busy = busy.as_deref().is_some_and(|id| {
-            threads::main_thread_index(&self.threads).is_some_and(|i| self.threads[i].id == id)
-        });
         let ready: Vec<usize> = self
             .bg
             .runs
@@ -525,9 +566,8 @@ impl Cabin {
             .enumerate()
             .filter(|(_, r)| {
                 r.end.is_some()
-                    && busy.as_deref() != Some(r.thread_id.as_str())
-                    && !self.scheduled_report_waits(r, busy.as_deref())
-                    && !(main_busy && self.reports_to_main(r))
+                    && !(busy.as_deref() == Some(r.thread_id.as_str())
+                        && self.bg.post_here.contains(&r.id))
             })
             .map(|(i, _)| i)
             .collect();
@@ -540,54 +580,99 @@ impl Cabin {
             done.push(self.bg.runs.remove(i));
         }
         done.reverse();
+        // `finish_bg_card` lets go of each run's card; keep the ids for the results.
+        let cards: Vec<Option<String>> = done.iter().map(|r| self.bg_card_id(r.id)).collect();
         for run in &done {
             let end = run.end.clone().unwrap_or(BgEnd::Done);
             self.finish_bg_card(run.id, &(&end).into(), run.origin == BgOrigin::Scheduled);
         }
         self.flush_board();
-        for run in done {
+        for (run, card_id) in done.into_iter().zip(cards) {
             let end = run.end.clone().unwrap_or(BgEnd::Done);
             let reply = self.scrub_transcript(run.say.clone());
+            let asked_here = self.bg.post_here.contains(&run.id);
+            self.bg.post_here.retain(|id| *id != run.id);
             if run.origin == BgOrigin::Scheduled {
-                // Its report goes to Follow up, the home feed, and Main. The
-                // hidden Background chat keeps a copy.
-                self.push_msg_on(
-                    &run.thread_id,
-                    "assistant",
-                    bg_result_post(&run.title, &end, &reply),
-                );
-                self.post_main_report(&run.title, &end, &reply);
+                // Follow up and the home feed take its report; the result is on
+                // the automation's card. Main's next turn hears where it is.
                 self.settle_scheduled_run(run.automation.as_deref(), &end, &reply);
+                let card_id =
+                    card_id.or_else(|| self.automation_card_id(run.automation.as_deref()));
+                let card = self.put_run_result(card_id.as_deref(), &run.title, &end, &reply, None);
+                let main = self.main_thread_idx();
+                let main = self.threads[main].id.clone();
+                self.bg
+                    .unread
+                    .push((main, bg_result_note(&run.title, &end, &reply, Some(&card))));
                 threads::file_background_sessions(
                     &mut self.threads,
                     std::slice::from_ref(&run.session),
                 );
                 continue;
             }
-            if !self.threads.iter().any(|t| t.id == run.thread_id) {
-                // The chat that started it is gone: the report lands in Main.
-                if end != BgEnd::Stopped || !reply.trim().is_empty() {
-                    self.post_main_report(&run.title, &end, &reply);
+            let alive = self.threads.iter().any(|t| t.id == run.thread_id);
+            let said = end != BgEnd::Stopped || !reply.trim().is_empty();
+            if run.origin == BgOrigin::Detached {
+                // A moved-off turn is the chat's own turn: it answers there.
+                if said && alive {
+                    self.push_msg_on(
+                        &run.thread_id,
+                        "assistant",
+                        bg_result_post(&run.title, &end, &reply),
+                    );
+                    self.bg.unread.push((
+                        run.thread_id.clone(),
+                        bg_result_note(&run.title, &end, &reply, None),
+                    ));
                 }
-                threads::file_background_sessions(
-                    &mut self.threads,
-                    std::slice::from_ref(&run.session),
-                );
-                continue;
-            }
-            if end != BgEnd::Stopped || !reply.trim().is_empty() {
-                self.push_msg_on(
-                    &run.thread_id,
-                    "assistant",
-                    bg_result_post(&run.title, &end, &reply),
-                );
-                self.bg.unread.push((
-                    run.thread_id.clone(),
-                    bg_result_note(&run.title, &end, &reply),
-                ));
+            } else if said {
+                // A /bg or BACKGROUND_TASK run always has a card; one that lost it
+                // gets a new one, so the result still has a home.
+                let card_id = card_id.unwrap_or_else(|| {
+                    let model = self.run_model();
+                    grokhub_core::work_run::open_run_card(
+                        &mut self.board,
+                        grokhub_core::WorkKind::Background,
+                        &run.title,
+                        &run.session,
+                        &model,
+                        now_ms(),
+                    )
+                });
+                let from = self.started_in_chat(&run.thread_id, &card_id);
+                let card =
+                    self.put_run_result(Some(&card_id), &run.title, &end, &reply, from.as_deref());
+                // The chat that started it hears it; with that chat gone, Main does.
+                let hears = if alive {
+                    run.thread_id.clone()
+                } else {
+                    let main = self.main_thread_idx();
+                    self.threads[main].id.clone()
+                };
+                if asked_here && alive {
+                    self.push_msg_on(
+                        &run.thread_id,
+                        "assistant",
+                        bg_result_post(&run.title, &end, &reply),
+                    );
+                    if let Some(c) = self.board.iter_mut().find(|c| c.id == card_id) {
+                        c.result_sent = true;
+                    }
+                    self.bg
+                        .unread
+                        .push((hears, bg_result_note(&run.title, &end, &reply, None)));
+                } else {
+                    self.bg
+                        .unread
+                        .push((hears, bg_result_note(&run.title, &end, &reply, Some(&card))));
+                }
+                self.notify_bg_end(&run, &end, Some(&card_id), &vis);
             }
             if run.origin == BgOrigin::Detached {
                 self.settle_detached_run(&run, &end, &reply);
+                if alive {
+                    self.notify_bg_end(&run, &end, None, &vis);
+                }
             }
             // A fork is its own session on disk. Unless a chat took it back
             // above, it is background work and not a History row.
@@ -597,63 +682,135 @@ impl Cabin {
                     std::slice::from_ref(&run.session),
                 );
             }
-            let head = match end {
-                BgEnd::Done => "Background task done",
-                BgEnd::Failed(_) => "Background task failed",
-                BgEnd::Stopped => "Background task stopped",
-            };
-            // The bell keeps every finished task, the same words the OS ping says.
-            if end != BgEnd::Stopped {
-                let kind = if matches!(end, BgEnd::Failed(_)) {
-                    super::notices::NoticeKind::Error
-                } else {
-                    super::notices::NoticeKind::Success
-                };
-                let from = self.notice_chat(&run.thread_id);
-                self.notify(kind, format!("{head} · {}", run.title), Some(from), None);
-            }
-            if run.thread_id == vis {
-                self.status = format!("{head} · {}", run.title);
-            }
-            if end != BgEnd::Stopped && (!self.window_focused || run.thread_id != vis) {
-                let clock = Self::local_clock();
-                if !quiet_hours_active(&clock.hm(), &self.cfg.quiet_start, &self.cfg.quiet_end) {
-                    crate::notify::ping(
-                        grokhub_core::brand::product_name(),
-                        &format!("{head} · {}", run.title),
-                    );
-                }
-            }
         }
+        self.flush_board();
+        self.save_bg_unread();
         self.persist();
     }
 
-    /// Scheduled runs and runs whose chat is gone post their report in Main.
-    fn reports_to_main(&self, run: &BgRun) -> bool {
-        run.origin == BgOrigin::Scheduled || !self.threads.iter().any(|t| t.id == run.thread_id)
+    /// The bell, the status line and the OS ping for a run that ended. A run
+    /// with a card opens that card; a moved-off turn opens its chat.
+    fn notify_bg_end(&mut self, run: &BgRun, end: &BgEnd, card: Option<&str>, vis: &str) {
+        let head = match end {
+            BgEnd::Done => "Background task done",
+            BgEnd::Failed(_) => "Background task failed",
+            BgEnd::Stopped => "Background task stopped",
+        };
+        // The bell keeps every finished task, the same words the OS ping says.
+        if *end != BgEnd::Stopped {
+            let kind = if matches!(end, BgEnd::Failed(_)) {
+                super::notices::NoticeKind::Error
+            } else {
+                super::notices::NoticeKind::Success
+            };
+            let (from, open) = match card {
+                Some(id) => (
+                    super::notices::NoticePlace::Page(Nav::Workboard),
+                    Some(super::notices::NoticeAction::OpenCard(id.to_string())),
+                ),
+                None => (self.notice_chat(&run.thread_id), None),
+            };
+            self.notify(kind, format!("{head} · {}", run.title), Some(from), open);
+        }
+        if run.thread_id == vis {
+            self.status = format!("{head} · {}", run.title);
+        }
+        if *end != BgEnd::Stopped && (!self.window_focused || run.thread_id != vis) {
+            let clock = Self::local_clock();
+            if !quiet_hours_active(&clock.hm(), &self.cfg.quiet_start, &self.cfg.quiet_end) {
+                crate::notify::ping(
+                    grokhub_core::brand::product_name(),
+                    &format!("{head} · {}", run.title),
+                );
+            }
+        }
     }
 
-    /// Post a background report in Main. The next turn there hears it too.
-    pub(super) fn post_main_report(&mut self, title: &str, end: &BgEnd, reply: &str) {
-        let idx = self.main_thread_idx();
-        let id = self.threads[idx].id.clone();
-        self.push_msg_on(&id, "assistant", bg_result_post(title, end, reply));
-        self.bg.unread.push((id, bg_result_note(title, end, reply)));
+    /// Write a run's result on card `id` and return the card's title (the run's
+    /// title when the card is gone). `from` is the chat Send to chat posts to.
+    fn put_run_result(
+        &mut self,
+        id: Option<&str>,
+        title: &str,
+        end: &BgEnd,
+        reply: &str,
+        from: Option<&str>,
+    ) -> String {
+        let Some(id) = id else {
+            return title.trim().to_string();
+        };
+        let body = bg_result_body(end, reply);
+        grokhub_core::work_run::set_run_result(&mut self.board, id, &body, from, now_ms());
+        self.board
+            .iter()
+            .find(|c| c.id == id)
+            .map(|c| c.title.trim().to_string())
+            .unwrap_or_else(|| title.trim().to_string())
     }
 
-    /// A scheduled run's report lands in its Follow up card's chat. While you
-    /// are mid-reply in that chat, it waits: your live reply rewrites the last
-    /// assistant message, so the report would be lost or spliced into it.
-    fn scheduled_report_waits(&self, run: &BgRun, busy: Option<&str>) -> bool {
-        let (Some(busy), Some(id)) = (busy, run.automation.as_deref()) else {
+    /// The chat a run was started from, for Send to chat: a chat you can see,
+    /// not the card's own chat (a queued card's run) or a hidden one.
+    fn started_in_chat(&self, thread_id: &str, card_id: &str) -> Option<String> {
+        let own = self
+            .board
+            .iter()
+            .find(|c| c.id == card_id)
+            .and_then(|c| c.thread_id.as_deref())
+            == Some(thread_id);
+        let shown = self
+            .threads
+            .iter()
+            .any(|t| t.id == thread_id && !t.background);
+        (shown && !own).then(|| thread_id.to_string())
+    }
+
+    /// The newest card of automation `id`, archived or not.
+    fn automation_card_id(&self, id: Option<&str>) -> Option<String> {
+        let id = id?;
+        self.board
+            .iter()
+            .rev()
+            .find(|c| c.automation.as_deref() == Some(id))
+            .map(|c| c.id.clone())
+    }
+
+    /// Send to chat on a card: post its result into the chat that started the
+    /// run, or Main. Posts once; a chat mid-reply waits, since its live reply
+    /// rewrites the last assistant message. True when it posted.
+    pub(super) fn send_card_result(&mut self, id: &str) -> bool {
+        let Some(from) = self
+            .board
+            .iter()
+            .find(|c| c.id == id)
+            .map(|c| c.result_chat.clone())
+        else {
             return false;
         };
-        run.origin == BgOrigin::Scheduled
-            && self.board.iter().any(|c| {
-                c.automation.as_deref() == Some(id)
-                    && !matches!(c.status, BoardStatus::Done | BoardStatus::Dismissed)
-                    && c.thread_id.as_deref() == Some(busy)
-            })
+        let target = match from.filter(|tid| self.threads.iter().any(|t| &t.id == tid)) {
+            Some(tid) => tid,
+            None => {
+                let main = self.main_thread_idx();
+                self.threads[main].id.clone()
+            }
+        };
+        if self.running && self.chat_job_thread.as_deref() == Some(target.as_str()) {
+            self.status = "That chat is still replying. Send it when the reply ends.".into();
+            return false;
+        }
+        let Some(post) = grokhub_core::work_run::take_result_post(&mut self.board, id) else {
+            return false;
+        };
+        self.push_msg_on(&target, "assistant", post);
+        let name = self
+            .threads
+            .iter()
+            .find(|t| t.id == target)
+            .map(|t| t.title.clone())
+            .unwrap_or_default();
+        self.status = format!("Sent to {}", name.trim());
+        self.flush_board();
+        self.persist();
+        true
     }
 
     /// A moved-off turn wrote its chat's own session. Give that session back to
@@ -704,7 +861,7 @@ impl Cabin {
         self.persist_automations();
     }
 
-    /// Stop one run. What it said so far still posts.
+    /// Stop one run. What it said so far still lands on its card.
     pub(super) fn stop_bg_run(&mut self, id: u64) {
         if let Some(run) = self.bg.runs.iter_mut().find(|r| r.id == id && r.live()) {
             run.stop_native();
@@ -757,7 +914,11 @@ impl Cabin {
         if n > 0 {
             self.flush_board();
         }
+        let before = self.bg.unread.len();
         self.bg.unread.retain(|(id, _)| id != thread_id);
+        if self.bg.unread.len() != before {
+            self.save_bg_unread();
+        }
         n
     }
 
@@ -791,6 +952,9 @@ impl Cabin {
                 true
             }
         });
+        if !notes.is_empty() {
+            self.save_bg_unread();
+        }
         bg_results_follow(&notes)
     }
 
@@ -845,7 +1009,14 @@ impl Cabin {
         }
         let visible = self.visible_thread_id();
         match self.start_bg_task(arg, &visible, BgOrigin::User) {
-            Ok(title) => self.status = format!("Background · {title}"),
+            Ok(title) => {
+                // Its result goes on its card, unless you asked for it here.
+                if bg_asks_for_chat_post(arg) {
+                    let run = self.bg.next_id;
+                    self.bg.post_here.push(run);
+                }
+                self.status = format!("Background · {title}");
+            }
             Err(e) => self.status = e,
         }
     }
