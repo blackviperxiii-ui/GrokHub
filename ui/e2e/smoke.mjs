@@ -193,14 +193,25 @@ function pulseFixture(req, res) {
   res.end(body);
 }
 
-async function wd(method, path, body) {
+async function wd(method, path, body, retried = false) {
   const res = await fetch(`${DRIVER}${path}`, {
     method,
     headers: { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const json = await res.json();
-  if (!res.ok) throw new Error(`${method} ${path}: ${JSON.stringify(json.value)}`);
+  if (!res.ok) {
+    // WebKitGTK refuses a click on an element that is still moving (a page
+    // just opened, a post just landed, text reflowing) as "not interactable".
+    // Wait for it to sit still and click again; one that never does still fails.
+    const click = /^(\/session\/[^/]+)\/element\/([^/]+)\/click$/.exec(path);
+    if (click && json.value?.error === "element not interactable" && !retried) {
+      const [, s, el] = click;
+      await waitFor("the clicked element to sit still", async () => ((await settled(s, el)) ? true : null), 10000);
+      return wd(method, path, body, true);
+    }
+    throw new Error(`${method} ${path}: ${JSON.stringify(json.value)}`);
+  }
   return json.value;
 }
 
@@ -302,14 +313,6 @@ async function settled(s, el) {
   await sleep(300);
   const [x2, y2] = await where();
   return x === x2 && y === y2;
-}
-
-/** Clicks `el` once it sits still. A post that has just landed is still
- * laying out (its picture and taller text settle), and WebKitGTK refuses a
- * click on a moving element as "not interactable". */
-async function clickStill(s, el, what) {
-  await waitFor(`${what} to sit still`, async () => ((await settled(s, el)) ? true : null));
-  await wd("POST", `${s}/element/${el}/click`, {});
 }
 
 /** The top-row category each Settings page sits in (src/sections.ts). */
@@ -565,21 +568,21 @@ async function pulse(s, config) {
   console.log(`writer posted ${JSON.stringify(PULSE_TITLE)} after the save`);
   await shot(s, "pulse");
 
-  await clickStill(s, await find(s, ".pulse .media-item"), "the first picture");
+  await click(s, ".pulse .media-item");
   await waitFor("the lightbox", () => find(s, ".lightbox img"));
   await shot(s, "pulse-lightbox");
   const close = await wd("POST", `${s}/element`, {
     using: "xpath",
     value: "//div[contains(@class,'lightbox')]//button[normalize-space()='Close']",
   });
-  await clickStill(s, close[ELEMENT], "the lightbox Close");
+  await wd("POST", `${s}/element/${close[ELEMENT]}/click`, {});
 
   // No menu: Dismiss, last in the row, takes the post away.
   const dismiss = await wd("POST", `${s}/element`, {
     using: "xpath",
     value: `${post}//div[contains(@class,'card-row')]/button[last()][normalize-space()='Dismiss']`,
   });
-  await clickStill(s, dismiss[ELEMENT], "Dismiss");
+  await wd("POST", `${s}/element/${dismiss[ELEMENT]}/click`, {});
   await waitFor("the dismissed post", async () => {
     const left = await wd("POST", `${s}/elements`, { using: "xpath", value: post });
     return left.length === 0;
