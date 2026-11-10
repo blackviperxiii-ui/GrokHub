@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { pulseImage, type PulseChip, type PulseIdea, type PulsePost } from "./api";
 import { Markdown } from "./Markdown";
 import { VerdictLine } from "./PulseFix";
+import { reducedMotion } from "./rubberBand";
 import { ConfirmRow, ExternalLink, useDismiss } from "./ui";
 
 /** Topic emoji with a bundled 3D picture (Fluent Emoji 3D, MIT, see
@@ -173,7 +174,8 @@ export function fullDate(ms: number): string {
 
 /** The same row of buttons on every card, in one line: Like first (far
  * left), the card's own buttons and Not interested in the middle, Dismiss last
- * (far right). Like pressed again takes the like back. */
+ * (far right). A like turns into a filled heart that stays; a second tap takes
+ * it back. The heart pops once on the like tap, unless reduced motion is on. */
 export function CardButtons({
   liked,
   busy,
@@ -189,17 +191,45 @@ export function CardButtons({
   onDismiss: () => void;
   children?: ReactNode;
 }) {
+  const [popping, setPopping] = useState(false);
+  // Heart shows while liked, or during the one-shot pop before liked lands.
+  // The pop class drops as soon as liked is true (no effect); animationend
+  // clears popping for idea rows where liked never sticks.
+  const showHeart = liked || popping;
+  const like = () => {
+    if (liked) {
+      setPopping(false);
+      onLike();
+      return;
+    }
+    if (!reducedMotion()) setPopping(true);
+    onLike();
+  };
   return (
     <div className="card-buttons card-row feed-foot" role="group" aria-label="Card actions">
       <button
         type="button"
-        className="quiet card-like"
+        className={["quiet", "card-like", popping && !liked ? "card-like-pop" : ""]
+          .filter(Boolean)
+          .join(" ")}
         aria-label="Like"
         aria-pressed={liked}
         disabled={busy}
-        onClick={onLike}
+        onClick={like}
       >
-        <span aria-hidden="true">{liked ? "♥" : "♡"}</span> Like
+        {showHeart ? (
+          <span
+            className="card-like-heart"
+            aria-hidden="true"
+            onAnimationEnd={() => setPopping(false)}
+          >
+            ♥
+          </span>
+        ) : (
+          <>
+            <span aria-hidden="true">♡</span> Like
+          </>
+        )}
       </button>
       {children}
       <button type="button" className="quiet" disabled={busy} onClick={onDislike}>

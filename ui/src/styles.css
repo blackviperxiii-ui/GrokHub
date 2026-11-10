@@ -4523,3 +4523,43 @@ label.toggle-row {
 .card-row > .card-dismiss {
   margin-left: auto;
 }
+
+/* Like → filled heart. The heart keeps the accent colour; a one-shot pop plays
+   only on the tap that likes (removed on animationend). Unlike snaps back with
+   no animation. Reduced motion skips the pop via the global reduce rule and by
+   never adding .card-like-pop in JS. */
+.card-like[aria-pressed="true"] .card-like-heart,
+.card-like.card-like-pop .card-like-heart {
+  color: var(--amber);
+  margin-right: 0;
+}
+
+.card-like .card-like-heart {
+  display: inline-block;
+  transform-origin: center;
+}
+
+@keyframes card-like-pop {
+  0% {
+    transform: scale(0.6);
+    opacity: 0.7;
+  }
+  55% {
+    transform: scale(1.15);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.card-like.card-like-pop .card-like-heart {
+  animation: card-like-pop 280ms var(--ease-out);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card-like.card-like-pop .card-like-heart {
+    animation: none;
+  }
+}

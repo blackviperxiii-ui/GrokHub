@@ -904,7 +904,7 @@ pub(super) fn post_actions(card: &UpdateCard, looking_more: bool) -> Vec<(String
         add("Discuss", FeedPostAct::Discuss);
     }
     if !source {
-        add(if liked { "Liked" } else { "Like" }, FeedPostAct::Like);
+        add(if liked { "♥" } else { "Like" }, FeedPostAct::Like);
     }
     acts
 }
@@ -945,7 +945,7 @@ pub(super) fn post_row(
 ) -> Vec<(String, FeedPostAct)> {
     let liked = card.reaction == Some(CardReaction::Up);
     let mut row = vec![(
-        if liked { "Liked" } else { "Like" }.to_string(),
+        if liked { "♥" } else { "Like" }.to_string(),
         FeedPostAct::Like,
     )];
     row.extend(
@@ -990,6 +990,8 @@ fn post_why_menu(ui: &mut egui::Ui, why: Option<&str>) {
 
 /// The row, painted: one line, every button the same size and outline,
 /// Dismiss pinned to the right. A narrow card scrolls the row sideways.
+/// A liked Like slot shows ♥; the frame it flips on, a short scale tween
+/// runs unless reduced motion is on.
 fn paint_post_row(ui: &mut egui::Ui, row: &[(String, FeedPostAct)]) -> Option<FeedPostAct> {
     let mut hit = None;
     let ((last_label, last), rest) = row.split_last()?;
@@ -1000,7 +1002,12 @@ fn paint_post_row(ui: &mut egui::Ui, row: &[(String, FeedPostAct)]) -> Option<Fe
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
                 for (label, did) in rest {
-                    if card_button(ui, label, Quick::Outline) {
+                    let clicked = if *did == FeedPostAct::Like {
+                        paint_like_slot(ui, label)
+                    } else {
+                        card_button(ui, label, Quick::Outline)
+                    };
+                    if clicked {
                         hit = Some(did.clone());
                     }
                 }
@@ -1012,6 +1019,40 @@ fn paint_post_row(ui: &mut egui::Ui, row: &[(String, FeedPostAct)]) -> Option<Fe
             });
         });
     hit
+}
+
+/// Like stays the same outlined size as its neighbours. When the label is the
+/// filled heart, scale 0.6 → 1 over 280 ms on the frame it appears; reduced
+/// motion snaps to 1.
+fn paint_like_slot(ui: &mut egui::Ui, label: &str) -> bool {
+    let liked = label == "♥";
+    let id = ui.id().with("pulse_like_heart");
+    let was = ui.ctx().data(|d| d.get_temp::<bool>(id).unwrap_or(false));
+    if liked && !was && !crate::motion::reduced_motion(ui) {
+        // Snap the tween to the start of the pop so the next frames ease up.
+        let _ = ui.ctx().animate_value_with_time(id.with("s"), 0.6, 0.0);
+    }
+    ui.ctx().data_mut(|d| d.insert_temp(id, liked));
+    let scale = if !liked || crate::motion::reduced_motion(ui) {
+        1.0
+    } else {
+        ui.ctx().animate_value_with_time(id.with("s"), 1.0, 0.28)
+    };
+    let text = RichText::new(label)
+        .size(crate::theme::FONT_TIP * scale)
+        .strong()
+        .extra_letter_spacing(0.8);
+    use crate::ui_kit::recipe::{look, Part, State, BUTTON_RADIUS};
+    let l = look(Part::Button, State::Default);
+    let ink = if liked { crate::theme::amber() } else { l.ink };
+    let resp = ui.add(
+        egui::Button::new(text.color(ink))
+            .fill(l.fill)
+            .stroke(l.stroke)
+            .corner_radius(BUTTON_RADIUS)
+            .min_size(egui::vec2(0.0, 22.0)),
+    );
+    resp.clicked_by(egui::PointerButton::Primary)
 }
 
 /// One card button, answering a pointer click only (Undo and Delete live
