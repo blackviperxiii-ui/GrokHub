@@ -37,6 +37,9 @@ pub fn start(config_dir: &Path) {
     HUB.get_or_init(|| {
         first = true;
         PAUSED.store(super::store::paused(config_dir), Ordering::Relaxed);
+        if !paused() && super::head_start::claim(config_dir) {
+            HEAD_START_BEFORE_MS.store(crate::now_ms(), Ordering::Relaxed);
+        }
         Mutex::new(Engine::open(config_dir))
     });
     if !first {
@@ -63,9 +66,39 @@ pub fn started() -> bool {
 /// Minutes local time is east of UTC, as the app last told us. UTC until then.
 static UTC_OFFSET_MIN: AtomicI32 = AtomicI32::new(0);
 
-/// The app's local clock offset, so habits are counted in local hours.
+/// When this process started the engine for the first time in its folder,
+/// while the old logs still wait to be read. 0 otherwise.
+static HEAD_START_BEFORE_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The app's local clock offset, so habits are counted in local hours. The
+/// first call also gives a folder new to the engine its head start
+/// ([`super::head_start`]), now that old runs can be put in their local hour.
 pub fn set_utc_offset_min(offset_min: i32) {
     UTC_OFFSET_MIN.store(offset_min.clamp(-840, 840), Ordering::Relaxed);
+    let before_ms = HEAD_START_BEFORE_MS.swap(0, Ordering::Relaxed);
+    if before_ms > 0 {
+        // Off the caller's thread: the cabin calls this while it paints.
+        let _ = std::thread::Builder::new()
+            .name("learn-head-start".into())
+            .spawn(move || head_start(before_ms));
+    }
+}
+
+fn head_start(before_ms: u64) {
+    let Some(config_dir) = engine().map(|e| e.config_dir().to_path_buf()) else {
+        return;
+    };
+    let signals = super::head_start::signals(
+        &crate::run_metrics::read_run_lines(&config_dir),
+        &crate::card_signals::read_signals(&config_dir),
+        before_ms,
+        local_hour,
+    );
+    super::head_start::feed(signals, crate::now_ms(), |step| {
+        if let Some(mut e) = engine() {
+            step(&mut e);
+        }
+    });
 }
 
 /// The local hour of `at_ms`, 0 to 23.

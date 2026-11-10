@@ -1,0 +1,1 @@
+- The learning engine gets a head start: the first time it runs for someone who already used the app, it reads their past runs and card choices once, so habits and tastes are known on day one. It never does this again after Forget everything, and not while learning is paused.
