@@ -94,6 +94,9 @@ pub struct WeekRecapInputs {
     pub disk_freed_bytes: Option<u64>,
     pub top_tasks: Vec<TaskDone>,
     pub suggestion: Option<String>,
+    /// How the app's own offers and changes went, one line per area that has
+    /// a score (`learn::hub::score_lines`). Empty hides the section.
+    pub learned: Vec<String>,
     pub tone: RecapTone,
 }
 
@@ -109,6 +112,8 @@ pub struct WeekRecap {
     pub disk: Option<String>,
     pub tasks: Vec<String>,
     pub suggestion: Option<String>,
+    /// How the app's own offers and changes went. Never in the share text.
+    pub learned: Vec<String>,
     pub closing: String,
 }
 
@@ -155,6 +160,7 @@ impl WeekRecap {
             }
         };
         list("Tasks", &self.tasks);
+        list("Its own calls", &self.learned);
         if let Some(ref s) = self.suggestion {
             lines.push(format!("Next: {s}"));
         }
@@ -184,6 +190,7 @@ impl WeekRecap {
             crate::brand::filled("Top {product} tasks"),
             &self.tasks,
         );
+        section_lines(&mut out, LEARNED_TITLE, &self.learned);
         out.push_str("## Next week\n\n");
         match &self.suggestion {
             Some(s) => out.push_str(&format!("- {s}\n\n")),
@@ -262,6 +269,11 @@ pub fn project_name(raw: &str) -> String {
 }
 
 /// Build the recap. Empty / off signals produce no section.
+/// The recap section for how the app's own offers and changes went.
+pub const LEARNED_TITLE: &str = "How its own calls went";
+/// Areas shown there at most.
+pub const LEARNED_CAP: usize = 3;
+
 pub fn build_recap(input: &WeekRecapInputs) -> WeekRecap {
     let games: Vec<String> = input
         .games
@@ -300,6 +312,13 @@ pub fn build_recap(input: &WeekRecapInputs) -> WeekRecap {
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .map(str::to_string);
+    let learned: Vec<String> = input
+        .learned
+        .iter()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .take(LEARNED_CAP)
+        .collect();
     let greeting = greeting_line(
         &input.tone,
         &input.week_key,
@@ -316,6 +335,7 @@ pub fn build_recap(input: &WeekRecapInputs) -> WeekRecap {
         disk,
         tasks,
         suggestion,
+        learned,
         closing,
     }
 }
@@ -839,8 +859,54 @@ mod tests {
                 },
             ],
             suggestion: Some("Lean into gaming again".into()),
+            learned: Vec::new(),
             tone: tone(),
         }
+    }
+
+    #[test]
+    fn the_apps_own_score_is_a_section_of_the_card_and_never_shared() {
+        let mut input = fixture_full();
+        input.learned = vec![
+            "Skills: 80% went your way, up from 60%".into(),
+            "  ".into(),
+            "Quick chips: 50% went your way".into(),
+            "Settings: 100% went your way".into(),
+            "Model choice: 0% went your way".into(),
+        ];
+        let recap = build_recap(&input);
+        assert_eq!(
+            recap.learned,
+            vec![
+                "Skills: 80% went your way, up from 60%",
+                "Quick chips: 50% went your way",
+                "Settings: 100% went your way"
+            ]
+        );
+        assert!(recap.card_body().contains(
+            "\nIts own calls: Skills: 80% went your way, up from 60%; Quick chips: 50% went your way; Settings: 100% went your way\n"
+        ));
+        assert!(recap.render().contains(
+            "## How its own calls went\n\n- Skills: 80% went your way, up from 60%\n- Quick chips: 50% went your way\n- Settings: 100% went your way\n\n## Next week"
+        ));
+        assert!(!recap.share_text().contains("went your way"));
+
+        // No score: no section, and a score alone does not make a quiet
+        // week a busy one.
+        let plain = build_recap(&fixture_full());
+        assert!(!plain.render().contains(LEARNED_TITLE));
+        assert!(!plain.card_body().contains("Its own calls"));
+        let quiet = build_recap(&WeekRecapInputs {
+            week_key: "2026-10-20".into(),
+            learned: vec!["Skills: 80% went your way".into()],
+            tone: tone(),
+            ..WeekRecapInputs::default()
+        });
+        assert!(quiet.greeting.contains("Quiet week"), "{}", quiet.greeting);
+        assert_eq!(
+            quiet.card_body().lines().nth(1),
+            Some("Its own calls: Skills: 80% went your way")
+        );
     }
 
     #[test]

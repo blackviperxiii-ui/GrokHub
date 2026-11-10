@@ -605,6 +605,8 @@ fn the_shared_logs_feed_one_engine() {
     assert!(auto.undo(Key::ChatObjectives, at).is_some());
     let page = hub::view(at).trust;
     assert_eq!(page.dials[0].went, Some(50));
+    // The week recap reads the same score as a line.
+    assert_eq!(hub::score_lines(at)[0], "Settings: 50% went your way");
     let lines: Vec<(&str, &str)> = page
         .decisions
         .iter()
