@@ -68,17 +68,220 @@ const TOOLS_NOT_COMMANDS: [&str; 6] = [
     "search_replace",
 ];
 
-/// A plain answer for a command that starts with one of the cabin's own tool
-/// names, so the model calls the tool instead of retrying the shell.
+/// A plain answer for a command that runs one of the cabin's own tool names
+/// anywhere (`cd x && web_search q`, `bash -c "web_search q"`,
+/// `web_search("q")`), so the model calls the tool instead of retrying the
+/// shell. A program whose name only contains a tool's name
+/// (`./web_search.sh`, `my_web_search`) is not one.
 pub(crate) fn names_a_tool(command: &str) -> Option<String> {
-    let first = command
-        .split_whitespace()
-        .find(|word| !word.contains('='))?
-        .trim_matches(|c| c == '"' || c == '\'');
-    let tool = TOOLS_NOT_COMMANDS.iter().find(|name| **name == first)?;
+    let tool = simple_commands(command)
+        .iter()
+        .find_map(|cmd| tool_in(cmd).map(|(tool, _)| tool))?;
     Some(format!(
         "`{tool}` is a tool you call directly, not a shell command. Nothing ran. Call the {tool} tool itself."
     ))
+}
+
+/// The tool call a command stands for when the whole command is one
+/// read-only lookup (`web_search "q"`, `web_fetch https://…`) whose argument
+/// reads plainly, with nothing a shell would expand or redirect. Anything
+/// else is `None` and is turned back by [`names_a_tool`]. Nothing here ever
+/// runs a shell.
+pub(crate) fn lookup_in_shell(command: &str) -> Option<(&'static str, Value)> {
+    let cmds = simple_commands(command);
+    let [cmd] = cmds.as_slice() else {
+        return None;
+    };
+    if cmd.needs_shell {
+        return None;
+    }
+    let (tool, rest) = tool_in(cmd)?;
+    let arg = lookup_arg(&rest)?;
+    match tool {
+        "web_search" => Some((tool, json!({ "query": arg }))),
+        "web_fetch" if is_http_url(&arg) => Some((tool, json!({ "url": arg }))),
+        _ => None,
+    }
+}
+
+/// The line a repaired lookup's result starts with.
+pub(crate) fn repaired_note(tool: &str) -> String {
+    format!("`{tool}` is a tool, not a shell command, so this ran as the {tool} tool (nothing ran in the shell). Call {tool} directly next time.")
+}
+
+/// One simple command of a shell line (`a && b; c | d` holds four): its
+/// words with the quotes taken off. `needs_shell` marks one with something a
+/// shell would expand, substitute or redirect (`$`, a backtick, `<`, `>`, a
+/// brace) outside single quotes, or an unclosed quote.
+#[derive(Debug, Default)]
+struct SimpleCommand {
+    words: Vec<String>,
+    needs_shell: bool,
+}
+
+/// Programs that run a script given with `-c`.
+const SHELLS: [&str; 4] = ["bash", "sh", "zsh", "dash"];
+
+/// `command` split on `&&`, `||`, `;`, `|`, `&` and newlines outside quotes,
+/// with each `bash -c '…'` script opened up into its own commands.
+fn simple_commands(command: &str) -> Vec<SimpleCommand> {
+    let mut out = Vec::new();
+    open_scripts(command, 0, &mut out);
+    out
+}
+
+fn open_scripts(command: &str, depth: u8, out: &mut Vec<SimpleCommand>) {
+    for cmd in split_commands(command) {
+        let script = cmd
+            .words
+            .iter()
+            .position(|w| !is_assignment(w))
+            .filter(|_| depth < 3)
+            .filter(|&i| {
+                let program = cmd.words[i].rsplit('/').next().unwrap_or("");
+                SHELLS.contains(&program) && cmd.words.get(i + 1).is_some_and(|f| is_c_flag(f))
+            })
+            .and_then(|i| cmd.words.get(i + 2));
+        match script {
+            Some(script) => open_scripts(script, depth + 1, out),
+            None => out.push(cmd),
+        }
+    }
+}
+
+fn split_commands(command: &str) -> Vec<SimpleCommand> {
+    fn end_word(out: &mut [SimpleCommand], word: &mut Option<String>) {
+        if let (Some(w), Some(cmd)) = (word.take(), out.last_mut()) {
+            cmd.words.push(w);
+        }
+    }
+    let mut out = vec![SimpleCommand::default()];
+    let mut word: Option<String> = None;
+    let mut quote: Option<char> = None;
+    let mut chars = command.chars().peekable();
+    while let Some(c) = chars.next() {
+        let mut flag = false;
+        match (quote, c) {
+            (Some('\''), '\'') | (Some('"'), '"') => quote = None,
+            (Some('\''), c) => word.get_or_insert_with(String::new).push(c),
+            (Some(_), '\\') => {
+                if let Some(next) = chars.next() {
+                    word.get_or_insert_with(String::new).push(next);
+                }
+            }
+            (Some(_), c) => {
+                flag = matches!(c, '$' | '`');
+                word.get_or_insert_with(String::new).push(c);
+            }
+            (None, '\'' | '"') => {
+                quote = Some(c);
+                word.get_or_insert_with(String::new);
+            }
+            (None, '\\') => {
+                if let Some(next) = chars.next().filter(|n| *n != '\n') {
+                    word.get_or_insert_with(String::new).push(next);
+                }
+            }
+            (None, ';' | '\n' | '|' | '&') => {
+                end_word(&mut out, &mut word);
+                if matches!(c, '|' | '&') && chars.peek() == Some(&c) {
+                    chars.next();
+                }
+                out.push(SimpleCommand::default());
+            }
+            (None, c) if c.is_whitespace() => end_word(&mut out, &mut word),
+            (None, c) => {
+                flag = matches!(c, '$' | '`' | '<' | '>' | '{' | '}');
+                word.get_or_insert_with(String::new).push(c);
+            }
+        }
+        if flag {
+            if let Some(cmd) = out.last_mut() {
+                cmd.needs_shell = true;
+            }
+        }
+    }
+    end_word(&mut out, &mut word);
+    if quote.is_some() {
+        if let Some(cmd) = out.last_mut() {
+            cmd.needs_shell = true;
+        }
+    }
+    out.retain(|cmd| !cmd.words.is_empty());
+    out
+}
+
+/// `NAME=value`, a variable set for the command that follows it.
+fn is_assignment(word: &str) -> bool {
+    word.split_once('=').is_some_and(|(name, _)| {
+        name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
+}
+
+/// `-c`, `-lc`, `-ic`: the flag that hands a shell its script.
+fn is_c_flag(word: &str) -> bool {
+    word.strip_prefix('-')
+        .is_some_and(|flags| flags.contains('c') && flags.chars().all(|c| c.is_ascii_alphabetic()))
+}
+
+/// The cabin tool a simple command runs, and its words after the name. The
+/// name may carry `(`, `:` or `)` (`web_search("q")`, `web_search: q`), which
+/// starts the words after it; any other character after it (`.sh`, `_cli`)
+/// makes it some other program.
+fn tool_in(cmd: &SimpleCommand) -> Option<(&'static str, Vec<String>)> {
+    let i = cmd.words.iter().position(|w| !is_assignment(w))?;
+    let word = cmd.words[i].trim_start_matches(['(', '$', '`']);
+    let end = word
+        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .unwrap_or(word.len());
+    let (name, tail) = word.split_at(end);
+    if !(tail.is_empty() || tail.starts_with(['(', ':', ')', '`'])) {
+        return None;
+    }
+    let tool = TOOLS_NOT_COMMANDS.iter().find(|t| **t == name)?;
+    let rest = std::iter::once(tail.to_string())
+        .filter(|t| !t.is_empty())
+        .chain(cmd.words[i + 1..].iter().cloned())
+        .collect();
+    Some((tool, rest))
+}
+
+/// A lookup's one argument from the words after its name: `q`, `"q"`,
+/// `("q")`, `(query="q")`, `: q`, `--query q`, or `'{"query":"q"}'`.
+fn lookup_arg(rest: &[String]) -> Option<String> {
+    let joined = rest.join(" ");
+    let mut text = joined.trim();
+    text = text.strip_prefix(':').unwrap_or(text).trim();
+    if let Some(inner) = text.strip_prefix('(').and_then(|t| t.strip_suffix(')')) {
+        text = inner.trim();
+    }
+    for key in [
+        "--query=", "--url=", "query=", "url=", "q=", "--query ", "--url ", "-q ",
+    ] {
+        if let Some(value) = text.strip_prefix(key) {
+            text = value.trim();
+            break;
+        }
+    }
+    let arg = if text.starts_with('{') {
+        let value: Value = serde_json::from_str(text).ok()?;
+        ["query", "url"]
+            .iter()
+            .find_map(|k| value.get(*k).and_then(Value::as_str))?
+            .trim()
+            .to_string()
+    } else {
+        text.to_string()
+    };
+    (!arg.is_empty()).then_some(arg)
+}
+
+fn is_http_url(arg: &str) -> bool {
+    let rest = arg
+        .strip_prefix("https://")
+        .or_else(|| arg.strip_prefix("http://"));
+    rest.is_some_and(|r| !r.is_empty() && !r.contains(char::is_whitespace))
 }
 
 pub fn run(workspace: &Path, args: &Value, stop: &dyn Fn() -> bool) -> ToolOutput {
@@ -1033,6 +1236,88 @@ mod tests {
         }
         for real in ["ls -la", "cargo test web_search", "echo web_fetch", ""] {
             assert_eq!(super::names_a_tool(real), None, "{real}");
+        }
+    }
+
+    #[test]
+    fn a_tool_anywhere_in_the_command_is_turned_back() {
+        for typed in [
+            "web_search(\"best ssd 2026\")",
+            "web_search: best ssd",
+            "cd notes && web_search best ssd",
+            "bash -c \"web_search best ssd\"",
+            "sh -lc 'todo_write {}'",
+            "echo hi | web_search",
+            "; web_search best ssd",
+            "ls\nsearch_replace a b",
+            "true || \"web_fetch\" https://example.com",
+            "$(web_search best ssd)",
+        ] {
+            let why = super::names_a_tool(typed).unwrap_or_default();
+            assert!(
+                why.contains("is a tool you call directly"),
+                "{typed}: {why}"
+            );
+        }
+        // A real program whose name only contains a tool's name still runs.
+        for real in [
+            "./web_search.sh best ssd",
+            "web_search.sh best ssd",
+            "my_web_search best ssd",
+            "web_searcher best ssd",
+            "/usr/local/bin/web_search_cli q",
+            "grep -rn web_search src && echo done",
+            "git log --grep=\"web_search\"",
+            "bash -c \"echo web_search\"",
+            "cargo test web_search | tail -5",
+        ] {
+            assert_eq!(super::names_a_tool(real), None, "{real}");
+        }
+    }
+
+    #[test]
+    fn a_lone_lookup_typed_into_the_shell_becomes_the_tool_call() {
+        let search = |q: &str| Some(("web_search", serde_json::json!({ "query": q })));
+        for (typed, want) in [
+            ("web_search \"best ssd 2026\"", search("best ssd 2026")),
+            ("web_search best ssd 2026", search("best ssd 2026")),
+            ("web_search(\"best ssd\")", search("best ssd")),
+            ("web_search(query=\"best ssd\")", search("best ssd")),
+            ("web_search: best ssd", search("best ssd")),
+            ("web_search --query 'best ssd'", search("best ssd")),
+            ("web_search '{\"query\": \"best ssd\"}'", search("best ssd")),
+            ("bash -c \"web_search 'best ssd'\"", search("best ssd")),
+            ("  web_search what is rust?  ", search("what is rust?")),
+            (
+                "web_fetch https://example.com/a?b=1",
+                Some((
+                    "web_fetch",
+                    serde_json::json!({ "url": "https://example.com/a?b=1" }),
+                )),
+            ),
+        ] {
+            assert_eq!(super::lookup_in_shell(typed), want, "{typed}");
+        }
+        // Anything more than the one lookup, or an argument that would need a
+        // shell to read, is turned back instead.
+        for typed in [
+            "cd notes && web_search best ssd",
+            "web_search best ssd | head -3",
+            "web_search $(cat query.txt)",
+            "web_search \"$HOME\"",
+            "web_search best ssd > hits.txt",
+            "web_search `whoami`",
+            "web_search",
+            "web_search \"\"",
+            "web_fetch example.com",
+            "web_fetch file:///etc/passwd",
+            "web_fetch https://a.example https://b.example",
+            "todo_write '{}'",
+            "search_replace a b",
+            "./web_search.sh best ssd",
+            "ls -la",
+        ] {
+            assert_eq!(super::lookup_in_shell(typed), None, "{typed}");
         }
     }
 
