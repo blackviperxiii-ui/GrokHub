@@ -72,6 +72,15 @@ fn git(dir: &Path, args: &[&str]) -> Result<(i32, String), String> {
     Ok((code, String::from_utf8_lossy(&out.stdout).into_owned()))
 }
 
+/// `origin`'s URL, if this folder is a repo with that remote.
+pub fn origin_url(dir: &Path) -> Option<String> {
+    let Ok((0, out)) = git(dir, &["remote", "get-url", "origin"]) else {
+        return None;
+    };
+    let url = out.trim();
+    (!url.is_empty()).then(|| url.to_string())
+}
+
 /// The workspace's repo, or `is_repo: false` when it isn't one.
 pub fn repo(dir: &Path) -> Repo {
     let mut repo = Repo {

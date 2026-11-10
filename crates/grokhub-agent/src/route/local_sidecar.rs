@@ -1106,6 +1106,8 @@ fn load(config_dir: &Path, want: Want) -> Result<Busy, String> {
             binary: paths.binary,
             model,
         };
+        let measured = paths.model.clone();
+        let cached = super::local_warm::resident_pct(&measured);
         let (started, model, stand_in) = start_or_stand_in(config_dir, paths, stand_in);
         let mut slot = global_slot().lock().expect("sidecar global");
         STARTING.store(false, Ordering::SeqCst);
@@ -1121,7 +1123,11 @@ fn load(config_dir: &Path, want: Want) -> Result<Busy, String> {
                     learned_idle(config_dir, &side.model, side.idle_unload_secs);
                 let name = model.file_name().map(|n| n.to_string_lossy());
                 let ms = u64::try_from(began.elapsed().as_millis()).unwrap_or(u64::MAX);
-                health::log_to(config_dir, "start", name.as_deref(), Some(ms));
+                // A stand-in loaded another file than the one measured.
+                let cached = cached.filter(|_| model == measured);
+                let detail = super::local_warm::start_detail(name.as_deref(), cached);
+                health::log_to(config_dir, "start", detail.as_deref(), Some(ms));
+                super::local_warm::note_loaded();
                 set_last_error(None);
                 let busy = side.busy();
                 *slot = Some(side);

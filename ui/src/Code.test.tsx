@@ -8,12 +8,15 @@ const api = vi.hoisted(() => ({
   codeRepo: vi.fn<() => Promise<CodeRepo>>(),
   codeDiff: vi.fn<(path: string) => Promise<CodeDiff>>(),
   codeBuiltins: vi.fn<() => Promise<CodeBuiltin[]>>(),
+  codeTestPlan: vi.fn<(command?: string | null) => Promise<{ command: string; needsConfirm: boolean; remembered: string | null }>>(),
+  codeTestRun: vi.fn<(command: string, confirmed: boolean) => Promise<{ command: string; exit: number; output: string; cut: boolean }>>(),
+  onCodeRun: vi.fn(() => Promise.resolve(() => {})),
 }));
 
 vi.mock("./api", () => api);
 vi.mock("./Chat", () => ({ newConversationId: () => "shell-new" }));
 
-import { Code, CODE_BUILTINS, CODE_CLEAN, CODE_NEXT, CODE_NOT_REPO, CODE_REVIEW_PROMPT, overrideLabel } from "./Code";
+import { Code, CODE_BUILTINS, CODE_CLEAN, CODE_CONFIRM, CODE_NEXT, CODE_NOT_REPO, CODE_REVIEW_PROMPT, CODE_TESTS, overrideLabel } from "./Code";
 
 function repo(over: Partial<CodeRepo> = {}): CodeRepo {
   return {
@@ -38,6 +41,12 @@ describe("Code tab", () => {
     api.codeDiff.mockReset();
     api.codeBuiltins.mockReset();
     api.codeBuiltins.mockResolvedValue([]);
+    api.codeTestPlan.mockReset();
+    api.codeTestRun.mockReset();
+    api.onCodeRun.mockReset();
+    api.onCodeRun.mockResolvedValue(() => {});
+    api.codeTestPlan.mockResolvedValue({ command: "cargo test", needsConfirm: true, remembered: null });
+    api.codeTestRun.mockResolvedValue({ command: "cargo test", exit: 0, output: "test ok\n", cut: false });
   });
 
   it("shows the branch and changed files, and opens a diff", async () => {
@@ -118,11 +127,13 @@ describe("Code tab", () => {
     expect(list.querySelectorAll("li button").length).toBe(5);
     expect(screen.getByRole("button", { name: /^qa-walkthrough/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^follow-through/ })).toBeInTheDocument();
-    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+    const skills = screen.getByRole("list", { name: CODE_BUILTINS });
+    expect(skills.querySelector('[role="switch"]')).toBeNull();
+    expect(skills.querySelector("textarea, input, [contenteditable]")).toBeNull();
     expect(screen.queryByRole("button", { name: /open folder/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /edit/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     expect(CODE_NEXT).not.toMatch(/skill/i);
+    expect(CODE_NEXT).not.toMatch(/\btests\b/i);
   });
 
   it("opens a built-in and shows its body", async () => {
@@ -143,5 +154,54 @@ describe("Code tab", () => {
     render(<Code onTask={() => {}} />);
     expect(await screen.findByText(overrideLabel(over))).toBeInTheDocument();
     expect(screen.getByText("overridden by project skill follow-through")).toBeInTheDocument();
+  });
+
+  it("shows the exact command on the first-run confirm card", async () => {
+    api.codeRepo.mockResolvedValue(repo({ files: [] }));
+    render(<Code onTask={() => {}} />);
+    expect(await screen.findByRole("heading", { name: CODE_TESTS })).toBeInTheDocument();
+    expect(await screen.findByLabelText("Test command")).toHaveValue("cargo test");
+    await userEvent.click(screen.getByRole("button", { name: "Run tests" }));
+    expect(await screen.findByRole("group", { name: CODE_CONFIRM })).toBeInTheDocument();
+    expect(screen.getByLabelText("Command to run")).toHaveTextContent("cargo test");
+    expect(api.codeTestRun).not.toHaveBeenCalled();
+  });
+
+  it("runs after confirm and does not ask again for the same command", async () => {
+    api.codeRepo.mockResolvedValue(repo({ files: [] }));
+    api.codeTestPlan
+      .mockResolvedValueOnce({ command: "cargo test", needsConfirm: true, remembered: null })
+      .mockResolvedValueOnce({ command: "cargo test", needsConfirm: true, remembered: null })
+      .mockResolvedValueOnce({ command: "cargo test", needsConfirm: false, remembered: "cargo test" })
+      .mockResolvedValueOnce({ command: "cargo test", needsConfirm: false, remembered: "cargo test" })
+      .mockResolvedValue({ command: "cargo test", needsConfirm: false, remembered: "cargo test" });
+    render(<Code onTask={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Run tests" }));
+    const card = await screen.findByRole("group", { name: CODE_CONFIRM });
+    await userEvent.click(card.querySelector("button")!);
+    expect(api.codeTestRun).toHaveBeenCalledWith("cargo test", true);
+    expect(await screen.findByLabelText("Test output")).toHaveTextContent("test ok");
+    expect(screen.queryByRole("group", { name: CODE_CONFIRM })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Run tests" }));
+    expect(api.codeTestRun).toHaveBeenCalledWith("cargo test", false);
+    expect(screen.queryByRole("group", { name: CODE_CONFIRM })).not.toBeInTheDocument();
+  });
+
+  it("asks again when the command changes", async () => {
+    api.codeRepo.mockResolvedValue(repo({ files: [] }));
+    api.codeTestPlan.mockResolvedValue({ command: "cargo test", needsConfirm: false, remembered: "cargo test" });
+    render(<Code onTask={() => {}} />);
+    const field = await screen.findByLabelText("Test command");
+    await userEvent.clear(field);
+    await userEvent.type(field, "cargo test -- --ignored");
+    api.codeTestPlan.mockResolvedValue({
+      command: "cargo test -- --ignored",
+      needsConfirm: true,
+      remembered: "cargo test",
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Run tests" }));
+    expect(await screen.findByLabelText("Command to run")).toHaveTextContent("cargo test -- --ignored");
+    expect(api.codeTestRun).not.toHaveBeenCalled();
   });
 });
