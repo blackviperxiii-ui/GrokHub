@@ -1,0 +1,2 @@
+- Run on a proactive card that found something now works in the background on the hidden Background chat and leaves its receipt on the card, instead of opening a new "Discuss" chat tab. Its steps are still recorded as proactive, not as yours.
+- A proactive step that needs your yes still stops at the approval card first, and nothing runs until you approve. With approvals set to Ask, a card with a report keeps its own chat, where every step asks you.
