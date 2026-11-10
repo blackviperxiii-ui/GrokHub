@@ -596,7 +596,8 @@ pub use print_alerts::{
 };
 pub use proactive_auto::{
     ceiling_allows, AccessTier, AutoAct, AutoBudget, AutoCandidate, CeilingCtx, CeilingMiss,
-    PillMode, AUTO_CONFIDENCE_MIN, AUTO_PER_DAY, AUTO_P_MIND_MAX, AUTO_REVERSIBILITY,
+    PillMode, AUTO_CONFIDENCE_MIN, AUTO_PER_DAY, AUTO_P_MIND_MAX, AUTO_RESTORE_PER_DAY,
+    AUTO_REVERSIBILITY,
 };
 pub use project::{
     add_to_folder, clean_project_name, create_folder, create_project, drop_node, drop_selected,
