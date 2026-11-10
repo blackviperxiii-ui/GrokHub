@@ -15,8 +15,10 @@
 use std::path::{Path, PathBuf};
 
 use grokhub_core::local_setup::{self, LocalModel};
+use grokhub_core::local_skills::{self, TaskKind};
 
-use super::local_scale::{self, Need, Scale};
+use super::local_scale::{self, Need, Room, Scale};
+use super::local_task::Marks;
 
 /// Why a model other than the Settings pick runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,12 +35,21 @@ pub enum StandIn {
     Tight,
     /// The computer is free and the task is hard: a bigger model.
     Performance,
+    /// Dynamic is on and another model on disk is clearly better at this
+    /// kind of task.
+    BestFor(TaskKind),
 }
 
 impl StandIn {
     /// The running-model row that says why.
-    pub fn line(self) -> &'static str {
-        match self {
+    pub fn line(self) -> String {
+        if let StandIn::BestFor(kind) = self {
+            return format!(
+                "Running a model that's stronger at {} than your pick. Turn off Dynamic to always use your pick.",
+                kind.words()
+            );
+        }
+        let line = match self {
             StandIn::LowBattery => {
                 "Running a smaller model while the battery is low. Your pick comes back once it charges."
             }
@@ -57,9 +68,16 @@ impl StandIn {
             StandIn::Performance => {
                 "Running a bigger model than your pick for hard tasks while the computer is free. It steps back down when the computer gets busy."
             }
-        }
+            StandIn::BestFor(_) => unreachable!("handled above"),
+        };
+        line.to_string()
     }
 }
+
+/// A model must beat the pick (and what runs) by this many points on the
+/// task's score before it swaps in: a load costs time, so the gain has to
+/// be worth it.
+pub const BEST_MARGIN: u8 = 8;
 
 /// The least time between two swaps of a running model, so a battery reading
 /// that flips back and forth doesn't reload the model each time.
@@ -103,6 +121,13 @@ pub struct Now<'a> {
     pub need: Need,
     /// The governor and the room the machine has.
     pub scale: Scale,
+    /// The kind of task this request is, when it's a reply someone reads.
+    pub task: Option<TaskKind>,
+    /// Dynamic is on: the best model on disk per task. Off, the pick answers
+    /// everything and only a game, a low battery or too little memory swaps.
+    pub dynamic: bool,
+    /// What the router learned about each model's misses per task.
+    pub marks: &'a Marks,
 }
 
 /// The model the next load should run.
@@ -130,7 +155,10 @@ pub fn plan(n: Now<'_>) -> Plan {
         (Some(t), Some(r)) => t.run_mb > r.run_mb,
         _ => false,
     };
-    if bigger {
+    // A model picked for the task waits for the chat to go quiet too, so the
+    // reply in hand never sits through a reload (the caller loads it now
+    // when the file is already in memory).
+    if bigger || matches!(stand_in, Some(StandIn::BestFor(_))) {
         return Plan::Later {
             model: target,
             stand_in,
@@ -151,7 +179,27 @@ fn stays_big(
     why: Option<StandIn>,
     target_why: Option<StandIn>,
 ) -> bool {
-    if why != Some(StandIn::Performance) || target_why.is_some() {
+    if target_why.is_some() || n.scale.gaming {
+        return false;
+    }
+    if let Some(StandIn::BestFor(_)) = why {
+        // A model picked for the last task stays for everyday chat in
+        // between, while it still fits: back and forth would cost two loads.
+        let (Some(m), Some(home)) = (catalog_for(running), catalog_for(n.home)) else {
+            return false;
+        };
+        return n.dynamic
+            && match n.scale.room {
+                Some(room) if m.run_mb > home.run_mb => {
+                    !n.scale.saving
+                        && local_scale::performance_ready(&room)
+                        && local_scale::fits(m, &room, m.run_mb, 0)
+                }
+                Some(room) => local_scale::fits(m, &room, m.run_mb, 0),
+                None => m.run_mb <= home.run_mb,
+            };
+    }
+    if why != Some(StandIn::Performance) {
         return false;
     }
     let (Some(room), Some(m)) = (n.scale.room, catalog_for(running)) else {
@@ -203,8 +251,19 @@ fn target(n: &Now<'_>) -> (PathBuf, Option<StandIn>) {
         .loaded
         .and_then(|(p, _)| catalog_for(p))
         .map_or(0, |m| m.run_mb);
+    if n.dynamic {
+        if let Some(kind) = n.task {
+            if let Some(p) = best_for(n, home, kind, resident) {
+                return p;
+            }
+        }
+    }
     if let Some(room) = n.scale.room {
-        if n.need == Need::Hard && !n.scale.saving && local_scale::performance_ready(&room) {
+        if n.dynamic
+            && n.need == Need::Hard
+            && !n.scale.saving
+            && local_scale::performance_ready(&room)
+        {
             let bigger = n
                 .on_disk
                 .iter()
@@ -231,7 +290,7 @@ fn target(n: &Now<'_>) -> (PathBuf, Option<StandIn>) {
             }
         }
     }
-    if n.scale.saving {
+    if n.scale.saving && n.dynamic {
         let lighter = match n.need {
             Need::Hard => None,
             Need::Light | Need::Background => smallest(),
@@ -249,6 +308,76 @@ fn target(n: &Now<'_>) -> (PathBuf, Option<StandIn>) {
     (home_path, None)
 }
 
+/// `m`'s score for `kind`, less what the router learned about its misses.
+fn task_score(n: &Now<'_>, m: &LocalModel, kind: TaskKind) -> u8 {
+    local_skills::skill(m, kind).saturating_sub(n.marks.penalty(m.id, kind))
+}
+
+/// `m` can run now: a model bigger than the pick only while the computer is
+/// free and it fits with room to spare at a usable speed; any other one
+/// while it fits.
+fn may_run(
+    n: &Now<'_>,
+    home: &LocalModel,
+    m: &LocalModel,
+    room: Option<&Room>,
+    resident: u64,
+) -> bool {
+    match room {
+        Some(room) if m.run_mb > home.run_mb => {
+            !n.scale.saving
+                && local_scale::performance_ready(room)
+                && local_scale::fits(m, room, resident, local_scale::HEADROOM_MB)
+                && local_scale::est_tok_s(m, room, resident) >= local_scale::PERFORMANCE_FLOOR_TOK_S
+        }
+        Some(room) => local_scale::fits(m, room, resident, 0),
+        None => m.run_mb <= home.run_mb,
+    }
+}
+
+/// The model on disk best at `kind`, when it beats the pick by
+/// [`BEST_MARGIN`]. Everyday chat stays on the pick. What runs stays when
+/// it is within the margin of the best, so a run of similar asks doesn't
+/// reload.
+fn best_for(
+    n: &Now<'_>,
+    home: &LocalModel,
+    kind: TaskKind,
+    resident: u64,
+) -> Option<(PathBuf, Option<StandIn>)> {
+    if kind == TaskKind::Chat {
+        return None;
+    }
+    let room = n.scale.room.as_ref();
+    let home_score = task_score(n, home, kind);
+    let (best, best_path) = n
+        .on_disk
+        .iter()
+        .filter(|(m, _)| m.id != home.id)
+        .filter(|(m, _)| may_run(n, home, m, room, resident))
+        .max_by(|(a, _), (b, _)| {
+            task_score(n, a, kind)
+                .cmp(&task_score(n, b, kind))
+                // On a tie, the lighter one: it loads and runs faster.
+                .then(b.run_mb.cmp(&a.run_mb))
+        })?;
+    let best_score = task_score(n, best, kind);
+    if best_score < home_score.saturating_add(BEST_MARGIN) {
+        return None;
+    }
+    if let Some((running, why)) = n.loaded {
+        if matches!(why, None | Some(StandIn::BestFor(_))) {
+            if let Some(r) = catalog_for(running) {
+                if task_score(n, r, kind).saturating_add(BEST_MARGIN) > best_score {
+                    let why = (r.id != home.id).then_some(StandIn::BestFor(kind));
+                    return Some((running.to_path_buf(), why));
+                }
+            }
+        }
+    }
+    Some((best_path.clone(), Some(StandIn::BestFor(kind))))
+}
+
 /// The model to start when `failed` ran out of memory: the largest chat model
 /// on disk that needs less memory.
 pub fn out_of_memory_stand_in(
@@ -264,10 +393,13 @@ pub fn out_of_memory_stand_in(
 }
 
 /// The running-model row's mode: Gaming while a game holds the GPU,
-/// Performance while a bigger model runs for hard work, else Balanced.
-pub fn mode(stand_in: Option<StandIn>, scale: &Scale) -> local_scale::Mode {
+/// Performance while a bigger model runs for hard work, Fixed while Dynamic
+/// is off, else Balanced.
+pub fn mode(stand_in: Option<StandIn>, scale: &Scale, dynamic: bool) -> local_scale::Mode {
     if scale.gaming || stand_in == Some(StandIn::Gaming) {
         local_scale::Mode::Gaming
+    } else if !dynamic {
+        local_scale::Mode::Fixed
     } else if stand_in == Some(StandIn::Performance) {
         local_scale::Mode::Performance
     } else {

@@ -369,6 +369,14 @@ impl Cabin {
         if crate::cards::settings_action(ui, "Keep the model loaded", hint, action) {
             local_sidecar::set_keep_loaded(!live.kept_loaded);
         }
+        let dir = self.config_dir();
+        let dynamic = grokhub_agent::route::local_task::dynamic(&dir);
+        let (hint, action) = grokhub_agent::route::local_task::dynamic_row(dynamic);
+        if crate::cards::settings_action(ui, "Dynamic: best model per task", hint, action) {
+            if let Err(e) = grokhub_agent::route::local_task::set_dynamic(&dir, !dynamic) {
+                crate::cards::settings_note(ui, &e);
+            }
+        }
         if live.model.is_some() {
             if crate::cards::settings_action(ui, "Unload the model", UNLOAD_HINT, "Unload now") {
                 local_sidecar::stop_global();

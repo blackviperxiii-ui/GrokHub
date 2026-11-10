@@ -38,6 +38,8 @@ pub enum Mode {
     Balanced,
     Gaming,
     Performance,
+    /// Dynamic is off: the pick answers every task.
+    Fixed,
 }
 
 impl Mode {
@@ -52,6 +54,9 @@ impl Mode {
             }
             Mode::Performance => {
                 "Mode: Performance. The computer is free, so hard tasks get the biggest model that fits."
+            }
+            Mode::Fixed => {
+                "Mode: Your pick. Dynamic is off, so your pick answers every task. A game, a low battery or too little memory still swaps to a lighter one."
             }
         }
     }
