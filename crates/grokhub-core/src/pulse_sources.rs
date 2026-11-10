@@ -1869,8 +1869,9 @@ pub fn is_source_post(card: &UpdateCard) -> bool {
 }
 
 /// Saved Finds: posts kept with Save, newest first, in `{config}/saved-finds.json`.
+/// A file of their own: feed cleanup, expiry, archive and delete never read
+/// it, and nothing here drops a find. Only Remove from saved takes one out.
 pub const SAVED_FILE: &str = "saved-finds.json";
-pub const SAVED_MAX: usize = 200;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SavedFind {
@@ -1905,8 +1906,21 @@ pub fn save_find(list: &mut Vec<SavedFind>, find: SavedFind) -> bool {
         return false;
     }
     list.insert(0, find);
-    list.truncate(SAVED_MAX);
     true
+}
+
+/// Remove from saved. False when that link wasn't saved.
+pub fn remove_find(list: &mut Vec<SavedFind>, url: &str) -> bool {
+    let key = canonical_url(url);
+    let before = list.len();
+    list.retain(|f| canonical_url(&f.url) != key);
+    list.len() != before
+}
+
+/// Whether this link is already saved.
+pub fn is_saved(list: &[SavedFind], url: &str) -> bool {
+    let key = canonical_url(url);
+    list.iter().any(|f| canonical_url(&f.url) == key)
 }
 
 pub fn load_saved(path: &std::path::Path) -> Vec<SavedFind> {
@@ -2928,6 +2942,28 @@ mod tests {
             rank_with(std::slice::from_ref(&followed), &p, &bias, &known, NOW)[0].score,
             35
         );
+    }
+
+    #[test]
+    fn saved_finds_are_never_dropped_and_only_remove_takes_one_out() {
+        let mut list = Vec::new();
+        for i in 0..250 {
+            let find = SavedFind {
+                title: format!("Find {i}"),
+                url: format!("https://a.test/{i}"),
+                source_name: String::new(),
+                summary: String::new(),
+                because: None,
+                saved_ms: i,
+            };
+            assert!(save_find(&mut list, find));
+        }
+        assert_eq!(list.len(), 250, "no cap drops a saved find");
+        assert!(is_saved(&list, "https://www.a.test/0?utm_source=x"));
+        assert!(remove_find(&mut list, "https://a.test/0"));
+        assert!(!is_saved(&list, "https://a.test/0"));
+        assert!(!remove_find(&mut list, "https://a.test/0"));
+        assert_eq!(list.len(), 249);
     }
 
     #[test]

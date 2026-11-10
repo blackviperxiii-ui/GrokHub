@@ -867,6 +867,31 @@ export interface PulsePost {
   snooze: boolean;
   /** Offer Delete in the row (stale, repeat or finished card, or unsure). */
   delete: boolean;
+  /** Offer Save in the row: a source post with a link. */
+  save: boolean;
+  /** Already on the Saved page. */
+  saved: boolean;
+}
+
+/** A card kept with Save, on the Saved page. Stored apart from the feed
+ * (saved-finds.json), so feed cleanup never touches it. */
+export interface SavedFind {
+  title: string;
+  url: string;
+  sourceName: string;
+  summary: string;
+  because: string | null;
+  savedMs: number;
+}
+
+/** The Saved page: every saved card, newest first. */
+export function pulseSaved(): Promise<SavedFind[]> {
+  return invoke<SavedFind[]>("pulse_saved");
+}
+
+/** Remove from saved, the one action a saved card has. Returns what is left. */
+export function pulseUnsave(url: string): Promise<SavedFind[]> {
+  return invoke<SavedFind[]>("pulse_unsave", { url });
 }
 
 /** One update inside a digest card. */
@@ -983,7 +1008,8 @@ export type PulseAct =
   | "accept"
   | "moreLike"
   | "notInterested"
-  | "ignore";
+  | "ignore"
+  | "save";
 
 /** Today's local date for the ledger line, and the time Snooze counts from. */
 export function localDay(now: Date = new Date()) {
