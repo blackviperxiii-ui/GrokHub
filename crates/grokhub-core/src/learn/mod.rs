@@ -22,6 +22,7 @@
 //! [`signal::FLUSH_MS`], and nothing when nothing happened. On disk the
 //! engine stays under [`store::DISK_BUDGET`].
 
+pub mod backup;
 pub mod belief;
 pub mod decide;
 pub mod habit;
@@ -157,6 +158,34 @@ impl Engine {
         store::forget_all(&self.config_dir)?;
         decide::with_state(&self.config_dir, decide::State::forget_learned);
         Ok(())
+    }
+
+    /// Writes everything learned to the backup file and returns its path.
+    pub fn export(&mut self, now_ms: u64) -> Result<PathBuf, String> {
+        self.flush(now_ms);
+        backup::export(&self.config_dir, now_ms)
+    }
+
+    /// Takes the backup file in place of what was learned here. Returns how
+    /// many lines came in. Signals still waiting belong to what is being
+    /// replaced, so they are saved first and not replayed after.
+    pub fn import(&mut self, now_ms: u64) -> Result<usize, String> {
+        self.flush(now_ms);
+        let lines = backup::import(&self.config_dir, now_ms)?;
+        self.reload();
+        Ok(lines)
+    }
+
+    /// Puts back what was held before the last import.
+    pub fn restore(&mut self) -> Result<(), String> {
+        backup::restore(&self.config_dir)?;
+        self.reload();
+        Ok(())
+    }
+
+    fn reload(&mut self) {
+        self.unsaved.clear();
+        self.beliefs = store::load_beliefs(&self.config_dir);
     }
 
     /// The config folder this engine keeps its files under.

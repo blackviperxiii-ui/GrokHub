@@ -2,7 +2,7 @@
 
 ## Owns
 - One stream of what happened (`Signal`: a time, a `Kind`, a `Subject` id, a number) and one store of what the app concluded (`Belief`: counters or a running average, a confidence, the user's Forget and Wrong).
-- The files under `{config}/learn` (signal log, one rotated copy, belief file, lock), local only. The one engine a running app shares (`hub`), and what the chip, card and run logs mean as signals (`sources`).
+- The files under `{config}/learn` (signal log, one rotated copy, belief file, lock), local only. The one engine a running app shares (`hub`), and what the chip, card and run logs mean as signals (`sources`). Backup and move (`backup.rs`): `/learned backup` writes `{config}/learned-backup.json` (beliefs and decision state), `/learned import` takes it and keeps one restore point (`learn/restore.json`), `/learned restore` puts that back.
 
 ## Quick commands
 - `cargo test -p grokhub-core --lib learn:: --locked`

@@ -5,6 +5,8 @@
 //!   and a new file starts.
 //! - `beliefs.json`: every belief, replaced whole through a rename.
 //! - `decisions.json`: the decision engine's dials, rule counts and log.
+//! - `restore.json`: what was held before the last backup import
+//!   ([`super::backup`]), until it is put back or everything is forgotten.
 //! - `paused`: an empty file that is there while the user has learning
 //!   paused, so both apps on the folder stop together.
 //! - `learn.lock`: held while the beliefs are read, changed and written, so
@@ -65,7 +67,7 @@ pub fn append_signals(config_dir: &Path, batch: &[Signal]) -> std::io::Result<()
 pub fn forget_all(config_dir: &Path) -> Result<(), String> {
     let _lock = hold_lock(config_dir);
     let dir = dir(config_dir);
-    for name in [SIGNALS, SIGNALS_OLD, BELIEFS] {
+    for name in [SIGNALS, SIGNALS_OLD, BELIEFS, super::backup::RESTORE] {
         match fs::remove_file(dir.join(name)) {
             Ok(()) => {}
             Err(e) if e.kind() == ErrorKind::NotFound => {}

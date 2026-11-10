@@ -742,8 +742,12 @@ fn a_learned_command_names_one_belief_or_all() {
     );
     assert_eq!(Command::parse("forget All"), Ok(Command::ForgetAll));
     assert_eq!(Command::parse("Report"), Ok(Command::Report));
+    assert_eq!(Command::parse("backup"), Ok(Command::Backup));
+    assert_eq!(Command::parse("import"), Ok(Command::Import));
+    assert_eq!(Command::parse("restore"), Ok(Command::Restore));
     for bad in [
         "report now",
+        "import everything",
         "forget",
         "wrong",
         "forget suggestion",
@@ -1385,4 +1389,84 @@ fn a_folder_new_to_the_engine_gets_one_head_start_from_the_old_logs() {
             no: 0.0
         }
     );
+}
+
+#[test]
+fn a_backup_moves_what_was_learned_to_another_folder_and_the_import_can_be_put_back() {
+    use super::backup::{self, BAD_BACKUP, NEWER_BACKUP, NO_BACKUP, NO_RESTORE, RESTORE};
+    use super::decide::{Area, Dial};
+    let pick = |id: &str| Signal::new(T0, Kind::Picked, subject(id));
+
+    // The old PC: two picks of one chip, Settings on offer only.
+    let old = temp("backup-old");
+    let mut a = Engine::open(&old);
+    a.record(pick("chip:brief"));
+    a.record(pick("chip:brief"));
+    decide::with_state(&old, |s| s.set_dial(Area::Settings, Dial::Offer));
+    // Nothing was saved yet: the backup saves what waits first.
+    let file = a.export(T0).unwrap();
+    assert_eq!(file, old.join("learned-backup.json"));
+    let saved: backup::Backup = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!((saved.version, saved.made_ms), (1, T0));
+    assert_eq!(
+        saved.beliefs.get(&subject("chip:brief")).unwrap().shape,
+        Shape::Rate { yes: 2.0, no: 0.0 }
+    );
+
+    // The new PC learned one thing of its own, still unsaved.
+    let new = temp("backup-new");
+    let mut b = Engine::open(&new);
+    assert_eq!(b.import(T0), Err(NO_BACKUP.to_string()));
+    b.record(pick("chip:patch-notes"));
+    fs::copy(&file, new.join("learned-backup.json")).unwrap();
+    assert_eq!(b.import(T0 + 1), Ok(1));
+    // It now holds what the old PC held, and nothing of its own.
+    for beliefs in [b.beliefs().clone(), store::load_beliefs(&new)] {
+        assert_eq!(beliefs, saved.beliefs);
+    }
+    assert_eq!(decide::load(&new).dial(Area::Settings), Dial::Offer);
+    // A later save does not bring the replaced line back.
+    b.flush(T0 + 2);
+    assert_eq!(store::load_beliefs(&new), saved.beliefs);
+
+    // Putting it back: the new PC's own line and its own dial, once.
+    assert_eq!(b.restore(), Ok(()));
+    assert_eq!(b.beliefs().len(), 1);
+    assert_eq!(
+        store::load_beliefs(&new)
+            .get(&subject("chip:patch-notes"))
+            .unwrap()
+            .shape,
+        Shape::Rate { yes: 1.0, no: 0.0 }
+    );
+    assert_eq!(decide::load(&new).dial(Area::Settings), Dial::Act);
+    assert!(!store::dir(&new).join(RESTORE).exists());
+    assert_eq!(b.restore(), Err(NO_RESTORE.to_string()));
+
+    // A file that can't be read, or from a newer app, changes nothing and
+    // leaves no restore point.
+    let before = store::load_beliefs(&new);
+    for (text, why) in [
+        ("not a backup", BAD_BACKUP),
+        (r#"{"version":1,"made_ms":"soon"}"#, BAD_BACKUP),
+        (
+            r#"{"version":2,"made_ms":1,"beliefs":{},"decisions":{},"extra":true}"#,
+            NEWER_BACKUP,
+        ),
+    ] {
+        fs::write(new.join("learned-backup.json"), text).unwrap();
+        assert_eq!(b.import(T0 + 3), Err(why.to_string()), "{text}");
+        assert_eq!(store::load_beliefs(&new), before);
+        assert!(!store::dir(&new).join(RESTORE).exists());
+    }
+
+    // Forget everything takes the restore point with it. The backup file is
+    // the user's own and stays.
+    fs::copy(&file, new.join("learned-backup.json")).unwrap();
+    assert_eq!(b.import(T0 + 4), Ok(1));
+    assert!(store::dir(&new).join(RESTORE).exists());
+    b.forget_all().unwrap();
+    assert!(!store::dir(&new).join(RESTORE).exists());
+    assert_eq!(b.restore(), Err(NO_RESTORE.to_string()));
+    assert!(new.join("learned-backup.json").exists());
 }

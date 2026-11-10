@@ -389,9 +389,15 @@ pub enum Command {
     Goals(Vec<Goal>),
     /// The fault report for the developers, to read. Nothing is sent.
     Report,
+    /// Write everything learned to the backup file.
+    Backup,
+    /// Take the backup file in place of what was learned here.
+    Import,
+    /// Put back what was held before the last import.
+    Restore,
 }
 
-pub const USAGE: &str = "Use `/learned`, `/learned forget <id>`, `/learned wrong <id>`, `/learned always <id>`, `/learned forget all`, `/learned pause`, `/learned resume`, `/learned decisions`, `/learned trust <area> <watch|offer|act>`, `/learned goals <goal> ...` or `/learned report`. The id is the code at the end of each line.";
+pub const USAGE: &str = "Use `/learned`, `/learned forget <id>`, `/learned wrong <id>`, `/learned always <id>`, `/learned forget all`, `/learned pause`, `/learned resume`, `/learned decisions`, `/learned trust <area> <watch|offer|act>`, `/learned goals <goal> ...`, `/learned report`, `/learned backup`, `/learned import` or `/learned restore`. The id is the code at the end of each line.";
 
 impl Command {
     pub fn parse(rest: &str) -> Result<Self, String> {
@@ -425,6 +431,9 @@ impl Command {
             (None, _) => Ok(Command::List),
             (Some("decisions"), None) => Ok(Command::Decisions),
             (Some("report"), None) => Ok(Command::Report),
+            (Some("backup"), None) => Ok(Command::Backup),
+            (Some("import"), None) => Ok(Command::Import),
+            (Some("restore"), None) => Ok(Command::Restore),
             (Some("forget"), Some(all)) if all.eq_ignore_ascii_case("all") => {
                 Ok(Command::ForgetAll)
             }
@@ -461,6 +470,24 @@ pub fn run(rest: &str, now_ms: u64) -> String {
         Command::List => None,
         Command::Decisions => Some(super::hub::decisions_text(now_ms)),
         Command::Report => Some(report_text(now_ms)),
+        Command::Backup => Some(match super::hub::export() {
+            Ok(path) => format!(
+                "Saved everything the app learned to `{}`. To move it, copy that file into the config folder on the other PC and run `/learned import` there.",
+                path.display()
+            ),
+            Err(err) => format!("Couldn't save the backup: {err}"),
+        }),
+        Command::Import => Some(match super::hub::import() {
+            Ok(lines) => format!(
+                "Took {lines} learned line{} from the backup. What was here before is kept: `/learned restore` puts it back.",
+                if lines == 1 { "" } else { "s" }
+            ),
+            Err(err) => err,
+        }),
+        Command::Restore => Some(match super::hub::restore() {
+            Ok(()) => "Put back what the app had learned before the import.".to_string(),
+            Err(err) => err,
+        }),
         Command::Trust(area, dial) => {
             super::hub::set_dial(*area, *dial);
             Some(format!(

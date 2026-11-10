@@ -206,6 +206,33 @@ pub fn forget_all() -> Result<(), String> {
     }
 }
 
+/// Writes the backup file and returns where it is.
+pub fn export() -> Result<std::path::PathBuf, String> {
+    match engine() {
+        Some(mut e) => e.export(crate::now_ms()),
+        None => Err(NOT_STARTED.to_string()),
+    }
+}
+
+/// Takes the backup file in place of what was learned. Returns the lines
+/// that came in.
+pub fn import() -> Result<usize, String> {
+    match engine() {
+        Some(mut e) => e.import(crate::now_ms()),
+        None => Err(NOT_STARTED.to_string()),
+    }
+}
+
+/// Puts back what was held before the last import.
+pub fn restore() -> Result<(), String> {
+    match engine() {
+        Some(mut e) => e.restore(),
+        None => Err(NOT_STARTED.to_string()),
+    }
+}
+
+pub const NOT_STARTED: &str = "Learning isn't running in this app.";
+
 /// The usage counts auto setup reads. All zero before [`start`].
 pub fn auto_usage(now_ms: u64) -> crate::autotune::rules::Usage {
     read(|e| super::setup::usage(e.beliefs(), now_ms)).unwrap_or_default()
