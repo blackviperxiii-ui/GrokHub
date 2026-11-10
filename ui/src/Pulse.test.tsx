@@ -39,6 +39,8 @@ import {
   IGNORED_NOTE,
   MORE_LIKE_NOTE,
   NOT_INTERESTED_NOTE,
+  DWELL_MS,
+  DWELL_RATIO,
   PAGE_SIZE,
   Pulse,
   REFRESH_MS,
@@ -94,6 +96,56 @@ const PAGE: PulsePage = {
   ideas: [{ label: "Productivity", ideas: [IDEA] }],
   note: "",
 };
+
+
+type IoEntry = { target: Element; isIntersecting: boolean; intersectionRatio: number };
+
+class MockIO {
+  cb: (entries: IoEntry[]) => void;
+  els = new Set<Element>();
+  constructor(cb: (entries: IoEntry[]) => void, _opts?: IntersectionObserverInit) {
+    this.cb = cb;
+    observers.push(this);
+  }
+  observe(el: Element) {
+    this.els.add(el);
+  }
+  unobserve(el: Element) {
+    this.els.delete(el);
+  }
+  disconnect() {
+    this.els.clear();
+  }
+  trigger(el: Element, ratio: number) {
+    this.cb([{ target: el, isIntersecting: ratio > 0, intersectionRatio: ratio }]);
+  }
+}
+
+let observers: MockIO[] = [];
+
+function installMockIO() {
+  observers = [];
+  vi.stubGlobal("IntersectionObserver", MockIO);
+}
+
+function trigger(el: Element, ratio: number) {
+  for (const o of observers) {
+    if (o.els.has(el)) o.trigger(el, ratio);
+  }
+}
+
+function setHidden(hidden: boolean) {
+  Object.defineProperty(document, "visibilityState", {
+    configurable: true,
+    get: () => (hidden ? "hidden" : "visible"),
+  });
+  Object.defineProperty(document, "hidden", {
+    configurable: true,
+    get: () => hidden,
+  });
+  document.dispatchEvent(new Event("visibilitychange"));
+}
+
 
 describe("Pulse", () => {
   beforeEach(() => {
@@ -802,5 +854,85 @@ describe("Pulse", () => {
     await userEvent.click(items[0]);
     expect(api.pulseUnsave).toHaveBeenCalledWith("https://blog.rust-lang.org/1.99.html");
     expect(await screen.findByText(/Nothing saved yet/)).toBeInTheDocument();
+  });
+
+  it("sends dwell after 8000 ms at least 60% visible, not at 7999", async () => {
+    installMockIO();
+    api.getPulse.mockResolvedValue(PAGE);
+    api.pulseAct.mockResolvedValue(PAGE);
+    render(<Pulse onRun={() => {}} />);
+    const card = await screen.findByRole("listitem", { name: TITLE });
+    vi.useFakeTimers();
+    try {
+      trigger(card, DWELL_RATIO);
+      await vi.advanceTimersByTimeAsync(7999);
+      expect(api.pulseAct).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(api.pulseAct).toHaveBeenCalledWith("post-1", "dwell");
+      expect(api.pulseAct).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resets the dwell timer on scroll-out", async () => {
+    installMockIO();
+    api.getPulse.mockResolvedValue(PAGE);
+    api.pulseAct.mockResolvedValue(PAGE);
+    render(<Pulse onRun={() => {}} />);
+    const card = await screen.findByRole("listitem", { name: TITLE });
+    vi.useFakeTimers();
+    try {
+      trigger(card, DWELL_RATIO);
+      await vi.advanceTimersByTimeAsync(4000);
+      trigger(card, 0);
+      trigger(card, DWELL_RATIO);
+      await vi.advanceTimersByTimeAsync(7999);
+      expect(api.pulseAct).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(api.pulseAct).toHaveBeenCalledWith("post-1", "dwell");
+      expect(api.pulseAct).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a hidden document sends nothing", async () => {
+    installMockIO();
+    api.getPulse.mockResolvedValue(PAGE);
+    api.pulseAct.mockResolvedValue(PAGE);
+    render(<Pulse onRun={() => {}} />);
+    const card = await screen.findByRole("listitem", { name: TITLE });
+    vi.useFakeTimers();
+    try {
+      setHidden(true);
+      trigger(card, DWELL_RATIO);
+      await vi.advanceTimersByTimeAsync(DWELL_MS);
+      expect(api.pulseAct).not.toHaveBeenCalled();
+      trigger(card, 0);
+      setHidden(false);
+      trigger(card, DWELL_RATIO);
+      await vi.advanceTimersByTimeAsync(4000);
+      setHidden(true);
+      await vi.advanceTimersByTimeAsync(DWELL_MS);
+      expect(api.pulseAct).not.toHaveBeenCalled();
+    } finally {
+      setHidden(false);
+      vi.useRealTimers();
+    }
+  });
+
+  it("sends nothing without IntersectionObserver", async () => {
+    api.getPulse.mockResolvedValue(PAGE);
+    api.pulseAct.mockResolvedValue(PAGE);
+    render(<Pulse onRun={() => {}} />);
+    expect(await screen.findByRole("listitem", { name: TITLE })).toBeInTheDocument();
+    vi.useFakeTimers();
+    try {
+      await vi.advanceTimersByTimeAsync(DWELL_MS);
+      expect(api.pulseAct).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -49,6 +49,8 @@ pub enum Reaction {
     Snooze,
     /// Removed for good: a little against what it is about.
     Delete,
+    /// The card stayed on screen long enough to count as a look.
+    Dwell,
 }
 
 impl Reaction {
@@ -61,6 +63,7 @@ impl Reaction {
             Self::Engage => (1.0, 0.5),
             Self::Snooze => (1.0, 0.15),
             Self::Delete => (-1.0, 0.3),
+            Self::Dwell => (1.0, 0.25),
         }
     }
 }

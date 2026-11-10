@@ -1011,7 +1011,8 @@ export type PulseAct =
   | "moreLike"
   | "notInterested"
   | "ignore"
-  | "save";
+  | "save"
+  | "dwell";
 
 /** Today's local date for the ledger line, and the time Snooze counts from. */
 export function localDay(now: Date = new Date()) {

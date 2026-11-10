@@ -33,6 +33,7 @@ pub fn taste<'a>(
         Reaction::Like => Kind::Liked,
         Reaction::Dislike => Kind::Disliked,
         Reaction::Engage => Kind::Used,
+        Reaction::Dwell => Kind::Used,
         Reaction::Snooze => Kind::Picked,
         Reaction::Delete => Kind::Declined,
     };

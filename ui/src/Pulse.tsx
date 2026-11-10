@@ -34,6 +34,9 @@ export const IGNORED_NOTE = "Hidden for now.";
 export const REFRESH_MS = 60_000;
 /** Posts shown at first, and added each time the list's end scrolls into view. */
 export const PAGE_SIZE = 10;
+/** A dwell counts after the row stays this visible for this long, straight. */
+export const DWELL_MS = 8000;
+export const DWELL_RATIO = 0.6;
 /** After a save, how often and how many times to look for the new post. */
 const POLL_MS = 4000;
 const POLL_TRIES = 8;
@@ -94,6 +97,68 @@ function Instructions({ onClose, onSaved }: { onClose: () => void; onSaved: () =
   );
 }
 
+/** Watch feed rows and send a quiet dwell after 8 s at ≥60% visible.
+ * Nothing while the document is hidden, and nothing without IntersectionObserver. */
+function useFeedDwell(listRef: { current: HTMLUListElement | null }, idsKey: string, enabled: boolean) {
+  const sent = useRef(new Set<string>());
+  useEffect(() => {
+    const root = listRef.current;
+    if (!enabled || !root || typeof IntersectionObserver === "undefined") return;
+    const timers = new Map<string, ReturnType<typeof setTimeout>>();
+    const visible = new Set<string>();
+    const stop = (id: string) => {
+      const t = timers.get(id);
+      if (t !== undefined) clearTimeout(t);
+      timers.delete(id);
+    };
+    const start = (id: string) => {
+      if (sent.current.has(id) || timers.has(id)) return;
+      if (document.visibilityState === "hidden") return;
+      timers.set(
+        id,
+        setTimeout(() => {
+          timers.delete(id);
+          if (document.visibilityState === "hidden") return;
+          if (!visible.has(id)) return;
+          sent.current.add(id);
+          void pulseAct(id, "dwell").catch(() => {});
+        }, DWELL_MS),
+      );
+    };
+    const seen = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          const id = (e.target as HTMLElement).dataset.cardId;
+          if (!id) continue;
+          const enough = e.isIntersecting && e.intersectionRatio >= DWELL_RATIO;
+          if (enough) {
+            visible.add(id);
+            start(id);
+          } else {
+            visible.delete(id);
+            stop(id);
+          }
+        }
+      },
+      { threshold: [0, DWELL_RATIO, 1] },
+    );
+    const onVis = () => {
+      if (document.visibilityState === "hidden") {
+        for (const id of [...timers.keys()]) stop(id);
+      } else {
+        for (const id of visible) start(id);
+      }
+    };
+    document.addEventListener("visibilitychange", onVis);
+    root.querySelectorAll<HTMLElement>("[data-card-id]").forEach((el) => seen.observe(el));
+    return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      seen.disconnect();
+      for (const t of timers.values()) clearTimeout(t);
+    };
+  }, [idsKey, enabled, listRef]);
+}
+
 /** The cabin's Pulse: Feed first, Ideas second. `onRun` puts text in the
  * chat box (an idea's action, or a post to discuss); nothing runs until it
  * is sent there. */
@@ -115,6 +180,7 @@ export function Pulse({
   /** The PC health idea whose options window is open. */
   const [fixing, setFixing] = useState<PulseIdea | null>(null);
   const end = useRef<HTMLLIElement>(null);
+  const feedList = useRef<HTMLUListElement>(null);
   const polls = useRef<ReturnType<typeof setTimeout>[]>([]);
   /** A tap in flight: a background look must not overwrite its page. */
   const acting = useRef(false);
@@ -153,6 +219,9 @@ export function Pulse({
     seen.observe(el);
     return () => seen.disconnect();
   }, [more, shown]);
+
+  const dwellIds = (page?.feed.slice(0, shown) ?? []).map((p) => p.id).join(",");
+  useFeedDwell(feedList, dwellIds, tab === "feed" && page !== null);
 
   async function act(id: string, what: PulseAct, done?: string) {
     setBusy(true);
@@ -301,7 +370,7 @@ export function Pulse({
       <StatusLine note={note} />
       {tab === "saved" && <SavedPage onError={fail} />}
       {tab === "feed" && (
-        <ul className="rows feed" aria-busy={page === null}>
+        <ul className="rows feed" aria-busy={page === null} ref={feedList}>
           {page === null && !note && <SkeletonRows />}
           {page?.feed.slice(0, shown).map((post, i) => (
             <Fragment key={post.id}>
