@@ -3204,6 +3204,16 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         "approve_memory_row" => out(approve_memory_row(state, arg(args, "id")?)?),
         "reject_memory_row" => out(reject_memory_row(state, arg(args, "id")?)?),
         "set_memory_writes" => out(set_memory_writes(state, arg(args, "on")?)?),
+        "pause_memory_row" => out(pause_memory_row(
+            state,
+            arg(args, "id")?,
+            arg(args, "paused")?,
+        )?),
+        "add_personal_fact" => out(add_personal_fact(
+            state,
+            arg(args, "text")?,
+            arg(args, "group")?,
+        )?),
         "list_connectors" => out(block_on(list_connectors(state))?),
         "check_connectors" => out(block_on(check_connectors(state))?),
         "restart_connector" => out(block_on(restart_connector(state, arg(args, "name")?))?),
@@ -3266,6 +3276,12 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
                 }))?)
             }
         }
+        "get_goals" => out(block_on(get_goals(state, arg(args, "clock")?))?),
+        "goal_act" => out(block_on(goal_act(
+            state,
+            arg(args, "clock")?,
+            arg(args, "acts")?,
+        ))?),
         "home_catalog" => out(block_on(home_catalog(state))?),
         "set_home_layout" => out(block_on(set_home_layout(state, arg(args, "pick")?))?),
         "get_workboard" => out(block_on(get_workboard(state))?),
@@ -4055,6 +4071,25 @@ mod command_tests {
             !src.contains("#[tauri::command(async)]\nfn get_settings("),
             "a sync body on an async worker panics in zbus"
         );
+    }
+}
+
+#[cfg(test)]
+mod web_command_tests {
+    /// A name on the list with no arm in `remote_call` is refused at run
+    /// time, so the web app's button for it never works.
+    #[test]
+    fn every_web_command_has_an_arm_in_remote_call() {
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        let start = src.find("fn remote_call(").expect("remote_call");
+        let body = &src[start..];
+        let body = &body[..body.find("\n}\n").expect("end of remote_call")];
+        let missing: Vec<&str> = crate::remote::WEB_COMMANDS
+            .iter()
+            .copied()
+            .filter(|name| !body.contains(&format!("\"{name}\"")))
+            .collect();
+        assert_eq!(missing, Vec::<&str>::new());
     }
 }
 

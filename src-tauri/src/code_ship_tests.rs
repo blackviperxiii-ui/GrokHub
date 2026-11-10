@@ -185,6 +185,8 @@ fn hosts() {
     assert_eq!(host_of("https://gitlab.com/o/r"), Host::Other);
     assert_eq!(host_of("https://github.com.evil.example/o/r"), Host::Other);
     assert_eq!(host_of("/srv/git/r.git"), Host::Other);
+    assert_eq!(host_of("https://evil.example/x@github.com/y"), Host::Other);
+    assert_eq!(host_of("evil.example:x/y@github.com/z"), Host::Other);
     let mut f = facts("code/x", Some("main"), true, Pr::None);
     f.host = Host::Other;
     assert_eq!(guard(&CodeShip::default(), &f), Err(Blocked::HostOff));

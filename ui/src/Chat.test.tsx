@@ -774,6 +774,21 @@ describe("applyEvent", () => {
     expect(screen.queryByRole("button", { name: "Stop asking me" })).toBeNull();
   });
 
+  it("Stop asking me keeps a setting that changed after the chat loaded", async () => {
+    holdTurn();
+    api.answerPermission.mockResolvedValue();
+    api.saveSettings.mockResolvedValue({ ...SETTINGS, closeToTray: false, approvals: "auto" });
+    render(<Chat onOpenSettings={() => {}} />);
+    await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
+    const id = await startTurn("write a note");
+    // Close to tray went off elsewhere while this chat stayed open.
+    api.getSettings.mockResolvedValue({ ...SETTINGS, closeToTray: false });
+    emit(id, { kind: "permission", id: "call-1", title: "write", action: "note.txt", reason: "" });
+    await userEvent.click(screen.getByRole("button", { name: "Stop asking me" }));
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalledWith(false, "", "auto", false));
+    api.getSettings.mockResolvedValue(SETTINGS);
+  });
+
   it("on the web app the permission card has no Stop asking me", async () => {
     holdTurn();
     render(<Chat onOpenSettings={() => {}} remote />);

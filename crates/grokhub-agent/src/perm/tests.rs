@@ -1321,3 +1321,43 @@ fn auto_mode_runs_an_ordinary_command_the_sandbox_fully_holds() {
     let _ = std::fs::remove_dir_all(&cfg);
     let _ = std::fs::remove_dir_all(&work);
 }
+
+#[test]
+fn a_read_command_that_can_write_or_run_a_program_is_not_read_only() {
+    // Reads: these run with no card.
+    for read in [
+        "sort names.txt",
+        "sort -u -k 2 names.txt",
+        "uniq -c names.txt",
+        "uniq -f 1 names.txt",
+        "rg --hidden needle src",
+        "git branch",
+        "git branch -a -vv",
+        "git branch --list 'feat/*'",
+        "git branch --contains HEAD",
+        "git branch --sort=-committerdate",
+        "git -C . branch --show-current",
+    ] {
+        assert!(shell_is_readonly(read), "{read} is a read");
+    }
+    // Writes a file, runs a program, or changes a branch: these ask.
+    for not_read in [
+        "sort -o AGENTS.md payload.txt",
+        "sort -uo AGENTS.md payload.txt",
+        "sort --output=AGENTS.md payload.txt",
+        "sort --out AGENTS.md payload.txt",
+        "uniq payload.txt .mcp.json",
+        "uniq -c -- payload.txt .mcp.json",
+        "rg --hostname-bin ./tools/x.sh needle README.md",
+        "rg --hostname-bin=./tools/x.sh needle README.md",
+        "git branch feature",
+        "git branch --delete --force feature",
+        "git -C . branch -D feature",
+        "git branch -f main HEAD~20",
+        "git branch -m main old",
+        "git branch --set-upstream-to=origin/main",
+        "git branch --edit-description",
+    ] {
+        assert!(!shell_is_readonly(not_read), "{not_read} is not a read");
+    }
+}

@@ -225,9 +225,15 @@ pub fn branch_ok(name: &str) -> Result<(), Blocked> {
 pub fn host_of(url: &str) -> Host {
     let url = url.trim();
     let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
-    let rest = rest.rsplit_once('@').map(|(_, h)| h).unwrap_or(rest);
-    let host = rest
-        .split(['/', ':'])
+    // Sign-in details end at the last `@` before the path; an `@` further
+    // along belongs to the path, not the host.
+    let authority = rest.split('/').next().unwrap_or("");
+    let authority = authority
+        .rsplit_once('@')
+        .map(|(_, h)| h)
+        .unwrap_or(authority);
+    let host = authority
+        .split(':')
         .next()
         .unwrap_or("")
         .to_ascii_lowercase();
