@@ -6,6 +6,8 @@ use grokhub_core::{ChipAction, ChipSignals};
 /// Where a feature's offer ranks: above the PC's plain signals and seeds,
 /// under a reply's own follow-ups.
 const FEATURE_SCORE: f32 = 100.0;
+/// How long the habit chips are kept before the engine is asked again.
+const HABIT_CHIPS_TTL_MS: u64 = 60_000;
 /// The app you just came from leads the empty row, as it did before.
 const FEATURE_FOCUS_SCORE: f32 = 110.0;
 /// A skill matching the draft is what the person is typing toward.
@@ -856,6 +858,7 @@ impl Cabin {
             "Downloads cleanup",
         ));
         out.extend(scored(self.goal_chips(), FEATURE_SCORE + 1.0, "Your goal"));
+        out.extend(self.habit_chips());
         out.extend(scored(self.game_chips(), FEATURE_SCORE, "Your game"));
         out.extend(scored(
             self.radar_chips(),
@@ -868,6 +871,30 @@ impl Cabin {
         }
         out.retain(|c| !self.chip_hidden(c));
         out
+    }
+
+    /// What the user usually runs around now, from the learning engine,
+    /// after the decision engine weighed it. The engine's answer is kept for
+    /// [`HABIT_CHIPS_TTL_MS`], so painting a frame reads no file.
+    fn habit_chips(&self) -> Vec<QuickChip> {
+        static KEPT: std::sync::Mutex<Option<(u64, Vec<QuickChip>)>> = std::sync::Mutex::new(None);
+        let now = now_ms();
+        let mut kept = KEPT.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((at, chips)) = kept.as_ref() {
+            if now.saturating_sub(*at) < HABIT_CHIPS_TTL_MS {
+                return chips.clone();
+            }
+        }
+        grokhub_core::learn::hub::set_utc_offset_min(Self::local_clock().utc_offset_min());
+        let chips = grokhub_core::learn::hub::habit_chips(
+            &self.skill_list,
+            // A chip in a row the user is looking at interrupts nothing.
+            grokhub_core::learn::decide::Situation::default(),
+            FEATURE_SCORE - 1.0,
+            now,
+        );
+        *kept = Some((now, chips.clone()));
+        chips
     }
 
     /// The first file waiting in the attach tray, by name only.
