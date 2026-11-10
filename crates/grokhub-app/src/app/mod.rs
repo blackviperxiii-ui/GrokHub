@@ -265,6 +265,8 @@ mod self_review_ui;
 mod settings;
 mod setup_wizard;
 pub(crate) use setup_wizard::models_dir;
+#[cfg(test)]
+mod one_reply_each_tests;
 mod sidebar;
 mod skill_undo;
 mod skills_tab;
@@ -4878,15 +4880,10 @@ impl Cabin {
         self.finish_hub_dispatch(&status, false);
         // Messages queued behind the stopped turn would otherwise sit unseen
         // and send themselves after the next reply: hand them back instead.
-        let handed_back = if stopped {
-            self.queued_back_to_composer()
-        } else {
-            0
-        };
+        let handed_back = stopped.then(|| self.queued_back_to_composer()).flatten();
         self.status = match handed_back {
-            0 => status,
-            1 => format!("{status} · your queued message is back in the box"),
-            _ => format!("{status} · your {handed_back} queued messages are back in the box"),
+            Some(note) => format!("{status} · {note}"),
+            None => status,
         };
         self.maybe_continue_ptt();
     }
@@ -5963,18 +5960,3 @@ fn select_all_edit(ui: &egui::Ui, id: egui::Id, text: &str) {
 const CLOCK_TTL: Duration = Duration::from_secs(15);
 static LAST_CLOCK: Mutex<Option<(Instant, LocalClock, bool)>> = Mutex::new(None);
 static LAST_DAY: Mutex<Option<(Instant, String, bool)>> = Mutex::new(None);
-
-/// `typed` then each queued message, one blank line apart.
-fn composer_with_queued(typed: &str, queued: Vec<String>) -> String {
-    let mut parts: Vec<String> = Vec::new();
-    if !typed.trim().is_empty() {
-        parts.push(typed.trim_end().to_string());
-    }
-    parts.extend(
-        queued
-            .into_iter()
-            .map(|q| q.trim().to_string())
-            .filter(|q| !q.is_empty()),
-    );
-    parts.join("\n\n")
-}

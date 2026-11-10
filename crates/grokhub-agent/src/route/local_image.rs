@@ -65,6 +65,117 @@ pub fn kit_here() -> Option<Kit> {
     )
 }
 
+/// The tool an on-device turn draws with.
+pub const TOOL: &str = crate::tools::registry::IMAGE_GENERATE;
+/// Told to the device when this computer can draw.
+pub const CAN_DRAW: &str = "[Pictures] You can draw pictures here: for a picture, call image_generate with a prompt you write. Never say you can't make images.";
+/// Added when the newest ask is for a picture.
+pub const ASKED: &str = "They want one now.";
+/// Told to the device on a picture ask when nothing here can draw yet.
+pub const NO_KIT: &str = "[Pictures] Nothing here can draw pictures yet. Never say you can't make images: call image_generate, and if it can't, tell the user to download a picture model (Z-Image Turbo or Chroma1-HD) and the picture guard from Settings → Download models → Image.";
+
+#[cfg(test)]
+thread_local! {
+    static TEST_KIT: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// Pins [`can_draw_here`] on this thread until dropped.
+#[cfg(test)]
+pub(crate) struct KitForTests;
+
+#[cfg(test)]
+impl KitForTests {
+    pub(crate) fn set(on: bool) -> Self {
+        TEST_KIT.with(|c| c.set(Some(on)));
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for KitForTests {
+    fn drop(&mut self) {
+        TEST_KIT.with(|c| c.set(None));
+    }
+}
+
+/// The engine and a picture model are on disk: a few file checks, run once
+/// per on-device turn and never in the background.
+pub fn can_draw_here() -> bool {
+    #[cfg(test)]
+    if let Some(on) = TEST_KIT.with(std::cell::Cell::get) {
+        return on;
+    }
+    kit_here().is_some()
+}
+
+/// The gate offers the picture tool this turn: in the list, or in the
+/// deferred index (`name — blurb` lines) of `load_tool_schema`.
+fn offered(tools: &[Value]) -> bool {
+    let index_line = format!("\n{TOOL} — ");
+    tools.iter().any(|t| {
+        t["name"].as_str() == Some(TOOL)
+            || (t["name"].as_str() == Some(crate::tools::registry::LOAD_TOOL_SCHEMA)
+                && t["description"]
+                    .as_str()
+                    .is_some_and(|d| d.contains(&index_line)))
+    })
+}
+
+/// Get an on-device turn ready to draw. When this computer `can_draw` or the
+/// newest message is a picture `ask`, and the gate offers the picture tool,
+/// its full schema is in the list and the first system message says what
+/// the device can do. Returns the tools [`super::local_fit::fit_keeping`]
+/// must keep. The model still writes the prompt, so the hard-ban check and
+/// the picture guard see what it asks for.
+pub fn ready_on_device(
+    req: &mut crate::client::ResponsesRequest,
+    can_draw: bool,
+    ask: bool,
+) -> &'static [&'static str] {
+    if !(can_draw || ask) || !offered(&req.tools) {
+        return &[];
+    }
+    if !req.tools.iter().any(|t| t["name"].as_str() == Some(TOOL)) {
+        if let Some(schema) = crate::tools::native_schema(TOOL) {
+            req.tools.push(schema);
+        }
+    }
+    let line = match (can_draw, ask) {
+        (true, true) => format!("{CAN_DRAW} {ASKED}"),
+        (true, false) => CAN_DRAW.to_string(),
+        _ => NO_KIT.to_string(),
+    };
+    add_to_system(&mut req.input, &line);
+    &[TOOL]
+}
+
+/// Append `line` as its own paragraph to the first system message.
+fn add_to_system(input: &mut Vec<crate::client::InputItem>, line: &str) {
+    use crate::client::{ContentPart, InputItem};
+    let system = input.iter_mut().find_map(|item| match item {
+        InputItem::Message { role, content } if role == "system" || role == "developer" => {
+            content.iter_mut().find_map(|c| match c {
+                ContentPart::InputText(t) => Some(t),
+                _ => None,
+            })
+        }
+        _ => None,
+    });
+    match system {
+        Some(text) => {
+            text.push_str("\n\n");
+            text.push_str(line);
+        }
+        None => input.insert(
+            0,
+            InputItem::Message {
+                role: "system".into(),
+                content: vec![ContentPart::InputText(line.into())],
+            },
+        ),
+    }
+}
+
 /// Make one picture into `out_dir` and return its path. `explicit` is an 18+
 /// prompt (it already passed the hard-ban check). `stop` is the chat's
 /// cancel; a stopped run deletes its half-made file.

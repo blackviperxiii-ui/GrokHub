@@ -25,6 +25,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use super::ladder::{step, Step, Undo, ACT_AT};
+use super::score::{Board, Trend};
 use super::signal::Subject;
 use super::store;
 
@@ -181,6 +182,7 @@ pub enum Reason {
     NoUndo,
     SureEnoughToOffer,
     DialOffer,
+    Slipped,
     Halted,
     Quiet,
     Busy,
@@ -204,6 +206,7 @@ impl Reason {
             Self::NoUndo => "It can't be undone, so it asks.",
             Self::SureEnoughToOffer => "It's sure enough to offer, not to do it.",
             Self::DialOffer => "This area is set to offer only.",
+            Self::Slipped => "Its changes went worse lately, so this area asks for a month.",
             Self::Halted => "Halt is on.",
             Self::Quiet => "It's quiet hours.",
             Self::Busy => "You're busy right now.",
@@ -253,6 +256,8 @@ struct Rule {
     undone: u32,
     resting_until_ms: u64,
     last_ms: u64,
+    /// Where its proposals come from, so its outcomes reach the scoreboard.
+    area: Option<Area>,
     /// The last verdict logged, so the same answer isn't logged twice.
     last: Option<(Verdict, Reason)>,
 }
@@ -270,6 +275,7 @@ pub struct State {
     recent_acts: VecDeque<(u64, Subject)>,
     recent_undos: VecDeque<u64>,
     log: VecDeque<Decision>,
+    score: Board,
 }
 
 impl State {
@@ -282,7 +288,7 @@ impl State {
     }
 
     /// The log, oldest first.
-    pub fn log(&self) -> impl Iterator<Item = &Decision> {
+    pub fn log(&self) -> impl DoubleEndedIterator<Item = &Decision> {
         self.log.iter()
     }
 
@@ -303,6 +309,12 @@ impl State {
     pub fn resume(&mut self) {
         self.paused_until_ms = 0;
         self.recent_undos.clear();
+        self.score.resume();
+    }
+
+    /// The scoreboard: how each area's decisions went, week by week.
+    pub fn score(&self) -> &Board {
+        &self.score
     }
 
     /// Changes left today.
@@ -346,6 +358,11 @@ impl State {
         }
         let held = [
             (dial == Dial::Offer, Verdict::Offer, Reason::DialOffer),
+            (
+                self.score.resting(p.area, now_ms),
+                Verdict::Offer,
+                Reason::Slipped,
+            ),
             (now.halted, Verdict::Wait, Reason::Halted),
             (now.quiet, Verdict::Wait, Reason::Quiet),
             (now.busy, Verdict::Wait, Reason::Busy),
@@ -364,6 +381,7 @@ impl State {
 
     /// Weighs one proposal. An `Act` spends one of the day's changes.
     pub fn decide(&mut self, p: &Proposal, now: Situation, now_ms: u64) -> Decision {
+        self.score.check(p.area, now_ms);
         let (verdict, reason) = self.settle(p, now, now_ms);
         if !self.rules.contains_key(&p.rule) && self.rules.len() >= RULE_CAP {
             let oldest = self
@@ -377,6 +395,7 @@ impl State {
         }
         let rule = self.rules.entry(p.rule.clone()).or_default();
         rule.last_ms = now_ms;
+        rule.area = Some(p.area);
         let decision = Decision {
             at_ms: now_ms,
             area: p.area,
@@ -432,6 +451,10 @@ impl State {
         self.trim(now_ms);
         let r = self.rules.entry(rule.clone()).or_default();
         r.last_ms = now_ms;
+        if let Some(area) = r.area {
+            let good = matches!(outcome, Outcome::Accepted | Outcome::Kept);
+            self.score.note(area, good, now_ms);
+        }
         match outcome {
             Outcome::Accepted => r.passes += 1,
             Outcome::Declined => {
@@ -496,7 +519,7 @@ pub const NO_DECISIONS: &str =
     "No decisions yet. They show up here once the app has something it could change for you.";
 pub const TRUST_USAGE: &str = "Use `/learned trust <area> <watch|offer|act>`. Areas: settings, skills, router, local-ai, proactive, chips.";
 
-fn verdict_words(v: Verdict) -> &'static str {
+pub(super) fn verdict_words(v: Verdict) -> &'static str {
     match v {
         Verdict::Act => "Did it",
         Verdict::Offer => "Asked",
@@ -518,6 +541,24 @@ pub fn text(state: &State, now_ms: u64) -> String {
     }
     if state.paused(now_ms) {
         out.push_str("\nToo much was undone lately, so everything asks first for now.\n");
+    }
+    let scored: Vec<String> = Area::ALL
+        .into_iter()
+        .filter_map(|area| {
+            let score = state.score.score(area, now_ms);
+            let now = score.now?;
+            let was = match (score.trend, score.before) {
+                (Trend::TooEarly, _) | (_, None) => String::new(),
+                (Trend::Better, Some(b)) => format!(", up from {b}%"),
+                (Trend::Worse, Some(b)) => format!(", down from {b}%"),
+                (Trend::Steady, Some(b)) => format!(", about the same as before ({b}%)"),
+            };
+            Some(format!("- {}: {now}% went your way{was}\n", area.label()))
+        })
+        .collect();
+    if !scored.is_empty() {
+        out.push_str("\n**The last four weeks**\n");
+        out.extend(scored);
     }
     out.push_str("\n**Latest decisions**\n");
     if state.log.is_empty() {

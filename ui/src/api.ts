@@ -2105,6 +2105,45 @@ export interface LearnedView {
   singleChips: number;
   /** Learning is paused: nothing new is counted. */
   paused: boolean;
+  trust: LearnedTrust;
+}
+
+export type TrustArea = "settings" | "skills" | "router" | "local-ai" | "proactive" | "chips";
+/** How far an area may go: learn only, offer changes, or make them when sure. */
+export type TrustDial = "watch" | "offer" | "act";
+
+export interface LearnedDecision {
+  atMs: number;
+  /** What it was about, e.g. "Skill tidy in the morning". */
+  title: string;
+  /** "Did it", "Asked", "Held back" or "Stopped". */
+  did: string;
+  why: string;
+}
+
+/** One area's dial and its scoreboard line (grokhub_core::learn::score). */
+export interface TrustRow {
+  area: TrustArea;
+  label: string;
+  dial: TrustDial;
+  /** 0 to 100: the share of its offers and changes that went the user's way in the last four weeks. */
+  went: number | null;
+  /** The same for the four weeks before. */
+  before: number | null;
+  trend: "too_early" | "better" | "steady" | "worse";
+  /** It got worse, so it only offers for a month. */
+  resting: boolean;
+}
+
+/** The decision engine's side of the page (grokhub_core::learn::decide). */
+export interface LearnedTrust {
+  dials: TrustRow[];
+  /** Too much was undone lately, so everything asks first for now. */
+  askingFirst: boolean;
+  /** Changes the app may still make on its own today. */
+  leftToday: number;
+  /** Newest first. */
+  decisions: LearnedDecision[];
 }
 
 export type LearnedAct =
@@ -2113,7 +2152,9 @@ export type LearnedAct =
   | { kind: "always"; key: string }
   | { kind: "forgetAll" }
   | { kind: "pause" }
-  | { kind: "resume" };
+  | { kind: "resume" }
+  | { kind: "trust"; area: TrustArea; dial: TrustDial }
+  | { kind: "carryOn" };
 
 export function getLearned(): Promise<LearnedView> {
   return invoke<LearnedView>("get_learned");

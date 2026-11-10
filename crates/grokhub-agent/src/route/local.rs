@@ -892,7 +892,14 @@ pub fn serve_request(
     let n_ctx = rt
         .context_tokens()
         .unwrap_or_else(|| super::local_perf::current_defaults().ctx);
-    let (fitted, _) = super::local_fit::fit(&req, n_ctx);
+    // A picture ask, or a computer that can draw, keeps the picture tool
+    // even on a small window, and the device is told it can draw.
+    let keep = super::local_image::ready_on_device(
+        &mut req,
+        super::local_image::can_draw_here(),
+        crate::brain::is_picture_ask(&text),
+    );
+    let (fitted, _) = super::local_fit::fit_keeping(&req, n_ctx, keep);
     rt.chat_tools(&fitted, cancel)
         .map_err(ClientError::Protocol)
 }

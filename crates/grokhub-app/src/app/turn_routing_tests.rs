@@ -2159,7 +2159,7 @@ fn halt_work_stops_a_running_turn() {
 }
 
 #[test]
-fn stop_hands_queued_messages_back_instead_of_sending_them_later() {
+fn stop_hands_queued_messages_back_unjoined_instead_of_sending_them_later() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("stop-queue");
     unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };
@@ -2167,15 +2167,29 @@ fn stop_hands_queued_messages_back_instead_of_sending_them_later() {
     cabin.running = true;
     cabin.composer = "half typed".into();
     cabin.followup_queue =
-        Vec::<String>::from(["also rename the folder".into(), "  ".into()]).into();
+        Vec::<String>::from(["also rename the folder".into(), "then zip it".into()]).into();
     cabin.halt_work("Stopped");
-    assert!(cabin.followup_queue.is_empty());
-    assert_eq!(cabin.composer, "half typed\n\nalso rename the folder");
-    assert!(cabin.status.starts_with("Stopped"));
-    assert!(
-        cabin.status.contains("2 queued messages are back"),
-        "{}",
-        cabin.status
+    // The box holds one message: what was typed stays, word for word, and
+    // each queued one keeps its own place, held until the next reply.
+    assert_eq!(cabin.composer, "half typed");
+    assert_eq!(
+        cabin.followup_queue,
+        ["also rename the folder", "then zip it"]
+    );
+    assert!(cabin.followup_queue.iter().all(|q| q.paused));
+    assert_eq!(
+        cabin.status,
+        "Stopped · your 2 queued messages wait in line"
+    );
+    // Empty box: the first comes back into it, the rest wait in line.
+    cabin.composer.clear();
+    cabin.running = true;
+    cabin.halt_work("Stopped");
+    assert_eq!(cabin.composer, "also rename the folder");
+    assert_eq!(cabin.followup_queue, ["then zip it"]);
+    assert_eq!(
+        cabin.status,
+        "Stopped · your next queued message is back in the box, 1 more wait in line"
     );
     unsafe { std::env::remove_var("GROKHUB_CONFIG") };
 }

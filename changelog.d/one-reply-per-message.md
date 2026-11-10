@@ -1,0 +1,3 @@
+- Chat: every message gets its own reply. In a casual chat, a message typed while a reply runs (a quick question included) waits as its own turn instead of being answered only on the side card; a typed `/btw` still answers on the side.
+- A side answer that fails puts the question in line as its own message, and a steer sent after the run last checked for one goes as its own next turn instead of folding silently into the next reply.
+- Stop no longer joins queued messages into one: the first comes back into an empty box word for word, and the rest keep their places in line and go one by one after the next reply or on "continue".

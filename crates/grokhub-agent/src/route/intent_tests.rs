@@ -5,11 +5,70 @@ use super::*;
 const IDLE: TurnCx = TurnCx {
     running: false,
     prior: None,
+    casual: false,
 };
 const RUNNING: TurnCx = TurnCx {
     running: true,
     prior: None,
+    casual: false,
 };
+/// A casual chat's reply is running.
+const CASUAL_RUNNING: TurnCx = TurnCx {
+    running: true,
+    prior: None,
+    casual: true,
+};
+
+#[test]
+fn a_casual_chat_answers_every_message_typed_mid_reply_as_its_own_turn() {
+    // From a real chat: this question got no reply in the chat at all.
+    let q = "How's your day going, other than all that?";
+    assert_eq!(
+        read_turn(q, &RUNNING).route,
+        TurnRoute::Side,
+        "work: side card"
+    );
+    let read = read_turn(q, &CASUAL_RUNNING);
+    assert_eq!(read.route, TurnRoute::Queue);
+    assert_eq!(read.text, q, "the words are kept as typed");
+    assert_eq!(read.rules[0], "turn:queue:casual");
+    for (text, want) in [
+        ("lol", TurnRoute::Queue),
+        ("yeah same", TurnRoute::Queue),
+        ("actually make it shorter", TurnRoute::Queue),
+        ("btw what's your favorite game?", TurnRoute::Queue),
+        ("stop", TurnRoute::Stop),
+        ("/btw what time is it", TurnRoute::Side),
+    ] {
+        assert_eq!(read_turn(text, &CASUAL_RUNNING).route, want, "{text}");
+    }
+    // Nothing runs: casual changes nothing.
+    let idle = TurnCx {
+        casual: true,
+        ..IDLE
+    };
+    assert_eq!(read_turn(q, &idle).route, TurnRoute::Chat);
+}
+
+#[test]
+fn casual_talk_is_told_apart_from_work() {
+    for text in [
+        "ugh rough day, my car broke down on the way home",
+        "how are you?",
+        "gg that was a sick match",
+        "lol yeah",
+    ] {
+        assert!(casual_turn(text), "casual: {text}");
+    }
+    for text in [
+        "refactor the router into three modules and add tests",
+        "fix my wifi driver, it keeps dropping",
+        "scan my computer for problems",
+        "",
+    ] {
+        assert!(!casual_turn(text), "work: {text}");
+    }
+}
 
 /// Messages typed while nothing runs.
 const IDLE_SET: &[(&str, TurnRoute)] = &[
