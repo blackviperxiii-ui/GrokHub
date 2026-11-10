@@ -289,6 +289,7 @@ fn pulse_run_sends_the_ideas_prompt_as_bg() {
     end_bg_test(root, cabin);
 }
 
+#[cfg(unix)]
 fn feed_receipts(cabin: &Cabin, id: &str) -> Vec<grokhub_core::card_report::CardReceipt> {
     cabin
         .updates
