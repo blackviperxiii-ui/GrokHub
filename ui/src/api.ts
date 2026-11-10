@@ -243,8 +243,8 @@ export interface TurnRead {
 }
 
 /** Reads a message typed while a reply runs. Instant: no model call. */
-export function readTurn(text: string): Promise<TurnRead> {
-  return invoke<TurnRead>("read_turn", { text });
+export function readTurn(text: string, conversationId?: string): Promise<TurnRead> {
+  return invoke<TurnRead>("read_turn", { text, conversationId });
 }
 
 /** Answers `question` beside the running reply, read-only, under `sideId`.
