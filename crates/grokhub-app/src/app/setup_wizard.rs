@@ -62,6 +62,10 @@ pub(super) struct SetupWizard {
     pub(super) lib_tab: Option<grokhub_core::local_setup::ModelTab>,
     /// Models waiting their turn to download, next first.
     pub(super) dl_queue: Vec<&'static grokhub_core::local_setup::LocalModel>,
+    /// Why each model's last download stopped, by id, shown under its row
+    /// until it is downloaded again or finishes.
+    pub(super) dl_errors:
+        std::collections::BTreeMap<&'static str, grokhub_core::model_library::RowError>,
 }
 
 /// Open on its own only on a fresh profile that hasn't finished or skipped it.
