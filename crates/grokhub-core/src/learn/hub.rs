@@ -178,6 +178,36 @@ pub fn auto_usage(now_ms: u64) -> crate::autotune::rules::Usage {
     read(|e| super::setup::usage(e.beliefs(), now_ms)).unwrap_or_default()
 }
 
+/// Auto setup's plan after the decision engine weighed it
+/// ([`super::setup::weigh`]). Unchanged before [`start`].
+pub fn weigh_setup(
+    plan: crate::autotune::plan::Plan,
+    moment: crate::autotune::plan::Moment,
+    now_ms: u64,
+) -> crate::autotune::plan::Plan {
+    let Some(e) = engine() else {
+        return plan;
+    };
+    let situation = now().situation();
+    decide::with_state(e.config_dir(), |s| {
+        super::setup::weigh(plan, moment, &mut |p| Some(s.decide(p, situation, now_ms)))
+    })
+}
+
+/// What became of one of auto setup's changes or suggestions, by its rule.
+pub fn setup_outcome(rule: &str, outcome: Outcome, now_ms: u64) {
+    if let Some(rule) = super::setup::rule(rule) {
+        decision_outcome(&rule, outcome, now_ms);
+    }
+}
+
+/// The user handed one of auto setup's rules back to the app.
+pub fn setup_forgive(rule: &str) {
+    if let (Some(e), Some(rule)) = (engine(), super::setup::rule(rule)) {
+        decide::with_state(e.config_dir(), |s| s.forgive(&rule));
+    }
+}
+
 /// Weighs what the learners would like to change, the most helpful first.
 /// Nothing before [`start`], so nothing acts.
 pub fn decide_all(proposals: Vec<Proposal>, now: Situation, now_ms: u64) -> Vec<Decision> {
