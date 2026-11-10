@@ -1,0 +1,1 @@
+- Pulse: Start my day shows what each item says and names anything ranked past the cap ("Not shown"), and the week recap lists every line of every section instead of only the first.

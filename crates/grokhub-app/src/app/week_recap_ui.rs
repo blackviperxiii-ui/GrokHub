@@ -198,6 +198,9 @@ impl Cabin {
         });
         let mut card = feed::digest_card(&source, CARD_TITLE, &recap.card_body(), now);
         card.details = Some(details.to_string());
+        // Whole, line by line: the digest clip would fold and cut it.
+        card.body = Some(recap.card_body());
+        card.pulse.report = Some(recap.card_report());
         grokhub_core::hold_if_quiet(&mut card, self.quiet_now());
         self.updates.insert(0, card);
         self.persist_updates();

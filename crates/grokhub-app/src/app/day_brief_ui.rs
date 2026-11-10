@@ -291,6 +291,9 @@ impl Cabin {
         });
         let mut card = feed::digest_card(&source, CARD_TITLE, &brief.card_body(), now);
         card.details = Some(details.to_string());
+        // Whole, line by line: the digest clip would fold and cut it.
+        card.body = Some(brief.card_body());
+        card.pulse.report = Some(brief.card_report());
         card.prompt = brief.primary_prompt();
         card.pulse.because = Some("Start my day brief".into());
         grokhub_core::hold_if_quiet(&mut card, self.quiet_now());
