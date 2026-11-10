@@ -267,11 +267,7 @@ fn best_default(pool: Vec<(&'static str, f64, u8)>, floor: f64) -> Option<&'stat
     let pool = narrowed(&|r| r.2 >= CAPABLE_QUALITY, pool);
     let value = |r: &(&'static str, f64, u8)| f64::from(r.2) * r.1.max(0.0).powf(SPEED_WEIGHT);
     pool.into_iter()
-        .max_by(|a, b| {
-            value(a)
-                .total_cmp(&value(b))
-                .then(a.1.total_cmp(&b.1))
-        })
+        .max_by(|a, b| value(a).total_cmp(&value(b)).then(a.1.total_cmp(&b.1)))
         .map(|r| r.0)
 }
 

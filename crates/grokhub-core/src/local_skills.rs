@@ -104,7 +104,11 @@ pub fn resolved(m: &LocalModel) -> Skills {
     };
     let or = |v: u8, d: u8| if v == 0 { d } else { v };
     let reasoning = m.badges.contains(&"reasoning");
-    let reason_d = if reasoning { q.saturating_add(5).min(100) } else { q };
+    let reason_d = if reasoning {
+        q.saturating_add(5).min(100)
+    } else {
+        q
+    };
     // A model that holds more context reads a long paste better.
     let long_d = match m.ctx_default {
         c if c >= 32_768 => q.saturating_add(5).min(100),
