@@ -399,3 +399,56 @@ fn the_chat_view_lists_the_dials_and_says_why_in_plain_words() {
     assert_eq!(Dial::parse("ACT"), Some(Dial::Act));
     assert_eq!(Dial::parse("always"), None);
 }
+
+#[test]
+fn the_page_shows_every_dial_and_the_newest_decisions_first() {
+    use super::view;
+    let mut s = graduated("habit/tidy/morning");
+    s.set_dial(Area::Router, Dial::Watch);
+    let empty = view::trust(&State::default(), T);
+    assert_eq!(empty.dials.len(), 6);
+    assert!(empty.dials.iter().all(|d| d.dial == Dial::Act));
+    assert_eq!((empty.left_today, empty.decisions.len()), (ACTS_PER_DAY, 0));
+
+    answer(&mut s, &sure("settings/text-size"), T);
+    answer(&mut s, &sure("habit/tidy/morning"), T + HOUR);
+    let page = view::trust(&s, T + HOUR);
+    assert_eq!(
+        page.dials[2],
+        view::DialRow {
+            area: Area::Router,
+            label: "Model choice",
+            dial: Dial::Watch,
+        }
+    );
+    assert_eq!((page.asking_first, page.left_today), (false, 4));
+    assert_eq!(
+        page.decisions,
+        vec![
+            view::DecisionRow {
+                at_ms: T + HOUR,
+                title: "Skill tidy in the morning".into(),
+                did: "Did it",
+                why: "It was sure, you said yes to this before, and it can be undone.",
+            },
+            view::DecisionRow {
+                at_ms: T,
+                title: "Settings text size".into(),
+                did: "Asked",
+                why: "It's new at this, so it asks until you've said yes three times.",
+            },
+        ]
+    );
+    assert_eq!(
+        serde_json::to_value(&page.dials[2]).unwrap(),
+        serde_json::json!({"area": "router", "label": "Model choice", "dial": "watch"})
+    );
+    // Only the newest lines are shown.
+    for n in 0..20 {
+        answer(&mut s, &sure(&format!("settings/n{n}")), T + 2 * HOUR);
+    }
+    assert_eq!(
+        view::trust(&s, T + 2 * HOUR).decisions.len(),
+        view::DECISIONS_SHOWN
+    );
+}
