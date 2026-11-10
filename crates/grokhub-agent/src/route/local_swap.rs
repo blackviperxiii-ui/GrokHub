@@ -163,6 +163,24 @@ fn stays_big(
         && local_scale::fits(m, &room, m.run_mb, 0)
 }
 
+/// The smallest chat model on disk lighter than `home`: what a game, a low
+/// battery or a light ask runs on.
+fn smallest_below(
+    home: &LocalModel,
+    on_disk: &[(&'static LocalModel, PathBuf)],
+) -> Option<PathBuf> {
+    on_disk
+        .iter()
+        .filter(|(m, _)| m.run_mb < home.run_mb)
+        .min_by_key(|(m, _)| m.run_mb)
+        .map(|(_, p)| p.clone())
+}
+
+/// The model a game would swap `home` for, if one is on disk.
+pub fn gaming_model(home: &Path, on_disk: &[(&'static LocalModel, PathBuf)]) -> Option<PathBuf> {
+    smallest_below(catalog_for(home)?, on_disk)
+}
+
 /// The model this request should run on, and why when it isn't the pick.
 fn target(n: &Now<'_>) -> (PathBuf, Option<StandIn>) {
     let home_path = n.home.to_path_buf();
@@ -172,13 +190,7 @@ fn target(n: &Now<'_>) -> (PathBuf, Option<StandIn>) {
     let Some(home) = catalog_for(n.home) else {
         return (home_path, None);
     };
-    let smallest = || {
-        n.on_disk
-            .iter()
-            .filter(|(m, _)| m.run_mb < home.run_mb)
-            .min_by_key(|(m, _)| m.run_mb)
-            .map(|(_, p)| p.clone())
-    };
+    let smallest = || smallest_below(home, n.on_disk);
     if n.low_battery {
         if let Some(p) = smallest() {
             return (p, Some(StandIn::LowBattery));

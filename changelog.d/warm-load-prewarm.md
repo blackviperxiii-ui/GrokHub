@@ -1,0 +1,1 @@
+- Local AI reads the model it will need next into RAM in the background (after a game, an idle unload or at app start, and the model a game swaps to), so the next load skips the disk. It runs at the lowest disk priority, slows down while you game, and stops when memory or the disk gets busy.

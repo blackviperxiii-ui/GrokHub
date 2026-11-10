@@ -1403,11 +1403,75 @@ fn swap_plan(config_dir: &Path, home: &Path, running: Option<&Sidecar>, want: Wa
     })
 }
 
+/// The model a game would swap `home` for, among the models on disk.
+pub fn gaming_model_for(config_dir: &Path, home: &Path) -> Option<PathBuf> {
+    super::local_swap::gaming_model(home, &on_disk(config_dir))
+}
+
+/// When [`tick_scale`] last saw a game running (unix ms).
+static LAST_GAME_MS: AtomicU64 = AtomicU64::new(0);
+/// How long after a game the pick waits to come back: post-match screens
+/// and launchers finish, and a quick alt-tab back into the game swaps nothing.
+pub const GAME_OVER_SECS: u64 = 45;
+
+/// A game was last seen at `last_game_ms` and has been gone [`GAME_OVER_SECS`].
+pub fn game_settled(now_ms: u64, last_game_ms: u64) -> bool {
+    last_game_ms > 0 && now_ms.saturating_sub(last_game_ms) >= GAME_OVER_SECS * 1_000
+}
+
+/// Unix seconds of the last [`tick_prewarm`] look.
+static LAST_PREWARM_LOOK: AtomicU64 = AtomicU64::new(0);
+const PREWARM_LOOK_SECS: u64 = 60;
+
+/// The cabin sampler's tick for RAM-warming: once a minute, read the files
+/// the next load will need into the OS cache (see `local_prewarm`). That is
+/// the pick and its drafter when they aren't running (after a game, an idle
+/// unload or at app start), and the model a game swaps to.
+pub fn tick_prewarm(config_dir: &Path) {
+    let now = unix_secs();
+    if !super::local::switched_on()
+        || super::local_prewarm::busy()
+        || local_gov::paused()
+        || STARTING.load(Ordering::SeqCst)
+        || now.saturating_sub(LAST_PREWARM_LOOK.load(Ordering::SeqCst)) < PREWARM_LOOK_SECS
+    {
+        return;
+    }
+    LAST_PREWARM_LOOK.store(now, Ordering::SeqCst);
+    let (Some(binary), Some(home)) = (find_binary(config_dir), find_model(config_dir)) else {
+        return;
+    };
+    let Ok(slot) = global_slot().try_lock() else {
+        return;
+    };
+    let loaded = slot.as_ref().filter(|s| s.alive()).map(|s| s.model.clone());
+    drop(slot);
+    let gaming =
+        local_gov::gpu_contended() || super::local_scale::gaming_reason(local_gov::reason());
+    let gaming_pick = gaming_model_for(config_dir, &home);
+    let mut files = Vec::new();
+    for model in [Some(home), gaming_pick].into_iter().flatten() {
+        if loaded.as_ref() == Some(&model) {
+            continue;
+        }
+        let drafter = autoconfig::draft_plan(&binary, &model)
+            .and_then(|p| p.draft)
+            .and_then(|d| d.model);
+        files.push(model);
+        files.extend(drafter);
+    }
+    super::local_prewarm::start(files, gaming);
+}
+
 /// The cabin sampler's tick for scaling, between requests: a step up the
 /// last task wanted loads once the chat is quiet, and a bigger model that no
 /// longer fits (the computer got busy) or a model that isn't the lightest
 /// while a game runs stops, so the next request starts the right one.
 pub fn tick_scale(config_dir: &Path) {
+    let scale = super::local_scale::scale_now(unix_ms());
+    if scale.gaming {
+        LAST_GAME_MS.store(unix_ms(), Ordering::SeqCst);
+    }
     if in_flight() > 0 || local_gov::paused() || STARTING.load(Ordering::SeqCst) {
         return;
     }
@@ -1420,7 +1484,6 @@ pub fn tick_scale(config_dir: &Path) {
     let Some(side) = slot.as_ref().filter(|s| s.alive()) else {
         return;
     };
-    let scale = super::local_scale::scale_now(unix_ms());
     let step_down = side.stand_in == Some(super::local_swap::StandIn::Performance)
         && super::local_swap::catalog_for(&side.model)
             .is_some_and(|m| super::local_scale::step_down_due(m, &scale));
@@ -1444,7 +1507,18 @@ pub fn tick_scale(config_dir: &Path) {
         PENDING_STEP_UP.lock().expect("pending step up").take();
         return;
     }
-    let Some((model, _, need)) = pending.filter(|_| quiet) else {
+    // The game ended and the machine settled: the pick comes back now, in
+    // the background, so the next chat doesn't run on the gaming model.
+    let after_game = side.stand_in == Some(super::local_swap::StandIn::Gaming)
+        && !scale.gaming
+        && local_gov::level() == grokhub_core::local_governor::Level::Normal
+        && game_settled(unix_ms(), LAST_GAME_MS.load(Ordering::SeqCst));
+    let pending = if after_game {
+        find_model(config_dir).map(|home| (home, None, super::local_scale::Need::Normal))
+    } else {
+        pending
+    };
+    let Some((model, stand_in, need)) = pending.filter(|_| quiet) else {
         return;
     };
     if side.model == model || keep_loaded() || WARMING.swap(true, Ordering::SeqCst) {
@@ -1454,24 +1528,21 @@ pub fn tick_scale(config_dir: &Path) {
     PENDING_STEP_UP.lock().expect("pending step up").take();
     *WARM_NEED.lock().expect("warm need") = need;
     if let Some(side) = slot.take() {
-        health::log_to(
-            config_dir,
-            "swap",
-            Some(&swap_note(
-                &model,
-                Some(super::local_swap::StandIn::Performance),
-            )),
-            None,
-        );
+        health::log_to(config_dir, "swap", Some(&swap_note(&model, stand_in)), None);
         LAST_SWAP_SECS.store(unix_secs(), Ordering::SeqCst);
         retire(side);
     }
     drop(slot);
     let dir = config_dir.to_path_buf();
     let generation = WARM_GEN.load(Ordering::SeqCst);
+    let why = if after_game {
+        "back after the game"
+    } else {
+        "stepped up for a hard task"
+    };
     std::thread::spawn(move || {
         if load(&dir, Want::Warm(generation)).is_ok() {
-            health::log_to(&dir, "warm", Some("stepped up for a hard task"), None);
+            health::log_to(&dir, "warm", Some(why), None);
         }
         *WARM_NEED.lock().expect("warm need") = super::local_scale::Need::Normal;
         WARMING.store(false, Ordering::SeqCst);
@@ -2035,6 +2106,14 @@ pub mod fake_server {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_pick_comes_back_only_once_a_game_has_been_gone_a_while() {
+        let gone = GAME_OVER_SECS * 1_000;
+        assert!(!game_settled(1_000_000, 0), "no game seen");
+        assert!(!game_settled(1_000_000 + gone - 1, 1_000_000), "alt-tab");
+        assert!(game_settled(1_000_000 + gone, 1_000_000));
+    }
 
     /// A long-running stand-in child (not llama-server) in a [`Sidecar`].
     #[test]

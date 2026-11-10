@@ -35,7 +35,7 @@ mod windows;
 #[cfg(unix)]
 mod x11;
 
-use std::io::{BufRead, Write};
+use std::io::Write;
 use std::sync::{mpsc, Mutex};
 
 use grokhub_core::desktop_mcp::{stamp_halts, CallGate, DesktopBackend, DesktopServer};
@@ -186,36 +186,7 @@ fn emit(line: &str) {
     let _ = out.flush();
 }
 
-pub fn read_line_capped(reader: &mut impl BufRead, cap: usize) -> Result<Option<String>, String> {
-    let mut buf = Vec::new();
-    let mut byte = [0u8; 1];
-    loop {
-        let n = reader.read(&mut byte).map_err(|e| format!("stdin: {e}"))?;
-        if n == 0 {
-            if buf.is_empty() {
-                return Ok(None);
-            }
-            break;
-        }
-        if byte[0] == b'\n' {
-            break;
-        }
-        if byte[0] == b'\r' {
-            continue;
-        }
-        if buf.len() >= cap {
-            loop {
-                let n = reader.read(&mut byte).map_err(|e| format!("stdin: {e}"))?;
-                if n == 0 || byte[0] == b'\n' {
-                    break;
-                }
-            }
-            return Err("line longer than 1 MiB".into());
-        }
-        buf.push(byte[0]);
-    }
-    Ok(Some(String::from_utf8_lossy(&buf).into_owned()))
-}
+pub use grokhub_core::desktop_mcp::read_line_capped;
 
 pub fn encode_rgba(rgba: &[u8], w: u32, h: u32) -> Result<(Vec<u8>, String, u32, u32), String> {
     if w == 0 || h == 0 {
@@ -251,7 +222,7 @@ pub fn encode_rgba(rgba: &[u8], w: u32, h: u32) -> Result<(Vec<u8>, String, u32,
 }
 
 /// A chat's Stop: desktop control and that chat's run stop.
-const HALT_STAMP: &str = "desktop-halt.stamp";
+const HALT_STAMP: &str = grokhub_core::desktop_mcp::HALT_STAMP_FILE;
 /// Halt everything (tray, hotkey, quit): background runs and loops stop too.
 const HALT_ALL_STAMP: &str = "halt-all.stamp";
 
