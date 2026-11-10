@@ -671,6 +671,7 @@ fn note_chat_timings(v: &Value) {
     if let Some((ms, prompt_n, cache_n)) = super::local_warm::take_first_reply(v) {
         let detail = super::local_warm::first_reply_detail(prompt_n, cache_n);
         super::local_health::log_ms("first_reply", Some(&detail), Some(ms));
+        super::local_kv::judge_restore(prompt_n, cache_n);
     }
     let t = &v["timings"];
     if let Some(tok_s) = t["predicted_per_second"].as_f64() {
