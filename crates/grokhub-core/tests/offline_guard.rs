@@ -121,6 +121,7 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("crates/grokhub-agent/src/route/local_spec.rs", 2, "speed test and refusal check against the loopback sidecar"),
     // The app's own desktop, CDP, hub and LAN features.
     ("crates/grokhub-app/src/desktop.rs", 3, "hub health and CDP HTTP (loopback_agent), CDP websocket: loopback via egress_ok"),
+    ("crates/grokhub-hub/src/doctor.rs", 1, "--doctor reads its own hub's /v1/health on 127.0.0.1 only"),
     ("crates/grokhub-app/src/app/print_alerts_ui.rs", 1, "the user's printer: LAN, allowed (a public host is refused by egress_ok)"),
     ("crates/grokhub-app/src/app/lan_host.rs", 1, "UDP connect to TEST-NET-1 to read the LAN address: sends nothing"),
     ("src-tauri/src/remote.rs", 2, "UDP connect to TEST-NET-1 to read the LAN address (sends nothing), and an empty TCP connect to its own web access server to wake its worker pool"),

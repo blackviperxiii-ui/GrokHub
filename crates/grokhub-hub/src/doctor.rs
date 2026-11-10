@@ -86,9 +86,13 @@ pub fn skill_count(dir: &Path) -> usize {
         .count()
 }
 
-/// `GET /v1/health` on this computer's hub, 400 ms in all. Loopback only.
-fn hub_health(port: u16) -> Option<String> {
+/// `GET /v1/health` on this computer's hub, 400 ms in all. Loopback only,
+/// through the egress guard as the cabin's probe (it allows loopback and
+/// logs nothing).
+fn hub_health(dir: &Path, port: u16) -> Option<String> {
+    use grokhub_agent::harness as hx;
     let url = format!("http://127.0.0.1:{port}/v1/health");
+    hx::guard_quiet(dir, &hx::EgressReq::new(&url, &[])).ok()?;
     let agent = grokhub_core::http::agent(grokhub_core::http::Opts {
         overall: Some(Duration::from_millis(400)),
         ..Default::default()
@@ -105,7 +109,7 @@ pub fn gather(dir: &Path, port: u16) -> Facts {
         // The cabin file first, so the keychain is only asked when needed.
         authed: cabin_auth(dir) || shell_auth(),
         memory_ok: std::fs::create_dir_all(dir.join("memory")).is_ok(),
-        hub_health: hub_health(port),
+        hub_health: hub_health(dir, port),
         skills: skill_count(dir),
         sandbox: grokhub_agent::sandbox::status(dir),
     }
