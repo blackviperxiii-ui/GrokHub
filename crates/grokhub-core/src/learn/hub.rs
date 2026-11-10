@@ -73,6 +73,19 @@ pub fn local_hour(at_ms: u64) -> u32 {
     crate::rhythm::local_slot(at_ms, UTC_OFFSET_MIN.load(Ordering::Relaxed)).1
 }
 
+/// The app's last word on what is going on right now.
+static NOW: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// The app's picture of this moment. Every decider reads the same one.
+pub fn set_now(now: super::now::Snapshot) {
+    NOW.store(now.bits(), Ordering::Relaxed);
+}
+
+/// What is going on right now, as the app last said. All clear until then.
+pub fn now() -> super::now::Snapshot {
+    super::now::Snapshot::from_bits(NOW.load(Ordering::Relaxed))
+}
+
 /// Whether the user has learning paused. While it is, nothing is recorded.
 pub fn paused() -> bool {
     PAUSED.load(Ordering::Relaxed)
@@ -128,7 +141,7 @@ pub fn view(now_ms: u64) -> View {
     let mut out = read(|e| view::view(e.beliefs(), now_ms)).unwrap_or_default();
     out.paused = paused();
     let state = engine().map(|e| decide::load(e.config_dir()));
-    out.trust = view::trust(&state.unwrap_or_default(), now_ms);
+    out.trust = view::trust(&state.unwrap_or_default(), now(), now_ms);
     out
 }
 
@@ -200,6 +213,13 @@ pub fn set_dial(area: Area, dial: Dial) {
 pub fn carry_on() {
     if let Some(e) = engine() {
         decide::with_state(e.config_dir(), |s| s.resume());
+    }
+}
+
+/// Sets what matters most to the user, first to last.
+pub fn set_goals(goals: &[decide::Goal]) {
+    if let Some(e) = engine() {
+        decide::with_state(e.config_dir(), |s| s.set_goals(goals));
     }
 }
 

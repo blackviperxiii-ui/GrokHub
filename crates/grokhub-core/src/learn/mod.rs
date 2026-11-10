@@ -25,6 +25,7 @@ pub mod decide;
 pub mod habit;
 pub mod hub;
 pub mod ladder;
+pub mod now;
 pub mod score;
 pub mod setup;
 pub mod signal;
