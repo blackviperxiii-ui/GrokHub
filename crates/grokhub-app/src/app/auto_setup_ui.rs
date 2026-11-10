@@ -102,6 +102,14 @@ fn talk_id(word: &str) -> Option<&'static str> {
     }
 }
 
+impl Cabin {
+    /// The tone the Talk answer (or the default voice) stands for, where Get
+    /// to know you's soul step starts. Empty for a voice the person made.
+    pub(super) fn auto_talk_tone(&self) -> &'static str {
+        grokhub_core::onboard_identity::tone_for_personality(&self.cfg.personality)
+    }
+}
+
 /// The OS shows 12-hour times (US default until the PC is read).
 fn clock_12h() -> bool {
     grokhub_agent::device::current().is_none_or(|d| d.clock_12h)

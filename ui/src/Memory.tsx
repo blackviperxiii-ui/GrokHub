@@ -20,6 +20,7 @@ import {
   type PersonalGroupKey,
 } from "./api";
 import { PRODUCT_NAME } from "./brand";
+import { OPEN_EVENT } from "./onboardApi";
 import { Toggle } from "./Toggle";
 import { inShell } from "./transport";
 import { ConfirmRow, StatusLine, useNote } from "./ui";
@@ -330,6 +331,11 @@ export function Memory() {
       <p className="note">
         What {PRODUCT_NAME} knows about you, and where it learned it. It all stays on this computer.
       </p>
+      {inShell() && (
+        <button type="button" className="chip" onClick={() => window.dispatchEvent(new Event(OPEN_EVENT))}>
+          Get to know you
+        </button>
+      )}
       <Toggle
         checked={notes.writesOn}
         onChange={(on) =>

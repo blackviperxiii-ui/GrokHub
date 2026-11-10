@@ -210,3 +210,35 @@ pub fn run_habit(m: &RunMetrics, hour: u32) -> Vec<Signal> {
     }
     super::habit::skill_run(&crate::skill::skill_dir_name(skill), hour, m.at)
 }
+
+/// Get to know you was saved: `onboard:done`, the tone the person picked
+/// (`tone:direct`) and one hashed trait per interest (`trait:interest/3f9c…`).
+/// Their name and words stay in the files; only ids reach the engine.
+pub fn onboard_saved<'a>(
+    tone: &str,
+    interests: impl IntoIterator<Item = &'a str>,
+    at_ms: u64,
+) -> Vec<Signal> {
+    let mut out = Vec::new();
+    push(&mut out, at_ms, Kind::Accepted, "onboard", "done");
+    if matches!(tone, "friendly" | "direct" | "playful") {
+        push(&mut out, at_ms, Kind::SetByUser, "tone", tone);
+    }
+    for interest in interests {
+        let interest = interest.trim().to_lowercase();
+        if interest.is_empty() {
+            continue;
+        }
+        if let Some(id) = trait_id(&format!("interest:{interest}")) {
+            push(&mut out, at_ms, Kind::Liked, "trait", &id);
+        }
+    }
+    out
+}
+
+/// Get to know you was skipped: `onboard:skipped`, nothing else.
+pub fn onboard_skipped(at_ms: u64) -> Vec<Signal> {
+    let mut out = Vec::new();
+    push(&mut out, at_ms, Kind::Declined, "onboard", "skipped");
+    out
+}

@@ -1,0 +1,207 @@
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Drafts, OnboardAct, OnboardReply } from "./onboardApi";
+
+const mock = vi.hoisted(() => ({
+  onboard: vi.fn<(act: OnboardAct) => Promise<OnboardReply | null>>(),
+}));
+vi.mock("./onboardApi", async (orig) => ({
+  ...(await orig<typeof import("./onboardApi")>()),
+  onboard: mock.onboard,
+}));
+
+import { EMPTY_ANSWERS, OPEN_EVENT } from "./onboardApi";
+import { OnboardStage, WELCOME_TITLE } from "./GetToKnowYou";
+
+const BASE: OnboardReply = {
+  pending: true,
+  stage: "pending",
+  step: "welcome",
+  answers: { ...EMPTY_ANSWERS, tone: "direct" },
+  drafts: null,
+  amr: true,
+  openclaw: false,
+  saved: null,
+  note: null,
+};
+
+const DRAFTS: Drafts = {
+  user: "# User\n\n- Call me: Sam\n",
+  soul: "# Soul\n\n- Tone: direct. Short answers, the point first, no filler.\n",
+  memory: "# Memory\n\n- 2026-01-02: Goals: Finish a 10k run\n",
+  rows: [
+    { group: "about", text: "Call me Sam" },
+    { group: "needs", text: "Goals: Finish a 10k run" },
+  ],
+};
+
+/** Answers each act the way the shell would, with `over` on every reply. */
+function shell(over: Partial<OnboardReply> = {}) {
+  mock.onboard.mockImplementation(async (act) => {
+    switch (act.act) {
+      case "draft":
+        return {
+          ...BASE,
+          ...over,
+          step: "review",
+          answers: act.answers,
+          drafts: DRAFTS,
+        };
+      case "keep":
+        return { ...BASE, ...over, step: act.step, answers: act.answers };
+      case "save":
+        return {
+          ...BASE,
+          ...over,
+          stage: "done",
+          step: "done",
+          saved: {
+            files: ["USER.md", "SOUL.md", "MEMORY.md"],
+            rows: over.amr === false ? 0 : 2,
+            amr: over.amr ?? true,
+          },
+        };
+      case "skip":
+        return { ...BASE, ...over, pending: false, stage: "skipped" };
+      default:
+        return { ...BASE, ...over };
+    }
+  });
+}
+
+function acts(): string[] {
+  return mock.onboard.mock.calls.map(([a]) => a.act);
+}
+
+beforeEach(() => {
+  mock.onboard.mockReset();
+  shell();
+});
+
+describe("OnboardStage", () => {
+  it("waits while Auto Setup's first run is open, then shows after it", async () => {
+    const { rerender } = render(<OnboardStage after={false} />);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(mock.onboard).not.toHaveBeenCalled();
+    rerender(<OnboardStage after />);
+    expect(await screen.findByRole("dialog", { name: WELCOME_TITLE })).toBeInTheDocument();
+    expect(WELCOME_TITLE).toBe("Help Loadout get to know you");
+    expect(mock.onboard).toHaveBeenCalledWith({ act: "view" });
+  });
+
+  it("stays closed when the shell says it is done or skipped", async () => {
+    shell({ pending: false, stage: "done" });
+    render(<OnboardStage after />);
+    await waitFor(() => expect(mock.onboard).toHaveBeenCalledWith({ act: "view" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("walks the steps, reviews the exact drafts and saves them with the Personal rows", async () => {
+    render(<OnboardStage after />);
+    await userEvent.click(await screen.findByRole("button", { name: "Start" }));
+    expect(mock.onboard).toHaveBeenLastCalledWith({
+      act: "keep",
+      step: "about",
+      answers: BASE.answers,
+    });
+    await userEvent.type(screen.getByLabelText("What should I call you?"), "Sam");
+    await userEvent.click(screen.getByRole("button", { name: "Next" }));
+    // The soul step starts from Auto Setup's Talk answer.
+    expect(screen.getByRole("button", { name: "Straight to the point" })).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(screen.getByRole("button", { name: "Next" }));
+    await userEvent.type(screen.getByLabelText("Goals you're working on"), "Finish a 10k run");
+    await userEvent.click(screen.getByRole("button", { name: "Review" }));
+    expect(mock.onboard).toHaveBeenLastCalledWith({
+      act: "draft",
+      answers: { ...BASE.answers, callMe: "Sam", goals: "Finish a 10k run" },
+    });
+    expect(await screen.findByRole("dialog", { name: "Check what I'll save" })).toBeInTheDocument();
+    expect(screen.getByLabelText("About you (USER.md)")).toHaveValue("# User\n\n- Call me: Sam\n");
+    expect(screen.getByLabelText("Notes to keep (MEMORY.md)")).toHaveValue(DRAFTS.memory);
+    const rows = screen.getByRole("list", { name: "Personal rows" });
+    expect(rows).toHaveTextContent("Call me Sam");
+    expect(rows).toHaveTextContent("What you need");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(mock.onboard).toHaveBeenLastCalledWith({
+      act: "save",
+      drafts: DRAFTS,
+    });
+    expect(
+      await screen.findByText(
+        "Saved USER.md, SOUL.md, MEMORY.md and 2 Personal rows. Edit any of it later in Settings → Personal.",
+      ),
+    ).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("an edit or a removed row on Review is what Save sends", async () => {
+    shell({ step: "review" });
+    render(<OnboardStage after />);
+    const user = await screen.findByLabelText("About you (USER.md)");
+    await userEvent.clear(user);
+    await userEvent.type(user, "# User");
+    await userEvent.click(screen.getByRole("button", { name: "Remove: Call me Sam" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(mock.onboard).toHaveBeenLastCalledWith({
+      act: "save",
+      drafts: { ...DRAFTS, user: "# User", rows: [DRAFTS.rows[1]] },
+    });
+  });
+
+  it("with AMR off, Review lists no Personal rows", async () => {
+    shell({ step: "review", amr: false });
+    render(<OnboardStage after />);
+    expect(await screen.findByLabelText("About you (USER.md)")).toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "Personal rows" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText(/^Saved USER\.md, SOUL\.md, MEMORY\.md\. /)).toBeInTheDocument();
+  });
+
+  it("offers no chat-export or account import, and OpenClaw only when one is here", async () => {
+    shell({ step: "review" });
+    const { unmount } = render(<OnboardStage after />);
+    expect(await screen.findByLabelText("About you (USER.md)")).toBeInTheDocument();
+    for (const text of [/chat export/i, /export/i, /connected account/i, /sign in/i, /google|gmail|outlook/i]) {
+      expect(screen.queryByText(text)).toBeNull();
+    }
+    expect(screen.queryByRole("button", { name: "Add from OpenClaw" })).toBeNull();
+    unmount();
+    shell({ step: "review", openclaw: true });
+    render(<OnboardStage after />);
+    await userEvent.click(await screen.findByRole("button", { name: "Add from OpenClaw" }));
+    expect(mock.onboard).toHaveBeenLastCalledWith({
+      act: "openclaw",
+      drafts: DRAFTS,
+    });
+    expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual([
+      "Remove",
+      "Remove",
+      "Add from OpenClaw",
+      "Back",
+      "Skip for now",
+      "Save",
+    ]);
+  });
+
+  it("resumes at the step it was left on, with what was typed", async () => {
+    shell({ step: "life", answers: { ...EMPTY_ANSWERS, interests: "chess" } });
+    render(<OnboardStage after />);
+    expect(await screen.findByRole("dialog", { name: "Your life and work" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Interests")).toHaveValue("chess");
+  });
+
+  it("Skip for now and Escape skip it; Settings opens it again", async () => {
+    render(<OnboardStage after />);
+    await userEvent.click(await screen.findByRole("button", { name: "Skip for now" }));
+    expect(acts()).toEqual(["view", "skip"]);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    shell();
+    window.dispatchEvent(new Event(OPEN_EVENT));
+    expect(await screen.findByRole("dialog", { name: WELCOME_TITLE })).toBeInTheDocument();
+    expect(mock.onboard).toHaveBeenLastCalledWith({ act: "reopen" });
+    await userEvent.keyboard("{Escape}");
+    expect(mock.onboard).toHaveBeenLastCalledWith({ act: "skip" });
+  });
+});

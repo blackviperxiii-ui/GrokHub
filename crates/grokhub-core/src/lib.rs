@@ -147,6 +147,7 @@ pub mod nudge_watchers;
 pub mod oauth;
 pub mod objectives;
 pub mod offline;
+pub mod onboard_identity;
 pub mod openclaw;
 pub mod organs;
 pub mod osrs_hiscores;
