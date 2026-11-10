@@ -12,9 +12,9 @@
 // SMOKE_SHOTS=<folder> to keep one screenshot per page the run walks through.
 // SMOKE_WEB=1 adds the web access step, which needs Playwright's Chromium.
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { connect as tlsConnect } from "node:tls";
 import { tmpdir } from "node:os";
@@ -1446,6 +1446,51 @@ async function desktop(s, config) {
 // link and chats through this shell's engine. Desktop control and Always
 // are still on from the step above, and the web chat must get no desktop
 // tools. Then a refused command, and turning it off ends the pairing.
+// Diagnostics only (CI's web access step times out now and then and it
+// doesn't happen locally): when the page never loads, say which requests
+// were still open, whether the server answers at all, and where every
+// thread of the shell was waiting. Changes nothing when the step passes.
+async function webStallReport(origin, pending) {
+  console.log(`web stall: ${pending.size} request(s) still open`);
+  for (const [req, at] of pending) console.log(`  open since ${at}ms: ${req.method()} ${new URL(req.url()).pathname}`);
+  for (const path of ["/remote/v1/hello", "/"]) {
+    const started = Date.now();
+    const answer = await fetch(`${origin}${path}`, { signal: AbortSignal.timeout(5000) }).then(
+      (res) => `HTTP ${res.status}`,
+      (err) => `no answer (${err.name})`,
+    );
+    console.log(`web stall: ${path} -> ${answer} after ${Date.now() - started}ms`);
+  }
+  // The shell itself, not the node or xvfb-run whose arguments name it too.
+  const exe = resolve(binary);
+  const pids = spawnSync("pgrep", ["-f", binary], { encoding: "utf8" })
+    .stdout.trim()
+    .split(/\s+/)
+    .filter((pid) => {
+      try {
+        return pid && realpathSync(`/proc/${pid}/exe`) === realpathSync(exe);
+      } catch {
+        return false;
+      }
+    });
+  if (pids.length === 0) console.log(`web stall: no running ${exe}`);
+  for (const pid of pids) {
+    // sudo -n: a runner allows it without a prompt; elsewhere it just fails.
+    const gdb = spawnSync("sudo", ["-n", "gdb", "-p", pid, "-batch", "-ex", "thread apply all bt 25"], {
+      encoding: "utf8",
+      timeout: 120000,
+    });
+    const out = `${gdb.stdout ?? ""}${gdb.stderr ?? ""}`.trim();
+    console.log(`web stall: threads of pid ${pid}${gdb.status === 0 ? "" : ` (gdb exit ${gdb.status})`}:\n${out || "(no gdb output)"}`);
+    if (gdb.status === 0) continue;
+    // No gdb: each thread's name, state and the kernel call it sits in.
+    const tasks = spawnSync("sh", ["-c", `for t in /proc/${pid}/task/*; do echo "$(cat $t/comm) $(cut -d' ' -f3 $t/stat) $(cat $t/wchan)"; done`], {
+      encoding: "utf8",
+    });
+    console.log(`web stall: tasks of pid ${pid} (name state wchan):\n${tasks.stdout.trim()}`);
+  }
+}
+
 async function web(s) {
   const { chromium } = createRequire(import.meta.url)("playwright");
   await tab(s, "Settings");
@@ -1469,7 +1514,17 @@ async function web(s) {
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage();
-    await page.goto(link);
+    const opened = Date.now();
+    const pending = new Map();
+    page.on("request", (r) => pending.set(r, Date.now() - opened));
+    page.on("requestfinished", (r) => pending.delete(r));
+    page.on("requestfailed", (r) => pending.delete(r));
+    try {
+      await page.goto(link);
+    } catch (err) {
+      await webStallReport(origin, pending);
+      throw err;
+    }
     const box = page.getByRole("textbox", { name: "Message" });
     await box.waitFor({ timeout: 30000 });
     await box.fill(WEB_PROMPT);
