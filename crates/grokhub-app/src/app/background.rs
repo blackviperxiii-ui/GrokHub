@@ -236,6 +236,18 @@ impl Cabin {
         thread_id: &str,
         origin: BgOrigin,
     ) -> Result<String, String> {
+        self.start_bg_task_as(task, thread_id, origin, bg_span_origin(origin))
+    }
+
+    /// [`Self::start_bg_task`] with who started it for the harness (Spike-4c):
+    /// a proactive card's approved step runs here and its spans read proactive.
+    pub(super) fn start_bg_task_as(
+        &mut self,
+        task: &str,
+        thread_id: &str,
+        origin: BgOrigin,
+        started_by: hx::Origin,
+    ) -> Result<String, String> {
         let task = task.trim();
         if task.is_empty() {
             return Err("Nothing to run".into());
@@ -246,7 +258,7 @@ impl Cabin {
                 "{BG_TASK_MAX} background tasks are already running — stop one first"
             ));
         }
-        self.start_native_bg(task, thread_id, origin)
+        self.start_native_bg(task, thread_id, origin, started_by)
     }
 
     /// A scheduled job or `/loop` run started (Spike-4c): one span with origin
@@ -302,10 +314,11 @@ impl Cabin {
         task: &str,
         thread_id: &str,
         origin: BgOrigin,
+        started_by: hx::Origin,
     ) -> Result<String, String> {
         let gate = self.native_bg_gate();
         let (run_id, title, card_session) =
-            self.start_native_bg_on(task, thread_id, origin, BgSession::Fork, gate)?;
+            self.start_native_bg_on(task, thread_id, origin, started_by, BgSession::Fork, gate)?;
         // A scheduled run takes its automation's card in `start_scheduled_run`.
         if matches!(origin, BgOrigin::User | BgOrigin::Agent) {
             self.open_bg_card(run_id, &title, &card_session, origin == BgOrigin::User);
@@ -315,11 +328,13 @@ impl Cabin {
 
     /// Start one background run on `session` under `gate`. Returns its run id,
     /// title and native session. Opens no card: the caller files or reuses one.
+    /// `started_by` is the run's harness origin; its engine thread carries it.
     pub(super) fn start_native_bg_on(
         &mut self,
         task: &str,
         thread_id: &str,
         origin: BgOrigin,
+        started_by: hx::Origin,
         session: BgSession,
         gate: grokhub_agent::Gate,
     ) -> Result<(u64, String, String), String> {
@@ -377,7 +392,6 @@ impl Cabin {
         grokhub_agent::watch_cancel(&child_id, cancel.clone());
         let (tx, rx) = mpsc::channel();
         let session = child_id.clone();
-        let started_by = bg_span_origin(origin);
         std::thread::spawn(move || {
             // The engine and its egress lines take this thread's origin.
             let _origin = grokhub_agent::harness::OriginScope::enter(started_by);
@@ -1329,6 +1343,10 @@ pub(super) fn bg_crash_card(run: &BgRun) -> grokhub_core::UpdateCard {
     grokhub_core::crash_card(&source, &run.title, &run.thread_id, &retry, now_ms())
 }
 
+/// `(session, origin)` each fake model call saw on its engine thread.
+#[cfg(test)]
+pub(super) static BG_FAKE_ORIGINS: Mutex<Vec<(String, hx::Origin)>> = Mutex::new(Vec::new());
+
 #[cfg(test)]
 struct BgFake {
     n: std::sync::atomic::AtomicUsize,
@@ -1338,11 +1356,14 @@ struct BgFake {
 impl grokhub_agent::ModelClient for BgFake {
     fn stream(
         &self,
-        _req: &grokhub_agent::ResponsesRequest,
+        req: &grokhub_agent::ResponsesRequest,
         _cancel: &grokhub_agent::CancelToken,
         sink: &mut dyn FnMut(grokhub_agent::StreamEvent),
     ) -> Result<grokhub_agent::TurnOutput, grokhub_agent::ClientError> {
         use std::sync::atomic::Ordering;
+        if let Ok(mut seen) = BG_FAKE_ORIGINS.lock() {
+            seen.push((req.conversation_id.clone(), hx::current_origin()));
+        }
         let n = self.n.fetch_add(1, Ordering::SeqCst);
         if n == 0 {
             Ok(grokhub_agent::TurnOutput {
