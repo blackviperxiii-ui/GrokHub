@@ -1528,6 +1528,30 @@ fn an_experiment_is_one_try_a_day_and_not_the_same_thing_for_two_weeks() {
     assert!(!s.try_once(Area::Chips, &a, calm, day0 + REST_MS - 1));
     assert!(s.try_once(Area::Chips, &a, calm, day0 + REST_MS));
 
+    // Each try is written down once, when it starts: not when it is
+    // refused, and not each time its chip is drawn again.
+    let logged: Vec<_> = s
+        .log()
+        .map(|d| (d.at_ms, d.rule.clone(), d.area, d.verdict, d.reason))
+        .collect();
+    let tried = |at: u64, rule: &Subject| {
+        (
+            at,
+            rule.clone(),
+            Area::Chips,
+            super::decide::Verdict::Offer,
+            super::decide::Reason::Trying,
+        )
+    };
+    assert_eq!(
+        logged,
+        vec![
+            tried(day0, &a),
+            tried(day0 + DAY, &b),
+            tried(day0 + REST_MS, &a)
+        ]
+    );
+
     // The tries are kept with the rest of the decision state.
     let back: State = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
     assert_eq!(back, s);

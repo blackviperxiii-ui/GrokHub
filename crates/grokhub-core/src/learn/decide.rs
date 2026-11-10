@@ -254,6 +254,8 @@ pub enum Reason {
     Budget,
     /// The user answered its offer with a yes.
     YouSaidYes,
+    /// A deliberate experiment ([`super::experiment`]).
+    Trying,
 }
 
 impl Reason {
@@ -279,6 +281,7 @@ impl Reason {
             Self::Shadow => "It's new at this, so it asks until you've said yes three times.",
             Self::Budget => "It already made 5 changes on its own today.",
             Self::YouSaidYes => "You said yes to this.",
+            Self::Trying => "It wasn't sure, so it showed this once to see if you want it.",
         }
     }
 }
@@ -455,7 +458,22 @@ impl State {
             && !(now.halted || now.quiet || now.busy)
             && !self.paused(now_ms)
             && !self.score.resting(area, now_ms);
-        self.tries.allow(rule, clear, now_ms)
+        let before = self.tries.at(rule);
+        let trying = self.tries.allow(rule, clear, now_ms);
+        // The day's try is written down once, when it starts.
+        if trying && self.tries.at(rule) != before {
+            self.log.push_back(Decision {
+                at_ms: now_ms,
+                area,
+                rule: rule.clone(),
+                verdict: Verdict::Offer,
+                reason: Reason::Trying,
+            });
+            while self.log.len() > LOG_CAP {
+                self.log.pop_front();
+            }
+        }
+        trying
     }
 
     /// Offers waiting for a yes or a no on the list of decisions: the rule

@@ -36,6 +36,11 @@ pub struct Tries {
 }
 
 impl Tries {
+    /// When `rule` was last tried, if it still counts.
+    pub fn at(&self, rule: &Subject) -> Option<u64> {
+        self.at_ms.get(rule).copied()
+    }
+
     /// Whether `rule` is today's experiment. The first rule asked on a day
     /// takes the day, and keeps it for the day, so its chip doesn't come and
     /// go. `clear` is whether the app may try anything right now.
