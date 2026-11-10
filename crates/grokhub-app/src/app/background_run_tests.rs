@@ -266,6 +266,9 @@ fn a_bg_result_lands_on_its_card_mid_turn_and_a_post_here_ask_waits() {
     release_isolated(&root, cabin);
 }
 
+// Uses the in-process BgFake model, which `bg_cabin` only builds on unix,
+// like the other /bg run tests here.
+#[cfg(unix)]
 #[test]
 fn slash_bg_that_asks_for_the_result_here_remembers_it() {
     let _g = crate::config::hold_test_config();
