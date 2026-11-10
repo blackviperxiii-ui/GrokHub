@@ -1288,12 +1288,7 @@ mod tests {
         assert_eq!(weight(&d.config), before + 12);
         let state = pulse_feed::with_ideas_state(&d.config, |s| s.clone()).expect("state");
         assert_eq!(state.more_like, vec!["Tidy the workboard"]);
-        assert_eq!(
-            memory().matches("reason=liked").count(),
-            1,
-            "{}",
-            memory()
-        );
+        assert_eq!(memory().matches("reason=liked").count(), 1, "{}", memory());
     }
 
     #[test]
