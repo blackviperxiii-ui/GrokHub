@@ -304,6 +304,14 @@ async function settled(s, el) {
   return x === x2 && y === y2;
 }
 
+/** Clicks `el` once it sits still. A post that has just landed is still
+ * laying out (its picture and taller text settle), and WebKitGTK refuses a
+ * click on a moving element as "not interactable". */
+async function clickStill(s, el, what) {
+  await waitFor(`${what} to sit still`, async () => ((await settled(s, el)) ? true : null));
+  await wd("POST", `${s}/element/${el}/click`, {});
+}
+
 /** The top-row category each Settings page sits in (src/sections.ts). */
 const SETTINGS_CATEGORY = {
   Account: "Account",
@@ -557,21 +565,21 @@ async function pulse(s, config) {
   console.log(`writer posted ${JSON.stringify(PULSE_TITLE)} after the save`);
   await shot(s, "pulse");
 
-  await click(s, ".pulse .media-item");
+  await clickStill(s, await find(s, ".pulse .media-item"), "the first picture");
   await waitFor("the lightbox", () => find(s, ".lightbox img"));
   await shot(s, "pulse-lightbox");
   const close = await wd("POST", `${s}/element`, {
     using: "xpath",
     value: "//div[contains(@class,'lightbox')]//button[normalize-space()='Close']",
   });
-  await wd("POST", `${s}/element/${close[ELEMENT]}/click`, {});
+  await clickStill(s, close[ELEMENT], "the lightbox Close");
 
   // No menu: Dismiss, last in the row, takes the post away.
   const dismiss = await wd("POST", `${s}/element`, {
     using: "xpath",
     value: `${post}//div[contains(@class,'card-row')]/button[last()][normalize-space()='Dismiss']`,
   });
-  await wd("POST", `${s}/element/${dismiss[ELEMENT]}/click`, {});
+  await clickStill(s, dismiss[ELEMENT], "Dismiss");
   await waitFor("the dismissed post", async () => {
     const left = await wd("POST", `${s}/elements`, { using: "xpath", value: post });
     return left.length === 0;
