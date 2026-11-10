@@ -17,6 +17,7 @@ vi.mock("./api", () => api);
 
 import { NO_STEPS } from "./Home";
 import { dayCaption, Objectives } from "./Objectives";
+import { VIEW_LABELS, views } from "./Palette";
 
 const XP: Xp = {
   level: 1,
@@ -133,5 +134,25 @@ describe("Objectives", () => {
 
   it("writes the day as the cabin's caption", () => {
     expect(dayCaption(new Date(2026, 9, 28))).toBe("WEDNESDAY · OCT 28");
+  });
+
+  it("does not render a Workboards control, and the Workboard tab still exists", async () => {
+    api.getMission.mockResolvedValue({ mission: mission(), xp: XP });
+    view();
+    expect(await screen.findByRole("heading", { name: "Objectives" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /workboards?/i })).toBeNull();
+    expect(screen.queryByText(/workboards?/i)).toBeNull();
+    const tabs = views({
+      desktopControl: false,
+      pulse: true,
+      localAi: false,
+      tray: false,
+      webAccess: true,
+      plugins: false,
+      library: true,
+      code: true,
+    });
+    expect(tabs).toContain("workboard");
+    expect(VIEW_LABELS.workboard).toBe("Workboard");
   });
 });
