@@ -735,7 +735,7 @@ impl Cabin {
                                                 .inner_margin(egui::Margin::symmetric(12, 8)),
                                         )
                                         .hint_text(crate::theme::hint("Name"))
-                                        .font(egui::FontId::proportional(13.0))
+                                        .font(egui::FontId::proportional(crate::theme::TYPE_BODY))
                                         .vertical_align(egui::Align::Center),
                                 );
                                 if self.proj_rename_focus {

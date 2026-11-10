@@ -518,7 +518,7 @@ pub(super) fn result_text_inset() -> f32 {
     REPLY_MARK_W + REPLY_MARK_GAP + BUBBLE_PAD_X + outline
 }
 /// Label size of the action rows under a result bubble.
-pub(super) const RESULT_ROW_LABEL_SIZE: f32 = 13.0;
+pub(super) const RESULT_ROW_LABEL_SIZE: f32 = crate::theme::TYPE_BODY;
 
 /// Room to add after each action-row label so the pills under a result
 /// bubble share one column: every label takes the widest label's width.
@@ -623,7 +623,7 @@ pub(super) fn paint_speech_bubble(
                 ui.set_max_width(inner_w);
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
                 if user || !markdown {
-                    let job = crate::markdown::wrapped_job(ui, body, inner_w, crate::theme::fg());
+                    let job = crate::markdown::wrapped_job(body, inner_w, crate::theme::fg());
                     ui.add(egui::Label::new(job).wrap().selectable(true));
                 } else {
                     if !answer.is_empty() {
@@ -1011,7 +1011,7 @@ pub(super) fn composer_visual_rows(ui: &egui::Ui, text: &str, text_w: f32) -> us
     let galley = ui.fonts_mut(|f| {
         f.layout(
             text.to_owned(),
-            egui::FontId::new(15.0, egui::FontFamily::Proportional),
+            egui::FontId::new(crate::theme::TYPE_PROSE, egui::FontFamily::Proportional),
             egui::Color32::PLACEHOLDER,
             wrap,
         )
@@ -1191,7 +1191,7 @@ pub(super) fn paint_thought_fold_buttons(ui: &mut egui::Ui, fold: ThoughtFold) -
 
 fn paint_thought_collapse_hit(ui: &mut egui::Ui, label: &str, expanded: bool) -> egui::Response {
     let color = crate::theme::subtle();
-    let font = egui::FontId::proportional(11.0);
+    let font = egui::FontId::proportional(crate::theme::TYPE_CAPTION);
     let galley = ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font, color));
     let chev = 8.0_f32;
     let gap = 3.0;
@@ -1867,7 +1867,7 @@ impl Cabin {
                         ) {
                             ui.label(
                                 RichText::new(SKILL_SAVED_NOTE)
-                                    .size(12.0)
+                                    .size(crate::theme::TYPE_CAPTION)
                                     .color(crate::theme::muted()),
                             );
                         }
@@ -2520,13 +2520,13 @@ impl Cabin {
                     ui.set_max_width(inner);
                     ui.label(
                         RichText::new(eyebrow)
-                            .size(12.0)
+                            .size(crate::theme::TYPE_CAPTION)
                             .color(crate::theme::muted()),
                     );
                     ui.add_space(4.0);
                     ui.label(
                         RichText::new(grokhub_core::brand::filled("{product} wants permission"))
-                            .size(14.0)
+                            .size(crate::theme::TYPE_BODY)
                             .color(crate::theme::fg()),
                     );
                     // A parsed command paints even when it is `[ -f … ]` or `{ …; }`.
@@ -2546,7 +2546,7 @@ impl Cabin {
                         ui.add(
                             egui::Label::new(
                                 RichText::new(action)
-                                    .size(13.0)
+                                    .size(crate::theme::TYPE_BODY)
                                     .monospace()
                                     .color(crate::theme::fg()),
                             )
@@ -2558,7 +2558,7 @@ impl Cabin {
                         ui.add(
                             egui::Label::new(
                                 RichText::new(&p.reason)
-                                    .size(13.0)
+                                    .size(crate::theme::TYPE_BODY)
                                     .color(crate::theme::muted()),
                             )
                             .wrap(),
@@ -2568,7 +2568,7 @@ impl Cabin {
                         ui.add_space(4.0);
                         ui.label(
                             RichText::new(format!("{} more waiting", self.perm_queue.len()))
-                                .size(12.0)
+                                .size(crate::theme::TYPE_CAPTION)
                                 .color(crate::theme::muted()),
                         );
                     }
@@ -2715,7 +2715,7 @@ impl Cabin {
                 }
                 ui.label(
                     RichText::new(format!("{} wants input", p.server_name))
-                        .size(14.0)
+                        .size(crate::theme::TYPE_BODY)
                         .color(crate::theme::fg()),
                 );
                 let message = super::reply_chips_ui::question_text(&p);
@@ -2723,7 +2723,7 @@ impl Cabin {
                     ui.add_space(4.0);
                     ui.label(
                         RichText::new(message)
-                            .size(13.0)
+                            .size(crate::theme::TYPE_BODY)
                             .color(crate::theme::muted()),
                     );
                 }
@@ -2734,7 +2734,7 @@ impl Cabin {
                     ui.add_space(4.0);
                     ui.label(
                         RichText::new(&p.url)
-                            .size(12.0)
+                            .size(crate::theme::TYPE_CAPTION)
                             .color(crate::theme::muted()),
                     );
                 }
@@ -2800,7 +2800,7 @@ impl Cabin {
         ui.horizontal(|ui| {
             ui.label(
                 RichText::new("Credit limit")
-                    .size(13.0)
+                    .size(crate::theme::TYPE_BODY)
                     .color(crate::theme::muted()),
             );
             if crate::cards::white_pill(ui, "Try Again") {
@@ -2826,7 +2826,7 @@ impl Cabin {
         ui.horizontal(|ui| {
             ui.label(
                 RichText::new("18+ chats need this PC's model")
-                    .size(13.0)
+                    .size(crate::theme::TYPE_BODY)
                     .color(crate::theme::muted()),
             );
             if crate::cards::white_pill(ui, "Get a local model") {
@@ -3070,7 +3070,7 @@ impl Cabin {
                                     rect.center(),
                                     egui::Align2::CENTER_CENTER,
                                     line,
-                                    egui::FontId::proportional(11.0),
+                                    egui::FontId::proportional(crate::theme::TYPE_CAPTION),
                                     crate::theme::muted(),
                                 );
                             } else {
@@ -3302,7 +3302,7 @@ impl Cabin {
                                                         .frame(composer_field_frame())
                                                         .vertical_align(hint_align)
                                                         .font(egui::FontId::new(
-                                                            15.0,
+                                                            crate::theme::TYPE_PROSE,
                                                             egui::FontFamily::Proportional,
                                                         ))
                                                         .text_color(crate::theme::fg())
@@ -3320,7 +3320,7 @@ impl Cabin {
                                         if self.composer.is_empty() && !edit.has_focus() {
                                             let ghost = composer_hint_ink();
                                             let hint_font = egui::FontId::new(
-                                                15.0,
+                                                crate::theme::TYPE_TITLE,
                                                 egui::FontFamily::Proportional,
                                             );
                                             let hint_text = composer_ghost_hint(text_w);

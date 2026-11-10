@@ -188,7 +188,7 @@ fn paint_connector_row(ui: &mut egui::Ui, row: &ConnectorRow) -> Option<Connecto
                     rect.center(),
                     egui::Align2::CENTER_CENTER,
                     initial,
-                    egui::FontId::proportional(15.0),
+                    egui::FontId::proportional(crate::theme::TYPE_TITLE),
                     crate::theme::fg(),
                 );
                 ui.add_space(8.0);
@@ -196,7 +196,7 @@ fn paint_connector_row(ui: &mut egui::Ui, row: &ConnectorRow) -> Option<Connecto
                     ui.horizontal(|ui| {
                         ui.label(
                             RichText::new(&row.name)
-                                .size(15.0)
+                                .size(crate::theme::TYPE_TITLE)
                                 .color(crate::theme::fg()),
                         );
                         let (label, tone) = row.state.chip();
@@ -205,18 +205,30 @@ fn paint_connector_row(ui: &mut egui::Ui, row: &ConnectorRow) -> Option<Connecto
                     if !row.detail.is_empty() {
                         ui.label(
                             RichText::new(&row.detail)
-                                .size(12.0)
+                                .size(crate::theme::TYPE_CAPTION)
                                 .color(crate::theme::muted()),
                         );
                     }
                     if let Some(line) = row.error_line() {
-                        ui.label(RichText::new(line).size(12.0).color(crate::theme::setup()));
+                        ui.label(
+                            RichText::new(line)
+                                .size(crate::theme::TYPE_CAPTION)
+                                .color(crate::theme::setup()),
+                        );
                     }
                     if let Some(account) = &row.account {
-                        ui.label(RichText::new(account).size(12.0).color(crate::theme::fg()));
+                        ui.label(
+                            RichText::new(account)
+                                .size(crate::theme::TYPE_CAPTION)
+                                .color(crate::theme::fg()),
+                        );
                     }
                     if let Some(note) = &row.note {
-                        ui.label(RichText::new(note).size(12.0).color(crate::theme::muted()));
+                        ui.label(
+                            RichText::new(note)
+                                .size(crate::theme::TYPE_CAPTION)
+                                .color(crate::theme::muted()),
+                        );
                     }
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -356,7 +368,7 @@ impl Cabin {
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new(format!("{} API key", e.name))
-                            .size(12.0)
+                            .size(crate::theme::TYPE_CAPTION)
                             .color(crate::theme::muted()),
                     );
                     ui.add(
@@ -387,7 +399,7 @@ impl Cabin {
         crate::cards::section_label(ui, "GitHub");
         ui.label(
             RichText::new("Read-only. Who am I and List repos use your GitHub token. No writes. No other websites.")
-                .size(12.0)
+                .size(crate::theme::TYPE_CAPTION)
                 .color(crate::theme::muted()),
         );
         ui.add_space(8.0);

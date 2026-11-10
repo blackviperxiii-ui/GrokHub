@@ -41,7 +41,7 @@ pub fn empty_state(ui: &mut Ui, title: &str, message: &str, action_label: Option
         ui.add_space(crate::theme::SPACING_24);
         ui.label(
             RichText::new(title)
-                .font(crate::theme::title_font(crate::theme::TYPE_HEADLINE))
+                .font(crate::theme::title_font(crate::theme::headline(ui.ctx())))
                 .color(crate::theme::fg()),
         );
         ui.add_space(crate::theme::SPACING_8);

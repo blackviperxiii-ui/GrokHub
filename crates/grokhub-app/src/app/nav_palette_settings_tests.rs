@@ -31,7 +31,7 @@ fn about_paints_the_version() {
         "About must show grokhub --version: {about}"
     );
     assert!(
-        about.contains("FONT_HEADING"),
+        about.contains("theme::headline("),
         "version is a heading, not a muted note: {about}"
     );
     assert!(

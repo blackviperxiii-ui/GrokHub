@@ -890,7 +890,7 @@ impl Cabin {
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new("History")
-                    .font(crate::theme::title_font(crate::theme::TYPE_HEADLINE))
+                    .font(crate::theme::title_font(crate::theme::headline(ui.ctx())))
                     .color(crate::theme::fg()),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

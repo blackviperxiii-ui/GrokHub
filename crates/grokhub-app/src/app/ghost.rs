@@ -102,7 +102,7 @@ impl ComposerGhost {
             return false;
         }
         let ink = super::chat_ui::composer_hint_ink();
-        let font = egui::FontId::new(15.0, egui::FontFamily::Proportional);
+        let font = egui::FontId::new(crate::theme::TYPE_PROSE, egui::FontFamily::Proportional);
         let (prelude, ghost) = ui.fonts_mut(|fonts| {
             let prelude = fonts.layout(
                 composer.to_string(),

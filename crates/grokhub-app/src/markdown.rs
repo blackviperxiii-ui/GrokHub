@@ -21,17 +21,26 @@ pub(crate) fn display_text(text: &str) -> &str {
     &text[..end]
 }
 
+/// Reading text sits at 1.5x leading (docs/design/type.md), so long replies
+/// don't read as a wall.
+fn prose_leading(job: &mut LayoutJob) {
+    for s in &mut job.sections {
+        s.format.line_height = Some(crate::theme::LH_PROSE);
+    }
+}
+
 /// Cap for wrapping. Short bubbles hug via `bubble_outer_width`, they do not stretch to this.
 pub fn bubble_width(available: f32) -> f32 {
     bubble_max_width(available)
 }
 
 /// Layout bubble text so a long token wraps inside `wrap`.
-pub fn wrapped_job(ui: &Ui, text: &str, wrap: f32, color: Color32) -> LayoutJob {
+pub fn wrapped_job(text: &str, wrap: f32, color: Color32) -> LayoutJob {
     let text = display_text(text);
-    let font = TextStyle::Body.resolve(ui.style());
+    let font = crate::theme::prose_font();
     let wrap = wrap.max(1.0);
     let mut job = LayoutJob::simple(text.to_owned(), font, color, wrap);
+    prose_leading(&mut job);
     // Word boundaries first. A token wider than the row still breaks
     // (epaint falls through space, dash, punctuation, then any glyph).
     job.wrap.break_anywhere = false;
@@ -42,9 +51,9 @@ pub fn measure_text(ui: &Ui, text: &str, wrap: f32) -> Vec2 {
     let text = display_text(text);
     let wrap = wrap.max(1.0);
     if text.is_empty() {
-        return Vec2::new(0.0, ui.text_style_height(&TextStyle::Body));
+        return Vec2::new(0.0, crate::theme::LH_PROSE);
     }
-    let job = wrapped_job(ui, text, wrap, Color32::WHITE);
+    let job = wrapped_job(text, wrap, Color32::WHITE);
     ui.fonts_mut(|f| f.layout_job(job)).size()
 }
 
@@ -100,12 +109,17 @@ pub fn show(ui: &mut Ui, text: &str) {
     for (bi, block) in md_blocks(text).into_iter().enumerate() {
         match block {
             MdBlock::Heading(level, rest) => {
-                let rich = RichText::new(md_plain(&rest));
-                let rich = match level {
-                    1 => rich.heading().strong(),
-                    2 => rich.heading(),
-                    _ => rich.strong(),
+                // h1 is a section title; h2 and below are bold prose, so a
+                // reply never shouts. Each keeps its 4px-grid line height.
+                let size = if level == 1 {
+                    crate::theme::TYPE_SECTION
+                } else {
+                    crate::theme::TYPE_PROSE
                 };
+                let rich = RichText::new(md_plain(&rest))
+                    .size(size)
+                    .line_height(Some(crate::theme::line_height_for(size)))
+                    .strong();
                 wrapping_label(ui, rich, wrap);
             }
             MdBlock::Bullet { depth, text } => {
@@ -159,7 +173,7 @@ fn list_item(ui: &mut Ui, depth: u8, marker: Marker, text: &str, wrap: f32) {
         if lead > 0.0 {
             ui.add_space(lead);
         }
-        let row_h = ui.text_style_height(&TextStyle::Body);
+        let row_h = crate::theme::LH_PROSE;
         let (rect, _) = ui.allocate_exact_size(Vec2::new(gutter, row_h), Sense::hover());
         let ink = crate::theme::muted();
         match marker {
@@ -173,7 +187,7 @@ fn list_item(ui: &mut Ui, depth: u8, marker: Marker, text: &str, wrap: f32) {
                 }
             }
             Marker::Num(n) => {
-                let font = TextStyle::Body.resolve(ui.style());
+                let font = crate::theme::prose_font();
                 let galley = ui.fonts_mut(|f| f.layout_no_wrap(format!("{n}."), font, ink));
                 // Two-digit numbers push the text a little instead of overlapping it.
                 let w = galley.size().x;
@@ -298,7 +312,7 @@ pub(crate) fn table_col_widths(
 ) -> Vec<f32> {
     const MIN_COL: f32 = 24.0;
     let cols = header.len().max(1);
-    let font = TextStyle::Body.resolve(ui.style());
+    let font = crate::theme::prose_font();
     let measure = |t: &str| {
         ui.fonts_mut(|f| {
             f.layout_no_wrap(md_plain(t), font.clone(), Color32::WHITE)
@@ -469,7 +483,7 @@ fn wrapping_break(ui: &mut Ui, line: &str, wrap: f32) {
         .visuals()
         .override_text_color
         .unwrap_or_else(crate::theme::fg);
-    let job = wrapped_job(ui, line, wrap, ink);
+    let job = wrapped_job(line, wrap, ink);
     ui.add(Label::new(job).wrap().selectable(true));
 }
 
@@ -481,7 +495,7 @@ fn inline(ui: &mut Ui, line: &str, wrap: f32) {
         return;
     }
     if spans.is_empty() {
-        ui.add_space(ui.text_style_height(&TextStyle::Body));
+        ui.add_space(crate::theme::LH_PROSE);
         return;
     }
     let has_link = spans.iter().any(|s| matches!(s, MdSpan::Link { .. }));
@@ -516,7 +530,7 @@ fn inline(ui: &mut Ui, line: &str, wrap: f32) {
 }
 
 fn spans_job(ui: &Ui, spans: &[MdSpan], wrap: f32) -> LayoutJob {
-    let body = TextStyle::Body.resolve(ui.style());
+    let body = crate::theme::prose_font();
     let mono = TextStyle::Monospace.resolve(ui.style());
     let fg = crate::theme::fg();
     let strong = ui.visuals().strong_text_color();
@@ -557,6 +571,7 @@ fn spans_job(ui: &Ui, spans: &[MdSpan], wrap: f32) -> LayoutJob {
         }
         job.append(text, 0.0, fmt);
     }
+    prose_leading(&mut job);
     job
 }
 

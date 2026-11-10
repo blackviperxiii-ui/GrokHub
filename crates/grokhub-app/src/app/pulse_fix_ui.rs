@@ -252,9 +252,11 @@ impl Cabin {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let x = ui
                             .add(
-                                egui::Button::new(RichText::new("×").size(18.0))
-                                    .frame(false)
-                                    .min_size(egui::vec2(28.0, 28.0)),
+                                egui::Button::new(
+                                    RichText::new("×").size(crate::theme::TYPE_SECTION),
+                                )
+                                .frame(false)
+                                .min_size(egui::vec2(28.0, 28.0)),
                             )
                             .on_hover_text("Close (Esc)");
                         if x.clicked() {

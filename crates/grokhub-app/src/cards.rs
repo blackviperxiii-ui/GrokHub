@@ -359,7 +359,7 @@ pub fn page_header(ui: &mut egui::Ui, title: &str, action: &str) -> bool {
     ui.horizontal(|ui| {
         ui.label(
             RichText::new(title)
-                .font(crate::theme::title_font(crate::theme::TYPE_HEADLINE))
+                .font(crate::theme::title_font(crate::theme::headline(ui.ctx())))
                 .color(crate::theme::fg()),
         );
         if !action.is_empty() {
@@ -397,7 +397,13 @@ pub fn dots_menu(ui: &mut egui::Ui, bright: bool, add: impl FnOnce(&mut egui::Ui
         } else {
             crate::theme::muted()
         };
-        ui.menu_button(RichText::new("···").size(16.0).strong().color(color), add);
+        ui.menu_button(
+            RichText::new("···")
+                .size(crate::theme::TYPE_TITLE)
+                .strong()
+                .color(color),
+            add,
+        );
     });
 }
 
@@ -546,7 +552,7 @@ fn felt_segment_styled(
 
 /// Catalog / settings tab with animated active fill.
 pub fn felt_tab(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
-    let font = FontId::proportional(13.0);
+    let font = FontId::proportional(crate::theme::TYPE_BODY);
     // PLACEHOLDER lets the painter pick the colour below. Baking one in here painted the
     // selected tab's label in fg() on top of an fg() pill — a white label on white.
     let galley = ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font, Color32::PLACEHOLDER));
@@ -669,7 +675,7 @@ pub fn titlebar_update_chip(ui: &mut egui::Ui, label: &str) -> bool {
     let galley = ui.fonts_mut(|f| {
         f.layout_no_wrap(
             label.to_owned(),
-            FontId::proportional(12.0),
+            FontId::proportional(crate::theme::TYPE_CAPTION),
             Color32::PLACEHOLDER,
         )
     });
@@ -830,9 +836,17 @@ pub fn settings_toggle(ui: &mut egui::Ui, title: &str, hint: &str, on: &mut bool
             // A long hint wraps before the switch instead of running under it.
             ui.set_max_width(text_w);
             ui.add_space(8.0);
-            ui.label(RichText::new(title).size(15.0).color(crate::theme::fg()));
+            ui.label(
+                RichText::new(title)
+                    .size(crate::theme::TYPE_TITLE)
+                    .color(crate::theme::fg()),
+            );
             if !hint.is_empty() {
-                ui.label(RichText::new(hint).size(12.0).color(crate::theme::muted()));
+                ui.label(
+                    RichText::new(hint)
+                        .size(crate::theme::TYPE_CAPTION)
+                        .color(crate::theme::muted()),
+                );
             }
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -916,14 +930,26 @@ pub fn settings_dropdown(
 ) -> Option<usize> {
     let mut picked = None;
     ui.add_space(4.0);
-    ui.label(RichText::new(title).size(15.0).color(crate::theme::fg()));
+    ui.label(
+        RichText::new(title)
+            .size(crate::theme::TYPE_TITLE)
+            .color(crate::theme::fg()),
+    );
     if !hint.is_empty() {
-        ui.label(RichText::new(hint).size(12.0).color(crate::theme::muted()));
+        ui.label(
+            RichText::new(hint)
+                .size(crate::theme::TYPE_CAPTION)
+                .color(crate::theme::muted()),
+        );
     }
     ui.add_space(8.0);
     card_frame(ui, CardVariant::Outlined, true, |ui| {
         egui::ComboBox::from_id_salt(title)
-            .selected_text(RichText::new(selected).size(15.0).color(crate::theme::fg()))
+            .selected_text(
+                RichText::new(selected)
+                    .size(crate::theme::TYPE_TITLE)
+                    .color(crate::theme::fg()),
+            )
             .width(ui.available_width().max(160.0))
             .show_ui(ui, |ui| {
                 for (i, label) in choices.iter().enumerate() {
@@ -948,9 +974,17 @@ pub fn settings_field(
     masked: bool,
 ) {
     ui.add_space(4.0);
-    ui.label(RichText::new(title).size(15.0).color(crate::theme::fg()));
+    ui.label(
+        RichText::new(title)
+            .size(crate::theme::TYPE_TITLE)
+            .color(crate::theme::fg()),
+    );
     if !hint.is_empty() {
-        ui.label(RichText::new(hint).size(12.0).color(crate::theme::muted()));
+        ui.label(
+            RichText::new(hint)
+                .size(crate::theme::TYPE_CAPTION)
+                .color(crate::theme::muted()),
+        );
     }
     ui.add_space(8.0);
     card_frame(ui, CardVariant::Outlined, true, |ui| {
@@ -982,7 +1016,7 @@ pub fn get_started_panel(
         ui.add_space(12.0);
         ui.label(
             RichText::new(format!("Connect your Super Grok account. {} signs in on its own; the Grok Build CLI is not needed.", grokhub_core::brand::product_name()))
-                .size(15.0)
+                .size(crate::theme::TYPE_TITLE)
                 .color(crate::theme::muted()),
         );
         ui.add_space(24.0);
@@ -1035,7 +1069,7 @@ pub fn state_hint_job(hint: &str) -> LayoutJob {
                 .is_some_and(|rest| rest.starts_with([' ', '.']))
         })
         .unwrap_or("");
-    let font = FontId::proportional(12.0);
+    let font = FontId::proportional(crate::theme::TYPE_CAPTION);
     let mut job = LayoutJob::default();
     if !lead.is_empty() {
         job.append(
@@ -1089,7 +1123,11 @@ pub fn settings_grant_row(
     let labels = |ui: &mut egui::Ui| {
         ui.vertical(|ui| {
             ui.add_space(4.0);
-            ui.label(RichText::new(title).size(15.0).color(crate::theme::fg()));
+            ui.label(
+                RichText::new(title)
+                    .size(crate::theme::TYPE_TITLE)
+                    .color(crate::theme::fg()),
+            );
             if !hint.is_empty() {
                 let r = ui.label(state_hint_job(hint));
                 if let Some(full) = hint_hover {
@@ -1155,9 +1193,17 @@ fn settings_action_styled(
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
             ui.add_space(4.0);
-            ui.label(RichText::new(title).size(15.0).color(crate::theme::fg()));
+            ui.label(
+                RichText::new(title)
+                    .size(crate::theme::TYPE_TITLE)
+                    .color(crate::theme::fg()),
+            );
             if !hint.is_empty() {
-                ui.label(RichText::new(hint).size(12.0).color(crate::theme::muted()));
+                ui.label(
+                    RichText::new(hint)
+                        .size(crate::theme::TYPE_CAPTION)
+                        .color(crate::theme::muted()),
+                );
             }
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1178,7 +1224,7 @@ pub fn settings_progress(ui: &mut egui::Ui, pct: u8, fill: Color32) {
         );
         ui.label(
             RichText::new(format!("{pct}%"))
-                .size(13.0)
+                .size(crate::theme::TYPE_BODY)
                 .color(crate::theme::fg()),
         );
     });
@@ -1267,7 +1313,7 @@ pub fn appearance_card(ui: &mut egui::Ui, label: &str, selected: bool, preview: 
         egui::pos2(rect.center().x, rect.bottom() - 14.0),
         Align2::CENTER_CENTER,
         label,
-        FontId::proportional(13.0),
+        FontId::proportional(crate::theme::TYPE_BODY),
         crate::theme::fg(),
     );
     resp.clicked() || (resp.contains_pointer() && resp.ctx.input(|i| i.pointer.primary_released()))
@@ -2025,7 +2071,7 @@ fn imagine_video_hero(ui: &mut egui::Ui, wall: egui::Rect, path: &str) {
         egui::pos2(c.x, c.y - 18.0),
         Align2::CENTER_CENTER,
         "▶",
-        FontId::proportional(22.0),
+        FontId::proportional(crate::theme::TYPE_HEADLINE),
         crate::theme::fg(),
     );
     ui.painter().text(
@@ -2280,7 +2326,7 @@ fn imagine_disk_tile(
             rect.center(),
             Align2::CENTER_CENTER,
             "▶",
-            FontId::proportional(18.0),
+            FontId::proportional(crate::theme::TYPE_SECTION),
             crate::theme::fg(),
         );
         ui.painter().rect_filled(
@@ -3177,7 +3223,7 @@ mod tests {
         let ctx = egui::Context::default();
         let _ = crate::theme::test_pass(&ctx, Default::default(), |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
-                let font = FontId::proportional(13.0);
+                let font = FontId::proportional(crate::theme::TYPE_BODY);
                 let color = Color32::WHITE;
                 let long = layout_chip_label(
                     ui,
@@ -3213,7 +3259,7 @@ mod tests {
                 let natural = ui.fonts_mut(|f| {
                     f.layout_no_wrap(
                         "you should already have mcp configured".into(),
-                        FontId::proportional(13.0),
+                        FontId::proportional(crate::theme::TYPE_BODY),
                         color,
                     )
                     .size()
@@ -3255,15 +3301,19 @@ mod tests {
                     let galley = layout_chip_label(
                         ui,
                         label,
-                        FontId::proportional(13.0),
+                        FontId::proportional(crate::theme::TYPE_BODY),
                         color,
                         CHIP_LABEL_MAX_W,
                     );
                     assert_eq!(galley.rows.len(), 1, "owner wrap: {label}");
                     let natural = ui.fonts_mut(|f| {
-                        f.layout_no_wrap(label.to_owned(), FontId::proportional(13.0), color)
-                            .size()
-                            .x
+                        f.layout_no_wrap(
+                            label.to_owned(),
+                            FontId::proportional(crate::theme::TYPE_BODY),
+                            color,
+                        )
+                        .size()
+                        .x
                     });
                     if natural > CHIP_LABEL_MAX_W {
                         assert!(
@@ -3279,14 +3329,14 @@ mod tests {
                 let continue_g = layout_chip_label(
                     ui,
                     "continue",
-                    FontId::proportional(13.0),
+                    FontId::proportional(crate::theme::TYPE_BODY),
                     color,
                     CHIP_LABEL_MAX_W,
                 );
                 let test_g = layout_chip_label(
                     ui,
                     "test",
-                    FontId::proportional(13.0),
+                    FontId::proportional(crate::theme::TYPE_BODY),
                     color,
                     CHIP_LABEL_MAX_W,
                 );

@@ -230,3 +230,37 @@ fn old_files_with_only_likes_and_dislikes_still_load() {
     let t: Taste = serde_json::from_str(raw).expect("old file");
     assert_eq!(t.events[0].reaction, Reaction::Like);
 }
+
+#[test]
+fn each_reaction_becomes_one_engine_signal_per_trait() {
+    use crate::learn::signal::Kind;
+    use crate::learn::sources::{taste, trait_id};
+    let traits = vec![
+        "topic:rust".to_string(),
+        "subject:attractive women".to_string(),
+    ];
+    for (reaction, kind) in [
+        (Reaction::Like, Kind::Liked),
+        (Reaction::Dislike, Kind::Disliked),
+        (Reaction::Engage, Kind::Used),
+        (Reaction::Snooze, Kind::Picked),
+        (Reaction::Delete, Kind::Declined),
+    ] {
+        let signals = taste(&traits, reaction, 7);
+        assert_eq!(signals.len(), 2, "{reaction:?}");
+        assert!(signals.iter().all(|s| s.kind == kind && s.at_ms == 7));
+    }
+    let signals = taste(&traits, Reaction::Like, 7);
+    let subjects: Vec<&str> = signals.iter().map(|s| s.subject.as_str()).collect();
+    // The kind stays readable; the words never reach the engine.
+    assert!(subjects[0].starts_with("trait:topic/"), "{subjects:?}");
+    assert!(subjects[1].starts_with("trait:subject/"), "{subjects:?}");
+    assert!(subjects
+        .iter()
+        .all(|s| !s.contains("rust") && !s.contains("women")));
+    assert_eq!(trait_id("topic:rust"), trait_id("topic:rust"));
+    assert_ne!(trait_id("topic:rust"), trait_id("topic:go"));
+    // A kind that isn't a short ASCII word is skipped, not mangled.
+    assert_eq!(trait_id("tópico:rust"), None);
+    assert_eq!(trait_id("no colon"), None);
+}

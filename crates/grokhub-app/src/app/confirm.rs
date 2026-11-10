@@ -314,16 +314,24 @@ fn paint_confirm_sheet_titled(
         .stroke(egui::Stroke::new(2.0_f32, stroke))
         .inner_margin(egui::Margin::same(12))
         .show(ui, |ui| {
-            ui.label(RichText::new(title).size(14.0).color(crate::theme::fg()));
+            ui.label(
+                RichText::new(title)
+                    .size(crate::theme::TYPE_BODY)
+                    .color(crate::theme::fg()),
+            );
             ui.add_space(4.0);
             ui.label(
                 RichText::new(spec.consequence)
-                    .size(13.0)
+                    .size(crate::theme::TYPE_BODY)
                     .color(crate::theme::muted()),
             );
             let extra = detail.trim();
             if !extra.is_empty() && extra != spec.consequence {
-                ui.label(RichText::new(extra).size(13.0).color(crate::theme::muted()));
+                ui.label(
+                    RichText::new(extra)
+                        .size(crate::theme::TYPE_BODY)
+                        .color(crate::theme::muted()),
+                );
             }
             ui.add_space(8.0);
             ui.horizontal(|ui| {

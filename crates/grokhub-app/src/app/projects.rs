@@ -339,7 +339,7 @@ impl Cabin {
                         ui.set_min_width(168.0);
                         ui.label(
                             RichText::new("Add to folder")
-                                .size(12.0)
+                                .size(crate::theme::TYPE_CAPTION)
                                 .color(crate::theme::muted()),
                         );
                         if folders.is_empty() {

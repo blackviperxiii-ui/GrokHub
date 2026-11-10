@@ -715,7 +715,7 @@ impl Cabin {
                         if listed.is_empty() {
                             ui.label(
                                 RichText::new("Nothing running right now")
-                                    .size(11.0)
+                                    .size(crate::theme::TYPE_CAPTION)
                                     .color(crate::theme::muted()),
                             );
                         }
@@ -746,7 +746,7 @@ impl Cabin {
                                         };
                                         ui.label(
                                             RichText::new(status_word(item.status))
-                                                .size(11.0)
+                                                .size(crate::theme::TYPE_CAPTION)
                                                 .color(tone),
                                         );
                                     },
@@ -754,13 +754,15 @@ impl Cabin {
                             });
                             ui.label(
                                 RichText::new(&item.detail)
-                                    .size(11.0)
+                                    .size(crate::theme::TYPE_CAPTION)
                                     .color(crate::theme::muted()),
                             );
                             let steps = steps_line(item);
                             if !steps.is_empty() {
                                 ui.label(
-                                    RichText::new(steps).size(11.0).color(crate::theme::muted()),
+                                    RichText::new(steps)
+                                        .size(crate::theme::TYPE_CAPTION)
+                                        .color(crate::theme::muted()),
                                 );
                             }
                             if item.status == ActivityStatus::Running {
@@ -780,7 +782,9 @@ impl Cabin {
                             let row_btn = |ui: &mut egui::Ui, text: &str| {
                                 ui.add(
                                     egui::Button::new(
-                                        RichText::new(text).size(11.0).color(crate::theme::fg()),
+                                        RichText::new(text)
+                                            .size(crate::theme::TYPE_CAPTION)
+                                            .color(crate::theme::fg()),
                                     )
                                     .fill(egui::Color32::TRANSPARENT)
                                     .stroke(egui::Stroke::new(1.0, crate::theme::border())),
@@ -830,7 +834,7 @@ impl Cabin {
                         if more > 0 {
                             ui.label(
                                 RichText::new(format!("{more} more"))
-                                    .size(11.0)
+                                    .size(crate::theme::TYPE_CAPTION)
                                     .color(crate::theme::muted()),
                             );
                         }

@@ -1068,7 +1068,7 @@ impl Cabin {
                                                                     grokhub_core::brand::product_name(),
                                                                     env!("CARGO_PKG_VERSION")
                                                                 ))
-                                                                .size(crate::theme::FONT_HEADING)
+                                                                .size(crate::theme::headline(ui.ctx()))
                                                                 .color(crate::theme::fg()),
                                                             );
                                                             ui.add_space(8.0);
