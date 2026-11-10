@@ -1497,6 +1497,8 @@ const BASE_DENY_RULES: &[&str] = &[
     "MCPTool(grokhub-self__skill_delete)",
     "MCPTool(grokhub-self__connection_remove)",
     "MCPTool(grokhub-self__automation_delete)",
+    // A new automation runs on its own later, so it waits for your yes too
+    "MCPTool(grokhub-self__automation_create)",
 ];
 
 /// Every path C `--deny` rule: [`BASE_DENY_RULES`], then the forms GB's
@@ -2507,8 +2509,8 @@ mod tests {
 
     #[test]
     fn headless_deny_rules_cover_the_floor_and_stubs() {
-        assert_eq!(BASE_DENY_RULES.len(), 265);
-        assert_eq!(&HEADLESS_DENY_RULES[..265], BASE_DENY_RULES);
+        assert_eq!(BASE_DENY_RULES.len(), 266);
+        assert_eq!(&HEADLESS_DENY_RULES[..266], BASE_DENY_RULES);
         assert_eq!(HEADLESS_DENY_RULES[259], "Bash(*consent.jsonl*)");
         assert_eq!(HEADLESS_DENY_RULES[261], "Write(**/consent.jsonl)");
         assert_eq!(
@@ -2522,6 +2524,10 @@ mod tests {
         assert_eq!(
             HEADLESS_DENY_RULES[264],
             "MCPTool(grokhub-self__automation_delete)"
+        );
+        assert_eq!(
+            HEADLESS_DENY_RULES[265],
+            "MCPTool(grokhub-self__automation_create)"
         );
         assert_eq!(HEADLESS_DENY_RULES[0], "Bash(rm -rf /)");
         assert!(HEADLESS_DENY_RULES.contains(&"Bash(rm *)"));
@@ -2714,7 +2720,7 @@ mod tests {
     /// Card 29 part 3: case, full paths, wrappers and encoded PowerShell on path C.
     #[test]
     fn gb_rules_see_case_full_paths_wrappers_and_encoded_powershell() {
-        assert_eq!(HEADLESS_DENY_RULES.len(), 723);
+        assert_eq!(HEADLESS_DENY_RULES.len(), 724);
         let argv: usize = HEADLESS_DENY_RULES
             .iter()
             .map(|r| "--deny".len() + r.len() + 4)

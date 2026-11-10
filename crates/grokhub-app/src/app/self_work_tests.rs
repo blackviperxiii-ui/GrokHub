@@ -284,7 +284,8 @@ fn changes_from_the_self_server_process_show_as_work_rows() {
     );
     let (ok, made) = call(
         &mut server,
-        &mut io,
+        // A new automation needs a yes; this one is setup, so it gets one.
+        &mut FakeIo::answering(true),
         "automation_create",
         serde_json::json!({ "instructions": "sweep the inbox", "every": "1h" }),
     );

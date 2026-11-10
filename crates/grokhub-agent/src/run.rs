@@ -5598,12 +5598,14 @@ mod tests {
                             r#"{"command":"echo ran > ran.txt"}"#,
                         ),
                         call("k", "kill_command_or_subagent", r#"{"task_id":"t1"}"#),
+                        call("m", "monitor", r#"{"command":"echo hi"}"#),
+                        // A new automation is hard class: its refusal stops the rest of the
+                        // batch, so it goes last and every other tool still gets its own.
                         call(
                             "c",
                             "scheduler_create",
                             r#"{"interval":"10m","prompt":"nope"}"#,
                         ),
-                        call("m", "monitor", r#"{"command":"echo hi"}"#),
                     ],
                     usage: Usage::default(),
                     truncated: false,

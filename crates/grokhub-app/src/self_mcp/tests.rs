@@ -524,7 +524,8 @@ fn connection_remove_and_automation_delete_park_and_deny_leaves_files_byte_ident
     );
     let (ok, made) = call(
         &mut server,
-        &mut io,
+        // A new automation needs a yes; this one is setup, so it gets one.
+        &mut FakeIo::answering(true),
         "automation_create",
         json!({ "instructions": "sweep the inbox", "every": "1h" }),
     );
