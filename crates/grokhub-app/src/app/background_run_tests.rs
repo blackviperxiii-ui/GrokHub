@@ -1663,11 +1663,12 @@ fn no_background_run_writes_into_a_chat_unless_asked_there() {
     cabin.open_board_card(&pulse);
     assert!(cabin.board_view.show_archived);
     assert_eq!(cabin.board_view.open.as_deref(), Some(pulse.as_str()));
-    end_bg_test(root, cabin);
+    release_isolated(&root, cabin);
 }
 
 // A Pulse card's text that reads like "tell me here" can't make its run post
 // into the open chat: a card start never asks for a chat post.
+#[cfg(unix)]
 #[test]
 fn a_card_started_run_never_asks_for_a_chat_post() {
     let _g = crate::config::hold_test_config();
