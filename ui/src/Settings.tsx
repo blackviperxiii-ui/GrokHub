@@ -17,6 +17,7 @@ import { Appearance } from "./Appearance";
 import { AutoSetupPage } from "./AutoSetup";
 import { Background } from "./Background";
 import { Behavior } from "./Behavior";
+import { CodeSettings } from "./CodeSettings";
 import { Defaults } from "./Defaults";
 import { GrokSignIn } from "./GrokSignIn";
 import { Labs } from "./Labs";
@@ -275,6 +276,7 @@ export function Settings({
             {section === "privacy" && <Learned />}
             {section === "background" && <Background />}
             {section === "autoSetup" && <AutoSetupPage />}
+            {section === "code" && caps.code && <CodeSettings />}
             {section === "pulse" && caps.pulse && <Interests />}
             {section === "localAi" && caps.localAi && <LocalAi />}
             {section === "webAccess" && caps.webAccess && <WebAccess />}

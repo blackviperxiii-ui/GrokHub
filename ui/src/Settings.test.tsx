@@ -33,6 +33,7 @@ vi.mock("./Labs", () => ({ Labs: () => <p>Labs panel</p> }));
 vi.mock("./Personality", () => ({ Personality: () => <p>Personality panel</p> }));
 vi.mock("./Playbooks", () => ({ Playbooks: () => <p>Playbooks panel</p> }));
 vi.mock("./Interests", () => ({ Interests: () => <p>Interests panel</p> }));
+vi.mock("./CodeSettings", () => ({ CodeSettings: () => <p>Code panel</p> }));
 vi.mock("./Learned", () => ({ Learned: () => <p>Learned panel</p> }));
 vi.mock("./Permissions", () => ({ Permissions: () => <p>Permissions panel</p> }));
 // Behavior, Privacy and Background have their own tests.
@@ -84,7 +85,7 @@ async function everyPage() {
   return pages;
 }
 
-const DESKTOP: Capabilities = { desktopControl: true, pulse: true, localAi: true, tray: true, webAccess: true, plugins: true, library: true, autoSetup: true };
+const DESKTOP: Capabilities = { desktopControl: true, pulse: true, localAi: true, tray: true, webAccess: true, plugins: true, library: true, autoSetup: true, code: true };
 const PHONE: Capabilities = { desktopControl: false, pulse: false, localAi: false, tray: false, webAccess: false, plugins: false, library: false };
 const WEB: Capabilities = { ...PHONE, remote: true };
 /** A desktop with start at login, the summon hotkey and notifications. */
@@ -304,7 +305,7 @@ describe("Settings", () => {
       Account: ["Account"],
       "Look & feel": ["Appearance"],
       "AI & chat": ["Defaults", "Personality", "Playbooks", "Pulse", "Local AI"],
-      "Your PC": ["General", "Behavior", "Background", "Auto setup"],
+      "Your PC": ["General", "Behavior", "Background", "Auto setup", "Code"],
       "Privacy & safety": ["Privacy & data", "Permissions", "Web access"],
       "Help & updates": ["About", "Labs"],
     });
@@ -378,9 +379,13 @@ describe("Settings", () => {
     expect(screen.queryByText("Privacy panel")).toBeNull();
     expect(screen.queryByText("Learned panel")).toBeNull();
 
+    await openSection("Code");
+    expect(screen.getByText("Code panel")).toBeInTheDocument();
+    expect(screen.queryByText("Background panel")).toBeNull();
+
     await openSection("Pulse");
     expect(screen.getByText("Interests panel")).toBeInTheDocument();
-    expect(screen.queryByText("Background panel")).toBeNull();
+    expect(screen.queryByText("Code panel")).toBeNull();
 
     await openSection("Local AI");
     expect(screen.getByText("Local AI panel")).toBeInTheDocument();

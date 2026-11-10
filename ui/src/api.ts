@@ -2628,3 +2628,52 @@ export interface CodeBuiltin {
 export function codeBuiltins(): Promise<CodeBuiltin[]> {
   return invoke<CodeBuiltin[]>("code_builtins");
 }
+
+
+/** Code tab: the test command to show, and whether the first run still needs a confirm. */
+export interface CodeTestPlan {
+  command: string;
+  needsConfirm: boolean;
+  remembered: string | null;
+}
+
+/** A finished test run. Output is already redacted. */
+export interface CodeTestResult {
+  command: string;
+  exit: number;
+  output: string;
+  cut: boolean;
+}
+
+/** Settings → Code: the remembered test command for this project, if any. */
+export interface CodeTestRemembered {
+  command: string | null;
+}
+
+/** A redacted chunk of test output, or the end of the run. */
+export interface CodeRunChunk {
+  text: string;
+  done: boolean;
+  exit: number | null;
+  cut: boolean;
+}
+
+export function codeTestPlan(command?: string | null): Promise<CodeTestPlan> {
+  return invoke<CodeTestPlan>("code_test_plan", { command: command ?? null });
+}
+
+export function codeTestRun(command: string, confirmed: boolean): Promise<CodeTestResult> {
+  return invoke<CodeTestResult>("code_test_run", { command, confirmed });
+}
+
+export function codeTestRemembered(): Promise<CodeTestRemembered> {
+  return invoke<CodeTestRemembered>("code_test_remembered");
+}
+
+export function codeTestForget(): Promise<CodeTestRemembered> {
+  return invoke<CodeTestRemembered>("code_test_forget");
+}
+
+export function onCodeRun(handler: (chunk: CodeRunChunk) => void): Promise<UnlistenFn> {
+  return subscribe<CodeRunChunk>("code-run", handler);
+}

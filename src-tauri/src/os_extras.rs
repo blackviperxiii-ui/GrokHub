@@ -73,9 +73,16 @@ pub fn should_notify(focused: bool, enabled: bool) -> bool {
     enabled && !focused
 }
 
-/// Whether this launch came from the login items.
+/// The classic app's tray flags. Old systemd units and scripts pass them,
+/// so they start the shell the way a login start does.
+pub const TRAY_ALIASES: [&str; 2] = ["--agent", "--tray"];
+
+/// Whether this launch came from the login items (or a classic tray start).
 pub fn at_login<S: AsRef<str>>(args: impl IntoIterator<Item = S>) -> bool {
-    args.into_iter().any(|arg| arg.as_ref() == AUTOSTART_ARG)
+    args.into_iter().any(|arg| {
+        let arg = arg.as_ref();
+        arg == AUTOSTART_ARG || TRAY_ALIASES.contains(&arg)
+    })
 }
 
 /// A start at login stays in the tray when closing the window keeps it there.
@@ -537,6 +544,16 @@ mod tests {
         assert!(starts_hidden(login, true));
         assert!(!starts_hidden(login, false));
         assert!(!starts_hidden(opened, true));
+    }
+
+    #[test]
+    fn classic_tray_flags_start_like_a_login_start() {
+        assert!(at_login(["/usr/bin/grokhub-shell", "--agent"]));
+        assert!(at_login(["/usr/bin/grokhub-shell", "--tray"]));
+        assert!(!at_login(["/usr/bin/grokhub-shell"]));
+        assert!(!at_login(["/usr/bin/grokhub-shell", "--trayicon"]));
+        assert!(starts_hidden(["/usr/bin/grokhub-shell", "--tray"], true));
+        assert!(!starts_hidden(["/usr/bin/grokhub-shell", "--agent"], false));
     }
 
     fn ask(conversation: &str, call: &str) -> Ask {

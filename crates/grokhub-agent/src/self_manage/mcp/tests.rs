@@ -1,55 +1,30 @@
 use std::path::{Path, PathBuf};
 
-use grokhub_agent::harness as hx;
+use crate::harness as hx;
 use serde_json::{json, Value};
 
+use super::fake::{call, FakeIo};
 use super::*;
 
-/// The park handoff and elicit card, answered by the test.
-pub(crate) struct FakeIo {
-    pub approve: bool,
-    pub parks: Vec<hx::ParkRequest>,
-    pub secret: Option<String>,
-    pub elicits: Vec<Value>,
+/// Tests that pin the agent config folder take turns.
+fn hold_test_config() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-impl FakeIo {
-    pub(crate) fn answering(approve: bool) -> Self {
-        Self {
-            approve,
-            parks: Vec::new(),
-            secret: None,
-            elicits: Vec::new(),
-        }
-    }
+/// Tests never touch the OS keyring.
+fn test_config_root(label: &str) -> PathBuf {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        hx::set_default_key_store(std::sync::Arc::new(hx::MemoryKeyStore::new()));
+    });
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    std::env::temp_dir().join(format!("grokhub-{label}-{}-{n}", std::process::id()))
 }
 
-impl SelfIo for FakeIo {
-    fn park(&mut self, req: &hx::ParkRequest) -> bool {
-        self.parks.push(req.clone());
-        self.approve
-    }
-
-    fn elicit(&mut self, params: Value) -> Option<Value> {
-        let var = params
-            .pointer("/requestedSchema/required/0")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        self.elicits.push(params);
-        Some(match &self.secret {
-            Some(v) => json!({ "action": "accept", "content": { var: v } }),
-            None => json!({ "action": "decline" }),
-        })
-    }
-
-    fn halted(&mut self) -> bool {
-        false
-    }
-}
-
-pub(crate) fn root(label: &str) -> PathBuf {
-    let root = crate::config::test_config_root(label);
+fn root(label: &str) -> PathBuf {
+    let root = test_config_root(label);
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     hx::use_key_store_for(&root, std::sync::Arc::new(hx::MemoryKeyStore::new()));
@@ -67,29 +42,12 @@ fn init(server: &mut SelfServer<'_>, io: &mut FakeIo, elicit: bool) {
     assert!(reply.contains(r#""name":"grokhub-self""#), "{reply}");
 }
 
-/// One `tools/call` through the server: `(ok, text)`.
-pub(crate) fn call(
-    server: &mut SelfServer<'_>,
-    io: &mut FakeIo,
-    tool: &str,
-    args: Value,
-) -> (bool, String) {
-    let line = json!({ "jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": { "name": tool, "arguments": args } });
-    let reply: Value =
-        serde_json::from_str(&server.handle_line(&line.to_string(), io).unwrap()).unwrap();
-    let r = &reply["result"];
-    (
-        !r["isError"].as_bool().unwrap(),
-        r["content"][0]["text"].as_str().unwrap().to_string(),
-    )
-}
-
 fn spans(root: &Path) -> Vec<hx::Span> {
     hx::read_spans(root, SELF_TRACE).unwrap_or_default()
 }
 
 /// Every file under `dir`, path and bytes, sorted.
-pub(crate) fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
     let mut out = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
     while let Some(d) = stack.pop() {
@@ -414,7 +372,7 @@ fn files_holding(dir: &Path, needle: &str) -> Vec<PathBuf> {
 
 #[test]
 fn a_token_connection_parks_a_credentials_card_and_the_token_never_shows() {
-    let _g = crate::config::hold_test_config();
+    let _g = hold_test_config();
     let root = root("self-token");
     let cabin = root.join("GrokHub");
     let grok = root.join("home").join(".grok");
@@ -426,7 +384,7 @@ fn a_token_connection_parks_a_credentials_card_and_the_token_never_shows() {
     )
     .unwrap();
     let grok_before = snapshot(&grok);
-    let _pin = grokhub_agent::perm::ConfigGuard::set(&cabin);
+    let _pin = crate::perm::ConfigGuard::set(&cabin);
     let token = "sk-abcdefghijklmnopqrstuv";
     let mut server = SelfServer::new(&cabin);
     let mut io = FakeIo::answering(true);
@@ -508,9 +466,9 @@ fn a_token_connection_parks_a_credentials_card_and_the_token_never_shows() {
 
 #[test]
 fn connection_remove_and_automation_delete_park_and_deny_leaves_files_byte_identical() {
-    let _g = crate::config::hold_test_config();
+    let _g = hold_test_config();
     let root = root("self-remove");
-    let _pin = grokhub_agent::perm::ConfigGuard::set(&root);
+    let _pin = crate::perm::ConfigGuard::set(&root);
     let mut server = SelfServer::new(&root);
     let mut io = FakeIo::answering(false);
     assert!(
@@ -575,7 +533,7 @@ fn connection_remove_and_automation_delete_park_and_deny_leaves_files_byte_ident
         ]
     );
     assert_eq!(files(), before, "deny leaves every file byte-identical");
-    let _ = grokhub_agent::take_automation_changes();
+    let _ = crate::take_automation_changes();
     let _ = hx::take_self_changes(&root);
     let _ = std::fs::remove_dir_all(root);
 }

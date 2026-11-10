@@ -12,9 +12,12 @@
 //! **Speed.** Ranking 200 candidates against a full log stays well inside a
 //! frame, and the whole chip memory stays small.
 
-use crate::chip_rank::{rank_quick_chips, RankCtx, CHIP_ROW_MAX};
-use crate::chip_store::{log_chip_outcome, log_chips_shown, CHIP_LOG_MAX};
+use crate::chip_rank::{rank_quick_chips, rank_quick_chips_from, RankCtx, CHIP_ROW_MAX};
+use crate::chip_store::{
+    log_chip_outcome, log_chips_shown, outcome_signals, shown_signals, CHIP_LOG_MAX,
+};
 use crate::chips::{remember_chip_click, ChipKind, ChipMemory, QuickChip};
+use crate::learn::{Beliefs, Signal};
 
 const HOUR_MS: u64 = 60 * 60 * 1000;
 const DAYS: u64 = 30;
@@ -110,6 +113,13 @@ fn the_engine_beats_frecency_on_a_month_of_steady_habits() {
     let pool: Vec<QuickChip> = (0..8).map(act).collect();
     let id_of = |c: &QuickChip| c.id.trim_start_matches("act-").parse::<usize>().unwrap();
     let mut mem = ChipMemory::default();
+    // The learning engine's beliefs, told what the running app tells them.
+    let mut beliefs = Beliefs::default();
+    let hear = |beliefs: &mut Beliefs, told: Vec<Signal>| {
+        for s in &told {
+            beliefs.apply(s);
+        }
+    };
     let mut history: Vec<(u64, usize)> = Vec::new();
     let (mut engine, mut base) = (Score::default(), Score::default());
     let mut held_back = 0;
@@ -121,20 +131,22 @@ fn the_engine_beats_frecency_on_a_month_of_steady_habits() {
             seed: i as u64,
             max: CHIP_ROW_MAX,
         };
-        let row = rank_quick_chips(&mut mem, pool.clone(), ctx);
+        let row = rank_quick_chips_from(&beliefs, &mut mem, pool.clone(), ctx);
         let scored = at >= WARMUP_DAYS * 24 * HOUR_MS;
         if row.is_empty() {
             // Held back (or gated): neither ranking is counted for this step.
             held_back += 1;
         } else {
-            log_chips_shown(&mut mem, "composer", &row, at);
+            let told = shown_signals(&mut mem, "composer", &row, at);
+            hear(&mut beliefs, told);
             let shown: Vec<usize> = row.iter().map(id_of).collect();
             if scored {
                 engine.add(&shown, target);
                 base.add(&frecency_row(&history, at, pool.len()), target);
             }
             if shown.contains(&target) {
-                log_chip_outcome(&mut mem, "composer", &pool[target], true, at + 1_000);
+                let told = outcome_signals(&mut mem, "composer", &pool[target], true, at + 1_000);
+                hear(&mut beliefs, told);
             }
         }
         // The step is done either way: from the row, or another way.
