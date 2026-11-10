@@ -349,6 +349,7 @@ impl Tuner<'_> {
         let now = grokhub_core::now_ms();
         let before = self.store().clone();
         let p = plan::plan_pass(&signals, self.store(), moment, now);
+        let p = grokhub_core::learn::hub::weigh_setup(p, moment, now);
         let made: Vec<Change> = p
             .apply
             .iter()

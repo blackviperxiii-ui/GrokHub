@@ -1193,3 +1193,100 @@ fn a_habit_chip_asks_for_the_skill_and_names_its_rule() {
     };
     assert_eq!(sources::run_habit(&chat, 23, false), Vec::new());
 }
+
+#[test]
+fn the_settings_dial_and_halt_hold_what_auto_setup_would_change_on_its_own() {
+    use super::decide::{Area, Dial, Reason, Situation, State, Verdict};
+    use super::setup::weigh;
+    use crate::autotune::plan::{Change, Moment, Plan};
+    use crate::autotune::settings::{Key, Value};
+    let change = |rule: &'static str, asked: bool| Change {
+        key: Key::ChatObjectives,
+        from: Some(Value::Bool(false)),
+        to: Value::Bool(true),
+        rule,
+        asked,
+        reason: "why".into(),
+    };
+    let plan = || Plan {
+        apply: vec![change("wide_screen", false), change("answered", true)],
+        suggest: vec![change("steam_found", false)],
+        took_over: Vec::new(),
+    };
+    let rules = |changes: &[Change]| changes.iter().map(|c| c.rule).collect::<Vec<_>>();
+    let run = |s: &mut State, now: Situation, moment: Moment| {
+        let p = weigh(plan(), moment, &mut |p| Some(s.decide(p, now, T0)));
+        (rules(&p.apply), rules(&p.suggest))
+    };
+    let calm = Situation::default();
+
+    // No decision engine running: the plan stands.
+    let p = weigh(plan(), Moment::Launch, &mut |_| None);
+    assert_eq!(p, plan());
+
+    // The dial at its default: the built-in rule acts with no yes answers.
+    let mut s = State::default();
+    assert_eq!(
+        run(&mut s, calm, Moment::Launch),
+        (vec!["wide_screen", "answered"], vec!["steam_found"])
+    );
+    let acted = s.log().next().unwrap();
+    assert_eq!(
+        (acted.rule.as_str(), acted.area, acted.verdict, acted.reason),
+        (
+            "rule:settings/wide_screen",
+            Area::Settings,
+            Verdict::Act,
+            Reason::Sure
+        )
+    );
+    // The user's own answer is never weighed.
+    assert!(s.log().all(|d| d.rule.as_str() != "rule:settings/answered"));
+
+    // Offer only: the change becomes a suggestion. The answer still applies.
+    s.set_dial(Area::Settings, Dial::Offer);
+    assert_eq!(
+        run(&mut s, calm, Moment::Launch),
+        (vec!["answered"], vec!["wide_screen", "steam_found"])
+    );
+    // Watch only: nothing is made and nothing is offered.
+    s.set_dial(Area::Settings, Dial::Watch);
+    assert_eq!(
+        run(&mut s, calm, Moment::Launch),
+        (vec!["answered"], vec![])
+    );
+    // Halt holds the change and leaves the suggestion.
+    s.set_dial(Area::Settings, Dial::Act);
+    let halted = Situation {
+        halted: true,
+        ..calm
+    };
+    assert_eq!(
+        run(&mut s, halted, Moment::Launch),
+        (vec!["answered"], vec!["steam_found"])
+    );
+    // First run is the user's own setup: nothing is weighed, whatever the dial.
+    s.set_dial(Area::Settings, Dial::Watch);
+    assert_eq!(
+        run(&mut s, halted, Moment::FirstRun),
+        (vec!["wide_screen", "answered"], vec!["steam_found"])
+    );
+    // A rule handed back to the app is weighed afresh.
+    let rule = super::setup::rule("wide_screen").unwrap();
+    s.set_dial(Area::Settings, Dial::Act);
+    s.outcome(&rule, super::decide::Outcome::Undone, T0);
+    s.outcome(
+        &rule,
+        super::decide::Outcome::Undone,
+        T0 + 2 * 24 * 60 * 60 * 1_000,
+    );
+    assert_eq!(
+        run(&mut s, calm, Moment::Launch),
+        (vec!["answered"], vec!["steam_found"])
+    );
+    s.forgive(&rule);
+    assert_eq!(
+        run(&mut s, calm, Moment::Launch),
+        (vec!["wide_screen", "answered"], vec!["steam_found"])
+    );
+}

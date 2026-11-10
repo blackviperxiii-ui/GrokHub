@@ -18,7 +18,7 @@ rollback = "Drop any claim whose source turns out wrong or out of date, and say 
 give_up = [
   "a hard approval was refused",
   "hardware, access or a sign-in is missing",
-  "every approach in the playbook failed and was checked",
+  "every approach here failed and was checked",
 ]
 
 [applies_when]

@@ -517,5 +517,60 @@ fn the_shared_logs_feed_one_engine() {
     assert!(store::load_beliefs(&dir).is_empty());
     assert_eq!(store::read_signals(&dir), Vec::new());
     assert_eq!(view::run("", grokhub_core::now_ms()), view::NOTHING_YET);
+
+    // Auto setup's plan goes through the same engine. Settings is still on
+    // offer, so a change it would make on its own becomes a suggestion.
+    use grokhub_core::autotune::plan::{self, Change, Moment, Plan};
+    use grokhub_core::autotune::settings::{Key, Value};
+    use grokhub_core::autotune::store::AutoStore;
+    let change = Change {
+        key: Key::ChatObjectives,
+        from: Some(Value::Bool(false)),
+        to: Value::Bool(true),
+        rule: "wide_screen",
+        asked: false,
+        reason: "wide".into(),
+    };
+    let planned = Plan {
+        apply: vec![change.clone()],
+        ..Plan::default()
+    };
+    let weighed = hub::weigh_setup(planned.clone(), Moment::Launch, at);
+    assert_eq!(
+        (weighed.apply, weighed.suggest),
+        (vec![], vec![change.clone()])
+    );
+    // Yes to the suggestion, then the dial back to act: the next one is made.
+    let mut auto = AutoStore::default();
+    plan::accept(&mut auto, &change, at);
+    hub::set_dial(Area::Settings, decide::Dial::Act);
+    assert_eq!(
+        hub::weigh_setup(planned.clone(), Moment::Launch, at),
+        planned
+    );
+    // The app made it and the user took it back: one good and one bad
+    // outcome for Settings, and both decisions on the page.
+    let mut auto = AutoStore::default();
+    plan::apply(&mut auto, std::slice::from_ref(&change), Moment::Launch, at);
+    assert!(auto.undo(Key::ChatObjectives, at).is_some());
+    let page = hub::view(at).trust;
+    assert_eq!(page.dials[0].went, Some(50));
+    let lines: Vec<(&str, &str)> = page
+        .decisions
+        .iter()
+        .map(|d| (d.title.as_str(), d.did))
+        .collect();
+    assert_eq!(
+        lines,
+        vec![
+            ("Settings wide screen", "Did it"),
+            ("Settings wide screen", "Asked"),
+        ]
+    );
+    // A learner outside the core reads one dial straight from the hub.
+    hub::set_dial(Area::LocalAi, decide::Dial::Watch);
+    assert_eq!(hub::dial(Area::LocalAi), decide::Dial::Watch);
+    hub::set_dial(Area::LocalAi, decide::Dial::Act);
+    assert_eq!(hub::dial(Area::LocalAi), decide::Dial::Act);
     let _ = fs::remove_dir_all(&dir);
 }

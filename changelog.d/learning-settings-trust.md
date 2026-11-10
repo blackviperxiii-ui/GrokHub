@@ -1,0 +1,1 @@
+- Auto setup now follows the Settings trust dial: on offer its changes become suggestions, on watch it changes and suggests nothing. Halt, quiet hours and a busy moment hold a change until later. The first-run setup and your own answers are not affected.

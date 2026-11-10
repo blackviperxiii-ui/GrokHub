@@ -32,11 +32,13 @@ pub const BUILTIN: &[&str] = &[
 pub const MOODS: &[&str] = &["calm", "urgent", "frustrated", "low"];
 
 /// First words of the playbook paragraph in a turn's system prompt, so a
-/// later turn can swap or drop it in place.
-pub const PLAYBOOK_HEAD: &str = "Playbook for this turn:";
+/// later turn can swap or drop it in place. The model reads it, and models
+/// echo what they read into thoughts the person sees, so neither this nor
+/// [`PLAYBOOK_LINE`] names the app's machinery ("playbook", "cabin").
+pub const PLAYBOOK_HEAD: &str = "Steps for this turn:";
 /// Closes the playbook paragraph: it orders the work and never changes an approval.
 pub const PLAYBOOK_LINE: &str =
-    "The playbook orders the work; the person's latest ask outranks it, risky steps and hard-class actions still ask first, and the cabin safety rules win.";
+    "These steps order the work; the person's latest ask outranks them, risky steps and hard-class actions still ask first, and the safety rules win.";
 
 pub const DOMAINS: &[&str] = &[
     "system",
@@ -610,7 +612,7 @@ mod tests {
         let p = parse(BUILTIN[2]).unwrap();
         assert_eq!(
             p.prompt_block(),
-            "Playbook for this turn: Code changes. Reproduce first, make the smallest change, prove it with tests, then give a short summary.\n\
+            "Steps for this turn: Code changes. Reproduce first, make the smallest change, prove it with tests, then give a short summary.\n\
              Cover: reproduced, smallest change, tests pass, summary given.\n\
              Reproduce (look only): See what is already changed (`git status`); Reproduce the failure or the ask before editing anything; Read the files and the tests around the change; Run the tests once first to know what already fails.\n\
              Change (safe, reversible): Make the smallest edit that fixes it; Add or update a test for the change; Build and run the tests after each edit; Give a short summary of the change and how it was checked.\n\
@@ -618,16 +620,21 @@ mod tests {
              Back up: Check the working tree is committed or note what was already changed (git status) before the first edit, so each change can be undone on its own.\n\
              Check: After each change, build and run the tests that cover it; a change is done only when they pass and a short summary is ready.\n\
              Undo: Undo the change that broke the build or tests (restore the file from git or the kept copy) and say what failed.\n\
-             Stop only when a hard approval was refused, or hardware, access or a sign-in is missing, or every approach in the playbook failed and was checked.\n\
-             The playbook orders the work; the person's latest ask outranks it, risky steps and hard-class actions still ask first, and the cabin safety rules win."
+             Stop only when a hard approval was refused, or hardware, access or a sign-in is missing, or every approach here failed and was checked.\n\
+             These steps order the work; the person's latest ask outranks them, risky steps and hard-class actions still ask first, and the safety rules win."
         );
-        // Every shipped playbook is one paragraph, so it can be swapped whole.
+        // Every shipped playbook is one paragraph, so it can be swapped whole,
+        // and names none of the app's machinery for the model to echo.
         for text in BUILTIN {
             let block = parse(text).unwrap().prompt_block();
             assert!(
                 !block.contains("\n\n") && block.starts_with(PLAYBOOK_HEAD),
                 "{block}"
             );
+            let lower = block.to_lowercase();
+            for word in ["playbook", "cabin"] {
+                assert!(!lower.contains(word), "{word}: {block}");
+            }
         }
     }
 

@@ -198,9 +198,10 @@ pub struct Proposal {
     pub helps: Option<Goal>,
     /// The goal this change works against, if any.
     pub hurts: Option<Goal>,
-    /// The learner already tried this change on a share of real work and it
-    /// held (the router's canary). That is its trial, so it does not wait
-    /// for three yes answers first.
+    /// The change has had its trial another way: the learner tried it on a
+    /// share of real work and it held (the router's canary), or it comes
+    /// from a built-in rule that reads the PC (auto setup). It does not
+    /// wait for three yes answers first.
     pub tested: bool,
 }
 
@@ -366,6 +367,12 @@ impl State {
             goals: std::mem::take(&mut self.goals),
             ..Self::default()
         };
+    }
+
+    /// The user handed this kind of change back to the app: its undos and
+    /// its rest are forgotten, so it may be weighed afresh.
+    pub fn forgive(&mut self, rule: &Subject) {
+        self.rules.remove(rule);
     }
 
     /// The user's "carry on" after a watchdog pause.

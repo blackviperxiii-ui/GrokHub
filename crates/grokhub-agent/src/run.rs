@@ -636,6 +636,12 @@ fn run_turn(
     let mut evidence = 0usize;
     // This run's tool calls, for the checks before the turn ends.
     let mut ran: Vec<crate::post_check::Ran> = Vec::new();
+    // The chat's last turn came up empty, and whether this run's reply was
+    // already sent back for taking thanks anyway.
+    let after_empty = input.depth == 0 && crate::voice_session::after_empty(input.conversation_id);
+    let mut credit_noted = false;
+    // Small talk shows no thought that narrates the app's tools or rules.
+    let casual = input.depth == 0 && crate::route::intent::casual_turn(user_text);
     // Where `ran` stood at the last check, and how many notes it sent.
     let mut post_mark: Option<(usize, Option<crate::post_check::Ran>)> = None;
     let mut post_notes = 0usize;
@@ -860,20 +866,32 @@ fn run_turn(
         }
         // What the chat showed of this reply, kept if the reply fails partway.
         let mut shown = String::new();
+        let mut thoughts =
+            casual.then(|| grokhub_core::conversation::CasualThoughts::new(user_text));
         let streamed = crate::route::live::stream_routed(
             input.client,
             &req,
             input.cancel,
             &mut |ev| match ev {
                 StreamEvent::TextDelta(text) => {
+                    flush_thoughts(&mut thoughts, &mut *on_event);
                     shown.push_str(&text);
                     on_event(LoopEvent::Text(text))
                 }
-                StreamEvent::ReasoningDelta(text) => on_event(LoopEvent::Thought(text)),
+                StreamEvent::ReasoningDelta(text) => match thoughts.as_mut() {
+                    Some(t) => {
+                        let keep = t.push(&text);
+                        if !keep.is_empty() {
+                            on_event(LoopEvent::Thought(keep));
+                        }
+                    }
+                    None => on_event(LoopEvent::Thought(text)),
+                },
                 StreamEvent::RateWait(wait) => on_event(LoopEvent::Thought(rate_wait_note(wait))),
             },
             class,
         );
+        flush_thoughts(&mut thoughts, &mut *on_event);
         // The stored request this reply came from, for its calls' safety events.
         let turn_request = crate::harness::replay::last_request();
         // A fork of this chat starts from exactly what went out. The request
@@ -1124,9 +1142,24 @@ fn run_turn(
             // The conversation core reads the reply the person sees; the next
             // turn's note names any slip. No model call, no edit.
             if input.depth == 0 {
-                crate::voice_session::note_reply(input.conversation_id, &last_assistant);
+                crate::voice_session::note_reply(
+                    input.conversation_id,
+                    &last_assistant,
+                    crate::post_check::came_up_empty(&last_assistant, &ran),
+                );
             }
             let notes = input.steer.drain();
+            // The last turn came up empty: "glad it helped" takes thanks for
+            // a result nobody found, so the reply goes again, once.
+            if notes.is_empty()
+                && !credit_noted
+                && after_empty
+                && grokhub_core::conversation::takes_credit(&last_assistant)
+            {
+                credit_noted = true;
+                history.push(cabin_note(grokhub_core::conversation::CREDIT_NOTE));
+                continue;
+            }
             if notes.is_empty() && !written_handled {
                 written_handled = true;
                 if let Some(note) =
@@ -1814,6 +1847,17 @@ fn repair_shell_lookup(input: &LoopIn<'_>, call: &FunctionCall) -> FunctionCall 
         call_id: call.call_id.clone(),
         name: tool.to_string(),
         arguments: args.to_string(),
+    }
+}
+
+/// A casual turn's held thinking, shown once its sentence is done.
+fn flush_thoughts(
+    thoughts: &mut Option<grokhub_core::conversation::CasualThoughts>,
+    on_event: &mut dyn FnMut(LoopEvent),
+) {
+    let rest = thoughts.as_mut().map(|t| t.finish()).unwrap_or_default();
+    if !rest.is_empty() {
+        on_event(LoopEvent::Thought(rest));
     }
 }
 
@@ -2698,6 +2742,190 @@ mod tests {
             events.push(ev)
         });
         (out, history, events)
+    }
+
+    /// One user turn of chat `conv` saying `ask`, as the shells run it: the
+    /// Brief step leaves the turn's note, then the loop runs.
+    fn chat_turn(
+        client: &dyn ModelClient,
+        dir: &std::path::Path,
+        conv: &str,
+        ask: &str,
+        intent: &str,
+    ) -> (Vec<InputItem>, Vec<LoopEvent>) {
+        crate::voice_session::step(
+            conv,
+            crate::voice_session::TurnView {
+                text: ask,
+                intent,
+                care: "casual",
+                mood: "calm",
+                background: false,
+                hour: Some(20),
+            },
+        );
+        let (cancel, steer) = (CancelToken::new(), SteerQueue::new());
+        let input = LoopIn {
+            client,
+            workspace: dir,
+            model: "grok-4.7",
+            effort: Some("low"),
+            system: "sys",
+            conversation_id: conv,
+            max_turns: 0,
+            usage_base: Usage::default(),
+            cancel: &cancel,
+            steer: &steer,
+            halt: &NeverHalt,
+            gate: Gate::phase_readonly(),
+            desktop: None,
+            permits: &gate::ClosedPermits,
+            perms: None,
+            context_length: 0,
+            tasks: None,
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
+        };
+        let mut history = Vec::new();
+        let mut events = Vec::new();
+        run_loop(&input, &mut history, ask, None, &mut |ev| events.push(ev));
+        (history, events)
+    }
+
+    fn said(turns: &[&str]) -> Script {
+        Script {
+            turns: Mutex::new(turns.iter().map(|t| ScriptTurn::text(*t)).collect()),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        }
+    }
+
+    fn input_text(items: &[InputItem]) -> String {
+        let mut out = String::new();
+        for item in items {
+            if let InputItem::Message { content, .. } = item {
+                for part in content {
+                    if let ContentPart::InputText(t) = part {
+                        out.push_str(t);
+                        out.push('\n');
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    fn shown_text(events: &[LoopEvent]) -> String {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                LoopEvent::Text(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn thanks_after_a_turn_that_came_up_empty_is_never_taken_for_a_result() {
+        use grokhub_core::conversation::{CAME_UP_EMPTY, CREDIT_NOTE};
+        let dir = workspace("credit");
+        let _guard = crate::perm::ConfigGuard::set(dir.join("config"));
+        let conv = "loop-credit";
+        let ask = "find the 2.1 patch notes";
+        chat_turn(
+            &said(&["I couldn't find patch notes for 2.1 anywhere."]),
+            &dir,
+            conv,
+            ask,
+            "research",
+        );
+        // The thanks turn's own message says the last one came up empty, and
+        // "glad it helped" goes back once before the turn ends.
+        let thanks = said(&[
+            "Cool, glad it helped!",
+            "Sorry it came up empty. Want me to try the forums?",
+        ]);
+        let (_, events) = chat_turn(&thanks, &dir, conv, "ah ok thanks", "chat");
+        let seen = thanks.seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 2);
+        assert!(input_text(&seen[0]).contains(CAME_UP_EMPTY));
+        assert!(!input_text(&seen[0]).contains(CREDIT_NOTE));
+        assert!(input_text(&seen[1]).contains(CREDIT_NOTE));
+        assert!(
+            shown_text(&events).ends_with("Sorry it came up empty. Want me to try the forums?"),
+            "{events:?}"
+        );
+        // A turn that finds it clears the flag: the next turn hears nothing.
+        let found = said(&["Found them on the forums: 2.1 shipped Tuesday."]);
+        let (_, _) = chat_turn(&found, &dir, conv, "yeah try the forums", "research");
+        assert!(input_text(&found.seen.lock().unwrap()[0]).contains(CAME_UP_EMPTY));
+        let after = said(&["Glad it helped!"]);
+        chat_turn(&after, &dir, conv, "nice, thanks", "chat");
+        let seen = after.seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 1, "a real result takes thanks as is");
+        assert!(!input_text(&seen[0]).contains(CAME_UP_EMPTY));
+        crate::voice_session::forget(conv);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Thinks in two deltas that split a sentence, then replies.
+    struct Thinks;
+    impl ModelClient for Thinks {
+        fn stream(
+            &self,
+            _req: &ResponsesRequest,
+            _cancel: &CancelToken,
+            sink: &mut dyn FnMut(StreamEvent),
+        ) -> Result<crate::TurnOutput, ClientError> {
+            for t in [
+                "They had a rough day. I could use the brow",
+                "ser tool, but the playbook says no tools for small talk. Keep it warm.",
+            ] {
+                sink(StreamEvent::ReasoningDelta(t.into()));
+            }
+            sink(StreamEvent::TextDelta("Ugh, sorry. Want to vent?".into()));
+            Ok(crate::TurnOutput {
+                text: "Ugh, sorry. Want to vent?".into(),
+                ..Default::default()
+            })
+        }
+    }
+
+    fn thought_text(events: &[LoopEvent]) -> String {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                LoopEvent::Thought(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn small_talk_thoughts_never_narrate_the_apps_tools_but_work_thoughts_do() {
+        let dir = workspace("casual-thoughts");
+        let _guard = crate::perm::ConfigGuard::set(dir.join("config"));
+        let (_, events) = chat_turn(&Thinks, &dir, "loop-casual", "ugh rough day lol", "chat");
+        assert_eq!(thought_text(&events), "They had a rough day. Keep it warm.");
+        // The thinking shows before the reply, as it streamed.
+        let first_text = events.iter().position(|e| matches!(e, LoopEvent::Text(_)));
+        let last_thought = events
+            .iter()
+            .rposition(|e| matches!(e, LoopEvent::Thought(_)));
+        assert!(last_thought < first_text, "{events:?}");
+        // Work keeps every word: the tools are the point there.
+        let (_, events) = chat_turn(&Thinks, &dir, "loop-work", "fix my wifi", "repair");
+        assert_eq!(
+            thought_text(&events),
+            "They had a rough day. I could use the browser tool, but the playbook says no tools for small talk. Keep it warm."
+        );
+        crate::voice_session::forget("loop-casual");
+        crate::voice_session::forget("loop-work");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

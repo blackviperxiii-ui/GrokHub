@@ -166,6 +166,18 @@ pub fn check(reply: &str, ran: &[Ran]) -> Vec<Finding> {
     out
 }
 
+/// The turn found nothing for the ask: every search or page this run tried
+/// failed or listed nothing, every call failed, or the reply says it came up
+/// empty. The next turn is told, so "thanks" isn't taken for a result.
+pub fn came_up_empty(reply: &str, ran: &[Ran]) -> bool {
+    let lookup =
+        |r: &&Ran| r.name == "web_search" || r.name == "web_fetch" || r.name.contains("navigate");
+    let mut lookups = ran.iter().filter(lookup).peekable();
+    let lookups_empty = lookups.peek().is_some() && lookups.all(|r| !r.ok || r.urls.is_empty());
+    let all_failed = !ran.is_empty() && ran.iter().all(|r| !r.ok);
+    lookups_empty || all_failed || grokhub_core::conversation::admits_empty(reply)
+}
+
 /// The note the model gets for `findings`; `None` when there are none.
 pub fn note(findings: &[Finding]) -> Option<String> {
     if findings.is_empty() {
@@ -1385,6 +1397,38 @@ mod tests {
     const CARGO_OK: &str = "running 3 tests\ntest result: ok. 3 passed; 0 failed; 0 ignored\n\nrunning 9 tests\ntest result: ok. 9 passed; 0 failed; 0 ignored\n";
     const CARGO_RED: &str =
         "test result: FAILED. 11 passed; 1 failed; 0 ignored\nerror: test failed\n";
+
+    #[test]
+    fn a_turn_whose_searches_found_nothing_or_failed_came_up_empty() {
+        let search = |out: &str| Ran::new("web_search", r#"{"query":"patch 2.1"}"#, true, out);
+        let found = search("1. Patch notes - https://example.com/patch-2-1\n");
+        let nothing = search("No results.");
+        let fetch_failed = Ran::new(
+            "web_fetch",
+            r#"{"url":"https://example.com/patch-2-1"}"#,
+            false,
+            "HTTP 404",
+        );
+        let reply = "Here are the notes.";
+        assert!(came_up_empty(reply, std::slice::from_ref(&nothing)));
+        assert!(came_up_empty(
+            reply,
+            &[nothing.clone(), fetch_failed.clone()]
+        ));
+        assert!(came_up_empty(reply, std::slice::from_ref(&fetch_failed)));
+        assert!(came_up_empty(
+            reply,
+            &[shell("ls /nope", false, "No such file")]
+        ));
+        assert!(!came_up_empty(reply, &[nothing, found.clone()]));
+        assert!(!came_up_empty(reply, &[found, fetch_failed]));
+        assert!(!came_up_empty("Hey, good to see you!", &[]));
+        // The reply's own word counts, even with no tool at all.
+        assert!(came_up_empty(
+            "Sorry, I couldn't find that patch anywhere.",
+            &[]
+        ));
+    }
 
     #[test]
     fn a_link_no_tool_opened_gets_a_note_and_an_opened_one_does_not() {

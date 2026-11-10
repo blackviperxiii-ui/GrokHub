@@ -18,7 +18,7 @@ rollback = "Move the files back using the list kept before the change, and resto
 give_up = [
   "a hard approval was refused",
   "hardware, access or a sign-in is missing",
-  "every approach in the playbook failed and was checked",
+  "every approach here failed and was checked",
 ]
 
 [applies_when]

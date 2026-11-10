@@ -51,9 +51,14 @@ pub enum Tell {
     Slop,
     /// A bulleted list answering small talk.
     CasualList,
+    /// "Glad it helped" after a turn that came up empty. Read with the last
+    /// turn's outcome ([`takes_credit`]), so [`tells`] alone never returns it.
+    TakesCredit,
 }
 
 impl Tell {
+    /// The tells [`tells`] reads from a reply alone. [`Tell::TakesCredit`]
+    /// needs the last turn's outcome too, so it is not among them.
     pub const ALL: [Tell; 7] = [
         Tell::StockOpener,
         Tell::StockCloser,
@@ -71,11 +76,14 @@ impl Tell {
             Tell::StockCloser => "it ended on a stock sign-off, so just stop when you're done",
             Tell::ThirdPerson => "it called them \"the user\", so talk to them as \"you\"",
             Tell::ProcessTalk => {
-                "it narrated checklists, cards or limits, so say what happened in plain words"
+                "it narrated checklists, tools, cards or limits, so say what happened in plain words"
             }
             Tell::Telegraph => "it read like clipped notes, so use full, natural sentences",
             Tell::Slop => "it used stock filler words, so say it plainly",
             Tell::CasualList => "it answered small talk with a list, so talk in prose",
+            Tell::TakesCredit => {
+                "it took thanks for a result it never found, so own that it came up empty"
+            }
         }
     }
 
@@ -89,6 +97,7 @@ impl Tell {
             Tell::Telegraph => "telegraph",
             Tell::Slop => "slop",
             Tell::CasualList => "casual-list",
+            Tell::TakesCredit => "takes-credit",
         }
     }
 }
@@ -170,6 +179,175 @@ const PROCESS: [&str; 22] = [
     "marked completed",
     "checkpoints marked",
 ];
+
+/// The app's own tools and rules named in prose, matched as whole words
+/// ("my terminal velocity" and "the browser crashed" are their own words).
+const MACHINERY: [&str; 18] = [
+    "tool call",
+    "tool calls",
+    "tool output",
+    "tool result",
+    "tool results",
+    "my tools",
+    "browser tool",
+    "terminal tool",
+    "search tool",
+    "fetch tool",
+    "web_search",
+    "web_fetch",
+    "run_terminal_command",
+    "read_file",
+    "list_dir",
+    "cabin rules",
+    "cabin safety",
+    "cabin note",
+];
+
+/// More machinery words a casual turn's thoughts drop, on top of
+/// [`MACHINERY`] and [`PROCESS`], unless the person used the word themselves.
+const THOUGHT_MACHINERY: [&str; 14] = [
+    "tool",
+    "tools",
+    "terminal",
+    "browser",
+    "cabin",
+    "router",
+    "routing",
+    "system prompt",
+    "switch models",
+    "switching models",
+    "model switch",
+    "another model",
+    "model i was using",
+    "carrying on with another",
+];
+
+/// `phrase` in `text` as whole words: no letter, digit or `_` either side.
+fn has_word(text: &str, phrase: &str) -> bool {
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    text.match_indices(phrase).any(|(at, _)| {
+        !text[..at].chars().next_back().is_some_and(word)
+            && !text[at + phrase.len()..].chars().next().is_some_and(word)
+    })
+}
+
+/// "glad it helped": thanks taken for a result. A tell only after a turn
+/// that came up empty.
+const CREDIT: [&str; 14] = [
+    "glad it helped",
+    "glad that helped",
+    "glad this helped",
+    "happy it helped",
+    "happy that helped",
+    "glad i could help",
+    "happy i could help",
+    "glad it worked",
+    "glad that worked",
+    "glad that did the trick",
+    "glad it was useful",
+    "glad that was useful",
+    "glad it was helpful",
+    "glad that was helpful",
+];
+
+/// A reply saying it found nothing.
+const CAME_UP_EMPTY_WORDS: [&str; 12] = [
+    "couldn't find",
+    "could not find",
+    "wasn't able to find",
+    "was not able to find",
+    "couldn't track down",
+    "came up empty",
+    "found nothing",
+    "turned up nothing",
+    "nothing came up",
+    "no results",
+    "couldn't load",
+    "couldn't reach",
+];
+
+/// The next turn's line after a turn that came up empty.
+pub const CAME_UP_EMPTY: &str =
+    "Your last reply didn't find what they asked for; don't accept thanks for a result.";
+
+/// The note a reply gets, before the turn ends, when it took thanks for a
+/// result the last turn never found.
+pub const CREDIT_NOTE: &str = "Before this turn ends: your last reply didn't find what they asked for, so don't take thanks for it (\"glad it helped\"). Reply again: say plainly it came up empty and what you could try next.";
+
+/// The reply takes thanks for a result ("glad it helped").
+pub fn takes_credit(reply: &str) -> bool {
+    let text = plain(reply);
+    CREDIT.iter().any(|p| text.contains(p))
+}
+
+/// The reply says it found nothing ("I couldn't find", "no results").
+pub fn admits_empty(reply: &str) -> bool {
+    let text = plain(reply);
+    CAME_UP_EMPTY_WORDS.iter().any(|p| text.contains(p))
+}
+
+/// One thought sentence of a casual turn narrates the app's machinery: tool
+/// names, the terminal or browser tool, the cabin, playbooks, the router or a
+/// model switch. A word `asked` used is theirs, so it stays.
+pub fn narrates_machinery(chunk: &str, asked: &str) -> bool {
+    let text = plain(chunk);
+    let asked = plain(asked);
+    let named = |p: &&str| has_word(&text, p) && !has_word(&asked, p);
+    MACHINERY.iter().any(|p| has_word(&text, p))
+        || PROCESS.iter().any(|p| text.contains(p))
+        || THOUGHT_MACHINERY.iter().any(named)
+        || words(&text)
+            .iter()
+            .any(|w| snake_name(w) && !asked.contains(w.as_str()))
+}
+
+/// `browser_navigate`, `todo_write`: a tool's own name.
+fn snake_name(w: &str) -> bool {
+    w.contains('_')
+        && w.split('_')
+            .all(|p| !p.is_empty() && p.chars().all(char::is_alphabetic))
+}
+
+/// A casual turn's thinking as it streams, held back a sentence at a time so
+/// a sentence that narrates machinery ([`narrates_machinery`]) never shows.
+#[derive(Debug, Default)]
+pub struct CasualThoughts {
+    asked: String,
+    held: String,
+}
+
+impl CasualThoughts {
+    pub fn new(asked: &str) -> Self {
+        Self {
+            asked: asked.to_string(),
+            held: String::new(),
+        }
+    }
+
+    /// The finished sentences of `delta` to show now; the rest waits.
+    pub fn push(&mut self, delta: &str) -> String {
+        self.held.push_str(delta);
+        let Some(end) = self.held.rfind(['.', '!', '?', '\n']) else {
+            return String::new();
+        };
+        let rest = self.held.split_off(end + 1);
+        let done = std::mem::replace(&mut self.held, rest);
+        self.keep(&done)
+    }
+
+    /// What is still held, at the end of the thinking.
+    pub fn finish(&mut self) -> String {
+        let done = std::mem::take(&mut self.held);
+        self.keep(&done)
+    }
+
+    fn keep(&self, text: &str) -> String {
+        crate::chat_view::split_thought_chunks(text)
+            .into_iter()
+            .filter(|c| !narrates_machinery(c, &self.asked))
+            .collect()
+    }
+}
 
 const SLOP: [&str; 10] = [
     "delve",
@@ -343,7 +521,7 @@ pub fn tells(reply: &str, casual_ask: bool) -> Vec<Tell> {
     if THIRD_PERSON.iter().any(|p| text.contains(p)) {
         out.push(Tell::ThirdPerson);
     }
-    if PROCESS.iter().any(|p| text.contains(p)) {
+    if PROCESS.iter().any(|p| text.contains(p)) || MACHINERY.iter().any(|p| has_word(&text, p)) {
         out.push(Tell::ProcessTalk);
     }
     if telegraph(&text) {
@@ -594,17 +772,97 @@ mod tests {
         assert_eq!(
             cue(&turn, &[Tell::Telegraph, Tell::ProcessTalk, Tell::Slop, Tell::ProcessTalk]),
             format!(
-                "{SHORT} Your last reply slipped: it narrated checklists, cards or limits, so say what happened in plain words; it read like clipped notes, so use full, natural sentences."
+                "{SHORT} Your last reply slipped: it narrated checklists, tools, cards or limits, so say what happened in plain words; it read like clipped notes, so use full, natural sentences."
             )
         );
         assert_eq!(fix_line(&[]), None);
     }
 
     #[test]
+    fn naming_the_apps_own_tools_is_process_talk_but_their_own_browser_is_not() {
+        assert_eq!(
+            t("I used the browser tool to open the page."),
+            vec![Tell::ProcessTalk]
+        );
+        assert_eq!(
+            t("I ran web_search twice and read the results."),
+            vec![Tell::ProcessTalk]
+        );
+        assert_eq!(
+            t("That's against the cabin rules, so I'll ask first."),
+            vec![Tell::ProcessTalk]
+        );
+        for reply in [
+            "Ha, that's my terminal velocity on a Monday.",
+            "Ugh, the browser crashed on my PC too last week.",
+            "Open a terminal and run the update, then restart.",
+            "A cabin in the woods sounds perfect right now.",
+            "Which tools do you use for woodworking?",
+            "Your router is probably the weak link here.",
+        ] {
+            assert_eq!(t(reply), Vec::<Tell>::new(), "{reply}");
+        }
+    }
+
+    #[test]
+    fn glad_it_helped_and_came_up_empty_are_read_from_the_reply() {
+        for reply in [
+            "Cool, glad it helped!",
+            "Haha, happy that helped 😄",
+            "No worries, glad I could help.",
+            "Glad that did the trick!",
+        ] {
+            assert!(takes_credit(reply), "{reply}");
+        }
+        for reply in [
+            "Cool, have fun tonight!",
+            "Sorry that came up empty. Want me to try another site?",
+            "I'm glad you asked.",
+        ] {
+            assert!(!takes_credit(reply), "{reply}");
+        }
+        assert!(admits_empty(
+            "I couldn\u{2019}t find any listing for that patch."
+        ));
+        assert!(admits_empty("The search came up empty, sorry."));
+        assert!(!admits_empty("Found it: the patch shipped on Tuesday."));
+    }
+
+    #[test]
+    fn a_casual_turns_thoughts_drop_machinery_sentences_as_they_stream() {
+        let mut f = CasualThoughts::new("lol my day was rough, how was yours?");
+        let mut shown = String::new();
+        for delta in [
+            "They had a rough day. ",
+            "The playbook says to match ",
+            "their energy. I could use the brow",
+            "ser tool but it's small talk. Per the cabin ",
+            "rules, no tools. Maybe a todo_write? ",
+            "Something warm and short",
+        ] {
+            shown.push_str(&f.push(delta));
+        }
+        shown.push_str(&f.finish());
+        assert_eq!(shown, "They had a rough day. Something warm and short");
+        // A word they used themselves is their own, not the app's.
+        let mut own = CasualThoughts::new("my browser crashed lol");
+        assert_eq!(
+            own.push("Their browser crashed. The router picked a model. "),
+            "Their browser crashed."
+        );
+        assert_eq!(
+            own.push("The model I was using stopped, so I'm carrying on with another one. "),
+            ""
+        );
+        assert_eq!(own.push("Be kind. "), " Be kind.");
+    }
+
+    #[test]
     fn every_tell_has_its_own_id_and_fix() {
-        let ids: std::collections::BTreeSet<_> = Tell::ALL.iter().map(|t| t.id()).collect();
-        assert_eq!(ids.len(), Tell::ALL.len());
-        for t in Tell::ALL {
+        let every: Vec<Tell> = Tell::ALL.into_iter().chain([Tell::TakesCredit]).collect();
+        let ids: std::collections::BTreeSet<_> = every.iter().map(|t| t.id()).collect();
+        assert_eq!(ids.len(), every.len());
+        for t in every {
             assert!(t.fix().starts_with("it "), "{}", t.fix());
         }
     }

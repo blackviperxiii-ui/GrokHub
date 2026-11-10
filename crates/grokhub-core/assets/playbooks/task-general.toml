@@ -21,7 +21,7 @@ rollback = "If a check fails, put the copy back and say what went wrong."
 give_up = [
   "a hard approval was refused",
   "hardware, access or a sign-in is missing",
-  "every approach in the playbook failed and was checked",
+  "every approach here failed and was checked",
 ]
 
 [applies_when]
