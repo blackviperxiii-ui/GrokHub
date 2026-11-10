@@ -314,8 +314,14 @@ impl Cabin {
             ResumeSession::Fresh => BgSession::Fresh,
         };
         let block = res::resume_block(card);
-        let (run_id, _, native) =
-            self.start_native_bg_on(&block, &thread_id, origin, session, gate)?;
+        let (run_id, _, native) = self.start_native_bg_on(
+            &block,
+            &thread_id,
+            origin,
+            super::background::bg_span_origin(origin),
+            session,
+            gate,
+        )?;
         if let Some(run) = self.bg.runs.iter_mut().find(|r| r.id == run_id) {
             run.title = card.title.clone();
             run.automation = card.automation.clone();

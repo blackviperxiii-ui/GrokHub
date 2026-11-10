@@ -1,0 +1,1 @@
+- Quick chips: the row's order now reads each chip's history (picked, passed over, hidden) from the learning engine, so one system decides. Forget clears it, Always counts as a sure yes, and a chip you marked wrong is never shown. The ranker's learned weights start fresh once.

@@ -206,8 +206,20 @@ fn chip_source(chip: &QuickChip) -> String {
 /// waiting for an outcome is the same showing, not a new one, so a repaint or
 /// a keystroke that changes nothing adds no row.
 pub fn log_chips_shown(mem: &mut ChipMemory, surface: &str, chips: &[QuickChip], now: u64) {
+    crate::learn::hub::note_all(shown_signals(mem, surface, chips, now));
+}
+
+/// [`log_chips_shown`] without the engine: logs the row and returns what the
+/// learning engine is told about it.
+pub(crate) fn shown_signals(
+    mem: &mut ChipMemory,
+    surface: &str,
+    chips: &[QuickChip],
+    now: u64,
+) -> Vec<crate::learn::Signal> {
+    let mut told = Vec::new();
     if chips.is_empty() {
-        return;
+        return told;
     }
     let shown: Vec<ShownChip> = chips
         .iter()
@@ -231,7 +243,7 @@ pub fn log_chips_shown(mem: &mut ChipMemory, surface: &str, chips: &[QuickChip],
             && e.shown.iter().zip(&shown).all(|(a, b)| a.key == b.key)
     };
     if mem.events.last().is_some_and(same) {
-        return;
+        return told;
     }
     // The last open row on this surface was passed over for this one.
     if let Some(prev) = mem
@@ -244,10 +256,10 @@ pub fn log_chips_shown(mem: &mut ChipMemory, surface: &str, chips: &[QuickChip],
         let shown = prev.shown.clone();
         crate::chip_rank::learn_from_row(&mut mem.ranker, &shown, None);
         let keys = shown.iter().map(|s| s.key.as_str());
-        crate::learn::hub::note_all(crate::learn::sources::chips_passed_over(surface, keys, now));
+        told.extend(crate::learn::sources::chips_passed_over(surface, keys, now));
     }
     let keys = shown.iter().map(|s| s.key.as_str());
-    crate::learn::hub::note_all(crate::learn::sources::chips_shown(surface, keys, now));
+    told.extend(crate::learn::sources::chips_shown(surface, keys, now));
     mem.events.push(ChipEvent {
         at: now,
         surface: surface.to_string(),
@@ -258,6 +270,7 @@ pub fn log_chips_shown(mem: &mut ChipMemory, surface: &str, chips: &[QuickChip],
         let cut = mem.events.len() - CHIP_LOG_MAX;
         mem.events.drain(..cut);
     }
+    told
 }
 
 /// Note what the person did with `chip` on `surface`: the newest open showing
@@ -269,20 +282,30 @@ pub fn log_chip_outcome(
     picked: bool,
     now: u64,
 ) {
+    crate::learn::hub::note_all(outcome_signals(mem, surface, chip, picked, now));
+}
+
+/// [`log_chip_outcome`] without the engine: logs the outcome and returns
+/// what the learning engine is told about it.
+pub(crate) fn outcome_signals(
+    mem: &mut ChipMemory,
+    surface: &str,
+    chip: &QuickChip,
+    picked: bool,
+    now: u64,
+) -> Vec<crate::learn::Signal> {
     let key = chip_log_key(chip);
     let Some(event) = mem.events.iter_mut().rev().find(|e| {
         e.surface == surface && e.outcome.is_none() && e.shown.iter().any(|s| s.key == key)
     }) else {
-        return;
+        return Vec::new();
     };
     let slot = event
         .shown
         .iter()
         .find(|s| s.key == key)
         .map_or(0, |s| s.slot);
-    crate::learn::hub::note_all(crate::learn::sources::chip_outcome(
-        surface, &key, picked, now,
-    ));
+    let told = crate::learn::sources::chip_outcome(surface, &key, picked, now);
     // A habit chip's tap or hide is also the answer to its rule.
     if let Some(rule) = crate::learn::habit::chip_rule(&chip.id) {
         use crate::learn::decide::Outcome;
@@ -301,6 +324,7 @@ pub fn log_chip_outcome(
     let shown = event.shown.clone();
     event.outcome = Some(outcome.clone());
     crate::chip_rank::learn_from_row(&mut mem.ranker, &shown, Some(&outcome));
+    told
 }
 
 #[cfg(test)]
