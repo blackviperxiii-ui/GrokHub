@@ -907,9 +907,10 @@ export function Chat({
     if (!settings || settings.approvals !== "ask") return;
     void answer(id, "allow");
     try {
-      setSettings(
-        await saveSettings(settings.closeToTray, settings.workspace, "auto", settings.desktopControl),
-      );
+      // Read again first: a typed setting ask or the cabin may have changed
+      // the other settings since this chat loaded them.
+      const now = await getSettings();
+      setSettings(await saveSettings(now.closeToTray, now.workspace, "auto", now.desktopControl));
       setAck(STOP_ASKING_DONE);
     } catch (err) {
       setError(String(err));

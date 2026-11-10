@@ -359,6 +359,8 @@ fn exec(
         .map_err(|e| format!("couldn't start the test command: {e}"))?;
     let pid = child.id();
     *CURRENT.lock().map_err(|e| e.to_string())? = Some(pid);
+    // Frees the runner however this function leaves, a panic included.
+    let _running = Running(pid);
 
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
@@ -382,17 +384,10 @@ fn exec(
             cut = true;
             continue;
         }
-        let room = OUTPUT_CAP.saturating_sub(output.len());
-        if chunk.len() > room {
-            output.push_str(&chunk[..room]);
-            cut = true;
-        } else {
-            output.push_str(&chunk);
-        }
+        cut |= push_capped(&mut output, &chunk, OUTPUT_CAP);
         on_chunk(&chunk);
     }
     let status = child.wait();
-    clear_current(pid);
     let exit = match status {
         Ok(st) => st.code().unwrap_or(-1),
         Err(e) => return Err(format!("the test command did not finish: {e}")),
@@ -421,6 +416,26 @@ fn spawn_pump<R: Read + Send + 'static>(mut pipe: R, tx: std::sync::mpsc::Sender
     });
 }
 
+/// Adds as much of `chunk` as fits under `cap` bytes, ending on a whole
+/// character. True when some of it was left out.
+fn push_capped(output: &mut String, chunk: &str, cap: usize) -> bool {
+    let mut room = cap.saturating_sub(output.len()).min(chunk.len());
+    while !chunk.is_char_boundary(room) {
+        room -= 1;
+    }
+    output.push_str(&chunk[..room]);
+    room < chunk.len()
+}
+
+/// The run in progress; dropping it lets the next run start.
+struct Running(u32);
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        clear_current(self.0);
+    }
+}
+
 fn clear_current(pid: u32) {
     if let Ok(mut current) = CURRENT.lock() {
         if *current == Some(pid) {
@@ -432,6 +447,20 @@ fn clear_current(pid: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn output_cap_ends_on_a_whole_character() {
+        // The euro sign is three bytes; a cap of 8 falls inside the third one.
+        let mut out = String::from("ab");
+        assert!(push_capped(&mut out, "\u{20ac}\u{20ac}\u{20ac}", 8));
+        assert_eq!(out, "ab\u{20ac}\u{20ac}");
+        let mut out = String::from("ab");
+        assert!(!push_capped(&mut out, "cd", 8));
+        assert_eq!(out, "abcd");
+        let mut full = String::from("abcdefgh");
+        assert!(push_capped(&mut full, "i", 8));
+        assert_eq!(full, "abcdefgh");
+    }
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(

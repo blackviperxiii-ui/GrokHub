@@ -85,7 +85,12 @@ export async function pair(code: string, base: string = window.location.origin):
   const stream = new AbortController();
   const first = await openStream(root, trimmed, stream.signal);
   if (first?.status === 401) throw new Error(CODE_REFUSED);
-  if (!first?.ok || !first.body) throw new Error(UNREACHABLE);
+  if (!first?.ok || !first.body) {
+    // The desktop says why it turned the stream away ("Too many open tabs.").
+    const said = first ? ((await first.json().catch(() => null)) as { error?: unknown } | null) : null;
+    stream.abort();
+    throw new Error(typeof said?.error === "string" && said.error ? said.error : UNREACHABLE);
+  }
   const now: Link = { base: root, code: trimmed, stream, seen: 0, waiting: new Set() };
   setLink(now);
   void keepStream(now, first);

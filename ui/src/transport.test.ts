@@ -120,6 +120,19 @@ describe("transport (web app)", () => {
     await expect(pair("  ", BASE)).rejects.toThrow("Enter the pairing code Loadout shows.");
   });
 
+  it("passes on why the desktop turned the stream away", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        String(url).endsWith("/hello")
+          ? Response.json({ kind: "grokhub-remote", version: 1 })
+          : Response.json({ ok: false, error: "Too many open tabs." }, { status: 503 }),
+      ),
+    );
+    await expect(pair(CODE, BASE)).rejects.toThrow("Too many open tabs.");
+    expect(paired()).toBe(false);
+  });
+
   it("hands each event on the stream to its listeners", async () => {
     const box = desktop({});
     await pair(CODE, BASE);

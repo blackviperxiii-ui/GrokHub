@@ -88,8 +88,8 @@ const GIT_UNSAFE_OPTIONS: &[&str] = &[
 ];
 
 const READONLY_HEADS: &[&str] = &[
-    "ls", "cat", "pwd", "date", "whoami", "hostname", "uptime", "ps", "head", "tail", "wc", "uniq",
-    "tr", "cut", "grep",
+    "ls", "cat", "pwd", "date", "whoami", "hostname", "uptime", "ps", "head", "tail", "wc", "tr",
+    "cut", "grep",
 ];
 
 const SHELLS: &[&str] = &["sh", "bash", "zsh", "dash", "ksh", "fish"];
@@ -195,7 +195,10 @@ pub fn is_readonly(words: &[String]) -> bool {
         return true;
     }
     if head == "sort" {
-        return !sort_compress(words);
+        return !sort_compress(words) && !sort_writes(words);
+    }
+    if head == "uniq" {
+        return !uniq_writes(words);
     }
     if head == "rg" {
         return !rg_pre(words);
@@ -266,9 +269,67 @@ fn git_readonly(words: &[String]) -> bool {
     let Some(idx) = git_verb_index(words) else {
         return false;
     };
-    words
-        .get(idx)
-        .is_some_and(|verb| SAFE_GIT.contains(&verb.as_str()))
+    let Some(verb) = words.get(idx) else {
+        return false;
+    };
+    if verb == "branch" {
+        return git_branch_lists(&words[idx + 1..]);
+    }
+    SAFE_GIT.contains(&verb.as_str())
+}
+
+/// `git branch` only lists: no name to create, and no flag that deletes,
+/// moves, copies, forces or edits a branch. A flag this doesn't know asks.
+fn git_branch_lists(args: &[String]) -> bool {
+    const LIST_FLAGS: &[&str] = &[
+        "-a",
+        "-r",
+        "-v",
+        "-vv",
+        "-l",
+        "-i",
+        "--all",
+        "--remotes",
+        "--verbose",
+        "--list",
+        "--show-current",
+        "--ignore-case",
+        "--no-color",
+        "--color",
+        "--no-column",
+        "--column",
+        "--no-abbrev",
+    ];
+    const VALUE_FLAGS: &[&str] = &[
+        "--contains",
+        "--no-contains",
+        "--merged",
+        "--no-merged",
+        "--points-at",
+        "--sort",
+        "--format",
+        "--color",
+        "--column",
+        "--abbrev",
+    ];
+    let lists = args.iter().any(|a| a == "--list" || a == "-l");
+    let mut i = 0usize;
+    while let Some(arg) = args.get(i).map(String::as_str) {
+        i += 1;
+        if let Some((flag, _)) = arg.split_once('=') {
+            if !VALUE_FLAGS.contains(&flag) {
+                return false;
+            }
+        } else if LIST_FLAGS.contains(&arg) {
+        } else if VALUE_FLAGS.contains(&arg) {
+            // The commit, key or format this flag reads.
+            i += 1;
+        } else if arg.starts_with('-') || !lists {
+            // An unknown flag, or a bare name: `git branch NAME` creates it.
+            return false;
+        }
+    }
+    true
 }
 
 fn git_unsafe_query_option(words: &[String]) -> bool {
@@ -403,10 +464,55 @@ fn sort_compress(words: &[String]) -> bool {
     false
 }
 
+/// `sort -o FILE` (also `-uo FILE`, `--output=FILE`) writes FILE.
+fn sort_writes(words: &[String]) -> bool {
+    for word in words.iter().skip(1) {
+        if word == "--" {
+            break;
+        }
+        let flag = word
+            .split_once('=')
+            .map(|(f, _)| f)
+            .unwrap_or(word.as_str());
+        if long_prefix(flag, "--output", 3) {
+            return true;
+        }
+        if word.starts_with('-') && !word.starts_with("--") && word.contains('o') {
+            return true;
+        }
+    }
+    false
+}
+
+/// `uniq IN OUT` writes OUT: a second file name means it is not a read.
+fn uniq_writes(words: &[String]) -> bool {
+    let mut files = 0usize;
+    let mut i = 1usize;
+    let mut only_files = false;
+    while let Some(word) = words.get(i).map(String::as_str) {
+        i += 1;
+        if only_files || !word.starts_with('-') || word == "-" {
+            files += 1;
+        } else if word == "--" {
+            only_files = true;
+        } else if matches!(word, "-f" | "-s" | "-w")
+            || long_prefix(word, "--skip-fields", 8)
+            || long_prefix(word, "--skip-chars", 8)
+            || long_prefix(word, "--check-chars", 4)
+        {
+            // The count this flag reads.
+            i += 1;
+        }
+    }
+    files > 1
+}
+
 fn rg_pre(words: &[String]) -> bool {
     words.iter().skip(1).any(|word| {
         word == "--pre"
             || word.starts_with("--pre=")
+            || word == "--hostname-bin"
+            || word.starts_with("--hostname-bin=")
             || word == "--pre-glob"
             || word.starts_with("--pre-glob=")
     })
