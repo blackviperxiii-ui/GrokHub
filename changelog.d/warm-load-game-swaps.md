@@ -1,0 +1,1 @@
+- After a game ends and things settle (about 45 seconds), Local AI brings your picked model back in the background, so the next chat isn't stuck on the small gaming model. While you game, the small model keeps its draft model on the CPU when a speed test of that setup (run while no game runs) showed it helps; otherwise it runs alone.

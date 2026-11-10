@@ -269,6 +269,7 @@ impl Rig {
             args: &self.a,
             tune_dir: &self.dir,
             device: "NVIDIA GeForce RTX",
+            gaming: false,
         })
     }
 }
@@ -656,4 +657,61 @@ fn the_refusal_check_reads_the_reply_not_the_reasoning() {
     let empty = r#"{"choices":[{"message":{"role":"assistant","content":"","reasoning_content":"thinking"}}]}"#;
     assert_eq!(reply_text(empty), None, "an empty reply counts neither way");
     assert_eq!(reply_text("not json"), None);
+}
+
+#[test]
+fn a_game_keeps_the_drafter_on_the_cpu_only_on_its_own_speed_test() {
+    let rig = Rig::new("gaming", G12B_FILE, Some((G12B_MTP, VOCAB)));
+    let cpu = crate::route::local_autoconfig::gaming_launch(&rig.a);
+    let at = |device: &str, gaming: bool| {
+        plan(&Launch {
+            flags: &rig.flags,
+            model: &rig.model,
+            meta: &rig.meta,
+            profile: &rig.p,
+            state: GovState::Throttle,
+            args: &cpu,
+            tune_dir: &rig.dir,
+            device,
+            gaming,
+        })
+    };
+    assert_eq!(
+        at("cpu", false).decision,
+        Decision::Off("the machine is busy, so the draft model is off"),
+        "a throttled machine outside a game still turns it off"
+    );
+    let first = at(GAMING_DEVICE, true);
+    assert_eq!(first.decision, Decision::NeedsTest, "no gaming verdict yet");
+    assert_eq!(first.draft, None, "the model runs alone until it's tested");
+    let key = first.key.expect("verdict key");
+    assert!(key.starts_with("cpu-gaming|"), "{key}");
+    let keep = Verdict {
+        keep: true,
+        acceptance: 0.6,
+        gain: 1.4,
+        retest_at: None,
+    };
+    ld::save_verdict(&rig.dir, &key, keep).unwrap();
+    let on = at(GAMING_DEVICE, true);
+    assert_eq!(on.decision, Decision::On);
+    assert_eq!(
+        on.draft.map(|d| d.on_gpu),
+        Some(false),
+        "the drafter stays off the GPU"
+    );
+    ld::save_verdict(
+        &rig.dir,
+        &key,
+        Verdict {
+            keep: false,
+            ..keep
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        at(GAMING_DEVICE, true).draft,
+        None,
+        "a lost test turns it off"
+    );
 }

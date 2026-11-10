@@ -242,7 +242,14 @@ pub struct Launch<'a> {
     pub tune_dir: &'a Path,
     /// The device part of the verdict key.
     pub device: &'a str,
+    /// A game runs: the model is on the CPU beside it, and a drafter may
+    /// join only on its own speed test (see [`GAMING_DEVICE`]).
+    pub gaming: bool,
 }
+
+/// The device part of the verdict key for the gaming setup (CPU, half the
+/// threads), so its speed test never borrows a verdict from the GPU.
+pub const GAMING_DEVICE: &str = "cpu-gaming";
 
 /// The draft for one launch.
 pub fn plan(l: &Launch) -> Plan {
@@ -255,6 +262,7 @@ pub fn plan(l: &Launch) -> Plan {
         args,
         tune_dir,
         device,
+        gaming,
     } = *l;
     let forced = force();
     if forced == Some(false) {
@@ -295,7 +303,8 @@ pub fn plan(l: &Launch) -> Plan {
     let live_off = forced.is_none() && stored.is_some_and(|v| !v.keep && v.retest_at.is_some());
     let decision = ld::decide(Check {
         // The speed test runs whatever the level; it asked for the drafter.
-        level_ok: state != GovState::Throttle || forced == Some(true),
+        // A game throttles the machine, but its CPU setup has its own test.
+        level_ok: state != GovState::Throttle || forced == Some(true) || gaming,
         // A drafter file also needs the flag that loads it.
         engine_ok: flags.supports(c.kind) && (c.file.is_none() || flags.model.is_some()),
         tokenizer_ok,
@@ -488,10 +497,19 @@ pub fn tick_auto_test(config_dir: &Path, q: &ld::Quiet) {
     };
     let needs = autoconfig::draft_plan(&paths.binary, &paths.model)
         .is_some_and(|p| p.decision == Decision::NeedsTest);
-    // With the drafter settled, a model that hasn't had its refusal check
+    // Then the model a game swaps to, timed in the gaming setup now, while
+    // no game runs, so its drafter can join it during one.
+    let gaming = (!needs)
+        .then(|| super::local_sidecar::gaming_model_for(config_dir, &paths.model))
+        .flatten()
+        .filter(|g| {
+            autoconfig::gaming_draft_plan(&paths.binary, g)
+                .is_some_and(|p| p.decision == Decision::NeedsTest)
+        });
+    // With the drafters settled, a model that hasn't had its refusal check
     // gets it next.
-    let refusal = !needs && refusal_due(&paths.model);
-    if !needs && !refusal {
+    let refusal = !needs && gaming.is_none() && refusal_due(&paths.model);
+    if !needs && gaming.is_none() && !refusal {
         return;
     }
     if let Ok(mut a) = auto().lock() {
@@ -502,6 +520,8 @@ pub fn tick_auto_test(config_dir: &Path, q: &ld::Quiet) {
     std::thread::spawn(move || {
         let line = if refusal {
             run_refusal_check(&dir)
+        } else if let Some(model) = gaming {
+            run_gaming_bench(&dir, model)
         } else {
             run_bench(&dir)
         };
@@ -549,6 +569,24 @@ pub fn measure(base_url: &str, token: &str) -> Result<Timing, String> {
 /// when there's no drafter to test.
 pub fn run_bench(config_dir: &Path) -> Option<String> {
     let paths = super::local_sidecar::resolve_paths(config_dir)?;
+    bench(&paths)
+}
+
+/// [`run_bench`] for `model` in the gaming setup (CPU, half the threads), so
+/// a verdict waits for the next game. Run only while no game does.
+pub fn run_gaming_bench(config_dir: &Path, model: PathBuf) -> Option<String> {
+    let paths = super::local_sidecar::resolve_paths(config_dir)?;
+    let paths = super::local_sidecar::SidecarPaths {
+        binary: paths.binary,
+        model,
+    };
+    autoconfig::set_gaming_test(true);
+    let line = bench(&paths);
+    autoconfig::set_gaming_test(false);
+    line.map(|l| format!("While gaming: {l}"))
+}
+
+fn bench(paths: &super::local_sidecar::SidecarPaths) -> Option<String> {
     let planned = autoconfig::draft_plan(&paths.binary, &paths.model)?;
     match planned.decision {
         Decision::Off(r)
@@ -566,7 +604,7 @@ pub fn run_bench(config_dir: &Path) -> Option<String> {
     super::local_sidecar::stop_global();
     let timed = |force: Option<bool>| -> Result<(Timing, bool), String> {
         set_force(force);
-        let side = super::local_sidecar::start(&paths)?;
+        let side = super::local_sidecar::start(paths)?;
         let drafting = side.drafting();
         let t = measure(&side.base_url(), &side.token);
         side.stop();
