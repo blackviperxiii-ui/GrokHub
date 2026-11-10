@@ -158,6 +158,7 @@ impl Drop for Busy {
 /// Marks a request in flight until the guard drops, on the running server
 /// when there is one.
 pub fn busy() -> Busy {
+    super::local_habit::note_request(unix_secs());
     let slot = global_slot().lock().unwrap_or_else(|e| e.into_inner());
     match slot.as_ref() {
         Some(side) => side.busy(),
@@ -1464,7 +1465,9 @@ const PREWARM_LOOK_SECS: u64 = 60;
 /// The cabin sampler's tick for RAM-warming: once a minute, read the files
 /// the next load will need into the OS cache (see `local_prewarm`). That is
 /// the pick and its drafter when they aren't running (after a game, an idle
-/// unload or at app start), and the model a game swaps to.
+/// unload or at app start), and the model a game swaps to. Shortly before a
+/// usual chat time (see `local_habit`) it looks at them all again, unless a
+/// game is running.
 pub fn tick_prewarm(config_dir: &Path) {
     let now = unix_secs();
     if !super::local::switched_on()
@@ -1498,7 +1501,11 @@ pub fn tick_prewarm(config_dir: &Path) {
         files.push(model);
         files.extend(drafter);
     }
-    super::local_prewarm::start(files, gaming);
+    let habit = !gaming && super::local_habit::tick(now);
+    if super::local_prewarm::start(files, gaming, habit) && habit {
+        let why = Some("a usual chat time is near");
+        health::log_to(config_dir, "habit_warm", why, None);
+    }
 }
 
 /// The cabin sampler's tick for scaling, between requests: a step up the

@@ -41,6 +41,7 @@ pub mod local_effort;
 pub mod local_fit;
 pub mod local_flags;
 pub mod local_gov;
+pub mod local_habit;
 pub mod local_health;
 pub mod local_http;
 pub mod local_image;
