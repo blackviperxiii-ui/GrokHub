@@ -1,0 +1,1 @@
+- A model-choice change the app tested but may not make on its own now waits for you: `/learned decisions` lists it under "Waiting for your yes", and `/learned yes <id>` or `/learned no <id>` answers it. The desktop app shows the same with Yes and No buttons. A yes goes in on the next pass and Halt still stops it; a no ends it for a month.

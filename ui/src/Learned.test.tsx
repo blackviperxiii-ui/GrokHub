@@ -12,7 +12,7 @@ const api = vi.hoisted(() => ({
 
 vi.mock("./api", () => api);
 
-import { DECISIONS_EMPTY, IMPORT_WARN, LEARNED_EMPTY, LEARNED_PAUSED, Learned, TRUST_ASKING, TRUST_RESTING, scoreLine, waitingLine } from "./Learned";
+import { ASK_NO, ASK_YES, DECISIONS_EMPTY, IMPORT_WARN, LEARNED_EMPTY, LEARNED_PAUSED, Learned, TRUST_ASKING, TRUST_RESTING, scoreLine, waitingLine } from "./Learned";
 
 function row(over: Partial<LearnedRow> = {}): LearnedRow {
   return {
@@ -41,6 +41,7 @@ function trust(over: Partial<LearnedTrust> = {}): LearnedTrust {
     now: { quiet: false, busy: false, halted: false, gaming: false, onBattery: false },
     askingFirst: false,
     leftToday: 5,
+    asks: [],
     decisions: [],
     ...over,
   };
@@ -275,6 +276,23 @@ describe("Learned", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Put back what was here" }));
     expect(api.learnedSay).toHaveBeenCalledWith("restore");
     expect(screen.getByRole("status", { name: "Backup and report" })).toHaveTextContent("no reach");
+  });
+
+  it("answers a waiting model-choice change with a yes or a no", async () => {
+    const ask = { key: "rule:router/chat:default/order", title: "Router: which model goes first for chat:default", why: "This area is set to offer only." };
+    api.getLearned.mockResolvedValue({ rows: [], singleChips: 0, paused: false, trust: trust({ asks: [ask] }) });
+    api.learnedAct.mockResolvedValueOnce({ rows: [], singleChips: 0, paused: false, trust: trust({ asks: [ask] }) }).mockResolvedValueOnce({ rows: [], singleChips: 0, paused: false, trust: trust() });
+    render(<Learned />);
+    const waiting = () => within(within(screen.getByRole("list", { name: "Waiting for your yes" })).getByRole("listitem", { name: ask.title }));
+    await screen.findByRole("list", { name: "Waiting for your yes" });
+    expect(waiting().getByText("This area is set to offer only.")).toBeVisible();
+    await userEvent.click(waiting().getByRole("button", { name: "Yes" }));
+    expect(api.learnedAct).toHaveBeenLastCalledWith({ kind: "answer", key: ask.key, yes: true });
+    expect(screen.getByRole("status")).toHaveTextContent(ASK_YES);
+    await userEvent.click(waiting().getByRole("button", { name: "No" }));
+    expect(api.learnedAct).toHaveBeenLastCalledWith({ kind: "answer", key: ask.key, yes: false });
+    expect(screen.getByRole("status")).toHaveTextContent(ASK_NO);
+    expect(screen.queryByRole("list", { name: "Waiting for your yes" })).toBeNull();
   });
 
   it("shows why when the list can't load", async () => {

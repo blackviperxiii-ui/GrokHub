@@ -47,6 +47,11 @@ pub const PAUSE_MS: u64 = 3 * DAY_MS;
 pub const LOG_CAP: usize = 200;
 /// Rules kept. One more drops the one decided longest ago.
 pub const RULE_CAP: usize = 500;
+/// Areas whose offers have no card of their own, so they are answered from
+/// the list of decisions (`/learned yes <id>`, or the page's buttons).
+pub const PAGE_ANSWERS: [Area; 1] = [Area::Router];
+/// An offer nobody weighed again for this long is gone, not waiting.
+pub const ASK_FRESH_MS: u64 = 7 * DAY_MS;
 const DAY_MS: u64 = 24 * 60 * 60 * 1_000;
 
 /// A part of the app that can change something on its own.
@@ -247,6 +252,8 @@ pub enum Reason {
     Paused,
     Shadow,
     Budget,
+    /// The user answered its offer with a yes.
+    YouSaidYes,
 }
 
 impl Reason {
@@ -271,6 +278,7 @@ impl Reason {
             Self::Paused => "Too much was undone lately, so it asks first for a few days.",
             Self::Shadow => "It's new at this, so it asks until you've said yes three times.",
             Self::Budget => "It already made 5 changes on its own today.",
+            Self::YouSaidYes => "You said yes to this.",
         }
     }
 }
@@ -321,6 +329,9 @@ struct Rule {
     area: Option<Area>,
     /// The last verdict logged, so the same answer isn't logged twice.
     last: Option<(Verdict, Reason)>,
+    /// The user said yes to its offer: its next proposal goes through once.
+    #[serde(default)]
+    yes: bool,
 }
 
 /// Everything the decision engine remembers. One small file.
@@ -447,6 +458,47 @@ impl State {
         self.tries.allow(rule, clear, now_ms)
     }
 
+    /// Offers waiting for a yes or a no on the list of decisions: the rule
+    /// and why it asked, in rule order. Only [`PAGE_ANSWERS`] areas, and
+    /// only offers weighed inside [`ASK_FRESH_MS`].
+    pub fn asks(&self, now_ms: u64) -> Vec<(Subject, Reason)> {
+        self.rules
+            .iter()
+            .filter(|(_, r)| {
+                !r.yes
+                    && r.area.is_some_and(|a| PAGE_ANSWERS.contains(&a))
+                    && now_ms >= r.resting_until_ms
+                    && now_ms.saturating_sub(r.last_ms) < ASK_FRESH_MS
+            })
+            .filter_map(|(key, r)| match r.last {
+                Some((Verdict::Offer, reason)) => Some((key.clone(), reason)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The user's answer to a waiting offer. A yes lets the rule's next
+    /// proposal through once and counts as a yes answer; a no rests the rule.
+    /// False when nothing is waiting under `rule`.
+    pub fn answer(&mut self, rule: &Subject, yes: bool, now_ms: u64) -> bool {
+        if !self.asks(now_ms).iter().any(|(key, _)| key == rule) {
+            return false;
+        }
+        let outcome = if yes {
+            Outcome::Accepted
+        } else {
+            Outcome::Declined
+        };
+        self.outcome(rule, outcome, now_ms);
+        if let Some(r) = self.rules.get_mut(rule) {
+            r.yes = yes;
+            if !yes {
+                r.last = None;
+            }
+        }
+        true
+    }
+
     pub fn graduated(&self, rule: &Subject) -> bool {
         self.rules
             .get(rule)
@@ -457,6 +509,11 @@ impl State {
         let rule = self.rules.get(&p.rule);
         if rule.is_some_and(|r| r.undone >= UNDOS_TURN_OFF) {
             return (Verdict::Never, Reason::TurnedOff);
+        }
+        // The user's own yes to this offer. Halt still stops it, and the
+        // always-ask list is answered where it is asked, never from here.
+        if rule.is_some_and(|r| r.yes) && !p.hard && !now.halted {
+            return (Verdict::Act, Reason::YouSaidYes);
         }
         let dial = self.dial(p.area);
         if dial == Dial::Watch {
@@ -528,12 +585,16 @@ impl State {
         };
         if verdict == Verdict::Act {
             rule.acted += 1;
+            rule.yes = false;
             let day = now_ms / DAY_MS;
             if self.day != day {
                 self.day = day;
                 self.acts_today = 0;
             }
-            self.acts_today += 1;
+            // The day's budget is for changes the app made on its own.
+            if reason != Reason::YouSaidYes {
+                self.acts_today += 1;
+            }
             self.recent_acts.push_back((now_ms, p.rule.clone()));
         }
         // An act is logged every time; any other answer only when it changes.
@@ -642,6 +703,11 @@ pub const NO_DECISIONS: &str =
     "No decisions yet. They show up here once the app has something it could change for you.";
 pub const NO_GOALS: &str = "Nothing set. Name what matters with `/learned goals`.";
 pub const GOALS_USAGE: &str = "Use `/learned goals <goal> [<goal> ...]`, first is most important, or `/learned goals none`. Goals: cheapest, fastest, quiet, best-quality.";
+pub const ANSWER_USAGE: &str = "Answer with `/learned yes <id>` or `/learned no <id>`.";
+pub const YES_SAID: &str = "Yes noted. The change goes in the next time the app looks at it.";
+pub const NO_SAID: &str = "No noted. It won't ask about this again for a month.";
+pub const NO_ASK: &str =
+    "Nothing is waiting for an answer under that id. See `/learned decisions`.";
 pub const TRUST_USAGE: &str = "Use `/learned trust <area> <watch|offer|act>`. Areas: settings, skills, router, local-ai, proactive, chips.";
 
 pub(super) fn verdict_words(v: Verdict) -> &'static str {
@@ -697,6 +763,15 @@ pub fn text(state: &State, now_ms: u64) -> String {
     if !scored.is_empty() {
         out.push_str("\n**The last four weeks**\n");
         out.extend(scored);
+    }
+    let asks = state.asks(now_ms);
+    if !asks.is_empty() {
+        out.push_str("\n**Waiting for your yes**\n");
+        for (rule, reason) in &asks {
+            out.push_str(&format!("- {} `{}`\n", reason.why(), rule.as_str()));
+        }
+        out.push_str(ANSWER_USAGE);
+        out.push('\n');
     }
     out.push_str("\n**Latest decisions**\n");
     if state.log.is_empty() {

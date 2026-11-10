@@ -527,6 +527,8 @@ fn the_shared_logs_feed_one_engine() {
     );
     assert_eq!(page.dials[0].dial, decide::Dial::Offer);
     assert_eq!((page.asking_first, page.left_today), (false, 3));
+    // The habit is named for the part of the day the test runs in.
+    let tidy = format!("Skill tidy-up {}", habit::when(part, false));
     let lines: Vec<(&str, &str)> = page
         .decisions
         .iter()
@@ -538,9 +540,9 @@ fn the_shared_logs_feed_one_engine() {
             ("Settings text size", "Asked"),
             ("Settings text size", "Did it"),
             ("Settings text size", "Asked"),
-            ("Skill tidy-up at night", "Held back"),
-            ("Skill tidy-up at night", "Did it"),
-            ("Skill tidy-up at night", "Asked"),
+            (tidy.as_str(), "Held back"),
+            (tidy.as_str(), "Did it"),
+            (tidy.as_str(), "Asked"),
         ]
     );
     assert_eq!(page.decisions[0].why, "This area is set to offer only.");
@@ -738,5 +740,75 @@ fn the_shared_logs_feed_one_engine() {
         assert_eq!(view::page_say(line, at), Err(view::USAGE.to_string()));
     }
     assert!(store::load_beliefs(&dir).len() > 1);
+
+    // A model-choice change the router dial holds is answered from the list.
+    let route = Subject::new("rule", "router/chat:default/order").unwrap();
+    let change = Proposal {
+        area: Area::Router,
+        rule: route.clone(),
+        confidence: 1.0,
+        evidence: 60.0,
+        undo: grokhub_core::learn::Undo::OneClick,
+        value: 0.2,
+        hard: false,
+        helps: None,
+        hurts: None,
+        tested: true,
+    };
+    let weigh = |at: u64| {
+        let d = hub::decide_all(vec![change.clone()], Situation::default(), at);
+        (d[0].verdict, d[0].reason)
+    };
+    assert_eq!(
+        view::run("yes rule:router/chat:default/order", at),
+        decide::NO_ASK
+    );
+    hub::set_dial(Area::Router, decide::Dial::Offer);
+    assert_eq!(weigh(at), (Verdict::Offer, Reason::DialOffer));
+    assert_eq!(
+        hub::view(at).trust.asks,
+        vec![view::AskRow {
+            key: "rule:router/chat:default/order".into(),
+            title: "Router: which model goes first for chat:default".into(),
+            why: "This area is set to offer only.",
+        }]
+    );
+    let listed = view::run("decisions", at);
+    assert!(
+        listed.contains(
+            "**Waiting for your yes**\n- This area is set to offer only. `rule:router/chat:default/order`\nAnswer with `/learned yes <id>` or `/learned no <id>`.\n"
+        ),
+        "{listed}"
+    );
+    assert_eq!(
+        view::run("yes rule:router/chat:default/order", at),
+        decide::YES_SAID
+    );
+    assert_eq!(hub::view(at).trust.asks, vec![]);
+    assert_eq!(weigh(at + 1), (Verdict::Act, Reason::YouSaidYes));
+    // The next one asks again, and the page's No button rests it.
+    assert_eq!(weigh(at + 2), (Verdict::Offer, Reason::DialOffer));
+    let page = view::act(
+        view::Act::Answer {
+            key: "rule:router/chat:default/order".into(),
+            yes: false,
+        },
+        at + 3,
+    )
+    .unwrap();
+    assert_eq!(page.trust.asks, vec![]);
+    assert_eq!(weigh(at + 4), (Verdict::Wait, Reason::Resting));
+    assert_eq!(
+        view::act(
+            view::Act::Answer {
+                key: "rule:router/chat:default/order".into(),
+                yes: true,
+            },
+            at + 5,
+        ),
+        Err(view::NO_SUCH_LINE.to_string())
+    );
+    assert_eq!(view::run("yes", at), view::USAGE);
+    hub::set_dial(Area::Router, decide::Dial::Act);
     let _ = fs::remove_dir_all(&dir);
 }

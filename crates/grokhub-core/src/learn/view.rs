@@ -115,6 +115,17 @@ pub struct DecisionRow {
     pub why: &'static str,
 }
 
+/// An offer waiting for a yes or a no.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AskRow {
+    /// The rule's id, to answer it by.
+    pub key: String,
+    pub title: String,
+    /// Why it asked instead of doing it.
+    pub why: &'static str,
+}
+
 /// The decision engine's side of the page.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -126,6 +137,8 @@ pub struct Trust {
     pub asking_first: bool,
     /// Changes the app may still make on its own today.
     pub left_today: u32,
+    /// Offers waiting for a yes or a no.
+    pub asks: Vec<AskRow>,
     /// The newest decisions, newest first, at most [`DECISIONS_SHOWN`].
     pub decisions: Vec<DecisionRow>,
     /// What is going on right now, as the app last told the engine.
@@ -173,6 +186,15 @@ pub fn trust(state: &State, now: Snapshot, now_ms: u64) -> Trust {
             .collect(),
         asking_first: state.paused(now_ms),
         left_today: state.budget_left(now_ms),
+        asks: state
+            .asks(now_ms)
+            .into_iter()
+            .map(|(rule, reason)| AskRow {
+                title: rule_title(&rule),
+                key: rule.as_str().to_string(),
+                why: reason.why(),
+            })
+            .collect(),
         decisions: state
             .log()
             .rev()
@@ -395,9 +417,11 @@ pub enum Command {
     Import,
     /// Put back what was held before the last import.
     Restore,
+    /// Yes or no to an offer waiting on the list of decisions.
+    Answer(Subject, bool),
 }
 
-pub const USAGE: &str = "Use `/learned`, `/learned forget <id>`, `/learned wrong <id>`, `/learned always <id>`, `/learned forget all`, `/learned pause`, `/learned resume`, `/learned decisions`, `/learned trust <area> <watch|offer|act>`, `/learned goals <goal> ...`, `/learned report`, `/learned backup`, `/learned import` or `/learned restore`. The id is the code at the end of each line.";
+pub const USAGE: &str = "Use `/learned`, `/learned forget <id>`, `/learned wrong <id>`, `/learned always <id>`, `/learned forget all`, `/learned pause`, `/learned resume`, `/learned decisions`, `/learned trust <area> <watch|offer|act>`, `/learned yes <id>`, `/learned no <id>`, `/learned goals <goal> ...`, `/learned report`, `/learned backup`, `/learned import` or `/learned restore`. The id is the code at the end of each line.";
 
 impl Command {
     pub fn parse(rest: &str) -> Result<Self, String> {
@@ -440,6 +464,8 @@ impl Command {
             (Some("forget"), Some(id)) => subject(id).map(Command::Forget),
             (Some("wrong"), Some(id)) => subject(id).map(Command::Wrong),
             (Some("always"), Some(id)) => subject(id).map(Command::Always),
+            (Some("yes"), Some(id)) => subject(id).map(|rule| Command::Answer(rule, true)),
+            (Some("no"), Some(id)) => subject(id).map(|rule| Command::Answer(rule, false)),
             (Some("pause"), None) => Ok(Command::Pause),
             (Some("resume"), None) => Ok(Command::Resume),
             _ => Err(USAGE.into()),
@@ -469,6 +495,14 @@ pub fn run(rest: &str, now_ms: u64) -> String {
     let done = match &command {
         Command::List => None,
         Command::Decisions => Some(super::hub::decisions_text(now_ms)),
+        Command::Answer(rule, yes) => Some(
+            match (super::hub::answer(rule, *yes, now_ms), yes) {
+                (false, _) => super::decide::NO_ASK,
+                (true, true) => super::decide::YES_SAID,
+                (true, false) => super::decide::NO_SAID,
+            }
+            .to_string(),
+        ),
         Command::Report => Some(report_text(now_ms)),
         Command::Backup => Some(match super::hub::export() {
             Ok(path) => format!(
@@ -578,6 +612,7 @@ pub enum Act {
     Trust { area: Area, dial: Dial },
     Goals { goals: Vec<Goal> },
     CarryOn,
+    Answer { key: String, yes: bool },
 }
 
 pub const NO_SUCH_LINE: &str = "That line is gone. Open the page again.";
@@ -599,6 +634,11 @@ pub fn act(act: Act, now_ms: u64) -> Result<View, String> {
         Act::Trust { area, dial } => super::hub::set_dial(area, dial),
         Act::Goals { goals } => super::hub::set_goals(&goals),
         Act::CarryOn => super::hub::carry_on(),
+        Act::Answer { key, yes } => {
+            if !super::hub::answer(&subject(&key)?, yes, now_ms) {
+                return Err(NO_SUCH_LINE.into());
+            }
+        }
     }
     Ok(super::hub::view(now_ms))
 }

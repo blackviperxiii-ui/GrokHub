@@ -305,6 +305,20 @@ pub fn set_dial(area: Area, dial: Dial) {
     }
 }
 
+/// The user's yes or no to an offer waiting on the list of decisions. False
+/// when nothing is waiting under `rule`, or before [`start`].
+pub fn answer(rule: &Subject, yes: bool, now_ms: u64) -> bool {
+    let Some(mut e) = engine() else {
+        return false;
+    };
+    let took = decide::with_state(e.config_dir(), |s| s.answer(rule, yes, now_ms));
+    if took && !paused() {
+        let kind = if yes { Kind::Accepted } else { Kind::Declined };
+        e.record(Signal::new(now_ms, kind, rule.clone()));
+    }
+    took
+}
+
 /// The user's "carry on" after too much was undone: the app may act again.
 pub fn carry_on() {
     if let Some(e) = engine() {

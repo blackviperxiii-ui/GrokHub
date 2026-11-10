@@ -1585,3 +1585,117 @@ fn a_habit_seen_twice_or_at_mixed_times_is_unsure_and_three_clean_runs_are_due()
     assert_eq!(habit::chip_rule(&chip.id), unsure[0].rule());
     assert_eq!(habit::trial_chip(&unsure[1], &skills, 5.0), None);
 }
+
+#[test]
+fn a_yes_to_a_waiting_offer_lets_it_through_once_and_a_no_rests_it() {
+    use super::decide::{
+        Area, Dial, Proposal, Reason, Situation, State, Verdict, ASK_FRESH_MS, REST_MS,
+    };
+    let rule = Subject::new("rule", "router/chat:default/order").unwrap();
+    let p = Proposal {
+        area: Area::Router,
+        rule: rule.clone(),
+        confidence: 1.0,
+        evidence: 60.0,
+        undo: Undo::OneClick,
+        value: 0.2,
+        hard: false,
+        helps: None,
+        hurts: None,
+        tested: true,
+    };
+    let calm = Situation::default();
+    let said = |s: &mut State, p: &Proposal, now: Situation, at: u64| {
+        let d = s.decide(p, now, at);
+        (d.verdict, d.reason)
+    };
+    let t = 1_800_000_000_000u64;
+    let mut s = State::default();
+    // Nothing asked yet, so there is nothing to answer.
+    assert_eq!(s.asks(t), vec![]);
+    assert!(!s.answer(&rule, true, t));
+    s.set_dial(Area::Router, Dial::Offer);
+    assert_eq!(
+        said(&mut s, &p, calm, t),
+        (Verdict::Offer, Reason::DialOffer)
+    );
+    assert_eq!(s.asks(t), vec![(rule.clone(), Reason::DialOffer)]);
+    // An offer nobody weighed again for a week is gone.
+    assert_eq!(s.asks(t + ASK_FRESH_MS - 1).len(), 1);
+    assert_eq!(s.asks(t + ASK_FRESH_MS), vec![]);
+
+    // Yes: it stops waiting, and Halt still holds it.
+    assert!(s.answer(&rule, true, t + 1));
+    assert_eq!(s.asks(t + 1), vec![]);
+    assert!(!s.answer(&rule, true, t + 1));
+    let halted = Situation {
+        halted: true,
+        ..calm
+    };
+    assert_eq!(
+        said(&mut s, &p, halted, t + 2),
+        (Verdict::Offer, Reason::DialOffer)
+    );
+    // The always-ask list is never answered from here.
+    let hard = Proposal {
+        hard: true,
+        ..p.clone()
+    };
+    assert_eq!(
+        said(&mut s, &hard, calm, t + 3),
+        (Verdict::Offer, Reason::AlwaysAsks)
+    );
+    // It goes through once, with the dial still on offer, in quiet hours,
+    // and without spending one of the day's own changes.
+    let quiet = Situation {
+        quiet: true,
+        ..calm
+    };
+    assert_eq!(
+        said(&mut s, &p, quiet, t + 4),
+        (Verdict::Act, Reason::YouSaidYes)
+    );
+    assert_eq!(s.budget_left(t + 4), decide::ACTS_PER_DAY);
+    assert_eq!(s.score().score(Area::Router, t + 4).now, Some(100));
+    // The yes is spent: the next one asks again.
+    assert_eq!(
+        said(&mut s, &p, calm, t + 5),
+        (Verdict::Offer, Reason::DialOffer)
+    );
+
+    // No: it rests a month, and nothing waits meanwhile.
+    assert!(s.answer(&rule, false, t + 6));
+    assert_eq!(s.asks(t + 6), vec![]);
+    assert_eq!(
+        said(&mut s, &p, calm, t + 7),
+        (Verdict::Wait, Reason::Resting)
+    );
+    assert_eq!(
+        said(&mut s, &p, calm, t + 6 + REST_MS),
+        (Verdict::Offer, Reason::DialOffer)
+    );
+
+    // Areas with cards of their own are not answered from the list.
+    let settings = Proposal {
+        area: Area::Settings,
+        rule: Subject::new("rule", "settings/text-size").unwrap(),
+        tested: false,
+        ..p.clone()
+    };
+    assert_eq!(
+        said(&mut s, &settings, calm, t + 8),
+        (Verdict::Offer, Reason::Shadow)
+    );
+    assert!(!s.answer(&settings.rule, true, t + 8));
+
+    // The yes survives a save and a load.
+    let mut s = State::default();
+    s.set_dial(Area::Router, Dial::Offer);
+    s.decide(&p, calm, t);
+    assert!(s.answer(&rule, true, t));
+    let mut back: State = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+    assert_eq!(
+        said(&mut back, &p, calm, t + 1),
+        (Verdict::Act, Reason::YouSaidYes)
+    );
+}

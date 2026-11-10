@@ -11,6 +11,9 @@ export const TRUST_ASKING = "Too much was undone lately, so everything asks firs
 export const TRUST_RESTING = "An area that got worse asks first for a month.";
 export const CARRY_NOTE = `A backup is one file on this computer with everything ${PRODUCT_NAME} learned. Copy it into the config folder on another computer and take it in there. The fault report lists what ${PRODUCT_NAME} measured going wrong with itself, in ids and counts only. Nothing here is sent anywhere.`;
 export const IMPORT_WARN = "Taking in a backup replaces what was learned on this computer. What is here now is kept once, so you can put it back.";
+export const ASKS_NOTE = `${PRODUCT_NAME} tried these on a share of real work and they held. It asks because of how far you let this area go. A change made this way can still be undone.`;
+export const ASK_YES = "Yes noted. The change goes in the next time it looks.";
+export const ASK_NO = "No noted. It won't ask about this again for a month.";
 export const DECISIONS_EMPTY = "No decisions yet. They show up here once there is something it could change for you.";
 
 const DIAL: Record<TrustDial, string> = {
@@ -110,6 +113,28 @@ function Trust({ trust, busy, run }: { trust: LearnedTrust; busy: boolean; run: 
         </select>
       </label>
       <p className="note">{GOAL_NOTE}</p>
+      {trust.asks.length > 0 && (
+        <>
+          <h3>Waiting for your yes</h3>
+          <p className="note">{ASKS_NOTE}</p>
+          <ul className="rows" aria-label="Waiting for your yes">
+            {trust.asks.map((ask) => (
+              <li key={ask.key} className="card" aria-label={ask.title}>
+                <div className="card-title">{ask.title}</div>
+                <div className="card-status">{ask.why}</div>
+                <div className="card-buttons">
+                  <button type="button" disabled={busy} onClick={() => void run({ kind: "answer", key: ask.key, yes: true }, ASK_YES)}>
+                    Yes
+                  </button>
+                  <button type="button" className="quiet" disabled={busy} onClick={() => void run({ kind: "answer", key: ask.key, yes: false }, ASK_NO)}>
+                    No
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
       <h3>What it decided</h3>
       {trust.decisions.length === 0 && <p className="empty">{DECISIONS_EMPTY}</p>}
       {trust.decisions.length > 0 && (

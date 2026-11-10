@@ -1247,6 +1247,74 @@ fn the_trust_dial_holds_a_promotion_and_two_undos_turn_that_kind_of_change_off()
 }
 
 #[test]
+fn a_held_promotion_goes_live_on_the_users_yes_and_ends_on_a_no() {
+    let dir = test_dir("r3a-say-yes");
+    canary_ready(&dir, 1);
+    let engine = Engine(Default::default());
+    let rule = grokhub_core::learn::Subject::parse("rule:router/chat:default/order").unwrap();
+    engine
+        .0
+        .borrow_mut()
+        .set_dial(decide::Area::Router, decide::Dial::Offer);
+    let t1 = T0 + DAY_MS;
+    assert_eq!(
+        tick_under(&dir, t1, &engine).held,
+        vec!["chat:default#1".to_string()]
+    );
+    assert_eq!(
+        engine.0.borrow().asks(t1),
+        vec![(rule.clone(), decide::Reason::DialOffer)]
+    );
+
+    // Yes: the next pass makes the change, with the dial still on offer.
+    assert!(engine.0.borrow_mut().answer(&rule, true, t1 + 1));
+    let run = tick_under(&dir, t1 + 2, &engine);
+    assert_eq!(
+        (run.held, run.promoted),
+        (vec![], vec!["chat:default#1".to_string()])
+    );
+    assert!(tuning_path(&dir).exists());
+    assert_eq!(load_state(&dir).candidates[0].stage, Stage::Watch);
+    {
+        let s = engine.0.borrow();
+        let d = s.log().last().unwrap();
+        assert_eq!(
+            (d.verdict, d.reason),
+            (decide::Verdict::Act, decide::Reason::YouSaidYes)
+        );
+        assert_eq!(s.budget_left(t1 + 2), decide::ACTS_PER_DAY);
+    }
+
+    // A second one of the same kind waits again. No: it ends, and the
+    // tuning file is as the first change left it.
+    let live = std::fs::read(tuning_path(&dir)).unwrap();
+    canary_ready(&dir, 2);
+    let t2 = t1 + DAY_MS;
+    assert_eq!(
+        tick_under(&dir, t2, &engine).held,
+        vec!["chat:default#2".to_string()]
+    );
+    assert!(engine.0.borrow_mut().answer(&rule, false, t2 + 1));
+    let run = tick_under(&dir, t2 + 2, &engine);
+    assert_eq!(
+        (run.rejected, run.promoted, run.held),
+        (vec!["chat:default#2".to_string()], vec![], vec![])
+    );
+    let state = load_state(&dir);
+    let c = state
+        .candidates
+        .iter()
+        .find(|c| c.id == "chat:default#2")
+        .unwrap();
+    assert_eq!(
+        (c.stage, c.reason.as_str()),
+        (Stage::Rejected, "You said no to this, so it waits a month.")
+    );
+    assert_eq!(std::fs::read(tuning_path(&dir)).unwrap(), live);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn a_promotion_is_weighed_by_what_it_gains_and_which_goal_it_serves() {
     use super::tune::{Evidence, Snap};
     let ev = Evidence {
