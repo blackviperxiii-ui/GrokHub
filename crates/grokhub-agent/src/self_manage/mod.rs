@@ -13,6 +13,7 @@
 //! skills, connections, automations, Pulse's Steam source, the Know me tags
 //! (read only), and nothing else.
 
+pub mod mcp;
 mod ops;
 pub mod work;
 
