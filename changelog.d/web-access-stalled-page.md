@@ -1,0 +1,1 @@
+- Web access pages no longer hang while loading: the server could leave one file unanswered behind open connections, and now nudges its worker pool so every connection gets read.
