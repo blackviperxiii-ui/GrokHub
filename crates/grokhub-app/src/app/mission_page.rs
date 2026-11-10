@@ -1,7 +1,8 @@
 //! The Objectives page on the rail, and the details behind Home's objectives
 //! card: Today (the open chat's next step and the goals worth a look), My
 //! goals and This season (see [`goals`]). Home is the one "Ready up" page; this one does not repeat
-//! its PC or Up next cards. Workboards stays one click away.
+//! its PC or Up next cards. Workboards has its own rail row; this page does
+//! not point to it.
 
 use grokhub_core::mission::{MissionCheckStatus, MissionView};
 use grokhub_core::steam::SteamGame;
@@ -153,9 +154,6 @@ impl Cabin {
                         },
                     );
                     ui.add_space(GAP);
-                }
-                if crate::cards::ghost_pill(ui, "Workboards") {
-                    self.set_nav_id("workboard");
                 }
             });
         });
@@ -348,6 +346,30 @@ mod tests {
         assert_eq!(cabin.nav_id(), "objectives");
         cabin.set_nav_id("workboard");
         assert_eq!(cabin.nav, Nav::Workboard);
+    }
+
+    #[test]
+    fn objectives_no_longer_renders_a_workboards_control_and_the_workboards_tab_still_exists() {
+        let src = include_str!("mission_page.rs");
+        let code = src.split("#[cfg(test)]").next().expect("code");
+        assert!(
+            !code.contains("ghost_pill(ui, \"Workboards\")"),
+            "Workboards has its own rail row"
+        );
+        assert!(
+            !code.contains("set_nav_id(\"workboard\")"),
+            "Objectives must not point at Workboards"
+        );
+        assert!(
+            crate::theme::LOADOUT_NAV
+                .iter()
+                .any(|&pair| pair == ("workboard", "Workboards")),
+            "Workboards stays on the rail"
+        );
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.set_nav_id("workboard");
+        assert_eq!(cabin.nav, Nav::Workboard);
+        assert_eq!(cabin.rail_id(), "workboard");
     }
 
     #[test]
