@@ -78,16 +78,18 @@ fn now_secs() -> u64 {
 }
 
 /// Read the `files` that are [`due`] on one background thread. `gaming`
-/// paces it slower and counts only unused memory as room. Returns whether a
-/// thread started.
-pub fn start(files: Vec<PathBuf>, gaming: bool) -> bool {
+/// paces it slower and counts only unused memory as room; `fresh` (a usual
+/// chat time is near) looks at every file however recently it was warmed.
+/// A file still cached is skipped either way. Returns whether a thread
+/// started.
+pub fn start(files: Vec<PathBuf>, gaming: bool, fresh: bool) -> bool {
     let now = now_secs();
     let files: Vec<PathBuf> = {
         let warmed = WARMED.lock().unwrap_or_else(|e| e.into_inner());
         let mut seen = Vec::new();
         for f in files {
             let len = std::fs::metadata(&f).map_or(0, |m| m.len());
-            if len > 0 && !seen.contains(&f) && due(&warmed, &f, len, now) {
+            if len > 0 && !seen.contains(&f) && (fresh || due(&warmed, &f, len, now)) {
                 seen.push(f);
             }
         }

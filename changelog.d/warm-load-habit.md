@@ -1,0 +1,1 @@
+- Local AI learns when you usually start chatting on this computer (same time most days, or same time on a weekday) and reads your models into memory about 15 minutes before, so the first reply comes quicker. It never loads to the GPU for this and skips it while a game is running.
