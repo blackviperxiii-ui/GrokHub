@@ -127,6 +127,8 @@ pub fn read<R>(f: impl FnOnce(&Engine) -> R) -> Option<R> {
 pub fn view(now_ms: u64) -> View {
     let mut out = read(|e| view::view(e.beliefs(), now_ms)).unwrap_or_default();
     out.paused = paused();
+    let state = engine().map(|e| decide::load(e.config_dir()));
+    out.trust = view::trust(&state.unwrap_or_default(), now_ms);
     out
 }
 
@@ -191,6 +193,13 @@ pub fn decision_outcome(rule: &Subject, outcome: Outcome, now_ms: u64) -> Option
 pub fn set_dial(area: Area, dial: Dial) {
     if let Some(e) = engine() {
         decide::with_state(e.config_dir(), |s| s.set_dial(area, dial));
+    }
+}
+
+/// The user's "carry on" after too much was undone: the app may act again.
+pub fn carry_on() {
+    if let Some(e) = engine() {
+        decide::with_state(e.config_dir(), |s| s.resume());
     }
 }
 

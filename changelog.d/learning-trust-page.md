@@ -1,0 +1,1 @@
+- What Loadout learned (desktop): **How far it may go** sets each area to watch only, offer only or act when sure, **What it decided** lists the latest decisions with the reason for each, and **Carry on** lets it act again after too much was undone.

@@ -1,10 +1,72 @@
 import { useEffect, useState } from "react";
-import { getLearned, learnedAct, type LearnedAct, type LearnedRow, type LearnedStage, type LearnedView } from "./api";
+import { getLearned, learnedAct, type LearnedAct, type LearnedRow, type LearnedStage, type LearnedTrust, type LearnedView, type TrustDial } from "./api";
 import { PRODUCT_NAME } from "./brand";
 
 export const LEARNED_NOTE = `What ${PRODUCT_NAME} worked out from how you use it: which quick chips and cards you take, and how runs go. It stays on this computer and holds counts only, never what you typed. Forget clears a line so it starts fresh. That's wrong stops a line from being counted or used again. Always makes a line your own rule, whatever is counted.`;
 export const LEARNED_PAUSED = "Learning is paused. Nothing new is counted until you turn it back on.";
 export const LEARNED_EMPTY = "Nothing learned yet. It builds up as you use quick chips, cards and runs.";
+
+export const TRUST_NOTE = `How far ${PRODUCT_NAME} may go in each area. Watch only keeps learning and shows nothing. Offer only asks every time. Act when sure makes a change once you've said yes to it three times, and it can always be undone. Deleting, spending, sending and permissions always ask.`;
+export const TRUST_ASKING = "Too much was undone lately, so everything asks first for a few days.";
+export const DECISIONS_EMPTY = "No decisions yet. They show up here once there is something it could change for you.";
+
+const DIAL: Record<TrustDial, string> = {
+  watch: "Watch only",
+  offer: "Offer only",
+  act: "Act when sure",
+};
+
+function leftToday(n: number) {
+  if (n === 0) return "It has made all its changes for today, so it asks for the rest.";
+  return n === 1 ? "It may make 1 more change on its own today." : `It may make ${n} more changes on its own today.`;
+}
+
+/** The decision engine's dials and its newest decisions. The cabin's
+ * `/learned decisions` and `/learned trust` show and set the same. */
+function Trust({ trust, busy, run }: { trust: LearnedTrust; busy: boolean; run: (act: LearnedAct, done: string) => Promise<void> }) {
+  return (
+    <>
+      <h3>How far it may go</h3>
+      <p className="note">{TRUST_NOTE}</p>
+      {trust.askingFirst && (
+        <div className="confirm">
+          <p className="note warn">{TRUST_ASKING}</p>
+          <button type="button" className="quiet" disabled={busy} onClick={() => void run({ kind: "carryOn" }, "It may act on its own again.")}>
+            Carry on
+          </button>
+        </div>
+      )}
+      {trust.dials.map((d) => (
+        <label key={d.area}>
+          {d.label}
+          <select value={d.dial} disabled={busy} onChange={(e) => void run({ kind: "trust", area: d.area, dial: e.target.value as TrustDial }, `${d.label} is set to ${DIAL[e.target.value as TrustDial].toLowerCase()}.`)}>
+            {(Object.keys(DIAL) as TrustDial[]).map((dial) => (
+              <option key={dial} value={dial}>
+                {DIAL[dial]}
+              </option>
+            ))}
+          </select>
+        </label>
+      ))}
+      <p className="note">{leftToday(trust.leftToday)}</p>
+      <h3>What it decided</h3>
+      {trust.decisions.length === 0 && <p className="empty">{DECISIONS_EMPTY}</p>}
+      {trust.decisions.length > 0 && (
+        <ul className="rows" aria-label="Decisions">
+          {trust.decisions.map((d, i) => (
+            <li key={`${d.atMs}-${i}`} className="card" aria-label={`${d.did}: ${d.title}`}>
+              <div className="card-title">
+                {d.did}: {d.title}
+              </div>
+              <div className="card-status">{d.why}</div>
+              <div className="card-status">{new Date(d.atMs).toLocaleString()}</div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
+  );
+}
 
 const STAGE: Record<LearnedStage, string> = {
   watching: "Still watching",
@@ -99,6 +161,7 @@ export function Learned() {
           Plus counts for {view.singleChips === 1 ? "1 single quick chip" : `${view.singleChips} single quick chips`}, which rank the chip rows.
         </p>
       )}
+      {view && <Trust trust={view.trust} busy={busy} run={run} />}
       {view && !empty && !confirming && (
         <div className="card-buttons">
           <button type="button" className="quiet" disabled={busy} onClick={() => setConfirming(true)}>

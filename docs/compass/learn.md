@@ -13,7 +13,7 @@
 - `crates/grokhub-core/src/learn/view.rs`: `view` (beliefs as lines), `text`, `run` (the cabin's `/learned`), `act` (the desktop app's buttons). `ui/src/Learned.tsx` shows them in Settings, Privacy & data.
 - `crates/grokhub-core/src/learn/signal.rs`: `Subject`, `Kind`, `Signal`, `Stream`, `FLUSH_AT`, `FLUSH_MS`.
 - `crates/grokhub-core/src/learn/belief.rs`: `Beliefs`, `Shape`, `Standing`, `HALF_LIFE_MS`, `BELIEF_CAP`.
-- `crates/grokhub-core/src/learn/ladder.rs` and `store.rs`: `step`, `Undo`, `ACT_RESTORE_AT`, `RESTORE_MIN_EVIDENCE`; `append_signals`, `hold_lock`, `SIGNAL_BYTES`, `DISK_BUDGET`. `crates/grokhub-core/src/learn/decide.rs`: the decision engine. `Proposal` in, `Verdict` and `Reason` out (`State::decide`, `decide_all`, `outcome`), with shadow passes, the per-`Area` `Dial`, the watchdog `Alarm`, `ACTS_PER_DAY` and the log, in `decisions.json`. `/learned decisions` and `/learned trust <area> <level>` show and set it.
+- `crates/grokhub-core/src/learn/ladder.rs` and `store.rs`: `step`, `Undo`, `ACT_RESTORE_AT`, `RESTORE_MIN_EVIDENCE`; `append_signals`, `hold_lock`, `SIGNAL_BYTES`, `DISK_BUDGET`. `crates/grokhub-core/src/learn/decide.rs`: the decision engine. `Proposal` in, `Verdict` and `Reason` out (`State::decide`, `decide_all`, `outcome`), with shadow passes, the per-`Area` `Dial`, the watchdog `Alarm`, `ACTS_PER_DAY` and the log, in `decisions.json`. `/learned decisions` and `/learned trust <area> <level>` show and set it; the desktop page shows the same from `view::trust` (`Act::Trust`, `Act::CarryOn`).
 
 ## Change recipe
 - A new learner records signals and reads beliefs: no new log file or confidence rule. A new source is a pure function in `sources.rs` called from the log's own writer.

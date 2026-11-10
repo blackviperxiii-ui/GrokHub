@@ -2205,7 +2205,7 @@ async fn get_learned() -> Result<grokhub_core::learn::view::View, String> {
     off_main(|| grokhub_core::learn::hub::view(grokhub_core::now_ms())).await
 }
 
-/// Forget, That's wrong or Forget everything. Saved at once; the list comes
+/// Any button on the page, a trust dial included. Saved at once; the list comes
 /// back as it is after.
 #[tauri::command]
 async fn learned_act(

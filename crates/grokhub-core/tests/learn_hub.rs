@@ -403,6 +403,44 @@ fn the_shared_logs_feed_one_engine() {
         shown.contains("- Did it: It was sure, you said yes to this before, and it can be undone. `rule:settings/text-size`\n"),
         "{shown}"
     );
+    // The desktop page reads the same dials and log, and sets a dial with
+    // a button.
+    let dial: view::Act =
+        serde_json::from_str(r#"{"kind":"trust","area":"local-ai","dial":"watch"}"#).unwrap();
+    let page = view::act(dial, at).unwrap().trust;
+    assert_eq!(
+        page.dials[3],
+        view::DialRow {
+            area: Area::LocalAi,
+            label: "Local AI",
+            dial: decide::Dial::Watch,
+        }
+    );
+    assert_eq!(page.dials[0].dial, decide::Dial::Offer);
+    assert_eq!((page.asking_first, page.left_today), (false, 3));
+    let lines: Vec<(&str, &str)> = page
+        .decisions
+        .iter()
+        .map(|d| (d.title.as_str(), d.did))
+        .collect();
+    assert_eq!(
+        lines,
+        vec![
+            ("Settings text size", "Asked"),
+            ("Settings text size", "Did it"),
+            ("Settings text size", "Asked"),
+            ("Skill tidy-up at night", "Held back"),
+            ("Skill tidy-up at night", "Did it"),
+            ("Skill tidy-up at night", "Asked"),
+        ]
+    );
+    assert_eq!(page.decisions[0].why, "This area is set to offer only.");
+    // Two undos in a day make everything ask first until Carry on.
+    assert_eq!(hub::decision_outcome(&rule, Outcome::Undone, at), None);
+    assert!(hub::decision_outcome(&rule, Outcome::Undone, at).is_some());
+    assert!(hub::view(at).trust.asking_first);
+    let carry_on: view::Act = serde_json::from_str(r#"{"kind":"carryOn"}"#).unwrap();
+    assert!(!view::act(carry_on, at).unwrap().trust.asking_first);
     assert!(store::disk_used(&dir) < store::DISK_BUDGET);
 
     assert_eq!(
