@@ -2243,6 +2243,13 @@ async fn learned_act(
     off_main(move || grokhub_core::learn::view::act(act, grokhub_core::now_ms())).await?
 }
 
+/// The fault report, and backup and move: one of the page's four `/learned`
+/// lines, answered with the text the cabin's chat shows. Nothing is sent.
+#[tauri::command]
+async fn learned_say(line: String) -> Result<String, String> {
+    off_main(move || grokhub_core::learn::view::page_say(&line, grokhub_core::now_ms())).await?
+}
+
 #[tauri::command]
 async fn get_interests(state: State<'_, ShellState>) -> Result<interests::Page, String> {
     capabilities::needs(capabilities::current().pulse, "Pulse")?;
@@ -3607,6 +3614,7 @@ pub fn run() {
             set_skill_on,
             get_learned,
             learned_act,
+            learned_say,
             get_interests,
             add_interest,
             interest_act,

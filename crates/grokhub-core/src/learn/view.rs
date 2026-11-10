@@ -550,6 +550,20 @@ pub fn run(rest: &str, now_ms: u64) -> String {
     done.unwrap_or_else(|| text(&super::hub::view(now_ms)))
 }
 
+/// The `/learned` lines the desktop page may run for their text: the fault
+/// report, and backup and move.
+pub const PAGE_LINES: [&str; 4] = ["report", "backup", "import", "restore"];
+
+/// Runs one of [`PAGE_LINES`] and returns what the cabin's chat would show.
+/// Any other line is refused, so the page can't run the rest by name.
+pub fn page_say(line: &str, now_ms: u64) -> Result<String, String> {
+    if PAGE_LINES.contains(&line) {
+        Ok(run(line, now_ms))
+    } else {
+        Err(USAGE.to_string())
+    }
+}
+
 /// A button on the desktop app's list. `Trust` sets how far one area may
 /// go; `CarryOn` lets the app act again after too much was undone.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

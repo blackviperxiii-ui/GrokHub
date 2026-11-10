@@ -1019,6 +1019,7 @@ mod tests {
             "clear_api_key",
             "get_learned",
             "learned_act",
+            "learned_say",
             "get_interests",
             "add_interest",
             "interest_act",

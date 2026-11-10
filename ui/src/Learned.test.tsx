@@ -7,11 +7,12 @@ import type { LearnedAct, LearnedRow, LearnedTrust, LearnedView, TrustRow } from
 const api = vi.hoisted(() => ({
   getLearned: vi.fn<() => Promise<LearnedView>>(),
   learnedAct: vi.fn<(act: LearnedAct) => Promise<LearnedView>>(),
+  learnedSay: vi.fn<(line: string) => Promise<string>>(),
 }));
 
 vi.mock("./api", () => api);
 
-import { DECISIONS_EMPTY, LEARNED_EMPTY, LEARNED_PAUSED, Learned, TRUST_ASKING, TRUST_RESTING, scoreLine, waitingLine } from "./Learned";
+import { DECISIONS_EMPTY, IMPORT_WARN, LEARNED_EMPTY, LEARNED_PAUSED, Learned, TRUST_ASKING, TRUST_RESTING, scoreLine, waitingLine } from "./Learned";
 
 function row(over: Partial<LearnedRow> = {}): LearnedRow {
   return {
@@ -236,6 +237,44 @@ describe("Learned", () => {
     expect(api.learnedAct).toHaveBeenCalledWith({ kind: "carryOn" });
     expect(screen.queryByText(TRUST_ASKING)).toBeNull();
     expect(screen.queryByRole("button", { name: "Carry on" })).toBeNull();
+  });
+
+  it("saves a backup and shows the fault report without reading the list again", async () => {
+    api.getLearned.mockResolvedValue({ rows: [], singleChips: 0, paused: false, trust: trust() });
+    api.learnedSay.mockResolvedValueOnce("Saved a backup to learned-backup.json.").mockResolvedValueOnce("Nothing to report.");
+    render(<Learned />);
+    await userEvent.click(await screen.findByRole("button", { name: "Save a backup" }));
+    expect(api.learnedSay).toHaveBeenLastCalledWith("backup");
+    expect(screen.getByRole("status", { name: "Backup and report" })).toHaveTextContent("Saved a backup to learned-backup.json.");
+    await userEvent.click(screen.getByRole("button", { name: "Show the fault report" }));
+    expect(api.learnedSay).toHaveBeenLastCalledWith("report");
+    expect(screen.getByRole("status", { name: "Backup and report" })).toHaveTextContent("Nothing to report.");
+    expect(api.getLearned).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks before taking in a backup, then shows the list that came with it", async () => {
+    api.getLearned
+      .mockResolvedValueOnce({ rows: [], singleChips: 0, paused: false, trust: trust() })
+      .mockResolvedValueOnce({ rows: [row({ key: "skill:tidy", title: "Skill tidy" })], singleChips: 0, paused: false, trust: trust() });
+    api.learnedSay.mockResolvedValue("Took in the backup.");
+    render(<Learned />);
+    await userEvent.click(await screen.findByRole("button", { name: "Take in a backup…" }));
+    expect(api.learnedSay).not.toHaveBeenCalled();
+    expect(screen.getByText(IMPORT_WARN)).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Take in the backup" }));
+    expect(api.learnedSay).toHaveBeenCalledWith("import");
+    expect(await screen.findByRole("listitem", { name: "Skill tidy" })).toBeVisible();
+    expect(screen.queryByText(IMPORT_WARN)).toBeNull();
+    expect(screen.getByRole("status", { name: "Backup and report" })).toHaveTextContent("Took in the backup.");
+  });
+
+  it("shows why a put-back could not run", async () => {
+    api.getLearned.mockResolvedValue({ rows: [], singleChips: 0, paused: false, trust: trust() });
+    api.learnedSay.mockRejectedValue("no reach");
+    render(<Learned />);
+    await userEvent.click(await screen.findByRole("button", { name: "Put back what was here" }));
+    expect(api.learnedSay).toHaveBeenCalledWith("restore");
+    expect(screen.getByRole("status", { name: "Backup and report" })).toHaveTextContent("no reach");
   });
 
   it("shows why when the list can't load", async () => {
