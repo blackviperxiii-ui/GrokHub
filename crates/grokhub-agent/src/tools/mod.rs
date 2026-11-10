@@ -409,6 +409,12 @@ pub fn confine(root: &Path, raw: &str) -> Result<PathBuf, String> {
     Ok(acc)
 }
 
+/// A native tool's full schema by name, whatever the gate or the deferred
+/// index say: the caller decides whether it is offered.
+pub(crate) fn native_schema(name: &str) -> Option<Value> {
+    defs::find_def(name).map(|d| (d.schema)())
+}
+
 /// `image_generate` request body from the existing media builder.
 /// The `ImagineApi` is not called.
 pub(crate) fn dry_imagine_body(args: &Value) -> Result<Value, String> {

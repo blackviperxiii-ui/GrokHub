@@ -31,6 +31,9 @@ pub enum Intent {
     Task,
     Repair,
     Creative,
+    /// A clear ask for a new picture ("draw me a fox"): the run offers
+    /// `image_generate` up front and the model writes its prompt.
+    Image,
     Research,
     Background,
 }
@@ -43,6 +46,7 @@ impl Intent {
             Self::Task => "task",
             Self::Repair => "repair",
             Self::Creative => "creative",
+            Self::Image => "image",
             Self::Research => "research",
             Self::Background => "background",
         }
@@ -55,6 +59,7 @@ impl Intent {
             "task" => Self::Task,
             "repair" => Self::Repair,
             "creative" => Self::Creative,
+            "image" => Self::Image,
             "research" => Self::Research,
             "background" => Self::Background,
             _ => return None,
@@ -296,6 +301,38 @@ const CREATIVE_WORDS: &[&str] = &[
     "haiku",
     "slogan",
     "wallpaper",
+];
+/// Draw a picture: these verbs ask for one when they lead the ask and act on
+/// something new ("draw me a fox", not "draw the curtains").
+const DRAW_VERBS: &[&str] = &["draw", "sketch", "paint"];
+/// These verbs ask for a picture when a picture word follows soon after
+/// ("make a picture of", "generate an image").
+const PICTURE_VERBS: &[&str] = &["make", "create", "generate", "render", "produce", "give"];
+const PICTURE_NOUNS: &[&str] = &[
+    "picture",
+    "pictures",
+    "pic",
+    "pics",
+    "image",
+    "images",
+    "photo",
+    "photos",
+    "drawing",
+    "drawings",
+    "illustration",
+    "illustrations",
+    "painting",
+    "portrait",
+    "wallpaper",
+];
+/// A line that opens with these asks about something, never for a picture.
+const ASKS_ABOUT: &[&str] = &[
+    "how", "why", "what", "what's", "where", "when", "which", "who", "is", "are", "does", "do",
+    "did",
+];
+/// A picture that is already there ("make the image bigger"): not a new one.
+const PICTURE_THERE: &[&str] = &[
+    "the", "this", "that", "these", "those", "my", "your", "it", "its", "our",
 ];
 const RESEARCH_WORDS: &[&str] = &[
     "research",
@@ -828,6 +865,7 @@ fn done_for(intent: Intent, domain: &str) -> Vec<String> {
             "claims cited",
         ],
         (Intent::Creative, _) => &["draft delivered", "one line after"],
+        (Intent::Image, _) => &["picture made or why not"],
         (Intent::Background, _) => &["job finished"],
         (Intent::Chat, _) => &["answered"],
     };
@@ -913,7 +951,7 @@ fn domain_of(
         "files"
     } else if intent == Intent::Research {
         "web"
-    } else if intent == Intent::Creative {
+    } else if matches!(intent, Intent::Creative | Intent::Image) {
         "media"
     } else if intent == Intent::Repair && any_word(ws, CRASH_WORDS) {
         // "bluetoothd keeps crashing": a program on this computer.
@@ -921,6 +959,47 @@ fn domain_of(
     } else {
         "general"
     }
+}
+
+/// A message that clearly asks for a new picture ([`Intent::Image`]).
+pub fn is_picture_ask(text: &str) -> bool {
+    let t = text.trim().to_lowercase();
+    let mut rest = t.as_str();
+    for p in POLITE {
+        rest = rest.strip_prefix(p).map(str::trim_start).unwrap_or(rest);
+    }
+    picture_ask(&t, &words(rest))
+}
+
+/// A clear ask for a new picture. `ws` is the ask without its "can you"
+/// opener. "I like this picture", "describe the image" and "can you make
+/// images?" are not asks.
+fn picture_ask(t: &str, ws: &[&str]) -> bool {
+    // "how do I make a picture smaller?" asks about pictures, not for one.
+    if ws.first().is_some_and(|w| ASKS_ABOUT.contains(w)) {
+        return false;
+    }
+    let question = t.trim_end().ends_with('?');
+    // "draw me a fox", "i want you to sketch a castle".
+    let draw = ws.iter().enumerate().any(|(i, w)| {
+        DRAW_VERBS.contains(w)
+            && (i == 0 || matches!(ws[i - 1], "to" | "please" | "pls" | "and"))
+            && ws
+                .get(i + 1)
+                .is_some_and(|next| !PICTURE_THERE.contains(next))
+    });
+    // "make me a picture of a fox", "generate an image".
+    let make = ws.iter().enumerate().any(|(i, w)| {
+        PICTURE_VERBS.contains(w)
+            && ws
+                .iter()
+                .enumerate()
+                .skip(i + 1)
+                .take(4)
+                .take_while(|(_, n)| !PICTURE_THERE.contains(n))
+                .any(|(j, n)| PICTURE_NOUNS.contains(n) && (!question || j + 1 < ws.len()))
+    });
+    draw || make
 }
 
 /// "check into it for me", "why does it do that": a short ask whose only
@@ -1063,6 +1142,8 @@ pub fn rules(input: &BriefInput<'_>) -> Option<Brief> {
     let repair = broken || gaming_lag || pc_health || (any_word(&ws, DIAGNOSE_WORDS) && !feature);
     let intent = if input.background {
         Intent::Background
+    } else if !feature && picture_ask(&t, &rest_words) {
+        Intent::Image
     } else if repair {
         Intent::Repair
     } else if feature {
@@ -2223,5 +2304,44 @@ mod pc_health_tests {
             assert_eq!(b.domain, "system");
         }
         assert_eq!(sort("zxq blorp").domain, "general");
+    }
+    #[test]
+    fn a_clear_picture_ask_is_an_image_ask() {
+        for ask in [
+            "draw me a fox in the snow",
+            "make a picture of a castle at night",
+            "make an image of a red car",
+            "generate an image of a neon city skyline",
+            "can you draw me a dragon?",
+            "please create 3 pictures of my dog",
+            "i want you to sketch a lighthouse",
+            "give me a wallpaper of mountains",
+        ] {
+            assert!(is_picture_ask(ask), "{ask}");
+            let b = sort(ask);
+            assert_eq!(b.intent, Intent::Image, "{ask}");
+            assert_eq!(b.domain, "media", "{ask}");
+            assert_eq!(b.care, Care::Casual, "{ask}");
+        }
+        for not in [
+            "I like this picture",
+            "describe the image",
+            "what's in this image?",
+            "can you make images?",
+            "make the image bigger",
+            "how do I make a picture smaller?",
+            "draw the curtains",
+            "write me a poem about a fox",
+        ] {
+            assert!(!is_picture_ask(not), "{not}");
+            let intent = rules(&BriefInput {
+                text: not,
+                ..Default::default()
+            })
+            .map(|b| b.intent);
+            assert_ne!(intent, Some(Intent::Image), "{not}");
+        }
+        assert_eq!(Intent::parse("image"), Some(Intent::Image));
+        assert_eq!(Intent::Image.as_str(), "image");
     }
 }
