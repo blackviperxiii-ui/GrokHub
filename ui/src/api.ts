@@ -2677,3 +2677,76 @@ export function codeTestForget(): Promise<CodeTestRemembered> {
 export function onCodeRun(handler: (chunk: CodeRunChunk) => void): Promise<UnlistenFn> {
   return subscribe<CodeRunChunk>("code-run", handler);
 }
+
+/** Settings → Code → Pushes and PRs (`shell.json` → `codeShip`). */
+export type CodeShipMode = "ask" | "autoBeta";
+export interface CodeShipSettings {
+  mode: CodeShipMode;
+  /** The only PR base Auto-beta works with, and the base of "Open PR into". */
+  autoBase: string;
+  hosts: { github: boolean; other: boolean };
+  /** Protected on top of main and the repo's default branch. */
+  extraProtected: string[];
+  activityKeep: number;
+}
+
+export type CodeShipAction = "push" | "pr";
+
+/** What a push or "Open PR into" would run, and whether it asks first. */
+export interface CodeShipPlan {
+  action: CodeShipAction;
+  branch: string | null;
+  command: string;
+  needsConfirm: boolean;
+  blocked: string | null;
+  mode: CodeShipMode;
+  autoBase: string;
+  appMade: boolean;
+  prUrl: string | null;
+}
+
+/** A finished push or PR. Output is already redacted. */
+export interface CodeShipped {
+  command: string;
+  exit: number;
+  output: string;
+  summary: string;
+}
+
+/** One line of the Code tab's activity log. */
+export interface CodeActivityEntry {
+  tsMs: number;
+  kind: "push" | "pr" | "branch" | "blocked";
+  repoKey: string;
+  host: string;
+  branch: string;
+  command: string;
+  mode: string;
+  approvedBy: "user" | "autoBeta" | "none";
+  exit: number | null;
+  summary: string;
+}
+
+export function codeShipPlan(action: CodeShipAction): Promise<CodeShipPlan> {
+  return invoke<CodeShipPlan>("code_ship_plan", { action });
+}
+
+export function codeShipRun(action: CodeShipAction, confirmed: boolean): Promise<CodeShipped> {
+  return invoke<CodeShipped>("code_ship_run", { action, confirmed });
+}
+
+export function codeNewBranch(name: string): Promise<string> {
+  return invoke<string>("code_new_branch", { name });
+}
+
+export function codeActivity(): Promise<CodeActivityEntry[]> {
+  return invoke<CodeActivityEntry[]>("code_activity_list");
+}
+
+export function getCodeShip(): Promise<CodeShipSettings> {
+  return invoke<CodeShipSettings>("get_code_ship");
+}
+
+export function saveCodeShip(ship: CodeShipSettings): Promise<CodeShipSettings> {
+  return invoke<CodeShipSettings>("save_code_ship", { ship });
+}

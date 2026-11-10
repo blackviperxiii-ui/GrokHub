@@ -4755,3 +4755,89 @@ label.toggle-row {
     animation: none;
   }
 }
+
+/* Push and PR: the guard's mode line, the buttons, a confirm with the exact
+   command, and the activity log (newest first). */
+.code-ship {
+  margin-top: 8px;
+}
+
+.code-ship h3 {
+  margin: 0 0 8px;
+  font-size: var(--font-body);
+  font-weight: 600;
+}
+
+.code-ship h4 {
+  margin: 12px 0 4px;
+  font-size: var(--font-caption);
+  font-weight: 600;
+}
+
+.code-ship .confirm-window,
+.code-ship-buttons {
+  margin-top: 8px;
+}
+
+/* A long branch name trims rather than wrapping the button onto two lines. */
+.code-ship-buttons button {
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.code-activity {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.code-activity-row {
+  display: grid;
+  grid-template-columns: 5rem minmax(0, 10rem) minmax(0, 1fr) auto;
+  gap: 4px 8px;
+  align-items: baseline;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+
+.code-activity-kind {
+  font-size: var(--font-caption);
+  font-weight: 600;
+}
+
+.code-activity-row.blocked .code-activity-kind {
+  color: var(--danger-text);
+}
+
+.code-activity-branch {
+  font-family: ui-monospace, monospace;
+  font-size: var(--font-caption);
+  overflow-wrap: anywhere;
+}
+
+.code-activity-row time {
+  white-space: nowrap;
+}
+
+.code-activity-command {
+  grid-column: 1 / -1;
+  font-size: var(--font-caption);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 720px) {
+  .code-activity-row {
+    grid-template-columns: 5rem minmax(0, 1fr);
+  }
+
+  .code-activity-summary {
+    grid-column: 1 / -1;
+  }
+}
