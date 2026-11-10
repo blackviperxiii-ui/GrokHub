@@ -92,6 +92,7 @@ impl Sampler {
         local_sidecar::tick_keep_warm(config_dir, local::warm_wanted());
         local_sidecar::tick_idle_unload();
         if slow {
+            local_sidecar::tick_prewarm(config_dir);
             local_spec::tick_auto_test(config_dir, &quiet(s, want.is_none()));
         }
     }
