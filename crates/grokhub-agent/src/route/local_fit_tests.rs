@@ -121,6 +121,25 @@ fn a_4k_window_fits_and_keeps_the_safety_and_cabin_rules() {
     assert!(!system.contains("<formatting>"));
 }
 
+/// The prompt tells a model it may search "when the tool list includes"
+/// web_search. A small on-device window and a plain-talk chat both keep it
+/// in the list, so no turn is told it can search without the tool.
+#[test]
+fn a_small_window_and_a_talk_chat_still_offer_the_lookups() {
+    let req = real_request(vec![text("user", "what's the best budget ssd right now?")]);
+    let (out, done) = fit(&req, 4_096);
+    assert!(done.tools_cut);
+    let names: Vec<&str> = out
+        .tools
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
+    assert!(names.contains(&"web_search"), "{names:?}");
+    for lookup in ["web_search", "web_fetch"] {
+        assert!(!crate::tools::talk::is_demoted(lookup), "{lookup}");
+    }
+}
+
 #[test]
 fn a_long_chat_keeps_the_newest_whole_turns_and_says_so() {
     let mut history = Vec::new();

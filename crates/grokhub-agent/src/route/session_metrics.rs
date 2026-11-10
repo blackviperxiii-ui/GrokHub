@@ -7,7 +7,9 @@
 //! tokens, from the usage the client returns), model switches, escalations
 //! and their precision (an escalated call that answered counts as precise).
 //! [`summary`] is the pure read the eval and the tuner use. Nothing here is
-//! shown in the app.
+//! shown in the app. Each chat also counts the malformed tool calls the loop
+//! repaired, by model and tool ([`note_repair`]): silent repair helps some
+//! models more than others, so it is kept per model, not just counted.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -62,6 +64,10 @@ pub struct ChatMetrics {
     pub last_model: String,
     #[serde(default)]
     pub updated_ms: u64,
+    /// Tool calls the loop repaired (a lookup typed into the shell), by the
+    /// model that wrote them, then by the tool they ran as.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub repairs: BTreeMap<String, BTreeMap<String, u32>>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,11 +90,8 @@ pub struct CallFacts<'a> {
 }
 
 impl SessionMetrics {
-    /// Fold one finished call into `chat`'s counters.
-    pub fn note(&mut self, chat: &str, facts: &CallFacts<'_>, now_ms: u64) {
-        if chat.is_empty() {
-            return;
-        }
+    /// `chat`'s counters, making room for a new chat first.
+    fn chat_mut(&mut self, chat: &str) -> &mut ChatMetrics {
         if self.chats.len() >= SESSION_METRICS_CAP && !self.chats.contains_key(chat) {
             let oldest = self
                 .chats
@@ -99,7 +102,15 @@ impl SessionMetrics {
                 self.chats.remove(&id);
             }
         }
-        let c = self.chats.entry(chat.to_string()).or_default();
+        self.chats.entry(chat.to_string()).or_default()
+    }
+
+    /// Fold one finished call into `chat`'s counters.
+    pub fn note(&mut self, chat: &str, facts: &CallFacts<'_>, now_ms: u64) {
+        if chat.is_empty() {
+            return;
+        }
+        let c = self.chat_mut(chat);
         c.calls = c.calls.saturating_add(1);
         c.prompt_tokens = c.prompt_tokens.saturating_add(facts.prompt_tokens);
         c.cached_tokens = c
@@ -118,6 +129,26 @@ impl SessionMetrics {
                 c.precise = c.precise.saturating_add(1);
             }
         }
+        c.updated_ms = now_ms;
+    }
+
+    /// One tool call `model` wrote that the loop repaired into `tool`.
+    pub fn note_repair(&mut self, chat: &str, model: &str, tool: &str, now_ms: u64) {
+        if chat.is_empty() || tool.is_empty() {
+            return;
+        }
+        let model = match model.trim() {
+            "" => "unknown",
+            m => m,
+        };
+        let c = self.chat_mut(chat);
+        let n = c
+            .repairs
+            .entry(model.to_string())
+            .or_default()
+            .entry(tool.to_string())
+            .or_insert(0);
+        *n = n.saturating_add(1);
         c.updated_ms = now_ms;
     }
 }
@@ -196,6 +227,19 @@ pub fn note_call(config_dir: &Path, chat: &str, facts: &CallFacts<'_>, now_ms: u
     let _ = write_json(&metrics_path(config_dir), &m);
 }
 
+/// Fold one repaired tool call into the file. Never fails the call. This
+/// crate's own tests write only into a pinned scratch config folder.
+pub fn note_repair(config_dir: &Path, chat: &str, model: &str, tool: &str, now_ms: u64) {
+    if chat.is_empty() || (cfg!(test) && !crate::perm::config_pinned()) {
+        return;
+    }
+    let _g = WRITE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut m = load(config_dir);
+    m.note_repair(chat, model, tool, now_ms);
+    m.schema = SESSION_METRICS_SCHEMA;
+    let _ = write_json(&metrics_path(config_dir), &m);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -249,6 +293,29 @@ mod tests {
                 precision_pct: 50.0,
             }
         );
+    }
+
+    #[test]
+    fn repairs_are_counted_per_model_and_tool_and_round_trip() {
+        let mut m = SessionMetrics::default();
+        m.note_repair("chat-r", "openrouter/free-a", "web_search", 10);
+        m.note_repair("chat-r", "openrouter/free-a", "web_search", 20);
+        m.note_repair("chat-r", "grok-4.7", "web_fetch", 30);
+        m.note_repair("chat-r", " ", "web_search", 40);
+        m.note_repair("", "grok-4.7", "web_search", 50);
+        let c = &m.chats["chat-r"];
+        assert_eq!(c.repairs["openrouter/free-a"]["web_search"], 2);
+        assert_eq!(c.repairs["grok-4.7"]["web_fetch"], 1);
+        assert_eq!(c.repairs["unknown"]["web_search"], 1);
+        assert_eq!((c.calls, c.updated_ms), (0, 40));
+        assert_eq!(m.chats.len(), 1);
+        let json = serde_json::to_string(&m).unwrap();
+        let back: SessionMetrics = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, m);
+        // A chat with no repairs writes no field, so old files read the same.
+        let mut plain = SessionMetrics::default();
+        plain.note("chat-p", &call("grok-4.3", &[], 10, 0, true), 1);
+        assert!(!serde_json::to_string(&plain).unwrap().contains("repairs"));
     }
 
     #[test]
