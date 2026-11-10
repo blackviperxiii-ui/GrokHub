@@ -2071,7 +2071,7 @@ export function resetPlaybook(id: string): Promise<PlaybookPage> {
 }
 
 /** Settings → Privacy & data → What the app learned (grokhub_core::learn::view). */
-export type LearnedStage = "watching" | "suggesting" | "acting" | "measuring" | "wrong";
+export type LearnedStage = "watching" | "suggesting" | "acting" | "measuring" | "wrong" | "pinned";
 
 export interface LearnedRow {
   /** The belief's id, e.g. "card:suggestion". Forget and That's wrong take it. */
@@ -2090,9 +2090,17 @@ export interface LearnedView {
   rows: LearnedRow[];
   /** Single quick chips counted but not listed (their ids are hashes). */
   singleChips: number;
+  /** Learning is paused: nothing new is counted. */
+  paused: boolean;
 }
 
-export type LearnedAct = { kind: "forget"; key: string } | { kind: "wrong"; key: string } | { kind: "forgetAll" };
+export type LearnedAct =
+  | { kind: "forget"; key: string }
+  | { kind: "wrong"; key: string }
+  | { kind: "always"; key: string }
+  | { kind: "forgetAll" }
+  | { kind: "pause" }
+  | { kind: "resume" };
 
 export function getLearned(): Promise<LearnedView> {
   return invoke<LearnedView>("get_learned");

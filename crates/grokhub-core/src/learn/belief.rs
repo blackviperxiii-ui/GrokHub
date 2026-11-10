@@ -22,6 +22,8 @@ pub const HALF_LIFE_MS: u64 = 30 * 24 * 60 * 60 * 1_000;
 pub const BELIEF_CAP: usize = 2_000;
 /// z² for a 95% one-sided interval (z = 1.645).
 const Z2: f32 = 2.706;
+/// The evidence a pinned belief reads as: enough for every rung of the ladder.
+pub const PINNED_EVIDENCE: f32 = 100.0;
 
 fn fade(from_ms: u64, to_ms: u64) -> f32 {
     let dt = to_ms.saturating_sub(from_ms);
@@ -50,6 +52,9 @@ pub enum Standing {
     },
     /// The user said it is wrong. It never learns and never acts again.
     Wrong,
+    /// The user said it is always so. Nothing counts against it and it
+    /// never fades, until the user forgets it or marks it wrong.
+    Pinned,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -74,13 +79,20 @@ impl Belief {
     }
 
     fn live(&self) -> bool {
-        self.standing == Standing::Live
+        matches!(self.standing, Standing::Live | Standing::Pinned)
+    }
+
+    fn pinned(&self) -> bool {
+        self.standing == Standing::Pinned
     }
 
     /// How much evidence stands behind it at `now_ms`, after fading.
     pub fn evidence(&self, now_ms: u64) -> f32 {
         if !self.live() {
             return 0.0;
+        }
+        if self.pinned() {
+            return PINNED_EVIDENCE;
         }
         let raw = match self.shape {
             Shape::Rate { yes, no } => yes + no,
@@ -93,6 +105,7 @@ impl Belief {
     /// level, and when there is no evidence.
     pub fn rate(&self) -> Option<f32> {
         match self.shape {
+            Shape::Rate { .. } if self.pinned() => Some(1.0),
             Shape::Rate { yes, no } if self.live() && yes + no > 0.0 => Some(yes / (yes + no)),
             _ => None,
         }
@@ -115,6 +128,9 @@ impl Belief {
     /// 0 to 1: how sure the app is of the side the belief leans to (for a
     /// level, of the average) at `now_ms`.
     pub fn confidence(&self, now_ms: u64) -> f32 {
+        if self.pinned() {
+            return 1.0;
+        }
         let n = self.evidence(now_ms);
         if n <= 0.0 {
             return 0.0;
@@ -246,9 +262,26 @@ impl Beliefs {
         };
     }
 
+    /// The user's "always": the subject holds from now on, whatever was or
+    /// will be counted. Forget and "That's wrong" still overrule it. A
+    /// measured number can't be pinned; says whether it was.
+    pub fn pin(&mut self, key: &Subject, now_ms: u64) -> bool {
+        let fresh = Shape::Rate { yes: 0.0, no: 0.0 };
+        let b = self
+            .map
+            .entry(key.clone())
+            .or_insert_with(|| Belief::new(fresh, now_ms, "user"));
+        if matches!(b.shape, Shape::Level { .. }) {
+            return false;
+        }
+        b.standing = Standing::Pinned;
+        b.last_ms = now_ms;
+        true
+    }
+
     /// The belief a new fact at `at_ms` may change: `None` when the user
-    /// ruled it out, forgot it after that time, or the store is full of
-    /// lines the user locked.
+    /// ruled it out or pinned it, forgot it after that time, or the store is
+    /// full of lines the user locked.
     fn slot(
         &mut self,
         key: &Subject,
@@ -257,7 +290,7 @@ impl Beliefs {
         source: &str,
     ) -> Option<&mut Belief> {
         match self.map.get(key).map(|b| b.standing) {
-            Some(Standing::Wrong) => return None,
+            Some(Standing::Wrong | Standing::Pinned) => return None,
             Some(Standing::Forgotten { at_ms: gone }) if at_ms <= gone => return None,
             Some(Standing::Forgotten { .. }) => {
                 self.map
@@ -281,7 +314,7 @@ impl Beliefs {
         let weakest = self
             .map
             .iter()
-            .filter(|(_, b)| b.standing != Standing::Wrong)
+            .filter(|(_, b)| !matches!(b.standing, Standing::Wrong | Standing::Pinned))
             .min_by(|(_, a), (_, b)| {
                 a.evidence(now_ms)
                     .total_cmp(&b.evidence(now_ms))

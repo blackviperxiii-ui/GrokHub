@@ -11,7 +11,7 @@ const api = vi.hoisted(() => ({
 
 vi.mock("./api", () => api);
 
-import { LEARNED_EMPTY, Learned } from "./Learned";
+import { LEARNED_EMPTY, LEARNED_PAUSED, Learned } from "./Learned";
 
 function row(over: Partial<LearnedRow> = {}): LearnedRow {
   return {
@@ -37,7 +37,7 @@ describe("Learned", () => {
   });
 
   it("says so when nothing is learned, with no Forget everything", async () => {
-    api.getLearned.mockResolvedValue({ rows: [], singleChips: 0 });
+    api.getLearned.mockResolvedValue({ rows: [], singleChips: 0, paused: false });
     render(<Learned />);
     expect(await screen.findByText(LEARNED_EMPTY)).toBeVisible();
     expect(screen.queryByRole("button", { name: "Forget everything…" })).toBeNull();
@@ -47,6 +47,7 @@ describe("Learned", () => {
     api.getLearned.mockResolvedValue({
       rows: [row(), row({ key: "model:grok-code/run-ms", title: "How long grok-code takes", says: "A run takes about 3.0 seconds.", evidence: 1, sure: 27, stage: "measuring" })],
       singleChips: 4,
+      paused: false,
     });
     render(<Learned />);
     await screen.findByRole("list", { name: "Learned" });
@@ -57,8 +58,8 @@ describe("Learned", () => {
   });
 
   it("forgets one line and shows the list that comes back", async () => {
-    api.getLearned.mockResolvedValue({ rows: [row(), row({ key: "skill:tidy", title: "Skill tidy" })], singleChips: 0 });
-    api.learnedAct.mockResolvedValue({ rows: [row({ key: "skill:tidy", title: "Skill tidy" })], singleChips: 0 });
+    api.getLearned.mockResolvedValue({ rows: [row(), row({ key: "skill:tidy", title: "Skill tidy" })], singleChips: 0, paused: false });
+    api.learnedAct.mockResolvedValue({ rows: [row({ key: "skill:tidy", title: "Skill tidy" })], singleChips: 0, paused: false });
     render(<Learned />);
     await screen.findByRole("list", { name: "Learned" });
     await userEvent.click(line("Suggestion cards").getByRole("button", { name: "Forget" }));
@@ -69,10 +70,11 @@ describe("Learned", () => {
   });
 
   it("marks a line wrong, which leaves it listed without buttons", async () => {
-    api.getLearned.mockResolvedValue({ rows: [row()], singleChips: 0 });
+    api.getLearned.mockResolvedValue({ rows: [row()], singleChips: 0, paused: false });
     api.learnedAct.mockResolvedValue({
       rows: [row({ says: "You said this is wrong. It is not counted or used.", evidence: 0, sure: 0, stage: "wrong" })],
       singleChips: 0,
+      paused: false,
     });
     render(<Learned />);
     await screen.findByRole("list", { name: "Learned" });
@@ -83,8 +85,8 @@ describe("Learned", () => {
   });
 
   it("asks before forgetting everything, and Cancel changes nothing", async () => {
-    api.getLearned.mockResolvedValue({ rows: [row()], singleChips: 0 });
-    api.learnedAct.mockResolvedValue({ rows: [], singleChips: 0 });
+    api.getLearned.mockResolvedValue({ rows: [row()], singleChips: 0, paused: false });
+    api.learnedAct.mockResolvedValue({ rows: [], singleChips: 0, paused: false });
     render(<Learned />);
     await screen.findByRole("list", { name: "Learned" });
     await userEvent.click(screen.getByRole("button", { name: "Forget everything…" }));
@@ -95,6 +97,39 @@ describe("Learned", () => {
     expect(api.learnedAct).toHaveBeenCalledWith({ kind: "forgetAll" });
     expect(screen.getByRole("status")).toHaveTextContent("Forgot everything.");
     expect(screen.getByText(LEARNED_EMPTY)).toBeVisible();
+  });
+
+  it("makes a line the user's rule, which drops Always and the numbers", async () => {
+    api.getLearned.mockResolvedValue({ rows: [row(), row({ key: "model:grok-code/run-ms", title: "How long grok-code takes", stage: "measuring" })], singleChips: 0, paused: false });
+    api.learnedAct.mockResolvedValue({
+      rows: [row({ says: "You said this is always so. Nothing counts against it.", evidence: 100, sure: 100, stage: "pinned" })],
+      singleChips: 0,
+      paused: false,
+    });
+    render(<Learned />);
+    await screen.findByRole("list", { name: "Learned" });
+    expect(line("How long grok-code takes").queryByRole("button", { name: "Always" })).toBeNull();
+    await userEvent.click(line("Suggestion cards").getByRole("button", { name: "Always" }));
+    expect(api.learnedAct).toHaveBeenCalledWith({ kind: "always", key: "card:suggestion" });
+    expect(screen.getByRole("status")).toHaveTextContent("Suggestion cards is your rule now.");
+    expect(line("Suggestion cards").getByText("You said always")).toBeVisible();
+    expect(line("Suggestion cards").queryByRole("button", { name: "Always" })).toBeNull();
+    expect(line("Suggestion cards").getByRole("button", { name: "Forget" })).toBeVisible();
+  });
+
+  it("pauses and resumes learning", async () => {
+    api.getLearned.mockResolvedValue({ rows: [row()], singleChips: 0, paused: false });
+    api.learnedAct.mockResolvedValueOnce({ rows: [row()], singleChips: 0, paused: true }).mockResolvedValueOnce({ rows: [row()], singleChips: 0, paused: false });
+    render(<Learned />);
+    await screen.findByRole("list", { name: "Learned" });
+    expect(screen.queryByText(LEARNED_PAUSED)).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Pause learning" }));
+    expect(api.learnedAct).toHaveBeenLastCalledWith({ kind: "pause" });
+    expect(screen.getByText(LEARNED_PAUSED)).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Resume learning" }));
+    expect(api.learnedAct).toHaveBeenLastCalledWith({ kind: "resume" });
+    expect(screen.queryByText(LEARNED_PAUSED)).toBeNull();
+    expect(screen.getByRole("button", { name: "Pause learning" })).toBeVisible();
   });
 
   it("shows why when the list can't load", async () => {

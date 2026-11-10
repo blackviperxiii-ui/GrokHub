@@ -29,7 +29,7 @@
 - A `Subject` is an id, never words the user typed. The guard runs on file reads too, so one bad key drops the whole belief file.
 - Two apps share the folder: a save reads the file, replays this app's unsaved signals and writes it back under the lock. Never save the in-memory beliefs whole.
 - Before `start`, `note_all` does nothing, so tests of the logs record nothing. `crates/grokhub-core/tests/learn_hub.rs` is its own binary because the hub is one per process.
-- Counts fade from `last_ms` with no timer. Forget lets later signals start the line fresh; Wrong never does. `Undo::Never` stops at an offer.
+- Counts fade from `last_ms` with no timer. Forget lets later signals start the line fresh; Wrong never does. `Pinned` (`/learned always`) is the user's own rule: confidence 1, no fading, no votes. The `paused` file stops `note` in both apps within one tick. `Undo::Never` stops at an offer.
 
 ## See also
 - [grokhub-core](grokhub-core.md), [self-improve](self-improve.md), [ask-offers](ask-offers.md), [heartbeat](heartbeat.md), [router](router.md)
