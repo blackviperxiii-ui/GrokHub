@@ -70,7 +70,12 @@ export function Snippet({ text }: { text: string }) {
     at = m.index + m[0].length;
   }
   if (at < text.length) parts.push(text.slice(at));
-  return <p className="snippet">{parts}</p>;
+  // pre-line: a digest is a list, one line per item.
+  return (
+    <p className="snippet" style={{ whiteSpace: "pre-line" }}>
+      {parts}
+    </p>
+  );
 }
 
 /** Cached images as data URLs, loaded once per name. */

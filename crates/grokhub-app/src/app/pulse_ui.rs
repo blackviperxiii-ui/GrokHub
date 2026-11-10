@@ -1109,6 +1109,12 @@ pub(super) fn post_summary(card: &UpdateCard) -> String {
             return summary;
         }
     }
+    if card.kind == UpdateKind::Digest {
+        let whole = grokhub_core::update_feed::digest_text(card);
+        if !whole.is_empty() {
+            return whole;
+        }
+    }
     grokhub_core::short_takeaway(card)
 }
 

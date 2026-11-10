@@ -2242,6 +2242,47 @@ fn edition_prose(raw: &str) -> String {
 
 /// Like `clip_line`, but cuts between words so a URL is never cut in half.
 /// A single word longer than `max_chars` still falls back to a character cut.
+/// Like [`clip_words`], but each line stays its own line (blank ones drop),
+/// so a digest's list reads as a list.
+fn clip_keep_lines(raw: &str, max_chars: usize) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut left = max_chars;
+    for line in raw.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        let room = left.saturating_sub(usize::from(!out.is_empty()));
+        if room == 0 {
+            if let Some(last) = out.last_mut() {
+                if !last.ends_with('…') {
+                    last.push('…');
+                }
+            }
+            break;
+        }
+        let kept = clip_words(line, room);
+        left = room.saturating_sub(kept.chars().count());
+        let cut = kept.ends_with('…') && !line.ends_with('…');
+        out.push(kept);
+        if cut {
+            break;
+        }
+    }
+    out.join("\n")
+}
+
+/// A digest's whole text for the card face: every body line, without the
+/// steer line or a line that repeats the title. Nothing is cut to two
+/// sentences, so a digest never hides what it is about.
+pub fn digest_text(card: &UpdateCard) -> String {
+    let title = card.title.trim();
+    card.body
+        .as_deref()
+        .unwrap_or("")
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !is_steer(l) && !same_line(l, title))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn clip_words(raw: &str, max_chars: usize) -> String {
     let mut out = String::new();
     let mut used = 0usize;
@@ -3038,7 +3079,7 @@ pub fn digest_card(source_id: &str, title: &str, body: &str, created_at: u64) ->
         title
     };
     let body = {
-        let body = clip_words(body, DIGEST_BODY_CHARS);
+        let body = clip_keep_lines(body, DIGEST_BODY_CHARS);
         if body.is_empty() {
             None
         } else {
@@ -6276,5 +6317,25 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             explain_hint(&fresh, &disliked, now, true).is_none(),
             "a stronger negative group blocks New for you"
         );
+    }
+
+    #[test]
+    fn a_digest_keeps_its_lines_and_shows_them_all() {
+        let body = "Weekly brief\n\n- Backup ran: 3 files copied.\n- Price check: GPU down 12%. Worth a look. Still in stock.\nThe brief steers the next edition.";
+        let card = digest_card("d", "Weekly brief", body, 1);
+        assert_eq!(
+            card.body.as_deref(),
+            Some("Weekly brief\n- Backup ran: 3 files copied.\n- Price check: GPU down 12%. Worth a look. Still in stock.\nThe brief steers the next edition.")
+        );
+        // The face drops only the title echo and the steer line, never a sentence.
+        assert_eq!(
+            digest_text(&card),
+            "- Backup ran: 3 files copied.\n- Price check: GPU down 12%. Worth a look. Still in stock."
+        );
+        let long = "x ".repeat(600);
+        let cut = digest_card("d", "Long", &format!("first line\n{long}\nlast"), 1);
+        let cut = cut.body.unwrap_or_default();
+        assert!(cut.starts_with("first line\n"), "{cut}");
+        assert!(cut.ends_with('…') && !cut.contains("last"), "{cut}");
     }
 }
