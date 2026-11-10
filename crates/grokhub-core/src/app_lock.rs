@@ -26,8 +26,8 @@ pub enum AppKind {
 impl AppKind {
     fn described(self) -> &'static str {
         match self {
-            AppKind::Shell => "The new Loadout app",
-            AppKind::Cabin => "The classic Loadout app",
+            AppKind::Shell => "GrokHub Shell",
+            AppKind::Cabin => "The GrokHub cabin",
         }
     }
 }
@@ -137,7 +137,7 @@ pub fn claim(dir: &Path, me: AppKind) -> Result<AppLock, Held> {
 pub fn held_message(me: AppKind, other: Option<AppKind>) -> String {
     let who = match other {
         Some(app) if app != me => app.described(),
-        _ => "Another Loadout window",
+        _ => "Another GrokHub app",
     };
     format!("{who} is already open with this profile. Quit it from its tray, then try again.")
 }
@@ -226,15 +226,15 @@ mod tests {
     fn held_messages_name_the_other_app() {
         assert_eq!(
             held_message(AppKind::Cabin, Some(AppKind::Shell)),
-            "The new Loadout app is already open with this profile. Quit it from its tray, then try again."
+            "GrokHub Shell is already open with this profile. Quit it from its tray, then try again."
         );
         assert_eq!(
             held_message(AppKind::Shell, Some(AppKind::Cabin)),
-            "The classic Loadout app is already open with this profile. Quit it from its tray, then try again."
+            "The GrokHub cabin is already open with this profile. Quit it from its tray, then try again."
         );
         assert_eq!(
             held_message(AppKind::Shell, None),
-            "Another Loadout window is already open with this profile. Quit it from its tray, then try again."
+            "Another GrokHub app is already open with this profile. Quit it from its tray, then try again."
         );
     }
 

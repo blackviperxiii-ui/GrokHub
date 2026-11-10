@@ -112,7 +112,7 @@ mod tests {
         assert_eq!(
             held_notice(false, &held),
             HeldNotice::Dialog(
-                "The new Loadout app is already open with this profile. Quit it from its tray, then try again."
+                "GrokHub Shell is already open with this profile. Quit it from its tray, then try again."
                     .into()
             )
         );
