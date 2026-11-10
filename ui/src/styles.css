@@ -4604,6 +4604,46 @@ label.toggle-row {
   }
 }
 
+/* Built-in skills: a read-only list, one body open at a time. */
+.code-skills {
+  margin-top: 4px;
+}
+
+.code-skills h3 {
+  margin: 0 0 8px;
+  font-size: var(--font-body);
+  font-weight: 600;
+}
+
+.code-skills .rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.code-skill {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  text-align: start;
+  padding: 8px 12px;
+}
+
+.code-skill .card-title {
+  font-family: ui-monospace, monospace;
+  font-size: var(--font-body);
+}
+
+.code-skill[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
 /* Every card's buttons: one neat row. Like first, Dismiss last at the far
    right, the card's own buttons and Not interested between them. Same size and
    spacing everywhere; a narrow card scrolls the row instead of wrapping. */

@@ -2,17 +2,18 @@ import "@testing-library/jest-dom/vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CodeDiff, CodeRepo } from "./api";
+import type { CodeBuiltin, CodeDiff, CodeRepo } from "./api";
 
 const api = vi.hoisted(() => ({
   codeRepo: vi.fn<() => Promise<CodeRepo>>(),
   codeDiff: vi.fn<(path: string) => Promise<CodeDiff>>(),
+  codeBuiltins: vi.fn<() => Promise<CodeBuiltin[]>>(),
 }));
 
 vi.mock("./api", () => api);
 vi.mock("./Chat", () => ({ newConversationId: () => "shell-new" }));
 
-import { Code, CODE_CLEAN, CODE_NOT_REPO, CODE_REVIEW_PROMPT } from "./Code";
+import { Code, CODE_BUILTINS, CODE_CLEAN, CODE_NEXT, CODE_NOT_REPO, CODE_REVIEW_PROMPT, overrideLabel } from "./Code";
 
 function repo(over: Partial<CodeRepo> = {}): CodeRepo {
   return {
@@ -35,6 +36,8 @@ describe("Code tab", () => {
   beforeEach(() => {
     api.codeRepo.mockReset();
     api.codeDiff.mockReset();
+    api.codeBuiltins.mockReset();
+    api.codeBuiltins.mockResolvedValue([]);
   });
 
   it("shows the branch and changed files, and opens a diff", async () => {
@@ -70,5 +73,75 @@ describe("Code tab", () => {
     api.codeRepo.mockRejectedValue("git isn't installed or couldn't start");
     render(<Code onTask={() => {}} />);
     expect(await screen.findByRole("status")).toHaveTextContent("git isn't installed");
+  });
+
+  const BUILTINS: CodeBuiltin[] = [
+    {
+      name: "qa-walkthrough",
+      description: "Ultimate ship check.",
+      body: "# QA Walkthrough\nWalk the app.",
+      overriddenBy: null,
+    },
+    {
+      name: "av-qa-walkthrough",
+      description: "AV ship gate.",
+      body: "# AV QA\nPlayback checks.",
+      overriddenBy: null,
+    },
+    {
+      name: "create-verification-skill",
+      description: "Project skill that drives the real app.",
+      body: "# Create verification skill",
+      overriddenBy: null,
+    },
+    {
+      name: "maintain-verification-skill",
+      description: "Audit verify skill.",
+      body: "# Maintain verification skill",
+      overriddenBy: null,
+    },
+    {
+      name: "follow-through",
+      description: "Ledger, check-ins, stall detection, status updates; proven done and handoff. /follow-through",
+      body: "# Follow Through\nLedger, check-ins.",
+      overriddenBy: null,
+    },
+  ];
+
+  it("shows the built-in skills on a clean repo, with no toggle, edit or Open folder", async () => {
+    api.codeRepo.mockResolvedValue(repo({ files: [] }));
+    api.codeBuiltins.mockResolvedValue(BUILTINS);
+    render(<Code onTask={() => {}} />);
+    expect(await screen.findByText(CODE_CLEAN)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: CODE_BUILTINS })).toBeInTheDocument();
+    const list = screen.getByRole("list", { name: CODE_BUILTINS });
+    expect(list.querySelectorAll("li button").length).toBe(5);
+    expect(screen.getByRole("button", { name: /^qa-walkthrough/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^follow-through/ })).toBeInTheDocument();
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /open folder/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /edit/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(CODE_NEXT).not.toMatch(/skill/i);
+  });
+
+  it("opens a built-in and shows its body", async () => {
+    api.codeRepo.mockResolvedValue(repo({ files: [] }));
+    api.codeBuiltins.mockResolvedValue(BUILTINS);
+    render(<Code onTask={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: /^follow-through/ }));
+    expect(await screen.findByLabelText("Built-in skill follow-through")).toHaveTextContent("# Follow Through");
+    expect(screen.getByLabelText("Built-in skill follow-through")).toHaveTextContent("Ledger, check-ins.");
+  });
+
+  it("renders the overridden-by label on a shadowed built-in", async () => {
+    api.codeRepo.mockResolvedValue(repo({ files: [] }));
+    const over = { scope: "project" as const, name: "follow-through" };
+    api.codeBuiltins.mockResolvedValue(
+      BUILTINS.map((row) => (row.name === "follow-through" ? { ...row, overriddenBy: over } : row)),
+    );
+    render(<Code onTask={() => {}} />);
+    expect(await screen.findByText(overrideLabel(over))).toBeInTheDocument();
+    expect(screen.getByText("overridden by project skill follow-through")).toBeInTheDocument();
   });
 });

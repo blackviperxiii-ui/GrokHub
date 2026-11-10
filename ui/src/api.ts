@@ -2598,3 +2598,21 @@ export function codeRepo(): Promise<CodeRepo> {
 export function codeDiff(path: string): Promise<CodeDiff> {
   return invoke<CodeDiff>("code_diff", { path });
 }
+
+/** A same-name project, user, cabin or plugin skill that shadows a built-in. */
+export interface CodeOverriddenBy {
+  scope: "project" | "user" | "cabin" | "plugin" | string;
+  name: string;
+}
+
+/** Code tab: one built-in skill, always listed, even when overridden. */
+export interface CodeBuiltin {
+  name: string;
+  description: string;
+  body: string;
+  overriddenBy: CodeOverriddenBy | null;
+}
+
+export function codeBuiltins(): Promise<CodeBuiltin[]> {
+  return invoke<CodeBuiltin[]>("code_builtins");
+}
