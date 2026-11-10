@@ -620,5 +620,34 @@ fn the_shared_logs_feed_one_engine() {
     assert_eq!(hub::dial(Area::LocalAi), decide::Dial::Watch);
     hub::set_dial(Area::LocalAi, decide::Dial::Act);
     assert_eq!(hub::dial(Area::LocalAi), decide::Dial::Act);
+
+    // The fault report: nothing while the app's own numbers are fine, and
+    // after a model failed twelve runs, the text to read. Nothing is sent.
+    use grokhub_core::learn::review;
+    assert!(!hub::paused());
+    assert_eq!(view::run("report", at), review::NOTHING_TO_REPORT);
+    for i in 0..12u64 {
+        let run = RunMetrics {
+            run: format!("chat-bad:{i}"),
+            class: "chat".into(),
+            result: OutcomeResult::Failure,
+            model: "bad-model".into(),
+            finished_at: at,
+            at,
+            ..RunMetrics::default()
+        };
+        append_run(&dir, &run, 0).unwrap();
+    }
+    assert_eq!(
+        view::run("report", at),
+        format!(
+            "{}\n\n## What the app measured going wrong\n\n\
+             - `model:bad-model` went well in 0 of its last 12 runs (0%).\n\n\
+             ---\nMeasured by {} {} on one PC. Ids and counts only.\n",
+            review::REPORT_NOTE,
+            grokhub_core::brand::product_name(),
+            env!("CARGO_PKG_VERSION")
+        )
+    );
     let _ = fs::remove_dir_all(&dir);
 }

@@ -396,6 +396,22 @@ pub fn guard_span(target: &str, why: &str, now: u64) -> Span {
     span
 }
 
+/// What the weekly review's model reads: the week's skill runs, then what
+/// the learning engine measured going wrong with the app itself (nothing in
+/// a good week), then the Brain ask when there is one.
+fn weekly_digest(
+    stats: &[SkillStats],
+    faults: &[grokhub_core::learn::review::Fault],
+    brain: Option<&BrainAsk>,
+) -> String {
+    let mut digest = build_self_review_digest(stats);
+    digest.push_str(&grokhub_core::learn::review::digest(faults));
+    if let Some(ask) = brain {
+        digest.push_str(&brain_digest(&ask.stats, &ask.text));
+    }
+    digest
+}
+
 /// The weekly model call: one routed `background:review` call at the
 /// background effort, then the fixed rules. Refused targets are logged as
 /// scope findings; the call's tokens go on a span. With `brain`, the same
@@ -409,10 +425,7 @@ pub fn run_weekly(
     now: u64,
     cancel: &CancelToken,
 ) -> Result<WeeklyPass, ClientError> {
-    let mut digest = build_self_review_digest(stats);
-    if let Some(ask) = brain {
-        digest.push_str(&brain_digest(&ask.stats, &ask.text));
-    }
+    let digest = weekly_digest(stats, &grokhub_core::learn::hub::faults(now), brain);
     let input = vec![
         InputItem::Message {
             role: "system".into(),
@@ -768,6 +781,43 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    #[test]
+    fn the_weekly_review_reads_what_the_app_measured_about_itself() {
+        use grokhub_core::learn::decide::Area;
+        use grokhub_core::learn::review::Fault;
+        let stats = vec![SkillStats {
+            skill: "weekly-report".into(),
+            runs: 5,
+            failures: 3,
+            ..SkillStats::default()
+        }];
+        let week = "Skill runs this week (failures first):\n\
+                    - weekly-report: 3 of 5 weekly-report runs needed a fix\n";
+        // A good week reads as before.
+        assert_eq!(weekly_digest(&stats, &[], None), week);
+        let faults = [
+            Fault::Unreliable {
+                subject: "model:weak-model".into(),
+                good: 3,
+                runs: 12,
+            },
+            Fault::Slipped {
+                area: Area::Router,
+                now: 40,
+                before: 90,
+                resting: false,
+            },
+        ];
+        assert_eq!(
+            weekly_digest(&stats, &faults, None),
+            format!(
+                "{week}What the app measured about itself (ids and counts only):\n\
+                 - `model:weak-model` went well in 3 of its last 12 runs (25%).\n\
+                 - Model choice: 40% of the app's own changes were kept in the last four weeks, down from 90%.\n"
+            )
+        );
     }
 
     #[test]

@@ -14,6 +14,8 @@
 //! - [`habit`]: what the user does at the same time of day, as timed chips.
 //! - [`decide`]: the one place a change the app would make on its own is
 //!   weighed: do it, offer it, wait or never.
+//! - [`review`]: what the app measured going wrong with itself, for the
+//!   weekly self-review and the fault report.
 //!
 //! The budget is fixed. [`Engine::record`] touches memory only: no disk, no
 //! model, no network. [`Engine::tick`] writes one batch at most every
@@ -27,6 +29,7 @@ pub mod head_start;
 pub mod hub;
 pub mod ladder;
 pub mod now;
+pub mod review;
 pub mod score;
 pub mod setup;
 pub mod signal;
@@ -36,6 +39,8 @@ pub mod view;
 
 #[cfg(test)]
 mod decide_tests;
+#[cfg(test)]
+mod review_tests;
 #[cfg(test)]
 mod tests;
 

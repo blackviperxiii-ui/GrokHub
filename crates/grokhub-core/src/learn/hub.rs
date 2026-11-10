@@ -292,6 +292,15 @@ pub fn set_goals(goals: &[decide::Goal]) {
     }
 }
 
+/// What the app measured going wrong with itself. Nothing before [`start`].
+pub fn faults(now_ms: u64) -> Vec<super::review::Fault> {
+    let Some(e) = engine() else {
+        return Vec::new();
+    };
+    let state = decide::load(e.config_dir());
+    super::review::faults(e.beliefs(), state.score(), now_ms)
+}
+
 /// The dials and the newest decisions, for the cabin's chat.
 pub fn decisions_text(now_ms: u64) -> String {
     let state = engine().map(|e| decide::load(e.config_dir()));

@@ -741,7 +741,9 @@ fn a_learned_command_names_one_belief_or_all() {
         Ok(Command::Wrong(subject("model:grok-code/run-ms")))
     );
     assert_eq!(Command::parse("forget All"), Ok(Command::ForgetAll));
+    assert_eq!(Command::parse("Report"), Ok(Command::Report));
     for bad in [
+        "report now",
         "forget",
         "wrong",
         "forget suggestion",

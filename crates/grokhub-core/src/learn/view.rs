@@ -387,9 +387,11 @@ pub enum Command {
     Trust(Area, Dial),
     /// Set what matters most, first to last. Empty clears them.
     Goals(Vec<Goal>),
+    /// The fault report for the developers, to read. Nothing is sent.
+    Report,
 }
 
-pub const USAGE: &str = "Use `/learned`, `/learned forget <id>`, `/learned wrong <id>`, `/learned always <id>`, `/learned forget all`, `/learned pause`, `/learned resume`, `/learned decisions`, `/learned trust <area> <watch|offer|act>` or `/learned goals <goal> ...`. The id is the code at the end of each line.";
+pub const USAGE: &str = "Use `/learned`, `/learned forget <id>`, `/learned wrong <id>`, `/learned always <id>`, `/learned forget all`, `/learned pause`, `/learned resume`, `/learned decisions`, `/learned trust <area> <watch|offer|act>`, `/learned goals <goal> ...` or `/learned report`. The id is the code at the end of each line.";
 
 impl Command {
     pub fn parse(rest: &str) -> Result<Self, String> {
@@ -422,6 +424,7 @@ impl Command {
         match (verb.as_deref(), id) {
             (None, _) => Ok(Command::List),
             (Some("decisions"), None) => Ok(Command::Decisions),
+            (Some("report"), None) => Ok(Command::Report),
             (Some("forget"), Some(all)) if all.eq_ignore_ascii_case("all") => {
                 Ok(Command::ForgetAll)
             }
@@ -435,6 +438,19 @@ impl Command {
     }
 }
 
+fn report_text(now_ms: u64) -> String {
+    use super::review::{report, NOTHING_TO_REPORT, REPORT_NOTE};
+    let version = format!(
+        "{} {}",
+        crate::brand::product_name(),
+        env!("CARGO_PKG_VERSION")
+    );
+    match report(&super::hub::faults(now_ms), &version) {
+        Some(text) => format!("{REPORT_NOTE}\n\n{text}"),
+        None => NOTHING_TO_REPORT.to_string(),
+    }
+}
+
 /// Runs a `/learned` line on the app's engine and returns what to show.
 pub fn run(rest: &str, now_ms: u64) -> String {
     let command = match Command::parse(rest) {
@@ -444,6 +460,7 @@ pub fn run(rest: &str, now_ms: u64) -> String {
     let done = match &command {
         Command::List => None,
         Command::Decisions => Some(super::hub::decisions_text(now_ms)),
+        Command::Report => Some(report_text(now_ms)),
         Command::Trust(area, dial) => {
             super::hub::set_dial(*area, *dial);
             Some(format!(
