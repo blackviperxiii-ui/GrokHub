@@ -102,6 +102,9 @@ pub struct ShellSettings {
     /// Notifications only for what needs you: an OK to give or a reply, not
     /// a finished automation (auto setup's "only important").
     pub notify_important: bool,
+    /// Settings → Code → Pushes and PRs. An unreadable block loads as Ask.
+    #[serde(deserialize_with = "crate::code_ship::lenient")]
+    pub code_ship: crate::code_ship::CodeShip,
 }
 
 /// A size this build doesn't offer reads as the step at or below it.
@@ -233,6 +236,7 @@ impl Default for ShellSettings {
             text_size: 100,
             reduce_motion: false,
             notify_important: false,
+            code_ship: crate::code_ship::CodeShip::default(),
         }
     }
 }
@@ -391,6 +395,7 @@ mod tests {
                 text_size: 100,
                 reduce_motion: false,
                 notify_important: false,
+                code_ship: crate::code_ship::CodeShip::default(),
             }
         );
     }
@@ -454,6 +459,7 @@ mod tests {
             text_size: 100,
             reduce_motion: false,
             notify_important: false,
+            code_ship: crate::code_ship::CodeShip::default(),
         };
         save(&dir, &wanted).expect("save");
         assert_eq!(load(&dir), wanted);
@@ -510,6 +516,7 @@ mod tests {
                 text_size: 100,
                 reduce_motion: false,
                 notify_important: false,
+                code_ship: crate::code_ship::CodeShip::default(),
             }
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -546,6 +553,7 @@ mod tests {
                 text_size: 100,
                 reduce_motion: false,
                 notify_important: false,
+                code_ship: crate::code_ship::CodeShip::default(),
             }
         );
         save(&dir, &loaded).expect("save");

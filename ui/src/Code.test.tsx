@@ -11,6 +11,22 @@ const api = vi.hoisted(() => ({
   codeTestPlan: vi.fn<(command?: string | null) => Promise<{ command: string; needsConfirm: boolean; remembered: string | null }>>(),
   codeTestRun: vi.fn<(command: string, confirmed: boolean) => Promise<{ command: string; exit: number; output: string; cut: boolean }>>(),
   onCodeRun: vi.fn(() => Promise.resolve(() => {})),
+  codeShipPlan: vi.fn((action: "push" | "pr") =>
+    Promise.resolve({
+      action,
+      branch: "beta",
+      command: "git push --porcelain origin HEAD:refs/heads/beta",
+      needsConfirm: true,
+      blocked: null,
+      mode: "ask",
+      autoBase: "beta",
+      appMade: false,
+      prUrl: null,
+    }),
+  ),
+  codeShipRun: vi.fn(),
+  codeNewBranch: vi.fn(),
+  codeActivity: vi.fn(() => Promise.resolve([])),
 }));
 
 vi.mock("./api", () => api);

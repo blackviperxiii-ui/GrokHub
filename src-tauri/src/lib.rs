@@ -16,7 +16,9 @@ mod brand_guard;
 pub mod capabilities;
 pub mod chips;
 pub mod code;
+pub mod code_activity;
 pub mod code_runs;
+pub mod code_ship;
 pub mod connectors;
 pub mod credential;
 pub mod export;
@@ -1670,6 +1672,71 @@ async fn code_test_forget(
     let dir = workspace(&state);
     let config = state.config_dir.clone();
     off_main(move || code_runs::forget_test(&config, &dir)).await?
+}
+
+/// Code tab: what a push or "Open PR into" would run, and whether it asks first.
+#[tauri::command]
+async fn code_ship_plan(
+    state: State<'_, ShellState>,
+    action: code_ship::Action,
+) -> Result<code_ship::Plan, String> {
+    let dir = workspace(&state);
+    let config = state.config_dir.clone();
+    let cfg = current(&state).code_ship;
+    off_main(move || code_ship::plan(&config, &dir, &cfg, action)).await
+}
+
+/// Code tab: push the current branch or open its PR, through the push guard.
+/// `confirmed` must be true unless the guard said no confirm is needed.
+#[tauri::command]
+async fn code_ship_run(
+    state: State<'_, ShellState>,
+    action: code_ship::Action,
+    confirmed: bool,
+) -> Result<code_ship::Shipped, String> {
+    let dir = workspace(&state);
+    let config = state.config_dir.clone();
+    let cfg = current(&state).code_ship;
+    off_main(move || code_ship::ship(&config, &dir, &cfg, action, confirmed)).await?
+}
+
+/// Code tab: make and check out a branch the guard counts as the app's own.
+#[tauri::command]
+async fn code_new_branch(state: State<'_, ShellState>, name: String) -> Result<String, String> {
+    let dir = workspace(&state);
+    let config = state.config_dir.clone();
+    let cfg = current(&state).code_ship;
+    off_main(move || code_ship::new_branch(&config, &dir, &cfg, &name)).await?
+}
+
+/// Code tab: the newest pushes, PRs, branches and blocked attempts.
+#[tauri::command]
+async fn code_activity_list(
+    state: State<'_, ShellState>,
+) -> Result<Vec<code_activity::Entry>, String> {
+    let config = state.config_dir.clone();
+    off_main(move || code_activity::list(&config, code_activity::SHOW)).await
+}
+
+/// Settings → Code → Pushes and PRs.
+#[tauri::command]
+fn get_code_ship(state: State<'_, ShellState>) -> code_ship::CodeShip {
+    current(&state).code_ship
+}
+
+#[tauri::command]
+fn save_code_ship(
+    state: State<'_, ShellState>,
+    ship: code_ship::CodeShip,
+) -> Result<code_ship::CodeShip, String> {
+    let ship = code_ship::checked(ship)?;
+    let next = ShellSettings {
+        code_ship: ship.clone(),
+        ..current(&state)
+    };
+    settings::save(&state.config_dir, &next)?;
+    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next;
+    Ok(ship)
 }
 
 #[tauri::command]
@@ -3673,6 +3740,12 @@ pub fn run() {
             code_test_run,
             code_test_remembered,
             code_test_forget,
+            code_ship_plan,
+            code_ship_run,
+            code_new_branch,
+            code_activity_list,
+            get_code_ship,
+            save_code_ship,
             get_journal,
             journal_add,
             journal_act,
