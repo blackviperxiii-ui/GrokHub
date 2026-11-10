@@ -117,31 +117,51 @@ impl WeekRecap {
         format!("{CARD_SOURCE_PREFIX}{}", self.week_key)
     }
 
-    /// Short Pulse body: greeting + up to a few highlights + suggestion.
+    /// The card's text: the greeting, then every section in full.
     pub fn card_body(&self) -> String {
         let mut lines = vec![self.greeting.clone()];
-        if let Some(line) = self.games.first() {
-            lines.push(format!("Games · {line}"));
+        lines.extend(self.detail_lines());
+        lines.join("\n")
+    }
+
+    /// The card's report: the greeting as headline, every section below.
+    pub fn card_report(&self) -> crate::card_report::CardReport {
+        crate::card_report::CardReport {
+            found: self.greeting.clone(),
+            summary: self.detail_lines().join("\n"),
+            details: self.render(),
+            ..Default::default()
         }
-        if let Some(line) = self.projects.first() {
-            lines.push(format!("Projects · {line}"));
-        }
+    }
+
+    fn detail_lines(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+        let mut list = |label: &str, items: &[String]| {
+            if !items.is_empty() {
+                lines.push(format!("{label}: {}", items.join("; ")));
+            }
+        };
+        list("Games", &self.games);
+        list("Projects", &self.projects);
         if let Some(ref p) = self.prints {
-            lines.push(p.clone());
+            lines.push(format!("Prints: {p}"));
         }
         if let Some(ref d) = self.disk {
-            lines.push(d.clone());
+            lines.push(format!("Disk: {d}"));
         }
-        if let Some(line) = self.tasks.first() {
-            lines.push(format!("Tasks · {line}"));
-        }
+        let mut list = |label: &str, items: &[String]| {
+            if !items.is_empty() {
+                lines.push(format!("{label}: {}", items.join("; ")));
+            }
+        };
+        list("Tasks", &self.tasks);
         if let Some(ref s) = self.suggestion {
-            lines.push(format!("Next · {s}"));
+            lines.push(format!("Next: {s}"));
         }
-        if lines.len() == 1 {
+        if lines.is_empty() {
             lines.push(self.closing.clone());
         }
-        lines.join("\n")
+        lines
     }
 
     /// Full markdown for card `details` and chat. Omits empty sections.
@@ -848,8 +868,18 @@ mod tests {
         assert_eq!(recap.tasks[0], "weekly-report · 3×");
         assert_eq!(recap.suggestion.as_deref(), Some("Lean into gaming again"));
         let body = recap.card_body();
-        assert!(body.contains("Games · Hades"), "{body}");
-        assert!(body.contains("Next · Lean into gaming"), "{body}");
+        assert!(body.contains("Games: Hades"), "{body}");
+        // Every line of every section, not just the first.
+        for line in recap
+            .games
+            .iter()
+            .chain(&recap.projects)
+            .chain(&recap.tasks)
+        {
+            assert!(body.contains(line.as_str()), "{line} missing in {body}");
+        }
+        assert_eq!(recap.card_report().found, recap.greeting);
+        assert!(body.contains("Next: Lean into gaming"), "{body}");
         let md = recap.render();
         assert!(md.contains("## Games played"), "{md}");
         assert!(md.contains("## Prints made"), "{md}");

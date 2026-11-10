@@ -15,6 +15,8 @@ pub const CARD_TITLE: &str = "Start my day";
 pub const FILE_NAME: &str = "day_brief.json";
 /// Hard cap on ranked items shown on the card.
 pub const ITEM_CAP: usize = 5;
+/// How much of each item's own text the card repeats.
+pub const ITEM_BODY_MAX: usize = 200;
 /// Local hours the brief may post when rhythm has not learned yet and no
 /// brief hour is set: 5 AM up to 2 PM. A cabin left in the tray overnight
 /// waits for the morning instead of posting on a midnight tick.
@@ -173,6 +175,8 @@ pub struct DayBrief {
     pub generated_at: u64,
     pub greeting: String,
     pub items: Vec<DayBriefItem>,
+    /// Ranked below [`ITEM_CAP`]: named on the card so nothing drops unseen.
+    pub left_out: Vec<String>,
     pub closing: String,
 }
 
@@ -185,16 +189,48 @@ impl DayBrief {
         self.items.is_empty()
     }
 
-    /// Short Pulse body: greeting + up to a few item lines.
+    /// The card's text: the greeting, each item with what it says, and the
+    /// titles of anything ranked past the cap.
     pub fn card_body(&self) -> String {
         let mut lines = vec![self.greeting.clone()];
-        for item in self.items.iter().take(ITEM_CAP) {
-            lines.push(format!("{} · {}", item.section.short(), item.title));
+        lines.extend(self.detail_lines());
+        lines.join("\n")
+    }
+
+    /// The card's report: the greeting as headline, every item in full below.
+    pub fn card_report(&self) -> crate::card_report::CardReport {
+        crate::card_report::CardReport {
+            found: self.greeting.clone(),
+            summary: self.detail_lines().join("\n"),
+            details: self.render(),
+            ..Default::default()
         }
-        if self.items.is_empty() {
+    }
+
+    fn detail_lines(&self) -> Vec<String> {
+        let mut lines: Vec<String> = self
+            .items
+            .iter()
+            .map(|item| {
+                let said = crate::card_report::clip(&item.body, ITEM_BODY_MAX);
+                if said.is_empty() || said == item.title {
+                    format!("{} · {}", item.section.short(), item.title)
+                } else {
+                    format!("{} · {}: {said}", item.section.short(), item.title)
+                }
+            })
+            .collect();
+        if lines.is_empty() {
             lines.push(self.closing.clone());
         }
-        lines.join("\n")
+        if !self.left_out.is_empty() {
+            lines.push(format!(
+                "Not shown ({}): {}",
+                self.left_out.len(),
+                self.left_out.join(" · ")
+            ));
+        }
+        lines
     }
 
     /// Full markdown for card `details`. Omits empty sections. Groups by
@@ -332,6 +368,11 @@ pub fn build_brief(input: &DayBriefInputs) -> DayBrief {
             .then(a.section.cmp(&b.section))
             .then(a.title.cmp(&b.title))
     });
+    let left_out: Vec<String> = scored
+        .iter()
+        .skip(ITEM_CAP)
+        .map(|i| format!("{} · {}", i.section.short(), i.title))
+        .collect();
     scored.truncate(ITEM_CAP);
 
     let has_signal = !scored.is_empty();
@@ -340,6 +381,7 @@ pub fn build_brief(input: &DayBriefInputs) -> DayBrief {
         generated_at: input.generated_at,
         greeting: greeting_line(&input.tone, &input.day_key, has_signal),
         items: scored,
+        left_out,
         closing: closing_line(&input.tone),
     }
 }
@@ -463,6 +505,31 @@ mod tests {
 
     fn seed(title: &str, cat: &str) -> DayBriefSeed {
         DayBriefSeed::new(title, format!("{title} body"), format!("Do {title}"), cat)
+    }
+
+    #[test]
+    fn the_card_shows_each_item_and_names_what_the_cap_left_out() {
+        let brief = build_brief(&fixture_full());
+        assert_eq!(brief.items.len(), ITEM_CAP);
+        let body = brief.card_body();
+        assert!(
+            body.contains("Games · Celeste 50% off: Celeste 50% off body"),
+            "{body}"
+        );
+        assert!(
+            body.contains("Not shown (1): Backups · Notes backup due"),
+            "{body}"
+        );
+        for item in &brief.items {
+            assert!(
+                body.contains(&item.body),
+                "{} missing in {body}",
+                item.title
+            );
+        }
+        let report = brief.card_report();
+        assert_eq!(report.found, brief.greeting);
+        assert!(report.summary.contains("Not shown (1)"));
     }
 
     fn fixture_full() -> DayBriefInputs {
