@@ -6,6 +6,11 @@
 //! out from the time of the last update, so an old habit loses weight without
 //! a timer.
 //!
+//! A habit can also flip overnight, and a 30-day fade is too slow for that.
+//! A belief with at least [`BREAK_MIN_EVIDENCE`] behind it counts votes in a
+//! row against the side it leans to; at [`BREAK_RUN`] of them the old side
+//! keeps only [`BREAK_KEEP`] of its count, so the new habit shows at once.
+//!
 //! Confidence is the lower end of the Wilson interval on the side the counts
 //! lean to: twelve of twelve gives 0.82, three of three gives 0.53, and six
 //! against six gives 0.29.
@@ -22,6 +27,12 @@ pub const HALF_LIFE_MS: u64 = 30 * 24 * 60 * 60 * 1_000;
 pub const BELIEF_CAP: usize = 2_000;
 /// z² for a 95% one-sided interval (z = 1.645).
 const Z2: f32 = 2.706;
+/// Evidence a belief needs before a run against it counts as a break.
+pub const BREAK_MIN_EVIDENCE: f32 = 6.0;
+/// Votes in a row against the lean that make a break.
+pub const BREAK_RUN: u8 = 4;
+/// The share of its count the old side keeps after a break.
+pub const BREAK_KEEP: f32 = 0.25;
 /// The evidence a pinned belief reads as: enough for every rung of the ladder.
 pub const PINNED_EVIDENCE: f32 = 100.0;
 
@@ -65,6 +76,13 @@ pub struct Belief {
     /// The learner that wrote it, e.g. `signals`.
     pub source: String,
     pub standing: Standing,
+    /// Votes in a row against the side it leans to.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub against: u8,
+}
+
+fn is_zero(n: &u8) -> bool {
+    *n == 0
 }
 
 impl Belief {
@@ -75,6 +93,7 @@ impl Belief {
             last_ms: at_ms,
             source: source.to_string(),
             standing: Standing::Live,
+            against: 0,
         }
     }
 
@@ -203,11 +222,30 @@ impl Beliefs {
             return false;
         };
         b.advance(at_ms);
+        // The side it leaned to before this vote, once there is enough
+        // behind it for a run the other way to mean something.
+        let lean = match b.shape {
+            Shape::Rate { yes: y, no: n } if y + n >= BREAK_MIN_EVIDENCE && y != n => Some(y > n),
+            _ => None,
+        };
+        b.against = match lean {
+            Some(side) if side != yes => b.against.saturating_add(1),
+            _ => 0,
+        };
+        let broke = b.against >= BREAK_RUN;
         match &mut b.shape {
-            Shape::Rate { yes: y, .. } if yes => *y += 1.0,
-            Shape::Rate { no: n, .. } => *n += 1.0,
+            Shape::Rate { yes: y, no: n } => {
+                if broke {
+                    // The old habit ended: most of its count goes at once.
+                    *(if yes { &mut *n } else { &mut *y }) *= BREAK_KEEP;
+                }
+                *(if yes { y } else { n }) += 1.0;
+            }
             // A subject holds one shape: a vote can't turn a level into a rate.
             Shape::Level { .. } => return false,
+        }
+        if broke {
+            b.against = 0;
         }
         true
     }

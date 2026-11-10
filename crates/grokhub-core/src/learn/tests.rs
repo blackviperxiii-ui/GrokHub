@@ -23,12 +23,16 @@ fn close(got: f32, want: f32) {
     assert!((got - want).abs() < 0.001, "got {got}, want {want}");
 }
 
+/// A mixed record: the votes come in turn, not all of one side and then all
+/// of the other, which would read as a habit that flipped.
 fn votes(beliefs: &mut Beliefs, key: &Subject, yes: usize, no: usize, at: u64) {
-    for _ in 0..yes {
-        beliefs.vote(key, true, at, "test");
-    }
-    for _ in 0..no {
-        beliefs.vote(key, false, at, "test");
+    for i in 0..yes.max(no) {
+        if i < yes {
+            beliefs.vote(key, true, at, "test");
+        }
+        if i < no {
+            beliefs.vote(key, false, at, "test");
+        }
     }
 }
 
@@ -942,6 +946,65 @@ fn the_pause_is_a_file_both_apps_on_the_folder_see() {
     assert_eq!(store::set_paused(&dir, false), Ok(()));
     assert!(!store::paused(&dir));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn four_votes_in_a_row_against_a_settled_habit_drop_most_of_it_at_once() {
+    use belief::{BREAK_KEEP, BREAK_MIN_EVIDENCE, BREAK_RUN};
+    assert_eq!((BREAK_MIN_EVIDENCE, BREAK_RUN, BREAK_KEEP), (6.0, 4, 0.25));
+    let key = subject("habit:tidy/evening");
+    let shape = |b: &Beliefs| b.get(&key).unwrap().shape;
+    let mut b = Beliefs::default();
+    for i in 0..12 {
+        b.vote(&key, true, T0 + i, "signals");
+    }
+    // Three against are noise: nothing is dropped.
+    for i in 12..15 {
+        b.vote(&key, false, T0 + i, "signals");
+    }
+    assert_eq!(shape(&b), Shape::Rate { yes: 12.0, no: 3.0 });
+    assert_eq!(b.get(&key).unwrap().against, 3);
+    // The fourth is a break: the old side keeps a quarter and the lean flips.
+    b.vote(&key, false, T0 + 15, "signals");
+    assert_eq!(shape(&b), Shape::Rate { yes: 3.0, no: 4.0 });
+    assert_eq!(b.get(&key).unwrap().against, 0);
+    assert_eq!(b.get(&key).unwrap().leans_yes(), Some(false));
+
+    // A vote for the lean in between starts the run over.
+    let mut mixed = Beliefs::default();
+    for i in 0..12 {
+        mixed.vote(&key, true, T0 + i, "signals");
+    }
+    for (i, yes) in [false, false, false, true, false, false, false]
+        .into_iter()
+        .enumerate()
+    {
+        mixed.vote(&key, yes, T0 + 12 + i as u64, "signals");
+    }
+    assert_eq!(shape(&mixed), Shape::Rate { yes: 13.0, no: 6.0 });
+
+    // A belief with little behind it has no habit to break.
+    let mut thin = Beliefs::default();
+    for i in 0..5 {
+        thin.vote(&key, true, T0 + i, "signals");
+    }
+    for i in 5..9 {
+        thin.vote(&key, false, T0 + i, "signals");
+    }
+    assert_eq!(shape(&thin), Shape::Rate { yes: 5.0, no: 4.0 });
+
+    // It works the other way too: a settled "no" that turns into "yes".
+    let mut never = Beliefs::default();
+    for i in 0..8 {
+        never.vote(&key, false, T0 + i, "signals");
+    }
+    for i in 8..12 {
+        never.vote(&key, true, T0 + i, "signals");
+    }
+    assert_eq!(shape(&never), Shape::Rate { yes: 4.0, no: 2.0 });
+    // The run count is not written for a belief that has none.
+    let saved = serde_json::to_string(&never).unwrap();
+    assert!(!saved.contains("against"), "{saved}");
 }
 
 #[test]
