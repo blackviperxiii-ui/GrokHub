@@ -189,6 +189,9 @@ impl Cabin {
                 if crate::cards::ghost_pill(ui, "Notes files") {
                     self.nav = Nav::Memory;
                 }
+                if crate::cards::ghost_pill(ui, "Get to know you") {
+                    self.open_onboard(true);
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     crate::cards::search_field(ui, &mut self.personal.q);
                 });

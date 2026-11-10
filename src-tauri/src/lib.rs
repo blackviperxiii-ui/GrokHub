@@ -42,6 +42,7 @@ pub mod model_library;
 mod net_watch;
 pub mod nyx;
 pub mod oauth;
+pub mod onboard;
 pub mod opener;
 #[cfg(desktop)]
 mod os_extras;
@@ -252,6 +253,25 @@ fn auto_setup(
         zoom(&window, settings.text_size);
     }
     Ok(reply)
+}
+
+/// Get to know you: the stage after Auto Setup's first run, and Settings →
+/// Personal → Get to know you.
+#[tauri::command]
+fn onboard_identity(
+    state: State<'_, ShellState>,
+    act: onboard::Act,
+) -> Result<onboard::Reply, String> {
+    capabilities::needs(capabilities::current().auto_setup, "Get to know you")?;
+    let personality = current(&state).personality;
+    let home = grokhub_core::paths::user_home();
+    onboard::act(
+        &grokhub_agent::perm::config_dir(),
+        home.as_deref(),
+        &personality,
+        act,
+        grokhub_core::now_ms(),
+    )
 }
 
 /// The window's zoom follows Settings → Appearance → Text size.
@@ -3473,6 +3493,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             phone_smoke_report,
             auto_setup,
+            onboard_identity,
             quick_chips,
             chip_outcome,
             get_capabilities,

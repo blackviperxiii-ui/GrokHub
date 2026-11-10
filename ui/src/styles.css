@@ -4461,6 +4461,41 @@ label.toggle-row {
   flex-direction: column;
 }
 
+/* Get to know you (GetToKnowYou.tsx): the stage after the first run. */
+.first-run.onboard {
+  max-width: 600px;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  flex-wrap: nowrap;
+  align-items: stretch;
+}
+
+/* Focus moves to the window itself so Escape works; its controls keep their ring. */
+.first-run.onboard:focus {
+  outline: none;
+}
+
+.first-run.onboard .onboard-import {
+  align-self: flex-start;
+}
+
+.onboard-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+}
+
+.onboard-field input,
+.onboard-field textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.onboard-field textarea.code {
+  min-height: 96px;
+}
+
 /* The dotted orb (Orb.tsx): sits on the text line like a glyph. */
 .orb {
   display: inline-block;

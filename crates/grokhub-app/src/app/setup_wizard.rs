@@ -16,6 +16,10 @@ use grokhub_core::local_setup::{self as ls, Hardware};
 
 use super::*;
 
+/// Get to know you: the stage after this wizard.
+#[path = "onboard_ui.rs"]
+pub(super) mod onboard_ui;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SetupStep {
     Welcome,
@@ -54,6 +58,8 @@ pub(super) struct SetupWizard {
     pub(super) confirm_free_mb: Option<u64>,
     /// Auto setup's state for this launch.
     pub(super) auto: super::auto_setup_ui::AutoSetup,
+    /// Get to know you, the stage after this wizard.
+    pub(super) onboard: onboard_ui::Onboard,
     /// The local speed test running off the UI thread.
     pub(super) speed_rx: Option<mpsc::Receiver<Result<String, String>>>,
     /// The last speed test's whole report, draft model verdict included.
@@ -251,6 +257,9 @@ impl Cabin {
             self.setup.installed = grokhub_core::model_download::installed(&models_dir());
             if should_open_setup(self.cfg.setup_done, self.has_real_history()) {
                 self.open_setup(SetupStep::Welcome);
+            } else {
+                // A profile past the wizard whose files are still seeds.
+                self.open_onboard(false);
             }
         }
         self.poll_model_download();
@@ -317,12 +326,15 @@ impl Cabin {
             SETUP_DONE_STATUS
         }
         .into();
+        // Get to know you follows, when it still waits.
+        self.open_onboard(false);
     }
 
     pub(super) fn paint_setup_wizard(&mut self, ctx: &egui::Context) {
         self.tick_auto_setup(ctx);
         self.paint_auto_note(ctx);
         let Some(step) = self.setup.step else {
+            self.paint_onboard(ctx);
             return;
         };
         let mut act = WizardAct::None;

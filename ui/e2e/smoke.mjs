@@ -1199,6 +1199,18 @@ async function skipFirstRun(s) {
     return;
   }
   await wd("POST", `${s}/element/${skip[ELEMENT]}/click`, {});
+  // Get to know you (GetToKnowYou.tsx) is the next stage and uses the
+  // same backdrop; skip it too.
+  const later = await waitFor(
+    "the get-to-know-you stage",
+    () =>
+      wd("POST", `${s}/element`, {
+        using: "xpath",
+        value: "//div[@role='dialog' and contains(@class,'onboard')]//button[normalize-space()='Skip for now']",
+      }),
+    10000,
+  ).catch(() => null);
+  if (later) await wd("POST", `${s}/element/${later[ELEMENT]}/click`, {});
   await waitFor("the first-run window to close", async () => {
     const open = await wd("POST", `${s}/elements`, { using: "css selector", value: ".first-run-backdrop" });
     return open.length === 0;
@@ -1206,7 +1218,8 @@ async function skipFirstRun(s) {
   await sleep(1000);
   const notes = await wd("POST", `${s}/elements`, { using: "css selector", value: ".auto-note.card .chip" });
   if (notes.length > 0) await wd("POST", `${s}/element/${notes[0][ELEMENT]}/click`, {});
-  console.log(`first run: skipped${notes.length > 0 ? ", corner note closed" : ""}`);
+  const also = [later && "get to know you skipped", notes.length > 0 && "corner note closed"].filter(Boolean);
+  console.log(`first run: skipped${also.map((a) => `, ${a}`).join("")}`);
 }
 
 async function main() {

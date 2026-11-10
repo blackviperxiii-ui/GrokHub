@@ -55,6 +55,7 @@ import { LOGO_MARK_URL, PRODUCT_NAME } from "./brand";
 import { TabIcon } from "./TabIcon";
 import { ChatTabMenu, ClearChatDialog } from "./ClearChat";
 import { AutoNote, FirstRun, useAutoSetup } from "./AutoSetup";
+import { OnboardStage } from "./GetToKnowYou";
 
 // Chat and Automations stay mounted, so they load up front. The other screens
 // load the first time they open, and again in the background once the app is
@@ -551,6 +552,7 @@ export function App() {
       </header>
       {haltNote && <HaltNote text={haltNote} onDismiss={() => setHaltNote(undefined)} />}
       {caps.autoSetup && auto.reply?.firstRun && <FirstRun reply={auto.reply} act={auto.act} />}
+      {caps.autoSetup && <OnboardStage after={auto.reply !== null && !auto.reply.firstRun} />}
       {caps.autoSetup && auto.note && !auto.reply?.firstRun && (
         <AutoNote note={auto.note} act={auto.act} onClose={auto.closeNote} />
       )}
