@@ -40,8 +40,11 @@ pub(super) struct FixUi {
     pub verify_rx: Option<mpsc::Receiver<repair::DiagnoseReport>>,
     /// The result card was closed (Done or Undo fix).
     pub closed: bool,
-    /// The result went to the chat once.
+    /// The result was settled once (it shows on the fix card).
     pub announced: bool,
+    /// The fix's own word for its card: why it couldn't start, or what Undo
+    /// did. You tapped Fix, so its notes stay on the fix card, never the chat.
+    pub note: Option<String>,
     /// The fan fix's saved settings, for its re-check and its Undo.
     pub fans: Option<FanFix>,
 }
@@ -387,12 +390,10 @@ impl Cabin {
                 self.harness.fixes.run = Some(run);
                 self.harness.fixes.closed = false;
                 self.harness.fixes.announced = false;
+                self.harness.fixes.note = None;
                 self.advance_fix();
             }
-            Err(why) => {
-                self.live_mut().push(("assistant".into(), why));
-                self.persist();
-            }
+            Err(why) => self.harness.fixes.note = Some(why),
         }
     }
 
@@ -468,11 +469,9 @@ impl Cabin {
             }
             repair::Action::Done if self.harness.fixes.announced => {}
             repair::Action::Done => {
-                let text = run.result_text();
+                // The result card shows `result_text` with Undo fix.
                 self.harness.fixes.announced = true;
                 self.status.clear();
-                self.live_mut().push(("assistant".into(), text));
-                self.persist();
             }
         }
     }
@@ -560,8 +559,7 @@ impl Cabin {
         }
         let text = run.undo(hx::UndoAsk::from_click());
         self.harness.fixes.closed = true;
-        self.live_mut().push(("assistant".into(), text));
-        self.persist();
+        self.harness.fixes.note = Some(text);
     }
 
     /// Start a fan fix (or its undo) with the settings it saved.
@@ -585,9 +583,7 @@ impl Cabin {
                 run.undone = true;
             }
             self.harness.fixes.closed = true;
-            self.live_mut()
-                .push(("assistant".into(), FANS_BACK_NOTE.into()));
-            self.persist();
+            self.harness.fixes.note = Some(FANS_BACK_NOTE.into());
             return;
         }
         let game = self.game_running().is_some();
@@ -654,6 +650,10 @@ impl Cabin {
                     None => {}
                 }
             }
+            self.paint_fix_note(ui, running);
+            return;
+        }
+        if self.paint_fix_note(ui, running) {
             return;
         }
         let mut hit = None;
@@ -672,6 +672,36 @@ impl Cabin {
             None => {}
         }
     }
+    /// The fix's note (why it couldn't start, what Undo did) as its own card
+    /// with Done. True while it shows.
+    fn paint_fix_note(&mut self, ui: &mut egui::Ui, running: bool) -> bool {
+        let Some(note) = self.harness.fixes.note.clone() else {
+            return false;
+        };
+        let card = FixCard {
+            sections: vec![],
+            steps: vec![],
+            primary: None,
+            secondary: "Done",
+            hard: false,
+            checklist: false,
+        };
+        if fix_card_ui(
+            ui,
+            ("fix-note", String::new()),
+            "Fix",
+            &note,
+            "",
+            &card,
+            running,
+        )
+        .is_some()
+        {
+            self.harness.fixes.note = None;
+        }
+        true
+    }
+
     /// The answer goes to the chat that asked, even after a switch; a chat
     /// deleted meanwhile gets nothing.
     fn post_diagnose(&mut self, body: String) {
@@ -921,6 +951,41 @@ mod tests {
         assert_eq!(mixed.steps[0].class, StepClass::HardFloor);
     }
 
+    /// What the fix card shows for a finished run.
+    fn fix_result(cabin: &Cabin) -> String {
+        cabin
+            .harness
+            .fixes
+            .run
+            .as_ref()
+            .expect("a fix ran")
+            .result_text()
+    }
+
+    fn not_in_chat(cabin: &Cabin, text: &str) -> bool {
+        !cabin.messages.iter().any(|(_, b)| b == text)
+    }
+
+    #[test]
+    fn a_fix_that_cant_start_says_why_on_the_fix_card() {
+        let (_pin, root) = pinned("fix-cabin-nostep");
+        let mut cabin = Cabin::quiet_for_test();
+        // Only a hard-floor step: nothing the app may run.
+        cabin.harness.fixes.proposals = vec![plan(vec![DraftStep::new(
+            "dd if=/dev/zero of=/dev/sda",
+            "Wipe the disk.",
+        )])];
+        let before = cabin.messages.len();
+        cabin.apply_fix(0);
+        assert!(cabin.harness.fixes.run.is_none());
+        assert_eq!(
+            cabin.harness.fixes.note.as_deref(),
+            Some("This fix has no step I'm allowed to run, so I only explained what to do.")
+        );
+        assert_eq!(cabin.messages.len(), before, "nothing went to the chat");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn fix_it_with_no_grok_build_stops_at_the_first_step_and_says_so() {
         let (_pin, root) = pinned("fix-cabin-nogb");
@@ -939,9 +1004,11 @@ mod tests {
             (repair::REPAIR_TOOL.into(), "deny".into()),
         ]);
         assert_eq!(tools(&root), want);
-        assert_eq!(
-            cabin.messages.last().unwrap().1,
-            "A step didn't work (Clear the list), so I stopped there. Undo fix puts back what I changed."
+        let said = "A step didn't work (Clear the list), so I stopped there. Undo fix puts back what I changed.";
+        assert_eq!(fix_result(&cabin), said);
+        assert!(
+            not_in_chat(&cabin, said),
+            "the result stays on the fix card"
         );
         assert!(!cabin.harness.fixes.busy());
         let _ = std::fs::remove_dir_all(root);
@@ -982,10 +1049,14 @@ mod tests {
         cabin.poll_fix();
         wait_fix(&mut cabin);
         // No System state grant: the re-check can't run, so it is not a fix.
-        let last = cabin.messages.last().unwrap().1.clone();
+        let last = fix_result(&cabin);
         assert!(
             last.starts_with("That didn't fix it. I checked again: To check your computer"),
             "{last}"
+        );
+        assert!(
+            not_in_chat(&cabin, &last),
+            "the result stays on the fix card"
         );
         let spans = hx::read_spans(&root, "session").unwrap();
         assert_eq!(
@@ -998,9 +1069,11 @@ mod tests {
         assert!(hx::done_without_criteria(&spans).is_empty());
         cabin.undo_fix();
         assert_eq!(std::fs::read(&conf).unwrap(), before);
-        assert_eq!(
-            cabin.messages.last().unwrap().1,
-            "Undone. I put back the one file this fix changed, exactly as it was."
+        let undone = "Undone. I put back the one file this fix changed, exactly as it was.";
+        assert_eq!(cabin.harness.fixes.note.as_deref(), Some(undone));
+        assert!(
+            not_in_chat(&cabin, undone),
+            "Undo's word stays on the fix card"
         );
         assert!(cabin.harness.fixes.closed);
         let _ = std::fs::remove_dir_all(root);
@@ -1055,9 +1128,11 @@ mod tests {
             .live_mut()
             .push(("assistant".into(), "Ran it.\nSTEP_OK".into()));
         cabin.poll_fix();
-        assert_eq!(
-            cabin.messages.last().unwrap().1,
-            "Fixed. I checked again: Every fan reads full speed now. If anything seems off, press Undo fix."
+        let fixed = "Fixed. I checked again: Every fan reads full speed now. If anything seems off, press Undo fix.";
+        assert_eq!(fix_result(&cabin), fixed);
+        assert!(
+            not_in_chat(&cabin, fixed),
+            "the result stays on the fix card"
         );
         // Undo is its own elevated step, never a file copy over sysfs.
         cabin.undo_fix();
@@ -1073,7 +1148,8 @@ mod tests {
         );
         // Undo on the undo leaves the fans where the saved settings put them.
         cabin.undo_fix();
-        assert_eq!(cabin.messages.last().unwrap().1, FANS_BACK_NOTE);
+        assert_eq!(cabin.harness.fixes.note.as_deref(), Some(FANS_BACK_NOTE));
+        assert!(not_in_chat(&cabin, FANS_BACK_NOTE));
         assert!(cabin.harness.fixes.closed);
         let _ = std::fs::remove_dir_all(root);
     }
@@ -1111,15 +1187,13 @@ mod tests {
             (repair::REPAIR_TOOL.into(), "deny".into()),
         ]);
         assert_eq!(tools(&root), want);
-        let fix_lines: Vec<&String> = cabin
-            .messages
-            .iter()
-            .filter(|(_, b)| b.contains("Undo fix"))
-            .map(|(_, b)| b)
-            .collect();
         assert_eq!(
-            fix_lines,
-            vec!["I stopped the fix because you halted. Nothing more will run. Undo fix puts back what I changed."]
+            fix_result(&cabin),
+            "I stopped the fix because you halted. Nothing more will run. Undo fix puts back what I changed."
+        );
+        assert!(
+            !cabin.messages.iter().any(|(_, b)| b.contains("Undo fix")),
+            "the fix's word stays on its card, never the chat"
         );
         assert!(
             !cabin.messages.iter().any(|(r, _)| r == "user"),

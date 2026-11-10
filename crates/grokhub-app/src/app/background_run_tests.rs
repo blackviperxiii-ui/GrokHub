@@ -1554,3 +1554,29 @@ fn a_due_job_waits_only_for_the_last_job_or_a_desktop_replay() {
     }
     assert!(!include_str!("native_unattended.rs").contains("\"Loop: "));
 }
+
+// The harness retry stays a chat turn (it continues the live session and its
+// approvals); the status line names it as the app's own, not yours.
+#[cfg(unix)]
+#[test]
+fn the_harness_retry_is_a_chat_turn_and_the_status_names_it() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = bg_cabin("harness-retry");
+    // Local AI ready and a verify pending: the send parks its kick, so no
+    // model is called.
+    super::native_engine::set_local_ready_for_test(Some(true));
+    let (_verify, rx) = mpsc::channel();
+    cabin.verify_rx = Some(rx);
+    let product = grokhub_core::brand::product_name();
+    cabin.harness.repair = Some(format!("{product}'s check: `click` changed nothing."));
+    assert!(cabin.kick_repair());
+    let (running, status) = (cabin.running, cabin.status.clone());
+    super::native_engine::set_local_ready_for_test(None);
+    assert!(running, "the retry is a turn in this chat: {status}");
+    assert_eq!(
+        status,
+        format!("{product}'s own check is retrying the last step.")
+    );
+    assert!(cabin.bg.runs.is_empty(), "never a background run");
+    end_bg_test(root, cabin);
+}

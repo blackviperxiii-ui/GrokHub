@@ -2121,9 +2121,13 @@ impl Cabin {
             self.status = "Use Apply change in the card's menu.".into();
             return None;
         }
-        // A card with a report runs in its own chat, with the report, never
-        // beside whatever chat is open (that chat's talk and playbook stay out).
+        // A card with a report runs in the background with its report, on the
+        // hidden Background chat, never beside whatever chat is open (that
+        // chat's talk and playbook stay out) and never in a new chat tab.
+        // A proactive card's approved step stays the chat turn its harness
+        // origin rides on.
         if card.pulse.report.is_some()
+            && card.pulse.proactive.is_none()
             && matches!(card.kind, UpdateKind::Digest | UpdateKind::Suggestion)
             && grokhub_core::paused_job_of(&card).is_none()
         {
@@ -2133,15 +2137,39 @@ impl Cabin {
             } else {
                 action
             };
-            self.discuss_card(id);
-            self.send_from_card(line.clone());
+            let task = format!("{line}\n\n{}", grokhub_core::discuss_context(&card));
+            let hidden = self.ensure_background_history_thread();
+            let thread = self.threads[hidden].id.clone();
+            // No chat turn takes this run, so no turn may inherit its origin.
+            self.harness.next_origin = None;
+            match self.start_bg_task(&task, &thread, grokhub_core::BgOrigin::User) {
+                Ok(title) => {
+                    let run = self.bg.next_id;
+                    self.bg.feed_cards.push((run, id.to_string()));
+                    self.status = format!("Background · {title}. Its receipt lands on the card.");
+                }
+                Err(why) => {
+                    self.status = why;
+                    return None;
+                }
+            }
+            if grokhub_core::mark_update_opened(&mut self.updates, id) {
+                self.persist_updates();
+            }
             return Some(line);
         }
         let line = pc::run_line(&card);
         if grokhub_core::mark_update_opened(&mut self.updates, id) {
             self.persist_updates();
         }
+        // `/bg`: the run works on its own workboard card; its receipt also
+        // lands on this feed card.
+        let before = self.bg.next_id;
         self.send_chat(line.clone());
+        if self.bg.next_id != before {
+            let run = self.bg.next_id;
+            self.bg.feed_cards.push((run, id.to_string()));
+        }
         Some(line)
     }
 
