@@ -1399,8 +1399,11 @@ impl Cabin {
                 }
             });
         }
-        self.paint_brief_offer(ui);
-        self.ui_helper_offers(ui);
+        // The Saved page holds only saved cards; the feed's offers stay on the feed.
+        if !self.pulse_view.saved_open {
+            self.paint_brief_offer(ui);
+            self.ui_helper_offers(ui);
+        }
         ui.add_space(16.0);
     }
 
