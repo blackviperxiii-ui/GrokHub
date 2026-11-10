@@ -115,6 +115,7 @@ const GUARDED: &[(&str, usize, &str)] = &[
     // On-device model (loopback only).
     ("crates/grokhub-agent/src/route/local_http.rs", 2, "llama-server chat and the /props context-window read, both loopback only"),
     ("crates/grokhub-agent/src/route/local_sidecar.rs", 1, "llama-server /health on loopback"),
+    ("crates/grokhub-agent/src/route/local_kv.rs", 2, "llama-server slot save/restore and a one-token warm-up, on its own loopback sidecar"),
     ("crates/grokhub-agent/src/route/local_effort.rs", 1, "llama-server /props on loopback (refuses any other host)"),
     ("crates/grokhub-agent/src/route/local_image.rs", 1, "picture guard against its own loopback llama-server"),
     ("crates/grokhub-agent/src/route/local_spec.rs", 2, "speed test and refusal check against the loopback sidecar"),
@@ -122,7 +123,7 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("crates/grokhub-app/src/desktop.rs", 3, "hub health and CDP HTTP (loopback_agent), CDP websocket: loopback via egress_ok"),
     ("crates/grokhub-app/src/app/print_alerts_ui.rs", 1, "the user's printer: LAN, allowed (a public host is refused by egress_ok)"),
     ("crates/grokhub-app/src/app/lan_host.rs", 1, "UDP connect to TEST-NET-1 to read the LAN address: sends nothing"),
-    ("src-tauri/src/remote.rs", 1, "UDP connect to TEST-NET-1 to read the LAN address: sends nothing"),
+    ("src-tauri/src/remote.rs", 2, "UDP connect to TEST-NET-1 to read the LAN address (sends nothing), and an empty TCP connect to its own web access server to wake its worker pool"),
     ("src-tauri/src/remote_tls.rs", 1, "Web access TLS front proxies to its own loopback server"),
     // Game companions: loopback game clients only (game-data paths are not changed).
     ("crates/grokhub-core/src/game_watch_league.rs", 1, "League live client API on 127.0.0.1 (facade agent, loopback-only resolver)"),

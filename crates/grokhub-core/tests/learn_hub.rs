@@ -827,5 +827,66 @@ fn the_shared_logs_feed_one_engine() {
     );
     assert_eq!(view::run("yes", at), view::USAGE);
     hub::set_dial(Area::Router, decide::Dial::Act);
+
+    // The chip row is ordered from the same beliefs. A fresh pair ranks by
+    // score; one tap is on the next row's numbers as "picked before"; "Always"
+    // makes it a sure yes; a chip marked wrong is never shown.
+    assert!(!hub::paused());
+    let (first, second) = (
+        QuickChip {
+            score: 2.0,
+            ..chip("rank-first")
+        },
+        chip("rank-second"),
+    );
+    let pool = vec![first.clone(), second.clone()];
+    let mut row_mem = ChipMemory::default();
+    let mut seed = 1u64;
+    while grokhub_core::chip_health::in_holdout(seed) {
+        seed += 1;
+    }
+    let rank = |mem: &mut ChipMemory| {
+        let now_ms = grokhub_core::now_ms();
+        let row = grokhub_core::rank_quick_chips(
+            mem,
+            pool.clone(),
+            grokhub_core::RankCtx {
+                surface: "composer",
+                hour: 8,
+                now_ms,
+                seed,
+                max: grokhub_core::CHIP_ROW_MAX,
+            },
+        );
+        log_chips_shown(mem, "composer", &row, now_ms);
+        let ids: Vec<String> = row.iter().map(|c| c.id.clone()).collect();
+        // What the ranker read for each chip: (picked before, turned down).
+        let x: Vec<(f32, f32)> = mem.ranker.last.iter().map(|r| (r.x[2], r.x[4])).collect();
+        (ids, x)
+    };
+    let (ids, x) = rank(&mut row_mem);
+    assert_eq!(ids, ["rank-first", "rank-second"]);
+    assert_eq!(x, [(0.0, 0.0), (0.0, 0.0)]);
+    log_chip_outcome(
+        &mut row_mem,
+        "composer",
+        &second,
+        true,
+        grokhub_core::now_ms(),
+    );
+    let (_, x) = rank(&mut row_mem);
+    assert_eq!(x, [(0.0, 0.0), (0.27, 0.0)]);
+    assert!(hub::pin(&key(&second)));
+    let (_, x) = rank(&mut row_mem);
+    assert_eq!(x[1], (1.0, 0.0));
+    hub::mark_wrong(&key(&first));
+    let (ids, _) = rank(&mut row_mem);
+    assert_eq!(ids, ["rank-second"]);
+    // Forget clears what was counted; wrong stays wrong.
+    hub::forget(&key(&first));
+    hub::forget(&key(&second));
+    let (ids, x) = rank(&mut row_mem);
+    assert_eq!(ids, ["rank-second"]);
+    assert_eq!(x, [(0.0, 0.0)]);
     let _ = fs::remove_dir_all(&dir);
 }

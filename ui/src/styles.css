@@ -4644,6 +4644,55 @@ label.toggle-row {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
+/* Tests: the command, a confirm card, and a log pane (not a terminal). */
+.code-tests {
+  margin-top: 8px;
+}
+
+.code-tests h3 {
+  margin: 0 0 8px;
+  font-size: var(--font-body);
+  font-weight: 600;
+}
+
+.code-test-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.code-test-row label {
+  flex: 1 1 16rem;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.code-command,
+.code-log {
+  margin: 8px 0 0;
+  padding: 8px;
+  overflow: auto;
+  font-family: ui-monospace, monospace;
+  font-size: var(--font-caption);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.code-log {
+  max-height: 40vh;
+  min-height: 6rem;
+}
+
+.code-tests .confirm-window {
+  margin-top: 8px;
+}
+
+.code-settings .toggle-row {
+  margin: 8px 0;
+}
+
 /* Every card's buttons: one neat row. Like first, Dismiss last at the far
    right, the card's own buttons and Not interested between them. Same size and
    spacing everywhere; a narrow card scrolls the row instead of wrapping. */

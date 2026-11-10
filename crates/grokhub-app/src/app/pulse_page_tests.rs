@@ -300,6 +300,87 @@ fn feed_receipts(cabin: &Cabin, id: &str) -> Vec<grokhub_core::card_report::Card
         .unwrap_or_default()
 }
 
+/// A soft proactive card that found something: it has a report.
+#[cfg(unix)]
+fn proactive_report_card() -> grokhub_core::UpdateCard {
+    use grokhub_core::proactive::{proactive_card, Candidate, CandidateSource, ProactiveRoute};
+    let mut c = Candidate::soft(
+        CandidateSource::Workboard,
+        "tidy the board",
+        "board tidy",
+        0.9,
+        0.9,
+        "w",
+    );
+    c.report = Some(grokhub_core::card_report::CardReport {
+        found: "Three cards are stale.".into(),
+        summary: "They haven't moved in two weeks.".into(),
+        ..Default::default()
+    });
+    proactive_card(&c, ProactiveRoute::ICan, now_ms())
+}
+
+#[cfg(unix)]
+#[test]
+fn a_proactive_report_card_runs_on_the_background_chat_and_its_spans_read_proactive() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = bg_cabin("pulse-proactive-run");
+    let card = proactive_report_card();
+    let id = card.id.clone();
+    assert!(card.pulse.report.is_some() && card.pulse.proactive.is_some());
+    cabin.updates.push(card);
+    // Run on a proactive card goes through its gate (soft: no hard card).
+    assert_eq!(cabin.pulse_run(&id), None);
+    assert!(cabin.harness.park.is_none(), "a soft step parks nothing");
+    assert!(!cabin.running, "Run never takes the composer");
+    assert_eq!(cabin.bg.runs.len(), 1, "{}", cabin.status);
+    assert!(
+        !cabin
+            .threads
+            .iter()
+            .any(|t| t.title.starts_with("Discuss ·")),
+        "no new chat tab for a proactive Run"
+    );
+    let hidden = cabin.ensure_background_history_thread();
+    assert_eq!(cabin.bg.runs[0].thread_id, cabin.threads[hidden].id);
+    assert_eq!(cabin.harness.next_origin, None, "no chat turn inherits it");
+    let session = cabin.bg.runs[0].native_session.clone().expect("native run");
+    assert!(poll_until(&mut cabin, 8, |c| c.bg.runs.is_empty()));
+    // The receipt lands on the card, not in the chat.
+    let got = feed_receipts(&cabin, &id);
+    assert_eq!(got.len(), 1, "{}", cabin.status);
+    assert_eq!(got[0].what, "Ran tidy the board");
+    assert!(
+        cabin.messages.iter().all(|m| !m.1.contains("bg finished")),
+        "{:?}",
+        cabin.messages
+    );
+    // The run's engine thread carried origin proactive (Spike-4c).
+    let seen: Vec<grokhub_agent::harness::Origin> = super::background::BG_FAKE_ORIGINS
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(s, _)| *s == session)
+        .map(|(_, o)| *o)
+        .collect();
+    assert!(!seen.is_empty(), "the run called its model");
+    assert!(
+        seen.iter()
+            .all(|o| *o == grokhub_agent::harness::Origin::Proactive),
+        "{seen:?}"
+    );
+    // The click's span reads proactive too.
+    let spans = grokhub_agent::harness::read_spans(&root, super::proactive_ui::PROACTIVE_TRACE)
+        .unwrap_or_default();
+    assert!(
+        spans
+            .iter()
+            .any(|s| s.decision == "approve" && s.origin.as_str() == "proactive"),
+        "{spans:?}"
+    );
+    end_bg_test(root, cabin);
+}
+
 #[cfg(unix)]
 #[test]
 fn a_report_card_run_works_on_the_hidden_background_chat_and_answers_on_the_card() {

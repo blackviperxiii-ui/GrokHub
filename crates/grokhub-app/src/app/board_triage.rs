@@ -167,8 +167,14 @@ impl Cabin {
         };
         let task = grokhub_core::card_work_prompt(card);
         let gate = self.native_bg_gate();
-        let (run_id, _, native) =
-            self.start_native_bg_on(&task, &thread_id, BgOrigin::User, BgSession::Fork, gate)?;
+        let (run_id, _, native) = self.start_native_bg_on(
+            &task,
+            &thread_id,
+            BgOrigin::User,
+            grokhub_agent::harness::Origin::User,
+            BgSession::Fork,
+            gate,
+        )?;
         if let Some(run) = self.bg.runs.iter_mut().find(|r| r.id == run_id) {
             run.title = card.title.clone();
         }

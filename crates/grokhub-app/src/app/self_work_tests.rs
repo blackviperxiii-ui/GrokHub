@@ -218,10 +218,10 @@ fn heartbeat_halt_skips_every_organ_that_starts_work() {
 /// self_manage ledger line, and the user's Undo click removes it.
 #[test]
 fn self_made_skill_undo_click_removes_it() {
-    use crate::self_mcp::tests::{call, FakeIo};
+    use grokhub_agent::self_manage::mcp::fake::{call, FakeIo};
     let _g = crate::config::hold_test_config();
     let (_pin, root) = pin_skill_config("self-made-undo");
-    let mut server = crate::self_mcp::SelfServer::new(&root);
+    let mut server = grokhub_agent::self_manage::mcp::SelfServer::new(&root);
     let mut io = FakeIo::answering(false);
     let (ok, text) = call(
         &mut server,
@@ -264,14 +264,14 @@ fn self_made_skill_undo_click_removes_it() {
 /// the file, each shown once.
 #[test]
 fn changes_from_the_self_server_process_show_as_work_rows() {
-    use crate::self_mcp::tests::{call, FakeIo};
+    use grokhub_agent::self_manage::mcp::fake::{call, FakeIo};
     let _g = crate::config::hold_test_config();
     let (_pin, root) = pin_skill_config("self-elsewhere");
     let _agent_pin = grokhub_agent::perm::ConfigGuard::set(&root);
     let mut cabin = Cabin::quiet_for_test();
     cabin.poll_self_changes();
     assert!(cabin.harness.work_rows.is_empty());
-    let mut server = crate::self_mcp::SelfServer::new(&root);
+    let mut server = grokhub_agent::self_manage::mcp::SelfServer::new(&root);
     let mut io = FakeIo::answering(false);
     assert!(
         call(

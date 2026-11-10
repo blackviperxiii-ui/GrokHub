@@ -407,6 +407,81 @@ mod tests {
         assert_eq!(got, vec![("send_email", "park", "send", "proactive")]);
     }
 
+    fn with_report(mut c: Candidate) -> Candidate {
+        c.report = Some(grokhub_core::card_report::CardReport {
+            found: "Sam asked about Friday.".into(),
+            ..Default::default()
+        });
+        c
+    }
+
+    #[test]
+    fn a_hard_proactive_report_card_still_parks_and_starts_no_background_run() {
+        let (_pin, root) = pinned("proactive-report-hard");
+        let mut cabin = Cabin::quiet_for_test();
+        assert_eq!(cabin.post_proactive(vec![with_report(sam())], T0), 1);
+        let card = proactive_cards(&cabin).pop().expect("a card");
+        assert!(card.pulse.report.is_some());
+        let tabs = cabin.threads.len();
+        let out = cabin.proactive_click(&card.id).expect("a proactive card");
+        assert!(
+            matches!(
+                out,
+                hx::GateOutcome::Park {
+                    hard: Some(HardClass::Send),
+                    ..
+                }
+            ),
+            "{out:?}"
+        );
+        let park = cabin.harness.park.clone().expect("the hard send card");
+        assert_eq!(
+            park.source,
+            harness_ui::ParkSource::Proactive(card.id.clone())
+        );
+        assert!(
+            cabin.bg.runs.is_empty(),
+            "a step that needs a yes never runs"
+        );
+        assert!(cabin.bg.feed_cards.is_empty());
+        assert_eq!(cabin.threads.len(), tabs, "no chat tab");
+        assert!(!cabin.running);
+        let spans = hx::read_spans(&root, PROACTIVE_TRACE).unwrap();
+        assert_eq!(
+            spans
+                .iter()
+                .map(|s| (s.decision.as_str(), s.origin.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("park", "proactive")]
+        );
+        cabin.resolve_hard_park(false, "Esc");
+        assert!(cabin.bg.runs.is_empty() && !cabin.running);
+    }
+
+    #[test]
+    fn under_ask_a_proactive_report_card_keeps_its_own_chat_where_each_step_asks() {
+        let (_pin, _root) = pinned("proactive-report-ask");
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.permission_mode = PermissionMode::Ask;
+        let c = Candidate::soft(
+            CandidateSource::Workboard,
+            "tidy the board",
+            "board tidy",
+            0.9,
+            0.9,
+            "w",
+        );
+        assert_eq!(cabin.post_proactive(vec![with_report(c)], T0), 1);
+        let card = proactive_cards(&cabin).pop().unwrap();
+        assert!(card.pulse.report.is_some());
+        assert_eq!(
+            cabin.proactive_click(&card.id),
+            Some(hx::GateOutcome::Allow)
+        );
+        assert!(cabin.bg.runs.is_empty(), "a background run can't ask you");
+        assert!(cabin.bg.feed_cards.is_empty());
+    }
+
     #[test]
     fn a_half_reversible_candidate_is_a_card_only_and_runs_on_click() {
         let (_pin, _root) = pinned("proactive-half");

@@ -99,6 +99,13 @@ describe("paletteRows", () => {
     expect(labels(WEB, "")).toEqual(["Home", "Objectives", "Chat", "Imagine", "Automations", "Agents", "Personal", "Skills", "Connectors", "Workboard", "Settings"]);
   });
 
+  it("lists the Code tab and its Settings page when the Code tab is on", () => {
+    const rows = labels({ ...DESKTOP, code: true }, "");
+    expect(rows.slice(rows.indexOf("Chat"), rows.indexOf("Chat") + 2)).toEqual(["Chat", "Code"]);
+    expect(rows).toContain("Settings: Code");
+    expect(labels(DESKTOP, "")).not.toContain("Settings: Code");
+  });
+
   it("puts the commands this shell can run after the pages", () => {
     // The commands follow the last page, however many pages this shell has.
     const afterPages = (rows: string[], n: number) =>

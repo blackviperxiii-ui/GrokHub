@@ -224,6 +224,51 @@ pub fn stamp_halts(stamp_ms: u64, started_ms: u64) -> bool {
     stamp_ms > started_ms
 }
 
+/// The desktop halt stamp in the config dir (Stop, tray Halt, Halt everything).
+pub const HALT_STAMP_FILE: &str = "desktop-halt.stamp";
+
+/// The halt stamp under `config_dir`, if one was written.
+pub fn read_halt_stamp_in(config_dir: &std::path::Path) -> Option<u64> {
+    let text = std::fs::read_to_string(config_dir.join(HALT_STAMP_FILE)).ok()?;
+    text.trim().parse().ok()
+}
+
+/// One stdio JSON-RPC line, `\r` dropped. A line over `cap` bytes is read to
+/// its end and refused, so one huge line can't exhaust memory.
+pub fn read_line_capped(
+    reader: &mut impl std::io::BufRead,
+    cap: usize,
+) -> Result<Option<String>, String> {
+    let mut buf = Vec::new();
+    let mut byte = [0u8; 1];
+    loop {
+        let n = reader.read(&mut byte).map_err(|e| format!("stdin: {e}"))?;
+        if n == 0 {
+            if buf.is_empty() {
+                return Ok(None);
+            }
+            break;
+        }
+        if byte[0] == b'\n' {
+            break;
+        }
+        if byte[0] == b'\r' {
+            continue;
+        }
+        if buf.len() >= cap {
+            loop {
+                let n = reader.read(&mut byte).map_err(|e| format!("stdin: {e}"))?;
+                if n == 0 || byte[0] == b'\n' {
+                    break;
+                }
+            }
+            return Err("line longer than 1 MiB".into());
+        }
+        buf.push(byte[0]);
+    }
+    Ok(Some(String::from_utf8_lossy(&buf).into_owned()))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KeyName {
     Char(char),
