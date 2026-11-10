@@ -221,22 +221,35 @@ pub fn branch_ok(name: &str) -> Result<(), Blocked> {
 }
 
 /// The host in a remote URL: `https://github.com/…`, `git@github.com:…`,
-/// `ssh://git@github.com/…`. Anything else is [`Host::Other`].
+/// `ssh://git@github.com/…`. Anything else, a form this doesn't know
+/// included, is [`Host::Other`].
 pub fn host_of(url: &str) -> Host {
     let url = url.trim();
-    let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
-    // Sign-in details end at the last `@` before the path; an `@` further
-    // along belongs to the path, not the host.
-    let authority = rest.split('/').next().unwrap_or("");
-    let authority = authority
-        .rsplit_once('@')
-        .map(|(_, h)| h)
-        .unwrap_or(authority);
-    let host = authority
-        .split(':')
-        .next()
-        .unwrap_or("")
-        .to_ascii_lowercase();
+    let host = match url.split_once("://") {
+        Some((scheme, rest)) => {
+            let scheme = scheme.to_ascii_lowercase();
+            if !["http", "https", "ssh", "git"].contains(&scheme.as_str()) {
+                return Host::Other;
+            }
+            // Sign-in details end at the last `@` before the path, query or
+            // fragment; an `@` further along is not part of the host.
+            let authority = rest.split(['/', '?', '#', '\\']).next().unwrap_or("");
+            let host = authority
+                .rsplit_once('@')
+                .map(|(_, h)| h)
+                .unwrap_or(authority);
+            host.split(':').next().unwrap_or("")
+        }
+        // `user@host:path`. With no `:` before the first `/` git reads a
+        // local path, wherever it says github.com.
+        None => match url.split_once(':') {
+            Some((host, _)) if !host.contains('/') => {
+                host.rsplit_once('@').map(|(_, h)| h).unwrap_or(host)
+            }
+            _ => return Host::Other,
+        },
+    }
+    .to_ascii_lowercase();
     if host == "github.com" || host == "www.github.com" {
         Host::GitHub
     } else {
@@ -333,6 +346,21 @@ pub fn pr_args(base: &str, branch: &str) -> Vec<String> {
         .iter()
         .map(|s| s.to_string())
         .collect()
+}
+
+/// The gh argv that reads the branch's PR.
+pub fn pr_view_args(branch: &str) -> Vec<String> {
+    [
+        "pr",
+        "view",
+        "--json",
+        "state,baseRefName,url",
+        "--",
+        branch,
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
 }
 
 /// The command as the confirm shows it and the activity log keeps it.
@@ -449,7 +477,7 @@ fn pr_of(dir: &Path, branch: &str) -> Pr {
         return Pr::Unknown;
     }
     let mut c = Command::new("gh");
-    c.args(["pr", "view", branch, "--json", "state,baseRefName,url"])
+    c.args(pr_view_args(branch))
         .current_dir(dir)
         .stdin(Stdio::null())
         .env("GH_PROMPT_DISABLED", "1")
@@ -581,6 +609,7 @@ type Probe = Option<(Host, Pr)>;
 /// The facts for the checked-out branch.
 fn context(dir: &Path, config_dir: &Path, probe: &Probe) -> Result<Ctx, Blocked> {
     let branch = current_branch(dir).ok_or(Blocked::Detached)?;
+    branch_ok(&branch)?;
     let url = push_url(dir).ok_or(Blocked::NoRemote)?;
     let (host, pr) = match probe {
         Some((host, pr)) => (*host, pr.clone()),
@@ -684,15 +713,18 @@ fn log(
 }
 
 /// Push or open the PR. The guard runs again here, so a stale window can't
-/// skip it; `confirmed` must be true unless the guard said no confirm.
+/// skip it. Unless the guard said no confirm, `confirmed` must be true and
+/// `expected` must be the command the person saw, so a yes given for one
+/// branch never runs for another.
 pub fn ship(
     config_dir: &Path,
     dir: &Path,
     cfg: &CodeShip,
     action: Action,
     confirmed: bool,
+    expected: Option<&str>,
 ) -> Result<Shipped, String> {
-    ship_with(config_dir, dir, cfg, action, confirmed, None)
+    ship_with(config_dir, dir, cfg, action, confirmed, expected, None)
 }
 
 fn ship_with(
@@ -701,6 +733,7 @@ fn ship_with(
     cfg: &CodeShip,
     action: Action,
     confirmed: bool,
+    expected: Option<&str>,
     probe: Probe,
 ) -> Result<Shipped, String> {
     let ctx = context(dir, config_dir, &probe)
@@ -729,8 +762,16 @@ fn ship_with(
             return Err(msg);
         }
     };
-    if go == Go::Confirm && !confirmed {
-        return Err("This needs a confirmation first.".into());
+    if go == Go::Confirm {
+        if !confirmed {
+            return Err("This needs a confirmation first.".into());
+        }
+        if expected != Some(command.as_str()) {
+            return Err(
+                "The branch changed since you confirmed. Check the command and confirm again."
+                    .into(),
+            );
+        }
     }
     grokhub_core::offline::refuse()?;
     let approved_by = if go == Go::NoConfirm {

@@ -1689,17 +1689,20 @@ async fn code_ship_plan(
 }
 
 /// Code tab: push the current branch or open its PR, through the push guard.
-/// `confirmed` must be true unless the guard said no confirm is needed.
+/// Unless the guard said no confirm is needed, `confirmed` must be true and
+/// `command` must be the command the confirm showed.
 #[tauri::command]
 async fn code_ship_run(
     state: State<'_, ShellState>,
     action: code_ship::Action,
     confirmed: bool,
+    command: Option<String>,
 ) -> Result<code_ship::Shipped, String> {
     let dir = workspace(&state);
     let config = state.config_dir.clone();
     let cfg = current(&state).code_ship;
-    off_main(move || code_ship::ship(&config, &dir, &cfg, action, confirmed)).await?
+    off_main(move || code_ship::ship(&config, &dir, &cfg, action, confirmed, command.as_deref()))
+        .await?
 }
 
 /// Code tab: make and check out a branch the guard counts as the app's own.
@@ -3082,7 +3085,9 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             if taken && !web.owns(&conversation_id) {
                 return Err(remote::NOT_YOURS.into());
             }
-            web.adopt(&conversation_id);
+            if !web.adopt(&conversation_id) {
+                return Err(remote::NOT_YOURS.into());
+            }
             let settings = ShellSettings {
                 desktop_control: false,
                 ..current(&state)
@@ -3112,13 +3117,14 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             if taken && !web.owns(&conversation_id) {
                 return Err(remote::NOT_YOURS.into());
             }
-            web.adopt(&conversation_id);
-            out(stage_attachment(
+            let staged = stage_attachment(
                 state,
-                conversation_id,
+                conversation_id.clone(),
                 arg(args, "name")?,
                 arg(args, "data")?,
-            )?)
+            )?;
+            web.adopt(&conversation_id);
+            out(staged)
         }
         "remove_attachment" => {
             remove_attachment(state, own(args)?, arg(args, "path")?);
@@ -4076,20 +4082,68 @@ mod command_tests {
 
 #[cfg(test)]
 mod web_command_tests {
+    /// The text of `remote_call`.
+    fn remote_call_src() -> String {
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        let start = src.find("fn remote_call(").expect("remote_call");
+        let body = &src[start..];
+        body[..body.find("\n}\n").expect("end of remote_call")].to_string()
+    }
+
+    /// One command's arm in `remote_call`, up to the next arm.
+    fn arm<'a>(body: &'a str, name: &str) -> &'a str {
+        let from = body
+            .find(&format!("\n        \"{name}\" =>"))
+            .unwrap_or_else(|| panic!("no {name} arm"));
+        let rest = &body[from + 1..];
+        &rest[..rest.find("\n        \"").unwrap_or(rest.len())]
+    }
+
     /// A name on the list with no arm in `remote_call` is refused at run
     /// time, so the web app's button for it never works.
     #[test]
     fn every_web_command_has_an_arm_in_remote_call() {
-        let src = include_str!("lib.rs").replace("\r\n", "\n");
-        let start = src.find("fn remote_call(").expect("remote_call");
-        let body = &src[start..];
-        let body = &body[..body.find("\n}\n").expect("end of remote_call")];
+        let body = remote_call_src();
         let missing: Vec<&str> = crate::remote::WEB_COMMANDS
             .iter()
             .copied()
             .filter(|name| !body.contains(&format!("\"{name}\"")))
             .collect();
         assert_eq!(missing, Vec::<&str>::new());
+    }
+
+    /// The server refuses a name that isn't on the list before `remote_call`
+    /// sees it, so an arm for one never runs.
+    #[test]
+    fn every_arm_in_remote_call_is_a_web_command() {
+        let body = remote_call_src();
+        let arms: Vec<&str> = body
+            .lines()
+            .filter_map(|line| line.strip_prefix("        \""))
+            .filter_map(|line| line.split_once(" =>"))
+            .flat_map(|(names, _)| names.split(" | "))
+            .map(|name| name.trim_matches('"'))
+            .collect();
+        let unlisted: Vec<&str> = arms
+            .iter()
+            .copied()
+            .filter(|name| !crate::remote::web_command(name))
+            .collect();
+        assert_eq!(unlisted, Vec::<&str>::new());
+        assert_eq!(arms.len(), crate::remote::WEB_COMMANDS.len());
+    }
+
+    /// A browser's chats grow only by ones it really uses: a send with an
+    /// id no chat can have is refused, and a file that was refused claims
+    /// nothing.
+    #[test]
+    fn a_browser_takes_a_chat_only_by_using_it() {
+        let body = remote_call_src();
+        assert!(arm(&body, "send_chat").contains("if !web.adopt(&conversation_id) {"));
+        let stage = arm(&body, "stage_attachment");
+        let staged = stage.find("stage_attachment(").expect("the staging call");
+        let adopted = stage.find("web.adopt(").expect("adopts the chat");
+        assert!(staged < adopted, "{stage}");
     }
 }
 

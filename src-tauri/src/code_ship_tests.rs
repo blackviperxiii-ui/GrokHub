@@ -187,6 +187,23 @@ fn hosts() {
     assert_eq!(host_of("/srv/git/r.git"), Host::Other);
     assert_eq!(host_of("https://evil.example/x@github.com/y"), Host::Other);
     assert_eq!(host_of("evil.example:x/y@github.com/z"), Host::Other);
+    for other in [
+        "evil.example:x@github.com/z",
+        "git@evil.example:x@github.com/z",
+        "https://evil.example#@github.com/o/r",
+        "https://evil.example?@github.com/o/r",
+        "github.com/o/r",
+        "file://github.com/srv/r.git",
+    ] {
+        assert_eq!(host_of(other), Host::Other, "{other}");
+    }
+    for github in [
+        "ssh://git@github.com:22/o/r",
+        "https://user:p@ss@github.com/o/r",
+        "https://GitHub.com/o/r",
+    ] {
+        assert_eq!(host_of(github), Host::GitHub, "{github}");
+    }
     let mut f = facts("code/x", Some("main"), true, Pr::None);
     f.host = Host::Other;
     assert_eq!(guard(&CodeShip::default(), &f), Err(Blocked::HostOff));
@@ -252,6 +269,17 @@ fn the_push_argv_never_forces() {
     assert_eq!(
         shown("gh", &pr_args("beta", "code/fix")),
         "gh pr create --base beta --head code/fix --fill"
+    );
+    assert_eq!(
+        pr_view_args("feat/x"),
+        vec![
+            "pr",
+            "view",
+            "--json",
+            "state,baseRefName,url",
+            "--",
+            "feat/x"
+        ]
     );
     let src = include_str!("code_ship.rs");
     let prod = src.split("#[cfg(test)]").next().unwrap();
@@ -470,8 +498,16 @@ mod repo {
         let before = origin_sha(&f, "main").unwrap();
         commit(&f.work, "two\n");
         for cfg in [CodeShip::default(), auto()] {
-            let err =
-                ship_with(&f.config, &f.work, &cfg, Action::Push, true, GITHUB_NO_PR).unwrap_err();
+            let err = ship_with(
+                &f.config,
+                &f.work,
+                &cfg,
+                Action::Push,
+                true,
+                Some("git push --porcelain origin HEAD:refs/heads/main"),
+                GITHUB_NO_PR,
+            )
+            .unwrap_err();
             assert_eq!(
                 err,
                 "main is the main or default branch. The app never pushes to it; make a branch first."
@@ -510,7 +546,16 @@ mod repo {
         assert!(!plan.needs_confirm);
         assert!(plan.app_made);
         assert_eq!(plan.blocked, None);
-        let done = ship_with(&f.config, &f.work, &cfg, Action::Push, false, GITHUB_NO_PR).unwrap();
+        let done = ship_with(
+            &f.config,
+            &f.work,
+            &cfg,
+            Action::Push,
+            false,
+            None,
+            GITHUB_NO_PR,
+        )
+        .unwrap();
         assert_eq!(done.exit, 0, "{}", done.output);
         assert_eq!(done.summary, "Pushed code/fix to origin.");
         assert_eq!(origin_sha(&f, "code/fix").as_deref(), Some(head.as_str()));
@@ -537,6 +582,7 @@ mod repo {
                 &auto(),
                 Action::Push,
                 false,
+                None,
                 GITHUB_NO_PR
             )
             .unwrap_err(),
@@ -549,12 +595,102 @@ mod repo {
             &CodeShip::default(),
             Action::Push,
             true,
+            Some("git push --porcelain origin HEAD:refs/heads/mine"),
             GITHUB_NO_PR,
         )
         .unwrap();
         assert_eq!(done.exit, 0, "{}", done.output);
         assert_eq!(code_activity::list(&f.config, 1)[0].approved_by, "user");
         assert!(origin_sha(&f, "mine").is_some());
+        let _ = std::fs::remove_dir_all(&f.root);
+    }
+
+    #[test]
+    fn a_confirm_for_another_branch_pushes_nothing() {
+        let f = fixture("stale");
+        let cfg = CodeShip::default();
+        sh_git(&f.work, &["switch", "-c", "code/a"]);
+        commit(&f.work, "a\n");
+        let seen = plan_with(&f.config, &f.work, &cfg, Action::Push, GITHUB_NO_PR);
+        assert_eq!(
+            seen.command,
+            "git push --porcelain origin HEAD:refs/heads/code/a"
+        );
+        assert!(seen.needs_confirm);
+        // The branch changes while the confirm for code/a is still on screen.
+        sh_git(&f.work, &["switch", "-c", "code/b"]);
+        for stale in [Some(seen.command.as_str()), None] {
+            assert_eq!(
+                ship_with(
+                    &f.config,
+                    &f.work,
+                    &cfg,
+                    Action::Push,
+                    true,
+                    stale,
+                    GITHUB_NO_PR
+                )
+                .unwrap_err(),
+                "The branch changed since you confirmed. Check the command and confirm again."
+            );
+        }
+        assert_eq!(origin_sha(&f, "code/a"), None);
+        assert_eq!(origin_sha(&f, "code/b"), None);
+        let head = sh_git(&f.work, &["rev-parse", "HEAD"]);
+        let done = ship_with(
+            &f.config,
+            &f.work,
+            &cfg,
+            Action::Push,
+            true,
+            Some("git push --porcelain origin HEAD:refs/heads/code/b"),
+            GITHUB_NO_PR,
+        )
+        .unwrap();
+        assert_eq!(done.exit, 0, "{}", done.output);
+        assert_eq!(done.summary, "Pushed code/b to origin.");
+        assert_eq!(origin_sha(&f, "code/b").as_deref(), Some(head.as_str()));
+        assert_eq!(origin_sha(&f, "code/a"), None);
+        let _ = std::fs::remove_dir_all(&f.root);
+    }
+
+    #[test]
+    fn a_branch_named_like_a_flag_is_refused_before_gh_runs() {
+        use std::os::unix::fs::PermissionsExt;
+        let f = fixture("flag");
+        sh_git(&f.work, &["update-ref", "refs/heads/--web", "HEAD"]);
+        sh_git(&f.work, &["symbolic-ref", "HEAD", "refs/heads/--web"]);
+        sh_git(
+            &f.work,
+            &[
+                "remote",
+                "set-url",
+                "--push",
+                "origin",
+                "https://github.com/o/r.git",
+            ],
+        );
+        // A stand-in gh, first on PATH, that leaves a mark when it runs.
+        let bin = f.root.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let gh = bin.join("gh");
+        std::fs::write(&gh, "#!/bin/sh\necho ran > \"$0.ran\"\nexit 1\n").unwrap();
+        std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let old = std::env::var_os("PATH").unwrap_or_default();
+        let mut path = bin.clone().into_os_string();
+        path.push(":");
+        path.push(&old);
+        // SAFETY: tests run one at a time in this process, so nothing else
+        // reads the environment while PATH points at the stand-in.
+        unsafe { std::env::set_var("PATH", &path) };
+        let plan = plan_with(&f.config, &f.work, &CodeShip::default(), Action::Push, None);
+        unsafe { std::env::set_var("PATH", &old) };
+        assert_eq!(plan.branch.as_deref(), Some("--web"));
+        assert_eq!(
+            plan.blocked.as_deref(),
+            Some("\"--web\" isn't a branch name the app pushes.")
+        );
+        assert!(!bin.join("gh.ran").exists(), "gh ran for a refused branch");
         let _ = std::fs::remove_dir_all(&f.root);
     }
 
@@ -574,7 +710,16 @@ mod repo {
         commit(&other, "theirs\n");
         sh_git(&other, &["push", "origin", "code/race"]);
         let theirs = origin_sha(&f, "code/race").unwrap();
-        let done = ship_with(&f.config, &f.work, &cfg, Action::Push, false, GITHUB_NO_PR).unwrap();
+        let done = ship_with(
+            &f.config,
+            &f.work,
+            &cfg,
+            Action::Push,
+            false,
+            None,
+            GITHUB_NO_PR,
+        )
+        .unwrap();
         assert_ne!(done.exit, 0);
         assert_eq!(
             done.summary,

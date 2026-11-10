@@ -137,7 +137,7 @@ pub enum Viewer<'a> {
 }
 
 impl Viewer<'_> {
-    fn sees(&self, conversation_id: &str) -> bool {
+    pub(crate) fn sees(&self, conversation_id: &str) -> bool {
         match self {
             Viewer::Desktop => true,
             Viewer::Web(owns) => owns(conversation_id),
