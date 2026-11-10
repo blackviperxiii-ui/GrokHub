@@ -130,6 +130,14 @@ impl Engine {
         self.sync_beliefs(now_ms, |b| b.mark_wrong(key, now_ms));
     }
 
+    /// The user's "always" on one line. Saved at once. Says whether the
+    /// line could be pinned (a measurement can't).
+    pub fn pin(&mut self, key: &Subject, now_ms: u64) -> bool {
+        let mut pinned = false;
+        self.sync_beliefs(now_ms, |b| pinned = b.pin(key, now_ms));
+        pinned
+    }
+
     /// The user's Forget everything: the beliefs, the waiting signals and
     /// the files.
     pub fn forget_all(&mut self) -> Result<(), String> {

@@ -848,3 +848,98 @@ fn enough_unused_chip_rows_make_auto_setup_offer_to_turn_them_off() {
     );
     assert_eq!(step(0.6, 30.0, Undo::OneClick), Step::Suggest);
 }
+
+#[test]
+fn a_pinned_line_holds_whatever_is_counted_until_the_user_takes_it_back() {
+    let key = Subject::new("skill", "tidy").unwrap();
+    let mut b = Beliefs::default();
+    for i in 0..8 {
+        b.vote(&key, false, T0 + i, "signals");
+    }
+    assert_eq!(b.get(&key).unwrap().rate(), Some(0.0));
+    assert!(b.pin(&key, T0 + 10));
+    let pinned = b.get(&key).unwrap();
+    assert_eq!(pinned.standing, Standing::Pinned);
+    assert_eq!(pinned.rate(), Some(1.0));
+    assert_eq!(pinned.confidence(T0 + 10), 1.0);
+    // It does not fade, and nothing counts against it.
+    let later = T0 + 20 * belief::HALF_LIFE_MS;
+    assert_eq!(pinned.evidence(later), belief::PINNED_EVIDENCE);
+    assert_eq!(pinned.confidence(later), 1.0);
+    assert!(!b.vote(&key, false, T0 + 11, "signals"));
+    assert_eq!(b.get(&key).unwrap().rate(), Some(1.0));
+    assert_eq!(
+        step(1.0, belief::PINNED_EVIDENCE, Undo::Restore),
+        Step::Act,
+        "a rule the user stated clears every rung"
+    );
+    // Forget unpins it and later signals start it fresh.
+    assert!(b.forget(&key, T0 + 12));
+    assert_eq!(b.get(&key).unwrap().evidence(T0 + 12), 0.0);
+    assert!(b.vote(&key, false, T0 + 13, "signals"));
+    assert_eq!(b.get(&key).unwrap().rate(), Some(0.0));
+    // "That's wrong" beats a pin, and a pin can be put on something new.
+    b.pin(&key, T0 + 14);
+    b.mark_wrong(&key, T0 + 15);
+    assert_eq!(b.get(&key).unwrap().standing, Standing::Wrong);
+    let fresh = Subject::new("setting", "text-size").unwrap();
+    assert!(b.pin(&fresh, T0));
+    assert_eq!(b.get(&fresh).unwrap().confidence(T0), 1.0);
+    // A measured number is not a yes or no, so it can't be a rule.
+    let ms = Subject::new("model", "grok-code/run-ms").unwrap();
+    b.measure(&ms, 3000.0, T0, "signals");
+    assert!(!b.pin(&ms, T0));
+    assert_eq!(b.get(&ms).unwrap().standing, Standing::Live);
+}
+
+#[test]
+fn a_pinned_line_reads_as_the_users_rule_in_the_list() {
+    let key = Subject::new("skill", "tidy").unwrap();
+    let mut b = Beliefs::default();
+    b.pin(&key, T0);
+    let v = view::view(&b, T0);
+    assert_eq!(v.rows.len(), 1);
+    assert_eq!(v.rows[0].stage, view::Stage::Pinned);
+    assert_eq!(
+        v.rows[0].says,
+        "You said this is always so. Nothing counts against it."
+    );
+    assert_eq!(
+        view::text(&v).lines().nth(1),
+        Some(
+            "- **Skill tidy**: You said this is always so. Nothing counts against it. `skill:tidy`"
+        )
+    );
+    let paused = view::View {
+        paused: true,
+        ..Default::default()
+    };
+    assert_eq!(
+        view::text(&paused),
+        format!("{}{}", view::PAUSED_NOTE, view::NOTHING_YET)
+    );
+    assert_eq!(
+        view::Command::parse("always skill:tidy"),
+        Ok(view::Command::Always(key))
+    );
+    assert_eq!(view::Command::parse("pause"), Ok(view::Command::Pause));
+    assert_eq!(view::Command::parse("Resume"), Ok(view::Command::Resume));
+    assert_eq!(
+        view::Command::parse("pause now"),
+        Err(view::USAGE.to_string())
+    );
+}
+
+#[test]
+fn the_pause_is_a_file_both_apps_on_the_folder_see() {
+    let dir = std::env::temp_dir().join(format!("learn-pause-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(!store::paused(&dir));
+    assert_eq!(store::set_paused(&dir, false), Ok(()));
+    assert_eq!(store::set_paused(&dir, true), Ok(()));
+    assert!(store::paused(&dir));
+    assert_eq!(store::set_paused(&dir, true), Ok(()));
+    assert_eq!(store::set_paused(&dir, false), Ok(()));
+    assert!(!store::paused(&dir));
+    let _ = std::fs::remove_dir_all(&dir);
+}

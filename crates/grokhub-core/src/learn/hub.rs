@@ -7,6 +7,7 @@
 //! call it without a switch.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
@@ -19,6 +20,9 @@ use super::{Engine, Kind, Signal, Subject};
 pub const TICK_MS: u64 = 15_000;
 
 static HUB: OnceLock<Mutex<Engine>> = OnceLock::new();
+/// The user's pause, read from the folder at [`start`] and again at every
+/// look, so a pause in one app stops the other within [`TICK_MS`].
+static PAUSED: AtomicBool = AtomicBool::new(false);
 
 fn engine() -> Option<MutexGuard<'static, Engine>> {
     HUB.get()
@@ -31,6 +35,7 @@ pub fn start(config_dir: &Path) {
     let mut first = false;
     HUB.get_or_init(|| {
         first = true;
+        PAUSED.store(super::store::paused(config_dir), Ordering::Relaxed);
         Mutex::new(Engine::open(config_dir))
     });
     if !first {
@@ -43,6 +48,7 @@ pub fn start(config_dir: &Path) {
         .spawn(|| loop {
             std::thread::sleep(Duration::from_millis(TICK_MS));
             if let Some(mut e) = engine() {
+                PAUSED.store(super::store::paused(e.config_dir()), Ordering::Relaxed);
                 e.tick(crate::now_ms());
             }
         });
@@ -53,8 +59,27 @@ pub fn started() -> bool {
     HUB.get().is_some()
 }
 
-/// Records one signal. Memory only; nothing before [`start`].
+/// Whether the user has learning paused. While it is, nothing is recorded.
+pub fn paused() -> bool {
+    PAUSED.load(Ordering::Relaxed)
+}
+
+/// The user's pause or resume. What was learned before stays as it is.
+pub fn set_paused(on: bool) -> Result<(), String> {
+    let Some(e) = engine() else {
+        return Ok(());
+    };
+    super::store::set_paused(e.config_dir(), on)?;
+    PAUSED.store(on, Ordering::Relaxed);
+    Ok(())
+}
+
+/// Records one signal. Memory only; nothing before [`start`] or while
+/// learning is paused.
 pub fn note(signal: Signal) {
+    if paused() {
+        return;
+    }
     if let Some(mut e) = engine() {
         e.record(signal);
     }
@@ -62,6 +87,9 @@ pub fn note(signal: Signal) {
 
 /// Records several signals under one lock.
 pub fn note_all(signals: impl IntoIterator<Item = Signal>) {
+    if paused() {
+        return;
+    }
     if let Some(mut e) = engine() {
         for s in signals {
             e.record(s);
@@ -83,7 +111,15 @@ pub fn read<R>(f: impl FnOnce(&Engine) -> R) -> Option<R> {
 
 /// What the app learned, as lines. Empty before [`start`].
 pub fn view(now_ms: u64) -> View {
-    read(|e| view::view(e.beliefs(), now_ms)).unwrap_or_default()
+    let mut out = read(|e| view::view(e.beliefs(), now_ms)).unwrap_or_default();
+    out.paused = paused();
+    out
+}
+
+/// The user's "always" on one belief. Saved at once. `false` when the line
+/// is a measurement, which can't be pinned.
+pub fn pin(key: &Subject) -> bool {
+    engine().is_some_and(|mut e| e.pin(key, crate::now_ms()))
 }
 
 /// The user's Forget on one belief. Saved at once.
@@ -131,7 +167,9 @@ pub fn decision_outcome(rule: &Subject, outcome: Outcome, now_ms: u64) -> Option
         Outcome::Declined => Kind::Declined,
         Outcome::Undone => Kind::Undone,
     };
-    e.record(Signal::new(now_ms, kind, rule.clone()));
+    if !paused() {
+        e.record(Signal::new(now_ms, kind, rule.clone()));
+    }
     decide::with_state(e.config_dir(), |s| s.outcome(rule, outcome, now_ms))
 }
 
