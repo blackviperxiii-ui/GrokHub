@@ -4,9 +4,9 @@
 //! not been forgotten. Callers pass a [`Mode`] so Ask still confirms every
 //! time and Auto may run a remembered command without asking.
 
+use crate::code_secrets::Loaded;
 use grokhub_core::model_download::sha256_hex;
 use grokhub_core::proc_util::hide_windows_console;
-use grokhub_core::redact::redact_secrets;
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -210,6 +210,11 @@ pub fn remember(
     save(config_dir, &store)
 }
 
+/// The command remembered for this project and kind, if any.
+pub fn remembered(config_dir: &Path, kind: Kind, repo_key: &str) -> Result<Option<String>, String> {
+    Ok(remembered_command(&load(config_dir)?, kind, repo_key))
+}
+
 /// Forget the remembered command for this project and kind, if any.
 pub fn forget(config_dir: &Path, kind: Kind, repo_key: &str) -> Result<(), String> {
     let mut store = load(config_dir)?;
@@ -317,12 +322,15 @@ pub fn run(
         }
         Decision::Remembered => {}
     }
-    exec(workspace, command, &mut on_chunk)
+    exec(workspace, command, None, &mut on_chunk)
 }
 
-fn exec(
+/// Run `command` in the workspace through the shell. With `secrets`, each
+/// value is set in the child's environment and hidden from every line of output.
+pub(crate) fn exec(
     workspace: &Path,
     command: &str,
+    secrets: Option<&Loaded>,
     on_chunk: &mut impl FnMut(&str),
 ) -> Result<RunResult, String> {
     if !workspace.is_dir() {
@@ -331,7 +339,7 @@ fn exec(
     {
         let current = CURRENT.lock().map_err(|e| e.to_string())?;
         if current.is_some() {
-            return Err("A test run is already in progress.".into());
+            return Err("A run is already in progress.".into());
         }
     }
 
@@ -353,6 +361,9 @@ fn exec(
         .stderr(Stdio::piped())
         .env("TERM", "dumb")
         .env("GIT_TERMINAL_PROMPT", "0");
+    if let Some(secrets) = secrets {
+        secrets.inject(&mut c);
+    }
     hide_windows_console(&mut c);
     let mut child = c
         .spawn()
@@ -373,11 +384,16 @@ fn exec(
 
     let mut output = String::new();
     let mut cut = false;
-    while let Ok(buf) = rx.recv() {
-        if buf.is_empty() {
+    let mut shield = secrets.map(Loaded::shield).unwrap_or_default();
+    for item in rx.iter().map(Some).chain(std::iter::once(None)) {
+        let chunk = match item {
+            Some(buf) if buf.is_empty() => continue,
+            Some(buf) => shield.push(&String::from_utf8_lossy(&buf)),
+            None => shield.finish(),
+        };
+        if chunk.is_empty() {
             continue;
         }
-        let chunk = redact_secrets(&String::from_utf8_lossy(&buf));
         if output.len() >= OUTPUT_CAP {
             cut = true;
             continue;

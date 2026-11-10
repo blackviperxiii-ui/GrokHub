@@ -17,6 +17,7 @@ pub mod capabilities;
 pub mod chips;
 pub mod code;
 pub mod code_activity;
+pub mod code_deploy;
 pub mod code_runs;
 pub mod code_secrets;
 pub mod code_ship;
@@ -1739,7 +1740,8 @@ async fn code_secret_set(
 ) -> Result<code_secrets::SecretList, String> {
     let dir = workspace(&state);
     let config = state.config_dir.clone();
-    off_main(move || code_secrets::set_for(&config, &dir, &name, &value)).await?
+    let keep = current(&state).code_ship.activity_keep;
+    off_main(move || code_secrets::set_for(&config, &dir, &name, &value, keep)).await?
 }
 
 /// Settings → Code → Secrets: delete one secret. Refused unless `confirmed`.
@@ -1751,7 +1753,88 @@ async fn code_secret_delete(
 ) -> Result<code_secrets::SecretList, String> {
     let dir = workspace(&state);
     let config = state.config_dir.clone();
-    off_main(move || code_secrets::delete_for(&config, &dir, &name, confirmed)).await?
+    let keep = current(&state).code_ship.activity_keep;
+    off_main(move || code_secrets::delete_for(&config, &dir, &name, confirmed, keep)).await?
+}
+
+/// Code tab and Settings → Code: this project's deploy command and whether it asks first.
+#[tauri::command]
+async fn code_deploy_plan(state: State<'_, ShellState>) -> Result<code_deploy::Plan, String> {
+    let dir = workspace(&state);
+    let config = state.config_dir.clone();
+    let ship = current(&state).code_ship;
+    off_main(move || code_deploy::plan(&config, &dir, &ship)).await?
+}
+
+/// Settings → Code: this project's deploy switch and command.
+#[tauri::command]
+async fn code_deploy_save(
+    state: State<'_, ShellState>,
+    deploy_enabled: bool,
+    command: String,
+) -> Result<code_deploy::Settings, String> {
+    let dir = workspace(&state);
+    let config = state.config_dir.clone();
+    off_main(move || {
+        code_deploy::save_settings_of(
+            &config,
+            &dir,
+            code_deploy::Settings {
+                deploy_enabled,
+                command,
+            },
+        )
+    })
+    .await?
+}
+
+/// Settings → Code: forget the remembered deploy command so the next deploy asks.
+#[tauri::command]
+async fn code_deploy_forget(state: State<'_, ShellState>) -> Result<code_deploy::Plan, String> {
+    let dir = workspace(&state);
+    let config = state.config_dir.clone();
+    let ship = current(&state).code_ship;
+    off_main(move || code_deploy::forget(&config, &dir, &ship)).await?
+}
+
+/// Code tab: run the deploy. `command` is the text the person was shown and
+/// `confirmed` must be true unless the mode and memory say no confirm is needed.
+#[tauri::command]
+async fn code_deploy_run(
+    app: AppHandle,
+    state: State<'_, ShellState>,
+    command: String,
+    confirmed: bool,
+) -> Result<code_runs::RunResult, String> {
+    let dir = workspace(&state);
+    let config = state.config_dir.clone();
+    let ship = current(&state).code_ship;
+    off_main(move || {
+        let result = code_deploy::run(&config, &dir, &ship, &command, confirmed, |chunk| {
+            let _ = app.emit(
+                code_deploy::RUN_EVENT,
+                code_runs::RunChunk {
+                    text: chunk.to_string(),
+                    done: false,
+                    exit: None,
+                    cut: false,
+                },
+            );
+        });
+        if let Ok(done) = &result {
+            let _ = app.emit(
+                code_deploy::RUN_EVENT,
+                code_runs::RunChunk {
+                    text: String::new(),
+                    done: true,
+                    exit: Some(done.exit),
+                    cut: done.cut,
+                },
+            );
+        }
+        result
+    })
+    .await?
 }
 
 /// Settings → Code → Pushes and PRs.
@@ -3793,6 +3876,10 @@ pub fn run() {
             code_secret_list,
             code_secret_set,
             code_secret_delete,
+            code_deploy_plan,
+            code_deploy_save,
+            code_deploy_forget,
+            code_deploy_run,
             get_code_ship,
             save_code_ship,
             get_journal,

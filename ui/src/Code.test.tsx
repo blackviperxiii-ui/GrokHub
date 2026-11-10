@@ -27,6 +27,18 @@ const api = vi.hoisted(() => ({
   codeShipRun: vi.fn(),
   codeNewBranch: vi.fn(),
   codeActivity: vi.fn(() => Promise.resolve([])),
+  codeDeployPlan: vi.fn(() =>
+    Promise.resolve({
+      deployEnabled: false,
+      command: "",
+      needsConfirm: true,
+      remembered: null,
+      mode: "ask",
+      blocked: "Deploy is off for this project. Turn it on in Settings → Code.",
+    }),
+  ),
+  codeDeployRun: vi.fn(),
+  onCodeDeployRun: vi.fn(() => Promise.resolve(() => {})),
 }));
 
 vi.mock("./api", () => api);

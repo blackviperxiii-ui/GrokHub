@@ -2723,13 +2723,13 @@ export interface CodeShipped {
 /** One line of the Code tab's activity log. */
 export interface CodeActivityEntry {
   tsMs: number;
-  kind: "push" | "pr" | "branch" | "blocked";
+  kind: "push" | "pr" | "branch" | "blocked" | "deploy" | "secret";
   repoKey: string;
   host: string;
   branch: string;
   command: string;
   mode: string;
-  approvedBy: "user" | "autoBeta" | "none";
+  approvedBy: "user" | "autoBeta" | "remembered" | "none";
   exit: number | null;
   summary: string;
 }
@@ -2775,4 +2775,43 @@ export function codeSecretSet(name: string, value: string): Promise<CodeSecretLi
 /** Delete a secret. The shell refuses unless `confirmed` is true. */
 export function codeSecretDelete(name: string, confirmed: boolean): Promise<CodeSecretList> {
   return invoke<CodeSecretList>("code_secret_delete", { name, confirmed });
+}
+
+/** Code tab and Settings → Code: this project's deploy command and whether it asks first. */
+export interface CodeDeployPlan {
+  deployEnabled: boolean;
+  command: string;
+  needsConfirm: boolean;
+  /** The command currently remembered for this project, if any. */
+  remembered: string | null;
+  mode: CodeShipMode;
+  /** Why a deploy can't run now, if it can't. */
+  blocked: string | null;
+}
+
+/** One project's deploy settings. Off until turned on. */
+export interface CodeDeploySettings {
+  deployEnabled: boolean;
+  command: string;
+}
+
+export function codeDeployPlan(): Promise<CodeDeployPlan> {
+  return invoke<CodeDeployPlan>("code_deploy_plan");
+}
+
+export function codeDeploySave(deployEnabled: boolean, command: string): Promise<CodeDeploySettings> {
+  return invoke<CodeDeploySettings>("code_deploy_save", { deployEnabled, command });
+}
+
+export function codeDeployForget(): Promise<CodeDeployPlan> {
+  return invoke<CodeDeployPlan>("code_deploy_forget");
+}
+
+/** Run the deploy. `command` is the text the person was shown; the shell refuses if it changed. */
+export function codeDeployRun(command: string, confirmed: boolean): Promise<CodeTestResult> {
+  return invoke<CodeTestResult>("code_deploy_run", { command, confirmed });
+}
+
+export function onCodeDeployRun(handler: (chunk: CodeRunChunk) => void): Promise<UnlistenFn> {
+  return subscribe<CodeRunChunk>("code-deploy-run", handler);
 }

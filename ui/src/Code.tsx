@@ -12,11 +12,12 @@ import {
   type CodeRepo,
 } from "./api";
 import { newConversationId } from "./Chat";
+import { CodeDeploy } from "./CodeDeploy";
 import { CodeShip } from "./CodeShip";
 
 export const CODE_NOT_REPO = "This workspace isn't a git repo yet. Pick a project folder in Settings, or ask the agent to start one.";
 export const CODE_CLEAN = "No changes since the last commit.";
-export const CODE_NEXT = "Coming next on this tab: deploy, editor, terminal, and an agent that drives the work while you watch or step in.";
+export const CODE_NEXT = "Coming next on this tab: editor, terminal, and an agent that drives the work while you watch or step in.";
 export const CODE_REVIEW_PROMPT = "Review the uncommitted changes in this workspace: what changed, anything risky, and what to test before committing.";
 export const CODE_BUILTINS = "Built-in skills";
 export const CODE_TESTS = "Tests";
@@ -47,6 +48,7 @@ export function Code({ onTask }: { onTask: (task: CodeTask) => void }) {
   const [running, setRunning] = useState(false);
   const [log, setLog] = useState("");
   const [runNote, setRunNote] = useState<string | null>(null);
+  const [activityKey, setActivityKey] = useState(0);
 
   const load = useCallback(async () => {
     setBusy(true);
@@ -271,7 +273,8 @@ export function Code({ onTask }: { onTask: (task: CodeTask) => void }) {
           <p className="note">The first run of this command will ask before it starts.</p>
         )}
       </div>
-      {repo?.isRepo && <CodeShip onShipped={() => void load()} />}
+      {repo?.isRepo && <CodeShip key={activityKey} onShipped={() => void load()} />}
+      {repo?.isRepo && <CodeDeploy onDeployed={() => setActivityKey((n) => n + 1)} />}
       {builtins && builtins.length > 0 && (
         <div className="code-skills">
           <h3>{CODE_BUILTINS}</h3>
