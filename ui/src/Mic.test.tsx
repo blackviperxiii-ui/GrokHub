@@ -200,6 +200,21 @@ describe("push to talk", () => {
     await waitFor(() => expect(screen.getByLabelText("Message")).toHaveValue("hello"));
   });
 
+  it("a Ctrl+G hold ends when the window loses focus, with no key let go", async () => {
+    const mic = fakeMic();
+    api.transcribe.mockResolvedValue("said before switching away");
+    render(<Chat onOpenSettings={() => {}} />);
+    fireEvent.keyDown(window, { key: "g", ctrlKey: true });
+    await waitFor(() => expect(mic.processor).not.toBeNull());
+    expect(screen.getByRole("button", { name: /Listening/ })).toHaveAttribute("aria-pressed", "true");
+    mic.feed(new Float32Array(4800).fill(0.25));
+    fireEvent.blur(window);
+    await waitFor(() => expect(api.transcribe).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByLabelText("Message")).toHaveValue("said before switching away"));
+    expect(screen.getByRole("button", { name: MIC })).toHaveAttribute("aria-pressed", "false");
+    expect(api.sendChat).not.toHaveBeenCalled();
+  });
+
   it("a denied mic shows a note and sends nothing to transcribe", async () => {
     Object.defineProperty(navigator, "mediaDevices", {
       configurable: true,

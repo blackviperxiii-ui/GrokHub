@@ -18,6 +18,7 @@ import {
 import { revealItem, usePeek } from "./peek";
 import { SECTION_LABELS, sections, type Section } from "./sections";
 import { PRODUCT_NAME } from "./brand";
+import { useModalFocus } from "./ui";
 
 export type View =
   | "home"
@@ -211,6 +212,7 @@ export function Palette({
   const [pick, setPick] = useState(0);
   const [found, setFound] = useState<{ chats: readonly ChatHit[]; slash: readonly SlashHit[] }>(NOTHING_FOUND);
   const input = useRef<HTMLInputElement>(null);
+  const box = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLUListElement>(null);
   // The way the last arrow key moved, so only key moves (not hovers) scroll.
   const moved = useRef<1 | -1 | null>(null);
@@ -219,6 +221,7 @@ export function Palette({
   const { chats: findChats, slash: findSlash } = sources;
   const at = Math.min(pick, rows.length - 1);
   usePeek(list, "y", rows.length, paletteRoom);
+  useModalFocus(box);
 
   useEffect(() => {
     input.current?.focus();
@@ -275,6 +278,7 @@ export function Palette({
   return (
     <div className="palette-backdrop" onMouseDown={onClose}>
       <div
+        ref={box}
         className="palette"
         role="dialog"
         aria-modal="true"

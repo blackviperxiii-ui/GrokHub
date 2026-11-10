@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useEffectEvent, useState } from "react";
 import {
   codeDeployForget,
   codeDeployPlan,
@@ -29,13 +29,22 @@ export function ShipSettings() {
   const [extra, setExtra] = useState("");
   const [note, setNote] = useState<string | null>(null);
 
+  const typedExtra = extra
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  // Runs each time this page shows. A field typed in and not saved keeps the
+  // edit; untouched, it takes the fresh value.
+  const refresh = useEffectEvent((next: CodeShipSettings) => {
+    const was = ship;
+    setShip(next);
+    if (!was || base.trim() === was.autoBase) setBase(next.autoBase);
+    if (!was || typedExtra.join(",") === was.extraProtected.join(",")) setExtra(next.extraProtected.join(", "));
+  });
   useEffect(() => {
     getCodeShip().then(
-      (next) => {
-        setShip(next);
-        setBase(next.autoBase);
-        setExtra(next.extraProtected.join(", "));
-      },
+      (next) => refresh(next),
       (err) => setNote(String(err)),
     );
   }, []);
@@ -53,10 +62,6 @@ export function ShipSettings() {
   }
 
   if (!ship) return note ? <p className="note">{note}</p> : null;
-  const typedExtra = extra
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
   const changed = base.trim() !== ship.autoBase || typedExtra.join(",") !== ship.extraProtected.join(",");
   return (
     <div className="code-settings" role="group" aria-label="Pushes and PRs">

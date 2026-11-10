@@ -224,11 +224,15 @@ export function Mic({
     const up = (e: KeyboardEvent) => {
       if (e.key.toLowerCase() === "g" || e.key === "Control") void live.current.finish();
     };
+    // A window that loses focus never gets the keyup: end the hold as letting go does.
+    const end = () => void live.current.finish();
     window.addEventListener("keydown", down);
     window.addEventListener("keyup", up);
+    window.addEventListener("blur", end);
     return () => {
       window.removeEventListener("keydown", down);
       window.removeEventListener("keyup", up);
+      window.removeEventListener("blur", end);
     };
   }, []);
 

@@ -6,7 +6,7 @@ import type { CodeActivityEntry, CodeShipPlan } from "./api";
 
 const api = vi.hoisted(() => ({
   codeShipPlan: vi.fn<(action: "push" | "pr") => Promise<CodeShipPlan>>(),
-  codeShipRun: vi.fn<(action: "push" | "pr", confirmed: boolean) => Promise<{ command: string; exit: number; output: string; summary: string }>>(),
+  codeShipRun: vi.fn<(action: "push" | "pr", confirmed: boolean, command?: string | null) => Promise<{ command: string; exit: number; output: string; summary: string }>>(),
   codeNewBranch: vi.fn<(name: string) => Promise<string>>(),
   codeActivity: vi.fn<() => Promise<CodeActivityEntry[]>>(),
 }));
@@ -59,7 +59,7 @@ describe("Code tab → Push and PR", () => {
       expect(card).toHaveTextContent("git push --porcelain origin HEAD:refs/heads/code/fix");
       expect(api.codeShipRun).toHaveBeenCalledTimes(i);
       await userEvent.click(screen.getByRole("button", { name: "Push" }));
-      expect(api.codeShipRun).toHaveBeenLastCalledWith("push", true);
+      expect(api.codeShipRun).toHaveBeenLastCalledWith("push", true, "git push --porcelain origin HEAD:refs/heads/code/fix");
       expect(await screen.findByRole("status")).toHaveTextContent("Pushed code/fix to origin.");
     }
   });
@@ -116,5 +116,33 @@ describe("Code tab → Push and PR", () => {
     await userEvent.click(screen.getByRole("button", { name: "Make branch" }));
     expect(api.codeNewBranch).toHaveBeenCalledWith("code/new");
     expect(await screen.findByRole("status")).toHaveTextContent("On code/new now.");
+  });
+
+  it("a confirm card goes away when the branch changes, and a confirm sends the command it showed", async () => {
+    let branch = "code/a";
+    api.codeShipPlan.mockImplementation((action) =>
+      Promise.resolve(plan(action, { branch, command: `git push --porcelain origin HEAD:refs/heads/${branch}` })),
+    );
+    api.codeNewBranch.mockImplementation((name) => {
+      branch = name;
+      return Promise.resolve(name);
+    });
+    render(<CodeShip />);
+    await userEvent.click(await screen.findByRole("button", { name: "Push code/a" }));
+    expect(await screen.findByRole("group", { name: SHIP_CONFIRM_PUSH })).toHaveTextContent(
+      "git push --porcelain origin HEAD:refs/heads/code/a",
+    );
+    await userEvent.type(screen.getByRole("textbox", { name: "New branch" }), "code/b");
+    await userEvent.click(screen.getByRole("button", { name: "Make branch" }));
+    expect(await screen.findByRole("button", { name: "Push code/b" })).toBeEnabled();
+    expect(screen.queryByRole("group", { name: SHIP_CONFIRM_PUSH })).toBeNull();
+    expect(api.codeShipRun).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Push code/b" }));
+    expect(await screen.findByRole("group", { name: SHIP_CONFIRM_PUSH })).toHaveTextContent(
+      "git push --porcelain origin HEAD:refs/heads/code/b",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Push" }));
+    expect(api.codeShipRun).toHaveBeenCalledTimes(1);
+    expect(api.codeShipRun).toHaveBeenLastCalledWith("push", true, "git push --porcelain origin HEAD:refs/heads/code/b");
   });
 });

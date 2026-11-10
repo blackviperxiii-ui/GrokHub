@@ -1,0 +1,5 @@
+- Code tab: a confirmed push or pull request is refused when the command about to run is not the one on the card you confirmed, an open diff is re-read on Refresh, a branch named like a flag is refused, and a remote such as `host:path` is no longer read as GitHub.
+- Web app: Edit automation works from a paired browser, a Journal tile links only to a chat that browser can open, Home tiles and chips no longer open pages the web app lacks, a tab that stops reading is dropped instead of queueing without limit, and the HTTPS front limits connections per address and closes idle ones.
+- Chat: a reply whose events were lost shows a gap notice instead of hanging, an answered question card keeps its own answer after a message above it is deleted, a draft is kept when the open chat is picked again, and losing window focus ends a held Ctrl+G recording.
+- Settings: text you typed but did not save in Behavior, Code settings and Edit Home is kept when the page is shown again.
+- Dialogs keep Tab inside them and give focus back to what opened them.

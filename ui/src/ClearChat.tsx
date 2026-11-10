@@ -2,7 +2,7 @@
 // the open chat's saved history for good, so the confirm says so plainly.
 import { useEffect, useRef } from "react";
 import { PRODUCT_NAME } from "./brand";
-import { useDismiss } from "./ui";
+import { useDismiss, useModalFocus } from "./ui";
 
 export const CLEAR_CHAT_LABEL = "Clear chat…";
 export const CLEAR_CHAT_QUESTION = "Clear this chat?";
@@ -34,6 +34,8 @@ export function ChatTabMenu({ at, onClear, onClose }: { at: { x: number; y: numb
 /** Asks before Clear chat. Escape or Keep closes it; Clear chat confirms. */
 export function ClearChatDialog({ onConfirm, onClose }: { onConfirm: () => void; onClose: () => void }) {
   const keep = useRef<HTMLButtonElement>(null);
+  const box = useRef<HTMLDivElement>(null);
+  useModalFocus(box);
   useEffect(() => {
     keep.current?.focus();
     function onKey(event: KeyboardEvent) {
@@ -45,6 +47,7 @@ export function ClearChatDialog({ onConfirm, onClose }: { onConfirm: () => void;
   return (
     <div className="fix-backdrop" onClick={onClose}>
       <div
+        ref={box}
         className="card fix-window confirm-window"
         role="alertdialog"
         aria-modal="true"

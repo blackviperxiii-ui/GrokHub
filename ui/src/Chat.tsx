@@ -441,7 +441,7 @@ function LogItem({
     case "elicit":
       return (
         <ViewTransition>
-          <ElicitCard item={item} onAnswer={(action, value) => onAnswerCard(item, action, value)} />
+          <ElicitCard key={item.id} item={item} onAnswer={(action, value) => onAnswerCard(item, action, value)} />
         </ViewTransition>
       );
     case "slash":
@@ -705,7 +705,8 @@ export function Chat({
   // conversation it reads is the latest, not a dependency.
   const applyPrefill = useEffectEvent((next: Prefill) => {
     const to = next.conversationId;
-    if (to && to !== conversationId) {
+    const switched = !!to && to !== conversationId;
+    if (switched) {
       if (busyRef.current) {
         setError(MISSION_BUSY);
         return;
@@ -719,7 +720,8 @@ export function Chat({
       setError(null);
       setConversationId(to);
     }
-    setDraft(next.text);
+    // Opening the chat that is already open brings no text: keep what is typed.
+    setDraft((now) => (switched || next.text ? next.text : now));
   });
   useEffect(() => {
     if (prefill) applyPrefill(prefill);

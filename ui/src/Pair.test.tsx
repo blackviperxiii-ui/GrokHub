@@ -30,12 +30,21 @@ describe("Pair", () => {
     expect(takeCodeFromLink()).toBe("");
   });
 
-  it("a mangled pairing link leaves the form to pair by hand", () => {
+  it("a mangled pairing link leaves the form to pair by hand", async () => {
+    transport.pair.mockResolvedValue();
+    const onPaired = vi.fn();
     window.history.replaceState(null, "", "/#code=%zz");
-    render(<Pair onPaired={() => {}} />);
+    render(<Pair onPaired={onPaired} />);
     expect(window.location.hash).toBe("");
     expect(transport.pair).not.toHaveBeenCalled();
     expect(screen.getByLabelText("Pairing code")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Connect" })).toBeDisabled();
+
+    await userEvent.type(screen.getByLabelText("Pairing code"), "real-code");
+    await userEvent.click(screen.getByRole("button", { name: "Connect" }));
+    await waitFor(() => expect(onPaired).toHaveBeenCalledTimes(1));
+    expect(transport.pair).toHaveBeenCalledTimes(1);
+    expect(transport.pair).toHaveBeenCalledWith("real-code");
   });
 
   it("pairs from a pairing link without typing", async () => {

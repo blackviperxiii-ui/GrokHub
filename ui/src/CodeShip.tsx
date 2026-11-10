@@ -46,6 +46,12 @@ export function CodeShip({ onShipped }: { onShipped?: () => void }) {
     setPush(nextPush);
     setPr(nextPr);
     setActivity(log);
+    // A card for a command that would no longer run goes away, so nobody confirms the old one.
+    setConfirming((open) => {
+      if (!open) return open;
+      const now = open.action === "push" ? nextPush : nextPr;
+      return now.command === open.command ? open : null;
+    });
     return { push: nextPush, pr: nextPr };
   }, []);
 
@@ -75,17 +81,18 @@ export function CodeShip({ onShipped }: { onShipped?: () => void }) {
         setConfirming(plan);
         return;
       }
-      await run(action, false);
+      await run(action);
     } catch (err) {
       setNote(String(err));
     }
   }
 
-  async function run(action: CodeShipAction, confirmed: boolean) {
+  /** `shown` is the command on the confirm card the person pressed, when there was one. */
+  async function run(action: CodeShipAction, shown?: string) {
     setConfirming(null);
     setBusy(true);
     try {
-      const done = await codeShipRun(action, confirmed);
+      const done = shown === undefined ? await codeShipRun(action, false) : await codeShipRun(action, true, shown);
       setNote(done.summary);
       setOutput(done.output);
       onShipped?.();
@@ -165,7 +172,7 @@ export function CodeShip({ onShipped }: { onShipped?: () => void }) {
             {confirming.command}
           </pre>
           <div className="card-buttons">
-            <button type="button" onClick={() => void run(confirming.action, true)} disabled={busy}>
+            <button type="button" onClick={() => void run(confirming.action, confirming.command)} disabled={busy}>
               {confirming.action === "push" ? "Push" : "Open PR"}
             </button>
             <button type="button" className="quiet" onClick={() => setConfirming(null)} disabled={busy}>

@@ -2738,8 +2738,9 @@ export function codeShipPlan(action: CodeShipAction): Promise<CodeShipPlan> {
   return invoke<CodeShipPlan>("code_ship_plan", { action });
 }
 
-export function codeShipRun(action: CodeShipAction, confirmed: boolean): Promise<CodeShipped> {
-  return invoke<CodeShipped>("code_ship_run", { action, confirmed });
+/** `command` is the command the confirm card showed; the app refuses when it would now run a different one. */
+export function codeShipRun(action: CodeShipAction, confirmed: boolean, command?: string | null): Promise<CodeShipped> {
+  return invoke<CodeShipped>("code_ship_run", { action, confirmed, command: command ?? null });
 }
 
 export function codeNewBranch(name: string): Promise<string> {

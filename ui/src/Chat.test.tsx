@@ -171,6 +171,22 @@ function emit(conversationId: string, event: ChatEvent) {
   act(() => api.handler?.({ conversationId, event }));
 }
 
+/** A question card; with `labels` it offers them as buttons. */
+function question(id: string, message: string, labels: string[]): ChatEvent {
+  return {
+    kind: "elicit",
+    id,
+    server: "Question",
+    message,
+    mode: "form",
+    url: "",
+    fieldName: "answer",
+    fieldTitle: "Answer",
+    secret: false,
+    options: labels.map((label) => ({ label, description: "", recommended: false })),
+  };
+}
+
 describe("Chat", () => {
   beforeEach(() => {
     for (const fn of [
@@ -214,6 +230,24 @@ describe("Chat", () => {
     rerender(<Chat onOpenSettings={() => {}} prefill={{ text: "check the build", n: 2 }} />);
     expect(box).toHaveValue("check the build");
     expect(api.sendChat).not.toHaveBeenCalled();
+  });
+
+  it("opening the chat that is already open keeps what is typed in the box", async () => {
+    api.sendChat.mockResolvedValue("end_turn");
+    const { rerender } = render(<Chat onOpenSettings={() => {}} remote />);
+    const id = await startTurn("hi");
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Stop" })).toBeNull());
+    const box = screen.getByRole("textbox", { name: "Message" });
+    await userEvent.type(box, "my half-written next message");
+
+    rerender(<Chat onOpenSettings={() => {}} remote prefill={{ text: "", n: 1, conversationId: id }} />);
+    expect(box).toHaveValue("my half-written next message");
+    expect(screen.getByText("hi")).toBeVisible();
+    expect(api.closeChat).not.toHaveBeenCalled();
+
+    rerender(<Chat onOpenSettings={() => {}} remote prefill={{ text: "", n: 2, conversationId: "shell-other" }} />);
+    expect(box).toHaveValue("");
+    expect(screen.queryByText("hi")).toBeNull();
   });
 
   it("a mission prefill moves to its chat once, then stays there", async () => {
@@ -1097,6 +1131,57 @@ describe("Chat history", () => {
     render(<Chat onOpenSettings={() => {}} remote />);
     await startTurn("hello from the phone");
     expect(screen.queryByRole("button", { name: MESSAGE_MENU_LABEL })).toBeNull();
+  });
+
+  it("deleting a message above two answered questions leaves each card its own answer", async () => {
+    const finish = holdTurn();
+    api.forgetMessage.mockReset().mockResolvedValue(true);
+    api.answerElicit.mockReset().mockResolvedValue();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("plan it");
+    emit(id, question("ask-a", "Which colour?", ["Red", "Blue"]));
+    await userEvent.click(screen.getByRole("button", { name: "Red" }));
+    emit(id, question("ask-b", "Which size?", ["Small", "Large"]));
+    await userEvent.click(screen.getByRole("button", { name: "Large" }));
+    finish();
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Stop" })).toBeNull());
+    const cards = () => screen.getAllByRole("group", { name: "Loadout asks" }).map((card) => card.textContent);
+    expect(cards()).toEqual(["Loadout asksWhich colour?You chose: Red", "Loadout asksWhich size?You chose: Large"]);
+
+    const ask = screen.getByText("plan it");
+    await userEvent.click(within(ask).getByRole("button", { name: MESSAGE_MENU_LABEL }));
+    await userEvent.click(screen.getByRole("menuitem", { name: DELETE_MESSAGE_LABEL }));
+    await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(screen.queryByText("plan it")).toBeNull());
+    expect(cards()).toEqual(["Loadout asksWhich colour?Sent.", "Loadout asksWhich size?Sent."]);
+  });
+
+  it("deleting a message above two open questions keeps what was typed out of the other card", async () => {
+    api.sendChat.mockResolvedValue("end_turn");
+    api.forgetMessage.mockReset().mockResolvedValue(true);
+    api.answerElicit.mockReset().mockResolvedValue();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("go");
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Stop" })).toBeNull());
+    act(() => api.handler?.({ conversationId: id, event: question("ask-a", "Token for A?", []), helper: true }));
+    act(() => api.handler?.({ conversationId: id, event: question("ask-b", "Token for B?", []), helper: true }));
+    const boxes = () => screen.getAllByRole<HTMLInputElement>("textbox", { name: "Answer" }).map((box) => box.value);
+    await userEvent.type(screen.getAllByRole("textbox", { name: "Answer" })[0], "alpha-for-A");
+    expect(boxes()).toEqual(["alpha-for-A", ""]);
+
+    const ask = screen.getByText("go");
+    await userEvent.click(within(ask).getByRole("button", { name: MESSAGE_MENU_LABEL }));
+    await userEvent.click(screen.getByRole("menuitem", { name: DELETE_MESSAGE_LABEL }));
+    await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(screen.queryByText("go")).toBeNull());
+    expect(boxes()).toEqual(["", ""]);
+
+    const second = screen.getAllByRole("group", { name: "Loadout asks" })[1];
+    expect(second).toHaveTextContent("Token for B?");
+    expect(within(second).getByRole("button", { name: "Send" })).toBeDisabled();
+    await userEvent.type(within(second).getByRole("textbox", { name: "Answer" }), "beta-for-B");
+    await userEvent.click(within(second).getByRole("button", { name: "Send" }));
+    expect(api.answerElicit.mock.calls).toEqual([[id, "ask-b", "accept", "answer", "beta-for-B"]]);
   });
 
   it("Show earlier loads more of a long chat's start", async () => {

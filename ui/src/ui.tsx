@@ -1,9 +1,9 @@
 // Small shared pieces for the shell's pages: pop-up menus that close like
-// menus, a status line that reads as an error when it is one, an inline
-// "are you sure" row for destructive actions, and outside links that open in
-// the browser.
-import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode, type RefObject } from "react";
-import { openExternal } from "./external";
+// menus, windows that keep the keyboard inside, a status line that reads as an
+// error when it is one, an inline "are you sure" row for destructive actions,
+// and outside links that open in the browser.
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode, type RefObject } from "react";
+import { externalUrlOk, openExternal } from "./external";
 
 /** Close a pop-up on Escape or on a press outside `ref`. Only listens while open. */
 export function useDismiss<T extends HTMLElement>(open: boolean, close: () => void): RefObject<T | null> {
@@ -29,6 +29,41 @@ export function useDismiss<T extends HTMLElement>(open: boolean, close: () => vo
     };
   }, [open]);
   return ref;
+}
+
+const TABBABLE = "a[href], button, input, select, textarea, video[controls], [tabindex]";
+/** The open windows, newest last. Only the newest holds the keyboard. */
+const modals: RefObject<HTMLElement | null>[] = [];
+
+/** Keep the keyboard in the window `box` holds while `open`: Tab wraps from its
+ * last control to its first, and closing gives focus back to where it was. */
+export function useModalFocus(box: RefObject<HTMLElement | null>, open = true) {
+  // A layout effect, so the opener is read before the window's own effect moves focus inside.
+  useLayoutEffect(() => {
+    if (!open) return;
+    const opener = document.activeElement;
+    modals.push(box);
+    function onKey(event: KeyboardEvent) {
+      const el = box.current;
+      if (event.key !== "Tab" || !el || modals[modals.length - 1] !== box) return;
+      const stops = [...el.querySelectorAll<HTMLElement>(TABBABLE)].filter(
+        (s) => s.tabIndex >= 0 && !s.matches(":disabled"),
+      );
+      const at = document.activeElement;
+      const outside = !el.contains(at);
+      const edge = event.shiftKey ? stops[0] : stops[stops.length - 1];
+      // Shift+Tab from the window itself (focused, but not a stop) would also leave it.
+      if (stops.length > 0 && !outside && at !== edge && !(event.shiftKey && at === el)) return;
+      event.preventDefault();
+      (event.shiftKey ? stops[stops.length - 1] : stops[0])?.focus();
+    }
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      modals.splice(modals.indexOf(box), 1);
+      if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
+    };
+  }, [box, open]);
 }
 
 /** A page's one-line result: `ok` after something worked, `error` after it didn't. */
@@ -102,8 +137,9 @@ export function ExternalLink({ href, children }: { href: string; children: React
     event.preventDefault();
     void openExternal(href).catch(() => {});
   }
+  // A middle click or "open in new tab" follows the address itself, so only a web page gets one.
   return (
-    <a href={href} target="_blank" rel="noopener noreferrer" onClick={open}>
+    <a href={externalUrlOk(href) ? href : undefined} target="_blank" rel="noopener noreferrer" onClick={open}>
       {children}
     </a>
   );

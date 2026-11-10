@@ -3,7 +3,7 @@ import { pulseImage, type PulseChip, type PulseIdea, type PulsePost } from "./ap
 import { Markdown } from "./Markdown";
 import { VerdictLine } from "./PulseFix";
 import { reducedMotion } from "./rubberBand";
-import { ConfirmRow, ExternalLink, useDismiss } from "./ui";
+import { ConfirmRow, ExternalLink, useDismiss, useModalFocus } from "./ui";
 
 /** Topic emoji with a bundled 3D picture (Fluent Emoji 3D, MIT, see
  * public/emoji3d/LICENSE), by code point without variation selectors. */
@@ -110,6 +110,8 @@ export function Lightbox({
   onClose: () => void;
 }) {
   const close = useRef<HTMLButtonElement>(null);
+  const box = useRef<HTMLDivElement>(null);
+  useModalFocus(box);
   useEffect(() => {
     close.current?.focus();
     const onKey = (e: KeyboardEvent) => {
@@ -119,7 +121,7 @@ export function Lightbox({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
   return (
-    <div className="lightbox" role="dialog" aria-modal="true" aria-label="Image" onClick={onClose}>
+    <div ref={box} className="lightbox" role="dialog" aria-modal="true" aria-label="Image" onClick={onClose}>
       {video ? (
         <video src={src} controls autoPlay loop onClick={(e) => e.stopPropagation()} />
       ) : (

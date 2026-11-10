@@ -53,6 +53,19 @@ describe("outside links", () => {
     await userEvent.click(screen.getByRole("link", { name: "source" }));
     expect(transport.call).toHaveBeenCalledWith("open_external", { url: "https://example.com/x" });
   });
+
+  it("a link that isn't a web page carries no address to follow", () => {
+    render(
+      <>
+        <ExternalLink href="https://example.com/x">source</ExternalLink>
+        <ExternalLink href="file:///home/user/notes.txt">a file</ExternalLink>
+        <ExternalLink href="javascript:alert(1)">a script</ExternalLink>
+      </>,
+    );
+    expect(screen.getByText("source")).toHaveAttribute("href", "https://example.com/x");
+    expect(screen.getByText("a file")).not.toHaveAttribute("href");
+    expect(screen.getByText("a script")).not.toHaveAttribute("href");
+  });
 });
 
 describe("chat errors", () => {

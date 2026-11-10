@@ -14,6 +14,7 @@ import {
   type OnboardReply,
   type Step,
 } from "./onboardApi";
+import { useModalFocus } from "./ui";
 
 export const WELCOME_TITLE = `Help ${PRODUCT_NAME} get to know you`;
 export const WELCOME_BODY =
@@ -93,6 +94,7 @@ export function OnboardStage({ after }: { after: boolean }) {
   useEffect(() => {
     if (shown) box.current?.focus();
   }, [shown, step]);
+  useModalFocus(box, shown);
 
   if (!shown || !reply) return null;
 

@@ -287,8 +287,9 @@ export function Pulse({
   /** The writer posts in the background: look again until the new post shows. */
   function watchForPost() {
     const before = new Set(page?.feed.map((p) => p.id));
+    // Emptied in place: the cleanup on close holds this same array.
     polls.current.forEach(clearTimeout);
-    polls.current = [];
+    polls.current.length = 0;
     const look = (left: number) => {
       polls.current.push(
         setTimeout(() => {
