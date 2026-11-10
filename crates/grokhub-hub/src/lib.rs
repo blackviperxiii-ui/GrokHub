@@ -2,7 +2,9 @@
 
 #![cfg_attr(not(test), warn(clippy::unwrap_used, clippy::expect_used))]
 
+pub mod doctor;
 mod server;
+pub mod update;
 
 pub use server::{serve, serve_background, serve_lan};
 
@@ -16,6 +18,14 @@ pub enum Launch {
     McpSelf,
     /// `grokhub-hub bench local`: on-device speed and eval.
     BenchLocal,
+    /// The desktop tools on stdio, behind the same switch and hard gate.
+    McpDesktop,
+    /// The Cua Driver gate proxy on stdio (Linux, `cuaDriver` flag).
+    McpCua,
+    /// Auth, memory folder and hub checks; exits 1 on any ERR.
+    Doctor,
+    /// Says how this install updates. Runs nothing.
+    Update,
 }
 
 /// `grokhub-hub --askpass <socket> [prompt]`: `sudo` runs this through the
@@ -38,6 +48,10 @@ pub fn parse_args(args: &[String]) -> Launch {
             "--version" | "-V" => return Launch::Version,
             "-h" | "--help" => return Launch::Help,
             "--mcp-self" => return Launch::McpSelf,
+            "--mcp-desktop" => return Launch::McpDesktop,
+            "--mcp-cua" => return Launch::McpCua,
+            "--doctor" => return Launch::Doctor,
+            "--update" => return Launch::Update,
             _ => {}
         }
     }
@@ -227,6 +241,26 @@ mod tests {
             Some("/run/user/1000/grokhub-askpass-9/s")
         );
         assert_eq!(askpass_socket(&args(&["grokhub-hub", "--askpass"])), None);
+        assert_eq!(
+            parse_args(&args(&["grokhub-hub", "--mcp-desktop"])),
+            Launch::McpDesktop
+        );
+        assert_eq!(
+            parse_args(&args(&["grokhub-hub", "--mcp-cua"])),
+            Launch::McpCua
+        );
+        assert_eq!(
+            parse_args(&args(&["grokhub-hub", "--doctor"])),
+            Launch::Doctor
+        );
+        assert_eq!(
+            parse_args(&args(&["grokhub-hub", "--update"])),
+            Launch::Update
+        );
+        assert_eq!(
+            parse_args(&args(&["grokhub-hub", "--help", "--doctor"])),
+            Launch::Help
+        );
         assert_eq!(
             askpass_socket(&args(&["grokhub-hub", "--hub", "--askpass", "/x"])),
             None

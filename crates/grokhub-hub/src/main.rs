@@ -1,5 +1,6 @@
 //! LAN hub — same /v1 contract as grokhub --hub — plus the headless tools
-//! the desktop shell has no console for (`--mcp-self`, `--askpass`, `bench local`).
+//! the desktop shell has no console for (`--mcp-self`, `--mcp-desktop`,
+//! `--mcp-cua`, `--doctor`, `--update`, `--askpass`, `bench local`).
 
 use grokhub_core::DEFAULT_PORT;
 use grokhub_hub::{askpass_socket, parse_args, Launch};
@@ -43,6 +44,10 @@ fn help_text(version: &str) -> String {
         "grokhub-hub {version} — LAN /v1 hub and headless tools\n\n  \
 grokhub-hub              listen on GROKHUB_HUB_PORT or :18766 (also --hub)\n  \
 grokhub-hub --mcp-self   the agent's skill, connection and automation tools on stdin\n  \
+grokhub-hub --mcp-desktop  desktop tools on stdin (Settings switch and hard gate)\n  \
+grokhub-hub --mcp-cua    Cua Driver gate on stdin (Linux, cuaDriver flag)\n  \
+grokhub-hub --doctor     auth / memory / hub checks\n  \
+grokhub-hub --update     how this install updates (runs nothing)\n  \
 grokhub-hub bench local  on-device speed + eval\n  \
 grokhub-hub --askpass <socket>  answer a sudo prompt (the app runs this)\n  \
 grokhub-hub --version\n  \
@@ -68,15 +73,38 @@ fn main() {
             let dir = grokhub_core::paths::config_dir();
             std::process::exit(grokhub_agent::self_manage::mcp::run_stdio(&dir));
         }
+        Launch::McpDesktop => {
+            use_os_stores();
+            grokhub_desktop::host::install_standalone();
+            std::process::exit(grokhub_desktop::run_stdio());
+        }
+        Launch::McpCua => {
+            use_os_stores();
+            grokhub_desktop::host::install_standalone();
+            std::process::exit(grokhub_desktop::run_cua_stdio());
+        }
+        Launch::Doctor => {
+            let dir = grokhub_core::paths::config_dir();
+            let (text, ok) =
+                grokhub_hub::doctor::report(&grokhub_hub::doctor::gather(&dir, hub_port()));
+            print!("{text}");
+            std::process::exit(if ok { 0 } else { 1 });
+        }
+        Launch::Update => {
+            use grokhub_hub::update::{advice, install_kind};
+            let exe = env::current_exe().unwrap_or_default();
+            let appimage = env::var("APPIMAGE").ok();
+            println!(
+                "{}",
+                advice(install_kind(env::consts::OS, &exe, appimage.as_deref()))
+            );
+        }
         Launch::BenchLocal => {
             use_os_stores();
             std::process::exit(grokhub_agent::route::local_bench::run_cli());
         }
         Launch::Serve => {
-            let port = env::var("GROKHUB_HUB_PORT")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(DEFAULT_PORT);
+            let port = hub_port();
             let banner = format!("grokhub-hub {}", env!("CARGO_PKG_VERSION"));
             if let Err(e) = grokhub_hub::run(port, persist_path(), &banner) {
                 eprintln!("hub failed: {e}");
@@ -84,6 +112,13 @@ fn main() {
             }
         }
     }
+}
+
+fn hub_port() -> u16 {
+    env::var("GROKHUB_HUB_PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_PORT)
 }
 
 /// The same OS keyring and provider vault the apps use, so a token the
@@ -116,6 +151,10 @@ mod tests {
             "  grokhub-hub --mcp-self   the agent's skill, connection and automation tools on stdin\n",
             "  grokhub-hub bench local  on-device speed + eval\n",
             "  grokhub-hub --askpass <socket>  answer a sudo prompt (the app runs this)\n",
+            "  grokhub-hub --mcp-desktop  desktop tools on stdin (Settings switch and hard gate)\n",
+            "  grokhub-hub --mcp-cua    Cua Driver gate on stdin (Linux, cuaDriver flag)\n",
+            "  grokhub-hub --doctor     auth / memory / hub checks\n",
+            "  grokhub-hub --update     how this install updates (runs nothing)\n",
         ] {
             assert!(help.contains(line), "{line} missing from {help}");
         }
