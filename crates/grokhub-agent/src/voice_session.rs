@@ -54,18 +54,24 @@ const CAP: usize = 64;
 static SESSIONS: Mutex<Vec<(String, Session)>> = Mutex::new(Vec::new());
 static TURN: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
 
-/// Per chat, for the conversation core: whether this turn's ask was casual
-/// and what the last finished reply slipped on ([`note_reply`]).
+/// Per chat, for the conversation core: whether this turn's ask was casual,
+/// what the last finished reply slipped on ([`note_reply`]), and whether the
+/// last turn came up empty.
 #[derive(Debug, Default)]
 struct Talk {
     casual: bool,
     tells: Vec<Tell>,
+    /// The last finished turn found nothing for the ask.
+    empty: bool,
+    /// This turn follows one that came up empty (set by [`step`]).
+    after_empty: bool,
 }
 
 static TALK: Mutex<Option<HashMap<String, Talk>>> = Mutex::new(None);
 
-/// The last reply's tells, taken (each is named once), and this turn's shape kept.
-fn take_tells(conversation_id: &str, casual: bool) -> Vec<Tell> {
+/// The last reply's tells, taken (each is named once), and this turn's shape
+/// kept. Also whether the last turn came up empty.
+fn take_tells(conversation_id: &str, casual: bool) -> (Vec<Tell>, bool) {
     let mut talk = TALK.lock().unwrap_or_else(|e| e.into_inner());
     let m = talk.get_or_insert_with(HashMap::new);
     if m.len() >= CAP && !m.contains_key(conversation_id) {
@@ -73,17 +79,32 @@ fn take_tells(conversation_id: &str, casual: bool) -> Vec<Tell> {
     }
     let entry = m.entry(conversation_id.to_string()).or_default();
     entry.casual = casual;
-    std::mem::take(&mut entry.tells)
+    entry.after_empty = entry.empty;
+    (std::mem::take(&mut entry.tells), entry.after_empty)
 }
 
 /// Reads a chat's finished reply for the conversation core's tells; the next
-/// turn's note names them. Never edits the reply, never calls a model. Only a
-/// chat whose turn [`step`] saw in the foreground is read.
-pub fn note_reply(conversation_id: &str, reply: &str) {
+/// turn's note names them. `came_up_empty` is whether the turn found nothing
+/// for the ask; a turn that did clears it. Never edits the reply, never calls
+/// a model. Only a chat whose turn [`step`] saw in the foreground is read.
+pub fn note_reply(conversation_id: &str, reply: &str, came_up_empty: bool) {
     let mut talk = TALK.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(entry) = talk.as_mut().and_then(|m| m.get_mut(conversation_id)) {
         entry.tells = conversation::tells(reply, entry.casual);
+        if entry.after_empty && conversation::takes_credit(reply) {
+            entry.tells.push(Tell::TakesCredit);
+        }
+        entry.empty = came_up_empty;
     }
+}
+
+/// This turn follows one that came up empty, so thanks for a result are off.
+pub fn after_empty(conversation_id: &str) -> bool {
+    TALK.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .and_then(|m| m.get(conversation_id))
+        .is_some_and(|t| t.after_empty)
 }
 
 /// What the chat's last finished reply slipped on, not yet named in a note.
@@ -213,7 +234,12 @@ pub fn step(conversation_id: &str, view: TurnView) -> String {
             care: view.care,
             mood: view.mood,
         };
-        let cue = conversation::cue(&talk, &take_tells(conversation_id, talk.casual()));
+        let (last, after_empty) = take_tells(conversation_id, talk.casual());
+        let mut cue = conversation::cue(&talk, &last);
+        if after_empty {
+            cue.push(' ');
+            cue.push_str(conversation::CAME_UP_EMPTY);
+        }
         let mut all = SESSIONS.lock().unwrap_or_else(|e| e.into_inner());
         let voice = match all.iter_mut().find(|(id, _)| id == conversation_id) {
             Some((_, s)) => s.step(view),
@@ -547,7 +573,7 @@ mod tests {
             first.ends_with(grokhub_core::conversation::SHORT),
             "{first}"
         );
-        note_reply(id, "Certainly! Task complete.");
+        note_reply(id, "Certainly! Task complete.", false);
         assert_eq!(
             pending_tells(id),
             vec![Tell::StockOpener, Tell::ProcessTalk]
@@ -555,16 +581,43 @@ mod tests {
         let next = step(id, view("cool, thanks", "chat", "calm"));
         assert!(next.contains("Stay in voice:"), "{next}");
         assert!(
-            next.ends_with("Your last reply slipped: it opened with a stock phrase, so start with the answer; it narrated checklists, cards or limits, so say what happened in plain words."),
+            next.ends_with("Your last reply slipped: it opened with a stock phrase, so start with the answer; it narrated checklists, tools, cards or limits, so say what happened in plain words."),
             "{next}"
         );
         assert_eq!(pending_tells(id), Vec::<Tell>::new());
         let third = step(id, view("nice", "chat", "calm"));
         assert!(!third.contains("slipped"), "named once: {third}");
         // A reply to a chat no foreground turn saw is not read.
-        note_reply("vs-never-stepped", "Certainly!");
+        note_reply("vs-never-stepped", "Certainly!", true);
         assert_eq!(pending_tells("vs-never-stepped"), Vec::<Tell>::new());
         forget(id);
         assert_eq!(pending_tells(id), Vec::<Tell>::new());
+    }
+
+    #[test]
+    fn a_turn_after_one_that_came_up_empty_is_told_and_cleared_by_a_success() {
+        use grokhub_core::conversation::CAME_UP_EMPTY;
+        let id = "vs-empty";
+        register(id, cfg("nyx", None));
+        step(id, view("find the patch notes for 2.1", "research", "calm"));
+        note_reply(id, "I couldn't find patch notes for 2.1 anywhere.", true);
+        let thanks = step(id, view("ah ok thanks", "chat", "calm"));
+        assert!(thanks.ends_with(CAME_UP_EMPTY), "{thanks}");
+        assert!(after_empty(id));
+        // Taking the thanks anyway is named next turn.
+        note_reply(id, "Cool, glad it helped!", false);
+        assert_eq!(pending_tells(id), vec![Tell::TakesCredit]);
+        let next = step(id, view("lol", "chat", "calm"));
+        assert!(
+            next.ends_with("Your last reply slipped: it took thanks for a result it never found, so own that it came up empty."),
+            "{next}"
+        );
+        assert!(!next.contains(CAME_UP_EMPTY), "a success clears it: {next}");
+        assert!(!after_empty(id));
+        // Without an empty turn before it, "glad it helped" is fine.
+        note_reply(id, "Glad it helped!", false);
+        assert_eq!(pending_tells(id), Vec::<Tell>::new());
+        forget(id);
+        assert!(!after_empty(id));
     }
 }

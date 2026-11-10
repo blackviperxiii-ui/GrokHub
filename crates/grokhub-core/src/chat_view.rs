@@ -811,7 +811,7 @@ pub fn scrub_thought(text: &str) -> String {
         .to_string()
 }
 
-fn split_thought_chunks(text: &str) -> Vec<&str> {
+pub(crate) fn split_thought_chunks(text: &str) -> Vec<&str> {
     let mut out = Vec::new();
     let mut start = 0;
     let bytes = text.as_bytes();
