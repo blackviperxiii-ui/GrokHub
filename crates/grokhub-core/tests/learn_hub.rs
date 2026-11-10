@@ -663,6 +663,21 @@ fn the_shared_logs_feed_one_engine() {
         hub::habit_chips(&both, Now::default(), 99.0, live + 5),
         tried
     );
+    // The try is on the list of decisions, once.
+    let decided = hub::view(live + 6).trust.decisions;
+    let tries: Vec<_> = decided
+        .iter()
+        .filter(|d| d.title.starts_with("Skill try-me"))
+        .map(|d| (d.title.as_str(), d.did, d.why))
+        .collect();
+    assert_eq!(
+        tries,
+        vec![(
+            format!("Skill try-me {}", part.when()).as_str(),
+            "Asked",
+            "It wasn't sure, so it showed this once to see if you want it."
+        )]
+    );
     log_chips_shown(&mut habit_mem, "composer", &tried, live + 70);
     log_chip_outcome(&mut habit_mem, "composer", &tried[0], false, live + 71);
     assert_eq!(
