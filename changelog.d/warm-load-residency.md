@@ -1,0 +1,1 @@
+- Local AI now checks how much of a model is already in memory on Windows and macOS too, so the background warm-up skips models that are still cached there and looks again every 30 minutes, as it already did on Linux.

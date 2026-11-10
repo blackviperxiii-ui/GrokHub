@@ -8,23 +8,29 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::Value;
 
-/// Percent of `path` resident in the page cache, or `None` where the OS can't
-/// say (Windows and macOS for now) or the file can't be read. Mapping the
-/// file reads nothing from disk, so the check doesn't warm it.
+/// Percent of `path` resident in the page cache, or `None` when the file
+/// can't be read. Linux and macOS ask the kernel (`mincore` on a map, which
+/// reads nothing from disk). Windows has no public call for this, so it
+/// times a spread of small reads instead ([`windows`]); those warm about
+/// half a megabyte of the file.
 pub fn resident_pct(path: &Path) -> Option<u8> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        linux::resident_pct(path)
+        unix::resident_pct(path)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(windows)]
+    {
+        windows::resident_pct(path)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
         let _ = path;
         None
     }
 }
 
-#[cfg(target_os = "linux")]
-mod linux {
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod unix {
     use std::os::fd::AsRawFd;
     use std::path::Path;
 
@@ -57,15 +63,70 @@ mod linux {
         let pages = len.div_ceil(page);
         let mut vec = vec![0u8; pages];
         // SAFETY: `addr..addr+len` is the mapping made above and `vec` holds
-        // one byte per page of it.
-        let ok = unsafe { libc::mincore(addr, len, vec.as_mut_ptr()) } == 0;
+        // one byte per page of it (macOS types the bytes as `c_char`).
+        let ok = unsafe { libc::mincore(addr, len, vec.as_mut_ptr().cast()) } == 0;
         // SAFETY: unmaps exactly the mapping made above.
         unsafe { libc::munmap(addr, len) };
         if !ok {
             return None;
         }
+        // Bit 0 is "in core" on both (MINCORE_INCORE on macOS).
         let resident = vec.iter().filter(|b| **b & 1 == 1).count();
         u8::try_from(resident * 100 / pages).ok()
+    }
+}
+
+/// Reads this fast came from the cache: a cached 4 KiB read is a copy plus a
+/// system call (a few microseconds), while even a fast NVMe drive takes tens
+/// of microseconds for a random 4 KiB read that misses.
+pub const CACHED_READ_US: u64 = 20;
+/// Small reads spread over the file for the Windows estimate.
+pub const SAMPLES: u64 = 128;
+
+/// Percent of timed reads that came back at cache speed.
+pub fn cached_share(read_us: &[u64]) -> Option<u8> {
+    if read_us.is_empty() {
+        return None;
+    }
+    let hits = read_us.iter().filter(|us| **us < CACHED_READ_US).count();
+    u8::try_from(hits * 100 / read_us.len()).ok()
+}
+
+/// Where the `i`th of [`SAMPLES`] reads lands in a file of `len` bytes:
+/// evenly spaced, each on a 4 KiB boundary.
+pub fn sample_offset(i: u64, len: u64) -> u64 {
+    (len / SAMPLES).saturating_mul(i) & !4095
+}
+
+#[cfg(windows)]
+mod windows {
+    use std::os::windows::fs::{FileExt, OpenOptionsExt};
+    use std::path::Path;
+    use std::time::Instant;
+
+    /// `FILE_FLAG_RANDOM_ACCESS`: no read-ahead, so each sample reads only
+    /// its own 4 KiB and a miss stays a miss.
+    const RANDOM_ACCESS: u32 = 0x1000_0000;
+
+    pub fn resident_pct(path: &Path) -> Option<u8> {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(RANDOM_ACCESS)
+            .open(path)
+            .ok()?;
+        let len = file.metadata().ok()?.len();
+        if len < 4096 * super::SAMPLES {
+            return None;
+        }
+        let mut buf = [0u8; 4096];
+        let mut times = Vec::with_capacity(super::SAMPLES as usize);
+        for i in 0..super::SAMPLES {
+            let began = Instant::now();
+            file.seek_read(&mut buf, super::sample_offset(i, len))
+                .ok()?;
+            times.push(u64::try_from(began.elapsed().as_micros()).unwrap_or(u64::MAX));
+        }
+        super::cached_share(&times)
     }
 }
 
@@ -231,14 +292,30 @@ mod tests {
         }));
     }
 
-    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_windows_estimate_counts_cache_speed_reads() {
+        assert_eq!(cached_share(&[]), None);
+        assert_eq!(cached_share(&[3, 4, 5, 6]), Some(100));
+        assert_eq!(cached_share(&[3, 90, 4, 400]), Some(50));
+        assert_eq!(cached_share(&[CACHED_READ_US, 2_000]), Some(0));
+        let len = 7 * 1024 * 1024 * 1024 + 123;
+        assert_eq!(sample_offset(0, len), 0);
+        for i in 0..SAMPLES {
+            let at = sample_offset(i, len);
+            assert_eq!(at % 4096, 0);
+            assert!(at + 4096 <= len);
+        }
+        assert!(sample_offset(SAMPLES - 1, len) > len / 2);
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn a_file_just_written_reads_as_cached() {
         let dir = std::env::temp_dir().join(format!("gh-local-warm-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("tmp");
         let file = dir.join("m.gguf");
         std::fs::write(&file, vec![7u8; 64 * 1024]).expect("write");
-        let pct = resident_pct(&file).expect("linux reports residency");
+        let pct = resident_pct(&file).expect("the kernel reports residency");
         assert!(pct > 50, "freshly written pages sit in the cache: {pct}%");
         assert_eq!(resident_pct(&dir.join("missing")), None);
         let _ = std::fs::remove_dir_all(&dir);
