@@ -3,6 +3,9 @@ import {
   codeBuiltins,
   codeDiff,
   codeRepo,
+  codeTestPlan,
+  codeTestRun,
+  onCodeRun,
   type CodeBuiltin,
   type CodeDiff,
   type CodeOverriddenBy,
@@ -12,9 +15,12 @@ import { newConversationId } from "./Chat";
 
 export const CODE_NOT_REPO = "This workspace isn't a git repo yet. Pick a project folder in Settings, or ask the agent to start one.";
 export const CODE_CLEAN = "No changes since the last commit.";
-export const CODE_NEXT = "Coming next on this tab: editor, terminal, tests, and an agent that drives the work while you watch or step in.";
+export const CODE_NEXT = "Coming next on this tab: editor, terminal, and an agent that drives the work while you watch or step in.";
 export const CODE_REVIEW_PROMPT = "Review the uncommitted changes in this workspace: what changed, anything risky, and what to test before committing.";
 export const CODE_BUILTINS = "Built-in skills";
+export const CODE_TESTS = "Tests";
+export const CODE_CONFIRM = "Run this test command?";
+export const CODE_NO_COMMAND = "Type a test command to run.";
 
 /** The label on a built-in row that a same-name skill currently shadows. */
 export function overrideLabel(over: CodeOverriddenBy): string {
@@ -26,7 +32,7 @@ export interface CodeTask {
   conversationId: string;
 }
 
-/** The Code tab: the workspace's repo, its changed files and one file's diff, plus built-in skills. Read only. */
+/** The Code tab: the workspace's repo, its changed files and one file's diff, plus built-in skills and a test runner. */
 export function Code({ onTask }: { onTask: (task: CodeTask) => void }) {
   const [repo, setRepo] = useState<CodeRepo | null>(null);
   const [diff, setDiff] = useState<CodeDiff | null>(null);
@@ -34,6 +40,12 @@ export function Code({ onTask }: { onTask: (task: CodeTask) => void }) {
   const [openSkill, setOpenSkill] = useState<CodeBuiltin | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [command, setCommand] = useState("");
+  const [needsConfirm, setNeedsConfirm] = useState(true);
+  const [confirming, setConfirming] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [log, setLog] = useState("");
+  const [runNote, setRunNote] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setBusy(true);
@@ -54,6 +66,32 @@ export function Code({ onTask }: { onTask: (task: CodeTask) => void }) {
   useEffect(() => {
     codeRepo().then(setRepo, (err) => setNote(String(err)));
     codeBuiltins().then(setBuiltins, (err) => setNote(String(err)));
+    codeTestPlan().then(
+      (plan) => {
+        setCommand(plan.command);
+        setNeedsConfirm(plan.needsConfirm);
+      },
+      (err) => setNote(String(err)),
+    );
+  }, []);
+
+  useEffect(() => {
+    let gone = false;
+    let unlisten = () => {};
+    void onCodeRun((chunk) => {
+      if (gone || !chunk.text) return;
+      setLog((log) => log + chunk.text);
+    }).then(
+      (off) => {
+        if (gone) off();
+        else unlisten = off;
+      },
+      () => {},
+    );
+    return () => {
+      gone = true;
+      unlisten();
+    };
   }, []);
 
   async function open(path: string) {
@@ -62,6 +100,56 @@ export function Code({ onTask }: { onTask: (task: CodeTask) => void }) {
       setDiff(await codeDiff(path));
     } catch (err) {
       setNote(String(err));
+    }
+  }
+
+  async function refreshPlan(nextCommand: string) {
+    const plan = await codeTestPlan(nextCommand);
+    setNeedsConfirm(plan.needsConfirm);
+    return plan;
+  }
+
+  async function requestRun() {
+    const trimmed = command.trim();
+    if (!trimmed || running) return;
+    setNote(null);
+    setRunNote(null);
+    try {
+      const plan = await refreshPlan(trimmed);
+      setCommand(plan.command);
+      if (plan.needsConfirm) {
+        setConfirming(true);
+        return;
+      }
+      await doRun(plan.command, false);
+    } catch (err) {
+      setRunNote(String(err));
+    }
+  }
+
+  async function confirmRun() {
+    const trimmed = command.trim();
+    if (!trimmed || running) return;
+    setConfirming(false);
+    await doRun(trimmed, true);
+  }
+
+  async function doRun(cmd: string, confirmed: boolean) {
+    setRunning(true);
+    setLog("");
+    setRunNote(null);
+    try {
+      const result = await codeTestRun(cmd, confirmed);
+      setLog(
+        result.output + (result.cut ? "\n… cut here; the output is too long to show in full." : ""),
+      );
+      setRunNote(result.exit === 0 ? "Tests passed." : `Tests exited with ${result.exit}.`);
+      const plan = await codeTestPlan(cmd);
+      setNeedsConfirm(plan.needsConfirm);
+    } catch (err) {
+      setRunNote(String(err));
+    } finally {
+      setRunning(false);
     }
   }
 
@@ -129,6 +217,59 @@ export function Code({ onTask }: { onTask: (task: CodeTask) => void }) {
           )}
         </div>
       )}
+      <div className="code-tests">
+        <h3>{CODE_TESTS}</h3>
+        <div className="code-test-row">
+          <label>
+            Test command
+            <input
+              value={command}
+              spellCheck={false}
+              autoComplete="off"
+              placeholder="cargo test"
+              disabled={running}
+              onChange={(e) => {
+                setCommand(e.target.value);
+                setConfirming(false);
+                setNeedsConfirm(true);
+              }}
+            />
+          </label>
+          <button type="button" onClick={() => void requestRun()} disabled={running || !command.trim()}>
+            {running ? "Running…" : "Run tests"}
+          </button>
+        </div>
+        {!command.trim() && <p className="note">{CODE_NO_COMMAND}</p>}
+        {confirming && (
+          <div className="card confirm-window" role="group" aria-label={CODE_CONFIRM}>
+            <p>{CODE_CONFIRM}</p>
+            <pre className="code-command" aria-label="Command to run">
+              {command.trim()}
+            </pre>
+            <div className="card-buttons">
+              <button type="button" onClick={() => void confirmRun()} disabled={running}>
+                Run tests
+              </button>
+              <button type="button" className="quiet" onClick={() => setConfirming(false)} disabled={running}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+        {runNote && (
+          <p className="note" role="status">
+            {runNote}
+          </p>
+        )}
+        {(log || running) && (
+          <pre className="code-log" aria-label="Test output">
+            {log || "Running…"}
+          </pre>
+        )}
+        {needsConfirm && !confirming && command.trim() && !running && (
+          <p className="note">The first run of this command will ask before it starts.</p>
+        )}
+      </div>
       {builtins && builtins.length > 0 && (
         <div className="code-skills">
           <h3>{CODE_BUILTINS}</h3>
