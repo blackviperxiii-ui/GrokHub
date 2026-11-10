@@ -124,6 +124,8 @@ pub(super) struct PulseView {
     pub sources_open: bool,
     /// The Feed instructions sheet is open with this draft.
     pub sheet: Option<String>,
+    /// The Saved page shows instead of the feed.
+    pub saved_open: bool,
     ledger: Vec<LedgerEntry>,
     ledger_at: Option<std::time::Instant>,
     textures: HashMap<String, Option<egui::TextureHandle>>,
@@ -975,6 +977,15 @@ pub(super) fn post_why(card: &UpdateCard) -> Option<String> {
 }
 
 /// A post's ··· menu: only "Why I created this" and its answer.
+/// The header pill that opens the Saved page, or goes back to the feed.
+pub(super) fn saved_pill_label(saved_open: bool) -> &'static str {
+    if saved_open {
+        "Back to feed"
+    } else {
+        "Saved"
+    }
+}
+
 fn post_why_menu(ui: &mut egui::Ui, why: Option<&str>) {
     ui.label(
         RichText::new("Why I created this")
@@ -1307,7 +1318,11 @@ impl Cabin {
                         ui.vertical(|ui| {
                             ui.set_width(width);
                             self.paint_pulse_header(ui);
-                            self.ui_pulse_stream(ui);
+                            if self.pulse_view.saved_open {
+                                self.ui_pulse_saved(ui);
+                            } else {
+                                self.ui_pulse_stream(ui);
+                            }
                             ui.add_space(24.0);
                         });
                     });
@@ -1329,6 +1344,11 @@ impl Cabin {
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
+                // Saved: kept posts on a page of their own, apart from the feed.
+                let saved = self.pulse_view.saved_open;
+                if crate::cards::ghost_pill(ui, saved_pill_label(saved)) {
+                    self.pulse_view.saved_open = !saved;
+                }
                 if crate::cards::ghost_pill(ui, "Feed instructions") {
                     self.open_feed_instructions();
                 }

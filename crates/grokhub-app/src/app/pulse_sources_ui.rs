@@ -606,10 +606,12 @@ impl Cabin {
                 let Some(find) = ps::saved_from_card(&card, now_ms()) else {
                     return;
                 };
+                // Read the file again first: the desktop app saves to it too.
+                self.sources.saved = None;
                 if ps::save_find(self.saved_now(), find) {
                     self.persist_saved();
                 }
-                self.status = "Saved to Saved Finds in Settings → Pulse.".into();
+                self.status = "Saved. It's on Pulse → Saved.".into();
                 if card.reaction == Some(grokhub_core::CardReaction::Up) {
                     let _ = self.learn_place_from_card(&card);
                     return;
@@ -729,8 +731,7 @@ impl Cabin {
             self.follow_update_action(Some(grokhub_core::UpdateAction::DeepLink { href: url }));
         }
         if let Some(url) = remove {
-            self.saved_now().retain(|f| f.url != url);
-            self.persist_saved();
+            self.remove_saved(&url);
         }
     }
 
@@ -1189,6 +1190,13 @@ mod tests {
             cabin.follow_source_fetch();
             assert_eq!(cabin.sources.note, "");
         }
+        // The Saved page reads the same file: clearing the feed leaves it be,
+        // and Remove from saved is the one way out.
+        cabin.updates.clear();
+        assert_eq!(cabin.saved_page_list().len(), 1);
+        cabin.remove_saved("https://blog.rust-lang.org/1.99");
+        assert!(cabin.saved_page_list().is_empty());
+        assert!(ps::load_saved(&saved_finds_path()).is_empty());
     }
 
     #[test]
@@ -1232,7 +1240,7 @@ mod tests {
         let saved = id(&cabin, "Rust 1.99 released");
         cabin.source_post_act(&saved, SourceAct::Save);
         cabin.source_post_act(&saved, SourceAct::Save);
-        assert_eq!(cabin.status, "Saved to Saved Finds in Settings → Pulse.");
+        assert_eq!(cabin.status, "Saved. It's on Pulse → Saved.");
         let on_disk = ps::load_saved(&saved_finds_path());
         let rows: Vec<(&str, &str, &str, Option<&str>)> = on_disk
             .iter()
@@ -1338,7 +1346,7 @@ mod tests {
             .expect("second");
         cabin.source_post_act(&first, SourceAct::Save);
         assert_eq!(cabin.cfg.pulse_sources.subreddits, Vec::<String>::new());
-        assert_eq!(cabin.status, "Saved to Saved Finds in Settings → Pulse.");
+        assert_eq!(cabin.status, "Saved. It's on Pulse → Saved.");
         cabin.source_post_act(&second, SourceAct::Save);
         assert_eq!(cabin.cfg.pulse_sources.subreddits, vec!["rust".to_string()]);
         assert_eq!(

@@ -15,6 +15,7 @@ import {
   type PulsePage,
 } from "./api";
 import { FeedCard, IdeaRow, SkeletonRows } from "./FeedCard";
+import { SavedPage } from "./SavedPage";
 import { FixWindow } from "./PulseFix";
 import { StatusLine, useNote } from "./ui";
 
@@ -37,7 +38,7 @@ export const PAGE_SIZE = 10;
 const POLL_MS = 4000;
 const POLL_TRIES = 8;
 
-type Tab = "feed" | "ideas";
+type Tab = "feed" | "ideas" | "saved";
 
 /** The Feed instructions sheet: one free-text box, Cancel and Save. */
 function Instructions({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
@@ -252,6 +253,16 @@ export function Pulse({
           <button type="button" aria-pressed={tab === "ideas"} onClick={openIdeas}>
             {FOR_YOU_LABEL}
           </button>
+          <button
+            type="button"
+            aria-pressed={tab === "saved"}
+            onClick={() => {
+              setTab("saved");
+              clear();
+            }}
+          >
+            Saved
+          </button>
         </div>
         {tab === "feed" && (
           <button
@@ -288,6 +299,7 @@ export function Pulse({
         />
       )}
       <StatusLine note={note} />
+      {tab === "saved" && <SavedPage onError={fail} />}
       {tab === "feed" && (
         <ul className="rows feed" aria-busy={page === null}>
           {page === null && !note && <SkeletonRows />}
@@ -308,6 +320,7 @@ export function Pulse({
                 onWhy={() => pulseWhy(post.id)}
                 onSnooze={() => void act(post.id, "snooze", "Snoozed until 9 AM.")}
                 onDelete={() => void act(post.id, "delete", "Deleted.")}
+                onSave={() => void act(post.id, "save", "Saved. It's on the Saved page.")}
                 onChip={(c) => void chip(post.id, c)}
               />
               {i === today - 1 && i < total - 1 && (
