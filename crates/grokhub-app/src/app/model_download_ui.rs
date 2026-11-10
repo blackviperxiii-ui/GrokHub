@@ -78,8 +78,14 @@ fn with_engine(
             Ok(_) => done,
             Err(Ro::Paused { done }) => Outcome::Paused { done },
             Err(Ro::Cancelled) => Outcome::Cancelled,
-            Err(Ro::BadChecksum) => Outcome::BadChecksum,
-            Err(Ro::Failed(e)) => Outcome::Failed(e),
+            Err(Ro::BadChecksum) => Outcome::Failed {
+                step: md::Step::Engine,
+                why: "Its engine didn't match its published checksum, so it was deleted. Download it again to retry.".into(),
+            },
+            Err(Ro::Failed(why)) => Outcome::Failed {
+                step: md::Step::Engine,
+                why,
+            },
             Err(Ro::Done { .. }) => done,
         }
     }
@@ -152,20 +158,21 @@ impl Fetch for HfFetch {
     }
 
     fn sha256(&self, repo: &str, file: &str) -> Result<String, String> {
-        let url = md::tree_url(repo);
-        crate::xai::egress_ok(&url, &[])?;
-        let resp = agent()
-            .get(&url)
-            .header("user-agent", "GrokHub")
-            .call()
-            .map_err(|e| e.to_string())?;
-        let mut body = String::new();
-        resp.into_reader()
-            .take(4 * MIB)
-            .read_to_string(&mut body)
-            .map_err(|e| e.to_string())?;
-        md::sha256_from_tree(&body, file)
-            .ok_or_else(|| format!("Hugging Face lists no checksum for {file}"))
+        md::sha256_lookup(repo, file, &mut |url| {
+            crate::xai::egress_ok(url, &[])?;
+            let resp = agent()
+                .get(url)
+                .header("user-agent", "GrokHub")
+                .call()
+                .map_err(|e| e.to_string())?;
+            let link = resp.header("link").map(str::to_owned);
+            let mut body = String::new();
+            resp.into_reader()
+                .take(4 * MIB)
+                .read_to_string(&mut body)
+                .map_err(|e| e.to_string())?;
+            Ok((body, link))
+        })
     }
 }
 
@@ -190,7 +197,7 @@ pub(super) fn outcome_status(m: &LocalModel, out: &Outcome, dir: &Path) -> Strin
             "{} didn't match its published checksum, so it was deleted. Try the download again.",
             m.name
         ),
-        Outcome::Failed(why) => format!("{why} Resume picks up where it stopped."),
+        Outcome::Failed { why, .. } => format!("{why} Resume picks up where it stopped."),
     }
 }
 
@@ -300,6 +307,7 @@ impl Cabin {
         if self.setup.dl.is_some() {
             return;
         }
+        self.setup.dl_errors.remove(m.id);
         let ctl = Arc::new(Control::default());
         let (tx, rx) = mpsc::channel();
         let worker = ctl.clone();
@@ -369,10 +377,10 @@ impl Cabin {
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    finished = Some(Outcome::Failed(format!(
-                        "The download of {} stopped.",
-                        dl.model.name
-                    )));
+                    finished = Some(Outcome::Failed {
+                        step: md::Step::Download,
+                        why: format!("The download of {} stopped.", dl.model.name),
+                    });
                     break;
                 }
             }
@@ -405,7 +413,13 @@ impl Cabin {
                 }
             }
             Outcome::Paused { .. } => {}
-            _ => self.setup.dl_queue.clear(),
+            Outcome::Cancelled => self.setup.dl_queue.clear(),
+            // One model's failure stays on its row; the rest of the queue goes on.
+            failed => {
+                if let Some(e) = grokhub_core::model_library::row_error(m, &failed) {
+                    self.setup.dl_errors.insert(m.id, e);
+                }
+            }
         }
         if let Some(next) = self.advance_queue() {
             status.push_str(&format!(" Getting {next} next."));
@@ -894,7 +908,10 @@ pub(in crate::app) mod tests {
         let e2b = ls::model_by_id("gemma-4-e2b-it-abliterated-q4_k").expect("E2B");
         // The real fetch carries no data, so the egress guard lets both Hugging Face calls through.
         assert_eq!(crate::xai::egress_ok(&md::download_url(e2b), &[]), Ok(()));
-        assert_eq!(crate::xai::egress_ok(&md::tree_url(e2b.repo), &[]), Ok(()));
+        assert_eq!(
+            crate::xai::egress_ok(&md::tree_url(e2b.repo, e2b.remote_name()), &[]),
+            Ok(())
+        );
         // A real GGUF can't be faked, so this model is pinned to the fake body.
         let body = b"tiny fake gguf".to_vec();
         let m: &'static LocalModel = Box::leak(Box::new(LocalModel {
@@ -1046,6 +1063,58 @@ pub(in crate::app) mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// Hugging Face is down: the checksum read fails.
+    struct DownHf;
+
+    impl Fetch for DownHf {
+        fn open(&self, _url: &str, _offset: u64) -> Result<md::Opened, String> {
+            Err("never opened".into())
+        }
+        fn sha256(&self, _repo: &str, _file: &str) -> Result<String, String> {
+            Err("timed out".into())
+        }
+    }
+
+    #[test]
+    fn a_failed_download_keeps_the_queue_going_and_its_reason_on_its_row() {
+        let root = std::env::temp_dir().join(format!("grokhub-dl-fail-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let _pin = crate::config::TestConfigDir::set(root.join("cfg"));
+        let e2b = ls::model_by_id("gemma-4-e2b-it-abliterated-q4_k").expect("E2B");
+        let next = ls::model_by_id("gemma-4-12b-it-abliterated-mtp").expect("12B heads");
+        let mut app = Cabin::quiet_for_test();
+        app.setup.dl_queue.push(next);
+        STARTED.with(|s| s.borrow_mut().clear());
+        app.start_model_download_with(e2b, root.join("models"), Box::new(DownHf));
+        for _ in 0..500 {
+            app.poll_model_download();
+            if app.setup.dl.is_none() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(app.setup.dl.is_none(), "the download never finished");
+        // The next queued model still starts.
+        assert_eq!(STARTED.with(|s| s.take()), vec![next.id]);
+        let e = app
+            .setup
+            .dl_errors
+            .get(e2b.id)
+            .expect("a reason on its row");
+        assert_eq!(
+            (e.step, e.message.as_str(), e.detail.as_str()),
+            (
+                "checksum read",
+                "Couldn't read the checksum for Gemma 4 E2B: timed out",
+                "Failed at: checksum read"
+            )
+        );
+        // Downloading it again clears it.
+        app.download_all(vec![e2b]);
+        assert!(app.setup.dl_errors.is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn each_ending_reads_as_a_plain_status_line() {
         let m = ls::model_by_id("gemma-4-e4b-it-abliterated-q4_k").expect("E4B");
@@ -1065,7 +1134,10 @@ pub(in crate::app) mod tests {
         assert_eq!(
             outcome_status(
                 m,
-                &Outcome::Failed("The download of Gemma 4 E4B stopped: timed out".into()),
+                &Outcome::Failed {
+                    step: md::Step::Download,
+                    why: "The download of Gemma 4 E4B stopped: timed out".into()
+                },
                 dir
             ),
             "The download of Gemma 4 E4B stopped: timed out Resume picks up where it stopped."

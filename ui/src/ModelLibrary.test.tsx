@@ -17,7 +17,7 @@ const api = vi.hoisted(() => ({
 const events = vi.hoisted(() => [] as ((s: LibraryStatus) => void)[]);
 vi.mock("./api", () => api);
 
-const idle: LibraryStatus = { job: null, queued: 0, message: null, running: false };
+const idle: LibraryStatus = { job: null, queued: 0, message: null, errors: {}, running: false };
 
 function library(over: Partial<LibraryView> = {}): LibraryView {
   return {
@@ -119,6 +119,7 @@ describe("ModelLibrary", () => {
       job: { id: "g12", line: "Downloading Gemma 4 12B: 1.0 of 6.9 GB", pct: 14 },
       queued: 1,
       message: null,
+      errors: {},
       running: true,
     };
     api.downloadModels.mockResolvedValue(library({ status: busy }));
@@ -136,5 +137,35 @@ describe("ModelLibrary", () => {
     });
     expect(await screen.findByText("Downloaded Gemma 4 12B.")).toBeInTheDocument();
     expect(api.getModelLibrary).toHaveBeenCalledTimes(2);
+  });
+  it("shows a failed download's reason on its own row, under its button", async () => {
+    api.getModelLibrary.mockResolvedValue(library());
+    render(<ModelLibrary />);
+    const row = await screen.findByRole("listitem", { name: "Gemma 4 12B" });
+    expect(within(row).queryByRole("alert")).toBeNull();
+    const failed: LibraryStatus = {
+      ...idle,
+      message: "Gemma 4 12B didn't download. Its row says why.",
+      errors: {
+        g12: {
+          step: "free space",
+          message:
+            "Not enough free space for Gemma 4 12B. To make room, remove a downloaded model you don't use with the Remove button on its row, then download this one again.",
+          detail: "Failed at: free space (3.1 GB free, 8.9 GB needed)",
+        },
+      },
+    };
+    api.getModelLibrary.mockResolvedValue(library({ status: failed }));
+    act(() => {
+      for (const cb of events) cb(failed);
+    });
+    const alert = await within(row).findByRole("alert");
+    expect(alert).toHaveTextContent(/^Not enough free space for Gemma 4 12B\. To make room, remove a downloaded model/);
+    expect(alert).toHaveTextContent("Failed at: free space (3.1 GB free, 8.9 GB needed)");
+    // The reason follows its own row's button, inside the row.
+    const button = within(row).getByRole("button", { name: "Download Gemma 4 12B" });
+    expect(button.compareDocumentPosition(alert) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // The other row says nothing.
+    expect(within(screen.getByRole("listitem", { name: "Gemma 4 E2B" })).queryByRole("alert")).toBeNull();
   });
 });
