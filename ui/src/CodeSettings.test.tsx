@@ -8,6 +8,9 @@ const api = vi.hoisted(() => ({
   codeTestForget: vi.fn<() => Promise<{ command: string | null }>>(),
   getCodeShip: vi.fn(),
   saveCodeShip: vi.fn(),
+  codeSecretList: vi.fn(() => Promise.resolve({ names: [] as string[] })),
+  codeSecretSet: vi.fn(),
+  codeSecretDelete: vi.fn(),
 }));
 
 vi.mock("./api", () => api);

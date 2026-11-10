@@ -1,8 +1,8 @@
 //! The Code tab's activity log: one JSON line per push, PR, new branch or
 //! blocked attempt, in `code-activity.jsonl` in the config folder. Commands
-//! and summaries pass through the secret redactor before they are written.
+//! and summaries pass through the secret redactor (and any held project
+//! secret values) before they are written.
 
-use grokhub_core::redact::redact_secrets;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -50,10 +50,21 @@ fn path(config_dir: &Path) -> PathBuf {
 
 /// Add one entry, then keep only the newest `keep` lines.
 pub fn append(config_dir: &Path, entry: &Entry, keep: usize) -> Result<(), String> {
+    append_held(config_dir, entry, keep, &[])
+}
+
+/// [`append`] for a run that had project secrets in its environment: each held
+/// value is replaced with the redaction marker before the line is written.
+pub fn append_held(
+    config_dir: &Path,
+    entry: &Entry,
+    keep: usize,
+    held: &[String],
+) -> Result<(), String> {
     let _g = WRITE.lock().unwrap_or_else(|e| e.into_inner());
     let clean = Entry {
-        command: redact_secrets(&entry.command),
-        summary: redact_secrets(&entry.summary),
+        command: crate::code_secrets::redact(&entry.command, held),
+        summary: crate::code_secrets::redact(&entry.summary, held),
         ..entry.clone()
     };
     let line = serde_json::to_string(&clean).map_err(|e| e.to_string())?;

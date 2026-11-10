@@ -18,6 +18,7 @@ pub mod chips;
 pub mod code;
 pub mod code_activity;
 pub mod code_runs;
+pub mod code_secrets;
 pub mod code_ship;
 pub mod connectors;
 pub mod credential;
@@ -1716,6 +1717,41 @@ async fn code_activity_list(
 ) -> Result<Vec<code_activity::Entry>, String> {
     let config = state.config_dir.clone();
     off_main(move || code_activity::list(&config, code_activity::SHOW)).await
+}
+
+/// Settings → Code → Secrets: this project's secret names (never the values).
+#[tauri::command]
+async fn code_secret_list(
+    state: State<'_, ShellState>,
+) -> Result<code_secrets::SecretList, String> {
+    let dir = workspace(&state);
+    let config = state.config_dir.clone();
+    off_main(move || code_secrets::list_for(&config, &dir)).await
+}
+
+/// Settings → Code → Secrets: add a secret or replace its value. The value goes
+/// to the OS keychain; only the name is written to disk.
+#[tauri::command]
+async fn code_secret_set(
+    state: State<'_, ShellState>,
+    name: String,
+    value: String,
+) -> Result<code_secrets::SecretList, String> {
+    let dir = workspace(&state);
+    let config = state.config_dir.clone();
+    off_main(move || code_secrets::set_for(&config, &dir, &name, &value)).await?
+}
+
+/// Settings → Code → Secrets: delete one secret. Refused unless `confirmed`.
+#[tauri::command]
+async fn code_secret_delete(
+    state: State<'_, ShellState>,
+    name: String,
+    confirmed: bool,
+) -> Result<code_secrets::SecretList, String> {
+    let dir = workspace(&state);
+    let config = state.config_dir.clone();
+    off_main(move || code_secrets::delete_for(&config, &dir, &name, confirmed)).await?
 }
 
 /// Settings → Code → Pushes and PRs.
@@ -3744,6 +3780,9 @@ pub fn run() {
             code_ship_run,
             code_new_branch,
             code_activity_list,
+            code_secret_list,
+            code_secret_set,
+            code_secret_delete,
             get_code_ship,
             save_code_ship,
             get_journal,

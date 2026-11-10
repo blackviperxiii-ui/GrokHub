@@ -2750,3 +2750,22 @@ export function getCodeShip(): Promise<CodeShipSettings> {
 export function saveCodeShip(ship: CodeShipSettings): Promise<CodeShipSettings> {
   return invoke<CodeShipSettings>("save_code_ship", { ship });
 }
+
+/** Settings → Code → Secrets: this project's secret names. Values never come back to the window. */
+export interface CodeSecretList {
+  names: string[];
+}
+
+export function codeSecretList(): Promise<CodeSecretList> {
+  return invoke<CodeSecretList>("code_secret_list");
+}
+
+/** Add a secret or replace its value. The value goes to the system keychain. */
+export function codeSecretSet(name: string, value: string): Promise<CodeSecretList> {
+  return invoke<CodeSecretList>("code_secret_set", { name, value });
+}
+
+/** Delete a secret. The shell refuses unless `confirmed` is true. */
+export function codeSecretDelete(name: string, confirmed: boolean): Promise<CodeSecretList> {
+  return invoke<CodeSecretList>("code_secret_delete", { name, confirmed });
+}

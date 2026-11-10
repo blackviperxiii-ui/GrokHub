@@ -1,0 +1,1 @@
+- Settings > Code has a Secrets list for each project, ready for deploy runs. You add, replace or delete a secret by name; the value goes into your system keychain and never comes back to the screen. Only the names are saved, deleting asks first, and a value is hidden as [redacted] in output and in the Activity list.

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { codeTestForget, codeTestRemembered, getCodeShip, saveCodeShip, type CodeShipSettings } from "./api";
+import { CodeSecrets } from "./CodeSecrets";
 import { Toggle } from "./Toggle";
 
 export const CODE_SETTINGS_NOTE =
@@ -150,6 +151,7 @@ export function CodeSettings() {
         </>
       )}
       <ShipSettings />
+      <CodeSecrets />
     </div>
   );
 }
