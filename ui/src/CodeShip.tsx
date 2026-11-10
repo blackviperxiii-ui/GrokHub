@@ -21,6 +21,8 @@ const KIND_LABEL: Record<CodeActivityEntry["kind"], string> = {
   pr: "PR",
   branch: "Branch",
   blocked: "Blocked",
+  deploy: "Deploy",
+  secret: "Secret",
 };
 
 /** One activity line's time, in the person's own clock. */

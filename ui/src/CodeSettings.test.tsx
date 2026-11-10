@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { CODE_SETTINGS_NONE, CodeSettings, SHIP_MODE_ASK, SHIP_MODE_AUTO, SHIP_SETTINGS_RULES } from "./CodeSettings";
+import { CODE_SETTINGS_NONE, CodeSettings, DEPLOY_SETTINGS_NONE, SHIP_MODE_ASK, SHIP_MODE_AUTO, SHIP_SETTINGS_RULES } from "./CodeSettings";
 
 const api = vi.hoisted(() => ({
   codeTestRemembered: vi.fn<() => Promise<{ command: string | null }>>(),
@@ -11,6 +11,9 @@ const api = vi.hoisted(() => ({
   codeSecretList: vi.fn(() => Promise.resolve({ names: [] as string[] })),
   codeSecretSet: vi.fn(),
   codeSecretDelete: vi.fn(),
+  codeDeployPlan: vi.fn(),
+  codeDeploySave: vi.fn(),
+  codeDeployForget: vi.fn(),
 }));
 
 vi.mock("./api", () => api);
@@ -23,11 +26,24 @@ const SHIP = {
   activityKeep: 2000,
 };
 
+const DEPLOY_OFF = {
+  deployEnabled: false,
+  command: "",
+  needsConfirm: true,
+  remembered: null as string | null,
+  mode: "ask" as const,
+  blocked: "Deploy is off for this project. Turn it on in Settings → Code.",
+};
+
 describe("Settings → Code", () => {
   beforeEach(() => {
     api.codeTestRemembered.mockReset();
     api.codeTestForget.mockReset();
     api.getCodeShip.mockReset();
+    api.codeDeployPlan.mockReset();
+    api.codeDeploySave.mockReset();
+    api.codeDeployForget.mockReset();
+    api.codeDeployPlan.mockResolvedValue(DEPLOY_OFF);
     api.saveCodeShip.mockReset();
     api.getCodeShip.mockResolvedValue(SHIP);
     api.saveCodeShip.mockImplementation((ship: typeof SHIP) => Promise.resolve(ship));
@@ -92,5 +108,32 @@ describe("Settings → Code", () => {
     await userEvent.type(base, "main");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText("The PR base can't be main: main is never pushed to.")).toBeInTheDocument();
+  });
+  it("deploy is off by default, and turning it on saves the typed command", async () => {
+    api.codeTestRemembered.mockResolvedValue({ command: null });
+    api.codeDeploySave.mockResolvedValue({ deployEnabled: true, command: "npm run deploy" });
+    render(<CodeSettings />);
+    const toggle = await screen.findByRole("switch", { name: "Let the Code tab deploy this project" });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    api.codeDeployPlan.mockResolvedValue({ ...DEPLOY_OFF, deployEnabled: true, command: "npm run deploy", blocked: null });
+    await userEvent.type(screen.getByRole("textbox", { name: "Deploy command" }), "npm run deploy");
+    await userEvent.click(toggle);
+    expect(api.codeDeploySave).toHaveBeenLastCalledWith(true, "npm run deploy");
+    expect(await screen.findByRole("switch", { name: "Let the Code tab deploy this project" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+  });
+
+  it("shows the remembered deploy command and forgets it when the toggle is turned off", async () => {
+    api.codeTestRemembered.mockResolvedValue({ command: null });
+    const on = { ...DEPLOY_OFF, deployEnabled: true, command: "npm run deploy", blocked: null };
+    api.codeDeployPlan.mockResolvedValue({ ...on, remembered: "npm run deploy" });
+    api.codeDeployForget.mockResolvedValue({ ...on, remembered: null });
+    render(<CodeSettings />);
+    expect(await screen.findByText(/Remembered command/)).toHaveTextContent("Remembered command: npm run deploy");
+    await userEvent.click(screen.getByRole("switch", { name: "Remember this project's deploy command" }));
+    expect(api.codeDeployForget).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText(DEPLOY_SETTINGS_NONE)).toBeInTheDocument();
   });
 });

@@ -21,6 +21,8 @@ pub enum Kind {
     Pr,
     Branch,
     Blocked,
+    Deploy,
+    Secret,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

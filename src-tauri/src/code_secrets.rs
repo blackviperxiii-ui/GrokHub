@@ -273,9 +273,72 @@ impl Loaded {
         redact(text, &held)
     }
 
+    /// A redactor for one run's output that never lets a value slip through
+    /// split across two reads.
+    pub fn shield(&self) -> Shield {
+        Shield::new(self.held())
+    }
+
     /// The values, for redacting text built elsewhere (the activity log).
     pub fn held(&self) -> Vec<String> {
         self.pairs.iter().map(|(_, v)| v.clone()).collect()
+    }
+}
+
+/// Redacts a child's output as it streams. Output is held back to the end of
+/// each line, so a value split across two reads is still hidden whole. With no
+/// values to hide it passes text straight through (token patterns only).
+#[derive(Debug, Default)]
+pub struct Shield {
+    held: Vec<String>,
+    pending: String,
+    longest: usize,
+}
+
+/// A line this long with no newline is let out, keeping back enough to hide a
+/// value that straddles the cut.
+const SHIELD_LINE_LIMIT: usize = 32 * 1024;
+
+impl Shield {
+    pub fn new(held: Vec<String>) -> Self {
+        let held: Vec<String> = held
+            .into_iter()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .collect();
+        let longest = held.iter().map(String::len).max().unwrap_or(0);
+        Self {
+            held,
+            pending: String::new(),
+            longest,
+        }
+    }
+
+    /// Redacted text that is safe to show so far.
+    pub fn push(&mut self, text: &str) -> String {
+        if self.held.is_empty() {
+            return redact(text, &[]);
+        }
+        self.pending.push_str(text);
+        let mut cut = self.pending.rfind('\n').map(|i| i + 1).unwrap_or(0);
+        if cut == 0 && self.pending.len() > SHIELD_LINE_LIMIT {
+            cut = self
+                .pending
+                .len()
+                .saturating_sub(self.longest.saturating_sub(1));
+            while cut > 0 && !self.pending.is_char_boundary(cut) {
+                cut -= 1;
+            }
+        }
+        let rest = self.pending.split_off(cut);
+        let ready = std::mem::replace(&mut self.pending, rest);
+        redact(&ready, &self.held)
+    }
+
+    /// Whatever is still held back, redacted. Call once the output has ended.
+    pub fn finish(&mut self) -> String {
+        let ready = std::mem::take(&mut self.pending);
+        redact(&ready, &self.held)
     }
 }
 
@@ -319,13 +382,82 @@ pub fn list_for(config_dir: &Path, workspace: &Path) -> SecretList {
     list(config_dir, &key_of(workspace))
 }
 
+/// Put a secret change in the activity log: the name only, never the value.
+pub fn log_change(config_dir: &Path, repo_key: &str, summary: &str, keep: usize) {
+    let _ = crate::code_activity::append(
+        config_dir,
+        &crate::code_activity::Entry {
+            ts_ms: grokhub_core::now_ms(),
+            kind: crate::code_activity::Kind::Secret,
+            repo_key: repo_key.to_string(),
+            host: String::new(),
+            branch: String::new(),
+            command: String::new(),
+            mode: String::new(),
+            approved_by: "user".into(),
+            exit: None,
+            summary: summary.to_string(),
+        },
+        keep,
+    );
+}
+
+/// [`set`] against the keychain, then log whether the name was added or its
+/// value replaced.
+pub fn set_logged(
+    config_dir: &Path,
+    vault: &dyn Vault,
+    repo_key: &str,
+    name: &str,
+    value: &str,
+    keep: usize,
+) -> Result<SecretList, String> {
+    let name = name.trim();
+    let existed = names_in(&load(config_dir), repo_key)
+        .iter()
+        .any(|n| n == name);
+    let list = set(config_dir, vault, repo_key, name, value)?;
+    let verb = if existed {
+        "Replaced the value of"
+    } else {
+        "Added"
+    };
+    log_change(
+        config_dir,
+        repo_key,
+        &format!("{verb} secret {name}."),
+        keep,
+    );
+    Ok(list)
+}
+
+/// [`delete`] against the keychain, then log it.
+pub fn delete_logged(
+    config_dir: &Path,
+    vault: &dyn Vault,
+    repo_key: &str,
+    name: &str,
+    confirmed: bool,
+    keep: usize,
+) -> Result<SecretList, String> {
+    let list = delete(config_dir, vault, repo_key, name, confirmed)?;
+    log_change(
+        config_dir,
+        repo_key,
+        &format!("Deleted secret {}.", name.trim()),
+        keep,
+    );
+    Ok(list)
+}
+
 pub fn set_for(
     config_dir: &Path,
     workspace: &Path,
     name: &str,
     value: &str,
+    keep: usize,
 ) -> Result<SecretList, String> {
-    set(config_dir, &Keychain, &key_of(workspace), name, value)
+    set_logged(config_dir, &Keychain, &key_of(workspace), name, value, keep)
 }
 
 pub fn delete_for(
@@ -333,8 +465,16 @@ pub fn delete_for(
     workspace: &Path,
     name: &str,
     confirmed: bool,
+    keep: usize,
 ) -> Result<SecretList, String> {
-    delete(config_dir, &Keychain, &key_of(workspace), name, confirmed)
+    delete_logged(
+        config_dir,
+        &Keychain,
+        &key_of(workspace),
+        name,
+        confirmed,
+        keep,
+    )
 }
 
 #[cfg(test)]
