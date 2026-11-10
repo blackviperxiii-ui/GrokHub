@@ -160,6 +160,7 @@ impl Cabin {
                     self.harness_watch_cu(&watched, true);
                 }
                 AcpEvent::Findings(body) => self.harness.pending_findings = Some(body),
+                AcpEvent::Unsteered(texts) => self.requeue_unsteered(texts),
                 AcpEvent::Plan(t) => {
                     // Plan text only. No approve / request-changes / comment RPC on this tip:
                     // session/request_permission is tool Allow/Deny, and /approve does not parse.

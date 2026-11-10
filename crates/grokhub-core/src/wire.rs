@@ -200,6 +200,9 @@ pub enum AcpEvent {
         /// Set on the finish of a compaction xAI's server ran; `None` otherwise.
         server: Option<CompactDetail>,
     },
+    /// Steers the run never read: sent after its last steer check, or left
+    /// from a run that already ended. The host sends each as its own turn.
+    Unsteered(Vec<String>),
     Done {
         stop_reason: String,
     },
