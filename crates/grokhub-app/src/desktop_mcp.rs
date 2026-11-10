@@ -3,8 +3,7 @@
 //! host, and keeps the Settings glue that reads `AppConfig`.
 
 pub(crate) use grokhub_desktop::{
-    cua_wanted, desktop_panel_lines, process_started_ms, read_line_capped, screen_grabber,
-    take_desktop_test_status,
+    cua_wanted, desktop_panel_lines, process_started_ms, screen_grabber, take_desktop_test_status,
 };
 #[cfg(windows)]
 pub(crate) use grokhub_desktop::{windows_hands, windows_primary_frame};
