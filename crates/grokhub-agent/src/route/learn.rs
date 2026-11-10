@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
+use grokhub_core::learn::decide::{Outcome, Verdict as Decided};
 use grokhub_core::model_registry::profile::{read_profiles, ModelProfile};
 use grokhub_core::model_registry::store::{load_registry, models_dir, read_json, write_json};
 use grokhub_core::model_registry::Registry;
@@ -27,6 +28,7 @@ use super::policy::{
 use super::signals::{OutcomeSource, VerifySource};
 use super::spend::{premium_grants, spend_settings, Spend};
 use super::table::{load_table, profiles_hash};
+use super::trust::{self, Trust};
 use super::tune::{
     self, Arm, Candidate, Change, Evidence, Filters, Snap, Stage, Step, TuneState, Tuning, Verdict,
     DAY_MS, REJECT_DAYS, WEEK_MS,
@@ -447,6 +449,9 @@ pub struct TuneRun {
     pub promoted: Vec<String>,
     pub rolled_back: Vec<String>,
     pub rejected: Vec<String>,
+    /// Candidates whose canary passed and which the decision engine holds
+    /// (the trust dial, Halt, quiet hours, a pause, the day's budget).
+    pub held: Vec<String>,
     /// D13: the per-chat metrics this pass read (cache hits, switches,
     /// escalations and their precision). The measured cache hit rate feeds
     /// the learner's cost estimates.
@@ -465,6 +470,18 @@ pub fn tick(
     verify: &dyn VerifySource,
     outcome_hook: &dyn OutcomeSource,
     now_ms: u64,
+) -> Result<TuneRun, String> {
+    tick_under(config_dir, verify, outcome_hook, now_ms, &trust::Hub)
+}
+
+/// [`tick`] with the decision engine passed in: `trust` weighs every
+/// promotion and hears what became of it.
+pub fn tick_under(
+    config_dir: &Path,
+    verify: &dyn VerifySource,
+    outcome_hook: &dyn OutcomeSource,
+    now_ms: u64,
+    trust: &dyn Trust,
 ) -> Result<TuneRun, String> {
     if !verify.ready() || !outcome_hook.ready() {
         return Err(NEEDS_DATA.into());
@@ -504,6 +521,10 @@ pub fn tick(
             c.reason = "undone".into();
             c.ended_at = Some(now_ms);
             c.until = Some(now_ms + REJECT_DAYS * DAY_MS);
+            if let Some(rule) = trust::rule(&c.class, &change) {
+                // Two undos in a day pause every area: later promotions are held.
+                trust.outcome(&rule, Outcome::Undone, now_ms);
+            }
             continue;
         }
         if !c.active() {
@@ -523,6 +544,24 @@ pub fn tick(
                 cost_gain_pct,
                 latency_gain_pct,
             } => {
+                let held = trust::promotion(&c, &ev, cost_gain_pct, latency_gain_pct)
+                    .and_then(|p| trust.weigh(&p, now_ms))
+                    .filter(|d| d.verdict != Decided::Act);
+                if let Some(d) = held {
+                    let c = &mut state.candidates[i];
+                    if d.verdict == Decided::Never {
+                        c.stage = Stage::Rejected;
+                        c.reason = d.reason.why().into();
+                        c.ended_at = Some(now_ms);
+                        c.until = Some(now_ms + REJECT_DAYS * DAY_MS);
+                        run.rejected.push(c.id.clone());
+                    } else {
+                        // It stays in its canary and is weighed again next pass.
+                        c.reason = format!("waiting: {}", d.reason.why());
+                        run.held.push(c.id.clone());
+                    }
+                    continue;
+                }
                 let before = tuning.value(&c.class, &change);
                 tuning.apply(&c.class, &change);
                 let reason = match c.cost_rise_pct {
@@ -541,6 +580,7 @@ pub fn tick(
                 write_tuning(config_dir, &tuning, &reason)?;
                 let c = &mut state.candidates[i];
                 c.stage = Stage::Watch;
+                c.reason.clear();
                 c.promoted_at = Some(now_ms);
                 c.baseline = Some(ev.live);
                 c.promoted_snap = Some(ev.canary);
@@ -556,6 +596,9 @@ pub fn tick(
                         &format!("router rolled back {}: {why}", plain(&c.class)),
                     )?;
                     run.rolled_back.push(c.id.clone());
+                    if let Some(rule) = trust::rule(&c.class, &change) {
+                        trust.outcome(&rule, Outcome::RolledBack, now_ms);
+                    }
                 } else {
                     run.rejected.push(c.id.clone());
                 }
@@ -565,7 +608,12 @@ pub fn tick(
                 c.ended_at = Some(now_ms);
                 c.until = Some(now_ms + REJECT_DAYS * DAY_MS);
             }
-            Verdict::Keep => state.candidates[i].stage = Stage::Kept,
+            Verdict::Keep => {
+                state.candidates[i].stage = Stage::Kept;
+                if let Some(rule) = trust::rule(&c.class, &change) {
+                    trust.outcome(&rule, Outcome::Kept, now_ms);
+                }
+            }
         }
     }
     let inputs = format!("{}:{}", reg.hash, profiles_hash(&profiles));

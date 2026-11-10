@@ -405,6 +405,7 @@ fn the_shared_logs_feed_one_engine() {
         hard: false,
         helps: None,
         hurts: None,
+        tested: false,
     };
     let at = grokhub_core::now_ms();
     let decide_one = || {
