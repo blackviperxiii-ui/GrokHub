@@ -54,6 +54,7 @@ pub mod local_scale;
 pub mod local_sidecar;
 pub mod local_spec;
 pub mod local_swap;
+pub mod local_task;
 pub mod local_tune;
 pub mod local_warm;
 pub mod log;

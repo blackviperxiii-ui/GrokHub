@@ -10,7 +10,7 @@
 
 use std::path::{Path, PathBuf};
 
-use grokhub_agent::route::{local_autoconfig, local_gov, local_live, local_sidecar};
+use grokhub_agent::route::{local_autoconfig, local_gov, local_live, local_sidecar, local_task};
 use grokhub_core::local_discover::{self, FoundModel, Source};
 use grokhub_core::local_governor::{Level, Rules};
 use grokhub_core::local_picker::{self, BenchCache, Bucket, CpuSimd, Memory, Pick, Profile};
@@ -571,6 +571,9 @@ pub struct Running {
     pub lines: Vec<String>,
     pub loaded: bool,
     pub kept_loaded: bool,
+    /// Dynamic: the best model on disk per task.
+    pub dynamic: bool,
+    pub dynamic_hint: String,
 }
 
 pub fn running(config_dir: &Path) -> Running {
@@ -579,7 +582,17 @@ pub fn running(config_dir: &Path) -> Running {
         lines: local_live::lines(&live),
         loaded: live.model.is_some(),
         kept_loaded: live.kept_loaded,
+        dynamic: local_task::dynamic(config_dir),
+        dynamic_hint: local_task::dynamic_row(local_task::dynamic(config_dir))
+            .0
+            .to_string(),
     }
+}
+
+/// Dynamic on or off, then the page again.
+pub fn set_dynamic(config_dir: &Path, on: bool) -> Result<LocalAiView, String> {
+    local_task::set_dynamic(config_dir, on)?;
+    Ok(refreshed(config_dir))
 }
 
 /// Keep loaded / Let it unload, then the page again.

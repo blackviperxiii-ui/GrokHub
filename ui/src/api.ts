@@ -1737,6 +1737,9 @@ export interface LocalRunning {
   lines: string[];
   loaded: boolean;
   keptLoaded: boolean;
+  /** Dynamic: the best model on disk per task. */
+  dynamic: boolean;
+  dynamicHint: string;
 }
 
 export type LocalEngineEvent = {
@@ -1772,6 +1775,10 @@ export function checkModelFile(path: string): Promise<LocalFileRow> {
 
 export function setLocalKeepLoaded(on: boolean): Promise<LocalAiView> {
   return invoke<LocalAiView>("set_local_keep_loaded", { on });
+}
+
+export function setLocalDynamic(on: boolean): Promise<LocalAiView> {
+  return invoke<LocalAiView>("set_local_dynamic", { on });
 }
 
 export function unloadLocalModel(): Promise<LocalAiView> {

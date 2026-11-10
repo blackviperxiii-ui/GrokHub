@@ -63,8 +63,9 @@ pub fn place_of(a: Option<&LaunchArgs>, bare_cpu: bool) -> Place {
 }
 
 /// The on-device model as it is now.
-pub fn snapshot(_config_dir: &Path) -> LocalLive {
+pub fn snapshot(config_dir: &Path) -> LocalLive {
     let kept_loaded = local_sidecar::keep_loaded();
+    let dynamic = super::local_task::dynamic(config_dir);
     let scale = super::local_scale::scale_now(local_sidecar::unix_ms());
     let Some(l) = local_sidecar::loaded() else {
         return LocalLive {
@@ -79,7 +80,7 @@ pub fn snapshot(_config_dir: &Path) -> LocalLive {
             unload_in_secs: None,
             kept_loaded,
             stand_in: None,
-            mode: super::local_swap::mode(None, &scale),
+            mode: super::local_swap::mode(None, &scale, dynamic),
             refusal: None,
         };
     };
@@ -106,7 +107,7 @@ pub fn snapshot(_config_dir: &Path) -> LocalLive {
         unload_in_secs: (!busy && !kept_loaded).then(|| l.idle_unload_secs.saturating_sub(idle)),
         kept_loaded,
         stand_in: l.stand_in,
-        mode: super::local_swap::mode(l.stand_in, &scale),
+        mode: super::local_swap::mode(l.stand_in, &scale, dynamic),
         refusal: local_spec::refusal_line(&l.model),
     }
 }
@@ -150,7 +151,7 @@ pub fn lines(l: &LocalLive) -> Vec<String> {
     let doing = if l.busy { "answering" } else { "loaded" };
     let mut out = vec![format!("Running now: {name}, {doing} {place}{size}.")];
     if let Some(why) = l.stand_in {
-        out.push(why.line().to_string());
+        out.push(why.line());
     }
     out.push(l.mode.line().to_string());
     let mut speed = match l.tok_s {

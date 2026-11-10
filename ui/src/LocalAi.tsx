@@ -9,6 +9,7 @@ import {
   resetLocalAi,
   runLocalSpeedTest,
   saveLocalAi,
+  setLocalDynamic,
   setLocalKeepLoaded,
   startLocalDrafterDownload,
   startLocalEngineDownload,
@@ -316,6 +317,15 @@ export function LocalAi() {
     }
   }
 
+  async function dynamic(on: boolean) {
+    try {
+      setView(await setLocalDynamic(on));
+      tell(on ? "Dynamic is on: each task gets the model best at it." : "Dynamic is off: your pick answers every task.");
+    } catch (err) {
+      fail(err);
+    }
+  }
+
   async function keepLoaded(on: boolean) {
     try {
       setView(await setLocalKeepLoaded(on));
@@ -401,6 +411,10 @@ export function LocalAi() {
         ))}
         <button type="button" className="quiet" onClick={() => void keepLoaded(!view.running.keptLoaded)}>
           {view.running.keptLoaded ? "Let it unload" : "Keep loaded"}
+        </button>
+        <p className="note">{view.running.dynamicHint}</p>
+        <button type="button" className="quiet" onClick={() => void dynamic(!view.running.dynamic)}>
+          {view.running.dynamic ? "Turn off Dynamic" : "Turn on Dynamic"}
         </button>
         {view.running.loaded && (
           <button type="button" className="quiet" onClick={() => void unloadNow()}>

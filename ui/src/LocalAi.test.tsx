@@ -18,6 +18,7 @@ const api = vi.hoisted(() => ({
   checkModelFile: vi.fn<(path: string) => Promise<LocalFileRow>>(),
   runLocalSpeedTest: vi.fn<() => Promise<string>>(),
   setLocalKeepLoaded: vi.fn<(on: boolean) => Promise<LocalAiView>>(),
+  setLocalDynamic: vi.fn<(on: boolean) => Promise<LocalAiView>>(),
   unloadLocalModel: vi.fn<() => Promise<LocalAiView>>(),
   startLocalEngineDownload: vi.fn(),
   cancelLocalEngineDownload: vi.fn(),
@@ -182,6 +183,8 @@ function view(
       lines: ["Running now: nothing. The model loads with the next reply."],
       loaded: false,
       keptLoaded: false,
+      dynamic: true,
+      dynamicHint: "On: each task runs on the model on disk that's best at it.",
     },
     ...over,
   };
@@ -355,6 +358,8 @@ describe("LocalAi", () => {
       ],
       loaded: true,
       keptLoaded: false,
+      dynamic: true,
+      dynamicHint: "On: each task runs on the model on disk that's best at it.",
     };
     api.getLocalAi.mockResolvedValue({ ...v, running });
     api.setLocalKeepLoaded.mockResolvedValue({ ...v, running: { ...running, keptLoaded: true } });
@@ -369,6 +374,29 @@ describe("LocalAi", () => {
     expect(api.unloadLocalModel).toHaveBeenCalled();
     expect(await screen.findByText(/Unloaded the model/)).toBeInTheDocument();
     expect(within(rows).queryByRole("button", { name: "Unload now" })).toBeNull();
+  });
+
+  it("turns Dynamic off and on from the running rows", async () => {
+    const v = PROFILES["16 GB GPU"];
+    const running = {
+      lines: ["Running now: nothing. The model loads with the next reply."],
+      loaded: false,
+      keptLoaded: false,
+      dynamic: true,
+      dynamicHint: "On: each task runs on the model on disk that's best at it.",
+    };
+    api.getLocalAi.mockResolvedValue({ ...v, running });
+    api.setLocalDynamic.mockResolvedValue({
+      ...v,
+      running: { ...running, dynamic: false, dynamicHint: "Off: your pick answers every task." },
+    });
+    render(<LocalAi />);
+    const rows = await screen.findByLabelText("Running now");
+    expect(rows).toHaveTextContent("best at it");
+    await userEvent.click(within(rows).getByRole("button", { name: "Turn off Dynamic" }));
+    expect(api.setLocalDynamic).toHaveBeenCalledWith(false);
+    expect(await within(rows).findByRole("button", { name: "Turn on Dynamic" })).toBeInTheDocument();
+    expect(rows).toHaveTextContent("Off: your pick answers every task.");
   });
 
   it("shows the Auto status line and what detection couldn't see", async () => {
