@@ -10,8 +10,9 @@ use std::path::Path;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
+use super::decide::{self, Alarm, Area, Decision, Dial, Outcome, Proposal, Situation};
 use super::view::{self, View};
-use super::{Engine, Signal, Subject};
+use super::{Engine, Kind, Signal, Subject};
 
 /// How often the writer thread looks for work. It writes only what
 /// [`Engine::tick`] says is due, so most looks do nothing.
@@ -110,4 +111,39 @@ pub fn forget_all() -> Result<(), String> {
 /// The usage counts auto setup reads. All zero before [`start`].
 pub fn auto_usage(now_ms: u64) -> crate::autotune::rules::Usage {
     read(|e| super::setup::usage(e.beliefs(), now_ms)).unwrap_or_default()
+}
+
+/// Weighs what the learners would like to change, the most helpful first.
+/// Nothing before [`start`], so nothing acts.
+pub fn decide_all(proposals: Vec<Proposal>, now: Situation, now_ms: u64) -> Vec<Decision> {
+    let Some(e) = engine() else {
+        return Vec::new();
+    };
+    decide::with_state(e.config_dir(), |s| s.decide_all(proposals, now, now_ms))
+}
+
+/// What became of an offer or of a change the app made. The rule's counts
+/// take it in, and the beliefs learn from it like any other signal.
+pub fn decision_outcome(rule: &Subject, outcome: Outcome, now_ms: u64) -> Option<Alarm> {
+    let mut e = engine()?;
+    let kind = match outcome {
+        Outcome::Accepted | Outcome::Kept => Kind::Accepted,
+        Outcome::Declined => Kind::Declined,
+        Outcome::Undone => Kind::Undone,
+    };
+    e.record(Signal::new(now_ms, kind, rule.clone()));
+    decide::with_state(e.config_dir(), |s| s.outcome(rule, outcome, now_ms))
+}
+
+/// Sets how far one area may go.
+pub fn set_dial(area: Area, dial: Dial) {
+    if let Some(e) = engine() {
+        decide::with_state(e.config_dir(), |s| s.set_dial(area, dial));
+    }
+}
+
+/// The dials and the newest decisions, for the cabin's chat.
+pub fn decisions_text(now_ms: u64) -> String {
+    let state = engine().map(|e| decide::load(e.config_dir()));
+    decide::text(&state.unwrap_or_default(), now_ms)
 }

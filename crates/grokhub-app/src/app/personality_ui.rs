@@ -950,14 +950,14 @@ impl Cabin {
                     &mut e.description,
                     false,
                 );
-                ui.label(RichText::new("Tone rules").size(15.0).color(crate::theme::fg()));
+                ui.label(RichText::new("Tone rules").size(crate::theme::TYPE_TITLE).color(crate::theme::fg()));
                 ui.label(
                     RichText::new(format!(
                         "How it talks, {} of {} characters.",
                         e.tone_rules.chars().count(),
                         personality::TONE_RULES_MAX
                     ))
-                    .size(12.0)
+                    .size(crate::theme::TYPE_CAPTION)
                     .color(crate::theme::muted()),
                 );
                 ui.add_space(8.0);
@@ -1339,7 +1339,12 @@ fn paint_tag_chip(ui: &mut egui::Ui, label: &str, kind: TagKind) {
         .corner_radius(6.0)
         .inner_margin(egui::Margin::symmetric(8, 2))
         .show(ui, |ui| {
-            ui.label(RichText::new(label).size(11.0).strong().color(ink));
+            ui.label(
+                RichText::new(label)
+                    .size(crate::theme::TYPE_CAPTION)
+                    .strong()
+                    .color(ink),
+            );
         });
 }
 
@@ -1543,6 +1548,35 @@ fn paint_detail_panel(
                     .size(crate::theme::FONT_BODY)
                     .color(crate::theme::fg()),
             );
+            // TALK AS comes right after the description, before the sample and
+            // Try it, so a long sample can't push it below a 720px window.
+            ui.add_space(12.0);
+            if p.explicit {
+                ui.label(
+                    RichText::new("Adults only · opt-in")
+                        .size(crate::theme::FONT_META)
+                        .color(crate::theme::amber()),
+                );
+                ui.add_space(8.0);
+            }
+            let talk = talk_label(&p.name);
+            let talk_w = ui.available_width();
+            let talk_clicked = if loadout {
+                crate::ui_kit::recipe::button(
+                    ui,
+                    Some(egui::Id::new(("personality-talk", p.id.as_str()))),
+                    &talk,
+                    true,
+                    egui::vec2(talk_w, 36.0),
+                    true,
+                )
+                .clicked()
+            } else {
+                crate::cards::white_pill(ui, &talk)
+            };
+            if talk_clicked && !in_use {
+                act = Some(CardAct::Talk(p.id.clone()));
+            }
             if !p.sample.trim().is_empty() {
                 ui.add_space(8.0);
                 let sample_stroke = if loadout {
@@ -1594,33 +1628,6 @@ fn paint_detail_panel(
                     }
                     None => {}
                 }
-            }
-            ui.add_space(12.0);
-            if p.explicit {
-                ui.label(
-                    RichText::new("Adults only · opt-in")
-                        .size(crate::theme::FONT_META)
-                        .color(crate::theme::amber()),
-                );
-                ui.add_space(8.0);
-            }
-            let talk = talk_label(&p.name);
-            let talk_w = ui.available_width();
-            let talk_clicked = if loadout {
-                crate::ui_kit::recipe::button(
-                    ui,
-                    Some(egui::Id::new(("personality-talk", p.id.as_str()))),
-                    &talk,
-                    true,
-                    egui::vec2(talk_w, 36.0),
-                    true,
-                )
-                .clicked()
-            } else {
-                crate::cards::white_pill(ui, &talk)
-            };
-            if talk_clicked && !in_use {
-                act = Some(CardAct::Talk(p.id.clone()));
             }
             // Slide 19 has no Try it / Duplicate on the Selected card.
             if !loadout {

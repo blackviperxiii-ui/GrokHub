@@ -119,14 +119,14 @@ impl Cabin {
             .is_some_and(|t| t.plan_body.trim() == p.message.trim());
         ui.label(
             RichText::new("The plan")
-                .size(14.0)
+                .size(crate::theme::TYPE_BODY)
                 .color(crate::theme::fg()),
         );
         if !shown_above && !p.message.trim().is_empty() {
             ui.add_space(4.0);
             ui.label(
                 RichText::new(&p.message)
-                    .size(13.0)
+                    .size(crate::theme::TYPE_BODY)
                     .color(crate::theme::muted()),
             );
         }

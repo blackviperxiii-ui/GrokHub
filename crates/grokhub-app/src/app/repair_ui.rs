@@ -721,7 +721,7 @@ fn fix_card_ui(
                 ui.add(
                     egui::Label::new(
                         RichText::new(title)
-                            .size(14.0)
+                            .size(crate::theme::TYPE_BODY)
                             .strong()
                             .color(crate::theme::fg()),
                     )
@@ -745,7 +745,7 @@ fn fix_card_ui(
                             ui.add(
                                 egui::Label::new(
                                     RichText::new(cmd)
-                                        .size(12.0)
+                                        .size(crate::theme::TYPE_CAPTION)
                                         .monospace()
                                         .color(crate::theme::muted()),
                                 )

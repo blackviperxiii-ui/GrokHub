@@ -37,7 +37,7 @@ fn old_pages_take_sizes_and_margins_from_the_one_scale() {
         .nth(1)
         .and_then(|s| s.split("pub fn white_pill(").next())
         .expect("page_header");
-    assert!(header.contains("TYPE_HEADLINE"), "{header}");
+    assert!(header.contains("theme::headline("), "{header}");
     assert!(raw_sizes(header).is_empty(), "{header}");
     // The scanner itself catches a numbered size.
     assert_eq!(

@@ -334,7 +334,7 @@ impl Cabin {
         if !self.inbox_counted_by_activity() {
             let line = egui::Label::new(
                 RichText::new(inbox_line(n))
-                    .size(12.0)
+                    .size(crate::theme::TYPE_CAPTION)
                     .color(crate::theme::muted()),
             )
             .wrap()
@@ -419,7 +419,7 @@ fn paint_row(ui: &mut egui::Ui, row: &InboxRow) -> Option<Option<bool>> {
                 .add(
                     egui::Label::new(
                         RichText::new(&row.what)
-                            .size(13.0)
+                            .size(crate::theme::TYPE_BODY)
                             .color(crate::theme::fg()),
                     )
                     .wrap()
@@ -430,7 +430,7 @@ fn paint_row(ui: &mut egui::Ui, row: &InboxRow) -> Option<Option<bool>> {
                 .add(
                     egui::Label::new(
                         RichText::new(format!("From {}", row.chat))
-                            .size(12.0)
+                            .size(crate::theme::TYPE_CAPTION)
                             .color(crate::theme::muted()),
                     )
                     .wrap()

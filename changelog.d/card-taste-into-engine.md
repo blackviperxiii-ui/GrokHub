@@ -1,0 +1,1 @@
+- Learning: every Pulse card reaction (Like, Not interested, opens, Snooze, Delete) now also feeds the app's learning engine, one signal per card trait with the trait's words hashed; Dismiss still teaches nothing.

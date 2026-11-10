@@ -1039,7 +1039,7 @@ mod tests {
         let ctx = egui::Context::default();
         crate::theme::install_fonts_on(&ctx);
         let _ = crate::theme::test_pass(&ctx, Default::default(), |_| {});
-        let font = egui::FontId::proportional(14.0);
+        let font = egui::FontId::proportional(crate::theme::TYPE_BODY);
         let mut files = Vec::new();
         sources(
             &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),

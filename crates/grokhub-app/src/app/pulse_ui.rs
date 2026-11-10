@@ -1109,6 +1109,12 @@ pub(super) fn post_summary(card: &UpdateCard) -> String {
             return summary;
         }
     }
+    if card.kind == UpdateKind::Digest {
+        let whole = grokhub_core::update_feed::digest_text(card);
+        if !whole.is_empty() {
+            return whole;
+        }
+    }
     grokhub_core::short_takeaway(card)
 }
 
@@ -2405,7 +2411,7 @@ impl Cabin {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let close = ui
                             .add(
-                                egui::Button::new(RichText::new("×").size(18.0))
+                                egui::Button::new(RichText::new("×").size(crate::theme::TYPE_SECTION))
                                     .frame(false)
                                     .min_size(egui::vec2(28.0, 28.0)),
                             )

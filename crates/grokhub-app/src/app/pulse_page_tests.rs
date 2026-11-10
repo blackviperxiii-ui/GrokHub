@@ -1839,3 +1839,18 @@ fn a_post_offers_snooze_or_delete_as_it_suits_and_both_when_unsure() {
     plain.why = Some("You read garden posts.".into());
     assert_eq!(post_why(&plain).as_deref(), Some("You read garden posts."));
 }
+
+#[test]
+fn a_digest_without_a_report_shows_every_line() {
+    use super::pulse_ui::post_summary;
+    let card = grokhub_core::digest_card(
+        "d",
+        "Morning edition",
+        "Rust 1.92 ships. Faster builds and a new lint.\n- GPU price dropped 12%.\n- Steam sale ends Friday.",
+        1,
+    );
+    assert_eq!(
+        post_summary(&card),
+        "Rust 1.92 ships. Faster builds and a new lint.\n- GPU price dropped 12%.\n- Steam sale ends Friday."
+    );
+}

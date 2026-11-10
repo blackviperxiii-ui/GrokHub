@@ -1,0 +1,1 @@
+- Decision engine: one place weighs every change Loadout could make on its own. A new kind of change only offers until you've said yes three times, each area has its own level (`/learned trust <area> <watch|offer|act>`), two undos in a day pause it, and `/learned decisions` shows what it decided and why.

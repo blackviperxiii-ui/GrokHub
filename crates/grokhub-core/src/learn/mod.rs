@@ -11,6 +11,8 @@
 //! - [`store`]: the files, under `{config}/learn`, capped.
 //! - [`sources`]: what the app's existing logs mean as signals.
 //! - [`hub`]: the one engine a running app shares.
+//! - [`decide`]: the one place a change the app would make on its own is
+//!   weighed: do it, offer it, wait or never.
 //!
 //! The budget is fixed. [`Engine::record`] touches memory only: no disk, no
 //! model, no network. [`Engine::tick`] writes one batch at most every
@@ -18,6 +20,7 @@
 //! engine stays under [`store::DISK_BUDGET`].
 
 pub mod belief;
+pub mod decide;
 pub mod hub;
 pub mod ladder;
 pub mod setup;
@@ -26,6 +29,8 @@ pub mod sources;
 pub mod store;
 pub mod view;
 
+#[cfg(test)]
+mod decide_tests;
 #[cfg(test)]
 mod tests;
 
@@ -131,7 +136,14 @@ impl Engine {
         self.beliefs = Beliefs::default();
         self.stream = Stream::default();
         self.unsaved.clear();
-        store::forget_all(&self.config_dir)
+        store::forget_all(&self.config_dir)?;
+        decide::with_state(&self.config_dir, decide::State::forget_learned);
+        Ok(())
+    }
+
+    /// The config folder this engine keeps its files under.
+    pub fn config_dir(&self) -> &Path {
+        &self.config_dir
     }
 
     /// Disk writes so far, for the budget tests.

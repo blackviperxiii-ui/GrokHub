@@ -814,9 +814,17 @@ impl Cabin {
                     .inner_margin(egui::Margin::same(12))
                     .show(ui, |ui| {
                         ui.set_max_width(360.0);
-                        ui.label(RichText::new(&title).size(13.0).color(crate::theme::fg()));
+                        ui.label(
+                            RichText::new(&title)
+                                .size(crate::theme::TYPE_BODY)
+                                .color(crate::theme::fg()),
+                        );
                         ui.add_space(4.0);
-                        ui.label(RichText::new(&body).size(12.0).color(crate::theme::muted()));
+                        ui.label(
+                            RichText::new(&body)
+                                .size(crate::theme::TYPE_CAPTION)
+                                .color(crate::theme::muted()),
+                        );
                         ui.add_space(8.0);
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 8.0;
@@ -832,7 +840,7 @@ impl Cabin {
                                 1 => {
                                     ui.label(
                                         RichText::new("Working…")
-                                            .size(12.0)
+                                            .size(crate::theme::TYPE_CAPTION)
                                             .color(crate::theme::muted()),
                                     );
                                     if super::change_undo::click_pill(ui, "Cancel") {
