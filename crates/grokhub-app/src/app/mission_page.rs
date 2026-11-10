@@ -361,9 +361,7 @@ mod tests {
             "Objectives must not point at Workboards"
         );
         assert!(
-            crate::theme::LOADOUT_NAV
-                .iter()
-                .any(|&pair| pair == ("workboard", "Workboards")),
+            crate::theme::LOADOUT_NAV.contains(&("workboard", "Workboards")),
             "Workboards stays on the rail"
         );
         let mut cabin = Cabin::quiet_for_test();
