@@ -210,11 +210,18 @@ fn title(area: &str, id: &str) -> String {
         "card-group" => format!("Cards from {}", words(id)),
         "skill" => format!("Skill {id}"),
         "habit" => match id.rsplit_once('/') {
-            Some((skill, part)) => format!(
-                "Skill {skill} {}",
-                super::habit::Part::parse(part).map_or(part, |p| p.when())
-            ),
+            Some((skill, at)) => match super::habit::parse_tail(at) {
+                Some((part, gaming)) => {
+                    format!("Skill {skill} {}", super::habit::when(part, gaming))
+                }
+                None => format!("Skill {skill} {at}"),
+            },
             None => format!("Habit {id}"),
+        },
+        "router" => match id.rsplit_once('/') {
+            Some((class, "order")) => format!("Router: which model goes first for {class}"),
+            Some((class, "start")) => format!("Router: how hard {class} starts"),
+            _ => format!("Router {id}"),
         },
         "reply" => format!("Plan reply: {}", plan_reply(id)),
         "trait" => format!(

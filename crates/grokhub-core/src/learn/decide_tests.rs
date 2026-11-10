@@ -24,6 +24,7 @@ fn sure(id: &str) -> Proposal {
         hard: false,
         helps: None,
         hurts: None,
+        tested: false,
     }
 }
 
@@ -180,6 +181,7 @@ fn a_hard_change_never_acts_however_sure_and_however_trusted() {
         hard: true,
         helps: None,
         hurts: None,
+        tested: false,
         confidence: 1.0,
         evidence: 10_000.0,
         value: 1.0,
@@ -597,6 +599,7 @@ fn a_goal_the_user_named_moves_a_proposal_up_the_queue() {
         value: 0.4,
         helps: Some(Goal::Cheapest),
         hurts: Some(Goal::Fastest),
+        tested: false,
         ..sure("cheap")
     };
     let fast = Proposal {
@@ -686,5 +689,114 @@ fn the_snapshot_is_one_byte_and_a_game_counts_as_busy() {
         serde_json::json!({
             "quiet": false, "busy": false, "halted": false, "gaming": true, "onBattery": false,
         })
+    );
+}
+
+#[test]
+fn a_change_the_learner_already_tried_skips_the_three_yes_answers_and_nothing_else() {
+    let tested = |id: &str| Proposal {
+        area: Area::Router,
+        tested: true,
+        ..sure(id)
+    };
+    // New rule, no yes answers: an untested one asks, a tested one acts.
+    let mut s = State::default();
+    let untested = Proposal {
+        area: Area::Router,
+        ..sure("router/a")
+    };
+    assert_eq!(
+        answer(&mut s, &untested, T),
+        (Verdict::Offer, Reason::Shadow)
+    );
+    assert_eq!(
+        answer(&mut s, &tested("router/b"), T),
+        (Verdict::Act, Reason::Sure)
+    );
+    // Every other term still holds it.
+    s.set_dial(Area::Router, Dial::Offer);
+    assert_eq!(
+        answer(&mut s, &tested("router/b"), T),
+        (Verdict::Offer, Reason::DialOffer)
+    );
+    s.set_dial(Area::Router, Dial::Watch);
+    assert_eq!(
+        answer(&mut s, &tested("router/b"), T),
+        (Verdict::Wait, Reason::DialWatch)
+    );
+    s.set_dial(Area::Router, Dial::Act);
+    let halted = Situation {
+        halted: true,
+        ..Situation::default()
+    };
+    let d = s.decide(&tested("router/b"), halted, T);
+    assert_eq!((d.verdict, d.reason), (Verdict::Wait, Reason::Halted));
+    let hard = Proposal {
+        hard: true,
+        ..tested("router/c")
+    };
+    assert_eq!(
+        answer(&mut s, &hard, T),
+        (Verdict::Offer, Reason::AlwaysAsks)
+    );
+    // One act so far (router/b). Four more use up the day.
+    for i in 0..4 {
+        assert_eq!(
+            answer(&mut s, &tested(&format!("router/d{i}")), T),
+            (Verdict::Act, Reason::Sure)
+        );
+    }
+    assert_eq!(
+        answer(&mut s, &tested("router/e"), T),
+        (Verdict::Offer, Reason::Budget)
+    );
+}
+
+#[test]
+fn a_change_the_app_took_back_itself_counts_against_the_score_and_not_as_an_undo() {
+    let mut s = State::default();
+    let p = Proposal {
+        area: Area::Router,
+        tested: true,
+        ..sure("router/a")
+    };
+    assert_eq!(answer(&mut s, &p, T), (Verdict::Act, Reason::Sure));
+    for _ in 0..3 {
+        assert_eq!(s.outcome(&p.rule, Outcome::RolledBack, T), None);
+    }
+    // Three bad outcomes on the board, no watchdog pause, and the rule is
+    // not turned off the way two undos by the user would turn it off.
+    assert!(!s.paused(T));
+    assert_eq!(answer(&mut s, &p, T), (Verdict::Act, Reason::Sure));
+    for _ in 0..7 {
+        s.outcome(&p.rule, Outcome::Kept, T);
+    }
+    assert_eq!(s.score().score(Area::Router, T).now, Some(70));
+}
+
+#[test]
+fn a_router_decision_reads_as_what_the_router_would_change() {
+    let mut s = State::default();
+    for id in [
+        "router/chat:default/order",
+        "router/plan/start",
+        "router/odd",
+    ] {
+        let p = Proposal {
+            area: Area::Router,
+            tested: true,
+            ..sure(id)
+        };
+        s.decide(&p, calm(), T);
+    }
+    let page = super::view::trust(&s, Snapshot::default(), T);
+    let titles: Vec<&str> = page.decisions.iter().map(|d| d.title.as_str()).collect();
+    assert_eq!(
+        titles,
+        [
+            "Router odd",
+            "Router: how hard plan starts",
+            "Router: which model goes first for chat:default",
+        ]
     );
 }

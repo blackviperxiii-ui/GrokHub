@@ -195,6 +195,7 @@ pub fn decision_outcome(rule: &Subject, outcome: Outcome, now_ms: u64) -> Option
         Outcome::Accepted | Outcome::Kept => Kind::Accepted,
         Outcome::Declined => Kind::Declined,
         Outcome::Undone => Kind::Undone,
+        Outcome::RolledBack => Kind::Failed,
     };
     if !paused() {
         e.record(Signal::new(now_ms, kind, rule.clone()));
@@ -239,7 +240,8 @@ pub fn habit_chips(
     now_ms: u64,
 ) -> Vec<crate::chips::QuickChip> {
     let part = habit::Part::of_hour(local_hour(now_ms));
-    let due = read(|e| habit::due(e.beliefs(), part, now_ms)).unwrap_or_default();
+    let gaming = self::now().gaming;
+    let due = read(|e| habit::due(e.beliefs(), part, gaming, now_ms)).unwrap_or_default();
     // A habit whose skill is gone has no chip, so it is not weighed either.
     let shown: Vec<(habit::Habit, crate::chips::QuickChip, Proposal)> = due
         .into_iter()

@@ -66,6 +66,7 @@ pub mod sources;
 pub mod spend;
 pub mod table;
 pub mod trial;
+pub mod trust;
 pub mod tune;
 pub mod wait;
 

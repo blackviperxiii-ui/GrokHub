@@ -1171,6 +1171,8 @@ export interface BoardCard {
   fresh: boolean;
   /** A Follow up card's latest report. */
   report: string;
+  /** What the card's last background run came back with. */
+  result: string;
   /** Who owns it, as the cabin's badge reads. */
   owner: "Agent" | "You";
   /** Automation, Background, Episode or Flow; a plain task has none. */

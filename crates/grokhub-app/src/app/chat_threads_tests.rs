@@ -1731,7 +1731,7 @@ fn main_chat_repairs_a_bad_saved_row() {
 }
 
 #[test]
-fn scheduled_and_orphan_background_reports_post_in_main() {
+fn scheduled_and_orphan_background_results_land_on_cards_not_main() {
     let _lock = crate::config::hold_test_config();
     let root = crate::config::test_config_root("main-report");
     let _ = std::fs::remove_dir_all(&root);
@@ -1741,41 +1741,65 @@ fn scheduled_and_orphan_background_reports_post_in_main() {
     let mut list = vec![spoke("Harbor plan", 500)];
     let main_idx = crate::threads::ensure_main_thread(&mut list);
     let mut cabin = Cabin::quiet_cabin(list, 0);
+    cabin.board.clear();
     let bg_idx = cabin.ensure_background_history_thread();
     let bg_id = cabin.threads[bg_idx].id.clone();
+    let main_before = cabin.threads[main_idx].messages.len();
+    let bg_before = cabin.threads[bg_idx].messages.len();
 
-    cabin
-        .bg
-        .runs
-        .push(finished_scheduled_run(&bg_id, "Moved 4 files."));
+    let mut run = finished_scheduled_run(&bg_id, "Moved 4 files.");
+    run.automation = Some("a-tidy".into());
+    cabin.open_automation_card(run.id, "a-tidy", "Tidy downloads");
+    cabin.bg.runs.push(run);
     cabin.post_finished_bg_runs();
     let main = &cabin.threads[main_idx];
     assert_eq!(
-        main.messages.last().map(|m| m.1.as_str()),
-        Some("**Background task done** · Tidy downloads\n\nMoved 4 files.")
+        main.messages.len(),
+        main_before,
+        "Main gets no unasked post"
     );
+    assert_eq!(
+        cabin.threads[bg_idx].messages.len(),
+        bg_before,
+        "and no hidden copy either"
+    );
+    let card = cabin
+        .board
+        .iter()
+        .find(|c| c.automation.as_deref() == Some("a-tidy"))
+        .expect("the automation's card");
+    assert_eq!(card.result, "Moved 4 files.");
     assert_eq!(
         cabin.bg.unread,
         vec![(
             main.id.clone(),
-            "- Tidy downloads (done): Moved 4 files.".to_string()
+            "- Tidy downloads (done; result on workboard card \"Tidy downloads\"): Moved 4 files."
+                .to_string()
         )]
     );
-    assert_eq!(cabin.threads[bg_idx].messages.len(), 1, "hidden copy kept");
 
-    // A /bg run whose chat is gone reports in Main instead of vanishing.
+    // A /bg run whose chat is gone keeps its result on its card instead of vanishing.
     let mut orphan = finished_scheduled_run("thr-gone", "All clear.");
+    orphan.id = 2;
     orphan.origin = grokhub_core::BgOrigin::User;
     orphan.title = "Check the logs".into();
+    cabin.open_bg_card(2, "Check the logs", "", true);
     cabin.bg.runs.push(orphan);
     cabin.post_finished_bg_runs();
-    assert_eq!(
-        cabin.threads[main_idx]
-            .messages
-            .last()
-            .map(|m| m.1.as_str()),
-        Some("**Background task done** · Check the logs\n\nAll clear.")
-    );
+    assert_eq!(cabin.threads[main_idx].messages.len(), main_before);
+    let card = cabin
+        .board
+        .iter()
+        .find(|c| c.title == "Check the logs")
+        .expect("its card");
+    assert_eq!(card.result, "All clear.");
+    assert_eq!(card.result_chat, None, "Send to chat goes to Main");
+    assert!(cabin
+        .bg
+        .unread
+        .iter()
+        .any(|(id, note)| id == &cabin.threads[main_idx].id
+            && note.contains("result on workboard card \"Check the logs\"")));
     let _ = std::fs::remove_dir_all(&root);
 }
 

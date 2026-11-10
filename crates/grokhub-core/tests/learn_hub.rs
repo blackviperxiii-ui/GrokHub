@@ -252,6 +252,32 @@ fn the_shared_logs_feed_one_engine() {
         hub::habit_chips(&[], Now::default(), 99.0, live),
         Vec::new()
     );
+    // While a game runs, only habits learned while gaming are due, and a
+    // run then counts under the gaming habit.
+    hub::set_now(grokhub_core::learn::now::Snapshot {
+        gaming: true,
+        ..Default::default()
+    });
+    assert_eq!(
+        hub::habit_chips(&skills, Now::default(), 99.0, live),
+        Vec::new()
+    );
+    let gaming_run = RunMetrics {
+        run: "chat-g:0".into(),
+        class: "skill:tidy-up".into(),
+        result: OutcomeResult::Success,
+        model: "grok-code".into(),
+        finished_at: live,
+        at: live,
+        ..RunMetrics::default()
+    };
+    append_run(&dir, &gaming_run, 0).unwrap();
+    let while_gaming = habit::subject("tidy-up", part, true).unwrap();
+    assert_eq!(
+        hub::read(|e| e.beliefs().get(&while_gaming).map(|b| b.shape)).flatten(),
+        Some(Shape::Rate { yes: 1.0, no: 0.0 })
+    );
+    hub::set_now(Default::default());
     let rule = habit::chip_rule(&chips[0].id).unwrap();
     let state = || grokhub_core::learn::decide::load(&dir);
     let mut habit_mem = ChipMemory::default();
@@ -379,6 +405,7 @@ fn the_shared_logs_feed_one_engine() {
         hard: false,
         helps: None,
         hurts: None,
+        tested: false,
     };
     let at = grokhub_core::now_ms();
     let decide_one = || {

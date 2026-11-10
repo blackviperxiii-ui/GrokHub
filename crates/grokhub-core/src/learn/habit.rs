@@ -7,7 +7,12 @@
 //! has weighed it ([`super::hub::habit_chips`]). A tap is a yes to the rule
 //! and a hide is a no, which rests it for a month.
 //!
-//! Ids only: the skill's name and the part of the day. Never what was asked.
+//! A habit also belongs to a setting. A run while a game is up votes under
+//! `habit:<skill>/<part>.gaming`, and only those habits are due while a game
+//! runs, so what the user does between matches does not show up at work.
+//!
+//! Ids only: the skill's name, the part of the day and the setting. Never
+//! what was asked.
 
 use super::belief::Beliefs;
 use super::decide::{Area, Proposal};
@@ -66,15 +71,37 @@ impl Part {
     }
 }
 
-/// The belief for a skill in a part of the day. `None` for a name that is
-/// not an id or is too long.
-pub fn subject(skill: &str, part: Part) -> Option<Subject> {
-    Subject::new("habit", &format!("{skill}/{}", part.as_str()))
+/// The end of a habit's id: the part of the day, and `.gaming` for a habit
+/// that holds while a game runs.
+pub fn tail(part: Part, gaming: bool) -> String {
+    let setting = if gaming { ".gaming" } else { "" };
+    format!("{}{setting}", part.as_str())
+}
+
+/// Reads [`tail`] back.
+pub fn parse_tail(text: &str) -> Option<(Part, bool)> {
+    match text.split_once('.') {
+        Some((part, "gaming")) => Some((Part::parse(part)?, true)),
+        Some(_) => None,
+        None => Some((Part::parse(text)?, false)),
+    }
+}
+
+/// "in the evening", "at night while gaming".
+pub fn when(part: Part, gaming: bool) -> String {
+    let setting = if gaming { " while gaming" } else { "" };
+    format!("{}{setting}", part.when())
+}
+
+/// The belief for a skill in a part of the day and a setting. `None` for a
+/// name that is not an id or is too long.
+pub fn subject(skill: &str, part: Part, gaming: bool) -> Option<Subject> {
+    Subject::new("habit", &format!("{skill}/{}", tail(part, gaming)))
 }
 
 /// A skill run finished well in local hour `hour`: one vote for that part of
-/// the day and one against each other part.
-pub fn skill_run(skill: &str, hour: u32, at_ms: u64) -> Vec<Signal> {
+/// the day and one against each other part, all in the run's own setting.
+pub fn skill_run(skill: &str, hour: u32, gaming: bool, at_ms: u64) -> Vec<Signal> {
     let then = Part::of_hour(hour);
     Part::ALL
         .into_iter()
@@ -84,7 +111,7 @@ pub fn skill_run(skill: &str, hour: u32, at_ms: u64) -> Vec<Signal> {
             } else {
                 Kind::Ignored
             };
-            subject(skill, part).map(|s| Signal::new(at_ms, kind, s))
+            subject(skill, part, gaming).map(|s| Signal::new(at_ms, kind, s))
         })
         .collect()
 }
@@ -94,6 +121,8 @@ pub fn skill_run(skill: &str, hour: u32, at_ms: u64) -> Vec<Signal> {
 pub struct Habit {
     pub skill: String,
     pub part: Part,
+    /// It holds while a game runs, and only then.
+    pub gaming: bool,
     pub confidence: f32,
     pub evidence: f32,
 }
@@ -103,7 +132,7 @@ impl Habit {
     pub fn rule(&self) -> Option<Subject> {
         Subject::new(
             "rule",
-            &format!("habit/{}/{}", self.skill, self.part.as_str()),
+            &format!("habit/{}/{}", self.skill, tail(self.part, self.gaming)),
         )
     }
 
@@ -120,30 +149,37 @@ impl Habit {
             hard: false,
             helps: None,
             hurts: None,
+            tested: false,
         })
     }
 
     pub fn chip_id(&self) -> String {
-        format!("{CHIP_PREFIX}{}-{}", self.part.as_str(), self.skill)
+        format!(
+            "{CHIP_PREFIX}{}-{}",
+            tail(self.part, self.gaming),
+            self.skill
+        )
     }
 }
 
-/// The habits that hold in `part` at `now_ms`, the surest first: most of the
-/// skill's runs happen then, and the belief is sure enough to suggest.
-pub fn due(beliefs: &Beliefs, part: Part, now_ms: u64) -> Vec<Habit> {
+/// The habits that hold in `part` and this setting at `now_ms`, the surest
+/// first: most of the skill's runs happen then, and the belief is sure
+/// enough to suggest.
+pub fn due(beliefs: &Beliefs, part: Part, gaming: bool, now_ms: u64) -> Vec<Habit> {
     let mut out: Vec<Habit> = beliefs
         .iter()
         .filter(|(s, _)| s.area() == "habit")
         .filter_map(|(s, b)| {
             let (_, id) = s.as_str().split_once(':')?;
             let (skill, at) = id.rsplit_once('/')?;
-            if Part::parse(at)? != part || !b.leans_yes()? {
+            if parse_tail(at)? != (part, gaming) || !b.leans_yes()? {
                 return None;
             }
             let (confidence, evidence) = (b.confidence(now_ms), b.evidence(now_ms));
             (step(confidence, evidence, Undo::OneClick) != Step::Watch).then(|| Habit {
                 skill: skill.to_string(),
                 part,
+                gaming,
                 confidence,
                 evidence,
             })
@@ -160,10 +196,12 @@ pub fn due(beliefs: &Beliefs, part: Part, now_ms: u64) -> Vec<Habit> {
 /// The rule behind a habit chip's id, for its tap or hide. `None` for any
 /// other chip.
 pub fn chip_rule(chip_id: &str) -> Option<Subject> {
-    let (part, skill) = chip_id.strip_prefix(CHIP_PREFIX)?.split_once('-')?;
+    let (at, skill) = chip_id.strip_prefix(CHIP_PREFIX)?.split_once('-')?;
+    let (part, gaming) = parse_tail(at)?;
     Habit {
         skill: skill.to_string(),
-        part: Part::parse(part)?,
+        part,
+        gaming,
         confidence: 0.0,
         evidence: 0.0,
     }
@@ -182,7 +220,7 @@ pub fn chip(habit: &Habit, skills: &[SkillMd], score: f32) -> Option<QuickChip> 
         value: crate::skill::skill_use_in_chat_prompt(&skill.slash, &skill.name),
         kind: ChipKind::Chat,
         score,
-        hint: format!("You often run this {}", habit.part.when()),
+        hint: format!("You often run this {}", when(habit.part, habit.gaming)),
         primary: false,
     })
 }

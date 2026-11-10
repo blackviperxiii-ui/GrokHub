@@ -23,12 +23,16 @@ fn close(got: f32, want: f32) {
     assert!((got - want).abs() < 0.001, "got {got}, want {want}");
 }
 
+/// A mixed record: the votes come in turn, not all of one side and then all
+/// of the other, which would read as a habit that flipped.
 fn votes(beliefs: &mut Beliefs, key: &Subject, yes: usize, no: usize, at: u64) {
-    for _ in 0..yes {
-        beliefs.vote(key, true, at, "test");
-    }
-    for _ in 0..no {
-        beliefs.vote(key, false, at, "test");
+    for i in 0..yes.max(no) {
+        if i < yes {
+            beliefs.vote(key, true, at, "test");
+        }
+        if i < no {
+            beliefs.vote(key, false, at, "test");
+        }
     }
 }
 
@@ -945,6 +949,119 @@ fn the_pause_is_a_file_both_apps_on_the_folder_see() {
 }
 
 #[test]
+fn four_votes_in_a_row_against_a_settled_habit_drop_most_of_it_at_once() {
+    use belief::{BREAK_KEEP, BREAK_MIN_EVIDENCE, BREAK_RUN};
+    assert_eq!((BREAK_MIN_EVIDENCE, BREAK_RUN, BREAK_KEEP), (6.0, 4, 0.25));
+    let key = subject("habit:tidy/evening");
+    let shape = |b: &Beliefs| b.get(&key).unwrap().shape;
+    let mut b = Beliefs::default();
+    for i in 0..12 {
+        b.vote(&key, true, T0 + i, "signals");
+    }
+    // Three against are noise: nothing is dropped.
+    for i in 12..15 {
+        b.vote(&key, false, T0 + i, "signals");
+    }
+    assert_eq!(shape(&b), Shape::Rate { yes: 12.0, no: 3.0 });
+    assert_eq!(b.get(&key).unwrap().against, 3);
+    // The fourth is a break: the old side keeps a quarter and the lean flips.
+    b.vote(&key, false, T0 + 15, "signals");
+    assert_eq!(shape(&b), Shape::Rate { yes: 3.0, no: 4.0 });
+    assert_eq!(b.get(&key).unwrap().against, 0);
+    assert_eq!(b.get(&key).unwrap().leans_yes(), Some(false));
+
+    // A vote for the lean in between starts the run over.
+    let mut mixed = Beliefs::default();
+    for i in 0..12 {
+        mixed.vote(&key, true, T0 + i, "signals");
+    }
+    for (i, yes) in [false, false, false, true, false, false, false]
+        .into_iter()
+        .enumerate()
+    {
+        mixed.vote(&key, yes, T0 + 12 + i as u64, "signals");
+    }
+    assert_eq!(shape(&mixed), Shape::Rate { yes: 13.0, no: 6.0 });
+
+    // A belief with little behind it has no habit to break.
+    let mut thin = Beliefs::default();
+    for i in 0..5 {
+        thin.vote(&key, true, T0 + i, "signals");
+    }
+    for i in 5..9 {
+        thin.vote(&key, false, T0 + i, "signals");
+    }
+    assert_eq!(shape(&thin), Shape::Rate { yes: 5.0, no: 4.0 });
+
+    // It works the other way too: a settled "no" that turns into "yes".
+    let mut never = Beliefs::default();
+    for i in 0..8 {
+        never.vote(&key, false, T0 + i, "signals");
+    }
+    for i in 8..12 {
+        never.vote(&key, true, T0 + i, "signals");
+    }
+    assert_eq!(shape(&never), Shape::Rate { yes: 4.0, no: 2.0 });
+    // The run count is not written for a belief that has none.
+    let saved = serde_json::to_string(&never).unwrap();
+    assert!(!saved.contains("against"), "{saved}");
+}
+
+#[test]
+fn a_habit_learned_while_gaming_is_due_only_while_gaming() {
+    use habit::{chip_rule, due, parse_tail, skill_run, tail, when, Part};
+    assert_eq!(tail(Part::Night, false), "night");
+    assert_eq!(tail(Part::Night, true), "night.gaming");
+    assert_eq!(parse_tail("night.gaming"), Some((Part::Night, true)));
+    assert_eq!(parse_tail("evening"), Some((Part::Evening, false)));
+    assert_eq!(parse_tail("night.work"), None);
+    assert_eq!(parse_tail("noon"), None);
+    assert_eq!(when(Part::Night, true), "at night while gaming");
+    let ids: Vec<String> = skill_run("clip", 23, true, T0)
+        .into_iter()
+        .map(|s| s.subject.as_str().to_string())
+        .collect();
+    assert_eq!(
+        ids,
+        vec![
+            "habit:clip/morning.gaming",
+            "habit:clip/afternoon.gaming",
+            "habit:clip/evening.gaming",
+            "habit:clip/night.gaming",
+        ]
+    );
+    let mut b = Beliefs::default();
+    for i in 0..12 {
+        for s in skill_run("clip", 23, true, T0 + i) {
+            b.apply(&s);
+        }
+        for s in skill_run("report", 23, false, T0 + i) {
+            b.apply(&s);
+        }
+    }
+    let names = |gaming: bool| -> Vec<String> {
+        due(&b, Part::Night, gaming, T0 + 12)
+            .into_iter()
+            .map(|h| h.chip_id())
+            .collect()
+    };
+    assert_eq!(names(true), vec!["habit-night.gaming-clip"]);
+    assert_eq!(names(false), vec!["habit-night-report"]);
+    assert_eq!(
+        chip_rule("habit-night.gaming-clip").unwrap().as_str(),
+        "rule:habit/clip/night.gaming"
+    );
+    assert_eq!(chip_rule("habit-night.work-clip"), None);
+    let listed = view::text(&view::view(&b, T0 + 12));
+    assert!(
+        listed.contains(
+            "**Skill clip at night while gaming**: About 10 in 10 of its runs happen then."
+        ),
+        "{listed}"
+    );
+}
+
+#[test]
 fn a_skill_run_at_the_same_time_of_day_becomes_a_habit_for_that_part_only() {
     use habit::{due, skill_run, Part};
     assert_eq!(Part::of_hour(4), Part::Night);
@@ -952,7 +1069,7 @@ fn a_skill_run_at_the_same_time_of_day_becomes_a_habit_for_that_part_only() {
     assert_eq!(Part::of_hour(12), Part::Afternoon);
     assert_eq!(Part::of_hour(17), Part::Evening);
     assert_eq!(Part::of_hour(22), Part::Night);
-    let one: Vec<(String, Kind)> = skill_run("tidy", 19, T0)
+    let one: Vec<(String, Kind)> = skill_run("tidy", 19, false, T0)
         .into_iter()
         .map(|s| (s.subject.as_str().to_string(), s.kind))
         .collect();
@@ -965,41 +1082,44 @@ fn a_skill_run_at_the_same_time_of_day_becomes_a_habit_for_that_part_only() {
             ("habit:tidy/night".to_string(), Kind::Ignored),
         ]
     );
-    assert_eq!(skill_run("two words", 19, T0), Vec::new());
+    assert_eq!(skill_run("two words", 19, false, T0), Vec::new());
 
     let mut b = Beliefs::default();
     // Two evening runs are not a habit yet.
     for i in 0..2 {
-        for s in skill_run("tidy", 19, T0 + i) {
+        for s in skill_run("tidy", 19, false, T0 + i) {
             b.apply(&s);
         }
     }
-    assert_eq!(due(&b, Part::Evening, T0 + 2), Vec::new());
+    assert_eq!(due(&b, Part::Evening, false, T0 + 2), Vec::new());
     for i in 2..12 {
-        for s in skill_run("tidy", 20, T0 + i) {
+        for s in skill_run("tidy", 20, false, T0 + i) {
             b.apply(&s);
         }
     }
     // A skill run at all hours has no habit in any part.
     for (i, hour) in [8, 13, 19, 23].iter().cycle().take(16).enumerate() {
-        for s in skill_run("scattered", *hour, T0 + i as u64) {
+        for s in skill_run("scattered", *hour, false, T0 + i as u64) {
             b.apply(&s);
         }
     }
-    let evening = due(&b, Part::Evening, T0 + 12);
+    let evening = due(&b, Part::Evening, false, T0 + 12);
     assert_eq!(evening.len(), 1);
     assert_eq!(evening[0].skill, "tidy");
     assert_eq!(evening[0].evidence, 12.0);
     assert!((evening[0].confidence - 0.816).abs() < 0.001, "{evening:?}");
     assert_eq!(evening[0].chip_id(), "habit-evening-tidy");
     for part in [Part::Morning, Part::Afternoon, Part::Night] {
-        assert_eq!(due(&b, part, T0 + 12), Vec::new(), "{part:?}");
+        assert_eq!(due(&b, part, false, T0 + 12), Vec::new(), "{part:?}");
     }
     // It fades: three months on it is watched again, not suggested.
-    assert_eq!(due(&b, Part::Evening, T0 + 3 * HALF_LIFE_MS), Vec::new());
+    assert_eq!(
+        due(&b, Part::Evening, false, T0 + 3 * HALF_LIFE_MS),
+        Vec::new()
+    );
     // The user's "wrong" on the line ends it.
     b.mark_wrong(&subject("habit:tidy/evening"), T0 + 13);
-    assert_eq!(due(&b, Part::Evening, T0 + 13), Vec::new());
+    assert_eq!(due(&b, Part::Evening, false, T0 + 13), Vec::new());
 }
 
 #[test]
@@ -1008,6 +1128,7 @@ fn a_habit_chip_asks_for_the_skill_and_names_its_rule() {
     let h = Habit {
         skill: "patch-notes".into(),
         part: Part::Night,
+        gaming: false,
         confidence: 0.82,
         evidence: 12.0,
     };
@@ -1052,7 +1173,7 @@ fn a_habit_chip_asks_for_the_skill_and_names_its_rule() {
         at: T0,
         ..Default::default()
     };
-    let votes = sources::run_habit(&run, 23);
+    let votes = sources::run_habit(&run, 23, false);
     assert_eq!(votes.len(), 4);
     assert_eq!(votes[3].subject.as_str(), "habit:patch-notes/night");
     assert_eq!(votes[3].kind, Kind::Used);
@@ -1060,15 +1181,15 @@ fn a_habit_chip_asks_for_the_skill_and_names_its_rule() {
         result: crate::outcome::OutcomeResult::Failure,
         ..run.clone()
     };
-    assert_eq!(sources::run_habit(&failed, 23), Vec::new());
+    assert_eq!(sources::run_habit(&failed, 23, false), Vec::new());
     let late = crate::run_metrics::RunMetrics {
         corrections: 1,
         ..run.clone()
     };
-    assert_eq!(sources::run_habit(&late, 23), Vec::new());
+    assert_eq!(sources::run_habit(&late, 23, false), Vec::new());
     let chat = crate::run_metrics::RunMetrics {
         class: "topic:patch notes".into(),
         ..run
     };
-    assert_eq!(sources::run_habit(&chat, 23), Vec::new());
+    assert_eq!(sources::run_habit(&chat, 23, false), Vec::new());
 }

@@ -872,12 +872,15 @@ fn a_report_run_lands_in_follow_up_with_a_chat_and_a_chore_does_not() {
         Vec::<usize>::new(),
         "the Follow up chat is not a History row"
     );
-    assert!(thread
-        .messages
-        .last()
-        .unwrap()
-        .1
-        .contains("Three opened overnight"));
+    assert!(
+        thread.messages.is_empty(),
+        "the report stays on the card; its chat is for talking about it"
+    );
+    assert!(
+        card.report.contains("Three opened overnight"),
+        "{}",
+        card.report
+    );
 
     // The next run of the same automation adds to the same card and chat.
     cabin.file_automation_follow_up(
@@ -893,9 +896,13 @@ fn a_report_run_lands_in_follow_up_with_a_chat_and_a_chore_does_not() {
         .collect();
     assert_eq!(same.len(), 1);
     assert_eq!(same[0].thread_id.as_deref(), Some(chat.as_str()));
+    assert!(
+        same[0].report.contains("Two more today"),
+        "the card holds the newest report: {}",
+        same[0].report
+    );
     let thread = cabin.threads.iter().find(|t| t.id == chat).unwrap();
-    assert_eq!(thread.messages.len(), 2, "one message per run");
-    assert!(thread.messages[1].1.contains("Two more today"));
+    assert!(thread.messages.is_empty(), "no run writes into the chat");
 
     // A quiet chore that just did its job files nothing.
     assert!(!cabin.file_automation_follow_up(

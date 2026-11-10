@@ -1779,6 +1779,51 @@ fn a_crash_cards_chat_checks_that_program_by_the_cards_name() {
     );
 }
 
+/// The bluetoothd transcript's lost follow-up: the app answers "why does
+/// bluetoothd keep crashing" itself, with no card. The next turn the model
+/// reads carries that ask and its answer, once.
+#[test]
+fn a_self_answered_crash_ask_rides_into_the_next_model_turn_once() {
+    let mut quiet = QuietCabin::boot("crash-ask-carry");
+    let cabin = &mut quiet.cabin;
+    cabin.updates.clear();
+    let ask = "why does bluetoothd keep crashing?";
+    assert_eq!(cabin.card_program_here(), None);
+    assert!(cabin.try_diagnose_intent(ask));
+    assert_eq!(cabin.status, "Checking your computer (read only)…");
+    // The probes run off the UI thread; answer as they would.
+    let (tx, rx) = std::sync::mpsc::channel();
+    cabin.harness.diagnose_rx = Some(rx);
+    let answer = "I checked your computer and found one thing worth fixing.\n- bluetoothd has crashed: 2 crash dumps on record.";
+    tx.send((answer.to_string(), false, Vec::new())).unwrap();
+    cabin.poll_diagnose();
+    assert_eq!(
+        cabin.threads[cabin.thread_idx].messages.last(),
+        Some(&("assistant".to_string(), answer.to_string()))
+    );
+
+    let (turn, carry) = cabin.native_carry("check into it for me");
+    assert_eq!(
+        turn,
+        format!(
+            "Earlier in this chat ({} answered these before you saw them):\nUser: {ask}\nYou: {answer}\n\ncheck into it for me",
+            grokhub_core::brand::product_name()
+        )
+    );
+    // A chat that replays its earlier turns anyway carries the answer once.
+    cabin.threads[cabin.thread_idx].native_carry = true;
+    let (recap, _) = cabin.native_carry("check into it for me");
+    assert_eq!(recap.matches(ask).count(), 1, "{recap}");
+    cabin.threads[cabin.thread_idx].native_carry = false;
+    // Once the engine took the turn, nothing rides again.
+    cabin.clear_native_carry(carry);
+    assert_eq!(
+        cabin.native_carry("thanks").0,
+        "thanks",
+        "never replayed twice"
+    );
+}
+
 #[test]
 fn a_crash_card_waits_for_a_tap_unless_its_switch_is_on() {
     let mut quiet = QuietCabin::boot("pulse-auto-fix");
