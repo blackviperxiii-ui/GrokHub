@@ -170,6 +170,7 @@ pub fn append_run(config_dir: &Path, m: &RunMetrics, retention_days: u32) -> Res
     crate::learn::hub::note_all(crate::learn::sources::run_habit(
         m,
         crate::learn::hub::local_hour(m.at),
+        crate::learn::hub::now().gaming,
     ));
     let line = serde_json::to_string(m).map_err(|e| e.to_string())?;
     let path = runs_path(config_dir);
