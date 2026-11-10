@@ -178,6 +178,7 @@ pub fn apply(
 
 /// The user said yes to a suggestion: record it as theirs.
 pub fn accept(store: &mut AutoStore, c: &Change, now_ms: u64) -> JournalLine {
+    crate::learn::hub::setup_outcome(c.rule, crate::learn::decide::Outcome::Accepted, now_ms);
     store.record(
         c.key,
         c.from.clone(),

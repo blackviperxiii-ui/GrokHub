@@ -249,6 +249,10 @@ impl AutoStore {
     pub fn undo(&mut self, key: Key, now_ms: u64) -> Option<(Value, JournalLine)> {
         let e = self.entries.get_mut(&key)?;
         let back = e.before.clone()?;
+        // A change the app made on its own and the user took back.
+        if let Source::Inferred { rule } = &e.source {
+            crate::learn::hub::setup_outcome(rule, crate::learn::decide::Outcome::Undone, now_ms);
+        }
         if let Source::Inferred { rule } | Source::Asked { rule } = &e.source {
             let n = self.undo_counts.entry(rule.clone()).or_insert(0);
             *n = n.saturating_add(1);
@@ -287,13 +291,22 @@ impl AutoStore {
     /// Hand one setting back to auto setup.
     pub fn manage_again(&mut self, key: Key) -> bool {
         let was = self.entries.remove(&key).is_some();
-        self.rules_off.retain(|r| !rule_is_for(r, key));
+        self.rules_off.retain(|r| {
+            let back = rule_is_for(r, key);
+            if back {
+                crate::learn::hub::setup_forgive(r);
+            }
+            !back
+        });
         was
     }
 
     /// Hand every setting back.
     pub fn manage_all_again(&mut self) {
         self.entries.retain(|_, e| !e.locked());
+        for rule in &self.rules_off {
+            crate::learn::hub::setup_forgive(rule);
+        }
         self.rules_off.clear();
         self.undo_counts.clear();
     }
@@ -306,6 +319,7 @@ impl AutoStore {
     }
 
     pub fn dismiss(&mut self, rule: &str, now_ms: u64) {
+        crate::learn::hub::setup_outcome(rule, crate::learn::decide::Outcome::Declined, now_ms);
         self.dismissed.insert(rule.to_string(), now_ms);
     }
 

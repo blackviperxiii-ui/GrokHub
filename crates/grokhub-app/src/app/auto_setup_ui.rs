@@ -333,6 +333,7 @@ impl Cabin {
         let now = grokhub_core::now_ms();
         let before = self.auto_store().clone();
         let p = plan::plan_pass(&signals, self.auto_store(), moment, now);
+        let p = grokhub_core::learn::hub::weigh_setup(p, moment, now);
         let made = self.auto_make(&p.apply);
         let mut lines = p.took_over;
         lines.extend(plan::apply(self.auto_store(), &made, moment, now));
