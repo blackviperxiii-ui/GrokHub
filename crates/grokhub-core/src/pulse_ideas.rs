@@ -67,6 +67,12 @@ impl IdeasState {
         push_front(&mut self.more_like, title, MORE_LIKE_MAX);
     }
 
+    /// Take a title off the more-like list when the like is taken back.
+    pub fn forget_more_like(&mut self, title: &str) {
+        let title = title.trim();
+        self.more_like.retain(|t| !t.eq_ignore_ascii_case(title));
+    }
+
     pub fn note_not_interested(&mut self, title: &str) {
         self.more_like
             .retain(|t| !t.eq_ignore_ascii_case(title.trim()));
@@ -449,6 +455,11 @@ mod tests {
         s.note_more_like("Trivia night");
         s.note_more_like("Morning run plan");
         assert_eq!(s.more_like, vec!["Morning run plan", "Trivia night"]);
+        s.forget_more_like("Morning run plan");
+        assert_eq!(s.more_like, vec!["Trivia night"]);
+        s.forget_more_like("morning run plan");
+        assert_eq!(s.more_like, vec!["Trivia night"]);
+        s.note_more_like("Morning run plan");
         s.note_not_interested("Trivia night");
         assert_eq!(s.more_like, vec!["Morning run plan"]);
         assert_eq!(s.turned_down, vec!["Trivia night"]);

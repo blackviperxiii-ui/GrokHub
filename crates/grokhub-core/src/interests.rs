@@ -351,6 +351,53 @@ impl InterestProfile {
         moved
     }
 
+    /// Take back a earlier [`feedback`] of `signal` on the same text:
+    /// topic weights and nudged edges move by the inverse amount.
+    /// Pinned topics still never drop. Does not reopen edges that
+    /// Not interested closed.
+    pub fn retract_feedback(
+        &mut self,
+        text: &str,
+        signal: InterestSignal,
+        now_ms: u64,
+    ) -> Vec<String> {
+        let delta = -signal.delta();
+        let mut moved = Vec::new();
+        for t in &mut self.topics {
+            if !names_topic(text, &t.topic) {
+                continue;
+            }
+            t.last_seen_ms = now_ms;
+            if delta < 0 && t.pinned {
+                continue;
+            }
+            let next =
+                (i16::from(t.weight) + delta).clamp(i16::from(WEIGHT_MIN), i16::from(WEIGHT_MAX));
+            let next = u8::try_from(next).unwrap_or(WEIGHT_MIN);
+            if next != t.weight {
+                t.weight = next;
+                moved.push(t.topic.clone());
+            }
+        }
+        let named: Vec<String> = self
+            .topics
+            .iter()
+            .filter(|t| names_topic(text, &t.topic))
+            .map(|t| t.topic.clone())
+            .collect();
+        let edge_delta = -signal.edge_delta();
+        if edge_delta != 0 && named.len() >= 2 {
+            for i in 0..named.len() {
+                for j in (i + 1)..named.len() {
+                    self.graph
+                        .nudge_pair(&named[i], &named[j], edge_delta, now_ms);
+                }
+            }
+            self.graph.trim();
+        }
+        moved
+    }
+
     /// Unmuted topics, pinned first, then by weight.
     pub fn ranked(&self) -> Vec<&Interest> {
         let mut out: Vec<&Interest> = self.topics.iter().filter(|t| !t.muted).collect();
@@ -1416,6 +1463,32 @@ mod tests {
             p.find("air compressors").map(|t| t.weight),
             Some(WEIGHT_MIN)
         );
+    }
+
+    #[test]
+    fn retract_feedback_undoes_more_like_this_on_the_same_text() {
+        let mut p = InterestProfile::default();
+        p.add("Rust", InterestSource::Memory, 0);
+        p.add("xAI", InterestSource::Explicit, 0);
+        p.set_pinned("xAI", true);
+        let rust = p.find("Rust").unwrap().weight;
+        let xai = p.find("xAI").unwrap().weight;
+        assert_eq!(
+            p.feedback("Rust 1.99 and xAI", InterestSignal::MoreLikeThis, 50),
+            vec!["Rust", "xAI"]
+        );
+        assert_eq!(p.find("Rust").map(|t| t.weight), Some(rust + 12));
+        assert_eq!(p.find("xAI").map(|t| t.weight), Some(xai + 12));
+        assert_eq!(
+            p.retract_feedback("Rust 1.99 and xAI", InterestSignal::MoreLikeThis, 60),
+            vec!["Rust"]
+        );
+        assert_eq!(
+            p.find("Rust").map(|t| (t.weight, t.last_seen_ms)),
+            Some((rust, 60))
+        );
+        // Pinned topics never drop, including when a like is taken back.
+        assert_eq!(p.find("xAI").map(|t| t.weight), Some(xai + 12));
     }
 
     #[test]

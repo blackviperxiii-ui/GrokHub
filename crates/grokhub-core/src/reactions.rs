@@ -219,6 +219,13 @@ impl Reactions {
         entry.score = (entry.score - 3).clamp(-SCORE_MAX, SCORE_MAX);
     }
 
+    /// Take back one outcome's points. Writes no log line.
+    pub fn retract(&mut self, outcome: Outcome, category: &str) {
+        if let Some(entry) = self.categories.get_mut(category) {
+            entry.score = (entry.score - outcome.delta()).clamp(-SCORE_MAX, SCORE_MAX);
+        }
+    }
+
     /// Settings → Reset: everything learned is gone.
     pub fn reset(&mut self) {
         *self = Self::default();
@@ -383,6 +390,24 @@ mod tests {
         assert!((r.weight("disk") - 0.85).abs() < 1e-9);
         assert_eq!(r.score("never seen"), 0);
         assert_eq!(r.weight("never seen"), 1.0);
+    }
+
+    #[test]
+    fn retract_takes_back_an_accepted_more_like_this_score() {
+        let mut r = Reactions::default();
+        r.record(
+            Outcome::Accepted,
+            "automations ideas",
+            "Tidy the workboard",
+            T0,
+        );
+        r.more("automations ideas");
+        assert_eq!(r.score("automations ideas"), 5);
+        r.retract(Outcome::Accepted, "automations ideas");
+        r.less("automations ideas");
+        assert_eq!(r.score("automations ideas"), 0);
+        r.retract(Outcome::Accepted, "never seen");
+        assert_eq!(r.score("never seen"), 0);
     }
 
     #[test]

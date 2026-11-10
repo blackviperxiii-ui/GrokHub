@@ -171,6 +171,8 @@ pub struct Idea {
     /// A card that found something: its chips in place of the two buttons.
     /// Empty on other ideas.
     pub chips: Vec<Chip>,
+    /// Like was tapped and is still on: the row shows a filled heart.
+    pub loved: bool,
 }
 
 /// A PC health card's options window: the verdict, what to try, and the
@@ -431,6 +433,7 @@ fn idea(card: &UpdateCard, now_ms: u64) -> Idea {
         } else {
             Vec::new()
         },
+        loved: card.reaction == Some(CardReaction::Up),
     }
 }
 
@@ -586,6 +589,7 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
         Act::NotThis | Act::NotInterested => (Some(Outcome::Dismissed), Some(false)),
         Act::Love | Act::Accept => (Some(Outcome::Accepted), None),
         Act::Unlove => (None, None),
+        Act::MoreLike if card.reaction == Some(CardReaction::Up) => (None, None),
         Act::MoreLike => (Some(Outcome::Accepted), Some(true)),
         Act::Snooze => (Some(Outcome::Snoozed), None),
         // Opened goes through `engaged`, which notes the tap itself.
@@ -640,6 +644,13 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
                         s.taste_events
                             .retain(|e| !(e.kind == TasteKind::Love && e.text == card.title));
                     })?;
+                    if card.kind == UpdateKind::Idea {
+                        idea_retract(config_dir, &card, InterestSignal::MoreLikeThis, now_ms)?;
+                        pulse_feed::with_ideas_state(config_dir, |s| {
+                            s.forget_more_like(&card.title)
+                        })?;
+                        retract_idea_like_learned(config_dir, &card);
+                    }
                     true
                 }
                 None => false,
@@ -672,10 +683,17 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
             grokhub_core::mark_update_opened(&mut cards, id)
         }
         Act::MoreLike => {
-            note(&card.title, LedgerReason::Liked, &day.date)?;
-            idea_feedback(config_dir, &card, InterestSignal::MoreLikeThis, now_ms)?;
-            pulse_feed::with_ideas_state(config_dir, |s| s.note_more_like(&card.title))?;
-            false
+            if card.reaction == Some(CardReaction::Up) {
+                false
+            } else {
+                note(&card.title, LedgerReason::Liked, &day.date)?;
+                idea_feedback(config_dir, &card, InterestSignal::MoreLikeThis, now_ms)?;
+                pulse_feed::with_ideas_state(config_dir, |s| s.note_more_like(&card.title))?;
+                if let Some(saved) = cards.iter_mut().find(|c| c.id == id) {
+                    saved.reaction = Some(CardReaction::Up);
+                }
+                true
+            }
         }
         Act::NotInterested => {
             note(&card.title, LedgerReason::NotThis, &day.date)?;
@@ -711,6 +729,35 @@ fn idea_feedback(
         card.idea_action()
     );
     crate::interests::feedback(config_dir, &text, signal, now_ms).map(|_| ())
+}
+
+fn idea_retract(
+    config_dir: &Path,
+    card: &UpdateCard,
+    signal: InterestSignal,
+    now_ms: u64,
+) -> Result<(), String> {
+    let text = format!(
+        "{} {} {}",
+        card.title,
+        card.body.as_deref().unwrap_or(""),
+        card.idea_action()
+    );
+    crate::interests::retract_feedback(config_dir, &text, signal, now_ms).map(|_| ())
+}
+
+/// Take back the Accepted + More like this points an idea Like wrote.
+fn retract_idea_like_learned(config_dir: &Path, card: &UpdateCard) {
+    let Some((category, _)) = reactions::card_category_tag(card) else {
+        return;
+    };
+    let path = reactions_path(config_dir);
+    let mut learned = reactions::load(&path);
+    learned.retract(Outcome::Accepted, &category);
+    learned.less(&category);
+    if let Err(e) = reactions::save(&path, &learned) {
+        eprintln!("pulse: {e}");
+    }
 }
 
 fn find(config_dir: &Path, id: &str) -> Result<UpdateCard, String> {
@@ -1181,6 +1228,7 @@ mod tests {
         assert_eq!(ideas[0].id, "idea-1");
         assert!(ideas[0].title.starts_with("I can "), "{:?}", ideas[0]);
         assert_eq!(ideas[0].action, "close every done card on the workboard");
+        assert!(!ideas[0].loved);
         assert_eq!(
             page.ideas[0].label, "",
             "the first three ideas lead with no header"
@@ -1224,11 +1272,9 @@ mod tests {
         rust_topic(&d.config);
         let before = weight(&d.config);
         let page = act(&d.config, "idea-1", Act::MoreLike, &day(), NOW).expect("act");
-        assert_eq!(
-            page.ideas.iter().flat_map(|g| &g.ideas).count(),
-            1,
-            "{page:?}"
-        );
+        let ideas: Vec<&Idea> = page.ideas.iter().flat_map(|g| &g.ideas).collect();
+        assert_eq!(ideas.len(), 1, "{page:?}");
+        assert!(ideas[0].loved, "{page:?}");
         assert_eq!(weight(&d.config), before + 12);
         let state = pulse_feed::with_ideas_state(&d.config, |s| s.clone()).expect("state");
         assert_eq!(state.more_like, vec!["Tidy the workboard"]);
@@ -1237,6 +1283,71 @@ mod tests {
             .map(|raw| serde_json::from_str(raw).expect("act"))
             .collect();
         assert_eq!(acts, vec![Act::MoreLike, Act::NotInterested, Act::Accept]);
+        // A second Like while it is already loved sends no second signal.
+        act(&d.config, "idea-1", Act::MoreLike, &day(), NOW + 1).expect("again");
+        assert_eq!(weight(&d.config), before + 12);
+        let state = pulse_feed::with_ideas_state(&d.config, |s| s.clone()).expect("state");
+        assert_eq!(state.more_like, vec!["Tidy the workboard"]);
+        assert_eq!(
+            memory().matches("reason=liked").count(),
+            1,
+            "{}",
+            memory()
+        );
+    }
+
+    #[test]
+    fn unlove_on_an_idea_takes_the_heart_and_its_taste_signal_back() {
+        let d = dirs("idea-unlove", &sample());
+        rust_topic(&d.config);
+        let before = weight(&d.config);
+        act(&d.config, "idea-1", Act::MoreLike, &day(), NOW).expect("like");
+        assert_eq!(
+            reactions::load(&d.config.join(reactions::FILE_NAME)).score("automations ideas"),
+            5
+        );
+        let before_ledger = memory();
+        let page = act(&d.config, "idea-1", Act::Unlove, &day(), NOW + 1).expect("unlove");
+        let ideas: Vec<&Idea> = page.ideas.iter().flat_map(|g| &g.ideas).collect();
+        assert_eq!(ideas.len(), 1, "{page:?}");
+        assert!(!ideas[0].loved, "{page:?}");
+        assert_eq!(weight(&d.config), before);
+        let state = pulse_feed::with_ideas_state(&d.config, |s| s.clone()).expect("state");
+        assert!(state.more_like.is_empty(), "{state:?}");
+        assert_eq!(
+            reactions::load(&d.config.join(reactions::FILE_NAME)).score("automations ideas"),
+            0
+        );
+        assert_eq!(memory(), before_ledger, "Unlove writes no ledger line");
+        // Already unliked: nothing changes.
+        let again = act(&d.config, "idea-1", Act::Unlove, &day(), NOW + 2).expect("again");
+        assert_eq!(again, page);
+        assert_eq!(weight(&d.config), before);
+        // A Like after unlike sends the signal once more.
+        let page = act(&d.config, "idea-1", Act::MoreLike, &day(), NOW + 3).expect("relike");
+        let ideas: Vec<&Idea> = page.ideas.iter().flat_map(|g| &g.ideas).collect();
+        assert!(ideas[0].loved);
+        assert_eq!(weight(&d.config), before + 12);
+        assert_eq!(
+            pulse_feed::with_ideas_state(&d.config, |s| s.more_like.clone()).expect("state"),
+            vec!["Tidy the workboard"]
+        );
+        assert_eq!(
+            reactions::load(&d.config.join(reactions::FILE_NAME)).score("automations ideas"),
+            5
+        );
+        assert_eq!(memory().matches("reason=liked").count(), 2, "{}", memory());
+    }
+
+    #[test]
+    fn a_liked_idea_stays_loved_after_the_page_is_read_again() {
+        let d = dirs("idea-loved-persist", &sample());
+        act(&d.config, "idea-1", Act::MoreLike, &day(), NOW).expect("like");
+        let page = load(&d.config, None, NOW + 1).expect("reload");
+        let ideas: Vec<&Idea> = page.ideas.iter().flat_map(|g| &g.ideas).collect();
+        assert_eq!(ideas.len(), 1, "{page:?}");
+        assert!(ideas[0].loved, "{page:?}");
+        assert_eq!(ideas[0].id, "idea-1");
     }
 
     #[test]

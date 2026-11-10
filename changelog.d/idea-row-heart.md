@@ -1,0 +1,1 @@
+- Pulse: tapping Like on a For You idea sends more like this once and turns it into a filled heart that stays; tapping the heart takes the like back and undoes that taste signal. Reduced motion skips the animation.
