@@ -149,6 +149,7 @@ impl Habit {
             hard: false,
             helps: None,
             hurts: None,
+            tested: false,
         })
     }
 

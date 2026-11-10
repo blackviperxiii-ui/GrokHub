@@ -195,6 +195,7 @@ pub fn decision_outcome(rule: &Subject, outcome: Outcome, now_ms: u64) -> Option
         Outcome::Accepted | Outcome::Kept => Kind::Accepted,
         Outcome::Declined => Kind::Declined,
         Outcome::Undone => Kind::Undone,
+        Outcome::RolledBack => Kind::Failed,
     };
     if !paused() {
         e.record(Signal::new(now_ms, kind, rule.clone()));

@@ -218,6 +218,11 @@ fn title(area: &str, id: &str) -> String {
             },
             None => format!("Habit {id}"),
         },
+        "router" => match id.rsplit_once('/') {
+            Some((class, "order")) => format!("Router: which model goes first for {class}"),
+            Some((class, "start")) => format!("Router: how hard {class} starts"),
+            _ => format!("Router {id}"),
+        },
         "reply" => format!("Plan reply: {}", plan_reply(id)),
         "trait" => format!(
             "One Pulse card {}",

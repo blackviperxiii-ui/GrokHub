@@ -198,6 +198,10 @@ pub struct Proposal {
     pub helps: Option<Goal>,
     /// The goal this change works against, if any.
     pub hurts: Option<Goal>,
+    /// The learner already tried this change on a share of real work and it
+    /// held (the router's canary). That is its trial, so it does not wait
+    /// for three yes answers first.
+    pub tested: bool,
 }
 
 /// What is going on right now.
@@ -290,6 +294,9 @@ pub enum Outcome {
     Kept,
     /// A change the app made was undone.
     Undone,
+    /// A change the app made went worse and the app took it back itself.
+    /// It counts against the area's score, not as the user's undo.
+    RolledBack,
 }
 
 /// The watchdog tripped: acting is paused, and these rules' changes from
@@ -454,7 +461,11 @@ impl State {
             (now.quiet, Verdict::Wait, Reason::Quiet),
             (now.busy, Verdict::Wait, Reason::Busy),
             (self.paused(now_ms), Verdict::Offer, Reason::Paused),
-            (!self.graduated(&p.rule), Verdict::Offer, Reason::Shadow),
+            (
+                !p.tested && !self.graduated(&p.rule),
+                Verdict::Offer,
+                Reason::Shadow,
+            ),
             (
                 self.budget_left(now_ms) == 0,
                 Verdict::Offer,
@@ -548,6 +559,7 @@ impl State {
                 r.resting_until_ms = now_ms + REST_MS;
             }
             Outcome::Kept => r.kept += 1,
+            Outcome::RolledBack => r.passes = 0,
             Outcome::Undone => {
                 r.undone += 1;
                 r.passes = 0;
