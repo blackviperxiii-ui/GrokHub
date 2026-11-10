@@ -1,0 +1,1 @@
+- Local AI keeps the chat's cache when a model unloads quietly and puts it back the next time that model loads, so the first reply skips re-reading the system prompt and tools (a cache the reply couldn't use is dropped, and that model stops trying for the session). With nothing to restore, a GPU load answers one tiny warm-up first.

@@ -405,7 +405,17 @@ fn spawn_llama(
             ));
         }
     }
-    let args = spawn_args(model, host, port, launch, bare_cpu);
+    let mut args = spawn_args(model, host, port, launch, bare_cpu);
+    // A planned launch can save and restore its KV cache (see `local_kv`).
+    if launch.is_some() {
+        let options = super::local_flags::engine_options(binary);
+        if let Some(dir) = super::local_kv::spawn_dir(&options) {
+            args.extend([
+                super::local_kv::FLAG.to_string(),
+                dir.to_string_lossy().into_owned(),
+            ]);
+        }
+    }
     // The load log names out-of-memory failures; without a file it is dropped.
     let log = std::fs::File::create(server_log_path(binary))
         .map(Stdio::from)
@@ -1128,6 +1138,15 @@ fn load(config_dir: &Path, want: Want) -> Result<Busy, String> {
                 let detail = super::local_warm::start_detail(name.as_deref(), cached);
                 health::log_to(config_dir, "start", detail.as_deref(), Some(ms));
                 super::local_warm::note_loaded();
+                if let Some(a) = side.launch.clone() {
+                    super::local_kv::after_load(
+                        side.base_url(),
+                        side.token.clone(),
+                        side.binary.clone(),
+                        side.model.clone(),
+                        a,
+                    );
+                }
                 set_last_error(None);
                 let busy = side.busy();
                 *slot = Some(side);
@@ -1530,6 +1549,7 @@ pub fn tick_scale(config_dir: &Path) {
     if let Some(side) = slot.take() {
         health::log_to(config_dir, "swap", Some(&swap_note(&model, stand_in)), None);
         LAST_SWAP_SECS.store(unix_secs(), Ordering::SeqCst);
+        save_kv(&side);
         retire(side);
     }
     drop(slot);
@@ -1744,6 +1764,7 @@ pub fn tick_idle_unload() {
         if let Some(side) = slot.take() {
             *LAST_IDLE_UNLOAD.lock().expect("last idle unload") =
                 Some((side.model.clone(), unix_secs()));
+            save_kv(&side);
             retire(side);
             health::log("stop", Some("idle"));
         }
@@ -1799,6 +1820,14 @@ fn refused(want: Want) -> Option<&'static str> {
 
 /// Stops a sidecar taken from the slot. Every stop goes through here so it
 /// bumps [`WARM_GEN`] and cancels a keep-warm load started before it.
+/// Before a quiet unload: keep the chat slot's cache for the next load of
+/// this model (see `local_kv`). Never on a cut for a game.
+fn save_kv(side: &Sidecar) {
+    if let Some(a) = side.launch.as_ref().filter(|_| side.alive()) {
+        super::local_kv::save(&side.base_url(), &side.token, &side.binary, &side.model, a);
+    }
+}
+
 fn retire(side: Sidecar) {
     WARM_GEN.fetch_add(1, Ordering::SeqCst);
     side.stop();
