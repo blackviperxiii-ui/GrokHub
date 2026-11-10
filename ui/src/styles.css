@@ -4832,6 +4832,39 @@ label.toggle-row {
   overflow-wrap: anywhere;
 }
 
+/* Settings → Code → Secrets: one row per name, Replace and Delete at the right. */
+.code-secrets .empty {
+  margin-bottom: 8px;
+}
+
+.code-secret-list {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.code-secret-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+
+.code-secret-row code {
+  font-size: var(--font-caption);
+  overflow-wrap: anywhere;
+}
+
+.code-secrets .confirm-window {
+  margin: 8px 0;
+}
+
 @media (max-width: 720px) {
   .code-activity-row {
     grid-template-columns: 5rem minmax(0, 1fr);
