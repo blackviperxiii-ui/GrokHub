@@ -21,16 +21,18 @@ pub(super) enum SavedTap {
 }
 
 impl Cabin {
-    /// Every saved card, read fresh so the desktop app's saves show too.
-    pub(super) fn saved_page_list(&mut self) -> Vec<SavedFind> {
-        let list = ps::load_saved(&saved_finds_path());
-        self.sources.saved = Some(list.clone());
-        list
+    /// Every saved card, read fresh so the desktop app's saves show too. A
+    /// damaged file is the error, never an empty page.
+    pub(super) fn saved_page_list(&mut self) -> Result<Vec<SavedFind>, String> {
+        self.saved_read()
     }
 
     /// Remove from saved: read the file, take the link out, write it back.
     pub(super) fn remove_saved(&mut self, url: &str) {
-        let mut list = ps::load_saved(&saved_finds_path());
+        let mut list = match self.saved_read() {
+            Ok(list) => list,
+            Err(err) => return self.status = err,
+        };
         if ps::remove_find(&mut list, url) {
             if let Err(err) = ps::save_saved(&saved_finds_path(), &list) {
                 self.status = err;
@@ -42,10 +44,13 @@ impl Cabin {
     }
 
     pub(super) fn ui_pulse_saved(&mut self, ui: &mut egui::Ui) {
-        let list = self.saved_page_list();
+        let (list, note) = match self.saved_page_list() {
+            Ok(list) => (list, SAVED_EMPTY.to_string()),
+            Err(err) => (Vec::new(), err),
+        };
         if list.is_empty() {
             ui.label(
-                RichText::new(SAVED_EMPTY)
+                RichText::new(note)
                     .size(crate::theme::FONT_BODY)
                     .color(crate::theme::muted()),
             );

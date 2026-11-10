@@ -512,17 +512,12 @@ impl Cabin {
         added
     }
 
-    pub(super) fn saved_now(&mut self) -> &mut Vec<SavedFind> {
-        self.sources
-            .saved
-            .get_or_insert_with(|| ps::load_saved(&saved_finds_path()))
-    }
-
-    fn persist_saved(&mut self) {
-        let list = self.saved_now().clone();
-        if let Err(err) = ps::save_saved(&saved_finds_path(), &list) {
-            self.status = err;
-        }
+    /// Saved Finds read fresh, and kept for the next frame. A damaged file
+    /// is the error (shown, never taken as empty) and nothing is kept.
+    pub(super) fn saved_read(&mut self) -> Result<Vec<SavedFind>, String> {
+        let read = ps::load_saved(&saved_finds_path());
+        self.sources.saved = read.as_ref().ok().cloned();
+        read
     }
 
     /// The interest a post was for moves too when its title doesn't name it.
@@ -607,9 +602,15 @@ impl Cabin {
                     return;
                 };
                 // Read the file again first: the desktop app saves to it too.
-                self.sources.saved = None;
-                if ps::save_find(self.saved_now(), find) {
-                    self.persist_saved();
+                let mut list = match self.saved_read() {
+                    Ok(list) => list,
+                    Err(err) => return self.status = err,
+                };
+                if ps::save_find(&mut list, find) {
+                    if let Err(err) = ps::save_saved(&saved_finds_path(), &list) {
+                        return self.status = err;
+                    }
+                    self.sources.saved = Some(list);
                 }
                 self.status = "Saved. It's on Pulse → Saved.".into();
                 if card.reaction == Some(grokhub_core::CardReaction::Up) {
@@ -678,7 +679,14 @@ impl Cabin {
                 .color(crate::theme::fg()),
         );
         ui.add_space(4.0);
-        let list = self.saved_now().clone();
+        let read = match self.sources.saved.clone() {
+            Some(list) => Ok(list),
+            None => self.saved_read(),
+        };
+        let list = match read {
+            Ok(list) => list,
+            Err(err) => return crate::cards::settings_note(ui, &err),
+        };
         if list.is_empty() {
             crate::cards::settings_note(
                 ui,
@@ -1193,6 +1201,38 @@ mod tests {
     }
 
     #[test]
+    fn a_damaged_saved_file_shows_its_error_and_remove_leaves_it_be() {
+        let (_lock, _root, mut cabin) = cabin();
+        let path = saved_finds_path();
+        std::fs::create_dir_all(path.parent().expect("dir")).expect("dir");
+        let damaged = b"[{\"title\":\"Find 1\",\"url\":\"https://a.test/1\"";
+        std::fs::write(&path, damaged).expect("damaged file");
+
+        let err = cabin
+            .saved_page_list()
+            .expect_err("damaged is not an empty page");
+        assert!(err.contains("saved-finds.json is damaged"), "{err}");
+        assert!(err.contains("saved-finds.json.corrupt-"), "{err}");
+        cabin.remove_saved("https://a.test/1");
+        assert_eq!(cabin.status, err, "Remove shows the same error");
+        assert_eq!(std::fs::read(&path).expect("original"), damaged.to_vec());
+        let copies: Vec<_> = std::fs::read_dir(path.parent().expect("dir"))
+            .expect("list")
+            .flatten()
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("saved-finds.json.corrupt-")
+            })
+            .collect();
+        assert_eq!(copies.len(), 1, "one copy, however often it is read");
+        assert_eq!(
+            std::fs::read(copies[0].path()).expect("copy"),
+            damaged.to_vec()
+        );
+    }
+
+    #[test]
     fn remove_from_saved_takes_out_exactly_that_card_and_keeps_past_two_hundred() {
         let (_lock, _root, mut cabin) = cabin();
         let mut list = Vec::new();
@@ -1210,16 +1250,16 @@ mod tests {
             ));
         }
         ps::save_saved(&saved_finds_path(), &list).expect("write");
-        assert_eq!(cabin.saved_page_list().len(), 250);
+        assert_eq!(cabin.saved_page_list().expect("read").len(), 250);
 
         cabin.remove_saved("https://a.test/42");
         assert_eq!(cabin.status, "Removed from saved.");
-        let left = ps::load_saved(&saved_finds_path());
+        let left = ps::load_saved(&saved_finds_path()).expect("read");
         assert_eq!(left.len(), 249);
         assert!(left.iter().all(|f| f.url != "https://a.test/42"));
         assert_eq!(left[0].url, "https://a.test/249");
         assert_eq!(left[248].url, "https://a.test/0");
-        assert_eq!(cabin.saved_page_list().len(), 249);
+        assert_eq!(cabin.saved_page_list().expect("read").len(), 249);
     }
 
     #[test]
@@ -1264,7 +1304,7 @@ mod tests {
         cabin.source_post_act(&saved, SourceAct::Save);
         cabin.source_post_act(&saved, SourceAct::Save);
         assert_eq!(cabin.status, "Saved. It's on Pulse → Saved.");
-        let on_disk = ps::load_saved(&saved_finds_path());
+        let on_disk = ps::load_saved(&saved_finds_path()).expect("read");
         let rows: Vec<(&str, &str, &str, Option<&str>)> = on_disk
             .iter()
             .map(|f| {
@@ -1295,7 +1335,7 @@ mod tests {
         // The Saved page reads the same file and its own copy of the post:
         // the feed card going away (here, the whole feed) leaves it be.
         let feed = std::mem::take(&mut cabin.updates);
-        let page = cabin.saved_page_list();
+        let page = cabin.saved_page_list().expect("read");
         assert_eq!(page.len(), 1);
         assert_eq!(page[0].title, "Rust 1.99 released");
         cabin.updates = feed;

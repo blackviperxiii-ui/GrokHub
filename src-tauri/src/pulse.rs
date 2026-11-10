@@ -74,16 +74,16 @@ fn saved_view(list: Vec<SavedFind>) -> Vec<Saved> {
 }
 
 /// The Saved page: every saved find, newest first.
-pub fn saved(config_dir: &Path) -> Vec<Saved> {
+pub fn saved(config_dir: &Path) -> Result<Vec<Saved>, String> {
     let _store = store();
-    saved_view(ps::load_saved(&saved_path(config_dir)))
+    Ok(saved_view(ps::load_saved(&saved_path(config_dir))?))
 }
 
 /// Remove from saved, the Saved page's one action. Returns what is left.
 pub fn unsave(config_dir: &Path, url: &str) -> Result<Vec<Saved>, String> {
     let _store = store();
     let path = saved_path(config_dir);
-    let mut list = ps::load_saved(&path);
+    let mut list = ps::load_saved(&path)?;
     if ps::remove_find(&mut list, url) {
         ps::save_saved(&path, &list)?;
     }
@@ -567,7 +567,8 @@ fn build(
         card_taste::rank_with(older, &weights),
     );
     let shown: Vec<UpdateCard> = today.iter().chain(older.iter()).cloned().collect();
-    let saved_list = ps::load_saved(&saved_path(config_dir));
+    // Only marks which posts are saved; a damaged file shows on the Saved page.
+    let saved_list = ps::load_saved(&saved_path(config_dir)).unwrap_or_default();
     Page {
         today: today.len(),
         feed: shown
@@ -672,7 +673,7 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
         let find = ps::saved_from_card(&card, now_ms)
             .ok_or_else(|| "This post has no link to save.".to_string())?;
         let path = saved_path(config_dir);
-        let mut list = ps::load_saved(&path);
+        let mut list = ps::load_saved(&path)?;
         if ps::save_find(&mut list, find) {
             ps::save_saved(&path, &list)?;
         }
@@ -1372,6 +1373,33 @@ mod tests {
     }
 
     #[test]
+    fn save_onto_a_damaged_saved_file_is_refused_and_leaves_it_be() {
+        let mut find =
+            automation_done_card("src", "Rust 1.99 released", "Faster builds.", NOW - 60_000);
+        find.id = "find-1".into();
+        find.source_id = "source:rss:rust".into();
+        find.citations = vec!["https://blog.rust-lang.org/1.99".into()];
+        let d = dirs("saved-damaged", &[find]);
+        let path = saved_path(&d.config);
+        std::fs::create_dir_all(path.parent().expect("dir")).expect("mkdir");
+        let damaged = b"[{\"title\":\"Old find\",\"url\":\"https://a.test/old\"";
+        std::fs::write(&path, damaged).expect("damaged file");
+
+        let err = act(&d.config, "find-1", Act::Save, &day(), NOW).expect_err("refused");
+        assert!(err.contains("saved-finds.json is damaged"), "{err}");
+        assert_eq!(std::fs::read(&path).expect("original"), damaged.to_vec());
+        let page = load(&d.config, None, NOW).expect("load");
+        assert!(
+            !page.feed[0].loved,
+            "a refused Save doesn't count as a Like"
+        );
+        assert_eq!(saved(&d.config).expect_err("page shows the error"), err);
+        let refused = unsave(&d.config, "https://a.test/old").expect_err("refused");
+        assert_eq!(refused, err);
+        assert_eq!(std::fs::read(&path).expect("original"), damaged.to_vec());
+    }
+
+    #[test]
     fn save_puts_a_source_post_on_the_saved_page_apart_from_the_feed() {
         let mut find =
             automation_done_card("src", "Rust 1.99 released", "Faster builds.", NOW - 60_000);
@@ -1383,16 +1411,16 @@ mod tests {
         assert!(page.feed[0].save && !page.feed[0].saved);
         let page = act(&d.config, "find-1", Act::Save, &day(), NOW).expect("save");
         assert!(page.feed[0].saved && page.feed[0].loved, "{page:?}");
-        let list = saved(&d.config);
+        let list = saved(&d.config).expect("saved");
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].title, "Rust 1.99 released");
         // Feed delete never touches the Saved page.
         act(&d.config, "find-1", Act::Delete, &day(), NOW).expect("delete");
-        assert_eq!(saved(&d.config).len(), 1);
+        assert_eq!(saved(&d.config).expect("saved").len(), 1);
         // Remove from saved is its one way out.
         let left = unsave(&d.config, "https://blog.rust-lang.org/1.99").expect("unsave");
         assert!(left.is_empty());
-        assert!(saved(&d.config).is_empty());
+        assert!(saved(&d.config).expect("saved").is_empty());
         // A post with no source link offers no Save.
         let d = dirs("saved-none", &sample());
         let page = load(&d.config, None, NOW).expect("load");
@@ -1408,21 +1436,21 @@ mod tests {
         find.citations = vec!["https://blog.rust-lang.org/1.99".into()];
         let d = dirs("saved-cleanup", &[find]);
         act(&d.config, "find-1", Act::Save, &day(), NOW).expect("save");
-        assert_eq!(saved(&d.config).len(), 1);
+        assert_eq!(saved(&d.config).expect("saved").len(), 1);
 
         // The feed is cleaned out entirely (expiry, archive, delete all end
         // here): the Saved page keeps its card.
         std::fs::write(d.config.join(FILE), "[]").expect("empty feed");
         let page = load(&d.config, None, NOW + 30 * 86_400_000).expect("load");
         assert!(page.feed.is_empty());
-        let list = saved(&d.config);
+        let list = saved(&d.config).expect("saved");
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].url, "https://blog.rust-lang.org/1.99");
         assert_eq!(list[0].title, "Rust 1.99 released");
 
         // No cap: 250 more saves are all kept.
         let path = saved_path(&d.config);
-        let mut all = ps::load_saved(&path);
+        let mut all = ps::load_saved(&path).expect("read");
         for i in 0..250u64 {
             assert!(ps::save_find(
                 &mut all,
@@ -1437,7 +1465,7 @@ mod tests {
             ));
         }
         ps::save_saved(&path, &all).expect("write");
-        assert_eq!(saved(&d.config).len(), 251);
+        assert_eq!(saved(&d.config).expect("saved").len(), 251);
 
         // Remove from saved takes out exactly that card.
         let left = unsave(&d.config, "https://a.test/7").expect("unsave");
@@ -1448,7 +1476,7 @@ mod tests {
         assert!(left
             .iter()
             .any(|f| f.url == "https://blog.rust-lang.org/1.99"));
-        assert_eq!(saved(&d.config).len(), 250);
+        assert_eq!(saved(&d.config).expect("saved").len(), 250);
         // Removing a link that is not saved changes nothing.
         assert_eq!(
             unsave(&d.config, "https://a.test/7").expect("again").len(),

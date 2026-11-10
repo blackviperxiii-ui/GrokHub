@@ -2310,7 +2310,7 @@ async fn pulse_why(state: State<'_, ShellState>, id: String) -> Result<String, S
 async fn pulse_saved(state: State<'_, ShellState>) -> Result<Vec<pulse::Saved>, String> {
     capabilities::needs(capabilities::current().pulse, "Pulse")?;
     let dir = state.config_dir.clone();
-    off_main(move || pulse::saved(&dir)).await
+    off_main(move || pulse::saved(&dir)).await?
 }
 
 /// Remove from saved: the one action a saved find has. Returns what is left.
