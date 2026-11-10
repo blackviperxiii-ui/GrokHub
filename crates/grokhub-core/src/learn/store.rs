@@ -5,6 +5,8 @@
 //!   and a new file starts.
 //! - `beliefs.json`: every belief, replaced whole through a rename.
 //! - `decisions.json`: the decision engine's dials, rule counts and log.
+//! - `paused`: an empty file that is there while the user has learning
+//!   paused, so both apps on the folder stop together.
 //! - `learn.lock`: held while the beliefs are read, changed and written, so
 //!   two apps on one folder never write over each other.
 //!
@@ -22,6 +24,8 @@ pub const SIGNALS: &str = "signals.jsonl";
 pub const SIGNALS_OLD: &str = "signals.jsonl.1";
 pub const BELIEFS: &str = "beliefs.json";
 pub const LOCK: &str = "learn.lock";
+/// Present while the user has learning paused. Empty.
+pub const PAUSED: &str = "paused";
 /// Size of the active signal file at which it rotates, in bytes.
 pub const SIGNAL_BYTES: u64 = 384 * 1024;
 /// The most the engine's files may take together, in bytes.
@@ -121,4 +125,24 @@ pub fn disk_used(config_dir: &Path) -> u64 {
         .filter_map(|name| fs::metadata(dir.join(name)).ok())
         .map(|m| m.len())
         .sum()
+}
+
+/// Whether the user has learning paused.
+pub fn paused(config_dir: &Path) -> bool {
+    dir(config_dir).join(PAUSED).exists()
+}
+
+/// Pauses or resumes learning for every app on the folder.
+pub fn set_paused(config_dir: &Path, on: bool) -> Result<(), String> {
+    let dir = dir(config_dir);
+    let path = dir.join(PAUSED);
+    if on {
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        return fs::write(&path, b"").map_err(|e| e.to_string());
+    }
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
 }

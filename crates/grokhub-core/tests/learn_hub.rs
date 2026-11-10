@@ -201,6 +201,69 @@ fn the_shared_logs_feed_one_engine() {
     ] {
         assert!(json.get(field).is_some(), "{field} missing from {json}");
     }
+    // Pause: nothing is counted, what was learned stays, and resume counts again.
+    let probe = Subject::new("skill", "pause-probe").unwrap();
+    let seen = |key: &Subject| hub::read(|e| e.beliefs().get(key).map(|b| b.shape)).flatten();
+    assert_eq!(
+        view::run("pause", 0),
+        "Learning is paused. Nothing new is counted until `/learned resume`."
+    );
+    assert!(hub::paused());
+    assert!(store::paused(&dir));
+    hub::note(grokhub_core::learn::Signal::new(
+        1,
+        Kind::Succeeded,
+        probe.clone(),
+    ));
+    hub::note_all([grokhub_core::learn::Signal::new(
+        2,
+        Kind::Succeeded,
+        probe.clone(),
+    )]);
+    assert_eq!(seen(&probe), None);
+    assert!(view::run("", grokhub_core::now_ms()).starts_with(view::PAUSED_NOTE));
+    assert!(hub::view(0).paused);
+    assert_eq!(view::run("resume", 0), "Learning is back on.");
+    assert!(!store::paused(&dir));
+    hub::note(grokhub_core::learn::Signal::new(
+        3,
+        Kind::Succeeded,
+        probe.clone(),
+    ));
+    assert_eq!(seen(&probe), Some(Shape::Rate { yes: 1.0, no: 0.0 }));
+
+    // "Always": the user's own rule, from the chat and from the desktop app.
+    assert_eq!(
+        view::run("always skill:pause-probe", 0),
+        "`skill:pause-probe` is a rule now. Nothing counts against it until you forget it."
+    );
+    hub::note(grokhub_core::learn::Signal::new(
+        4,
+        Kind::Failed,
+        probe.clone(),
+    ));
+    let pinned = hub::view(grokhub_core::now_ms());
+    let line = pinned
+        .rows
+        .iter()
+        .find(|r| r.key == "skill:pause-probe")
+        .unwrap();
+    assert_eq!((line.stage, line.sure), (view::Stage::Pinned, 100));
+    assert_eq!(
+        store::load_beliefs(&dir).get(&probe).map(|b| b.standing),
+        Some(Standing::Pinned)
+    );
+    let pin: view::Act =
+        serde_json::from_str(r#"{"kind":"always","key":"reply:plan/go"}"#).unwrap();
+    assert!(view::act(pin, 0).is_ok());
+    let cost = view::Act::Always {
+        key: "model:grok-code/run-ms".into(),
+    };
+    assert_eq!(view::act(cost, 0), Err(view::CANT_PIN.to_string()));
+    let toggled: view::Act = serde_json::from_str(r#"{"kind":"pause"}"#).unwrap();
+    assert!(view::act(toggled, 0).unwrap().paused);
+    assert!(!view::act(view::Act::Resume, 0).unwrap().paused);
+
     // The decision engine on the same hub: a new rule offers until it has
     // three yes answers, then acts, and each answer is also a signal.
     use grokhub_core::learn::decide::{self, Area, Outcome, Proposal, Reason, Situation, Verdict};
