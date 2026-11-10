@@ -242,6 +242,9 @@ pub(super) struct HarnessState {
     pub diagnose_slash: bool,
     /// The chat that asked for the running diagnose; its answer goes there.
     pub diagnose_chat: String,
+    /// What the user asked for the running diagnose, carried to the engine
+    /// with its answer.
+    pub diagnose_ask: String,
     /// A card's quiet look (crash history) on its way: card id, what, report.
     pub card_look_rx: Option<mpsc::Receiver<super::repair_ui::CardLookDone>>,
     /// Spike-9 fix proposals and the fix being applied.
