@@ -9,9 +9,11 @@ publish = false
 
 [dependencies]
 grokhub-core = { path = "../grokhub-core" }
-# The headless tools (`--mcp-self`, `--askpass`, `bench local`). Already in
-# the workspace; no new third-party crates.
+# The headless tools (`--mcp-self`, `--mcp-desktop`, `--mcp-cua`, `--doctor`,
+# `--askpass`, `bench local`). Already in the workspace; no new third-party crates.
 grokhub-agent = { path = "../grokhub-agent" }
+grokhub-desktop = { path = "../grokhub-desktop" }
+keyring = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 tiny_http = "0.12"
