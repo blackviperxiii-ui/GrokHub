@@ -355,15 +355,16 @@ pub fn habit_chips(
             Some((h, chip, proposal))
         })
         .collect();
-    if shown.is_empty() {
-        return Vec::new();
-    }
-    let verdicts = decide_all(
-        shown.iter().map(|(_, _, p)| p.clone()).collect(),
-        now,
-        now_ms,
-    );
-    shown
+    let verdicts = if shown.is_empty() {
+        Vec::new()
+    } else {
+        decide_all(
+            shown.iter().map(|(_, _, p)| p.clone()).collect(),
+            now,
+            now_ms,
+        )
+    };
+    let mut chips: Vec<crate::chips::QuickChip> = shown
         .into_iter()
         .filter(|(_, _, p)| {
             verdicts.iter().any(|d| {
@@ -373,5 +374,40 @@ pub fn habit_chips(
         })
         .map(|(_, chip, _)| chip)
         .take(habit::CHIPS_MAX)
-        .collect()
+        .collect();
+    if chips.len() < habit::CHIPS_MAX {
+        chips.extend(trial_chip(skills, part, gaming, now, score, now_ms));
+    }
+    chips
+}
+
+/// Today's experiment, when there is one: a habit the app has seen but is
+/// not sure of, shown once as a chip that says it is a try. Nothing while
+/// learning is paused.
+fn trial_chip(
+    skills: &[crate::skill::SkillMd],
+    part: habit::Part,
+    gaming: bool,
+    now: Situation,
+    score: f32,
+    now_ms: u64,
+) -> Option<crate::chips::QuickChip> {
+    if paused() {
+        return None;
+    }
+    let e = engine()?;
+    let unsure: Vec<(Subject, crate::chips::QuickChip)> =
+        habit::unsure(e.beliefs(), part, gaming, now_ms)
+            .into_iter()
+            .filter_map(|h| Some((h.rule()?, habit::trial_chip(&h, skills, score)?)))
+            .collect();
+    if unsure.is_empty() {
+        return None;
+    }
+    decide::with_state(e.config_dir(), |s| {
+        unsure
+            .into_iter()
+            .find(|(rule, _)| s.try_once(Area::Chips, rule, now, now_ms))
+            .map(|(_, chip)| chip)
+    })
 }

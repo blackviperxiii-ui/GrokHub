@@ -12,6 +12,7 @@
 //! - [`sources`]: what the app's existing logs mean as signals.
 //! - [`hub`]: the one engine a running app shares.
 //! - [`habit`]: what the user does at the same time of day, as timed chips.
+//! - [`experiment`]: one deliberate try a day of something not yet sure.
 //! - [`decide`]: the one place a change the app would make on its own is
 //!   weighed: do it, offer it, wait or never.
 //! - [`review`]: what the app measured going wrong with itself, for the
@@ -25,6 +26,7 @@
 pub mod backup;
 pub mod belief;
 pub mod decide;
+pub mod experiment;
 pub mod habit;
 pub mod head_start;
 pub mod hub;

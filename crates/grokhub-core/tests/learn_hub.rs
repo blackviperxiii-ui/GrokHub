@@ -621,6 +621,53 @@ fn the_shared_logs_feed_one_engine() {
     hub::set_dial(Area::LocalAi, decide::Dial::Act);
     assert_eq!(hub::dial(Area::LocalAi), decide::Dial::Act);
 
+    // An experiment: a skill run only twice around now is not a habit yet,
+    // so the app tries it once as a chip that says so. Hiding it is a no.
+    let mut both = skills.clone();
+    both.push(grokhub_core::SkillMd {
+        name: "try-me".into(),
+        slash: "/try-me".into(),
+        ..Default::default()
+    });
+    assert_eq!(
+        hub::habit_chips(&both, Now::default(), 99.0, live),
+        Vec::new()
+    );
+    for i in 0..2u64 {
+        let run = RunMetrics {
+            run: format!("chat-try:{i}"),
+            class: "skill:try-me".into(),
+            result: OutcomeResult::Success,
+            model: "grok-code".into(),
+            finished_at: live,
+            at: live,
+            ..RunMetrics::default()
+        };
+        append_run(&dir, &run, 0).unwrap();
+    }
+    let busy = Now {
+        busy: true,
+        ..Now::default()
+    };
+    assert_eq!(hub::habit_chips(&both, busy, 99.0, live), Vec::new());
+    let tried = hub::habit_chips(&both, Now::default(), 99.0, live);
+    assert_eq!(tried.len(), 1);
+    assert_eq!(tried[0].value, "/try-me");
+    assert_eq!(
+        tried[0].hint,
+        format!("Trying this: you sometimes run it {}", part.when())
+    );
+    assert_eq!(
+        hub::habit_chips(&both, Now::default(), 99.0, live + 5),
+        tried
+    );
+    log_chips_shown(&mut habit_mem, "composer", &tried, live + 70);
+    log_chip_outcome(&mut habit_mem, "composer", &tried[0], false, live + 71);
+    assert_eq!(
+        hub::habit_chips(&both, Now::default(), 99.0, live + 80),
+        Vec::new()
+    );
+
     // The fault report: nothing while the app's own numbers are fine, and
     // after a model failed twelve runs, the text to read. Nothing is sent.
     use grokhub_core::learn::review;

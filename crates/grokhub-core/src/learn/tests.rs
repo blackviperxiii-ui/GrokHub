@@ -1470,3 +1470,118 @@ fn a_backup_moves_what_was_learned_to_another_folder_and_the_import_can_be_put_b
     assert_eq!(b.restore(), Err(NO_RESTORE.to_string()));
     assert!(new.join("learned-backup.json").exists());
 }
+
+#[test]
+fn an_experiment_is_one_try_a_day_and_not_the_same_thing_for_two_weeks() {
+    use super::decide::{Area, Dial, Outcome, Situation, State};
+    use super::experiment::{PER_DAY, REST_MS};
+    const DAY: u64 = 24 * 60 * 60 * 1_000;
+    let day0 = T0 - T0 % DAY;
+    let (a, b) = (
+        subject("rule:habit/a/morning"),
+        subject("rule:habit/b/morning"),
+    );
+    let calm = Situation::default();
+    let mut s = State::default();
+    assert_eq!((PER_DAY, REST_MS), (1, 14 * DAY));
+
+    // Nothing is tried while something holds the app back, and a refusal
+    // does not use up the day.
+    for held in [
+        Situation { busy: true, ..calm },
+        Situation {
+            quiet: true,
+            ..calm
+        },
+        Situation {
+            halted: true,
+            ..calm
+        },
+    ] {
+        assert!(!s.try_once(Area::Chips, &a, held, day0));
+    }
+    s.set_dial(Area::Chips, Dial::Offer);
+    assert!(!s.try_once(Area::Chips, &a, calm, day0));
+    s.set_dial(Area::Chips, Dial::Act);
+
+    // The first rule asked takes the day and keeps it; a second one waits.
+    assert!(s.try_once(Area::Chips, &a, calm, day0));
+    assert!(s.try_once(Area::Chips, &a, calm, day0 + 1_000));
+    assert!(!s.try_once(Area::Chips, &b, calm, day0 + 2_000));
+    // Today's try goes away while the app is busy and comes back after.
+    assert!(!s.try_once(
+        Area::Chips,
+        &a,
+        Situation { busy: true, ..calm },
+        day0 + 3_000
+    ));
+    assert!(s.try_once(Area::Chips, &a, calm, day0 + 4_000));
+
+    // The next day the first one rests and the other gets its turn.
+    assert!(!s.try_once(Area::Chips, &a, calm, day0 + DAY));
+    assert!(s.try_once(Area::Chips, &b, calm, day0 + DAY));
+    // A no to today's try ends it at once.
+    s.outcome(&b, Outcome::Declined, day0 + DAY + 1_000);
+    assert!(!s.try_once(Area::Chips, &b, calm, day0 + DAY + 2_000));
+
+    // Two weeks after its try, the first may be tried again.
+    assert!(!s.try_once(Area::Chips, &a, calm, day0 + REST_MS - 1));
+    assert!(s.try_once(Area::Chips, &a, calm, day0 + REST_MS));
+
+    // The tries are kept with the rest of the decision state.
+    let back: State = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+    assert_eq!(back, s);
+}
+
+#[test]
+fn a_habit_seen_twice_or_at_mixed_times_is_unsure_and_three_clean_runs_are_due() {
+    use super::habit::{self, Part};
+    let mut beliefs = Beliefs::default();
+    let mut runs = |skill: &str, n: usize, hour: u32| {
+        for _ in 0..n {
+            for s in habit::skill_run(skill, hour, false, T0) {
+                beliefs.apply(&s);
+            }
+        }
+    };
+    runs("once", 1, 8);
+    runs("twice", 2, 8);
+    runs("thrice", 3, 8);
+    runs("often", 4, 8);
+    runs("evenings", 2, 19);
+    // Three mornings and two evenings: it leans to the morning, not surely.
+    runs("mixed", 3, 8);
+    runs("mixed", 2, 19);
+    let names =
+        |list: Vec<habit::Habit>| -> Vec<String> { list.into_iter().map(|h| h.skill).collect() };
+    // The likelier one first. One run is too little to try.
+    assert_eq!(
+        names(habit::unsure(&beliefs, Part::Morning, false, T0)),
+        vec!["twice".to_string(), "mixed".to_string()]
+    );
+    assert_eq!(
+        names(habit::due(&beliefs, Part::Morning, false, T0)),
+        vec!["often".to_string(), "thrice".to_string()]
+    );
+    assert_eq!(
+        names(habit::unsure(&beliefs, Part::Evening, false, T0)),
+        vec!["evenings".to_string()]
+    );
+    assert_eq!(habit::unsure(&beliefs, Part::Morning, true, T0), Vec::new());
+
+    // Its chip is the habit's own chip, and says it is a try.
+    let skills = vec![crate::SkillMd {
+        name: "twice".into(),
+        slash: "/twice".into(),
+        ..Default::default()
+    }];
+    let unsure = habit::unsure(&beliefs, Part::Morning, false, T0);
+    let chip = habit::trial_chip(&unsure[0], &skills, 5.0).unwrap();
+    assert_eq!(chip.id, "habit-morning-twice");
+    assert_eq!(
+        chip.hint,
+        "Trying this: you sometimes run it in the morning"
+    );
+    assert_eq!(habit::chip_rule(&chip.id), unsure[0].rule());
+    assert_eq!(habit::trial_chip(&unsure[1], &skills, 5.0), None);
+}

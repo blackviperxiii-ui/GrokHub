@@ -339,6 +339,8 @@ pub struct State {
     score: Board,
     /// What matters most to the user, first to last. Theirs, like the dials.
     goals: Vec<Goal>,
+    /// What was tried on purpose, and when ([`super::experiment`]).
+    tries: super::experiment::Tries,
 }
 
 impl State {
@@ -429,6 +431,22 @@ impl State {
     }
 
     /// Whether `rule` has earned the right to act.
+    /// Whether `rule` may be today's experiment in `area`: the dial is on
+    /// act, nothing holds the app back, the rule isn't resting or off, and
+    /// the day's one try is free or already this rule's.
+    pub fn try_once(&mut self, area: Area, rule: &Subject, now: Situation, now_ms: u64) -> bool {
+        let held = self
+            .rules
+            .get(rule)
+            .is_some_and(|r| r.undone >= UNDOS_TURN_OFF || now_ms < r.resting_until_ms);
+        let clear = self.dial(area) == Dial::Act
+            && !held
+            && !(now.halted || now.quiet || now.busy)
+            && !self.paused(now_ms)
+            && !self.score.resting(area, now_ms);
+        self.tries.allow(rule, clear, now_ms)
+    }
+
     pub fn graduated(&self, rule: &Subject) -> bool {
         self.rules
             .get(rule)
