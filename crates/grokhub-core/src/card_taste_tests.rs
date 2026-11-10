@@ -193,8 +193,9 @@ fn weak_signals_lean_less_than_a_like_or_dislike() {
         ev(&mut t, "c", &["topic:a"], r);
         w(&t, "topic:a")
     };
+    assert_eq!(Reaction::Dwell.lean(), (1.0, 0.25));
     let like = one(Reaction::Like);
-    for r in [Reaction::Engage, Reaction::Snooze] {
+    for r in [Reaction::Engage, Reaction::Snooze, Reaction::Dwell] {
         let v = one(r);
         assert!(v > 0.0 && v < like, "{r:?}: {v} vs like {like}");
     }
@@ -243,6 +244,7 @@ fn each_reaction_becomes_one_engine_signal_per_trait() {
         (Reaction::Like, Kind::Liked),
         (Reaction::Dislike, Kind::Disliked),
         (Reaction::Engage, Kind::Used),
+        (Reaction::Dwell, Kind::Used),
         (Reaction::Snooze, Kind::Picked),
         (Reaction::Delete, Kind::Declined),
     ] {

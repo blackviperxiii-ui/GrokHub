@@ -296,7 +296,7 @@ export function FeedCard({
     if (onWhy) setWhy(await onWhy().catch((err) => String(err)));
   }
   return (
-    <li className="card post feed-card" aria-label={post.title}>
+    <li className="card post feed-card" aria-label={post.title} data-card-id={post.id}>
       <div className="feed-head">
         <TopicIcon icon={post.icon} />
         <div className="feed-title">{post.title}</div>

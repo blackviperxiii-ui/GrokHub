@@ -288,6 +288,9 @@ pub enum Act {
     Ignore,
     /// Save: the post goes to the Saved page (and counts as a Like).
     Save,
+    /// The card stayed on screen long enough to count as a look. Once per
+    /// card per day, and skipped if the card already got a reaction that day.
+    Dwell,
 }
 
 /// The local wall clock from the page: today's date for the ledger line and
@@ -642,6 +645,22 @@ fn learn_taste(
     card_taste::save(config_dir, &taste)
 }
 
+/// True when `at_ms` falls on the local calendar day of `day`, treating
+/// `now_ms` as `day.hour`:`day.minute` on that date.
+fn same_local_day(at_ms: u64, day: &Day, now_ms: u64) -> bool {
+    let since_midnight = u64::from(day.hour) * 3_600_000 + u64::from(day.minute) * 60_000;
+    let start = now_ms.saturating_sub(since_midnight);
+    let end = start.saturating_add(86_400_000);
+    at_ms >= start && at_ms < end
+}
+
+fn reacted_today(config_dir: &Path, card_id: &str, day: &Day, now_ms: u64) -> bool {
+    card_taste::load(config_dir)
+        .events
+        .iter()
+        .any(|e| e.card_id == card_id && same_local_day(e.at_ms, day, now_ms))
+}
+
 /// Dismiss and Not this take the card off the page (an idea leaves the
 /// store; an event leaves a tombstone so a repeat stays hidden for a day).
 /// Like marks it. Snooze hides it until the next 09:00. Accept only notes it.
@@ -663,7 +682,8 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
         Act::MoreLike => (Some(Outcome::Accepted), Some(true)),
         Act::Snooze => (Some(Outcome::Snoozed), None),
         // Opened goes through `engaged`, which notes the tap itself.
-        Act::Ignore | Act::Opened => (None, None),
+        // Dwell never takes the card off the page.
+        Act::Ignore | Act::Opened | Act::Dwell => (None, None),
     };
     let remove = |cards: &mut Vec<UpdateCard>| {
         if card.kind == UpdateKind::Idea {
@@ -782,6 +802,14 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
             idea_feedback(config_dir, &card, InterestSignal::NotInterested, now_ms)?;
             pulse_feed::with_ideas_state(config_dir, |s| s.note_not_interested(&card.title))?;
             remove(&mut cards)
+        }
+        Act::Dwell => {
+            if reacted_today(config_dir, id, day, now_ms) {
+                false
+            } else {
+                learn_taste(config_dir, &card, Some(Reaction::Dwell), None, now_ms)?;
+                false
+            }
         }
     };
     // After the ledger note: a refused note must leave taste learning alone
@@ -1984,5 +2012,42 @@ mod tests {
             fix(&d2.config, &other.id).is_err(),
             "only PC health cards have options"
         );
+    }
+
+    #[test]
+    fn dwell_is_once_per_card_per_day() {
+        let d = dirs("dwell-once", &sample());
+        let before = memory();
+        let page = act(&d.config, "post-1", Act::Dwell, &day(), NOW).expect("dwell");
+        assert!(
+            page.feed.iter().any(|p| p.id == "post-1"),
+            "dwell leaves the post on the page"
+        );
+        assert_eq!(memory(), before, "dwell writes no ledger line");
+        let taste = card_taste::load(&d.config);
+        assert_eq!(taste.events.len(), 1);
+        assert_eq!(taste.events[0].card_id, "post-1");
+        assert_eq!(taste.events[0].reaction, Reaction::Dwell);
+        assert_eq!(taste.events[0].at_ms, NOW);
+
+        act(&d.config, "post-1", Act::Dwell, &day(), NOW + 1_000).expect("again");
+        assert_eq!(card_taste::load(&d.config).events.len(), 1);
+
+        act(&d.config, "post-1", Act::Dwell, &day(), NOW + 86_400_000).expect("next day");
+        let taste = card_taste::load(&d.config);
+        assert_eq!(taste.events.len(), 2);
+        assert_eq!(taste.events[1].reaction, Reaction::Dwell);
+        assert_eq!(taste.events[1].at_ms, NOW + 86_400_000);
+    }
+
+    #[test]
+    fn dwell_is_skipped_if_the_card_already_got_a_reaction_that_day() {
+        let d = dirs("dwell-after-like", &sample());
+        act(&d.config, "post-1", Act::Love, &day(), NOW).expect("love");
+        assert_eq!(card_taste::load(&d.config).events.len(), 1);
+        act(&d.config, "post-1", Act::Dwell, &day(), NOW + 1_000).expect("dwell");
+        let taste = card_taste::load(&d.config);
+        assert_eq!(taste.events.len(), 1);
+        assert_eq!(taste.events[0].reaction, Reaction::Like);
     }
 }
