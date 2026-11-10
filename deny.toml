@@ -13,10 +13,6 @@ ignore = [
     { id = "RUSTSEC-2026-0370", reason = "unmaintained zbus 5 deps via ashpd and secret-service; remove with zbus 6" },
     { id = "RUSTSEC-2026-0371", reason = "unmaintained zbus 5 deps via ashpd and secret-service; remove with zbus 6" },
     { id = "RUSTSEC-2026-0372", reason = "unmaintained zbus 5 deps via ashpd and secret-service; remove with zbus 6" },
-    # glib 0.18 has unsound Iterator impls. It comes in through gtk-rs 0.18, which
-    # Tauri 2's Linux webview stack pins, and there is no patched 0.18 release.
-    # Drop this when Tauri moves to gtk4.
-    { id = "RUSTSEC-2024-0429", reason = "gtk-rs 0.18 via Tauri 2 Linux webview; no fix in 0.18; drop with the gtk4 move" },
 ]
 
 [licenses]
