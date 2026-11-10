@@ -1,5 +1,6 @@
 use super::decide::*;
 use super::ladder::Undo;
+use super::now::Snapshot;
 use super::score::{Score, Trend, MIN_OUTCOMES, SLIP_REST_MS, WEEK_MS};
 use super::signal::Subject;
 
@@ -21,6 +22,8 @@ fn sure(id: &str) -> Proposal {
         undo: Undo::OneClick,
         value: 0.5,
         hard: false,
+        helps: None,
+        hurts: None,
     }
 }
 
@@ -175,6 +178,8 @@ fn a_hard_change_never_acts_however_sure_and_however_trusted() {
     s.set_dial(Area::Settings, Dial::Act);
     let hard = Proposal {
         hard: true,
+        helps: None,
+        hurts: None,
         confidence: 1.0,
         evidence: 10_000.0,
         value: 1.0,
@@ -406,14 +411,14 @@ fn the_page_shows_every_dial_and_the_newest_decisions_first() {
     use super::view;
     let mut s = graduated("habit/tidy/morning");
     s.set_dial(Area::Router, Dial::Watch);
-    let empty = view::trust(&State::default(), T);
+    let empty = view::trust(&State::default(), Snapshot::default(), T);
     assert_eq!(empty.dials.len(), 6);
     assert!(empty.dials.iter().all(|d| d.dial == Dial::Act));
     assert_eq!((empty.left_today, empty.decisions.len()), (ACTS_PER_DAY, 0));
 
     answer(&mut s, &sure("settings/text-size"), T);
     answer(&mut s, &sure("habit/tidy/morning"), T + HOUR);
-    let page = view::trust(&s, T + HOUR);
+    let page = view::trust(&s, Snapshot::default(), T + HOUR);
     assert_eq!(
         page.dials[2],
         view::DialRow {
@@ -456,7 +461,9 @@ fn the_page_shows_every_dial_and_the_newest_decisions_first() {
         answer(&mut s, &sure(&format!("settings/n{n}")), T + 2 * HOUR);
     }
     assert_eq!(
-        view::trust(&s, T + 2 * HOUR).decisions.len(),
+        view::trust(&s, Snapshot::default(), T + 2 * HOUR)
+            .decisions
+            .len(),
         view::DECISIONS_SHOWN
     );
 }
@@ -580,5 +587,104 @@ fn an_area_that_got_worse_only_offers_for_a_month_and_carry_on_lifts_it() {
     assert!(
         shown.contains("**The last four weeks**\n- Settings: 50% went your way, down from 100%\n"),
         "{shown}"
+    );
+}
+
+#[test]
+fn a_goal_the_user_named_moves_a_proposal_up_the_queue() {
+    let mut s = State::default();
+    let cheap = Proposal {
+        value: 0.4,
+        helps: Some(Goal::Cheapest),
+        hurts: Some(Goal::Fastest),
+        ..sure("cheap")
+    };
+    let fast = Proposal {
+        value: 0.5,
+        helps: Some(Goal::Fastest),
+        ..sure("fast")
+    };
+    let order = |s: &mut State| -> Vec<Subject> {
+        s.decide_all(vec![cheap.clone(), fast.clone()], calm(), T)
+            .into_iter()
+            .map(|d| d.rule)
+            .collect()
+    };
+    // No goals: the more helpful one goes first.
+    assert_eq!((s.worth(&cheap), s.worth(&fast)), (0.4 * 0.85, 0.5 * 0.85));
+    assert_eq!(order(&mut s), vec![rule("fast"), rule("cheap")]);
+    // Cheapest first: 0.34 * 1.5 beats 0.425.
+    s.set_goals(&[Goal::Cheapest, Goal::Cheapest]);
+    assert_eq!(s.goals(), [Goal::Cheapest]);
+    assert_eq!(s.worth(&cheap), 0.4 * 0.85 * 1.5);
+    assert_eq!(order(&mut s), vec![rule("cheap"), rule("fast")]);
+    // Fastest first, cheapest second: the cheap one loses 0.5 and gains 0.25.
+    s.set_goals(&[Goal::Fastest, Goal::Cheapest]);
+    assert_eq!(s.worth(&cheap), 0.4 * 0.85 * 0.75);
+    assert_eq!(s.worth(&fast), 0.5 * 0.85 * 1.5);
+    assert_eq!(order(&mut s), vec![rule("fast"), rule("cheap")]);
+    // Goals are the user's own, so Forget everything keeps them.
+    s.forget_learned();
+    assert_eq!(s.goals(), [Goal::Fastest, Goal::Cheapest]);
+    let shown = text(&s, T);
+    assert!(
+        shown.contains(
+            "**What matters most to you**\n1. Fastest answers `fastest`\n2. Lowest cost `cheapest`\n"
+        ),
+        "{shown}"
+    );
+    s.set_goals(&[]);
+    assert!(text(&s, T).contains(NO_GOALS));
+    // The page names a goal with an underscore, the cabin with a dash.
+    assert_eq!(
+        serde_json::to_string(&Goal::BestQuality).unwrap(),
+        "\"best_quality\""
+    );
+    assert_eq!(Goal::parse("Best-Quality"), Some(Goal::BestQuality));
+}
+
+#[test]
+fn the_snapshot_is_one_byte_and_a_game_counts_as_busy() {
+    let all = Snapshot {
+        quiet: true,
+        busy: true,
+        halted: true,
+        gaming: true,
+        on_battery: true,
+    };
+    assert_eq!(Snapshot::default().bits(), 0);
+    assert_eq!(all.bits(), 31);
+    assert_eq!(Snapshot::from_bits(31), all);
+    let gaming = Snapshot {
+        gaming: true,
+        ..Snapshot::default()
+    };
+    assert_eq!(Snapshot::from_bits(gaming.bits()), gaming);
+    assert_eq!(
+        gaming.situation(),
+        Situation {
+            quiet: false,
+            busy: true,
+            halted: false
+        }
+    );
+    let battery = Snapshot {
+        on_battery: true,
+        ..Snapshot::default()
+    };
+    assert_eq!(battery.situation(), Situation::default());
+    let mut s = graduated("x");
+    assert_eq!(
+        {
+            let d = s.decide(&sure("x"), gaming.situation(), T);
+            (d.verdict, d.reason)
+        },
+        (Verdict::Wait, Reason::Busy)
+    );
+    assert_eq!(
+        serde_json::to_value(super::view::trust(&s, gaming, T).now).unwrap(),
+        serde_json::json!({
+            "quiet": false, "busy": false, "halted": false, "gaming": true, "onBattery": false,
+        })
     );
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getLearned, learnedAct, type LearnedAct, type LearnedRow, type LearnedStage, type LearnedTrust, type LearnedView, type TrustDial, type TrustRow } from "./api";
+import { getLearned, learnedAct, type LearnedAct, type LearnedRow, type LearnedStage, type LearnedTrust, type LearnedView, type TrustDial, type TrustGoal, type TrustRow } from "./api";
 import { PRODUCT_NAME } from "./brand";
 
 export const LEARNED_NOTE = `What ${PRODUCT_NAME} worked out from how you use it: which quick chips and cards you take, and how runs go. It stays on this computer and holds counts only, never what you typed. Forget clears a line so it starts fresh. That's wrong stops a line from being counted or used again. Always makes a line your own rule, whatever is counted.`;
@@ -16,6 +16,23 @@ const DIAL: Record<TrustDial, string> = {
   offer: "Offer only",
   act: "Act when sure",
 };
+
+const GOAL: Record<TrustGoal, string> = {
+  cheapest: "Lowest cost",
+  fastest: "Fastest answers",
+  quiet: "Fewest interruptions",
+  best_quality: "Best quality",
+};
+export const GOAL_NOTE = "When two changes are both likely right, the one that serves this goes first.";
+
+/** Why changes wait right now, or nothing when they don't. */
+export function waitingLine(now: LearnedTrust["now"]) {
+  if (now.halted) return "Halt is on, so changes wait.";
+  if (now.gaming) return "A game is running, so changes wait.";
+  if (now.quiet) return "It's quiet hours, so changes wait.";
+  if (now.busy) return "You're in the middle of something, so changes wait.";
+  return null;
+}
 
 /** One area's scoreboard line, or nothing before anything was counted. */
 export function scoreLine(row: TrustRow) {
@@ -70,6 +87,27 @@ function Trust({ trust, busy, run }: { trust: LearnedTrust; busy: boolean; run: 
         );
       })}
       <p className="note">{leftToday(trust.leftToday)}</p>
+      {waitingLine(trust.now) && <p className="note">{waitingLine(trust.now)}</p>}
+      <label>
+        What matters most
+        <select
+          value={trust.goals[0]?.goal ?? ""}
+          disabled={busy}
+          onChange={(e) => {
+            const first = e.target.value as TrustGoal | "";
+            const rest = trust.goals.map((g) => g.goal).filter((g) => g !== first);
+            void run({ kind: "goals", goals: first === "" ? [] : [first, ...rest] }, first === "" ? "No goal set." : `${GOAL[first]} comes first now.`);
+          }}
+        >
+          <option value="">Nothing set</option>
+          {(Object.keys(GOAL) as TrustGoal[]).map((goal) => (
+            <option key={goal} value={goal}>
+              {GOAL[goal]}
+            </option>
+          ))}
+        </select>
+      </label>
+      <p className="note">{GOAL_NOTE}</p>
       <h3>What it decided</h3>
       {trust.decisions.length === 0 && <p className="empty">{DECISIONS_EMPTY}</p>}
       {trust.decisions.length > 0 && (

@@ -21,6 +21,18 @@ pub const SIDE_MARK: &str = "~side-";
 #[derive(Default)]
 pub struct Reads(Mutex<HashMap<String, (String, TurnRoute)>>);
 
+impl Reads {
+    /// The reply running in `conversation_id` answers casual talk: its turn
+    /// was read as chat (not a plan) and its ask is small talk or a quick
+    /// question ([`intent::casual_turn`]).
+    fn casual_running(&self, conversation_id: &str) -> bool {
+        let reads = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        reads
+            .get(conversation_id)
+            .is_some_and(|(ask, took)| *took == TurnRoute::Chat && intent::casual_turn(ask))
+    }
+}
+
 /// The route for a message sent while nothing runs. A plan still waiting
 /// on approval keeps planning; "no, just answer" or "make a plan first"
 /// right after a turn fixes that turn's read and teaches the reader, on
@@ -37,6 +49,7 @@ pub fn pick_mode(state: &ShellState, conversation_id: &str, text: &str) -> agent
         let cx = TurnCx {
             running: false,
             prior: None,
+            casual: false,
         };
         intent::read_turn_learned(&state.config_dir, text, &cx).route
     });
@@ -64,11 +77,14 @@ pub struct TurnReadView {
 }
 
 /// Reads a message typed while `conversation_id`'s reply runs. Pure and
-/// instant: no model call.
-pub fn read_running(state: &ShellState, text: &str) -> TurnReadView {
+/// instant: no model call. When that reply answers casual talk, every
+/// message waits as its own turn (see [`TurnCx::casual`]).
+pub fn read_running(state: &ShellState, conversation_id: &str, text: &str) -> TurnReadView {
+    let casual = state.turn_reads.casual_running(conversation_id);
     let cx = TurnCx {
         running: true,
         prior: None,
+        casual,
     };
     let read = intent::read_turn_learned(&state.config_dir, text, &cx);
     // Chat and Plan only fit an idle chat; while running, a new job waits.
@@ -85,8 +101,12 @@ pub fn read_running(state: &ShellState, text: &str) -> TurnReadView {
 }
 
 #[tauri::command]
-pub fn read_turn(state: State<'_, ShellState>, text: String) -> TurnReadView {
-    read_running(&state, &text)
+pub fn read_turn(
+    state: State<'_, ShellState>,
+    conversation_id: Option<String>,
+    text: String,
+) -> TurnReadView {
+    read_running(&state, conversation_id.as_deref().unwrap_or(""), &text)
 }
 
 /// True when `side_id` is a side answer of `conversation_id`.
@@ -206,5 +226,27 @@ mod tests {
         assert!(!side_of("shell-b~side-1", "shell-a"));
         assert!(!side_of("shell-a", "shell-a"));
         assert!(!side_of("shell-a~side-1/../x", "shell-a"));
+    }
+
+    #[test]
+    fn only_a_casual_chat_reply_counts_as_casual_and_only_in_its_own_chat() {
+        let reads = Reads::default();
+        assert!(!reads.casual_running("shell-a"));
+        reads.0.lock().unwrap().insert(
+            "shell-a".into(),
+            ("how's your day going?".into(), TurnRoute::Chat),
+        );
+        reads.0.lock().unwrap().insert(
+            "shell-b".into(),
+            ("how's your day going?".into(), TurnRoute::Plan),
+        );
+        reads.0.lock().unwrap().insert(
+            "shell-c".into(),
+            ("fix the failing build in my repo".into(), TurnRoute::Chat),
+        );
+        assert!(reads.casual_running("shell-a"));
+        assert!(!reads.casual_running("shell-b"));
+        assert!(!reads.casual_running("shell-c"));
+        assert!(!reads.casual_running("shell-d"));
     }
 }
