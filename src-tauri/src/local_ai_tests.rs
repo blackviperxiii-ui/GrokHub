@@ -133,10 +133,10 @@ fn a_16_gb_gpu_shows_the_31b_as_slow_with_partial_offload() {
 }
 
 #[test]
-fn a_24_gb_gpu_recommends_every_model_and_preselects_31b() {
+fn a_24_gb_gpu_recommends_every_model_and_preselects_the_fast_26b_a4b() {
     let (order, selected, picker) = page(&machine(vec![gpu("RTX 4090", 24_576)], 65_536));
     assert!(order.iter().all(|(_, b)| *b == "recommended"), "{order:?}");
-    assert_eq!(selected, "gemma-4-31b-it-abliterated-q4_k");
+    assert_eq!(selected, "gemma-4-26b-a4b-it-abliterated-q4_k");
     assert_eq!(
         named(&order),
         [

@@ -94,7 +94,7 @@ function ModelOption({
       <label className="check">
         <input type="radio" name="local-model" checked={selected} onChange={onPick} />
         <span className="local-model-name">{row.name}</span>
-        {row.preselected && <span className="badge">Default for this PC</span>}
+        {row.preselected && <span className="badge">Recommended for this PC</span>}
         {row.optional && <span className="badge">Optional</span>}
         {row.badges.map((b) => (
           <span key={b} className="badge">

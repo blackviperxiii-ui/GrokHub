@@ -343,7 +343,7 @@ describe("LocalAi", () => {
     expect(within(muse).getByRole("radio")).not.toBeChecked();
     expect(muse).toHaveTextContent("5 GB · Q4_K_M · 8K ctx · about 40 tok/s · Apache-2.0");
     const top = screen.getByRole("listitem", { name: "Gemma 4 31B" });
-    expect(within(top).getByText("Default for this PC")).toBeInTheDocument();
+    expect(within(top).getByText("Recommended for this PC")).toBeInTheDocument();
   });
 
   it("shows what runs now and keeps it loaded or unloads it on a press", async () => {

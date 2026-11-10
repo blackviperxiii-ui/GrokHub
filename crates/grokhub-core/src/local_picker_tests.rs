@@ -280,16 +280,17 @@ fn with_optional_row() -> &'static [LocalModel] {
 }
 
 #[test]
-fn a_24_gb_gpu_gets_31b_and_never_picks_an_optional_model() {
+fn a_24_gb_gpu_gets_the_fast_26b_a4b_and_never_picks_an_optional_model() {
     let p = gpu(&[24_576], 65_536);
     let picks = run(&p);
     assert_eq!(buckets(&picks), [R; 5]);
-    assert_eq!(pre(&picks), Some("Gemma 4 31B"));
+    // The 31B runs well too, but the 26B-A4B MoE is about twice as fast.
+    assert_eq!(pre(&picks), Some("Gemma 4 26B-A4B"));
     assert_eq!(tier(&p), "T4");
     let picks = score(&p, with_optional_row(), &BenchCache::new());
     assert_eq!(picks[0].model.name, "Optional 30B");
     assert_eq!(picks[0].bucket, R);
-    assert_eq!(pre(&picks), Some("Gemma 4 31B"));
+    assert_eq!(pre(&picks), Some("Gemma 4 26B-A4B"));
     assert_eq!(
         why(&picks, "Optional 30B"),
         "Fits in 24 GB of GPU memory, about 40 tok/s. Optional: Loadout never picks it for you."
@@ -302,7 +303,7 @@ fn multi_gpu_sums_the_vram_and_is_t5() {
     assert_eq!(p.budget(), (Memory::Gpu, 32_768));
     let picks = run(&p);
     assert_eq!(buckets(&picks), [R; 5]);
-    assert_eq!(pre(&picks), Some("Gemma 4 31B"));
+    assert_eq!(pre(&picks), Some("Gemma 4 26B-A4B"));
     assert_eq!(tier(&p), "T5");
 }
 
@@ -346,7 +347,7 @@ fn apple_unified_memory_budgets_70_percent_of_ram() {
 
     let picks = run(&apple(65_536));
     assert_eq!(buckets(&picks), [R; 5]);
-    assert_eq!(pre(&picks), Some("Gemma 4 31B"));
+    assert_eq!(pre(&picks), Some("Gemma 4 26B-A4B"));
     assert_eq!(tier(&apple(65_536)), "T5");
 }
 
@@ -417,7 +418,20 @@ fn a_slow_speed_test_demotes_the_default_to_the_next_model() {
 }
 
 #[test]
-fn budgets_from_2_gb_to_48_gb_map_to_one_tier_default() {
+fn the_default_is_speedy_then_capable_and_a_measured_speed_can_change_it() {
+    let p = gpu(&[24_576], 65_536);
+    // Estimates: 26B-A4B 60 tok/s at quality 72 beats the 31B's 35 at 76.
+    assert_eq!(pre(&run(&p)), Some("Gemma 4 26B-A4B"));
+    // Measured: a 31B that runs at 70 tok/s here is quick and more capable.
+    let bench: BenchCache = [("gemma-4-31b-it-abliterated-q4_k".to_string(), 70.0)].into();
+    assert_eq!(pre(&score(&p, defaults(), &bench)), Some("Gemma 4 31B"));
+    // A quick but weak model never wins over a quick capable one: on 12 GB
+    // the E2B (60 tok/s) loses to the 12B (35 tok/s, quality 62).
+    assert_eq!(pre(&run(&gpu(&[12_288], 4_096))), Some("Gemma 4 12B"));
+}
+
+#[test]
+fn budgets_from_2_gb_to_48_gb_map_to_one_default_and_tier() {
     let cases: [(u64, Option<&str>, &str); 9] = [
         (2_048, None, "T0"),
         (3_072, Some("Gemma 4 E2B"), "T1"),
@@ -425,9 +439,11 @@ fn budgets_from_2_gb_to_48_gb_map_to_one_tier_default() {
         (6_144, Some("Gemma 4 E4B"), "T2"),
         (10_240, Some("Gemma 4 12B"), "T3"),
         (15_360, Some("Gemma 4 26B-A4B"), "T3"),
-        (20_480, Some("Gemma 4 31B"), "T4"),
-        (24_576, Some("Gemma 4 31B"), "T4"),
-        (49_152, Some("Gemma 4 31B"), "T5"),
+        // Where the 31B fits, the twice-as-fast 26B-A4B is the default and
+        // the 31B is what hard tasks step up to; the tier still says T4/T5.
+        (20_480, Some("Gemma 4 26B-A4B"), "T4"),
+        (24_576, Some("Gemma 4 26B-A4B"), "T4"),
+        (49_152, Some("Gemma 4 26B-A4B"), "T5"),
     ];
     for (vram, want, t) in cases {
         // 4 GB of RAM leaves no CPU budget, so only the GPU counts.

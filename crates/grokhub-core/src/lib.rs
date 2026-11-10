@@ -133,6 +133,7 @@ pub mod local_picker;
 pub mod local_profile;
 pub mod local_refusal;
 pub mod local_setup;
+pub mod local_skills;
 pub mod mcp_catalog;
 pub mod mcp_oauth;
 pub mod md;

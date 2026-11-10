@@ -563,7 +563,7 @@ mod tests {
         let l = v.lineup.expect("a lineup");
         assert!(!l.ids.is_empty());
         assert!(
-            l.line.contains("Balance: ") && l.line.contains("Video: "),
+            l.line.contains("Everyday: ") && l.line.contains("Video: "),
             "{}",
             l.line
         );

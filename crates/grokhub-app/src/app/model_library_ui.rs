@@ -280,7 +280,7 @@ mod tests {
         // The lineup says what it fetches and for which goal before the click.
         assert!(
             t.iter()
-                .any(|x| x.contains("Balance: ") && x.contains("Video: ")),
+                .any(|x| x.contains("Everyday: ") && x.contains("Video: ")),
             "{t:?}"
         );
         app.setup.lib_tab = Some(ModelTab::Image);

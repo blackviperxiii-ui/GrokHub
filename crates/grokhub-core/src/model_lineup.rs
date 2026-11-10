@@ -1,5 +1,5 @@
 //! The best local model lineup for this PC: one model per goal (Speed,
-//! Balance, Performance, Image, Video) picked from the Download models rows,
+//! Everyday, Performance, Image, Video) picked from the Download models rows,
 //! so the hot-swap router has the right set on disk to switch between.
 //!
 //! Pure. It reads the same hardware profile and picker rows as the rest of
@@ -7,10 +7,11 @@
 //! nothing and sends nothing anywhere. The shells own the downloading.
 //!
 //! How each goal maps to hot-swap (`grokhub_agent::route::local_swap`):
-//! - Balance is the auto setup's default, the everyday home model.
-//! - Speed is smaller than Balance, so it is what runs on low battery, while
+//! - Everyday is the auto setup's default: the most capable model that is
+//!   still quick here (speed first, `local_picker::default_among`).
+//! - Speed is smaller than Everyday, so it is what runs on low battery, while
 //!   a game runs, or when the machine saves power.
-//! - Performance is bigger than Balance and still fast enough, so it is what
+//! - Performance is bigger than Everyday and still fast enough, so it is what
 //!   hard tasks step up to when the computer is free.
 
 use crate::local_picker::{Memory, Profile};
@@ -25,7 +26,7 @@ pub const PERFORMANCE_FLOOR_TOK_S: u32 = 12;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Goal {
     Speed,
-    Balance,
+    Everyday,
     Performance,
     Image,
     Video,
@@ -35,7 +36,7 @@ impl Goal {
     /// Display order.
     pub const ALL: [Goal; 5] = [
         Goal::Speed,
-        Goal::Balance,
+        Goal::Everyday,
         Goal::Performance,
         Goal::Image,
         Goal::Video,
@@ -44,7 +45,7 @@ impl Goal {
     pub fn label(self) -> &'static str {
         match self {
             Goal::Speed => "Speed",
-            Goal::Balance => "Balance",
+            Goal::Everyday => "Everyday",
             Goal::Performance => "Performance",
             Goal::Image => "Image",
             Goal::Video => "Video",
@@ -116,14 +117,17 @@ fn row_of<'a>(rows: &'a [Row], id: &str) -> Option<&'a Row> {
 /// skips the disk check).
 pub fn recommend(rows: &[Row], p: &Profile, free_disk_mb: Option<u64>) -> Lineup {
     let chat = |r: &&Row| pickable(r, ModelKind::Chat);
-    // Balance: the biggest chat model that runs well, the picker's default.
-    let balance = rows
+    // Everyday: the picker's default rule (speedy, then capable) among the
+    // chat models that run well.
+    let well: Vec<&'static LocalModel> = rows
         .iter()
         .filter(chat)
         .filter(|r| r.fit == Fit::Yes)
-        .max_by_key(|r| r.model.run_mb);
-    let home_mb = balance.map(|r| r.model.run_mb);
-    // Speed: the fastest one smaller than Balance; on a tie, the smaller.
+        .map(|r| r.model)
+        .collect();
+    let everyday = crate::local_picker::default_among(p, &well).and_then(|m| row_of(rows, m.id));
+    let home_mb = everyday.map(|r| r.model.run_mb);
+    // Speed: the fastest one smaller than Everyday; on a tie, the smaller.
     let speed = home_mb.and_then(|home| {
         rows.iter()
             .filter(chat)
@@ -134,7 +138,7 @@ pub fn recommend(rows: &[Row], p: &Profile, free_disk_mb: Option<u64>) -> Lineup
                     .then(b.model.run_mb.cmp(&a.model.run_mb))
             })
     });
-    // Performance: the biggest one past Balance that still runs fast enough.
+    // Performance: the biggest one past Everyday that still runs fast enough.
     let performance = home_mb.and_then(|home| {
         rows.iter()
             .filter(chat)
@@ -178,24 +182,24 @@ pub fn recommend(rows: &[Row], p: &Profile, free_disk_mb: Option<u64>) -> Lineup
             Goal::Speed,
             speed,
             speed.map(drafter_of).unwrap_or_default(),
-            if balance.is_some() {
-                "Balance is already the quickest model that runs well here.".into()
+            if everyday.is_some() {
+                "Everyday is already the quickest model that runs well here.".into()
             } else {
                 no_chat()
             },
         ),
         slot(
-            Goal::Balance,
-            balance,
-            balance.map(drafter_of).unwrap_or_default(),
+            Goal::Everyday,
+            everyday,
+            everyday.map(drafter_of).unwrap_or_default(),
             no_chat(),
         ),
         slot(
             Goal::Performance,
             performance,
             performance.map(drafter_of).unwrap_or_default(),
-            if balance.is_some() {
-                "Balance is already the strongest model that runs well here.".into()
+            if everyday.is_some() {
+                "Everyday is already the strongest model that runs well here.".into()
             } else {
                 no_chat()
             },
@@ -223,7 +227,7 @@ pub fn recommend(rows: &[Row], p: &Profile, free_disk_mb: Option<u64>) -> Lineup
         .count();
     let on_disk = |m: &LocalModel| row_of(rows, m.id).is_some_and(|r| r.on_disk);
     let mut queue: Vec<&'static LocalModel> = Vec::new();
-    for goal in [Goal::Balance, Goal::Speed, Goal::Image, Goal::Performance] {
+    for goal in [Goal::Everyday, Goal::Speed, Goal::Image, Goal::Performance] {
         let Some(s) = slots.iter_mut().find(|s| s.goal == goal) else {
             continue;
         };
