@@ -2119,6 +2119,8 @@ export interface LearnedDecision {
   why: string;
 }
 
+export type TrustGoal = "cheapest" | "fastest" | "quiet" | "best_quality";
+
 /** One area's dial and its scoreboard line (grokhub_core::learn::score). */
 export interface TrustRow {
   area: TrustArea;
@@ -2136,6 +2138,10 @@ export interface TrustRow {
 /** The decision engine's side of the page (grokhub_core::learn::decide). */
 export interface LearnedTrust {
   dials: TrustRow[];
+  /** What matters most to the user, first to last. */
+  goals: { goal: TrustGoal; label: string }[];
+  /** What is going on right now, as the app last told the engine. */
+  now: { quiet: boolean; busy: boolean; halted: boolean; gaming: boolean; onBattery: boolean };
   /** Too much was undone lately, so everything asks first for now. */
   askingFirst: boolean;
   /** Changes the app may still make on its own today. */
@@ -2152,6 +2158,7 @@ export type LearnedAct =
   | { kind: "pause" }
   | { kind: "resume" }
   | { kind: "trust"; area: TrustArea; dial: TrustDial }
+  | { kind: "goals"; goals: TrustGoal[] }
   | { kind: "carryOn" };
 
 export function getLearned(): Promise<LearnedView> {

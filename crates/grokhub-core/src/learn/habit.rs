@@ -118,6 +118,8 @@ impl Habit {
             undo: Undo::OneClick,
             value: self.confidence,
             hard: false,
+            helps: None,
+            hurts: None,
         })
     }
 

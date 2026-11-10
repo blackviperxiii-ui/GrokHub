@@ -377,6 +377,8 @@ fn the_shared_logs_feed_one_engine() {
         undo: Undo::OneClick,
         value: 0.5,
         hard: false,
+        helps: None,
+        hurts: None,
     };
     let at = grokhub_core::now_ms();
     let decide_one = || {
@@ -397,6 +399,34 @@ fn the_shared_logs_feed_one_engine() {
     assert_eq!(decide_one(), (Verdict::Offer, Reason::DialOffer));
     assert_eq!(view::run("trust settings maybe", at), decide::TRUST_USAGE);
     assert_eq!(view::run("trust settings act now", at), view::USAGE);
+    // Goals: set in the cabin or by the page's button, kept in order.
+    assert_eq!(
+        view::run("goals fastest cheapest", at),
+        "What matters most, in order: Fastest answers, Lowest cost."
+    );
+    assert_eq!(view::run("goals", at), decide::GOALS_USAGE);
+    assert_eq!(view::run("goals loudest", at), decide::GOALS_USAGE);
+    let goals: view::Act =
+        serde_json::from_str(r#"{"kind":"goals","goals":["quiet","fastest"]}"#).unwrap();
+    let named: Vec<&str> = view::act(goals, at)
+        .unwrap()
+        .trust
+        .goals
+        .iter()
+        .map(|g| g.label)
+        .collect();
+    assert_eq!(named, vec!["Fewest interruptions", "Fastest answers"]);
+    assert_eq!(view::run("goals none", at), "No goals set.");
+    assert!(hub::view(at).trust.goals.is_empty());
+    // The app's picture of right now reaches the page.
+    hub::set_now(grokhub_core::learn::now::Snapshot {
+        gaming: true,
+        ..Default::default()
+    });
+    assert!(hub::view(at).trust.now.gaming);
+    assert!(hub::now().situation().busy);
+    hub::set_now(Default::default());
+
     let shown = view::run("decisions", at);
     assert!(shown.contains("- Settings: offer `settings`\n"), "{shown}");
     assert!(
