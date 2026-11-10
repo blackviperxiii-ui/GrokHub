@@ -21,12 +21,9 @@ const CHUNK: usize = 8 << 20;
 /// Read rates: plenty for a fast load, never a disk hog.
 const RATE_MB_S: u64 = 500;
 const GAME_RATE_MB_S: u64 = 100;
-/// A warmed file is read again after this long (the cache may have dropped
-/// it). Linux checks the cache first, so it looks more often.
-#[cfg(target_os = "linux")]
+/// A warmed file is looked at again after this long (the cache may have
+/// dropped it); one still cached is left alone (see `local_warm`).
 pub const REWARM_SECS: u64 = 30 * 60;
-#[cfg(not(target_os = "linux"))]
-pub const REWARM_SECS: u64 = 2 * 60 * 60;
 /// Pressure readings (`some avg10`, percent) past which reading waits or stops.
 const IO_BUSY_PCT: f64 = 10.0;
 const MEM_BUSY_PCT: f64 = 2.0;
@@ -91,7 +88,7 @@ pub fn start(files: Vec<PathBuf>, gaming: bool) -> bool {
                 seen.push(f);
             }
         }
-        // Already in the cache (Linux can tell): nothing to read.
+        // Already in the cache: nothing to read.
         seen.retain(|f| !super::local_warm::resident_pct(f).is_some_and(|p| p >= CACHED_PCT));
         seen
     };
