@@ -96,9 +96,10 @@ pub fn with_ideas_state<T>(
 
 /// The page's local clock, so quiet hours land on the person's own night.
 pub fn note_clock(config_dir: &Path, hour: u32, minute: u32, now_ms: u64) -> Result<(), String> {
-    with_state(config_dir, |s| {
-        s.utc_offset_min = Some(pw::utc_offset_min(hour, minute, now_ms));
-    })
+    let offset = pw::utc_offset_min(hour, minute, now_ms);
+    // The learning engine counts habits in the same local hours.
+    grokhub_core::learn::hub::set_utc_offset_min(offset);
+    with_state(config_dir, |s| s.utc_offset_min = Some(offset))
 }
 
 /// Something the person said in the main chat: taste, never engagement.

@@ -7,10 +7,12 @@
 //! call it without a switch.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 use super::decide::{self, Alarm, Area, Decision, Dial, Outcome, Proposal, Situation};
+use super::habit;
 use super::view::{self, View};
 use super::{Engine, Kind, Signal, Subject};
 
@@ -19,6 +21,9 @@ use super::{Engine, Kind, Signal, Subject};
 pub const TICK_MS: u64 = 15_000;
 
 static HUB: OnceLock<Mutex<Engine>> = OnceLock::new();
+/// The user's pause, read from the folder at [`start`] and again at every
+/// look, so a pause in one app stops the other within [`TICK_MS`].
+static PAUSED: AtomicBool = AtomicBool::new(false);
 
 fn engine() -> Option<MutexGuard<'static, Engine>> {
     HUB.get()
@@ -31,6 +36,7 @@ pub fn start(config_dir: &Path) {
     let mut first = false;
     HUB.get_or_init(|| {
         first = true;
+        PAUSED.store(super::store::paused(config_dir), Ordering::Relaxed);
         Mutex::new(Engine::open(config_dir))
     });
     if !first {
@@ -43,6 +49,7 @@ pub fn start(config_dir: &Path) {
         .spawn(|| loop {
             std::thread::sleep(Duration::from_millis(TICK_MS));
             if let Some(mut e) = engine() {
+                PAUSED.store(super::store::paused(e.config_dir()), Ordering::Relaxed);
                 e.tick(crate::now_ms());
             }
         });
@@ -53,8 +60,40 @@ pub fn started() -> bool {
     HUB.get().is_some()
 }
 
-/// Records one signal. Memory only; nothing before [`start`].
+/// Minutes local time is east of UTC, as the app last told us. UTC until then.
+static UTC_OFFSET_MIN: AtomicI32 = AtomicI32::new(0);
+
+/// The app's local clock offset, so habits are counted in local hours.
+pub fn set_utc_offset_min(offset_min: i32) {
+    UTC_OFFSET_MIN.store(offset_min.clamp(-840, 840), Ordering::Relaxed);
+}
+
+/// The local hour of `at_ms`, 0 to 23.
+pub fn local_hour(at_ms: u64) -> u32 {
+    crate::rhythm::local_slot(at_ms, UTC_OFFSET_MIN.load(Ordering::Relaxed)).1
+}
+
+/// Whether the user has learning paused. While it is, nothing is recorded.
+pub fn paused() -> bool {
+    PAUSED.load(Ordering::Relaxed)
+}
+
+/// The user's pause or resume. What was learned before stays as it is.
+pub fn set_paused(on: bool) -> Result<(), String> {
+    let Some(e) = engine() else {
+        return Ok(());
+    };
+    super::store::set_paused(e.config_dir(), on)?;
+    PAUSED.store(on, Ordering::Relaxed);
+    Ok(())
+}
+
+/// Records one signal. Memory only; nothing before [`start`] or while
+/// learning is paused.
 pub fn note(signal: Signal) {
+    if paused() {
+        return;
+    }
     if let Some(mut e) = engine() {
         e.record(signal);
     }
@@ -62,6 +101,9 @@ pub fn note(signal: Signal) {
 
 /// Records several signals under one lock.
 pub fn note_all(signals: impl IntoIterator<Item = Signal>) {
+    if paused() {
+        return;
+    }
     if let Some(mut e) = engine() {
         for s in signals {
             e.record(s);
@@ -83,7 +125,15 @@ pub fn read<R>(f: impl FnOnce(&Engine) -> R) -> Option<R> {
 
 /// What the app learned, as lines. Empty before [`start`].
 pub fn view(now_ms: u64) -> View {
-    read(|e| view::view(e.beliefs(), now_ms)).unwrap_or_default()
+    let mut out = read(|e| view::view(e.beliefs(), now_ms)).unwrap_or_default();
+    out.paused = paused();
+    out
+}
+
+/// The user's "always" on one belief. Saved at once. `false` when the line
+/// is a measurement, which can't be pinned.
+pub fn pin(key: &Subject) -> bool {
+    engine().is_some_and(|mut e| e.pin(key, crate::now_ms()))
 }
 
 /// The user's Forget on one belief. Saved at once.
@@ -131,7 +181,9 @@ pub fn decision_outcome(rule: &Subject, outcome: Outcome, now_ms: u64) -> Option
         Outcome::Declined => Kind::Declined,
         Outcome::Undone => Kind::Undone,
     };
-    e.record(Signal::new(now_ms, kind, rule.clone()));
+    if !paused() {
+        e.record(Signal::new(now_ms, kind, rule.clone()));
+    }
     decide::with_state(e.config_dir(), |s| s.outcome(rule, outcome, now_ms))
 }
 
@@ -146,4 +198,45 @@ pub fn set_dial(area: Area, dial: Dial) {
 pub fn decisions_text(now_ms: u64) -> String {
     let state = engine().map(|e| decide::load(e.config_dir()));
     decide::text(&state.unwrap_or_default(), now_ms)
+}
+
+/// The quick chips for what the user usually does around `now_ms`: each due
+/// habit goes through the decision engine, and the ones it would offer or
+/// act on become chips, at most [`habit::CHIPS_MAX`]. Empty before [`start`].
+pub fn habit_chips(
+    skills: &[crate::skill::SkillMd],
+    now: Situation,
+    score: f32,
+    now_ms: u64,
+) -> Vec<crate::chips::QuickChip> {
+    let part = habit::Part::of_hour(local_hour(now_ms));
+    let due = read(|e| habit::due(e.beliefs(), part, now_ms)).unwrap_or_default();
+    // A habit whose skill is gone has no chip, so it is not weighed either.
+    let shown: Vec<(habit::Habit, crate::chips::QuickChip, Proposal)> = due
+        .into_iter()
+        .filter_map(|h| {
+            let chip = habit::chip(&h, skills, score)?;
+            let proposal = h.proposal()?;
+            Some((h, chip, proposal))
+        })
+        .collect();
+    if shown.is_empty() {
+        return Vec::new();
+    }
+    let verdicts = decide_all(
+        shown.iter().map(|(_, _, p)| p.clone()).collect(),
+        now,
+        now_ms,
+    );
+    shown
+        .into_iter()
+        .filter(|(_, _, p)| {
+            verdicts.iter().any(|d| {
+                d.rule == p.rule
+                    && matches!(d.verdict, decide::Verdict::Act | decide::Verdict::Offer)
+            })
+        })
+        .map(|(_, chip, _)| chip)
+        .take(habit::CHIPS_MAX)
+        .collect()
 }

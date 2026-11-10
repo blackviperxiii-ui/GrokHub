@@ -1,0 +1,1 @@
+- What Loadout learned: **Always** makes a line your own rule that nothing counts against, and **Pause learning** stops counting until you turn it back on (`/learned always <id>`, `/learned pause`, `/learned resume`).

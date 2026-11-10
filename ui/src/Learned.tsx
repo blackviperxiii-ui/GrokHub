@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { getLearned, learnedAct, type LearnedAct, type LearnedRow, type LearnedStage, type LearnedView } from "./api";
 import { PRODUCT_NAME } from "./brand";
 
-export const LEARNED_NOTE = `What ${PRODUCT_NAME} worked out from how you use it: which quick chips and cards you take, and how runs go. It stays on this computer and holds counts only, never what you typed. Forget clears a line so it starts fresh. That's wrong stops a line from being counted or used again.`;
+export const LEARNED_NOTE = `What ${PRODUCT_NAME} worked out from how you use it: which quick chips and cards you take, and how runs go. It stays on this computer and holds counts only, never what you typed. Forget clears a line so it starts fresh. That's wrong stops a line from being counted or used again. Always makes a line your own rule, whatever is counted.`;
+export const LEARNED_PAUSED = "Learning is paused. Nothing new is counted until you turn it back on.";
 export const LEARNED_EMPTY = "Nothing learned yet. It builds up as you use quick chips, cards and runs.";
 
 const STAGE: Record<LearnedStage, string> = {
@@ -11,10 +12,11 @@ const STAGE: Record<LearnedStage, string> = {
   acting: "Sure enough to act",
   measuring: "A measurement",
   wrong: "Marked wrong",
+  pinned: "You said always",
 };
 
 function proof(row: LearnedRow) {
-  if (row.stage === "wrong") return STAGE.wrong;
+  if (row.stage === "wrong" || row.stage === "pinned") return STAGE[row.stage];
   const seen = row.evidence === 1 ? "Seen once" : `Seen ${row.evidence} times`;
   return `${seen} · ${row.sure}% sure · ${STAGE[row.stage]}`;
 }
@@ -56,6 +58,14 @@ export function Learned() {
           {note}
         </p>
       )}
+      {view?.paused && <p className="note warn">{LEARNED_PAUSED}</p>}
+      {view && (
+        <div className="card-buttons">
+          <button type="button" className="quiet" disabled={busy} onClick={() => void run({ kind: view.paused ? "resume" : "pause" }, view.paused ? "Learning is back on." : "Learning is paused.")}>
+            {view.paused ? "Resume learning" : "Pause learning"}
+          </button>
+        </div>
+      )}
       {view === null && !note && <p className="empty">Loading…</p>}
       {empty && <p className="empty">{LEARNED_EMPTY}</p>}
       {view && view.rows.length > 0 && (
@@ -73,6 +83,11 @@ export function Learned() {
                   <button type="button" className="quiet" disabled={busy} onClick={() => void run({ kind: "wrong", key: row.key }, `${row.title} won't be counted or used again.`)}>
                     That's wrong
                   </button>
+                  {row.stage !== "pinned" && row.stage !== "measuring" && (
+                    <button type="button" className="quiet" disabled={busy} onClick={() => void run({ kind: "always", key: row.key }, `${row.title} is your rule now.`)}>
+                      Always
+                    </button>
+                  )}
                 </div>
               )}
             </li>

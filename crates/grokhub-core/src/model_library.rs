@@ -7,6 +7,7 @@ use crate::local_picker::{self, BenchCache, Bucket, Profile};
 use crate::local_setup::{
     self as ls, LocalModel, ModelKind, ModelTab, DISK_HEADROOM_MB, STANDARD_MODEL_CAP,
 };
+use crate::model_download::{Outcome, Step};
 
 /// Whether a model fits this PC, in the words a row shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -209,6 +210,70 @@ pub fn queue_line(q: &[&LocalModel]) -> String {
     }
 }
 
+/// Why a model's last download stopped. It shows under that model's own row
+/// until the model is downloaded again or finishes.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RowError {
+    /// The step that failed: free space, checksum read, download, verify or engine.
+    pub step: &'static str,
+    /// What happened and what to do next.
+    pub message: String,
+    /// One short line: the step, plus free and needed space when space is why.
+    pub detail: String,
+}
+
+fn failed_at(step: Step) -> String {
+    format!("Failed at: {}", step.label())
+}
+
+/// The row error for how `m`'s download ended; `None` when it finished or
+/// the user paused or cancelled it.
+pub fn row_error(m: &LocalModel, out: &Outcome) -> Option<RowError> {
+    let (step, message) = match out {
+        Outcome::Failed {
+            step: step @ Step::Download,
+            why,
+        } => (
+            *step,
+            format!("{why} Download it again to pick up where it stopped."),
+        ),
+        Outcome::Failed { step, why } => (*step, why.clone()),
+        Outcome::BadChecksum => (
+            Step::Verify,
+            format!(
+                "{} didn't match its published checksum, so it was deleted. Download it again to start over.",
+                m.name
+            ),
+        ),
+        Outcome::Done(_) | Outcome::Paused { .. } | Outcome::Cancelled => return None,
+    };
+    Some(RowError {
+        step: step.label(),
+        message,
+        detail: failed_at(step),
+    })
+}
+
+/// The row error when the drive hasn't room for `m`: how much is free, how
+/// much it needs, and the Remove buttons that make room. Nothing is removed
+/// for the user.
+pub fn space_error(m: &LocalModel, free_mb: u64, needed_mb: u64) -> RowError {
+    RowError {
+        step: Step::Space.label(),
+        message: format!(
+            "Not enough free space for {}. To make room, remove a downloaded model you don't use with the Remove button on its row, then download this one again.",
+            m.name
+        ),
+        detail: format!(
+            "{} ({} free, {} needed)",
+            failed_at(Step::Space),
+            ls::size_label(free_mb),
+            ls::size_label(needed_mb)
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -287,5 +352,55 @@ mod tests {
         );
         assert_eq!(queue_line(&[]), "Everything that fits is downloaded.");
         assert!(queue_line(&q).contains(" in all") || q.len() < 2);
+    }
+    #[test]
+    fn a_failed_download_says_which_step_and_space_says_free_and_needed() {
+        let m = ls::model_by_id("gemma-4-31b-it-abliterated-q4_k").unwrap();
+        let space = space_error(m, 3_174, 20_890);
+        assert_eq!(space.step, "free space");
+        assert_eq!(
+            space.message,
+            "Not enough free space for Gemma 4 31B. To make room, remove a downloaded model you don't use with the Remove button on its row, then download this one again."
+        );
+        assert_eq!(
+            space.detail,
+            "Failed at: free space (3.1 GB free, 20.4 GB needed)"
+        );
+        let read = row_error(
+            m,
+            &Outcome::Failed {
+                step: Step::Checksum,
+                why: "Couldn't read the checksum for Gemma 4 31B: timed out".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            (read.step, read.message.as_str(), read.detail.as_str()),
+            (
+                "checksum read",
+                "Couldn't read the checksum for Gemma 4 31B: timed out",
+                "Failed at: checksum read"
+            )
+        );
+        let cut = row_error(
+            m,
+            &Outcome::Failed {
+                step: Step::Download,
+                why: "The download of Gemma 4 31B stopped: reset".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            cut.message,
+            "The download of Gemma 4 31B stopped: reset Download it again to pick up where it stopped."
+        );
+        let bad = row_error(m, &Outcome::BadChecksum).unwrap();
+        assert_eq!(
+            (bad.step, bad.detail.as_str()),
+            ("verify", "Failed at: verify")
+        );
+        // A pause or cancel is the user's own stop, not an error on the row.
+        assert_eq!(row_error(m, &Outcome::Paused { done: 5 }), None);
+        assert_eq!(row_error(m, &Outcome::Cancelled), None);
     }
 }

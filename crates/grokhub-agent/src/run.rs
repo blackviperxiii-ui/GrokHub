@@ -992,6 +992,9 @@ fn run_turn(
                         .iter()
                         .filter(|t| matches!(t.status.as_str(), "pending" | "in_progress"))
                         .count();
+                    // The goal rides along, so the next model never asks
+                    // what it was doing.
+                    let (last_ask, attempts) = crate::route::handoff::goal_facts(history);
                     if let Some(packet) = crate::route::handoff::packet(
                         input.conversation_id,
                         &err,
@@ -1000,6 +1003,8 @@ fn run_turn(
                             tool_results,
                             compacted: compacted_once,
                             open_items,
+                            last_ask,
+                            attempts,
                         },
                     ) {
                         history.push(cabin_note(&packet));
@@ -1293,9 +1298,16 @@ fn run_turn(
         // written before the model saw any of their answers.
         let mut denied_in_reply: Option<String> = None;
         let batched_tools_on = tools::batch::settings(&config_dir).enabled;
+        // A lookup typed into the shell runs as its own tool from here on;
+        // the history above keeps the call as the model wrote it.
+        let calls: Vec<FunctionCall> = turn
+            .calls
+            .iter()
+            .map(|call| repair_shell_lookup(input, call))
+            .collect();
         let mut call_i = 0usize;
-        while call_i < turn.calls.len() {
-            let call = &turn.calls[call_i];
+        while call_i < calls.len() {
+            let call = &calls[call_i];
             if input.cancel.is_cancelled() {
                 return finish(input, StopReason::Cancelled, usage, compacted_once, true);
             }
@@ -1310,10 +1322,10 @@ fn run_turn(
                 continue;
             }
             if batched_tools_on {
-                let run_len = tools::batch::batch_run_len(&turn.calls, call_i);
+                let run_len = tools::batch::batch_run_len(&calls, call_i);
                 if run_len > 1 {
                     match run_readonly_tool_batch(
-                        &turn.calls[call_i..call_i + run_len],
+                        &calls[call_i..call_i + run_len],
                         input,
                         &mut gate,
                         base_readonly,
@@ -1598,6 +1610,14 @@ fn run_turn(
             if refused && crate::denials::is_denial(&output.text) {
                 denied_in_reply = Some(call.call_id.clone());
             }
+            let mut output = output;
+            if call.name != turn.calls[call_i].name {
+                output.text = format!(
+                    "{}\n{}",
+                    tools::shell::repaired_note(&call.name),
+                    output.text
+                );
+            }
             if refused {
                 push_refusal(history, input.conversation_id, call, output);
             } else {
@@ -1762,6 +1782,39 @@ fn handle_written_calls(
                 .join(", ")
         )
     })
+}
+
+/// A read-only lookup the model typed into the shell (`web_search "q"`) as
+/// the tool call it stands for, with the same call id. The gate, the hooks
+/// and the tool's own checks then see the real call, and nothing runs in a
+/// shell. Each repair is counted for the model that wrote the call. Any
+/// other call comes back as it was.
+fn repair_shell_lookup(input: &LoopIn<'_>, call: &FunctionCall) -> FunctionCall {
+    let repaired = (call.name == "run_terminal_command")
+        .then(|| serde_json::from_str::<serde_json::Value>(&call.arguments).ok())
+        .flatten()
+        .and_then(|args| {
+            args.get("command")
+                .and_then(|c| c.as_str())
+                .and_then(tools::shell::lookup_in_shell)
+        });
+    let Some((tool, args)) = repaired else {
+        return call.clone();
+    };
+    let model = crate::route::handoff::last_served(input.conversation_id)
+        .unwrap_or_else(|| input.model.to_string());
+    crate::route::session_metrics::note_repair(
+        &crate::perm::config_dir(),
+        input.conversation_id,
+        &model,
+        tool,
+        grokhub_core::now_ms(),
+    );
+    FunctionCall {
+        call_id: call.call_id.clone(),
+        name: tool.to_string(),
+        arguments: args.to_string(),
+    }
 }
 
 fn cabin_note(text: &str) -> InputItem {
@@ -5967,6 +6020,92 @@ mod tests {
                 "Not verified since your last change to notes.txt. Check it (run the tests or build, re-read the file, look at the result) before you finish.".to_string(),
             ]
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_search_typed_into_the_shell_runs_as_the_search_tool() {
+        let dir = workspace("shell-search");
+        let conv = format!("shell-search-{}", std::process::id());
+        let typed = r#"{"command":"web_search \"best budget ssd\""}"#;
+        let chained = r#"{"command":"cd notes && web_search best budget ssd"}"#;
+        let script = scripted(vec![
+            turn(
+                "",
+                vec![
+                    call("s1", "run_terminal_command", typed),
+                    call("s2", "run_terminal_command", chained),
+                ],
+            ),
+            turn("Here's what I found.", Vec::new()),
+        ]);
+        let (out, history, events) = run_drive_in(
+            &script,
+            &dir,
+            &conv,
+            chat(gate::PermMode::Always, true, false),
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        let output = |id: &str| {
+            history
+                .iter()
+                .find_map(|item| match item {
+                    InputItem::FunctionCallOutput { call_id, output } if call_id == id => {
+                        Some(output.clone())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_default()
+        };
+        // The lone search went to the search tool: its row says so, and its
+        // result opens with the one repair line, not a shell error.
+        let s1 = output("s1");
+        assert!(
+            s1.starts_with(&tools::shell::repaired_note("web_search")),
+            "{s1}"
+        );
+        assert!(!s1.contains("is a tool you call directly"), "{s1}");
+        assert!(!s1.contains("command not found"), "{s1}");
+        assert!(events.iter().any(|e| matches!(
+            e,
+            LoopEvent::Tool { id, name, .. } if id.contains("s1") && name == "web_search"
+        )));
+        // The history still holds the call as the model wrote it.
+        assert!(history.iter().any(|item| matches!(
+            item,
+            InputItem::FunctionCall { call_id, name, arguments }
+                if call_id == "s1" && name == "run_terminal_command" && arguments == typed
+        )));
+        // A search chained after another command is turned back, unrun.
+        let s2 = output("s2");
+        assert!(
+            s2.contains("`web_search` is a tool you call directly"),
+            "{s2}"
+        );
+        // The repaired call is judged as web_search: a job allowed the shell
+        // but not search gets no search through the shell.
+        let job = format!("shell-search-job-{}", std::process::id());
+        let _set = bind_job_tool_set(job.clone(), ToolSet::only(["run_terminal_command"]));
+        let script = scripted(vec![
+            turn("", vec![call("j1", "run_terminal_command", typed)]),
+            turn("I can't search in this job.", Vec::new()),
+        ]);
+        let (_, history, _) = run_drive_in(
+            &script,
+            &dir,
+            &job,
+            chat(gate::PermMode::Always, true, false),
+        );
+        let j1 = history
+            .iter()
+            .find_map(|item| match item {
+                InputItem::FunctionCallOutput { call_id, output } if call_id == "j1" => {
+                    Some(output.clone())
+                }
+                _ => None,
+            })
+            .unwrap_or_default();
+        assert!(j1.contains(&tools::tool_set_refusal("web_search")), "{j1}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

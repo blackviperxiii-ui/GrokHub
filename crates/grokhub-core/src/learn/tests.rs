@@ -848,3 +848,227 @@ fn enough_unused_chip_rows_make_auto_setup_offer_to_turn_them_off() {
     );
     assert_eq!(step(0.6, 30.0, Undo::OneClick), Step::Suggest);
 }
+
+#[test]
+fn a_pinned_line_holds_whatever_is_counted_until_the_user_takes_it_back() {
+    let key = Subject::new("skill", "tidy").unwrap();
+    let mut b = Beliefs::default();
+    for i in 0..8 {
+        b.vote(&key, false, T0 + i, "signals");
+    }
+    assert_eq!(b.get(&key).unwrap().rate(), Some(0.0));
+    assert!(b.pin(&key, T0 + 10));
+    let pinned = b.get(&key).unwrap();
+    assert_eq!(pinned.standing, Standing::Pinned);
+    assert_eq!(pinned.rate(), Some(1.0));
+    assert_eq!(pinned.confidence(T0 + 10), 1.0);
+    // It does not fade, and nothing counts against it.
+    let later = T0 + 20 * belief::HALF_LIFE_MS;
+    assert_eq!(pinned.evidence(later), belief::PINNED_EVIDENCE);
+    assert_eq!(pinned.confidence(later), 1.0);
+    assert!(!b.vote(&key, false, T0 + 11, "signals"));
+    assert_eq!(b.get(&key).unwrap().rate(), Some(1.0));
+    assert_eq!(
+        step(1.0, belief::PINNED_EVIDENCE, Undo::Restore),
+        Step::Act,
+        "a rule the user stated clears every rung"
+    );
+    // Forget unpins it and later signals start it fresh.
+    assert!(b.forget(&key, T0 + 12));
+    assert_eq!(b.get(&key).unwrap().evidence(T0 + 12), 0.0);
+    assert!(b.vote(&key, false, T0 + 13, "signals"));
+    assert_eq!(b.get(&key).unwrap().rate(), Some(0.0));
+    // "That's wrong" beats a pin, and a pin can be put on something new.
+    b.pin(&key, T0 + 14);
+    b.mark_wrong(&key, T0 + 15);
+    assert_eq!(b.get(&key).unwrap().standing, Standing::Wrong);
+    let fresh = Subject::new("setting", "text-size").unwrap();
+    assert!(b.pin(&fresh, T0));
+    assert_eq!(b.get(&fresh).unwrap().confidence(T0), 1.0);
+    // A measured number is not a yes or no, so it can't be a rule.
+    let ms = Subject::new("model", "grok-code/run-ms").unwrap();
+    b.measure(&ms, 3000.0, T0, "signals");
+    assert!(!b.pin(&ms, T0));
+    assert_eq!(b.get(&ms).unwrap().standing, Standing::Live);
+}
+
+#[test]
+fn a_pinned_line_reads_as_the_users_rule_in_the_list() {
+    let key = Subject::new("skill", "tidy").unwrap();
+    let mut b = Beliefs::default();
+    b.pin(&key, T0);
+    let v = view::view(&b, T0);
+    assert_eq!(v.rows.len(), 1);
+    assert_eq!(v.rows[0].stage, view::Stage::Pinned);
+    assert_eq!(
+        v.rows[0].says,
+        "You said this is always so. Nothing counts against it."
+    );
+    assert_eq!(
+        view::text(&v).lines().nth(1),
+        Some(
+            "- **Skill tidy**: You said this is always so. Nothing counts against it. `skill:tidy`"
+        )
+    );
+    let paused = view::View {
+        paused: true,
+        ..Default::default()
+    };
+    assert_eq!(
+        view::text(&paused),
+        format!("{}{}", view::PAUSED_NOTE, view::NOTHING_YET)
+    );
+    assert_eq!(
+        view::Command::parse("always skill:tidy"),
+        Ok(view::Command::Always(key))
+    );
+    assert_eq!(view::Command::parse("pause"), Ok(view::Command::Pause));
+    assert_eq!(view::Command::parse("Resume"), Ok(view::Command::Resume));
+    assert_eq!(
+        view::Command::parse("pause now"),
+        Err(view::USAGE.to_string())
+    );
+}
+
+#[test]
+fn the_pause_is_a_file_both_apps_on_the_folder_see() {
+    let dir = std::env::temp_dir().join(format!("learn-pause-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(!store::paused(&dir));
+    assert_eq!(store::set_paused(&dir, false), Ok(()));
+    assert_eq!(store::set_paused(&dir, true), Ok(()));
+    assert!(store::paused(&dir));
+    assert_eq!(store::set_paused(&dir, true), Ok(()));
+    assert_eq!(store::set_paused(&dir, false), Ok(()));
+    assert!(!store::paused(&dir));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_skill_run_at_the_same_time_of_day_becomes_a_habit_for_that_part_only() {
+    use habit::{due, skill_run, Part};
+    assert_eq!(Part::of_hour(4), Part::Night);
+    assert_eq!(Part::of_hour(5), Part::Morning);
+    assert_eq!(Part::of_hour(12), Part::Afternoon);
+    assert_eq!(Part::of_hour(17), Part::Evening);
+    assert_eq!(Part::of_hour(22), Part::Night);
+    let one: Vec<(String, Kind)> = skill_run("tidy", 19, T0)
+        .into_iter()
+        .map(|s| (s.subject.as_str().to_string(), s.kind))
+        .collect();
+    assert_eq!(
+        one,
+        vec![
+            ("habit:tidy/morning".to_string(), Kind::Ignored),
+            ("habit:tidy/afternoon".to_string(), Kind::Ignored),
+            ("habit:tidy/evening".to_string(), Kind::Used),
+            ("habit:tidy/night".to_string(), Kind::Ignored),
+        ]
+    );
+    assert_eq!(skill_run("two words", 19, T0), Vec::new());
+
+    let mut b = Beliefs::default();
+    // Two evening runs are not a habit yet.
+    for i in 0..2 {
+        for s in skill_run("tidy", 19, T0 + i) {
+            b.apply(&s);
+        }
+    }
+    assert_eq!(due(&b, Part::Evening, T0 + 2), Vec::new());
+    for i in 2..12 {
+        for s in skill_run("tidy", 20, T0 + i) {
+            b.apply(&s);
+        }
+    }
+    // A skill run at all hours has no habit in any part.
+    for (i, hour) in [8, 13, 19, 23].iter().cycle().take(16).enumerate() {
+        for s in skill_run("scattered", *hour, T0 + i as u64) {
+            b.apply(&s);
+        }
+    }
+    let evening = due(&b, Part::Evening, T0 + 12);
+    assert_eq!(evening.len(), 1);
+    assert_eq!(evening[0].skill, "tidy");
+    assert_eq!(evening[0].evidence, 12.0);
+    assert!((evening[0].confidence - 0.816).abs() < 0.001, "{evening:?}");
+    assert_eq!(evening[0].chip_id(), "habit-evening-tidy");
+    for part in [Part::Morning, Part::Afternoon, Part::Night] {
+        assert_eq!(due(&b, part, T0 + 12), Vec::new(), "{part:?}");
+    }
+    // It fades: three months on it is watched again, not suggested.
+    assert_eq!(due(&b, Part::Evening, T0 + 3 * HALF_LIFE_MS), Vec::new());
+    // The user's "wrong" on the line ends it.
+    b.mark_wrong(&subject("habit:tidy/evening"), T0 + 13);
+    assert_eq!(due(&b, Part::Evening, T0 + 13), Vec::new());
+}
+
+#[test]
+fn a_habit_chip_asks_for_the_skill_and_names_its_rule() {
+    use habit::{chip, chip_rule, Habit, Part};
+    let h = Habit {
+        skill: "patch-notes".into(),
+        part: Part::Night,
+        confidence: 0.82,
+        evidence: 12.0,
+    };
+    let skills = vec![crate::skill::SkillMd {
+        name: "patch-notes".into(),
+        slash: "/patch-notes".into(),
+        ..Default::default()
+    }];
+    let c = chip(&h, &skills, 99.0).expect("chip");
+    assert_eq!(
+        (
+            c.id.as_str(),
+            c.label.as_str(),
+            c.value.as_str(),
+            c.hint.as_str(),
+            c.score
+        ),
+        (
+            "habit-night-patch-notes",
+            "patch notes",
+            "/patch-notes",
+            "You often run this at night",
+            99.0
+        )
+    );
+    assert_eq!(chip(&h, &[], 99.0), None, "the skill was removed");
+    assert_eq!(
+        chip_rule(&c.id).map(|r| r.as_str().to_string()),
+        Some("rule:habit/patch-notes/night".to_string())
+    );
+    assert_eq!(chip_rule("skill-patch-notes"), None);
+    assert_eq!(chip_rule("habit-noon-patch-notes"), None);
+    let p = h.proposal().expect("proposal");
+    assert_eq!(
+        (p.area, p.undo, p.hard),
+        (decide::Area::Chips, Undo::OneClick, false)
+    );
+
+    let run = crate::run_metrics::RunMetrics {
+        class: "skill:Patch Notes".into(),
+        result: crate::outcome::OutcomeResult::Success,
+        at: T0,
+        ..Default::default()
+    };
+    let votes = sources::run_habit(&run, 23);
+    assert_eq!(votes.len(), 4);
+    assert_eq!(votes[3].subject.as_str(), "habit:patch-notes/night");
+    assert_eq!(votes[3].kind, Kind::Used);
+    let failed = crate::run_metrics::RunMetrics {
+        result: crate::outcome::OutcomeResult::Failure,
+        ..run.clone()
+    };
+    assert_eq!(sources::run_habit(&failed, 23), Vec::new());
+    let late = crate::run_metrics::RunMetrics {
+        corrections: 1,
+        ..run.clone()
+    };
+    assert_eq!(sources::run_habit(&late, 23), Vec::new());
+    let chat = crate::run_metrics::RunMetrics {
+        class: "topic:patch notes".into(),
+        ..run
+    };
+    assert_eq!(sources::run_habit(&chat, 23), Vec::new());
+}
