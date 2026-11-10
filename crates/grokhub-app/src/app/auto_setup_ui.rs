@@ -607,7 +607,9 @@ impl Cabin {
         let reply = self.answer_setting_ask(ask);
         self.touch();
         self.live_mut().push(("user".into(), text.to_string()));
-        self.live_mut().push(("assistant".into(), reply));
+        self.live_mut().push(("assistant".into(), reply.clone()));
+        let here = self.visible_thread_id();
+        self.note_native_answer(&here, text, &reply);
         self.stamp_current_access();
         self.persist();
         true

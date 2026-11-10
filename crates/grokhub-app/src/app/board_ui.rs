@@ -282,6 +282,15 @@ pub(super) fn step_mark(status: StepStatus) -> &'static str {
 }
 
 /// The live card for a chat, so an Activity row can open it.
+/// The live background run that works card `card_id`, if one does.
+pub(super) fn card_live_run<'a>(
+    bg: &'a super::background::BgWork,
+    card_id: &str,
+) -> Option<&'a super::background::BgRun> {
+    let run = bg.cards.iter().find(|(_, c)| c == card_id)?.0;
+    bg.runs.iter().find(|r| r.id == run && r.live())
+}
+
 pub(super) fn board_card_for_chat(cards: &[BoardCard], chat_id: &str) -> Option<String> {
     if chat_id.is_empty() {
         return None;
@@ -870,6 +879,7 @@ impl Cabin {
             .as_ref()
             .filter(|(n, _)| n == &id)
             .map(|(_, t)| t.clone());
+        let mut run_live = false;
         let resp = card_frame(ui, CardVariant::Default, true, |ui| {
             ui.set_width(ui.available_width());
             // Only the title row drags (or folds the card on a click); the rest
@@ -978,11 +988,15 @@ impl Cabin {
                 );
             }
             self.paint_card_work(ui, card, busy_here, act);
+            run_live = self.paint_card_run(ui, card, act);
             ui.add_space(8.0);
             let chat_h = if wide { FOLLOW_CHAT_H } else { CARD_CHAT_H };
             match thread.as_deref() {
                 Some(tid) => self.paint_card_chat(ui, &id, tid, chat_h),
-                None if card.automation.is_some() && !card.report.trim().is_empty() => {
+                None if card.automation.is_some()
+                    && card.result.trim().is_empty()
+                    && !card.report.trim().is_empty() =>
+                {
                     // A report whose chat is gone still reads like the chat did.
                     let view = ChatView {
                         kind: ChatKind::Assistant,
@@ -1002,10 +1016,81 @@ impl Cabin {
                 );
             }
         });
-        if busy_here {
+        if busy_here || run_live {
             crate::icons::request_live_frame(ui.ctx());
         }
         resp.rect
+    }
+
+    /// The card's background run: its live step and text while it runs, then
+    /// its result with Send to chat. True while the run is live.
+    fn paint_card_run(
+        &mut self,
+        ui: &mut egui::Ui,
+        card: &BoardCard,
+        act: &mut Option<BoardAct>,
+    ) -> bool {
+        let live = card_live_run(&self.bg, &card.id).map(|r| {
+            (
+                grokhub_core::bg_elapsed_label(r.started.elapsed().as_millis() as u64),
+                r.action.clone(),
+                grokhub_core::assistant_prose(&r.say),
+            )
+        });
+        let caption = |ui: &mut egui::Ui, text: &str| {
+            ui.add_space(crate::theme::SPACING_4);
+            ui.label(
+                RichText::new(text)
+                    .size(crate::theme::FONT_TIP)
+                    .color(crate::theme::subtle()),
+            );
+        };
+        if let Some((elapsed, action, say)) = &live {
+            caption(ui, &format!("Running · {elapsed}"));
+            if !action.trim().is_empty() {
+                ui.label(
+                    RichText::new(action.trim())
+                        .size(crate::theme::FONT_TIP)
+                        .color(crate::theme::muted()),
+                );
+            }
+            if !say.trim().is_empty() {
+                let view = ChatView {
+                    kind: ChatKind::Assistant,
+                    title: String::new(),
+                    body: say.trim().to_string(),
+                };
+                paint_chat_block(ui, &view, false, false, ThoughtFold::Expanded);
+            }
+            return true;
+        }
+        if card.result.trim().is_empty() {
+            return false;
+        }
+        caption(ui, "Result");
+        let view = ChatView {
+            kind: ChatKind::Assistant,
+            title: String::new(),
+            body: card.result.trim().to_string(),
+        };
+        paint_chat_block(ui, &view, false, false, ThoughtFold::Expanded);
+        if card.result_sent {
+            ui.label(
+                RichText::new("Sent to chat")
+                    .size(crate::theme::FONT_TIP)
+                    .color(crate::theme::muted()),
+            );
+        } else {
+            let send = ui
+                .push_id(("board-send-result", card.id.as_str()), |ui| {
+                    crate::cards::ghost_pill(ui, "Send to chat")
+                })
+                .inner;
+            if send {
+                *act = Some(BoardAct::SendResult(card.id.clone()));
+            }
+        }
+        false
     }
 
     /// The work part of an open card: its steps, where it left off, Resume and
@@ -1812,9 +1897,9 @@ impl Cabin {
     }
 
     /// A scheduled run finished. When it left something to read or act on (a
-    /// report you asked for, a question, a problem), it lands in Follow up with a
-    /// chat that starts with the report. Later runs of the same automation add
-    /// to that card and that chat instead of filing another.
+    /// report you asked for, a question, a problem), it lands in Follow up with
+    /// the report on the card and a hidden chat to talk about it. Later runs of
+    /// the same automation update that card instead of filing another.
     pub(super) fn file_automation_follow_up(
         &mut self,
         automation_id: &str,
@@ -1837,7 +1922,8 @@ impl Cabin {
         let Some(card) = self.board.iter().find(|c| c.id == card_id).cloned() else {
             return false;
         };
-        let report = card.report.clone();
+        // The card's own hidden chat is where you talk about the report; the
+        // report itself stays on the card and reaches that chat's next turn.
         let thread_id = match card
             .thread_id
             .clone()
@@ -1855,12 +1941,7 @@ impl Cabin {
                 tid
             }
         };
-        let stamp = format!("Scheduled run · {}", Self::local_clock().hm());
-        let entry = ("assistant".to_string(), format!("**{stamp}**\n\n{report}"));
-        if thread_id == self.visible_thread_id() {
-            self.live_mut().push(entry);
-        } else if let Some(t) = self.threads.iter_mut().find(|t| t.id == thread_id) {
-            t.messages_mut().push(entry);
+        if let Some(t) = self.threads.iter_mut().find(|t| t.id == thread_id) {
             t.accessed_ms = now_ms();
         }
         // The run's card on the home feed now leads to this card. A clock

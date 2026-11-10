@@ -13,6 +13,7 @@
 //! a probe that needs admin is skipped with a note.
 
 mod apply;
+mod crash_ask;
 pub mod driver_update;
 mod drivers;
 mod fans;
@@ -32,6 +33,7 @@ pub use apply::{
     gb_prompt, step_ok, Action, ApplyCtx, ApplyRun, ChecklistLine, StepMark, APPLY_TOOL,
     CHECK_LINE, REPAIR_TOOL, RESTORE_TOOL, STEP_FAILED, STEP_OK, UNATTENDED, UNDO_TOOL,
 };
+pub use crash_ask::{probes_for_named, program_in_ask};
 pub use drivers::{
     apt_versions, candidate_spec, driver_plan, driver_rollback_plan, driver_updated,
     driver_updates, installed_spec, is_driver_pkg, parse_candidate, parse_installed, rollback_cmd,

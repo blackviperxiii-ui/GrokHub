@@ -83,9 +83,10 @@ pub const WINDOWS_PROBES: &[ProbeId] = &[
 pub const LINUX_SUBJECT_PROBES: &[ProbeId] = &[ProbeId::CrashDumps, ProbeId::CrashLog];
 pub const WINDOWS_SUBJECT_PROBES: &[ProbeId] = &[ProbeId::AppCrashes];
 
-/// A program's name taken from a card, never from the model: letters, digits
-/// and `_ . @ -`, not starting with `-` or `.`, at most 64 long. It goes into
-/// an argv (or a quoted PowerShell string) as one plain word.
+/// A program's name from a card or the user's own typed ask, never from the
+/// model: letters, digits and `_ . @ -`, not starting with `-` or `.`, at most
+/// 64 long. It goes into an argv (or a quoted PowerShell string) as one plain
+/// word.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProgramName(String);
 

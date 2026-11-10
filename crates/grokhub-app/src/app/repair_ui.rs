@@ -134,13 +134,20 @@ impl Cabin {
             return false;
         }
         let os = repair::Os::current();
-        // In a chat opened from a crash card, "check into it" reads that
-        // program's crash history, by the name on the card.
-        let subject = self.card_program_here();
-        let probes = subject
-            .as_ref()
-            .and_then(|_| repair::probes_for_subject(text, os))
-            .or_else(|| repair::probes_for_intent(text, os));
+        // A crash ask that names its program reads that program's crash
+        // history. In a chat opened from a crash card, "check into it" reads
+        // the card's program, by the name on the card.
+        let (subject, probes) = match repair::probes_for_named(text, os) {
+            Some((name, probes)) => (Some(name), Some(probes)),
+            None => {
+                let subject = self.card_program_here();
+                let probes = subject
+                    .as_ref()
+                    .and_then(|_| repair::probes_for_subject(text, os))
+                    .or_else(|| repair::probes_for_intent(text, os));
+                (subject, probes)
+            }
+        };
         let Some(probes) = probes else {
             return false;
         };
@@ -148,7 +155,7 @@ impl Cabin {
         self.live_mut().push(("user".into(), text.to_string()));
         self.stamp_current_access();
         self.persist();
-        self.run_diagnose_about(probes, false, subject);
+        self.run_diagnose_about(probes, false, subject, text);
         true
     }
 
@@ -166,20 +173,23 @@ impl Cabin {
     /// Run `probes` (every one for this OS when empty). `slash` marks the
     /// answer as a slash result; an intent answer is a plain reply.
     pub(super) fn run_diagnose(&mut self, probes: Vec<repair::ProbeId>, slash: bool) {
-        self.run_diagnose_about(probes, slash, None);
+        self.run_diagnose_about(probes, slash, None, "/diagnose");
     }
 
-    /// [`Self::run_diagnose`], with the program a card is about.
+    /// [`Self::run_diagnose`], with the program the ask or a card is about
+    /// and the words that asked.
     fn run_diagnose_about(
         &mut self,
         probes: Vec<repair::ProbeId>,
         slash: bool,
         subject: Option<repair::ProgramName>,
+        ask: &str,
     ) {
         if self.harness.diagnose_rx.is_some() {
             self.status = "Already checking your computer".into();
             return;
         }
+        self.harness.diagnose_ask = ask.to_string();
         let dir = crate::config::config_dir();
         let session = self.fix_session();
         let access = self.access_mode();
@@ -319,6 +329,10 @@ impl Cabin {
                         now_ms(),
                     );
                 }
+                // The engine never ran this turn: its next prompt carries it.
+                let ask = std::mem::take(&mut self.harness.diagnose_ask);
+                let chat = self.harness.diagnose_chat.clone();
+                self.note_native_answer(&chat, &ask, &body);
                 let body = if self.harness.diagnose_slash {
                     mark_slash_result(&body)
                 } else {

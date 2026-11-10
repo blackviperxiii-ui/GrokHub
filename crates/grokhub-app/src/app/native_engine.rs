@@ -310,32 +310,55 @@ impl Cabin {
     }
 
     /// The first native turn on a thread adopted from the CLI carries its earlier
-    /// turns, once. Every other turn goes out as typed. The index names the
-    /// thread whose carry the turn used; it is cleared only once the send is
+    /// turns, once. A turn after ones the app answered itself carries those,
+    /// once. Every other turn goes out as typed. The index names the thread
+    /// whose carry the turn used; it is cleared only once the send is
     /// accepted, so a failed first send carries the recap on the retry.
-    fn native_carry(&self, last_user: &str) -> (String, Option<usize>) {
+    pub(super) fn native_carry(&self, last_user: &str) -> (String, Option<usize>) {
         let idx = self
             .chat_job_thread
             .as_deref()
             .and_then(|id| self.threads.iter().position(|t| t.id == id))
             .unwrap_or(self.thread_idx);
-        let Some(thread) = self.threads.get(idx).filter(|t| t.native_carry) else {
+        let Some(thread) = self.threads.get(idx) else {
             return (last_user.to_string(), None);
         };
-        let recap = if idx == self.thread_idx {
-            threads::native_carry_recap(&self.messages)
-        } else {
-            threads::native_carry_recap(&thread.messages)
-        };
-        (format!("{recap}{last_user}"), Some(idx))
+        if thread.native_carry {
+            // The recap already holds the self-answered turns: never twice.
+            let recap = if idx == self.thread_idx {
+                threads::native_carry_recap(&self.messages)
+            } else {
+                threads::native_carry_recap(&thread.messages)
+            };
+            return (format!("{recap}{last_user}"), Some(idx));
+        }
+        if thread.native_notes.is_empty() {
+            return (last_user.to_string(), None);
+        }
+        let notes = threads::native_notes_text(&thread.native_notes);
+        (format!("{notes}{last_user}"), Some(idx))
     }
 
-    fn clear_native_carry(&mut self, idx: Option<usize>) {
+    pub(super) fn clear_native_carry(&mut self, idx: Option<usize>) {
         let Some(thread) = idx.and_then(|idx| self.threads.get_mut(idx)) else {
             return;
         };
         thread.native_carry = false;
+        thread.native_notes.clear();
         self.persist();
+    }
+
+    /// A turn the cabin answered itself in chat `chat` (the open one when
+    /// empty) rides to the engine with that chat's next prompt.
+    pub(super) fn note_native_answer(&mut self, chat: &str, ask: &str, answer: &str) {
+        let idx = if chat.is_empty() {
+            Some(self.thread_idx)
+        } else {
+            self.threads.iter().position(|t| t.id == chat)
+        };
+        if let Some(thread) = idx.and_then(|idx| self.threads.get_mut(idx)) {
+            threads::note_native_answer(thread, ask, answer);
+        }
     }
 
     pub(super) fn ensure_native_engine(&mut self) -> Result<(), String> {

@@ -1,0 +1,1 @@
+- The router's own tuning now follows the trust dial: set Router to offer or watch and it stops switching models on its own. Halt, quiet hours, a busy moment, the daily limit of five changes and the pause after too many undos hold it too, and undoing the same kind of router change twice turns it off.
