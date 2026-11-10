@@ -169,7 +169,17 @@ pub fn note_brief(session: &str, brief: &crate::brain::Brief) {
     if talk::note_brief(session, brief) {
         upgrade_talk(session);
     }
+    // A picture ask gets the picture tool up front, at the tail so the cached
+    // prefix holds, instead of a load_tool_schema round trip the model may
+    // skip and then say it can't draw. The gate still decides: a read-only
+    // chat never offers it.
+    if brief.intent == crate::brain::Intent::Image && !session.is_empty() {
+        remember_loaded(session, IMAGE_GENERATE);
+    }
 }
+
+/// The picture tool.
+pub const IMAGE_GENERATE: &str = "image_generate";
 
 /// Append every demoted tool to the chat's tail, once, in [`TALK_DEMOTED`] order.
 fn upgrade_talk(session: &str) {

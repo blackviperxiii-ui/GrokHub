@@ -5,13 +5,17 @@
 //! request would not fit. [`fit`] shrinks only what it must, in this order,
 //! and stops as soon as the request fits with room left for the reply:
 //!
-//! 1. Tools: keep the core workspace and web tools.
+//! 1. Tools: keep the core workspace and web tools, `load_tool_schema` (its
+//!    index cut to the names, so a deferred tool can still be loaded) and any
+//!    the caller must keep (with their required fields only).
 //! 2. System: drop the optional guidance sections. Safety, memory, the cabin
 //!    rules, the personality and AGENTS.md stay.
 //! 3. Older user turns lose the per-turn cabin notes (the newest keeps them).
 //! 4. AGENTS.md: at most a quarter of the window, cut at a line, saying so.
 //! 5. History: keep the newest whole turns that fit, and say earlier turns
-//!    were left out. If even the newest turn is too big, AGENTS.md gives way.
+//!    were left out.
+//! 6. Still too big: the spare core tools go ([`SPARE_TOOLS`]), then
+//!    AGENTS.md gives way.
 //!
 //! The saved chat is never changed; only the request sent to the device is.
 //!
@@ -35,7 +39,14 @@ pub const CORE_TOOLS: &[&str] = &[
     "web_search",
     "web_fetch",
     "get_command_or_subagent_output",
+    // Without it a deferred tool (web_fetch, which web_search points at)
+    // can't be loaded on a small window at all.
+    "load_tool_schema",
 ];
+
+/// Core tools that go, in this order, when nothing else is left to cut:
+/// the background-output reader, then the finders the shell also covers.
+pub const SPARE_TOOLS: &[&str] = &["get_command_or_subagent_output", "glob", "grep", "list_dir"];
 
 /// System sections that are guidance, not safety, dropped in this order.
 const OPTIONAL_SECTIONS: &[&str] = &[
@@ -87,6 +98,8 @@ struct Sticky {
     /// The largest window these cuts were made for; a bigger one starts clean.
     n_ctx: u64,
     tools: bool,
+    /// How many of [`SPARE_TOOLS`], in order, are cut.
+    spare: usize,
     /// How many of [`OPTIONAL_SECTIONS`], in order, are cut.
     sections: usize,
     notes: bool,
@@ -121,6 +134,16 @@ fn chat_start(input: &[InputItem]) -> u64 {
 /// Shrink `req` until it fits `n_ctx` with [`reply_reserve`] left over,
 /// starting from what this chat's earlier turns already cut.
 pub fn fit(req: &ResponsesRequest, n_ctx: u64) -> (ResponsesRequest, Fitted) {
+    fit_keeping(req, n_ctx, &[])
+}
+
+/// [`fit`], keeping `keep` beside [`CORE_TOOLS`] when the tools are cut
+/// (`image_generate` when this computer can draw).
+pub fn fit_keeping(
+    req: &ResponsesRequest,
+    n_ctx: u64,
+    keep: &[&str],
+) -> (ResponsesRequest, Fitted) {
     let key = req.conversation_id.as_str();
     let start = chat_start(&req.input);
     let prior = (!key.is_empty())
@@ -135,7 +158,7 @@ pub fn fit(req: &ResponsesRequest, n_ctx: u64) -> (ResponsesRequest, Fitted) {
             n_ctx,
             ..Default::default()
         });
-    let (out, done, next) = fit_from(req, n_ctx, prior);
+    let (out, done, next) = fit_from(req, n_ctx, prior, keep);
     if !key.is_empty() {
         let mut m = sticky_map().lock().unwrap_or_else(|e| e.into_inner());
         m.retain(|(k, _)| k != key);
@@ -151,6 +174,7 @@ fn fit_from(
     req: &ResponsesRequest,
     n_ctx: u64,
     mut s: Sticky,
+    keep: &[&str],
 ) -> (ResponsesRequest, Fitted, Sticky) {
     let budget = n_ctx.saturating_sub(reply_reserve(n_ctx));
     let mut out = req.clone();
@@ -161,9 +185,15 @@ fn fit_from(
         out.tools.retain(|t| {
             t["name"]
                 .as_str()
-                .is_some_and(|name| CORE_TOOLS.contains(&name))
+                .is_some_and(|name| CORE_TOOLS.contains(&name) || keep.contains(&name))
         });
         done.tools_cut = out.tools.len() < before;
+        for t in out.tools.iter_mut() {
+            names_only_index(t);
+            if t["name"].as_str().is_some_and(|name| keep.contains(&name)) {
+                required_only(t);
+            }
+        }
         s.tools = true;
     }
     for (i, section) in OPTIONAL_SECTIONS.iter().enumerate() {
@@ -187,6 +217,15 @@ fn fit_from(
         done.turns_dropped = keep_recent_turns(&mut out, budget, s.dropped);
         s.dropped = done.turns_dropped;
     }
+    for (i, name) in SPARE_TOOLS.iter().enumerate() {
+        if i >= s.spare && fits(&out) {
+            break;
+        }
+        let before = out.tools.len();
+        out.tools.retain(|t| t["name"].as_str() != Some(name));
+        done.tools_cut |= out.tools.len() < before;
+        s.spare = s.spare.max(i + 1);
+    }
     let over = request_tokens(&out).saturating_sub(budget);
     if over > 0 {
         let agents = agents_tokens(&out.input);
@@ -205,6 +244,58 @@ fn fit_from(
         done.newest_clipped = clip_newest_user(&mut out.input, over);
     }
     (out, done, s)
+}
+
+/// Where `load_tool_schema`'s description starts its `name — blurb` lines.
+const INDEX_AT: &str = "Deferred tools (index):\n";
+
+/// `load_tool_schema` with its index cut to the tool names: a small window
+/// still reaches every deferred tool for a fraction of the tokens.
+fn names_only_index(tool: &mut serde_json::Value) {
+    if tool["name"].as_str() != Some(crate::tools::registry::LOAD_TOOL_SCHEMA) {
+        return;
+    }
+    let Some((_, index)) = tool["description"]
+        .as_str()
+        .and_then(|d| d.split_once(INDEX_AT))
+    else {
+        return;
+    };
+    let names: Vec<&str> = index
+        .lines()
+        .filter_map(|l| l.split(" — ").next())
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .collect();
+    tool["description"] = format!(
+        "Load a deferred tool's full schema by name before you call it. Deferred tools: {}",
+        names.join(", ")
+    )
+    .into();
+}
+
+/// A tool kept beside the core: its first sentence and required fields.
+fn required_only(tool: &mut serde_json::Value) {
+    if let Some(desc) = tool["description"].as_str() {
+        let first = desc.split_once(". ").map_or(desc, |(first, _)| first);
+        tool["description"] = format!("{}.", first.trim_end_matches('.')).into();
+    }
+    let required: Vec<String> = tool["parameters"]["required"]
+        .as_array()
+        .map(|r| {
+            r.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    if let Some(props) = tool["parameters"]["properties"].as_object_mut() {
+        props.retain(|name, _| required.contains(name));
+        for prop in props.values_mut() {
+            if let Some(prop) = prop.as_object_mut() {
+                prop.remove("description");
+            }
+        }
+    }
 }
 
 /// The newest user message's text, when it has one.

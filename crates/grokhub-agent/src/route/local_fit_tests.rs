@@ -424,3 +424,90 @@ fn a_bigger_window_or_another_chat_start_begins_clean() {
     let (_, clean) = fit(&other, 131_072);
     assert_eq!(clean, Fitted::default());
 }
+
+fn tool_names(req: &ResponsesRequest) -> Vec<&str> {
+    req.tools
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect()
+}
+
+#[test]
+fn a_4k_window_keeps_load_tool_schema_so_deferred_tools_stay_reachable() {
+    let req = real_request(vec![text("user", "hey")]);
+    assert!(tool_names(&req).contains(&"load_tool_schema"));
+    let (out, done) = fit(&req, 4_096);
+    assert!(done.tools_cut);
+    assert!(fits(&out, 4_096), "{} tokens", request_tokens(&out));
+    let names = tool_names(&out);
+    assert!(names.contains(&"load_tool_schema"), "{names:?}");
+    assert!(names.contains(&"web_search"), "{names:?}");
+    // Its index is cut to the names, and still names web_fetch.
+    let load = out
+        .tools
+        .iter()
+        .find(|t| t["name"] == "load_tool_schema")
+        .unwrap();
+    let desc = load["description"].as_str().unwrap();
+    let listed = desc.split_once("Deferred tools: ").unwrap().1;
+    assert!(listed.split(", ").any(|n| n == "web_fetch"), "{desc}");
+    assert!(!desc.contains(" — "), "{desc}");
+}
+
+/// One on-device turn on a 4k window; what the device was sent.
+fn sent_on_4k(ask: &str, can_draw: bool) -> ResponsesRequest {
+    let rt = std::sync::Arc::new(SmallWindow {
+        n_ctx: Some(4_096),
+        sent: Default::default(),
+    });
+    let _on = crate::route::local::ForceOn::with(Some(rt.clone()));
+    let _kit = crate::route::local_image::KitForTests::set(can_draw);
+    let req = real_request(vec![text("user", ask)]);
+    crate::route::local::serve_request("chat:default", &req, &crate::client::CancelToken::new())
+        .unwrap();
+    let sent = rt.sent.lock().unwrap()[0].clone();
+    assert!(fits(&sent, 4_096), "{} tokens", request_tokens(&sent));
+    sent
+}
+
+#[test]
+fn a_small_window_keeps_the_picture_tool_when_this_computer_can_draw() {
+    use crate::route::local_image as li;
+    for ask in ["hey", "draw me a fox in the snow"] {
+        let sent = sent_on_4k(ask, true);
+        let names = tool_names(&sent);
+        assert!(names.contains(&"image_generate"), "{ask}: {names:?}");
+        assert!(names.contains(&"load_tool_schema"), "{ask}: {names:?}");
+        let image = sent
+            .tools
+            .iter()
+            .find(|t| t["name"] == "image_generate")
+            .unwrap();
+        assert_eq!(image["description"], "Generate images.");
+        assert_eq!(
+            image["parameters"]["required"],
+            serde_json::json!(["prompt"])
+        );
+        let system = first_text(&sent.input[0]);
+        assert!(system.contains(li::CAN_DRAW), "{ask}");
+        assert!(!system.contains(li::NO_KIT), "{ask}");
+        assert_eq!(system.contains(li::ASKED), ask != "hey", "{ask}");
+    }
+}
+
+#[test]
+fn with_nothing_to_draw_with_only_a_picture_ask_says_what_to_download() {
+    use crate::route::local_image as li;
+    let plain = sent_on_4k("hey", false);
+    assert!(!tool_names(&plain).contains(&"image_generate"));
+    assert!(!first_text(&plain.input[0]).contains("[Pictures]"));
+    let ask = sent_on_4k("make a picture of a castle at night", false);
+    // Kept, so an 18+ prompt gets the tool's own notice and a clean one can
+    // still reach Grok Imagine when signed in.
+    assert!(tool_names(&ask).contains(&"image_generate"));
+    let system = first_text(&ask.input[0]);
+    assert!(system.contains(li::NO_KIT));
+    assert!(!system.contains(li::CAN_DRAW));
+    assert!(li::NO_KIT.contains("Settings → Download models → Image"));
+    assert!(li::NO_KIT.contains("picture guard"));
+}

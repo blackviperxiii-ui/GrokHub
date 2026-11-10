@@ -934,7 +934,9 @@ pub fn hosted_max_turns(conversation_id: &str) -> u32 {
     match crate::checkpoint::turn_brief(conversation_id).map(|b| b.intent) {
         Some(Intent::Research) => 5,
         Some(Intent::Task | Intent::Repair) | None => 3,
-        Some(Intent::Chat | Intent::Question | Intent::Creative | Intent::Background) => 2,
+        Some(
+            Intent::Chat | Intent::Question | Intent::Creative | Intent::Image | Intent::Background,
+        ) => 2,
     }
 }
 

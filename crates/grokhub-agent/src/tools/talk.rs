@@ -55,7 +55,7 @@ fn profiles() -> &'static Mutex<BTreeMap<String, Profile>> {
 /// Whether this Brief is plain talk, sure enough to send the Talk profile.
 pub fn wants_talk(brief: &Brief) -> bool {
     let talk = match brief.intent {
-        Intent::Chat | Intent::Creative => true,
+        Intent::Chat | Intent::Creative | Intent::Image => true,
         Intent::Question => TALK_QUESTION_DOMAINS.contains(&brief.domain.as_str()),
         _ => false,
     };
