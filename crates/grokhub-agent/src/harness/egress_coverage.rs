@@ -62,6 +62,7 @@ const WRAPPED: &[(&str, usize, &str)] = &[
     ("grokhub-agent/src/route/local_effort.rs", 1, "fetch_thinking: loopback-only /props with bearer token; no egress line"),
     ("grokhub-agent/src/route/local_image.rs", 1, "ask_guard: the picture guard's loopback chat/completions to the llama-server it just started for one picture; no egress line (on-device)"),
     ("grokhub-agent/src/route/local_spec.rs", 2, "measure: the speed test's and the refusal check's loopback chat/completions to the sidecar each just started; no egress line"),
+    ("grokhub-agent/src/route/local_kv.rs", 2, "slot_call and warm_up: loopback /slots save and restore and a one-token warm-up chat/completions to the sidecar that just loaded, with its bearer token; no egress line (on-device)"),
     ("grokhub-agent/src/route/sources.rs", 1, "XaiApiSource::get / XaiProbeTransport::send: guard_egress (no user data) to api.x.ai"),
     ("grokhub-agent/src/plugins.rs", 1, "fetch_marketplace: guard_quiet (no user data)"),
     (
