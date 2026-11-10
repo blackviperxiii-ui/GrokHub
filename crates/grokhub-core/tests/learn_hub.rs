@@ -39,9 +39,57 @@ fn the_shared_logs_feed_one_engine() {
     assert!(!hub::started());
     assert!(!store::dir(&dir).exists());
 
+    // A run from yesterday, from before this folder had an engine.
+    let day = 24 * 60 * 60 * 1_000u64;
+    let yesterday = grokhub_core::now_ms() - day;
+    let old = RunMetrics {
+        run: "chat-old:1".into(),
+        class: "skill:old-habit".into(),
+        result: OutcomeResult::Success,
+        model: "old-model".into(),
+        finished_at: yesterday,
+        at: yesterday,
+        ..RunMetrics::default()
+    };
+    append_run(&dir, &old, 0).unwrap();
+    assert!(!store::dir(&dir).exists());
+
     hub::start(&dir);
     hub::start(&dir);
     assert!(hub::started());
+
+    // The head start: once the app gives its clock, the old run is learned
+    // from as if the engine had seen it, in its own hour. Forget everything
+    // then clears it like anything else learned, and it is not read again.
+    assert_eq!(store::disk_used(&dir), 0);
+    hub::set_utc_offset_min(0);
+    let old_skill = Subject::new("skill", "old-habit").unwrap();
+    let waited = std::time::Instant::now();
+    while !store::load_beliefs(&dir).get(&old_skill).is_some() {
+        assert!(waited.elapsed().as_secs() < 20, "no head start");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let learned = store::load_beliefs(&dir);
+    assert_eq!(
+        learned.get(&old_skill).unwrap().shape,
+        Shape::Rate { yes: 1.0, no: 0.0 }
+    );
+    let old_model = Subject::new("model", "old-model").unwrap();
+    assert_eq!(
+        learned.get(&old_model).unwrap().shape,
+        Shape::Rate { yes: 1.0, no: 0.0 }
+    );
+    let part = grokhub_core::learn::habit::Part::of_hour(hub::local_hour(yesterday));
+    let old_habit = Subject::new("habit", &format!("old-habit/{}", part.as_str())).unwrap();
+    assert_eq!(
+        learned.get(&old_habit).unwrap().shape,
+        Shape::Rate { yes: 1.0, no: 0.0 }
+    );
+    hub::forget_all().unwrap();
+    assert_eq!(store::disk_used(&dir), 0);
+    hub::set_utc_offset_min(0);
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert_eq!(store::disk_used(&dir), 0);
 
     // Chips: a row passed over, a second row with a pick, a hide on Home.
     let mut mem = ChipMemory::default();

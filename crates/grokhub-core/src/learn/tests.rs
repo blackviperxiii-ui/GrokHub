@@ -1290,3 +1290,97 @@ fn the_settings_dial_and_halt_hold_what_auto_setup_would_change_on_its_own() {
         (vec!["wide_screen", "answered"], vec!["steam_found"])
     );
 }
+
+#[test]
+fn a_folder_new_to_the_engine_gets_one_head_start_from_the_old_logs() {
+    use super::head_start::{claim, feed, signals, CHUNK, MARK};
+    use crate::card_signals::{CardEvent, CardSignal};
+    use crate::outcome::OutcomeResult;
+    use crate::run_metrics::RunMetrics;
+    const HOUR_MS: u64 = 60 * 60 * 1_000;
+
+    // The claim is yes once, and never for a folder that already has beliefs
+    // or had its mark (which Forget everything leaves in place).
+    let dir = temp("head-start");
+    assert!(claim(&dir));
+    assert!(store::dir(&dir).join(MARK).exists());
+    assert!(!claim(&dir));
+    store::forget_all(&dir).unwrap();
+    assert!(!claim(&dir));
+    let used = temp("head-start-used");
+    fs::create_dir_all(store::dir(&used)).unwrap();
+    fs::write(store::dir(&used).join(store::BELIEFS), "{}").unwrap();
+    assert!(!claim(&used));
+    assert!(store::dir(&used).join(MARK).exists());
+
+    // Three old runs of one skill at 08:00, one failed run, a card the user
+    // asked for more of, and one run written after the engine started.
+    let run = |n: u64, result: OutcomeResult, at: u64| RunMetrics {
+        run: format!("chat-a:{n}"),
+        class: "skill:weekly-report".into(),
+        result,
+        model: "grok-code".into(),
+        finished_at: at,
+        at,
+        ..RunMetrics::default()
+    };
+    let day = 24 * HOUR_MS;
+    let eight = T0 - T0 % day + 8 * HOUR_MS;
+    let started = eight + 10 * day;
+    let runs = vec![
+        run(1, OutcomeResult::Success, eight),
+        run(2, OutcomeResult::Success, eight + day),
+        run(3, OutcomeResult::Failure, eight + 2 * day),
+        run(4, OutcomeResult::Success, eight + 3 * day),
+        run(5, OutcomeResult::Success, started + 1),
+    ];
+    let cards = vec![CardSignal {
+        ts: eight + HOUR_MS,
+        kind: "suggestion".into(),
+        group: "run:nightly".into(),
+        event: CardEvent::More,
+        card_id: "c1".into(),
+        source_id: String::new(),
+        after_open: None,
+    }];
+    let hour = |at: u64| ((at % day) / HOUR_MS) as u32;
+    let old = signals(&runs, &cards, started, hour);
+    // Oldest first, and nothing from after the start.
+    assert!(old.windows(2).all(|w| w[0].at_ms <= w[1].at_ms));
+    assert!(old.iter().all(|s| s.at_ms < started));
+    let count = |kind: Kind, subject: &str| {
+        old.iter()
+            .filter(|s| s.kind == kind && s.subject.as_str() == subject)
+            .count()
+    };
+    assert_eq!(count(Kind::Succeeded, "skill:weekly-report"), 3);
+    assert_eq!(count(Kind::Failed, "skill:weekly-report"), 1);
+    assert_eq!(count(Kind::Succeeded, "model:grok-code"), 3);
+    assert_eq!(count(Kind::Liked, "card:suggestion"), 1);
+    assert_eq!(count(Kind::Liked, "card-group:run:nightly"), 1);
+    // The three good runs vote for the morning habit; the failed one doesn't.
+    let habit = old
+        .iter()
+        .filter(|s| s.subject.as_str() == "habit:weekly-report/morning")
+        .count();
+    assert_eq!(habit, 3);
+
+    // Fed to a real engine in small steps, nothing is dropped: more signals
+    // than one chunk all reach the belief file.
+    let many: Vec<RunMetrics> = (0..(CHUNK as u64 + 50))
+        .map(|n| run(100 + n, OutcomeResult::Success, eight + n))
+        .collect();
+    let mut engine = Engine::open(&dir);
+    let fed = signals(&many, &[], started, hour);
+    feed(fed, started, |step| step(&mut engine));
+    assert_eq!(engine.dropped(), 0);
+    let saved = store::load_beliefs(&dir);
+    let skill = saved.get(&subject("skill:weekly-report")).unwrap();
+    assert_eq!(
+        skill.shape,
+        Shape::Rate {
+            yes: 250.0,
+            no: 0.0
+        }
+    );
+}
