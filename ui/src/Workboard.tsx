@@ -862,7 +862,13 @@ function BoardCardRow({
             {meta.length > 0 && <span className="card-status">{meta.join(" · ")}</span>}
           </div>
           {card.detail && <div className="card-status">{card.detail}</div>}
-          {card.report && (
+          {card.result && (
+            <details className="board-report board-result" open>
+              <summary>Result</summary>
+              <pre>{card.result}</pre>
+            </details>
+          )}
+          {card.report && card.report !== card.result && (
             <details className="board-report">
               <summary>Latest report</summary>
               <pre>{card.report}</pre>
