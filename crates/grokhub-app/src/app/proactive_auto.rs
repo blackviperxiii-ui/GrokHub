@@ -18,6 +18,10 @@
 //! `AutoState::queue` is where auto-act candidates come in. The 6a engine's
 //! sources carry no tool arguments yet, so nothing fills it in the running
 //! app; `AutoBudget` (5 a day) sits beside 6a's card budget.
+//!
+//! Wider autonomy: the harness names each step's rung (`hx::step_undo`). A
+//! skill patch is a bigger change, so the ceiling also wants 0.9, ten
+//! sightings and the day's one slot before it runs without asking.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -88,6 +92,10 @@ impl Cabin {
             busy,
             halted,
             budget_left: self.auto_act.budget.left(&Self::local_day(), quiet, busy),
+            restore_left: self
+                .auto_act
+                .budget
+                .restore_left(&Self::local_day(), quiet, busy),
         }
     }
 
@@ -103,7 +111,9 @@ impl Cabin {
         c.hard = hx::step_class(&c.tool, &c.arguments);
         c.key = hx::proactive_key(&c.tool, &c.arguments);
         let by_hand = c.reversibility > 0.0;
-        if hx::ledger_target(&c.tool, &c.arguments).is_none() {
+        // The harness also names the rung: one click, a bigger change, or never.
+        c.undo = hx::step_undo(&c.tool, &c.arguments);
+        if c.undo == grokhub_core::learn::Undo::Never {
             c.reversibility = 0.0;
         }
         let access = self.access_mode();
@@ -119,7 +129,7 @@ impl Cabin {
         };
         match hx::run_auto_act(&dir, &self.native_workspace(), &act, &mind, access) {
             hx::AutoRun::Done { kind, change } => {
-                self.auto_act.budget.spend(&Self::local_day());
+                self.auto_act.budget.spend(&Self::local_day(), c.undo);
                 self.auto_act.auto_lines.push((kind, change.seq));
                 let done = DoneForYou {
                     kind: kind.as_str().into(),
@@ -399,6 +409,8 @@ mod tests {
             value: 0.8,
             confidence: 0.9,
             reversibility: 1.0,
+            undo: grokhub_core::learn::Undo::OneClick,
+            evidence: 0.0,
             summary: format!("Turned off the {name} connection"),
             offer: format!("turn off the {name} connection"),
             why: "It failed every start this week.".into(),
@@ -417,6 +429,8 @@ mod tests {
             value: 0.9,
             confidence: 0.95,
             reversibility: 1.0,
+            undo: grokhub_core::learn::Undo::OneClick,
+            evidence: 0.0,
             summary: "Reply to Sam: Thanks Sam, Thursday at 3 works.".into(),
             offer: "reply to Sam".into(),
             why: "Sam asked if Thursday works.".into(),
@@ -582,7 +596,10 @@ mod tests {
                 "budget",
                 |r| {
                     for _ in 0..grokhub_core::AUTO_PER_DAY {
-                        r.cabin.auto_act.budget.spend(&Cabin::local_day());
+                        r.cabin
+                            .auto_act
+                            .budget
+                            .spend(&Cabin::local_day(), grokhub_core::learn::Undo::OneClick);
                     }
                     turn_off_with(r)
                 },
@@ -671,6 +688,145 @@ mod tests {
             } else {
                 assert_eq!(offer_cards(&r.cabin), vec![(tool, route)], "{label}");
             }
+        }
+    }
+
+    const SKILL: &str = "patch-notes";
+
+    fn skill_file(root: &std::path::Path) -> std::path::PathBuf {
+        root.join("skills").join(SKILL).join("SKILL.md")
+    }
+
+    fn write_skill(root: &std::path::Path) -> Vec<u8> {
+        let path = skill_file(root);
+        std::fs::create_dir_all(path.parent().expect("skill dir")).expect("skills");
+        let skill = grokhub_core::SkillMd {
+            name: SKILL.into(),
+            description: "Sum up a game's patch notes".into(),
+            trigger: "patch notes".into(),
+            instructions: "Read the notes and list what changed.".into(),
+            ..Default::default()
+        };
+        std::fs::write(&path, grokhub_core::render_skill_md(&skill)).expect("SKILL.md");
+        std::fs::read(&path).expect("read back")
+    }
+
+    /// A patch to a skill, as sure and as often seen as `confidence` and
+    /// `evidence` say, with one earlier approval so MindCheck has history.
+    fn patch_skill(r: &Rig, confidence: f64, evidence: f64) -> AutoCandidate {
+        let args = serde_json::json!({
+            "name": SKILL,
+            "instructions": "Check the date first, then list what changed.",
+            "reason": "it used old notes 10 times",
+        })
+        .to_string();
+        let span = hx::proactive_span("skill_modify", &args, "approve", "", AccessMode::Full);
+        hx::note_proactive(&r.root, &span);
+        AutoCandidate {
+            tool: "skill_modify".into(),
+            arguments: args,
+            confidence,
+            evidence,
+            summary: "Fixed the patch-notes skill".into(),
+            offer: "fix the patch-notes skill".into(),
+            why: "It used old notes 10 times.".into(),
+            ..turn_off(SKILL)
+        }
+    }
+
+    /// Wider autonomy: at 0.9 with 10 sightings a skill patch is made without
+    /// asking, the card's Undo puts the file back byte for byte, and the
+    /// second one the same day asks.
+    #[test]
+    fn a_sure_often_seen_skill_patch_is_made_and_undo_restores_the_file() {
+        let _g = crate::config::hold_test_config();
+        let mut r = rig("dfy-patch", &["notes"]);
+        let before = write_skill(&r.root);
+        let c = patch_skill(&r, 0.9, 10.0);
+        r.cabin.auto_act.queue.push_back(c);
+        r.cabin.tick_auto_act();
+
+        assert!(offer_cards(&r.cabin).is_empty());
+        let after = std::fs::read_to_string(skill_file(&r.root)).expect("patched");
+        assert!(
+            after.contains("Check the date first, then list what changed."),
+            "{after}"
+        );
+        let ledger = hx::ChangeLedger::load_kind(&r.root, ChangeKind::Skill);
+        let line = ledger.all().last().cloned().expect("ledger line");
+        assert_eq!(line.id, SKILL);
+        let cards = done_cards(&r.cabin);
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].title, "Fixed the patch-notes skill");
+        assert_eq!(
+            cards[0].done_for_you,
+            Some(DoneForYou {
+                kind: "skill".into(),
+                target: SKILL.into(),
+                undo_ref: line.seq,
+                mind_key: "proactive:skill_modify".into(),
+                answered: false,
+            })
+        );
+        let today = Cabin::local_day();
+        assert_eq!(
+            r.cabin.auto_act.budget.restore_left(&today, false, false),
+            0
+        );
+        assert_eq!(r.cabin.auto_act.budget.left(&today, false, false), 4);
+
+        // The day's one bigger change is spent: the next asks, and a
+        // one-click step still goes.
+        let again = patch_skill(&r, 0.95, 40.0);
+        r.cabin.auto_act.queue.push_back(again);
+        r.cabin.tick_auto_act();
+        assert_eq!(last_ask(&r.root), "restore_budget");
+        assert_eq!(done_cards(&r.cabin).len(), 1);
+        assert_eq!(
+            offer_cards(&r.cabin),
+            vec![("skill_modify".to_string(), pro::ProactiveRoute::ICan)]
+        );
+        approve_history(&r.root, 1);
+        r.cabin.auto_act.queue.push_back(turn_off("notes"));
+        r.cabin.tick_auto_act();
+        assert_eq!(done_cards(&r.cabin).len(), 2);
+
+        let id = cards[0].id.clone();
+        r.cabin.done_for_you_undo(&id);
+        assert_eq!(
+            std::fs::read(skill_file(&r.root)).expect("restored"),
+            before,
+            "Undo restores the skill byte for byte"
+        );
+        let mind = hx::proactive_mind(&r.root, Arc::new(hx::SystemClock));
+        assert!(mind.mind_prior("proactive:skill_modify") > 0.2);
+    }
+
+    /// Under the higher bar the patch is offered, and the file is untouched.
+    #[test]
+    fn a_skill_patch_under_the_higher_bar_asks_and_changes_nothing() {
+        let _g = crate::config::hold_test_config();
+        for (label, confidence, evidence, miss) in [
+            ("sure", 0.89, 50.0, "restore_confidence"),
+            ("seen", 0.99, 9.0, "restore_evidence"),
+        ] {
+            let mut r = rig(&format!("dfy-patch-{label}"), &["notes"]);
+            let before = write_skill(&r.root);
+            let c = patch_skill(&r, confidence, evidence);
+            r.cabin.auto_act.queue.push_back(c);
+            r.cabin.tick_auto_act();
+            assert_eq!(last_ask(&r.root), miss, "{label}");
+            assert!(done_cards(&r.cabin).is_empty(), "{label}");
+            assert_eq!(
+                std::fs::read(skill_file(&r.root)).expect("skill"),
+                before,
+                "{label}: nothing ran"
+            );
+            assert_eq!(
+                offer_cards(&r.cabin),
+                vec![("skill_modify".to_string(), pro::ProactiveRoute::ICan)],
+                "{label}"
+            );
         }
     }
 
