@@ -986,7 +986,7 @@ mod tests {
                 (Lane::FollowUp, "Follow up"),
                 (Lane::Todo, "Todo"),
                 (Lane::Doing, "Doing"),
-                (Lane::Blocked, "Blocked"),
+                (Lane::Blocked, "Needs Attention"),
                 (Lane::Done, "Done"),
             ]
         );

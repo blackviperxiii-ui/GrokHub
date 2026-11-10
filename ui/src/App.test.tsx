@@ -25,7 +25,7 @@ const api = vi.hoisted(() => ({
   // One card, worked by chat "shell-c1", so its dock item can open it.
   getWorkboard: vi.fn(() =>
     Promise.resolve({
-      columns: [{ lane: "blocked", label: "Blocked", cards: [{ id: "w1", chat: "shell-c1" }] }],
+      columns: [{ lane: "blocked", label: "Needs Attention", cards: [{ id: "w1", chat: "shell-c1" }] }],
       archived: [],
       stamp: 1,
     }),

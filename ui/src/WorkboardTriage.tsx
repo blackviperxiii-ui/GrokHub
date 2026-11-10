@@ -61,7 +61,7 @@ export function CardTriage({
   async function block(event: FormEvent) {
     event.preventDefault();
     if (blocking === null || !blocking.trim()) return;
-    if (await onAct({ kind: "block", reason: blocking }, "Blocked. The reason is saved where the work left off.")) {
+    if (await onAct({ kind: "block", reason: blocking }, "Moved to Needs Attention. The reason is saved where the work left off.")) {
       setBlocking(null);
     }
   }

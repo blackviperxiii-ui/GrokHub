@@ -540,6 +540,11 @@ impl Cabin {
                         let _ = push_stream_capped(&mut run.say, &d, TEXT_FILE_CAP as u64);
                     }
                     Ok(GrokPEvent::Tool(card)) => {
+                        // A tool call ends a paragraph: the text after it is a
+                        // new one, never glued to the last word before it.
+                        if !run.say.trim().is_empty() && !run.say.ends_with("\n\n") {
+                            run.say = format!("{}\n\n", run.say.trim_end());
+                        }
                         if !card.title.trim().is_empty() {
                             run.action = redact_held_secrets(&card.title, &self.secret_hold);
                         }
@@ -663,20 +668,7 @@ impl Cabin {
             }
             let alive = self.threads.iter().any(|t| t.id == run.thread_id);
             let said = end != BgEnd::Stopped || !reply.trim().is_empty();
-            if run.origin == BgOrigin::Detached {
-                // A moved-off turn is the chat's own turn: it answers there.
-                if said && alive {
-                    self.push_msg_on(
-                        &run.thread_id,
-                        "assistant",
-                        bg_result_post(&run.title, &end, &reply),
-                    );
-                    self.bg.unread.push((
-                        run.thread_id.clone(),
-                        bg_result_note(&run.title, &end, &reply, None),
-                    ));
-                }
-            } else if said {
+            if said {
                 // A /bg or BACKGROUND_TASK run always has a card; one that lost it
                 // gets a new one, so the result still has a home.
                 let card_id = card_id.unwrap_or_else(|| {
@@ -1086,6 +1078,16 @@ impl Cabin {
             }
             Err(e) => self.status = e,
         }
+    }
+
+    /// A background run a card started (Pulse Run): its result goes on its
+    /// own card, never into a chat, whatever the task's words say.
+    pub(super) fn start_card_bg_task(&mut self, task: &str) {
+        let visible = self.visible_thread_id();
+        self.status = match self.start_bg_task(task.trim(), &visible, BgOrigin::User) {
+            Ok(title) => format!("Background · {title}. Its result lands on its card."),
+            Err(e) => e,
+        };
     }
 
     /// Enter in the composer. Alt+Enter queues instead of steering a live reply.

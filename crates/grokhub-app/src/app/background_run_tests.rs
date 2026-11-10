@@ -114,7 +114,11 @@ fn slash_bg_runs_beside_the_chat_on_a_forked_session() {
         card.result_chat.as_deref(),
         Some(cabin.threads[0].id.as_str())
     );
-    assert_eq!(card.status, grokhub_core::BoardStatus::Done);
+    assert_eq!(
+        card.status,
+        grokhub_core::BoardStatus::Dismissed,
+        "a finished run archives itself"
+    );
     assert_eq!(
         cabin.notices.items.first().map(|n| n.text.as_str()),
         Some("Background task done · run the checks"),
@@ -1578,5 +1582,107 @@ fn the_harness_retry_is_a_chat_turn_and_the_status_names_it() {
         format!("{product}'s own check is retrying the last step.")
     );
     assert!(cabin.bg.runs.is_empty(), "never a background run");
+    end_bg_test(root, cabin);
+}
+
+// Guard (Nov 10 chat log): a background run's output never lands in a chat
+// tab unless you asked for it there. Whatever started it, it ends on its own
+// card: archived when it finished, in Needs Attention when it did not.
+#[test]
+fn no_background_run_writes_into_a_chat_unless_asked_there() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("bg-guard");
+    std::fs::create_dir_all(&root).expect("config root");
+    cabin.window_focused = true;
+    cabin.board.clear();
+    cabin.threads = vec![crate::threads::ChatThread::new("Main", false)];
+    cabin.thread_idx = 0;
+    cabin.messages = std::sync::Arc::new(vec![("user".into(), "night".into())]);
+    let id = cabin.threads[0].id.clone();
+    let origins = [
+        grokhub_core::BgOrigin::User,
+        grokhub_core::BgOrigin::Agent,
+        grokhub_core::BgOrigin::Detached,
+    ];
+    for (i, origin) in origins.into_iter().enumerate() {
+        let n = i as u64 + 1;
+        let title = format!("pulse {n}");
+        cabin.open_bg_card(n, &title, "", true);
+        let mut run = done_run(
+            n,
+            &id,
+            &title,
+            "Steam library: 41 games. Tell me here if you want more.",
+        );
+        run.origin = origin;
+        cabin.bg.runs.push(run);
+    }
+    // One that failed.
+    cabin.open_bg_card(9, "rescan", "", true);
+    let mut failed = done_run(9, &id, "rescan", "");
+    failed.end = Some(grokhub_core::BgEnd::Failed("no network".into()));
+    cabin.bg.runs.push(failed);
+    cabin.post_finished_bg_runs();
+    assert!(cabin.bg.runs.is_empty());
+    assert_eq!(
+        cabin.messages.len(),
+        1,
+        "nothing but what you asked for lands in a chat: {:?}",
+        cabin.messages
+    );
+    for n in 1..=3 {
+        let card = cabin
+            .board
+            .iter()
+            .find(|c| c.title == format!("pulse {n}"))
+            .expect("its card");
+        assert_eq!(
+            card.status,
+            grokhub_core::BoardStatus::Dismissed,
+            "a finished run archives itself"
+        );
+        assert!(
+            card.result.contains("41 games"),
+            "the result stays on the card"
+        );
+    }
+    let rescan = cabin.board.iter().find(|c| c.title == "rescan").unwrap();
+    assert_eq!(
+        rescan.status,
+        grokhub_core::BoardStatus::Blocked,
+        "a failed run waits in Needs Attention"
+    );
+    // The bell opens an archived run in Archived.
+    let pulse = cabin
+        .board
+        .iter()
+        .find(|c| c.title == "pulse 1")
+        .unwrap()
+        .id
+        .clone();
+    cabin.open_board_card(&pulse);
+    assert!(cabin.board_view.show_archived);
+    assert_eq!(cabin.board_view.open.as_deref(), Some(pulse.as_str()));
+    release_isolated(&root, cabin);
+}
+
+// A Pulse card's text that reads like "tell me here" can't make its run post
+// into the open chat: a card start never asks for a chat post.
+#[cfg(unix)]
+#[test]
+fn a_card_started_run_never_asks_for_a_chat_post() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = bg_cabin("bg-card-start");
+    cabin.start_card_bg_task("Read the Steam library and post the result here");
+    assert_eq!(cabin.bg.runs.len(), 1, "{}", cabin.status);
+    assert!(
+        cabin.bg.post_here.is_empty(),
+        "nobody asked for a chat post"
+    );
+    assert!(
+        cabin.messages.iter().all(|m| !m.1.contains("/bg")),
+        "nothing typed into the chat: {:?}",
+        cabin.messages
+    );
     end_bg_test(root, cabin);
 }

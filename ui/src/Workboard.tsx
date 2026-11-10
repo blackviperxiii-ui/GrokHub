@@ -655,7 +655,7 @@ function CardDetail({
           )}
           {card.checkpoint.blocker && (
             <>
-              <dt>Blocked on</dt>
+              <dt>Stopped on</dt>
               <dd>{card.checkpoint.blocker}</dd>
             </>
           )}

@@ -799,7 +799,10 @@ pub fn scrub_thought(text: &str) -> String {
     let text = crate::turn_timeline::thought_text(text);
     let mut out = String::new();
     for chunk in split_thought_chunks(&text) {
-        if thought_chunk_is_attach_noise(chunk) || thought_chunk_is_false_no_computer(chunk) {
+        if thought_chunk_is_attach_noise(chunk)
+            || thought_chunk_is_false_no_computer(chunk)
+            || thought_chunk_is_mode_chatter(chunk)
+        {
             continue;
         }
         out.push_str(chunk);
@@ -828,6 +831,32 @@ pub(crate) fn split_thought_chunks(text: &str) -> Vec<&str> {
         out.push(&text[start..]);
     }
     out
+}
+
+/// The model talking about the app's own reply modes ("checklist mode does
+/// not apply", "stay in casual chat mode", "wait for a specific ask"). Those
+/// words come from its instructions, not from the person, so they never show.
+fn thought_chunk_is_mode_chatter(chunk: &str) -> bool {
+    const MODE: [&str; 16] = [
+        "checklist mode",
+        "chat mode",
+        "casual mode",
+        "task mode",
+        "repair mode",
+        "talk mode",
+        "talk style",
+        "reply mode",
+        "mode does not apply",
+        "mode doesn't apply",
+        "a specific ask",
+        "an explicit ask",
+        "no explicit task",
+        "no task was requested",
+        "rather than a task request",
+        "not a task request",
+    ];
+    let t = chunk.to_lowercase().replace('\u{2019}', "'");
+    MODE.iter().any(|p| t.contains(p))
 }
 
 fn thought_chunk_is_false_no_computer(chunk: &str) -> bool {
@@ -1781,6 +1810,23 @@ mod tests {
             "Need a snapshot."
         );
         assert_eq!(scrub_thought("Need a snapshot."), "Need a snapshot.");
+        // Reply-mode chatter from the instructions never shows (Nov 10 log).
+        assert_eq!(
+            scrub_thought(
+                "The user is excited about new engines. This is a casual update rather than a task request, so the checklist mode does not apply."
+            ),
+            "The user is excited about new engines."
+        );
+        assert_eq!(
+            scrub_thought(
+                "The user wants to keep coding. No explicit task was requested. I\u{2019}ll stay in casual chat mode and wait for a specific ask."
+            ),
+            "The user wants to keep coding."
+        );
+        assert_eq!(
+            scrub_thought("They want a grocery checklist for Sunday."),
+            "They want a grocery checklist for Sunday."
+        );
         let kept = visible_chat(&[(
             "assistant".into(),
             "THINKING:\nThere is an image attached. Plan the reply.\n\nHello.".into(),

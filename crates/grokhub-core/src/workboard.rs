@@ -86,7 +86,7 @@ impl KanbanColumn {
         match self {
             Self::Todo => "Todo",
             Self::Doing => "Doing",
-            Self::Blocked => "Blocked",
+            Self::Blocked => "Needs Attention",
             Self::Done => "Done",
             Self::FollowUp => "Follow up",
         }
@@ -1042,7 +1042,7 @@ mod tests {
         assert_eq!(BoardStatus::Done.column(), Some(KanbanColumn::Done));
         assert_eq!(BoardStatus::Dismissed.column(), None);
         assert_eq!(KanbanColumn::Blocked.status(), BoardStatus::Blocked);
-        assert_eq!(KanbanColumn::Blocked.label(), "Blocked");
+        assert_eq!(KanbanColumn::Blocked.label(), "Needs Attention");
     }
 
     #[test]

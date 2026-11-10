@@ -1,0 +1,1 @@
+- Background work stays off your chats: a finished background run archives its own card (open it from Archived or the bell to read the result or send it to a chat), a stopped or failed one waits in the new Needs Attention column (was Blocked), the memory import line goes to the bell instead of the chat, and thoughts no longer show the app's reply-mode chatter.

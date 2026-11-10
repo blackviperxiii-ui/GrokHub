@@ -1173,7 +1173,7 @@ fn workboard_flo_card_progress_labels_and_presence_chips() {
     assert_eq!(BOARD_PILL_RADIUS, 22.0);
     assert_eq!(board_status_label(BoardStatus::Todo), "To do");
     assert_eq!(board_status_label(BoardStatus::InProgress), "In progress");
-    assert_eq!(board_status_label(BoardStatus::Blocked), "Blocked");
+    assert_eq!(board_status_label(BoardStatus::Blocked), "Needs Attention");
     assert_eq!(board_status_label(BoardStatus::Done), "Done");
     assert_eq!(board_status_label(BoardStatus::FollowUp), "Follow up");
     assert_eq!(board_card_progress(BoardStatus::Todo), (0, 4));

@@ -2223,10 +2223,13 @@ impl Cabin {
         if grokhub_core::mark_update_opened(&mut self.updates, id) {
             self.persist_updates();
         }
-        // `/bg`: the run works on its own workboard card; its receipt also
-        // lands on this feed card.
+        // A background run on its own card; its receipt also lands on this
+        // feed card. Started directly, not typed as `/bg` into a chat, so the
+        // card's own words ("tell me", "report back") can never ask for a chat
+        // post: nobody asked for one.
         let before = self.bg.next_id;
-        self.send_chat(line.clone());
+        let what = line.strip_prefix("/bg ").unwrap_or(&line).to_string();
+        self.start_card_bg_task(&what);
         if self.bg.next_id != before {
             let run = self.bg.next_id;
             self.bg.feed_cards.push((run, id.to_string()));
