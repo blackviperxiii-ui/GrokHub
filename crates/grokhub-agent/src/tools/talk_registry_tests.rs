@@ -213,3 +213,28 @@ fn read_only_talk_chat_upgrades_to_the_read_tools_it_may_see() {
         ]
     );
 }
+
+#[test]
+fn a_picture_ask_sends_the_picture_tool_up_front_at_the_tail() {
+    let image = Brief {
+        intent: Intent::Image,
+        domain: "media".into(),
+        confidence: 100,
+        ..Default::default()
+    };
+    let before = turn("talk-reg-image", &chat(), ON);
+    assert!(!names(&before).iter().any(|n| n == "image_generate"));
+    let tools = turn("talk-reg-image", &image, ON);
+    let sent = names(&tools);
+    assert!(sent.iter().any(|n| n == "image_generate"), "{sent:?}");
+    // Only the tail grew: the cached prefix the first turn sent holds.
+    assert!(wire(&tools).starts_with(wire(&before).trim_end_matches(']')));
+    // A read-only chat never gets it, picture ask or not.
+    note_brief("talk-reg-image-ro", &image);
+    begin_turn("talk-reg-image-ro");
+    let readonly = names(&schemas_for_settings(&gate(true), ON));
+    assert!(
+        !readonly.iter().any(|n| n == "image_generate"),
+        "{readonly:?}"
+    );
+}

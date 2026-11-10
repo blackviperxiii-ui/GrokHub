@@ -138,15 +138,24 @@ fn crash_dumps(out: &ProbeOutput, name: &str) -> Vec<Finding> {
         };
         return vec![Finding::new(ProbeId::CrashDumps, Severity::Info, plain, "")];
     };
-    let cols: Vec<&str> = newest.split_whitespace().collect();
-    let when = cols.get(..4).map(|c| c.join(" ")).unwrap_or_default();
-    let signal = cols
-        .get(7)
+    let when_of = |line: &str| -> String {
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        cols.get(..4).map(|c| c.join(" ")).unwrap_or_default()
+    };
+    let (oldest, when) = (when_of(lines[0]), when_of(newest));
+    let span = if lines.len() == 1 || oldest == when {
+        format!("from {when}")
+    } else {
+        format!("from {oldest} to {when}")
+    };
+    let cause = newest
+        .split_whitespace()
+        .nth(7)
         .filter(|s| s.starts_with("SIG"))
-        .map(|s| format!(", stopped by {s}"))
+        .map(signal_cause)
         .unwrap_or_default();
     let plain = format!(
-        "{name} has crashed: {} on record. The newest is from {when}{signal}.",
+        "{name} has crashed: {} on record, {span}.{cause}",
         count_of(lines.len(), "crash dump", "crash dumps")
     );
     vec![Finding::new(
@@ -207,27 +216,54 @@ fn app_crashes(out: &ProbeOutput, name: &str) -> Vec<Finding> {
         };
         return vec![Finding::new(ProbeId::AppCrashes, Severity::Info, plain, "")];
     };
-    let mut cols = newest.split('\t').map(str::trim);
-    let when = cols.next().unwrap_or_default().replace('T', " ");
+    let when_of = |line: &str| -> String {
+        line.split('\t')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .replace('T', " ")
+    };
+    let mut cols = newest.split('\t').map(str::trim).skip(1);
+    let when = when_of(newest);
+    let oldest = when_of(lines[lines.len() - 1]);
     let module = cols.next().filter(|m| !m.is_empty());
     let code = cols.next().filter(|c| !c.is_empty());
+    let span = if lines.len() == 1 || oldest == when {
+        format!("on {when}")
+    } else {
+        format!("from {oldest} to {when}")
+    };
     let mut plain = format!(
-        "{name} has crashed: {} in the Application log. The newest was {when}",
+        "{name} has crashed: {} in the Application log, {span}.",
         count_of(lines.len(), "crash", "crashes")
     );
-    if let Some(module) = module {
-        plain.push_str(&format!(", in {module}"));
+    match (module, code) {
+        (Some(m), Some(c)) => plain.push_str(&format!(" The newest was in {m} (code {c}).")),
+        (Some(m), None) => plain.push_str(&format!(" The newest was in {m}.")),
+        (None, Some(c)) => plain.push_str(&format!(" The newest ended with code {c}.")),
+        (None, None) => {}
     }
-    if let Some(code) = code {
-        plain.push_str(&format!(" (code {code})"));
-    }
-    plain.push('.');
     vec![Finding::new(
         ProbeId::AppCrashes,
         Severity::Warning,
         plain,
         lines.join("\n"),
     )]
+}
+
+/// What the signal that stopped a crashed program likely means, in plain
+/// words, with the signal kept for anyone who searches it.
+fn signal_cause(sig: &str) -> String {
+    let why = match sig {
+        "SIGSEGV" | "SIGBUS" => "a memory error inside the program",
+        "SIGABRT" => "the program stopping itself after an error it couldn't recover from",
+        "SIGILL" => "an instruction this processor can't run",
+        "SIGFPE" => "a math error inside the program",
+        "SIGTRAP" => "a debugging trap left in the program",
+        "SIGSYS" => "a system call the computer blocked",
+        _ => return format!(" The newest was stopped by {sig}."),
+    };
+    format!(" The likely cause of the newest is {why} ({sig}).")
 }
 
 fn names(list: &[String]) -> String {

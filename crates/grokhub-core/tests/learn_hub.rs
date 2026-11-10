@@ -252,6 +252,32 @@ fn the_shared_logs_feed_one_engine() {
         hub::habit_chips(&[], Now::default(), 99.0, live),
         Vec::new()
     );
+    // While a game runs, only habits learned while gaming are due, and a
+    // run then counts under the gaming habit.
+    hub::set_now(grokhub_core::learn::now::Snapshot {
+        gaming: true,
+        ..Default::default()
+    });
+    assert_eq!(
+        hub::habit_chips(&skills, Now::default(), 99.0, live),
+        Vec::new()
+    );
+    let gaming_run = RunMetrics {
+        run: "chat-g:0".into(),
+        class: "skill:tidy-up".into(),
+        result: OutcomeResult::Success,
+        model: "grok-code".into(),
+        finished_at: live,
+        at: live,
+        ..RunMetrics::default()
+    };
+    append_run(&dir, &gaming_run, 0).unwrap();
+    let while_gaming = habit::subject("tidy-up", part, true).unwrap();
+    assert_eq!(
+        hub::read(|e| e.beliefs().get(&while_gaming).map(|b| b.shape)).flatten(),
+        Some(Shape::Rate { yes: 1.0, no: 0.0 })
+    );
+    hub::set_now(Default::default());
     let rule = habit::chip_rule(&chips[0].id).unwrap();
     let state = || grokhub_core::learn::decide::load(&dir);
     let mut habit_mem = ChipMemory::default();
@@ -377,6 +403,9 @@ fn the_shared_logs_feed_one_engine() {
         undo: Undo::OneClick,
         value: 0.5,
         hard: false,
+        helps: None,
+        hurts: None,
+        tested: false,
     };
     let at = grokhub_core::now_ms();
     let decide_one = || {
@@ -397,6 +426,34 @@ fn the_shared_logs_feed_one_engine() {
     assert_eq!(decide_one(), (Verdict::Offer, Reason::DialOffer));
     assert_eq!(view::run("trust settings maybe", at), decide::TRUST_USAGE);
     assert_eq!(view::run("trust settings act now", at), view::USAGE);
+    // Goals: set in the cabin or by the page's button, kept in order.
+    assert_eq!(
+        view::run("goals fastest cheapest", at),
+        "What matters most, in order: Fastest answers, Lowest cost."
+    );
+    assert_eq!(view::run("goals", at), decide::GOALS_USAGE);
+    assert_eq!(view::run("goals loudest", at), decide::GOALS_USAGE);
+    let goals: view::Act =
+        serde_json::from_str(r#"{"kind":"goals","goals":["quiet","fastest"]}"#).unwrap();
+    let named: Vec<&str> = view::act(goals, at)
+        .unwrap()
+        .trust
+        .goals
+        .iter()
+        .map(|g| g.label)
+        .collect();
+    assert_eq!(named, vec!["Fewest interruptions", "Fastest answers"]);
+    assert_eq!(view::run("goals none", at), "No goals set.");
+    assert!(hub::view(at).trust.goals.is_empty());
+    // The app's picture of right now reaches the page.
+    hub::set_now(grokhub_core::learn::now::Snapshot {
+        gaming: true,
+        ..Default::default()
+    });
+    assert!(hub::view(at).trust.now.gaming);
+    assert!(hub::now().situation().busy);
+    hub::set_now(Default::default());
+
     let shown = view::run("decisions", at);
     assert!(shown.contains("- Settings: offer `settings`\n"), "{shown}");
     assert!(
@@ -414,6 +471,10 @@ fn the_shared_logs_feed_one_engine() {
             area: Area::LocalAi,
             label: "Local AI",
             dial: decide::Dial::Watch,
+            went: None,
+            before: None,
+            trend: grokhub_core::learn::score::Trend::TooEarly,
+            resting: false,
         }
     );
     assert_eq!(page.dials[0].dial, decide::Dial::Offer);

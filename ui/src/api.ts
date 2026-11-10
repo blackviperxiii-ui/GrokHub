@@ -243,8 +243,8 @@ export interface TurnRead {
 }
 
 /** Reads a message typed while a reply runs. Instant: no model call. */
-export function readTurn(text: string): Promise<TurnRead> {
-  return invoke<TurnRead>("read_turn", { text });
+export function readTurn(text: string, conversationId?: string): Promise<TurnRead> {
+  return invoke<TurnRead>("read_turn", { text, conversationId });
 }
 
 /** Answers `question` beside the running reply, read-only, under `sideId`.
@@ -1197,6 +1197,8 @@ export interface BoardCard {
   fresh: boolean;
   /** A Follow up card's latest report. */
   report: string;
+  /** What the card's last background run came back with. */
+  result: string;
   /** Who owns it, as the cabin's badge reads. */
   owner: "Agent" | "You";
   /** Automation, Background, Episode or Flow; a plain task has none. */
@@ -2145,9 +2147,29 @@ export interface LearnedDecision {
   why: string;
 }
 
+export type TrustGoal = "cheapest" | "fastest" | "quiet" | "best_quality";
+
+/** One area's dial and its scoreboard line (grokhub_core::learn::score). */
+export interface TrustRow {
+  area: TrustArea;
+  label: string;
+  dial: TrustDial;
+  /** 0 to 100: the share of its offers and changes that went the user's way in the last four weeks. */
+  went: number | null;
+  /** The same for the four weeks before. */
+  before: number | null;
+  trend: "too_early" | "better" | "steady" | "worse";
+  /** It got worse, so it only offers for a month. */
+  resting: boolean;
+}
+
 /** The decision engine's side of the page (grokhub_core::learn::decide). */
 export interface LearnedTrust {
-  dials: { area: TrustArea; label: string; dial: TrustDial }[];
+  dials: TrustRow[];
+  /** What matters most to the user, first to last. */
+  goals: { goal: TrustGoal; label: string }[];
+  /** What is going on right now, as the app last told the engine. */
+  now: { quiet: boolean; busy: boolean; halted: boolean; gaming: boolean; onBattery: boolean };
   /** Too much was undone lately, so everything asks first for now. */
   askingFirst: boolean;
   /** Changes the app may still make on its own today. */
@@ -2164,6 +2186,7 @@ export type LearnedAct =
   | { kind: "pause" }
   | { kind: "resume" }
   | { kind: "trust"; area: TrustArea; dial: TrustDial }
+  | { kind: "goals"; goals: TrustGoal[] }
   | { kind: "carryOn" };
 
 export function getLearned(): Promise<LearnedView> {

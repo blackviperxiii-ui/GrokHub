@@ -25,6 +25,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use super::ladder::{step, Step, Undo, ACT_AT};
+use super::score::{Board, Trend};
 use super::signal::Subject;
 use super::store;
 
@@ -128,6 +129,55 @@ impl Dial {
     }
 }
 
+/// Something the user wants from the app. Habits say what the user does;
+/// goals say what they are after, and settle a tie between two likely
+/// changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Goal {
+    Cheapest,
+    Fastest,
+    Quiet,
+    BestQuality,
+}
+
+impl Goal {
+    pub const ALL: [Goal; 4] = [
+        Goal::Cheapest,
+        Goal::Fastest,
+        Goal::Quiet,
+        Goal::BestQuality,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Cheapest => "cheapest",
+            Self::Fastest => "fastest",
+            Self::Quiet => "quiet",
+            Self::BestQuality => "best-quality",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|g| g.as_str().eq_ignore_ascii_case(text))
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Cheapest => "Lowest cost",
+            Self::Fastest => "Fastest answers",
+            Self::Quiet => "Fewest interruptions",
+            Self::BestQuality => "Best quality",
+        }
+    }
+}
+
+/// How much the user's first goal lifts a proposal that serves it. Each
+/// later goal lifts half as much as the one before.
+pub const GOAL_LIFT: f32 = 0.5;
+
 /// One change a learner would like to make.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Proposal {
@@ -144,6 +194,14 @@ pub struct Proposal {
     /// It deletes, spends, sends something off the PC, or touches a
     /// permission or a sign-in. Always asks.
     pub hard: bool,
+    /// The goal this change serves, if it serves one.
+    pub helps: Option<Goal>,
+    /// The goal this change works against, if any.
+    pub hurts: Option<Goal>,
+    /// The learner already tried this change on a share of real work and it
+    /// held (the router's canary). That is its trial, so it does not wait
+    /// for three yes answers first.
+    pub tested: bool,
 }
 
 /// What is going on right now.
@@ -181,6 +239,7 @@ pub enum Reason {
     NoUndo,
     SureEnoughToOffer,
     DialOffer,
+    Slipped,
     Halted,
     Quiet,
     Busy,
@@ -204,6 +263,7 @@ impl Reason {
             Self::NoUndo => "It can't be undone, so it asks.",
             Self::SureEnoughToOffer => "It's sure enough to offer, not to do it.",
             Self::DialOffer => "This area is set to offer only.",
+            Self::Slipped => "Its changes went worse lately, so this area asks for a month.",
             Self::Halted => "Halt is on.",
             Self::Quiet => "It's quiet hours.",
             Self::Busy => "You're busy right now.",
@@ -234,6 +294,9 @@ pub enum Outcome {
     Kept,
     /// A change the app made was undone.
     Undone,
+    /// A change the app made went worse and the app took it back itself.
+    /// It counts against the area's score, not as the user's undo.
+    RolledBack,
 }
 
 /// The watchdog tripped: acting is paused, and these rules' changes from
@@ -253,6 +316,8 @@ struct Rule {
     undone: u32,
     resting_until_ms: u64,
     last_ms: u64,
+    /// Where its proposals come from, so its outcomes reach the scoreboard.
+    area: Option<Area>,
     /// The last verdict logged, so the same answer isn't logged twice.
     last: Option<(Verdict, Reason)>,
 }
@@ -270,6 +335,9 @@ pub struct State {
     recent_acts: VecDeque<(u64, Subject)>,
     recent_undos: VecDeque<u64>,
     log: VecDeque<Decision>,
+    score: Board,
+    /// What matters most to the user, first to last. Theirs, like the dials.
+    goals: Vec<Goal>,
 }
 
 impl State {
@@ -295,6 +363,7 @@ impl State {
     pub fn forget_learned(&mut self) {
         *self = Self {
             dials: std::mem::take(&mut self.dials),
+            goals: std::mem::take(&mut self.goals),
             ..Self::default()
         };
     }
@@ -303,6 +372,43 @@ impl State {
     pub fn resume(&mut self) {
         self.paused_until_ms = 0;
         self.recent_undos.clear();
+        self.score.resume();
+    }
+
+    /// What matters most to the user, first to last.
+    pub fn goals(&self) -> &[Goal] {
+        &self.goals
+    }
+
+    /// Sets the goals in the user's order. A goal named twice counts once.
+    pub fn set_goals(&mut self, goals: &[Goal]) {
+        self.goals.clear();
+        for goal in goals {
+            if !self.goals.contains(goal) {
+                self.goals.push(*goal);
+            }
+        }
+    }
+
+    /// How much `goal` moves a proposal's worth: the first goal by
+    /// [`GOAL_LIFT`], each later one by half the one before, none if the
+    /// user didn't name it.
+    fn pull(&self, goal: Option<Goal>) -> f32 {
+        goal.and_then(|g| self.goals.iter().position(|have| *have == g))
+            .map_or(0.0, |at| GOAL_LIFT / (1u32 << at) as f32)
+    }
+
+    /// A proposal's place in the queue for the day's budget: how much it
+    /// helps and how sure it is, lifted by a goal it serves and lowered by
+    /// one it works against.
+    pub fn worth(&self, p: &Proposal) -> f32 {
+        let base = p.value.clamp(0.0, 1.0) * p.confidence.clamp(0.0, 1.0);
+        base * (1.0 + self.pull(p.helps) - self.pull(p.hurts)).max(0.0)
+    }
+
+    /// The scoreboard: how each area's decisions went, week by week.
+    pub fn score(&self) -> &Board {
+        &self.score
     }
 
     /// Changes left today.
@@ -346,11 +452,20 @@ impl State {
         }
         let held = [
             (dial == Dial::Offer, Verdict::Offer, Reason::DialOffer),
+            (
+                self.score.resting(p.area, now_ms),
+                Verdict::Offer,
+                Reason::Slipped,
+            ),
             (now.halted, Verdict::Wait, Reason::Halted),
             (now.quiet, Verdict::Wait, Reason::Quiet),
             (now.busy, Verdict::Wait, Reason::Busy),
             (self.paused(now_ms), Verdict::Offer, Reason::Paused),
-            (!self.graduated(&p.rule), Verdict::Offer, Reason::Shadow),
+            (
+                !p.tested && !self.graduated(&p.rule),
+                Verdict::Offer,
+                Reason::Shadow,
+            ),
             (
                 self.budget_left(now_ms) == 0,
                 Verdict::Offer,
@@ -364,6 +479,7 @@ impl State {
 
     /// Weighs one proposal. An `Act` spends one of the day's changes.
     pub fn decide(&mut self, p: &Proposal, now: Situation, now_ms: u64) -> Decision {
+        self.score.check(p.area, now_ms);
         let (verdict, reason) = self.settle(p, now, now_ms);
         if !self.rules.contains_key(&p.rule) && self.rules.len() >= RULE_CAP {
             let oldest = self
@@ -377,6 +493,7 @@ impl State {
         }
         let rule = self.rules.entry(p.rule.clone()).or_default();
         rule.last_ms = now_ms;
+        rule.area = Some(p.area);
         let decision = Decision {
             at_ms: now_ms,
             area: p.area,
@@ -414,10 +531,9 @@ impl State {
         now: Situation,
         now_ms: u64,
     ) -> Vec<Decision> {
-        let worth = |p: &Proposal| p.value.clamp(0.0, 1.0) * p.confidence.clamp(0.0, 1.0);
         proposals.sort_by(|a, b| {
-            worth(b)
-                .total_cmp(&worth(a))
+            self.worth(b)
+                .total_cmp(&self.worth(a))
                 .then_with(|| a.rule.cmp(&b.rule))
         });
         proposals
@@ -432,6 +548,10 @@ impl State {
         self.trim(now_ms);
         let r = self.rules.entry(rule.clone()).or_default();
         r.last_ms = now_ms;
+        if let Some(area) = r.area {
+            let good = matches!(outcome, Outcome::Accepted | Outcome::Kept);
+            self.score.note(area, good, now_ms);
+        }
         match outcome {
             Outcome::Accepted => r.passes += 1,
             Outcome::Declined => {
@@ -439,6 +559,7 @@ impl State {
                 r.resting_until_ms = now_ms + REST_MS;
             }
             Outcome::Kept => r.kept += 1,
+            Outcome::RolledBack => r.passes = 0,
             Outcome::Undone => {
                 r.undone += 1;
                 r.passes = 0;
@@ -494,6 +615,8 @@ pub fn with_state<R>(config_dir: &Path, change: impl FnOnce(&mut State) -> R) ->
 
 pub const NO_DECISIONS: &str =
     "No decisions yet. They show up here once the app has something it could change for you.";
+pub const NO_GOALS: &str = "Nothing set. Name what matters with `/learned goals`.";
+pub const GOALS_USAGE: &str = "Use `/learned goals <goal> [<goal> ...]`, first is most important, or `/learned goals none`. Goals: cheapest, fastest, quiet, best-quality.";
 pub const TRUST_USAGE: &str = "Use `/learned trust <area> <watch|offer|act>`. Areas: settings, skills, router, local-ai, proactive, chips.";
 
 pub(super) fn verdict_words(v: Verdict) -> &'static str {
@@ -516,8 +639,39 @@ pub fn text(state: &State, now_ms: u64) -> String {
             area.as_str()
         ));
     }
+    out.push_str("\n**What matters most to you**\n");
+    if state.goals.is_empty() {
+        out.push_str(NO_GOALS);
+        out.push('\n');
+    }
+    for (at, goal) in state.goals.iter().enumerate() {
+        out.push_str(&format!(
+            "{}. {} `{}`\n",
+            at + 1,
+            goal.label(),
+            goal.as_str()
+        ));
+    }
     if state.paused(now_ms) {
         out.push_str("\nToo much was undone lately, so everything asks first for now.\n");
+    }
+    let scored: Vec<String> = Area::ALL
+        .into_iter()
+        .filter_map(|area| {
+            let score = state.score.score(area, now_ms);
+            let now = score.now?;
+            let was = match (score.trend, score.before) {
+                (Trend::TooEarly, _) | (_, None) => String::new(),
+                (Trend::Better, Some(b)) => format!(", up from {b}%"),
+                (Trend::Worse, Some(b)) => format!(", down from {b}%"),
+                (Trend::Steady, Some(b)) => format!(", about the same as before ({b}%)"),
+            };
+            Some(format!("- {}: {now}% went your way{was}\n", area.label()))
+        })
+        .collect();
+    if !scored.is_empty() {
+        out.push_str("\n**The last four weeks**\n");
+        out.extend(scored);
     }
     out.push_str("\n**Latest decisions**\n");
     if state.log.is_empty() {

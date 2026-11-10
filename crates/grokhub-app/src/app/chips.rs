@@ -6,6 +6,8 @@ use grokhub_core::{ChipAction, ChipSignals};
 /// Where a feature's offer ranks: above the PC's plain signals and seeds,
 /// under a reply's own follow-ups.
 const FEATURE_SCORE: f32 = 100.0;
+/// How often the cabin refreshes the engine's picture of right now.
+const NOW_EVERY_MS: u64 = 30_000;
 /// How long the habit chips are kept before the engine is asked again.
 const HABIT_CHIPS_TTL_MS: u64 = 60_000;
 /// The app you just came from leads the empty row, as it did before.
@@ -871,6 +873,24 @@ impl Cabin {
         }
         out.retain(|c| !self.chip_hidden(c));
         out
+    }
+
+    /// Tells the learning engine what is going on right now, at most once
+    /// every [`NOW_EVERY_MS`], so every decider reads one picture.
+    pub(super) fn note_now(&mut self) {
+        static AT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let now = now_ms();
+        if now.saturating_sub(AT.load(std::sync::atomic::Ordering::Relaxed)) < NOW_EVERY_MS {
+            return;
+        }
+        AT.store(now, std::sync::atomic::Ordering::Relaxed);
+        grokhub_core::learn::hub::set_now(grokhub_core::learn::now::Snapshot {
+            quiet: self.quiet_now(),
+            busy: self.heartbeat_busy(),
+            halted: self.heartbeat_halted(now),
+            gaming: self.chip_guard().gaming,
+            on_battery: grokhub_agent::indexers::power::on_battery(),
+        });
     }
 
     /// What the user usually runs around now, from the learning engine,

@@ -1,5 +1,7 @@
 use super::decide::*;
 use super::ladder::Undo;
+use super::now::Snapshot;
+use super::score::{Score, Trend, MIN_OUTCOMES, SLIP_REST_MS, WEEK_MS};
 use super::signal::Subject;
 
 const T: u64 = 1_800_000_000_000;
@@ -20,6 +22,9 @@ fn sure(id: &str) -> Proposal {
         undo: Undo::OneClick,
         value: 0.5,
         hard: false,
+        helps: None,
+        hurts: None,
+        tested: false,
     }
 }
 
@@ -174,6 +179,9 @@ fn a_hard_change_never_acts_however_sure_and_however_trusted() {
     s.set_dial(Area::Settings, Dial::Act);
     let hard = Proposal {
         hard: true,
+        helps: None,
+        hurts: None,
+        tested: false,
         confidence: 1.0,
         evidence: 10_000.0,
         value: 1.0,
@@ -405,20 +413,24 @@ fn the_page_shows_every_dial_and_the_newest_decisions_first() {
     use super::view;
     let mut s = graduated("habit/tidy/morning");
     s.set_dial(Area::Router, Dial::Watch);
-    let empty = view::trust(&State::default(), T);
+    let empty = view::trust(&State::default(), Snapshot::default(), T);
     assert_eq!(empty.dials.len(), 6);
     assert!(empty.dials.iter().all(|d| d.dial == Dial::Act));
     assert_eq!((empty.left_today, empty.decisions.len()), (ACTS_PER_DAY, 0));
 
     answer(&mut s, &sure("settings/text-size"), T);
     answer(&mut s, &sure("habit/tidy/morning"), T + HOUR);
-    let page = view::trust(&s, T + HOUR);
+    let page = view::trust(&s, Snapshot::default(), T + HOUR);
     assert_eq!(
         page.dials[2],
         view::DialRow {
             area: Area::Router,
             label: "Model choice",
             dial: Dial::Watch,
+            went: None,
+            before: None,
+            trend: Trend::TooEarly,
+            resting: false,
         }
     );
     assert_eq!((page.asking_first, page.left_today), (false, 4));
@@ -441,14 +453,350 @@ fn the_page_shows_every_dial_and_the_newest_decisions_first() {
     );
     assert_eq!(
         serde_json::to_value(&page.dials[2]).unwrap(),
-        serde_json::json!({"area": "router", "label": "Model choice", "dial": "watch"})
+        serde_json::json!({
+            "area": "router", "label": "Model choice", "dial": "watch",
+            "went": null, "before": null, "trend": "too_early", "resting": false,
+        })
     );
     // Only the newest lines are shown.
     for n in 0..20 {
         answer(&mut s, &sure(&format!("settings/n{n}")), T + 2 * HOUR);
     }
     assert_eq!(
-        view::trust(&s, T + 2 * HOUR).decisions.len(),
+        view::trust(&s, Snapshot::default(), T + 2 * HOUR)
+            .decisions
+            .len(),
         view::DECISIONS_SHOWN
+    );
+}
+
+/// `good` yes answers and `bad` no answers to `id`'s offers in the week of
+/// `at`, after one decision so the rule knows its area.
+fn answers(s: &mut State, id: &str, good: u32, bad: u32, at: u64) {
+    answer(s, &sure(id), at);
+    for _ in 0..good {
+        s.outcome(&rule(id), Outcome::Accepted, at);
+    }
+    for _ in 0..bad {
+        s.outcome(&rule(id), Outcome::Declined, at);
+    }
+}
+
+#[test]
+fn the_scoreboard_compares_four_weeks_with_the_four_before() {
+    let mut s = State::default();
+    let settings = |s: &State, at: u64| s.score().score(Area::Settings, at);
+    assert_eq!(
+        settings(&s, T),
+        Score {
+            now: None,
+            before: None,
+            trend: Trend::TooEarly
+        }
+    );
+    // An outcome for a rule no proposal came from has no area to count in.
+    s.outcome(&rule("stray"), Outcome::Accepted, T);
+    assert_eq!(settings(&s, T).now, None);
+
+    answers(&mut s, "a", 9, 1, T);
+    assert_eq!(
+        settings(&s, T),
+        Score {
+            now: Some(90),
+            before: None,
+            trend: Trend::TooEarly
+        }
+    );
+    // Four weeks on, those counts are the span before.
+    let later = T + 4 * WEEK_MS;
+    answers(&mut s, "b", 8, 2, later);
+    assert_eq!(
+        settings(&s, later),
+        Score {
+            now: Some(80),
+            before: Some(90),
+            trend: Trend::Steady
+        }
+    );
+    answers(&mut s, "c", 0, 5, later);
+    assert_eq!(
+        settings(&s, later),
+        Score {
+            now: Some(53),
+            before: Some(90),
+            trend: Trend::Worse
+        }
+    );
+    // Other areas are untouched, and counts older than both spans drop.
+    assert_eq!(s.score().score(Area::Skills, later).now, None);
+    let much_later = T + 8 * WEEK_MS;
+    answers(&mut s, "d", 1, 0, much_later);
+    assert_eq!(
+        settings(&s, much_later),
+        Score {
+            now: Some(100),
+            before: Some(53),
+            trend: Trend::TooEarly
+        }
+    );
+    assert_eq!(MIN_OUTCOMES, 10);
+}
+
+#[test]
+fn an_area_that_got_worse_only_offers_for_a_month_and_carry_on_lifts_it() {
+    let mut s = graduated("x");
+    answers(&mut s, "a", 10, 0, T);
+    let later = T + 4 * WEEK_MS;
+    // A no rests its own rule, so each no here is a different rule.
+    for n in 0..5 {
+        answers(&mut s, &format!("n{n}"), 1, 1, later);
+    }
+    assert_eq!(s.score().score(Area::Settings, later).trend, Trend::Worse);
+    assert!(!s.score().resting(Area::Settings, later));
+    assert_eq!(
+        answer(&mut s, &sure("x"), later),
+        (Verdict::Offer, Reason::Slipped)
+    );
+    assert!(s.score().resting(Area::Settings, later));
+    // Another area still acts.
+    let mut skills = sure("y");
+    skills.area = Area::Skills;
+    for _ in 0..SHADOW_PASSES {
+        s.outcome(&skills.rule, Outcome::Accepted, later);
+    }
+    let d = s.decide(&skills, calm(), later);
+    assert_eq!((d.verdict, d.reason), (Verdict::Act, Reason::Sure));
+    // The rest ends on its own once the numbers are no longer worse.
+    let rested = later + SLIP_REST_MS;
+    assert!(!s.score().resting(Area::Settings, rested));
+    assert_eq!(
+        answer(&mut s, &sure("x"), rested),
+        (Verdict::Act, Reason::Sure)
+    );
+    // Carry on lifts a rest at once.
+    let mut again = graduated("x");
+    answers(&mut again, "a", 10, 0, T);
+    for n in 0..5 {
+        answers(&mut again, &format!("n{n}"), 1, 1, later);
+    }
+    assert_eq!(
+        answer(&mut again, &sure("x"), later),
+        (Verdict::Offer, Reason::Slipped)
+    );
+    again.resume();
+    assert!(!again.score().resting(Area::Settings, later));
+    let shown = text(&again, later);
+    assert!(
+        shown.contains("**The last four weeks**\n- Settings: 50% went your way, down from 100%\n"),
+        "{shown}"
+    );
+}
+
+#[test]
+fn a_goal_the_user_named_moves_a_proposal_up_the_queue() {
+    let mut s = State::default();
+    let cheap = Proposal {
+        value: 0.4,
+        helps: Some(Goal::Cheapest),
+        hurts: Some(Goal::Fastest),
+        tested: false,
+        ..sure("cheap")
+    };
+    let fast = Proposal {
+        value: 0.5,
+        helps: Some(Goal::Fastest),
+        ..sure("fast")
+    };
+    let order = |s: &mut State| -> Vec<Subject> {
+        s.decide_all(vec![cheap.clone(), fast.clone()], calm(), T)
+            .into_iter()
+            .map(|d| d.rule)
+            .collect()
+    };
+    // No goals: the more helpful one goes first.
+    assert_eq!((s.worth(&cheap), s.worth(&fast)), (0.4 * 0.85, 0.5 * 0.85));
+    assert_eq!(order(&mut s), vec![rule("fast"), rule("cheap")]);
+    // Cheapest first: 0.34 * 1.5 beats 0.425.
+    s.set_goals(&[Goal::Cheapest, Goal::Cheapest]);
+    assert_eq!(s.goals(), [Goal::Cheapest]);
+    assert_eq!(s.worth(&cheap), 0.4 * 0.85 * 1.5);
+    assert_eq!(order(&mut s), vec![rule("cheap"), rule("fast")]);
+    // Fastest first, cheapest second: the cheap one loses 0.5 and gains 0.25.
+    s.set_goals(&[Goal::Fastest, Goal::Cheapest]);
+    assert_eq!(s.worth(&cheap), 0.4 * 0.85 * 0.75);
+    assert_eq!(s.worth(&fast), 0.5 * 0.85 * 1.5);
+    assert_eq!(order(&mut s), vec![rule("fast"), rule("cheap")]);
+    // Goals are the user's own, so Forget everything keeps them.
+    s.forget_learned();
+    assert_eq!(s.goals(), [Goal::Fastest, Goal::Cheapest]);
+    let shown = text(&s, T);
+    assert!(
+        shown.contains(
+            "**What matters most to you**\n1. Fastest answers `fastest`\n2. Lowest cost `cheapest`\n"
+        ),
+        "{shown}"
+    );
+    s.set_goals(&[]);
+    assert!(text(&s, T).contains(NO_GOALS));
+    // The page names a goal with an underscore, the cabin with a dash.
+    assert_eq!(
+        serde_json::to_string(&Goal::BestQuality).unwrap(),
+        "\"best_quality\""
+    );
+    assert_eq!(Goal::parse("Best-Quality"), Some(Goal::BestQuality));
+}
+
+#[test]
+fn the_snapshot_is_one_byte_and_a_game_counts_as_busy() {
+    let all = Snapshot {
+        quiet: true,
+        busy: true,
+        halted: true,
+        gaming: true,
+        on_battery: true,
+    };
+    assert_eq!(Snapshot::default().bits(), 0);
+    assert_eq!(all.bits(), 31);
+    assert_eq!(Snapshot::from_bits(31), all);
+    let gaming = Snapshot {
+        gaming: true,
+        ..Snapshot::default()
+    };
+    assert_eq!(Snapshot::from_bits(gaming.bits()), gaming);
+    assert_eq!(
+        gaming.situation(),
+        Situation {
+            quiet: false,
+            busy: true,
+            halted: false
+        }
+    );
+    let battery = Snapshot {
+        on_battery: true,
+        ..Snapshot::default()
+    };
+    assert_eq!(battery.situation(), Situation::default());
+    let mut s = graduated("x");
+    assert_eq!(
+        {
+            let d = s.decide(&sure("x"), gaming.situation(), T);
+            (d.verdict, d.reason)
+        },
+        (Verdict::Wait, Reason::Busy)
+    );
+    assert_eq!(
+        serde_json::to_value(super::view::trust(&s, gaming, T).now).unwrap(),
+        serde_json::json!({
+            "quiet": false, "busy": false, "halted": false, "gaming": true, "onBattery": false,
+        })
+    );
+}
+
+#[test]
+fn a_change_the_learner_already_tried_skips_the_three_yes_answers_and_nothing_else() {
+    let tested = |id: &str| Proposal {
+        area: Area::Router,
+        tested: true,
+        ..sure(id)
+    };
+    // New rule, no yes answers: an untested one asks, a tested one acts.
+    let mut s = State::default();
+    let untested = Proposal {
+        area: Area::Router,
+        ..sure("router/a")
+    };
+    assert_eq!(
+        answer(&mut s, &untested, T),
+        (Verdict::Offer, Reason::Shadow)
+    );
+    assert_eq!(
+        answer(&mut s, &tested("router/b"), T),
+        (Verdict::Act, Reason::Sure)
+    );
+    // Every other term still holds it.
+    s.set_dial(Area::Router, Dial::Offer);
+    assert_eq!(
+        answer(&mut s, &tested("router/b"), T),
+        (Verdict::Offer, Reason::DialOffer)
+    );
+    s.set_dial(Area::Router, Dial::Watch);
+    assert_eq!(
+        answer(&mut s, &tested("router/b"), T),
+        (Verdict::Wait, Reason::DialWatch)
+    );
+    s.set_dial(Area::Router, Dial::Act);
+    let halted = Situation {
+        halted: true,
+        ..Situation::default()
+    };
+    let d = s.decide(&tested("router/b"), halted, T);
+    assert_eq!((d.verdict, d.reason), (Verdict::Wait, Reason::Halted));
+    let hard = Proposal {
+        hard: true,
+        ..tested("router/c")
+    };
+    assert_eq!(
+        answer(&mut s, &hard, T),
+        (Verdict::Offer, Reason::AlwaysAsks)
+    );
+    // One act so far (router/b). Four more use up the day.
+    for i in 0..4 {
+        assert_eq!(
+            answer(&mut s, &tested(&format!("router/d{i}")), T),
+            (Verdict::Act, Reason::Sure)
+        );
+    }
+    assert_eq!(
+        answer(&mut s, &tested("router/e"), T),
+        (Verdict::Offer, Reason::Budget)
+    );
+}
+
+#[test]
+fn a_change_the_app_took_back_itself_counts_against_the_score_and_not_as_an_undo() {
+    let mut s = State::default();
+    let p = Proposal {
+        area: Area::Router,
+        tested: true,
+        ..sure("router/a")
+    };
+    assert_eq!(answer(&mut s, &p, T), (Verdict::Act, Reason::Sure));
+    for _ in 0..3 {
+        assert_eq!(s.outcome(&p.rule, Outcome::RolledBack, T), None);
+    }
+    // Three bad outcomes on the board, no watchdog pause, and the rule is
+    // not turned off the way two undos by the user would turn it off.
+    assert!(!s.paused(T));
+    assert_eq!(answer(&mut s, &p, T), (Verdict::Act, Reason::Sure));
+    for _ in 0..7 {
+        s.outcome(&p.rule, Outcome::Kept, T);
+    }
+    assert_eq!(s.score().score(Area::Router, T).now, Some(70));
+}
+
+#[test]
+fn a_router_decision_reads_as_what_the_router_would_change() {
+    let mut s = State::default();
+    for id in [
+        "router/chat:default/order",
+        "router/plan/start",
+        "router/odd",
+    ] {
+        let p = Proposal {
+            area: Area::Router,
+            tested: true,
+            ..sure(id)
+        };
+        s.decide(&p, calm(), T);
+    }
+    let page = super::view::trust(&s, Snapshot::default(), T);
+    let titles: Vec<&str> = page.decisions.iter().map(|d| d.title.as_str()).collect();
+    assert_eq!(
+        titles,
+        [
+            "Router odd",
+            "Router: how hard plan starts",
+            "Router: which model goes first for chat:default",
+        ]
     );
 }

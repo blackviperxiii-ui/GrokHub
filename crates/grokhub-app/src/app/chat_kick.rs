@@ -73,13 +73,14 @@ impl Cabin {
             text = read.text;
             if running_here {
                 match read.route {
-                    TurnRoute::Side => {
-                        self.status = match self.start_side_run(text) {
-                            Ok(()) => TurnRoute::Side.ack().into(),
-                            Err(err) => err,
-                        };
-                        return;
-                    }
+                    // A side answer that can't start waits as its own turn.
+                    TurnRoute::Side => match self.start_side_run(text.clone()) {
+                        Ok(()) => {
+                            self.status = TurnRoute::Side.ack().into();
+                            return;
+                        }
+                        Err(_) => queue_asked = true,
+                    },
                     TurnRoute::Stop => {
                         self.halt_work(TurnRoute::Stop.ack());
                         return;
@@ -505,9 +506,19 @@ impl Cabin {
                 &TurnCx {
                     running,
                     prior: None,
+                    casual: running && self.casual_reply_running(),
                 },
             ),
         }
+    }
+
+    /// The reply running here answers casual talk ([`intent::casual_turn`]),
+    /// not a plan, a scheduled job or work.
+    fn casual_reply_running(&self) -> bool {
+        self.session_mode == SessionMode::Chat
+            && !self.scheduled_perm
+            && last_user_scan(self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str())))
+                .is_some_and(|ask| intent::casual_turn(&ask))
     }
 
     #[cfg(test)]

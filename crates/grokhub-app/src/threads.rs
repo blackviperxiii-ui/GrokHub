@@ -72,6 +72,10 @@ pub struct ChatThread {
     /// Adopted from the CLI and not yet given a recap of its earlier turns.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub native_carry: bool,
+    /// Turns the app answered itself (a computer check, a setting) that the
+    /// engine has not seen yet. They ride once on the next native prompt.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub native_notes: Vec<String>,
     /// This chat's own personality id, picked in the chat header. Empty follows the
     /// default in Settings.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -122,6 +126,7 @@ impl ChatThread {
             retired_sessions: Vec::new(),
             native: false,
             native_carry: false,
+            native_notes: Vec::new(),
             personality: String::new(),
             main: false,
             follow_ups: None,
@@ -193,6 +198,44 @@ pub fn native_carry_recap(messages: &[(String, String)]) -> String {
         "{card}Earlier in this chat (before {} ran it natively):\n{}\n\n",
         grokhub_core::brand::product_name(),
         lines.join("\n")
+    )
+}
+
+/// Self-answered turns kept for the next native prompt; the oldest go first.
+const NOTES_KEPT: usize = 4;
+
+/// Queue a turn the app answered itself, so the next native prompt carries
+/// the ask and the answer once. Each side is cut, so a long answer (or
+/// anything a check printed) never rides whole.
+pub fn note_native_answer(thread: &mut ChatThread, ask: &str, answer: &str) {
+    let cut = |text: &str, max: usize| {
+        let text = text.trim();
+        let mut cut: String = text.chars().take(max).collect();
+        if cut.len() < text.len() {
+            cut.push('…');
+        }
+        cut
+    };
+    let (ask, answer) = (cut(ask, 600), cut(answer, 1200));
+    if ask.is_empty() || answer.is_empty() {
+        return;
+    }
+    thread
+        .native_notes
+        .push(format!("User: {ask}\nYou: {answer}"));
+    let over = thread.native_notes.len().saturating_sub(NOTES_KEPT);
+    thread.native_notes.drain(..over);
+}
+
+/// The queued self-answered turns, as the lead of the next native prompt.
+pub fn native_notes_text(notes: &[String]) -> String {
+    if notes.is_empty() {
+        return String::new();
+    }
+    format!(
+        "Earlier in this chat ({} answered these before you saw them):\n{}\n\n",
+        grokhub_core::brand::product_name(),
+        notes.join("\n")
     )
 }
 
