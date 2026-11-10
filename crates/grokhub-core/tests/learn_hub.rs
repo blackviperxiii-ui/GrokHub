@@ -649,5 +649,37 @@ fn the_shared_logs_feed_one_engine() {
             env!("CARGO_PKG_VERSION")
         )
     );
+
+    // Backup and move, from the chat: the file lands in the config folder,
+    // an import takes it and keeps what was there, and restore puts it back.
+    assert_eq!(
+        view::run("backup", at),
+        format!(
+            "Saved everything the app learned to `{}`. To move it, copy that file into the config folder on the other PC and run `/learned import` there.",
+            dir.join("learned-backup.json").display()
+        )
+    );
+    let held = store::load_beliefs(&dir);
+    assert!(held.len() > 1);
+    let bad = Subject::new("model", "bad-model").unwrap();
+    hub::forget(&bad);
+    assert_ne!(store::load_beliefs(&dir), held);
+    assert_eq!(
+        view::run("import", at),
+        format!(
+            "Took {} learned lines from the backup. What was here before is kept: `/learned restore` puts it back.",
+            held.len()
+        )
+    );
+    assert_eq!(store::load_beliefs(&dir), held);
+    assert_eq!(
+        view::run("restore", at),
+        "Put back what the app had learned before the import."
+    );
+    assert_ne!(store::load_beliefs(&dir), held);
+    assert_eq!(
+        view::run("restore", at),
+        grokhub_core::learn::backup::NO_RESTORE
+    );
     let _ = fs::remove_dir_all(&dir);
 }
