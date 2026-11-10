@@ -247,11 +247,22 @@ fn item_chat_id(runs: &[super::background::BgRun], item: &ActivityItem) -> Strin
         .unwrap_or_default()
 }
 
+/// The card a `bg:` row's run works, if it has one.
+fn item_run_card(bg: &super::background::BgWork, item: &ActivityItem) -> Option<String> {
+    let run: u64 = item.key.strip_prefix("bg:")?.parse().ok()?;
+    bg.cards
+        .iter()
+        .find(|(r, _)| *r == run)
+        .map(|(_, id)| id.clone())
+}
+
 /// What a click in the Activity list asks for. Applied after painting.
 enum DockAct {
     Open {
         kind: ActivityKind,
         chat_id: String,
+        /// The card a background run works; Open goes there.
+        card: Option<String>,
         waiting: bool,
     },
     SteerQueued(usize),
@@ -293,9 +304,9 @@ pub(super) fn row_buttons(item: &ActivityItem, steerable: bool) -> Vec<(&'static
         (ActivityKind::Chat, _) => vec![("Open chat", RowPick::Open)],
         (ActivityKind::Routine, _) => vec![("Open result", RowPick::Open)],
         (ActivityKind::Background, ActivityStatus::Running) => {
-            vec![("Open chat", RowPick::Open), ("Stop", RowPick::Stop)]
+            vec![("Open card", RowPick::Open), ("Stop", RowPick::Stop)]
         }
-        (ActivityKind::Background, _) => vec![("Open chat", RowPick::Open)],
+        (ActivityKind::Background, _) => vec![("Open card", RowPick::Open)],
     }
 }
 
@@ -777,8 +788,12 @@ impl Cabin {
                                 );
                             }
                             let chat_id = item_chat_id(&self.bg.runs, item);
-                            // A run that works a Workboard card can open it too.
-                            let card = super::board_ui::board_card_for_chat(&self.board, &chat_id);
+                            // A background run lives on its card; a chat turn
+                            // that works a Workboard card can open it too.
+                            let run_card = item_run_card(&self.bg, item);
+                            let card = run_card.clone().or_else(|| {
+                                super::board_ui::board_card_for_chat(&self.board, &chat_id)
+                            });
                             let row_btn = |ui: &mut egui::Ui, text: &str| {
                                 ui.add(
                                     egui::Button::new(
@@ -801,6 +816,7 @@ impl Cabin {
                                             RowPick::Open => DockAct::Open {
                                                 kind: item.kind,
                                                 chat_id: chat_id.clone(),
+                                                card: run_card.clone(),
                                                 waiting: item.status == ActivityStatus::Waiting,
                                             },
                                             RowPick::SteerNow => DockAct::SteerQueued(place),
@@ -824,7 +840,7 @@ impl Cabin {
                                         });
                                     }
                                 }
-                                if let Some(card) = card {
+                                if let Some(card) = card.filter(|_| run_card.is_none()) {
                                     if row_btn(ui, "Open card") {
                                         open_card = Some(card);
                                     }
@@ -859,42 +875,55 @@ impl Cabin {
             Some(DockAct::Open {
                 kind,
                 chat_id,
+                card,
                 waiting,
-            }) => {
-                self.activity.open = false;
-                match kind {
-                    ActivityKind::Chat | ActivityKind::Background => {
-                        self.select_main_nav("chat");
-                        if !chat_id.is_empty() && chat_id != self.visible_thread_id() {
-                            if let Some(idx) = self.threads.iter().position(|t| t.id == chat_id) {
-                                self.switch_thread(idx);
-                            }
-                        }
-                        if waiting {
-                            self.harness.jump = Some("ask");
-                            // The chat no longer prints a count line; open the
-                            // rows when there is more than the one card.
-                            self.harness.inbox_open = self.decisions_waiting() > 1;
-                        }
-                    }
-                    ActivityKind::Routine => {
-                        self.select_main_nav("automations");
-                    }
-                    ActivityKind::Download => {
-                        self.nav = Nav::Settings;
-                        self.settings_sec = SettingsSec::AiModels;
-                    }
-                    ActivityKind::QueuedMessage
-                    | ActivityKind::SideQuestion
-                    | ActivityKind::Recording => {}
-                }
-            }
+            }) => self.open_dock_row(kind, &chat_id, card.as_deref(), waiting),
             // Queue edits keep the list open so the next row is one click away.
             Some(DockAct::SteerQueued(i)) => self.steer_queued(i),
             Some(DockAct::DropQueued(i)) => self.drop_queued(i),
             Some(DockAct::DropSide(id)) => self.stop_side_run(id as u64),
             Some(DockAct::StopRun(id)) => self.stop_bg_run(id),
             Some(DockAct::StopRecording) => self.stop_screen_recording(),
+        }
+    }
+
+    /// Open on an Activity row: a background run's card, a chat, a routine's
+    /// page or the model downloads.
+    fn open_dock_row(
+        &mut self,
+        kind: ActivityKind,
+        chat_id: &str,
+        card: Option<&str>,
+        waiting: bool,
+    ) {
+        self.activity.open = false;
+        match kind {
+            // A background run is its card: open that, not its chat.
+            ActivityKind::Background if card.is_some() => {
+                self.open_board_card(card.unwrap_or_default());
+            }
+            ActivityKind::Chat | ActivityKind::Background => {
+                self.select_main_nav("chat");
+                if !chat_id.is_empty() && chat_id != self.visible_thread_id() {
+                    if let Some(idx) = self.threads.iter().position(|t| t.id == chat_id) {
+                        self.switch_thread(idx);
+                    }
+                }
+                if waiting {
+                    self.harness.jump = Some("ask");
+                    // The chat no longer prints a count line; open the
+                    // rows when there is more than the one card.
+                    self.harness.inbox_open = self.decisions_waiting() > 1;
+                }
+            }
+            ActivityKind::Routine => {
+                self.select_main_nav("automations");
+            }
+            ActivityKind::Download => {
+                self.nav = Nav::Settings;
+                self.settings_sec = SettingsSec::AiModels;
+            }
+            ActivityKind::QueuedMessage | ActivityKind::SideQuestion | ActivityKind::Recording => {}
         }
     }
 
@@ -1031,6 +1060,35 @@ mod tests {
         });
         let _ = crate::theme::test_pass(&ctx, esc, |ui| cabin.ui_activity_dock(ui));
         assert!(!cabin.activity.open, "Esc closes the list");
+    }
+
+    #[test]
+    fn open_on_a_background_row_goes_to_its_card_not_its_chat() {
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.board.clear();
+        let chat = cabin.visible_thread_id();
+        cabin.open_bg_card(7, "tidy the notes", "", true);
+        let card = cabin.bg_card_id(7).expect("the run's card");
+        let item = ActivityItem {
+            key: "bg:7".into(),
+            kind: ActivityKind::Background,
+            title: "tidy the notes".into(),
+            status: ActivityStatus::Running,
+            detail: String::new(),
+            steps: 0,
+            at: 0,
+        };
+        assert_eq!(
+            item_run_card(&cabin.bg, &item).as_deref(),
+            Some(card.as_str())
+        );
+        cabin.nav = Nav::Chat;
+        cabin.open_dock_row(ActivityKind::Background, &chat, Some(&card), false);
+        assert_eq!(cabin.nav, Nav::Workboard);
+        assert_eq!(cabin.board_view.open.as_deref(), Some(card.as_str()));
+        // A run with no card still opens its chat.
+        cabin.open_dock_row(ActivityKind::Background, &chat, None, false);
+        assert_eq!(cabin.nav, Nav::Chat);
     }
 
     #[test]

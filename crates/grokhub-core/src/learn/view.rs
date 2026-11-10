@@ -8,8 +8,9 @@
 use serde::{Deserialize, Serialize};
 
 use super::belief::{Belief, Beliefs, Shape, Standing};
-use super::decide::{Area, Dial, State, TRUST_USAGE};
+use super::decide::{Area, Dial, Goal, State, GOALS_USAGE, TRUST_USAGE};
 use super::ladder::{step, Step, Undo};
+use super::now::Snapshot;
 use super::score::Trend;
 use super::signal::Subject;
 
@@ -95,6 +96,13 @@ pub struct DialRow {
     pub resting: bool,
 }
 
+/// One of the user's goals.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct GoalRow {
+    pub goal: Goal,
+    pub label: &'static str,
+}
+
 /// One decision, as the user reads it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -112,12 +120,16 @@ pub struct DecisionRow {
 #[serde(rename_all = "camelCase")]
 pub struct Trust {
     pub dials: Vec<DialRow>,
+    /// What matters most to the user, first to last.
+    pub goals: Vec<GoalRow>,
     /// Too much was undone lately, so everything asks first for now.
     pub asking_first: bool,
     /// Changes the app may still make on its own today.
     pub left_today: u32,
     /// The newest decisions, newest first, at most [`DECISIONS_SHOWN`].
     pub decisions: Vec<DecisionRow>,
+    /// What is going on right now, as the app last told the engine.
+    pub now: Snapshot,
 }
 
 pub const DECISIONS_SHOWN: usize = 15;
@@ -133,8 +145,9 @@ fn rule_title(rule: &Subject) -> String {
 }
 
 /// The dials and the newest decisions in `state` at `now_ms`.
-pub fn trust(state: &State, now_ms: u64) -> Trust {
+pub fn trust(state: &State, now: Snapshot, now_ms: u64) -> Trust {
     Trust {
+        now,
         dials: Area::ALL
             .into_iter()
             .map(|area| {
@@ -148,6 +161,14 @@ pub fn trust(state: &State, now_ms: u64) -> Trust {
                     trend: score.trend,
                     resting: state.score().resting(area, now_ms),
                 }
+            })
+            .collect(),
+        goals: state
+            .goals()
+            .iter()
+            .map(|goal| GoalRow {
+                goal: *goal,
+                label: goal.label(),
             })
             .collect(),
         asking_first: state.paused(now_ms),
@@ -189,10 +210,12 @@ fn title(area: &str, id: &str) -> String {
         "card-group" => format!("Cards from {}", words(id)),
         "skill" => format!("Skill {id}"),
         "habit" => match id.rsplit_once('/') {
-            Some((skill, part)) => format!(
-                "Skill {skill} {}",
-                super::habit::Part::parse(part).map_or(part, |p| p.when())
-            ),
+            Some((skill, at)) => match super::habit::parse_tail(at) {
+                Some((part, gaming)) => {
+                    format!("Skill {skill} {}", super::habit::when(part, gaming))
+                }
+                None => format!("Skill {skill} {at}"),
+            },
             None => format!("Habit {id}"),
         },
         "reply" => format!("Plan reply: {}", plan_reply(id)),
@@ -357,9 +380,11 @@ pub enum Command {
     Decisions,
     /// Set how far one area may go.
     Trust(Area, Dial),
+    /// Set what matters most, first to last. Empty clears them.
+    Goals(Vec<Goal>),
 }
 
-pub const USAGE: &str = "Use `/learned`, `/learned forget <id>`, `/learned wrong <id>`, `/learned always <id>`, `/learned forget all`, `/learned pause`, `/learned resume`, `/learned decisions` or `/learned trust <area> <watch|offer|act>`. The id is the code at the end of each line.";
+pub const USAGE: &str = "Use `/learned`, `/learned forget <id>`, `/learned wrong <id>`, `/learned always <id>`, `/learned forget all`, `/learned pause`, `/learned resume`, `/learned decisions`, `/learned trust <area> <watch|offer|act>` or `/learned goals <goal> ...`. The id is the code at the end of each line.";
 
 impl Command {
     pub fn parse(rest: &str) -> Result<Self, String> {
@@ -373,6 +398,17 @@ impl Command {
                 .zip(dial)
                 .map(|(area, dial)| Command::Trust(area, dial))
                 .ok_or_else(|| TRUST_USAGE.to_string());
+        }
+        if verb.as_deref() == Some("goals") {
+            let named: Vec<&str> = id.into_iter().chain(extra).chain(parts).collect();
+            if let ["none"] = named[..] {
+                return Ok(Command::Goals(Vec::new()));
+            }
+            let goals: Option<Vec<Goal>> = named.iter().map(|g| Goal::parse(g)).collect();
+            return goals
+                .filter(|g| !g.is_empty())
+                .map(Command::Goals)
+                .ok_or_else(|| GOALS_USAGE.to_string());
         }
         if extra.is_some() {
             return Err(USAGE.into());
@@ -414,6 +450,15 @@ pub fn run(rest: &str, now_ms: u64) -> String {
                     Dial::Act => "act when it's sure",
                 }
             ))
+        }
+        Command::Goals(goals) => {
+            super::hub::set_goals(goals);
+            let named: Vec<&str> = goals.iter().map(|g| g.label()).collect();
+            Some(if named.is_empty() {
+                "No goals set.".to_string()
+            } else {
+                format!("What matters most, in order: {}.", named.join(", "))
+            })
         }
         Command::Forget(key) => {
             super::hub::forget(key);
@@ -468,6 +513,7 @@ pub enum Act {
     Pause,
     Resume,
     Trust { area: Area, dial: Dial },
+    Goals { goals: Vec<Goal> },
     CarryOn,
 }
 
@@ -488,6 +534,7 @@ pub fn act(act: Act, now_ms: u64) -> Result<View, String> {
         Act::Pause => super::hub::set_paused(true)?,
         Act::Resume => super::hub::set_paused(false)?,
         Act::Trust { area, dial } => super::hub::set_dial(area, dial),
+        Act::Goals { goals } => super::hub::set_goals(&goals),
         Act::CarryOn => super::hub::carry_on(),
     }
     Ok(super::hub::view(now_ms))

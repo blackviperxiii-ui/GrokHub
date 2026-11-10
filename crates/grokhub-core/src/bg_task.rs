@@ -2,8 +2,9 @@
 //!
 //! A background run is its own headless `grok -p`. It forks the chat's Grok
 //! session, so it knows the conversation, and never writes into that session.
-//! When it ends, its reply is posted on the chat that started it, and the next
-//! turn on that chat is told what came back.
+//! When it ends, its result lands on its workboard card, not in a chat. The
+//! next turn on the chat that started it is told what came back and on which
+//! card. It is posted in that chat only when you asked for it there.
 //!
 //! Steering stops the live turn, keeps what it already said and did, and starts
 //! the next turn with the new message plus a short note of that progress.
@@ -111,20 +112,25 @@ pub fn bg_task_title(prompt: &str) -> String {
     clip_chars(line, BG_TITLE_CAP)
 }
 
-/// The assistant message posted on the origin chat when a run ends.
-pub fn bg_result_post(title: &str, end: &BgEnd, reply: &str) -> String {
+/// What a run's card keeps as its result: the reply's prose, or why it failed.
+pub fn bg_result_body(end: &BgEnd, reply: &str) -> String {
     let prose = assistant_prose(reply);
+    match end {
+        BgEnd::Failed(err) if prose.trim().is_empty() => err.trim().to_string(),
+        BgEnd::Done if prose.trim().is_empty() => "It finished without a reply.".to_string(),
+        _ => prose.trim().to_string(),
+    }
+}
+
+/// The assistant message a chat gets when you asked for a run's result there.
+pub fn bg_result_post(title: &str, end: &BgEnd, reply: &str) -> String {
     let head = match end {
         BgEnd::Done => "Background task done",
         BgEnd::Failed(_) => "Background task failed",
         BgEnd::Stopped => "Background task stopped",
     };
     let mut out = format!("**{head}** · {}", title.trim());
-    let body = match end {
-        BgEnd::Failed(err) if prose.trim().is_empty() => err.trim().to_string(),
-        BgEnd::Done if prose.trim().is_empty() => "It finished without a reply.".to_string(),
-        _ => prose.trim().to_string(),
-    };
+    let body = bg_result_body(end, reply);
     if !body.is_empty() {
         out.push_str("\n\n");
         out.push_str(&body);
@@ -132,12 +138,19 @@ pub fn bg_result_post(title: &str, end: &BgEnd, reply: &str) -> String {
     out
 }
 
-/// One line for the next turn on that chat: what the run was and what it said.
-pub fn bg_result_note(title: &str, end: &BgEnd, reply: &str) -> String {
-    let how = match end {
+/// One line for the next turn on that chat: what the run was, where its result
+/// is, and what it said. `card` names the workboard card that holds the result;
+/// `None` means it was posted in that chat because you asked for it there.
+pub fn bg_result_note(title: &str, end: &BgEnd, reply: &str, card: Option<&str>) -> String {
+    let state = match end {
         BgEnd::Done => "done",
         BgEnd::Failed(_) => "failed",
         BgEnd::Stopped => "stopped",
+    };
+    let how = match card.map(str::trim) {
+        Some(card) if !card.is_empty() => format!("{state}; result on workboard card \"{card}\""),
+        Some(_) => format!("{state}; result on its workboard card"),
+        None => format!("{state}; posted in this chat"),
     };
     let said = match end {
         BgEnd::Failed(err) if assistant_prose(reply).trim().is_empty() => err.trim().to_string(),
@@ -165,9 +178,50 @@ pub fn bg_results_follow(notes: &[String]) -> Option<String> {
         return None;
     }
     Some(format!(
-        "Background tasks that finished since your last turn. Their replies are already in this chat. Use them; do not redo that work.\n{}",
+        "Background tasks that finished since your last turn. Each line says where its result is: on a workboard card (not in this chat), or posted in this chat. Use them; do not redo that work.\n{}",
         notes.join("\n")
     ))
+}
+
+/// `/bg` text that asks for the result in this chat ("post the result here",
+/// "tell me here"). Only then does a run post its result into the chat that
+/// started it; otherwise the result stays on its card.
+pub fn bg_asks_for_chat_post(task: &str) -> bool {
+    const VERBS: [&str; 8] = [
+        "post", "tell me", "reply", "report", "show me", "send", "share", "drop",
+    ];
+    const OBJECTS: [&str; 8] = [
+        "",
+        " it",
+        " that",
+        " them",
+        " the result",
+        " the results",
+        " results",
+        " back",
+    ];
+    const PLACES: [&str; 5] = [
+        " here",
+        " in this chat",
+        " in the chat",
+        " in chat",
+        " to this chat",
+    ];
+    let text = format!(
+        " {} ",
+        task.to_lowercase()
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| !w.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+    VERBS.iter().any(|verb| {
+        OBJECTS.iter().any(|object| {
+            PLACES
+                .iter()
+                .any(|place| text.contains(&format!(" {verb}{object}{place} ")))
+        })
+    })
 }
 
 /// `12s`, `4m`, `1h 5m`.
@@ -322,25 +376,76 @@ mod tests {
     }
 
     #[test]
+    fn a_bg_ask_that_names_the_chat_posts_there() {
+        for yes in [
+            "run the tests and post the result here",
+            "Index the docs, then tell me here.",
+            "check disk space; report back here",
+            "Find the flaky test and post it in this chat",
+            "summarize the logs and share the results in chat",
+        ] {
+            assert!(bg_asks_for_chat_post(yes), "{yes}");
+        }
+        for no in [
+            "run the tests",
+            "fix the bug here in main.rs",
+            "summarize what we discussed in this chat",
+            "post a release note draft to the docs folder",
+            "",
+        ] {
+            assert!(!bg_asks_for_chat_post(no), "{no}");
+        }
+    }
+
+    #[test]
     fn the_next_turn_hears_what_came_back() {
         assert!(bg_results_follow(&[]).is_none());
         assert!(bg_results_follow(&["  ".into()]).is_none());
-        let note = bg_result_note("tests", &BgEnd::Done, "All   42\npassed.");
-        assert_eq!(note, "- tests (done): All 42 passed.");
-        let failed = bg_result_note("tests", &BgEnd::Failed("exit 2".into()), "");
-        assert_eq!(failed, "- tests (failed): exit 2");
+        let note = bg_result_note("tests", &BgEnd::Done, "All   42\npassed.", Some("tests"));
         assert_eq!(
-            bg_result_note("tests", &BgEnd::Stopped, ""),
-            "- tests (stopped)"
+            note,
+            "- tests (done; result on workboard card \"tests\"): All 42 passed."
+        );
+        let failed = bg_result_note(
+            "tests",
+            &BgEnd::Failed("exit 2".into()),
+            "",
+            Some("Run tests"),
+        );
+        assert_eq!(
+            failed,
+            "- tests (failed; result on workboard card \"Run tests\"): exit 2"
+        );
+        assert_eq!(
+            bg_result_note("tests", &BgEnd::Stopped, "", Some("tests")),
+            "- tests (stopped; result on workboard card \"tests\")"
+        );
+        assert_eq!(
+            bg_result_note("tests", &BgEnd::Done, "ok", None),
+            "- tests (done; posted in this chat): ok"
         );
         let block = bg_results_follow(&[note]).unwrap();
         assert!(
             block.starts_with("Background tasks that finished"),
             "{block}"
         );
-        assert!(block.ends_with("- tests (done): All 42 passed."), "{block}");
-        let long = bg_result_note("t", &BgEnd::Done, &"z ".repeat(2000));
-        assert!(long.chars().count() < BG_FOLLOW_CAP + 40);
+        assert!(
+            block.contains("on a workboard card (not in this chat)"),
+            "the next turn knows the result is on the card: {block}"
+        );
+        assert!(
+            !block.contains("already in this chat"),
+            "results no longer land in the chat: {block}"
+        );
+        assert!(
+            block.ends_with("- tests (done; result on workboard card \"tests\"): All 42 passed."),
+            "{block}"
+        );
+        let long = bg_result_note("t", &BgEnd::Done, &"z ".repeat(2000), Some("t"));
+        // The head names the card; the reply part stays within the cap.
+        let head = "- t (done; result on workboard card \"t\"): ";
+        assert!(long.starts_with(head), "{long}");
+        assert!(long.chars().count() <= head.chars().count() + BG_FOLLOW_CAP);
     }
 
     #[test]

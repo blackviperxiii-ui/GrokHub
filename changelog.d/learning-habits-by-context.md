@@ -1,0 +1,1 @@
+- Habits belong to a setting: what you run while a game is up is learned on its own and only offered while a game runs, so it does not show up at work.

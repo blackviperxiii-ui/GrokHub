@@ -11,7 +11,7 @@ const api = vi.hoisted(() => ({
 
 vi.mock("./api", () => api);
 
-import { DECISIONS_EMPTY, LEARNED_EMPTY, LEARNED_PAUSED, Learned, TRUST_ASKING, TRUST_RESTING, scoreLine } from "./Learned";
+import { DECISIONS_EMPTY, LEARNED_EMPTY, LEARNED_PAUSED, Learned, TRUST_ASKING, TRUST_RESTING, scoreLine, waitingLine } from "./Learned";
 
 function row(over: Partial<LearnedRow> = {}): LearnedRow {
   return {
@@ -36,6 +36,8 @@ function trust(over: Partial<LearnedTrust> = {}): LearnedTrust {
       dial("settings", "Settings", "act"),
       dial("router", "Model choice", "watch"),
     ],
+    goals: [],
+    now: { quiet: false, busy: false, halted: false, gaming: false, onBattery: false },
     askingFirst: false,
     leftToday: 5,
     decisions: [],
@@ -193,6 +195,34 @@ describe("Learned", () => {
     expect(scoreLine(dial("chips", "Quick chips", "act", { went: 80 }))).toBe("80% of what it offered or changed here went your way in the last four weeks.");
     expect(scoreLine(dial("chips", "Quick chips", "act", { went: 80, before: 60, trend: "better" }))).toBe("80% of what it offered or changed here went your way in the last four weeks, up from 60%.");
     expect(scoreLine(dial("chips", "Quick chips", "act", { went: 80, before: 78, trend: "steady" }))).toBe("80% of what it offered or changed here went your way in the last four weeks.");
+  });
+
+  it("sets what matters most, keeping the other goals after it", async () => {
+    const view = { rows: [], singleChips: 0, paused: false };
+    const goals = [
+      { goal: "cheapest" as const, label: "Lowest cost" },
+      { goal: "quiet" as const, label: "Fewest interruptions" },
+    ];
+    api.getLearned.mockResolvedValue({ ...view, trust: trust({ goals }) });
+    api.learnedAct.mockResolvedValue({ ...view, trust: trust({ goals: [goals[1], goals[0]] }) });
+    render(<Learned />);
+    expect(await screen.findByLabelText("What matters most")).toHaveValue("cheapest");
+    await userEvent.selectOptions(screen.getByLabelText("What matters most"), "Fewest interruptions");
+    expect(api.learnedAct).toHaveBeenCalledWith({ kind: "goals", goals: ["quiet", "cheapest"] });
+    expect(screen.getByRole("status")).toHaveTextContent("Fewest interruptions comes first now.");
+    expect(screen.getByLabelText("What matters most")).toHaveValue("quiet");
+    await userEvent.selectOptions(screen.getByLabelText("What matters most"), "Nothing set");
+    expect(api.learnedAct).toHaveBeenLastCalledWith({ kind: "goals", goals: [] });
+  });
+
+  it("says why changes wait right now", () => {
+    const clear = trust().now;
+    expect(waitingLine(clear)).toBeNull();
+    expect(waitingLine({ ...clear, onBattery: true })).toBeNull();
+    expect(waitingLine({ ...clear, gaming: true, quiet: true })).toBe("A game is running, so changes wait.");
+    expect(waitingLine({ ...clear, quiet: true })).toBe("It's quiet hours, so changes wait.");
+    expect(waitingLine({ ...clear, busy: true })).toBe("You're in the middle of something, so changes wait.");
+    expect(waitingLine({ ...clear, halted: true, gaming: true })).toBe("Halt is on, so changes wait.");
   });
 
   it("offers Carry on while everything asks first", async () => {

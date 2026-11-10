@@ -70,6 +70,7 @@ function card(over: Partial<BoardCard> = {}): BoardCard {
     priority: "",
     fresh: false,
     report: "",
+    result: "",
     owner: "You",
     kind: null,
     leftOff: null,
@@ -547,6 +548,19 @@ describe("Workboard", () => {
     expect(paused.getByText(/Left off: Finish the lexer/)).toBeVisible();
     expect(paused.getByRole("img", { name: "1 of 3" })).toBeInTheDocument();
     expect(inCard("Write release notes").getByText("You")).toBeVisible();
+  });
+
+  it("shows a background run's result on its card, with no chat to send it to", async () => {
+    api.getWorkboard.mockResolvedValue(
+      board({ done: [card({ id: "w-9", title: "Check disk", result: "Disk at 91% on /home." })] }),
+    );
+    render(<Workboard onWork={() => {}} />);
+    await screen.findByRole("region", { name: "Done" });
+    const done = inCard("Check disk");
+    expect(done.getByText("Result")).toBeVisible();
+    expect(done.getByText("Disk at 91% on /home.")).toBeVisible();
+    expect(done.queryByRole("button", { name: /send to chat/i })).toBeNull();
+    expect(inCard("Check disk").queryByText("Latest report")).toBeNull();
   });
 
   it("opens a card to its steps and where it left off, and reads the log only when asked", async () => {

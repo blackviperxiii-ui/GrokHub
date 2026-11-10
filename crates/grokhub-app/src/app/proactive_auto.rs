@@ -102,6 +102,7 @@ impl Cabin {
     /// One candidate per tick: hard class parks, the ceiling admits or sends
     /// it to an ask card, and an admitted one runs through the harness.
     pub(super) fn tick_auto_act(&mut self) {
+        self.note_now();
         self.expire_hard_park();
         let Some(mut c) = self.auto_act.queue.pop_front() else {
             return;
