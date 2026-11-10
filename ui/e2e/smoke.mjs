@@ -193,14 +193,25 @@ function pulseFixture(req, res) {
   res.end(body);
 }
 
-async function wd(method, path, body) {
+async function wd(method, path, body, retried = false) {
   const res = await fetch(`${DRIVER}${path}`, {
     method,
     headers: { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const json = await res.json();
-  if (!res.ok) throw new Error(`${method} ${path}: ${JSON.stringify(json.value)}`);
+  if (!res.ok) {
+    // WebKitGTK refuses a click on an element that is still moving (a page
+    // just opened, a post just landed, text reflowing) as "not interactable".
+    // Wait for it to sit still and click again; one that never does still fails.
+    const click = /^(\/session\/[^/]+)\/element\/([^/]+)\/click$/.exec(path);
+    if (click && json.value?.error === "element not interactable" && !retried) {
+      const [, s, el] = click;
+      await waitFor("the clicked element to sit still", async () => ((await settled(s, el)) ? true : null), 10000);
+      return wd(method, path, body, true);
+    }
+    throw new Error(`${method} ${path}: ${JSON.stringify(json.value)}`);
+  }
   return json.value;
 }
 
