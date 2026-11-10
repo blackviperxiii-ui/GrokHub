@@ -416,7 +416,11 @@ fn post(
     now_ms: u64,
 ) -> Post {
     let save = ps::is_source_post(card) && ps::saved_from_card(card, now_ms).is_some();
-    let saved = save && card.citations.first().is_some_and(|url| ps::is_saved(saved, url));
+    let saved = save
+        && card
+            .citations
+            .first()
+            .is_some_and(|url| ps::is_saved(saved, url));
     let offers = grokhub_core::card_offers::offers(card, shown, now_ms);
     let images = pulse_feed::images_dir(config_dir);
     let source = card
@@ -663,6 +667,16 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
             grokhub_core::dismiss_update_at(cards, id, now_ms)
         }
     };
+    // Save keeps the post on the Saved page (its own file), then counts as a Like.
+    if act == Act::Save {
+        let find = ps::saved_from_card(&card, now_ms)
+            .ok_or_else(|| "This post has no link to save.".to_string())?;
+        let path = saved_path(config_dir);
+        let mut list = ps::load_saved(&path);
+        if ps::save_find(&mut list, find) {
+            ps::save_saved(&path, &list)?;
+        }
+    }
     let changed = match act {
         Act::Dismiss => remove(&mut cards),
         Act::Dislike => {
@@ -677,17 +691,22 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
             note_less(config_dir, &card, now_ms)?;
             remove(&mut cards)
         }
-        Act::Save => {
-            let find = ps::saved_from_card(&card, now_ms)
-                .ok_or_else(|| "This post has no link to save.".to_string())?;
-            let path = saved_path(config_dir);
-            let mut list = ps::load_saved(&path);
-            if ps::save_find(&mut list, find) {
-                ps::save_saved(&path, &list)?;
+        Act::Love | Act::Save => {
+            if card.reaction == Some(CardReaction::Up) {
+                false
+            } else {
+                note(&card.title, LedgerReason::Liked, &day.date)?;
+                learn_taste(config_dir, &card, Some(Reaction::Like), None, now_ms)?;
+                pulse_feed::with_state(config_dir, |s| {
+                    s.note_engaged(now_ms);
+                    s.note_taste(TasteKind::Love, &card.title, now_ms);
+                })?;
+                if let Some(saved) = cards.iter_mut().find(|c| c.id == id) {
+                    saved.reaction = Some(CardReaction::Up);
+                }
+                true
             }
-            love(config_dir, &card, &mut cards, day, now_ms)?
         }
-        Act::Love => love(config_dir, &card, &mut cards, day, now_ms)?,
         Act::Unlove => {
             let loved = cards
                 .iter_mut()
@@ -755,29 +774,6 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
         save(config_dir, &cards)?;
     }
     Ok(page(config_dir, &cards, now_ms))
-}
-
-/// Like: the heart, a ledger line and card taste. False when already liked.
-fn love(
-    config_dir: &Path,
-    card: &UpdateCard,
-    cards: &mut [UpdateCard],
-    day: &Day,
-    now_ms: u64,
-) -> Result<bool, String> {
-    if card.reaction == Some(CardReaction::Up) {
-        return Ok(false);
-    }
-    note(&card.title, LedgerReason::Liked, &day.date)?;
-    learn_taste(config_dir, card, Some(Reaction::Like), None, now_ms)?;
-    pulse_feed::with_state(config_dir, |s| {
-        s.note_engaged(now_ms);
-        s.note_taste(TasteKind::Love, &card.title, now_ms);
-    })?;
-    if let Some(liked) = cards.iter_mut().find(|c| c.id == card.id) {
-        liked.reaction = Some(CardReaction::Up);
-    }
-    Ok(true)
 }
 
 /// Move the interest topics an idea's text names.
@@ -1401,6 +1397,63 @@ mod tests {
         let d = dirs("saved-none", &sample());
         let page = load(&d.config, None, NOW).expect("load");
         assert!(page.feed.iter().all(|p| !p.save));
+    }
+
+    #[test]
+    fn saved_page_outlives_feed_cleanup_and_keeps_more_than_two_hundred() {
+        let mut find =
+            automation_done_card("src", "Rust 1.99 released", "Faster builds.", NOW - 60_000);
+        find.id = "find-1".into();
+        find.source_id = "source:rss:rust".into();
+        find.citations = vec!["https://blog.rust-lang.org/1.99".into()];
+        let d = dirs("saved-cleanup", &[find]);
+        act(&d.config, "find-1", Act::Save, &day(), NOW).expect("save");
+        assert_eq!(saved(&d.config).len(), 1);
+
+        // The feed is cleaned out entirely (expiry, archive, delete all end
+        // here): the Saved page keeps its card.
+        std::fs::write(d.config.join(FILE), "[]").expect("empty feed");
+        let page = load(&d.config, None, NOW + 30 * 86_400_000).expect("load");
+        assert!(page.feed.is_empty());
+        let list = saved(&d.config);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].url, "https://blog.rust-lang.org/1.99");
+        assert_eq!(list[0].title, "Rust 1.99 released");
+
+        // No cap: 250 more saves are all kept.
+        let path = saved_path(&d.config);
+        let mut all = ps::load_saved(&path);
+        for i in 0..250u64 {
+            assert!(ps::save_find(
+                &mut all,
+                SavedFind {
+                    title: format!("Find {i}"),
+                    url: format!("https://a.test/{i}"),
+                    source_name: "Example Feed".into(),
+                    summary: String::new(),
+                    because: None,
+                    saved_ms: NOW + i,
+                },
+            ));
+        }
+        ps::save_saved(&path, &all).expect("write");
+        assert_eq!(saved(&d.config).len(), 251);
+
+        // Remove from saved takes out exactly that card.
+        let left = unsave(&d.config, "https://a.test/7").expect("unsave");
+        assert_eq!(left.len(), 250);
+        assert!(left.iter().all(|f| f.url != "https://a.test/7"));
+        assert!(left.iter().any(|f| f.url == "https://a.test/6"));
+        assert!(left.iter().any(|f| f.url == "https://a.test/8"));
+        assert!(left
+            .iter()
+            .any(|f| f.url == "https://blog.rust-lang.org/1.99"));
+        assert_eq!(saved(&d.config).len(), 250);
+        // Removing a link that is not saved changes nothing.
+        assert_eq!(
+            unsave(&d.config, "https://a.test/7").expect("again").len(),
+            250
+        );
     }
 
     #[test]

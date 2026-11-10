@@ -1190,13 +1190,36 @@ mod tests {
             cabin.follow_source_fetch();
             assert_eq!(cabin.sources.note, "");
         }
-        // The Saved page reads the same file: clearing the feed leaves it be,
-        // and Remove from saved is the one way out.
-        cabin.updates.clear();
-        assert_eq!(cabin.saved_page_list().len(), 1);
-        cabin.remove_saved("https://blog.rust-lang.org/1.99");
-        assert!(cabin.saved_page_list().is_empty());
-        assert!(ps::load_saved(&saved_finds_path()).is_empty());
+    }
+
+    #[test]
+    fn remove_from_saved_takes_out_exactly_that_card_and_keeps_past_two_hundred() {
+        let (_lock, _root, mut cabin) = cabin();
+        let mut list = Vec::new();
+        for i in 0..250u64 {
+            assert!(ps::save_find(
+                &mut list,
+                ps::SavedFind {
+                    title: format!("Find {i}"),
+                    url: format!("https://a.test/{i}"),
+                    source_name: "Example Feed".into(),
+                    summary: String::new(),
+                    because: None,
+                    saved_ms: i,
+                },
+            ));
+        }
+        ps::save_saved(&saved_finds_path(), &list).expect("write");
+        assert_eq!(cabin.saved_page_list().len(), 250);
+
+        cabin.remove_saved("https://a.test/42");
+        assert_eq!(cabin.status, "Removed from saved.");
+        let left = ps::load_saved(&saved_finds_path());
+        assert_eq!(left.len(), 249);
+        assert!(left.iter().all(|f| f.url != "https://a.test/42"));
+        assert_eq!(left[0].url, "https://a.test/249");
+        assert_eq!(left[248].url, "https://a.test/0");
+        assert_eq!(cabin.saved_page_list().len(), 249);
     }
 
     #[test]
@@ -1269,6 +1292,13 @@ mod tests {
             .expect("still up");
         assert_eq!(card.reaction, Some(grokhub_core::CardReaction::Up));
         assert_eq!(weight(&mut cabin), 80);
+        // The Saved page reads the same file and its own copy of the post:
+        // the feed card going away (here, the whole feed) leaves it be.
+        let feed = std::mem::take(&mut cabin.updates);
+        let page = cabin.saved_page_list();
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].title, "Rust 1.99 released");
+        cabin.updates = feed;
 
         cabin.status.clear();
         let gone = id(&cabin, "Rust in the kernel");

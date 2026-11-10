@@ -2307,9 +2307,7 @@ async fn pulse_why(state: State<'_, ShellState>, id: String) -> Result<String, S
 
 /// The Pulse Saved page: every saved find, newest first.
 #[tauri::command]
-async fn pulse_saved(
-    state: State<'_, ShellState>,
-) -> Result<Vec<pulse::Saved>, String> {
+async fn pulse_saved(state: State<'_, ShellState>) -> Result<Vec<pulse::Saved>, String> {
     capabilities::needs(capabilities::current().pulse, "Pulse")?;
     let dir = state.config_dir.clone();
     off_main(move || pulse::saved(&dir)).await

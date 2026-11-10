@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { pulseSaved, pulseUnsave, type SavedFind } from "./api";
-import { Snippet, fullDate } from "./FeedCard";
+import { Snippet } from "./FeedCard";
 import { ExternalLink, useDismiss } from "./ui";
 
 export const SAVED_EMPTY = "Nothing saved yet. Save a post in the feed and it stays here.";
@@ -22,12 +22,12 @@ function SavedCard({
     <li className="card post feed-card" aria-label={find.title}>
       <div className="feed-head">
         <div className="feed-title">
-          <ExternalLink href={find.url}>{find.title}</ExternalLink>
+          {/* Same text-colored link as the links inside a card's text. */}
+          <span className="snippet">
+            <ExternalLink href={find.url}>{find.title}</ExternalLink>
+          </span>
         </div>
         <div className="feed-corner" ref={corner}>
-          <span className="card-status" title={fullDate(find.savedMs)}>
-            Saved
-          </span>
           <button
             type="button"
             className="quiet icon-button"
@@ -44,6 +44,7 @@ function SavedCard({
               <button
                 type="button"
                 role="menuitem"
+                style={{ whiteSpace: "nowrap" }}
                 onClick={() => {
                   setMenu(false);
                   onRemove();
@@ -92,4 +93,3 @@ export function SavedPage({ onError }: { onError: (err: unknown) => void }) {
     </ul>
   );
 }
-

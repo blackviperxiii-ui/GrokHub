@@ -976,7 +976,6 @@ pub(super) fn post_why(card: &UpdateCard) -> Option<String> {
         .or_else(|| card.pulse.because.as_deref().map(why_line))
 }
 
-/// A post's ··· menu: only "Why I created this" and its answer.
 /// The header pill that opens the Saved page, or goes back to the feed.
 pub(super) fn saved_pill_label(saved_open: bool) -> &'static str {
     if saved_open {
@@ -986,6 +985,7 @@ pub(super) fn saved_pill_label(saved_open: bool) -> &'static str {
     }
 }
 
+/// A post's ··· menu: only "Why I created this" and its answer.
 fn post_why_menu(ui: &mut egui::Ui, why: Option<&str>) {
     ui.label(
         RichText::new("Why I created this")

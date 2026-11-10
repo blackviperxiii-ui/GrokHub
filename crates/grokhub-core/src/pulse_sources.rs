@@ -2967,6 +2967,50 @@ mod tests {
     }
 
     #[test]
+    fn two_hundred_fifty_saved_finds_survive_a_round_trip_and_remove_takes_exactly_one() {
+        let dir = std::env::temp_dir().join(format!(
+            "grokhub-core-saved-250-{}-{}",
+            std::process::id(),
+            crate::now_ms()
+        ));
+        let path = dir.join(SAVED_FILE);
+        let mut list = Vec::new();
+        for i in 0..250u64 {
+            let find = SavedFind {
+                title: format!("Find {i}"),
+                url: format!("https://a.test/{i}"),
+                source_name: "Example Feed".into(),
+                summary: String::new(),
+                because: None,
+                saved_ms: i,
+            };
+            assert!(save_find(&mut list, find));
+            save_saved(&path, &list).expect("write");
+        }
+        let on_disk = load_saved(&path);
+        assert_eq!(on_disk.len(), 250);
+        assert_eq!(on_disk[0].url, "https://a.test/249");
+        assert_eq!(on_disk[249].url, "https://a.test/0");
+
+        let mut list = on_disk;
+        assert!(remove_find(&mut list, "https://a.test/125"));
+        save_saved(&path, &list).expect("write");
+        let after = load_saved(&path);
+        assert_eq!(after.len(), 249);
+        assert!(!is_saved(&after, "https://a.test/125"));
+        assert!(is_saved(&after, "https://a.test/124"));
+        assert!(is_saved(&after, "https://a.test/126"));
+        let left: Vec<String> = after.iter().map(|f| f.url.clone()).collect();
+        let want: Vec<String> = (0..250u64)
+            .rev()
+            .filter(|i| *i != 125)
+            .map(|i| format!("https://a.test/{i}"))
+            .collect();
+        assert_eq!(left, want, "only that one find left the list");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn saved_finds_keep_one_entry_per_link_newest_first() {
         let mut card = item_card(
             &ranked(item(
