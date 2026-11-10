@@ -446,6 +446,8 @@ impl WebAccess {
                 };
                 let accept = Arc::clone(&server);
                 std::thread::spawn(move || accept_loop(&accept, &job));
+                let kick = Arc::downgrade(&server);
+                std::thread::spawn(move || nudge_pool(&kick, inner));
                 *running = Some(Running {
                     pairing,
                     port,
@@ -612,6 +614,27 @@ fn accept_loop(server: &Server, job: &Job) {
             assets: Arc::clone(&job.assets),
         };
         std::thread::spawn(move || handle(req, &job, slot));
+    }
+}
+
+/// How often the server pokes its own worker pool (see `nudge_pool`).
+const NUDGE_EVERY: Duration = Duration::from_millis(200);
+
+/// tiny_http 0.12 hands each connection to a worker pool that can miss a
+/// wakeup: when two connections land before a woken worker takes its task,
+/// the second one waits in the queue until another worker frees up or a new
+/// connection arrives. Keep-alive sockets hold workers, so a page's last
+/// file could wait for good. An empty connection now and then makes the pool
+/// start a worker, which runs anything left in the queue. Ends with the server.
+fn nudge_pool(server: &std::sync::Weak<Server>, addr: SocketAddr) {
+    let ip = match addr.ip() {
+        ip if ip.is_unspecified() => IpAddr::V4(Ipv4Addr::LOCALHOST),
+        ip => ip,
+    };
+    let addr = SocketAddr::new(ip, addr.port());
+    while server.upgrade().is_some() {
+        std::thread::sleep(NUDGE_EVERY);
+        let _ = std::net::TcpStream::connect_timeout(&addr, NUDGE_EVERY);
     }
 }
 
@@ -1285,6 +1308,41 @@ mod tests {
             .and_then(|p| p.parse().ok())
             .expect("a localhost link");
         (port, view.code)
+    }
+
+    /// One keep-alive GET; whether its status line came back in time.
+    fn answered(sock: &mut TcpStream) -> bool {
+        write!(
+            sock,
+            "GET /assets/app.js HTTP/1.1\r\nHost: x\r\nConnection: keep-alive\r\n\r\n"
+        )
+        .expect("send");
+        sock.set_read_timeout(Some(Duration::from_secs(1)))
+            .expect("timeout");
+        let mut line = String::new();
+        BufReader::new(sock.try_clone().expect("clone"))
+            .read_line(&mut line)
+            .is_ok_and(|_| line.starts_with("HTTP/1.1 200"))
+    }
+
+    #[test]
+    fn a_new_connection_is_answered_while_keep_alive_ones_hold_the_pool() {
+        // Three open keep-alive sockets leave the pool one idle worker, and
+        // two connections at once used to strand the second one unread.
+        for _ in 0..20 {
+            let access = WebAccess::default();
+            let (port, _) = serve(&access);
+            let connect = || TcpStream::connect(("127.0.0.1", port)).expect("connect");
+            let mut held: Vec<TcpStream> = (0..3).map(|_| connect()).collect();
+            assert!(held.iter_mut().all(answered));
+            std::thread::sleep(Duration::from_millis(50));
+            let (mut a, mut b) = (connect(), connect());
+            assert!(
+                answered(&mut a) && answered(&mut b),
+                "a page file never came back"
+            );
+            access.stop();
+        }
     }
 
     #[test]

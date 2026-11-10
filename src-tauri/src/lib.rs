@@ -14,6 +14,7 @@ mod brand_guard;
 pub mod capabilities;
 pub mod chips;
 pub mod code;
+pub mod code_runs;
 pub mod connectors;
 pub mod credential;
 pub mod export;
@@ -1589,6 +1590,84 @@ async fn code_builtins(state: State<'_, ShellState>) -> Result<Vec<code::Builtin
     let config = state.config_dir.clone();
     let home = grokhub_core::user_home();
     off_main(move || code::builtins(&dir, home.as_deref(), &config)).await
+}
+
+/// Code tab: the test command to show, and whether it still needs a confirm.
+#[tauri::command]
+async fn code_test_plan(
+    state: State<'_, ShellState>,
+    command: Option<String>,
+) -> Result<code_runs::Plan, String> {
+    let dir = workspace(&state);
+    let config = state.config_dir.clone();
+    off_main(move || code_runs::plan(&config, &dir, command.as_deref(), code_runs::Mode::Auto))
+        .await?
+}
+
+/// Code tab: run the test command. `confirmed` must be true when the store
+/// still wants a confirm for this command.
+#[tauri::command]
+async fn code_test_run(
+    app: AppHandle,
+    state: State<'_, ShellState>,
+    command: String,
+    confirmed: bool,
+) -> Result<code_runs::RunResult, String> {
+    let dir = workspace(&state);
+    let config = state.config_dir.clone();
+    off_main(move || {
+        let result = code_runs::run(
+            &config,
+            &dir,
+            &command,
+            confirmed,
+            code_runs::Mode::Auto,
+            |chunk| {
+                let _ = app.emit(
+                    code_runs::RUN_EVENT,
+                    code_runs::RunChunk {
+                        text: chunk.to_string(),
+                        done: false,
+                        exit: None,
+                        cut: false,
+                    },
+                );
+            },
+        );
+        if let Ok(done) = &result {
+            let _ = app.emit(
+                code_runs::RUN_EVENT,
+                code_runs::RunChunk {
+                    text: String::new(),
+                    done: true,
+                    exit: Some(done.exit),
+                    cut: done.cut,
+                },
+            );
+        }
+        result
+    })
+    .await?
+}
+
+/// Settings → Code: the remembered test command for this project, if any.
+#[tauri::command]
+async fn code_test_remembered(
+    state: State<'_, ShellState>,
+) -> Result<code_runs::RememberedView, String> {
+    let dir = workspace(&state);
+    let config = state.config_dir.clone();
+    off_main(move || code_runs::remembered_view(&config, &dir)).await?
+}
+
+/// Settings → Code: forget the remembered test command so the next run asks.
+#[tauri::command]
+async fn code_test_forget(
+    state: State<'_, ShellState>,
+) -> Result<code_runs::RememberedView, String> {
+    let dir = workspace(&state);
+    let config = state.config_dir.clone();
+    off_main(move || code_runs::forget_test(&config, &dir)).await?
 }
 
 #[tauri::command]
@@ -3583,6 +3662,10 @@ pub fn run() {
             code_repo,
             code_diff,
             code_builtins,
+            code_test_plan,
+            code_test_run,
+            code_test_remembered,
+            code_test_forget,
             get_journal,
             journal_add,
             journal_act,
