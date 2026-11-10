@@ -98,6 +98,13 @@ fn title(area: &str, id: &str) -> String {
         "card" => format!("{} cards", capital(&words(id))),
         "card-group" => format!("Cards from {}", words(id)),
         "skill" => format!("Skill {id}"),
+        "habit" => match id.rsplit_once('/') {
+            Some((skill, part)) => format!(
+                "Skill {skill} {}",
+                super::habit::Part::parse(part).map_or(part, |p| p.when())
+            ),
+            None => format!("Habit {id}"),
+        },
         "reply" => format!("Plan reply: {}", plan_reply(id)),
         "trait" => format!(
             "One Pulse card {}",
@@ -146,6 +153,7 @@ fn says(area: &str, id: &str, belief: &Belief) -> String {
         "reply" => format!("You pick this about {n} times in 10 when a plan waits."),
         "trait" => format!("You like cards with it about {n} times in 10."),
         "model" | "skill" => format!("Runs go well about {n} times in 10."),
+        "habit" => format!("About {n} in 10 of its runs happen then."),
         _ => format!("It goes your way about {n} times in 10."),
     }
 }

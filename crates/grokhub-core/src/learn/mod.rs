@@ -11,6 +11,7 @@
 //! - [`store`]: the files, under `{config}/learn`, capped.
 //! - [`sources`]: what the app's existing logs mean as signals.
 //! - [`hub`]: the one engine a running app shares.
+//! - [`habit`]: what the user does at the same time of day, as timed chips.
 //! - [`decide`]: the one place a change the app would make on its own is
 //!   weighed: do it, offer it, wait or never.
 //!
@@ -21,6 +22,7 @@
 
 pub mod belief;
 pub mod decide;
+pub mod habit;
 pub mod hub;
 pub mod ladder;
 pub mod setup;

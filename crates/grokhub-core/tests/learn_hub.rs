@@ -119,9 +119,21 @@ fn the_shared_logs_feed_one_engine() {
     // Three rows went up: 1 surface + 2 chips, 1 + 1, 1 + 1.
     assert_eq!(shown, 7);
     assert_eq!(lines.first().unwrap().subject.as_str(), "chips:composer");
+    // The run's last four lines are its habit votes: `t0` is 08:00 UTC, so
+    // one for the morning and one against each other part of the day.
+    let tail: Vec<(&str, Kind)> = lines[lines.len() - 5..]
+        .iter()
+        .map(|s| (s.subject.as_str(), s.kind))
+        .collect();
     assert_eq!(
-        lines.last().unwrap().subject.as_str(),
-        "model:grok-code/run-usd"
+        tail,
+        vec![
+            ("model:grok-code/run-usd", Kind::Measured),
+            ("habit:weekly-report/morning", Kind::Used),
+            ("habit:weekly-report/afternoon", Kind::Ignored),
+            ("habit:weekly-report/evening", Kind::Ignored),
+            ("habit:weekly-report/night", Kind::Ignored),
+        ]
     );
     let text = fs::read_to_string(store::dir(&dir).join(store::SIGNALS)).unwrap();
     for word in ["brief", "patch-notes", "Name", "body"] {
@@ -201,6 +213,94 @@ fn the_shared_logs_feed_one_engine() {
     ] {
         assert!(json.get(field).is_some(), "{field} missing from {json}");
     }
+    // The habit miner: twelve good runs of one skill at this time of day
+    // become a chip, through the decision engine. A tap is a yes to its
+    // rule; a hide is a no, and the chip rests.
+    use grokhub_core::learn::decide::Situation as Now;
+    use grokhub_core::learn::habit;
+    hub::set_utc_offset_min(0);
+    let live = grokhub_core::now_ms();
+    let skills = vec![grokhub_core::SkillMd {
+        name: "tidy-up".into(),
+        slash: "/tidy-up".into(),
+        ..Default::default()
+    }];
+    assert_eq!(
+        hub::habit_chips(&skills, Now::default(), 99.0, live),
+        Vec::new()
+    );
+    for i in 0..12u64 {
+        let run = RunMetrics {
+            run: format!("chat-h:{i}"),
+            class: "skill:tidy-up".into(),
+            result: OutcomeResult::Success,
+            model: "grok-code".into(),
+            finished_at: live,
+            at: live,
+            ..RunMetrics::default()
+        };
+        append_run(&dir, &run, 0).unwrap();
+    }
+    let part = habit::Part::of_hour(hub::local_hour(live));
+    let chips = hub::habit_chips(&skills, Now::default(), 99.0, live);
+    assert_eq!(chips.len(), 1, "{chips:?}");
+    assert_eq!(chips[0].id, format!("habit-{}-tidy-up", part.as_str()));
+    assert_eq!(chips[0].value, "/tidy-up");
+    assert_eq!(chips[0].hint, format!("You often run this {}", part.when()));
+    // The skill was removed: no chip, and nothing is weighed.
+    assert_eq!(
+        hub::habit_chips(&[], Now::default(), 99.0, live),
+        Vec::new()
+    );
+    let rule = habit::chip_rule(&chips[0].id).unwrap();
+    let state = || grokhub_core::learn::decide::load(&dir);
+    let mut habit_mem = ChipMemory::default();
+    for i in 0..3u64 {
+        log_chips_shown(&mut habit_mem, "composer", &chips, live + 10 * i);
+        log_chip_outcome(
+            &mut habit_mem,
+            "composer",
+            &chips[0],
+            true,
+            live + 10 * i + 1,
+        );
+    }
+    assert!(state().graduated(&rule), "three taps are three yes answers");
+    assert_eq!(
+        hub::habit_chips(&skills, Now::default(), 99.0, live + 40).len(),
+        1
+    );
+    log_chips_shown(&mut habit_mem, "composer", &chips, live + 50);
+    log_chip_outcome(&mut habit_mem, "composer", &chips[0], false, live + 51);
+    assert!(!state().graduated(&rule));
+    assert_eq!(
+        hub::habit_chips(&skills, Now::default(), 99.0, live + 60),
+        Vec::new(),
+        "a hide rests the habit chip"
+    );
+    let why: Vec<_> = state()
+        .log()
+        .filter(|d| d.rule == rule)
+        .map(|d| (d.verdict, d.reason))
+        .collect();
+    use grokhub_core::learn::decide::{Reason as Why, Verdict as Said};
+    assert_eq!(
+        why,
+        vec![
+            (Said::Offer, Why::Shadow),
+            (Said::Act, Why::Sure),
+            (Said::Wait, Why::Resting),
+        ]
+    );
+    let listed = view::run("", grokhub_core::now_ms());
+    assert!(
+        listed.contains(&format!(
+            "**Skill tidy-up {}**: About 10 in 10 of its runs happen then.",
+            part.when()
+        )),
+        "{listed}"
+    );
+
     // Pause: nothing is counted, what was learned stays, and resume counts again.
     let probe = Subject::new("skill", "pause-probe").unwrap();
     let seen = |key: &Subject| hub::read(|e| e.beliefs().get(key).map(|b| b.shape)).flatten();

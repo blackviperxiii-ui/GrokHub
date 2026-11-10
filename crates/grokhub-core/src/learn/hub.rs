@@ -7,11 +7,12 @@
 //! call it without a switch.
 
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 use super::decide::{self, Alarm, Area, Decision, Dial, Outcome, Proposal, Situation};
+use super::habit;
 use super::view::{self, View};
 use super::{Engine, Kind, Signal, Subject};
 
@@ -57,6 +58,19 @@ pub fn start(config_dir: &Path) {
 /// Whether [`start`] has run in this process.
 pub fn started() -> bool {
     HUB.get().is_some()
+}
+
+/// Minutes local time is east of UTC, as the app last told us. UTC until then.
+static UTC_OFFSET_MIN: AtomicI32 = AtomicI32::new(0);
+
+/// The app's local clock offset, so habits are counted in local hours.
+pub fn set_utc_offset_min(offset_min: i32) {
+    UTC_OFFSET_MIN.store(offset_min.clamp(-840, 840), Ordering::Relaxed);
+}
+
+/// The local hour of `at_ms`, 0 to 23.
+pub fn local_hour(at_ms: u64) -> u32 {
+    crate::rhythm::local_slot(at_ms, UTC_OFFSET_MIN.load(Ordering::Relaxed)).1
 }
 
 /// Whether the user has learning paused. While it is, nothing is recorded.
@@ -184,4 +198,45 @@ pub fn set_dial(area: Area, dial: Dial) {
 pub fn decisions_text(now_ms: u64) -> String {
     let state = engine().map(|e| decide::load(e.config_dir()));
     decide::text(&state.unwrap_or_default(), now_ms)
+}
+
+/// The quick chips for what the user usually does around `now_ms`: each due
+/// habit goes through the decision engine, and the ones it would offer or
+/// act on become chips, at most [`habit::CHIPS_MAX`]. Empty before [`start`].
+pub fn habit_chips(
+    skills: &[crate::skill::SkillMd],
+    now: Situation,
+    score: f32,
+    now_ms: u64,
+) -> Vec<crate::chips::QuickChip> {
+    let part = habit::Part::of_hour(local_hour(now_ms));
+    let due = read(|e| habit::due(e.beliefs(), part, now_ms)).unwrap_or_default();
+    // A habit whose skill is gone has no chip, so it is not weighed either.
+    let shown: Vec<(habit::Habit, crate::chips::QuickChip, Proposal)> = due
+        .into_iter()
+        .filter_map(|h| {
+            let chip = habit::chip(&h, skills, score)?;
+            let proposal = h.proposal()?;
+            Some((h, chip, proposal))
+        })
+        .collect();
+    if shown.is_empty() {
+        return Vec::new();
+    }
+    let verdicts = decide_all(
+        shown.iter().map(|(_, _, p)| p.clone()).collect(),
+        now,
+        now_ms,
+    );
+    shown
+        .into_iter()
+        .filter(|(_, _, p)| {
+            verdicts.iter().any(|d| {
+                d.rule == p.rule
+                    && matches!(d.verdict, decide::Verdict::Act | decide::Verdict::Offer)
+            })
+        })
+        .map(|(_, chip, _)| chip)
+        .take(habit::CHIPS_MAX)
+        .collect()
 }
