@@ -1,0 +1,1 @@
+- The app now tries things on purpose, rarely: a skill you have run a couple of times around the same time of day can show up once as a quick chip marked as a try. At most one a day, never while you are busy or in quiet hours, and hiding it is a no.

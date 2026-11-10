@@ -193,6 +193,51 @@ pub fn due(beliefs: &Beliefs, part: Part, gaming: bool, now_ms: u64) -> Vec<Habi
     out
 }
 
+/// Habits the app has seen in `part` and this setting but is not sure of:
+/// they lean yes with more than one run behind them, and are still under the
+/// line for a suggestion. The likeliest first. These are what an experiment
+/// may try ([`super::experiment`]).
+pub fn unsure(beliefs: &Beliefs, part: Part, gaming: bool, now_ms: u64) -> Vec<Habit> {
+    let mut out: Vec<Habit> = beliefs
+        .iter()
+        .filter(|(s, _)| s.area() == "habit")
+        .filter_map(|(s, b)| {
+            let (_, id) = s.as_str().split_once(':')?;
+            let (skill, at) = id.rsplit_once('/')?;
+            if parse_tail(at)? != (part, gaming) || !b.leans_yes()? {
+                return None;
+            }
+            let (confidence, evidence) = (b.confidence(now_ms), b.evidence(now_ms));
+            (evidence >= super::experiment::MIN_EVIDENCE
+                && step(confidence, evidence, Undo::OneClick) == Step::Watch)
+                .then(|| Habit {
+                    skill: skill.to_string(),
+                    part,
+                    gaming,
+                    confidence,
+                    evidence,
+                })
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        b.confidence
+            .total_cmp(&a.confidence)
+            .then_with(|| a.skill.cmp(&b.skill))
+    });
+    out
+}
+
+/// The chip for a habit the app is trying on purpose: the habit's own chip,
+/// saying that it is a try.
+pub fn trial_chip(habit: &Habit, skills: &[SkillMd], score: f32) -> Option<QuickChip> {
+    let mut chip = chip(habit, skills, score)?;
+    chip.hint = format!(
+        "Trying this: you sometimes run it {}",
+        when(habit.part, habit.gaming)
+    );
+    Some(chip)
+}
+
 /// The rule behind a habit chip's id, for its tap or hide. `None` for any
 /// other chip.
 pub fn chip_rule(chip_id: &str) -> Option<Subject> {
