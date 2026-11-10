@@ -72,6 +72,26 @@ fn job_primary_pill(ui: &mut egui::Ui, label: &str) -> bool {
 }
 
 impl Cabin {
+    /// A Suggested automation tile was pressed. Its Add saves the job; a
+    /// click on the rest of the tile only opens a preview with its own Add.
+    pub(super) fn suggested_tile_hit(
+        &mut self,
+        hit: crate::cards::TileHit,
+        title: &str,
+        seed: &str,
+    ) {
+        match hit {
+            crate::cards::TileHit::Add => self.add_automation_seed(seed),
+            crate::cards::TileHit::Body => {
+                self.confirm = Some(super::confirm::ConfirmKind::AddSuggestedAuto {
+                    title: title.to_string(),
+                    seed: seed.to_string(),
+                });
+            }
+            crate::cards::TileHit::None => {}
+        }
+    }
+
     pub(super) fn add_automation_seed(&mut self, seed: &str) {
         match self.save_schedule(seed) {
             Some(status) => {
@@ -314,12 +334,8 @@ impl Cabin {
             let auto_tiles = crate::cards::merge_suggested_autos(&self.suggestions.autos, &active_names);
             crate::cards::tile_row(ui, auto_tiles.len(), |ui, i| {
                 let (icon, title, body, seed) = &auto_tiles[i];
-                if matches!(
-                    crate::cards::grok_tile(ui, *icon, title, body, Some("Add"), false),
-                    crate::cards::TileHit::Add | crate::cards::TileHit::Body
-                ) {
-                    self.add_automation_seed(seed);
-                }
+                let hit = crate::cards::grok_tile(ui, *icon, title, body, Some("Add"), false);
+                self.suggested_tile_hit(hit, title, seed);
             });
             if let Some(i) = remove_loop {
                 if let Some(row) = self.grok_loops.get(i) {

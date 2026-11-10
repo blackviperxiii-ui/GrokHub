@@ -1,0 +1,4 @@
+- Saying "good morning" or "hi" no longer leads to an offer to automate a greeting: greetings and small talk are never counted as repeat asks, and an offer whose topic is only a greeting word is never made.
+- No thanks on a repeat-ask offer now holds at every hour, including for offers dismissed before this update.
+- Clicking a Suggested automation tile opens a preview of what it does and when; only its Add button adds it.
+- When the agent wants to create a new automation, you approve it on a card first, even with Always on, and it never makes one on a turn that was only a greeting.

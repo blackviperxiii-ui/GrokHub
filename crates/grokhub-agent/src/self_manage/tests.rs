@@ -52,7 +52,7 @@ fn class_table_names_every_tool_once() {
             ("connection_disable", "soft"),
             ("connection_remove", "delete"),
             ("automation_list", "read"),
-            ("automation_create", "soft"),
+            ("automation_create", "new_automation"),
             ("automation_modify", "soft"),
             ("automation_disable", "soft"),
             ("automation_delete", "delete"),
@@ -153,6 +153,31 @@ fn every_path_sees_the_same_classes() {
         }
     );
     assert_eq!(native(&always, "connection_add", &cred), Decision::Ask);
+    // A new automation needs your yes on a card: Always cannot skip it, and a
+    // run with nobody there refuses it. Native and MCP names agree.
+    let new_job = json!({ "instructions": "say good morning", "every": "1d", "reason": "asked" });
+    for name in ["automation_create", "grokhub-self__automation_create"] {
+        assert_eq!(
+            decide(Step::Tool {
+                name,
+                arguments: &new_job.to_string()
+            }),
+            GateOutcome::Park {
+                reason: "hard-class automation: New automation — Always cannot skip".into(),
+                hard: Some(HardClass::Automation),
+                needs_user: true,
+            },
+            "{name}"
+        );
+    }
+    assert_eq!(
+        native(&always, "automation_create", &new_job),
+        Decision::Ask
+    );
+    assert_eq!(
+        native(&gate(PermMode::Always, false), "automation_create", &new_job),
+        Decision::Refuse("Tool `automation_create` was not executed: hard-class automation needs you, and nobody is here to approve it".into())
+    );
     // Soft follows the pill: Always runs, Ask asks, unattended Ask refuses.
     let soft = json!({ "name": "weekly-report", "instructions": "open report.md", "reason": "asked twice" });
     for name in [
@@ -160,7 +185,7 @@ fn every_path_sees_the_same_classes() {
         "skill_modify",
         "skill_disable",
         "connection_add",
-        "automation_create",
+        "automation_modify",
     ] {
         assert_eq!(
             decide(Step::Tool {

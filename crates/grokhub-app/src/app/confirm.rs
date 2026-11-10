@@ -106,6 +106,12 @@ pub(super) enum ConfirmKind {
         dir: String,
         title: String,
     },
+    /// A Suggested automation tile's preview: what it would do and when.
+    /// Only its Add saves the job.
+    AddSuggestedAuto {
+        title: String,
+        seed: String,
+    },
     /// Settings → Connectors Disconnect: the server and its sign-in go.
     Disconnect {
         name: String,
@@ -137,6 +143,7 @@ impl ConfirmKind {
             | Self::RemoveJob { .. }
             | Self::LastRun { .. }
             | Self::DeleteRecording { .. }
+            | Self::AddSuggestedAuto { .. }
             | Self::Disconnect { .. }
             | Self::SleepPc
             | Self::ClearMainChat
@@ -184,6 +191,35 @@ pub(super) fn remove_job_spec() -> ConfirmSpec {
         consequence: "The job is deleted and will not run again.",
         primary: REMOVE_JOB_PRIMARY,
         danger: true,
+    }
+}
+
+pub(super) fn add_suggested_auto_spec() -> ConfirmSpec {
+    ConfirmSpec {
+        title: "Add automation",
+        consequence: "It runs on its own on this schedule. Nothing is added until you press Add.",
+        primary: "Add",
+        danger: false,
+    }
+}
+
+/// What a Suggested automation would do, and when, in two lines.
+pub(super) fn suggested_auto_preview(seed: &str) -> String {
+    match route_schedule(seed) {
+        Some(ScheduleRoute::Clock(a)) => {
+            let what = match a.name.trim() {
+                "" => a.instructions.trim(),
+                name => name,
+            };
+            format!(
+                "What: {what}\nWhen: {}",
+                grokhub_core::automation_schedule_label(&a)
+            )
+        }
+        Some(ScheduleRoute::Interval { interval, prompt }) => {
+            format!("What: {}\nWhen: every {interval}", prompt.trim())
+        }
+        None => format!("What: {}", seed.trim()),
     }
 }
 
@@ -409,6 +445,11 @@ impl Cabin {
             ConfirmKind::DeleteRecording { dir, title, .. } => {
                 (delete_recording_spec(), format!("Delete {title}?"), dir.clone())
             }
+            ConfirmKind::AddSuggestedAuto { title, seed } => (
+                add_suggested_auto_spec(),
+                format!("Add {title}?"),
+                suggested_auto_preview(seed),
+            ),
             ConfirmKind::Disconnect { name } => (
                 disconnect_spec(),
                 super::connectors_ui::disconnect_question(name),
@@ -471,7 +512,7 @@ impl Cabin {
         }
     }
 
-    fn take_confirm(&mut self, kind: ConfirmKind) {
+    pub(super) fn take_confirm(&mut self, kind: ConfirmKind) {
         self.confirm = None;
         match kind {
             ConfirmKind::AlwaysSession => self.apply_session_always(),
@@ -485,6 +526,7 @@ impl Cabin {
                 dir,
                 title,
             } => self.delete_recording(&card_id, &dir, &title),
+            ConfirmKind::AddSuggestedAuto { seed, .. } => self.add_automation_seed(&seed),
             ConfirmKind::Disconnect { name } => self.disconnect_confirmed(&name),
             ConfirmKind::SleepPc => self.sleep_pc_confirmed(),
             ConfirmKind::ClearMainChat => self.clear_main_chat(),

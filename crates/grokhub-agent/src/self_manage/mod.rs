@@ -33,6 +33,9 @@ pub enum SelfClass {
     Read,
     /// Create, modify, disable, enable: logged with Undo, follows the GB pill.
     Soft,
+    /// A new automation: logged with Undo, and it always parks a card for
+    /// your yes first, since the job runs on its own later.
+    NewAutomation,
     /// Hard class delete: always parks a card.
     Delete,
     /// Hard class credentials: a connection that needs a token.
@@ -44,6 +47,7 @@ impl SelfClass {
         match self {
             Self::Read => "read",
             Self::Soft => "soft",
+            Self::NewAutomation => "new_automation",
             Self::Delete => "delete",
             Self::Credentials => "credentials",
         }
@@ -53,6 +57,7 @@ impl SelfClass {
     pub fn hard(self) -> Option<crate::harness::HardClass> {
         match self {
             Self::Read | Self::Soft => None,
+            Self::NewAutomation => Some(crate::harness::HardClass::Automation),
             Self::Delete => Some(crate::harness::HardClass::Delete),
             Self::Credentials => Some(crate::harness::HardClass::Credentials),
         }
@@ -75,7 +80,7 @@ pub const SELF_TOOLS: &[(&str, SelfClass)] = &[
     ("connection_disable", SelfClass::Soft),
     ("connection_remove", SelfClass::Delete),
     ("automation_list", SelfClass::Read),
-    ("automation_create", SelfClass::Soft),
+    ("automation_create", SelfClass::NewAutomation),
     ("automation_modify", SelfClass::Soft),
     ("automation_disable", SelfClass::Soft),
     ("automation_delete", SelfClass::Delete),

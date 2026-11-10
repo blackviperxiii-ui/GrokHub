@@ -10,11 +10,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use crate::chat_view::is_workload_user;
-use crate::ideas::{is_one_off_ask, same_topic, topic_words, IdeaKind};
+use crate::ideas::{is_one_off_ask, same_topic, same_topic_words, topic_words, IdeaKind};
 use crate::redact::{is_plain_text, redact_secrets};
 use crate::review::{LearnedSuggestion, SuggestionKind};
 use crate::rhythm::hour_label;
 use crate::skill::{is_feedback_ask, skill_dir_name};
+use crate::small_talk::{is_small_talk, is_small_talk_word};
 use crate::update_feed::{automate_offer_card, idea_card, UpdateCard};
 
 pub const HOUR_MS: u64 = 60 * 60 * 1000;
@@ -85,10 +86,13 @@ pub struct AskLogEntry {
 pub struct AskOfferLedger {
     #[serde(default)]
     pub entries: Vec<AskLogEntry>,
-    /// Cluster keys the user dismissed: never suggest again.
-    #[serde(default)]
+    /// Topics the user dismissed: never suggest again, at any hour. Keys
+    /// saved as `{topic}@h{hour}` or `{topic}@skill` load as the bare topic.
+    #[serde(default, deserialize_with = "de_dismissed")]
     pub dismissed: BTreeSet<String>,
-    #[serde(default)]
+    /// Cluster key → when it was offered. Old `{topic}@h{hour}` keys load as
+    /// the bare topic, keeping the newest stamp.
+    #[serde(default, deserialize_with = "de_last_offered")]
     pub last_offered: BTreeMap<String, u64>,
     #[serde(default)]
     pub last_tick_ms: u64,
@@ -96,6 +100,60 @@ pub struct AskOfferLedger {
     pub day: String,
     #[serde(default)]
     pub posted_today: u32,
+}
+
+/// `{topic}@h{hour}` → `{topic}`; any other key as it is.
+fn strip_hour(key: &str) -> &str {
+    match key.rsplit_once("@h") {
+        Some((topic, hour))
+            if !topic.is_empty()
+                && !hour.is_empty()
+                && hour.bytes().all(|b| b.is_ascii_digit()) =>
+        {
+            topic
+        }
+        _ => key,
+    }
+}
+
+/// The topic a cluster key or an old dismissal key names: `patch-note@h19`,
+/// `patch-note@skill` and `patch-note` are all `patch-note`.
+pub fn dismiss_topic(key: &str) -> &str {
+    let key = strip_hour(key.trim());
+    key.strip_suffix("@skill").unwrap_or(key)
+}
+
+fn de_dismissed<'de, D: serde::Deserializer<'de>>(d: D) -> Result<BTreeSet<String>, D::Error> {
+    let raw = BTreeSet::<String>::deserialize(d)?;
+    Ok(raw
+        .iter()
+        .map(|k| dismiss_topic(k).to_string())
+        .filter(|k| !k.is_empty())
+        .collect())
+}
+
+fn de_last_offered<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<BTreeMap<String, u64>, D::Error> {
+    let raw = BTreeMap::<String, u64>::deserialize(d)?;
+    let mut out = BTreeMap::new();
+    for (key, at) in raw {
+        let slot = out.entry(strip_hour(&key).to_string()).or_insert(at);
+        *slot = (*slot).max(at);
+    }
+    Ok(out)
+}
+
+/// The user said No thanks to this cluster's topic, or to one
+/// [`same_topic_words`] calls the same.
+fn is_dismissed(dismissed: &BTreeSet<String>, cluster_key: &str) -> bool {
+    let topic = dismiss_topic(cluster_key);
+    if dismissed.contains(topic) {
+        return true;
+    }
+    let words = |t: &str| -> Vec<String> { t.split('-').map(str::to_string).collect() };
+    let mine = words(topic);
+    dismissed.iter().any(|d| same_topic_words(&words(d), &mine))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,7 +202,7 @@ pub struct TickOutput {
 /// First-line ask text worth logging, or `None` when filtered out.
 pub fn may_log_ask(text: &str) -> Option<String> {
     let t = text.trim();
-    if t.len() < 8 || t.starts_with('/') {
+    if t.len() < 8 || t.starts_with('/') || is_small_talk(t) {
         return None;
     }
     if is_workload_user(t) || is_feedback_ask(t) || !is_plain_text(t) || is_one_off_ask(t) {
@@ -222,9 +280,10 @@ fn topic_key(text: &str) -> String {
     }
 }
 
-fn cluster_key(topic: &str, peak_hour: u32, kind: OfferKind) -> String {
+/// Topic only, never the hour: a No thanks or an Accept holds at every hour.
+fn cluster_key(topic: &str, kind: OfferKind) -> String {
     match kind {
-        OfferKind::Automation => format!("{topic}@h{peak_hour}"),
+        OfferKind::Automation => topic.to_string(),
         OfferKind::Skill => format!("{topic}@skill"),
     }
 }
@@ -254,10 +313,13 @@ pub fn cluster_asks(entries: &[AskLogEntry], now_ms: u64) -> Vec<AskCluster> {
 
     let mut out = Vec::new();
     for (example, members) in groups {
-        let topic = topic_key(&example);
-        if topic.is_empty() {
+        // A topic of only filler or greeting words ("good" from "good
+        // morning") is not something to automate.
+        let words = topic_words(&example);
+        if words.is_empty() || words.iter().all(|w| is_small_talk_word(w)) {
             continue;
         }
+        let topic = topic_key(&example);
         // Peak hour by counting each ask toward its hour (± tolerance).
         // Ties go to the hour with the most exact asks, so asks all at 19
         // peak at 19, not at the 18 that also has them all within tolerance.
@@ -291,7 +353,7 @@ pub fn cluster_asks(entries: &[AskLogEntry], now_ms: u64) -> Vec<AskCluster> {
         let tight = peak_score as usize >= OFFER_MIN_COUNT;
         if tight {
             out.push(AskCluster {
-                key: cluster_key(&topic, peak_hour, OfferKind::Automation),
+                key: cluster_key(&topic, OfferKind::Automation),
                 example: example.clone(),
                 count: peak_score as usize,
                 peak_hour,
@@ -300,7 +362,7 @@ pub fn cluster_asks(entries: &[AskLogEntry], now_ms: u64) -> Vec<AskCluster> {
             });
         } else if members.len() >= OFFER_MIN_COUNT {
             out.push(AskCluster {
-                key: cluster_key(&topic, peak_hour, OfferKind::Skill),
+                key: cluster_key(&topic, OfferKind::Skill),
                 example,
                 count: members.len(),
                 peak_hour,
@@ -410,9 +472,9 @@ fn already_automated(existing: &[String], example: &str) -> bool {
         .any(|a| !a.trim().is_empty() && same_topic(a, example))
 }
 
-/// Mark a cluster dismissed forever (Dismiss on the suggestion card).
+/// Mark a cluster's topic dismissed forever (Dismiss on the suggestion card).
 pub fn dismiss_cluster(ledger: &mut AskOfferLedger, cluster_key: &str) {
-    let key = cluster_key.trim();
+    let key = dismiss_topic(cluster_key);
     if key.is_empty() {
         return;
     }
@@ -426,7 +488,7 @@ pub fn dismiss_cluster(ledger: &mut AskOfferLedger, cluster_key: &str) {
     }
 }
 
-/// Source id → cluster key (`askoffer:topic@h19` → `topic@h19`).
+/// Source id → cluster key (`askoffer:patch-note` → `patch-note`).
 pub fn cluster_key_from_source(source_id: &str) -> Option<&str> {
     source_id
         .strip_prefix(SOURCE_PREFIX)
@@ -471,7 +533,7 @@ pub fn tick(input: TickInput<'_>) -> TickOutput {
         if ledger.posted_today >= daily_max {
             break;
         }
-        if ledger.dismissed.contains(&cluster.key) {
+        if is_dismissed(&ledger.dismissed, &cluster.key) {
             continue;
         }
         if already_automated(existing_autos, &cluster.example) {
@@ -698,6 +760,127 @@ mod tests {
         assert_eq!(clusters[0].count, 3);
         assert_eq!(clusters[0].peak_hour, 19);
         assert_eq!(clusters[0].kind, OfferKind::Automation);
+    }
+
+    fn tick_at(ledger: &mut AskOfferLedger, today: &str, now_ms: u64) -> TickOutput {
+        tick(TickInput {
+            settings: &AskOfferSettings::default(),
+            ledger,
+            existing_autos: &[],
+            live_sources: &[],
+            today,
+            now_ms,
+        })
+    }
+
+    fn log_patch_notes_at(ledger: &mut AskOfferLedger, hour: u32, first_day: u64) -> u64 {
+        let mut last = 0;
+        for (i, text) in [
+            "check the game patch notes",
+            "check tonight's patch notes please",
+            "check patch notes for the update",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let e = entry(text, hour, first_day + i as u64);
+            append_ask(ledger, &e.text, e.hour, e.weekday, e.at_ms);
+            last = e.at_ms;
+        }
+        last
+    }
+
+    #[test]
+    fn greetings_and_small_talk_are_never_logged() {
+        let mut ledger = AskOfferLedger::default();
+        for (i, text) in [
+            "good morning",
+            "Good morning!",
+            "good morning grok",
+            "good afternoon",
+            "good evening, sam",
+            "hello there",
+            "hey grok, how are you",
+            "how's it going?",
+            "thank you so much",
+            "ok cool lol",
+        ]
+        .iter()
+        .enumerate()
+        {
+            assert_eq!(may_log_ask(text), None, "{text}");
+            append_ask(&mut ledger, text, 8, 1, i as u64 * DAY_MS);
+        }
+        assert!(ledger.entries.is_empty(), "{:?}", ledger.entries);
+    }
+
+    #[test]
+    fn three_good_mornings_never_offer_an_automation() {
+        let mut ledger = AskOfferLedger::default();
+        for day in 0..3u64 {
+            let e = entry("good morning", 8 + (day as u32 % 2), day);
+            append_ask(&mut ledger, &e.text, e.hour, e.weekday, e.at_ms);
+        }
+        let now = entry("good morning", 9, 3).at_ms;
+        assert!(tick_at(&mut ledger, "2027-01-18", now).cards.is_empty());
+
+        // A ledger saved before the filter still holds the greetings, and a
+        // greeting with a stray digit gets past the word check: its only topic
+        // word is "good", so it never makes an offer either.
+        let old = vec![
+            entry("Good morning!", 8, 0),
+            entry("good morning 2 u", 8, 1),
+            entry("good morning 2 you", 9, 2),
+        ];
+        assert_eq!(topic_words("good morning 2 u"), vec!["good".to_string()]);
+        assert_eq!(cluster_asks(&old, now), Vec::new());
+        let mut saved = AskOfferLedger {
+            entries: old,
+            ..Default::default()
+        };
+        assert!(tick_at(&mut saved, "2027-01-18", now).cards.is_empty());
+    }
+
+    #[test]
+    fn no_thanks_holds_at_every_hour() {
+        let mut ledger = AskOfferLedger::default();
+        let evening = log_patch_notes_at(&mut ledger, 19, 0);
+        let out = tick_at(&mut ledger, "2027-01-17", evening + HOUR_MS);
+        assert_eq!(out.cards.len(), 1);
+        let key = cluster_key_from_source(&out.cards[0].source_id)
+            .expect("prefix")
+            .to_string();
+        assert_eq!(key, "note-patch-update");
+        dismiss_cluster(&mut ledger, &key);
+
+        // The same asks a week later at 7 in the morning: still no offer.
+        ledger.entries.clear();
+        ledger.last_offered.clear();
+        let morning = log_patch_notes_at(&mut ledger, 7, 7);
+        let again = tick_at(&mut ledger, "2027-01-25", morning + HOUR_MS);
+        assert_eq!(again.cards, Vec::new());
+    }
+
+    #[test]
+    fn an_old_hour_keyed_dismissal_still_counts_after_load() {
+        let saved = r#"{"dismissed":["note-patch-update@h19","standup-summary@skill"],
+            "lastOffered":{"note-patch-update@h19":5,"note-patch-update@h20":9}}"#;
+        let mut ledger: AskOfferLedger = serde_json::from_str(saved).expect("ledger");
+        let topics: Vec<&str> = ledger.dismissed.iter().map(String::as_str).collect();
+        assert_eq!(topics, vec!["note-patch-update", "standup-summary"]);
+        assert_eq!(
+            ledger.last_offered.iter().collect::<Vec<_>>(),
+            vec![(&"note-patch-update".to_string(), &9)]
+        );
+        // Loading the migrated file again changes nothing.
+        let twice: AskOfferLedger =
+            serde_json::from_str(&serde_json::to_string(&ledger).unwrap()).unwrap();
+        assert_eq!(twice, ledger);
+
+        ledger.last_offered.clear();
+        let morning = log_patch_notes_at(&mut ledger, 7, 0);
+        let out = tick_at(&mut ledger, "2027-01-17", morning + HOUR_MS);
+        assert_eq!(out.cards, Vec::new());
     }
 
     #[test]
