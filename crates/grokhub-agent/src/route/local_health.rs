@@ -21,7 +21,7 @@ pub struct Event {
     pub event: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
-    /// Load time for `start`.
+    /// Load time for `start`; prompt time for `first_reply`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ms: Option<u64>,
 }
@@ -103,10 +103,15 @@ pub fn log_to(config_dir: &Path, event: &str, detail: Option<&str>, ms: Option<u
 /// [`log_to`] the cabin's config folder. Tests write nothing here; they call
 /// [`log_to`] with their own folder.
 pub fn log(event: &str, detail: Option<&str>) {
+    log_ms(event, detail, None);
+}
+
+/// [`log`] with a time in milliseconds.
+pub fn log_ms(event: &str, detail: Option<&str>, ms: Option<u64>) {
     #[cfg(not(test))]
-    log_to(&crate::perm::config_dir(), event, detail, None);
+    log_to(&crate::perm::config_dir(), event, detail, ms);
     #[cfg(test)]
-    let _ = (event, detail);
+    let _ = (event, detail, ms);
 }
 
 /// The events in `config_dir`'s log, oldest first (bad lines skipped).
