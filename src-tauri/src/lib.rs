@@ -1582,6 +1582,15 @@ async fn code_diff(state: State<'_, ShellState>, path: String) -> Result<code::D
     off_main(move || code::diff(&dir, &path)).await?
 }
 
+/// Code tab: the app's built-in skills, read only.
+#[tauri::command]
+async fn code_builtins(state: State<'_, ShellState>) -> Result<Vec<code::Builtin>, String> {
+    let dir = workspace(&state);
+    let config = state.config_dir.clone();
+    let home = grokhub_core::user_home();
+    off_main(move || code::builtins(&dir, home.as_deref(), &config)).await
+}
+
 #[tauri::command]
 async fn get_journal(state: State<'_, ShellState>) -> Result<journal::Page, String> {
     let dir = state.config_dir.clone();
@@ -3566,6 +3575,7 @@ pub fn run() {
             answer_connector_key,
             code_repo,
             code_diff,
+            code_builtins,
             get_journal,
             journal_add,
             journal_act,

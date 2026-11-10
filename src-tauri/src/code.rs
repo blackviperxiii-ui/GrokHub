@@ -1,9 +1,12 @@
-//! Code tab, slice 1: a read-only look at the workspace's git repo (branch,
-//! changed files, one file's diff). Nothing here writes to the repo.
+//! Code tab: a read-only look at the workspace's git repo (branch, changed
+//! files, one file's diff) and the app's built-in skills. Nothing here writes
+//! to the repo or edits a skill.
 //!
 //! git runs without a shell, with external diff tools, text conversion and
 //! fsmonitor hooks off, so a repo's own config can't start other programs.
 
+use grokhub_agent::perm::ConfigGuard;
+use grokhub_agent::{plugins, SkillSource, BUILTIN_SKILL_BODIES};
 use serde::Serialize;
 use std::path::{Component, Path};
 use std::process::{Command, Stdio};
@@ -241,6 +244,92 @@ fn as_new(path: &Path) -> Result<String, String> {
     Ok(out)
 }
 
+/// A same-name project, user, cabin or plugin skill that shadows a built-in.
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OverriddenBy {
+    /// "project", "user", "cabin" or "plugin".
+    pub scope: String,
+    pub name: String,
+}
+
+/// One built-in skill, always listed, even when a same-name skill overrides it.
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Builtin {
+    pub name: String,
+    pub description: String,
+    /// The skill body, without the YAML front matter.
+    pub body: String,
+    pub overridden_by: Option<OverriddenBy>,
+}
+
+/// The app's built-in skills, in ship order, with whatever currently overrides
+/// each one (existing skill resolution). A built-in can't be deleted; removing
+/// the override brings it back.
+pub fn builtins(workspace: &Path, home: Option<&Path>, config_dir: &Path) -> Vec<Builtin> {
+    let _config = ConfigGuard::set(config_dir);
+    let found =
+        grokhub_agent::discover_all_skills(workspace, home, &plugins::skill_dirs(workspace));
+    BUILTIN_SKILL_BODIES
+        .iter()
+        .filter_map(|(folder, text)| {
+            let (name, description, body) = parse_builtin(folder, text)?;
+            let overridden_by = found.iter().find_map(|skill| {
+                if skill.name != name || skill.source == SkillSource::Builtin {
+                    return None;
+                }
+                Some(OverriddenBy {
+                    scope: skill.source.as_str().to_string(),
+                    name: skill.name.clone(),
+                })
+            });
+            Some(Builtin {
+                name,
+                description,
+                body,
+                overridden_by,
+            })
+        })
+        .collect()
+}
+
+fn parse_builtin(folder: &str, text: &str) -> Option<(String, String, String)> {
+    let (yaml, body) = split_frontmatter(text).unwrap_or(("", text));
+    let mut name = folder.to_string();
+    let mut description = String::new();
+    for line in yaml.lines() {
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        match key.trim() {
+            "name" => {
+                let trimmed = value.trim();
+                if !trimmed.is_empty() {
+                    name = trimmed.to_string();
+                }
+            }
+            "description" => description = value.trim().to_string(),
+            _ => {}
+        }
+    }
+    Some((name, description, body.trim().to_string()))
+}
+
+fn split_frontmatter(text: &str) -> Option<(&str, &str)> {
+    let text = text.trim_start_matches('\u{feff}').trim_start();
+    let rest = text.strip_prefix("---")?;
+    let rest = rest
+        .strip_prefix("\r\n")
+        .or_else(|| rest.strip_prefix('\n'))?;
+    let (yaml, after) = rest.split_once("\n---")?;
+    let body = after
+        .strip_prefix("\r\n")
+        .or_else(|| after.strip_prefix('\n'))
+        .unwrap_or(after);
+    Some((yaml.trim_end_matches('\r'), body))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -323,5 +412,100 @@ mod tests {
         assert!(n.text.contains("+new"), "{}", n.text);
         assert!(diff(&dir, "../x").is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "grokhub-code-builtins-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        for sub in ["cfg", "home", "ws/.git"] {
+            std::fs::create_dir_all(dir.join(sub)).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn lists_the_five_built_ins_in_order_with_bodies_and_no_override() {
+        let root = scratch("list");
+        let (cfg, home, ws) = (root.join("cfg"), root.join("home"), root.join("ws"));
+        let rows = builtins(&ws, Some(&home), &cfg);
+        let names: Vec<_> = rows.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "qa-walkthrough",
+                "av-qa-walkthrough",
+                "create-verification-skill",
+                "maintain-verification-skill",
+                "follow-through",
+            ]
+        );
+        let follow = rows.iter().find(|r| r.name == "follow-through").unwrap();
+        assert_eq!(
+            follow.description,
+            "Ledger, check-ins, stall detection, status updates; proven done and handoff. /follow-through"
+        );
+        assert!(
+            follow.body.starts_with("# Follow Through"),
+            "{}",
+            follow.body
+        );
+        for row in &rows {
+            assert!(
+                !row.body.starts_with("---"),
+                "{} body starts with front matter: {}",
+                row.name,
+                &row.body[..row.body.len().min(40)]
+            );
+            assert_eq!(row.overridden_by, None, "{}", row.name);
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_same_named_project_skill_overrides_and_removing_it_clears_the_flag() {
+        let root = scratch("override");
+        let (cfg, home, ws) = (root.join("cfg"), root.join("home"), root.join("ws"));
+        let none = builtins(&ws, Some(&home), &cfg);
+        let follow = none.iter().find(|r| r.name == "follow-through").unwrap();
+        assert_eq!(follow.overridden_by, None);
+
+        let skill = ws.join(".grok/skills/follow-through/SKILL.md");
+        std::fs::create_dir_all(skill.parent().unwrap()).unwrap();
+        std::fs::write(
+            &skill,
+            "---\nname: follow-through\ndescription: project override\n---\nProject body.\n",
+        )
+        .unwrap();
+        let over = builtins(&ws, Some(&home), &cfg);
+        let follow = over.iter().find(|r| r.name == "follow-through").unwrap();
+        assert_eq!(
+            follow.overridden_by,
+            Some(OverriddenBy {
+                scope: "project".into(),
+                name: "follow-through".into(),
+            })
+        );
+        // The row still lists the built-in's own description and body.
+        assert_eq!(
+            follow.description,
+            "Ledger, check-ins, stall detection, status updates; proven done and handoff. /follow-through"
+        );
+        assert!(
+            follow.body.starts_with("# Follow Through"),
+            "{}",
+            follow.body
+        );
+
+        // Drop the whole project skills tree so the discover cache key changes
+        // (directory mtimes can stay in the same second as the write).
+        std::fs::remove_dir_all(ws.join(".grok")).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let again = builtins(&ws, Some(&home), &cfg);
+        let follow = again.iter().find(|r| r.name == "follow-through").unwrap();
+        assert_eq!(follow.overridden_by, None);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
