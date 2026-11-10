@@ -194,6 +194,7 @@ pub mod shortcuts;
 pub mod situation;
 pub mod skill;
 pub mod slash;
+pub mod small_talk;
 pub mod ssrf;
 pub mod stardew_saves;
 pub mod startup_apps;

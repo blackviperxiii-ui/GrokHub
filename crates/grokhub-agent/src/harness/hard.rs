@@ -47,6 +47,9 @@ pub enum HardClass {
     /// machine-wide registry keys, the script execution policy, Defender
     /// or the firewall.
     SystemAdmin,
+    /// A new scheduled job (`automation_create`, `scheduler_create` with no
+    /// `task_id`): it runs on its own later, so it is only ever offered.
+    Automation,
 }
 
 impl HardClass {
@@ -62,6 +65,7 @@ impl HardClass {
             Self::RunsLater => "runs_later",
             Self::FlaggedDriver => "flagged_driver",
             Self::SystemAdmin => "system_admin",
+            Self::Automation => "automation",
         }
     }
 
@@ -77,6 +81,7 @@ impl HardClass {
             Self::RunsLater => "File that runs code later",
             Self::FlaggedDriver => "Driver anti-cheats block",
             Self::SystemAdmin => "Admin rights or system protection",
+            Self::Automation => "New automation",
         }
     }
 
@@ -92,6 +97,7 @@ impl HardClass {
             "runs_later" => Some(Self::RunsLater),
             "flagged_driver" => Some(Self::FlaggedDriver),
             "system_admin" => Some(Self::SystemAdmin),
+            "automation" => Some(Self::Automation),
             _ => None,
         }
     }
@@ -1973,6 +1979,21 @@ fn touches_path(name: &str, arguments: &str, matches: fn(&str) -> bool) -> bool 
     false
 }
 
+/// A call that adds a new scheduled job: `automation_create` (native or
+/// `grokhub-self__`), or `scheduler_create` without a `task_id` to update.
+pub fn creates_automation(name: &str, arguments: &str) -> bool {
+    if crate::self_manage::self_tool(name) == Some("automation_create") {
+        return true;
+    }
+    if name.rsplit("__").next() != Some("scheduler_create") {
+        return false;
+    }
+    let args = serde_json::from_str::<serde_json::Value>(arguments).unwrap_or_default();
+    args.get("task_id")
+        .and_then(|v| v.as_str())
+        .is_none_or(|id| id.trim().is_empty())
+}
+
 /// Hard class for a tool call. Read-only tools are never hard class.
 pub fn hard_class(name: &str, arguments: &str) -> Option<HardClass> {
     if crate::gate::is_readonly(name) {
@@ -1997,6 +2018,9 @@ pub fn hard_class(name: &str, arguments: &str) -> Option<HardClass> {
             .or_else(|| system_admin(&cmd))
             .or_else(|| flagged_driver(&cmd))
             .or_else(|| asks_outside_sandbox(arguments));
+    }
+    if creates_automation(name, arguments) {
+        return Some(HardClass::Automation);
     }
     if let Some(class) =
         crate::self_manage::self_class(name, &serde_json::from_str(arguments).unwrap_or_default())
@@ -4220,5 +4244,25 @@ mod tests {
             None
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn only_a_new_automation_needs_your_yes() {
+        let new = r#"{"interval":"1d","prompt":"say good morning"}"#;
+        assert_eq!(
+            hard_class("scheduler_create", new),
+            Some(HardClass::Automation)
+        );
+        assert_eq!(
+            hard_class("grokhub__scheduler_create", new),
+            Some(HardClass::Automation)
+        );
+        // Updating a job you already have keeps the pill.
+        let update = r#"{"interval":"1h","prompt":"x","task_id":"auto1"}"#;
+        assert_eq!(hard_class("scheduler_create", update), None);
+        assert_eq!(
+            HardClass::parse(HardClass::Automation.as_str()),
+            Some(HardClass::Automation)
+        );
     }
 }

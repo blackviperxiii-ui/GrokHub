@@ -129,6 +129,7 @@ pub(super) fn hard_words(class: HardClass, tool: &str, action: &str, held: &[Str
             format!("Needs admin rights or changes system protection: {action}")
         }
         HardClass::AgentConfig => format!("Change agent instructions: {action}"),
+        HardClass::Automation => format!("Add an automation: {action}"),
         HardClass::OutsideValue => format!("Uses a value from outside text: {action}"),
         HardClass::RunsLater => format!("Changes a file that runs later: {action}"),
         HardClass::FlaggedDriver => {

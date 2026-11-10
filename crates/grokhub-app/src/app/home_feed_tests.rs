@@ -1116,7 +1116,10 @@ fn ask_offer_dismiss_persists_in_ledger() {
     card.prompt = Some("every day at 7pm, check patch notes".into());
     cabin.ask_offer_dismissed(&card);
     let ledger = super::super::ask_offers_ui::load_ask_offer_ledger();
-    assert!(ledger.dismissed.contains("patch-note@h19"));
+    // A card posted with an hour in its key is dismissed by topic, so the
+    // No thanks holds at every hour.
+    let dismissed: Vec<&str> = ledger.dismissed.iter().map(String::as_str).collect();
+    assert_eq!(dismissed, vec!["patch-note"]);
 
     let _ = std::fs::remove_dir_all(&root);
     unsafe { std::env::remove_var("GROKHUB_CONFIG") };

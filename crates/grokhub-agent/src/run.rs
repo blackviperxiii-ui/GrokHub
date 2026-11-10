@@ -105,6 +105,11 @@ fn bound_job_tool_set(session: &str) -> Option<ToolSet> {
 /// one is refused. Refused calls don't count, and a successful edit starts the
 /// count over, so "edit, test, edit, test, edit, test" keeps going.
 const REPEAT_LIMIT: u32 = 2;
+/// The refusal when the model tries to add an automation on a turn that
+/// was only a greeting ("good morning", "hey"): a hello is not a job.
+pub const GREETING_NO_AUTOMATION: &str =
+    "Not added: the user only said hello, so no automation was made. \
+Reply to the greeting. Offer an automation only when they ask for one.";
 /// What a call that already ran [`REPEAT_LIMIT`] times gets back instead of running.
 pub const REPEAT_REPLAN: &str = "not run: the same call already ran twice. Stop repeating it. \
 Re-read the goal, say in one line what you tried, then pick a different approach \
@@ -1370,6 +1375,18 @@ fn run_turn(
                         }
                     }
                 }
+            }
+            if input.depth == 0
+                && grokhub_core::small_talk::is_greeting(user_text)
+                && crate::harness::creates_automation(&call.name, &call.arguments)
+            {
+                let output = ToolOutput::err(GREETING_NO_AUTOMATION);
+                let id = tool_id(call);
+                emit_tool(on_event, &id, call, "in_progress", &call.arguments, None);
+                emit_tool(on_event, &id, call, "failed", &output.text, None);
+                push_refusal(history, input.conversation_id, call, output);
+                call_i += 1;
+                continue;
             }
             let key = repeat_key(call);
             if repeats.get(&key).copied().unwrap_or(0) >= REPEAT_LIMIT {
@@ -5406,6 +5423,156 @@ mod tests {
             "{notes:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// One attended chat turn under Always: the model calls `calls`, the
+    /// permission card (if any) gets `answer`. Returns the history, how many
+    /// cards were asked, and the config dir automations are saved in.
+    fn automation_turn(
+        tag: &str,
+        user_text: &str,
+        answer: PermAnswer,
+        calls: Vec<FunctionCall>,
+    ) -> (Vec<InputItem>, usize, std::path::PathBuf) {
+        let dir = workspace(tag);
+        let cfg = std::env::temp_dir().join(format!("gh-{tag}-cfg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&cfg);
+        std::fs::create_dir_all(&cfg).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        let asks = Answer {
+            answer,
+            asks: AtomicUsize::new(0),
+        };
+        let script = Script {
+            turns: Mutex::new(vec![
+                ScriptTurn {
+                    text: String::new(),
+                    calls,
+                    usage: Usage::default(),
+                    truncated: false,
+                },
+                ScriptTurn::text("done"),
+            ]),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+        let input = LoopIn {
+            client: &script,
+            workspace: &dir,
+            model: "grok-4.7",
+            effort: None,
+            system: "",
+            conversation_id: tag,
+            max_turns: 4,
+            usage_base: Usage::default(),
+            cancel: &CancelToken::new(),
+            steer: &SteerQueue::new(),
+            halt: &NeverHalt,
+            gate: chat(gate::PermMode::Always, true, false),
+            desktop: None,
+            permits: &asks,
+            perms: None,
+            context_length: 0,
+            tasks: None,
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
+        };
+        let mut history = Vec::new();
+        let out = run_loop(&input, &mut history, user_text, None, &mut |_| {});
+        assert_eq!(out.stop, StopReason::EndTurn);
+        let _ = std::fs::remove_dir_all(&dir);
+        (history, asks.asks.load(Ordering::SeqCst), cfg)
+    }
+
+    fn saved_automations(cfg: &std::path::Path) -> usize {
+        std::fs::read_to_string(cfg.join("automations.json"))
+            .ok()
+            .and_then(|t| serde_json::from_str::<Vec<serde_json::Value>>(&t).ok())
+            .map_or(0, |list| list.len())
+    }
+
+    fn new_automation_calls() -> Vec<FunctionCall> {
+        vec![
+            call(
+                "a",
+                "automation_create",
+                r#"{"instructions":"say good morning","every":"1d","reason":"you said it 3 times"}"#,
+            ),
+            call(
+                "s",
+                "scheduler_create",
+                r#"{"interval":"1d","prompt":"say good morning"}"#,
+            ),
+        ]
+    }
+
+    #[test]
+    fn a_new_automation_waits_for_your_yes_even_under_always() {
+        let (history, asks, cfg) = automation_turn(
+            "auto-no",
+            "check my patch notes every day",
+            PermAnswer::Deny,
+            new_automation_calls(),
+        );
+        // The first create asked on a card; the no ends the step, so
+        // nothing is saved and the second create never runs either.
+        assert_eq!(asks, 1);
+        assert_eq!(saved_automations(&cfg), 0);
+        let outputs: Vec<(&str, &str)> = history
+            .iter()
+            .filter_map(|item| match item {
+                InputItem::FunctionCallOutput { call_id, output } => {
+                    Some((call_id.as_str(), output.as_str()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            outputs,
+            vec![
+                (
+                    "a",
+                    "User rejected the execution for tool `automation_create`"
+                ),
+                ("s", "Not executed: earlier action failed"),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&cfg);
+
+        // With the yes on the card, it is saved.
+        let (_, asks, cfg) = automation_turn(
+            "auto-yes",
+            "check my patch notes every day",
+            PermAnswer::Allow,
+            new_automation_calls(),
+        );
+        assert_eq!((asks, saved_automations(&cfg)), (2, 2));
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn a_greeting_turn_never_makes_an_automation() {
+        let (history, asks, cfg) = automation_turn(
+            "auto-gm",
+            "good morning",
+            PermAnswer::Allow,
+            new_automation_calls(),
+        );
+        // No card is even asked: a greeting is not a request for a job.
+        assert_eq!((asks, saved_automations(&cfg)), (0, 0));
+        let refusals = history
+            .iter()
+            .filter(|item| matches!(
+                item,
+                InputItem::FunctionCallOutput { output, .. } if output.contains(GREETING_NO_AUTOMATION)
+            ))
+            .count();
+        assert_eq!(refusals, 2, "{history:?}");
+        let _ = std::fs::remove_dir_all(&cfg);
     }
 
     #[test]

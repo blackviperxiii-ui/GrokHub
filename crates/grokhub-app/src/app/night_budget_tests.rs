@@ -599,6 +599,33 @@ fn nightly_review_stays_quiet() {
 }
 
 #[test]
+fn a_suggested_tile_body_click_previews_and_only_add_adds() {
+    use super::confirm::ConfirmKind;
+    use crate::cards::TileHit;
+    let mut quiet = QuietCabin::boot("tile-preview");
+    let cabin = &mut quiet.cabin;
+    let seed = "every day at 9, summarize the board";
+    cabin.suggested_tile_hit(TileHit::Body, "Board digest", seed);
+    assert_eq!((cabin.automations.len(), cabin.grok_loops.len()), (0, 0));
+    let Some(kind @ ConfirmKind::AddSuggestedAuto { .. }) = cabin.confirm.clone() else {
+        panic!("a body click opens the preview, got {:?}", cabin.confirm);
+    };
+    assert_eq!(
+        super::confirm::suggested_auto_preview(seed),
+        "What: summarize the board\nWhen: daily at 09:00"
+    );
+    // Cancel leaves nothing behind.
+    cabin.confirm = None;
+    assert_eq!((cabin.automations.len(), cabin.grok_loops.len()), (0, 0));
+    // The preview's Add adds it, as the tile's own Add does.
+    cabin.take_confirm(kind);
+    assert_eq!(cabin.automations.len(), 1);
+    assert_eq!(cabin.confirm, None);
+    cabin.suggested_tile_hit(TileHit::Add, "Deploy check", "/loop 30m check deploy");
+    assert_eq!(cabin.grok_loops.len(), 1);
+}
+
+#[test]
 fn add_automation_seed_daily_clock_and_loop() {
     let mut quiet = QuietCabin::boot("auto-seed");
     let root = quiet.boot.root.clone();
