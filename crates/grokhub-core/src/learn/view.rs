@@ -8,6 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::belief::{Belief, Beliefs, Shape, Standing};
+use super::decide::{Area, Dial, TRUST_USAGE};
 use super::ladder::{step, Step, Undo};
 use super::signal::Subject;
 
@@ -235,20 +236,34 @@ pub enum Command {
     Forget(Subject),
     Wrong(Subject),
     ForgetAll,
+    /// The dials and the newest decisions.
+    Decisions,
+    /// Set how far one area may go.
+    Trust(Area, Dial),
 }
 
-pub const USAGE: &str = "Use `/learned`, `/learned forget <id>`, `/learned wrong <id>` or `/learned forget all`. The id is the code at the end of each line.";
+pub const USAGE: &str = "Use `/learned`, `/learned forget <id>`, `/learned wrong <id>`, `/learned forget all`, `/learned decisions` or `/learned trust <area> <watch|offer|act>`. The id is the code at the end of each line.";
 
 impl Command {
     pub fn parse(rest: &str) -> Result<Self, String> {
         let mut parts = rest.split_whitespace();
         let (verb, id, extra) = (parts.next(), parts.next(), parts.next());
+        let verb = verb.map(str::to_ascii_lowercase);
+        if verb.as_deref() == Some("trust") && parts.next().is_none() {
+            let area = id.and_then(Area::parse);
+            let dial = extra.and_then(Dial::parse);
+            return area
+                .zip(dial)
+                .map(|(area, dial)| Command::Trust(area, dial))
+                .ok_or_else(|| TRUST_USAGE.to_string());
+        }
         if extra.is_some() {
             return Err(USAGE.into());
         }
         let subject = |id: &str| Subject::parse(id).ok_or_else(|| USAGE.to_string());
-        match (verb.map(str::to_ascii_lowercase).as_deref(), id) {
+        match (verb.as_deref(), id) {
             (None, _) => Ok(Command::List),
+            (Some("decisions"), None) => Ok(Command::Decisions),
             (Some("forget"), Some(all)) if all.eq_ignore_ascii_case("all") => {
                 Ok(Command::ForgetAll)
             }
@@ -267,6 +282,19 @@ pub fn run(rest: &str, now_ms: u64) -> String {
     };
     let done = match &command {
         Command::List => None,
+        Command::Decisions => Some(super::hub::decisions_text(now_ms)),
+        Command::Trust(area, dial) => {
+            super::hub::set_dial(*area, *dial);
+            Some(format!(
+                "{} is set to {}.",
+                area.label(),
+                match dial {
+                    Dial::Watch => "watch only",
+                    Dial::Offer => "offer only",
+                    Dial::Act => "act when it's sure",
+                }
+            ))
+        }
         Command::Forget(key) => {
             super::hub::forget(key);
             Some(format!(

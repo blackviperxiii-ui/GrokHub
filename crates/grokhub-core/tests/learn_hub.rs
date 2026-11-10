@@ -201,10 +201,57 @@ fn the_shared_logs_feed_one_engine() {
     ] {
         assert!(json.get(field).is_some(), "{field} missing from {json}");
     }
+    // The decision engine on the same hub: a new rule offers until it has
+    // three yes answers, then acts, and each answer is also a signal.
+    use grokhub_core::learn::decide::{self, Area, Outcome, Proposal, Reason, Situation, Verdict};
+    use grokhub_core::learn::Undo;
+    let rule = Subject::new("rule", "settings/text-size").unwrap();
+    let proposal = Proposal {
+        area: Area::Settings,
+        rule: rule.clone(),
+        confidence: 0.85,
+        evidence: 14.0,
+        undo: Undo::OneClick,
+        value: 0.5,
+        hard: false,
+    };
+    let at = grokhub_core::now_ms();
+    let decide_one = || {
+        let d = hub::decide_all(vec![proposal.clone()], Situation::default(), at);
+        (d[0].verdict, d[0].reason)
+    };
+    assert_eq!(decide_one(), (Verdict::Offer, Reason::Shadow));
+    for _ in 0..decide::SHADOW_PASSES {
+        assert_eq!(hub::decision_outcome(&rule, Outcome::Accepted, at), None);
+    }
+    assert_eq!(decide_one(), (Verdict::Act, Reason::Sure));
+    let learned = hub::read(|e| e.beliefs().get(&rule).map(|b| b.shape)).flatten();
+    assert_eq!(learned, Some(Shape::Rate { yes: 3.0, no: 0.0 }));
+    assert_eq!(
+        view::run("trust settings offer", at),
+        "Settings is set to offer only."
+    );
+    assert_eq!(decide_one(), (Verdict::Offer, Reason::DialOffer));
+    assert_eq!(view::run("trust settings maybe", at), decide::TRUST_USAGE);
+    assert_eq!(view::run("trust settings act now", at), view::USAGE);
+    let shown = view::run("decisions", at);
+    assert!(shown.contains("- Settings: offer `settings`\n"), "{shown}");
+    assert!(
+        shown.contains("- Did it: It was sure, you said yes to this before, and it can be undone. `rule:settings/text-size`\n"),
+        "{shown}"
+    );
+    assert!(store::disk_used(&dir) < store::DISK_BUDGET);
+
     assert_eq!(
         view::run("forget all", 0),
         "Forgot everything the app learned."
     );
+    // Forget everything clears the rule's passes and the log. The dial is
+    // the user's own setting and stays.
+    let kept = decide::load(&dir);
+    assert_eq!(kept.dial(Area::Settings), decide::Dial::Offer);
+    assert!(!kept.graduated(&rule));
+    assert_eq!(kept.log().count(), 0);
     assert!(store::load_beliefs(&dir).is_empty());
     assert_eq!(store::read_signals(&dir), Vec::new());
     assert_eq!(view::run("", grokhub_core::now_ms()), view::NOTHING_YET);

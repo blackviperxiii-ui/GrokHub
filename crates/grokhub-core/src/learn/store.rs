@@ -4,6 +4,7 @@
 //!   [`SIGNAL_BYTES`] it becomes `signals.jsonl.1` (replacing the older one)
 //!   and a new file starts.
 //! - `beliefs.json`: every belief, replaced whole through a rename.
+//! - `decisions.json`: the decision engine's dials, rule counts and log.
 //! - `learn.lock`: held while the beliefs are read, changed and written, so
 //!   two apps on one folder never write over each other.
 //!
@@ -115,7 +116,7 @@ pub fn save_beliefs(config_dir: &Path, beliefs: &Beliefs) -> Result<(), String> 
 /// Bytes the engine's files take now.
 pub fn disk_used(config_dir: &Path) -> u64 {
     let dir = dir(config_dir);
-    [SIGNALS, SIGNALS_OLD, BELIEFS]
+    [SIGNALS, SIGNALS_OLD, BELIEFS, super::decide::FILE]
         .iter()
         .filter_map(|name| fs::metadata(dir.join(name)).ok())
         .map(|m| m.len())
