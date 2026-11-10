@@ -545,17 +545,26 @@ fn amr_first_recall_imports_learning_and_chips_once() {
             id.trim_end_matches(".md")
         )
     );
-    let status: Vec<&String> = cabin
-        .messages
-        .iter()
-        .filter(|m| m.1.contains("Memory import:"))
-        .map(|m| &m.1)
-        .collect();
-    assert_eq!(status.len(), 1, "{:?}", cabin.messages);
+    // The import is housekeeping: the bell and the status line say it, the
+    // chat never does (nobody asked for it there).
     assert!(
-        status[0].ends_with("Memory import: 10 imported, 0 skipped (learning_state 7, chips 3)."),
-        "{}",
-        status[0]
+        !cabin
+            .messages
+            .iter()
+            .any(|m| m.1.contains("Memory import:")),
+        "{:?}",
+        cabin.messages
+    );
+    let line = "Memory import: 10 imported, 0 skipped (learning_state 7, chips 3).";
+    assert!(
+        cabin.notices.items.iter().any(|n| n.text == line),
+        "{:?}",
+        cabin
+            .notices
+            .items
+            .iter()
+            .map(|n| &n.text)
+            .collect::<Vec<_>>()
     );
     assert_eq!(amr_node_files(&root).len(), 10);
     let dreams: Vec<_> = std::fs::read_dir(root.join("amr/dreams"))

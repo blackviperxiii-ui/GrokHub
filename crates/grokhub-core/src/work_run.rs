@@ -312,8 +312,9 @@ pub fn open_run_card(
     id
 }
 
-/// Settle the card `id`: Done, or Blocked for a stop or a failure, with its
-/// final checkpoint. True when the card is there.
+/// Settle the card `id`: archived when it finished, or Needs Attention
+/// (`Blocked`) for a stop or a failure, with its final checkpoint. True when
+/// the card is there.
 pub fn finish_run_card(cards: &mut [BoardCard], id: &str, end: &RunEnd, now: u64) -> bool {
     let Some(c) = cards.iter_mut().find(|c| c.id == id) else {
         return false;
@@ -321,10 +322,17 @@ pub fn finish_run_card(cards: &mut [BoardCard], id: &str, end: &RunEnd, now: u64
     end_run(c, end, now);
     c.updated_ms = now;
     if c.status != BoardStatus::Dismissed {
-        c.status = match end {
-            RunEnd::Done => BoardStatus::Done,
-            RunEnd::Stopped | RunEnd::Failed(_) => BoardStatus::Blocked,
-        };
+        match end {
+            // A background run that finished archives itself: its result
+            // stays readable from Archived, and the board keeps only work that
+            // needs you.
+            RunEnd::Done => {
+                c.status = BoardStatus::Done;
+                archive_card(c, now);
+            }
+            // Anything else waits in Needs Attention for you to pick it up.
+            RunEnd::Stopped | RunEnd::Failed(_) => c.status = BoardStatus::Blocked,
+        }
     }
     true
 }
@@ -409,6 +417,7 @@ pub fn edit_board_file<R>(
 mod tests {
     use super::*;
     use crate::work_file::lock_path;
+    use crate::workboard::KanbanColumn;
     use std::fs;
     use std::time::Duration;
 
@@ -604,8 +613,21 @@ mod tests {
         assert_eq!(cards[0].kind, WorkKind::Background);
         assert_eq!(cards[0].status, BoardStatus::InProgress);
         assert!(finish_run_card(&mut cards, &bg, &RunEnd::Done, 6));
-        assert_eq!(cards[0].status, BoardStatus::Done);
+        // Finished: it archives itself, off the board.
+        assert_eq!(cards[0].status, BoardStatus::Dismissed);
+        assert_eq!(cards[0].archived_ms, 6);
         assert!(!finish_run_card(&mut cards, "nope", &RunEnd::Done, 6));
+        // Stopped or failed: it waits in Needs Attention.
+        for end in [RunEnd::Stopped, RunEnd::Failed("no network".into())] {
+            let id = open_run_card(&mut cards, WorkKind::Background, "Sync", "s", "m", 7);
+            assert!(finish_run_card(&mut cards, &id, &end, 8));
+            let c = cards.iter().find(|c| c.id == id).unwrap();
+            assert_eq!(c.status, BoardStatus::Blocked);
+            assert_eq!(
+                c.status.column().map(KanbanColumn::label),
+                Some("Needs Attention")
+            );
+        }
 
         let mut ep = run_card("Open the settings");
         begin_run(&mut ep, WorkKind::Episode, "", "", 7);

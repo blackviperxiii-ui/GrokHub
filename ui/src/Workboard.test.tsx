@@ -57,7 +57,7 @@ const LABELS: Record<BoardLane, string> = {
   followUp: "Follow up",
   todo: "Todo",
   doing: "Doing",
-  blocked: "Blocked",
+  blocked: "Needs Attention",
   done: "Done",
 };
 
@@ -234,7 +234,7 @@ describe("Workboard", () => {
       within(menu)
         .getAllByRole("menuitem")
         .map((b) => b.textContent),
-    ).toEqual(["Follow up", "Doing", "Blocked", "Done"]);
+    ).toEqual(["Follow up", "Doing", "Needs Attention", "Done"]);
     expect(
       within(menu).getByRole("menuitem", { name: "Follow up" }),
     ).toHaveFocus();
@@ -540,7 +540,7 @@ describe("Workboard", () => {
     );
     render(<Workboard onWork={() => {}} />);
     await screen.findByRole("region", { name: "Todo" });
-    for (const name of ["Todo", "Doing", "Blocked", "Done"])
+    for (const name of ["Todo", "Doing", "Needs Attention", "Done"])
       expect(within(column(name)).getByRole("heading")).toBeVisible();
     const paused = inCard("Port the lexer");
     expect(paused.getByText("Agent")).toBeVisible();

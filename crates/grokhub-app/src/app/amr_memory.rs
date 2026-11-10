@@ -178,10 +178,18 @@ impl Cabin {
                     now_ms(),
                 );
                 if report.imported() > 0 {
+                    // Housekeeping, not an answer: the status line and the bell
+                    // say it, and the report file keeps the counts. Never a chat
+                    // message, since nobody asked for it there.
                     let _ = grokhub_core::amr::write_import_report(&store, &report);
-                    self.live_mut()
-                        .push(("assistant".into(), mark_slash_result(&report.status_line())));
-                    self.persist();
+                    let line = report.status_line();
+                    self.status = line.clone();
+                    self.notify(
+                        super::notices::NoticeKind::Info,
+                        line,
+                        Some(super::notices::NoticePlace::Page(super::Nav::Memory)),
+                        None,
+                    );
                 }
             }
         }

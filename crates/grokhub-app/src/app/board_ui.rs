@@ -395,7 +395,7 @@ pub(super) fn board_status_label(status: BoardStatus) -> &'static str {
     match status {
         BoardStatus::InProgress => "In progress",
         BoardStatus::Done => "Done",
-        BoardStatus::Blocked => "Blocked",
+        BoardStatus::Blocked => "Needs Attention",
         BoardStatus::FollowUp => "Follow up",
         BoardStatus::Dismissed => "Archived",
         BoardStatus::Proposed | BoardStatus::Approved | BoardStatus::Staged | BoardStatus::Todo => {
@@ -1145,7 +1145,7 @@ impl Cabin {
             for (name, value) in [
                 ("Goal", cp.goal.as_str()),
                 ("Next", cp.next.as_str()),
-                ("Blocked by", cp.blocker.as_str()),
+                ("Stopped on", cp.blocker.as_str()),
             ] {
                 if !value.trim().is_empty() {
                     small(ui, &format!("{name}: {value}"), crate::theme::fg());
@@ -1456,6 +1456,9 @@ impl Cabin {
         }
         for (id, title, archived_ms) in rows {
             let asking = pending == Some(ArchivedDelete::One(id.clone()));
+            let card = self.board.iter().find(|c| c.id == id).cloned();
+            let has_result = card.as_ref().is_some_and(|c| !c.result.trim().is_empty());
+            let open = has_result && self.board_view.open.as_deref() == Some(id.as_str());
             ui.horizontal_wrapped(|ui| {
                 ui.label(
                     RichText::new(&title)
@@ -1484,6 +1487,14 @@ impl Cabin {
                         self.board_view.confirm = None;
                     }
                 } else {
+                    // A background run that finished archives itself; its
+                    // result is still here to read or send to a chat.
+                    if has_result {
+                        let label = if open { "Hide result" } else { "Result" };
+                        if crate::cards::ghost_pill(ui, label) {
+                            self.board_view.open = (!open).then(|| id.clone());
+                        }
+                    }
                     if crate::cards::ghost_pill(ui, "Restore") {
                         *act = Some(BoardAct::Restore(id.clone()));
                     }
@@ -1492,6 +1503,11 @@ impl Cabin {
                     }
                 }
             });
+            if let (true, Some(card)) = (open, card.as_ref()) {
+                ui.push_id(("board-archived-result", id.as_str()), |ui| {
+                    self.paint_card_run(ui, card, act);
+                });
+            }
         }
     }
 
@@ -1521,6 +1537,15 @@ impl Cabin {
             return;
         }
         self.select_main_nav("workboard");
+        // A finished background run archives itself: open it in Archived.
+        if self
+            .board
+            .iter()
+            .any(|c| c.id == id && c.status == BoardStatus::Dismissed)
+        {
+            self.board_view.show_archived = true;
+            self.board_view.archived_query.clear();
+        }
         self.board_view.open = Some(id.to_string());
     }
 
