@@ -1803,10 +1803,21 @@ export interface LibraryTab {
   all: LibraryQueueOffer | null;
 }
 
+/** Why a model's last download stopped; it shows under that model's row. */
+export interface LibraryRowError {
+  /** free space, checksum read, download, verify or engine. */
+  step: string;
+  message: string;
+  /** The step, plus free and needed space when space is why. */
+  detail: string;
+}
+
 export interface LibraryStatus {
   job: { id: string; line: string; pct: number } | null;
   queued: number;
   message: string | null;
+  /** By model id, until that model is downloaded again or finishes. */
+  errors: Record<string, LibraryRowError>;
   running: boolean;
 }
 
@@ -2118,6 +2129,31 @@ export interface LearnedView {
   singleChips: number;
   /** Learning is paused: nothing new is counted. */
   paused: boolean;
+  trust: LearnedTrust;
+}
+
+export type TrustArea = "settings" | "skills" | "router" | "local-ai" | "proactive" | "chips";
+/** How far an area may go: learn only, offer changes, or make them when sure. */
+export type TrustDial = "watch" | "offer" | "act";
+
+export interface LearnedDecision {
+  atMs: number;
+  /** What it was about, e.g. "Skill tidy in the morning". */
+  title: string;
+  /** "Did it", "Asked", "Held back" or "Stopped". */
+  did: string;
+  why: string;
+}
+
+/** The decision engine's side of the page (grokhub_core::learn::decide). */
+export interface LearnedTrust {
+  dials: { area: TrustArea; label: string; dial: TrustDial }[];
+  /** Too much was undone lately, so everything asks first for now. */
+  askingFirst: boolean;
+  /** Changes the app may still make on its own today. */
+  leftToday: number;
+  /** Newest first. */
+  decisions: LearnedDecision[];
 }
 
 export type LearnedAct =
@@ -2126,7 +2162,9 @@ export type LearnedAct =
   | { kind: "always"; key: string }
   | { kind: "forgetAll" }
   | { kind: "pause" }
-  | { kind: "resume" };
+  | { kind: "resume" }
+  | { kind: "trust"; area: TrustArea; dial: TrustDial }
+  | { kind: "carryOn" };
 
 export function getLearned(): Promise<LearnedView> {
   return invoke<LearnedView>("get_learned");

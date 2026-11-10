@@ -1,0 +1,1 @@
+- Text size: the new app uses the same type scale as the cabin (`--font-*` and `--lh-*` tokens in rem, so Text size and the OS text size scale it). Body reads at 14/20, chat and the composer at 16/24, weights stay at 400/500/600, big titles get tighter tracking, and page titles step down on narrow windows.

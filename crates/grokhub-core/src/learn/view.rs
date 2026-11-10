@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::belief::{Belief, Beliefs, Shape, Standing};
-use super::decide::{Area, Dial, TRUST_USAGE};
+use super::decide::{Area, Dial, State, TRUST_USAGE};
 use super::ladder::{step, Step, Undo};
 use super::signal::Subject;
 
@@ -74,6 +74,80 @@ pub struct View {
     pub single_chips: usize,
     /// The user has learning paused: nothing new is counted.
     pub paused: bool,
+    /// How far each area may go, and what the app decided lately.
+    pub trust: Trust,
+}
+
+/// One area's dial.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DialRow {
+    pub area: Area,
+    pub label: &'static str,
+    pub dial: Dial,
+}
+
+/// One decision, as the user reads it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DecisionRow {
+    pub at_ms: u64,
+    /// What it was about, e.g. "Skill tidy in the morning".
+    pub title: String,
+    /// "Did it", "Asked", "Held back" or "Stopped".
+    pub did: &'static str,
+    pub why: &'static str,
+}
+
+/// The decision engine's side of the page.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Trust {
+    pub dials: Vec<DialRow>,
+    /// Too much was undone lately, so everything asks first for now.
+    pub asking_first: bool,
+    /// Changes the app may still make on its own today.
+    pub left_today: u32,
+    /// The newest decisions, newest first, at most [`DECISIONS_SHOWN`].
+    pub decisions: Vec<DecisionRow>,
+}
+
+pub const DECISIONS_SHOWN: usize = 15;
+
+/// A rule's name as the user reads it: `rule:habit/tidy/morning` reads like
+/// the belief `habit:tidy/morning`.
+fn rule_title(rule: &Subject) -> String {
+    let (_, rest) = rule.as_str().split_once(':').unwrap_or_default();
+    match rest.split_once('/') {
+        Some((area, id)) => title(area, id),
+        None => capital(&words(rest)),
+    }
+}
+
+/// The dials and the newest decisions in `state` at `now_ms`.
+pub fn trust(state: &State, now_ms: u64) -> Trust {
+    Trust {
+        dials: Area::ALL
+            .into_iter()
+            .map(|area| DialRow {
+                area,
+                label: area.label(),
+                dial: state.dial(area),
+            })
+            .collect(),
+        asking_first: state.paused(now_ms),
+        left_today: state.budget_left(now_ms),
+        decisions: state
+            .log()
+            .rev()
+            .take(DECISIONS_SHOWN)
+            .map(|d| DecisionRow {
+                at_ms: d.at_ms,
+                title: rule_title(&d.rule),
+                did: super::decide::verdict_words(d.verdict),
+                why: d.reason.why(),
+            })
+            .collect(),
+    }
 }
 
 fn words(id: &str) -> String {
@@ -98,6 +172,13 @@ fn title(area: &str, id: &str) -> String {
         "card" => format!("{} cards", capital(&words(id))),
         "card-group" => format!("Cards from {}", words(id)),
         "skill" => format!("Skill {id}"),
+        "habit" => match id.rsplit_once('/') {
+            Some((skill, part)) => format!(
+                "Skill {skill} {}",
+                super::habit::Part::parse(part).map_or(part, |p| p.when())
+            ),
+            None => format!("Habit {id}"),
+        },
         "reply" => format!("Plan reply: {}", plan_reply(id)),
         "trait" => format!(
             "One Pulse card {}",
@@ -146,6 +227,7 @@ fn says(area: &str, id: &str, belief: &Belief) -> String {
         "reply" => format!("You pick this about {n} times in 10 when a plan waits."),
         "trait" => format!("You like cards with it about {n} times in 10."),
         "model" | "skill" => format!("Runs go well about {n} times in 10."),
+        "habit" => format!("About {n} in 10 of its runs happen then."),
         _ => format!("It goes your way about {n} times in 10."),
     }
 }
@@ -358,7 +440,8 @@ pub fn run(rest: &str, now_ms: u64) -> String {
     done.unwrap_or_else(|| text(&super::hub::view(now_ms)))
 }
 
-/// A button on the desktop app's list.
+/// A button on the desktop app's list. `Trust` sets how far one area may
+/// go; `CarryOn` lets the app act again after too much was undone.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Act {
@@ -368,6 +451,8 @@ pub enum Act {
     ForgetAll,
     Pause,
     Resume,
+    Trust { area: Area, dial: Dial },
+    CarryOn,
 }
 
 pub const NO_SUCH_LINE: &str = "That line is gone. Open the page again.";
@@ -386,6 +471,8 @@ pub fn act(act: Act, now_ms: u64) -> Result<View, String> {
         Act::ForgetAll => super::hub::forget_all()?,
         Act::Pause => super::hub::set_paused(true)?,
         Act::Resume => super::hub::set_paused(false)?,
+        Act::Trust { area, dial } => super::hub::set_dial(area, dial),
+        Act::CarryOn => super::hub::carry_on(),
     }
     Ok(super::hub::view(now_ms))
 }

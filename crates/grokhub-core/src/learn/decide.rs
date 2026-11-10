@@ -282,7 +282,7 @@ impl State {
     }
 
     /// The log, oldest first.
-    pub fn log(&self) -> impl Iterator<Item = &Decision> {
+    pub fn log(&self) -> impl DoubleEndedIterator<Item = &Decision> {
         self.log.iter()
     }
 
@@ -496,7 +496,7 @@ pub const NO_DECISIONS: &str =
     "No decisions yet. They show up here once the app has something it could change for you.";
 pub const TRUST_USAGE: &str = "Use `/learned trust <area> <watch|offer|act>`. Areas: settings, skills, router, local-ai, proactive, chips.";
 
-fn verdict_words(v: Verdict) -> &'static str {
+pub(super) fn verdict_words(v: Verdict) -> &'static str {
     match v {
         Verdict::Act => "Did it",
         Verdict::Offer => "Asked",

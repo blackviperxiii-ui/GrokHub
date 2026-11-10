@@ -595,9 +595,9 @@ pub fn load(config_dir: &Path, day: Option<&Day>, now_ms: u64) -> Result<Page, S
     pulse_feed::with_state(config_dir, |s| {
         s.note_engaged(now_ms);
         if let Some(day) = day {
-            s.utc_offset_min = Some(grokhub_core::pulse_writer::utc_offset_min(
-                day.hour, day.minute, now_ms,
-            ));
+            let offset = grokhub_core::pulse_writer::utc_offset_min(day.hour, day.minute, now_ms);
+            grokhub_core::learn::hub::set_utc_offset_min(offset);
+            s.utc_offset_min = Some(offset);
         }
     })?;
     let _store = store();

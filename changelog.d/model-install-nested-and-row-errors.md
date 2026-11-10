@@ -1,0 +1,4 @@
+- Download models: Z-Image Turbo pictures and Chroma1-HD pictures install again. The checksum lookup now reads each file's own folder on Hugging Face (and its next pages), so a file in a subfolder, like their VAE, is found.
+- Download models: when a model doesn't download, the reason shows on that model's row, under its button, with the step that failed. When the drive is too full it says how much is free and how much is needed, and points to the Remove buttons. A resumed download only needs room for what is left.
+- Download models: one model's failure no longer stops the rest of the queue. Pause and Cancel still stop it.
+- Download models (desktop app): each model is its own card, so its button sits under its own name.

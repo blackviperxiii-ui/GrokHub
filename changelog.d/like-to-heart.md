@@ -1,0 +1,1 @@
+- Pulse: tapping Like on a card plays a short pop that turns it into a filled heart; tapping the heart takes the like back. Reduced motion skips the animation and swaps instantly.
