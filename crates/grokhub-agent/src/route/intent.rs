@@ -103,6 +103,10 @@ pub struct TurnCx {
     pub running: bool,
     /// The kind of the chat's previous turn, for short follow-ups.
     pub prior: Option<AskKind>,
+    /// The running reply is casual talk ([`casual_turn`]), not work. Every
+    /// message typed during it then waits as its own turn with its own reply:
+    /// nothing is answered only off to the side, steered in or folded.
+    pub casual: bool,
 }
 
 /// The read of one typed message.
@@ -575,9 +579,44 @@ pub fn read_turn(text: &str, cx: &TurnCx) -> TurnRead {
     }
     let s = shape(own);
     if cx.running {
-        read_running(&s, own, &mut words, &mut rules)
+        one_reply_each(read_running(&s, own, &mut words, &mut rules), cx)
     } else {
         read_idle(&s, own, cx, words, rules)
+    }
+}
+
+/// A casual chat answers every message in the chat, once and in order: a
+/// side question, a steer or a new ask typed while a reply runs waits as its
+/// own turn. Stop still stops. A typed `/btw` keeps the side card it asked for.
+fn one_reply_each(mut read: TurnRead, cx: &TurnCx) -> TurnRead {
+    let keep = matches!(read.route, TurnRoute::Stop | TurnRoute::Queue)
+        || read.rules.first().is_some_and(|r| r.ends_with(":typed"));
+    if cx.running && cx.casual && !keep {
+        read.route = TurnRoute::Queue;
+        read.rules.insert(0, "turn:queue:casual".into());
+    }
+    read
+}
+
+/// The running turn's ask is casual talk, not work: small talk, a feeling, a
+/// quick question. A task, a repair, research, something to make or a
+/// background job is work.
+pub fn casual_turn(ask: &str) -> bool {
+    use crate::brain::{BriefInput, Intent};
+    let own = ask::own_words(ask).trim();
+    if own.is_empty() {
+        return false;
+    }
+    let brief = crate::brain::rules(&BriefInput {
+        text: own,
+        ..Default::default()
+    });
+    match brief {
+        Some(b) => matches!(b.intent, Intent::Chat | Intent::Question),
+        None => {
+            let s = shape(own);
+            !(s.request || s.imperative) && s.work_verbs == 0
+        }
     }
 }
 
@@ -828,7 +867,7 @@ pub fn read_turn_learned(config_dir: &Path, text: &str, cx: &TurnCx) -> TurnRead
             read.rules.insert(0, format!("turn:{}:learned", route.id()));
         }
     }
-    read
+    one_reply_each(read, cx)
 }
 
 /// The user showed `text` belonged on `to` (tapped Tell the main task, Steer

@@ -404,6 +404,35 @@ impl Engine for NativeEngine {
         image: Option<&str>,
         emit: &mut dyn FnMut(AcpEvent),
     ) -> Result<(), String> {
+        // A steer left from the last run would fold into this one unread.
+        let steer = self.steer.clone();
+        hand_back_unsteered(&steer, emit);
+        self.prompt_turn(text, image, &mut |ev| {
+            if matches!(ev, AcpEvent::Done { .. }) {
+                hand_back_unsteered(&steer, emit);
+            }
+            emit(ev);
+        })
+    }
+}
+
+/// Steers this run never read go back to the host, each its own message,
+/// before the run's Done: one sent after the loop's last steer check would
+/// otherwise wait and fold into the next turn with no reply of its own.
+fn hand_back_unsteered(steer: &SteerQueue, emit: &mut dyn FnMut(AcpEvent)) {
+    let left = steer.drain();
+    if !left.is_empty() {
+        emit(AcpEvent::Unsteered(left));
+    }
+}
+
+impl NativeEngine {
+    fn prompt_turn(
+        &mut self,
+        text: &str,
+        image: Option<&str>,
+        emit: &mut dyn FnMut(AcpEvent),
+    ) -> Result<(), String> {
         let hub = crate::tasks::hub_for(&self.conversation_id);
         if !self.reopen_tasks && (hub.is_halted() || self.cancel.is_cancelled()) {
             emit(AcpEvent::Done {
@@ -1272,6 +1301,67 @@ mod tests {
         assert_eq!(last_pct(&mut engine, "one"), Some(0));
         // Session average would be 45%; the second turn alone hit 90%.
         assert_eq!(last_pct(&mut engine, "two"), Some(90));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_steer_the_run_never_read_goes_back_before_done_not_into_the_next_turn() {
+        let steer = SteerQueue::new();
+        let mut seen = Vec::new();
+        hand_back_unsteered(&steer, &mut |ev| seen.push(ev));
+        assert!(seen.is_empty(), "nothing waiting, nothing sent");
+        steer.push("and one more thing");
+        steer.push("also this");
+        hand_back_unsteered(&steer, &mut |ev| seen.push(ev));
+        assert_eq!(
+            seen,
+            vec![AcpEvent::Unsteered(vec![
+                "and one more thing".into(),
+                "also this".into()
+            ])]
+        );
+        assert!(steer.drain().is_empty(), "handed back, not kept for later");
+
+        // Through the engine: a steer still waiting when a prompt starts (it
+        // came after the last run's check) is handed back first, unread.
+        let dir = std::env::temp_dir().join(format!("gh-eng-unsteered-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        let steer = SteerQueue::new();
+        let mut engine = NativeEngine::new(EngineParts {
+            client: Arc::new(Speak),
+            workspace: dir.clone(),
+            model: "grok-4.7".into(),
+            effort: None,
+            system: "sys".into(),
+            conversation_id: format!("unsteered-{}", std::process::id()),
+            auth_kind: AuthKind::ApiKey,
+            max_turns: 2,
+            cancel: CancelToken::new(),
+            steer: steer.clone(),
+            halt: Box::new(NoHalt),
+            gate: crate::Gate::phase_readonly(),
+            desktop: None,
+            permits: Arc::new(crate::gate::ClosedPermits),
+        });
+        steer.push("late steer");
+        let mut events = Vec::new();
+        engine
+            .prompt("hi", None, &mut |ev| events.push(ev))
+            .unwrap();
+        assert_eq!(
+            events.first(),
+            Some(&AcpEvent::Unsteered(vec!["late steer".into()]))
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|ev| matches!(ev, AcpEvent::Unsteered(_)))
+                .count(),
+            1
+        );
+        assert!(matches!(events.last(), Some(AcpEvent::Done { .. })));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

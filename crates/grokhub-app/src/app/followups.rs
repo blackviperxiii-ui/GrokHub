@@ -91,16 +91,6 @@ impl FollowupQueue {
         Some(self.items.remove(i).text)
     }
 
-    /// Every message for `thread`, in order, out of the line. Other chats'
-    /// messages keep their places.
-    pub(super) fn take_all_for(&mut self, thread: &str) -> Vec<String> {
-        let (mine, rest): (Vec<Queued>, Vec<Queued>) = std::mem::take(&mut self.items)
-            .into_iter()
-            .partition(|q| q.fits(thread));
-        self.items = rest;
-        mine.into_iter().map(|q| q.text).collect()
-    }
-
     pub(super) fn get(&self, i: usize) -> Option<&Queued> {
         self.items.get(i)
     }
@@ -147,18 +137,75 @@ impl super::Cabin {
             .map(|t| t.title.clone())
     }
 
-    /// Moves queued follow-ups into the composer, after anything already
-    /// typed there. Returns how many moved. Only the open chat's messages
-    /// move: another chat's wait for that chat.
-    pub(super) fn queued_back_to_composer(&mut self) -> usize {
+    /// A stop hands the open chat's queued messages back, each still its own
+    /// message, word for word: the first goes in an empty box, and every other
+    /// one keeps its place in line, held so nothing sends on its own right
+    /// after the stop. They go one by one after the next reply, or on
+    /// "continue". Nothing is ever joined into one message. Returns the
+    /// status note, if anything was waiting. Only the open chat's line moves:
+    /// another chat's messages wait for that chat.
+    pub(super) fn queued_back_to_composer(&mut self) -> Option<String> {
         let visible = self.visible_thread_id();
-        let queued = self.followup_queue.take_all_for(&visible);
-        let moved = queued.len();
-        if moved > 0 {
-            self.composer = super::composer_with_queued(&self.composer, queued);
-            self.composer_want_focus = true;
+        let waiting = self.followup_queue.count_for(&visible);
+        if waiting == 0 {
+            return None;
         }
-        moved
+        let boxed = self.composer.trim().is_empty();
+        if boxed {
+            self.composer = self.followup_queue.take_next_for(&visible)?;
+        }
+        self.followup_queue.pause_for(&visible);
+        self.composer_want_focus = true;
+        Some(handed_back_note(boxed, waiting))
+    }
+
+    /// Steers the run never read (sent after its last steer check): each
+    /// leaves the place it was shown mid-reply and waits at the front of its
+    /// chat's line, in order, to go as its own turn with its own reply. After
+    /// a stop they wait like the rest of the line.
+    pub(super) fn requeue_unsteered(&mut self, texts: Vec<String>) {
+        let chat = self
+            .chat_job_thread
+            .clone()
+            .unwrap_or_else(|| self.visible_thread_id());
+        let here = chat == self.visible_thread_id();
+        for text in texts.into_iter().rev() {
+            let text = text.trim().to_string();
+            if text.is_empty() {
+                continue;
+            }
+            if here {
+                drop_last_user_row(self.live_mut(), &text);
+            } else if let Some(t) = self.threads.iter_mut().find(|t| t.id == chat) {
+                drop_last_user_row(t.messages_mut(), &text);
+            }
+            self.followup_queue.push_front(&chat, text);
+        }
+        if !self.running {
+            self.followup_queue.pause_for(&chat);
+        }
+    }
+}
+
+fn drop_last_user_row(rows: &mut Vec<(String, String)>, text: &str) {
+    if let Some(i) = rows
+        .iter()
+        .rposition(|(r, b)| r == "user" && b.trim() == text)
+    {
+        rows.remove(i);
+    }
+}
+
+/// What a stop says about the queued messages it handed back.
+fn handed_back_note(boxed: bool, waiting: usize) -> String {
+    match (boxed, waiting) {
+        (true, 1) => "your queued message is back in the box".into(),
+        (true, n) => format!(
+            "your next queued message is back in the box, {} more wait in line",
+            n - 1
+        ),
+        (false, 1) => "your queued message waits in line".into(),
+        (false, n) => format!("your {n} queued messages wait in line"),
     }
 }
 
@@ -216,16 +263,18 @@ mod tests {
     }
 
     #[test]
-    fn take_all_leaves_other_chats_waiting() {
+    fn holding_a_chats_line_leaves_other_chats_waiting_and_keeps_each_message() {
+        // A stop holds its chat's line; the messages stay apart, in order.
         let mut q = FollowupQueue::default();
         q.push("a", "a1".into());
         q.push("b", "b1".into());
         q.push("a", "a2".into());
-        assert_eq!(
-            q.take_all_for("a"),
-            vec!["a1".to_string(), "a2".to_string()]
-        );
-        assert_eq!(q.len(), 1);
+        q.pause_for("a");
+        assert!(!q.ready_for("a"));
+        assert!(q.ready_for("b"), "b's message is not held");
+        assert_eq!(q.len(), 3);
+        assert_eq!(q.take_next_for("a").as_deref(), Some("a1"));
+        assert_eq!(q.take_next_for("a").as_deref(), Some("a2"));
         assert_eq!(q.get(0).map(|e| e.thread.as_str()), Some("b"));
     }
 

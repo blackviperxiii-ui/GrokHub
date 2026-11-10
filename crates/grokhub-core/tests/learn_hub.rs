@@ -414,6 +414,10 @@ fn the_shared_logs_feed_one_engine() {
             area: Area::LocalAi,
             label: "Local AI",
             dial: decide::Dial::Watch,
+            went: None,
+            before: None,
+            trend: grokhub_core::learn::score::Trend::TooEarly,
+            resting: false,
         }
     );
     assert_eq!(page.dials[0].dial, decide::Dial::Offer);
