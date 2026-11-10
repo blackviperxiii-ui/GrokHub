@@ -500,3 +500,22 @@ fn background_work_keeps_whatever_is_loaded() {
         Plan::Keep
     );
 }
+
+#[test]
+fn the_gaming_model_is_the_one_a_game_would_swap_to() {
+    let disk = disk();
+    let home = file(BIG);
+    let n = Now {
+        scale: Scale {
+            gaming: true,
+            ..Scale::default()
+        },
+        ..now(&home, &disk)
+    };
+    let Plan::Load { model, .. } = plan(n) else {
+        panic!("a game with nothing loaded starts a model");
+    };
+    assert_eq!(gaming_model(&home, &disk), Some(model));
+    assert_eq!(gaming_model(&file(SMALL), &disk), None, "nothing lighter");
+    assert_eq!(gaming_model(Path::new("/models/unknown.gguf"), &disk), None);
+}

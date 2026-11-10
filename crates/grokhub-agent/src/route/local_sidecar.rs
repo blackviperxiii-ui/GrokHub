@@ -1403,6 +1403,50 @@ fn swap_plan(config_dir: &Path, home: &Path, running: Option<&Sidecar>, want: Wa
     })
 }
 
+/// Unix seconds of the last [`tick_prewarm`] look.
+static LAST_PREWARM_LOOK: AtomicU64 = AtomicU64::new(0);
+const PREWARM_LOOK_SECS: u64 = 60;
+
+/// The cabin sampler's tick for RAM-warming: once a minute, read the files
+/// the next load will need into the OS cache (see `local_prewarm`). That is
+/// the pick and its drafter when they aren't running (after a game, an idle
+/// unload or at app start), and the model a game swaps to.
+pub fn tick_prewarm(config_dir: &Path) {
+    let now = unix_secs();
+    if !super::local::switched_on()
+        || super::local_prewarm::busy()
+        || local_gov::paused()
+        || STARTING.load(Ordering::SeqCst)
+        || now.saturating_sub(LAST_PREWARM_LOOK.load(Ordering::SeqCst)) < PREWARM_LOOK_SECS
+    {
+        return;
+    }
+    LAST_PREWARM_LOOK.store(now, Ordering::SeqCst);
+    let (Some(binary), Some(home)) = (find_binary(config_dir), find_model(config_dir)) else {
+        return;
+    };
+    let Ok(slot) = global_slot().try_lock() else {
+        return;
+    };
+    let loaded = slot.as_ref().filter(|s| s.alive()).map(|s| s.model.clone());
+    drop(slot);
+    let gaming =
+        local_gov::gpu_contended() || super::local_scale::gaming_reason(local_gov::reason());
+    let gaming_pick = super::local_swap::gaming_model(&home, &on_disk(config_dir));
+    let mut files = Vec::new();
+    for model in [Some(home), gaming_pick].into_iter().flatten() {
+        if loaded.as_ref() == Some(&model) {
+            continue;
+        }
+        let drafter = autoconfig::draft_plan(&binary, &model)
+            .and_then(|p| p.draft)
+            .and_then(|d| d.model);
+        files.push(model);
+        files.extend(drafter);
+    }
+    super::local_prewarm::start(files, gaming);
+}
+
 /// The cabin sampler's tick for scaling, between requests: a step up the
 /// last task wanted loads once the chat is quiet, and a bigger model that no
 /// longer fits (the computer got busy) or a model that isn't the lightest
