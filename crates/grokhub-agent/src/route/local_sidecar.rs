@@ -19,6 +19,7 @@ use super::local_gov;
 use super::local_health as health;
 use super::local_swap::Plan;
 use grokhub_core::local_setup::LocalModel;
+use grokhub_core::local_skills::TaskKind;
 
 /// The shortest wait for `/health` (a small model on a fast disk).
 pub const HEALTH_TIMEOUT: Duration = Duration::from_secs(30);
@@ -1094,9 +1095,15 @@ fn load(config_dir: &Path, want: Want) -> Result<Busy, String> {
         // A step up waits for a quiet chat, so a reply never sits through a
         // reload; a request after a quiet spell is a new task and takes it now.
         let swap = match swap {
+            Plan::Later {
+                model,
+                stand_in: stand_in @ Some(super::local_swap::StandIn::BestFor(_)),
+            } if super::local_warm::resident_pct(&model).unwrap_or(0) >= WARM_LOAD_PCT => {
+                Plan::Load { model, stand_in }
+            }
             Plan::Later { model, stand_in } if secs_since_use() < QUIET_SECS => {
                 *PENDING_STEP_UP.lock().expect("pending step up") =
-                    Some((model, stand_in, want_need(want)));
+                    Some((model, stand_in, want_need(want), want_kind(want)));
                 Plan::Keep
             }
             Plan::Later { model, stand_in } => Plan::Load { model, stand_in },
@@ -1389,13 +1396,16 @@ pub const QUIET_SECS: u64 = 20;
 
 /// A bigger model [`super::local_swap::plan`] wants once the chat is quiet,
 /// and the need it was for.
-static PENDING_STEP_UP: Mutex<
-    Option<(
-        PathBuf,
-        Option<super::local_swap::StandIn>,
-        super::local_scale::Need,
-    )>,
-> = Mutex::new(None);
+/// A step up waiting for a quiet chat: the model, why, and the need and
+/// task kind it was for.
+type StepUp = (
+    PathBuf,
+    Option<super::local_swap::StandIn>,
+    super::local_scale::Need,
+    Option<TaskKind>,
+);
+
+static PENDING_STEP_UP: Mutex<Option<StepUp>> = Mutex::new(None);
 
 /// A keep-warm load plans for the need it warms for; a request for its own.
 fn want_need(want: Want) -> super::local_scale::Need {
@@ -1404,6 +1414,22 @@ fn want_need(want: Want) -> super::local_scale::Need {
         Want::Any | Want::Request => super::local_scale::current_need(),
     }
 }
+
+/// A keep-warm load plans for the task kind it warms for; a request for
+/// its own.
+fn want_kind(want: Want) -> Option<TaskKind> {
+    match want {
+        Want::Warm(_) => *WARM_KIND.lock().expect("warm kind"),
+        Want::Any | Want::Request => super::local_task::current_kind(),
+    }
+}
+
+/// The task kind a keep-warm load plans for: a step up's, else none.
+static WARM_KIND: Mutex<Option<TaskKind>> = Mutex::new(None);
+
+/// The latest task kind other than everyday chat, so the idle tick can
+/// RAM-warm the model best at it.
+static LAST_TASK_KIND: Mutex<Option<TaskKind>> = Mutex::new(None);
 
 /// The need a keep-warm load plans for: a step up's, else Normal.
 static WARM_NEED: Mutex<super::local_scale::Need> = Mutex::new(super::local_scale::Need::Normal);
@@ -1428,6 +1454,11 @@ fn on_disk(config_dir: &Path) -> Vec<(&'static LocalModel, PathBuf)> {
 fn swap_plan(config_dir: &Path, home: &Path, running: Option<&Sidecar>, want: Want) -> Plan {
     let loaded = running.map(|s| (s.model.as_path(), s.stand_in));
     let on_disk = on_disk(config_dir);
+    let task = want_kind(want);
+    if let Some(k) = task.filter(|k| *k != TaskKind::Chat) {
+        *LAST_TASK_KIND.lock().expect("last task kind") = Some(k);
+    }
+    let marks = super::local_task::marks(config_dir);
     super::local_swap::plan(super::local_swap::Now {
         home,
         loaded,
@@ -1439,8 +1470,44 @@ fn swap_plan(config_dir: &Path, home: &Path, running: Option<&Sidecar>, want: Wa
         secs_since_swap: unix_secs().saturating_sub(LAST_SWAP_SECS.load(Ordering::SeqCst)),
         need: want_need(want),
         scale: super::local_scale::scale_now(unix_ms()),
+        task,
+        dynamic: super::local_task::dynamic(config_dir),
+        marks: &marks,
     })
 }
+
+/// The model `best_for` would pick for `kind` with nothing loaded, for the
+/// idle tick's RAM-warm.
+fn best_model_for(config_dir: &Path, home: &Path, kind: TaskKind) -> Option<PathBuf> {
+    let on_disk = on_disk(config_dir);
+    let marks = super::local_task::marks(config_dir);
+    match super::local_swap::plan(super::local_swap::Now {
+        home,
+        loaded: None,
+        on_disk: &on_disk,
+        low_battery: super::local::low_battery(),
+        kept_loaded: keep_loaded(),
+        forced: std::env::var_os("GROKHUB_LOCAL_MODEL").is_some(),
+        in_flight: 0,
+        secs_since_swap: u64::MAX,
+        need: super::local_scale::Need::Normal,
+        scale: super::local_scale::scale_now(unix_ms()),
+        task: Some(kind),
+        dynamic: super::local_task::dynamic(config_dir),
+        marks: &marks,
+    }) {
+        Plan::Load {
+            model,
+            stand_in: Some(super::local_swap::StandIn::BestFor(_)),
+        } => Some(model),
+        _ => None,
+    }
+}
+
+/// A model picked for the task loads now, without waiting for a quiet
+/// chat, when this much of its file is already in memory: the load is then
+/// a few seconds, not a read off the disk.
+pub const WARM_LOAD_PCT: u8 = 80;
 
 /// The model a game would swap `home` for, among the models on disk.
 pub fn gaming_model_for(config_dir: &Path, home: &Path) -> Option<PathBuf> {
@@ -1490,8 +1557,14 @@ pub fn tick_prewarm(config_dir: &Path) {
     let gaming =
         local_gov::gpu_contended() || super::local_scale::gaming_reason(local_gov::reason());
     let gaming_pick = gaming_model_for(config_dir, &home);
+    // The model best at the latest non-chat task, so a swap to it reads
+    // from memory, not the disk. Not while a game runs.
+    let task_pick = (!gaming)
+        .then(|| *LAST_TASK_KIND.lock().expect("last task kind"))
+        .flatten()
+        .and_then(|k| best_model_for(config_dir, &home, k));
     let mut files = Vec::new();
-    for model in [Some(home), gaming_pick].into_iter().flatten() {
+    for model in [Some(home), gaming_pick, task_pick].into_iter().flatten() {
         if loaded.as_ref() == Some(&model) {
             continue;
         }
@@ -1559,11 +1632,11 @@ pub fn tick_scale(config_dir: &Path) {
         && local_gov::level() == grokhub_core::local_governor::Level::Normal
         && game_settled(unix_ms(), LAST_GAME_MS.load(Ordering::SeqCst));
     let pending = if after_game {
-        find_model(config_dir).map(|home| (home, None, super::local_scale::Need::Normal))
+        find_model(config_dir).map(|home| (home, None, super::local_scale::Need::Normal, None))
     } else {
         pending
     };
-    let Some((model, stand_in, need)) = pending.filter(|_| quiet) else {
+    let Some((model, stand_in, need, kind)) = pending.filter(|_| quiet) else {
         return;
     };
     if side.model == model || keep_loaded() || WARMING.swap(true, Ordering::SeqCst) {
@@ -1572,6 +1645,7 @@ pub fn tick_scale(config_dir: &Path) {
     }
     PENDING_STEP_UP.lock().expect("pending step up").take();
     *WARM_NEED.lock().expect("warm need") = need;
+    *WARM_KIND.lock().expect("warm kind") = kind;
     if let Some(side) = slot.take() {
         health::log_to(config_dir, "swap", Some(&swap_note(&model, stand_in)), None);
         LAST_SWAP_SECS.store(unix_secs(), Ordering::SeqCst);
@@ -1583,6 +1657,8 @@ pub fn tick_scale(config_dir: &Path) {
     let generation = WARM_GEN.load(Ordering::SeqCst);
     let why = if after_game {
         "back after the game"
+    } else if matches!(stand_in, Some(super::local_swap::StandIn::BestFor(_))) {
+        "switched to the model best at the task"
     } else {
         "stepped up for a hard task"
     };
@@ -1591,6 +1667,7 @@ pub fn tick_scale(config_dir: &Path) {
             health::log_to(&dir, "warm", Some(why), None);
         }
         *WARM_NEED.lock().expect("warm need") = super::local_scale::Need::Normal;
+        *WARM_KIND.lock().expect("warm kind") = None;
         WARMING.store(false, Ordering::SeqCst);
     });
 }
@@ -1610,6 +1687,9 @@ fn swap_note(model: &Path, why: Option<super::local_swap::StandIn>) -> String {
         Some(super::local_swap::StandIn::Lighter) => format!("{name} for a light task"),
         Some(super::local_swap::StandIn::Tight) => format!("{name} because less memory is free"),
         Some(super::local_swap::StandIn::Performance) => format!("{name} for a hard task"),
+        Some(super::local_swap::StandIn::BestFor(kind)) => {
+            format!("{name}, best on disk for {}", kind.words())
+        }
         None => format!("{name}, the Settings pick"),
     }
 }

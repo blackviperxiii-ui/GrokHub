@@ -2638,6 +2638,16 @@ async fn check_model_file(
 }
 
 #[tauri::command]
+async fn set_local_dynamic(
+    state: State<'_, ShellState>,
+    on: bool,
+) -> Result<local_ai::LocalAiView, String> {
+    capabilities::needs(capabilities::current().local_ai, "Local AI")?;
+    let dir = state.config_dir.clone();
+    off_main(move || local_ai::set_dynamic(&dir, on)).await?
+}
+
+#[tauri::command]
 async fn set_local_keep_loaded(
     state: State<'_, ShellState>,
     on: bool,
@@ -3807,6 +3817,7 @@ pub fn run() {
             check_model_file,
             run_local_speed_test,
             set_local_keep_loaded,
+            set_local_dynamic,
             unload_local_model,
             get_model_library,
             download_models,

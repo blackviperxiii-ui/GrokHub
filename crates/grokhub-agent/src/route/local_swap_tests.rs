@@ -43,8 +43,13 @@ fn now<'a>(home: &'a Path, on_disk: &'a [(&'static LocalModel, PathBuf)]) -> Now
         secs_since_swap: u64::MAX,
         need: Need::Normal,
         scale: Scale::default(),
+        task: None,
+        dynamic: true,
+        marks: &NO_MARKS,
     }
 }
+
+static NO_MARKS: Marks = Marks::new();
 
 #[test]
 fn the_pick_runs_and_a_low_battery_swaps_to_the_smallest_model_and_back() {
@@ -454,14 +459,135 @@ fn the_mode_label_follows_the_game_and_the_stand_in() {
         gaming: true,
         ..Scale::default()
     };
-    assert_eq!(mode(None, &gaming), local_scale::Mode::Gaming);
+    assert_eq!(mode(None, &gaming, true), local_scale::Mode::Gaming);
     assert_eq!(
-        mode(Some(StandIn::Performance), &Scale::default()),
+        mode(Some(StandIn::Performance), &Scale::default(), true),
         local_scale::Mode::Performance
     );
     assert_eq!(
-        mode(Some(StandIn::Lighter), &Scale::default()),
+        mode(Some(StandIn::Lighter), &Scale::default(), true),
         local_scale::Mode::Balanced
+    );
+    assert_eq!(
+        mode(None, &Scale::default(), false),
+        local_scale::Mode::Fixed
+    );
+    assert_eq!(mode(None, &gaming, false), local_scale::Mode::Gaming);
+}
+
+const REASONER: &str = "deepseek-r1-0528-qwen3-8b-heretic-q4_k_m";
+
+fn task_disk() -> Vec<(&'static LocalModel, PathBuf)> {
+    [BIG, REASONER, SMALL]
+        .iter()
+        .map(|id| (m(id), file(id)))
+        .collect()
+}
+
+#[test]
+fn with_dynamic_on_a_task_runs_on_the_model_best_at_it_and_chat_stays_on_the_pick() {
+    let disk = task_disk();
+    let home = file(BIG);
+    let n = Now {
+        task: Some(TaskKind::Reason),
+        ..now(&home, &disk)
+    };
+    assert_eq!(
+        plan(n),
+        Plan::Load {
+            model: file(REASONER),
+            stand_in: Some(StandIn::BestFor(TaskKind::Reason))
+        },
+        "nothing runs: the reasoner starts for a reasoning task"
+    );
+    let on_home = Now {
+        loaded: Some((&home, None)),
+        ..n
+    };
+    assert_eq!(
+        plan(on_home),
+        Plan::Later {
+            model: file(REASONER),
+            stand_in: Some(StandIn::BestFor(TaskKind::Reason))
+        },
+        "the pick runs: the reply stays on it and the reasoner loads when the chat is quiet"
+    );
+    let chat = Now {
+        task: Some(TaskKind::Chat),
+        ..on_home
+    };
+    assert_eq!(plan(chat), Plan::Keep, "everyday chat stays on the pick");
+    let off = Now {
+        dynamic: false,
+        ..on_home
+    };
+    assert_eq!(
+        plan(off),
+        Plan::Keep,
+        "Dynamic off: the pick answers everything"
+    );
+}
+
+#[test]
+fn a_model_picked_for_a_task_stays_for_chat_and_a_game_still_wins() {
+    let disk = task_disk();
+    let home = file(BIG);
+    let reasoner = file(REASONER);
+    let on_reasoner = Now {
+        loaded: Some((&reasoner, Some(StandIn::BestFor(TaskKind::Reason)))),
+        task: Some(TaskKind::Chat),
+        ..now(&home, &disk)
+    };
+    assert_eq!(plan(on_reasoner), Plan::Keep, "no reload back and forth");
+    let off = Now {
+        dynamic: false,
+        ..on_reasoner
+    };
+    assert_eq!(
+        plan(off),
+        Plan::Later {
+            model: home.clone(),
+            stand_in: None
+        },
+        "turning Dynamic off brings the (bigger) pick back once the chat is quiet"
+    );
+    let game = Now {
+        scale: Scale {
+            gaming: true,
+            ..Scale::default()
+        },
+        task: Some(TaskKind::Reason),
+        ..on_reasoner
+    };
+    assert_eq!(
+        plan(game),
+        Plan::Load {
+            model: file(SMALL),
+            stand_in: Some(StandIn::Gaming)
+        }
+    );
+}
+
+#[test]
+fn a_model_that_kept_missing_a_task_is_no_longer_picked_for_it() {
+    let disk = task_disk();
+    let home = file(BIG);
+    let mut marks = Marks::new();
+    marks.note(m(REASONER).id, TaskKind::Reason, false);
+    let n = Now {
+        loaded: Some((&home, None)),
+        task: Some(TaskKind::Reason),
+        marks: &marks,
+        ..now(&home, &disk)
+    };
+    assert_eq!(plan(n), Plan::Keep, "one miss puts it inside the margin");
+}
+
+#[test]
+fn the_row_says_what_the_task_model_is_for() {
+    assert_eq!(
+        StandIn::BestFor(TaskKind::Code).line(),
+        "Running a model that's stronger at coding than your pick. Turn off Dynamic to always use your pick."
     );
 }
 

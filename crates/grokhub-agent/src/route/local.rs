@@ -34,6 +34,7 @@ use regex::Regex;
 use serde_json::Value;
 
 use grokhub_core::local_governor::Level;
+use grokhub_core::local_skills::TaskKind;
 use grokhub_core::model_registry::{CatalogSource, Listing, ModelMeta, Prices, SourceKind};
 
 use super::ladder::PREPARE_HARD;
@@ -865,6 +866,8 @@ pub fn serve_request(
     let tokens = (text.len() as u64).div_ceil(4);
     let _need =
         super::local_scale::NeedGuard::set(super::local_scale::need(class_norm, tokens, &text));
+    let kind = super::local_task::kind(class_norm, tokens, &text);
+    let _kind = super::local_task::KindGuard::set(kind);
     if heavy(class_norm, tokens) && super::local_gov::level() != Level::RampUp {
         match super::local_gov::wait_for_ramp_up(HEAVY_WAIT, &|| cancel.is_cancelled()) {
             None => return Err(ClientError::Cancelled),
@@ -900,8 +903,26 @@ pub fn serve_request(
         crate::brain::is_picture_ask(&text),
     );
     let (fitted, _) = super::local_fit::fit_keeping(&req, n_ctx, keep);
-    rt.chat_tools(&fitted, cancel)
-        .map_err(ClientError::Protocol)
+    let out = rt.chat_tools(&fitted, cancel);
+    note_task_reply(kind, &out, cancel);
+    out.map_err(ClientError::Protocol)
+}
+
+/// Teach the per-task picker how the running model did on this kind of
+/// task: a refusal or an error marks it down, a good reply eases the mark.
+fn note_task_reply(kind: Option<TaskKind>, out: &Result<TurnOutput, String>, cancel: &CancelToken) {
+    let Some(kind) = kind else { return };
+    if cancel.is_cancelled() {
+        return;
+    }
+    let Some(model) = super::local_sidecar::loaded().map(|l| l.model) else {
+        return;
+    };
+    let ok = match out {
+        Ok(o) => super::local_task::answered(&o.text, !o.calls.is_empty()),
+        Err(_) => false,
+    };
+    super::local_task::note_reply(&crate::perm::config_dir(), &model, kind, ok);
 }
 
 pub(crate) fn serve_within(
@@ -923,6 +944,8 @@ fn serve_within_at(
 ) -> Result<TurnOutput, ClientError> {
     let tokens = (text.len() as u64).div_ceil(4);
     let _need = super::local_scale::NeedGuard::set(super::local_scale::need(class, tokens, text));
+    let kind = super::local_task::kind(class, tokens, text);
+    let _kind = super::local_task::KindGuard::set(kind);
     if heavy(class, tokens) && super::local_gov::level() != Level::RampUp {
         match super::local_gov::wait_for_ramp_up(heavy_wait, &|| cancel.is_cancelled()) {
             None => return Err(ClientError::Cancelled),
@@ -947,15 +970,15 @@ fn serve_within_at(
                 effort,
                 &mut |d| deltas.push_str(d),
             )
-            .map_err(ClientError::Protocol)?;
-        let text = if out.is_empty() { deltas } else { out };
-        return Ok(TurnOutput {
-            text,
-            reasoning: String::new(),
-            calls: Vec::new(),
-            usage: Usage::default(),
-            ..Default::default()
-        });
+            .map(|out| TurnOutput {
+                text: if out.is_empty() { deltas } else { out },
+                reasoning: String::new(),
+                calls: Vec::new(),
+                usage: Usage::default(),
+                ..Default::default()
+            });
+        note_task_reply(kind, &out, cancel);
+        return out.map_err(ClientError::Protocol);
     }
     let answer = if class == "background:summarize" {
         rt.summarize(text, 60)
