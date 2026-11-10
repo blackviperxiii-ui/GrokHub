@@ -1082,7 +1082,7 @@ export function Chat({
       }
       let read: TurnRead;
       try {
-        read = await readTurn(text);
+        read = await readTurn(text, conversationId);
       } catch {
         read = { route: "queue", text, ack: "" };
       }
