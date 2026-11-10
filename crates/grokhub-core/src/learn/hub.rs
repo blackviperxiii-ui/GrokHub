@@ -233,6 +233,11 @@ pub fn decision_outcome(rule: &Subject, outcome: Outcome, now_ms: u64) -> Option
     decide::with_state(e.config_dir(), |s| s.outcome(rule, outcome, now_ms))
 }
 
+/// How far `area` may go. Act, the default, before [`start`].
+pub fn dial(area: Area) -> Dial {
+    engine().map_or(Dial::default(), |e| decide::load(e.config_dir()).dial(area))
+}
+
 /// Sets how far one area may go.
 pub fn set_dial(area: Area, dial: Dial) {
     if let Some(e) = engine() {

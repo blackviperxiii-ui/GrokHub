@@ -567,5 +567,10 @@ fn the_shared_logs_feed_one_engine() {
             ("Settings wide screen", "Asked"),
         ]
     );
+    // A learner outside the core reads one dial straight from the hub.
+    hub::set_dial(Area::LocalAi, decide::Dial::Watch);
+    assert_eq!(hub::dial(Area::LocalAi), decide::Dial::Watch);
+    hub::set_dial(Area::LocalAi, decide::Dial::Act);
+    assert_eq!(hub::dial(Area::LocalAi), decide::Dial::Act);
     let _ = fs::remove_dir_all(&dir);
 }

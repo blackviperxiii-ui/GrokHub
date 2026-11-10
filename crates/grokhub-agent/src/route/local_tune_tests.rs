@@ -110,4 +110,34 @@ fn the_record_lives_in_the_tune_folder_and_counts_only_real_chat_replies() {
         current(&dir, &tag.key, &tag.cands, base),
         arm(1, false, 256)
     );
+    // With the Local AI dial off act, the canary waits and the launch stays
+    // on the promoted arm. An unknown key runs the planner's own either way.
+    assert_eq!(
+        current_under(&dir, &tag.key, &tag.cands, base, true),
+        arm(1, false, 256)
+    );
+    assert_eq!(current_under(&dir, &tag.key, &tag.cands, base, false), base);
+    assert_eq!(
+        current_under(&dir, "other|cpu|Normal", &tag.cands, base, false),
+        base
+    );
+}
+
+#[test]
+fn with_no_new_tries_the_launch_keeps_the_promoted_arm_unless_it_is_banned() {
+    let base = arm(2, false, 512);
+    let cands = vec![base, arm(1, false, 512), arm(2, false, 256)];
+    let r = Record {
+        promoted: Some("np1-plain-ub512".into()),
+        canary: Some("np2-plain-ub256".into()),
+        ..Record::default()
+    };
+    assert_eq!(r.current(&cands, base), arm(2, false, 256));
+    assert_eq!(r.settled(&cands, base), arm(1, false, 512));
+    let mut banned = r.clone();
+    banned.banned.insert("np1-plain-ub512".into());
+    assert_eq!(banned.settled(&cands, base), base);
+    // A promoted arm the plan no longer offers falls back to the plan's own.
+    assert_eq!(r.settled(&[base], base), base);
+    assert_eq!(Record::default().settled(&cands, base), base);
 }
