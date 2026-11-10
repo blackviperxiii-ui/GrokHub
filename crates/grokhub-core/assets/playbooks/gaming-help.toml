@@ -20,7 +20,7 @@ rollback = "Restore the backed-up config or undo the last change if something br
 give_up = [
   "a hard approval was refused",
   "hardware, access or a sign-in is missing",
-  "every approach in the playbook failed and was checked",
+  "every approach here failed and was checked",
   "no search tool worked; say so in one line and mark the answer as from memory",
 ]
 

@@ -3426,6 +3426,47 @@ fn a_provider_out_of_credit_cools_it_and_grok_takes_the_turn() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// A provider out of credit on small talk: Grok answers with no word about
+/// the switch. On a work turn the one plain line still shows.
+#[test]
+fn the_switch_line_shows_on_work_turns_and_never_on_small_talk() {
+    let thought_for = |label: &str, ask: &str| {
+        let dir = test_dir(label);
+        providers::use_vault_for(&dir, Arc::new(MemoryVault::default()));
+        providers::use_transport_for(&dir, Arc::new(BrokeWire::default()));
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        save_registry(&dir, &fleet()).unwrap();
+        add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+        grant_destination(&dir, OR_DEST, CALL_DATA, UserClick::from_click()).unwrap();
+        rank_first(&dir, OR_MODEL);
+        let grok = GrokOk(Mutex::new(String::new()));
+        let (mut shown, mut thought) = (String::new(), String::new());
+        live::stream_routed(
+            &grok,
+            &chat(label, &[ask]),
+            &CancelToken::new(),
+            &mut |ev| match ev {
+                StreamEvent::TextDelta(t) => shown.push_str(&t),
+                StreamEvent::ReasoningDelta(t) => thought.push_str(&t),
+                StreamEvent::RateWait(_) => {}
+            },
+            "chat:default",
+        )
+        .expect("Grok takes the turn");
+        let _ = std::fs::remove_dir_all(dir);
+        assert_eq!(shown, "hello from grok");
+        thought
+    };
+    assert_eq!(
+        thought_for("r3b-switch-work", "fix my wifi"),
+        "The model I was using ran out of credit, so I'm carrying on with another one — the work so far is kept."
+    );
+    assert_eq!(
+        thought_for("r3b-switch-casual", "haha how was your day?"),
+        ""
+    );
+}
+
 #[test]
 fn provider_fallible_covers_limits_credit_and_outages_only() {
     let fallible = [

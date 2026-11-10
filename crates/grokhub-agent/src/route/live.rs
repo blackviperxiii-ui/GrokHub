@@ -1819,10 +1819,11 @@ pub fn stream_routed(
         sink(ev)
     };
     // Failover PR 7: a switch inside this call tells the chat one plain
-    // line — why it moved, never which models (background work stays
-    // silent, like the loading note below).
+    // line — why it moved, never which models. Background work stays silent,
+    // like the loading note below, and so does small talk: the line is about
+    // the app, not the chat, and it only helps while work is under way.
     let switch_line = |sink: &mut dyn FnMut(StreamEvent), err: &ClientError| {
-        if !class.trim().starts_with("background:") {
+        if !class.trim().starts_with("background:") && !super::intent::casual_turn(&text) {
             sink(StreamEvent::ReasoningDelta(
                 super::handoff::chat_line(super::handoff::stop_rule(err)).to_string(),
             ));

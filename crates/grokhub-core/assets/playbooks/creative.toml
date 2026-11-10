@@ -18,7 +18,7 @@ rollback = "If the draft missed the ask, replace it with a corrected draft and o
 give_up = [
   "a hard approval was refused",
   "hardware, access or a sign-in is missing",
-  "every approach in the playbook failed and was checked",
+  "every approach here failed and was checked",
 ]
 
 [applies_when]

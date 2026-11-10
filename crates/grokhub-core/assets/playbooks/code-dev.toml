@@ -18,7 +18,7 @@ rollback = "Undo the change that broke the build or tests (restore the file from
 give_up = [
   "a hard approval was refused",
   "hardware, access or a sign-in is missing",
-  "every approach in the playbook failed and was checked",
+  "every approach here failed and was checked",
 ]
 
 [applies_when]
