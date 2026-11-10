@@ -45,7 +45,7 @@ fn an_8gb_gpu_gets_a_quick_model_an_everyday_one_a_step_up_and_pictures() {
     assert_eq!(
         Some(E4B),
         crate::local_picker::preselected(&p).map(|m| m.id),
-        "Balance is what auto setup picks"
+        "Everyday is what auto setup picks"
     );
     assert_eq!(id(slot(&l, Goal::Speed)), Some(E2B));
     // A mixture-of-experts model spills to RAM and still clears the floor.

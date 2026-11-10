@@ -63,7 +63,7 @@ function library(over: Partial<LibraryView> = {}): LibraryView {
     ],
     lineup: {
       ids: ["g12", "g12-mtp", "zimg"],
-      line: "3 models, 14.6 GB in all. Speed: Gemma 4 E2B (downloaded) · Balance: Gemma 4 12B · Video: No on-device video models yet.",
+      line: "3 models, 14.6 GB in all. Speed: Gemma 4 E2B (downloaded) · Everyday: Gemma 4 12B · Video: No on-device video models yet.",
     },
     everything: { ids: ["g12", "g12-mtp"], line: "2 models, 8.4 GB in all." },
     status: idle,
@@ -83,7 +83,7 @@ describe("ModelLibrary", () => {
 
   it("offers everything that fits once the lineup is downloaded", async () => {
     api.getModelLibrary.mockResolvedValue(
-      library({ lineup: { ids: [], line: "This PC has its best lineup. Balance: Gemma 4 12B (downloaded)." } }),
+      library({ lineup: { ids: [], line: "This PC has its best lineup. Everyday: Gemma 4 12B (downloaded)." } }),
     );
     render(<ModelLibrary />);
     expect(await screen.findByText(/This PC has its best lineup\./)).toBeInTheDocument();
