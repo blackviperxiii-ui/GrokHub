@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use grokhub_core::gguf::{self, GgufMeta};
@@ -208,6 +209,18 @@ pub fn on_cpu(prev: &LaunchArgs) -> LaunchArgs {
         run: run_with_slots(1),
         ..prev.clone()
     }
+}
+
+/// The speed test is timing the gaming setup at idle (see `local_spec`).
+static GAMING_TEST: AtomicBool = AtomicBool::new(false);
+
+/// Plan launches as a game would see them, for the gaming speed test.
+pub fn set_gaming_test(on: bool) {
+    GAMING_TEST.store(on, Ordering::SeqCst);
+}
+
+fn gaming_test() -> bool {
+    GAMING_TEST.load(Ordering::SeqCst)
 }
 
 /// [`on_cpu`] for Gaming mode: half the threads (at least two), so the
@@ -924,6 +937,21 @@ fn planned(
     model: &Path,
     free: Option<FreeNow>,
 ) -> Option<(LaunchArgs, local_spec::Plan, String, PathBuf)> {
+    planned_as(binary, model, free, false)
+}
+
+/// [`draft_plan`] for `model` in the gaming setup, whether a game runs or not.
+pub fn gaming_draft_plan(binary: &Path, model: &Path) -> Option<local_spec::Plan> {
+    planned_as(binary, model, None, true).map(|(_, plan, _, _)| plan)
+}
+
+/// [`planned`]; `gaming` plans the gaming setup even with no game running.
+fn planned_as(
+    binary: &Path,
+    model: &Path,
+    free: Option<FreeNow>,
+    gaming: bool,
+) -> Option<(LaunchArgs, local_spec::Plan, String, PathBuf)> {
     let (p, dir, state, o, probe) = {
         let l = live().lock().ok()?;
         (
@@ -961,12 +989,27 @@ fn planned(
         args: &args,
         tune_dir: &dir,
         device: &device,
+        gaming: false,
     });
     args.draft = plan.draft.clone().map(Box::new);
     // Gaming mode: a game holds the GPU, so the model runs on the CPU with
-    // half the threads and the game keeps its frame rate.
-    if super::local_scale::gaming_reason(super::local_gov::reason()) {
+    // half the threads and the game keeps its frame rate. Its drafter joins
+    // on the CPU too, only when the gaming setup's own speed test kept it
+    // and both fit in RAM; otherwise the model runs alone.
+    if gaming || gaming_test() || super::local_scale::gaming_reason(super::local_gov::reason()) {
         args = gaming_launch(&args);
+        plan = local_spec::plan(&local_spec::Launch {
+            flags: &flags,
+            model,
+            meta: &meta,
+            profile: &p,
+            state,
+            args: &args,
+            tune_dir: &dir,
+            device: local_spec::GAMING_DEVICE,
+            gaming: true,
+        });
+        args.draft = plan.draft.clone().map(Box::new);
     }
     let options = super::local_flags::engine_options(binary);
     // A tuned or gaming launch may have cut the context or left the GPU:
