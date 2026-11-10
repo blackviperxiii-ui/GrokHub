@@ -12,7 +12,8 @@
 //! than [`HEADROOM_TARGET_MB`] of VRAM free after loading is banned and
 //! rolled back at once. The reward is decode speed less the time to read a
 //! 1k-token prompt (both from the server's own timings). Under Throttle
-//! nothing is tuned: the sharing flags decide that launch.
+//! nothing is tuned: the sharing flags decide that launch. With the Local AI
+//! trust dial on offer or watch no canary runs ([`current`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -117,6 +118,16 @@ impl Record {
         };
         find(&self.canary)
             .or_else(|| find(&self.promoted))
+            .unwrap_or(base)
+    }
+
+    /// The arm the next launch runs when nothing new may be tried: the
+    /// promoted arm, else the planner's own. A canary waits.
+    pub fn settled(&self, cands: &[Arm], base: Arm) -> Arm {
+        self.promoted
+            .as_ref()
+            .filter(|l| !self.banned.contains(*l))
+            .and_then(|l| cands.iter().find(|a| &a.label() == l).copied())
             .unwrap_or(base)
     }
 
@@ -226,9 +237,24 @@ struct Running {
 
 static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
 
-/// The arm the next launch for `key` runs.
+/// The arm the next launch for `key` runs. A canary runs only while the
+/// user's Local AI trust dial lets the app act on its own; on offer or watch
+/// the launch stays on what was already promoted.
 pub fn current(dir: &Path, key: &str, cands: &[Arm], base: Arm) -> Arm {
-    load(dir).get(key).map_or(base, |r| r.current(cands, base))
+    use grokhub_core::learn::decide::{Area, Dial};
+    let explore = grokhub_core::learn::hub::dial(Area::LocalAi) == Dial::Act;
+    current_under(dir, key, cands, base, explore)
+}
+
+/// [`current`] with the dial's answer passed in.
+pub fn current_under(dir: &Path, key: &str, cands: &[Arm], base: Arm, explore: bool) -> Arm {
+    load(dir).get(key).map_or(base, |r| {
+        if explore {
+            r.current(cands, base)
+        } else {
+            r.settled(cands, base)
+        }
+    })
 }
 
 /// A launch tagged `tag` is up with `headroom_mb` VRAM free; its chat
