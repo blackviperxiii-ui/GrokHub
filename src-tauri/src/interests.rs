@@ -102,6 +102,20 @@ pub fn feedback(
     Ok(moved)
 }
 
+/// Take back a earlier idea More like this (or the same kind of signal).
+pub fn retract_feedback(
+    config_dir: &Path,
+    text: &str,
+    signal: interests::InterestSignal,
+    now_ms: u64,
+) -> Result<Vec<String>, String> {
+    let _held = STORE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut profile = interests::load(&path(config_dir));
+    let moved = profile.retract_feedback(text, signal, now_ms);
+    interests::save(&path(config_dir), &profile)?;
+    Ok(moved)
+}
+
 pub fn act(config_dir: &Path, topic: &str, act: Act) -> Result<Page, String> {
     let _held = STORE.lock().unwrap_or_else(|e| e.into_inner());
     let mut profile = interests::load(&path(config_dir));

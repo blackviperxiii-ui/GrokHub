@@ -1,6 +1,6 @@
-import { render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   FeedPrompt,
   FixView,
@@ -80,6 +80,7 @@ const IDEA: PulseIdea = {
   fix: "",
   more: "",
   chips: [],
+  loved: false,
 };
 
 const PAGE: PulsePage = {
@@ -93,6 +94,11 @@ describe("Pulse", () => {
   beforeEach(() => {
     for (const fn of Object.values(api)) fn.mockReset();
     api.pulseImage.mockImplementation((name) => Promise.resolve(`data:image/jpeg;base64,${name}`));
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
   });
 
   it("opens on Feed and switches to Ideas under their headers", async () => {
@@ -505,8 +511,15 @@ describe("Pulse", () => {
         { label: "Productivity", ideas: [IDEA] },
       ],
     };
+    const likedPage: PulsePage = {
+      ...page,
+      ideas: [
+        { label: "", ideas: [{ ...written, loved: true }] },
+        { label: "Productivity", ideas: [IDEA] },
+      ],
+    };
     api.getPulse.mockResolvedValue(page);
-    api.pulseAct.mockResolvedValue(page);
+    api.pulseAct.mockImplementation(async (_id, act) => (act === "moreLike" ? likedPage : page));
     const onRun = vi.fn();
     render(<Pulse onRun={onRun} />);
 
@@ -522,9 +535,28 @@ describe("Pulse", () => {
     expect(screen.queryByRole("button", { name: "Snooze" })).toBeNull();
     const main = within(row).getByRole("button", { name: "Let's do it" });
 
-    await userEvent.click(within(row).getByRole("button", { name: "Like" }));
+    const like = within(row).getByRole("button", { name: "Like" });
+    expect(like).toHaveAttribute("aria-pressed", "false");
+    await userEvent.click(like);
+    expect(api.pulseAct).toHaveBeenCalledTimes(1);
     expect(api.pulseAct).toHaveBeenLastCalledWith("idea-2", "moreLike");
     expect(await screen.findByRole("status")).toHaveTextContent(MORE_LIKE_NOTE);
+    const heart = within(row).getByRole("button", { name: "Like" });
+    expect(heart).toHaveAttribute("aria-pressed", "true");
+    expect(heart).toHaveTextContent("♥");
+
+    api.pulseAct.mockImplementation(async (_id, act) => (act === "unlove" ? page : likedPage));
+    await userEvent.click(heart);
+    expect(api.pulseAct).toHaveBeenLastCalledWith("idea-2", "unlove");
+    const likeAgain = within(row).getByRole("button", { name: "Like" });
+    expect(likeAgain).toHaveAttribute("aria-pressed", "false");
+    expect(likeAgain).toHaveTextContent("♡ Like");
+
+    api.pulseAct.mockImplementation(async (_id, act) => (act === "moreLike" ? likedPage : page));
+    await userEvent.click(likeAgain);
+    expect(api.pulseAct.mock.calls.filter((c) => c[1] === "moreLike")).toHaveLength(2);
+    expect(api.pulseAct).toHaveBeenLastCalledWith("idea-2", "moreLike");
+    expect(within(row).getByRole("button", { name: "Like" })).toHaveAttribute("aria-pressed", "true");
 
     await userEvent.click(within(row).getByRole("button", { name: "Not interested" }));
     expect(api.pulseAct).toHaveBeenLastCalledWith("idea-2", "notInterested");
@@ -536,6 +568,53 @@ describe("Pulse", () => {
     await userEvent.click(main);
     expect(api.pulseAct).toHaveBeenLastCalledWith("idea-2", "accept");
     expect(onRun).toHaveBeenCalledWith("close every done card on the workboard");
+  });
+
+  it("a liked idea keeps its heart when Pulse is read again", async () => {
+    const liked = { ...IDEA, id: "idea-2", title: "Rust 1.99 upgrade plan", loved: true };
+    api.getPulse.mockResolvedValue({
+      ...PAGE,
+      feed: [],
+      ideas: [{ label: "", ideas: [liked] }],
+    });
+    render(<Pulse onRun={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: "For You" }));
+    const like = within(screen.getByRole("listitem", { name: "Rust 1.99 upgrade plan" })).getByRole(
+      "button",
+      { name: "Like" },
+    );
+    expect(like).toHaveAttribute("aria-pressed", "true");
+    expect(like).toHaveTextContent("♥");
+    expect(api.pulseAct).not.toHaveBeenCalled();
+  });
+
+  it("reduced motion skips the pop when an idea Like turns into a heart", async () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({ matches: true, addEventListener: () => {}, removeEventListener: () => {} })),
+    );
+    const written = { ...IDEA, id: "idea-2", title: "Rust 1.99 upgrade plan" };
+    const page: PulsePage = { ...PAGE, feed: [], ideas: [{ label: "", ideas: [written] }] };
+    const likedPage: PulsePage = {
+      ...page,
+      ideas: [{ label: "", ideas: [{ ...written, loved: true }] }],
+    };
+    api.getPulse.mockResolvedValue(page);
+    api.pulseAct.mockResolvedValue(likedPage);
+    render(<Pulse onRun={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: "For You" }));
+    const like = within(screen.getByRole("listitem", { name: "Rust 1.99 upgrade plan" })).getByRole(
+      "button",
+      { name: "Like" },
+    );
+    await userEvent.click(like);
+    const heart = within(screen.getByRole("listitem", { name: "Rust 1.99 upgrade plan" })).getByRole(
+      "button",
+      { name: "Like" },
+    );
+    expect(heart).toHaveAttribute("aria-pressed", "true");
+    expect(heart).toHaveTextContent("♥");
+    expect(heart).not.toHaveClass("card-like-pop");
   });
 
   it("a crash idea shows its report and chips, and Discuss opens its own chat", async () => {

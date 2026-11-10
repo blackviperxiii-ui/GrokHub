@@ -923,6 +923,8 @@ export interface PulseIdea {
   /** A card that found something: its chips in place of the two buttons.
    * Empty on other ideas. */
   chips: PulseChip[];
+  /** Like was tapped and is still on: the row shows a filled heart. */
+  loved: boolean;
 }
 
 export type FixKind =

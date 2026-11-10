@@ -349,7 +349,13 @@ export function Pulse({
                     busy={busy}
                     onDo={() => void run(idea)}
                     onFix={() => setFixing(idea)}
-                    onMoreLike={() => void act(idea.id, "moreLike", MORE_LIKE_NOTE)}
+                    onMoreLike={() =>
+                      void act(
+                        idea.id,
+                        idea.loved ? "unlove" : "moreLike",
+                        idea.loved ? undefined : MORE_LIKE_NOTE,
+                      )
+                    }
                     onNotInterested={() => void act(idea.id, "notInterested", NOT_INTERESTED_NOTE)}
                     onDismiss={() => void act(idea.id, "dismiss", "Dismissed.")}
                     onChip={(c) => void chip(idea.id, c)}

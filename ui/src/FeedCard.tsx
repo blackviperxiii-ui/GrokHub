@@ -412,7 +412,7 @@ export interface IdeaRowProps {
   onDo: () => void;
   /** A PC health card's main button: open its options window. */
   onFix?: () => void;
-  /** Like: more ideas in its spirit. */
+  /** Like, or take it back when the idea is already liked. */
   onMoreLike: () => void;
   /** Not interested: the idea goes, with some of its topics' weight. */
   onNotInterested: () => void;
@@ -463,7 +463,7 @@ export function IdeaRow({
         </div>
       )}
       <CardButtons
-        liked={false}
+        liked={idea.loved}
         busy={busy}
         onLike={onMoreLike}
         onDislike={onNotInterested}
