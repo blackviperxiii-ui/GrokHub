@@ -1,5 +1,6 @@
 use super::decide::*;
 use super::ladder::Undo;
+use super::score::{Score, Trend, MIN_OUTCOMES, SLIP_REST_MS, WEEK_MS};
 use super::signal::Subject;
 
 const T: u64 = 1_800_000_000_000;
@@ -419,6 +420,10 @@ fn the_page_shows_every_dial_and_the_newest_decisions_first() {
             area: Area::Router,
             label: "Model choice",
             dial: Dial::Watch,
+            went: None,
+            before: None,
+            trend: Trend::TooEarly,
+            resting: false,
         }
     );
     assert_eq!((page.asking_first, page.left_today), (false, 4));
@@ -441,7 +446,10 @@ fn the_page_shows_every_dial_and_the_newest_decisions_first() {
     );
     assert_eq!(
         serde_json::to_value(&page.dials[2]).unwrap(),
-        serde_json::json!({"area": "router", "label": "Model choice", "dial": "watch"})
+        serde_json::json!({
+            "area": "router", "label": "Model choice", "dial": "watch",
+            "went": null, "before": null, "trend": "too_early", "resting": false,
+        })
     );
     // Only the newest lines are shown.
     for n in 0..20 {
@@ -450,5 +458,127 @@ fn the_page_shows_every_dial_and_the_newest_decisions_first() {
     assert_eq!(
         view::trust(&s, T + 2 * HOUR).decisions.len(),
         view::DECISIONS_SHOWN
+    );
+}
+
+/// `good` yes answers and `bad` no answers to `id`'s offers in the week of
+/// `at`, after one decision so the rule knows its area.
+fn answers(s: &mut State, id: &str, good: u32, bad: u32, at: u64) {
+    answer(s, &sure(id), at);
+    for _ in 0..good {
+        s.outcome(&rule(id), Outcome::Accepted, at);
+    }
+    for _ in 0..bad {
+        s.outcome(&rule(id), Outcome::Declined, at);
+    }
+}
+
+#[test]
+fn the_scoreboard_compares_four_weeks_with_the_four_before() {
+    let mut s = State::default();
+    let settings = |s: &State, at: u64| s.score().score(Area::Settings, at);
+    assert_eq!(
+        settings(&s, T),
+        Score {
+            now: None,
+            before: None,
+            trend: Trend::TooEarly
+        }
+    );
+    // An outcome for a rule no proposal came from has no area to count in.
+    s.outcome(&rule("stray"), Outcome::Accepted, T);
+    assert_eq!(settings(&s, T).now, None);
+
+    answers(&mut s, "a", 9, 1, T);
+    assert_eq!(
+        settings(&s, T),
+        Score {
+            now: Some(90),
+            before: None,
+            trend: Trend::TooEarly
+        }
+    );
+    // Four weeks on, those counts are the span before.
+    let later = T + 4 * WEEK_MS;
+    answers(&mut s, "b", 8, 2, later);
+    assert_eq!(
+        settings(&s, later),
+        Score {
+            now: Some(80),
+            before: Some(90),
+            trend: Trend::Steady
+        }
+    );
+    answers(&mut s, "c", 0, 5, later);
+    assert_eq!(
+        settings(&s, later),
+        Score {
+            now: Some(53),
+            before: Some(90),
+            trend: Trend::Worse
+        }
+    );
+    // Other areas are untouched, and counts older than both spans drop.
+    assert_eq!(s.score().score(Area::Skills, later).now, None);
+    let much_later = T + 8 * WEEK_MS;
+    answers(&mut s, "d", 1, 0, much_later);
+    assert_eq!(
+        settings(&s, much_later),
+        Score {
+            now: Some(100),
+            before: Some(53),
+            trend: Trend::TooEarly
+        }
+    );
+    assert_eq!(MIN_OUTCOMES, 10);
+}
+
+#[test]
+fn an_area_that_got_worse_only_offers_for_a_month_and_carry_on_lifts_it() {
+    let mut s = graduated("x");
+    answers(&mut s, "a", 10, 0, T);
+    let later = T + 4 * WEEK_MS;
+    // A no rests its own rule, so each no here is a different rule.
+    for n in 0..5 {
+        answers(&mut s, &format!("n{n}"), 1, 1, later);
+    }
+    assert_eq!(s.score().score(Area::Settings, later).trend, Trend::Worse);
+    assert!(!s.score().resting(Area::Settings, later));
+    assert_eq!(
+        answer(&mut s, &sure("x"), later),
+        (Verdict::Offer, Reason::Slipped)
+    );
+    assert!(s.score().resting(Area::Settings, later));
+    // Another area still acts.
+    let mut skills = sure("y");
+    skills.area = Area::Skills;
+    for _ in 0..SHADOW_PASSES {
+        s.outcome(&skills.rule, Outcome::Accepted, later);
+    }
+    let d = s.decide(&skills, calm(), later);
+    assert_eq!((d.verdict, d.reason), (Verdict::Act, Reason::Sure));
+    // The rest ends on its own once the numbers are no longer worse.
+    let rested = later + SLIP_REST_MS;
+    assert!(!s.score().resting(Area::Settings, rested));
+    assert_eq!(
+        answer(&mut s, &sure("x"), rested),
+        (Verdict::Act, Reason::Sure)
+    );
+    // Carry on lifts a rest at once.
+    let mut again = graduated("x");
+    answers(&mut again, "a", 10, 0, T);
+    for n in 0..5 {
+        answers(&mut again, &format!("n{n}"), 1, 1, later);
+    }
+    assert_eq!(
+        answer(&mut again, &sure("x"), later),
+        (Verdict::Offer, Reason::Slipped)
+    );
+    again.resume();
+    assert!(!again.score().resting(Area::Settings, later));
+    let shown = text(&again, later);
+    assert!(
+        shown.contains("**The last four weeks**\n- Settings: 50% went your way, down from 100%\n"),
+        "{shown}"
     );
 }

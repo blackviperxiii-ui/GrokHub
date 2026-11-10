@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use super::belief::{Belief, Beliefs, Shape, Standing};
 use super::decide::{Area, Dial, State, TRUST_USAGE};
 use super::ladder::{step, Step, Undo};
+use super::score::Trend;
 use super::signal::Subject;
 
 /// Faded evidence below this is not worth a line.
@@ -78,12 +79,20 @@ pub struct View {
     pub trust: Trust,
 }
 
-/// One area's dial.
+/// One area's dial, and how its decisions went lately.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DialRow {
     pub area: Area,
     pub label: &'static str,
     pub dial: Dial,
+    /// 0 to 100: the share of its offers and changes that went the user's
+    /// way in the last four weeks. `None` with nothing counted.
+    pub went: Option<u8>,
+    /// The same for the four weeks before.
+    pub before: Option<u8>,
+    pub trend: Trend,
+    /// It got worse, so it only offers for a month.
+    pub resting: bool,
 }
 
 /// One decision, as the user reads it.
@@ -128,10 +137,17 @@ pub fn trust(state: &State, now_ms: u64) -> Trust {
     Trust {
         dials: Area::ALL
             .into_iter()
-            .map(|area| DialRow {
-                area,
-                label: area.label(),
-                dial: state.dial(area),
+            .map(|area| {
+                let score = state.score().score(area, now_ms);
+                DialRow {
+                    area,
+                    label: area.label(),
+                    dial: state.dial(area),
+                    went: score.now,
+                    before: score.before,
+                    trend: score.trend,
+                    resting: state.score().resting(area, now_ms),
+                }
             })
             .collect(),
         asking_first: state.paused(now_ms),
