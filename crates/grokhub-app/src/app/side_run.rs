@@ -2,7 +2,10 @@
 //! run on a copy of the chat, beside the work. The main reply, its history and
 //! its session are never touched. The answer shows under the chat as an
 //! "On the side" card and never enters the engine history; **Tell the main
-//! task** feeds it in when the user wants that.
+//! task** feeds it in when the user wants that. A side run that fails or ends
+//! with no answer puts the question in line as its own turn, so it is still
+//! answered in the chat. A casual chat never answers on the side unasked
+//! (`intent::TurnCx::casual`).
 
 use super::*;
 use grokhub_agent::route::intent::TurnRoute;
@@ -155,6 +158,7 @@ impl Cabin {
     pub(super) fn poll_side_runs(&mut self) -> bool {
         use grokhub_core::wire::GrokPEvent;
         let mut moved = false;
+        let mut unanswered = Vec::new();
         for run in &mut self.side.runs {
             let Some(rx) = run.rx.as_ref() else {
                 continue;
@@ -191,12 +195,31 @@ impl Cabin {
                 run.rx = None;
                 let _ = grokhub_agent::delete_session(&run.session);
                 moved = true;
+                if run.answer.trim().is_empty() {
+                    unanswered.push(run.id);
+                }
             }
+        }
+        if !unanswered.is_empty() {
+            self.requeue_unanswered_side(&unanswered);
         }
         if moved {
             self.trim_side_answers();
         }
         moved
+    }
+
+    /// Side runs that ended with no answer: each question leaves its card
+    /// and waits in its chat's line as its own turn, word for word.
+    fn requeue_unanswered_side(&mut self, ids: &[u64]) {
+        let (gone, kept): (Vec<SideRun>, Vec<SideRun>) = std::mem::take(&mut self.side.runs)
+            .into_iter()
+            .partition(|r| ids.contains(&r.id));
+        self.side.runs = kept;
+        for run in gone {
+            self.followup_queue.push(&run.thread_id, run.question);
+        }
+        self.status = "Couldn't answer that on the side, so it's next in line".into();
     }
 
     /// Keep the newest finished answers per chat; live runs always stay.
