@@ -1869,8 +1869,9 @@ pub fn is_source_post(card: &UpdateCard) -> bool {
 }
 
 /// Saved Finds: posts kept with Save, newest first, in `{config}/saved-finds.json`.
+/// A file of their own: feed cleanup, expiry, archive and delete never read
+/// it, and nothing here drops a find. Only Remove from saved takes one out.
 pub const SAVED_FILE: &str = "saved-finds.json";
-pub const SAVED_MAX: usize = 200;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SavedFind {
@@ -1905,18 +1906,99 @@ pub fn save_find(list: &mut Vec<SavedFind>, find: SavedFind) -> bool {
         return false;
     }
     list.insert(0, find);
-    list.truncate(SAVED_MAX);
     true
 }
 
-pub fn load_saved(path: &std::path::Path) -> Vec<SavedFind> {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_default()
+/// Remove from saved. False when that link wasn't saved.
+pub fn remove_find(list: &mut Vec<SavedFind>, url: &str) -> bool {
+    let key = canonical_url(url);
+    let before = list.len();
+    list.retain(|f| canonical_url(&f.url) != key);
+    list.len() != before
 }
 
+/// Whether this link is already saved.
+pub fn is_saved(list: &[SavedFind], url: &str) -> bool {
+    let key = canonical_url(url);
+    list.iter().any(|f| canonical_url(&f.url) == key)
+}
+
+/// Saved Finds from disk; no file yet is an empty list. A file that can't be
+/// read or parsed is never taken as empty: see [`load_saved_at`].
+pub fn load_saved(path: &std::path::Path) -> Result<Vec<SavedFind>, String> {
+    load_saved_at(path, crate::now_ms())
+}
+
+/// [`load_saved`] at `now_ms`. A damaged file is copied byte for byte to
+/// `saved-finds.json.corrupt-<now_ms>` (once: a copy with the same bytes is
+/// reused), stays where it is, and the error names the copy. Until the file
+/// parses again or is moved, [`save_saved`] refuses to write.
+pub fn load_saved_at(path: &std::path::Path, now_ms: u64) -> Result<Vec<SavedFind>, String> {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => {
+            return Err(format!(
+                "Saved items couldn't be read ({e}). Nothing is saved or removed until it can."
+            ))
+        }
+    };
+    let err = match serde_json::from_slice(&bytes) {
+        Ok(list) => return Ok(list),
+        Err(e) => e,
+    };
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("saved-finds.json");
+    Err(match back_up_damaged(path, &bytes, now_ms) {
+        Ok(copy) => format!(
+            "{name} is damaged ({err}). A copy is in {copy}. Nothing is saved or removed until {name} is fixed or moved."
+        ),
+        Err(e) => format!(
+            "{name} is damaged ({err}) and couldn't be copied ({e}). Nothing is saved or removed until it is fixed or moved."
+        ),
+    })
+}
+
+/// The damaged file's copy next to it, by file name. A copy that already
+/// holds these exact bytes is reused, so reading every frame makes one copy.
+fn back_up_damaged(path: &std::path::Path, bytes: &[u8], now_ms: u64) -> std::io::Result<String> {
+    let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("saved-finds.json");
+    let prefix = format!("{name}.corrupt-");
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let file = entry.file_name().to_string_lossy().into_owned();
+            if file.starts_with(&prefix) && std::fs::read(entry.path()).is_ok_and(|b| b == bytes) {
+                return Ok(file);
+            }
+        }
+    }
+    let copy = format!("{prefix}{now_ms}");
+    std::fs::write(dir.join(&copy), bytes)?;
+    Ok(copy)
+}
+
+/// Writes Saved Finds. Refuses while the file on disk can't be read or
+/// parsed, so a damaged file is never written over.
 pub fn save_saved(path: &std::path::Path, list: &[SavedFind]) -> Result<(), String> {
+    match std::fs::read(path) {
+        Ok(bytes) if serde_json::from_slice::<Vec<SavedFind>>(&bytes).is_err() => {
+            return Err(load_saved(path)
+                .err()
+                .unwrap_or_else(|| "Saved items are damaged. Nothing was saved.".to_string()))
+        }
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            return Err(format!(
+                "Saved items couldn't be read ({e}). Nothing was saved."
+            ))
+        }
+        _ => {}
+    }
     let text = serde_json::to_string_pretty(list).map_err(|e| format!("Saved finds: {e}"))?;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("Saved finds: {e}"))?;
@@ -2928,6 +3010,127 @@ mod tests {
             rank_with(std::slice::from_ref(&followed), &p, &bias, &known, NOW)[0].score,
             35
         );
+    }
+
+    #[test]
+    fn saved_finds_are_never_dropped_and_only_remove_takes_one_out() {
+        let mut list = Vec::new();
+        for i in 0..250 {
+            let find = SavedFind {
+                title: format!("Find {i}"),
+                url: format!("https://a.test/{i}"),
+                source_name: String::new(),
+                summary: String::new(),
+                because: None,
+                saved_ms: i,
+            };
+            assert!(save_find(&mut list, find));
+        }
+        assert_eq!(list.len(), 250, "no cap drops a saved find");
+        assert!(is_saved(&list, "https://www.a.test/0?utm_source=x"));
+        assert!(remove_find(&mut list, "https://a.test/0"));
+        assert!(!is_saved(&list, "https://a.test/0"));
+        assert!(!remove_find(&mut list, "https://a.test/0"));
+        assert_eq!(list.len(), 249);
+    }
+
+    #[test]
+    fn two_hundred_fifty_saved_finds_survive_a_round_trip_and_remove_takes_exactly_one() {
+        let dir = std::env::temp_dir().join(format!(
+            "grokhub-core-saved-250-{}-{}",
+            std::process::id(),
+            crate::now_ms()
+        ));
+        let path = dir.join(SAVED_FILE);
+        let mut list = Vec::new();
+        for i in 0..250u64 {
+            let find = SavedFind {
+                title: format!("Find {i}"),
+                url: format!("https://a.test/{i}"),
+                source_name: "Example Feed".into(),
+                summary: String::new(),
+                because: None,
+                saved_ms: i,
+            };
+            assert!(save_find(&mut list, find));
+            save_saved(&path, &list).expect("write");
+        }
+        let on_disk = load_saved(&path).expect("read");
+        assert_eq!(on_disk.len(), 250);
+        assert_eq!(on_disk[0].url, "https://a.test/249");
+        assert_eq!(on_disk[249].url, "https://a.test/0");
+
+        let mut list = on_disk;
+        assert!(remove_find(&mut list, "https://a.test/125"));
+        save_saved(&path, &list).expect("write");
+        let after = load_saved(&path).expect("read");
+        assert_eq!(after.len(), 249);
+        assert!(!is_saved(&after, "https://a.test/125"));
+        assert!(is_saved(&after, "https://a.test/124"));
+        assert!(is_saved(&after, "https://a.test/126"));
+        let left: Vec<String> = after.iter().map(|f| f.url.clone()).collect();
+        let want: Vec<String> = (0..250u64)
+            .rev()
+            .filter(|i| *i != 125)
+            .map(|i| format!("https://a.test/{i}"))
+            .collect();
+        assert_eq!(left, want, "only that one find left the list");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_damaged_saved_file_is_copied_kept_and_never_written_over() {
+        let dir = std::env::temp_dir().join(format!(
+            "grokhub-core-saved-damaged-{}-{}",
+            std::process::id(),
+            crate::now_ms()
+        ));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join(SAVED_FILE);
+        let damaged =
+            b"[{\"title\":\"Rust 1.99 released\",\"url\":\"https://blog.rust-lang.org/1.99\"";
+        std::fs::write(&path, damaged).expect("damaged file");
+
+        // Loading is an error, never an empty list, and copies the bytes.
+        let err = load_saved_at(&path, 1_791_705_600_000).expect_err("damaged is an error");
+        assert!(err.contains("saved-finds.json is damaged"), "{err}");
+        assert!(
+            err.contains("saved-finds.json.corrupt-1791705600000"),
+            "{err}"
+        );
+        let copy = dir.join("saved-finds.json.corrupt-1791705600000");
+        assert_eq!(std::fs::read(&copy).expect("copy"), damaged.to_vec());
+        assert_eq!(std::fs::read(&path).expect("original"), damaged.to_vec());
+
+        // Reading again later makes no second copy.
+        let again = load_saved_at(&path, 1_791_705_660_000).expect_err("still damaged");
+        assert!(
+            again.contains("saved-finds.json.corrupt-1791705600000"),
+            "{again}"
+        );
+        assert!(!dir.join("saved-finds.json.corrupt-1791705660000").exists());
+
+        // A Save after that is refused and the original stays byte for byte.
+        let find = SavedFind {
+            title: "Find 1".into(),
+            url: "https://a.test/1".into(),
+            source_name: "Example Feed".into(),
+            summary: String::new(),
+            because: None,
+            saved_ms: 1_791_705_600_000,
+        };
+        let refused = save_saved(&path, &[find]).expect_err("no write over a damaged file");
+        assert!(refused.contains("Nothing is saved or removed"), "{refused}");
+        assert_eq!(std::fs::read(&path).expect("original"), damaged.to_vec());
+        assert!(!path.with_extension("json.tmp").exists());
+
+        // No file at all is still just an empty list.
+        let missing = dir.join("none").join(SAVED_FILE);
+        assert_eq!(
+            load_saved_at(&missing, 1_791_705_600_000).expect("missing"),
+            Vec::new()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -1,0 +1,1 @@
+- Pulse has a Saved page: the Saved button in the Pulse header opens it, Save on a source post keeps it there, and each saved card has only a ⋯ menu with Remove from saved. Saved cards live apart from the feed, so feed cleanup never touches them, and the old 200-item limit is gone.

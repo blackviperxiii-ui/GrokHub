@@ -2305,6 +2305,25 @@ async fn pulse_why(state: State<'_, ShellState>, id: String) -> Result<String, S
     off_main(move || pulse::why(&dir, &id)).await?
 }
 
+/// The Pulse Saved page: every saved find, newest first.
+#[tauri::command]
+async fn pulse_saved(state: State<'_, ShellState>) -> Result<Vec<pulse::Saved>, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || pulse::saved(&dir)).await?
+}
+
+/// Remove from saved: the one action a saved find has. Returns what is left.
+#[tauri::command]
+async fn pulse_unsave(
+    state: State<'_, ShellState>,
+    url: String,
+) -> Result<Vec<pulse::Saved>, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || pulse::unsave(&dir, &url)).await?
+}
+
 /// A PC health card's options window. Read only.
 #[tauri::command]
 async fn pulse_fix(state: State<'_, ShellState>, id: String) -> Result<pulse::FixView, String> {
@@ -2896,6 +2915,8 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             arg(args, "day")?,
         ))?),
         "pulse_why" => out(block_on(pulse_why(state, arg(args, "id")?))?),
+        "pulse_saved" => out(block_on(pulse_saved(state))?),
+        "pulse_unsave" => out(block_on(pulse_unsave(state, arg(args, "url")?))?),
         "pulse_fix" => out(block_on(pulse_fix(state, arg(args, "id")?))?),
         "get_feed_prompt" => out(block_on(get_feed_prompt(state))?),
         "save_feed_prompt" => out(block_on(save_feed_prompt(state, arg(args, "text")?))?),
@@ -3564,6 +3585,8 @@ pub fn run() {
             pulse_offer,
             pulse_remind,
             pulse_why,
+            pulse_saved,
+            pulse_unsave,
             pulse_fix,
             get_feed_prompt,
             save_feed_prompt,

@@ -2,6 +2,7 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  SavedFind,
   FeedPrompt,
   FixView,
   PulseAct,
@@ -24,6 +25,8 @@ const api = vi.hoisted(() => ({
   getFeedPrompt: vi.fn<() => Promise<FeedPrompt>>(),
   openUrl: vi.fn<(url: string) => Promise<void>>(),
   saveFeedPrompt: vi.fn<(text: string) => Promise<FeedPrompt>>(),
+  pulseSaved: vi.fn<() => Promise<SavedFind[]>>(),
+  pulseUnsave: vi.fn<(url: string) => Promise<SavedFind[]>>(),
 }));
 
 vi.mock("./api", () => api);
@@ -63,6 +66,8 @@ function post(over: Partial<PulsePost> = {}): PulsePost {
     chips: [],
     snooze: false,
     delete: false,
+    save: false,
+    saved: false,
     ...over,
   };
 }
@@ -755,5 +760,47 @@ describe("Pulse", () => {
     expect(screen.getByText(/<b>raw<\/b>/)).toBeInTheDocument();
     expect(screen.getAllByRole("link")).toHaveLength(1);
     expect(screen.getByRole("link", { name: "ok" })).toHaveAttribute("href", "https://a.example/x");
+  });
+  it("Save puts a source post on the Saved page, which only offers Remove from saved", async () => {
+    api.getPulse.mockResolvedValue({ ...PAGE, feed: [post({ save: true })] });
+    api.pulseAct.mockResolvedValue({ ...PAGE, feed: [post({ save: true, saved: true, loved: true })] });
+    const find: SavedFind = {
+      title: TITLE,
+      url: "https://blog.rust-lang.org/1.99.html",
+      sourceName: "Rust Blog",
+      summary: "Async closures are stable.",
+      because: "You follow Rust",
+      savedMs: Date.UTC(2026, 9, 26, 16, 0),
+    };
+    api.pulseSaved.mockResolvedValue([find]);
+    api.pulseUnsave.mockResolvedValue([]);
+    render(<Pulse onRun={() => {}} />);
+
+    const card = await screen.findByRole("listitem", { name: TITLE });
+    const row = within(card).getByRole("group", { name: "Card actions" });
+    const rowNames = within(row)
+      .getAllByRole("button")
+      .map((b) => b.getAttribute("aria-label") ?? b.textContent);
+    // Like far left, Save among the card's own actions, Dismiss far right.
+    expect(rowNames[0]).toBe("Like");
+    expect(rowNames.at(-1)).toBe("Dismiss");
+    expect(rowNames.indexOf("Save")).toBeLessThan(rowNames.indexOf("Not interested"));
+    await userEvent.click(within(row).getByRole("button", { name: "Save" }));
+    expect(api.pulseAct).toHaveBeenCalledWith("post-1", "save");
+    expect(await within(card).findByRole("button", { name: "Saved" })).toBeDisabled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Saved", pressed: false }));
+    const saved = await screen.findByRole("listitem", { name: TITLE });
+    expect(saved).toHaveTextContent("Async closures are stable.");
+    expect(saved).toHaveTextContent("Rust Blog · You follow Rust");
+    // No row of buttons: only the ⋯ menu.
+    expect(within(saved).queryByRole("group", { name: "Card actions" })).not.toBeInTheDocument();
+    expect(within(saved).getAllByRole("button").map((b) => b.textContent)).toEqual(["⋯"]);
+    await userEvent.click(within(saved).getByRole("button", { name: "More" }));
+    const items = within(saved).getAllByRole("menuitem");
+    expect(items.map((i) => i.textContent)).toEqual(["Remove from saved"]);
+    await userEvent.click(items[0]);
+    expect(api.pulseUnsave).toHaveBeenCalledWith("https://blog.rust-lang.org/1.99.html");
+    expect(await screen.findByText(/Nothing saved yet/)).toBeInTheDocument();
   });
 });

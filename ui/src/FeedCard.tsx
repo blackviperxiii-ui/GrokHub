@@ -260,6 +260,8 @@ export interface FeedCardProps {
   onSnooze?: () => void;
   /** Gone for good, after a confirm. Shown when the card says it suits. */
   onDelete?: () => void;
+  /** Save: the post goes to the Saved page. Shown on source posts. */
+  onSave?: () => void;
   /** A chip under the card other than Discuss: a fix, Ignore for now, or
    * Remind me later. */
   onChip?: (chip: PulseChip) => void;
@@ -281,6 +283,7 @@ export function FeedCard({
   onWhy,
   onSnooze,
   onDelete,
+  onSave,
   onChip,
 }: FeedCardProps) {
   const chips = post.chips ?? [];
@@ -389,6 +392,17 @@ export function FeedCard({
         {post.link && onOpen && (
           <button type="button" className="quiet" disabled={busy} onClick={onOpen}>
             Read it
+          </button>
+        )}
+        {post.save && onSave && (
+          <button
+            type="button"
+            className="quiet"
+            aria-pressed={post.saved}
+            disabled={busy || post.saved}
+            onClick={onSave}
+          >
+            {post.saved ? "Saved" : "Save"}
           </button>
         )}
         {post.snooze && onSnooze && (
