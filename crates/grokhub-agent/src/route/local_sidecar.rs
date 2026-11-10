@@ -406,8 +406,24 @@ fn spawn_llama(
         }
     }
     let mut args = spawn_args(model, host, port, launch, bare_cpu);
-    // A planned launch can save and restore its KV cache (see `local_kv`).
-    if launch.is_some() {
+    // A planned launch can save and restore its KV cache (see `local_kv`),
+    // and a cold one wholly on the GPU with RAM short skips the page cache.
+    if let Some(l) = launch {
+        let help = super::local_flags::help_text(binary);
+        let file_mb = std::fs::metadata(model).map_or(0, |m| m.len()) / (1024 * 1024);
+        let facts = super::local_warm::LoadFacts {
+            whole_on_gpu: !l.cpu_only && l.ngl >= l.all_layers && l.n_cpu_moe.is_none(),
+            mlock: l.mlock,
+            file_mb,
+            free_ram_mb: autoconfig::free_now().ram_free_mb,
+            cached_pct: super::local_warm::resident_pct(model),
+            engine_dio: help
+                .lines()
+                .any(|l| l.contains("--load-mode") && l.contains("dio")),
+        };
+        if super::local_warm::direct_load(facts) {
+            args.extend(["--load-mode".to_string(), "dio".to_string()]);
+        }
         let options = super::local_flags::engine_options(binary);
         if let Some(dir) = super::local_kv::spawn_dir(&options) {
             args.extend([
@@ -425,6 +441,9 @@ fn spawn_llama(
     grokhub_core::proc_util::hide_windows_console(&mut cmd);
     let run = launch.map(|l| l.run.clone()).unwrap_or_default();
     cmd.envs(run.env());
+    cmd.envs(super::local_warm::cache_env(|k| {
+        std::env::var_os(k).is_some()
+    }));
     if run.low_priority {
         super::local_flags::below_normal(&mut cmd);
     }

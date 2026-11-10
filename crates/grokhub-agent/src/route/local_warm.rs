@@ -108,6 +108,48 @@ pub fn first_reply_detail(prompt_n: u64, cache_n: u64) -> String {
     format!("prompt {prompt_n} tokens, {cache_n} from cache")
 }
 
+/// Shader and kernel caches for the engine, each only when the user hasn't
+/// set it (`is_set`): a bigger Mesa cache (AMD and Intel on Linux) and the
+/// largest CUDA JIT cache, so compiled GPU work survives between loads.
+pub fn cache_env(is_set: impl Fn(&str) -> bool) -> Vec<(&'static str, &'static str)> {
+    [
+        ("MESA_SHADER_CACHE_MAX_SIZE", "8G"),
+        ("CUDA_CACHE_MAXSIZE", "4294967296"),
+    ]
+    .into_iter()
+    .filter(|(k, _)| !is_set(k))
+    .collect()
+}
+
+/// Facts for the load mode choice.
+#[derive(Debug, Clone, Copy)]
+pub struct LoadFacts {
+    /// Every layer goes to the GPU, so RAM keeps nothing of the model.
+    pub whole_on_gpu: bool,
+    pub mlock: bool,
+    pub file_mb: u64,
+    pub free_ram_mb: Option<u64>,
+    pub cached_pct: Option<u8>,
+    /// The engine takes `--load-mode dio`.
+    pub engine_dio: bool,
+}
+
+/// RAM left free after a load before reading through the cache is skipped.
+pub const DIO_SPARE_MB: u64 = 4 * 1024;
+
+/// Load straight from disk (`--load-mode dio`), skipping the page cache: a
+/// cold file going wholly to the GPU on a machine short of RAM, where a
+/// cached copy would only push other programs out. Anything already cached,
+/// partly offloaded, locked, or unknown keeps the engine's default.
+pub fn direct_load(f: LoadFacts) -> bool {
+    f.engine_dio
+        && f.whole_on_gpu
+        && !f.mlock
+        && f.cached_pct.is_some_and(|p| p < 20)
+        && f.free_ram_mb
+            .is_some_and(|free| free < f.file_mb.saturating_add(DIO_SPARE_MB))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -143,6 +185,50 @@ mod tests {
             first_reply_detail(2100, 40),
             "prompt 2100 tokens, 40 from cache"
         );
+    }
+
+    #[test]
+    fn caches_the_user_set_are_left_alone() {
+        assert_eq!(cache_env(|_| false).len(), 2);
+        let only_cuda = cache_env(|k| k == "MESA_SHADER_CACHE_MAX_SIZE");
+        assert_eq!(only_cuda, vec![("CUDA_CACHE_MAXSIZE", "4294967296")]);
+    }
+
+    #[test]
+    fn only_a_cold_whole_gpu_load_on_tight_ram_skips_the_cache() {
+        let tight = LoadFacts {
+            whole_on_gpu: true,
+            mlock: false,
+            file_mb: 15_000,
+            free_ram_mb: Some(12_000),
+            cached_pct: Some(3),
+            engine_dio: true,
+        };
+        assert!(direct_load(tight));
+        assert!(!direct_load(LoadFacts {
+            free_ram_mb: Some(15_000 + DIO_SPARE_MB),
+            ..tight
+        }));
+        assert!(!direct_load(LoadFacts {
+            cached_pct: Some(80),
+            ..tight
+        }));
+        assert!(!direct_load(LoadFacts {
+            cached_pct: None,
+            ..tight
+        }));
+        assert!(!direct_load(LoadFacts {
+            whole_on_gpu: false,
+            ..tight
+        }));
+        assert!(!direct_load(LoadFacts {
+            mlock: true,
+            ..tight
+        }));
+        assert!(!direct_load(LoadFacts {
+            engine_dio: false,
+            ..tight
+        }));
     }
 
     #[cfg(target_os = "linux")]

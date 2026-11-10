@@ -1,0 +1,1 @@
+- Local AI gives the engine bigger GPU shader and kernel caches (unless you set your own), so compiled GPU work survives between loads, and on a machine short of RAM a cold model going wholly to the GPU loads straight from disk instead of filling the file cache.
