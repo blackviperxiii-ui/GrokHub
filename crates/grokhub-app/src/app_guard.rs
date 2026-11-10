@@ -127,13 +127,13 @@ mod tests {
 
     #[test]
     fn only_window_and_tray_starts_take_the_lock() {
-        let main = include_str!("main.rs");
+        let main = include_str!("main.rs").replace("\r\n", "\n");
         assert_eq!(
             main.matches("app_guard::claim()").count(),
             1,
             "one claim site"
         );
-        let run = between(main, "fn run_cabin(", "fn run_cabin_with_fx");
+        let run = between(&main, "fn run_cabin(", "fn run_cabin_with_fx");
         assert!(run.contains("app_guard::claim()"), "{run}");
         assert!(
             run.find("tray::try_claim_cabin()").expect("pid claim")
@@ -146,7 +146,7 @@ mod tests {
             "{run}"
         );
         let dispatch = between(
-            main,
+            &main,
             "    match launch {\n        Launch::Version =>",
             "\nfn run_oauth_cli(",
         );
@@ -179,11 +179,11 @@ mod tests {
 
     #[test]
     fn restarts_release_the_lock_before_the_next_cabin_starts() {
-        let tray = include_str!("tray.rs");
-        let release = between(tray, "pub fn release_cabin_claim() {", "\n}\n");
+        let tray = include_str!("tray.rs").replace("\r\n", "\n");
+        let release = between(&tray, "pub fn release_cabin_claim() {", "\n}\n");
         assert!(release.contains("app_guard::release()"), "{release}");
-        let update = include_str!("update.rs");
-        let replace = between(update, "fn replace_process(", "\n}\n");
+        let update = include_str!("update.rs").replace("\r\n", "\n");
+        let replace = between(&update, "fn replace_process(", "\n}\n");
         assert!(
             replace.find("release_cabin_claim()").expect("release")
                 < replace.find("spawn_detached").expect("spawn"),
