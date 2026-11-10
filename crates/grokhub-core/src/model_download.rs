@@ -40,13 +40,83 @@ pub fn download_url(m: &LocalModel) -> String {
     resolve_url(m.repo, m.remote_name())
 }
 
-fn resolve_url(repo: &str, remote: &str) -> String {
+/// Where `remote` in `repo` downloads from.
+pub fn resolve_url(repo: &str, remote: &str) -> String {
     format!("https://huggingface.co/{repo}/resolve/main/{remote}")
 }
 
-/// The Hugging Face tree listing that carries each file's LFS SHA-256.
-pub fn tree_url(repo: &str) -> String {
-    format!("https://huggingface.co/api/models/{repo}/tree/main")
+/// The Hugging Face tree listing of `file`'s own folder, which carries its
+/// LFS SHA-256. A listing shows one folder only, so a file under
+/// `split_files/vae/` is never in the top one. Each folder name is
+/// percent-encoded on its own; the slashes between them stay.
+pub fn tree_url(repo: &str, file: &str) -> String {
+    let base = format!("https://huggingface.co/api/models/{repo}/tree/main");
+    match file.rsplit_once('/') {
+        Some((folder, _)) if !folder.is_empty() => {
+            let path: Vec<String> = folder.split('/').map(encode_segment).collect();
+            format!("{base}/{}", path.join("/"))
+        }
+        _ => base,
+    }
+}
+
+/// RFC 3986 unreserved characters stay; every other byte is `%XX`.
+fn encode_segment(seg: &str) -> String {
+    let mut out = String::with_capacity(seg.len());
+    for b in seg.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// The `rel="next"` page in a tree listing's `Link` header. The Hub pages a
+/// large folder this way; only a page on the Hub itself is followed.
+pub fn next_page(link: &str) -> Option<String> {
+    link.split(',').find_map(|part| {
+        let (target, params) = part.trim().split_once(';')?;
+        let next = params
+            .split(';')
+            .any(|p| p.trim().eq_ignore_ascii_case("rel=\"next\"") || p.trim() == "rel=next");
+        let url = target.trim().strip_prefix('<')?.strip_suffix('>')?;
+        (next && url.starts_with("https://huggingface.co/")).then(|| url.to_string())
+    })
+}
+
+/// One page of a tree listing: its body and its `Link` header.
+pub type Page = (String, Option<String>);
+
+/// The most listing pages one lookup reads. The Hub lists 1,000 entries a
+/// page, so this covers any folder a model lives in.
+const MAX_PAGES: usize = 50;
+
+/// The publisher's SHA-256 for `file` in `repo`: reads `file`'s folder
+/// listing through `get`, following its next pages, until the file shows.
+/// Every [`Fetch`] uses this, so the shell and the cabin read the same pages.
+pub fn sha256_lookup(
+    repo: &str,
+    file: &str,
+    get: &mut dyn FnMut(&str) -> Result<Page, String>,
+) -> Result<String, String> {
+    let mut url = tree_url(repo, file);
+    let mut seen = Vec::new();
+    for _ in 0..MAX_PAGES {
+        let (body, link) = get(&url)?;
+        if let Some(h) = sha256_from_tree(&body, file) {
+            return Ok(h);
+        }
+        seen.push(url);
+        match link.as_deref().and_then(next_page) {
+            Some(next) if !seen.contains(&next) => url = next,
+            _ => break,
+        }
+    }
+    Err(format!(
+        "Hugging Face lists no checksum for {file} in {repo}."
+    ))
 }
 
 /// `file`'s `lfs.oid` in a Hugging Face tree listing.
@@ -223,8 +293,58 @@ pub enum Outcome {
     Cancelled,
     /// The hash didn't match; the `.part` is gone so the next try starts clean.
     BadChecksum,
-    /// Network or disk trouble; the `.part` stays so it resumes.
-    Failed(String),
+    /// Network or disk trouble at `step`; the `.part` stays so it resumes.
+    Failed {
+        step: Step,
+        why: String,
+    },
+}
+
+/// Where a model download stopped, for the line under its row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Step {
+    /// The drive hasn't room for it.
+    Space,
+    /// Reading the publisher's checksum before the download.
+    Checksum,
+    /// Pulling or writing the bytes.
+    Download,
+    /// Checking the finished file.
+    Verify,
+    /// The speech or picture engine that runs it.
+    Engine,
+}
+
+impl Step {
+    pub fn label(self) -> &'static str {
+        match self {
+            Step::Space => "free space",
+            Step::Checksum => "checksum read",
+            Step::Download => "download",
+            Step::Verify => "verify",
+            Step::Engine => "engine",
+        }
+    }
+}
+
+/// Bytes of `m` already in `dir`: finished files and any `.part`.
+pub fn bytes_on_disk(dir: &Path, m: &LocalModel) -> u64 {
+    std::iter::once(m.file)
+        .chain(m.parts.iter().map(|p| p.file))
+        .map(|f| {
+            let fin = dir.join(f);
+            fs::metadata(&fin)
+                .or_else(|_| fs::metadata(part_of(&fin)))
+                .map(|md| md.len())
+                .unwrap_or(0)
+        })
+        .sum()
+}
+
+/// Free disk `m` still needs in `dir`: what is left to download plus the
+/// headroom. A resumed download only needs room for the rest.
+pub fn space_needed_mb(dir: &Path, m: &LocalModel) -> u64 {
+    crate::local_setup::disk_needed_mb(m).saturating_sub(bytes_on_disk(dir, m) / (1_024 * 1_024))
 }
 
 const CHUNK: usize = 256 * 1024;
@@ -247,11 +367,15 @@ pub fn download(
     ctl: &Control,
     on: &mut dyn FnMut(Progress),
 ) -> Outcome {
+    let failed = |step, why| Outcome::Failed { step, why };
     if let Err(e) = crate::offline::refuse() {
-        return Outcome::Failed(e);
+        return failed(Step::Download, e);
     }
     if let Err(e) = fs::create_dir_all(dir) {
-        return Outcome::Failed(format!("Couldn't create {}: {e}", dir.display()));
+        return failed(
+            Step::Download,
+            format!("Couldn't create {}: {e}", dir.display()),
+        );
     }
     let items: Vec<Item> = std::iter::once(Item {
         repo: m.repo,
@@ -276,13 +400,16 @@ pub fn download(
         match fetch.sha256(it.repo, it.remote) {
             Ok(h) if h == pin => {}
             Ok(_) => {
-                return Outcome::Failed(format!(
+                return failed(Step::Checksum, format!(
                     "Hugging Face now lists a different file for {} than the one {product} pinned, so it wasn't downloaded.",
                     m.name, product = crate::brand::product_name()
                 ))
             }
             Err(e) => {
-                return Outcome::Failed(format!("Couldn't read the checksum for {}: {e}", m.name))
+                return failed(
+                    Step::Checksum,
+                    format!("Couldn't read the checksum for {}: {e}", m.name),
+                )
             }
         }
     }
@@ -336,7 +463,7 @@ pub fn download(
     if matches!(m.kind, ModelKind::Chat | ModelKind::Drafter) {
         let json = serde_json::to_string_pretty(&rec).unwrap_or_default();
         if let Err(e) = fs::write(dir.join(INSTALLED_FILE), json) {
-            return Outcome::Failed(format!("Couldn't record {}: {e}", m.name));
+            return failed(Step::Download, format!("Couldn't record {}: {e}", m.name));
         }
     }
     Outcome::Done(rec)
@@ -352,7 +479,12 @@ fn fetch_file(
     ctl: &Control,
     on: &mut dyn FnMut(Progress),
 ) -> Result<u64, Outcome> {
-    let failed = |s: String| Err(Outcome::Failed(s));
+    let failed = |why: String| {
+        Err(Outcome::Failed {
+            step: Step::Download,
+            why,
+        })
+    };
     if let Some(parent) = fin.parent()
         && let Err(e) = fs::create_dir_all(parent)
     {
@@ -418,7 +550,12 @@ fn fetch_file(
             let _ = fs::remove_file(&part);
             return Err(Outcome::BadChecksum);
         }
-        Err(e) => return failed(format!("Couldn't check {}: {e}", part.display())),
+        Err(e) => {
+            return Err(Outcome::Failed {
+                step: Step::Verify,
+                why: format!("Couldn't check {}: {e}", part.display()),
+            });
+        }
     }
     if let Err(e) = fs::rename(&part, fin) {
         return failed(format!("Couldn't finish {}: {e}", fin.display()));
@@ -658,9 +795,13 @@ mod tests {
         let out = download(&dir, &model(), &srv, &Control::default(), &mut |_| {});
         assert_eq!(
             out,
-            Outcome::Failed("The download of Test Model stopped: connection reset".into())
+            Outcome::Failed {
+                step: Step::Download,
+                why: "The download of Test Model stopped: connection reset".into()
+            }
         );
         assert_eq!(partial_bytes(&dir, &model()), Some(20));
+        assert_eq!(bytes_on_disk(&dir, &model()), 20);
         // A restart: a fresh call picks up at byte 20.
         let out = download(&dir, &model(), &srv, &Control::default(), &mut |_| {});
         assert!(
@@ -706,9 +847,10 @@ mod tests {
         let out = download(&dir, &model(), &srv, &Control::default(), &mut |_| {});
         assert_eq!(
             out,
-            Outcome::Failed(
-                "Hugging Face now lists a different file for Test Model than the one Loadout pinned, so it wasn't downloaded.".into()
-            )
+            Outcome::Failed {
+                step: Step::Checksum,
+                why: "Hugging Face now lists a different file for Test Model than the one Loadout pinned, so it wasn't downloaded.".into()
+            }
         );
         assert!(srv.opens.lock().unwrap().is_empty());
         assert!(partial_bytes(&dir, &model()).is_none());
@@ -749,7 +891,7 @@ mod tests {
         let m = crate::local_setup::model_by_id("gemma-4-e4b-it-abliterated-q4_k").unwrap();
         assert_eq!(download_url(m), "https://huggingface.co/huihui-ai/Huihui-gemma-4-E4B-it-qat-q4_0-unquantized-abliterated-GGUF/resolve/main/Huihui-gemma-4-E4B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf");
         assert_eq!(
-            tree_url(m.repo),
+            tree_url(m.repo, m.remote_name()),
             "https://huggingface.co/api/models/huihui-ai/Huihui-gemma-4-E4B-it-qat-q4_0-unquantized-abliterated-GGUF/tree/main"
         );
         assert_eq!(
@@ -768,6 +910,118 @@ mod tests {
         assert_eq!(content_range_total("bytes 20-49/50"), Some(50));
         assert_eq!(content_range_total("bytes 0-0/*"), None);
         assert_eq!(content_range_total("50"), None);
+    }
+
+    #[test]
+    fn a_nested_file_reads_its_own_folder_and_follows_the_next_page() {
+        // The picture models' VAE sits two folders down; the top listing never has it.
+        let repo = "Comfy-Org/z_image_turbo";
+        let file = "split_files/vae/ae.safetensors";
+        let first =
+            "https://huggingface.co/api/models/Comfy-Org/z_image_turbo/tree/main/split_files/vae";
+        assert_eq!(tree_url(repo, file), first);
+        // Each folder name is encoded on its own; the slashes between stay.
+        assert_eq!(
+            tree_url("acme/x", "my dir/a#b/f.gguf"),
+            "https://huggingface.co/api/models/acme/x/tree/main/my%20dir/a%23b"
+        );
+        let second = format!("{first}?cursor=abc");
+        let hash = "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38";
+        let mut asked = Vec::new();
+        let got = sha256_lookup(repo, file, &mut |url| {
+            asked.push(url.to_string());
+            if url == first {
+                Ok((
+                    r#"[{"type":"file","path":"split_files/vae/other.safetensors","lfs":{"oid":"0000000000000000000000000000000000000000000000000000000000000000"}}]"#.into(),
+                    Some(format!("<{second}>; rel=\"next\"")),
+                ))
+            } else {
+                Ok((
+                    format!(r#"[{{"type":"file","path":"{file}","lfs":{{"oid":"{hash}"}}}}]"#),
+                    None,
+                ))
+            }
+        });
+        assert_eq!(got.as_deref(), Ok(hash));
+        assert_eq!(asked, [first.to_string(), second.clone()]);
+        // Only a next page on the Hub is followed; a previous page isn't next.
+        assert_eq!(
+            next_page(&format!("<{second}>; rel=\"next\"")),
+            Some(second.clone())
+        );
+        assert_eq!(
+            next_page(&format!(
+                "<{first}>; rel=\"prev\", <{second}>; rel=\"next\""
+            )),
+            Some(second)
+        );
+        assert_eq!(next_page(&format!("<{first}>; rel=\"prev\"")), None);
+        assert_eq!(next_page("<https://example.com/x>; rel=\"next\""), None);
+        // Not listed on any page: the error names the file and the repo.
+        let none = sha256_lookup(repo, file, &mut |_| Ok(("[]".into(), None)));
+        assert_eq!(
+            none,
+            Err("Hugging Face lists no checksum for split_files/vae/ae.safetensors in Comfy-Org/z_image_turbo.".into())
+        );
+        // A Link that points back at a page already read ends the walk.
+        let mut n = 0;
+        let looped = sha256_lookup(repo, file, &mut |_| {
+            n += 1;
+            Ok(("[]".into(), Some(format!("<{first}>; rel=\"next\""))))
+        });
+        assert!(looped.is_err());
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn a_resumed_download_only_needs_room_for_what_is_left() {
+        let dir = tmp("space");
+        let m = LocalModel {
+            download_mb: 10,
+            ..model()
+        };
+        assert_eq!(space_needed_mb(&dir, &m), 10 + 2_048);
+        fs::create_dir_all(&dir).unwrap();
+        File::create(part_path(&dir, &m))
+            .unwrap()
+            .set_len(3 * 1_024 * 1_024)
+            .unwrap();
+        assert_eq!(bytes_on_disk(&dir, &m), 3 * 1_024 * 1_024);
+        assert_eq!(space_needed_mb(&dir, &m), 7 + 2_048);
+        assert_eq!(
+            (
+                Step::Space.label(),
+                Step::Checksum.label(),
+                Step::Engine.label()
+            ),
+            ("free space", "checksum read", "engine")
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_file_at_the_top_of_the_repo_still_reads_the_top_listing() {
+        let tree = r#"[{"type":"file","path":"test.gguf","lfs":{"oid":"ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef0123456789"}}]"#;
+        let mut asked = Vec::new();
+        let got = sha256_lookup("acme/test-GGUF", "test.gguf", &mut |url| {
+            asked.push(url.to_string());
+            Ok((tree.into(), None))
+        });
+        assert_eq!(
+            got.as_deref(),
+            Ok("abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789")
+        );
+        assert_eq!(
+            asked,
+            ["https://huggingface.co/api/models/acme/test-GGUF/tree/main"]
+        );
+        // A failed read says why and stops there.
+        assert_eq!(
+            sha256_lookup("acme/test-GGUF", "test.gguf", &mut |_| Err(
+                "timed out".into()
+            )),
+            Err("timed out".into())
+        );
     }
 
     #[test]

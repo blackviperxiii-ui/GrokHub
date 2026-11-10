@@ -1777,10 +1777,21 @@ export interface LibraryTab {
   all: LibraryQueueOffer | null;
 }
 
+/** Why a model's last download stopped; it shows under that model's row. */
+export interface LibraryRowError {
+  /** free space, checksum read, download, verify or engine. */
+  step: string;
+  message: string;
+  /** The step, plus free and needed space when space is why. */
+  detail: string;
+}
+
 export interface LibraryStatus {
   job: { id: string; line: string; pct: number } | null;
   queued: number;
   message: string | null;
+  /** By model id, until that model is downloaded again or finishes. */
+  errors: Record<string, LibraryRowError>;
   running: boolean;
 }
 

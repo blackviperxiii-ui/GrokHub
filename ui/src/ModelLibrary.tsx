@@ -102,13 +102,22 @@ export function ModelLibrary() {
         ))}
       </div>
       <ul aria-label={`${open.label} models`}>
-        {open.rows.map((row) => (
-          <li key={row.id} aria-label={row.name}>
-            <p>{row.line}</p>
-            <p className="note">{row.about}</p>
-            {action(row)}
-          </li>
-        ))}
+        {open.rows.map((row) => {
+          const failed = status.errors[row.id];
+          return (
+            <li key={row.id} aria-label={row.name} className="local-library-row">
+              <p>{row.line}</p>
+              <p className="note">{row.about}</p>
+              {action(row)}
+              {failed && (
+                <div className="local-library-row-error" role="alert">
+                  <p className="note error">{failed.message}</p>
+                  <p className="note">{failed.detail}</p>
+                </div>
+              )}
+            </li>
+          );
+        })}
       </ul>
       {open.empty && <p className="note">{open.empty}</p>}
       {status.job ? (

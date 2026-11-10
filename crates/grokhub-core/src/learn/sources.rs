@@ -199,3 +199,14 @@ pub fn run(m: &RunMetrics) -> Vec<Signal> {
     }
     out
 }
+
+/// The habit votes for one line of the run log: a skill run that finished
+/// well, counted for the part of the day `hour` is in. A late line (a
+/// correction, an undo) is the same run again and counts nothing.
+pub fn run_habit(m: &RunMetrics, hour: u32) -> Vec<Signal> {
+    let skill = m.class.strip_prefix("skill:").unwrap_or_default();
+    if skill.is_empty() || m.result != OutcomeResult::Success || m.undos > 0 || m.corrections > 0 {
+        return Vec::new();
+    }
+    super::habit::skill_run(&crate::skill::skill_dir_name(skill), hour, m.at)
+}

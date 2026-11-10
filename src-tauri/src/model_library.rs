@@ -3,14 +3,15 @@
 //! one background worker that downloads the queue a model at a time from
 //! Hugging Face and reports progress on [`LIBRARY_EVENT`].
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use grokhub_agent::route::local_sidecar;
 use grokhub_core::local_picker::{BenchCache, Profile};
 use grokhub_core::local_setup::{self as ls, LocalModel, ModelKind, ModelTab};
-use grokhub_core::model_download::{self as md, Control, Outcome, Progress};
-use grokhub_core::model_library::{self as lib, Fit, Row};
+use grokhub_core::model_download::{self as md, Control, Outcome, Progress, Step};
+use grokhub_core::model_library::{self as lib, Fit, Row, RowError};
 use grokhub_core::model_lineup as lineup;
 use grokhub_core::runtime_download as rd;
 use serde::Serialize;
@@ -67,6 +68,8 @@ pub struct LibraryStatus {
     pub job: Option<LibraryJob>,
     pub queued: usize,
     pub message: Option<String>,
+    /// Why a model's last download stopped, by model id, for under its row.
+    pub errors: BTreeMap<String, RowError>,
     /// The worker is running; when it turns false, read the page again.
     pub running: bool,
 }
@@ -95,6 +98,8 @@ struct State {
     queue: Vec<&'static LocalModel>,
     run: Option<Run>,
     message: Option<String>,
+    /// Each model's last failure until it is downloaded again or finishes.
+    errors: BTreeMap<&'static str, RowError>,
     worker: bool,
 }
 
@@ -134,6 +139,11 @@ fn status_of(s: &State) -> LibraryStatus {
         }),
         queued: s.queue.len(),
         message: s.message.clone(),
+        errors: s
+            .errors
+            .iter()
+            .map(|(id, e)| ((*id).to_string(), e.clone()))
+            .collect(),
         running: s.worker,
     }
 }
@@ -272,17 +282,7 @@ pub fn download(
         .collect::<Result<Vec<_>, _>>()?;
     let start = {
         let mut s = state().lock().map_err(|e| e.to_string())?;
-        for m in models {
-            if !s.queue.iter().any(|q| q.id == m.id)
-                && s.run.as_ref().is_none_or(|r| r.model.id != m.id)
-            {
-                s.queue.push(m);
-            }
-        }
-        s.message = None;
-        let start = !s.worker;
-        s.worker = true;
-        start
+        enqueue(&mut s, models)
     };
     if start {
         let app2 = app.clone();
@@ -293,6 +293,51 @@ pub fn download(
     Ok(view(&config_dir))
 }
 
+/// Queue `models` behind anything queued; each one's last error goes, since
+/// it is being tried again. `true` when the worker has to start.
+fn enqueue(s: &mut State, models: Vec<&'static LocalModel>) -> bool {
+    for m in models {
+        s.errors.remove(m.id);
+        if !s.queue.iter().any(|q| q.id == m.id)
+            && s.run.as_ref().is_none_or(|r| r.model.id != m.id)
+        {
+            s.queue.push(m);
+        }
+    }
+    s.message = None;
+    let start = !s.worker;
+    s.worker = true;
+    start
+}
+
+/// Why one model's download didn't finish.
+enum Halt {
+    /// The user paused or cancelled it, so the queue stops.
+    Stop(String),
+    /// It failed: the reason goes on its row and the queue goes on.
+    Failed(RowError),
+}
+
+/// Record how `m` ended. A failure stays on that model's row and the rest
+/// of the queue still downloads; the user's pause or cancel stops the queue.
+fn settle(s: &mut State, m: &'static LocalModel, end: Result<String, Halt>) {
+    s.run = None;
+    match end {
+        Ok(said) => {
+            s.errors.remove(m.id);
+            s.message = Some(said);
+        }
+        Err(Halt::Stop(said)) => {
+            s.queue.clear();
+            s.message = Some(said);
+        }
+        Err(Halt::Failed(e)) => {
+            s.message = Some(format!("{} didn't download. Its row says why.", m.name));
+            s.errors.insert(m.id, e);
+        }
+    }
+}
+
 fn work(app: &AppHandle, config_dir: &Path) {
     loop {
         let next = match state().lock() {
@@ -300,15 +345,9 @@ fn work(app: &AppHandle, config_dir: &Path) {
             Err(_) => None,
         };
         let Some(m) = next else { break };
-        let message = fetch_one(app, config_dir, m);
+        let end = fetch_one(app, config_dir, m);
         if let Ok(mut s) = state().lock() {
-            s.run = None;
-            if let Err(stop) = message {
-                s.queue.clear();
-                s.message = Some(stop);
-            } else {
-                s.message = message.ok();
-            }
+            settle(&mut s, m, end);
         }
         emit(app);
     }
@@ -318,8 +357,8 @@ fn work(app: &AppHandle, config_dir: &Path) {
     emit(app);
 }
 
-/// Download one model. `Ok` with what to say, or `Err` when the queue stops.
-fn fetch_one(app: &AppHandle, config_dir: &Path, m: &'static LocalModel) -> Result<String, String> {
+/// Download one model: `Ok` with what to say, or how it stopped.
+fn fetch_one(app: &AppHandle, config_dir: &Path, m: &'static LocalModel) -> Result<String, Halt> {
     // The draft model offer's own download may hold this file already.
     let _busy = if m.kind == ModelKind::Drafter {
         match Busy::claim(&DRAFTER_BUSY) {
@@ -330,14 +369,11 @@ fn fetch_one(app: &AppHandle, config_dir: &Path, m: &'static LocalModel) -> Resu
         None
     };
     let dir = dir_for(config_dir, m);
+    // A resumed download only needs room for what is left.
+    let need = md::space_needed_mb(&dir, m);
     if let Some(free) = crate::local_ai::free_disk_mb(&crate::local_ai::existing(&dir)) {
-        if free < ls::disk_needed_mb(m) {
-            return Err(format!(
-                "Stopped: {} needs {} free, and this drive has {}.",
-                m.name,
-                ls::size_label(ls::disk_needed_mb(m)),
-                ls::size_label(free)
-            ));
+        if free < need {
+            return Err(Halt::Failed(lib::space_error(m, free, need)));
         }
     }
     let ctl = Arc::new(Control::default());
@@ -382,32 +418,40 @@ fn fetch_one(app: &AppHandle, config_dir: &Path, m: &'static LocalModel) -> Resu
                 Ok(_) | Err(rd::Outcome::Done { .. }) => Outcome::Done(r),
                 Err(rd::Outcome::Paused { done }) => Outcome::Paused { done },
                 Err(rd::Outcome::Cancelled) => Outcome::Cancelled,
-                Err(rd::Outcome::BadChecksum) => Outcome::BadChecksum,
-                Err(rd::Outcome::Failed(e)) => Outcome::Failed(e),
+                Err(rd::Outcome::BadChecksum) => Outcome::Failed {
+                    step: Step::Engine,
+                    why: format!(
+                        "The engine {} runs on didn't match its published checksum, so it was deleted. Download it again to retry.",
+                        m.name
+                    ),
+                },
+                Err(rd::Outcome::Failed(why)) => Outcome::Failed {
+                    step: Step::Engine,
+                    why,
+                },
             },
             None => Outcome::Done(r),
         },
         (out, _) => out,
     };
+    if let Some(e) = lib::row_error(m, &out) {
+        return Err(Halt::Failed(e));
+    }
     match out {
-        Outcome::Done(_) => {
+        Outcome::Paused { done } => Err(Halt::Stop(format!(
+            "Paused {} at {}. Download it again to pick up where it stopped.",
+            m.name,
+            md::progress_line(done, Some(m.download_mb * MIB))
+        ))),
+        Outcome::Cancelled => Err(Halt::Stop(format!("Cancelled the {} download.", m.name))),
+        // Done: a failure already returned above.
+        _ => {
             if m.kind == ModelKind::Drafter {
                 // The next reply loads with it; the speed test decides.
                 local_sidecar::stop_global();
             }
             Ok(format!("Downloaded {}.", m.name))
         }
-        Outcome::Paused { done } => Err(format!(
-            "Paused {} at {}. Download it again to pick up where it stopped.",
-            m.name,
-            md::progress_line(done, Some(m.download_mb * MIB))
-        )),
-        Outcome::Cancelled => Err(format!("Cancelled the {} download.", m.name)),
-        Outcome::BadChecksum => Err(format!(
-            "{} didn't match its published checksum, so it was deleted.",
-            m.name
-        )),
-        Outcome::Failed(e) => Err(e),
     }
 }
 
@@ -536,5 +580,51 @@ mod tests {
         );
         assert!(q.is_empty());
         assert_eq!(take_next(&mut q, |_| false), None);
+    }
+    #[test]
+    fn a_failed_model_keeps_the_rest_of_the_queue_and_its_reason_on_its_row() {
+        let mid = ls::model_by_id(MID).unwrap();
+        let draft = ls::model_by_id(MID_DRAFT).unwrap();
+        let mut s = State::default();
+        assert!(enqueue(&mut s, vec![mid, draft]), "the worker starts");
+        assert_eq!(take_next(&mut s.queue, |_| false).map(|m| m.id), Some(MID));
+        settle(
+            &mut s,
+            mid,
+            Err(Halt::Failed(lib::space_error(mid, 1_024, 9_000))),
+        );
+        // The next model still downloads.
+        assert_eq!(
+            s.queue.iter().map(|m| m.id).collect::<Vec<_>>(),
+            [MID_DRAFT]
+        );
+        let st = status_of(&s);
+        assert_eq!(
+            st.message.as_deref(),
+            Some("Gemma 4 12B didn't download. Its row says why.")
+        );
+        // The reason is keyed by the model, so the page shows it on that row.
+        let json = serde_json::to_value(&st).unwrap();
+        assert_eq!(json["errors"][MID]["step"], "free space");
+        assert_eq!(
+            json["errors"][MID]["detail"],
+            "Failed at: free space (1 GB free, 8.8 GB needed)"
+        );
+        // Downloading it again clears the old reason.
+        assert!(!enqueue(&mut s, vec![mid]), "the worker already runs");
+        assert!(status_of(&s).errors.is_empty());
+        assert_eq!(
+            s.queue.iter().map(|m| m.id).collect::<Vec<_>>(),
+            [MID_DRAFT, MID]
+        );
+        // A pause from the user still stops the whole queue.
+        settle(&mut s, draft, Err(Halt::Stop("Paused.".into())));
+        assert!(s.queue.is_empty());
+        assert_eq!(status_of(&s).message.as_deref(), Some("Paused."));
+        // A model that finishes drops any reason it had.
+        s.errors
+            .insert(MID, lib::row_error(mid, &Outcome::BadChecksum).unwrap());
+        settle(&mut s, mid, Ok("Downloaded Gemma 4 12B.".into()));
+        assert!(s.errors.is_empty());
     }
 }

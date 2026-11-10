@@ -154,11 +154,17 @@ impl Cabin {
                 None => crate::cards::settings_note(ui, "Queued."),
             }
         }
+        // Why its last download stopped, under its own button.
+        if let Some(e) = self.setup.dl_errors.get(m.id) {
+            crate::cards::settings_note(ui, &e.message);
+            crate::cards::settings_note(ui, &e.detail);
+        }
     }
 
     /// Queue `q` behind anything already queued and start when idle.
     pub(super) fn download_all(&mut self, q: Vec<&'static LocalModel>) {
         for m in q {
+            self.setup.dl_errors.remove(m.id);
             if !self.setup.dl_queue.iter().any(|x| x.id == m.id) {
                 self.setup.dl_queue.push(m);
             }

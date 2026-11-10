@@ -449,12 +449,15 @@ impl md::Fetch for HfFetch {
     }
 
     fn sha256(&self, repo: &str, file: &str) -> Result<String, String> {
-        let resp = hf_get(&md::tree_url(repo), None)?;
-        let mut body = String::new();
-        resp.into_reader()
-            .read_to_string(&mut body)
-            .map_err(|e| e.to_string())?;
-        md::sha256_from_tree(&body, file).ok_or_else(|| format!("No SHA-256 for {file} in {repo}"))
+        md::sha256_lookup(repo, file, &mut |url| {
+            let resp = hf_get(url, None)?;
+            let link = resp.header("link").map(str::to_owned);
+            let mut body = String::new();
+            resp.into_reader()
+                .read_to_string(&mut body)
+                .map_err(|e| e.to_string())?;
+            Ok((body, link))
+        })
     }
 }
 
@@ -729,7 +732,7 @@ pub fn start_drafter(
                     )),
                 )
             }
-            md::Outcome::Failed(e) => ("error", Some(e.clone()), Some(e.clone())),
+            md::Outcome::Failed { why, .. } => ("error", Some(why.clone()), Some(why.clone())),
             md::Outcome::BadChecksum => {
                 let msg = format!(
                     "{} didn't match its published checksum, so it was deleted. Try the download again.",

@@ -655,7 +655,7 @@ fn pulse_feed_shows_posts_with_cached_source_images_and_a_placeholder() {
         super::pulse_ui::post_row(&liked, false, &chip_day())
             .first()
             .map(|(label, _)| label.as_str()),
-        Some("Liked")
+        Some("♥")
     );
 }
 
@@ -1454,9 +1454,16 @@ fn every_post_shows_one_row_like_first_dismiss_last() {
     hobby.pulse.hobby_path.as_mut().unwrap().answered = true;
     assert_eq!(labels(&post_actions(&hobby, false)), ["Like"]);
 
-    // A plain post that is liked reads Liked.
+    // A plain post that is liked shows the filled heart.
     hobby.reaction = Some(grokhub_core::CardReaction::Up);
-    assert_eq!(labels(&post_actions(&hobby, false)), ["Liked"]);
+    assert_eq!(labels(&post_actions(&hobby, false)), ["♥"]);
+    assert_eq!(
+        labels(&post_row(&hobby, false, &chip_day()))
+            .first()
+            .map(|s| s.as_str()),
+        Some("♥"),
+        "Like stays at index 0 as a heart when liked"
+    );
 }
 
 #[test]

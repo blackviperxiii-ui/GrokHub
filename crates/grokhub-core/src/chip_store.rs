@@ -283,6 +283,16 @@ pub fn log_chip_outcome(
     crate::learn::hub::note_all(crate::learn::sources::chip_outcome(
         surface, &key, picked, now,
     ));
+    // A habit chip's tap or hide is also the answer to its rule.
+    if let Some(rule) = crate::learn::habit::chip_rule(&chip.id) {
+        use crate::learn::decide::Outcome;
+        let outcome = if picked {
+            Outcome::Accepted
+        } else {
+            Outcome::Declined
+        };
+        crate::learn::hub::decision_outcome(&rule, outcome, now);
+    }
     let outcome = if picked {
         ChipOutcome::Picked { key, slot, at: now }
     } else {
