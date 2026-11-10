@@ -2,7 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { LearnedAct, LearnedRow, LearnedTrust, LearnedView } from "./api";
+import type { LearnedAct, LearnedRow, LearnedTrust, LearnedView, TrustRow } from "./api";
 
 const api = vi.hoisted(() => ({
   getLearned: vi.fn<() => Promise<LearnedView>>(),
@@ -11,7 +11,7 @@ const api = vi.hoisted(() => ({
 
 vi.mock("./api", () => api);
 
-import { DECISIONS_EMPTY, LEARNED_EMPTY, LEARNED_PAUSED, Learned, TRUST_ASKING } from "./Learned";
+import { DECISIONS_EMPTY, LEARNED_EMPTY, LEARNED_PAUSED, Learned, TRUST_ASKING, TRUST_RESTING, scoreLine } from "./Learned";
 
 function row(over: Partial<LearnedRow> = {}): LearnedRow {
   return {
@@ -26,11 +26,15 @@ function row(over: Partial<LearnedRow> = {}): LearnedRow {
   };
 }
 
+function dial(area: TrustRow["area"], label: string, to: TrustRow["dial"], over: Partial<TrustRow> = {}): TrustRow {
+  return { area, label, dial: to, went: null, before: null, trend: "too_early", resting: false, ...over };
+}
+
 function trust(over: Partial<LearnedTrust> = {}): LearnedTrust {
   return {
     dials: [
-      { area: "settings", label: "Settings", dial: "act" },
-      { area: "router", label: "Model choice", dial: "watch" },
+      dial("settings", "Settings", "act"),
+      dial("router", "Model choice", "watch"),
     ],
     askingFirst: false,
     leftToday: 5,
@@ -155,8 +159,8 @@ describe("Learned", () => {
       ...view,
       trust: trust({
         dials: [
-          { area: "settings", label: "Settings", dial: "act" },
-          { area: "router", label: "Model choice", dial: "offer" },
+          dial("settings", "Settings", "act"),
+          dial("router", "Model choice", "offer", { went: 53, before: 90, trend: "worse", resting: true }),
         ],
         leftToday: 1,
         decisions: [
@@ -176,9 +180,19 @@ describe("Learned", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Model choice is set to offer only.");
     expect(screen.getByLabelText("Model choice")).toHaveValue("offer");
     expect(screen.getByText("It may make 1 more change on its own today.")).toBeVisible();
+    expect(screen.getByText("Model choice: 53% of what it offered or changed here went your way in the last four weeks, down from 90%. It asks first here for a month.")).toBeVisible();
+    expect(screen.getByText(TRUST_RESTING)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Carry on" })).toBeVisible();
     const lines = within(screen.getByRole("list", { name: "Decisions" })).getAllByRole("listitem");
     expect(lines.map((li) => li.getAttribute("aria-label"))).toEqual(["Did it: Skill tidy in the morning", "Asked: Settings text size"]);
     expect(within(lines[1]).getByText("This area is set to offer only.")).toBeVisible();
+  });
+
+  it("words an area's score by its trend", () => {
+    expect(scoreLine(dial("chips", "Quick chips", "act"))).toBeNull();
+    expect(scoreLine(dial("chips", "Quick chips", "act", { went: 80 }))).toBe("80% of what it offered or changed here went your way in the last four weeks.");
+    expect(scoreLine(dial("chips", "Quick chips", "act", { went: 80, before: 60, trend: "better" }))).toBe("80% of what it offered or changed here went your way in the last four weeks, up from 60%.");
+    expect(scoreLine(dial("chips", "Quick chips", "act", { went: 80, before: 78, trend: "steady" }))).toBe("80% of what it offered or changed here went your way in the last four weeks.");
   });
 
   it("offers Carry on while everything asks first", async () => {
