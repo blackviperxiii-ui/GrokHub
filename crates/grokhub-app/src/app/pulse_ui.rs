@@ -2179,10 +2179,9 @@ impl Cabin {
         // A card with a report runs in the background with its report, on the
         // hidden Background chat, never beside whatever chat is open (that
         // chat's talk and playbook stay out) and never in a new chat tab.
-        // A proactive card's approved step stays the chat turn its harness
-        // origin rides on.
+        // Under Ask a background run can't ask you, so the card keeps its own
+        // chat, where every step asks.
         if card.pulse.report.is_some()
-            && card.pulse.proactive.is_none()
             && matches!(card.kind, UpdateKind::Digest | UpdateKind::Suggestion)
             && grokhub_core::paused_job_of(&card).is_none()
         {
@@ -2192,12 +2191,19 @@ impl Cabin {
             } else {
                 action
             };
+            if self.permission_mode.needs_approval() {
+                self.discuss_card(id);
+                self.send_from_card(line.clone());
+                return Some(line);
+            }
             let task = format!("{line}\n\n{}", grokhub_core::discuss_context(&card));
             let hidden = self.ensure_background_history_thread();
             let thread = self.threads[hidden].id.clone();
-            // No chat turn takes this run, so no turn may inherit its origin.
-            self.harness.next_origin = None;
-            match self.start_bg_task(&task, &thread, grokhub_core::BgOrigin::User) {
+            // The run takes the origin a click set (a proactive card's approved
+            // step reads proactive, Spike-4c), so no chat turn inherits it.
+            let started_by = self.harness.next_origin.take().unwrap_or_default();
+            let user = grokhub_core::BgOrigin::User;
+            match self.start_bg_task_as(&task, &thread, user, started_by) {
                 Ok(title) => {
                     let run = self.bg.next_id;
                     self.bg.feed_cards.push((run, id.to_string()));

@@ -31,7 +31,8 @@ Quick chips are the few next steps Loadout offers under the chat box, on Home an
    - Copy checks, dismissed chips and chips that rest after five unpicked showings in three days are dropped.
 3. **Lane lean** (cabin): the coding or life lane nudges near-tie scores before ranking. The lead is never more than two thirds of a tenth of the top score.
 4. **Rank** (`rank_quick_chips`):
-   - Thompson sampling over a diagonal Bayesian logistic model of 13 features.
+   - Thompson sampling over a diagonal Bayesian logistic model of 12 features.
+   - What the person did with each chip before (picked, passed over, hidden) is read from the learning engine's belief about that chip (`learn`, subject `chip:<key>`), so the row and the "What I've learned" page use the same numbers. Forget clears it, "Always" reads as a sure yes, and a chip marked wrong is never shown.
    - MMR keeps one chip per intent.
    - A gate hides rows that are unlikely to be picked once 50 rows have been seen.
    - The draw is seeded per boundary (a turn, a page, the hour), so a row holds still while the person types.
@@ -64,7 +65,7 @@ The shell gets wire chips over IPC (`quick_chips`, `chip_outcome`). The checks:
 ## Proving it (`chip_replay_tests`, `chip_health`)
 
 - **Replay:** a scripted month of steady habits, scored over its last three weeks.
-  - Recall@3 is 0.92 for the engine against 0.36 for frecency on the same rows.
+  - Recall@3 is 0.90 for the engine against 0.36 for frecency on the same rows.
   - MRR@3 is 0.84 against 0.21.
   - The test requires a lead of at least 10 points.
 - **Speed:** ranking 200 candidates against a full log takes a p99 of 0.74 ms in an optimized build. The test requires under 1 ms optimized and under 40 ms in a test build. Chip memory stays far under 5 MB, at about 120 KB full.
