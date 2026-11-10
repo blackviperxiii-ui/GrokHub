@@ -7,12 +7,16 @@
 //! 1. **Fatigue**: a chip shown five times in three days and never picked
 //!    rests for three days.
 //! 2. **Score**: a linear model over a dozen cached features, learned online
+//!    (what the person did with each chip before comes from the learning
+//!    engine's belief about that chip, so the row and the "What I've
+//!    learned" page read the same numbers)
 //!    as a diagonal Bayesian logistic regression (Chapelle and Li, "An
 //!    Empirical Evaluation of Thompson Sampling", 2011). Each row draws its
 //!    weights from the posterior (Thompson sampling), so a chip that might be
 //!    better gets tried now and then. The spread grows with evidence as
 //!    n/(n+50): with no history the draw is the prior mean, which ranks
 //!    exactly by the engine's own score, as before.
+//!    A chip the person marked wrong is never shown.
 //! 3. **Diversify**: maximal marginal relevance (λ 0.7), one chip per intent.
 //! 4. **Gate**: once the person has seen enough rows, a row whose best chip
 //!    is unlikely to be picked is not shown at all.
@@ -28,18 +32,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::chip_store::{chip_log_key, ChipOutcome};
 use crate::chips::{chip_intent, chip_memory_key, ChipKind, ChipMemory, QuickChip};
+use crate::learn::{Beliefs, Standing, Subject};
 
 /// Chips a row shows at most, on every surface.
 pub const CHIP_ROW_MAX: usize = 3;
 /// Feature count. A stored model of another size is reset to the prior.
-const DIMS: usize = 13;
+const DIMS: usize = 12;
 /// Evidence at which the draw's spread reaches half its full width.
 const SPREAD_HALF_AT: f32 = 50.0;
 const MMR_LAMBDA: f32 = 0.7;
 const FATIGUE_SHOWS: usize = 5;
 const FATIGUE_WINDOW_MS: u64 = 3 * 24 * 60 * 60 * 1000;
-const FRECENCY_HALF_LIFE_MS: f32 = 14.0 * 24.0 * 60.0 * 60.0 * 1000.0;
-const DISMISS_RECENT_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 /// Rows the person must have seen before the gate can hide one.
 const GATE_MIN_SHOWS: u32 = 50;
 /// Draws used to estimate each chip's propensity.
@@ -51,10 +54,9 @@ const IGNORED_WEIGHT: f32 = 0.25;
 const FEATURE_NAMES: [&str; DIMS] = [
     "bias",
     "engine score",
-    "frecency",
+    "picked before",
     "next-step odds",
-    "hidden lately",
-    "shown, not picked",
+    "turned down",
     "ask",
     "page",
     "command",
@@ -165,25 +167,89 @@ pub struct RankCtx<'a> {
     pub max: usize,
 }
 
+/// What the learning engine holds about one chip, read once per row.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct Heard {
+    /// 0 to 1: how surely the person picks it.
+    picked: f32,
+    /// 0 to 1: how surely the person passes it over or hides it.
+    turned_down: f32,
+    /// The person marked it wrong: it is never shown.
+    wrong: bool,
+}
+
+fn heard(beliefs: &Beliefs, chip: &QuickChip, now_ms: u64) -> Heard {
+    let Some(belief) = Subject::new("chip", &chip_log_key(chip)).and_then(|s| beliefs.get(&s))
+    else {
+        return Heard::default();
+    };
+    let Some(rate) = belief.rate() else {
+        return Heard {
+            wrong: belief.standing == Standing::Wrong,
+            ..Heard::default()
+        };
+    };
+    let sure = belief.confidence(now_ms);
+    Heard {
+        picked: rate * sure,
+        turned_down: (1.0 - rate) * sure,
+        wrong: false,
+    }
+}
+
 /// Rank `pool` into a row of at most `ctx.max` (and [`CHIP_ROW_MAX`]) chips.
-/// Notes each chip's features and propensity for the log.
+/// Notes each chip's features and propensity for the log. What the person
+/// did with each chip before is read from the learning engine.
 pub fn rank_quick_chips(
     mem: &mut ChipMemory,
     pool: Vec<QuickChip>,
     ctx: RankCtx<'_>,
 ) -> Vec<QuickChip> {
+    // Read and let go of the engine before ranking, which may log to it.
+    let known = crate::learn::hub::read(|e| {
+        pool.iter()
+            .map(|c| heard(e.beliefs(), c, ctx.now_ms))
+            .collect()
+    })
+    .unwrap_or_else(|| vec![Heard::default(); pool.len()]);
+    rank(mem, pool, known, ctx)
+}
+
+/// [`rank_quick_chips`] over `beliefs` in place of the running engine's.
+#[cfg(test)]
+pub(crate) fn rank_quick_chips_from(
+    beliefs: &Beliefs,
+    mem: &mut ChipMemory,
+    pool: Vec<QuickChip>,
+    ctx: RankCtx<'_>,
+) -> Vec<QuickChip> {
+    let known = pool.iter().map(|c| heard(beliefs, c, ctx.now_ms)).collect();
+    rank(mem, pool, known, ctx)
+}
+
+fn rank(
+    mem: &mut ChipMemory,
+    pool: Vec<QuickChip>,
+    known: Vec<Heard>,
+    ctx: RankCtx<'_>,
+) -> Vec<QuickChip> {
     mem.ranker.fit();
     mem.ranker.last.retain(|r| r.surface != ctx.surface);
     let max = ctx.max.clamp(1, CHIP_ROW_MAX);
-    let pool: Vec<QuickChip> = pool
+    let (pool, known): (Vec<QuickChip>, Vec<Heard>) = pool
         .into_iter()
-        .filter(|c| !fatigued(mem, c, ctx.now_ms))
-        .collect();
+        .zip(known)
+        .filter(|(c, h)| !h.wrong && !fatigued(mem, c, ctx.now_ms))
+        .unzip();
     if pool.is_empty() {
         return pool;
     }
     let top = pool.iter().map(|c| c.score).fold(f32::MIN, f32::max);
-    let xs: Vec<Vec<f32>> = pool.iter().map(|c| features(mem, c, top, ctx)).collect();
+    let xs: Vec<Vec<f32>> = pool
+        .iter()
+        .zip(&known)
+        .map(|(c, h)| features(mem, c, *h, top, ctx))
+        .collect();
     let pick = |seed: u64| select(&mem.ranker, &pool, &xs, seed, max);
     let row = pick(ctx.seed);
     if gate_closed(&mem.ranker, &pool, &xs, &row) {
@@ -332,7 +398,13 @@ fn fatigued(mem: &ChipMemory, chip: &QuickChip, now: u64) -> bool {
 }
 
 /// The chip's features, each about 0 to 1, in [`FEATURE_NAMES`] order.
-fn features(mem: &ChipMemory, chip: &QuickChip, top: f32, ctx: RankCtx<'_>) -> Vec<f32> {
+fn features(
+    mem: &ChipMemory,
+    chip: &QuickChip,
+    heard: Heard,
+    top: f32,
+    ctx: RankCtx<'_>,
+) -> Vec<f32> {
     let key = chip_memory_key(chip);
     let hit = mem.hits.iter().find(|h| h.key == key);
     let engine = if top > 0.0 {
@@ -340,11 +412,6 @@ fn features(mem: &ChipMemory, chip: &QuickChip, top: f32, ctx: RankCtx<'_>) -> V
     } else {
         0.0
     };
-    let frecency = hit.map_or(0.0, |h| {
-        let age = ctx.now_ms.saturating_sub(h.last_used_at) as f32;
-        let f = h.uses as f32 * 0.5f32.powf(age / FRECENCY_HALF_LIFE_MS);
-        1.0 - (-f / 3.0).exp()
-    });
     let next = mem
         .last_chip_key
         .as_ref()
@@ -355,23 +422,6 @@ fn features(mem: &ChipMemory, chip: &QuickChip, top: f32, ctx: RankCtx<'_>) -> V
                 .get(&key)
                 .map_or(0.0, |n| *n as f32 / total.max(1) as f32)
         });
-    let hidden = hit.map_or(0.0, |h| {
-        if h.dismisses > 0 && ctx.now_ms.saturating_sub(h.last_dismissed_at) < DISMISS_RECENT_MS {
-            1.0
-        } else {
-            0.0
-        }
-    });
-    let log_key = chip_log_key(chip);
-    let passed_over = mem
-        .events
-        .iter()
-        .rev()
-        .take(60)
-        .filter(|e| e.shown.iter().any(|s| s.key == log_key))
-        .filter(|e| !matches!(&e.outcome, Some(ChipOutcome::Picked { key, .. }) if *key == log_key))
-        .count();
-    let passed_over = (passed_over as f32 / FATIGUE_SHOWS as f32).min(1.0);
     let at_hour = hit.map_or(0.0, |h| {
         let peak = h.hour_hits.iter().copied().max().unwrap_or(0);
         let now = h.hour_hits.get(usize::from(ctx.hour)).copied().unwrap_or(0);
@@ -385,10 +435,9 @@ fn features(mem: &ChipMemory, chip: &QuickChip, top: f32, ctx: RankCtx<'_>) -> V
     vec![
         1.0,
         engine,
-        frecency,
+        heard.picked,
         next,
-        hidden,
-        passed_over,
+        heard.turned_down,
         flag(chip.kind == ChipKind::Chat),
         flag(chip.kind == ChipKind::Nav),
         flag(chip.kind == ChipKind::Shell),
@@ -596,6 +645,98 @@ mod tests {
         assert!(mem.ranker.learned >= 40);
         let row = rank_quick_chips(&mut mem, vec![engine, habit], ctx(12345));
         assert_eq!(row[0].id, "learn-brief", "{:?}", mem.ranker.weights());
+    }
+
+    fn about(c: &QuickChip) -> Subject {
+        Subject::new("chip", &chip_log_key(c)).unwrap()
+    }
+
+    #[test]
+    fn a_chips_history_is_what_the_learning_engine_holds() {
+        let (liked, passed, fresh) = (
+            chip("a", "Brief me", 5.0),
+            chip("b", "Plan the week", 5.0),
+            chip("c", "Show my photos", 5.0),
+        );
+        let mut beliefs = Beliefs::default();
+        for _ in 0..20 {
+            beliefs.vote(&about(&liked), true, 1_000_000, "signals");
+            beliefs.vote(&about(&passed), false, 1_000_000, "signals");
+        }
+        let mut mem = ChipMemory::default();
+        let pool = vec![liked.clone(), passed.clone(), fresh.clone()];
+        let row = rank_quick_chips_from(&beliefs, &mut mem, pool.clone(), ctx(1));
+        assert_eq!(ids(&row), ["a", "b", "c"]);
+        // Picked before (slot 2) and turned down (slot 4), as logged.
+        let x = |mem: &ChipMemory, i: usize| (mem.ranker.last[i].x[2], mem.ranker.last[i].x[4]);
+        assert_eq!(x(&mem, 0), (0.88, 0.0));
+        assert_eq!(x(&mem, 1), (0.0, 0.88));
+        assert_eq!(x(&mem, 2), (0.0, 0.0));
+        // "Always" is a sure yes; forgetting it leaves nothing.
+        assert!(beliefs.pin(&about(&passed), 1_000_000));
+        let _ = rank_quick_chips_from(&beliefs, &mut mem, pool.clone(), ctx(1));
+        assert_eq!(x(&mem, 1), (1.0, 0.0));
+        assert!(beliefs.forget(&about(&passed), 1_000_000));
+        let _ = rank_quick_chips_from(&beliefs, &mut mem, pool, ctx(1));
+        assert_eq!(x(&mem, 1), (0.0, 0.0));
+    }
+
+    #[test]
+    fn a_chip_marked_wrong_is_never_shown() {
+        let mut beliefs = Beliefs::default();
+        let (top, other) = (chip("a", "Brief me", 9.0), chip("b", "Plan the week", 5.0));
+        let mut mem = ChipMemory::default();
+        let pool = vec![top.clone(), other];
+        let row = rank_quick_chips_from(&beliefs, &mut mem, pool.clone(), ctx(1));
+        assert_eq!(ids(&row), ["a", "b"]);
+        beliefs.mark_wrong(&about(&top), 1_000_000);
+        let row = rank_quick_chips_from(&beliefs, &mut mem, pool, ctx(1));
+        assert_eq!(ids(&row), ["b"]);
+        let only = rank_quick_chips_from(&beliefs, &mut mem, vec![top], ctx(1));
+        assert_eq!(only, Vec::new());
+    }
+
+    #[test]
+    fn the_engines_numbers_move_a_picked_chip_up() {
+        use crate::chip_store::{outcome_signals, shown_signals};
+        let mut mem = ChipMemory::default();
+        let mut beliefs = Beliefs::default();
+        // Two plain chips: the person always takes the one scored lower.
+        let (first, taken) = (chip("a", "Brief me", 9.0), chip("b", "Plan the week", 8.0));
+        let pool = vec![first, taken.clone()];
+        let mut t = 1_000_000;
+        let mut shown = 0;
+        while shown < 40 {
+            t += 1;
+            let at = RankCtx {
+                now_ms: t,
+                seed: t,
+                ..ctx(t)
+            };
+            let row = rank_quick_chips_from(&beliefs, &mut mem, pool.clone(), at);
+            if row.is_empty() {
+                assert!(crate::chip_health::in_holdout(t));
+                continue;
+            }
+            shown += 1;
+            let mut told = shown_signals(&mut mem, "composer", &row, t);
+            told.extend(outcome_signals(&mut mem, "composer", &taken, true, t));
+            for s in &told {
+                beliefs.apply(s);
+            }
+        }
+        // Four days on, so the chip that was passed over is done resting.
+        let at = RankCtx {
+            now_ms: t + FATIGUE_WINDOW_MS + 24 * 60 * 60 * 1000,
+            ..ctx(12345)
+        };
+        let row = rank_quick_chips_from(&beliefs, &mut mem, pool.clone(), at);
+        assert_eq!(ids(&row), ["b", "a"], "{:?}", mem.ranker.weights());
+        // Same learned weights, nothing held about the chips ("Forget
+        // everything"): the engine's own score decides again.
+        mem.ranker.learned = 0;
+        let row = rank_quick_chips_from(&Beliefs::default(), &mut mem, pool, at);
+        assert_eq!(ids(&row), ["a", "b"], "{:?}", mem.ranker.weights());
     }
 
     #[test]
