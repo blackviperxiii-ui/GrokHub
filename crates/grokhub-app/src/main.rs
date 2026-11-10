@@ -7,6 +7,7 @@
 #![cfg_attr(not(test), warn(clippy::unwrap_used, clippy::expect_used))]
 
 mod app;
+mod app_guard;
 mod card_prefs;
 mod cards;
 mod cli;
@@ -429,6 +430,12 @@ mod win_console {
 
 fn run_cabin(hidden: bool) -> eframe::Result<()> {
     if !tray::try_claim_cabin() {
+        return Ok(());
+    }
+    // One app per profile: the new shell may already hold this config dir.
+    if let Err(held) = app_guard::claim() {
+        tray::release_cabin_claim();
+        app_guard::tell(&app_guard::held_notice(hidden, &held));
         return Ok(());
     }
     cabin_async::install();

@@ -380,6 +380,7 @@ pub fn release_cabin_claim_at(dir: &Path, this_pid: u32) {
 
 pub fn release_cabin_claim() {
     release_cabin_claim_at(&crate::config::config_dir(), std::process::id());
+    crate::app_guard::release();
 }
 
 pub fn request_cabin_raise_at(dir: &Path) {

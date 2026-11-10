@@ -1,0 +1,1 @@
+- The classic app and the new shell no longer run on the same profile at once: whichever opens second explains that the other is open (a login or tray start just exits quietly). A different profile folder is not affected.

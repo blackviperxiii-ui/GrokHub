@@ -501,6 +501,7 @@ fn replace_process(argv: &[String]) -> Result<(), String> {
     crate::tray::release_cabin_claim();
     if let Err(e) = spawn_detached(argv) {
         let _ = crate::tray::try_claim_cabin();
+        let _ = crate::app_guard::claim();
         return Err(e);
     }
     std::process::exit(0);
