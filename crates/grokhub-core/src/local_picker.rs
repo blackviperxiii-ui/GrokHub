@@ -167,13 +167,112 @@ pub fn score(p: &Profile, catalog: &'static [LocalModel], bench: &BenchCache) ->
             }
         })
         .collect();
-    if let Some(top) = picks
-        .iter_mut()
-        .find(|x| x.bucket == Bucket::Recommended && !x.model.optional)
-    {
+    let best = recommended_default(&picks, quick_floor(p), |m| {
+        speed_here(p, m, bench.get(m.id).copied())
+    });
+    if let Some(top) = picks.iter_mut().find(|x| Some(x.model.id) == best) {
         top.preselected = true;
     }
     picks
+}
+
+/// A default this fast counts as quick here, by where it runs (tok/s).
+pub const QUICK_GPU_TOK_S: f64 = 30.0;
+pub const QUICK_UNIFIED_TOK_S: f64 = 20.0;
+pub const QUICK_CPU_TOK_S: f64 = 8.0;
+/// A default at least this capable (`local_skills` quality) can carry
+/// everyday chat on its own.
+pub const CAPABLE_QUALITY: u8 = 50;
+/// How much speed counts against capability when the default is picked:
+/// `quality x tok/s ^ SPEED_WEIGHT`. Under 1, so a much faster model must
+/// still be close in quality; high enough that a fast MoE beats a slower
+/// dense model one size up.
+pub const SPEED_WEIGHT: f64 = 0.75;
+
+/// Generation speed for `m` on `p`: the speed test's reading, else the
+/// catalog's estimate for where it runs.
+pub fn speed_here(p: &Profile, m: &LocalModel, measured: Option<f64>) -> f64 {
+    if let Some(t) = measured {
+        return t;
+    }
+    let (mem, _) = p.budget();
+    f64::from(match mem {
+        Memory::Gpu => m.tok_s.gpu,
+        Memory::Unified => m.tok_s.unified,
+        Memory::System => m.tok_s.cpu,
+    })
+}
+
+/// The tok/s a default should reach on `p` to count as quick.
+pub fn quick_floor(p: &Profile) -> f64 {
+    match p.budget().0 {
+        Memory::Gpu => QUICK_GPU_TOK_S,
+        Memory::Unified => QUICK_UNIFIED_TOK_S,
+        Memory::System => QUICK_CPU_TOK_S,
+    }
+}
+
+/// The recommended everyday model: speedy first, then capable. Among the
+/// Recommended rows the app may pick (never an optional one), keep those
+/// that are quick here (`floor` tok/s) and capable enough, when any are,
+/// then take the best `quality x speed ^ SPEED_WEIGHT`; a tie goes to the
+/// faster. The router steps up to a more capable model on disk when a task
+/// needs it, so the default doesn't have to be the biggest that fits.
+fn recommended_default(
+    picks: &[Pick],
+    floor: f64,
+    speed: impl Fn(&LocalModel) -> f64,
+) -> Option<&'static str> {
+    let pool: Vec<(&'static str, f64, u8)> = picks
+        .iter()
+        .filter(|x| x.bucket == Bucket::Recommended && !x.model.optional)
+        .map(|x| {
+            let q = crate::local_skills::resolved(x.model).quality;
+            (x.model.id, speed(x.model), q)
+        })
+        .collect();
+    best_default(pool, floor)
+}
+
+/// The recommended everyday model among `models` (all assumed to run well
+/// on `p`), by the catalog's speed estimates: the same rule as the
+/// picker's pre-selection, for the lineup.
+pub fn default_among(p: &Profile, models: &[&'static LocalModel]) -> Option<&'static LocalModel> {
+    let pool = models
+        .iter()
+        .filter(|m| m.is_chat() && !m.optional)
+        .map(|m| {
+            (
+                m.id,
+                speed_here(p, m, None),
+                crate::local_skills::resolved(m).quality,
+            )
+        })
+        .collect();
+    let id = best_default(pool, quick_floor(p))?;
+    models.iter().copied().find(|m| m.id == id)
+}
+
+fn best_default(pool: Vec<(&'static str, f64, u8)>, floor: f64) -> Option<&'static str> {
+    let narrowed = |keep: &dyn Fn(&(&'static str, f64, u8)) -> bool,
+                    from: Vec<(&'static str, f64, u8)>| {
+        let kept: Vec<_> = from.iter().copied().filter(|r| keep(r)).collect();
+        if kept.is_empty() {
+            from
+        } else {
+            kept
+        }
+    };
+    let pool = narrowed(&|r| r.1 >= floor, pool);
+    let pool = narrowed(&|r| r.2 >= CAPABLE_QUALITY, pool);
+    let value = |r: &(&'static str, f64, u8)| f64::from(r.2) * r.1.max(0.0).powf(SPEED_WEIGHT);
+    pool.into_iter()
+        .max_by(|a, b| {
+            value(a)
+                .total_cmp(&value(b))
+                .then(a.1.total_cmp(&b.1))
+        })
+        .map(|r| r.0)
 }
 
 fn rate(p: &Profile, m: &LocalModel, measured: Option<f64>) -> (Bucket, String) {
@@ -267,9 +366,15 @@ pub fn preselected(p: &Profile) -> Option<&'static LocalModel> {
         .map(|x| x.model)
 }
 
-/// `T0` (cloud only) to `T5`: the tier of the pre-selected model.
+/// `T0` (cloud only) to `T5`: what this machine can run, from the biggest
+/// model the app may pick that runs well here (not the default, which
+/// favours speed).
 pub fn tier(p: &Profile) -> &'static str {
-    match preselected(p) {
+    let biggest = score(p, local_models(), &BenchCache::new())
+        .into_iter()
+        .find(|x| x.bucket == Bucket::Recommended && !x.model.optional)
+        .map(|x| x.model);
+    match biggest {
         None => "T0",
         Some(m) if m.tier == "T4" && p.budget().1 > T5_BUDGET_MB => "T5",
         Some(m) => m.tier,

@@ -670,6 +670,7 @@ mod tests {
             min_budget: Default::default(),
             tok_s: Default::default(),
             parts: &[],
+            skills: Default::default(),
         }
     }
 

@@ -37,9 +37,14 @@
 # Only the main GGUF downloads; the repos' vision projector
 # (`mmproj-model-bf16.gguf`) isn't fetched yet, so no row claims vision.
 
+# `skills = { quality, chat, code, reason, write, long, adult }` on a chat
+# row: what it is good at, 0 to 100, from public results for its family
+# (`local_skills.rs`). The router picks the best model on disk per task with
+# them; a score left out is worked out from the tier and context size.
+
 # Raise with every change to this file: a release ships it signed, and an
 # older app swaps in a newer one (`catalog_update.rs`).
-version = 2
+version = 3
 
 [[model]]
 id = "nvidia-nemotron3.5-lightning-30b-a3b-heretic-q4_k_m"
@@ -54,6 +59,7 @@ kind = "chat"
 optional = true
 abliterated = { by = "mlasli", method = "heretic" }
 badges = ["tools", "moe", "reasoning"]
+skills = { quality = 74, chat = 72, code = 74, reason = 80, write = 68, long = 80, adult = 66 }
 tier = "T4"
 route = "local:small"
 ctx_default = 32768
@@ -76,6 +82,7 @@ kind = "chat"
 optional = true
 abliterated = { by = "trohrbaugh", method = "heretic" }
 badges = ["tools", "reasoning"]
+skills = { quality = 74, chat = 70, code = 74, reason = 80, write = 70, long = 90, adult = 68 }
 tier = "T4"
 route = "local:small"
 ctx_default = 8192
@@ -97,6 +104,7 @@ kind = "chat"
 optional = true
 abliterated = { by = "llmfan46", method = "heretic" }
 badges = ["tools", "moe", "reasoning"]
+skills = { quality = 78, chat = 76, code = 85, reason = 82, write = 72, long = 80, adult = 70 }
 tier = "T4"
 route = "local:small"
 ctx_default = 32768
@@ -117,6 +125,7 @@ license = "Apache-2.0"
 kind = "chat"
 abliterated = { by = "huihui-ai", method = "abliteration" }
 badges = ["tools"]
+skills = { quality = 76, chat = 82, code = 72, reason = 74, write = 85, long = 76, adult = 82 }
 tier = "T4"
 route = "local:small"
 ctx_default = 32_768
@@ -140,6 +149,7 @@ kind = "chat"
 optional = true
 abliterated = { by = "Olafangensan", method = "heretic" }
 badges = ["tools", "moe", "reasoning"]
+skills = { quality = 72, chat = 70, code = 80, reason = 76, write = 66, long = 72, adult = 58 }
 tier = "T4"
 route = "local:small"
 ctx_default = 16384
@@ -161,6 +171,7 @@ kind = "chat"
 optional = true
 abliterated = { by = "0bserverx (on trohrbaugh ARA base)", method = "heretic" }
 badges = ["tools", "reasoning"]
+skills = { quality = 80, chat = 76, code = 84, reason = 84, write = 74, long = 74, adult = 70 }
 tier = "T4"
 route = "local:small"
 ctx_default = 16384
@@ -181,6 +192,7 @@ license = "Apache-2.0"
 kind = "chat"
 abliterated = { by = "huihui-ai", method = "abliteration" }
 badges = ["tools", "moe"]
+skills = { quality = 72, chat = 78, code = 68, reason = 70, write = 80, long = 72, adult = 78 }
 tier = "T3"
 route = "local:small"
 ctx_default = 16_384
@@ -206,6 +218,7 @@ kind = "chat"
 optional = true
 abliterated = { by = "llmfan46", method = "heretic" }
 badges = ["tools"]
+skills = { quality = 66, chat = 72, code = 62, reason = 62, write = 75, long = 64, adult = 74 }
 tier = "T3"
 route = "local:small"
 ctx_default = 12288
@@ -227,6 +240,7 @@ kind = "chat"
 optional = true
 abliterated = { by = "p-e-w", method = "heretic" }
 badges = ["tools", "moe", "reasoning"]
+skills = { quality = 70, chat = 66, code = 74, reason = 80, write = 55, long = 74, adult = 52 }
 tier = "T3"
 route = "local:small"
 ctx_default = 32768
@@ -248,6 +262,7 @@ kind = "chat"
 optional = true
 abliterated = { by = "n0kovo", method = "abliteration" }
 badges = ["tools", "reasoning"]
+skills = { quality = 60, chat = 66, code = 56, reason = 62, write = 72, long = 50, adult = 85 }
 tier = "T3"
 route = "local:small"
 ctx_default = 8192
@@ -269,6 +284,7 @@ kind = "chat"
 optional = true
 abliterated = { by = "coder3101", method = "heretic" }
 badges = ["tools", "reasoning"]
+skills = { quality = 62, chat = 62, code = 60, reason = 70, write = 62, long = 52, adult = 62 }
 tier = "T3"
 route = "local:small"
 ctx_default = 8192
@@ -290,6 +306,7 @@ license = "Apache-2.0"
 kind = "chat"
 abliterated = { by = "huihui-ai", method = "abliteration" }
 badges = ["tools"]
+skills = { quality = 62, chat = 68, code = 58, reason = 60, write = 70, long = 62, adult = 70 }
 tier = "T3"
 route = "local:small"
 ctx_default = 16_384
@@ -313,6 +330,7 @@ kind = "chat"
 optional = true
 abliterated = { by = "richardyoung", method = "heretic" }
 badges = ["tools", "reasoning"]
+skills = { quality = 58, chat = 52, code = 60, reason = 72, write = 45, long = 58, adult = 44 }
 tier = "T2"
 route = "local:small"
 ctx_default = 16384
@@ -334,6 +352,7 @@ kind = "chat"
 optional = true
 abliterated = { by = "richardyoung", method = "heretic" }
 badges = ["tools", "reasoning"]
+skills = { quality = 54, chat = 55, code = 56, reason = 56, write = 50, long = 56, adult = 46 }
 tier = "T2"
 route = "local:small"
 ctx_default = 12288
@@ -356,6 +375,7 @@ kind = "chat"
 optional = true
 abliterated = { by = "ChiKoi7", method = "heretic" }
 badges = ["tools"]
+skills = { quality = 50, chat = 54, code = 48, reason = 50, write = 54, long = 42, adult = 48 }
 tier = "T2"
 route = "local:small"
 ctx_default = 8192
@@ -377,6 +397,7 @@ kind = "chat"
 optional = true
 abliterated = { by = "llmfan46", method = "heretic" }
 badges = ["tools", "reasoning"]
+skills = { quality = 60, chat = 60, code = 62, reason = 64, write = 58, long = 64, adult = 58 }
 tier = "T2"
 route = "local:small"
 ctx_default = 32768
@@ -399,6 +420,7 @@ kind = "chat"
 optional = true
 abliterated = { by = "grumd0", method = "heretic" }
 badges = ["tools"]
+skills = { quality = 52, chat = 54, code = 52, reason = 56, write = 50, long = 54, adult = 50 }
 tier = "T2"
 route = "local:small"
 ctx_default = 16384
@@ -419,6 +441,7 @@ license = "Apache-2.0"
 kind = "chat"
 abliterated = { by = "huihui-ai", method = "abliteration" }
 badges = ["tools"]
+skills = { quality = 54, chat = 60, code = 50, reason = 52, write = 60, long = 46, adult = 60 }
 tier = "T2"
 route = "local:small"
 ctx_default = 8_192
@@ -442,6 +465,7 @@ kind = "chat"
 optional = true
 abliterated = { by = "richardyoung", method = "heretic" }
 badges = ["tools"]
+skills = { quality = 44, chat = 44, code = 46, reason = 52, write = 40, long = 36, adult = 40 }
 tier = "T1"
 route = "local:tiny"
 ctx_default = 8192
@@ -462,6 +486,7 @@ license = "Apache-2.0"
 kind = "chat"
 abliterated = { by = "huihui-ai", method = "abliteration" }
 badges = ["tools"]
+skills = { quality = 42, chat = 48, code = 38, reason = 40, write = 48, long = 34, adult = 48 }
 tier = "T1"
 route = "local:tiny"
 ctx_default = 8_192
@@ -487,6 +512,7 @@ kind = "chat"
 optional = true
 abliterated = { by = "coder3101", method = "heretic" }
 badges = ["tools", "reasoning"]
+skills = { quality = 42, chat = 42, code = 40, reason = 48, write = 42, long = 34, adult = 42 }
 tier = "T1"
 route = "local:tiny"
 ctx_default = 8192
@@ -508,6 +534,7 @@ kind = "chat"
 optional = true
 abliterated = { by = "p-e-w", method = "heretic" }
 badges = ["tools", "reasoning"]
+skills = { quality = 48, chat = 48, code = 48, reason = 52, write = 44, long = 36, adult = 44 }
 tier = "T1"
 route = "local:tiny"
 ctx_default = 8192
@@ -530,6 +557,7 @@ kind = "chat"
 optional = true
 abliterated = { by = "DavidAU", method = "heretic" }
 badges = ["tools"]
+skills = { quality = 38, chat = 42, code = 34, reason = 34, write = 44, long = 34, adult = 42 }
 tier = "T1"
 route = "local:tiny"
 ctx_default = 8192
@@ -552,6 +580,7 @@ kind = "chat"
 optional = true
 abliterated = { by = "richardyoung", method = "heretic" }
 badges = ["tools", "reasoning"]
+skills = { quality = 38, chat = 40, code = 38, reason = 40, write = 36, long = 34, adult = 26 }
 tier = "T1"
 route = "local:tiny"
 ctx_default = 8192
@@ -573,6 +602,7 @@ kind = "chat"
 optional = true
 abliterated = { by = "virtualdmns", method = "heretic" }
 badges = ["tools", "reasoning"]
+skills = { quality = 38, chat = 40, code = 36, reason = 40, write = 36, long = 34, adult = 36 }
 tier = "T1"
 route = "local:tiny"
 ctx_default = 8192

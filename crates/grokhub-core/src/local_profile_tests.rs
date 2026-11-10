@@ -105,7 +105,7 @@ fn macs_apple_silicon_by_memory_and_intel_with_amd() {
         (8_192, "T1", "Gemma 4 E2B"),
         (16_384, "T2", "Gemma 4 E4B"),
         (32_768, "T3", "Gemma 4 26B-A4B"),
-        (65_536, "T5", "Gemma 4 31B"),
+        (65_536, "T5", "Gemma 4 26B-A4B"),
     ];
     for (ram, t, model) in cases {
         let mac = machine("macos", vec![apple_gpu(ram)], ram, CpuSimd::Neon);
@@ -137,7 +137,7 @@ fn linux_machines_by_backend() {
         65_536,
         CpuSimd::Avx2,
     );
-    assert_eq!(row(&cuda), (Backend::Cuda, "T4", Some("Gemma 4 31B")));
+    assert_eq!(row(&cuda), (Backend::Cuda, "T4", Some("Gemma 4 26B-A4B")));
     // The example desktop: RX 9070 XT 16 GB + Radeon iGPU, 58 GB RAM.
     let amd = machine(
         "linux",
@@ -195,7 +195,7 @@ fn multi_gpu_splits_by_free_vram_on_one_vendor() {
     );
     assert_eq!(plan.tensor_split, Some(vec![23_000, 11_000]));
     assert_eq!(plan.vram_mb(), 36_864);
-    assert_eq!(row(&p), (Backend::Cuda, "T5", Some("Gemma 4 31B")));
+    assert_eq!(row(&p), (Backend::Cuda, "T5", Some("Gemma 4 26B-A4B")));
     let single = machine(
         "linux",
         vec![gpu(GpuVendor::Nvidia, "RTX 4090", 24_576)],

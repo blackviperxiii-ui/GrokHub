@@ -38,7 +38,7 @@ fn an_8gb_gpu_gets_a_quick_model_an_everyday_one_a_step_up_and_pictures() {
     let l = lineup_for(&p, &[], Some(500_000));
     assert_eq!(l.slots.len(), Goal::ALL.len());
     assert_eq!(
-        id(slot(&l, Goal::Balance)),
+        id(slot(&l, Goal::Everyday)),
         Some(E4B),
         "the picker's default"
     );
@@ -58,8 +58,8 @@ fn an_8gb_gpu_gets_a_quick_model_an_everyday_one_a_step_up_and_pictures() {
     assert_eq!(video.note, "No on-device video models yet.");
     // Hot-swap fit: Speed is smaller than Balance, Performance bigger.
     let run = |g| slot(&l, g).pick.unwrap().run_mb;
-    assert!(run(Goal::Speed) < run(Goal::Balance));
-    assert!(run(Goal::Performance) > run(Goal::Balance));
+    assert!(run(Goal::Speed) < run(Goal::Everyday));
+    assert!(run(Goal::Performance) > run(Goal::Everyday));
 }
 
 #[test]
@@ -92,22 +92,25 @@ fn the_queue_puts_the_everyday_model_first_and_each_draft_model_after_its_chat_m
 }
 
 #[test]
-fn a_big_gpu_runs_the_biggest_as_balance_and_has_nothing_bigger_to_step_up_to() {
+fn a_big_gpu_runs_the_fast_moe_every_day_and_steps_up_to_the_31b() {
     let p = pc(&[24_576], 65_536, 500_000);
     let l = lineup_for(&p, &[], None);
-    assert_eq!(id(slot(&l, Goal::Balance)), Some(G31));
-    let perf = slot(&l, Goal::Performance);
-    assert!(perf.pick.is_none());
-    assert!(perf.note.contains("strongest"), "{}", perf.note);
+    // Speed first: the 26B-A4B MoE (about 60 tok/s) is the everyday model,
+    // and the dense 31B (about 35 tok/s) is what hard tasks step up to.
+    assert_eq!(
+        id(slot(&l, Goal::Everyday)),
+        Some("gemma-4-26b-a4b-it-abliterated-q4_k")
+    );
+    assert_eq!(id(slot(&l, Goal::Performance)), Some(G31));
     let speed = slot(&l, Goal::Speed).pick.unwrap();
-    assert!(speed.run_mb < slot(&l, Goal::Balance).pick.unwrap().run_mb);
+    assert!(speed.run_mb < slot(&l, Goal::Everyday).pick.unwrap().run_mb);
 }
 
 #[test]
 fn a_cpu_only_pc_skips_a_step_up_too_slow_for_hot_swap() {
     let p = pc(&[], 16_384, 500_000);
     let l = lineup_for(&p, &[], None);
-    assert_eq!(id(slot(&l, Goal::Balance)), Some(E4B));
+    assert_eq!(id(slot(&l, Goal::Everyday)), Some(E4B));
     assert_eq!(id(slot(&l, Goal::Speed)), Some(E2B));
     assert!(slot(&l, Goal::Performance).pick.is_none());
 }
@@ -116,7 +119,7 @@ fn a_cpu_only_pc_skips_a_step_up_too_slow_for_hot_swap() {
 fn what_is_on_disk_stays_in_the_lineup_but_out_of_the_queue() {
     let p = pc(&[8_192], 32_768, 500_000);
     let l = lineup_for(&p, &[E4B, "gemma-4-e4b-it-abliterated-mtp"], Some(500_000));
-    let balance = slot(&l, Goal::Balance);
+    let balance = slot(&l, Goal::Everyday);
     assert_eq!(id(balance), Some(E4B));
     assert!(balance.on_disk);
     assert!(l.queue.iter().all(|m| !m.id.starts_with("gemma-4-e4b")));
@@ -157,7 +160,7 @@ fn nothing_to_fetch_says_so_and_a_pc_without_avx_gets_no_chat_models() {
         ..p
     };
     let l = lineup_for(&old, &[], None);
-    for g in [Goal::Speed, Goal::Balance, Goal::Performance] {
+    for g in [Goal::Speed, Goal::Everyday, Goal::Performance] {
         assert!(slot(&l, g).pick.is_none());
         assert!(slot(&l, g).note.contains("AVX"), "{}", slot(&l, g).note);
     }

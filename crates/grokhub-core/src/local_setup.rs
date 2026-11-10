@@ -191,6 +191,8 @@ pub struct LocalModel {
     pub tok_s: TokS,
     /// Files it needs besides `file`, downloaded after it; empty for a GGUF.
     pub parts: &'static [ModelPart],
+    /// What it is good at (`local_skills`); unset scores are worked out.
+    pub skills: crate::local_skills::Skills,
 }
 
 #[derive(Deserialize)]
@@ -238,6 +240,8 @@ struct CatalogRow {
     tok_s: TokS,
     #[serde(default)]
     parts: Vec<PartRow>,
+    #[serde(default)]
+    skills: crate::local_skills::Skills,
 }
 
 /// `[[model.parts]]`: one of `sha256` (LFS) or `git_oid` (a small git file).
@@ -325,6 +329,7 @@ fn to_model(r: CatalogRow) -> Option<LocalModel> {
         min_budget: r.min_budget,
         tok_s: r.tok_s,
         parts,
+        skills: r.skills,
     })
 }
 
