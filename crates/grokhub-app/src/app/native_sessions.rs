@@ -93,7 +93,7 @@ impl Cabin {
             egui::RichText::new(
                 "Native sessions resume in the native engine. Grok CLI sessions stay read-only.",
             )
-            .size(12.0)
+            .size(crate::theme::TYPE_CAPTION)
             .color(crate::theme::subtle()),
         );
         let draft_id = egui::Id::new("native-history-rename");

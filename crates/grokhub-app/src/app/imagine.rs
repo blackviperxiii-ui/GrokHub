@@ -553,7 +553,9 @@ impl Cabin {
                         ui.vertical_centered(|ui| {
                             ui.label(
                                 RichText::new(format!("Imagine {word}"))
-                                    .font(crate::theme::title_font(crate::theme::IMAGINE_TITLE))
+                                    .font(crate::theme::title_font(crate::theme::headline(
+                                        ui.ctx(),
+                                    )))
                                     .color(crate::theme::fg()),
                             );
                         });

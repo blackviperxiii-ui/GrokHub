@@ -79,12 +79,16 @@ fn paint_facts(
     } else {
         format!("Learned {n} things, sealed on this computer:")
     };
-    ui.label(RichText::new(head).size(13.0).color(crate::theme::fg()));
+    ui.label(
+        RichText::new(head)
+            .size(crate::theme::TYPE_BODY)
+            .color(crate::theme::fg()),
+    );
     for f in facts.iter().take(FACTS_SHOWN) {
         ui.add(
             egui::Label::new(
                 RichText::new(&f.line)
-                    .size(12.0)
+                    .size(crate::theme::TYPE_CAPTION)
                     .color(crate::theme::muted()),
             )
             .truncate(),
@@ -93,7 +97,7 @@ fn paint_facts(
     if n > FACTS_SHOWN {
         ui.label(
             RichText::new(format!("and {} more", n - FACTS_SHOWN))
-                .size(12.0)
+                .size(crate::theme::TYPE_CAPTION)
                 .color(crate::theme::muted()),
         );
     }

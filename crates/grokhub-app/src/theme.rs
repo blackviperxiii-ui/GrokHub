@@ -54,8 +54,8 @@ pub const MUTED: Color32 = Color32::from_rgb(0x71, 0x76, 0x7b);
 /// Small meta text (source lines, section labels, the silence line) `#8B9096`:
 /// 6.5:1 on black, so 11–12px text stays readable on a dim screen.
 pub const SUBTLE: Color32 = Color32::from_rgb(0x8b, 0x90, 0x96);
-/// Empty-home greeting — title 20–28, not a product wordmark.
-pub const GREET_HERO: f32 = 28.0;
+/// Empty-home greeting — the headline step, not a product wordmark.
+pub const GREET_HERO: f32 = TYPE_HEADLINE;
 /// Hairline `#2F3336`.
 pub const BORDER: Color32 = Color32::from_rgb(0x2f, 0x33, 0x36);
 /// Slightly stronger hairline for an active ring.
@@ -731,20 +731,75 @@ pub const RADIUS_MD: f32 = 12.0;
 #[cfg_attr(not(test), allow(dead_code))]
 pub const RADIUS_LG: f32 = 16.0;
 
-/// The one type scale (Inter). Every text size in the app is one of these
-/// steps; the `FONT_*` names below are older spellings of the same steps.
+/// The one type scale (Inter), the same steps as the shell's `--font-*`
+/// (docs/design/type.md). Every text size in the app is one of these; each
+/// step has a line height on the 4px grid (`LH_*`). The `FONT_*` names below
+/// are older spellings of the same steps.
+/// Counter digits in tiny badges only (the bell's unread number).
+pub const TYPE_BADGE: f32 = 10.0;
 /// Captions, tips and meta lines.
 pub const TYPE_CAPTION: f32 = 12.0;
-/// Body text and card bodies.
-pub const TYPE_BODY: f32 = 13.0;
-/// Labels, chrome and list rows.
-pub const TYPE_LABEL: f32 = 14.0;
-/// Inputs and row titles in settings lists.
-pub const TYPE_UI: f32 = 15.0;
-/// Card and section titles.
+/// Body text, labels, list rows, inputs and buttons.
+pub const TYPE_BODY: f32 = 14.0;
+/// Labels, chrome and list rows (same step as body).
+pub const TYPE_LABEL: f32 = TYPE_BODY;
+/// Inputs and row titles in settings lists (same step as body).
+pub const TYPE_UI: f32 = TYPE_BODY;
+/// Long reading text: chat replies, markdown, notes.
+pub const TYPE_PROSE: f32 = 16.0;
+/// Card and row titles (semibold).
 pub const TYPE_TITLE: f32 = 16.0;
+/// Section headers inside a page.
+pub const TYPE_SECTION: f32 = 20.0;
 /// Page titles.
-pub const TYPE_HEADLINE: f32 = 22.0;
+pub const TYPE_HEADLINE: f32 = 24.0;
+/// Big numbers and hero lines.
+pub const TYPE_DISPLAY: f32 = 32.0;
+/// Code, logs and paths.
+pub const TYPE_MONO: f32 = 14.0;
+
+/// Line heights for the steps above, all on the 4px grid.
+pub const LH_CAPTION: f32 = 16.0;
+pub const LH_BODY: f32 = 20.0;
+/// 1.5x for reading text (WCAG 1.4.8).
+pub const LH_PROSE: f32 = 24.0;
+pub const LH_SECTION: f32 = 28.0;
+pub const LH_HEADLINE: f32 = 32.0;
+pub const LH_DISPLAY: f32 = 40.0;
+
+/// The line height for a size on the scale (off-scale sizes get 1.5x, rounded
+/// to the 4px grid).
+pub fn line_height_for(size: f32) -> f32 {
+    match size {
+        s if s <= TYPE_CAPTION => LH_CAPTION,
+        s if s <= TYPE_BODY => LH_BODY,
+        s if s <= TYPE_PROSE => LH_PROSE,
+        s if s <= TYPE_SECTION => LH_SECTION,
+        s if s <= TYPE_HEADLINE => LH_HEADLINE,
+        s if s <= TYPE_DISPLAY => LH_DISPLAY,
+        s => (s * 1.5 / 4.0).round() * 4.0,
+    }
+}
+
+/// Page titles on a window this wide: one step smaller on a narrow window so a
+/// title keeps to one line. Body text never shrinks.
+pub fn headline_for(window_w: f32) -> f32 {
+    if window_w < NARROW_WINDOW_W {
+        TYPE_SECTION
+    } else {
+        TYPE_HEADLINE
+    }
+}
+
+/// [`headline_for`] the current window.
+pub fn headline(ctx: &egui::Context) -> f32 {
+    headline_for(ctx.content_rect().width())
+}
+
+/// The font chat replies and markdown read in.
+pub fn prose_font() -> FontId {
+    FontId::proportional(TYPE_PROSE)
+}
 
 /// The margin every full page keeps from the window edge on a wide window.
 pub const PAGE_MARGIN: f32 = SPACING_24;
@@ -877,8 +932,6 @@ pub const FONT_BODY: f32 = TYPE_BODY;
 pub const FONT_TIP: f32 = TYPE_CAPTION;
 /// Settings / pane titles — larger than Body.
 pub const FONT_HEADING: f32 = TYPE_HEADLINE;
-/// grok.com/imagine `h1.text-[22px].leading-7`
-pub const IMAGINE_TITLE: f32 = 22.0;
 /// gap from h1 to `.query-bar` on /imagine
 pub const IMAGINE_GAP: f32 = 32.0;
 /// measured Imagine query-bar width
@@ -1175,7 +1228,7 @@ pub fn apply_palette(ctx: &egui::Context, palette: PaintPalette) {
     );
     style.text_styles.insert(
         TextStyle::Monospace,
-        FontId::new(12.0, FontFamily::Monospace),
+        FontId::new(TYPE_MONO, FontFamily::Monospace),
     );
     style.spacing.item_spacing = egui::vec2(SPACING_8, SPACING_8);
     style.spacing.button_padding = egui::vec2(SPACING_12, SPACING_8);
@@ -1927,8 +1980,8 @@ mod tests {
         assert_eq!(LINK, Color32::from_rgb(0x1d, 0x9b, 0xf0));
         assert_eq!(SEND_ON, OPS_AMBER);
         assert_eq!(SEND_ON_INK, OPS_VOID);
-        assert_eq!(GREET_HERO, 28.0);
-        assert!(GREET_HERO > FONT_HEADING);
+        assert_eq!(GREET_HERO, 24.0);
+        assert!(GREET_HERO >= FONT_HEADING);
         assert!(GREET_HERO <= 28.0);
         assert_eq!(CHAT_COL_W, 768.0);
         assert!(CHAT_COL_W >= 720.0 && CHAT_COL_W <= 800.0);
@@ -1954,11 +2007,14 @@ mod tests {
         let scale = [
             TYPE_CAPTION,
             TYPE_BODY,
-            TYPE_LABEL,
-            TYPE_UI,
-            TYPE_TITLE,
+            TYPE_PROSE,
+            TYPE_SECTION,
             TYPE_HEADLINE,
+            TYPE_DISPLAY,
         ];
+        assert_eq!(TYPE_LABEL, TYPE_BODY);
+        assert_eq!(TYPE_UI, TYPE_BODY);
+        assert_eq!(TYPE_TITLE, TYPE_PROSE);
         assert!(scale.windows(2).all(|w| w[0] < w[1]), "{scale:?}");
         assert_eq!(
             page_frame(&egui::Context::default()).inner_margin,
@@ -1992,9 +2048,10 @@ mod tests {
         assert!(ICON_CHROME < ICON_ACTION);
         assert!(ICON_ACTION < TILE_ICON);
         assert_eq!(FONT_SECTION, 16.0);
-        assert_eq!(FONT_BODY, 13.0);
+        assert_eq!(FONT_BODY, 14.0);
         assert_eq!(FONT_TIP, 12.0);
         assert!(FONT_TIP < FONT_BODY);
+        assert!(FONT_HEADING > FONT_BODY);
         assert!(FONT_SECTION > FONT_CHROME);
         assert_eq!(ALWAYS_AMBER_DARK, Color32::from_rgb(0xe7, 0xe9, 0xea));
         assert_eq!(ALWAYS_AMBER_LIGHT, Color32::from_rgb(0x0a, 0x0a, 0x0a));
@@ -2032,9 +2089,9 @@ mod tests {
         assert_eq!(QUERY_RADIUS, 160.0);
         assert_eq!(HIT, 40.0);
         assert_eq!(NAV_ROW_H, 40.0);
-        assert_eq!(FONT_UI, 15.0);
+        assert_eq!(FONT_UI, 14.0);
         assert_eq!(FONT_CHROME, 14.0);
-        assert_eq!(FONT_HEADING, 22.0);
+        assert_eq!(FONT_HEADING, 24.0);
         assert_eq!(TITLEBAR_H, 40.0);
         assert!(TITLEBAR_H >= HIT - 4.0, "titlebar must fit chrome hits");
         assert!(include_bytes!("../assets/fonts/Inter-Regular.ttf").len() > 1000);
@@ -2042,8 +2099,6 @@ mod tests {
             &include_bytes!("../assets/fonts/Inter-Regular.ttf")[..4],
             &[0x00, 0x01, 0x00, 0x00]
         );
-        assert!(FONT_HEADING > FONT_UI);
-        assert_eq!(IMAGINE_TITLE, 22.0);
         assert_eq!(IMAGINE_GAP, 32.0);
         assert_eq!(IMAGINE_BAR_W, 768.0);
         assert_eq!(IMAGINE_BAR_RADIUS, 20.0);
@@ -2335,3 +2390,7 @@ mod tests {
 #[cfg(test)]
 #[path = "theme_spacing_tests.rs"]
 mod spacing_tests;
+
+#[cfg(test)]
+#[path = "theme_type_tests.rs"]
+mod type_tests;

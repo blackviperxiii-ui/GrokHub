@@ -424,7 +424,7 @@ impl Cabin {
             .or_else(|| entry.sources.first().copied());
         ui.label(
             egui::RichText::new(entry.name)
-                .size(crate::theme::TYPE_HEADLINE)
+                .size(crate::theme::headline(ui.ctx()))
                 .strong()
                 .color(crate::theme::fg()),
         );
@@ -1006,7 +1006,7 @@ fn rail_row(ui: &mut egui::Ui, name: &str, note: &str, on: bool, new: usize) -> 
 fn cant_mod_pane(ui: &mut egui::Ui, cant: &CantMod) {
     ui.label(
         egui::RichText::new(&cant.name)
-            .size(crate::theme::TYPE_HEADLINE)
+            .size(crate::theme::headline(ui.ctx()))
             .strong()
             .color(crate::theme::fg()),
     );

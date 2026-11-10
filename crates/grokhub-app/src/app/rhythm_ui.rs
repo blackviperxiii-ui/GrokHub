@@ -251,7 +251,7 @@ fn paint_week(ui: &mut egui::Ui, r: &Rhythm) {
                 lab.left_center(),
                 egui::Align2::LEFT_CENTER,
                 *name,
-                egui::FontId::proportional(10.0),
+                egui::FontId::proportional(crate::theme::TYPE_CAPTION),
                 crate::theme::muted(),
             );
             for hour in 0..24 {
