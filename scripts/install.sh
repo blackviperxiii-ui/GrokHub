@@ -2,6 +2,9 @@
 # Install grokhub + grokhub-hub from this clone.
 #   --channel beta    fetch origin, check out the beta branch, build, install
 #   --channel stable  same for main (stable = main)
+#   --app cabin       the egui cabin (grokhub) plus the hub; the default
+#   --app shell       the Tauri shell (grokhub-shell) plus the hub
+#   --app both        both apps plus the hub
 # The channel is remembered in $GROKHUB_CONFIG/channel (the install receipt),
 # so a plain ./scripts/install.sh --user and the in-app Update stay on it.
 set -euo pipefail
@@ -11,9 +14,11 @@ PREFIX="${PREFIX:-$HOME/.local}"
 SYSTEM=0
 CHANNEL=""
 DRY_RUN=0
+# Which app to build. No --app keeps today's install: the cabin and the hub.
+APP=cabin
 
 usage() {
-  echo "usage: $0 [--user|--system] [--prefix=DIR] [--channel beta|stable] [--dry-run]"
+  echo "usage: $0 [--user|--system] [--prefix=DIR] [--channel beta|stable] [--app cabin|shell|both] [--dry-run]"
 }
 
 set_channel() {
@@ -21,6 +26,16 @@ set_channel() {
     beta|stable) CHANNEL="$1" ;;
     *)
       echo "error: --channel takes beta or stable, not '$1'" >&2
+      exit 2
+      ;;
+  esac
+}
+
+set_app() {
+  case "$1" in
+    cabin|shell|both) APP="$1" ;;
+    *)
+      echo "error: --app takes cabin, shell or both, not '$1'" >&2
       exit 2
       ;;
   esac
@@ -38,6 +53,15 @@ while [[ $# -gt 0 ]]; do
         exit 2
       fi
       set_channel "$2"
+      shift
+      ;;
+    --app=*) set_app "${1#--app=}" ;;
+    --app)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --app takes cabin, shell or both" >&2
+        exit 2
+      fi
+      set_app "$2"
       shift
       ;;
     --dry-run) DRY_RUN=1 ;;
@@ -67,15 +91,38 @@ else
   esac
 fi
 if [[ "$CHANNEL" == beta ]]; then BRANCH=beta; else BRANCH=main; fi
+WANT_CABIN=0
+WANT_SHELL=0
+case "$APP" in
+  cabin) WANT_CABIN=1 ;;
+  shell) WANT_SHELL=1 ;;
+  both) WANT_CABIN=1; WANT_SHELL=1 ;;
+esac
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
-  echo "channel=$CHANNEL branch=$BRANCH switch=$SWITCH prefix=$PREFIX receipt=$RECEIPT"
+  echo "channel=$CHANNEL branch=$BRANCH switch=$SWITCH prefix=$PREFIX receipt=$RECEIPT app=$APP"
   exit 0
 fi
 
 if [[ "$SYSTEM" -eq 1 && "$(id -u)" -ne 0 ]]; then
   echo "error: --system needs root" >&2
   exit 1
+fi
+
+if [[ "$WANT_SHELL" -eq 1 ]]; then
+  # The shell builds its web UI with npm and links the system webview. Stop
+  # before git or cargo when either is missing, rather than halfway through.
+  missing=()
+  command -v npm >/dev/null 2>&1 || missing+=(npm)
+  if command -v pkg-config >/dev/null 2>&1 && ! pkg-config --exists webkit2gtk-4.1; then
+    missing+=(webkit2gtk-4.1)
+  fi
+  if [[ "${#missing[@]}" -gt 0 ]]; then
+    echo "error: --app $APP builds the shell, which needs: ${missing[*]}" >&2
+    echo "  Arch: sudo pacman -S --needed nodejs npm webkit2gtk-4.1" >&2
+    echo "  Debian/Ubuntu: sudo apt-get install nodejs npm libwebkit2gtk-4.1-dev" >&2
+    exit 1
+  fi
 fi
 
 cd "$ROOT"
@@ -135,27 +182,52 @@ if [[ "$SWITCH" -eq 1 ]]; then
   echo "channel $CHANNEL: $(git rev-parse --short=7 HEAD) on $BRANCH"
 fi
 
-GROKHUB_CHANNEL="$CHANNEL" cargo build --release --locked -p grokhub-app -p grokhub-hub
+if [[ "$WANT_CABIN" -eq 1 ]]; then
+  GROKHUB_CHANNEL="$CHANNEL" cargo build --release --locked -p grokhub-app -p grokhub-hub
+else
+  GROKHUB_CHANNEL="$CHANNEL" cargo build --release --locked -p grokhub-hub
+fi
 TARGET="${CARGO_TARGET_DIR:-$ROOT/target}"
+if [[ "$WANT_SHELL" -eq 1 ]]; then
+  # src-tauri is its own workspace, so its build lands in src-tauri/target
+  # unless CARGO_TARGET_DIR points both builds at one folder.
+  npm ci --prefix "$ROOT/ui"
+  GROKHUB_CHANNEL="$CHANNEL" "$ROOT/ui/node_modules/.bin/tauri" build --no-bundle -- --locked
+  SHELL_TARGET="${CARGO_TARGET_DIR:-$ROOT/src-tauri/target}"
+fi
 
-install -Dm755 "$TARGET/release/grokhub" "$PREFIX/bin/grokhub"
+if [[ "$WANT_CABIN" -eq 1 ]]; then
+  install -Dm755 "$TARGET/release/grokhub" "$PREFIX/bin/grokhub"
+fi
 install -Dm755 "$TARGET/release/grokhub-hub" "$PREFIX/bin/grokhub-hub"
+if [[ "$WANT_SHELL" -eq 1 ]]; then
+  install -Dm755 "$SHELL_TARGET/release/grokhub-shell" "$PREFIX/bin/grokhub-shell"
+fi
 install_desktop_entry() {
   local src="$1"
   local dst="$2"
   local bin="$3"
-  local tmp
+  local name tmp
+  name="$(basename "$bin")"
   tmp="$(mktemp)"
-  sed -e "s|^Exec=grokhub\$|Exec=${bin}|" \
-      -e "s|^TryExec=grokhub\$|TryExec=${bin}|" \
+  sed -e "s|^Exec=${name}\$|Exec=${bin}|" \
+      -e "s|^TryExec=${name}\$|TryExec=${bin}|" \
       "$src" >"$tmp"
   install -Dm644 "$tmp" "$dst"
   rm -f "$tmp"
 }
-install_desktop_entry \
-  "$ROOT/packaging/grokhub.desktop" \
-  "$PREFIX/share/applications/grokhub.desktop" \
-  "$PREFIX/bin/grokhub"
+if [[ "$WANT_CABIN" -eq 1 ]]; then
+  install_desktop_entry \
+    "$ROOT/packaging/grokhub.desktop" \
+    "$PREFIX/share/applications/grokhub.desktop" \
+    "$PREFIX/bin/grokhub"
+fi
+if [[ "$WANT_SHELL" -eq 1 ]]; then
+  install_desktop_entry \
+    "$ROOT/packaging/grokhub-shell.desktop" \
+    "$PREFIX/share/applications/grokhub-shell.desktop" \
+    "$PREFIX/bin/grokhub-shell"
+fi
 if command -v update-desktop-database >/dev/null 2>&1; then
   update-desktop-database "$PREFIX/share/applications" >/dev/null 2>&1 || true
 fi
@@ -169,8 +241,12 @@ fi
 if [[ "$SYSTEM" -eq 0 ]]; then
   install -Dm644 "$ROOT/packaging/systemd/grokhub-hub.service" \
     "$HOME/.config/systemd/user/grokhub-hub.service"
-  install -Dm644 "$ROOT/packaging/systemd/grokhub.service" \
-    "$HOME/.config/systemd/user/grokhub.service"
+  # The cabin's login unit. The shell starts at login through its own
+  # Settings switch (the autostart plugin), so it gets no unit here.
+  if [[ "$WANT_CABIN" -eq 1 ]]; then
+    install -Dm644 "$ROOT/packaging/systemd/grokhub.service" \
+      "$HOME/.config/systemd/user/grokhub.service"
+  fi
 fi
 
 # Overlay-safe package install. Never fail the cabin overlay if sudo/pkg is
@@ -233,7 +309,9 @@ fi
 
 if command -v systemctl >/dev/null && [[ "$SYSTEM" -eq 0 ]]; then
   systemctl --user daemon-reload >/dev/null 2>&1 || true
-  systemctl --user enable grokhub.service >/dev/null 2>&1 || true
+  if [[ "$WANT_CABIN" -eq 1 ]]; then
+    systemctl --user enable grokhub.service >/dev/null 2>&1 || true
+  fi
   systemctl --user enable --now grokhub-hub.service >/dev/null 2>&1 || true
 fi
 
@@ -246,7 +324,12 @@ if [[ "$SWITCH" -eq 1 ]]; then
   rm -f "$CONFIG_DIR/channel.beta-since"
 fi
 
-echo "installed $PREFIX/bin/grokhub ($("$PREFIX/bin/grokhub" --version 2>/dev/null || echo "channel $CHANNEL"))"
+if [[ "$WANT_CABIN" -eq 1 ]]; then
+  echo "installed $PREFIX/bin/grokhub ($("$PREFIX/bin/grokhub" --version 2>/dev/null || echo "channel $CHANNEL"))"
+fi
+if [[ "$WANT_SHELL" -eq 1 ]]; then
+  echo "installed $PREFIX/bin/grokhub-shell (channel $CHANNEL)"
+fi
 echo "installed $PREFIX/bin/grokhub-hub"
 if [[ "$SYSTEM" -eq 0 ]]; then
   echo "ensure $PREFIX/bin is on PATH"

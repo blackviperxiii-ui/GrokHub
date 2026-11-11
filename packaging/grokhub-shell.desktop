@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=GrokHub Shell
+GenericName=Gaming and PC companion
+Comment=Loadout's Tauri desktop app (preview)
+Exec=grokhub-shell
+TryExec=grokhub-shell
+Icon=grokhub
+Terminal=false
+Categories=Utility;Development;Network;
+Keywords=loadout;gaming;pc;ai;agent;grok;chat;tauri;
+StartupNotify=true
+StartupWMClass=grokhub-shell
+SingleMainWindow=true
