@@ -91,6 +91,7 @@ pub mod remote_tls;
 #[cfg(desktop)]
 pub mod scheduler;
 pub mod screen_record;
+pub mod screenshot_offer;
 pub mod settings;
 pub mod shell_update;
 pub mod skills;
@@ -3738,6 +3739,65 @@ fn forget_all_devices(web: State<'_, Arc<remote::WebAccess>>) -> remote_devices:
     web.forget_all()
 }
 
+/// The composer's screenshot offer: one look at the watched folders, off
+/// the main thread. Nothing is listed while Screenshot explain is off.
+#[tauri::command]
+async fn get_screenshot_offer(
+    state: State<'_, ShellState>,
+) -> Result<screenshot_offer::View, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        let dirs = screenshot_offer::this_pc_dirs();
+        screenshot_offer::check(&dir, &dirs, grokhub_core::now_ms())
+    })
+    .await
+}
+
+/// Settings → Behavior → Screenshot explain.
+#[tauri::command]
+async fn set_screenshot_explain(
+    state: State<'_, ShellState>,
+    on: bool,
+) -> Result<screenshot_offer::View, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || screenshot_offer::set_enabled(&dir, on, grokhub_core::now_ms())).await?
+}
+
+/// The screenshot chip's Not now.
+#[tauri::command]
+async fn dismiss_screenshot_offer(
+    state: State<'_, ShellState>,
+) -> Result<screenshot_offer::View, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || screenshot_offer::dismiss(&dir)).await
+}
+
+/// The screenshot chip's Explain: the offered picture is read and attached
+/// off the main thread. Nothing is sent.
+#[tauri::command]
+async fn explain_screenshot_offer(
+    app: AppHandle,
+    conversation_id: String,
+) -> Result<attach::Outcome, String> {
+    off_main(move || {
+        let state = app.state::<ShellState>();
+        let dir = state.config_dir.clone();
+        screenshot_offer::explain(&dir, grokhub_core::now_ms(), |path| {
+            stage_paths(
+                &state,
+                &conversation_id,
+                std::iter::once(path.to_path_buf()),
+            )
+            .pop()
+            .unwrap_or(attach::Outcome {
+                staged: None,
+                error: Some(screenshot_offer::GONE.into()),
+            })
+        })
+    })
+    .await?
+}
+
 /// Settings → Your PC → PC helpers: the wellbeing and focus switches.
 #[tauri::command]
 async fn get_pc_helpers(state: State<'_, ShellState>) -> Result<pc_helpers::PcHelpers, String> {
@@ -5201,6 +5261,10 @@ pub fn run() {
             set_workboard_tidy,
             get_behavior,
             get_pc_helpers,
+            get_screenshot_offer,
+            set_screenshot_explain,
+            dismiss_screenshot_offer,
+            explain_screenshot_offer,
             set_pc_helper,
             set_pc_auto_sleep,
             forget_pc_rhythm,

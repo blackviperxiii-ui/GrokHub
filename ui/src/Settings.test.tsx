@@ -41,6 +41,7 @@ vi.mock("./Learned", () => ({ Learned: () => <p>Learned panel</p> }));
 vi.mock("./Permissions", () => ({ Permissions: () => <p>Permissions panel</p> }));
 // Behavior, Privacy and Background have their own tests.
 vi.mock("./WorkboardTidy", () => ({ WorkboardTidy: () => <p>Workboard tidy</p> }));
+vi.mock("./ScreenshotExplain", () => ({ ScreenshotExplain: () => <p>Screenshot explain row</p> }));
 vi.mock("./Behavior", () => ({
   Behavior: ({ readOnly, onCloseToTray }: { readOnly?: boolean; onCloseToTray?: (on: boolean) => void }) =>
     readOnly ? (
@@ -354,11 +355,13 @@ describe("Settings", () => {
 
     await openSection("Behavior");
     expect(screen.getByRole("button", { name: "Behavior panel" })).toBeInTheDocument();
+    expect(screen.getByText("Screenshot explain row")).toBeInTheDocument();
     expect(screen.queryByLabelText("Work folder")).toBeNull();
 
     await openSection("Appearance");
     expect(screen.getByRole("button", { name: "System" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.queryByRole("button", { name: "Behavior panel" })).toBeNull();
+    expect(screen.queryByText("Screenshot explain row")).toBeNull();
 
     await openSection("Personality");
     expect(screen.getByText("Personality panel")).toBeInTheDocument();
