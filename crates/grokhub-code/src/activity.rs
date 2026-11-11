@@ -97,16 +97,35 @@ pub fn append_held(
     Ok(())
 }
 
-/// The newest `limit` entries, newest first. Lines this build can't read are skipped.
-pub fn list(config_dir: &Path, limit: usize) -> Vec<Entry> {
+/// The newest `limit` entries that pass `wanted`, newest first. Lines this
+/// build can't read are skipped.
+fn newest(config_dir: &Path, limit: usize, wanted: impl Fn(&Entry) -> bool) -> Vec<Entry> {
     let Ok(raw) = std::fs::read_to_string(path(config_dir)) else {
         return Vec::new();
     };
     raw.lines()
         .rev()
         .filter_map(|l| serde_json::from_str::<Entry>(l).ok())
+        .filter(wanted)
         .take(limit)
         .collect()
+}
+
+/// The newest `limit` entries of every project, newest first.
+pub fn list(config_dir: &Path, limit: usize) -> Vec<Entry> {
+    newest(config_dir, limit, |_| true)
+}
+
+/// The newest `limit` entries of the project with this key, newest first.
+pub fn list_for_key(config_dir: &Path, repo_key: &str, limit: usize) -> Vec<Entry> {
+    newest(config_dir, limit, |e| e.repo_key == repo_key)
+}
+
+/// What the Code tab shows: the newest `limit` entries of the project in
+/// `workspace`, newest first.
+pub fn list_for(config_dir: &Path, workspace: &Path, limit: usize) -> Vec<Entry> {
+    let key = crate::runs::repo_key(workspace, crate::repo::origin_url(workspace).as_deref());
+    list_for_key(config_dir, &key, limit)
 }
 
 #[cfg(test)]
@@ -148,6 +167,26 @@ mod tests {
         assert_eq!(got, vec![5, 4, 3]);
         let two: Vec<u64> = list(&d, 2).iter().map(|e| e.ts_ms).collect();
         assert_eq!(two, vec![5, 4]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_project_sees_its_own_newest_entries_only() {
+        let d = dir("project");
+        // Two projects take turns: "a" writes the odd times, "b" the even ones.
+        for n in 1..=120 {
+            let mut e = entry(n, &format!("push {n}"));
+            e.repo_key = if n % 2 == 1 { "a" } else { "b" }.into();
+            append(&d, &e, KEEP_DEFAULT).unwrap();
+        }
+        let got = list_for_key(&d, "a", SHOW);
+        assert_eq!(got.len(), 50);
+        assert!(got.iter().all(|e| e.repo_key == "a"));
+        let times: Vec<u64> = got.iter().map(|e| e.ts_ms).collect();
+        let newest_odd: Vec<u64> = (0..50).map(|i| 119 - 2 * i).collect();
+        assert_eq!(times, newest_odd);
+        assert_eq!((times[0], times[49]), (119, 21));
+        assert!(list_for_key(&d, "c", SHOW).is_empty());
         let _ = std::fs::remove_dir_all(&d);
     }
 

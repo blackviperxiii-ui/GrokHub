@@ -13,11 +13,13 @@ pub mod audio_check;
 pub mod auto_setup;
 pub mod automations;
 pub mod background;
+pub mod bg_runs;
 #[cfg(test)]
 mod brand_guard;
 pub mod capabilities;
 pub mod changes;
 pub mod chips;
+pub mod command_box;
 // The Code tab's logic lives in grokhub-code (shared with the cabin); the
 // old module names stay so the commands below and settings read the same.
 pub use grokhub_code::activity as code_activity;
@@ -340,7 +342,7 @@ fn slash_hits(draft: String) -> Vec<slash::Hit> {
 /// Runs a slash line instead of sending it. Nothing reaches the model.
 /// `conversation_id` is the chat the line was typed in.
 #[tauri::command]
-fn run_slash(
+async fn run_slash(
     state: State<'_, ShellState>,
     line: String,
     conversation_id: Option<String>,
@@ -363,6 +365,9 @@ fn run_slash_line(
         slash::Action::Op(op) => op,
         other => return slash::apply(other, &workspace(state)),
     };
+    if let Some(done) = engine_op(state, &op)? {
+        return Ok(done);
+    }
     let bound = current(state).workspace;
     let done = slash_ops::run(
         op,
@@ -385,6 +390,63 @@ fn run_slash_line(
         end_chat(state, id);
     }
     Ok(done.effect)
+}
+
+/// The slash commands that run the model on their own: `/send`, `/bg`,
+/// `/consult`, and `/host`. Each is read only and unattended.
+fn engine_op(state: &ShellState, op: &slash::Op) -> Result<Option<slash::Effect>, String> {
+    let notice = |text: String| Ok(Some(slash::Effect::Notice { text }));
+    match op {
+        slash::Op::Bg(arg) if arg.trim().is_empty() => notice(bg_runs::status()),
+        slash::Op::Bg(arg) if arg.trim().eq_ignore_ascii_case("stop") => {
+            notice(bg_runs::stop_text())
+        }
+        slash::Op::Bg(task) | slash::Op::Send(task) => {
+            let settings = current(state);
+            let route = route(&settings, agent::SessionMode::Chat, &state.config_dir)?;
+            let title = bg_runs::start(
+                state.config_dir.clone(),
+                route.client,
+                grokhub_agent::route::host::chat_start().0,
+                route.workspace,
+                task,
+            )?;
+            let lead = if matches!(op, slash::Op::Send(_)) {
+                "Sent"
+            } else {
+                "Background"
+            };
+            notice(format!(
+                "{lead} · {title}. It reads and reports, and can't change files. /bg shows how it went."
+            ))
+        }
+        slash::Op::Consult(question) => {
+            let settings = current(state);
+            let route = route(&settings, agent::SessionMode::Chat, &state.config_dir)?;
+            let _config = grokhub_agent::perm::ConfigGuard::set(&state.config_dir);
+            let done = bg_runs::ask_once(
+                route.client,
+                grokhub_core::model_for_mode("fast"),
+                route.workspace,
+                format!("shell-consult-{}", grokhub_core::now_ms()),
+                question.clone(),
+                grokhub_agent::CancelToken::new(),
+            );
+            let _ = grokhub_agent::delete_session(&done.session_id);
+            if !done.error.is_empty() && done.text.trim().is_empty() {
+                return Err(done.error);
+            }
+            notice(grokhub_core::format_consult_reply(question, &done.text))
+        }
+        slash::Op::HostStatus => notice(match chat_client() {
+            Ok(_) => format!(
+                "{} is ready on this computer",
+                grokhub_core::brand::product_name()
+            ),
+            Err(e) => e,
+        }),
+        _ => Ok(None),
+    }
 }
 
 #[tauri::command]
@@ -1980,6 +2042,13 @@ async fn code_test_run(
     .await?
 }
 
+/// Code tab: stop the test run or deploy in progress, and everything it
+/// started. False when nothing was running. Desktop only.
+#[tauri::command]
+async fn code_run_stop() -> Result<bool, String> {
+    off_main(code_runs::stop).await
+}
+
 /// Settings → Code: the remembered test command for this project, if any.
 #[tauri::command]
 async fn code_test_remembered(
@@ -1998,6 +2067,49 @@ async fn code_test_forget(
     let dir = workspace(&state);
     let config = state.config_dir.clone();
     off_main(move || code_runs::forget_test(&config, &dir)).await?
+}
+
+/// Command page: the project folder's name and the lines it remembers.
+#[tauri::command]
+async fn command_box_view(state: State<'_, ShellState>) -> Result<command_box::View, String> {
+    let dir = workspace(&state);
+    let config = state.config_dir.clone();
+    off_main(move || command_box::view(&config, &dir)).await
+}
+
+/// Command page: whether a line goes to the agent now, asks first, or is
+/// refused (forbidden, outside the project, or stopped by the push guard).
+#[tauri::command]
+async fn command_box_check(
+    state: State<'_, ShellState>,
+    line: String,
+) -> Result<command_box::Verdict, String> {
+    let dir = workspace(&state);
+    let config = state.config_dir.clone();
+    let ship = current(&state).code_ship;
+    off_main(move || command_box::check(&config, &dir, &line, ship)).await
+}
+
+/// Command page: the yes on a first run. The checks run again, the line is
+/// remembered for this repo, and the agent's message comes back to queue.
+#[tauri::command]
+async fn command_box_approve(state: State<'_, ShellState>, line: String) -> Result<String, String> {
+    let dir = workspace(&state);
+    let config = state.config_dir.clone();
+    let ship = current(&state).code_ship;
+    off_main(move || command_box::approve(&config, &dir, &line, ship)).await?
+}
+
+/// Command page: forget this repo's remembered lines, so each asks again.
+#[tauri::command]
+async fn command_box_forget(state: State<'_, ShellState>) -> Result<command_box::View, String> {
+    let dir = workspace(&state);
+    let config = state.config_dir.clone();
+    off_main(move || {
+        command_box::forget(&config, &command_box::repo_key(&dir))?;
+        Ok(command_box::view(&config, &dir))
+    })
+    .await?
 }
 
 /// Code tab: what a push or "Open PR into" would run, and whether it asks first.
@@ -2038,13 +2150,14 @@ async fn code_new_branch(state: State<'_, ShellState>, name: String) -> Result<S
     off_main(move || code_ship::new_branch(&config, &dir, &cfg, &name)).await?
 }
 
-/// Code tab: the newest pushes, PRs, branches and blocked attempts.
+/// Code tab: this project's newest pushes, PRs, branches and blocked attempts.
 #[tauri::command]
 async fn code_activity_list(
     state: State<'_, ShellState>,
 ) -> Result<Vec<code_activity::Entry>, String> {
+    let dir = workspace(&state);
     let config = state.config_dir.clone();
-    off_main(move || code_activity::list(&config, code_activity::SHOW)).await
+    off_main(move || code_activity::list_for(&config, &dir, code_activity::SHOW)).await
 }
 
 /// Settings → Code → Secrets: this project's secret names (never the values).
@@ -2184,16 +2297,19 @@ async fn code_file_read(
 }
 
 /// Code tab editor: save a text file of the project. The save is logged.
+/// `root` is the project folder `code_file_read` returned with the file; the
+/// save is refused when the project folder is a different one now.
 #[tauri::command]
 async fn code_file_write(
     state: State<'_, ShellState>,
     path: String,
     text: String,
+    root: String,
 ) -> Result<code_files::FileText, String> {
     let dir = workspace(&state);
     let config = state.config_dir.clone();
     let keep = current(&state).code_ship.activity_keep;
-    off_main(move || code_files::write_logged(&config, &dir, &path, &text, keep)).await?
+    off_main(move || code_files::write_logged(&config, &dir, &path, &text, &root, keep)).await?
 }
 
 /// Code tab terminal: open the user's shell in the project folder.
@@ -2219,12 +2335,16 @@ async fn code_term_open(
             let id = code_term::open(code_term::global(), &dir, held, rows, cols, move |chunk| {
                 let _ = app.emit(code_term::EVENT, chunk);
             })?;
-            code_term::log(
-                &config,
-                &dir,
-                "Opened a terminal in the project folder.",
-                keep,
-            );
+            // The shell is already printing and the window needs the id to
+            // show it, so the id goes back first and the log is written after.
+            std::thread::spawn(move || {
+                code_term::log(
+                    &config,
+                    &dir,
+                    "Opened a terminal in the project folder.",
+                    keep,
+                );
+            });
             Ok(id)
         })
         .await?
@@ -4693,8 +4813,13 @@ pub fn run() {
             code_builtins,
             code_test_plan,
             code_test_run,
+            code_run_stop,
             code_test_remembered,
             code_test_forget,
+            command_box_view,
+            command_box_check,
+            command_box_approve,
+            command_box_forget,
             code_ship_plan,
             code_ship_run,
             code_new_branch,
@@ -4895,6 +5020,8 @@ pub fn run() {
             // What the learning engine holds in memory is written on the way out.
             if let tauri::RunEvent::Exit = event {
                 grokhub_core::learn::hub::flush();
+                // A test run or deploy does not outlive the app.
+                code_runs::stop();
             }
         }),
         Err(err) => {
@@ -4928,6 +5055,15 @@ mod command_tests {
             !src.contains("#[tauri::command(async)]\nfn get_settings("),
             "a sync body on an async worker panics in zbus"
         );
+    }
+
+    #[test]
+    fn the_capability_file_claims_a_manifest_only_if_the_build_has_one() {
+        // With no app manifest in build.rs, Tauri allows every app command
+        // from the app's own page. The capability file must not say otherwise.
+        let has = include_str!("../build.rs").contains("app_manifest");
+        let says = include_str!("../capabilities/default.json").contains("build manifest");
+        assert_eq!(says, has);
     }
 }
 

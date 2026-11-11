@@ -12,6 +12,7 @@ import {
   onLocalEngineEvent,
   onUpdateAvailable,
   shareSchedulerClock,
+  WEB,
   workboardSweepUndo,
   type BoardSwept,
   type Capabilities,
@@ -52,6 +53,7 @@ import type { Section } from "./sections";
 import { useOverscroll } from "./rubberBand";
 import { useHidingBar } from "./tabBar";
 import { applyTheme } from "./theme";
+import { inShell } from "./transport";
 import { LOGO_MARK_URL, PRODUCT_NAME } from "./brand";
 import { TabIcon } from "./TabIcon";
 import { ChatTabMenu, ClearChatDialog } from "./ClearChat";
@@ -64,6 +66,7 @@ import { OnboardStage } from "./GetToKnowYou";
 const loaders = {
   agents: () => import("./Agents").then((m) => ({ default: m.Agents })),
   code: () => import("./Code").then((m) => ({ default: m.Code })),
+  command: () => import("./CommandBox").then((m) => ({ default: m.CommandBox })),
   connectors: () => import("./Connectors").then((m) => ({ default: m.Connectors })),
   imagine: () => import("./Imagine").then((m) => ({ default: m.Imagine })),
   devices: () => import("./Devices").then((m) => ({ default: m.Devices })),
@@ -87,6 +90,7 @@ const History = lazy(loaders.history);
 const Home = lazy(loaders.home);
 const Journal = lazy(loaders.journal);
 const Code = lazy(loaders.code);
+const CommandBox = lazy(loaders.command);
 const Library = lazy(loaders.library);
 const Memory = lazy(loaders.memory);
 const Objectives = lazy(loaders.objectives);
@@ -141,7 +145,9 @@ export function runNoticeAction(run: RunNotice): NoticeAction {
 export function App() {
   const [view, setView] = useState<View>("chat");
   const [prefill, setPrefill] = useState<Prefill>();
-  const [caps, setCaps] = useState<Capabilities>(CORE_ONLY);
+  // A browser is the web app from its first render: it must not run a
+  // desktop-only step (the last chat, say) while its capabilities load.
+  const [caps, setCaps] = useState<Capabilities>(() => (inShell() ? CORE_ONLY : WEB));
   const [palette, setPalette] = useState(false);
   const [sheet, setSheet] = useState(false);
   const paletteChips = useChipRow({ surface: "palette", active: palette });
@@ -603,6 +609,7 @@ export function App() {
           onOpenSettings={() => setView("settings")}
           onSignIn={() => run({ kind: "settings", section: "account" })}
           onOpenView={openView}
+          onOpenPalette={() => setPalette(true)}
           onQueue={onQueue}
           queueAct={queueAct}
           prefill={prefill}
@@ -686,6 +693,16 @@ export function App() {
           <Code
             onTask={({ prompt, conversationId }) => {
               setPrefill((now) => ({ text: prompt, n: (now?.n ?? 0) + 1, conversationId }));
+              setView("chat");
+            }}
+          />
+        </Page>
+      )}
+      {opened.has("command") && !caps.remote && (
+        <Page shown={view === "command"}>
+          <CommandBox
+            onRun={(prompt) => {
+              setPrefill((now) => ({ text: prompt, n: (now?.n ?? 0) + 1, send: true }));
               setView("chat");
             }}
           />

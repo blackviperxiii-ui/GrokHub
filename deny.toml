@@ -13,6 +13,16 @@ ignore = [
     { id = "RUSTSEC-2026-0370", reason = "unmaintained zbus 5 deps via ashpd and secret-service; remove with zbus 6" },
     { id = "RUSTSEC-2026-0371", reason = "unmaintained zbus 5 deps via ashpd and secret-service; remove with zbus 6" },
     { id = "RUSTSEC-2026-0372", reason = "unmaintained zbus 5 deps via ashpd and secret-service; remove with zbus 6" },
+    # The next two are only in src-tauri/Cargo.lock (the desktop shell), which CI
+    # checks with `cargo deny --manifest-path src-tauri/Cargo.toml`. The root
+    # lockfile reports them as not detected; that does not make them unused.
+    # glib 0.18 has unsound Iterator impls. It comes in through gtk-rs 0.18, which
+    # Tauri 2's Linux webview stack pins, and there is no patched 0.18 release.
+    # Drop this when Tauri moves to gtk4.
+    { id = "RUSTSEC-2024-0429", reason = "gtk-rs 0.18 via Tauri 2 Linux webview; no fix in 0.18; drop with the gtk4 move" },
+    # proc-macro-error is unmaintained. Build-time proc-macro only, pulled in by
+    # glib-macros and gtk3-macros 0.18. No runtime code. Drop with the gtk4 move.
+    { id = "RUSTSEC-2024-0370", reason = "build-time only, via glib-macros and gtk3-macros 0.18" },
 ]
 
 [licenses]

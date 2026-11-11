@@ -838,7 +838,10 @@ export type SlashEffect =
         | "automations"
         | "connectors"
         | "history"
-        | "skills";
+        | "skills"
+        | "workboard"
+        | "devices"
+        | "updates";
     }
   | { kind: "notice"; text: string }
   | { kind: "export" }
@@ -849,7 +852,17 @@ export type SlashEffect =
   | { kind: "compact" }
   /** A destructive command waits for a yes: run `yes` when the person agrees. */
   | { kind: "confirm"; prompt: string; yes: string }
-  | { kind: "deleted"; id: string; title: string };
+  | { kind: "deleted"; id: string; title: string }
+  /** `/queue`: held until the live reply ends, or sent at once. */
+  | { kind: "queue"; text: string }
+  /** `/palette`. */
+  | { kind: "palette" }
+  /** `/view-plan`: the latest plan from Plan mode. */
+  | { kind: "viewPlan" }
+  /** `/loop <words>`: saved as an automation, then its page opens. */
+  | { kind: "loop"; seed: string }
+  /** A page opens, with a line saying why. */
+  | { kind: "openNote"; view: "settings"; text: string };
 
 export function slashHits(draft: string): Promise<SlashHit[]> {
   return invoke<SlashHit[]>("slash_hits", { draft });
@@ -3135,10 +3148,46 @@ export function codeTestForget(): Promise<CodeTestRemembered> {
   return invoke<CodeTestRemembered>("code_test_forget");
 }
 
+/** The Command page: the project folder's name and the lines it remembers. */
+export interface CommandBoxView {
+  project: string;
+  remembered: string[];
+}
+
+/** What the Command page does with a line: queue it to the agent now, ask
+ * first (a first run, or a destructive line every time), or refuse it. */
+export type CommandBoxVerdict =
+  | { verdict: "queue"; command: string; prompt: string }
+  | { verdict: "confirm"; command: string; destructive: boolean }
+  | { verdict: "blocked"; command: string; message: string };
+
+export function commandBoxView(): Promise<CommandBoxView> {
+  return invoke<CommandBoxView>("command_box_view");
+}
+
+export function commandBoxCheck(line: string): Promise<CommandBoxVerdict> {
+  return invoke<CommandBoxVerdict>("command_box_check", { line });
+}
+
+/** The yes on a first run: the checks run again, and the agent's message comes back. */
+export function commandBoxApprove(line: string): Promise<string> {
+  return invoke<string>("command_box_approve", { line });
+}
+
+export function commandBoxForget(): Promise<CommandBoxView> {
+  return invoke<CommandBoxView>("command_box_forget");
+}
+
 export function onCodeRun(
   handler: (chunk: CodeRunChunk) => void,
 ): Promise<UnlistenFn> {
   return subscribe<CodeRunChunk>("code-run", handler);
+}
+
+/** Stop the running test or deploy and everything it started (desktop app
+ * only). Resolves to false when nothing was running. */
+export function codeRunStop(): Promise<boolean> {
+  return invoke<boolean>("code_run_stop");
 }
 
 /** Code tab editor: one entry of a project folder. */
@@ -3159,6 +3208,8 @@ export interface CodeFileListing {
 export interface CodeFileText {
   path: string;
   text: string;
+  /** The project folder the file was read from; a save sends it back. */
+  root: string;
 }
 
 /** One folder of the project (desktop app only). */
@@ -3171,12 +3222,11 @@ export function codeFileRead(path: string): Promise<CodeFileText> {
   return invoke<CodeFileText>("code_file_read", { path });
 }
 
-/** Save a text file of the project; the save goes in the activity log. */
-export function codeFileWrite(
-  path: string,
-  text: string,
-): Promise<CodeFileText> {
-  return invoke<CodeFileText>("code_file_write", { path, text });
+/** Save a text file of the project; the save goes in the activity log.
+ * `root` is the project folder the file was opened from: the desktop refuses
+ * the save when that is no longer the project folder. */
+export function codeFileWrite(path: string, text: string, root: string): Promise<CodeFileText> {
+  return invoke<CodeFileText>("code_file_write", { path, text, root });
 }
 
 /** Redacted terminal output, or the news that the shell ended. */
@@ -3238,6 +3288,8 @@ export interface CodeShipPlan {
   autoBase: string;
   appMade: boolean;
   prUrl: string | null;
+  /** A push only: the repo has a pre-push hook, and this push does not run it. */
+  skipsHook: boolean;
 }
 
 /** A finished push or PR. Output is already redacted. */

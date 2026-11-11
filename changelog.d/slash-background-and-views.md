@@ -1,0 +1,1 @@
+- The desktop app runs /send, /bg, /queue, /loop, /board, /goal, /fix, /diagnose, /consult, /inspect, /hooks, /view-plan, /auto, /hub, /host, /update and /palette, and answers /workflow and /worktree the way the cabin does.

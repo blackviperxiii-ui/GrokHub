@@ -13,6 +13,7 @@ const ranHandlers = vi.hoisted(() => [] as ((run: unknown) => void)[]);
 const updateHandlers = vi.hoisted(() => [] as ((update: unknown) => void)[]);
 const api = vi.hoisted(() => ({
   CORE_ONLY: { desktopControl: false, pulse: false, localAi: false, tray: false, webAccess: false, plugins: false, library: false },
+  WEB: { desktopControl: false, pulse: true, localAi: false, tray: false, webAccess: false, plugins: false, library: false, remote: true },
   getCapabilities: vi.fn<() => Promise<Capabilities>>(),
   getSettings: vi.fn(() => Promise.resolve({ theme: "light", desktopControl: false })),
   haltDesktop: vi.fn<() => Promise<string[]>>(() => Promise.resolve([])),

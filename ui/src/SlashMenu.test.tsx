@@ -9,6 +9,7 @@ const api = vi.hoisted(() => ({
   slashHits: vi.fn<(draft: string) => Promise<SlashHit[]>>(),
   runSlash: vi.fn<(line: string) => Promise<SlashEffect>>(),
   closeChat: vi.fn<(id: string) => Promise<void>>(),
+  addAutomation: vi.fn<(text: string) => Promise<unknown[]>>(),
 }));
 
 vi.mock("./api", () => ({
@@ -19,6 +20,7 @@ vi.mock("./api", () => ({
   slashHits: api.slashHits,
   runSlash: api.runSlash,
   closeChat: api.closeChat,
+  addAutomation: api.addAutomation,
   answerElicit: vi.fn(),
   saveSettings: vi.fn(),
   answerPermission: vi.fn(),
@@ -37,7 +39,7 @@ vi.mock("./api", () => ({
   removeAttachment: vi.fn(),
 }));
 
-import { Chat, PLAN_NEXT, UNDO_NA } from "./Chat";
+import { Chat, NO_PLAN, PLAN_NEXT, UNDO_NA } from "./Chat";
 import { isSlashCommand } from "./SlashMenu";
 
 const SETTINGS: Settings = {
@@ -301,5 +303,61 @@ describe("composer slash commands", () => {
     api.runSlash.mockResolvedValueOnce({ kind: "open", view: "skills" });
     await userEvent.type(screen.getByLabelText("Message"), "/skills{Enter}");
     await waitFor(() => expect(onOpenView).toHaveBeenCalledWith("skills"));
+  });
+
+  it("/queue with nothing running sends the message as a chat turn", async () => {
+    api.runSlash.mockResolvedValueOnce({ kind: "queue", text: "then run the tests" });
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "/queue then run the tests{Enter}");
+    await waitFor(() =>
+      expect(api.sendChat).toHaveBeenCalledWith(expect.stringMatching(/^shell-/), "then run the tests", "chat"),
+    );
+  });
+
+  it("/board opens Workboards, /palette opens the palette, and /view-plan with no plan says so", async () => {
+    const onOpenView = vi.fn();
+    const onOpenPalette = vi.fn();
+    render(<Chat onOpenSettings={() => {}} onOpenView={onOpenView} onOpenPalette={onOpenPalette} />);
+    api.runSlash.mockResolvedValueOnce({ kind: "open", view: "workboard" });
+    await userEvent.type(screen.getByLabelText("Message"), "/board{Enter}");
+    await waitFor(() => expect(onOpenView).toHaveBeenCalledWith("workboard"));
+    api.runSlash.mockResolvedValueOnce({ kind: "palette" });
+    await userEvent.type(screen.getByLabelText("Message"), "/palette{Enter}");
+    await waitFor(() => expect(onOpenPalette).toHaveBeenCalledTimes(1));
+    api.runSlash.mockResolvedValueOnce({ kind: "viewPlan" });
+    await userEvent.type(screen.getByLabelText("Message"), "/view-plan{Enter}");
+    expect(await screen.findByRole("status", { name: "/view-plan result" })).toHaveTextContent(NO_PLAN);
+    expect(NO_PLAN).toBe("No plan yet. Use Plan mode.");
+  });
+
+  it("/loop saves its words as an automation and opens Automations; words with no time say why", async () => {
+    const onOpenView = vi.fn();
+    render(<Chat onOpenSettings={() => {}} onOpenView={onOpenView} />);
+    api.addAutomation.mockResolvedValueOnce([]);
+    api.runSlash.mockResolvedValueOnce({ kind: "loop", seed: "every day at 9 summarize my inbox" });
+    await userEvent.type(screen.getByLabelText("Message"), "/loop every day at 9 summarize my inbox{Enter}");
+    await waitFor(() => expect(api.addAutomation).toHaveBeenCalledWith("every day at 9 summarize my inbox"));
+    await waitFor(() => expect(onOpenView).toHaveBeenCalledWith("automations"));
+    expect(await screen.findByRole("status", { name: "/loop result" })).toHaveTextContent(
+      "Scheduled: every day at 9 summarize my inbox",
+    );
+    api.addAutomation.mockRejectedValueOnce("Say when, like \"every weekday at 9am summarize my inbox\".");
+    api.runSlash.mockResolvedValueOnce({ kind: "loop", seed: "summarize my inbox" });
+    await userEvent.type(screen.getByLabelText("Message"), "/loop summarize my inbox{Enter}");
+    await waitFor(() => expect(screen.getAllByRole("status", { name: "/loop result" })).toHaveLength(2));
+    expect(onOpenView).toHaveBeenCalledTimes(1);
+  });
+
+  it("/auto opens Settings with the line saying where approvals live", async () => {
+    const onOpenView = vi.fn();
+    render(<Chat onOpenSettings={() => {}} onOpenView={onOpenView} />);
+    api.runSlash.mockResolvedValueOnce({
+      kind: "openNote",
+      view: "settings",
+      text: "Permissions are set in Settings → Defaults, under When the AI wants to change things",
+    });
+    await userEvent.type(screen.getByLabelText("Message"), "/auto{Enter}");
+    await waitFor(() => expect(onOpenView).toHaveBeenCalledWith("settings"));
+    expect(await screen.findByRole("status", { name: "/auto result" })).toHaveTextContent("Defaults");
   });
 });

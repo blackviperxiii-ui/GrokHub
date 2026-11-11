@@ -31,6 +31,9 @@ pub(super) struct OpenFile {
     /// The project folder the file was opened from. Saves go back there even
     /// when the cabin's project changes while edits are unsaved.
     pub(super) workspace: PathBuf,
+    /// That folder with links resolved, as the read returned it. A save
+    /// sends it back and is refused when the folder is a different one now.
+    pub(super) root: String,
     /// The path from the project root, with `/` between parts.
     pub(super) path: String,
     /// The text in the editor box.
@@ -187,6 +190,7 @@ impl CodeEditor {
                 self.note = None;
                 self.open = Some(OpenFile {
                     workspace: ws,
+                    root: got.root,
                     path: got.path,
                     saved: got.text.clone(),
                     text: got.text,
@@ -216,11 +220,12 @@ impl CodeEditor {
             return false;
         };
         let (tx, rx) = mpsc::channel();
-        let (config, ws, path, text) = (
+        let (config, ws, path, text, root) = (
             config_dir.to_path_buf(),
             open.workspace.clone(),
             open.path.clone(),
             open.text.clone(),
+            open.root.clone(),
         );
         self.saving = Some(Saving {
             workspace: ws.clone(),
@@ -232,7 +237,7 @@ impl CodeEditor {
         std::thread::spawn(move || {
             let keep = keep
                 .unwrap_or_else(|| grokhub_code::ship::load_from_shell_json(&config).activity_keep);
-            let _ = tx.send(files::write_logged(&config, &ws, &path, &text, keep));
+            let _ = tx.send(files::write_logged(&config, &ws, &path, &text, &root, keep));
         });
         true
     }

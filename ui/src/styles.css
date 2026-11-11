@@ -4625,10 +4625,41 @@ label.toggle-row {
   min-height: 0;
 }
 
+/* The tab itself scrolls, so no section gives up height: one that could
+   shrink is squeezed to nothing and paints over the section below it. */
+.code > * {
+  flex-shrink: 0;
+}
+
+.code > .code-split > .rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* A long list scrolls in place, beside the diff a click opens. The padding
+   (taken back by the margin) leaves room for a row's focus ring, which the
+   scroll box would cut off. */
+.code > .code-split > .code-changed {
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: 4px;
+  margin: -4px;
+}
+
 .code-file {
   width: 100%;
   text-align: start;
   font-family: ui-monospace, monospace;
+  overflow-wrap: anywhere;
+}
+
+.code-file[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 .code-status {
@@ -4647,9 +4678,22 @@ label.toggle-row {
   white-space: pre;
 }
 
+/* The panes that scroll take keyboard focus, so they show where it is. */
+.code-activity:focus-visible,
+.code-diff:focus-visible,
+.code-log:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 @media (max-width: 720px) {
   .code-split {
     grid-template-columns: 1fr;
+  }
+
+  /* The diff is under the list here: a shorter list leaves it room on screen. */
+  .code > .code-split > .code-changed {
+    max-height: 35vh;
   }
 }
 
@@ -4698,7 +4742,12 @@ label.toggle-row {
   margin-top: 8px;
 }
 
-.code-tests h3 {
+.code-deploy {
+  margin-top: 8px;
+}
+
+.code-tests h3,
+.code-deploy h3 {
   margin: 0 0 8px;
   font-size: var(--font-body);
   font-weight: 600;
@@ -4738,8 +4787,55 @@ label.toggle-row {
   margin-top: 8px;
 }
 
+/* Command line: a `$` before the box, and short lists of past lines. */
+.code-test-row .command-box-line {
+  flex: 1 1 16rem;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.code-test-row .command-box-line input {
+  flex: 1;
+  font-family: ui-monospace, monospace;
+}
+
+.command-box-prompt {
+  font-family: ui-monospace, monospace;
+  color: var(--muted);
+}
+
+.command-box-list {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .code-settings .toggle-row {
   margin: 8px 0;
+}
+
+/* A short set of radio choices (Settings → Code → Mode, About → Channel). */
+fieldset.channel {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  margin: 0 0 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Settings stacks a label over its field; a radio sits beside its text. */
+fieldset.channel label {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
 }
 
 /* Every card's buttons: one neat row. Like first, Dismiss last at the far
@@ -4843,6 +4939,8 @@ label.toggle-row {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  max-height: 40vh;
+  overflow-y: auto;
 }
 
 .code-activity-row {
@@ -4949,11 +5047,6 @@ label.toggle-row {
   padding: 4px 8px;
 }
 
-.code-tree .code-file[aria-pressed="true"] {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-}
-
 .code-editor-pane {
   display: flex;
   flex-direction: column;
@@ -4993,6 +5086,10 @@ label.toggle-row {
 
 .code-editor-host .cm-editor.cm-focused {
   outline: none;
+}
+
+/* The ring goes on the frame: inside it, the frame's own clipping cuts it off. */
+.code-editor-host:focus-within {
   box-shadow: var(--ring);
 }
 

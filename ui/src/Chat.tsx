@@ -10,6 +10,7 @@ import {
   type KeyboardEvent,
 } from "react";
 import {
+  addAutomation,
   answerElicit,
   answerPermission,
   cancelChat,
@@ -122,9 +123,15 @@ export interface Prefill {
   text: string;
   n: number;
   conversationId?: string;
+  /** Send it as a chat message instead of filling the box (the Command
+   * line's run); behind a running reply it waits its turn. */
+  send?: boolean;
 }
 
 const PLACEHOLDER = `Message ${PRODUCT_NAME}`;
+
+/** `/view-plan` before any plan was made. */
+export const NO_PLAN = "No plan yet. Use Plan mode.";
 
 /** Bare `/plan`: the next message plans first. */
 export const PLAN_NEXT = "Your next message gets a plan first.";
@@ -507,6 +514,7 @@ export function Chat({
   onOpenSettings,
   onSignIn = onOpenSettings,
   onOpenView,
+  onOpenPalette,
   onQueue,
   queueAct,
   prefill,
@@ -523,6 +531,8 @@ export function Chat({
   /** `/memory`, `/connectors` and the like open their page, and so does a
    * chip that goes somewhere. */
   onOpenView?: (view: View) => void;
+  /** `/palette` opens the command palette. */
+  onOpenPalette?: () => void;
   /** The messages waiting behind the running reply, for the Activity menu. */
   onQueue?: (conversationId: string, texts: string[]) => void;
   /** Steer now or Remove, pressed on a queued row in the Activity menu. A new
@@ -563,7 +573,7 @@ export function Chat({
   const [queue, setQueue] = useState<string[]>([]);
   const queueRef = useRef<string[]>([]);
   /** The queued message whose turn came: it sends after this render. */
-  const [nextUp, setNextUp] = useState<{ text: string; n: number }>();
+  const [nextUp, setNextUp] = useState<{ text: string; n: number; as?: SessionMode }>();
   /** `/plan` or `/chat` named how the next message runs; otherwise the app reads it. */
   const nextAs = useRef<SessionMode | undefined>(undefined);
   /** Questions answered beside the running reply. */
@@ -742,6 +752,12 @@ export function Chat({
       setEarlier(0);
       setError(null);
       setConversationId(to);
+    }
+    if (next.send && next.text) {
+      touched.current = true;
+      if (busyRef.current) changeQueue([...queueRef.current, next.text]);
+      else setNextUp((now) => ({ text: next.text, n: (now?.n ?? 0) + 1, as: "chat" }));
+      return;
     }
     // Opening the chat that is already open brings no text: keep what is typed.
     setDraft((now) => (switched || next.text ? next.text : now));
@@ -1108,6 +1124,34 @@ export function Chat({
         startFresh();
         setItems([{ kind: "slash", command, text: `Deleted ${effect.title}` }]);
         break;
+      case "queue":
+        if (busyRef.current) changeQueue([...queueRef.current, effect.text]);
+        else void deliver(effect.text, [], false, "chat");
+        break;
+      case "palette":
+        onOpenPalette?.();
+        break;
+      case "viewPlan": {
+        const plan = [...items].reverse().find((it) => it.kind === "elicit" && it.server === "Plan");
+        setItems((now) => [
+          ...now,
+          { kind: "slash", command, text: plan?.kind === "elicit" ? plan.message : NO_PLAN },
+        ]);
+        break;
+      }
+      case "loop":
+        try {
+          await addAutomation(effect.seed);
+          setItems((now) => [...now, { kind: "slash", command, text: `Scheduled: ${effect.seed}` }]);
+          onOpenView?.("automations");
+        } catch (err) {
+          setItems((now) => [...now, { kind: "slash", command, text: String(err) }]);
+        }
+        break;
+      case "openNote":
+        setItems((now) => [...now, { kind: "slash", command, text: effect.text }]);
+        onOpenView?.(effect.view);
+        break;
     }
   }
 
@@ -1247,11 +1291,11 @@ export function Chat({
     if (act.op === "remove") removeQueued(act.index);
     else void steerQueued(act.index);
   });
-  const sendNext = useEffectEvent((text: string) => void deliver(text, [], false));
+  const sendNext = useEffectEvent((text: string, as?: SessionMode) => void deliver(text, [], false, as));
   useEffect(() => {
     if (!nextUp) return;
-    const text = nextUp.text;
-    const timer = window.setTimeout(() => sendNext(text), 0);
+    const { text, as } = nextUp;
+    const timer = window.setTimeout(() => sendNext(text, as), 0);
     return () => window.clearTimeout(timer);
   }, [nextUp]);
   useEffect(() => {

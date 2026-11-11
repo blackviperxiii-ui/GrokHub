@@ -1,9 +1,9 @@
 import "@testing-library/jest-dom/vitest";
 import { Activity } from "react";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CodeBuiltin, CodeDiff, CodeRepo } from "./api";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { CodeBuiltin, CodeDeployPlan, CodeDiff, CodeFileListing, CodeRepo } from "./api";
 
 const api = vi.hoisted(() => ({
   codeRepo: vi.fn<() => Promise<CodeRepo>>(),
@@ -11,6 +11,10 @@ const api = vi.hoisted(() => ({
   codeBuiltins: vi.fn<() => Promise<CodeBuiltin[]>>(),
   codeTestPlan: vi.fn<(command?: string | null) => Promise<{ command: string; needsConfirm: boolean; remembered: string | null }>>(),
   codeTestRun: vi.fn<(command: string, confirmed: boolean) => Promise<{ command: string; exit: number; output: string; cut: boolean }>>(),
+  codeRunStop: vi.fn<() => Promise<boolean>>(),
+  codeFilesList: vi.fn<(path: string) => Promise<CodeFileListing>>(),
+  codeFileRead: vi.fn(),
+  codeFileWrite: vi.fn(),
   onCodeRun: vi.fn(() => Promise.resolve(() => {})),
   codeShipPlan: vi.fn((action: "push" | "pr") =>
     Promise.resolve({
@@ -23,27 +27,21 @@ const api = vi.hoisted(() => ({
       autoBase: "beta",
       appMade: false,
       prUrl: null,
+      skipsHook: false,
     }),
   ),
   codeShipRun: vi.fn(),
   codeNewBranch: vi.fn(),
   codeActivity: vi.fn(() => Promise.resolve([])),
-  codeDeployPlan: vi.fn(() =>
-    Promise.resolve({
-      deployEnabled: false,
-      command: "",
-      needsConfirm: true,
-      remembered: null,
-      mode: "ask",
-      blocked: "Deploy is off for this project. Turn it on in Settings → Code.",
-    }),
-  ),
-  codeDeployRun: vi.fn(),
+  codeDeployPlan: vi.fn<() => Promise<CodeDeployPlan>>(),
+  codeDeployRun: vi.fn<(command: string, confirmed: boolean) => Promise<{ command: string; exit: number; output: string; cut: boolean }>>(),
   onCodeDeployRun: vi.fn(() => Promise.resolve(() => {})),
 }));
 
 vi.mock("./api", () => api);
 vi.mock("./Chat", () => ({ newConversationId: () => "shell-new" }));
+// The terminal has its own tests; here it would only pull in its screen widget.
+vi.mock("./CodeTerminal", () => ({ default: () => null }));
 
 import { Code, CODE_BUILTINS, CODE_CLEAN, CODE_CONFIRM, CODE_NEXT, CODE_NOT_REPO, CODE_REVIEW_PROMPT, CODE_TESTS, overrideLabel } from "./Code";
 
@@ -88,6 +86,25 @@ describe("Code tab", () => {
     api.onCodeRun.mockResolvedValue(() => {});
     api.codeTestPlan.mockResolvedValue({ command: "cargo test", needsConfirm: true, remembered: null });
     api.codeTestRun.mockResolvedValue({ command: "cargo test", exit: 0, output: "test ok\n", cut: false });
+    api.codeRunStop.mockReset();
+    api.codeRunStop.mockResolvedValue(true);
+    api.codeFilesList.mockReset();
+    api.codeFilesList.mockResolvedValue({ path: "", entries: [{ name: "README.md", path: "README.md", dir: false }], more: false });
+    api.codeActivity.mockClear();
+    api.codeDeployRun.mockReset();
+    api.codeDeployPlan.mockReset();
+    api.codeDeployPlan.mockResolvedValue({
+      deployEnabled: false,
+      command: "",
+      needsConfirm: true,
+      remembered: null,
+      mode: "ask",
+      blocked: "Deploy is off for this project. Turn it on in Settings → Code.",
+    });
+  });
+
+  afterEach(() => {
+    Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
   });
 
   it("shows the branch and changed files, and opens a diff", async () => {
@@ -401,5 +418,195 @@ describe("Code tab", () => {
     await userEvent.click(screen.getByRole("button", { name: "Run tests" }));
     expect(await screen.findByLabelText("Command to run")).toHaveTextContent("cargo test -- --ignored");
     expect(api.codeTestRun).not.toHaveBeenCalled();
+  });
+
+  it("draws a changed file as a quiet row, and its diff as a region the keyboard can scroll", async () => {
+    api.codeRepo.mockResolvedValue(repo());
+    api.codeDiff.mockResolvedValue({ path: "src/a.rs", text: "-old\n+new\n", cut: false });
+    render(<Code onTask={() => {}} />);
+    const row = await screen.findByRole("button", { name: /src\/a\.rs/ });
+    expect(row).toHaveClass("code-file", "quiet", "modified");
+    await userEvent.click(row);
+    const diff = await screen.findByRole("region", { name: "Diff of src/a.rs" });
+    expect(diff).toHaveAttribute("tabindex", "0");
+    expect(diff).toHaveTextContent("+new");
+  });
+
+  it("marks the changed-files list as the one that scrolls beside the diff", async () => {
+    api.codeRepo.mockResolvedValue(repo());
+    render(<Code onTask={() => {}} />);
+    expect(await screen.findByRole("list", { name: "Changed files" })).toHaveClass("rows", "code-changed");
+  });
+
+  it("gives the test output and a skill's body a role and a place in the tab order", async () => {
+    api.codeRepo.mockResolvedValue(repo({ files: [] }));
+    api.codeBuiltins.mockResolvedValue([{ name: "follow-through", description: "Ledger.", body: "# Follow Through", overriddenBy: null }]);
+    api.codeTestPlan.mockResolvedValue({ command: "cargo test", needsConfirm: false, remembered: "cargo test" });
+    render(<Code onTask={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText("Test command")).toHaveValue("cargo test"));
+    await userEvent.click(screen.getByRole("button", { name: "Run tests" }));
+    const output = await screen.findByRole("log", { name: "Test output" });
+    expect(output).toHaveAttribute("tabindex", "0");
+    expect(output).toHaveTextContent("test ok");
+    await userEvent.click(screen.getByRole("button", { name: /^follow-through/ }));
+    expect(screen.getByRole("region", { name: "Built-in skill follow-through" })).toHaveAttribute("tabindex", "0");
+  });
+
+  it("moves focus to Cancel when the test confirm card appears", async () => {
+    api.codeRepo.mockResolvedValue(repo({ files: [] }));
+    render(<Code onTask={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText("Test command")).toHaveValue("cargo test"));
+    await userEvent.click(screen.getByRole("button", { name: "Run tests" }));
+    const card = await screen.findByRole("group", { name: CODE_CONFIRM });
+    expect(document.activeElement).toBe(within(card).getByRole("button", { name: "Cancel" }));
+  });
+
+  it("a running test shows Stop beside it, and Stop ends the run", async () => {
+    api.codeRepo.mockResolvedValue(repo({ files: [] }));
+    api.codeTestPlan.mockResolvedValue({ command: "cargo test", needsConfirm: false, remembered: "cargo test" });
+    let finish: (result: { command: string; exit: number; output: string; cut: boolean }) => void = () => {};
+    api.codeTestRun.mockImplementationOnce(() => new Promise((done) => (finish = done)));
+    render(<Code onTask={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText("Test command")).toHaveValue("cargo test"));
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Run tests" }));
+    const running = await screen.findByRole("button", { name: "Running…" });
+    expect(running).toBeDisabled();
+    const stop = screen.getByRole("button", { name: "Stop" });
+    expect(running.nextElementSibling).toBe(stop);
+    await userEvent.click(stop);
+    expect(api.codeRunStop).toHaveBeenCalledTimes(1);
+    expect(api.codeRunStop).toHaveBeenCalledWith();
+    await act(async () => finish({ command: "cargo test", exit: -1, output: "running 12 tests\n", cut: false }));
+    expect(await screen.findByText("Tests stopped.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Run tests" })).toBeEnabled();
+    expect(screen.getByRole("log", { name: "Test output" })).toHaveTextContent("running 12 tests");
+  });
+
+  it("says why a run could not be stopped", async () => {
+    api.codeRepo.mockResolvedValue(repo({ files: [] }));
+    api.codeTestPlan.mockResolvedValue({ command: "cargo test", needsConfirm: false, remembered: "cargo test" });
+    api.codeTestRun.mockImplementationOnce(() => new Promise(() => {}));
+    api.codeRunStop.mockRejectedValue("The run could not be stopped.");
+    render(<Code onTask={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText("Test command")).toHaveValue("cargo test"));
+    await userEvent.click(screen.getByRole("button", { name: "Run tests" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Stop" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("The run could not be stopped.");
+    expect(screen.getByRole("button", { name: "Stop" })).toBeEnabled();
+  });
+
+  /** Start a run whose answer the test gives by hand, and wait for its Stop button. */
+  async function startHeldRun() {
+    let finish: (result: { command: string; exit: number; output: string; cut: boolean }) => void = () => {};
+    api.codeTestRun.mockImplementationOnce(() => new Promise((done) => (finish = done)));
+    await userEvent.click(screen.getByRole("button", { name: "Run tests" }));
+    const stop = await screen.findByRole("button", { name: "Stop" });
+    return { stop, finish: (exit: number, output: string) => act(async () => finish({ command: "cargo test", exit, output, cut: false })) };
+  }
+
+  /** The Tests section with a command that runs without asking. */
+  async function testsReady() {
+    api.codeRepo.mockResolvedValue(repo({ files: [] }));
+    api.codeTestPlan.mockResolvedValue({ command: "cargo test", needsConfirm: false, remembered: "cargo test" });
+    render(<Code onTask={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText("Test command")).toHaveValue("cargo test"));
+  }
+
+  it("a Stop that stopped nothing leaves the run's own exit code on screen", async () => {
+    await testsReady();
+    // Nothing was running any more, or the kill itself failed.
+    api.codeRunStop.mockResolvedValue(false);
+    const run = await startHeldRun();
+    await userEvent.click(run.stop);
+    expect(api.codeRunStop).toHaveBeenCalledTimes(1);
+    await run.finish(101, "test result: FAILED. 3 failed\n");
+    expect(await screen.findByRole("status")).toHaveTextContent(/^Tests exited with 101\.$/);
+    expect(screen.getByRole("log", { name: "Test output" })).toHaveTextContent("test result: FAILED. 3 failed");
+  });
+
+  it("a run that fails after an earlier run was stopped shows its own exit code", async () => {
+    await testsReady();
+    const first = await startHeldRun();
+    await userEvent.click(first.stop);
+    await first.finish(-1, "running 12 tests\n");
+    expect(await screen.findByRole("status")).toHaveTextContent(/^Tests stopped\.$/);
+
+    const second = await startHeldRun();
+    await second.finish(1, "test result: FAILED. 1 failed\n");
+    expect(await screen.findByRole("status")).toHaveTextContent(/^Tests exited with 1\.$/);
+    expect(api.codeRunStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("a run that passes just as Stop is pressed is reported as passed", async () => {
+    await testsReady();
+    const run = await startHeldRun();
+    await userEvent.click(run.stop);
+    await run.finish(0, "test result: ok. 12 passed\n");
+    expect(await screen.findByRole("status")).toHaveTextContent(/^Tests passed\.$/);
+  });
+
+  it("a Stop that failed does not label the run's later failure as stopped", async () => {
+    await testsReady();
+    api.codeRunStop.mockRejectedValue("The run could not be stopped.");
+    const run = await startHeldRun();
+    await userEvent.click(run.stop);
+    expect(await screen.findByRole("status")).toHaveTextContent(/^The run could not be stopped\.$/);
+    await run.finish(1, "test result: FAILED. 1 failed\n");
+    expect(await screen.findByRole("status")).toHaveTextContent(/^Tests exited with 1\.$/);
+  });
+
+  it("a second Stop that finds nothing left to stop does not undo the first", async () => {
+    await testsReady();
+    const run = await startHeldRun();
+    await userEvent.click(run.stop);
+    // The run is on its way out: the desktop has nothing left to kill.
+    api.codeRunStop.mockResolvedValueOnce(false);
+    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+    api.codeRunStop.mockRejectedValueOnce("The run could not be stopped.");
+    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+    expect(api.codeRunStop).toHaveBeenCalledTimes(3);
+    await run.finish(-1, "running 12 tests\n");
+    expect(await screen.findByRole("status")).toHaveTextContent(/^Tests stopped\.$/);
+  });
+
+  it("a deploy that finishes reads the activity list again and keeps the Push and PR section as it was", async () => {
+    api.codeRepo.mockResolvedValue(repo({ files: [] }));
+    api.codeDeployPlan.mockResolvedValue({
+      deployEnabled: true,
+      command: "npm run deploy",
+      needsConfirm: false,
+      remembered: "npm run deploy",
+      mode: "autoBeta",
+      blocked: null,
+    });
+    api.codeDeployRun.mockResolvedValue({ command: "npm run deploy", exit: 0, output: "done\n", cut: false });
+    render(<Code onTask={() => {}} />);
+    await userEvent.type(await screen.findByLabelText("New branch"), "code/keep-me");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Deploy" })).toBeEnabled());
+    expect(api.codeActivity).toHaveBeenCalledTimes(1);
+    await userEvent.click(screen.getByRole("button", { name: "Deploy" }));
+    expect(await screen.findByText("Deploy finished.")).toBeInTheDocument();
+    await waitFor(() => expect(api.codeActivity).toHaveBeenCalledTimes(2));
+    await settle();
+    expect(screen.getByLabelText("New branch")).toHaveValue("code/keep-me");
+  });
+
+  it("Refresh lists the editor's folder again", async () => {
+    Object.assign(window, { __TAURI_INTERNALS__: {} });
+    api.codeRepo.mockResolvedValue(repo({ files: [] }));
+    render(<Code onTask={() => {}} />);
+    expect(await screen.findByRole("button", { name: "README.md" })).toBeInTheDocument();
+    expect(api.codeFilesList.mock.calls).toEqual([[""]]);
+    // A file made outside the app.
+    api.codeFilesList.mockResolvedValue({
+      path: "",
+      entries: ["README.md", "made-outside.txt"].map((name) => ({ name, path: name, dir: false })),
+      more: false,
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(await screen.findByRole("button", { name: "made-outside.txt" })).toBeInTheDocument();
+    expect(api.codeFilesList.mock.calls).toEqual([[""], [""]]);
   });
 });
