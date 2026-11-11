@@ -74,7 +74,8 @@ pub fn fullscreen() -> Option<bool> {
         use windows_sys::Win32::UI::Shell::SHQueryUserNotificationState;
         let mut state = 0;
         // SAFETY: an out-pointer to a local i32.
-        (unsafe { SHQueryUserNotificationState(&mut state) } >= 0).then(|| matches!(state, 3 | 4))
+        let ok = unsafe { SHQueryUserNotificationState(&mut state) } >= 0;
+        ok.then_some(matches!(state, 3 | 4))
     }
     #[cfg(not(windows))]
     {
