@@ -2,7 +2,7 @@
 // them without loading Settings.
 import type { Capabilities } from "./api";
 
-export type Section = "general" | "account" | "defaults" | "behavior" | "appearance" | "personality" | "playbooks" | "permissions" | "privacy" | "background" | "autoSetup" | "code" | "pulse" | "localAi" | "aiModels" | "webAccess" | "labs" | "about";
+export type Section = "general" | "account" | "defaults" | "behavior" | "appearance" | "personality" | "playbooks" | "permissions" | "privacy" | "background" | "autoSetup" | "pcHelpers" | "code" | "pulse" | "localAi" | "aiModels" | "webAccess" | "labs" | "about";
 
 export const SECTION_LABELS: Record<Section, string> = {
   general: "General",
@@ -16,6 +16,7 @@ export const SECTION_LABELS: Record<Section, string> = {
   privacy: "Privacy & data",
   background: "Background",
   autoSetup: "Auto setup",
+  pcHelpers: "PC helpers",
   code: "Code",
   pulse: "Pulse",
   localAi: "Local AI",
@@ -39,6 +40,7 @@ export function sections(caps: Capabilities): Section[] {
     "privacy",
     "background",
     ...(caps.autoSetup ? (["autoSetup"] as const) : []),
+    ...(caps.autoSetup ? (["pcHelpers"] as const) : []),
     ...(caps.code ? (["code"] as const) : []),
     ...(caps.pulse ? (["pulse"] as const) : []),
     ...(caps.localAi ? (["localAi"] as const) : []),
@@ -67,7 +69,7 @@ const CATEGORY_SECTIONS: Record<SettingsCategory, readonly Section[]> = {
   account: ["account"],
   look: ["appearance"],
   ai: ["defaults", "personality", "playbooks", "pulse", "localAi", "aiModels"],
-  pc: ["general", "behavior", "background", "autoSetup", "code"],
+  pc: ["general", "behavior", "background", "autoSetup", "pcHelpers", "code"],
   privacy: ["privacy", "permissions", "webAccess"],
   // About first: the version is what people come here for.
   help: ["about", "labs"],

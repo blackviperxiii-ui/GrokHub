@@ -24,6 +24,7 @@ mod pixels;
 mod portal;
 #[cfg(target_os = "linux")]
 pub mod screen;
+pub mod signals;
 #[cfg(windows)]
 mod uia;
 #[cfg(target_os = "linux")]
