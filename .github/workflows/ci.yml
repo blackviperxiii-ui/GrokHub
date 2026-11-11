@@ -163,10 +163,12 @@ jobs:
               - 'crates/grokhub-code/**'
               - 'crates/grokhub-desktop/**'
               - 'crates/grokhub-fps-probe/**'
+              - 'crates/grokhub-hub/**'
               - 'crates/grokhub-proto/**'
               - 'scripts/shell-fps-probe.mjs'
               - 'scripts/stage-hub-sidecar.mjs'
               - '.github/workflows/ci.yml'
+              - '.github/workflows/release.yml'
       # Shell matrix: PRs run ubuntu only, when shell/UI paths change (the
       # Windows WebView2 smoke runs on merge_group, push to main, tags, nightly
       # and manual); push to beta runs none (nightly covers it); tags, nightly
@@ -405,7 +407,7 @@ jobs:
         os: ${{ fromJSON(needs.changes.outputs.shell_os) }}
     name: shell (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
