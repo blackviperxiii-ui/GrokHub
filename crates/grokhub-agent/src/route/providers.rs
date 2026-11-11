@@ -27,7 +27,7 @@ use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -225,10 +225,18 @@ pub fn providers_path(config_dir: &Path) -> PathBuf {
 }
 
 /// The providers you added, oldest first. None on a fresh config.
+///
+/// A key is saved under the provider's id, and the id comes from the address.
+/// A row whose address no longer passes [`parse_base_url`] (plain http, a
+/// private host) or no longer gives that id (the file was edited to point at
+/// another host) is skipped, so its key is never sent there.
 pub fn load_providers(config_dir: &Path) -> Vec<Provider> {
     read_json::<ProviderList>(&providers_path(config_dir))
         .map(|l| l.providers)
         .unwrap_or_default()
+        .into_iter()
+        .filter(|p| parse_base_url(&p.base_url).is_ok_and(|(_, _, id)| id == p.id))
+        .collect()
 }
 
 fn save_providers(config_dir: &Path, providers: &[Provider]) -> Result<(), String> {
@@ -279,6 +287,11 @@ pub fn check_key(key: &str) -> Result<&str, String> {
     Ok(key)
 }
 
+/// What adding says when the key can't go into the keyring.
+pub const KEYRING_OFF: &str = "The keyring isn't available, so the key wasn't saved.";
+/// What removing says for an id that isn't in the saved list.
+pub const NOT_ADDED: &str = "That provider isn't added.";
+
 /// [`add_provider`] with the API shape you picked; `None` detects it from the host.
 /// A proxy that speaks Anthropic's API under another host needs the pick.
 pub fn add_provider_as(
@@ -291,9 +304,11 @@ pub fn add_provider_as(
     let (url, detected, id) = parse_base_url(base_url)?;
     let kind = kind.unwrap_or(detected);
     let key = check_key(key)?;
+    // The keyring library's own message says nothing a person can act on.
     vault_for(config_dir)
-        .ok_or_else(|| "The keyring isn't available, so the key wasn't saved.".to_string())?
-        .set(&id, key)?;
+        .ok_or_else(|| KEYRING_OFF.to_string())?
+        .set(&id, key)
+        .map_err(|_| KEYRING_OFF.to_string())?;
     forget_key_cache(config_dir, &id);
     forget_listing(config_dir, &id);
     let mut all = load_providers(config_dir);
@@ -312,13 +327,22 @@ pub fn add_provider_as(
 }
 
 /// Remove a provider and its key. Its grant stays in Settings → Permissions until you revoke it.
+///
+/// Only an id in the saved list is removed, so the caller's text never names a
+/// keyring entry or a file. While the keyring can't delete the key the
+/// provider stays listed: the row is the only sign a key may still be there.
 pub fn remove_provider(config_dir: &Path, id: &str) -> Result<(), String> {
+    let mut all = load_providers(config_dir);
+    if !all.iter().any(|p| p.id == id) {
+        return Err(NOT_ADDED.into());
+    }
     if let Some(v) = vault_for(config_dir) {
-        v.delete(id)?;
+        v.delete(id).map_err(|_| {
+            format!("The keyring isn't available, so {id} wasn't removed. Try again when it is.")
+        })?;
     }
     forget_key_cache(config_dir, id);
     forget_listing(config_dir, id);
-    let mut all = load_providers(config_dir);
     all.retain(|p| p.id != id);
     save_providers(config_dir, &all)
 }
@@ -481,16 +505,45 @@ impl KeyVault for MemoryVault {
     }
 }
 
-type VaultSlot = Option<Arc<dyn KeyVault>>;
+pub(super) type VaultSlot = Option<Arc<dyn KeyVault>>;
 static DEFAULT_VAULT: Mutex<VaultSlot> = Mutex::new(None);
 static VAULTS: Mutex<Vec<(PathBuf, Arc<dyn KeyVault>)>> = Mutex::new(Vec::new());
 /// Whether a key is there, per (config dir, provider), so routing doesn't ask the keyring every call.
-static HAS_KEY: Mutex<BTreeMap<(PathBuf, String), bool>> = Mutex::new(BTreeMap::new());
+static HAS_KEY: Mutex<BTreeMap<(PathBuf, String), KeyKnown>> = Mutex::new(BTreeMap::new());
+
+/// How long a keyring that could not be read is left alone before it is asked
+/// again. Routing asks on every call and the cabin's Settings on every repaint.
+pub const KEY_RETRY: Duration = Duration::from_secs(5);
+
+/// What is known about one provider's key.
+#[derive(Clone, Copy)]
+enum KeyKnown {
+    /// The keyring answered: a key is saved, or none is.
+    Answered(bool),
+    /// No keyring yet, or it could not be read (locked, not started). That is
+    /// not an answer, so it is asked again from this moment on.
+    AskAgainAt(Instant),
+}
 
 /// `grokhub` calls this once at start. Until then (and in tests) there is no
 /// vault: no key reads as present and nothing can be saved.
 pub fn use_os_vault() {
-    *DEFAULT_VAULT.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(OsKeyVault));
+    // Calling it again keeps the vault and what it already answered.
+    if DEFAULT_VAULT
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .is_some()
+    {
+        return;
+    }
+    use_default_vault(Some(Arc::new(OsKeyVault)));
+}
+
+/// The vault every config dir without one of its own uses. What the vault
+/// before it answered is forgotten.
+pub(super) fn use_default_vault(vault: VaultSlot) {
+    *DEFAULT_VAULT.lock().unwrap_or_else(|e| e.into_inner()) = vault;
+    HAS_KEY.lock().unwrap_or_else(|e| e.into_inner()).clear();
 }
 
 /// Use `vault` for this config dir only (tests).
@@ -526,27 +579,50 @@ fn forget_key_cache(config_dir: &Path, id: &str) {
         .remove(&(config_dir.to_path_buf(), id.to_string()));
 }
 
-fn key(config_dir: &Path, id: &str) -> Option<Zeroizing<String>> {
+/// The key the keyring holds for `id`. `Err` when there is no keyring yet or
+/// it could not be read, which says nothing about whether a key is saved.
+fn read_key(config_dir: &Path, id: &str) -> Result<Option<Zeroizing<String>>, ()> {
     let _lap = crate::timing::lap("route:provider_key_read");
-    vault_for(config_dir)?
-        .get(id)
-        .ok()
-        .flatten()
-        .filter(|k| !k.trim().is_empty())
+    let found = vault_for(config_dir).ok_or(())?.get(id).map_err(|_| ())?;
+    Ok(found.filter(|k| !k.trim().is_empty()))
 }
 
-/// A key for this provider is in the keyring.
+fn key(config_dir: &Path, id: &str) -> Option<Zeroizing<String>> {
+    read_key(config_dir, id).ok().flatten()
+}
+
+/// A key for this provider is in the keyring. Only an answer the keyring gave
+/// is remembered for good: with no keyring yet, or one that could not be read
+/// (locked, not started), this is `false` for now and the keyring is asked
+/// again after [`KEY_RETRY`].
 pub fn has_key(config_dir: &Path, id: &str) -> bool {
+    has_key_at(config_dir, id, Instant::now())
+}
+
+/// [`has_key`] at `now`.
+pub(super) fn has_key_at(config_dir: &Path, id: &str, now: Instant) -> bool {
     let slot = (config_dir.to_path_buf(), id.to_string());
-    if let Some(have) = HAS_KEY.lock().unwrap_or_else(|e| e.into_inner()).get(&slot) {
-        return *have;
+    let known = HAS_KEY
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&slot)
+        .copied();
+    match known {
+        Some(KeyKnown::Answered(have)) => return have,
+        Some(KeyKnown::AskAgainAt(at)) if now < at => return false,
+        _ => {}
     }
-    let have = key(config_dir, id).is_some();
+    let began = Instant::now();
+    let known = match read_key(config_dir, id) {
+        Ok(found) => KeyKnown::Answered(found.is_some()),
+        // A keyring that took long to fail is left alone for longer.
+        Err(()) => KeyKnown::AskAgainAt(now + KEY_RETRY.max(began.elapsed() * 10)),
+    };
     HAS_KEY
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .insert(slot, have);
-    have
+        .insert(slot, known);
+    matches!(known, KeyKnown::Answered(true))
 }
 
 // ---- What the router may use -------------------------------------------------

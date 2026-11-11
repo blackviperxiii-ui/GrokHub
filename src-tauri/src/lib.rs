@@ -4708,6 +4708,9 @@ pub fn run() {
             // The router takes Local AI's switch, OpenRouter's policy and the
             // spend limits from the cabin's settings from the start.
             grokhub_agent::route::host::sync(&config_dir);
+            // Provider keys are read from the OS keyring from the first chat,
+            // not only once Settings → AI models has been opened.
+            grokhub_agent::route::providers::use_os_vault();
             // The full device profile, shared with the cabin: sizes local
             // model launches and sets the router's battery and low-end tier.
             #[cfg(desktop)]
