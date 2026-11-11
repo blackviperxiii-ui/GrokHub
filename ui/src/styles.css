@@ -5453,7 +5453,7 @@ fieldset.channel label {
 }
 
 .mods-badge {
-  font-size: 0.8em;
+  font-size: var(--font-caption);
   opacity: 0.8;
 }
 
