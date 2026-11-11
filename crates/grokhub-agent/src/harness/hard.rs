@@ -1908,17 +1908,33 @@ pub fn is_agent_config_path(path: &str) -> bool {
         .map(clean)
         .filter(|part| part != ".")
         .collect();
-    let in_settings = parts.iter().enumerate().any(|(at, part)| {
-        part == ".claude"
-            || (part == ".grok"
-                && parts.get(at + 1).is_some_and(|next| {
-                    matches!(next.as_str(), "hooks" | "hooks-paths" | "skills")
-                }))
-    });
+    // `.grok/a/../hooks` is `.grok/hooks`: each `..` steps back over the part
+    // before it. The path as written counts too.
+    let mut folded: Vec<String> = Vec::new();
+    for part in &parts {
+        if part == ".." && folded.last().is_some_and(|prev| prev != "..") {
+            folded.pop();
+        } else {
+            folded.push(part.clone());
+        }
+    }
+    let in_settings = |parts: &[String]| {
+        parts.iter().enumerate().any(|(at, part)| {
+            part == ".claude"
+                || (part == ".grok"
+                    && parts.get(at + 1).is_some_and(|next| {
+                        matches!(next.as_str(), "hooks" | "hooks-paths" | "skills")
+                    }))
+        })
+    };
     let instruction_file = parts
         .last()
         .is_some_and(|name| INSTRUCTION_FILES.contains(&name.to_ascii_lowercase().as_str()));
-    in_settings || instruction_file || in_cabin_instructions(&parts)
+    in_settings(&parts)
+        || in_settings(&folded)
+        || instruction_file
+        || in_cabin_instructions(&parts)
+        || in_cabin_instructions(&folded)
 }
 
 /// The cabin's own skills and memory folders, under its config folder.
@@ -4164,6 +4180,10 @@ mod tests {
             "tee .claude/settings.local.json <x",
             "sed -i s/ask/allow/ \".claude/settings.json\"",
             "cp x.json .grok/./hooks/x.json",
+            "cp x.json .grok/a/../hooks/x.json",
+            "mkdir -p .grok/a/../hooks && cp x.json .grok/a/../hooks/x.json",
+            "cp x.sh .grok/a/b/../../skills/x/SKILL.txt",
+            "cp x.json sub/../.grok/a/.././hooks-paths",
         ] {
             assert_eq!(
                 hard_class("run_terminal_command", &shell(command)),
@@ -4171,6 +4191,11 @@ mod tests {
                 "{command}"
             );
         }
+        // `..` steps back over the part before it; the path as written counts too.
+        assert!(is_agent_config_path(".grok/a/../hooks/x.json"));
+        assert!(is_agent_config_path(".grok/hooks/../x.json"));
+        assert!(!is_agent_config_path(".grok/a/../notes/x.json"));
+        assert!(!is_agent_config_path("a/../.grok/notes.md"));
         for (name, args) in [
             ("write", write("src/claude.rs")),
             ("write", write("notes/.claudeish/x")),

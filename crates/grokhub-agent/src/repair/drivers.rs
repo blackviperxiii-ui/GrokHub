@@ -446,8 +446,8 @@ pub fn driver_rollback_plan(
 /// The command (run as root) that puts the old drivers back, when the way
 /// back is the old packages. A snapshot is rolled back with its own tool.
 /// The record comes from a file anyone running as the user can change, so the
-/// command holds only package names and versions checked here, and cache
-/// paths built from them. Anything else and there is no command.
+/// command holds only driver package names and versions checked here, and
+/// cache paths built from them. Anything else and there is no command.
 pub fn rollback_cmd(rollback: &Rollback, drivers: &[VerifiedDriver]) -> Option<String> {
     if drivers.is_empty() {
         return None;
@@ -455,6 +455,10 @@ pub fn rollback_cmd(rollback: &Rollback, drivers: &[VerifiedDriver]) -> Option<S
     let old: Vec<(ProgramName, &str)> = drivers
         .iter()
         .map(|d| {
+            // The app records only driver packages (`verify_driver`).
+            if !is_driver_pkg(&d.pkg) {
+                return None;
+            }
             let pkg = ProgramName::parse(&d.pkg)?;
             plain_version(&d.from).then_some((pkg, d.from.as_str()))
         })
@@ -831,5 +835,24 @@ mod tests {
             ),
             None
         );
+        // Only driver packages go back: the app records no other kind, so a
+        // record that names one was not written by it.
+        for pkg in ["sudo", "polkit", "openssh-server"] {
+            assert_eq!(
+                rollback_cmd(&Rollback::AptVersions, &apt(pkg, "1.9.5p2-1")),
+                None,
+                "{pkg}"
+            );
+            let file = format!("/var/cache/pacman/pkg/{pkg}-1.9.5p2-1-x86_64.pkg.tar.zst");
+            assert_eq!(
+                rollback_cmd(&cached(&file), &apt(pkg, "1.9.5p2-1")),
+                None,
+                "{pkg}"
+            );
+        }
+        // One package in the list that is not a driver refuses the whole list.
+        let mut mixed = nvidia.clone();
+        mixed.extend(apt("sudo", "1.9.5p2-1"));
+        assert_eq!(rollback_cmd(&Rollback::AptVersions, &mixed), None);
     }
 }

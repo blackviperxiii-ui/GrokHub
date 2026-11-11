@@ -465,7 +465,7 @@ fn fire_stop(
     stop_hook_active: bool,
     subject: &str,
 ) -> Option<String> {
-    let found = hooks_matching(session, event, &[subject]);
+    let found = hooks_matching(subagent_owner(session, event), event, &[subject]);
     if found.is_empty() {
         return None;
     }
@@ -493,7 +493,7 @@ fn observe(
     arguments: &str,
     stop_active: bool,
 ) {
-    let found = hooks_matching(session, event, &[subject]);
+    let found = hooks_matching(subagent_owner(session, event), event, &[subject]);
     if found.is_empty() {
         return;
     }
@@ -892,6 +892,17 @@ fn install(session: &str, hooks: Vec<Loaded>) -> HookGuard {
 /// installed under the chat, and its tool hooks check its helpers' calls too.
 fn root(session: &str) -> &str {
     session.split('/').next().unwrap_or(session)
+}
+
+/// Where the hooks for `event` are installed. A helper that starts or stops
+/// a helper of its own (`chat/s1`) fires the chat's SubagentStart and
+/// SubagentStop hooks. Every other event here belongs to the session itself.
+fn subagent_owner<'a>(session: &'a str, event: &str) -> &'a str {
+    if matches!(event, "SubagentStart" | "SubagentStop") {
+        root(session)
+    } else {
+        session
+    }
 }
 
 fn hooks_matching(session: &str, event: &str, subjects: &[&str]) -> Vec<Loaded> {
@@ -1552,6 +1563,64 @@ mod tests {
         );
         on_permission_denied(&helper, &dir, "write", "{}", "t1");
         assert_eq!(fs::read_to_string(&sid_path).unwrap(), helper);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn subagent_hooks_of_a_chat_also_run_for_a_helpers_helper() {
+        let dir = scratch("nested");
+        let session = format!("nested-{}", std::process::id());
+        let helper = format!("{session}/s1");
+        let sid_path = dir.join("sid");
+        let record = if cfg!(windows) {
+            format!(
+                "[IO.File]::WriteAllText('{}', $env:GROK_SESSION_ID)",
+                sid_path.display()
+            )
+        } else {
+            format!(
+                "printf '%s' \"$GROK_SESSION_ID\" > '{}'",
+                sid_path.display()
+            )
+        };
+        let hook = |event: &str, command: String| TestHook {
+            event: event.into(),
+            matcher: String::new(),
+            command,
+            timeout: Duration::from_secs(5),
+            source_dir: dir.clone(),
+        };
+        let _hooks = install_test_hooks(
+            &session,
+            vec![
+                hook("SubagentStart", record),
+                hook(
+                    "SubagentStop",
+                    test_echo(r#"{"decision":"deny","reason":"run the tests too"}"#, None),
+                ),
+                hook(
+                    "Stop",
+                    test_echo(r#"{"decision":"deny","reason":"keep going"}"#, None),
+                ),
+            ],
+        );
+        // `chat/s1` starts and stops a helper of its own.
+        on_subagent_start(&helper, &dir, "explore");
+        assert_eq!(fs::read_to_string(&sid_path).unwrap(), helper);
+        assert_eq!(
+            on_subagent_stop(&session, &dir, "explore", false),
+            Some("run the tests too".to_string())
+        );
+        assert_eq!(
+            on_subagent_stop(&helper, &dir, "explore", false),
+            Some("run the tests too".to_string())
+        );
+        // The chat's own Stop hook is not a helper's.
+        assert_eq!(
+            on_stop(&session, &dir, "Stop", false),
+            Some("keep going".to_string())
+        );
+        assert_eq!(on_stop(&helper, &dir, "Stop", false), None);
         let _ = fs::remove_dir_all(&dir);
     }
 

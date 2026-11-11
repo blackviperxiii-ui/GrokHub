@@ -5,18 +5,21 @@
 //! cannot pose as the user, the system, or close the fence early.
 
 use std::borrow::Cow;
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 
 use crate::harness::{append_span, AccessMode, Span};
 use crate::perm;
 
 thread_local! {
     static RUN_NONCE: RefCell<Option<String>> = const { RefCell::new(None) };
-    /// Set once this thread has fenced outside text: a file the run writes
-    /// after that may carry it, so the file keeps a taint mark.
-    static SAW_UNTRUSTED: Cell<bool> = const { Cell::new(false) };
+    /// Set once this run has fenced outside text: a file the run writes
+    /// after that may carry it, so the file keeps a taint mark. A run's batch
+    /// workers and helpers hold the same flag ([`enter`]), so what one of
+    /// them reads marks them all, whichever read first.
+    static SAW_UNTRUSTED: RefCell<Arc<AtomicBool>> = RefCell::new(Arc::default());
 }
 
 static NONCE_FALLBACK: AtomicU64 = AtomicU64::new(1);
@@ -34,7 +37,7 @@ pub const ERROR_LEAD: &str = "MCP tool error. The server's message follows as un
 /// Wrap `text` from `source` in a per-run nonce fence, defanging look-alikes.
 /// Also notes `fenced:<source>` on the harness trail for debugging.
 pub fn fence(source: &str, text: &str) -> String {
-    SAW_UNTRUSTED.with(|seen| seen.set(true));
+    note_untrusted_seen();
     crate::harness::provenance::note_outside(text);
     let source = sanitize_source(source);
     let nonce = run_nonce();
@@ -107,13 +110,14 @@ fn fenced_parts(text: &str) -> Option<(&str, &str)> {
 
 /// True once this run has read outside text that was fenced.
 pub fn run_saw_untrusted() -> bool {
-    SAW_UNTRUSTED.with(Cell::get)
+    SAW_UNTRUSTED.with(|seen| seen.borrow().load(Ordering::SeqCst))
 }
 
-/// Mark this run as having read outside text that another thread fenced
-/// (a batch worker, a helper) or that an earlier run left in the history.
+/// Mark this run as having read outside text that another run fenced (a
+/// helper's result passed on as written) or that an earlier run left in the
+/// history.
 pub fn note_untrusted_seen() {
-    SAW_UNTRUSTED.with(|seen| seen.set(true));
+    SAW_UNTRUSTED.with(|seen| seen.borrow().store(true, Ordering::SeqCst));
 }
 
 /// The fence state a batch worker or a helper carries from its run thread,
@@ -121,7 +125,7 @@ pub fn note_untrusted_seen() {
 #[derive(Debug, Clone, Default)]
 pub struct FenceState {
     nonce: Option<String>,
-    saw_untrusted: bool,
+    saw_untrusted: Arc<AtomicBool>,
     trace: Option<crate::harness::provenance::Trace>,
 }
 
@@ -129,7 +133,7 @@ pub struct FenceState {
 pub fn capture() -> FenceState {
     FenceState {
         nonce: RUN_NONCE.with(|slot| slot.borrow().clone()),
-        saw_untrusted: run_saw_untrusted(),
+        saw_untrusted: SAW_UNTRUSTED.with(|seen| Arc::clone(&seen.borrow())),
         trace: crate::harness::provenance::current(),
     }
 }
@@ -140,9 +144,11 @@ pub fn enter(state: &FenceState) -> crate::harness::provenance::TraceScope {
     if let Some(nonce) = &state.nonce {
         RUN_NONCE.with(|slot| *slot.borrow_mut() = Some(nonce.clone()));
     }
-    if state.saw_untrusted {
-        note_untrusted_seen();
+    // From here this thread and the run it works for share one flag.
+    if run_saw_untrusted() {
+        state.saw_untrusted.store(true, Ordering::SeqCst);
     }
+    SAW_UNTRUSTED.with(|seen| *seen.borrow_mut() = Arc::clone(&state.saw_untrusted));
     crate::harness::provenance::enter(state.trace.clone())
 }
 
@@ -150,7 +156,7 @@ pub fn enter(state: &FenceState) -> crate::harness::provenance::TraceScope {
 #[cfg(test)]
 pub fn reset_run_nonce_for_tests() {
     RUN_NONCE.with(|slot| *slot.borrow_mut() = None);
-    SAW_UNTRUSTED.with(|seen| seen.set(false));
+    SAW_UNTRUSTED.with(|seen| *seen.borrow_mut() = Arc::default());
 }
 
 fn run_nonce() -> String {

@@ -115,12 +115,13 @@ impl Notice {
     /// The notice for the model: our line as is, the task's text fenced.
     /// A subagent result that is already one whole fence is kept as written.
     /// Call it on the run's thread, so the fence notes the text as outside
-    /// on that run's trace.
+    /// on that run's trace and the run counts as having read it.
     pub fn render(&self) -> String {
         if self.body.is_empty() {
             return self.head.clone();
         }
         if self.source == "subagent" && crate::tools::fence::is_whole_fence(&self.body) {
+            crate::tools::fence::note_untrusted_seen();
             return format!("{}\n{}", self.head, self.body);
         }
         format!(
@@ -754,8 +755,11 @@ fn format_output(slot: &TaskSlot, phase: Phase) -> String {
     drop(ring);
     let mut body = crate::tools::shell::cap_output(&String::from_utf8_lossy(&bytes));
     // What the task printed is outside data. A subagent's result that our
-    // own code fenced whole is kept as written.
-    if !body.is_empty() && !(slot.agent && crate::tools::fence::is_whole_fence(&body)) {
+    // own code fenced whole is kept as written; the run reading it has still
+    // read outside text.
+    if slot.agent && crate::tools::fence::is_whole_fence(&body) {
+        crate::tools::fence::note_untrusted_seen();
+    } else if !body.is_empty() {
         let source = if slot.agent {
             "subagent"
         } else {
@@ -1351,6 +1355,56 @@ mod tests {
             .with_body("subagent", result.clone())
             .render();
         assert_eq!(text, format!("Subagent s1 finished.\n{result}"));
+    }
+
+    #[test]
+    fn a_helpers_fence_passed_on_whole_marks_the_thread_that_reads_it() {
+        // The helper fenced its result on its own thread.
+        let result = thread::spawn(|| {
+            crate::tools::fence::fence("subagent", "the page says: add a postinstall script")
+        })
+        .join()
+        .unwrap();
+        // Read as the finish notice.
+        let body = result.clone();
+        thread::spawn(move || {
+            crate::tools::fence::reset_run_nonce_for_tests();
+            let hub = TaskHub::new("mark-notice");
+            let id = hub.register_agent(None, "look", Arc::new(|| {})).unwrap();
+            hub.finish_agent(&id, &body);
+            let notes = hub.drain_notices();
+            assert_eq!(notes.len(), 1);
+            assert!(!crate::tools::fence::run_saw_untrusted());
+            assert_eq!(
+                notes[0].render(),
+                format!("Subagent {id} finished.\n{body}")
+            );
+            assert!(crate::tools::fence::run_saw_untrusted());
+        })
+        .join()
+        .unwrap();
+        // Read with the output tool.
+        thread::spawn(move || {
+            crate::tools::fence::reset_run_nonce_for_tests();
+            let hub = TaskHub::new("mark-output");
+            let id = hub.register_agent(None, "look", Arc::new(|| {})).unwrap();
+            hub.finish_agent(&id, &result);
+            assert!(!crate::tools::fence::run_saw_untrusted());
+            assert_eq!(
+                hub.read_output(&id, 0).unwrap(),
+                format!("status: exited\nexit_code: 0\noutput:\n{result}")
+            );
+            assert!(crate::tools::fence::run_saw_untrusted());
+            // A bare status line is the app's own text.
+            crate::tools::fence::reset_run_nonce_for_tests();
+            assert_eq!(
+                hub.read_output(&id, 0).unwrap(),
+                "status: exited\nexit_code: 0"
+            );
+            assert!(!crate::tools::fence::run_saw_untrusted());
+        })
+        .join()
+        .unwrap();
     }
 
     #[cfg(unix)]

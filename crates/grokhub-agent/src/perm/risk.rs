@@ -118,6 +118,7 @@ pub fn program_name(token: &str) -> String {
 /// a bare name found on PATH, or a path straight inside a system bin folder
 /// (anywhere under Program Files on Windows). `./gh`, `tools/cat` or
 /// `/tmp/x/ls` could be anything, so their name earns no read-only pass.
+/// Off Windows `c:/windows/system32/cat` is a folder in the workspace.
 pub fn trusted_head(token: &str) -> bool {
     if !token.contains(['/', '\\']) {
         return true;
@@ -133,13 +134,16 @@ pub fn trusted_head(token: &str) -> bool {
         "/usr/sbin/",
         "/usr/local/bin/",
         "/opt/homebrew/bin/",
-        "c:/windows/system32/",
     ];
-    const TREES: &[&str] = &["c:/program files/", "c:/program files (x86)/"];
-    BIN.iter().any(|dir| {
+    const WINDOWS_BIN: &str = "c:/windows/system32/";
+    const WINDOWS_TREES: &[&str] = &["c:/program files/", "c:/program files (x86)/"];
+    let inside = |dir: &str| {
         path.strip_prefix(dir)
             .is_some_and(|rest| !rest.is_empty() && !rest.contains('/'))
-    }) || TREES.iter().any(|dir| path.starts_with(dir))
+    };
+    BIN.iter().any(|dir| inside(dir))
+        || (cfg!(windows)
+            && (inside(WINDOWS_BIN) || WINDOWS_TREES.iter().any(|dir| path.starts_with(dir))))
 }
 
 pub fn is_dangerous(words: &[String]) -> bool {
@@ -394,6 +398,11 @@ fn kubectl_reads(words: &[String]) -> bool {
     while let Some(arg) = words.get(i).map(String::as_str) {
         i += 1;
         if !arg.starts_with('-') {
+            continue;
+        }
+        // `-owide`, `-nkube-system`: the rest of the word is the value.
+        let mut letters = arg.chars().skip(1);
+        if matches!(letters.next(), Some('n' | 'o' | 'l' | 'L' | 'c')) && letters.next().is_some() {
             continue;
         }
         if let Some((flag, _)) = arg.split_once('=') {

@@ -411,6 +411,7 @@ const CLEAN_FILES: &[&[&str]] = &[
     &["del"],
     &["erase"],
     &["rd"],
+    &["ri"],
 ];
 /// Registry deletes.
 const REGISTRY_DELETES: &[&[&str]] = &[
