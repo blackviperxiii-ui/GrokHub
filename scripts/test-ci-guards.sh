@@ -269,6 +269,65 @@ run_guard pass "docker action with a digest passes"
 
 CI_YML="$W/.github/workflows/ci.yml"
 
+# merged_download [pattern line]: a step that merges every artifact it
+# downloads into one directory, with an optional `pattern:` input.
+merged_download() {
+  printf '      - uses: actions/download-artifact@%s # v8\n        with:\n          path: dist-release\n          merge-multiple: true\n' "$SHA" >>"$CI_YML"
+  if (($# > 0)); then
+    printf '          %s\n' "$1" >>"$CI_YML"
+  fi
+}
+
+fresh_pr
+merged_download
+commit_pr
+run_guard fail "a merged download without a pattern fails"
+
+fresh_pr
+merged_download 'pattern: "{linux,windows,shell-*}"'
+commit_pr
+run_guard pass "a merged download that names the release artifacts passes"
+
+fresh_pr
+merged_download "pattern: 'linux' # one artifact"
+commit_pr
+run_guard pass "a merged download of one named artifact passes"
+
+fresh_pr
+merged_download 'pattern: "*"'
+commit_pr
+run_guard fail "a merged download of every artifact fails"
+
+fresh_pr
+merged_download 'pattern: "{linux,windows*,shell-*}"'
+commit_pr
+run_guard fail "a merged download whose pattern takes the unsigned Windows staging files fails"
+
+fresh_pr
+merged_download 'pattern: "{linux,windows-signpath-unsigne?}"'
+commit_pr
+run_guard fail "a merged download that matches the staging files with ? fails"
+
+fresh_pr
+merged_download 'pattern: "windows{,-signpath-unsigned}"'
+commit_pr
+run_guard fail "a merged download pattern with an empty alternative fails"
+
+fresh_pr
+merged_download 'pattern: "!(linux)"'
+commit_pr
+run_guard fail "a merged download pattern the guard cannot read fails"
+
+fresh_pr
+merged_download 'pattern: {linux,windows}'
+commit_pr
+run_guard fail "an unquoted brace pattern, which YAML reads as a map, fails"
+
+fresh_pr
+printf '      - uses: actions/download-artifact@%s # v8\n        with:\n          name: linux\n          path: dist-release\n' "$SHA" >>"$CI_YML"
+commit_pr
+run_guard pass "a download of one artifact by name, not merged, passes"
+
 fresh_pr
 sed -i "/^  linux:/,/^  windows:/s/^    if: .*/    if: needs.changes.outputs.code == 'true'/" "$CI_YML"
 commit_pr

@@ -12,6 +12,8 @@
 #   60) a persist path spawns a thread or writes a file outside PersistService
 #   70) a workflow or composite action uses an action by tag or branch instead
 #       of a full commit SHA, or no workflow file can be read
+#   75) a workflow step merges downloaded artifacts without a pattern, or with
+#       one that takes the unsigned Windows staging files
 #   80) our code uses an API anti-cheats flag: memory reads, module lists,
 #       injection or global keyboard/mouse hooks
 #   90) Rust embeds Markdown or a docs/, screenshots/ or research/ file that

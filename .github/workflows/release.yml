@@ -41,7 +41,8 @@ env:
   SOURCE_REF: ${{ github.event_name == 'schedule' && 'beta' || '' }}
 
 jobs:
-  # Decides whether to build. Tags always build. Beta pre-releases come from a
+  # Decides whether to build. A tag builds only when it is v<VERSION> or
+  # v<VERSION>-beta.N for the tagged commit. Beta pre-releases come from a
   # push to beta, the nightly or a manual run on beta; the nightly skips when
   # vX.Y.Z-beta.N already exists (no new beta commits since the last one).
   # Manual runs on other branches skip.
@@ -72,6 +73,8 @@ jobs:
         run: |
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           if [ "$GITHUB_REF_TYPE" = tag ]; then
+            # Before any build or signing: the tag must be this commit's VERSION.
+            bash scripts/release-tag-check.sh "$GITHUB_REF_NAME" || exit 1
             echo "build=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
           if [ "$EVENT" != schedule ] && [ "$REF" != refs/heads/beta ]; then
@@ -344,9 +347,12 @@ jobs:
         with:
           ref: ${{ needs.plan.outputs.sha }}
           fetch-depth: 0
+      # Named, so the unsigned copies in windows-signpath-unsigned (same file
+      # names as the signed ones in windows) are never merged in.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: dist-release
+          pattern: "{linux,windows,shell-*}"
           merge-multiple: true
       - name: Name the release
         id: name

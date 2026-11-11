@@ -59,6 +59,8 @@ The `changes` job looks up the cache key `ci-nightly-green-<beta sha>`. If the k
 
 - Rust caches (`linux-release`, `windows-release`, `shell-<os>`) are used only on the `beta` ref. Tags and the nightly build cold.
 - A newer beta build cancels one still running. Tag runs never cancel.
+- A tag builds only when it is `v<VERSION>` or `v<VERSION>-beta.N` for the tagged commit. `plan` runs `scripts/release-tag-check.sh` before any build or signing.
+- `publish` downloads only the `linux`, `windows` and `shell-*` artifacts, so the unsigned Windows files staged for SignPath never reach a release (`scripts/ci-guards.sh`).
 - A manual run on any branch other than `beta` builds nothing.
 - Pull requests and pushes to `main` never run release.yml.
 
