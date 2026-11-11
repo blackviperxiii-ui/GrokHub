@@ -94,6 +94,8 @@ export type Item =
   | { kind: "slash"; command: string; text: string }
   /** `/export` saved this chat; the card opens or shows the file. */
   | { kind: "saved"; saved: SavedFile }
+  /** A destructive slash command asks first; Yes runs `yes`. */
+  | { kind: "confirm"; command: string; prompt: string; yes: string }
   | ElicitItem;
 
 type Ended = "ended" | "halted";
@@ -127,6 +129,8 @@ const PLACEHOLDER = `Message ${PRODUCT_NAME}`;
 export const PLAN_NEXT = "Your next message gets a plan first.";
 /** Bare `/chat`: the next message is answered straight away. */
 export const CHAT_NEXT = "Your next message gets a straight answer, with no plan.";
+/** `/undo` with no reply running: the session only grows, so there is nothing to take back. */
+export const UNDO_NA = "N/A on native threads: the session is append-only.";
 /** Bare `/btw`: side questions need no command. */
 export const BTW_HINT =
   "No command needed: ask your question while a reply runs and it's answered on the side.";
@@ -393,6 +397,7 @@ function LogItem({
   onMenu,
   onAnswer,
   onAnswerCard,
+  onConfirm,
   onStopAsking,
   nyxUrl,
 }: {
@@ -404,6 +409,8 @@ function LogItem({
   nyxUrl?: string;
   onAnswer: (id: string, answer: Answer) => void;
   onAnswerCard: (item: ElicitItem, action: ElicitAction, value: string) => void;
+  /** Yes or Cancel on a slash command's question. */
+  onConfirm: (item: Item, yes: boolean) => void;
   /** Stop asking me on a permission card, while the setting is Ask me first. */
   onStopAsking?: (id: string) => void;
 }) {
@@ -449,6 +456,21 @@ function LogItem({
         <div className="card notice slash-notice" role="status" aria-label={`${item.command} result`}>
           <span className="card-title">{item.command}</span>
           <p className="card-detail-line plain">{item.text}</p>
+        </div>
+      );
+    case "confirm":
+      return (
+        <div className="card notice slash-notice" role="group" aria-label={`${item.command} asks first`}>
+          <span className="card-title">{item.command}</span>
+          <p className="card-detail-line plain">{item.prompt}</p>
+          <div className="card-buttons">
+            <button type="button" className="quiet danger" onClick={() => onConfirm(item, true)}>
+              Yes
+            </button>
+            <button type="button" onClick={() => onConfirm(item, false)}>
+              Cancel
+            </button>
+          </div>
         </div>
       );
     case "saved":
@@ -1008,7 +1030,7 @@ export function Chat({
     setError(null);
     let effect: SlashEffect;
     try {
-      effect = await runSlash(line);
+      effect = await runSlash(line, conversationId);
     } catch (err) {
       setError(String(err));
       return;
@@ -1044,14 +1066,56 @@ export function Chat({
         setItems((now) => [...now, { kind: "slash", command, text: effect.text }]);
         break;
       case "export":
+      case "exportAs":
         try {
-          const saved = await exportChat(conversationId);
+          const saved =
+            effect.kind === "export"
+              ? await exportChat(conversationId)
+              : await exportChat(conversationId, effect.format);
           setItems((now) => [...now, { kind: "saved", saved }]);
         } catch (err) {
           setError(String(err));
         }
         break;
+      case "retry": {
+        const last = [...items].reverse().find((it) => it.kind === "user");
+        if (last?.kind === "user") void deliver(last.text, [], false);
+        else setItems((now) => [...now, { kind: "slash", command, text: "Nothing to retry" }]);
+        break;
+      }
+      case "undo":
+        if (busyRef.current) {
+          void cancelChat(conversationId);
+          setItems((now) => [...now, { kind: "slash", command, text: "Undid in-flight reply" }]);
+        } else {
+          setItems((now) => [...now, { kind: "slash", command, text: UNDO_NA }]);
+        }
+        break;
+      case "stop": {
+        const running = busyRef.current;
+        if (running) stopReply();
+        setItems((now) => [...now, { kind: "slash", command, text: running ? "Stopped" : "Nothing is running" }]);
+        break;
+      }
+      case "compact":
+        void deliver("/compact", [], false, "chat");
+        break;
+      case "confirm":
+        setItems((now) => [...now, { kind: "confirm", command, prompt: effect.prompt, yes: effect.yes }]);
+        break;
+      case "deleted":
+        startFresh();
+        setItems([{ kind: "slash", command, text: `Deleted ${effect.title}` }]);
+        break;
     }
+  }
+
+  /** Yes runs the command's own `yes` line; Cancel drops the question. */
+  function settleConfirm(item: Item, yes: boolean) {
+    if (item.kind !== "confirm") return;
+    setItems((now) => now.filter((it) => it !== item));
+    if (yes) void slash(item.yes);
+    else setItems((now) => [...now, { kind: "slash", command: item.command, text: "Cancelled. Nothing changed." }]);
   }
 
   /** Tab fills a row in; Enter or a click runs one that takes no text. */
@@ -1075,6 +1139,10 @@ export function Chat({
     // While a reply runs, the app reads what the message is for (files wait
     // in the box). A typed /btw or /side asks on the side.
     if (busy) {
+      if (/^\/(stop|undo)$/i.test(text) && !remote) {
+        await slash(text);
+        return;
+      }
       if (!text || (isSlashCommand(text) && !/^\/(btw|side)\s+\S/i.test(text))) return;
       setDraft("");
       // The web app lines messages up behind the reply, as before. In a chat
@@ -1233,6 +1301,7 @@ export function Chat({
             nyxUrl={nyx?.url}
             onAnswer={answer}
             onAnswerCard={answerCard}
+            onConfirm={settleConfirm}
             onStopAsking={!remote && settings?.approvals === "ask" ? stopAsking : undefined}
           />
         ))}

@@ -399,12 +399,35 @@ describe("Chat", () => {
     const id = await startTurn("hello");
     await act(async () => finish());
     await userEvent.type(screen.getByLabelText("Message"), "/export{Enter}");
-    expect(api.runSlash).toHaveBeenCalledWith("/export");
+    expect(api.runSlash).toHaveBeenCalledWith("/export", id);
     expect(api.exportChat).toHaveBeenCalledWith(id);
     const card = await screen.findByRole("status", { name: "Saved hello-20261106-1415.md to Chats" });
     await userEvent.click(within(card).getByRole("button", { name: "Show in folder" }));
     expect(api.revealSaved).toHaveBeenCalledWith("saved-1");
     expect(api.sendChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("/export html and /export json ask for that format", async () => {
+    api.runSlash.mockReset().mockResolvedValue({ kind: "exportAs", format: "html" });
+    api.exportChat.mockReset().mockResolvedValue({
+      token: "saved-2",
+      name: "hello-20261106-1415.html",
+      folder: "Chats",
+      path: "/home/user/Documents/Loadout/Chats/hello-20261106-1415.html",
+      line: "Saved hello-20261106-1415.html to Chats",
+      revealLabel: "Show in folder",
+    });
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "/export html{Enter}");
+    expect(
+      await screen.findByRole("status", { name: "Saved hello-20261106-1415.html to Chats" }),
+    ).toBeInTheDocument();
+    expect(api.exportChat).toHaveBeenCalledWith(expect.stringMatching(/^shell-/), "html");
+    api.runSlash.mockResolvedValue({ kind: "exportAs", format: "json" });
+    await userEvent.type(screen.getByLabelText("Message"), "/export json{Enter}");
+    await waitFor(() =>
+      expect(api.exportChat).toHaveBeenLastCalledWith(expect.stringMatching(/^shell-/), "json"),
+    );
   });
 
   it("a failed /export says why and saves no card", async () => {

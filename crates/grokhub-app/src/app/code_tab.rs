@@ -159,6 +159,12 @@ pub(super) struct CodeTab {
     pub(super) running: bool,
     pub(super) log: String,
     pub(super) run_note: Option<String>,
+    /// Push and PR, behind the shared push guard.
+    pub(super) ship: super::code_ship_ui::ShipPanel,
+    /// This project's deploy secrets, names only.
+    pub(super) secrets: super::code_secrets_ui::SecretsPanel,
+    /// The deploy button and its settings.
+    pub(super) deploy: super::code_deploy_ui::DeployPanel,
 }
 
 impl Default for CodeTab {
@@ -184,6 +190,9 @@ impl Default for CodeTab {
             running: false,
             log: String::new(),
             run_note: None,
+            ship: Default::default(),
+            secrets: Default::default(),
+            deploy: Default::default(),
         }
     }
 }
@@ -353,7 +362,14 @@ pub(super) fn load_job(
     let msg = Msg::Loaded(Box::new(Loaded {
         builtins: repo::builtins(workspace, home, config),
         plan: runs::plan(config, workspace, None, runs::Mode::Auto),
-        activity: activity::list(config, ACTIVITY_ROWS),
+        activity: {
+            // A held secret value never shows, whatever wrote the line.
+            let held = secrets::held_for(config, workspace);
+            activity::list(config, ACTIVITY_ROWS)
+                .into_iter()
+                .map(|e| super::code_ship_ui::clean_entry(e, &held))
+                .collect()
+        },
         diff,
         repo: r,
     }));
@@ -566,11 +582,16 @@ impl Cabin {
                 };
                 if crate::cards::page_header(ui, "Code", action) && !self.code_tab.loading {
                     self.code_kick_load(&ctx);
+                    let (config, ws) = (crate::config::config_dir(), self.code_workspace());
+                    self.code_tab.ship.refresh(&ctx, &config, &ws);
+                    self.code_tab.deploy.reload();
                 }
                 super::pages::page_body(ui, "code", |ui| {
                     self.ui_code_repo(ui, &ctx);
                     ui.add_space(crate::theme::SPACING_24);
                     self.ui_code_tests(ui, &ctx);
+                    ui.add_space(crate::theme::SPACING_24);
+                    self.ui_code_ship(ui, &ctx);
                     ui.add_space(crate::theme::SPACING_24);
                     self.ui_code_builtins(ui);
                     self.ui_code_activity(ui);
@@ -776,6 +797,30 @@ impl Cabin {
                 Some(name)
             };
         }
+    }
+
+    /// Push and PR, then Deploy (a git repo only), then Secrets. A push, PR or new
+    /// branch reads the repo and the activity again.
+    fn ui_code_ship(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let Some(is_repo) = self.code_tab.repo.as_ref().map(|r| r.is_repo) else {
+            return;
+        };
+        let (config, ws) = (crate::config::config_dir(), self.code_workspace());
+        if is_repo {
+            self.code_tab.ship.ui(ui, &config, &ws);
+            if self.code_tab.ship.changed && !self.code_tab.loading {
+                self.code_tab.ship.changed = false;
+                self.code_kick_load(ctx);
+            }
+            ui.add_space(crate::theme::SPACING_24);
+            self.code_tab.deploy.ui(ui, &config, &ws);
+            if self.code_tab.deploy.changed && !self.code_tab.loading {
+                self.code_tab.deploy.changed = false;
+                self.code_kick_load(ctx);
+            }
+            ui.add_space(crate::theme::SPACING_24);
+        }
+        self.code_tab.secrets.ui(ui, &config, &ws);
     }
 
     fn ui_code_activity(&mut self, ui: &mut egui::Ui) {

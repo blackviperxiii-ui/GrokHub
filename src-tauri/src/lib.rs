@@ -66,6 +66,7 @@ pub mod playbooks;
 pub mod plugins;
 pub mod privacy;
 pub mod proactive;
+pub mod projects;
 pub mod pulse;
 pub mod pulse_feed;
 pub mod queue;
@@ -78,6 +79,7 @@ pub mod settings;
 pub mod shell_update;
 pub mod skills;
 pub mod slash;
+pub mod slash_ops;
 mod steam_checks;
 mod turns;
 pub mod voice;
@@ -316,14 +318,49 @@ fn slash_hits(draft: String) -> Vec<slash::Hit> {
 }
 
 /// Runs a slash line instead of sending it. Nothing reaches the model.
+/// `conversation_id` is the chat the line was typed in.
 #[tauri::command]
-fn run_slash(state: State<'_, ShellState>, line: String) -> Result<slash::Effect, String> {
-    run_slash_line(&state, &line, false)
+fn run_slash(
+    state: State<'_, ShellState>,
+    line: String,
+    conversation_id: Option<String>,
+) -> Result<slash::Effect, String> {
+    run_slash_line(&state, &line, false, conversation_id.as_deref(), None)
 }
 
-fn run_slash_line(state: &ShellState, line: &str, remote: bool) -> Result<slash::Effect, String> {
-    let action = slash::parse(line, remote)?;
-    slash::apply(action, &workspace(state))
+fn run_slash_line(
+    state: &ShellState,
+    line: &str,
+    remote: bool,
+    conversation_id: Option<&str>,
+    owned: Option<&dyn Fn(&str) -> bool>,
+) -> Result<slash::Effect, String> {
+    let op = match slash::parse(line, remote)? {
+        slash::Action::Op(op) => op,
+        other => return slash::apply(other, &workspace(state)),
+    };
+    let bound = current(state).workspace;
+    let done = slash_ops::run(
+        op,
+        &slash_ops::Ctx {
+            config_dir: &state.config_dir,
+            conversation_id,
+            bound: &bound,
+            owned,
+        },
+    )?;
+    if let Some(path) = done.workspace {
+        let next = ShellSettings {
+            workspace: path,
+            ..current(state)
+        };
+        settings::save(&state.config_dir, &next)?;
+        *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next;
+    }
+    if let slash::Effect::Deleted { id, .. } = &done.effect {
+        end_chat(state, id);
+    }
+    Ok(done.effect)
 }
 
 #[tauri::command]
@@ -3213,12 +3250,16 @@ async fn export_chat(
     state: State<'_, ShellState>,
     id: String,
     clock: automations::Clock,
+    format: Option<String>,
 ) -> Result<export::Saved, String> {
     capabilities::needs(cfg!(desktop), "Saving a chat")?;
+    let format = grokhub_core::ChatExport::parse(format.as_deref().unwrap_or(""))
+        .ok_or(grokhub_core::EXPORT_FORMATS_HINT)?;
     let dir = state.config_dir.clone();
     let now = grokhub_core::now_ms();
     let offset = clock.at(now).utc_offset_min();
-    let path = off_main(move || export::export_to_chats(&dir, &id, now, offset)).await??;
+    let path =
+        off_main(move || export::export_to_chats_as(&dir, &id, now, offset, format)).await??;
     Ok(export::saved(&state.saves, path))
 }
 
@@ -3411,7 +3452,17 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         )?),
         "add_memory" => out(add_memory(state, arg(args, "text")?, arg(args, "global")?)?),
         "slash_hits" => out(slash::hits(&arg::<String>(args, "draft")?, true)),
-        "run_slash" => out(run_slash_line(&state, &arg::<String>(args, "line")?, true)?),
+        "run_slash" => {
+            let id: Option<String> = arg(args, "conversationId")?;
+            let owned = |id: &str| web.owns(id);
+            out(run_slash_line(
+                &state,
+                &arg::<String>(args, "line")?,
+                true,
+                id.as_deref(),
+                Some(&owned as &dyn Fn(&str) -> bool),
+            )?)
+        }
         "search_memory" => out(search_memory(state, arg(args, "query")?)?),
         "edit_memory_row" => out(edit_memory_row(
             state,
