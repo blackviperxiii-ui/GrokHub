@@ -232,6 +232,28 @@ describe("Chat", () => {
     expect(api.sendChat).not.toHaveBeenCalled();
   });
 
+  it("a send prefill (the Command line's run) goes as a chat message, leaving the box alone", async () => {
+    api.sendChat.mockResolvedValue("end_turn");
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    const box = screen.getByRole("textbox", { name: "Message" });
+    await userEvent.type(box, "half typed");
+    rerender(<Chat onOpenSettings={() => {}} prefill={{ text: "Run this: ls", n: 1, send: true }} />);
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    expect(api.sendChat.mock.calls[0].slice(1)).toEqual(["Run this: ls", "chat"]);
+    expect(box).toHaveValue("half typed");
+  });
+
+  it("a send prefill behind a running reply waits its turn", async () => {
+    const finish = holdTurn();
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("hello");
+    rerender(<Chat onOpenSettings={() => {}} prefill={{ text: "Run this: ls", n: 1, send: true }} />);
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
+    emit(id, { kind: "done", stop: "end_turn" });
+    finish();
+    await waitFor(() => expect(api.sendChat).toHaveBeenLastCalledWith(id, "Run this: ls", undefined));
+  });
+
   it("opening the chat that is already open keeps what is typed in the box", async () => {
     api.sendChat.mockResolvedValue("end_turn");
     const { rerender } = render(<Chat onOpenSettings={() => {}} remote />);
