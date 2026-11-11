@@ -165,6 +165,7 @@ jobs:
               - 'crates/grokhub-fps-probe/**'
               - 'crates/grokhub-hub/**'
               - 'crates/grokhub-proto/**'
+              - 'Cargo.toml'
               - 'scripts/shell-fps-probe.mjs'
               - 'scripts/stage-hub-sidecar.mjs'
               - '.github/workflows/ci.yml'

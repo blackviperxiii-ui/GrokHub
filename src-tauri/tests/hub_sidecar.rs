@@ -131,16 +131,35 @@ fn the_stage_script_writes_the_path_tauri_checks_and_ci_runs_it_before_cargo() {
     }
 }
 
-/// The value of every `path = "…"` key in a Cargo manifest.
+/// The value of every `path = "…"` or `path = '…'` key in a Cargo manifest.
+/// A value in triple quotes comes back empty.
 fn manifest_paths(manifest: &str) -> Vec<&str> {
     manifest
         .split("path")
         .skip(1)
         .filter_map(|rest| {
-            let rest = rest.trim_start().strip_prefix('=')?;
-            rest.trim_start().strip_prefix('"')?.split('"').next()
+            let rest = rest.trim_start().strip_prefix('=')?.trim_start();
+            let quote = rest.chars().next().filter(|c| matches!(c, '"' | '\''))?;
+            rest[1..].split(quote).next()
         })
         .collect()
+}
+
+#[test]
+fn a_manifest_path_is_read_in_either_quote_style() {
+    let manifest = r#"
+[[bin]]
+path = "src/main.rs"
+[dependencies]
+a = { path = "../crates/a" }
+b = { path='../crates/b' }
+c = { path = """../crates/c""" }
+paths = ["d"]
+"#;
+    assert_eq!(
+        manifest_paths(manifest),
+        ["src/main.rs", "../crates/a", "../crates/b", ""]
+    );
 }
 
 /// The crates a manifest depends on by path, where `prefix` is how that
@@ -151,7 +170,7 @@ fn path_dependencies(manifest: &Path, prefix: &str) -> Vec<String> {
         std::fs::read_to_string(manifest).unwrap_or_else(|e| panic!("{}: {e}", manifest.display()));
     manifest_paths(&text)
         .into_iter()
-        .filter(|value| value.starts_with("../"))
+        .filter(|value| value.is_empty() || value.starts_with('/') || value.contains(".."))
         .map(|value| match value.strip_prefix(prefix) {
             Some(name) if !name.is_empty() && !name.contains('/') => name.to_owned(),
             _ => panic!(
@@ -176,6 +195,14 @@ fn the_shell_filter_names_every_crate_the_shell_builds_and_every_file_these_test
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("src-tauri sits in the repository root");
+    // A crate can take a local crate from the root `[workspace.dependencies]`
+    // with `workspace = true`, and the walk below reads no such table.
+    let workspace = std::fs::read_to_string(root.join("Cargo.toml")).expect("the root Cargo.toml");
+    assert_eq!(
+        manifest_paths(&workspace),
+        Vec::<&str>::new(),
+        "the root Cargo.toml names a local path: make this test follow `workspace = true`"
+    );
     let mut reached = BTreeSet::new();
     let mut todo = path_dependencies(&root.join("src-tauri/Cargo.toml"), "../crates/");
     while let Some(name) = todo.pop() {
@@ -210,6 +237,7 @@ fn the_shell_filter_names_every_crate_the_shell_builds_and_every_file_these_test
         // The sidecar that scripts/stage-hub-sidecar.mjs builds into the bundles.
         "crates/grokhub-hub/**",
         // The files this test file reads from outside src-tauri.
+        "Cargo.toml",
         ".github/workflows/ci.yml",
         ".github/workflows/release.yml",
         "scripts/stage-hub-sidecar.mjs",
