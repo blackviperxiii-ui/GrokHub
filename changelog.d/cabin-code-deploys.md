@@ -1,0 +1,1 @@
+- The cabin Code tab can deploy the project: off until you turn it on, with the command and its switch shared with the desktop app. Ask mode shows the exact command before every deploy; Auto-beta runs a confirmed command without asking until it changes, and Forget makes the next one ask. The project's secrets are set for the run and hidden in the output and the activity list.
