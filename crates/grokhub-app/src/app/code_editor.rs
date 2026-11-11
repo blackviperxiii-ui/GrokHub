@@ -279,6 +279,11 @@ impl CodeEditor {
                 .request_repaint_after(std::time::Duration::from_millis(100));
         }
         crate::cards::section_label(ui, EDITOR_TITLE);
+        // The last save or refusal sits above the editor, where it's seen.
+        if let Some(note) = &self.note {
+            crate::cards::help_text(ui, note);
+            ui.add_space(crate::theme::SPACING_8);
+        }
         let mut browse_to: Option<String> = None;
         let mut picked: Option<String> = None;
         let height = ui.available_height().clamp(MIN_EDIT_H, MAX_EDIT_H);
@@ -298,9 +303,6 @@ impl CodeEditor {
             ui.separator();
             ui.vertical(|ui| self.ui_pane(ui, config_dir, height));
         });
-        if let Some(note) = &self.note {
-            crate::cards::help_text(ui, note);
-        }
         if let Some(folder) = browse_to {
             self.browse(&folder);
         }
@@ -380,6 +382,8 @@ impl CodeEditor {
                 );
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // Clear of the page's scroll bar.
+                ui.add_space(crate::theme::SPACING_16);
                 let label = if saving { EDITOR_SAVING } else { "Save" };
                 ui.add_enabled_ui(dirty && !saving, |ui| {
                     if crate::cards::white_pill(ui, label) {
