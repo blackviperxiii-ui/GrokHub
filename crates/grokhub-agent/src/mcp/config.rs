@@ -89,11 +89,20 @@ pub fn load_servers_for(workspace: &Path) -> BTreeMap<String, ServerDef> {
     out
 }
 
-/// Only the user's own `mcp.json` may name a saved key. An entry from an
-/// import or a plugin has none until the user saves one for it.
+/// Only the user's own `mcp.json` may name a saved key. A plugin's entry
+/// never has one (a key cannot be saved under a plugin's name), so the
+/// variable it would go in is dropped with it.
 fn without_saved_key(mut def: ServerDef) -> ServerDef {
     def.token_ref = None;
     def.token_env = None;
+    def
+}
+
+/// An imported or pasted entry has no saved key until the user saves one for
+/// it, so the key it names is dropped. The variable its key goes in stays,
+/// for the key saved later under the entry's own name.
+fn without_key_name(mut def: ServerDef) -> ServerDef {
+    def.token_ref = None;
     def
 }
 
@@ -103,7 +112,7 @@ pub fn import_documents(docs: &[String]) -> Result<ImportReport, String> {
         for (name, def) in servers_from_document(doc)? {
             incoming
                 .entry(name)
-                .or_insert_with(|| without_saved_key(def));
+                .or_insert_with(|| without_key_name(def));
         }
     }
     merge_servers(incoming)

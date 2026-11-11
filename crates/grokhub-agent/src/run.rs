@@ -2519,9 +2519,10 @@ fn dispatch_tool_call(
     (output, Usage::default())
 }
 
-/// The line a permission card shows: the fields the named tool runs with,
-/// never some other key the model added. A tool with no such field, and
-/// any other server's tool, shows all of its arguments.
+/// The line a permission card shows: the one argument the named tool acts
+/// on ([`card_fields`]), never some other key the model added. A connection
+/// shows its program and every argument. A tool that acts on none of those
+/// arguments, and any other server's tool, shows all of its arguments.
 fn action_line(name: &str, arguments: &str) -> String {
     let value: serde_json::Value =
         serde_json::from_str(arguments).unwrap_or(serde_json::Value::Null);
@@ -2533,8 +2534,8 @@ fn action_line(name: &str, arguments: &str) -> String {
             .filter(|text| !text.is_empty())
             .map(str::to_string)
     };
-    let line = match crate::self_manage::self_tool(name).unwrap_or(name) {
-        "run_terminal_command" | "monitor" => field("command"),
+    let tool = crate::self_manage::self_tool(name).unwrap_or(name);
+    let line = match tool {
         "connection_add" | "connection_modify" => field("command")
             .map(|command| {
                 let args = value.get("args").and_then(|list| list.as_array());
@@ -2550,11 +2551,31 @@ fn action_line(name: &str, arguments: &str) -> String {
                 })
             })
             .or_else(|| field("url")),
-        "read_file" | "write" | "search_replace" => tools::tool_path_arg(name, &value),
-        "web_fetch" => field("url"),
-        _ => None,
+        // `message` is what gets sent when both are set.
+        "send_subagent_message" if field("message").is_some() => None,
+        _ => card_fields(tool).iter().find_map(|key| field(key)),
     };
     clip(line.as_deref().unwrap_or(arguments), 180)
+}
+
+/// The arguments one of the app's own tools acts on, of those a card line
+/// shows as plain text (a path, a command, typed text, keys, an address, a
+/// prompt), in the order the tool itself reads them: the first one set is
+/// the one it uses. A tool not listed acts on none of them.
+fn card_fields(tool: &str) -> &'static [&'static str] {
+    match tool {
+        "read_file" => &["target_file"],
+        "list_dir" | "grep" | "glob" | "skill" => &["path"],
+        "write" => &["path", "file_path", "target_file"],
+        "search_replace" => &["file_path", "path", "target_file"],
+        "run_terminal_command" | "monitor" => &["command"],
+        "web_fetch" => &["url"],
+        "type" | "send_subagent_message" => &["text"],
+        "key" => &["keys"],
+        "scheduler_create" | "spawn_subagent" | "image_generate" | "image_edit"
+        | "video_generate" | "video_edit" | "video_extend" => &["prompt"],
+        _ => &[],
+    }
 }
 
 fn tool_id(call: &FunctionCall) -> String {
@@ -7512,13 +7533,17 @@ mod tests {
             ),
             "https://docs.example/a"
         );
-        // Another server's tool, or one with no single field that says what
-        // it does: everything it was sent.
+        // Another server's tool: nothing here knows which argument it acts
+        // on, so the card shows everything it was sent.
         let theirs = r#"{"path":"README.md","command":"rm -rf build"}"#;
         assert_eq!(action_line("notes__write", theirs), theirs);
         assert_eq!(action_line("notes__connection_add", theirs), theirs);
-        let typed = r#"{"path":"README.md","text":"hello"}"#;
-        assert_eq!(action_line("type", typed), typed);
+        assert_eq!(action_line("notes__type", theirs), theirs);
+        // The app's own typing step types `text`, whatever else was sent.
+        assert_eq!(
+            action_line("type", r#"{"path":"README.md","text":"hello"}"#),
+            "hello"
+        );
         assert_eq!(
             action_line(
                 "run_terminal_command",
@@ -7526,6 +7551,381 @@ mod tests {
             ),
             format!("{}…", "x".repeat(180))
         );
+    }
+
+    /// The card line for every tool the app runs itself. A row's line is the
+    /// one argument the tool acts on; a tool that acts on none of the
+    /// arguments a card can show plainly gets all of them.
+    #[test]
+    fn every_native_tools_card_line_is_the_argument_it_acts_on() {
+        const ALL: &str = "";
+        let rows: &[(&str, &str, &str)] = &[
+            // Reads.
+            ("read_file", r#"{"target_file":"src/a.rs"}"#, "src/a.rs"),
+            (
+                "read_file",
+                r#"{"target_file":"src/a.rs","path":"README.md"}"#,
+                "src/a.rs",
+            ),
+            ("read_file", r#"{"path":"README.md"}"#, ALL),
+            ("list_dir", r#"{"path":"src"}"#, "src"),
+            ("list_dir", "{}", ALL),
+            ("grep", r#"{"pattern":"needle","path":"crates"}"#, "crates"),
+            ("grep", r#"{"pattern":"needle"}"#, ALL),
+            ("glob", r#"{"pattern":"**/*.rs","path":"crates"}"#, "crates"),
+            (
+                "get_command_or_subagent_output",
+                r#"{"task_id":"t1","path":"README.md"}"#,
+                ALL,
+            ),
+            ("scheduler_list", "{}", ALL),
+            (
+                "search_tool",
+                r#"{"query":"notes","path":"README.md"}"#,
+                ALL,
+            ),
+            (
+                "load_tool_schema",
+                r#"{"name":"work_add","path":"README.md"}"#,
+                ALL,
+            ),
+            (
+                "skill",
+                r#"{"name":"release","path":"checklist.md"}"#,
+                "checklist.md",
+            ),
+            ("skill", r#"{"name":"release","text":"hello"}"#, ALL),
+            ("todo_write", r#"{"todos":[],"text":"hello"}"#, ALL),
+            (
+                "ask_user_question",
+                r#"{"questions":[],"prompt":"hello"}"#,
+                ALL,
+            ),
+            ("report_findings", r#"{"findings":[],"text":"hello"}"#, ALL),
+            ("enter_plan_mode", "{}", ALL),
+            (
+                "exit_plan_mode",
+                r#"{"plan":"ship it","path":"README.md"}"#,
+                ALL,
+            ),
+            ("diagnose", r#"{"probes":["disk"],"command":"df -h"}"#, ALL),
+            ("local_ai_status", "{}", ALL),
+            (
+                "show_panel",
+                r#"{"title":"CI","elements":[],"text":"hello"}"#,
+                ALL,
+            ),
+            (
+                "models_check",
+                r#"{"live":true,"url":"https://x.example"}"#,
+                ALL,
+            ),
+            (
+                "mods_search",
+                r#"{"game":"skyrim","query":"ui","url":"https://x.example"}"#,
+                ALL,
+            ),
+            (
+                "mods_detail",
+                r#"{"game":"skyrim","id":"12","path":"a"}"#,
+                ALL,
+            ),
+            ("mods_installed", r#"{"game":"skyrim","path":"a"}"#, ALL),
+            // Edits.
+            (
+                "write",
+                r#"{"path":"plan.txt","content":"yes"}"#,
+                "plan.txt",
+            ),
+            (
+                "write",
+                r#"{"file_path":"a.rs","target_file":"b.rs","content":""}"#,
+                "a.rs",
+            ),
+            (
+                "write",
+                r#"{"path":"a.rs","content":"","text":"hello"}"#,
+                "a.rs",
+            ),
+            (
+                "search_replace",
+                r#"{"file_path":"a.rs","old_string":"a","new_string":"b"}"#,
+                "a.rs",
+            ),
+            (
+                "search_replace",
+                r#"{"file_path":"a.rs","path":"b.rs","old_string":"a","new_string":"b"}"#,
+                "a.rs",
+            ),
+            // Commands and the tools that start or stop work.
+            (
+                "run_terminal_command",
+                r#"{"command":" cargo test "}"#,
+                "cargo test",
+            ),
+            (
+                "run_terminal_command",
+                r#"{"command":"echo hi","path":"README.md"}"#,
+                "echo hi",
+            ),
+            (
+                "kill_command_or_subagent",
+                r#"{"task_id":"t1","command":"echo hi"}"#,
+                ALL,
+            ),
+            (
+                "monitor",
+                r#"{"command":"tail -f app.log"}"#,
+                "tail -f app.log",
+            ),
+            ("monitor", r#"{"task_id":"t1","pattern":"error"}"#, ALL),
+            (
+                "scheduler_create",
+                r#"{"interval":"1h","prompt":"check the build"}"#,
+                "check the build",
+            ),
+            (
+                "scheduler_create",
+                r#"{"interval":"1h","prompt":"check the build","path":"README.md"}"#,
+                "check the build",
+            ),
+            (
+                "scheduler_delete",
+                r#"{"task_id":"a1","prompt":"hello"}"#,
+                ALL,
+            ),
+            (
+                "connection_delete",
+                r#"{"name":"notes","url":"https://x.example"}"#,
+                ALL,
+            ),
+            ("local_ai_selftest", "{}", ALL),
+            (
+                "mods_prepare_install",
+                r#"{"game":"skyrim","id":"12","file":"main","path":"a"}"#,
+                ALL,
+            ),
+            (
+                "spawn_subagent",
+                r#"{"prompt":"find the entry point","description":"look"}"#,
+                "find the entry point",
+            ),
+            (
+                "spawn_subagent",
+                r#"{"prompt":"find the entry point","path":"README.md"}"#,
+                "find the entry point",
+            ),
+            (
+                "send_subagent_message",
+                r#"{"subagent_id":"s1","text":"keep going"}"#,
+                "keep going",
+            ),
+            // `message` wins over `text`, so `text` is not what is sent.
+            (
+                "send_subagent_message",
+                r#"{"subagent_id":"s1","message":"write package.json","text":"keep going"}"#,
+                ALL,
+            ),
+            (
+                "send_subagent_message",
+                r#"{"subagent_id":"s1","message":"go"}"#,
+                ALL,
+            ),
+            // The desktop.
+            ("screenshot", "{}", ALL),
+            ("click", r#"{"x":10,"y":20,"text":"hello"}"#, ALL),
+            ("move", r#"{"x":10,"y":20}"#, ALL),
+            ("drag", r#"{"x":10,"y":20,"to_x":30,"to_y":40}"#, ALL),
+            ("scroll", r#"{"x":10,"y":20,"dy":-3}"#, ALL),
+            ("type", r#"{"text":"rm -rf ~/old"}"#, "rm -rf ~/old"),
+            ("type", r#"{"path":"README.md","text":"hello"}"#, "hello"),
+            ("type", r#"{"keys":"ctrl+s"}"#, ALL),
+            ("key", r#"{"keys":"ctrl+s"}"#, "ctrl+s"),
+            ("key", r#"{"keys":"ctrl+s","text":"hello"}"#, "ctrl+s"),
+            // The web and media.
+            (
+                "web_fetch",
+                r#"{"url":"https://docs.example/a"}"#,
+                "https://docs.example/a",
+            ),
+            (
+                "web_fetch",
+                r#"{"url":"https://docs.example/a","path":"README.md"}"#,
+                "https://docs.example/a",
+            ),
+            (
+                "web_search",
+                r#"{"query":"egui tables","url":"https://x.example"}"#,
+                ALL,
+            ),
+            ("image_generate", r#"{"prompt":"a red fox"}"#, "a red fox"),
+            (
+                "image_edit",
+                r#"{"prompt":"make it blue","image":"https://cdn.example/a.png"}"#,
+                "make it blue",
+            ),
+            ("video_generate", r#"{"prompt":"a fox runs"}"#, "a fox runs"),
+            (
+                "video_edit",
+                r#"{"prompt":"slow it down","video":"https://cdn.example/v.mp4"}"#,
+                "slow it down",
+            ),
+            (
+                "video_extend",
+                r#"{"prompt":"keep running","video":"https://cdn.example/v.mp4"}"#,
+                "keep running",
+            ),
+            // The app's tools for its own skills, connections and automations.
+            ("skill_list", "{}", ALL),
+            (
+                "skill_create",
+                r#"{"name":"weekly","instructions":"Sum up the week","path":"README.md"}"#,
+                ALL,
+            ),
+            (
+                "skill_modify",
+                r#"{"name":"weekly","description":"Weekly notes"}"#,
+                ALL,
+            ),
+            ("skill_disable", r#"{"name":"weekly"}"#, ALL),
+            ("skill_enable", r#"{"name":"weekly"}"#, ALL),
+            (
+                "grokhub-self__skill_delete",
+                r#"{"name":"weekly","text":"hello"}"#,
+                ALL,
+            ),
+            ("connection_list", "{}", ALL),
+            (
+                "connection_add",
+                r#"{"name":"notes","command":"notes-mcp","reason":"keep notes"}"#,
+                "notes-mcp",
+            ),
+            (
+                "connection_add",
+                r#"{"name":"notes","command":"npx","args":["-y","notes-mcp"],"path":"Notes"}"#,
+                "npx -y notes-mcp",
+            ),
+            (
+                "connection_add",
+                r#"{"name":"docs","url":"https://mcp.docs.example/sse","reason":"read docs"}"#,
+                "https://mcp.docs.example/sse",
+            ),
+            (
+                "grokhub-self__connection_modify",
+                r#"{"name":"notes","command":"bash","args":["-c","echo hi"],"text":"Notes"}"#,
+                r#"bash -c "echo hi""#,
+            ),
+            (
+                "connection_modify",
+                r#"{"name":"notes","args":["--all"],"path":"Notes"}"#,
+                ALL,
+            ),
+            (
+                "connection_disable",
+                r#"{"name":"notes","url":"https://x.example"}"#,
+                ALL,
+            ),
+            ("connection_remove", r#"{"name":"notes"}"#, ALL),
+            ("automation_list", "{}", ALL),
+            (
+                "automation_create",
+                r#"{"instructions":"check the build","every":"1d","prompt":"hello"}"#,
+                ALL,
+            ),
+            ("automation_modify", r#"{"id":"a1","every":"2d"}"#, ALL),
+            ("automation_disable", r#"{"id":"a1","reason":"noisy"}"#, ALL),
+            (
+                "automation_delete",
+                r#"{"id":"a1","command":"echo hi"}"#,
+                ALL,
+            ),
+            ("pulse_steam", r#"{"on":true}"#, ALL),
+            (
+                "module_setup",
+                r#"{"module":"frame_rate","command":"echo hi"}"#,
+                ALL,
+            ),
+            ("know_me_tags", "{}", ALL),
+            ("work_get", r#"{"id":"w1"}"#, ALL),
+            ("work_list", "{}", ALL),
+            (
+                "work_update",
+                r#"{"id":"w1","note":"half done","text":"hello"}"#,
+                ALL,
+            ),
+            (
+                "work_add",
+                r#"{"title":"Ship it","goal":"a release","prompt":"hello"}"#,
+                ALL,
+            ),
+            ("work_archive", r#"{"id":"w1"}"#, ALL),
+        ];
+        for (name, arguments, line) in rows {
+            let line = if *line == ALL { arguments } else { line };
+            assert_eq!(&action_line(name, arguments), line, "{name} {arguments}");
+        }
+        // No native tool is left without a row.
+        let mut covered: Vec<&str> = rows
+            .iter()
+            .map(|(name, _, _)| crate::self_manage::self_tool(name).unwrap_or(name))
+            .collect();
+        covered.sort_unstable();
+        covered.dedup();
+        let mut native = gate::native_names();
+        native.push("show_panel");
+        native.extend(crate::self_manage::SELF_TOOLS.iter().map(|(name, _)| *name));
+        native.extend(
+            crate::self_manage::work::WORK_TOOLS
+                .iter()
+                .map(|(name, _)| *name),
+        );
+        native.sort_unstable();
+        native.dedup();
+        assert_eq!(covered, native);
+        assert_eq!(native.len(), 71);
+    }
+
+    #[test]
+    fn a_risky_typed_step_shows_the_text_it_types() {
+        let dir = workspace("card-type");
+        let desk = Spy {
+            calls: AtomicUsize::new(0),
+            halted: false,
+            locked: false,
+        };
+        let deny = Answer {
+            answer: PermAnswer::Deny,
+            asks: AtomicUsize::new(0),
+        };
+        let script = scripted(vec![
+            turn("", vec![call("t1", "type", r#"{"text":"rm -rf ~/old"}"#)]),
+            turn("Not typed.", Vec::new()),
+        ]);
+        let (_, _, events) = once(
+            &script,
+            &dir,
+            chat(gate::PermMode::Always, true, true),
+            Some(&desk),
+            &deny,
+        );
+        let cards: Vec<(String, String)> = events
+            .into_iter()
+            .filter_map(|event| match event {
+                LoopEvent::Permission { name, action, .. } => Some((name, action)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            cards,
+            vec![("type".to_string(), "rm -rf ~/old".to_string())]
+        );
+        assert_eq!(desk.calls.load(Ordering::SeqCst), 0);
+        // What the egui cabin does with that line: it holds the step.
+        assert_eq!(
+            crate::harness::classify_ask("type", &cards[0].1),
+            crate::harness::HardHit::Class(crate::harness::HardClass::Delete)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -1811,12 +1811,118 @@ mod tests {
             saved["mcpServers"]["weather"],
             json!({"url": server.url(), "type": "http"})
         );
+        // The variable its key goes in stays; the key it named is gone.
         assert_eq!(
             saved["mcpServers"]["notes"],
-            json!({"command": "notes-mcp", "enabled": false})
+            json!({"command": "notes-mcp", "tokenEnv": "NOTES_KEY", "enabled": false})
         );
         super::doctor();
         assert_eq!(server.auth_values(), vec![None]);
+        super::shutdown_all();
+        super::invalidate();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_imported_entry_keeps_its_key_variable_for_the_key_saved_later() {
+        let dir = crate::harness::test_dir("mcp-import-token-env");
+        let _guard = ConfigGuard::set(&dir);
+        super::invalidate();
+        let pasted = json!({"mcpServers": {"brave-search": {
+            "command": "npx", "args": ["-y", "brave-search-mcp"],
+            "tokenRef": "brave-search", "tokenEnv": "BRAVE_API_KEY", "enabled": false
+        }}});
+        let report = import_documents(&[pasted.to_string()]).unwrap();
+        assert_eq!(report.added, vec!["brave-search".to_string()]);
+        let saved = || -> serde_json::Value {
+            serde_json::from_str(&std::fs::read_to_string(dir.join("mcp.json")).unwrap()).unwrap()
+        };
+        assert_eq!(
+            saved()["mcpServers"]["brave-search"],
+            json!({
+                "command": "npx", "args": ["-y", "brave-search-mcp"],
+                "tokenEnv": "BRAVE_API_KEY", "enabled": false
+            })
+        );
+        assert_eq!(
+            super::save_key("brave-search", FAKE_KEY).unwrap(),
+            "Saved the key for brave-search"
+        );
+        assert_eq!(
+            saved()["mcpServers"]["brave-search"],
+            json!({
+                "command": "npx", "args": ["-y", "brave-search-mcp"],
+                "tokenRef": "brave-search", "tokenEnv": "BRAVE_API_KEY", "enabled": false
+            })
+        );
+        let def = &super::load_servers()["brave-search"];
+        assert_eq!(
+            (def.token_ref.as_deref(), def.token_env.as_deref()),
+            (Some("brave-search"), Some("BRAVE_API_KEY"))
+        );
+        super::invalidate();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A stdio entry whose program writes the value of `var` to a file as it
+    /// starts, and the file.
+    #[cfg(unix)]
+    fn env_probe(dir: &Path, var: &str, key_name: &str) -> (serde_json::Value, PathBuf) {
+        let seen = dir.join(format!("{var}.seen"));
+        let script = format!("printf '%s' \"${var}\" > '{}'", seen.display());
+        let entry = json!({
+            "command": "/bin/sh", "args": ["-c", script],
+            "tokenRef": key_name, "tokenEnv": var
+        });
+        (entry, seen)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_pasted_stdio_connector_starts_with_the_key_saved_for_it() {
+        let dir = crate::harness::test_dir("mcp-import-save-start");
+        let _guard = ConfigGuard::set(&dir);
+        super::invalidate();
+        let (entry, seen) = env_probe(&dir, "BRAVE_API_KEY", "brave-search");
+        let pasted = json!({"mcpServers": {"brave-search": entry}});
+        import_documents(&[pasted.to_string()]).unwrap();
+        // No key saved yet: it starts without one.
+        super::doctor();
+        assert_eq!(std::fs::read_to_string(&seen).unwrap(), "");
+        assert_eq!(
+            super::save_key("brave-search", FAKE_KEY).unwrap(),
+            "Saved the key for brave-search"
+        );
+        super::doctor();
+        assert_eq!(
+            std::fs::read_to_string(&seen).unwrap(),
+            "sk-abcdefghijklmnopqrstuv"
+        );
+        super::shutdown_all();
+        super::invalidate();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_imported_stdio_entry_never_starts_with_another_entrys_key() {
+        let (dir, _guard) = sealed_cfg("mcp-import-other-env");
+        let (entry, seen) = env_probe(&dir, "NOTES_KEY", "github");
+        let pasted = json!({"mcpServers": {"notes": entry}});
+        import_documents(&[pasted.to_string()]).unwrap();
+        super::doctor();
+        assert_eq!(std::fs::read_to_string(&seen).unwrap(), "");
+        // Put back by hand, the name of github's key stops the start.
+        std::fs::remove_file(&seen).unwrap();
+        let by_hand = json!({"mcpServers": {"notes": env_probe(&dir, "NOTES_KEY", "github").0}});
+        std::fs::write(dir.join("mcp.json"), by_hand.to_string()).unwrap();
+        super::invalidate();
+        let rows = super::doctor();
+        assert_eq!(
+            rows.iter().find(|r| r.name == "notes").expect("row").last_error,
+            "notes names another connector's key, so it was not used: save a key for notes in Settings, Connectors"
+        );
+        assert!(!seen.exists());
         super::shutdown_all();
         super::invalidate();
         let _ = std::fs::remove_dir_all(&dir);
