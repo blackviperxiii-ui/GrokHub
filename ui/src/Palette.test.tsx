@@ -66,6 +66,7 @@ describe("paletteRows", () => {
       "Settings: Auto setup",
       "Settings: Pulse",
       "Settings: Local AI",
+      "Settings: AI models",
       "Settings: Web access",
       "Settings: Labs",
       "Settings: About",
