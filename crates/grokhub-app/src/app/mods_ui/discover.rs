@@ -165,64 +165,11 @@ pub(super) fn mark_viewed(game: &str) {
 
 /// One quiet line under the title: what discovery is doing.
 pub(super) fn status_line(offline: bool) -> String {
-    if offline {
-        return "Discovery waits while Offline only is on.".into();
-    }
     let s = state();
-    if s.running {
-        return "Looking for new mods…".into();
-    }
-    let Some(store) = &s.store else {
-        return String::new();
-    };
-    let now = grokhub_core::now_ms() / 1000;
-    let fresh: usize = store
-        .finds
-        .values()
-        .flatten()
-        .filter(|f| f.is_new(now))
-        .count();
-    summary_line(store.seen.len(), fresh)
-}
-
-fn summary_line(games: usize, fresh: usize) -> String {
-    match (games, fresh) {
-        (0, _) => "Loadout looks up mods for your games on its own.".into(),
-        (g, 0) => format!("Watching {g} {} for new mods.", plural(g, "game", "games")),
-        (g, f) => format!(
-            "{f} new {} across {g} {} in the last two weeks.",
-            plural(f, "find", "finds"),
-            plural(g, "game", "games")
-        ),
-    }
-}
-
-fn plural<'a>(n: usize, one: &'a str, many: &'a str) -> &'a str {
-    if n == 1 {
-        one
-    } else {
-        many
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_status_line_reads_plainly() {
-        assert_eq!(
-            summary_line(0, 0),
-            "Loadout looks up mods for your games on its own."
-        );
-        assert_eq!(summary_line(1, 0), "Watching 1 game for new mods.");
-        assert_eq!(
-            summary_line(4, 1),
-            "1 new find across 4 games in the last two weeks."
-        );
-        assert_eq!(
-            summary_line(1, 37),
-            "37 new finds across 1 game in the last two weeks."
-        );
-    }
+    discover::status_line(
+        s.store.as_ref(),
+        offline,
+        s.running,
+        grokhub_core::now_ms() / 1000,
+    )
 }

@@ -1,5 +1,9 @@
+use std::path::PathBuf;
+
 use super::*;
+use grokhub_core::battlenet::BnetGame;
 use grokhub_core::mods::{Download, ModFile};
+use grokhub_core::steam::SteamGame;
 
 fn game(app_id: u32, name: &str, last_played: u64, playtime_min: u64) -> SteamGame {
     SteamGame {

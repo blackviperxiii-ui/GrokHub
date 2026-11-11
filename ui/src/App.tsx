@@ -76,6 +76,7 @@ const loaders = {
   home: () => import("./Home").then((m) => ({ default: m.Home })),
   library: () => import("./Library").then((m) => ({ default: m.Library })),
   memory: () => import("./Memory").then((m) => ({ default: m.Memory })),
+  mods: () => import("./Mods").then((m) => ({ default: m.Mods })),
   objectives: () => import("./Objectives").then((m) => ({ default: m.Objectives })),
   skills: () => import("./Skills").then((m) => ({ default: m.Skills })),
   pulse: () => import("./Pulse").then((m) => ({ default: m.Pulse })),
@@ -93,6 +94,7 @@ const Code = lazy(loaders.code);
 const CommandBox = lazy(loaders.command);
 const Library = lazy(loaders.library);
 const Memory = lazy(loaders.memory);
+const Mods = lazy(loaders.mods);
 const Objectives = lazy(loaders.objectives);
 const Pulse = lazy(loaders.pulse);
 const Skills = lazy(loaders.skills);
@@ -792,6 +794,11 @@ export function App() {
       {opened.has("library") && caps.library && (
         <Page shown={view === "library"}>
           <Library />
+        </Page>
+      )}
+      {opened.has("mods") && caps.mods && !caps.remote && (
+        <Page shown={view === "mods"}>
+          <Mods />
         </Page>
       )}
       {opened.has("settings") && (

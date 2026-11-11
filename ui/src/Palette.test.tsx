@@ -101,6 +101,13 @@ describe("paletteRows", () => {
     expect(labels(WEB, "")).toEqual(["Home", "Objectives", "Chat", "Imagine", "Automations", "Agents", "Personal", "Skills", "Connectors", "Workboard", "Settings"]);
   });
 
+  it("lists Mods right after Library on a desktop that has it, never on the web", () => {
+    const rows = labels({ ...DESKTOP, mods: true }, "");
+    expect(rows.slice(rows.indexOf("Library"), rows.indexOf("Library") + 2)).toEqual(["Library", "Mods"]);
+    expect(labels(DESKTOP, "")).not.toContain("Mods");
+    expect(labels({ ...WEB, mods: true }, "")).not.toContain("Mods");
+  });
+
   it("lists the Code tab and its Settings page when the Code tab is on", () => {
     const rows = labels({ ...DESKTOP, code: true }, "");
     expect(rows.slice(rows.indexOf("Chat"), rows.indexOf("Chat") + 2)).toEqual(["Chat", "Code"]);

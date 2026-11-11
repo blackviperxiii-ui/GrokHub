@@ -277,7 +277,9 @@ mod tests {
         };
         let receipt = cfg.join("channel").display().to_string();
         let plan = |c: &str, b: &str, sw: u8| {
-            format!("channel={c} branch={b} switch={sw} prefix=/tmp/gh-chan receipt={receipt}")
+            format!(
+                "channel={c} branch={b} switch={sw} prefix=/tmp/gh-chan receipt={receipt} app=cabin"
+            )
         };
         assert_eq!(run(&["--user", "--dry-run"]).1, plan("stable", "main", 0));
         assert_eq!(
@@ -311,6 +313,68 @@ mod tests {
             )
         );
         assert_eq!(run(&["--bogus"]).0, Some(2));
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    /// `--app` picks which desktop app the clone install builds. No `--app`
+    /// stays on the cabin, so the cabin's own update (`install.sh --user`)
+    /// and a fresh install behave exactly as before the flag existed.
+    #[cfg(unix)]
+    #[test]
+    fn install_sh_app_flag_defaults_to_the_cabin() {
+        let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts/install.sh");
+        let cfg = std::env::temp_dir().join(format!("grokhub-app-sh-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&cfg);
+        std::fs::create_dir_all(&cfg).unwrap();
+        let run = |args: &[&str]| {
+            let out = std::process::Command::new("bash")
+                .arg(script)
+                .args(args)
+                .env("GROKHUB_CONFIG", &cfg)
+                .env("PREFIX", "/tmp/gh-app")
+                .output()
+                .unwrap();
+            (
+                out.status.code(),
+                String::from_utf8_lossy(&out.stdout).trim().to_string(),
+                String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            )
+        };
+        let receipt = cfg.join("channel").display().to_string();
+        let plan = |app: &str| {
+            format!(
+                "channel=stable branch=main switch=0 prefix=/tmp/gh-app receipt={receipt} app={app}"
+            )
+        };
+        assert_eq!(
+            run(&["--user", "--dry-run"]),
+            (Some(0), plan("cabin"), String::new())
+        );
+        assert_eq!(run(&["--dry-run"]).1, plan("cabin"));
+        assert_eq!(
+            run(&["--user", "--app", "shell", "--dry-run"]).1,
+            plan("shell")
+        );
+        assert_eq!(run(&["--app=both", "--dry-run"]).1, plan("both"));
+        assert_eq!(run(&["--app", "cabin", "--dry-run"]).1, plan("cabin"));
+        assert_eq!(
+            run(&["--app", "tauri", "--dry-run"]),
+            (
+                Some(2),
+                String::new(),
+                "error: --app takes cabin, shell or both, not 'tauri'".into()
+            )
+        );
+        assert_eq!(
+            run(&["--app"]),
+            (
+                Some(2),
+                String::new(),
+                "error: --app takes cabin, shell or both".into()
+            )
+        );
+        let sh = include_str!("../../../scripts/install.sh");
+        assert!(sh.contains("\nAPP=cabin\n"), "the default app is the cabin");
         let _ = std::fs::remove_dir_all(&cfg);
     }
 
