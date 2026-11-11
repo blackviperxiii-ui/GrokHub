@@ -9,13 +9,14 @@
 //!
 //! Every git and gh call runs off the UI thread; results come back on a
 //! channel. Output, notes and activity lines pass through the project's held
-//! secret values before they are shown.
+//! secret values before they are shown. The activity log itself shows in
+//! the Code tab's Activity section.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
 use eframe::egui::{self, RichText};
-use grokhub_code::activity::{self, Entry, Kind};
+use grokhub_code::activity::Entry;
 use grokhub_code::secrets;
 use grokhub_code::ship::{self, Action, CodeShip, Plan, ShipMode};
 
@@ -25,8 +26,6 @@ pub(super) const SHIP_CONFIRM_PR: &str = "Open this PR?";
 pub(super) const SHIP_RULES: &str =
     "Never pushes main or the default branch, never force-pushes, never deletes a branch.";
 pub(super) const SHIP_SETTINGS_NOTE: &str = "Change these in the desktop app's Code settings.";
-pub(super) const SHIP_ACTIVITY: &str = "Activity";
-pub(super) const SHIP_NO_ACTIVITY: &str = "No pushes or PRs from this tab yet.";
 pub(super) const BRANCH_HINT: &str = "code/fix-typo";
 
 /// The Push and PR settings, read fresh for every plan and run so a change
@@ -62,23 +61,10 @@ pub(super) fn protected_line(cfg: &CodeShip) -> String {
     )
 }
 
-pub(super) fn kind_label(kind: Kind) -> &'static str {
-    match kind {
-        Kind::Push => "Push",
-        Kind::Pr => "PR",
-        Kind::Branch => "Branch",
-        Kind::Blocked => "Blocked",
-        Kind::Deploy => "Deploy",
-        Kind::Secret => "Secret",
-        Kind::Edit => "Edit",
-        Kind::Terminal => "Terminal",
-    }
-}
-
 /// Work for the worker thread.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ShipJob {
-    /// Read both plans and the activity log; `then` is a press waiting on them.
+    /// Read both plans; `then` is a press waiting on them.
     Refresh {
         then: Option<Action>,
     },
@@ -99,7 +85,6 @@ pub(super) enum ShipOut {
     Plans {
         push: Plan,
         pr: Plan,
-        activity: Vec<Entry>,
         cfg: CodeShip,
         then: Option<Action>,
     },
@@ -113,7 +98,8 @@ fn clean_plan(mut p: Plan, held: &[String]) -> Plan {
     p
 }
 
-fn clean_entry(mut e: Entry, held: &[String]) -> Entry {
+/// An activity row with the project's held secret values hidden.
+pub(super) fn clean_entry(mut e: Entry, held: &[String]) -> Entry {
     e.command = secrets::redact(&e.command, held);
     e.summary = secrets::redact(&e.summary, held);
     e.branch = secrets::redact(&e.branch, held);
@@ -135,10 +121,6 @@ impl ShipJob {
             ShipJob::Refresh { then } => ShipOut::Plans {
                 push: clean_plan(ship::plan(config_dir, ws, &cfg, Action::Push), &held),
                 pr: clean_plan(ship::plan(config_dir, ws, &cfg, Action::Pr), &held),
-                activity: activity::list(config_dir, activity::SHOW)
-                    .into_iter()
-                    .map(|e| clean_entry(e, &held))
-                    .collect(),
                 cfg,
                 then,
             },
@@ -176,7 +158,8 @@ pub(super) struct ShipPanel {
     pub(super) busy: bool,
     pub(super) note: Option<String>,
     pub(super) output: String,
-    pub(super) activity: Vec<Entry>,
+    /// A push, PR or new branch finished: the tab reads the repo and activity again.
+    pub(super) changed: bool,
     /// The workspace the panel was read for; another one starts it over.
     ws: Option<PathBuf>,
     rx: Option<mpsc::Receiver<ShipOut>>,
@@ -238,7 +221,6 @@ impl ShipPanel {
             ShipOut::Plans {
                 push,
                 pr,
-                activity,
                 cfg,
                 then,
             } => {
@@ -254,7 +236,6 @@ impl ShipPanel {
                 }
                 self.push = Some(push);
                 self.pr = Some(pr);
-                self.activity = activity;
                 self.cfg = Some(cfg);
                 let Some(action) = then else {
                     self.busy = false;
@@ -289,6 +270,7 @@ impl ShipPanel {
                     }
                     Err(e) => self.note = Some(e),
                 }
+                self.changed = true;
                 Some(ShipJob::Refresh { then: None })
             }
             ShipOut::Branch(res) => {
@@ -301,9 +283,16 @@ impl ShipPanel {
                     }
                     Err(e) => self.note = Some(e),
                 }
+                self.changed = true;
                 Some(ShipJob::Refresh { then: None })
             }
         }
+    }
+
+    /// The page's Refresh: read the plans again, unless something is running.
+    pub(super) fn refresh(&mut self, ctx: &egui::Context, config_dir: &Path, ws: &Path) {
+        let job = self.shown();
+        self.start(job, ctx, config_dir, ws);
     }
 
     fn spawn(&mut self, job: ShipJob, ctx: &egui::Context, config_dir: &Path, ws: &Path) {
@@ -347,7 +336,7 @@ impl ShipPanel {
     }
 
     /// The section: mode and rules, New branch, Push and Open PR, the confirm
-    /// card, the result and the activity log.
+    /// card and the result.
     pub(super) fn ui(&mut self, ui: &mut egui::Ui, config_dir: &Path, ws: &Path) {
         let ctx = ui.ctx().clone();
         if self.ws.as_deref() != Some(ws) {
@@ -360,7 +349,7 @@ impl ShipPanel {
         }
         self.poll(&ctx, config_dir, ws);
 
-        crate::cards::section_heading(ui, SHIP_TITLE);
+        crate::cards::section_label(ui, SHIP_TITLE);
         let cfg = self.cfg.clone().unwrap_or_default();
         muted(ui, &format!("{} {SHIP_RULES}", mode_note(&cfg)));
         muted(
@@ -437,36 +426,6 @@ impl ShipPanel {
             mono_block(ui, &self.output);
         }
         self.start(job, &ctx, config_dir, ws);
-
-        crate::cards::section_heading(ui, SHIP_ACTIVITY);
-        if self.activity.is_empty() {
-            muted(ui, SHIP_NO_ACTIVITY);
-        }
-        for e in &self.activity {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(
-                    RichText::new(kind_label(e.kind))
-                        .size(crate::theme::TYPE_CAPTION)
-                        .color(crate::theme::fg()),
-                );
-                ui.label(
-                    RichText::new(&e.branch)
-                        .monospace()
-                        .size(crate::theme::TYPE_CAPTION)
-                        .color(crate::theme::fg()),
-                );
-                muted(ui, &e.summary);
-            });
-            if !e.command.is_empty() {
-                ui.label(
-                    RichText::new(&e.command)
-                        .monospace()
-                        .size(crate::theme::TYPE_CAPTION)
-                        .color(crate::theme::muted()),
-                );
-            }
-            ui.add_space(4.0);
-        }
     }
 }
 

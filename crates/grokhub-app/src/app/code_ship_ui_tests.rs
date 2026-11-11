@@ -22,7 +22,6 @@ fn plans(push: Plan, pr: Plan, then: Option<Action>) -> ShipOut {
     ShipOut::Plans {
         push,
         pr,
-        activity: Vec::new(),
         cfg: CodeShip::default(),
         then,
     }
@@ -188,23 +187,18 @@ fn a_result_or_an_error_shows_then_reads_again() {
     )));
     assert_eq!(next, Some(ShipJob::Refresh { then: None }));
     assert_eq!(p.note.as_deref(), Some("This needs a confirmation first."));
+    // The tab reads the repo and its activity again after any try.
+    assert!(p.changed);
     let next = p.apply(ShipOut::Branch(Ok("code/fix".into())));
     assert_eq!(next, Some(ShipJob::Refresh { then: None }));
     assert_eq!(p.note.as_deref(), Some("On code/fix now."));
     assert_eq!(p.branch_name, "");
 }
 
-#[test]
-fn kind_labels_match_the_shell_tab() {
-    assert_eq!(kind_label(Kind::Push), "Push");
-    assert_eq!(kind_label(Kind::Pr), "PR");
-    assert_eq!(kind_label(Kind::Blocked), "Blocked");
-    assert_eq!(kind_label(Kind::Secret), "Secret");
-}
-
 #[cfg(unix)]
 mod repo {
     use super::*;
+    use grokhub_code::activity::{self, Kind};
     use std::process::Command;
 
     fn sh_git(dir: &Path, args: &[&str]) {
@@ -293,9 +287,7 @@ mod repo {
 
     fn read(f: &Fixture) -> (Plan, Plan, Vec<Entry>) {
         match (ShipJob::Refresh { then: None }).run(&f.config, &f.work, &none) {
-            ShipOut::Plans {
-                push, pr, activity, ..
-            } => (push, pr, activity),
+            ShipOut::Plans { push, pr, .. } => (push, pr, activity::list(&f.config, 10)),
             other => panic!("expected plans, got {other:?}"),
         }
     }
@@ -464,11 +456,15 @@ mod repo {
                 "Pushing to this git host is off in Settings → Code.".into()
             ))
         );
-        let ShipOut::Plans { push, activity, .. } =
+        let ShipOut::Plans { push, .. } =
             (ShipJob::Refresh { then: None }).run(&f.config, &f.work, &held)
         else {
             panic!("expected plans");
         };
+        let activity: Vec<Entry> = activity::list(&f.config, 10)
+            .into_iter()
+            .map(|e| clean_entry(e, &held()))
+            .collect();
         assert_eq!(
             push.command,
             "git push --porcelain origin HEAD:refs/heads/[redacted]"

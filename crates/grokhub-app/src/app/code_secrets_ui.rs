@@ -221,7 +221,7 @@ impl SecretsPanel {
         }
         self.poll();
 
-        crate::cards::section_heading(ui, SECRETS_TITLE);
+        crate::cards::section_label(ui, SECRETS_TITLE);
         muted(ui, SECRETS_NOTE);
         ui.add_space(8.0);
         let mut job = None;
