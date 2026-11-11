@@ -3083,6 +3083,48 @@ export interface CodeDiff {
   cut: boolean;
 }
 
+/** Code tab: one project on the project bar. */
+export interface CodeProject {
+  id: string;
+  name: string;
+  path: string;
+  /** The folder the app works in now. */
+  current: boolean;
+  /** The folder is no longer on disk. */
+  missing: boolean;
+}
+
+/** Code tab: every project in the list, and the open folder ("" when none is). */
+export interface CodeProjects {
+  bound: string;
+  projects: CodeProject[];
+}
+
+export function codeProjects(): Promise<CodeProjects> {
+  return invoke<CodeProjects>("code_projects");
+}
+
+/** Switch to a project from the list, or open a folder by path; the app then works in it. */
+export function codeProjectOpen(path: string): Promise<CodeProjects> {
+  return invoke<CodeProjects>("code_project_open", { path });
+}
+
+/** The system folder picker, then that folder opens; null when the picker was closed. */
+export function codeProjectPick(): Promise<CodeProjects | null> {
+  return invoke<CodeProjects | null>("code_project_pick");
+}
+
+/** Make a project in the work folder and open it. */
+export function codeProjectNew(name: string): Promise<CodeProjects> {
+  return invoke<CodeProjects>("code_project_new", { name });
+}
+
+/** The agent window shows this session: it takes the open project's folder
+ * unless it has one already. Resolves with the folder it works in. */
+export function codeSessionBind(conversationId: string): Promise<string> {
+  return invoke<string>("code_session_bind", { conversationId });
+}
+
 export function codeRepo(): Promise<CodeRepo> {
   return invoke<CodeRepo>("code_repo");
 }

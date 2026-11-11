@@ -456,6 +456,11 @@ pub(crate) fn exec(
     })
 }
 
+/// True while a test run or deploy is in progress.
+pub fn running() -> bool {
+    CURRENT.lock().unwrap_or_else(|e| e.into_inner()).is_some()
+}
+
 /// Stop the test run or deploy in progress, and everything it started. False
 /// when nothing is running. The stopped run ends by itself, with exit -1.
 pub fn stop() -> bool {
@@ -780,6 +785,21 @@ mod tests {
             "{}",
             out.output
         );
+    }
+
+    #[test]
+    fn running_is_true_only_while_a_run_is_going() {
+        let work = temp_dir("running-work");
+        assert!(!running());
+        let mut during = Vec::new();
+        let run = exec(&work, "echo one", Kind::Test, &[], None, &mut |_: &str| {
+            during.push(running())
+        })
+        .unwrap();
+        assert_eq!(run.exit, 0);
+        assert!(!during.is_empty(), "the run printed a line");
+        assert!(during.iter().all(|on| *on), "{during:?}");
+        assert!(!running());
     }
 
     #[test]

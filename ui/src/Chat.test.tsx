@@ -100,6 +100,8 @@ vi.mock("./api", () => ({
 }));
 
 import {
+  AGENT_EMPTY,
+  AGENT_PLACEHOLDER,
   applyEvent,
   Chat,
   CHAT_EMPTY,
@@ -112,6 +114,7 @@ import {
   PLAN_NEXT,
   STOP_ASKING_DONE,
   type Item,
+  waitingLine,
   type QueueAct,
 } from "./Chat";
 import { ASK_TRACKED } from "./Goals";
@@ -1482,5 +1485,53 @@ describe("Chat queue", () => {
     await act(async () => ends[0]("halted"));
     expect(screen.getByLabelText("Message")).toHaveValue("then deploy");
     expect(api.sendChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("as the Code tab's agent window it starts on a new session, not the last chat", async () => {
+    api.getLastChat.mockResolvedValue(SAVED);
+    const onConversation = vi.fn();
+    const onBusy = vi.fn();
+    const view = render(<Chat onOpenSettings={() => {}} embedded onConversation={onConversation} onBusy={onBusy} />);
+    await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
+    expect(api.getLastChat).not.toHaveBeenCalled();
+    expect(screen.queryByText("pick a paint colour")).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Agent" })).toHaveClass("chat", "embedded");
+    expect(screen.getByText(AGENT_EMPTY)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "New session" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "New chat" })).not.toBeInTheDocument();
+    expect(onConversation).toHaveBeenCalledTimes(1);
+    const first = onConversation.mock.calls[0][0];
+    expect(first).toMatch(/^shell-/);
+    expect(onBusy).toHaveBeenLastCalledWith(false);
+
+    // A reply reports busy while it runs; a message typed meanwhile waits in sight.
+    const finish = holdTurn();
+    await userEvent.type(screen.getByLabelText(AGENT_PLACEHOLDER), "add a health check{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledWith(first, "add a health check", undefined));
+    expect(onBusy).toHaveBeenLastCalledWith(true);
+    api.readTurn.mockResolvedValue({ route: "queue", text: "then deploy", ack: "" });
+    await userEvent.type(screen.getByLabelText(AGENT_PLACEHOLDER), "then deploy{Enter}");
+    expect(await screen.findByText(waitingLine(1))).toBeInTheDocument();
+    expect(waitingLine(1)).toBe("1 message waits for this reply to end.");
+    expect(waitingLine(3)).toBe("3 messages wait for this reply to end.");
+    api.sendChat.mockResolvedValue("end_turn");
+    await act(async () => finish());
+    await waitFor(() => expect(onBusy).toHaveBeenLastCalledWith(false));
+
+    // A typed command tells the tab, which reads the open project again.
+    const onRan = vi.fn();
+    api.runSlash.mockReset().mockResolvedValue({ kind: "notice", text: "Bound /work/dawn" });
+    view.rerender(
+      <Chat onOpenSettings={() => {}} embedded onConversation={onConversation} onBusy={onBusy} onRan={onRan} />,
+    );
+    await userEvent.type(screen.getByLabelText(AGENT_PLACEHOLDER), "/project bind /work/dawn{Enter}");
+    expect(await screen.findByText("Bound /work/dawn")).toBeInTheDocument();
+    expect(api.runSlash).toHaveBeenCalledWith("/project bind /work/dawn", first);
+    expect(onRan).toHaveBeenCalledTimes(1);
+
+    // New session tells the tab the session changed.
+    await userEvent.click(screen.getByRole("button", { name: "New session" }));
+    await waitFor(() => expect(onConversation).toHaveBeenCalledTimes(2));
+    expect(onConversation.mock.calls[1][0]).not.toBe(first);
   });
 });

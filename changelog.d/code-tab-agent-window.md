@@ -1,0 +1,1 @@
+- Code tab: the agent window. Talk to the agent beside the project's files, diff, terminal and tests instead of on the Chat tab, with its to-dos and helpers listed underneath. Each session works in the folder of the project it started in, even when the app opens another project while it runs.

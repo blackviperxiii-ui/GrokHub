@@ -184,6 +184,15 @@ export function App() {
   const busy = Object.values(activity).some((item) => item.status === "running" || item.status === "waiting");
   // The open chat for the Agents page: the conversation the window last heard from.
   const [openChat, setOpenChat] = useState<string>();
+  // The conversation each pane has open: the Chat tab's, and the Code tab's
+  // agent window's. One conversation is only ever open in one of them.
+  const [chatSession, setChatSession] = useState<string>();
+  const [agentSession, setAgentSession] = useState<string>();
+  const agentNow = useRef<string>(undefined);
+  const onAgentSession = useCallback((id: string) => {
+    agentNow.current = id;
+    setAgentSession(id);
+  }, []);
   // The pages opened so far. Each mounts the first time it opens, not before.
   const [opened, setOpened] = useState<ReadonlySet<View>>(() => new Set(["chat"]));
   if (!opened.has(view)) setOpened(new Set(opened).add(view));
@@ -290,7 +299,8 @@ export function App() {
     let stop: (() => void) | undefined;
     let dropped = false;
     void onChatEvent((envelope) => {
-      setOpenChat(envelope.conversationId);
+      // The agent window's session has its own Tasks panel on the Code tab.
+      if (envelope.conversationId.split("~side-")[0] !== agentNow.current) setOpenChat(envelope.conversationId);
       // While the window is in the background, what a reply did lands in the
       // bell too, so it is there on return (the OS notification is the echo).
       if (!document.hasFocus()) {
@@ -469,6 +479,11 @@ export function App() {
   /** A saved chat, opened in Chat as History opens one. The web app has no
    * History, so there it switches to the browser's own chat. */
   function openSaved(id: string) {
+    // The agent window has it open: it shows there, cards and all.
+    if (id === agentSession && opened.has("code")) {
+      setView("code");
+      return;
+    }
     if (caps.remote) setPrefill((now) => ({ text: "", n: (now?.n ?? 0) + 1, conversationId: id }));
     else setOpen((now) => ({ id, n: (now?.n ?? 0) + 1 }));
     setView("chat");
@@ -630,6 +645,7 @@ export function App() {
           open={open}
           deleted={deleted}
           clear={clear}
+          onConversation={setChatSession}
           active={view === "chat"}
           remote={Boolean(caps.remote)}
           grokSignIn={Boolean(caps.grokSignIn)}
@@ -702,15 +718,22 @@ export function App() {
           />
         </Page>
       )}
+      {/* Code hides its own pages: its agent window stays mounted like Chat. */}
       {opened.has("code") && !caps.remote && (
-        <Page shown={view === "code"}>
+        <Suspense fallback={null}>
           <Code
-            onTask={({ prompt, conversationId }) => {
-              setPrefill((now) => ({ text: prompt, n: (now?.n ?? 0) + 1, conversationId }));
-              setView("chat");
-            }}
+            shown={view === "code"}
+            onOpenSettings={() => setView("settings")}
+            onSignIn={() => run({ kind: "settings", section: "account" })}
+            onOpenView={openView}
+            onOpenPalette={() => setPalette(true)}
+            grokSignIn={Boolean(caps.grokSignIn)}
+            chatSession={chatSession}
+            onShowChat={() => setView("chat")}
+            onSession={onAgentSession}
+            deleted={deleted}
           />
-        </Page>
+        </Suspense>
       )}
       {opened.has("command") && !caps.remote && (
         <Page shown={view === "command"}>
