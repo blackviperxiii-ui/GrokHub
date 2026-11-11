@@ -23,19 +23,22 @@ fn names_in_literals(src: &str, name: &str) -> Vec<String> {
 
 #[test]
 fn shell_strings_take_the_name_from_brand_json() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut hits = Vec::new();
-    for entry in std::fs::read_dir(&dir).expect("src dir") {
-        let path = entry.expect("entry").path();
-        let file = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        // Tests quote what the shell shows, and this file names what it bans.
-        if !file.ends_with(".rs") || file.ends_with("_tests.rs") || file == "brand_guard.rs" {
-            continue;
-        }
-        let src = std::fs::read_to_string(&path).expect("read");
-        for name in ["GrokHub", grokhub_core::brand::product_name()] {
-            for line in names_in_literals(&src, name) {
-                hits.push(format!("{file}: {line}"));
+    // The shell's own sources and the Code tab's shared crate it shows.
+    for dir in [root.join("src"), root.join("../crates/grokhub-code/src")] {
+        for entry in std::fs::read_dir(&dir).expect("src dir") {
+            let path = entry.expect("entry").path();
+            let file = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            // Tests quote what the shell shows, and this file names what it bans.
+            if !file.ends_with(".rs") || file.ends_with("_tests.rs") || file == "brand_guard.rs" {
+                continue;
+            }
+            let src = std::fs::read_to_string(&path).expect("read");
+            for name in ["GrokHub", grokhub_core::brand::product_name()] {
+                for line in names_in_literals(&src, name) {
+                    hits.push(format!("{file}: {line}"));
+                }
             }
         }
     }

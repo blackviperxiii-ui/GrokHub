@@ -52,7 +52,7 @@ pub struct Listing {
 /// The real path of `rel` under `workspace`, or an error naming why not.
 /// `must_exist` is false for a save that may create the file.
 fn resolve(workspace: &Path, rel: &str, must_exist: bool) -> Result<PathBuf, String> {
-    let rel = crate::code::inside(rel).map_err(|_| OUTSIDE.to_string())?;
+    let rel = crate::repo::inside(rel).map_err(|_| OUTSIDE.to_string())?;
     let rel_path = Path::new(rel);
     if rel_path
         .components()
@@ -182,13 +182,12 @@ pub fn write_logged(
     keep: usize,
 ) -> Result<FileText, String> {
     let saved = write(workspace, rel, text)?;
-    let repo_key =
-        crate::code_runs::repo_key(workspace, crate::code::origin_url(workspace).as_deref());
-    let _ = crate::code_activity::append(
+    let repo_key = crate::runs::repo_key(workspace, crate::repo::origin_url(workspace).as_deref());
+    let _ = crate::activity::append(
         config_dir,
-        &crate::code_activity::Entry {
+        &crate::activity::Entry {
             ts_ms: grokhub_core::now_ms(),
-            kind: crate::code_activity::Kind::Edit,
+            kind: crate::activity::Kind::Edit,
             repo_key,
             host: String::new(),
             branch: String::new(),
@@ -204,5 +203,5 @@ pub fn write_logged(
 }
 
 #[cfg(test)]
-#[path = "code_files_tests.rs"]
+#[path = "files_tests.rs"]
 mod tests;

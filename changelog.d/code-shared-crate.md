@@ -1,0 +1,1 @@
+- Internal: the Code tab's logic moved into a shared `grokhub-code` crate so the cabin can use it too; the desktop app's Code tab works the same.

@@ -70,8 +70,8 @@ pub fn append_held(
 ) -> Result<(), String> {
     let _g = WRITE.lock().unwrap_or_else(|e| e.into_inner());
     let clean = Entry {
-        command: crate::code_secrets::redact(&entry.command, held),
-        summary: crate::code_secrets::redact(&entry.summary, held),
+        command: crate::secrets::redact(&entry.command, held),
+        summary: crate::secrets::redact(&entry.summary, held),
         ..entry.clone()
     };
     let line = serde_json::to_string(&clean).map_err(|e| e.to_string())?;

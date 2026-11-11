@@ -37,6 +37,9 @@ tauri-build = { version = "2", features = [] }
 grokhub-core = { path = "../crates/grokhub-core" }
 grokhub-agent = { path = "../crates/grokhub-agent" }
 grokhub-fps-probe = { path = "../crates/grokhub-fps-probe" }
+# The Code tab's logic (repo view, runs, push guard, secrets, deploys, files,
+# terminal), shared with the cabin.
+grokhub-code = { path = "../crates/grokhub-code" }
 tauri = { version = "2", features = ["tray-icon"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -66,9 +69,6 @@ minisign-verify = "0.3"
 grokhub-desktop = { path = "../crates/grokhub-desktop" }
 # The composer's + button opens the system file picker (open only).
 tauri-plugin-dialog = "2.8.4"
-# The Code tab's terminal runs the user's shell in a real pseudo-terminal
-# (code_term.rs): ConPTY on Windows, openpty elsewhere. Desktop only.
-portable-pty = "0.9"
 # Desktop basics (os_extras.rs): one running copy, the window's place and size,
 # the summon hotkey, notifications and start at login. All driven from Rust.
 tauri-plugin-single-instance = "2.5.5"

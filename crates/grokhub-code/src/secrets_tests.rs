@@ -1,5 +1,5 @@
 use super::*;
-use crate::code_activity::{self, Entry, Kind};
+use crate::activity::{self as code_activity, Entry, Kind};
 use std::cell::RefCell;
 use std::collections::HashMap;
 

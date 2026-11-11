@@ -1,0 +1,23 @@
+[package]
+name = "grokhub-code"
+version.workspace = true
+rust-version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The Code tab's logic, shared by the cabin and the Tauri shell."
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+grokhub-core = { path = "../grokhub-core" }
+grokhub-agent = { path = "../grokhub-agent" }
+serde.workspace = true
+serde_json.workspace = true
+keyring.workspace = true
+
+# The terminal runs the user's shell in a real pseudo-terminal (term.rs):
+# ConPTY on Windows, openpty elsewhere. Desktop only.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+portable-pty = "0.9"
