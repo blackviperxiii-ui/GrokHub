@@ -67,6 +67,9 @@ pub mod onboard;
 pub mod opener;
 #[cfg(desktop)]
 mod os_extras;
+pub mod pc_files;
+#[cfg(desktop)]
+pub mod pc_files_run;
 pub mod pc_helpers;
 pub mod permissions;
 pub mod personality;
@@ -3492,6 +3495,116 @@ async fn forget_pc_rhythm(state: State<'_, ShellState>) -> Result<pc_helpers::Pc
     off_main(move || pc_helpers::forget_rhythm(&dir)).await?
 }
 
+/// Settings → Your PC → PC helpers, files, system and printers.
+#[tauri::command]
+async fn get_pc_files(state: State<'_, ShellState>) -> Result<pc_files::FilesHelpers, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || pc_files::read(&dir)).await
+}
+
+/// Turn one of those switches on or off (`downloadsTidy`, `modelDrop`,
+/// `backupNudge`, `resumeCode`, `netLog`, `printAlerts`, `printCamera`).
+#[tauri::command]
+async fn set_pc_files_switch(
+    state: State<'_, ShellState>,
+    key: String,
+    on: bool,
+) -> Result<pc_files::FilesHelpers, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || pc_files::set_switch(&dir, &key, on)).await?
+}
+
+/// Save the code folders or the important folders.
+#[tauri::command]
+async fn set_pc_folders(
+    state: State<'_, ShellState>,
+    key: String,
+    folders: Vec<String>,
+) -> Result<pc_files::FilesHelpers, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || pc_files::set_folders(&dir, &key, &folders)).await?
+}
+
+/// Where "Move to models" puts a model; empty means the default.
+#[tauri::command]
+async fn set_pc_models_folder(
+    state: State<'_, ShellState>,
+    folder: String,
+) -> Result<pc_files::FilesHelpers, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || pc_files::set_models_folder(&dir, &folder)).await?
+}
+
+/// Save a LAN printer after asking its address what it is.
+#[cfg(desktop)]
+#[tauri::command]
+async fn add_pc_printer(
+    state: State<'_, ShellState>,
+    endpoint: String,
+) -> Result<pc_files::FilesHelpers, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || pc_files::save_printer(&dir, pc_files_run::identify_printer(&endpoint)?))
+        .await?
+}
+
+#[tauri::command]
+async fn remove_pc_printer(
+    state: State<'_, ShellState>,
+    key: String,
+) -> Result<pc_files::FilesHelpers, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || pc_files::remove_printer(&dir, &key)).await?
+}
+
+#[tauri::command]
+async fn set_pc_printer_on(
+    state: State<'_, ShellState>,
+    key: String,
+    on: bool,
+) -> Result<pc_files::FilesHelpers, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || pc_files::set_printer_enabled(&dir, &key, on)).await?
+}
+
+/// What could go from Downloads. Nothing is moved.
+#[cfg(desktop)]
+#[tauri::command]
+async fn pc_tidy_review() -> Result<Vec<pc_files_run::TidyRow>, String> {
+    off_main(pc_files_run::tidy_review).await
+}
+
+/// Move the ticked suggestions to the Trash; the page asks for approval first.
+#[cfg(desktop)]
+#[tauri::command]
+async fn pc_tidy_trash(names: Vec<String>) -> Result<pc_files_run::TidyDone, String> {
+    off_main(move || pc_files_run::tidy_trash(&names)).await?
+}
+
+/// Where the person left off in the code folders they picked.
+#[cfg(desktop)]
+#[tauri::command]
+async fn pc_resume_rows(
+    state: State<'_, ShellState>,
+) -> Result<Vec<pc_files_run::ResumeRow>, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || pc_files_run::resume_rows(&dir)).await
+}
+
+/// Time a download and log it; returns Mbit/s.
+#[cfg(desktop)]
+#[tauri::command]
+async fn pc_speed_test(state: State<'_, ShellState>) -> Result<f64, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || pc_files_run::speed_test(&dir)).await?
+}
+
+/// Save the internet log as a CSV; returns where it went.
+#[tauri::command]
+async fn pc_net_csv(state: State<'_, ShellState>) -> Result<String, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || pc_files::export_net_csv(&dir, grokhub_core::now_ms())).await?
+}
+
 /// Devices → Start share: whether this computer's LAN hub is on, its pairing
 /// code and the computers paired with it. Desktop only.
 #[cfg(desktop)]
@@ -4502,6 +4615,9 @@ pub fn run() {
                 app.state::<ShellState>().config_dir.clone(),
                 app.handle().clone(),
             );
+            // Downloads tidy, model drop, backup reminders and printer alerts.
+            #[cfg(desktop)]
+            pc_files_run::start(app.state::<ShellState>().config_dir.clone());
             // The Workboard's local tidy, while the cabin is closed. No model.
             #[cfg(desktop)]
             workboard::start_sweeper(app.state::<ShellState>().config_dir.clone());
@@ -4763,6 +4879,23 @@ pub fn run() {
             set_pc_helper,
             set_pc_auto_sleep,
             forget_pc_rhythm,
+            get_pc_files,
+            set_pc_files_switch,
+            set_pc_folders,
+            set_pc_models_folder,
+            #[cfg(desktop)]
+            add_pc_printer,
+            remove_pc_printer,
+            set_pc_printer_on,
+            #[cfg(desktop)]
+            pc_tidy_review,
+            #[cfg(desktop)]
+            pc_tidy_trash,
+            #[cfg(desktop)]
+            pc_resume_rows,
+            #[cfg(desktop)]
+            pc_speed_test,
+            pc_net_csv,
             save_behavior,
             save_defaults,
             get_privacy,
