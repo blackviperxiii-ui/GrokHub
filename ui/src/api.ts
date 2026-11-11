@@ -835,6 +835,7 @@ export type SlashEffect =
       view: "settings" | "memory" | "automations" | "connectors" | "history";
     }
   | { kind: "notice"; text: string }
+  | { kind: "import" }
   | { kind: "export" }
   | { kind: "exportAs"; format: "html" | "json" }
   | { kind: "retry" }

@@ -53,6 +53,10 @@ pub const SHELL_SLASH: &[ShellCmd] = &[
     row("/connectors", "Open Connectors", "/connectors"),
     ShellCmd {
         desktop_only: true,
+        ..row("/import", "Add an OpenClaw workspace for review", "/import")
+    },
+    ShellCmd {
+        desktop_only: true,
         ..row("/rename", "Rename this chat…", "/rename ")
     },
     ShellCmd {
@@ -209,6 +213,9 @@ pub enum Effect {
     },
     /// `/settings`, `/memory`, `/automations`, `/connectors`.
     Open { view: &'static str },
+    /// `/import`: open the review of an OpenClaw workspace's notes. Nothing
+    /// is written until the person saves.
+    Import,
     /// A line to show in the chat log: help or a saved note.
     Notice { text: String },
     /// `/export`: the chat saves this conversation and shows where it went.
@@ -376,6 +383,7 @@ pub fn parse(line: &str, remote: bool) -> Result<Action, String> {
             view: "automations",
         },
         "/connectors" => Effect::Open { view: "connectors" },
+        "/import" => Effect::Import,
         "/export" => match grokhub_core::ChatExport::parse(rest) {
             Some(grokhub_core::ChatExport::Markdown) => Effect::Export,
             Some(grokhub_core::ChatExport::Html) => Effect::ExportAs { format: "html" },

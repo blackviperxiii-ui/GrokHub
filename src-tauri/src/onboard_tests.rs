@@ -130,3 +130,97 @@ fn acts_parse_from_the_page() {
     let s: Act = serde_json::from_str(r#"{"act":"skip"}"#).unwrap();
     assert_eq!(s, Act::Skip);
 }
+
+/// A synthetic OpenClaw workspace under a throwaway home.
+fn fixture_home(tag: &str) -> PathBuf {
+    let home = std::env::temp_dir().join(format!(
+        "gh-tauri-oc-home-{tag}-{}-{}",
+        std::process::id(),
+        grokhub_core::now_ms()
+    ));
+    let ws = home.join(".openclaw").join("workspace");
+    fs::create_dir_all(&ws).unwrap();
+    fs::write(ws.join("SOUL.md"), "Be brief and kind.\n").unwrap();
+    fs::write(ws.join("USER.md"), "Likes tea.\n").unwrap();
+    fs::write(ws.join("TOOLS.md"), "Camera is cam-7.\n").unwrap();
+    fs::write(
+        ws.join("NOTES.md"),
+        "token sk-abcdefghijklmnopqrstuvwxyz0123456789ABCD\n",
+    )
+    .unwrap();
+    home
+}
+
+#[test]
+fn import_slash_is_a_desktop_command_that_opens_the_review() {
+    assert_eq!(
+        crate::slash::parse("/import", false),
+        Ok(crate::slash::Action::Effect(crate::slash::Effect::Import))
+    );
+    let hit = crate::slash::hits("/imp", true)
+        .into_iter()
+        .find(|h| h.cmd == "/import")
+        .expect("import row");
+    assert_eq!(
+        hit.disabled.as_deref(),
+        Some(crate::slash::ON_YOUR_COMPUTER)
+    );
+    assert!(crate::slash::help().contains("/import — Add an OpenClaw workspace for review"));
+}
+
+#[test]
+fn openclaw_notes_are_appended_for_review_and_nothing_is_written() {
+    let (dir, _g) = temp("oc-append");
+    let home = fixture_home("append");
+    let base = Drafts {
+        user: "# User\n\n- Call me: Sam\n".into(),
+        ..Drafts::default()
+    };
+    let r = act(&dir, Some(&home), "", Act::Openclaw { drafts: base }, NOW).unwrap();
+    assert!(r.openclaw);
+    let d = r.drafts.expect("drafts");
+    assert!(
+        d.user.starts_with("# User\n\n- Call me: Sam\n"),
+        "{}",
+        d.user
+    );
+    assert!(d.user.contains("From OpenClaw USER.md") && d.user.contains("Likes tea."));
+    assert!(d.soul.contains("From OpenClaw SOUL.md") && d.soul.contains("Be brief and kind."));
+    let all = format!("{}{}{}", d.user, d.soul, d.memory);
+    assert!(!all.contains("cam-7"), "TOOLS.md stays out");
+    assert!(
+        !all.contains("sk-abcdefghijkl"),
+        "secret-looking files stay out"
+    );
+    assert!(
+        !dir.join("USER.md").exists(),
+        "nothing is written before Save"
+    );
+    assert!(!dir.join("memory").join("USER.md").exists());
+}
+
+#[test]
+fn an_existing_user_file_is_unchanged_until_save() {
+    let (dir, _g) = temp("oc-keep");
+    let home = fixture_home("keep");
+    let user_path = dir.join("memory").join("USER.md");
+    fs::write(&user_path, "# User\n\n- Real note\n").unwrap();
+    let r = act(
+        &dir,
+        Some(&home),
+        "",
+        Act::Openclaw {
+            drafts: Drafts {
+                user: "# User\n\n- Real note\n".into(),
+                ..Drafts::default()
+            },
+        },
+        NOW,
+    )
+    .unwrap();
+    assert!(r.drafts.unwrap().user.contains("- Real note\n"));
+    assert_eq!(
+        fs::read_to_string(&user_path).unwrap(),
+        "# User\n\n- Real note\n"
+    );
+}
