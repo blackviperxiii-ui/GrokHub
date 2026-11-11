@@ -312,6 +312,291 @@ pub fn search(workspace: &Path, query: &str) -> Result<Vec<Hit>, String> {
         .collect())
 }
 
+/// How many lines a recall or a preview shows before it says "and N more".
+const SHOWN: usize = 8;
+
+fn clip(text: &str) -> String {
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() <= 100 {
+        return flat;
+    }
+    let cut: String = flat.chars().take(99).collect();
+    format!("{}…", cut.trim_end())
+}
+
+fn listed(lines: &[String]) -> String {
+    let mut out: Vec<String> = lines.iter().take(SHOWN).map(|l| format!("- {l}")).collect();
+    if lines.len() > SHOWN {
+        out.push(format!("…and {} more", lines.len() - SHOWN));
+    }
+    out.join("\n")
+}
+
+/// `/recall <query>`: what the notes and the learned lines say about it,
+/// through the same search the agent's own recall uses.
+pub fn recall(workspace: &Path, query: &str) -> Result<String, String> {
+    let query = query.trim();
+    if query.is_empty() {
+        return Err("Type what to recall after /recall.".into());
+    }
+    let hits = search(workspace, query)?;
+    if hits.is_empty() {
+        return Ok(format!("Nothing in memory matches {query}."));
+    }
+    let lines: Vec<String> = hits
+        .iter()
+        .map(|h| format!("{}: {}", h.scope, clip(&h.body)))
+        .collect();
+    Ok(format!("Recalled for {query}\n{}", listed(&lines)))
+}
+
+/// A throwaway copy of the learned-notes store, so a command can show what it
+/// would remove by running for real on the copy. Gone when dropped.
+struct Trial {
+    root: std::path::PathBuf,
+    store: grokhub_core::amr::AmrStore,
+}
+
+impl Drop for Trial {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        let target = to.join(entry.file_name());
+        if kind.is_dir() {
+            copy_tree(&entry.path(), &target)?;
+        } else if kind.is_file() {
+            std::fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
+}
+
+fn trial() -> Result<Trial, String> {
+    let config = grokhub_agent::perm::config_dir();
+    let root = std::env::temp_dir().join(format!(
+        "grokhub-amr-trial-{}-{}",
+        std::process::id(),
+        grokhub_core::now_ms()
+    ));
+    let amr = root.join("amr");
+    let source = config.join("amr");
+    if source.is_dir() {
+        copy_tree(&source, &amr).map_err(|e| e.to_string())?;
+    } else {
+        std::fs::create_dir_all(&amr).map_err(|e| e.to_string())?;
+    }
+    let vault = grokhub_agent::harness::LearnedVault::new(&config);
+    let store = grokhub_core::amr::AmrStore::at(amr).with_sealer(std::sync::Arc::new(vault));
+    Ok(Trial { root, store })
+}
+
+/// What a destructive memory command answers before it changes anything.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Plan {
+    /// Nothing would change; say so.
+    Nothing(String),
+    /// Ask with this text, listing what goes.
+    Ask(String),
+}
+
+fn global_notes() -> Result<String, String> {
+    read(&grokhub_agent::global_memory_path())
+}
+
+/// Learned lines whose text a forget on `topic` would tombstone, plus the
+/// MEMORY.md lines it would drop.
+fn forget_hits(topic: &str) -> Result<(Vec<String>, Vec<String>), String> {
+    let mut learned = Vec::new();
+    if grokhub_agent::amr_enabled() {
+        let trial = trial()?;
+        let gone = trial
+            .store
+            .forget_matching(topic)
+            .map_err(|e| e.to_string())?;
+        let (rows, _) = grokhub_core::amr::memory_rows(&grokhub_agent::amr_store());
+        for id in &gone.forgotten {
+            if let Some(row) = rows.iter().find(|r| &r.id == id) {
+                learned.push(clip(&row.text));
+            }
+        }
+    }
+    let before = global_notes()?;
+    let after = grokhub_core::forget_topic(&before, topic);
+    let lines = before
+        .lines()
+        .filter(|l| !l.trim().is_empty() && !after.lines().any(|k| k == *l))
+        .map(clip)
+        .collect();
+    Ok((learned, lines))
+}
+
+/// `/forget [topic]` without a yes: what would go.
+pub fn forget_plan(topic: Option<&str>) -> Result<Plan, String> {
+    let Some(topic) = topic.map(str::trim).filter(|t| !t.is_empty()) else {
+        let lines = global_notes()?
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .count();
+        if lines == 0 {
+            return Ok(Plan::Nothing("MEMORY.md is already empty.".into()));
+        }
+        return Ok(Plan::Ask(format!(
+            "Empty MEMORY.md? All {lines} {} go. Learned lines stay; /forget <topic> removes those.",
+            if lines == 1 { "line" } else { "lines" }
+        )));
+    };
+    let (learned, lines) = forget_hits(topic)?;
+    if learned.is_empty() && lines.is_empty() {
+        return Ok(Plan::Nothing(format!(
+            "Nothing in memory mentions {topic}."
+        )));
+    }
+    let mut all: Vec<String> = learned.iter().map(|l| format!("learned: {l}")).collect();
+    all.extend(lines.iter().map(|l| format!("MEMORY.md: {l}")));
+    Ok(Plan::Ask(format!(
+        "Forget {topic}? These go:\n{}",
+        listed(&all)
+    )))
+}
+
+/// `/forget [topic] --yes`: the cabin's own pair of steps. Learned lines get a
+/// tombstone and the topic's lines leave the global MEMORY.md; with no topic
+/// the file is emptied.
+pub fn forget(topic: Option<&str>) -> Result<String, String> {
+    let path = grokhub_agent::global_memory_path();
+    let Some(topic) = topic.map(str::trim).filter(|t| !t.is_empty()) else {
+        read(&path)?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(&path, "").map_err(|e| e.to_string())?;
+        return Ok("Forgot MEMORY.md".into());
+    };
+    let mut line = format!("Forgot {topic}");
+    if grokhub_agent::amr_enabled() {
+        let store = open_store()?;
+        let done = store.forget_matching(topic).map_err(|e| e.to_string())?;
+        let n = done.forgotten.len();
+        line = format!(
+            "Forgot {topic}: {n} {} in the memory repo",
+            if n == 1 { "note" } else { "notes" }
+        );
+        if done.locked > 0 {
+            line.push_str(&format!(", {} private not checked", done.locked));
+        }
+    }
+    let before = read(&path)?;
+    let after = grokhub_core::forget_topic(&before, topic);
+    if after != before {
+        std::fs::write(&path, after).map_err(|e| e.to_string())?;
+    }
+    Ok(line)
+}
+
+/// Memory retention in days, from `app.json` (the cabin's setting). 0 keeps
+/// everything; the default is 90.
+pub fn retention_days() -> u64 {
+    let path = grokhub_agent::perm::config_dir().join("app.json");
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.get("amr_retention_days").and_then(|n| n.as_u64()))
+        .map_or(90, |n| n.min(3650))
+}
+
+const PRUNE_OFF: &str = "Memory retention runs in memory repo mode only.";
+
+/// `/memory prune` without a yes: the notes retention would retire.
+pub fn prune_plan() -> Result<Plan, String> {
+    if !grokhub_agent::amr_enabled() {
+        return Ok(Plan::Nothing(PRUNE_OFF.into()));
+    }
+    let trial = trial()?;
+    let report = trial
+        .store
+        .prune_stale(
+            grokhub_core::now_ms(),
+            retention_days(),
+            grokhub_core::amr::DREAM_STALE_BELOW,
+        )
+        .map_err(|e| e.to_string())?;
+    if report.retired.is_empty() {
+        return Ok(Plan::Nothing(report.status_line()));
+    }
+    let lines: Vec<String> = report
+        .retired
+        .iter()
+        .map(|r| format!("{} ({})", clip(&r.quote), r.because))
+        .collect();
+    Ok(Plan::Ask(format!(
+        "Retire {} unsure {}? They stay on disk, marked forgotten.\n{}",
+        lines.len(),
+        if lines.len() == 1 { "note" } else { "notes" },
+        listed(&lines)
+    )))
+}
+
+/// `/memory prune yes`: run retention now.
+pub fn prune() -> Result<String, String> {
+    if !grokhub_agent::amr_enabled() {
+        return Ok(PRUNE_OFF.into());
+    }
+    let store = open_store()?;
+    store
+        .prune_stale(
+            grokhub_core::now_ms(),
+            retention_days(),
+            grokhub_core::amr::DREAM_STALE_BELOW,
+        )
+        .map(|report| report.status_line())
+        .map_err(|e| format!("Memory retention didn't run: {e}"))
+}
+
+/// `/memory dream`: the newest dream report under a "What changed" block.
+pub fn dream_report(config_dir: &Path) -> String {
+    use grokhub_core::what_changed as wc;
+    match grokhub_core::amr::latest_dream(&config_dir.join("amr")) {
+        Some((_, text)) => wc::with_block(&wc::from_dream(&text), &text),
+        None => format!(
+            "No dream yet. {} dreams once a night after the review, in memory repo mode.",
+            grokhub_core::brand::product_name()
+        ),
+    }
+}
+
+/// `/dream`: one dream pass now over the learned notes (merge repeats, retire
+/// unsure ones, propose missing preferences), then its report.
+pub fn dream_now(config_dir: &Path) -> Result<String, String> {
+    if !grokhub_agent::amr_enabled() {
+        return Ok("Dreaming runs in memory repo mode only.".into());
+    }
+    let store = open_store()?;
+    let days = retention_days();
+    let opts = grokhub_core::amr::DreamOpts {
+        ttl_days: if days == 0 { u64::MAX } else { days },
+        user_md: std::fs::read_to_string(
+            grokhub_agent::global_memory_path().with_file_name("USER.md"),
+        )
+        .ok(),
+        ..Default::default()
+    };
+    let done = store
+        .dream_once(grokhub_core::now_ms(), &opts)
+        .map_err(|e| e.to_string())?;
+    Ok(format!(
+        "{}\n\n{}",
+        done.status_line(),
+        dream_report(config_dir)
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
