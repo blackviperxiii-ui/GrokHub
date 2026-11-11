@@ -134,6 +134,15 @@ function trigger(el: Element, ratio: number) {
   }
 }
 
+/** The feed card, once the dwell watcher observes it. The row is on the page
+ * a moment before the effect that watches it runs, and a `trigger` in that gap
+ * reaches no observer. */
+async function watchedCard(): Promise<HTMLElement> {
+  const card = await screen.findByRole("listitem", { name: TITLE });
+  await vi.waitFor(() => expect(observers.some((o) => o.els.has(card))).toBe(true));
+  return card;
+}
+
 function setHidden(hidden: boolean) {
   Object.defineProperty(document, "visibilityState", {
     configurable: true,
@@ -917,7 +926,7 @@ describe("Pulse", () => {
     api.getPulse.mockResolvedValue(PAGE);
     api.pulseAct.mockResolvedValue(PAGE);
     render(<Pulse onRun={() => {}} />);
-    const card = await screen.findByRole("listitem", { name: TITLE });
+    const card = await watchedCard();
     vi.useFakeTimers();
     try {
       trigger(card, DWELL_RATIO);
@@ -936,7 +945,7 @@ describe("Pulse", () => {
     api.getPulse.mockResolvedValue(PAGE);
     api.pulseAct.mockResolvedValue(PAGE);
     render(<Pulse onRun={() => {}} />);
-    const card = await screen.findByRole("listitem", { name: TITLE });
+    const card = await watchedCard();
     vi.useFakeTimers();
     try {
       trigger(card, DWELL_RATIO);
@@ -958,7 +967,7 @@ describe("Pulse", () => {
     api.getPulse.mockResolvedValue(PAGE);
     api.pulseAct.mockResolvedValue(PAGE);
     render(<Pulse onRun={() => {}} />);
-    const card = await screen.findByRole("listitem", { name: TITLE });
+    const card = await watchedCard();
     vi.useFakeTimers();
     try {
       setHidden(true);
