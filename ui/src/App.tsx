@@ -738,7 +738,7 @@ export function App() {
       )}
       {opened.has("devices") && caps.webAccess && !caps.remote && (
         <Page shown={view === "devices"}>
-          <Devices onOpenWebAccess={() => run({ kind: "settings", section: "webAccess" })} />
+          <Devices onOpenWebAccess={() => run({ kind: "settings", section: "webAccess" })} onRun={ask} />
         </Page>
       )}
       {opened.has("imagine") && (

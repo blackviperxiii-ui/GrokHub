@@ -3025,6 +3025,10 @@ label.toggle-row {
   margin-inline: auto;
 }
 
+.devices textarea {
+  flex-shrink: 0;
+}
+
 .devices h2 {
   margin: 8px 0 0;
   font-size: var(--font-prose);
