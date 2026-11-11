@@ -69,6 +69,7 @@ import { isSlashCommand, SlashMenu, useSlashHits } from "./SlashMenu";
 import { needsSettings } from "./ui";
 import { SavedCard } from "./SavedCard";
 import { settingAsk } from "./autoSetupApi";
+import { Episode } from "./Episode";
 
 export type Item =
   | { kind: "user"; text: string }
@@ -1269,6 +1270,7 @@ export function Chat({
         </p>
       )}
       <SideCards sides={sides} onStop={stopSide} onTell={(side) => void tellSide(side)} onDismiss={dismissSide} />
+      <Episode key={conversationId} conversationId={conversationId} desktopOn={!remote && Boolean(settings?.desktopControl)} />
       <AttachChips files={attach.files} note={attach.note} onRemove={attach.remove} busy={busy} />
       <form className="composer slash-wrap" onSubmit={send}>
         {slashOpen && (
