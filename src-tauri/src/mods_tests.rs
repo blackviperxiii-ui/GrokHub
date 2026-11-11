@@ -149,7 +149,7 @@ fn offline_only_shows_the_cache_and_asks_nothing() {
         NOW * 1000,
     );
     assert!(empty.mods.is_empty());
-    assert_eq!(empty.note.as_deref(), Some(OFFLINE_NOTE));
+    assert_eq!(empty.note.as_deref(), Some(offline_note().as_str()));
     assert!(log.lock().unwrap().is_empty());
     // Seen once online, the page stays while Offline only is on.
     search(
@@ -172,7 +172,7 @@ fn offline_only_shows_the_cache_and_asks_nothing() {
     );
     assert_eq!(kept.mods.len(), 2);
     assert!(kept.cached);
-    assert_eq!(kept.note.as_deref(), Some(OFFLINE_NOTE));
+    assert_eq!(kept.note.as_deref(), Some(offline_note().as_str()));
     assert_eq!(log.lock().unwrap().len(), 1);
 }
 
@@ -181,7 +181,7 @@ fn no_new_finds_says_when_loadout_looks() {
     let dir = temp("finds");
     let view = new_finds(&dir, "stardew", Source::Nexus, 0, false, NOW);
     assert!(view.mods.is_empty());
-    assert_eq!(view.note.as_deref(), Some(NO_FINDS));
+    assert_eq!(view.note.as_deref(), Some(no_finds().as_str()));
     assert_eq!(Store::load(&dir).viewed.get("stardew"), Some(&NOW));
 }
 
