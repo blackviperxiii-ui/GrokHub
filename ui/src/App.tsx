@@ -609,6 +609,7 @@ export function App() {
           onOpenSettings={() => setView("settings")}
           onSignIn={() => run({ kind: "settings", section: "account" })}
           onOpenView={openView}
+          onOpenPalette={() => setPalette(true)}
           onQueue={onQueue}
           queueAct={queueAct}
           prefill={prefill}

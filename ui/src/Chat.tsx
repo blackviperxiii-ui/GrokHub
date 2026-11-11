@@ -10,6 +10,7 @@ import {
   type KeyboardEvent,
 } from "react";
 import {
+  addAutomation,
   answerElicit,
   answerPermission,
   cancelChat,
@@ -128,6 +129,9 @@ export interface Prefill {
 }
 
 const PLACEHOLDER = `Message ${PRODUCT_NAME}`;
+
+/** `/view-plan` before any plan was made. */
+export const NO_PLAN = "No plan yet. Use Plan mode.";
 
 /** Bare `/plan`: the next message plans first. */
 export const PLAN_NEXT = "Your next message gets a plan first.";
@@ -510,6 +514,7 @@ export function Chat({
   onOpenSettings,
   onSignIn = onOpenSettings,
   onOpenView,
+  onOpenPalette,
   onQueue,
   queueAct,
   prefill,
@@ -526,6 +531,8 @@ export function Chat({
   /** `/memory`, `/connectors` and the like open their page, and so does a
    * chip that goes somewhere. */
   onOpenView?: (view: View) => void;
+  /** `/palette` opens the command palette. */
+  onOpenPalette?: () => void;
   /** The messages waiting behind the running reply, for the Activity menu. */
   onQueue?: (conversationId: string, texts: string[]) => void;
   /** Steer now or Remove, pressed on a queued row in the Activity menu. A new
@@ -1116,6 +1123,34 @@ export function Chat({
       case "deleted":
         startFresh();
         setItems([{ kind: "slash", command, text: `Deleted ${effect.title}` }]);
+        break;
+      case "queue":
+        if (busyRef.current) changeQueue([...queueRef.current, effect.text]);
+        else void deliver(effect.text, [], false, "chat");
+        break;
+      case "palette":
+        onOpenPalette?.();
+        break;
+      case "viewPlan": {
+        const plan = [...items].reverse().find((it) => it.kind === "elicit" && it.server === "Plan");
+        setItems((now) => [
+          ...now,
+          { kind: "slash", command, text: plan?.kind === "elicit" ? plan.message : NO_PLAN },
+        ]);
+        break;
+      }
+      case "loop":
+        try {
+          await addAutomation(effect.seed);
+          setItems((now) => [...now, { kind: "slash", command, text: `Scheduled: ${effect.seed}` }]);
+          onOpenView?.("automations");
+        } catch (err) {
+          setItems((now) => [...now, { kind: "slash", command, text: String(err) }]);
+        }
+        break;
+      case "openNote":
+        setItems((now) => [...now, { kind: "slash", command, text: effect.text }]);
+        onOpenView?.(effect.view);
         break;
     }
   }
