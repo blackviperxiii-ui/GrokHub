@@ -18,6 +18,7 @@ use grokhub_core::desktop_mcp::DesktopWindows;
 use grokhub_core::desktop_mcp::{WindowGeom, APPS_MSG, GEOMETRY_MSG, TRASH_MSG};
 
 /// First window (in list order) whose title holds `want`, any case.
+#[cfg(any(target_os = "linux", windows, test))]
 pub(crate) fn pick_title<'a>(
     titles: impl IntoIterator<Item = &'a str>,
     want: &str,

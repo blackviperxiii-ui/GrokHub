@@ -4,11 +4,14 @@
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "linux")]
 use grokhub_core::desktop_mcp::{
-    current_desktop_is_kde, join_kscreen_with_eis, parse_kscreen_doctor, select_desktop_stack,
-    union_monitor, CapturedShot, DesktopBackend, DesktopCaptureKind, DesktopInputKind,
-    DesktopMonitorKind, DesktopProbes, DesktopSessionEnv, DesktopStack, EisRegion, KeyCombo,
-    MonitorGeom, MouseButton, ShotGeom,
+    current_desktop_is_kde, join_kscreen_with_eis, parse_kscreen_doctor,
+};
+use grokhub_core::desktop_mcp::{
+    select_desktop_stack, union_monitor, CapturedShot, DesktopBackend, DesktopCaptureKind,
+    DesktopInputKind, DesktopMonitorKind, DesktopProbes, DesktopSessionEnv, DesktopStack,
+    EisRegion, KeyCombo, MonitorGeom, MouseButton, ShotGeom,
 };
 use grokhub_core::{grim_capture_args, ydotool_socket_path};
 
@@ -252,6 +255,9 @@ impl DesktopBackend for WaylandBackend {
         if let Some(result) = self.dispatch_route(|routes| routes.move_abs_on(geom, x, y)) {
             return result;
         }
+        // Only the Linux routes place the pointer by the shot's geometry.
+        #[cfg(not(target_os = "linux"))]
+        let _ = geom;
         self.prepare_input()?;
         self.move_to(x, y)
     }
