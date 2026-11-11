@@ -170,12 +170,31 @@ pub fn tick(
             posted.push(card);
         }
     }
+    refund(config_dir, now_ms, surfaced.len() - posted.len());
     Ok(posted)
+}
+
+/// Only a card that reached the page costs a slot. `surface` charged one for
+/// each candidate at `now_ms`; this gives back the `unposted` ones (a topic
+/// you said never to suggest, a card you removed that day, the cabin opening).
+fn refund(config_dir: &Path, now_ms: u64, unposted: usize) {
+    if unposted == 0 {
+        return;
+    }
+    let _lock = BUDGET.lock().unwrap_or_else(|e| e.into_inner());
+    let mut budget = load_budget(config_dir);
+    for _ in 0..unposted {
+        if let Some(at) = budget.shown.iter().rposition(|t| *t == now_ms) {
+            budget.shown.remove(at);
+        }
+    }
+    let _ = save_budget(config_dir, &budget);
 }
 
 /// What a click on a card teaches the shared budget: Dismiss mutes the topic
 /// for a day, Not this for a week, and both count toward the dismissal
-/// streak; using a card resets it. Cards that are not proactive change nothing.
+/// streak; Later mutes it until the snooze ends and counts as nothing; using
+/// a card resets the streak. Cards that are not proactive change nothing.
 pub fn card_acted(config_dir: &Path, card: &UpdateCard, act: Feedback, now_ms: u64) {
     let Some(meta) = &card.pulse.proactive else {
         return;
@@ -185,6 +204,10 @@ pub fn card_acted(config_dir: &Path, card: &UpdateCard, act: Feedback, now_ms: u
     match act {
         Feedback::Dismiss => budget.dismiss(&meta.topic, now_ms),
         Feedback::NotThis => budget.not_this(&meta.topic, now_ms),
+        Feedback::Later(until_ms) => {
+            budget.mutes.retain(|(_, until)| now_ms < *until);
+            budget.mutes.push((meta.topic.clone(), until_ms));
+        }
         Feedback::Used => budget.engaged(),
     }
     let _ = save_budget(config_dir, &budget);
@@ -193,8 +216,12 @@ pub fn card_acted(config_dir: &Path, card: &UpdateCard, act: Feedback, now_ms: u
 /// A click on a proactive card, as the budget hears it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Feedback {
+    /// Dismiss, Delete or Ignore: off the page for a day.
     Dismiss,
+    /// Not this or Not interested: off the page for a week.
     NotThis,
+    /// Snooze: the card is hidden until this time, so its topic waits too.
+    Later(u64),
     Used,
 }
 
@@ -247,7 +274,23 @@ mod tests {
     const MIN: u64 = 60_000;
     const PID: u32 = 4242;
 
-    fn temp_dir(name: &str) -> PathBuf {
+    /// A test's scratch folder, removed when the test ends, pass or fail.
+    struct Scratch(PathBuf);
+
+    impl std::ops::Deref for Scratch {
+        type Target = Path;
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn temp_dir(name: &str) -> Scratch {
         let dir = std::env::temp_dir().join(format!(
             "grokhub-shell-proactive-{name}-{}-{}",
             std::process::id(),
@@ -255,7 +298,25 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("temp dir");
-        dir
+        Scratch(dir)
+    }
+
+    /// 08:01 on the test day (the wall clock at `NOW + MIN`), so Snooze
+    /// hides a card until 09:00, which is `NOW + 60 * MIN`.
+    fn day() -> crate::pulse::Day {
+        crate::pulse::Day {
+            date: "2027-01-15".into(),
+            hour: 8,
+            minute: 1,
+        }
+    }
+
+    /// One look on the blocked board, then a click on the card it posted.
+    fn posted_then(dir: &Path, act: crate::pulse::Act) -> UpdateCard {
+        blocked_board(dir);
+        let card = tick(dir, PID, NOW, false).expect("tick").remove(0);
+        crate::pulse::act(dir, &card.id, act, &day(), NOW + MIN).expect("act");
+        card
     }
 
     /// One blocked card on the board, as the cabin's test fixture has it.
@@ -366,6 +427,113 @@ mod tests {
         assert!(tick(&dir, PID, NOW + 20 * MIN, false)
             .expect("tick")
             .is_empty());
+    }
+
+    #[test]
+    fn a_deleted_or_ignored_card_does_not_come_back_on_the_next_look() {
+        for act in [crate::pulse::Act::Delete, crate::pulse::Act::Ignore] {
+            let dir = temp_dir("removed");
+            let _config = grokhub_agent::perm::ConfigGuard::set(dir.to_path_buf());
+            posted_then(&dir, act);
+            let budget = load_budget(&dir);
+            assert_eq!(budget.dismiss_streak, 1, "{act:?}");
+            assert!(budget.muted("Renew the domain", NOW + 2 * MIN), "{act:?}");
+            assert!(
+                !budget.muted("Renew the domain", NOW + 25 * 60 * MIN),
+                "{act:?}"
+            );
+            let again = tick(&dir, PID, NOW + 20 * MIN, false).expect("tick");
+            assert_eq!(again, Vec::new(), "{act:?}");
+            let live: Vec<UpdateCard> = crate::pulse::cards(&dir)
+                .expect("cards")
+                .into_iter()
+                .filter(|c| c.status != grokhub_core::UpdateStatus::Dismissed)
+                .collect();
+            assert_eq!(live, Vec::new(), "{act:?}");
+            assert_eq!(load_budget(&dir).shown, vec![NOW], "{act:?}");
+        }
+    }
+
+    #[test]
+    fn not_interested_mutes_the_topic_for_a_week_and_costs_no_more_budget() {
+        let dir = temp_dir("dislike");
+        let _config = grokhub_agent::perm::ConfigGuard::set(dir.to_path_buf());
+        posted_then(&dir, crate::pulse::Act::Dislike);
+        for later in [20 * MIN, 40 * MIN] {
+            assert_eq!(
+                tick(&dir, PID, NOW + later, false).expect("tick"),
+                Vec::new()
+            );
+        }
+        let budget = load_budget(&dir);
+        assert_eq!(budget.shown, vec![NOW]);
+        assert_eq!(budget.dismiss_streak, 1);
+        assert!(budget.muted("Renew the domain", NOW + 6 * 24 * 60 * MIN));
+        assert!(!budget.muted("Renew the domain", NOW + 8 * 24 * 60 * MIN));
+    }
+
+    #[test]
+    fn a_snoozed_card_is_left_alone_until_it_is_back_and_counts_as_no_dismissal() {
+        let dir = temp_dir("snooze");
+        let _config = grokhub_agent::perm::ConfigGuard::set(dir.to_path_buf());
+        let card = posted_then(&dir, crate::pulse::Act::Snooze);
+        assert_eq!(
+            tick(&dir, PID, NOW + 20 * MIN, false).expect("tick"),
+            Vec::new()
+        );
+        let budget = load_budget(&dir);
+        assert_eq!(budget.shown, vec![NOW]);
+        assert_eq!(budget.dismiss_streak, 0);
+        // Muted until 09:00, and not after.
+        assert!(budget.muted("Renew the domain", NOW + 59 * MIN));
+        assert!(!budget.muted("Renew the domain", NOW + 60 * MIN));
+        let stored = crate::pulse::cards(&dir).expect("cards");
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].id, card.id);
+        assert_eq!(stored[0].runs, card.runs, "no repeat was merged into it");
+    }
+
+    #[test]
+    fn a_card_set_to_remind_later_is_left_alone_until_then() {
+        let dir = temp_dir("remind");
+        let _config = grokhub_agent::perm::ConfigGuard::set(dir.to_path_buf());
+        blocked_board(&dir);
+        let card = tick(&dir, PID, NOW, false).expect("tick").remove(0);
+        crate::pulse::remind(&dir, &card.id, &day(), NOW + MIN).expect("remind");
+        assert_eq!(
+            tick(&dir, PID, NOW + 20 * MIN, false).expect("tick"),
+            Vec::new()
+        );
+        let budget = load_budget(&dir);
+        assert_eq!(budget.shown, vec![NOW]);
+        assert_eq!(budget.dismiss_streak, 0);
+        assert!(budget.muted("Renew the domain", NOW + 20 * MIN));
+    }
+
+    #[test]
+    fn a_card_that_does_not_land_costs_no_budget() {
+        let dir = temp_dir("tombstone");
+        blocked_board(&dir);
+        let card = tick(&dir, PID, NOW, false).expect("tick").remove(0);
+        // The cabin's Delete: a tombstone on the page, and the budget not told.
+        let mut cards = crate::pulse::cards(&dir).expect("cards");
+        assert!(grokhub_core::dismiss_update_at(
+            &mut cards,
+            &card.id,
+            NOW + MIN
+        ));
+        std::fs::write(
+            dir.join("updates.json"),
+            serde_json::to_string(&cards).expect("json"),
+        )
+        .expect("write");
+        for later in [20 * MIN, 40 * MIN] {
+            assert_eq!(
+                tick(&dir, PID, NOW + later, false).expect("tick"),
+                Vec::new()
+            );
+        }
+        assert_eq!(load_budget(&dir).shown, vec![NOW]);
     }
 
     #[test]

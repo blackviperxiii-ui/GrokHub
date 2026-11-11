@@ -6,6 +6,7 @@
 
 use std::path::Path;
 
+use grokhub_core::outcome::TaskOutcome;
 use grokhub_core::{BoardCard, BoardStatus, MissionSeed, MissionView, StepStatus};
 
 /// The `todo_write` word for a step, which is what the projection speaks.
@@ -19,13 +20,43 @@ fn todo_word(status: StepStatus) -> &'static str {
     }
 }
 
+/// The outcomes log for one board page: read once, and only when a card
+/// needs it (a running or blocked card that has a chat).
+pub struct Outcomes<'a> {
+    config_dir: &'a Path,
+    read: std::cell::OnceCell<Vec<TaskOutcome>>,
+}
+
+impl<'a> Outcomes<'a> {
+    pub fn new(config_dir: &'a Path) -> Self {
+        Self {
+            config_dir,
+            read: std::cell::OnceCell::new(),
+        }
+    }
+
+    fn all(&self) -> &[TaskOutcome] {
+        self.read
+            .get_or_init(|| grokhub_core::outcome::read_outcomes(self.config_dir))
+    }
+}
+
 /// What the card gives the projection, with the newest outcome for its chat.
-pub fn seed(config_dir: &Path, card: &BoardCard) -> MissionSeed {
+pub fn seed(card: &BoardCard, outcomes: &Outcomes) -> MissionSeed {
+    match card.thread_id {
+        Some(_) => seed_with(card, outcomes.all()),
+        None => seed_with(card, &[]),
+    }
+}
+
+/// [`seed`] over outcomes already read (one per task, oldest first).
+fn seed_with(card: &BoardCard, outcomes: &[TaskOutcome]) -> MissionSeed {
     let outcome = card.thread_id.as_deref().and_then(|chat| {
-        grokhub_core::outcome::read_outcomes(config_dir)
-            .into_iter()
+        let turns = format!("{chat}:");
+        outcomes
+            .iter()
             .rev()
-            .find(|o| o.task == chat || o.task.starts_with(&format!("{chat}:")))
+            .find(|o| o.task == chat || o.task.starts_with(&turns))
     });
     let (outcome_result, outcome_reasons, outcome_span_ids) = match outcome {
         Some(o) => (
@@ -35,8 +66,8 @@ pub fn seed(config_dir: &Path, card: &BoardCard) -> MissionSeed {
                 grokhub_core::outcome::OutcomeResult::Pending => "pending",
             }
             .to_string(),
-            o.reasons,
-            o.span_ids,
+            o.reasons.clone(),
+            o.span_ids.clone(),
         ),
         None => (String::new(), Vec::new(), Vec::new()),
     };
@@ -84,19 +115,36 @@ pub fn seed(config_dir: &Path, card: &BoardCard) -> MissionSeed {
 
 /// The mission a card shows, if it is one: a card on the move (Doing or
 /// Blocked), not one waiting, finished or archived.
-pub fn project(config_dir: &Path, card: &BoardCard) -> Option<MissionView> {
+pub fn project(card: &BoardCard, outcomes: &Outcomes) -> Option<MissionView> {
     if !matches!(card.status, BoardStatus::InProgress | BoardStatus::Blocked) {
         return None;
     }
-    MissionView::project(&seed(config_dir, card))
+    MissionView::project(&seed(card, outcomes))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use grokhub_core::outcome::{append_outcome, outcomes_path, OutcomeResult};
     use grokhub_core::{Checkpoint, MissionStatus, WorkStep};
 
-    fn temp_dir(name: &str) -> std::path::PathBuf {
+    /// A test's scratch folder, removed when the test ends, pass or fail.
+    struct Scratch(std::path::PathBuf);
+
+    impl std::ops::Deref for Scratch {
+        type Target = Path;
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn temp_dir(name: &str) -> Scratch {
         let dir = std::env::temp_dir().join(format!(
             "grokhub-shell-mission-{name}-{}-{}",
             std::process::id(),
@@ -104,7 +152,19 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("temp dir");
-        dir
+        Scratch(dir)
+    }
+
+    fn outcome(task: &str, result: OutcomeResult, reason: &str, finished_at: u64) -> TaskOutcome {
+        TaskOutcome {
+            task: task.into(),
+            signature: "sig".into(),
+            result,
+            reasons: vec![reason.into()],
+            finished_at,
+            at: finished_at,
+            ..TaskOutcome::default()
+        }
     }
 
     fn step(text: &str, status: StepStatus) -> WorkStep {
@@ -131,7 +191,7 @@ mod tests {
     #[test]
     fn a_running_card_projects_its_steps_as_a_checklist() {
         let dir = temp_dir("running");
-        let m = project(&dir, &running_card()).expect("a mission");
+        let m = project(&running_card(), &Outcomes::new(&dir)).expect("a mission");
         assert_eq!(m.id, "m1");
         assert_eq!(m.title, "Fix the printer");
         assert_eq!(m.status, MissionStatus::Active);
@@ -165,7 +225,7 @@ mod tests {
             blocker: "Needs a password".into(),
             ..Checkpoint::default()
         });
-        let m = project(&dir, &c).expect("a mission");
+        let m = project(&c, &Outcomes::new(&dir)).expect("a mission");
         assert_eq!(m.goal, "Get printing working");
         assert!(m.resume_ok);
         assert_eq!(m.status, MissionStatus::Paused);
@@ -182,8 +242,63 @@ mod tests {
         ] {
             let mut c = running_card();
             c.status = status;
-            assert_eq!(project(&dir, &c), None, "{status:?}");
+            assert_eq!(project(&c, &Outcomes::new(&dir)), None, "{status:?}");
         }
+    }
+
+    #[test]
+    fn each_card_takes_the_newest_outcome_of_its_own_chat_from_one_read() {
+        let outcomes = [
+            outcome("chat-m1:1", OutcomeResult::Failure, "verify_failed", 10),
+            outcome("chat-m2:1", OutcomeResult::Success, "verify_ok", 20),
+            outcome("chat-m1:2", OutcomeResult::Pending, "waiting", 30),
+            outcome("chat-m10:1", OutcomeResult::Failure, "not_mine", 40),
+        ];
+        let mut one = running_card();
+        one.status = BoardStatus::Blocked;
+        let mut two = one.clone();
+        two.id = "m2".into();
+        two.thread_id = Some("chat-m2".into());
+        let first = seed_with(&one, &outcomes);
+        assert_eq!(first.outcome_result, "pending");
+        assert_eq!(first.outcome_reasons, ["waiting"]);
+        assert!(!first.todos_verified);
+        let second = seed_with(&two, &outcomes);
+        assert_eq!(second.outcome_result, "success");
+        assert_eq!(second.outcome_reasons, ["verify_ok"]);
+        assert!(second.todos_verified);
+        let mut no_chat = one.clone();
+        no_chat.thread_id = None;
+        assert_eq!(seed_with(&no_chat, &outcomes).outcome_result, "");
+    }
+
+    #[test]
+    fn a_board_page_reads_the_outcomes_log_once_and_only_for_a_card_with_a_chat() {
+        let dir = temp_dir("once");
+        let outcomes = Outcomes::new(&dir);
+        // A card with no chat needs no outcome, so nothing is read for it:
+        // the lines written after it are the ones the page sees.
+        let mut no_chat = running_card();
+        no_chat.thread_id = None;
+        assert_eq!(seed(&no_chat, &outcomes).outcome_result, "");
+        append_outcome(
+            &dir,
+            &outcome("chat-m1:1", OutcomeResult::Failure, "verify_failed", 10),
+        )
+        .expect("append");
+        append_outcome(
+            &dir,
+            &outcome("chat-m2:1", OutcomeResult::Success, "verify_ok", 20),
+        )
+        .expect("append");
+        assert_eq!(seed(&running_card(), &outcomes).outcome_result, "failure");
+        // The log goes away under the page: the next card still has the one read.
+        std::fs::remove_file(outcomes_path(&dir)).expect("remove");
+        let mut two = running_card();
+        two.thread_id = Some("chat-m2".into());
+        assert_eq!(seed(&two, &outcomes).outcome_result, "success");
+        // A new page reads again.
+        assert_eq!(seed(&two, &Outcomes::new(&dir)).outcome_result, "");
     }
 
     #[test]

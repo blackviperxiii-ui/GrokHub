@@ -702,30 +702,25 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
             ps::save_saved(&path, &list)?;
         }
     }
-    // The proactive budget and the nudge ledger hear what you did with their cards.
-    match act {
-        Act::Dismiss => {
-            crate::proactive::card_acted(
-                config_dir,
-                &card,
-                crate::proactive::Feedback::Dismiss,
-                now_ms,
-            );
-            crate::nudges::dismissed(config_dir, &card);
+    // The proactive budget and the nudge ledger hear what you did with their
+    // cards. Every way of taking a card off the page counts, so it does not
+    // come back on the next look.
+    let feedback = match act {
+        Act::Dismiss | Act::Delete | Act::Ignore => Some(crate::proactive::Feedback::Dismiss),
+        Act::NotThis | Act::Dislike | Act::NotInterested => {
+            Some(crate::proactive::Feedback::NotThis)
         }
-        Act::NotThis => crate::proactive::card_acted(
-            config_dir,
-            &card,
-            crate::proactive::Feedback::NotThis,
-            now_ms,
-        ),
-        Act::Accept | Act::Love => crate::proactive::card_acted(
-            config_dir,
-            &card,
-            crate::proactive::Feedback::Used,
-            now_ms,
-        ),
-        _ => {}
+        Act::Snooze => Some(crate::proactive::Feedback::Later(pc::snooze_until(
+            now_ms, day.hour, day.minute,
+        ))),
+        Act::Accept | Act::Love => Some(crate::proactive::Feedback::Used),
+        Act::Unlove | Act::Opened | Act::MoreLike | Act::Save | Act::Dwell => None,
+    };
+    if let Some(feedback) = feedback {
+        crate::proactive::card_acted(config_dir, &card, feedback, now_ms);
+    }
+    if matches!(act, Act::Dismiss | Act::Delete | Act::Ignore) {
+        crate::nudges::dismissed(config_dir, &card);
     }
     let changed = match act {
         Act::Dismiss => remove(&mut cards),
@@ -1022,6 +1017,15 @@ pub fn remind(config_dir: &Path, id: &str, day: &Day, now_ms: u64) -> Result<Rem
         .find(|c| c.id == id && c.kind != UpdateKind::Idea)
     {
         learn_taste(config_dir, card, Some(Reaction::Snooze), None, now_ms)?;
+    }
+    // A proactive card's topic waits with it, so the next look leaves it alone.
+    if let Some(card) = cards.iter().find(|c| c.id == id) {
+        crate::proactive::card_acted(
+            config_dir,
+            card,
+            crate::proactive::Feedback::Later(later.at_ms),
+            now_ms,
+        );
     }
     if pc::snooze_card(&mut cards, id, later.at_ms) {
         save(config_dir, &cards)?;

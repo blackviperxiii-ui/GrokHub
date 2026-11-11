@@ -337,7 +337,7 @@ fn progress(card: &BoardCard) -> [u32; 2] {
     [filled, total]
 }
 
-fn card(config_dir: &Path, c: &BoardCard, all: &[BoardCard]) -> Card {
+fn card(c: &BoardCard, all: &[BoardCard], outcomes: &crate::mission::Outcomes) -> Card {
     Card {
         id: c.id.clone(),
         title: c.title.clone(),
@@ -380,7 +380,7 @@ fn card(config_dir: &Path, c: &BoardCard, all: &[BoardCard]) -> Card {
         flow: c.flow.as_ref().map(|f| f.line()),
         user_steps: c.user_steps,
         steps_text: wt::steps_text(c),
-        mission: crate::mission::project(config_dir, c),
+        mission: crate::mission::project(c, outcomes),
     }
 }
 
@@ -536,6 +536,7 @@ pub fn set_auto_delete(config_dir: &Path, days: u32) -> Result<Tidy, String> {
 }
 
 fn page(config_dir: &Path, cards: &[BoardCard], stamp: u64) -> Page {
+    let outcomes = crate::mission::Outcomes::new(config_dir);
     let columns = Lane::ALL
         .iter()
         .map(|&lane| {
@@ -549,7 +550,7 @@ fn page(config_dir: &Path, cards: &[BoardCard], stamp: u64) -> Page {
                 label: col.label().to_string(),
                 cards: here
                     .into_iter()
-                    .map(|i| card(config_dir, &cards[i], cards))
+                    .map(|i| card(&cards[i], cards, &outcomes))
                     .collect(),
             }
         })
@@ -563,7 +564,7 @@ fn page(config_dir: &Path, cards: &[BoardCard], stamp: u64) -> Page {
         columns,
         archived: archived
             .into_iter()
-            .map(|c| card(config_dir, c, cards))
+            .map(|c| card(c, cards, &outcomes))
             .collect(),
         stamp,
         swept: swept_for(config_dir, cards),

@@ -321,31 +321,23 @@ pub fn goal_pin(config_dir: &Path) -> String {
         .unwrap_or_default()
 }
 
-/// Sets the pin, keeping every other key in `app.json` as it is. A file that
-/// doesn't parse is left alone.
+/// The most of a goal that is pinned: one line, not a page.
+const GOAL_PIN_MAX: usize = 200;
+
+/// Sets the pin, keeping every other key in `app.json` as it is, under the
+/// lock the shell's other writers of that file take. A file that doesn't
+/// parse is left alone.
 fn set_goal_pin(config_dir: &Path, pin: &str) -> Result<(), String> {
     let path = config_dir.join("app.json");
-    let mut app = match std::fs::read_to_string(&path) {
-        Ok(raw) if raw.len() as u64 > APP_JSON_CAP => {
-            return Err("The settings file is too big to change here.".into());
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > APP_JSON_CAP) {
+        return Err("The settings file is too big to change here.".into());
+    }
+    grokhub_core::app_json::patch(config_dir, &[("goalPin", serde_json::json!(pin))]).map_err(|e| {
+        match grokhub_core::app_json::read(config_dir) {
+            Err(_) => "The settings file can't be read, so it was left as it is.".to_string(),
+            Ok(_) => e,
         }
-        Ok(raw) if raw.trim().is_empty() => serde_json::json!({}),
-        Ok(raw) => serde_json::from_str::<serde_json::Value>(&raw)
-            .ok()
-            .filter(serde_json::Value::is_object)
-            .ok_or("The settings file can't be read, so it was left as it is.")?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
-        Err(e) => return Err(e.to_string()),
-    };
-    let map = app
-        .as_object_mut()
-        .ok_or("The settings file isn't an object.")?;
-    map.insert("goalPin".into(), serde_json::json!(pin));
-    std::fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
-    let tmp = config_dir.join("app.json.tmp");
-    let body = serde_json::to_string_pretty(&app).map_err(|e| e.to_string())?;
-    std::fs::write(&tmp, body).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
+    })
 }
 
 /// `/goal`: show, clear or pin. The cabin's words.
@@ -363,8 +355,13 @@ fn goal(config_dir: &Path, arg: &str) -> Result<String, String> {
         set_goal_pin(config_dir, "")?;
         return Ok("Goal cleared".into());
     }
-    set_goal_pin(config_dir, arg)?;
-    Ok(format!("Goal: {arg}"))
+    if grokhub_core::redact_secret_words(arg) != arg {
+        return Err("A goal can't hold a key or password, so nothing was pinned.".into());
+    }
+    let pin: String = arg.chars().take(GOAL_PIN_MAX).collect();
+    let pin = pin.trim_end();
+    set_goal_pin(config_dir, pin)?;
+    Ok(format!("Goal: {pin}"))
 }
 
 /// `/diagnose`: the read-only checks of disk, services, logs and updates,
@@ -843,6 +840,73 @@ mod tests {
             std::fs::read_to_string(h.config.join("app.json")).expect("read"),
             "{not json"
         );
+    }
+
+    #[test]
+    fn goal_and_another_settings_writer_never_lose_each_others_change() {
+        let h = home("goalrace");
+        let dir = h.config.as_path();
+        std::fs::write(dir.join("app.json"), r#"{"weeklySpendCapUsd": 20}"#).expect("seed");
+        // Each round both writers start together and write once. A writer
+        // that read before the other wrote and saved after it would put the
+        // other's key back to the round before.
+        let saved = || {
+            let app = grokhub_core::app_json::read(dir).expect("app.json parses");
+            (
+                app.get("goalPin")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+                app.get("focusStep").and_then(serde_json::Value::as_i64),
+                app.get("weeklySpendCapUsd")
+                    .and_then(serde_json::Value::as_i64),
+            )
+        };
+        let mut lost = Vec::new();
+        for round in 0..300_i64 {
+            let go = std::sync::Barrier::new(2);
+            std::thread::scope(|s| {
+                s.spawn(|| {
+                    go.wait();
+                    goal(dir, &format!("goal {round}")).expect("pin");
+                });
+                s.spawn(|| {
+                    go.wait();
+                    grokhub_core::app_json::patch(dir, &[("focusStep", serde_json::json!(round))])
+                        .expect("patch");
+                });
+            });
+            if saved() != (Some(format!("goal {round}")), Some(round), Some(20)) {
+                lost.push(round);
+            }
+        }
+        assert_eq!(lost, Vec::<i64>::new(), "rounds where a change was lost");
+        assert_eq!(saved(), (Some("goal 299".to_string()), Some(299), Some(20)));
+        let _ = std::fs::remove_dir_all(dir.parent().expect("root"));
+    }
+
+    #[test]
+    fn a_long_goal_is_clipped_and_one_holding_a_key_is_not_pinned() {
+        let h = home("goalclip");
+        let long = "x".repeat(5_000);
+        let clipped = "x".repeat(200);
+        assert_eq!(
+            text(go(&h, &format!("/goal {long}"))),
+            format!("Goal: {clipped}")
+        );
+        assert_eq!(goal_pin(&h.config), clipped);
+
+        let key = concat!("sk-", "abcdefghijklmnopqrstuv");
+        assert_eq!(
+            go(&h, &format!("/goal deploy with {key}")),
+            Err("A goal can't hold a key or password, so nothing was pinned.".to_string())
+        );
+        assert_eq!(goal_pin(&h.config), clipped, "the pin before it stays");
+        // A word that only looks like a key prefix is a goal like any other.
+        assert_eq!(
+            text(go(&h, "/goal ship the risk-management-process")),
+            "Goal: ship the risk-management-process"
+        );
+        let _ = std::fs::remove_dir_all(h.config.parent().expect("root"));
     }
 
     #[test]

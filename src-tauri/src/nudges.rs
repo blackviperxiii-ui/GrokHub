@@ -84,22 +84,21 @@ pub fn local_day(now_ms: u64, offset_min: i32) -> String {
     format!("{year:04}-{month:02}-{day:02}")
 }
 
+/// A watcher's command may run this long. One that hangs is stopped, so the
+/// proactive thread it runs on keeps looking.
 #[cfg(target_os = "linux")]
-fn run(cmd: &str, args: &[&str]) -> Option<String> {
-    let mut c = std::process::Command::new(cmd);
-    c.args(args)
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        c.creation_flags(CREATE_NO_WINDOW);
-    }
-    let out = c.output().ok()?;
-    out.status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// The most a watcher keeps of what its command printed.
+#[cfg(target_os = "linux")]
+const PROBE_CAP: u64 = 4 * 1024 * 1024;
+
+/// What `cmd` printed, or `None` when it is missing, failed or ran past
+/// `timeout`. The shared bounded runner does the waiting and the stop.
+#[cfg(target_os = "linux")]
+fn probe(cmd: &str, args: &[&str], timeout: std::time::Duration) -> Option<String> {
+    let mut command = std::process::Command::new(cmd);
+    command.args(args);
+    grokhub_core::proc_util::output_within(&mut command, timeout, PROBE_CAP)
 }
 
 fn dir_size_cap(path: &Path, cap_entries: usize) -> u64 {
@@ -141,7 +140,7 @@ fn cache_folders(home: &Path) -> Vec<CacheFolder> {
 
 #[cfg(target_os = "linux")]
 fn os_updates() -> OsUpdateSnap {
-    let pending = run("apt", &["list", "--upgradable"])
+    let pending = probe("apt", &["list", "--upgradable"], PROBE_TIMEOUT)
         .map(|s| {
             s.lines()
                 .skip(1)
@@ -166,18 +165,22 @@ fn os_updates() -> OsUpdateSnap {
 
 #[cfg(target_os = "linux")]
 fn crash_counts() -> Vec<CrashCount> {
-    let out = run(
+    // The newest 500 error lines of the day: only that many are counted.
+    let out = probe(
         "journalctl",
         &[
             "--since",
             "24 hours ago",
             "-p",
             "err",
+            "-n",
+            "500",
             "-o",
             "json",
             "-q",
             "--no-pager",
         ],
+        PROBE_TIMEOUT,
     );
     let mut counts: std::collections::BTreeMap<String, u32> = std::collections::BTreeMap::new();
     for line in out.iter().flat_map(|t| t.lines().take(500)) {
@@ -259,25 +262,42 @@ fn steam_news(config_dir: &Path) -> Vec<SteamNewsHit> {
     out
 }
 
-fn gpu_driver(config_dir: &Path, home: &Path) -> Option<GpuDriverSnap> {
-    let profile = grokhub_agent::device::read_profile(home);
-    let gpu = profile.main_gpu()?;
-    let installed = gpu.driver.trim();
-    if installed.is_empty() {
+/// The driver a feed fetch offered, from `nudge-gpu-offer.json`: its version
+/// and where to get it. Missing, broken or incomplete is no offer.
+fn gpu_offer(config_dir: &Path) -> Option<(String, String)> {
+    let path = config_dir.join("nudge-gpu-offer.json");
+    if std::fs::metadata(&path).map_or(true, |m| m.len() > LEDGER_CAP) {
         return None;
     }
-    let raw = std::fs::read_to_string(config_dir.join("nudge-gpu-offer.json")).ok()?;
+    let raw = std::fs::read_to_string(path).ok()?;
     let v = serde_json::from_str::<serde_json::Value>(&raw).ok()?;
     let offered = v.get("version")?.as_str()?.trim().to_string();
     let url = v.get("url")?.as_str()?.trim().to_string();
-    if offered.is_empty() || url.is_empty() {
-        return None;
-    }
+    (!offered.is_empty() && !url.is_empty()).then_some((offered, url))
+}
+
+/// The main GPU's name and installed driver, from the hardware probes
+/// (nvidia-smi, vulkaninfo).
+fn main_gpu(home: &Path) -> Option<(String, String)> {
+    let profile = grokhub_agent::device::read_profile(home);
+    let gpu = profile.main_gpu()?;
+    let installed = gpu.driver.trim();
+    (!installed.is_empty()).then(|| (gpu.name.clone(), installed.to_string()))
+}
+
+/// The offer is read first: without one there is no nudge to make, so the
+/// hardware is not probed.
+fn gpu_driver(
+    config_dir: &Path,
+    installed: impl FnOnce() -> Option<(String, String)>,
+) -> Option<GpuDriverSnap> {
+    let (offered, download_url) = gpu_offer(config_dir)?;
+    let (gpu_name, installed) = installed()?;
     Some(GpuDriverSnap {
-        gpu_name: gpu.name.clone(),
-        installed: installed.to_string(),
+        gpu_name,
+        installed,
         offered,
-        download_url: url,
+        download_url,
     })
 }
 
@@ -290,7 +310,7 @@ pub fn snapshot(config_dir: &Path, settings: &NudgeWatcherSettings) -> WatcherSn
         snap.steam_news = steam_news(config_dir);
     }
     if settings.gpu_driver {
-        snap.gpu = gpu_driver(config_dir, &home);
+        snap.gpu = gpu_driver(config_dir, || main_gpu(&home));
     }
     if settings.disk_low {
         snap.disk = crate::local_ai::free_disk_mb(&home).map(|mb| DiskSnap {
@@ -386,7 +406,23 @@ mod tests {
     const PID: u32 = 4242;
     const GIB: u64 = 1024 * 1024 * 1024;
 
-    fn temp_dir(name: &str) -> PathBuf {
+    /// A test's scratch folder, removed when the test ends, pass or fail.
+    struct Scratch(PathBuf);
+
+    impl std::ops::Deref for Scratch {
+        type Target = Path;
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn temp_dir(name: &str) -> Scratch {
         let dir = std::env::temp_dir().join(format!(
             "grokhub-shell-nudges-{name}-{}-{}",
             std::process::id(),
@@ -394,7 +430,7 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("temp dir");
-        dir
+        Scratch(dir)
     }
 
     fn disk_on() -> NudgeWatcherSettings {
@@ -552,5 +588,83 @@ mod tests {
         dismissed(&dir, &plain);
         assert_eq!(load_ledger(&dir), after);
         assert_eq!(meta.watcher, nw::WatcherId::DiskLow.key());
+    }
+
+    #[test]
+    fn every_way_of_removing_a_nudge_in_pulse_rests_its_watcher_for_a_week() {
+        use crate::pulse::Act;
+        for act in [Act::Dismiss, Act::Delete, Act::Ignore] {
+            let dir = temp_dir("pulse-act");
+            let _config = grokhub_agent::perm::ConfigGuard::set(dir.to_path_buf());
+            let card = tick_with(&dir, &disk_on(), &low_disk(), "2027-01-15", NOW)
+                .expect("tick")
+                .remove(0);
+            let key = card.pulse.nudge_watcher.clone().expect("meta").dedupe_key;
+            let day = crate::pulse::Day {
+                date: "2027-01-15".into(),
+                hour: 8,
+                minute: 1,
+            };
+            let clicked = grokhub_core::now_ms();
+            crate::pulse::act(&dir, &card.id, act, &day, NOW + MIN).expect("act");
+            let until = load_ledger(&dir).snoozed_until.get(&key).copied();
+            assert!(
+                until.is_some_and(|u| u >= clicked + nw::DISMISS_SNOOZE_MS),
+                "{act:?}: {until:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn without_a_driver_offer_the_gpu_is_not_probed() {
+        let dir = temp_dir("gpu");
+        let probed = std::cell::Cell::new(0);
+        let installed = || {
+            probed.set(probed.get() + 1);
+            Some(("Test GPU".to_string(), "550.1".to_string()))
+        };
+        assert_eq!(gpu_offer(&dir), None);
+        assert_eq!(gpu_driver(&dir, installed), None);
+        std::fs::write(
+            dir.join("nudge-gpu-offer.json"),
+            r#"{"version":"551.2","url":""}"#,
+        )
+        .expect("write");
+        assert_eq!(gpu_driver(&dir, installed), None, "an offer with no link");
+        assert_eq!(probed.get(), 0, "no offer, so no hardware probe");
+
+        std::fs::write(
+            dir.join("nudge-gpu-offer.json"),
+            r#"{"version":" 551.2 ","url":"https://example.com/driver"}"#,
+        )
+        .expect("write");
+        assert_eq!(
+            gpu_driver(&dir, installed),
+            Some(GpuDriverSnap {
+                gpu_name: "Test GPU".into(),
+                installed: "550.1".into(),
+                offered: "551.2".into(),
+                download_url: "https://example.com/driver".into(),
+            })
+        );
+        assert_eq!(probed.get(), 1);
+        assert_eq!(gpu_driver(&dir, || None), None, "no GPU to offer it for");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_watcher_command_that_hangs_is_stopped_at_its_deadline() {
+        use std::time::{Duration, Instant};
+        let start = Instant::now();
+        assert_eq!(probe("sleep", &["5"], Duration::from_millis(200)), None);
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            start.elapsed()
+        );
+        assert_eq!(
+            probe("echo", &["ok"], Duration::from_secs(10)).as_deref(),
+            Some("ok\n")
+        );
     }
 }
