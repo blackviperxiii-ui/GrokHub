@@ -1,0 +1,1 @@
+- Tauri Devices: Start share runs this computer's LAN hub in the app, another computer pairs with a code, and Run it here sends a task to a chat on this PC.

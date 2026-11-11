@@ -1957,6 +1957,40 @@ export function forgetAllDevices(): Promise<Devices> {
   return invoke<Devices>("forget_all_devices");
 }
 
+/** A computer paired with this one's LAN hub. */
+export interface SharePeer {
+  name: string;
+  /** Unix ms; 0 before its first call. */
+  lastSeen: number;
+}
+
+/** Devices → Start share (src-tauri/src/hub_share.rs); desktop only. */
+export interface Share {
+  on: boolean;
+  port: number;
+  /** The live pairing code while sharing; empty otherwise. Never log it. */
+  code: string;
+  /** What the other computer opens, without the code; empty while off. */
+  address: string;
+  peers: SharePeer[];
+}
+
+export function getShare(): Promise<Share> {
+  return invoke<Share>("get_share");
+}
+
+export function startShare(): Promise<Share> {
+  return invoke<Share>("start_share");
+}
+
+export function stopShare(): Promise<Share> {
+  return invoke<Share>("stop_share");
+}
+
+export function newShareCode(): Promise<Share> {
+  return invoke<Share>("new_share_code");
+}
+
 /** Settings → Labs → Plugins (src-tauri/src/plugins.rs). */
 export interface PluginRow {
   name: string;
@@ -3011,4 +3045,33 @@ export function saveAiSpend(cap: number, ceiling: number): Promise<AiModelsView>
 
 export function revokeAiPremium(id: string): Promise<AiModelsView> {
   return invoke<AiModelsView>("revoke_ai_premium", { id });
+}
+
+/** One line of the top bar while a recording or an audio check runs. */
+export interface RecordLine {
+  secs: number;
+  text: string;
+}
+
+/** A run that just finished (src-tauri/src/screen_record.rs). */
+export interface RecordEvent {
+  kind: "record" | "audio";
+  ok: boolean;
+  text: string;
+}
+
+export interface RecordStatus {
+  recording: RecordLine | null;
+  listening: RecordLine | null;
+  events: RecordEvent[];
+}
+
+/** The recording indicator, the audio check's line and finished runs (each once). */
+export function recordStatus(): Promise<RecordStatus> {
+  return invoke<RecordStatus>("record_status");
+}
+
+/** The indicator's Stop. */
+export function recordStop(): Promise<boolean> {
+  return invoke<boolean>("record_stop");
 }

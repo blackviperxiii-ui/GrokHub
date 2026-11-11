@@ -43,6 +43,7 @@ import {
 } from "./notices";
 import { Chat, newConversationId, type Prefill, type QueueAct } from "./Chat";
 import { useChipRow } from "./Chips";
+import { RecordIndicator } from "./RecordIndicator";
 import { HALT_DONE, HALT_FAILED, HaltButton, HaltNote, haltShown, isHaltKey } from "./Halt";
 import { NO_SOURCES, Palette, VIEW_LABELS, pageViews, views, type PaletteAction, type View } from "./Palette";
 import { COMPOSER_SLASH, shellKeys, type CommandRunners } from "./paletteCommands";
@@ -541,6 +542,13 @@ export function App() {
             setView("workboard");
           }}
         />
+        {canHalt && (
+          <RecordIndicator
+            onEvent={(event) =>
+              notify(event.ok ? "success" : "error", event.text, undefined, event.kind === "audio" ? "Audio check" : "Screen recording")
+            }
+          />
+        )}
         <NoticeBell
           notices={notices}
           onOpen={() => setNotices(markRead)}
@@ -738,7 +746,7 @@ export function App() {
       )}
       {opened.has("devices") && caps.webAccess && !caps.remote && (
         <Page shown={view === "devices"}>
-          <Devices onOpenWebAccess={() => run({ kind: "settings", section: "webAccess" })} />
+          <Devices onOpenWebAccess={() => run({ kind: "settings", section: "webAccess" })} onRun={ask} />
         </Page>
       )}
       {opened.has("imagine") && (
