@@ -76,7 +76,7 @@ impl Dimensions for GridSize {
 /// backend accepts.
 pub(super) fn grid_for(area: Vec2, cell: Vec2) -> GridSize {
     let fit = |len: f32, step: f32, lo: u16, hi: u16| -> u16 {
-        if !(step > 0.0) || !len.is_finite() {
+        if !step.is_finite() || step <= 0.0 || !len.is_finite() {
             return lo;
         }
         let n = (len / step).floor();
