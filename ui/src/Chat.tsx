@@ -71,6 +71,7 @@ import { needsSettings } from "./ui";
 import { SavedCard } from "./SavedCard";
 import { settingAsk } from "./autoSetupApi";
 import { Episode } from "./Episode";
+import { ScreenshotOffer } from "./ScreenshotOffer";
 import { openImport } from "./onboardApi";
 
 export type Item =
@@ -1456,6 +1457,16 @@ export function Chat({
           // ends (a send now would be dropped); otherwise it goes at once.
           if (busyRef.current) changeQueue([text, ...queueRef.current]);
           else setNextUp((now) => ({ text, n: (now?.n ?? 0) + 1 }));
+        }}
+      />
+      <ScreenshotOffer
+        conversationId={conversationId}
+        active={active}
+        remote={remote}
+        busy={busy}
+        onAttached={(outcome, prompt) => {
+          attach.adopt([outcome]);
+          if (outcome.staged) setDraft((now) => (now.trim() ? now : prompt));
         }}
       />
       <AttachChips files={attach.files} note={attach.note} onRemove={attach.remove} busy={busy} />

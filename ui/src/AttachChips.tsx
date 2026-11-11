@@ -69,6 +69,8 @@ export interface Attachments {
   add: (files: File[]) => Promise<void>;
   pick: () => Promise<void>;
   remove: (path: string) => void;
+  /** Files the desktop already staged (the screenshot chip's Explain). */
+  adopt: (outcomes: StageOutcome[]) => void;
   /** After a send: the chips go, the copies stay with the chat. */
   clear: () => void;
   onPaste: (event: ClipboardEvent) => void;
@@ -192,6 +194,7 @@ export function useAttachments(
     add,
     pick,
     remove,
+    adopt: take,
     clear: () => {
       setFiles([]);
       setNote(null);

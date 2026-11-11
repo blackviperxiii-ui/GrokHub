@@ -27,6 +27,7 @@ import { AiModels } from "./AiModels";
 import { LocalAi } from "./LocalAi";
 import { Permissions } from "./Permissions";
 import { PcHelpers } from "./PcHelpers";
+import { ScreenshotExplain } from "./ScreenshotExplain";
 import { Personality } from "./Personality";
 import { Playbooks } from "./Playbooks";
 import { Learned } from "./Learned";
@@ -263,6 +264,7 @@ export function Settings({
                 onCloseToTray={(closeToTray) => setSettings({ ...loaded, closeToTray })}
               />
             )}
+            {section === "behavior" && <ScreenshotExplain />}
             {section === "behavior" && <WorkboardTidy />}
             {section === "appearance" && (
               <Appearance
