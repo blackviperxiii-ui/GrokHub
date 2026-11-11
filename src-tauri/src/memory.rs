@@ -420,9 +420,14 @@ fn trial() -> Result<Trial, String> {
         NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     // A new folder only the owner can open; a name already taken is an error.
-    let mut folder = std::fs::DirBuilder::new();
     #[cfg(unix)]
-    std::os::unix::fs::DirBuilderExt::mode(&mut folder, 0o700);
+    let folder = {
+        let mut folder = std::fs::DirBuilder::new();
+        std::os::unix::fs::DirBuilderExt::mode(&mut folder, 0o700);
+        folder
+    };
+    #[cfg(not(unix))]
+    let folder = std::fs::DirBuilder::new();
     folder.create(&root).map_err(|e| e.to_string())?;
     let amr = root.join("amr");
     let source = config.join("amr");

@@ -119,12 +119,20 @@ Build locally (Linux needs `libwebkit2gtk-4.1-dev`,
 `libayatana-appindicator3-dev` and `librsvg2-dev`):
 
 ```sh
+node scripts/stage-hub-sidecar.mjs          # Windows and macOS: builds grokhub-hub and stages it as the sidecar
 npm ci --prefix ui
 ui/node_modules/.bin/tauri build            # bundles in src-tauri/target/release/bundle
 ui/node_modules/.bin/tauri build --debug --no-bundle
 cargo install tauri-driver --locked
 xvfb-run -a node ui/e2e/smoke.mjs src-tauri/target/debug/grokhub-shell
 ```
+
+On Windows and macOS, run `node scripts/stage-hub-sidecar.mjs` before any
+`cargo` or `tauri` command in `src-tauri/` (`tauri build`, `tauri dev`,
+`cargo check`, clippy and `cargo test`), and again after a change under
+`crates/`: nothing else rebuilds the staged hub. Without the staged file the
+`src-tauri` build script stops with "resource path `grokhub-hub-<triple>`
+doesn't exist" (`.exe` on Windows). On Linux the script does nothing.
 
 ## Phase 3 status
 

@@ -8,6 +8,7 @@ use grokhub_core::autotune::device::{self as dev, DeviceProfile, OsLook};
 use grokhub_core::autotune::os_signals as os;
 use grokhub_core::local_profile::LocalProfile;
 
+#[cfg(any(target_os = "linux", windows, target_os = "macos"))]
 use super::run;
 
 /// The whole record: the hardware from `profile`, then everything else.
