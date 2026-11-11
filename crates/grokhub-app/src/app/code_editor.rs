@@ -237,7 +237,9 @@ impl CodeEditor {
         let got = match saving.rx.try_recv() {
             Ok(got) => got,
             Err(mpsc::TryRecvError::Empty) => return false,
-            Err(mpsc::TryRecvError::Disconnected) => Err("The save stopped before it finished.".into()),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                Err("The save stopped before it finished.".into())
+            }
         };
         let Some(saving) = self.saving.take() else {
             return false;
@@ -256,7 +258,13 @@ impl CodeEditor {
     }
 
     /// The editor, drawn into the Code page.
-    pub(super) fn ui(&mut self, ui: &mut egui::Ui, workspace: &Path, config_dir: &Path, keep: usize) {
+    pub(super) fn ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        workspace: &Path,
+        config_dir: &Path,
+        keep: usize,
+    ) {
         self.set_workspace(workspace);
         if self.poll_save() {
             ui.ctx().request_repaint();

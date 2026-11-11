@@ -207,7 +207,10 @@ fn save_writes_the_file_and_logs_only_path_and_size() {
     let log = activity::list(&config, 10);
     assert_eq!(log.len(), 1);
     assert_eq!(log[0].kind, activity::Kind::Edit);
-    assert_eq!(log[0].summary, format!("Saved src/a.rs ({} bytes).", body.len()));
+    assert_eq!(
+        log[0].summary,
+        format!("Saved src/a.rs ({} bytes).", body.len())
+    );
     let raw = std::fs::read_to_string(config.join(activity::FILE)).unwrap();
     assert!(!raw.contains("sk-not-in-the-log"));
     assert!(!raw.contains("let token"));
