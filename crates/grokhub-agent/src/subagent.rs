@@ -3018,6 +3018,68 @@ mod tests {
         let _ = std::fs::remove_dir_all(&cfg);
     }
 
+    #[test]
+    fn a_tool_hook_of_the_chat_stops_a_helpers_write() {
+        let dir = scratch("toolhook");
+        let cfg = scratch("toolhookcfg");
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        let sid = session("toolhook");
+        let _hooks = crate::hooks::install_test_hooks(
+            &sid,
+            vec![crate::hooks::TestHook {
+                event: "PreToolUse".into(),
+                matcher: "Write".into(),
+                command: crate::hooks::test_echo(r#"{"decision":"deny","reason":"nope"}"#, None),
+                timeout: Duration::from_secs(5),
+                source_dir: dir.clone(),
+            }],
+        );
+        let parent_id = sid.clone();
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        let seen_step = Arc::clone(&seen);
+        let client = fake(&sid, move |req, _cancel, n| {
+            let depth = depth_of(&parent_id, &req.conversation_id);
+            if depth == 0 && n == 0 {
+                return Ok(calls_turn(
+                    vec![call(
+                        "s",
+                        "spawn_subagent",
+                        &spawn_args("write it", "general", false, "none"),
+                    )],
+                    Usage::default(),
+                ));
+            }
+            if depth == 1 && n == 0 {
+                return Ok(calls_turn(
+                    vec![call("w", "write", r#"{"path":"out.txt","content":"yes"}"#)],
+                    Usage::default(),
+                ));
+            }
+            if depth == 1 {
+                seen_step
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .push(last_output(req));
+            }
+            Ok(text_turn("done", Usage::default()))
+        });
+        let _ = run_parent(
+            &client,
+            &dir,
+            &sid,
+            chat(PermMode::Always, false, true),
+            &closed(),
+            &CancelToken::new(),
+            &mut |_| {},
+        );
+        assert!(!dir.join("out.txt").exists());
+        let seen = seen.lock().unwrap_or_else(|err| err.into_inner());
+        assert_eq!(seen.len(), 1, "{seen:?}");
+        assert!(seen[0].contains("nope"), "{seen:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
     /// A folder opened so its times can be set. Windows opens a folder only
     /// with backup semantics, and setting a time needs write-attributes.
     fn dir_handle(path: &Path) -> std::fs::File {

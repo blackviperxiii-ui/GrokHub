@@ -1302,6 +1302,11 @@ const BASE_DENY_RULES: &[&str] = &[
     "Bash(*; rd *)",
     "Bash(*&& rd *)",
     "Bash(*| rd *)",
+    "Bash(ri *)",
+    "Bash(sudo ri *)",
+    "Bash(*; ri *)",
+    "Bash(*&& ri *)",
+    "Bash(*| ri *)",
     "Bash(remove-item *)",
     "Bash(sudo remove-item *)",
     "Bash(*; remove-item *)",
@@ -1529,6 +1534,7 @@ const CASE_HEADS: &[&str] = &[
     "del",
     "erase",
     "rd",
+    "ri",
     "remove-item",
     "remove-itemsafely",
     "clear-recyclebin",
@@ -1566,6 +1572,7 @@ const WRAPPED_HEADS: &[&str] = &[
     "del",
     "erase",
     "rd",
+    "ri",
     "remove-item",
     "Remove-Item",
     "shutdown",
@@ -1885,10 +1892,10 @@ const INSTRUCTION_FILES: &[&str] = &[
 ];
 
 /// A path the agent reads as its own settings or instructions: any `.claude`
-/// folder, `.grok/hooks` and `.grok/skills`, the cabin's own skills and
-/// memory folders, and the instruction files above wherever they sit. These
-/// grant permissions, run hooks or steer later chats, so the agent writing
-/// them could approve or instruct its own later calls.
+/// folder, `.grok/hooks`, `.grok/hooks-paths` and `.grok/skills`, the cabin's
+/// own skills and memory folders, and the instruction files above wherever
+/// they sit. These grant permissions, run hooks or steer later chats, so the
+/// agent writing them could approve or instruct its own later calls.
 pub fn is_agent_config_path(path: &str) -> bool {
     let path = norm_path(path);
     let clean = |part: &str| {
@@ -1899,13 +1906,14 @@ pub fn is_agent_config_path(path: &str) -> bool {
         .split('/')
         .filter(|part| !part.is_empty())
         .map(clean)
+        .filter(|part| part != ".")
         .collect();
     let in_settings = parts.iter().enumerate().any(|(at, part)| {
         part == ".claude"
             || (part == ".grok"
-                && parts
-                    .get(at + 1)
-                    .is_some_and(|next| next == "hooks" || next == "skills"))
+                && parts.get(at + 1).is_some_and(|next| {
+                    matches!(next.as_str(), "hooks" | "hooks-paths" | "skills")
+                }))
     });
     let instruction_file = parts
         .last()
@@ -2225,6 +2233,9 @@ const DELETE_HEADS: &[&str] = &[
     "del",
     "erase",
     "rd",
+    // PowerShell's short name for Remove-Item. Ruby's doc viewer shares the
+    // name and gets the card too.
+    "ri",
     "remove-item",
     "remove-itemsafely",
     "recycle",
@@ -2509,24 +2520,24 @@ mod tests {
 
     #[test]
     fn headless_deny_rules_cover_the_floor_and_stubs() {
-        assert_eq!(BASE_DENY_RULES.len(), 266);
-        assert_eq!(&HEADLESS_DENY_RULES[..266], BASE_DENY_RULES);
-        assert_eq!(HEADLESS_DENY_RULES[259], "Bash(*consent.jsonl*)");
-        assert_eq!(HEADLESS_DENY_RULES[261], "Write(**/consent.jsonl)");
+        assert_eq!(BASE_DENY_RULES.len(), 271);
+        assert_eq!(&HEADLESS_DENY_RULES[..271], BASE_DENY_RULES);
+        assert_eq!(HEADLESS_DENY_RULES[264], "Bash(*consent.jsonl*)");
+        assert_eq!(HEADLESS_DENY_RULES[266], "Write(**/consent.jsonl)");
         assert_eq!(
-            HEADLESS_DENY_RULES[262],
+            HEADLESS_DENY_RULES[267],
             "MCPTool(grokhub-self__skill_delete)"
         );
         assert_eq!(
-            HEADLESS_DENY_RULES[263],
+            HEADLESS_DENY_RULES[268],
             "MCPTool(grokhub-self__connection_remove)"
         );
         assert_eq!(
-            HEADLESS_DENY_RULES[264],
+            HEADLESS_DENY_RULES[269],
             "MCPTool(grokhub-self__automation_delete)"
         );
         assert_eq!(
-            HEADLESS_DENY_RULES[265],
+            HEADLESS_DENY_RULES[270],
             "MCPTool(grokhub-self__automation_create)"
         );
         assert_eq!(HEADLESS_DENY_RULES[0], "Bash(rm -rf /)");
@@ -2590,7 +2601,7 @@ mod tests {
             CREDENTIAL_HEADS,
         ]
         .concat();
-        assert_eq!(heads.len(), 29);
+        assert_eq!(heads.len(), 30);
         for h in &heads {
             for cmd in [
                 format!("{h} target"),
@@ -2720,7 +2731,7 @@ mod tests {
     /// Card 29 part 3: case, full paths, wrappers and encoded PowerShell on path C.
     #[test]
     fn gb_rules_see_case_full_paths_wrappers_and_encoded_powershell() {
-        assert_eq!(HEADLESS_DENY_RULES.len(), 724);
+        assert_eq!(HEADLESS_DENY_RULES.len(), 754);
         let argv: usize = HEADLESS_DENY_RULES
             .iter()
             .map(|r| "--deny".len() + r.len() + 4)
@@ -3251,6 +3262,15 @@ mod tests {
             ("nice -n 10 rm notes.txt", HardClass::Delete),
             ("timeout 5 shutdown now", HardClass::IrreversibleOs),
             ("timeout -s KILL 5s rm notes.txt", HardClass::Delete),
+            ("ri -Recurse -Force build", HardClass::Delete),
+            (
+                "Get-ChildItem build | ri -Recurse -Force",
+                HardClass::Delete,
+            ),
+            (
+                "powershell -NoProfile -Command \"ri -Recurse -Force build\"",
+                HardClass::Delete,
+            ),
         ] {
             assert_eq!(
                 hard_class("run_terminal_command", &sh(cmd)),
@@ -3509,6 +3529,10 @@ mod tests {
         assert_eq!(
             delete_targets("Remove-Item -Path C:\\tmp\\x.txt -Force"),
             vec!["C:\\tmp\\x.txt"]
+        );
+        assert_eq!(
+            delete_targets("ri -Recurse -Force C:\\tmp\\x"),
+            vec!["C:\\tmp\\x"]
         );
         assert_eq!(
             delete_targets("sudo rm /var/tmp/old.log"),
@@ -4111,6 +4135,9 @@ mod tests {
             "sub/.claude/commands/x.md",
             ".claude",
             ".grok/hooks/pre.sh",
+            ".grok/./hooks/pre.sh",
+            "./.grok/./hooks/x.json",
+            ".grok/hooks-paths",
             "C:\\repo\\.CLAUDE\\settings.json",
         ] {
             assert_eq!(
@@ -4136,6 +4163,7 @@ mod tests {
             "mkdir -p .grok/hooks && cp x.sh .grok/hooks/",
             "tee .claude/settings.local.json <x",
             "sed -i s/ask/allow/ \".claude/settings.json\"",
+            "cp x.json .grok/./hooks/x.json",
         ] {
             assert_eq!(
                 hard_class("run_terminal_command", &shell(command)),
