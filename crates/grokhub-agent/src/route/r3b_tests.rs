@@ -2763,6 +2763,48 @@ fn xai_down_hands_an_ordinary_turn_to_a_provider_then_to_this_computer() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// The xAI account ran out of credit.
+struct XaiBroke;
+
+impl ModelClient for XaiBroke {
+    fn stream(
+        &self,
+        _r: &ResponsesRequest,
+        _c: &CancelToken,
+        _s: &mut dyn FnMut(StreamEvent),
+    ) -> Result<TurnOutput, ClientError> {
+        Err(ClientError::PaymentRequired {
+            status: 402,
+            message: "out of credit".into(),
+        })
+    }
+}
+
+#[test]
+fn xai_out_of_credit_hands_the_turn_to_a_provider_instead_of_failing() {
+    let (dir, wire) = setup("xai-broke");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    save_registry(&dir, &fleet()).unwrap();
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    grant_destination(&dir, OR_DEST, CALL_DATA, UserClick::from_click()).unwrap();
+    let mut shown = String::new();
+    let out = live::stream_routed(
+        &XaiBroke,
+        &chat("xai-broke-1", &["fix my wifi"]),
+        &CancelToken::new(),
+        &mut |ev| {
+            if let StreamEvent::TextDelta(t) = ev {
+                shown.push_str(&t);
+            }
+        },
+        "chat:default",
+    );
+    assert_eq!(out.unwrap().text, "hello from the provider");
+    assert!(shown.contains("hello from the provider"), "{shown}");
+    assert_eq!(wire.n(), 1);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[test]
 fn a_providers_thinking_is_read_and_goes_back_to_it_alone() {
     // llama.cpp with `--reasoning-format deepseek` says `reasoning_content`.
@@ -3414,7 +3456,16 @@ fn a_provider_out_of_credit_cools_it_and_grok_takes_the_turn() {
     assert_eq!(grok.0.lock().unwrap().as_str(), "grok-4.7");
     // The provider was tried once, then cooled: the next pick skips it.
     assert_eq!(wire.calls(), 1);
-    assert!(live::cooling(&dir, OR_MODEL, grokhub_core::now_ms()));
+    let now = grokhub_core::now_ms();
+    assert!(live::cooling(&dir, OR_MODEL, now));
+    // Out of credit doesn't clear in a minute: an hour on it is still skipped,
+    // and so is every other paid model on the same account. Its free models,
+    // and another provider's, still answer.
+    let later = now + 60 * 60_000;
+    assert!(live::cooling(&dir, OR_MODEL, later));
+    assert!(live::cooling(&dir, "openrouter/other/paid", later));
+    assert!(!live::cooling(&dir, "openrouter/other/model:free", later));
+    assert!(!live::cooling(&dir, AN_MODEL, later));
     // The route record names Grok as the route that answered.
     let (_, rec) = route_records(&dir, ROUTE_TAIL_LINES)
         .pop()
@@ -4019,5 +4070,36 @@ fn a_saved_row_with_a_path_for_an_id_is_not_removed_by_it() {
         "That provider isn't added."
     );
     assert_eq!(std::fs::read_to_string(dir.join("app.json")).unwrap(), "{}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A rate limit cools for five minutes, or for as long as the provider asked;
+/// it stays on the one model. Any other fault keeps the one-minute cool.
+#[test]
+fn a_rate_limit_cools_for_minutes_and_an_outage_for_one() {
+    let dir = test_dir("r3b-limit-cool");
+    let limited = ClientError::RateLimited {
+        retry_after_secs: None,
+        message: "slow down".into(),
+    };
+    live::cool_down_for(&dir, "openrouter/a/b", &limited, NOW);
+    assert!(live::cooling(&dir, "openrouter/a/b", NOW + 61_000));
+    assert!(!live::cooling(&dir, "openrouter/a/b", NOW + live::LIMIT_COOL_MS));
+    assert!(!live::cooling(&dir, "openrouter/a/c", NOW + 1));
+    let wait = ClientError::RateLimited {
+        retry_after_secs: Some(900),
+        message: "slow down".into(),
+    };
+    live::cool_down_for(&dir, "anthropic/x", &wait, NOW);
+    assert!(live::cooling(&dir, "anthropic/x", NOW + 600_000));
+    assert!(!live::cooling(&dir, "anthropic/x", NOW + 900_000));
+    let down = ClientError::Server {
+        status: 503,
+        message: "overloaded".into(),
+        retry_after_secs: None,
+    };
+    live::cool_down_for(&dir, "anthropic/y", &down, NOW);
+    assert!(live::cooling(&dir, "anthropic/y", NOW + 59_000));
+    assert!(!live::cooling(&dir, "anthropic/y", NOW + 61_000));
     let _ = std::fs::remove_dir_all(dir);
 }
