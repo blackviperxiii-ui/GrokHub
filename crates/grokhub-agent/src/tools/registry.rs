@@ -655,6 +655,9 @@ mod tests {
     /// Chat/Agent and background, and 50 to Plan/Ask.
     /// The deferred `module_setup` index line (Home's one-tap Frame Rate setup)
     /// added 36 to Chat/Agent and background.
+    /// Eager `look_at_screen` (one way to see the screen on every desktop, so the
+    /// agent stops trying shell screenshot tools) added 334 to Chat/Agent
+    /// (11_352 → 11_686); unattended and read-only runs don't get it.
     #[test]
     fn eager_schema_payload_stays_within_budget_per_profile() {
         use super::super::set::ToolSet;
@@ -664,14 +667,15 @@ mod tests {
                 "chat",
                 profile(PermMode::Ask, false, true),
                 full.clone(),
-                // +150 for the shell's outside_sandbox arg (HX-11), +143 for grep's modes.
-                11_352,
+                // +150 for the shell's outside_sandbox arg (HX-11), +143 for grep's modes,
+                // +334 for eager look_at_screen.
+                11_686,
             ),
             (
                 "agent",
                 profile(PermMode::Always, false, true),
                 full.clone(),
-                11_352,
+                11_686,
             ),
             (
                 "plan/ask",
@@ -718,6 +722,7 @@ mod tests {
                 "search_replace",
                 "run_terminal_command",
                 "web_search",
+                "look_at_screen",
                 "todo_write",
                 "ask_user_question",
                 "report_findings",

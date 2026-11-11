@@ -102,13 +102,11 @@ pub fn schemas() -> Vec<Value> {
 pub fn look_schema() -> Value {
     tool(
         super::LOOK_AT_SCREEN,
-        "Look at the screen and get it back as an image. Works on Wayland, X11, Windows and \
-         macOS, with or without desktop control. Use this whenever you need to see the screen; \
-         never shell screenshot commands (spectacle, grim, import, ffmpeg x11grab), which the \
-         shell sandbox can't run. Only when the task needs to see the screen.",
+        "See the screen as an image, on any desktop, no desktop control needed. Use this, \
+         never shell screenshot commands.",
         json!({ "monitor": {
             "type": "string",
-            "description": "Monitor id, or \"all\". Defaults to \"all\"."
+            "description": "Monitor id or \"all\" (default)."
         }}),
         &[],
     )
