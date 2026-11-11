@@ -108,6 +108,14 @@ describe("paletteRows", () => {
     expect(labels(DESKTOP, "")).not.toContain("Settings: Code");
   });
 
+  it("opens the Command line right after Code, on the desktop only", () => {
+    const rows = labels({ ...DESKTOP, code: true }, "");
+    expect(rows.slice(rows.indexOf("Code"), rows.indexOf("Code") + 3)).toEqual(["Code", "Command line", "History"]);
+    expect(labels(DESKTOP, "")).not.toContain("Command line");
+    expect(labels({ ...WEB, code: true }, "")).not.toContain("Command line");
+    expect(labels({ ...DESKTOP, code: true }, "command")).toContain("Command line");
+  });
+
   it("puts the commands this shell can run after the pages", () => {
     // The commands follow the last page, however many pages this shell has.
     const afterPages = (rows: string[], n: number) =>
