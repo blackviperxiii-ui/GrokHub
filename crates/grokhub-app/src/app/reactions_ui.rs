@@ -20,7 +20,7 @@ impl Cabin {
             .get_or_insert_with(|| reactions::load(&reactions_path()))
     }
 
-    fn save_reactions(&mut self) {
+    pub(super) fn save_reactions(&mut self) {
         let state = self.reactions_now().clone();
         if let Err(err) = reactions::save(&reactions_path(), &state) {
             self.status = err;
@@ -99,6 +99,23 @@ impl Cabin {
     pub(super) fn react_to_act(&mut self, act: &super::pulse_ui::PulseAct) {
         use super::pulse_ui::{PulseAct, SourceAct};
         let (id, outcome, more) = match act {
+            PulseAct::Like(id)
+                if self
+                    .pulse_card(id)
+                    .is_some_and(|c| c.reaction == Some(grokhub_core::CardReaction::Up)) =>
+            {
+                // Unlike: pulse_like retracts; no Accepted write.
+                return;
+            }
+            PulseAct::Like(id)
+                if self.pulse_card(id).is_some_and(|c| {
+                    c.kind == grokhub_core::UpdateKind::Idea
+                        || grokhub_core::pulse_sources::is_source_post(&c)
+                }) =>
+            {
+                // Like absorbs More like this on ideas and source posts.
+                (id, Outcome::Accepted, Some(true))
+            }
             PulseAct::Run(id)
             | PulseAct::Offer(id, _)
             | PulseAct::Always(id)

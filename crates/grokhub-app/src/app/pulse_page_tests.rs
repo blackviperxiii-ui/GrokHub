@@ -780,9 +780,8 @@ fn pulse_feed_shows_posts_with_cached_source_images_and_a_placeholder() {
         "the source line names the source, not the card type: {texts:?}"
     );
 
-    // Like: a ledger line and the heart stays on.
+    // Like: a ledger line and the heart stays on; a second tap unlikes.
     let id = cabin.updates[0].id.clone();
-    cabin.pulse_like(&id, "2026-10-04");
     cabin.pulse_like(&id, "2026-10-04");
     assert_eq!(
         pulse_memory()
@@ -790,13 +789,20 @@ fn pulse_feed_shows_posts_with_cached_source_images_and_a_placeholder() {
             .count(),
         1
     );
-    // The heart stays on, first in the post's row.
     let liked = cabin.updates[0].clone();
     assert_eq!(
         super::pulse_ui::post_row(&liked, false, &chip_day())
             .first()
             .map(|(label, _)| label.as_str()),
         Some("♥")
+    );
+    cabin.pulse_like(&id, "2026-10-04");
+    assert_eq!(cabin.updates[0].reaction, None, "second tap unlikes");
+    assert_eq!(
+        super::pulse_ui::post_row(&cabin.updates[0].clone(), false, &chip_day())
+            .first()
+            .map(|(label, _)| label.as_str()),
+        Some("Like")
     );
 }
 
@@ -1006,8 +1012,13 @@ fn pulse_rows_show_their_chips_on_focus_and_keys_act_on_the_focused_row() {
     );
     assert_eq!(cabin.pulse_view.focus.as_deref(), Some("idea-beach"));
 
-    // D through the page: the focused row goes, the ledger says so, focus moves on.
+    // D through the page: asks first, then the focused row goes.
     let _ = pulse_text_at(cabin, 1200.0, vec![pulse_key_event(egui::Key::D)]);
+    let kind = cabin
+        .confirm
+        .clone()
+        .expect("Dismiss asks before removing the card");
+    cabin.take_confirm(kind);
     assert!(!cabin.updates.iter().any(|c| c.id == "idea-beach"));
     assert!(
         pulse_memory().contains("pulse: dismissed \"Beach photos\" reason=dismiss"),
@@ -1352,10 +1363,10 @@ fn pulse_mixes_ideas_and_posts_in_one_column_and_narrow_rows_keep_run() {
     // a ··· too, holding only Why I created this.
     assert_eq!(count(&wide, "Run"), 0);
     assert!(count(&wide, "···") > 2, "{wide:?}");
-    // Posts show Like first and their chips at rest.
+    // Posts and idea rows show Like; posts show their chips at rest.
     assert_eq!(
         (count(&wide, "Like"), count(&wide, "Remind me later")),
-        (3, 3)
+        (5, 3)
     );
 
     // Narrow: Run stays on every idea row; idea rows keep Snooze and Dismiss
@@ -1566,7 +1577,6 @@ fn every_post_shows_one_row_like_first_dismiss_last() {
             "Like",
             "Undo",
             "Don't do this again",
-            "Delete",
             "Not interested",
             "Dismiss"
         ]
@@ -1587,7 +1597,6 @@ fn every_post_shows_one_row_like_first_dismiss_last() {
             "Skip",
             "Too easy",
             "Too hard",
-            "Delete",
             "Not interested",
             "Dismiss"
         ]
@@ -1764,8 +1773,7 @@ fn a_plain_post_shows_its_chips_between_like_and_dismiss() {
                 "Remind me later".to_string(),
                 FeedPostAct::Chip(ChipAct::RemindAt(CHIP_TONIGHT))
             ),
-            // A finished run is a one-off: Delete, not Snooze.
-            ("Delete".to_string(), FeedPostAct::Delete),
+            // A finished run is a one-off: Delete folded into Dismiss.
             ("Not interested".to_string(), FeedPostAct::Dislike),
             ("Dismiss".to_string(), FeedPostAct::Dismiss),
         ]
@@ -2009,7 +2017,7 @@ fn a_crash_card_waits_for_a_tap_unless_its_switch_is_on() {
 }
 
 #[test]
-fn a_post_offers_snooze_or_delete_as_it_suits_and_both_when_unsure() {
+fn a_post_offers_snooze_as_it_suits_and_dismiss_last_with_no_delete_button() {
     use super::pulse_ui::{post_row, post_why, FeedPostAct};
     let day = chip_day();
     let has = |card: &grokhub_core::UpdateCard, did: FeedPostAct| {
@@ -2020,11 +2028,11 @@ fn a_post_offers_snooze_or_delete_as_it_suits_and_both_when_unsure() {
     assert!(has(&soon, FeedPostAct::Snooze) && !has(&soon, FeedPostAct::Delete));
     let mut plain = pulse_idea("plain", "Three garden posts", "reading", day.now_ms);
     plain.kind = grokhub_core::UpdateKind::Digest;
-    assert!(has(&plain, FeedPostAct::Snooze) && has(&plain, FeedPostAct::Delete));
+    // Delete folded into Dismiss: Snooze may still show; Delete never does.
+    assert!(has(&plain, FeedPostAct::Snooze) && !has(&plain, FeedPostAct::Delete));
     let row = post_row(&plain, false, &day);
     let at = |did: FeedPostAct| row.iter().position(|(_, d)| *d == did);
-    assert!(at(FeedPostAct::Snooze) < at(FeedPostAct::Delete));
-    assert!(at(FeedPostAct::Delete) < at(FeedPostAct::Dislike));
+    assert!(at(FeedPostAct::Snooze) < at(FeedPostAct::Dislike));
     assert_eq!(
         row.last().map(|(_, d)| d.clone()),
         Some(FeedPostAct::Dismiss)

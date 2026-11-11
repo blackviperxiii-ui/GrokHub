@@ -194,6 +194,8 @@ pub(super) enum PulseAct {
     RetryNow,
     Source(String, SourceAct),
     /// More or fewer cards of this one's kind, from the ··· menu.
+    /// Alias of Like (More like this folded in). Kept for older callers/tests.
+    #[expect(dead_code, reason = "alias of Like; kept for older callers")]
     MoreKind(String),
     LessKind(String),
     /// A backup reminder's one-tap, by chip id.
@@ -537,13 +539,7 @@ fn pulse_menu(
                 .size(crate::theme::FONT_TIP)
                 .color(crate::theme::subtle()),
         );
-        pick(
-            ui,
-            "More like this",
-            "",
-            PulseAct::MoreKind(id.clone()),
-            act,
-        );
+        // More like this folded into the row's Like.
         pick(ui, "Less like this", "", PulseAct::LessKind(id), act);
     }
 }
@@ -681,9 +677,9 @@ pub(super) fn paint_pulse_row(
                 }
                 ui.horizontal(|ui| {
                     paint_type_tag(ui, kind);
-                    if active || st.compact {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.spacing_mut().item_spacing.x = 8.0;
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        if active || st.compact {
                             let shown = if st.compact { 1 } else { chips.len() };
                             // Right to left: the last chip is laid down first.
                             for (label, chip) in chips.iter().take(shown).rev() {
@@ -691,8 +687,13 @@ pub(super) fn paint_pulse_row(
                                     act = Some(chip_act(card, chip));
                                 }
                             }
-                        });
-                    }
+                        }
+                        // Like absorbs More like this; always first on the right edge.
+                        let liked = card.reaction == Some(CardReaction::Up);
+                        if paint_like_slot(ui, if liked { "♥" } else { "Like" }) {
+                            act = Some(PulseAct::Like(card.id.clone()));
+                        }
+                    });
                 });
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
@@ -759,7 +760,11 @@ pub(super) enum FeedPostAct {
     Dismiss,
     /// Hidden until the next 09:00, when the card suits it.
     Snooze,
-    /// Gone from the page for good, when the card suits it.
+    /// Alias of Dismiss (Delete folded in). Kept so older callers/tests still compile.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "alias of Dismiss; kept for older callers")
+    )]
     Delete,
     Discuss,
     Link(String),
@@ -801,6 +806,11 @@ pub(super) enum SourceAct {
         expect(dead_code, reason = "replaced by the row's Not interested")
     )]
     NotInterested,
+    /// Alias path for Like (More like this folded in). Tests still call it.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "folded into Like; kept for tests/alias")
+    )]
     MoreLike,
 }
 
@@ -820,7 +830,8 @@ pub(super) fn feed_act(card: &UpdateCard, did: FeedPostAct) -> PulseAct {
         FeedPostAct::Dislike => PulseAct::Dislike(id),
         FeedPostAct::Dismiss => PulseAct::Dismiss(id),
         FeedPostAct::Snooze => PulseAct::Snooze(id),
-        FeedPostAct::Delete => PulseAct::Ignore(id),
+        // Delete folded into Dismiss (confirm); keep the act as an alias.
+        FeedPostAct::Delete => PulseAct::Dismiss(id),
         FeedPostAct::Discuss => PulseAct::Discuss(id),
         FeedPostAct::Link(url) => PulseAct::Link(url),
         FeedPostAct::Undo => PulseAct::Undo(id),
@@ -896,15 +907,8 @@ pub(super) fn post_actions(card: &UpdateCard, looking_more: bool) -> Vec<(String
             if liked { "Saved" } else { "Save" },
             FeedPostAct::Source(SourceAct::Save),
         );
-        // Not interested is the row's one dislike button (card taste).
-        add(
-            if looking_more {
-                "Looking…"
-            } else {
-                "More like this"
-            },
-            FeedPostAct::Source(SourceAct::MoreLike),
-        );
+        // More like this folded into Like (see pulse_like).
+        let _ = looking_more;
     }
     if matches!(card.kind, UpdateKind::Digest | UpdateKind::Suggestion) {
         add("Discuss", FeedPostAct::Discuss);
@@ -942,8 +946,8 @@ pub(super) fn post_buttons(
 }
 
 /// Every post's one row of buttons: Like first, the post's own buttons,
-/// Snooze and Delete when the card suits them (both when unsure), then Not
-/// interested (the one dislike), and Dismiss last.
+/// Snooze when the card suits it, then Not interested (the one dislike),
+/// and Dismiss last. Delete folded into Dismiss (confirm).
 pub(super) fn post_row(
     card: &UpdateCard,
     looking_more: bool,
@@ -962,9 +966,6 @@ pub(super) fn post_row(
     let offers = grokhub_core::card_offers::offers(card, &[], day.now_ms);
     if offers.snooze {
         row.push(("Snooze".into(), FeedPostAct::Snooze));
-    }
-    if offers.delete {
-        row.push(("Delete".into(), FeedPostAct::Delete));
     }
     row.push(("Not interested".into(), FeedPostAct::Dislike));
     row.push(("Dismiss".into(), FeedPostAct::Dismiss));
@@ -2079,7 +2080,8 @@ impl Cabin {
                 {
                     self.day_brief_not_today(&id);
                 } else {
-                    self.pulse_dismiss(&id, &Self::local_day());
+                    // Confirm first: Dismiss absorbs Delete ("won't come back").
+                    self.confirm = Some(super::confirm::ConfirmKind::DismissPulse { id });
                 }
             }
             PulseAct::NotThis(id) => {
@@ -2115,8 +2117,10 @@ impl Cabin {
             PulseAct::RetryNow => self.retry_model_wait_now(),
             PulseAct::BackupChip(id) => self.tap_backup_chip(&id),
             PulseAct::Source(id, did) => self.source_post_act(&id, did),
+            // More like this folded into Like; keep the act as an alias.
+            PulseAct::MoreKind(id) => self.pulse_like(&id, &Self::local_day()),
             // Recorded by react_to_act; nothing else to do.
-            PulseAct::MoreKind(_) | PulseAct::LessKind(_) => {}
+            PulseAct::LessKind(_) => {}
             PulseAct::Link(url) => {
                 self.follow_update_action(Some(UpdateAction::DeepLink { href: url }))
             }
@@ -2340,15 +2344,22 @@ impl Cabin {
         self.pulse_remove_dismiss(card, true);
     }
 
-    /// Dismiss. On a feed post it carries no weight: the card goes and
-    /// nothing is learned (Like and Not interested are the taste signals).
+    /// Dismiss (after confirm). Takes the card off for good. Records Delete
+    /// taste when the shell's Delete would have (not an idea, not housekeeping).
     /// Ideas and proactive rows keep their quiet-for-a-day throttle.
     pub(super) fn pulse_dismiss(&mut self, id: &str, day: &str) {
         let Some(card) = self.pulse_card(id) else {
             return;
         };
+        let now = now_ms();
+        let housekeeping = grokhub_core::card_offers::stale(&card, now)
+            || grokhub_core::card_offers::one_off(&card);
+        if card.kind != UpdateKind::Idea && !housekeeping {
+            self.learn_card_taste(&card, grokhub_core::card_taste::Reaction::Delete);
+        }
         if !weighted_dismiss(&card) {
             self.pulse_remove_dismiss(&card, false);
+            self.status = "Dismissed.".into();
             return;
         }
         let used_depth = grokhub_core::used_depth(&self.card_prefs, &card);
@@ -2394,6 +2405,7 @@ impl Cabin {
             return;
         };
         if card.reaction == Some(CardReaction::Up) {
+            self.pulse_unlike(&card);
             return;
         }
         if let Some(saved) = self.updates.iter_mut().find(|c| c.id == id) {
@@ -2402,6 +2414,40 @@ impl Cabin {
         self.persist_updates();
         self.pulse_note(&card.title, LedgerReason::Liked, day);
         self.learn_card_taste(&card, grokhub_core::card_taste::Reaction::Like);
+        // More like this folded in: source check. Idea category lift is in react_to_act.
+        if grokhub_core::pulse_sources::is_source_post(&card) {
+            self.source_more_like(&card);
+        } else if card.kind == UpdateKind::Idea {
+            self.status = "Got it. More of these.".into();
+        }
+    }
+
+    /// Heart pressed again: clear the Like and retract More like this signals.
+    pub(super) fn pulse_unlike(&mut self, card: &UpdateCard) {
+        if let Some(saved) = self.updates.iter_mut().find(|c| c.id == card.id) {
+            saved.reaction = None;
+        }
+        self.persist_updates();
+        // Take back the card-taste Like line.
+        use grokhub_core::card_taste as ct;
+        let dir = crate::config::config_dir();
+        let mut taste = ct::load(&dir);
+        if taste.undo(&card.id, ct::Reaction::Like) {
+            if let Err(err) = ct::save(&dir, &taste) {
+                self.status = err;
+            }
+        }
+        if grokhub_core::pulse_sources::is_source_post(card) {
+            self.source_unlike_more(card);
+        } else if card.kind == UpdateKind::Idea {
+            self.react_more(card, false);
+            // Retract the Accepted points Like wrote via react_to_act.
+            if let Some((category, _)) = grokhub_core::reactions::card_category_tag(card) {
+                self.reactions_now()
+                    .retract(grokhub_core::reactions::Outcome::Accepted, &category);
+                self.save_reactions();
+            }
+        }
     }
 
     /// Not interested: the post goes and card taste learns from its traits.
@@ -3134,7 +3180,6 @@ mod post_row_tests {
             ("Ignore for now", FeedPostAct::Snooze),
             ("Remind me later", FeedPostAct::Snooze),
             ("Snooze", FeedPostAct::Snooze),
-            ("Delete", FeedPostAct::Delete),
             ("Not interested", FeedPostAct::Dislike),
             ("Dismiss", FeedPostAct::Dismiss),
         ]
@@ -3168,10 +3213,10 @@ mod post_row_tests {
     #[test]
     fn a_narrow_digest_row_keeps_dismiss_in_view_and_off_not_interested() {
         let (rects, right) = row_rects(600.0);
-        assert_eq!(rects.len(), 8);
+        assert_eq!(rects.len(), 7);
         // What shows: a button scrolled out of view shows nothing.
         let shown: Vec<egui::Rect> = rects.iter().copied().filter(|r| r.width() > 0.0).collect();
-        assert!(shown.len() >= 6, "most of the row shows: {rects:?}");
+        assert!(shown.len() >= 5, "most of the row shows: {rects:?}");
         for pair in shown.windows(2) {
             assert!(
                 pair[1].min.x >= pair[0].max.x + 7.0,
@@ -3187,7 +3232,7 @@ mod post_row_tests {
         }
         // Dismiss stays in view at the right; the rest scrolls beside it.
         assert!(
-            (rects[7].max.x - right).abs() <= 1.0,
+            (rects[6].max.x - right).abs() <= 1.0,
             "{rects:?} vs {right}"
         );
     }
@@ -3195,8 +3240,8 @@ mod post_row_tests {
     #[test]
     fn a_wide_digest_row_still_pins_dismiss_to_the_right() {
         let (rects, right) = row_rects(1400.0);
-        let dismiss = rects[7];
-        let not_interested = rects[6];
+        let dismiss = rects[6];
+        let not_interested = rects[5];
         assert!(
             (dismiss.max.x - right).abs() <= 1.0,
             "{dismiss:?} vs {right}"
