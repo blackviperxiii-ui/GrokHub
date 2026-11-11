@@ -263,3 +263,83 @@ fn held_values_skip_a_name_with_no_value_and_keep_the_rest() {
     assert_eq!(held_values(&d, &vault, KEY), vec![VALUE.to_string()]);
     assert!(held_values(&d, &vault, "another-repo").is_empty());
 }
+
+#[test]
+fn the_shield_hides_a_whole_value_that_falls_on_the_long_line_cut() {
+    let mut shield = Shield::new(vec![VALUE.to_string()]);
+    let long = "a".repeat(32 * 1024);
+    let mut out = shield.push(&long);
+    // The line is now over the limit, and the value ends five bytes from its end.
+    out.push_str(&shield.push(&format!("aa{VALUE}bbbbb")));
+    out.push_str(&shield.finish());
+    assert_eq!(out, format!("{long}aa[redacted]bbbbb"));
+}
+
+#[test]
+fn the_shield_hides_a_value_with_line_breaks_printed_a_line_at_a_time() {
+    let value = "line-one-AAAA\nline-two-BBBB\nline-three-CC\nline-four-DDDD";
+    let mut shield = Shield::new(vec![value.to_string()]);
+    let mut out = String::new();
+    for line in value.lines() {
+        out.push_str(&shield.push(&format!("{line}\n")));
+    }
+    out.push_str(&shield.finish());
+    assert_eq!(out, "[redacted]\n");
+    // One line of it among other text is hidden too, in a run and in the log.
+    let mut shield = Shield::new(vec![value.to_string()]);
+    assert_eq!(
+        shield.push("key: line-two-BBBB end\nnext\n"),
+        "key: [redacted] end\nnext\n"
+    );
+    assert_eq!(
+        redact("said line-three-CC twice", &[value.to_string()]),
+        "said [redacted] twice"
+    );
+}
+
+#[test]
+fn the_shield_with_nothing_held_hides_a_key_split_across_two_reads() {
+    let mut shield = Shield::new(Vec::new());
+    let mut out = shield.push("token ghp_abcdef");
+    out.push_str(&shield.push("ghijklmnop12 done\n"));
+    // Split inside the prefix, and between Bearer and its value (the
+    // redactor takes the word Bearer with the value).
+    out.push_str(&shield.push("next gh"));
+    out.push_str(&shield.push("p_abcdefghijklmnop12 ok\nAuthorization: Bearer "));
+    out.push_str(&shield.push("abcdefghijklmnop12\nplain text"));
+    out.push_str(&shield.finish());
+    assert_eq!(
+        out,
+        "token [redacted] done\nnext [redacted] ok\nAuthorization: [redacted]\nplain text"
+    );
+}
+
+#[test]
+fn the_shield_keeps_a_character_split_across_two_reads_whole() {
+    // The euro sign is three bytes; the read ends after its second.
+    let mut shield = Shield::new(Vec::new());
+    let mut out = shield.push_bytes(&[b'5', 0xe2, 0x82]);
+    out.push_str(&shield.push_bytes(&[0xac, b'\n']));
+    out.push_str(&shield.finish());
+    assert_eq!(out, "5\u{20ac}\n");
+    let mut shield = Shield::new(vec![VALUE.to_string()]);
+    let mut out = shield.push_bytes(&[b'5', 0xe2]);
+    out.push_str(&shield.push_bytes(&[0x82, 0xac, b'\n']));
+    out.push_str(&shield.finish());
+    assert_eq!(out, "5\u{20ac}\n");
+}
+
+#[test]
+fn a_missing_keychain_is_named_in_plain_words() {
+    assert_eq!(
+        keychain_message(keyring::Error::NoDefaultStore),
+        "No system keychain is running. Start one, then restart the app."
+    );
+    // Any other failure keeps the plain sentence, without the library's wording.
+    assert_eq!(
+        keychain_message(keyring::Error::NoStorageAccess(
+            "org.freedesktop.DBus".into()
+        )),
+        "The system keychain is not available."
+    );
+}

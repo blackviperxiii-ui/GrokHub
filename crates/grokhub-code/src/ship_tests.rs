@@ -909,4 +909,107 @@ mod repo {
         );
         let _ = std::fs::remove_dir_all(&f.root);
     }
+
+    #[test]
+    fn a_tag_named_like_the_branch_does_not_bend_the_push_target() {
+        let f = fixture("tag");
+        sh_git(&f.work, &["switch", "-c", "feature"]);
+        sh_git(&f.work, &["tag", "feature"]);
+        commit(&f.work, "two\n");
+        assert_eq!(current_branch(&f.work).as_deref(), Some("feature"));
+        let plan = plan_with(
+            &f.config,
+            &f.work,
+            &CodeShip::default(),
+            Action::Push,
+            GITHUB_NO_PR,
+        );
+        assert_eq!(plan.branch.as_deref(), Some("feature"));
+        assert_eq!(
+            plan.command,
+            "git push --porcelain origin HEAD:refs/heads/feature"
+        );
+        assert_eq!(plan.blocked, None);
+        let head = sh_git(&f.work, &["rev-parse", "HEAD"]);
+        let done = ship_with(
+            &f.config,
+            &f.work,
+            &CodeShip::default(),
+            Action::Push,
+            true,
+            Some("git push --porcelain origin HEAD:refs/heads/feature"),
+            GITHUB_NO_PR,
+        )
+        .unwrap();
+        assert_eq!(done.summary, "Pushed feature to origin.");
+        assert_eq!(origin_sha(&f, "feature").as_deref(), Some(head.as_str()));
+        assert_eq!(origin_sha(&f, "heads/feature"), None);
+        let _ = std::fs::remove_dir_all(&f.root);
+    }
+
+    #[test]
+    fn a_tag_named_main_does_not_open_main_to_a_push() {
+        let f = fixture("tag-main");
+        sh_git(&f.work, &["tag", "main"]);
+        commit(&f.work, "two\n");
+        assert_eq!(current_branch(&f.work).as_deref(), Some("main"));
+        let plan = plan_with(&f.config, &f.work, &auto(), Action::Push, GITHUB_NO_PR);
+        assert_eq!(plan.branch.as_deref(), Some("main"));
+        assert_eq!(
+            plan.blocked.as_deref(),
+            Some("main is the main or default branch. The app never pushes to it; make a branch first.")
+        );
+        let _ = std::fs::remove_dir_all(&f.root);
+    }
+
+    #[test]
+    fn the_default_branch_is_read_whole_when_its_short_name_is_taken() {
+        let f = fixture("tag-origin");
+        // With a tag called origin/main, git's short name for the default
+        // branch becomes remotes/origin/main.
+        sh_git(&f.work, &["tag", "origin/main"]);
+        assert_eq!(default_branch(&f.work).as_deref(), Some("main"));
+        let _ = std::fs::remove_dir_all(&f.root);
+    }
+
+    #[test]
+    fn the_push_plan_says_when_a_pre_push_hook_is_skipped() {
+        use std::os::unix::fs::PermissionsExt;
+        let f = fixture("hook");
+        sh_git(&f.work, &["switch", "-c", "feature"]);
+        let cfg = CodeShip::default();
+        let push = |f: &Fixture| plan_with(&f.config, &f.work, &cfg, Action::Push, GITHUB_NO_PR);
+        assert!(!push(&f).skips_hook);
+        let hook = f.work.join(".git/hooks/pre-push");
+        std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+        std::fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+        // Git does not run a hook that is not executable.
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(!push(&f).skips_hook);
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(push(&f).skips_hook);
+        // Opening a PR pushes nothing, so no hook is passed over.
+        assert!(!plan_with(&f.config, &f.work, &cfg, Action::Pr, GITHUB_NO_PR).skips_hook);
+        // The hook is still not run: the push goes through.
+        commit(&f.work, "two\n");
+        let done = ship_with(
+            &f.config,
+            &f.work,
+            &cfg,
+            Action::Push,
+            true,
+            Some("git push --porcelain origin HEAD:refs/heads/feature"),
+            GITHUB_NO_PR,
+        )
+        .unwrap();
+        assert_eq!(done.summary, "Pushed feature to origin.");
+        // A hooks folder the repo names itself is read too.
+        let own = f.work.join("my-hooks");
+        std::fs::create_dir_all(&own).unwrap();
+        std::fs::rename(&hook, own.join("pre-push")).unwrap();
+        assert!(!push(&f).skips_hook);
+        sh_git(&f.work, &["config", "core.hooksPath", "my-hooks"]);
+        assert!(push(&f).skips_hook);
+        let _ = std::fs::remove_dir_all(&f.root);
+    }
 }

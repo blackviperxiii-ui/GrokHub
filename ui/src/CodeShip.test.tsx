@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { Activity } from "react";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodeActivityEntry, CodeShipPlan } from "./api";
@@ -14,7 +14,7 @@ const api = vi.hoisted(() => ({
 
 vi.mock("./api", () => api);
 
-import { CodeShip, SHIP_CONFIRM_PR, SHIP_CONFIRM_PUSH, SHIP_NO_ACTIVITY, SHIP_RULES } from "./CodeShip";
+import { CodeShip, SHIP_CONFIRM_PR, SHIP_CONFIRM_PUSH, SHIP_NO_ACTIVITY, SHIP_RULES, SHIP_SKIPS_HOOK } from "./CodeShip";
 
 function plan(action: "push" | "pr", over: Partial<CodeShipPlan> = {}): CodeShipPlan {
   return {
@@ -30,6 +30,7 @@ function plan(action: "push" | "pr", over: Partial<CodeShipPlan> = {}): CodeShip
     autoBase: "beta",
     appMade: true,
     prUrl: null,
+    skipsHook: false,
     ...over,
   };
 }
@@ -60,6 +61,23 @@ describe("Code tab → Push and PR", () => {
       output: "To github.com:o/r.git\n",
       summary: "Pushed code/fix to origin.",
     });
+  });
+
+  it("says on the push card when the repo's pre-push hook will not run", async () => {
+    api.codeShipPlan.mockResolvedValue(plan("push", { skipsHook: true }));
+    render(<CodeShip />);
+    await userEvent.click(await screen.findByRole("button", { name: "Push" }));
+    const card = await screen.findByRole("group", { name: SHIP_CONFIRM_PUSH });
+    expect(within(card).getByText(SHIP_SKIPS_HOOK)).toBeInTheDocument();
+    expect(SHIP_SKIPS_HOOK).toBe("This repo has a pre-push hook. The Code tab pushes without running it.");
+  });
+
+  it("says nothing about hooks on the push card when the repo has none", async () => {
+    api.codeShipPlan.mockResolvedValue(plan("push"));
+    render(<CodeShip />);
+    await userEvent.click(await screen.findByRole("button", { name: "Push" }));
+    const card = await screen.findByRole("group", { name: SHIP_CONFIRM_PUSH });
+    expect(within(card).queryByText(SHIP_SKIPS_HOOK)).toBeNull();
   });
 
   it("in Ask mode every push shows the exact command first", async () => {
@@ -129,6 +147,27 @@ describe("Code tab → Push and PR", () => {
     await userEvent.click(screen.getByRole("button", { name: "Make branch" }));
     expect(api.codeNewBranch).toHaveBeenCalledWith("code/new");
     expect(await screen.findByRole("status")).toHaveTextContent("On code/new now.");
+  });
+
+  it("puts the Activity list, which scrolls in its own box, in the tab order", async () => {
+    api.codeActivity.mockResolvedValue([
+      {
+        tsMs: 1_700_000_000_000,
+        kind: "push",
+        repoKey: "k",
+        host: "github",
+        branch: "beta",
+        command: "git push --porcelain origin HEAD:refs/heads/beta",
+        mode: "ask",
+        approvedBy: "user",
+        exit: 0,
+        summary: "Pushed beta.",
+      },
+    ]);
+    render(<CodeShip />);
+    const log = await screen.findByRole("list", { name: "Activity" });
+    expect(log).toHaveClass("code-activity");
+    expect(log).toHaveAttribute("tabindex", "0");
   });
 
   it("a confirm card goes away when the branch changes, and a confirm sends the command it showed", async () => {
@@ -205,5 +244,52 @@ describe("Code tab → Push and PR", () => {
     expect(await screen.findByRole("status")).toHaveTextContent("On code/b now.");
     expect(screen.queryByRole("group", { name: SHIP_CONFIRM_PUSH })).toBeNull();
     expect(api.codeShipRun).not.toHaveBeenCalled();
+  });
+
+  it("a new refresh key reads the plans and the activity list again and keeps everything else", async () => {
+    api.codeShipPlan.mockImplementation((action) => Promise.resolve(plan(action, { mode: "autoBeta", needsConfirm: false })));
+    let finish: (done: { command: string; exit: number; output: string; summary: string }) => void = () => {};
+    api.codeShipRun.mockImplementationOnce(() => new Promise((done) => (finish = done)));
+    const view = render(<CodeShip refreshKey={0} />);
+    await userEvent.type(await screen.findByLabelText("New branch"), "code/keep-me");
+    await userEvent.click(screen.getByRole("button", { name: "Push code/fix" }));
+    expect(await screen.findByRole("button", { name: "Working…" })).toBeDisabled();
+    // Mounting read the list once, and pressing Push read it again.
+    expect(api.codeActivity).toHaveBeenCalledTimes(2);
+
+    // A deploy finished while the push is still running.
+    api.codeActivity.mockResolvedValue([
+      {
+        tsMs: 1_700_000_000_000,
+        kind: "deploy",
+        repoKey: "github.com/o/r",
+        host: "github.com",
+        branch: "code/fix",
+        command: "npm run deploy",
+        mode: "autoBeta",
+        approvedBy: "remembered",
+        exit: 0,
+        summary: "Deploy finished.",
+      },
+    ]);
+    view.rerender(<CodeShip refreshKey={1} />);
+    expect(await screen.findByText("Deploy finished.")).toBeInTheDocument();
+    expect(api.codeActivity).toHaveBeenCalledTimes(3);
+    expect(screen.getByLabelText("New branch")).toHaveValue("code/keep-me");
+    expect(screen.getByRole("button", { name: "Working…" })).toBeDisabled();
+    expect(api.codeShipRun).toHaveBeenCalledTimes(1);
+
+    await act(async () => finish({ command: "git push", exit: 0, output: "To github.com:o/r.git\n", summary: "Pushed code/fix to origin." }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Pushed code/fix to origin.");
+    const output = screen.getByRole("log", { name: "Push output" });
+    expect(output).toHaveTextContent("To github.com:o/r.git");
+    expect(output).toHaveAttribute("tabindex", "0");
+  });
+
+  it("moves focus to Cancel when the confirm card appears", async () => {
+    render(<CodeShip />);
+    await userEvent.click(await screen.findByRole("button", { name: "Push code/fix" }));
+    const card = await screen.findByRole("group", { name: SHIP_CONFIRM_PUSH });
+    expect(document.activeElement).toBe(within(card).getByRole("button", { name: "Cancel" }));
   });
 });

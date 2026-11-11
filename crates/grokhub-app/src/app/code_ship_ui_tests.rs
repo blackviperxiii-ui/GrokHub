@@ -11,6 +11,7 @@ fn plan(action: Action, command: &str, needs_confirm: bool, blocked: Option<&str
         auto_base: "beta".into(),
         app_made: true,
         pr_url: None,
+        skips_hook: false,
     }
 }
 

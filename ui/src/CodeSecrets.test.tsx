@@ -93,4 +93,13 @@ describe("Settings → Code → Secrets", () => {
     );
     expect(screen.getByLabelText("Value")).toHaveValue("");
   });
+
+  it("moves focus to Cancel when the delete card appears", async () => {
+    api.codeSecretList.mockResolvedValue({ names: ["DEPLOY_TOKEN"] });
+    render(<CodeSecrets />);
+    await userEvent.click(await screen.findByRole("button", { name: "Delete DEPLOY_TOKEN" }));
+    expect(screen.getByRole("group", { name: "Delete DEPLOY_TOKEN?" })).toBeInTheDocument();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Cancel" }));
+    expect(api.codeSecretDelete).not.toHaveBeenCalled();
+  });
 });

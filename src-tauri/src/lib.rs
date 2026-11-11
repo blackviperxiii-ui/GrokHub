@@ -1978,6 +1978,13 @@ async fn code_test_run(
     .await?
 }
 
+/// Code tab: stop the test run or deploy in progress, and everything it
+/// started. False when nothing was running. Desktop only.
+#[tauri::command]
+async fn code_run_stop() -> Result<bool, String> {
+    off_main(code_runs::stop).await
+}
+
 /// Settings → Code: the remembered test command for this project, if any.
 #[tauri::command]
 async fn code_test_remembered(
@@ -2079,13 +2086,14 @@ async fn code_new_branch(state: State<'_, ShellState>, name: String) -> Result<S
     off_main(move || code_ship::new_branch(&config, &dir, &cfg, &name)).await?
 }
 
-/// Code tab: the newest pushes, PRs, branches and blocked attempts.
+/// Code tab: this project's newest pushes, PRs, branches and blocked attempts.
 #[tauri::command]
 async fn code_activity_list(
     state: State<'_, ShellState>,
 ) -> Result<Vec<code_activity::Entry>, String> {
+    let dir = workspace(&state);
     let config = state.config_dir.clone();
-    off_main(move || code_activity::list(&config, code_activity::SHOW)).await
+    off_main(move || code_activity::list_for(&config, &dir, code_activity::SHOW)).await
 }
 
 /// Settings → Code → Secrets: this project's secret names (never the values).
@@ -2225,16 +2233,19 @@ async fn code_file_read(
 }
 
 /// Code tab editor: save a text file of the project. The save is logged.
+/// `root` is the project folder `code_file_read` returned with the file; the
+/// save is refused when the project folder is a different one now.
 #[tauri::command]
 async fn code_file_write(
     state: State<'_, ShellState>,
     path: String,
     text: String,
+    root: String,
 ) -> Result<code_files::FileText, String> {
     let dir = workspace(&state);
     let config = state.config_dir.clone();
     let keep = current(&state).code_ship.activity_keep;
-    off_main(move || code_files::write_logged(&config, &dir, &path, &text, keep)).await?
+    off_main(move || code_files::write_logged(&config, &dir, &path, &text, &root, keep)).await?
 }
 
 /// Code tab terminal: open the user's shell in the project folder.
@@ -2260,12 +2271,16 @@ async fn code_term_open(
             let id = code_term::open(code_term::global(), &dir, held, rows, cols, move |chunk| {
                 let _ = app.emit(code_term::EVENT, chunk);
             })?;
-            code_term::log(
-                &config,
-                &dir,
-                "Opened a terminal in the project folder.",
-                keep,
-            );
+            // The shell is already printing and the window needs the id to
+            // show it, so the id goes back first and the log is written after.
+            std::thread::spawn(move || {
+                code_term::log(
+                    &config,
+                    &dir,
+                    "Opened a terminal in the project folder.",
+                    keep,
+                );
+            });
             Ok(id)
         })
         .await?
@@ -4731,6 +4746,7 @@ pub fn run() {
             code_builtins,
             code_test_plan,
             code_test_run,
+            code_run_stop,
             code_test_remembered,
             code_test_forget,
             command_box_view,
@@ -4937,6 +4953,8 @@ pub fn run() {
             // What the learning engine holds in memory is written on the way out.
             if let tauri::RunEvent::Exit = event {
                 grokhub_core::learn::hub::flush();
+                // A test run or deploy does not outlive the app.
+                code_runs::stop();
             }
         }),
         Err(err) => {
@@ -4970,6 +4988,15 @@ mod command_tests {
             !src.contains("#[tauri::command(async)]\nfn get_settings("),
             "a sync body on an async worker panics in zbus"
         );
+    }
+
+    #[test]
+    fn the_capability_file_claims_a_manifest_only_if_the_build_has_one() {
+        // With no app manifest in build.rs, Tauri allows every app command
+        // from the app's own page. The capability file must not say otherwise.
+        let has = include_str!("../build.rs").contains("app_manifest");
+        let says = include_str!("../capabilities/default.json").contains("build manifest");
+        assert_eq!(says, has);
     }
 }
 

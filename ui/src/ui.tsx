@@ -70,6 +70,21 @@ export function useModalFocus(box: RefObject<HTMLElement | null>, open = true) {
   }, [box, open]);
 }
 
+/** A ref for the safe button (Cancel, Keep editing) of a confirm card that
+ * shows in the page: the button takes focus when the card appears, so the
+ * keyboard and a screen reader land on the question. `card` is what the card
+ * shows, falsy while there is none; a hidden page that shows again with the
+ * same card open does not move focus. */
+export function useCardFocus<T extends HTMLElement>(card: unknown): RefObject<T | null> {
+  const ref = useRef<T | null>(null);
+  const seen = useRef<unknown>(null);
+  useEffect(() => {
+    if (card && seen.current !== card) ref.current?.focus();
+    seen.current = card;
+  }, [card]);
+  return ref;
+}
+
 /** A page's one-line result: `ok` after something worked, `error` after it didn't. */
 export type Note = { text: string; error: boolean } | null;
 

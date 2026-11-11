@@ -141,6 +141,7 @@ jobs:
           filters: |
             deny:
               - 'Cargo.lock'
+              - 'src-tauri/Cargo.lock'
               - 'deny.toml'
             ci_workflow:
               - '.github/workflows/ci.yml'
@@ -325,6 +326,8 @@ jobs:
         with:
           tool: cargo-deny
       - run: cargo deny --locked check
+      # The desktop shell is its own workspace with its own lockfile.
+      - run: cargo deny --manifest-path src-tauri/Cargo.toml --locked check
 
   # Cross-platform recode, Phase 1 (docs/cross-platform/README.md): the
   # non-UI crates must stay portable to the Tauri targets. Check-only (clippy,

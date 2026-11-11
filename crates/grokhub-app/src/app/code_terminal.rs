@@ -505,7 +505,7 @@ impl TermPanel {
                 Msg::Opened(Ok(id)) => {
                     live.id = Some(id);
                     for chunk in std::mem::take(&mut live.early) {
-                        apply(live, chunk);
+                        apply(live, chunk, &mut answer);
                     }
                 }
                 Msg::Opened(Err(e)) => {
@@ -514,7 +514,7 @@ impl TermPanel {
                 }
                 Msg::Out(chunk) => match live.id {
                     None => live.early.push(chunk),
-                    Some(_) => apply(live, chunk),
+                    Some(_) => apply(live, chunk, &mut answer),
                 },
             }
         }
@@ -528,22 +528,30 @@ impl TermPanel {
             return;
         };
         let text = String::from_utf8_lossy(bytes);
-        if let Err(e) = backend::write(backend::global(), id, &text) {
-            self.status = Some(e);
-        }
+        // A refusal (busy, too much at once) is a passing note: the next
+        // input the shell takes clears it.
+        self.status = backend::write(backend::global(), id, &text).err();
     }
 }
 
-/// Feed one chunk into the screen if it belongs to this session.
-fn apply(live: &mut Live, chunk: Chunk) {
+/// Send the screen's answer to a query (cursor position and the like) back
+/// to the shell `id`.
+fn answer(id: u32, reply: &str) {
+    let _ = backend::write(backend::global(), id, reply);
+}
+
+/// Feed one chunk into the screen if it belongs to this session. What the
+/// screen answers to the queries in it goes to `write` joined, as one write:
+/// a chunk full of queries must not fill the shell's input queue, which
+/// would drop the answers that did not fit.
+fn apply(live: &mut Live, chunk: Chunk, write: &mut dyn FnMut(u32, &str)) {
     if Some(chunk.id) != live.id {
         return;
     }
     if !chunk.text.is_empty() {
-        for reply in live.screen.feed(&chunk.text) {
-            if let Some(id) = live.id {
-                let _ = backend::write(backend::global(), id, &reply);
-            }
+        let replies = live.screen.feed(&chunk.text).concat();
+        if !replies.is_empty() {
+            write(chunk.id, &replies);
         }
     }
     if chunk.exited {

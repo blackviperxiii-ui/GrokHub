@@ -1,0 +1,2 @@
+- The Code tab's terminal shows a name like `task-definitions.json` in full when a colour or line-redraw code follows it or the name arrives in two pieces (it was shown as `[redacted]`), shows the whole of a long listing when the shell exits right after it, and a job that outlives the shell is no longer left stuck on its own output.
+- The cabin ends a test run or deploy that is still going when it quits, and its terminal's "The terminal is busy" note goes away once the shell takes input again.
