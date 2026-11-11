@@ -3119,6 +3119,12 @@ export function codeProjectNew(name: string): Promise<CodeProjects> {
   return invoke<CodeProjects>("code_project_new", { name });
 }
 
+/** The agent window shows this session: it takes the open project's folder
+ * unless it has one already. Resolves with the folder it works in. */
+export function codeSessionBind(conversationId: string): Promise<string> {
+  return invoke<string>("code_session_bind", { conversationId });
+}
+
 export function codeRepo(): Promise<CodeRepo> {
   return invoke<CodeRepo>("code_repo");
 }

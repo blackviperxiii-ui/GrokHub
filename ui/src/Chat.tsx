@@ -148,6 +148,13 @@ export const STOP_ASKING_DONE =
   "Allowed. From now on only risky things ask. Settings → Defaults changes it back.";
 
 export const CHAT_EMPTY = `Ask ${PRODUCT_NAME} anything.`;
+/** The Code tab's agent window, before its first message. */
+export const AGENT_EMPTY = "Tell the agent what to build or fix in this project.";
+export const AGENT_PLACEHOLDER = "Message the agent";
+/** Messages typed in the agent window while a reply runs. */
+export function waitingLine(count: number): string {
+  return count === 1 ? "1 message waits for this reply to end." : `${count} messages wait for this reply to end.`;
+}
 export const SIGNED_OUT =
   `${PRODUCT_NAME} chats with your xAI API key. It's kept in this device's keychain, never in a file.`;
 export const SIGNED_OUT_GROK =
@@ -548,6 +555,10 @@ export function Chat({
   active = true,
   remote = false,
   grokSignIn = false,
+  embedded = false,
+  onConversation,
+  onBusy,
+  onRan,
 }: {
   onOpenSettings: () => void;
   /** The signed-out card's button: Settings → Account. */
@@ -570,6 +581,15 @@ export function Chat({
   remote?: boolean;
   /** Settings → Account offers Sign in with Grok here. */
   grokSignIn?: boolean;
+  /** The Code tab's agent window: it starts on a new session instead of the
+   * last chat, has no dock, and names itself Agent. */
+  embedded?: boolean;
+  /** The conversation on screen, at the start and each time it changes. */
+  onConversation?: (conversationId: string) => void;
+  /** A reply started or ended. */
+  onBusy?: (busy: boolean) => void;
+  /** A slash command ran here: it may have moved the app to another folder. */
+  onRan?: () => void;
 }) {
   "use memo";
   const [conversationId, setConversationId] = useState(newConversationId);
@@ -703,12 +723,19 @@ export function Chat({
   });
 
   useEffect(() => {
-    if (remote) return;
+    if (remote || embedded) return;
     getLastChat().then(
       (last) => restoreLast(last),
       () => {},
     );
-  }, [remote]);
+  }, [remote, embedded]);
+
+  useEffect(() => {
+    onConversation?.(conversationId);
+  }, [conversationId, onConversation]);
+  useEffect(() => {
+    onBusy?.(busy);
+  }, [busy, onBusy]);
 
   // Only a new pick acts; the conversation it leaves is the latest, not a
   // dependency.
@@ -1090,6 +1117,7 @@ export function Chat({
       return;
     }
     slashing.current.delete(line);
+    onRan?.();
     setAck((now) => (now === SLASH_RUNNING ? null : now));
     // Only the line that was sent leaves the box: words typed while it ran stay.
     setDraft((now) => (now.trim() === box.trim() ? "" : now));
@@ -1372,12 +1400,12 @@ export function Chat({
 
   return (
     <section
-      className={nyx ? "chat has-nyx" : "chat"}
-      aria-label="Chat"
+      className={embedded ? "chat embedded" : nyx ? "chat has-nyx" : "chat"}
+      aria-label={embedded ? "Agent" : "Chat"}
       onDragOver={attach.onDragOver}
       onDrop={attach.onDrop}
     >
-      {nyx && <NyxDock url={nyx.url} mood={nyx.mood} />}
+      {nyx && !embedded && <NyxDock url={nyx.url} mood={nyx.mood} />}
       {/* Focusable so the keyboard can scroll a long conversation. */}
       <div className="log" role="log" aria-live="polite" tabIndex={0}>
         {items.length === 0 && !busy && settings && !settings.hasApiKey && !settings.signedIn ? (
@@ -1387,7 +1415,7 @@ export function Chat({
           !busy && (
             <div className="nyx-empty">
               {nyx && <NyxFace url={nyx.url} size={96} />}
-              <p className="empty">{CHAT_EMPTY}</p>
+              <p className="empty">{embedded ? AGENT_EMPTY : CHAT_EMPTY}</p>
             </div>
           )
         )}
@@ -1446,6 +1474,11 @@ export function Chat({
           {ack}
         </p>
       )}
+      {embedded && queue.length > 0 && (
+        <p className="note" role="status">
+          {waitingLine(queue.length)}
+        </p>
+      )}
       <SideCards sides={sides} onStop={stopSide} onTell={(side) => void tellSide(side)} onDismiss={dismissSide} />
       <Episode
         key={conversationId}
@@ -1472,8 +1505,8 @@ export function Chat({
           <AttachButton onPick={() => void attach.pick()} busy={busy} full={attach.files.length >= ATTACH_MAX} />
         )}
         <textarea
-          aria-label="Message"
-          placeholder={PLACEHOLDER}
+          aria-label={embedded ? AGENT_PLACEHOLDER : "Message"}
+          placeholder={embedded ? AGENT_PLACEHOLDER : PLACEHOLDER}
           value={draft}
           rows={2}
           role={slashOpen ? "combobox" : undefined}
@@ -1511,7 +1544,7 @@ export function Chat({
           </button>
         )}
         <button type="button" className="quiet" onClick={startOver} disabled={busy}>
-          New chat
+          {embedded ? "New session" : "New chat"}
         </button>
       </form>
       {goalAsk && !busy ? (

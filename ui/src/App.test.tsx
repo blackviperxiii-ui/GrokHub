@@ -158,6 +158,26 @@ vi.mock("./Automations", () => ({
   resultLine: (r: { text: string; error: string }) => r.error || r.text,
 }));
 vi.mock("./Memory", () => ({ Memory: () => null }));
+vi.mock("./Code", () => ({
+  Code: (p: {
+    shown: boolean;
+    chatSession?: string;
+    onShowChat?: () => void;
+    onSession?: (id: string) => void;
+    deleted?: { id: string };
+  }) => (
+    <div hidden={!p.shown}>
+      <p>Code page</p>
+      {p.deleted && <p>Code heard deleted {p.deleted.id}</p>}
+      <button type="button" onClick={() => p.onSession?.("shell-old")}>
+        Agent window shows shell-old
+      </button>
+      <button type="button" onClick={p.onShowChat}>
+        That session is in Chat
+      </button>
+    </div>
+  ),
+}));
 vi.mock("./Agents", () => ({
   Agents: ({ conversationId, onOpenChat }: { conversationId?: string; onOpenChat: () => void }) => (
     <button type="button" onClick={onOpenChat}>
@@ -402,6 +422,42 @@ describe("App", () => {
     const tab = await screen.findByRole("button", { name: "Chat" });
     await userEvent.pointer({ keys: "[MouseRight]", target: tab });
     expect(screen.queryByRole("menuitem", { name: "Clear chat…" })).toBeNull();
+  });
+
+  it("a chat the Code tab's agent window has open shows there, not in Chat as a second copy", async () => {
+    api.getCapabilities.mockResolvedValue({ ...DESKTOP, code: true });
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Code" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Agent window shows shell-old" }));
+    await userEvent.click(screen.getByRole("button", { name: "History" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Open old chat" }));
+    expect(screen.getByRole("button", { name: "Code" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("Code page")).toBeVisible();
+    expect(screen.queryByText("Opened shell-old")).not.toBeInTheDocument();
+    // A delete in History reaches the agent window too.
+    await userEvent.click(screen.getByRole("button", { name: "History" }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete a chat" }));
+    expect(screen.getByText("Code heard deleted shell-gone")).toBeInTheDocument();
+    // A session the Chat tab holds is shown there.
+    await userEvent.click(screen.getByRole("button", { name: "Code" }));
+    await userEvent.click(screen.getByRole("button", { name: "That session is in Chat" }));
+    expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("Agents does not follow the agent window's session, which has its own Tasks panel", async () => {
+    api.getCapabilities.mockResolvedValue({ ...DESKTOP, code: true });
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Code" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Agent window shows shell-old" }));
+    await userEvent.click(screen.getByRole("button", { name: "Agents" }));
+    act(() => {
+      for (const handler of chatHandlers) handler({ conversationId: "shell-old", event: { kind: "text", text: "hi" } });
+    });
+    expect(await screen.findByRole("button", { name: "Agents for no chat" })).toBeVisible();
+    act(() => {
+      for (const handler of chatHandlers) handler({ conversationId: "shell-c7", event: { kind: "text", text: "hi" } });
+    });
+    expect(screen.getByRole("button", { name: "Agents for shell-c7" })).toBeVisible();
   });
 
   it("Agents follows the chat the window last heard from and links back to Chat", async () => {

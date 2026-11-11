@@ -18,6 +18,7 @@ export const SESSIONS_TITLE = "Sessions";
 export const SESSIONS_EMPTY = "No sessions in this project yet.";
 /** Sessions shown before Show all. */
 export const SESSIONS_SHOWN = 6;
+export const PROJECTS_AGENT_BUSY = "The agent is still replying. Stop it or wait, then switch.";
 
 /** The last part of a folder path, for a folder with no project row. */
 export function folderName(path: string): string {
@@ -35,11 +36,28 @@ interface Props {
   onSwitched: () => void;
   onNewSession: () => void;
   onOpenSession: (id: string) => void;
+  /** The folder the app works in, each time the bar reads it. */
+  onFolder?: (folder: string) => void;
+  /** The agent window's reply is running: the project and the session stay. */
+  agentBusy?: boolean;
+  /** The session in the agent window, marked in the list. */
+  openSession?: string;
+  /** A new value reads the open project and its sessions again (a reply
+   * ended, or a command typed in the agent window ran). */
+  refresh?: number;
 }
 
 /** The Code tab's project bar: the open project, the list to switch between,
  * Open folder and New project, and the open project's sessions. */
-export function CodeProjects({ onSwitched, onNewSession, onOpenSession }: Props) {
+export function CodeProjects({
+  onSwitched,
+  onNewSession,
+  onOpenSession,
+  onFolder,
+  agentBusy = false,
+  openSession,
+  refresh = 0,
+}: Props) {
   const [list, setList] = useState<ProjectList | null>(null);
   const [chats, setChats] = useState<ChatRow[]>([]);
   const [picking, setPicking] = useState(false);
@@ -54,11 +72,19 @@ export function CodeProjects({ onSwitched, onNewSession, onOpenSession }: Props)
   useEffect(() => {
     codeProjects().then(setList, (err) => setNote(String(err)));
     listChats().then(setChats, () => {});
-  }, []);
+  }, [refresh]);
+  const bound = list?.bound;
+  useEffect(() => {
+    if (bound !== undefined) onFolder?.(bound);
+  }, [bound, onFolder]);
 
   /** Run one change of project; `null` from it means nothing was picked. */
   async function change(job: () => Promise<ProjectList | null>) {
     if (busy) return;
+    if (agentBusy) {
+      setNote(PROJECTS_AGENT_BUSY);
+      return;
+    }
     setBusy(true);
     setNote(null);
     try {
@@ -86,7 +112,6 @@ export function CodeProjects({ onSwitched, onNewSession, onOpenSession }: Props)
   }
 
   const current = list?.projects.find((p) => p.current);
-  const bound = list?.bound ?? "";
   const sessions = current ? projectSessions(chats, current.id) : [];
   const shown = all ? sessions : sessions.slice(0, SESSIONS_SHOWN);
   // With nothing open the list is the start of the tab.
@@ -167,7 +192,7 @@ export function CodeProjects({ onSwitched, onNewSession, onOpenSession }: Props)
         <div className="code-sessions">
           <div className="code-head">
             <h3>{SESSIONS_TITLE}</h3>
-            <button type="button" onClick={onNewSession}>
+            <button type="button" onClick={onNewSession} disabled={agentBusy}>
               New session
             </button>
           </div>
@@ -177,7 +202,13 @@ export function CodeProjects({ onSwitched, onNewSession, onOpenSession }: Props)
             <ul className="rows code-project-list" aria-label={SESSIONS_TITLE}>
               {shown.map((c) => (
                 <li key={c.id}>
-                  <button type="button" className="code-skill quiet" onClick={() => onOpenSession(c.id)}>
+                  <button
+                    type="button"
+                    className="code-skill quiet"
+                    aria-current={c.id === openSession ? "true" : undefined}
+                    disabled={agentBusy && c.id !== openSession}
+                    onClick={() => onOpenSession(c.id)}
+                  >
                     <span className="card-title">{c.title || "Untitled chat"}</span>
                     <span className="note">{whenLabel(c.updated)}</span>
                   </button>

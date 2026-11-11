@@ -1,9 +1,10 @@
-import { lazy, Suspense, useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
+import { Activity, lazy, Suspense, useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 import {
   codeBuiltins,
   codeDiff,
   codeRepo,
   codeRunStop,
+  codeSessionBind,
   codeTestPlan,
   codeTestRun,
   onCodeRun,
@@ -12,9 +13,11 @@ import {
   type CodeOverriddenBy,
   type CodeRepo,
 } from "./api";
-import { newConversationId } from "./Chat";
+import { Agents } from "./Agents";
+import { Chat, newConversationId, type Prefill } from "./Chat";
 import { CodeDeploy } from "./CodeDeploy";
-import { CodeProjects } from "./CodeProjects";
+import { CodeProjects, folderName } from "./CodeProjects";
+import type { View } from "./Palette";
 import { CodeShip } from "./CodeShip";
 import { inShell } from "./transport";
 import { useCardFocus } from "./ui";
@@ -25,7 +28,11 @@ const CodeTerminal = lazy(() => import("./CodeTerminal"));
 
 export const CODE_NOT_REPO = "This project isn't a git repo yet. Open another project above, or ask the agent to start one.";
 export const CODE_CLEAN = "No changes since the last commit.";
-export const CODE_NEXT = "Coming next on this tab: an agent that drives the work while you watch or step in.";
+export const AGENT_TITLE = "Agent";
+/** Under the agent window's title: the folder its session works in. */
+export function worksIn(folder: string): string {
+  return `Works in ${folderName(folder)}`;
+}
 export const CODE_DESKTOP_ONLY = "The editor and terminal are only in the desktop app.";
 export const CODE_REVIEW_PROMPT = "Review the uncommitted changes in this workspace: what changed, anything risky, and what to test before committing.";
 export const CODE_BUILTINS = "Built-in skills";
@@ -39,30 +46,160 @@ export function overrideLabel(over: CodeOverriddenBy): string {
   return `overridden by ${over.scope} skill ${over.name}`;
 }
 
-export interface CodeTask {
-  prompt: string;
-  conversationId: string;
+interface Props {
+  /** The Code tab is the one on screen. */
+  shown: boolean;
+  onOpenSettings: () => void;
+  onSignIn?: () => void;
+  onOpenView?: (view: View) => boolean | void;
+  onOpenPalette?: () => void;
+  grokSignIn?: boolean;
+  /** The conversation the Chat tab has open. A session row for it goes
+   * there: one conversation is never open in both places. */
+  chatSession?: string;
+  onShowChat?: () => void;
+  /** The session in the agent window, each time it changes. */
+  onSession?: (id: string) => void;
+  /** Chats History deleted: the agent window leaves one it is showing. */
+  deleted?: { id: string; ids?: string[]; n: number };
 }
 
-/** The Code tab: the project bar and the open project's sessions, then that project's workspace. */
-export function Code({ onTask, onOpenChat }: { onTask: (task: CodeTask) => void; onOpenChat?: (id: string) => void }) {
+/** The Code tab: the project bar, the open project's sessions and its
+ * workspace, with the agent window and its tasks beside them. */
+export function Code({
+  shown,
+  onOpenSettings,
+  onSignIn,
+  onOpenView,
+  onOpenPalette,
+  grokSignIn,
+  chatSession,
+  onShowChat,
+  onSession,
+  deleted,
+}: Props) {
   // Counts project switches: a new value starts the workspace below afresh in
   // the new folder, with nothing kept from the old one.
   const [switches, setSwitches] = useState(0);
+  /** What the agent window is told: a new session, with or without words in
+   * its box, or a saved session to open. */
+  const [prefill, setPrefill] = useState<Prefill>();
+  const [open, setOpen] = useState<{ id: string; n: number }>();
+  /** The session in the agent window, and the folder it works in. */
+  const [session, setSession] = useState<string>();
+  const [folder, setFolder] = useState("");
+  const [busy, setBusy] = useState(false);
+  /** Counts replies ended, so the Sessions list reads again. */
+  const [ended, setEnded] = useState(0);
+  const sessionNow = useRef<string>(undefined);
+  const busyNow = useRef(false);
+  const appFolder = useRef<string>(undefined);
+
+  /** A new session, with `text` waiting in its box. It has its folder
+   * before the agent window shows it. */
+  const startSession = useCallback((text: string) => {
+    const id = newConversationId();
+    const show = () => setPrefill((now) => ({ text, n: (now?.n ?? 0) + 1, conversationId: id }));
+    codeSessionBind(id).then(show, show);
+  }, []);
+
+  /** A saved session. The Chat tab keeps the one it has open; any other
+   * takes its folder first, so opening it is not the Chat tab's last chat. */
+  function openSession(id: string) {
+    if (id === chatSession) {
+      onShowChat?.();
+      return;
+    }
+    const show = () => setOpen((now) => ({ id, n: (now?.n ?? 0) + 1 }));
+    codeSessionBind(id).then(show, show);
+  }
+
+  const onConversation = useCallback(
+    (id: string) => {
+      sessionNow.current = id;
+      setSession(id);
+      onSession?.(id);
+      setFolder("");
+      codeSessionBind(id).then(
+        (dir) => {
+          if (sessionNow.current === id) setFolder(dir);
+        },
+        () => {},
+      );
+    },
+    [onSession],
+  );
+
+  const onRan = useCallback(() => setEnded((n) => n + 1), []);
+
+  const onBusy = useCallback((now: boolean) => {
+    busyNow.current = now;
+    setBusy(now);
+    if (!now) setEnded((n) => n + 1);
+  }, []);
+
+  // The app works in another folder than when this tab last looked (a switch
+  // here, or a project bound in chat): the agent window starts a session
+  // there. A reply still running keeps its session and its folder.
+  const onFolder = useCallback(
+    (next: string) => {
+      const before = appFolder.current;
+      appFolder.current = next;
+      if (before !== undefined && before !== next && !busyNow.current) startSession("");
+    },
+    [startSession],
+  );
+
   return (
-    <section className="code" aria-label="Code">
-      <CodeProjects
-        onSwitched={() => setSwitches((n) => n + 1)}
-        onNewSession={() => onTask({ prompt: "", conversationId: newConversationId() })}
-        onOpenSession={(id) => onOpenChat?.(id)}
-      />
-      <CodeWorkspace key={switches} onTask={onTask} />
-    </section>
+    <div className="code-tab" hidden={!shown}>
+      <Activity mode={shown ? "visible" : "hidden"}>
+        <section className="code" aria-label="Code">
+          <CodeProjects
+            onSwitched={() => setSwitches((n) => n + 1)}
+            onNewSession={() => startSession("")}
+            onOpenSession={openSession}
+            onFolder={onFolder}
+            agentBusy={busy}
+            openSession={session}
+            refresh={ended}
+          />
+          <CodeWorkspace key={switches} agentBusy={busy} onAsk={startSession} />
+        </section>
+      </Activity>
+      {/* Outside <Activity>, like Chat: hidden there, its listeners would
+          stop and a reply landing on another tab would be lost. */}
+      <aside className="code-agent" aria-label="Agent window">
+        <header className="code-head">
+          <h3>{AGENT_TITLE}</h3>
+          {folder && (
+            <span className="note" title={folder}>
+              {worksIn(folder)}
+            </span>
+          )}
+        </header>
+        <Chat
+          embedded
+          active={shown}
+          prefill={prefill}
+          open={open}
+          onConversation={onConversation}
+          onBusy={onBusy}
+          onRan={onRan}
+          deleted={deleted}
+          onOpenSettings={onOpenSettings}
+          onSignIn={onSignIn}
+          onOpenView={onOpenView}
+          onOpenPalette={onOpenPalette}
+          grokSignIn={grokSignIn}
+        />
+        <Agents conversationId={session} active={shown} />
+      </aside>
+    </div>
   );
 }
 
 /** The open project's repo, its changed files and one file's diff, an editor and a terminal, plus built-in skills and a test runner. */
-function CodeWorkspace({ onTask }: { onTask: (task: CodeTask) => void }) {
+function CodeWorkspace({ agentBusy, onAsk }: { agentBusy: boolean; onAsk: (prompt: string) => void }) {
   const [repo, setRepo] = useState<CodeRepo | null>(null);
   const [diff, setDiff] = useState<CodeDiff | null>(null);
   const [builtins, setBuiltins] = useState<CodeBuiltin[] | null>(null);
@@ -265,10 +402,7 @@ function CodeWorkspace({ onTask }: { onTask: (task: CodeTask) => void }) {
             {busy ? "Refreshing…" : "Refresh"}
           </button>
           {repo?.isRepo && repo.files.length > 0 && (
-            <button
-              type="button"
-              onClick={() => onTask({ prompt: CODE_REVIEW_PROMPT, conversationId: newConversationId() })}
-            >
+            <button type="button" disabled={agentBusy} onClick={() => onAsk(CODE_REVIEW_PROMPT)}>
               Ask the agent to review
             </button>
           )}
@@ -409,7 +543,6 @@ function CodeWorkspace({ onTask }: { onTask: (task: CodeTask) => void }) {
           </div>
         </div>
       )}
-      <p className="note">{CODE_NEXT}</p>
     </>
   );
 }

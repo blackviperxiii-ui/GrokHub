@@ -1,5 +1,4 @@
 import "@testing-library/jest-dom/vitest";
-import { Activity } from "react";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -36,16 +35,69 @@ const api = vi.hoisted(() => ({
   codeDeployPlan: vi.fn<() => Promise<CodeDeployPlan>>(),
   codeDeployRun: vi.fn<(command: string, confirmed: boolean) => Promise<{ command: string; exit: number; output: string; cut: boolean }>>(),
   onCodeDeployRun: vi.fn(() => Promise.resolve(() => {})),
+  codeSessionBind: vi.fn<(conversationId: string) => Promise<string>>(),
 }));
 
 vi.mock("./api", () => api);
-vi.mock("./Chat", () => ({ newConversationId: () => "shell-new" }));
+// The conversation pane has its own tests; here it shows what it was told and
+// reports a session and a reply the way the real one does.
+vi.mock("./Chat", async () => {
+  const { useEffect, useState } = await import("react");
+  let made = 0;
+  interface StubProps {
+    embedded?: boolean;
+    active?: boolean;
+    prefill?: { text: string; conversationId?: string };
+    open?: { id: string };
+    onConversation?: (id: string) => void;
+    onBusy?: (busy: boolean) => void;
+    onRan?: () => void;
+    deleted?: { n: number };
+  }
+  function Chat({ embedded, active, prefill, open, onConversation, onBusy, onRan, deleted }: StubProps) {
+    const [busy, setBusy] = useState(false);
+    const id = open?.id ?? prefill?.conversationId ?? "shell-first";
+    useEffect(() => onConversation?.(id), [id, onConversation]);
+    useEffect(() => onBusy?.(busy), [busy, onBusy]);
+    return (
+      <div data-testid="agent-chat" data-embedded={String(embedded)} data-active={String(active)}>
+        <span>session {id}</span>
+        <span>box [{prefill?.text ?? ""}]</span>
+        <span>deleted {deleted?.n ?? 0}</span>
+        <button type="button" onClick={onRan}>
+          stub slash
+        </button>
+        <button type="button" onClick={() => setBusy((now) => !now)}>
+          stub reply
+        </button>
+      </div>
+    );
+  }
+  return { Chat, newConversationId: () => `shell-new-${++made}` };
+});
+vi.mock("./Agents", () => ({
+  Agents: (p: { conversationId?: string; active?: boolean; onOpenChat?: () => void }) => (
+    <div data-testid="agent-tasks" data-active={String(p.active)} data-links={String(Boolean(p.onOpenChat))}>
+      tasks of {p.conversationId}
+    </div>
+  ),
+}));
 // The terminal has its own tests; here it would only pull in its screen widget.
 vi.mock("./CodeTerminal", () => ({ default: () => null }));
-// The project bar has its own tests; here it is three buttons that call back.
+// The project bar has its own tests; here it is buttons that call back, and
+// it shows what the tab tells it.
 vi.mock("./CodeProjects", () => ({
-  CodeProjects: (p: { onSwitched: () => void; onNewSession: () => void; onOpenSession: (id: string) => void }) => (
-    <div>
+  folderName: (path: string) => path.split("/").filter(Boolean).pop() ?? path,
+  CodeProjects: (p: {
+    onSwitched: () => void;
+    onNewSession: () => void;
+    onOpenSession: (id: string) => void;
+    onFolder?: (folder: string) => void;
+    agentBusy?: boolean;
+    openSession?: string;
+    refresh?: number;
+  }) => (
+    <div data-testid="bar" data-busy={String(p.agentBusy)} data-open={p.openSession} data-refresh={p.refresh}>
       <button type="button" onClick={p.onSwitched}>
         stub switch
       </button>
@@ -55,11 +107,17 @@ vi.mock("./CodeProjects", () => ({
       <button type="button" onClick={() => p.onOpenSession("chat-7")}>
         stub open session
       </button>
+      <button type="button" onClick={() => p.onFolder?.("/work/demo")}>
+        stub folder demo
+      </button>
+      <button type="button" onClick={() => p.onFolder?.("/work/other")}>
+        stub folder other
+      </button>
     </div>
   ),
 }));
 
-import { Code, CODE_BUILTINS, CODE_CLEAN, CODE_CONFIRM, CODE_NEXT, CODE_NOT_REPO, CODE_REVIEW_PROMPT, CODE_TESTS, overrideLabel } from "./Code";
+import { AGENT_TITLE, Code, CODE_BUILTINS, CODE_CLEAN, CODE_CONFIRM, CODE_NOT_REPO, CODE_REVIEW_PROMPT, CODE_TESTS, overrideLabel } from "./Code";
 
 function repo(over: Partial<CodeRepo> = {}): CodeRepo {
   return {
@@ -81,9 +139,7 @@ function repo(over: Partial<CodeRepo> = {}): CodeRepo {
 /** The tab as the app holds it: mounted once, hidden while another tab shows. */
 function Tab({ shown }: { shown: boolean }) {
   return (
-    <Activity mode={shown ? "visible" : "hidden"}>
-      <Code onTask={() => {}} />
-    </Activity>
+    <Code shown={shown} onOpenSettings={() => {}} />
   );
 }
 
@@ -93,6 +149,8 @@ const settle = () => act(() => new Promise<void>((done) => setTimeout(done, 0)))
 describe("Code tab", () => {
   beforeEach(() => {
     api.codeRepo.mockReset();
+    api.codeSessionBind.mockReset();
+    api.codeSessionBind.mockResolvedValue("/work/demo");
     api.codeDiff.mockReset();
     api.codeBuiltins.mockReset();
     api.codeBuiltins.mockResolvedValue([]);
@@ -126,7 +184,7 @@ describe("Code tab", () => {
   it("shows the branch and changed files, and opens a diff", async () => {
     api.codeRepo.mockResolvedValue(repo());
     api.codeDiff.mockResolvedValue({ path: "src/a.rs", text: "-old\n+new\n", cut: false });
-    render(<Code onTask={() => {}} />);
+    render(<Code shown onOpenSettings={() => {}} />);
     expect(await screen.findByText(/On beta → origin\/beta · 1 ahead, 0 behind/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /src\/a\.rs/ }));
     expect(api.codeDiff).toHaveBeenCalledWith("src/a.rs");
@@ -136,7 +194,7 @@ describe("Code tab", () => {
   it("Refresh reads the open diff again", async () => {
     api.codeRepo.mockResolvedValue(repo());
     api.codeDiff.mockResolvedValue({ path: "src/a.rs", text: "-old\n+first edit\n", cut: false });
-    render(<Code onTask={() => {}} />);
+    render(<Code shown onOpenSettings={() => {}} />);
     await userEvent.click(await screen.findByRole("button", { name: /src\/a\.rs/ }));
     expect(await screen.findByLabelText("Diff of src/a.rs")).toHaveTextContent("+first edit");
     api.codeDiff.mockResolvedValue({ path: "src/a.rs", text: "-old\n+second edit\n", cut: false });
@@ -177,7 +235,7 @@ describe("Code tab", () => {
   it("a slow refresh does not replace the diff of a file picked after it", async () => {
     api.codeRepo.mockResolvedValue(repo());
     api.codeDiff.mockResolvedValue({ path: "src/a.rs", text: "-old\n+a edit\n", cut: false });
-    render(<Code onTask={() => {}} />);
+    render(<Code shown onOpenSettings={() => {}} />);
     await userEvent.click(await screen.findByRole("button", { name: /src\/a\.rs/ }));
     expect(await screen.findByLabelText("Diff of src/a.rs")).toHaveTextContent("+a edit");
     let answerSlow: (diff: CodeDiff) => void = () => {};
@@ -201,7 +259,7 @@ describe("Code tab", () => {
     ];
     api.codeRepo.mockResolvedValue(repo({ files }));
     api.codeDiff.mockResolvedValue({ path: "c.txt", text: "+c edit\n", cut: false });
-    render(<Code onTask={() => {}} />);
+    render(<Code shown onOpenSettings={() => {}} />);
     await userEvent.click(await screen.findByRole("button", { name: /c\.txt/ }));
     expect(await screen.findByLabelText("Diff of c.txt")).toHaveTextContent("+c edit");
 
@@ -226,7 +284,7 @@ describe("Code tab", () => {
   it("a file that fails to open does not drop a Refresh of the diff on screen", async () => {
     api.codeRepo.mockResolvedValue(repo());
     api.codeDiff.mockResolvedValue({ path: "src/a.rs", text: "-old\n+first\n", cut: false });
-    render(<Code onTask={() => {}} />);
+    render(<Code shown onOpenSettings={() => {}} />);
     await userEvent.click(await screen.findByRole("button", { name: /src\/a\.rs/ }));
     expect(await screen.findByLabelText("Diff of src/a.rs")).toHaveTextContent("+first");
 
@@ -248,7 +306,7 @@ describe("Code tab", () => {
     let answerSlow: (diff: CodeDiff) => void = () => {};
     api.codeDiff.mockImplementationOnce(() => new Promise<CodeDiff>((done) => (answerSlow = done)));
     api.codeDiff.mockResolvedValue({ path: "src/a.rs", text: "-old\n+new\n", cut: false });
-    render(<Code onTask={() => {}} />);
+    render(<Code shown onOpenSettings={() => {}} />);
     await userEvent.click(await screen.findByRole("button", { name: /src\/a\.rs/ }));
     await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled());
@@ -292,26 +350,29 @@ describe("Code tab", () => {
 
   it("says so when the workspace isn't a repo or has no changes", async () => {
     api.codeRepo.mockResolvedValueOnce(repo({ isRepo: false, branch: null, files: [] }));
-    const { unmount } = render(<Code onTask={() => {}} />);
+    const { unmount } = render(<Code shown onOpenSettings={() => {}} />);
     expect(await screen.findByText(CODE_NOT_REPO)).toBeInTheDocument();
     unmount();
     api.codeRepo.mockResolvedValueOnce(repo({ files: [] }));
-    render(<Code onTask={() => {}} />);
+    render(<Code shown onOpenSettings={() => {}} />);
     expect(await screen.findByText(CODE_CLEAN)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Ask the agent to review" })).not.toBeInTheDocument();
   });
 
-  it("hands a review task to the chat", async () => {
+  it("puts a review task in a new session of the agent window, on the same tab", async () => {
     api.codeRepo.mockResolvedValue(repo());
-    const onTask = vi.fn();
-    render(<Code onTask={onTask} />);
+    render(<Code shown onOpenSettings={() => {}} />);
+    const chat = screen.getByTestId("agent-chat");
+    expect(chat).toHaveTextContent("session shell-first");
     await userEvent.click(await screen.findByRole("button", { name: "Ask the agent to review" }));
-    expect(onTask).toHaveBeenCalledWith({ prompt: CODE_REVIEW_PROMPT, conversationId: "shell-new" });
+    await waitFor(() => expect(chat).toHaveTextContent(`box [${CODE_REVIEW_PROMPT}]`));
+    expect(chat).not.toHaveTextContent("session shell-first");
+    expect(chat).toHaveTextContent(/session shell-new-\d+/);
   });
 
   it("shows a load error", async () => {
     api.codeRepo.mockRejectedValue("git isn't installed or couldn't start");
-    render(<Code onTask={() => {}} />);
+    render(<Code shown onOpenSettings={() => {}} />);
     expect(await screen.findByRole("status")).toHaveTextContent("git isn't installed");
   });
 
@@ -351,7 +412,7 @@ describe("Code tab", () => {
   it("shows the built-in skills on a clean repo, with no toggle, edit or Open folder", async () => {
     api.codeRepo.mockResolvedValue(repo({ files: [] }));
     api.codeBuiltins.mockResolvedValue(BUILTINS);
-    render(<Code onTask={() => {}} />);
+    render(<Code shown onOpenSettings={() => {}} />);
     expect(await screen.findByText(CODE_CLEAN)).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: CODE_BUILTINS })).toBeInTheDocument();
     const list = screen.getByRole("list", { name: CODE_BUILTINS });
@@ -363,14 +424,12 @@ describe("Code tab", () => {
     expect(skills.querySelector("textarea, input, [contenteditable]")).toBeNull();
     expect(screen.queryByRole("button", { name: /open folder/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /edit/i })).not.toBeInTheDocument();
-    expect(CODE_NEXT).not.toMatch(/skill/i);
-    expect(CODE_NEXT).not.toMatch(/\btests\b/i);
   });
 
   it("opens a built-in and shows its body", async () => {
     api.codeRepo.mockResolvedValue(repo({ files: [] }));
     api.codeBuiltins.mockResolvedValue(BUILTINS);
-    render(<Code onTask={() => {}} />);
+    render(<Code shown onOpenSettings={() => {}} />);
     await userEvent.click(await screen.findByRole("button", { name: /^follow-through/ }));
     expect(await screen.findByLabelText("Built-in skill follow-through")).toHaveTextContent("# Follow Through");
     expect(screen.getByLabelText("Built-in skill follow-through")).toHaveTextContent("Ledger, check-ins.");
@@ -382,14 +441,14 @@ describe("Code tab", () => {
     api.codeBuiltins.mockResolvedValue(
       BUILTINS.map((row) => (row.name === "follow-through" ? { ...row, overriddenBy: over } : row)),
     );
-    render(<Code onTask={() => {}} />);
+    render(<Code shown onOpenSettings={() => {}} />);
     expect(await screen.findByText(overrideLabel(over))).toBeInTheDocument();
     expect(screen.getByText("overridden by project skill follow-through")).toBeInTheDocument();
   });
 
   it("shows the exact command on the first-run confirm card", async () => {
     api.codeRepo.mockResolvedValue(repo({ files: [] }));
-    render(<Code onTask={() => {}} />);
+    render(<Code shown onOpenSettings={() => {}} />);
     expect(await screen.findByRole("heading", { name: CODE_TESTS })).toBeInTheDocument();
     expect(await screen.findByLabelText("Test command")).toHaveValue("cargo test");
     await userEvent.click(screen.getByRole("button", { name: "Run tests" }));
@@ -406,7 +465,7 @@ describe("Code tab", () => {
       .mockResolvedValueOnce({ command: "cargo test", needsConfirm: false, remembered: "cargo test" })
       .mockResolvedValueOnce({ command: "cargo test", needsConfirm: false, remembered: "cargo test" })
       .mockResolvedValue({ command: "cargo test", needsConfirm: false, remembered: "cargo test" });
-    render(<Code onTask={() => {}} />);
+    render(<Code shown onOpenSettings={() => {}} />);
     await userEvent.click(await screen.findByRole("button", { name: "Run tests" }));
     const card = await screen.findByRole("group", { name: CODE_CONFIRM });
     await userEvent.click(card.querySelector("button")!);
@@ -422,7 +481,7 @@ describe("Code tab", () => {
   it("asks again when the command changes", async () => {
     api.codeRepo.mockResolvedValue(repo({ files: [] }));
     api.codeTestPlan.mockResolvedValue({ command: "cargo test", needsConfirm: false, remembered: "cargo test" });
-    render(<Code onTask={() => {}} />);
+    render(<Code shown onOpenSettings={() => {}} />);
     const field = await screen.findByLabelText("Test command");
     await userEvent.clear(field);
     await userEvent.type(field, "cargo test -- --ignored");
@@ -439,7 +498,7 @@ describe("Code tab", () => {
   it("draws a changed file as a quiet row, and its diff as a region the keyboard can scroll", async () => {
     api.codeRepo.mockResolvedValue(repo());
     api.codeDiff.mockResolvedValue({ path: "src/a.rs", text: "-old\n+new\n", cut: false });
-    render(<Code onTask={() => {}} />);
+    render(<Code shown onOpenSettings={() => {}} />);
     const row = await screen.findByRole("button", { name: /src\/a\.rs/ });
     expect(row).toHaveClass("code-file", "quiet", "modified");
     await userEvent.click(row);
@@ -450,7 +509,7 @@ describe("Code tab", () => {
 
   it("marks the changed-files list as the one that scrolls beside the diff", async () => {
     api.codeRepo.mockResolvedValue(repo());
-    render(<Code onTask={() => {}} />);
+    render(<Code shown onOpenSettings={() => {}} />);
     expect(await screen.findByRole("list", { name: "Changed files" })).toHaveClass("rows", "code-changed");
   });
 
@@ -458,7 +517,7 @@ describe("Code tab", () => {
     api.codeRepo.mockResolvedValue(repo({ files: [] }));
     api.codeBuiltins.mockResolvedValue([{ name: "follow-through", description: "Ledger.", body: "# Follow Through", overriddenBy: null }]);
     api.codeTestPlan.mockResolvedValue({ command: "cargo test", needsConfirm: false, remembered: "cargo test" });
-    render(<Code onTask={() => {}} />);
+    render(<Code shown onOpenSettings={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText("Test command")).toHaveValue("cargo test"));
     await userEvent.click(screen.getByRole("button", { name: "Run tests" }));
     const output = await screen.findByRole("log", { name: "Test output" });
@@ -470,7 +529,7 @@ describe("Code tab", () => {
 
   it("moves focus to Cancel when the test confirm card appears", async () => {
     api.codeRepo.mockResolvedValue(repo({ files: [] }));
-    render(<Code onTask={() => {}} />);
+    render(<Code shown onOpenSettings={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText("Test command")).toHaveValue("cargo test"));
     await userEvent.click(screen.getByRole("button", { name: "Run tests" }));
     const card = await screen.findByRole("group", { name: CODE_CONFIRM });
@@ -482,7 +541,7 @@ describe("Code tab", () => {
     api.codeTestPlan.mockResolvedValue({ command: "cargo test", needsConfirm: false, remembered: "cargo test" });
     let finish: (result: { command: string; exit: number; output: string; cut: boolean }) => void = () => {};
     api.codeTestRun.mockImplementationOnce(() => new Promise((done) => (finish = done)));
-    render(<Code onTask={() => {}} />);
+    render(<Code shown onOpenSettings={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText("Test command")).toHaveValue("cargo test"));
     expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Run tests" }));
@@ -505,7 +564,7 @@ describe("Code tab", () => {
     api.codeTestPlan.mockResolvedValue({ command: "cargo test", needsConfirm: false, remembered: "cargo test" });
     api.codeTestRun.mockImplementationOnce(() => new Promise(() => {}));
     api.codeRunStop.mockRejectedValue("The run could not be stopped.");
-    render(<Code onTask={() => {}} />);
+    render(<Code shown onOpenSettings={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText("Test command")).toHaveValue("cargo test"));
     await userEvent.click(screen.getByRole("button", { name: "Run tests" }));
     await userEvent.click(await screen.findByRole("button", { name: "Stop" }));
@@ -526,7 +585,7 @@ describe("Code tab", () => {
   async function testsReady() {
     api.codeRepo.mockResolvedValue(repo({ files: [] }));
     api.codeTestPlan.mockResolvedValue({ command: "cargo test", needsConfirm: false, remembered: "cargo test" });
-    render(<Code onTask={() => {}} />);
+    render(<Code shown onOpenSettings={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText("Test command")).toHaveValue("cargo test"));
   }
 
@@ -598,7 +657,7 @@ describe("Code tab", () => {
       blocked: null,
     });
     api.codeDeployRun.mockResolvedValue({ command: "npm run deploy", exit: 0, output: "done\n", cut: false });
-    render(<Code onTask={() => {}} />);
+    render(<Code shown onOpenSettings={() => {}} />);
     await userEvent.type(await screen.findByLabelText("New branch"), "code/keep-me");
     await waitFor(() => expect(screen.getByRole("button", { name: "Deploy" })).toBeEnabled());
     expect(api.codeActivity).toHaveBeenCalledTimes(1);
@@ -612,7 +671,7 @@ describe("Code tab", () => {
   it("Refresh lists the editor's folder again", async () => {
     Object.assign(window, { __TAURI_INTERNALS__: {} });
     api.codeRepo.mockResolvedValue(repo({ files: [] }));
-    render(<Code onTask={() => {}} />);
+    render(<Code shown onOpenSettings={() => {}} />);
     expect(await screen.findByRole("button", { name: "README.md" })).toBeInTheDocument();
     expect(api.codeFilesList.mock.calls).toEqual([[""]]);
     // A file made outside the app.
@@ -630,7 +689,7 @@ describe("Code tab", () => {
     api.codeRepo.mockResolvedValueOnce(repo());
     api.codeDiff.mockResolvedValue({ path: "src/a.rs", text: "-old\n+new\n", cut: false });
     api.codeTestPlan.mockResolvedValueOnce({ command: "cargo test", needsConfirm: true, remembered: null });
-    render(<Code onTask={() => {}} />);
+    render(<Code shown onOpenSettings={() => {}} />);
     await userEvent.click(await screen.findByRole("button", { name: /src\/a\.rs/ }));
     expect(await screen.findByLabelText("Diff of src/a.rs")).toBeInTheDocument();
     expect(screen.getByLabelText("Test command")).toHaveValue("cargo test");
@@ -648,12 +707,111 @@ describe("Code tab", () => {
 
   it("New session starts a fresh chat and a session row opens its saved chat", async () => {
     api.codeRepo.mockResolvedValue(repo());
-    const onTask = vi.fn();
-    const onOpenChat = vi.fn();
-    render(<Code onTask={onTask} onOpenChat={onOpenChat} />);
+    render(<Code shown onOpenSettings={() => {}} />);
+    const chat = screen.getByTestId("agent-chat");
     await userEvent.click(screen.getByRole("button", { name: "stub new session" }));
-    expect(onTask).toHaveBeenCalledWith({ prompt: "", conversationId: "shell-new" });
+    await waitFor(() => expect(chat).toHaveTextContent(/session shell-new-\d+/));
+    expect(chat).toHaveTextContent("box []");
     await userEvent.click(screen.getByRole("button", { name: "stub open session" }));
-    expect(onOpenChat).toHaveBeenCalledWith("chat-7");
+    await waitFor(() => expect(chat).toHaveTextContent("session chat-7"));
+    expect(screen.getByTestId("bar")).toHaveAttribute("data-open", "chat-7");
+    expect(screen.getByTestId("agent-tasks")).toHaveTextContent("tasks of chat-7");
+  });
+
+  it("gives a session its folder before the agent window opens it", async () => {
+    api.codeRepo.mockResolvedValue(repo());
+    let bound: (dir: string) => void = () => {};
+    render(<Code shown onOpenSettings={() => {}} />);
+    const chat = screen.getByTestId("agent-chat");
+    api.codeSessionBind.mockImplementation(() => new Promise<string>((done) => (bound = done)));
+    await userEvent.click(screen.getByRole("button", { name: "stub open session" }));
+    expect(api.codeSessionBind).toHaveBeenLastCalledWith("chat-7");
+    // Until the folder is set the saved chat is not loaded.
+    expect(chat).toHaveTextContent("session shell-first");
+    await act(async () => bound("/work/demo"));
+    expect(chat).toHaveTextContent("session chat-7");
+  });
+
+  it("sends a session the Chat tab has open to the Chat tab, and tells the app its own session", async () => {
+    api.codeRepo.mockResolvedValue(repo());
+    const onShowChat = vi.fn();
+    const onSession = vi.fn();
+    render(<Code shown onOpenSettings={() => {}} chatSession="chat-7" onShowChat={onShowChat} onSession={onSession} />);
+    expect(onSession).toHaveBeenLastCalledWith("shell-first");
+    await userEvent.click(screen.getByRole("button", { name: "stub open session" }));
+    expect(onShowChat).toHaveBeenCalledTimes(1);
+    await settle();
+    expect(screen.getByTestId("agent-chat")).toHaveTextContent("session shell-first");
+    expect(api.codeSessionBind).not.toHaveBeenCalledWith("chat-7");
+  });
+
+  it("passes History's deletes to the agent window, and reads the project again after a typed command", async () => {
+    api.codeRepo.mockResolvedValue(repo());
+    render(<Code shown onOpenSettings={() => {}} deleted={{ id: "chat-7", ids: ["chat-7"], n: 3 }} />);
+    expect(screen.getByTestId("agent-chat")).toHaveTextContent("deleted 3");
+    const bar = screen.getByTestId("bar");
+    const before = Number(bar.getAttribute("data-refresh"));
+    await userEvent.click(screen.getByRole("button", { name: "stub slash" }));
+    expect(Number(bar.getAttribute("data-refresh"))).toBe(before + 1);
+  });
+
+  it("shows the agent window beside the workspace, with the folder its session works in", async () => {
+    api.codeRepo.mockResolvedValue(repo());
+    render(<Code shown onOpenSettings={() => {}} />);
+    const pane = screen.getByRole("complementary", { name: "Agent window" });
+    expect(within(pane).getByRole("heading", { name: AGENT_TITLE })).toBeInTheDocument();
+    expect(within(pane).getByTestId("agent-chat")).toHaveAttribute("data-embedded", "true");
+    expect(api.codeSessionBind).toHaveBeenCalledWith("shell-first");
+    expect(await within(pane).findByText("Works in demo")).toHaveAttribute("title", "/work/demo");
+    // The Tasks panel follows the same session and has no link out of the tab.
+    const tasks = within(pane).getByTestId("agent-tasks");
+    expect(tasks).toHaveTextContent("tasks of shell-first");
+    expect(tasks).toHaveAttribute("data-links", "false");
+  });
+
+  it("holds the project and the sessions while the agent replies, then reads the sessions again", async () => {
+    api.codeRepo.mockResolvedValue(repo());
+    render(<Code shown onOpenSettings={() => {}} />);
+    const bar = screen.getByTestId("bar");
+    expect(bar).toHaveAttribute("data-busy", "false");
+    const before = Number(bar.getAttribute("data-refresh"));
+    await userEvent.click(screen.getByRole("button", { name: "stub reply" }));
+    expect(bar).toHaveAttribute("data-busy", "true");
+    expect(await screen.findByRole("button", { name: "Ask the agent to review" })).toBeDisabled();
+    expect(Number(bar.getAttribute("data-refresh"))).toBe(before);
+    await userEvent.click(screen.getByRole("button", { name: "stub reply" }));
+    expect(bar).toHaveAttribute("data-busy", "false");
+    expect(Number(bar.getAttribute("data-refresh"))).toBe(before + 1);
+    expect(screen.getByRole("button", { name: "Ask the agent to review" })).toBeEnabled();
+  });
+
+  it("starts a session in the new folder when the app's folder changes, but not under a running reply", async () => {
+    api.codeRepo.mockResolvedValue(repo());
+    render(<Code shown onOpenSettings={() => {}} />);
+    const chat = screen.getByTestId("agent-chat");
+    // The first read of the folder is where the tab starts, not a change.
+    await userEvent.click(screen.getByRole("button", { name: "stub folder demo" }));
+    expect(chat).toHaveTextContent("session shell-first");
+    await userEvent.click(screen.getByRole("button", { name: "stub reply" }));
+    await userEvent.click(screen.getByRole("button", { name: "stub folder other" }));
+    expect(chat).toHaveTextContent("session shell-first");
+    await userEvent.click(screen.getByRole("button", { name: "stub reply" }));
+    api.codeSessionBind.mockResolvedValue("/work/demo");
+    await userEvent.click(screen.getByRole("button", { name: "stub folder demo" }));
+    await waitFor(() => expect(chat).not.toHaveTextContent("session shell-first"));
+    expect(await screen.findByText("Works in demo")).toBeInTheDocument();
+  });
+
+  it("keeps the agent window mounted and idle while another tab shows", async () => {
+    api.codeRepo.mockResolvedValue(repo());
+    const view = render(<Tab shown />);
+    await userEvent.click(screen.getByRole("button", { name: "stub open session" }));
+    await waitFor(() => expect(screen.getByTestId("agent-chat")).toHaveTextContent("session chat-7"));
+    view.rerender(<Tab shown={false} />);
+    const chat = screen.getByTestId("agent-chat");
+    expect(chat).toHaveAttribute("data-active", "false");
+    expect(chat).toHaveTextContent("session chat-7");
+    expect(screen.getByTestId("agent-tasks")).toHaveAttribute("data-active", "false");
+    expect(chat.closest(".code-tab")).toHaveAttribute("hidden");
   });
 });

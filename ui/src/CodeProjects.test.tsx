@@ -19,6 +19,7 @@ import {
   CodeProjects,
   folderName,
   projectSessions,
+  PROJECTS_AGENT_BUSY,
   PROJECTS_EMPTY,
   PROJECTS_MISSING,
   PROJECTS_NONE_OPEN,
@@ -164,6 +165,39 @@ describe("CodeProjects", () => {
     await userEvent.click(screen.getByRole("button", { name: "Show all 8" }));
     expect(within(list).getAllByRole("button")).toHaveLength(8);
   });
+
+  it("holds the project and the other sessions while the agent replies", async () => {
+    const calls = { onSwitched: vi.fn(), onNewSession: vi.fn(), onOpenSession: vi.fn() };
+    render(<CodeProjects {...calls} agentBusy openSession="c" />);
+    const rows = within(await screen.findByRole("list", { name: "Sessions" })).getAllByRole("button");
+    expect(rows[0]).toHaveAttribute("aria-current", "true");
+    expect(rows[0]).toBeEnabled();
+    expect(rows[1]).not.toHaveAttribute("aria-current");
+    expect(rows[1]).toBeDisabled();
+    expect(screen.getByRole("button", { name: "New session" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Switch project" }));
+    await userEvent.click(within(screen.getByRole("list", { name: "Projects" })).getByRole("button", { name: /Dawn/ }));
+    expect(screen.getByRole("status")).toHaveTextContent(PROJECTS_AGENT_BUSY);
+    expect(api.codeProjectOpen).not.toHaveBeenCalled();
+    expect(calls.onSwitched).not.toHaveBeenCalled();
+  });
+
+  it("tells the tab the app's folder, and reads the project and its sessions again when told", async () => {
+    const calls = { onSwitched: vi.fn(), onNewSession: vi.fn(), onOpenSession: vi.fn() };
+    const onFolder = vi.fn();
+    const view = render(<CodeProjects {...calls} onFolder={onFolder} refresh={1} />);
+    await waitFor(() => expect(onFolder).toHaveBeenCalledWith("/work/harbor"));
+    expect(api.listChats).toHaveBeenCalledTimes(1);
+    // A command typed in the agent window moved the app to Dawn meanwhile.
+    api.codeProjects.mockResolvedValue(onDawn());
+    api.listChats.mockResolvedValue([chat("z", "p2", 50)]);
+    view.rerender(<CodeProjects {...calls} onFolder={onFolder} refresh={2} />);
+    expect(await screen.findByRole("button", { name: /Chat z/ })).toBeInTheDocument();
+    expect(api.listChats).toHaveBeenCalledTimes(2);
+    expect(api.codeProjects).toHaveBeenCalledTimes(2);
+    expect(onFolder).toHaveBeenLastCalledWith("/work/dawn");
+    expect(calls.onSwitched).not.toHaveBeenCalled();
+  });
 });
 
 describe("helpers", () => {
@@ -177,4 +211,5 @@ describe("helpers", () => {
     expect(projectSessions(rows, "p1").map((r) => r.id)).toEqual(["c", "a"]);
     expect(projectSessions(rows, "p4")).toEqual([]);
   });
+
 });

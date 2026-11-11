@@ -35,6 +35,17 @@ const PROMPT = "write a note from the smoke test";
 const NOTE = "smoke-note.txt";
 const NOTE_TEXT = "written after Allow once";
 const DRIVER = "http://127.0.0.1:4444";
+// The Code tab's agent window: one message that writes a note in its
+// session's folder and ticks a to-do.
+const AGENT_PROMPT = "smoke agent window: write the session note";
+const AGENT_NOTE = "agent-session-note.txt";
+const AGENT_NOTE_TEXT = "written by the agent window's session";
+const AGENT_TODO = "write the session note";
+const AGENT_REPLY = "The session note is written";
+// A second message in the same session, sent after the app has moved on.
+const AGENT_PROMPT_2 = "smoke agent window: write the follow-up note";
+const AGENT_NOTE_2 = "agent-session-follow-up.txt";
+const AGENT_REPLY_2 = "The follow-up note is written";
 
 const binary = process.argv[2];
 if (!binary) {
@@ -74,6 +85,24 @@ function mockReply(callNumber, body) {
     return textReply(JSON.stringify([PULSE_IDEA]));
   }
   if (body.includes(WEB_PROMPT)) return textReply(WEB_REPLY);
+  // Before the first agent prompt, which this turn carries as history.
+  if (body.includes(AGENT_PROMPT_2)) {
+    if (!body.includes("smoke-agent-follow-up")) {
+      return toolCall("smoke-agent-follow-up", "write", { path: AGENT_NOTE_2, content: AGENT_NOTE_TEXT });
+    }
+    return textReply(AGENT_REPLY_2);
+  }
+  if (body.includes(AGENT_PROMPT)) {
+    if (!body.includes("smoke-agent-write")) {
+      return toolCall("smoke-agent-write", "write", { path: AGENT_NOTE, content: AGENT_NOTE_TEXT });
+    }
+    if (!body.includes("smoke-agent-todo")) {
+      return toolCall("smoke-agent-todo", "todo_write", {
+        todos: [{ id: "1", content: AGENT_TODO, status: "completed" }],
+      });
+    }
+    return textReply(AGENT_REPLY);
+  }
   // A supervised desktop session: its first step types a delete (the card
   // waits), the next says it is waiting. Checked before the desktop prompt,
   // whose turn the chat carries as history.
@@ -126,6 +155,10 @@ function mockRunPrompt() {
   return mockSeen.some((c) => c.body.includes(AUTOMATION));
 }
 
+/** While set, the mock holds its answer to the agent window's first call, so
+ * the test can act while that reply is still running. */
+let agentHold = null;
+
 function startMock() {
   const seen = [];
   mockSeen = seen;
@@ -137,12 +170,16 @@ function startMock() {
       seen.push({ path: req.url, auth: req.headers.authorization, body });
       const calls = seen.filter((c) => c.path === "/v1/responses").length;
       const payload = sse(mockReply(calls, body));
-      res.writeHead(200, {
-        "Content-Type": "text/event-stream",
-        "Content-Length": Buffer.byteLength(payload),
-        Connection: "close",
-      });
-      res.end(payload);
+      const answer = () => {
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Content-Length": Buffer.byteLength(payload),
+          Connection: "close",
+        });
+        res.end(payload);
+      };
+      if (agentHold && body.includes(AGENT_PROMPT)) void agentHold.then(answer);
+      else answer();
     });
   });
   return new Promise((ok) =>
@@ -368,9 +405,11 @@ async function clickStill(s, el, what) {
  * the turn runs). */
 async function turnOver(s, text) {
   await waitFor(`the reply ${JSON.stringify(text)} and Send`, async () => {
+    // Only the Chat tab's own log and composer: the Code tab's agent window
+    // has a second pair once that tab has opened.
     const replies = await wd("POST", `${s}/elements`, {
       using: "css selector",
-      value: ".bubble.assistant:not(.streaming)",
+      value: "section[aria-label='Chat'] .bubble.assistant:not(.streaming)",
     });
     let seen = false;
     for (const el of replies) {
@@ -379,7 +418,8 @@ async function turnOver(s, text) {
     if (!seen) return false;
     const send = await wd("POST", `${s}/elements`, {
       using: "xpath",
-      value: "//form[contains(@class,'composer')]//button[@type='submit'][normalize-space()='Send']",
+      value:
+        "//section[@aria-label='Chat']//form[contains(@class,'composer')]//button[@type='submit'][normalize-space()='Send']",
     });
     return send.length === 1;
   });
@@ -1287,6 +1327,122 @@ async function codeProjects(s, config, workspace) {
   console.log("code tab: added the folder as a project, switched to a second project and back");
 }
 
+// The Code tab's agent window: a message sent there runs on the Code tab, in
+// the folder of the project its session started in. While its reply runs the
+// app is moved to the second project from Chat (`/project bind`); the note
+// must still land in the first project. Its to-do shows in the Tasks panel,
+// and the session is listed under the first project.
+async function codeAgent(s, config, workspace) {
+  const xp = (value) => wd("POST", `${s}/elements`, { using: "xpath", value });
+  const bound = () => JSON.parse(readFileSync(join(config, "shell.json"), "utf8")).workspace;
+  const other = join(config, "second-project");
+  const pane = "aside.code-agent";
+  const name = workspace.split(/[\\/]/).filter(Boolean).pop();
+
+  await tab(s, "Code");
+  await waitFor("the session's folder under the agent window's title", async () =>
+    (await textOf(s, `${pane} > .code-head .note`)) === `Works in ${name}`,
+  );
+  const sessionsBefore = (await xp("//div[contains(@class,'code-sessions')]//ul[@aria-label='Sessions']//button")).length;
+
+  let release = () => {};
+  agentHold = new Promise((ok) => (release = ok));
+  const box = await find(s, `${pane} textarea[aria-label='Message the agent']`);
+  await wd("POST", `${s}/element/${box}/value`, { text: AGENT_PROMPT });
+  await click(s, `${pane} form.composer button[type='submit']`);
+  await waitFor("the agent window's reply to start", async () =>
+    (await xp("//aside[contains(@class,'code-agent')]//form[contains(@class,'composer')]//button[normalize-space()='Stop']"))[0],
+  );
+  await waitFor("the model asked from the agent window", () => mockSeen.some((c) => c.body.includes(AGENT_PROMPT)));
+
+  // The app moves to the second project while that reply waits on the model.
+  await tab(s, "Chat");
+  const chatBox = await find(s, "section[aria-label='Chat'] textarea[aria-label='Message']");
+  await wd("POST", `${s}/element/${chatBox}/value`, { text: `/project bind ${other}` });
+  await click(s, "section[aria-label='Chat'] form.composer button[type='submit']");
+  await waitFor("the app in the second project", () => realpathSync(bound()) === realpathSync(other));
+  await tab(s, "Code");
+  await waitFor("the second project's name on the bar", async () =>
+    (await textOf(s, ".code-projects > .code-head .card-title")) === "Second smoke project",
+  );
+  // The running session stays in the agent window, with its own folder.
+  if ((await textOf(s, `${pane} > .code-head .note`)) !== `Works in ${name}`) {
+    throw new Error("the running session's folder changed with the app's project");
+  }
+  await shot(s, "code-agent-running");
+
+  /** The note lands in the session's project, never the app's, and the
+   * reply ends in the agent window. */
+  const wrote = async (file, reply) => {
+    const note = join(workspace, file);
+    await waitFor(`${file} in the session's own project`, async () => {
+      if (existsSync(note)) return true;
+      // Ask me first: the write waits on its card in the agent window.
+      const cards = await wd("POST", `${s}/elements`, {
+        using: "css selector",
+        value: `${pane} .card.permission .card-buttons button:not([disabled])`,
+      });
+      const allow = cards[0];
+      if (allow && (await settled(s, allow[ELEMENT]))) {
+        await wd("POST", `${s}/element/${allow[ELEMENT]}/click`, {}).catch(() => {});
+      }
+      return null;
+    });
+    if (readFileSync(note, "utf8") !== AGENT_NOTE_TEXT) throw new Error(`${file} has the wrong words`);
+    if (existsSync(join(other, file))) throw new Error(`${file} landed in the project the app moved to`);
+    await waitFor(`the agent window's reply ${JSON.stringify(reply)}`, async () => {
+      const replies = await wd("POST", `${s}/elements`, {
+        using: "css selector",
+        value: `${pane} .bubble.assistant:not(.streaming)`,
+      });
+      for (const el of replies) {
+        if ((await wd("GET", `${s}/element/${el[ELEMENT]}/text`)).includes(reply)) return true;
+      }
+      return null;
+    });
+    await waitFor("Send again in the agent window", async () =>
+      (await xp("//aside[contains(@class,'code-agent')]//form[contains(@class,'composer')]//button[@type='submit'][normalize-space()='Send']"))[0],
+    );
+  };
+
+  release();
+  agentHold = null;
+  await wrote(AGENT_NOTE, AGENT_REPLY);
+
+  // A message that starts after the move: the app is in the second project,
+  // and the session still works in the first.
+  if (realpathSync(bound()) !== realpathSync(other)) throw new Error("the app left the second project early");
+  const again = await find(s, `${pane} textarea[aria-label='Message the agent']`);
+  await wd("POST", `${s}/element/${again}/value`, { text: AGENT_PROMPT_2 });
+  await click(s, `${pane} form.composer button[type='submit']`);
+  await wrote(AGENT_NOTE_2, AGENT_REPLY_2);
+  await waitFor("the to-do in the Tasks panel", () =>
+    find(s, `${pane} section[aria-label='Agent tasks'] li[aria-label='${AGENT_TODO}']`),
+  );
+  await onView(s, "Code");
+  await shot(s, "code-agent-window");
+
+  // Back in the first project, the session is one of its sessions and the
+  // agent window starts a new one there.
+  await waitFor("the first project again", async () => {
+    if (realpathSync(bound()) === realpathSync(workspace)) return true;
+    const [open] = await xp("//div[contains(@class,'code-projects')]//ul[@aria-label='Projects']//button[not(@disabled)]");
+    if (open) await clickStill(s, open[ELEMENT], "the first project's row");
+    else {
+      const [sw] = await xp("//div[contains(@class,'code-projects')]//button[normalize-space()='Switch project']");
+      if (sw) await clickStill(s, sw[ELEMENT], "Switch project");
+    }
+    return null;
+  });
+  await waitFor("the agent's session among the first project's sessions", async () =>
+    (await xp("//div[contains(@class,'code-sessions')]//ul[@aria-label='Sessions']//button")).length > sessionsBefore,
+  );
+  await waitFor("a new session in the agent window", async () =>
+    (await wd("POST", `${s}/elements`, { using: "css selector", value: `${pane} .bubble` })).length === 0,
+  );
+  console.log("code tab: the agent window ran a session in its own project while the app moved, and listed its to-do");
+}
+
 /** The window opens 900px wide (tauri.conf.json). Every tab, the brand, the
  * Activity dock and Command must fit it without the page scrolling sideways:
  * a sideways scroll puts a scrollbar along the bottom edge, and WebKit takes
@@ -1474,6 +1630,7 @@ async function main() {
     await desktop(s, config);
     await episode(s, config);
     await codeProjects(s, config, workspace);
+    await codeAgent(s, config, workspace);
     if (process.env.SMOKE_WEB === "1") await web(s);
     console.log("smoke ok");
   } catch (err) {
