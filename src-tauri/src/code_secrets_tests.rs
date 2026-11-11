@@ -252,3 +252,14 @@ fn a_listed_name_with_no_value_is_an_error_that_names_it() {
 fn the_keychain_account_carries_the_project_and_name() {
     assert_eq!(account("k1", "DEPLOY_TOKEN"), "code-secret:k1:DEPLOY_TOKEN");
 }
+
+#[test]
+fn held_values_skip_a_name_with_no_value_and_keep_the_rest() {
+    let d = dir("held");
+    let vault = MockVault::default();
+    set(&d, &vault, KEY, "DEPLOY_TOKEN", VALUE).unwrap();
+    set(&d, &vault, KEY, "OTHER_TOKEN", "zzzz9999").unwrap();
+    vault.delete(&account(KEY, "OTHER_TOKEN")).unwrap();
+    assert_eq!(held_values(&d, &vault, KEY), vec![VALUE.to_string()]);
+    assert!(held_values(&d, &vault, "another-repo").is_empty());
+}

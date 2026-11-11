@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 import {
   codeBuiltins,
   codeDiff,
@@ -14,10 +14,16 @@ import {
 import { newConversationId } from "./Chat";
 import { CodeDeploy } from "./CodeDeploy";
 import { CodeShip } from "./CodeShip";
+import { inShell } from "./transport";
+
+// CodeMirror and xterm load only when the tab first shows them.
+const CodeEditor = lazy(() => import("./CodeEditor"));
+const CodeTerminal = lazy(() => import("./CodeTerminal"));
 
 export const CODE_NOT_REPO = "This workspace isn't a git repo yet. Pick a project folder in Settings, or ask the agent to start one.";
 export const CODE_CLEAN = "No changes since the last commit.";
-export const CODE_NEXT = "Coming next on this tab: editor, terminal, and an agent that drives the work while you watch or step in.";
+export const CODE_NEXT = "Coming next on this tab: an agent that drives the work while you watch or step in.";
+export const CODE_DESKTOP_ONLY = "The editor and terminal are only in the desktop app.";
 export const CODE_REVIEW_PROMPT = "Review the uncommitted changes in this workspace: what changed, anything risky, and what to test before committing.";
 export const CODE_BUILTINS = "Built-in skills";
 export const CODE_TESTS = "Tests";
@@ -34,7 +40,7 @@ export interface CodeTask {
   conversationId: string;
 }
 
-/** The Code tab: the workspace's repo, its changed files and one file's diff, plus built-in skills and a test runner. */
+/** The Code tab: the workspace's repo, its changed files and one file's diff, an editor and a terminal, plus built-in skills and a test runner. */
 export function Code({ onTask }: { onTask: (task: CodeTask) => void }) {
   const [repo, setRepo] = useState<CodeRepo | null>(null);
   const [diff, setDiff] = useState<CodeDiff | null>(null);
@@ -258,6 +264,15 @@ export function Code({ onTask }: { onTask: (task: CodeTask) => void }) {
           )}
         </div>
       )}
+      {repo !== null &&
+        (inShell() ? (
+          <Suspense fallback={<p className="note">Loading the editor and terminal…</p>}>
+            <CodeEditor />
+            <CodeTerminal />
+          </Suspense>
+        ) : (
+          <p className="note">{CODE_DESKTOP_ONLY}</p>
+        ))}
       <div className="code-tests">
         <h3>{CODE_TESTS}</h3>
         <div className="code-test-row">
