@@ -182,7 +182,15 @@ pub(super) fn offer(
     };
     match installed.iter().find(|i| i.mod_key == key) {
         Some(i) if &i.version == version => Offer::Installed,
-        Some(i) => Offer::Update(i.version.clone()),
+        // An update comes the same way the file does: a browser download
+        // can't be fetched by the app, so the mod's main file goes through
+        // the pickup again. Its other files (optional, patch) are not the
+        // update of the installed one, and the pickup would take that out.
+        Some(i) => match &f.download {
+            Download::Browser(url) if f.primary => Offer::Browser(url.clone()),
+            Download::Direct(_) | Download::Browser(_) => Offer::Update(i.version.clone()),
+            Download::Steam(_) => unreachable!("handled above"),
+        },
         None => match &f.download {
             Download::Direct(_) => Offer::Install,
             Download::Browser(url) => Offer::Browser(url.clone()),

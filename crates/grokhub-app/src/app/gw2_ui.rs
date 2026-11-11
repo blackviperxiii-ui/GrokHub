@@ -256,6 +256,8 @@ impl Cabin {
         match store_key(None) {
             Ok(()) => {
                 g.has_key = Some(false);
+                // A read still under way must not bring the snapshot back.
+                g.pending = None;
                 g.account = None;
                 g.note = "Key removed.".into();
                 if !cfg!(test) {
@@ -339,6 +341,28 @@ mod tests {
         cabin.finish_gw2(Ok(acct.clone()), 2_000);
         assert_eq!(cabin.focus.gw2.account, Some(acct));
         assert!(cabin.focus.gw2.note.contains("no wallet scope"));
+    }
+
+    #[test]
+    fn a_refresh_under_way_is_dropped_when_the_key_is_removed() {
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.focus.gw2.loaded_cache = true;
+        cabin.focus.gw2.has_key = Some(true);
+        let acct = Gw2Account {
+            fractal_level: Some(5),
+            ..Default::default()
+        };
+        cabin.focus.gw2.account = Some(acct.clone());
+        let (tx, rx) = mpsc::channel();
+        cabin.focus.gw2.pending = Some(rx);
+        cabin.remove_gw2_key();
+        // The read that was under way comes back late.
+        let late = tx.send(Ok(acct));
+        cabin.tick_gw2();
+        assert_eq!(cabin.focus.gw2.account, None);
+        assert_eq!(cabin.focus.gw2.note, "Key removed.");
+        assert!(cabin.focus.gw2.pending.is_none());
+        assert!(late.is_err(), "nothing waits for the late read");
     }
 
     #[test]

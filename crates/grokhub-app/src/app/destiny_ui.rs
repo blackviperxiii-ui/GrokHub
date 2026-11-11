@@ -356,6 +356,8 @@ impl Cabin {
         }
         d.has_key = Some(false);
         d.name = None;
+        // A read still under way must not bring the snapshot back.
+        d.pending = None;
         d.profile = None;
         d.note = "Key and name removed.".into();
     }
@@ -443,6 +445,30 @@ mod tests {
             .destiny
             .note
             .contains("keeps your characters private"));
+    }
+
+    #[test]
+    fn a_refresh_under_way_is_dropped_when_key_and_name_are_removed() {
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.focus.destiny.loaded = true;
+        cabin.focus.destiny.has_key = Some(true);
+        cabin.focus.destiny.name = Some("Tester#0042".into());
+        let p = DestinyProfile {
+            bungie_name: "Tester#0042".into(),
+            triumph_score: Some(5),
+            ..Default::default()
+        };
+        cabin.focus.destiny.profile = Some(p.clone());
+        let (tx, rx) = mpsc::channel();
+        cabin.focus.destiny.pending = Some(rx);
+        cabin.forget_destiny();
+        // The read that was under way comes back late.
+        let late = tx.send(Ok(p));
+        cabin.tick_destiny();
+        assert_eq!(cabin.focus.destiny.profile, None);
+        assert_eq!(cabin.focus.destiny.note, "Key and name removed.");
+        assert!(cabin.focus.destiny.pending.is_none());
+        assert!(late.is_err(), "nothing waits for the late read");
     }
 
     #[test]

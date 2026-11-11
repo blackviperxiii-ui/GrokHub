@@ -586,3 +586,22 @@ fn every_module_paints_inside_its_tile_at_every_size() {
     assert!(painted > REGISTRY.len(), "{painted}");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn a_feed_link_goes_through_the_same_url_check_as_every_other_link() {
+    let arm = include_str!("page.rs")
+        .split("TileAction::OpenUrl { url } =>")
+        .nth(1)
+        .and_then(|s| s.split("TileAction::Play").next())
+        .expect("the OpenUrl arm");
+    assert!(arm.contains("crate::desktop::open_url(&url)"), "{arm}");
+    assert!(!arm.contains("open_path("), "{arm}");
+    // It stays https only: open_url alone would also take http.
+    assert!(arm.contains("url.starts_with(\"https://\")"), "{arm}");
+    assert!(!crate::desktop::url_safe_to_open(
+        "https://example.com/\"--some-flag"
+    ));
+    assert!(crate::desktop::url_safe_to_open(
+        "https://store.steampowered.com/about/"
+    ));
+}

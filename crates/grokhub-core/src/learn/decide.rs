@@ -717,6 +717,15 @@ pub fn with_state<R>(config_dir: &Path, change: impl FnOnce(&mut State) -> R) ->
     out
 }
 
+/// Puts `state` in place of the saved one, under the engine's lock. Unlike
+/// [`with_state`] it says when the write did not land: the caller is
+/// replacing everything it holds and has to know.
+pub fn replace(config_dir: &Path, state: &State) -> Result<(), String> {
+    let _lock = store::hold_lock(config_dir);
+    let text = serde_json::to_string(state).map_err(|e| e.to_string())?;
+    crate::pulse_writer::write_atomic(&store::dir(config_dir).join(FILE), &text)
+}
+
 pub const NO_DECISIONS: &str =
     "No decisions yet. They show up here once the app has something it could change for you.";
 pub const NO_GOALS: &str = "Nothing set. Name what matters with `/learned goals`.";

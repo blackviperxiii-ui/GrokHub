@@ -76,14 +76,14 @@ fn read(path: &Path, missing: &str) -> Result<Backup, String> {
     serde_json::from_str(&text).map_err(|_| BAD_BACKUP.to_string())
 }
 
-/// Puts `backup` in place of what the folder holds.
+/// Puts `backup` in place of what the folder holds. A write that fails is
+/// an error, so a half-applied put never reads as done. The beliefs go last:
+/// the engine holds them in memory and reads them again only after an `Ok`,
+/// so on an error the folder still has the ones it holds.
 fn put(config_dir: &Path, backup: Backup) -> Result<(), String> {
-    {
-        let _lock = store::hold_lock(config_dir);
-        store::save_beliefs(config_dir, &backup.beliefs)?;
-    }
-    decide::with_state(config_dir, |s| *s = backup.decisions);
-    Ok(())
+    decide::replace(config_dir, &backup.decisions)?;
+    let _lock = store::hold_lock(config_dir);
+    store::save_beliefs(config_dir, &backup.beliefs)
 }
 
 /// Writes the backup file and returns where it is. The caller saves what
@@ -109,7 +109,7 @@ pub fn import(config_dir: &Path, now_ms: u64) -> Result<usize, String> {
 }
 
 /// Puts back what the folder held before the last import, and uses the
-/// restore point up.
+/// restore point up. The point stays when putting it back fails.
 pub fn restore(config_dir: &Path) -> Result<(), String> {
     let point = store::dir(config_dir).join(RESTORE);
     let before = read(&point, NO_RESTORE)?;

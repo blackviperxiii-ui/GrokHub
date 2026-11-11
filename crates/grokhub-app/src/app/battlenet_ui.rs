@@ -498,9 +498,17 @@ impl Cabin {
                 region,
             }));
         }
-        // A token is for one region's profile: connect again there.
+        // A token is for one region's profile: connect again there. A read
+        // or a sign-in still under way is for the old region, so its answer
+        // is dropped.
+        if let Some((_, stop)) = b.signing_in.take() {
+            stop.store(true, Ordering::Relaxed);
+            b.note = "Region changed. Press Connect to sign in there.".into();
+        }
+        b.connect = None;
         let _ = store_token(None);
         b.token = None;
+        b.pending = None;
         b.profile = None;
         if !cfg!(test) {
             let _ = std::fs::remove_file(bn::cache_path(&crate::config::config_dir()));
@@ -519,6 +527,8 @@ impl Cabin {
         }
         b.connect = None;
         b.token = None;
+        // A read still under way must not bring the snapshot back.
+        b.pending = None;
         b.profile = None;
         if !cfg!(test) {
             let _ = std::fs::remove_file(bn::cache_path(&crate::config::config_dir()));
@@ -842,6 +852,57 @@ mod tests {
         assert_eq!(cabin.focus.bnet.region, Region::Eu);
         assert_eq!(cabin.focus.bnet.token, None);
         assert_eq!(cabin.focus.bnet.profile, None);
+    }
+
+    #[test]
+    fn a_refresh_under_way_is_dropped_on_disconnect_and_on_a_region_change() {
+        for region_change in [false, true] {
+            let mut cabin = Cabin::quiet_for_test();
+            cabin.focus.bnet.loaded = true;
+            cabin.focus.bnet.token = Some(token(Region::Us, u64::MAX));
+            cabin.focus.bnet.profile = Some(BnetProfile::default());
+            let (tx, rx) = mpsc::channel();
+            cabin.focus.bnet.pending = Some(rx);
+            if region_change {
+                cabin.set_bnet_region(Region::Eu);
+            } else {
+                cabin.disconnect_bnet(false);
+            }
+            // The read that was under way comes back late.
+            let late = tx.send(Ok(BnetProfile::default()));
+            cabin.tick_bnet();
+            assert_eq!(
+                cabin.focus.bnet.profile, None,
+                "region change: {region_change}"
+            );
+            assert!(cabin.focus.bnet.pending.is_none());
+            assert!(late.is_err(), "nothing waits for the late read");
+        }
+    }
+
+    #[test]
+    fn a_sign_in_under_way_ends_on_a_region_change() {
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.focus.bnet.loaded = true;
+        let stop = Arc::new(AtomicBool::new(false));
+        cabin.focus.bnet.signing_in = Some(("s1".into(), stop.clone()));
+        let (tx, rx) = mpsc::channel();
+        cabin.focus.bnet.connect = Some(rx);
+        cabin.set_bnet_region(Region::Eu);
+        // The sign-in for the region the player left finishes late.
+        let late = tx.send(Ok(token(Region::Us, u64::MAX)));
+        cabin.tick_bnet();
+        assert_eq!(cabin.focus.bnet.token, None);
+        assert!(late.is_err(), "nothing waits for the late sign-in");
+        assert!(
+            stop.load(Ordering::Relaxed),
+            "the loopback wait is told to stop"
+        );
+        assert!(cabin.focus.bnet.signing_in.is_none());
+        assert_eq!(
+            cabin.focus.bnet.note,
+            "Region changed. Press Connect to sign in there."
+        );
     }
 
     #[test]

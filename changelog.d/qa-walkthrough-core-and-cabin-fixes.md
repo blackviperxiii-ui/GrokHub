@@ -1,0 +1,6 @@
+- Mods: Update works for a mod whose main file is a browser download (every Nexus mod); it goes through the same download and pickup as the first install.
+- Games: Disconnect or Remove key during a refresh stays disconnected (Battle.net, Guild Wars 2, Destiny 2, Old School RuneScape), and changing the Battle.net region ends a sign-in that was under way.
+- Reports and diagnostics redact more key shapes (Hugging Face, GitLab, npm, PyPI, Groq, Google, Slack rotated tokens, webhook secrets, Azure account keys), and redaction no longer slows down on a long run of look-alike prefixes.
+- Home: a feed tile's link goes through the same check as every other link before it opens.
+- Learning: a failed import or put-back reports its write error instead of looking done.
+- Windows install script builds with `--locked`.

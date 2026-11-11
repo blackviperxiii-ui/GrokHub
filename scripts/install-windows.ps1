@@ -11,7 +11,7 @@ if (-not $Prefix) {
   $Prefix = Join-Path $env:LOCALAPPDATA 'Programs\GrokHub'
 }
 New-Item -ItemType Directory -Path $Prefix -Force | Out-Null
-cargo build --release -p grokhub-app -p grokhub-hub
+cargo build --release --locked -p grokhub-app -p grokhub-hub
 if (-not (Test-Path 'target/release/grokhub.exe')) { throw "missing grokhub.exe" }
 if (-not (Test-Path 'target/release/grokhub-hub.exe')) { throw "missing grokhub-hub.exe" }
 function Overlay-Locked([string]$From, [string]$To) {
