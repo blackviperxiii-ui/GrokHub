@@ -1337,6 +1337,35 @@ fn a_read_command_that_can_write_or_run_a_program_is_not_read_only() {
         "git branch --contains HEAD",
         "git branch --sort=-committerdate",
         "git -C . branch --show-current",
+        "git branch --sort -committerdate",
+        "git branch --abbrev -v",
+        "git branch --abbrev=7 -v",
+        "git branch 'feat/*' --list",
+        "git branch --format '%(refname)' -l 'x*'",
+        "git branch -av",
+        "git branch -avv",
+        "git branch -rv --merged main",
+        "git branch -al 'feat/*'",
+        "git grep -n hello",
+        "git grep -n -i -w -e hello -- src",
+        "kubectl get pods",
+        "kubectl get pods -n kube-system -o wide",
+        "kubectl logs web --tail 20",
+        "kubectl logs -f web",
+        "kubectl describe pod web",
+        "sort.exe /R names.txt",
+        "sort /opt/data/names.txt",
+        "date",
+        "date -u",
+        "date +%s",
+        "date -d yesterday +%F",
+        "date -Iseconds",
+        "hostname",
+        "hostname -I",
+        "hostname -s",
+        "ls 2>&1",
+        "ls >&2",
+        "ls 2>&-",
     ] {
         assert!(shell_is_readonly(read), "{read} is a read");
     }
@@ -1357,7 +1386,150 @@ fn a_read_command_that_can_write_or_run_a_program_is_not_read_only() {
         "git branch -m main old",
         "git branch --set-upstream-to=origin/main",
         "git branch --edit-description",
+        // A flag that takes a value must not hide the word after it.
+        "git branch --format -l --abbrev -D victim",
+        "git branch --format -l --abbrev -f other HEAD~1",
+        "git branch --format -l --abbrev -M old renamed",
+        "git branch --format -l created",
+        "git branch --format --list created",
+        "git branch --format -l created2",
+        "git branch --format -l --abbrev --del victim",
+        "git branch --abbrev --unset-upstream",
+        "git branch --abbrev --edit-description",
+        "git branch --abbrev -D --sort --list victim",
+        "git branch --abbrev -f --sort --list mover HEAD~2",
+        "git branch --abbrev -M --format -l b_sort renamed",
+        "git branch --abbrev newbranch",
+        "git branch --sort --list newbranch HEAD~1",
+        "git branch -avD feature",
+        "git branch -vd feature",
+        "git branch -af main HEAD~20",
+        "git branch -av feature",
+        // `-O` opens the matches in a program, also inside a flag cluster.
+        "git grep -nO'touch pwned;:' hello",
+        "git grep -iOless hello",
+        "git grep hello -lO'touch x;:'",
+        "git -C . grep -nOless hello",
+        "git --no-pager grep -wOless hello",
+        // A config, server or identity of its own, or a file to write.
+        "kubectl get pods --kubeconfig ./kc.yaml",
+        "kubectl get pods --kubeconfig=./kc.yaml",
+        "kubectl logs web --kubeconfig ./kc.yaml",
+        "kubectl describe pod web --kubeconfig ./kc.yaml",
+        "kubectl get pods -s https://203.0.113.9",
+        "kubectl get pods -As https://203.0.113.9",
+        "kubectl get pods --server https://203.0.113.9 --insecure-skip-tls-verify",
+        "kubectl get pods --token abc",
+        "kubectl get pods --as system:admin",
+        "kubectl get pods --cache-dir ./x",
+        "kubectl get pods --profile=cpu --profile-output=AGENTS.md",
+        "kubectl get -f pods.yaml",
+        "sort.exe /O AGENTS.md payload.txt",
+        "sort.exe payload.txt /output AGENTS.md",
+        "sort.exe -- /O AGENTS.md",
+        // Sets the clock or the machine's name.
+        "date -s '2020-01-01 00:00:00'",
+        "date --set=2020-01-01",
+        "date -us 2020-01-01",
+        "date 010112002020",
+        "hostname evil.example",
+        "hostname -F /home/user/name.txt",
+        "hostname -b",
+        // `>&2notes.txt` writes a file named `2notes.txt`.
+        "cat payload.txt >&2notes.txt",
+        "ls >&2/../AGENTS.md",
+        "cat a > AGENTS.md",
+        "ls >> .mcp.json",
+        "grep x f | tee AGENTS.md",
+        "head -c 5 a 1> .claude/settings.json",
+        "cat a > >(tee AGENTS.md)",
+        "cat <(echo hi > AGENTS.md)",
     ] {
         assert!(!shell_is_readonly(not_read), "{not_read} is not a read");
     }
+}
+
+#[test]
+fn a_wrapper_run_from_a_path_earns_no_pass_for_what_it_wraps() {
+    for local in [
+        "tools/env ls",
+        "./timeout 5 ls",
+        "tools/nice cat a",
+        "tools/ionice -c 3 cat a",
+        "tools/chrt 1 ls",
+        "tools/stdbuf -o L cat a",
+        "/tmp/x/timeout 5 ls",
+        "timeout 5 tools/env ls",
+    ] {
+        assert!(!shell_is_readonly(local), "{local} is not a read");
+    }
+    for system in ["env ls", "timeout 5 ls", "/usr/bin/env ls"] {
+        assert!(shell_is_readonly(system), "{system} is a read");
+    }
+    // The wrapped command is still looked at.
+    assert!(analyze("./timeout 5 rm -rf x").dangerous);
+    let segs = analyze("tools/env npm test").segments.unwrap();
+    assert_eq!(segs.len(), 1);
+    assert_eq!(segs[0].command, "npm test");
+    assert!(!segs[0].eligible);
+    // An allow rule for the wrapped command does not cover a local wrapper.
+    let policy = policy_of(&[("Bash(npm test)", Action::Allow)], &[]);
+    let decide = |command: &str| {
+        at(
+            &policy,
+            PermMode::Ask,
+            true,
+            false,
+            "run_terminal_command",
+            &shell(command),
+        )
+    };
+    assert_eq!(decide("tools/env npm test"), Decision::Ask);
+    assert_eq!(decide("env npm test"), Decision::Run);
+}
+
+#[test]
+fn powershell_reads_a_backslash_as_a_plain_character() {
+    let words = |seg: &Seg| seg.words.clone();
+    let segs = split::analyze_with(r"ls .\; Set-Content AGENTS.md x", true)
+        .segments
+        .unwrap();
+    assert_eq!(segs.len(), 2);
+    assert_eq!(words(&segs[0]), ["ls", r".\"]);
+    assert_eq!(words(&segs[1]), ["Set-Content", "AGENTS.md", "x"]);
+    assert!(!segs[1].readonly);
+
+    let segs = split::analyze_with("ls .\\\nSet-Content AGENTS.md x", true)
+        .segments
+        .unwrap();
+    assert_eq!(segs.len(), 2);
+    assert_eq!(words(&segs[1]), ["Set-Content", "AGENTS.md", "x"]);
+
+    let segs = split::analyze_with(r"ls .\| Set-Content AGENTS.md", true)
+        .segments
+        .unwrap();
+    assert_eq!(segs.len(), 2);
+    assert!(segs[1].pipe_in);
+    assert!(!segs[1].readonly);
+
+    let segs = split::analyze_with(r#"ls ".\"; Set-Content AGENTS.md x #""#, true)
+        .segments
+        .unwrap();
+    assert_eq!(segs.len(), 2);
+    assert_eq!(words(&segs[0]), ["ls", r".\"]);
+    assert_eq!(words(&segs[1]), ["Set-Content", "AGENTS.md", "x"]);
+
+    // A redirect target keeps its backslash too, so this one is a file.
+    assert!(split::analyze_with(r"ls > /dev/nul\l", true)
+        .segments
+        .is_none());
+
+    // Any other shell still reads it as an escape.
+    let segs = split::analyze_with(r"ls a\;b", false).segments.unwrap();
+    assert_eq!(segs.len(), 1);
+    assert_eq!(words(&segs[0]), ["ls", "a;b"]);
+    let segs = split::analyze_with(r"ls > /dev/nul\l", false)
+        .segments
+        .unwrap();
+    assert_eq!(words(&segs[0]), ["ls"]);
 }

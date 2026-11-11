@@ -4217,6 +4217,59 @@ mod tests {
     }
 
     #[test]
+    fn a_redirect_or_pipe_into_the_agent_settings_parks_a_card() {
+        let _cfg =
+            crate::perm::ConfigGuard::set(std::path::Path::new("/home/user/.config/GrokHub"));
+        for command in [
+            "cat a > AGENTS.md",
+            "ls >> .mcp.json",
+            "grep x f | tee AGENTS.md",
+            "head -c 5 a 1> .claude/settings.json",
+            "cat a > >(tee AGENTS.md)",
+            "cat <(echo hi > AGENTS.md)",
+        ] {
+            assert_eq!(
+                hard_class("run_terminal_command", &sh(command)),
+                Some(HardClass::AgentConfig),
+                "{command}"
+            );
+        }
+    }
+
+    // PowerShell runs the shell tool on Windows: `.\` is a path, and the `;`
+    // after it starts a second statement.
+    #[cfg(windows)]
+    #[test]
+    fn a_backslash_does_not_hide_a_second_statement_from_the_settings_card() {
+        use crate::gate::{decide_with, Decision, Gate, PermMode};
+        let _cfg =
+            crate::perm::ConfigGuard::set(std::path::Path::new("/home/user/.config/GrokHub"));
+        let call = sh(r"ls .\; Set-Content AGENTS.md x");
+        assert_eq!(
+            hard_class("run_terminal_command", &call),
+            Some(HardClass::AgentConfig)
+        );
+        let gate = Gate {
+            mode: PermMode::Always,
+            readonly_session: false,
+            attended: true,
+            desktop: false,
+        };
+        assert_eq!(
+            decide_with(
+                &gate,
+                "run_terminal_command",
+                &call,
+                false,
+                None,
+                std::path::Path::new("/home/user/my-app"),
+                None,
+            ),
+            Decision::Ask
+        );
+    }
+
+    #[test]
     fn input_drivers_hit_the_floor_and_flagged_drivers_get_a_card() {
         let floor = hard_floor("run_terminal_command", &sh("winget install interception"))
             .expect("an input driver is refused");

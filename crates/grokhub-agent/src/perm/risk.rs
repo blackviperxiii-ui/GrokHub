@@ -88,8 +88,7 @@ const GIT_UNSAFE_OPTIONS: &[&str] = &[
 ];
 
 const READONLY_HEADS: &[&str] = &[
-    "ls", "cat", "pwd", "date", "whoami", "hostname", "uptime", "ps", "head", "tail", "wc", "tr",
-    "cut", "grep",
+    "ls", "cat", "pwd", "whoami", "uptime", "ps", "head", "tail", "wc", "tr", "cut", "grep",
 ];
 
 const SHELLS: &[&str] = &["sh", "bash", "zsh", "dash", "ksh", "fish"];
@@ -200,6 +199,12 @@ pub fn is_readonly(words: &[String]) -> bool {
     if head == "uniq" {
         return !uniq_writes(words);
     }
+    if head == "date" {
+        return !date_sets(words);
+    }
+    if head == "hostname" {
+        return !hostname_sets(words);
+    }
     if head == "rg" {
         return !rg_pre(words);
     }
@@ -207,10 +212,7 @@ pub fn is_readonly(words: &[String]) -> bool {
         return git_readonly(words);
     }
     if head == "kubectl" {
-        return matches!(
-            words.get(1).map(String::as_str),
-            Some("get" | "logs" | "describe")
-        );
+        return kubectl_reads(words);
     }
     false
 }
@@ -299,6 +301,8 @@ fn git_branch_lists(args: &[String]) -> bool {
         "--no-column",
         "--column",
         "--no-abbrev",
+        // Its length comes only as `--abbrev=N`, never as the next word.
+        "--abbrev",
     ];
     const VALUE_FLAGS: &[&str] = &[
         "--contains",
@@ -312,7 +316,18 @@ fn git_branch_lists(args: &[String]) -> bool {
         "--column",
         "--abbrev",
     ];
-    let lists = args.iter().any(|a| a == "--list" || a == "-l");
+    // `-av`, `-vv`, `-al`: several one-letter listing flags in one word.
+    let cluster = |arg: &str| {
+        arg.len() > 2
+            && !arg.starts_with("--")
+            && arg
+                .strip_prefix('-')
+                .is_some_and(|letters| letters.bytes().all(|b| b"arvli".contains(&b)))
+    };
+    // List mode counts only when git reads the word as a flag, not as the
+    // value of the flag before it.
+    let mut lists = false;
+    let mut named = false;
     let mut i = 0usize;
     while let Some(arg) = args.get(i).map(String::as_str) {
         i += 1;
@@ -321,11 +336,74 @@ fn git_branch_lists(args: &[String]) -> bool {
                 return false;
             }
         } else if LIST_FLAGS.contains(&arg) {
+            lists |= matches!(arg, "--list" | "-l");
+        } else if cluster(arg) {
+            lists |= arg.contains('l');
         } else if VALUE_FLAGS.contains(&arg) {
             // The commit, key or format this flag reads.
             i += 1;
-        } else if arg.starts_with('-') || !lists {
-            // An unknown flag, or a bare name: `git branch NAME` creates it.
+        } else if arg.starts_with('-') {
+            return false;
+        } else {
+            named = true;
+        }
+    }
+    // A bare name is a pattern in list mode; without it, a branch to create.
+    lists || !named
+}
+
+/// `kubectl get`, `logs` or `describe` with only flags that pick or shape
+/// what is shown. One that names a config, server, identity or output file
+/// asks, and so does a flag this doesn't know.
+fn kubectl_reads(words: &[String]) -> bool {
+    const FLAGS: &[&str] = &[
+        "-A",
+        "--all-namespaces",
+        "--show-labels",
+        "--no-headers",
+        "-w",
+        "--watch",
+        "--timestamps",
+        "-p",
+        "--previous",
+        "--all-containers",
+        "--follow",
+    ];
+    const VALUE_FLAGS: &[&str] = &[
+        "-n",
+        "--namespace",
+        "-o",
+        "--output",
+        "-l",
+        "--selector",
+        "--field-selector",
+        "-L",
+        "--label-columns",
+        "--sort-by",
+        "-c",
+        "--container",
+        "--tail",
+        "--since",
+        "--since-time",
+        "--request-timeout",
+    ];
+    let Some(verb @ ("get" | "logs" | "describe")) = words.get(1).map(String::as_str) else {
+        return false;
+    };
+    let mut i = 2usize;
+    while let Some(arg) = words.get(i).map(String::as_str) {
+        i += 1;
+        if !arg.starts_with('-') {
+            continue;
+        }
+        if let Some((flag, _)) = arg.split_once('=') {
+            if !FLAGS.contains(&flag) && !VALUE_FLAGS.contains(&flag) {
+                return false;
+            }
+        } else if VALUE_FLAGS.contains(&arg) {
+            // The namespace, format or count this flag reads.
+            i += 1;
+        } else if !FLAGS.contains(&arg) && !(verb == "logs" && arg == "-f") {
             return false;
         }
     }
@@ -339,8 +417,12 @@ fn git_unsafe_query_option(words: &[String]) -> bool {
     }) {
         return true;
     }
+    // `git grep -O<program>`, also inside a cluster such as `-nO<program>`.
     matches!(git_verb_index(words), Some(idx) if words.get(idx).map(String::as_str) == Some("grep"))
-        && words.iter().skip(1).any(|word| word.starts_with("-O"))
+        && words
+            .iter()
+            .skip(1)
+            .any(|word| word.starts_with('-') && !word.starts_with("--") && word.contains('O'))
 }
 
 fn git_verb_index(words: &[String]) -> Option<usize> {
@@ -466,6 +548,13 @@ fn sort_compress(words: &[String]) -> bool {
 
 /// `sort -o FILE` (also `-uo FILE`, `--output=FILE`) writes FILE.
 fn sort_writes(words: &[String]) -> bool {
+    // Windows `sort.exe /O FILE` (any start of `/OUTPUT`). It has no `--`.
+    if words.iter().skip(1).any(|word| {
+        let lower = word.to_ascii_lowercase();
+        lower.len() >= 2 && "/output".starts_with(&lower)
+    }) {
+        return true;
+    }
     for word in words.iter().skip(1) {
         if word == "--" {
             break;
@@ -505,6 +594,69 @@ fn uniq_writes(words: &[String]) -> bool {
         }
     }
     files > 1
+}
+
+/// `date -s`, `--set` or a bare time (`date 010112002030`) sets the clock.
+fn date_sets(words: &[String]) -> bool {
+    let mut i = 1usize;
+    while let Some(word) = words.get(i).map(String::as_str) {
+        i += 1;
+        if word.starts_with('+') {
+            continue;
+        }
+        if !word.starts_with('-') {
+            return true;
+        }
+        if matches!(word, "--date" | "--file" | "--reference") {
+            // The time or file this flag reads.
+            i += 1;
+        } else if word.starts_with("--") {
+            let flag = word.split_once('=').map(|(f, _)| f).unwrap_or(word);
+            if long_prefix(flag, "--set", 3) {
+                return true;
+            }
+        } else {
+            for (at, letter) in word.bytes().enumerate().skip(1) {
+                match letter {
+                    b's' => return true,
+                    // The rest of the word, or the next one, is its value.
+                    b'd' | b'f' | b'r' => {
+                        if at + 1 == word.len() {
+                            i += 1;
+                        }
+                        break;
+                    }
+                    b'I' => break,
+                    _ => {}
+                }
+            }
+        }
+    }
+    false
+}
+
+/// `hostname NAME`, `-F FILE` and `-b` set the name. The rest only print it.
+fn hostname_sets(words: &[String]) -> bool {
+    const PRINTS: &[&str] = &[
+        "--alias",
+        "--all-fqdns",
+        "--all-ip-addresses",
+        "--domain",
+        "--fqdn",
+        "--long",
+        "--ip-address",
+        "--short",
+        "--yp",
+        "--nis",
+    ];
+    words.iter().skip(1).any(|word| {
+        if word.starts_with("--") {
+            return !PRINTS.contains(&word.as_str());
+        }
+        !word.strip_prefix('-').is_some_and(|letters| {
+            !letters.is_empty() && letters.bytes().all(|b| b"aAdfiIsy".contains(&b))
+        })
+    })
 }
 
 fn rg_pre(words: &[String]) -> bool {
