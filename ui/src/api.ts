@@ -369,6 +369,8 @@ export interface ChatRow {
   created: number;
   /** Unix ms of its last saved turn. */
   updated: number;
+  /** Pinned with /pin: it lists first. */
+  pinned?: boolean;
 }
 
 /** "tools": a run of tool steps, named on one muted line (not replayed as cards). */
@@ -432,8 +434,8 @@ export interface SavedFile {
 }
 
 /** `/export` and History's Export: the chat as Markdown in your Chats folder. */
-export function exportChat(id: string): Promise<SavedFile> {
-  return invoke<SavedFile>("export_chat", { id, clock: wallClock() });
+export function exportChat(id: string, format?: "html" | "json"): Promise<SavedFile> {
+  return invoke<SavedFile>("export_chat", { id, clock: wallClock(), format });
 }
 
 export function openSaved(token: string): Promise<void> {
@@ -650,16 +652,25 @@ export interface SlashHit {
 export type SlashEffect =
   | { kind: "newChat" }
   | { kind: "mode"; mode: SessionMode; text: string | null }
-  | { kind: "open"; view: "settings" | "memory" | "automations" | "connectors" }
+  | { kind: "open"; view: "settings" | "memory" | "automations" | "connectors" | "history" }
   | { kind: "notice"; text: string }
-  | { kind: "export" };
+  | { kind: "export" }
+  | { kind: "exportAs"; format: "html" | "json" }
+  | { kind: "retry" }
+  | { kind: "undo" }
+  | { kind: "stop" }
+  | { kind: "compact" }
+  /** A destructive command waits for a yes: run `yes` when the person agrees. */
+  | { kind: "confirm"; prompt: string; yes: string }
+  | { kind: "deleted"; id: string; title: string };
 
 export function slashHits(draft: string): Promise<SlashHit[]> {
   return invoke<SlashHit[]>("slash_hits", { draft });
 }
 
-export function runSlash(line: string): Promise<SlashEffect> {
-  return invoke<SlashEffect>("run_slash", { line });
+/** `conversationId` is the chat the line was typed in. */
+export function runSlash(line: string, conversationId?: string): Promise<SlashEffect> {
+  return invoke<SlashEffect>("run_slash", { line, conversationId });
 }
 
 export function addMemory(

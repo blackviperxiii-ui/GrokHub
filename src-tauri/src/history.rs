@@ -34,6 +34,8 @@ pub struct ChatRow {
     pub created: u64,
     /// Unix ms of its last saved turn; the page groups and sorts by it.
     pub updated: u64,
+    /// Pinned with `/pin`: it lists first.
+    pub pinned: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -90,7 +92,42 @@ fn row(info: &SessionInfo) -> ChatRow {
         title: info.title.clone(),
         created: info.created,
         updated: updated_ms(info),
+        pinned: false,
     }
+}
+
+const PINS_FILE: &str = "shell-pins.json";
+
+/// The ids `/pin` has pinned, from `{config}/shell-pins.json`.
+pub fn pinned_ids(config_dir: &Path) -> Vec<String> {
+    std::fs::read_to_string(config_dir.join(PINS_FILE))
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+/// `/pin`: pins the chat, or unpins it when it is pinned. True when it is
+/// pinned now. A chat with no file yet can't be pinned.
+pub fn toggle_pin(config_dir: &Path, id: &str) -> Result<bool, String> {
+    let id = shell_id(id)?;
+    {
+        let _config = ConfigGuard::set(config_dir);
+        grokhub_agent::load_session(id)?;
+    }
+    let mut ids = pinned_ids(config_dir);
+    let pinned = if let Some(at) = ids.iter().position(|p| p == id) {
+        ids.remove(at);
+        false
+    } else {
+        ids.push(id.to_string());
+        true
+    };
+    std::fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
+    let raw = serde_json::to_string(&ids).map_err(|e| e.to_string())?;
+    let tmp = config_dir.join(format!("{PINS_FILE}.tmp"));
+    std::fs::write(&tmp, raw).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, config_dir.join(PINS_FILE)).map_err(|e| e.to_string())?;
+    Ok(pinned)
 }
 
 /// The shell's sessions, newest activity first. Call under a `ConfigGuard`.
@@ -100,7 +137,16 @@ fn shell_sessions() -> Vec<(ChatRow, SessionInfo)> {
         .filter(|info| info.id.starts_with(PREFIX))
         .map(|info| (row(&info), info))
         .collect();
-    found.sort_by(|(a, _), (b, _)| b.updated.cmp(&a.updated).then(a.id.cmp(&b.id)));
+    let pins = pinned_ids(&grokhub_agent::perm::config_dir());
+    for (row, _) in &mut found {
+        row.pinned = pins.contains(&row.id);
+    }
+    found.sort_by(|(a, _), (b, _)| {
+        b.pinned
+            .cmp(&a.pinned)
+            .then(b.updated.cmp(&a.updated))
+            .then(a.id.cmp(&b.id))
+    });
     found
 }
 
@@ -213,6 +259,13 @@ pub fn delete(config_dir: &Path, id: &str) -> Result<(), String> {
     let _config = ConfigGuard::set(config_dir);
     grokhub_agent::delete_session(id)?;
     grokhub_agent::delete_forks_of(&[id.to_string()]);
+    let mut ids = pinned_ids(config_dir);
+    if let Some(at) = ids.iter().position(|p| p == id) {
+        ids.remove(at);
+        if let Ok(raw) = serde_json::to_string(&ids) {
+            let _ = std::fs::write(config_dir.join(PINS_FILE), raw);
+        }
+    }
     Ok(())
 }
 
@@ -717,5 +770,229 @@ mod tests {
         );
         assert_eq!(list(&config), Vec::<ChatRow>::new());
         assert!(load(&config, id, LOAD_CAP).is_err());
+    }
+
+    fn applied_text(applied: crate::slash_ops::Applied) -> String {
+        match applied.effect {
+            crate::slash::Effect::Notice { text } => text,
+            other => panic!("expected a notice, got {other:?}"),
+        }
+    }
+
+    fn ctx<'a>(config: &'a Path, id: &'a str) -> crate::slash_ops::Ctx<'a> {
+        crate::slash_ops::Ctx {
+            config_dir: config,
+            conversation_id: Some(id),
+            bound: "",
+            owned: None,
+        }
+    }
+
+    #[test]
+    fn rename_and_pin_act_on_the_chat_and_a_pinned_chat_lists_first() {
+        use crate::slash::Op;
+        use crate::slash_ops::run;
+        let (config, workspace) = (temp_dir("pin-cfg"), temp_dir("pin-ws"));
+        let (older, newer) = ("shell-history-pin-a", "shell-history-pin-b");
+        turn(
+            older,
+            &config,
+            &workspace,
+            Model::new("Ok.", false),
+            "first",
+        );
+        turn(
+            newer,
+            &config,
+            &workspace,
+            Model::new("Ok.", false),
+            "second",
+        );
+        let text = applied_text(
+            run(Op::Rename("Pier light".into()), &ctx(&config, older)).expect("rename"),
+        );
+        assert_eq!(text, "Renamed to Pier light");
+        assert_eq!(
+            list(&config)
+                .iter()
+                .find(|r| r.id == older)
+                .map(|r| r.title.as_str()),
+            Some("Pier light")
+        );
+        assert!(list(&config).iter().all(|r| !r.pinned));
+        let text = applied_text(run(Op::Pin, &ctx(&config, older)).expect("pin"));
+        assert_eq!(text, "Pinned Pier light");
+        let rows = list(&config);
+        assert_eq!(rows[0].id, older);
+        assert!(rows[0].pinned && !rows[1].pinned);
+        assert_eq!(
+            search(&config, "").first().map(|r| r.id.as_str()),
+            Some(older)
+        );
+        let text = applied_text(run(Op::Pin, &ctx(&config, older)).expect("unpin"));
+        assert_eq!(text, "Unpinned Pier light");
+        assert!(list(&config).iter().all(|r| !r.pinned));
+        // A chat that was never saved can't be renamed or pinned.
+        assert_eq!(
+            run(Op::Pin, &ctx(&config, "shell-history-pin-none")),
+            Err("Send a message first. This chat isn't saved yet.".into())
+        );
+        assert_eq!(
+            run(Op::Rename("x".into()), &ctx(&config, "native-cabin-1")),
+            Err(NOT_SHELL.into())
+        );
+    }
+
+    #[test]
+    fn delete_asks_first_and_changes_nothing_until_yes() {
+        use crate::slash::{Effect, Op};
+        use crate::slash_ops::run;
+        let (config, workspace) = (temp_dir("del-cfg"), temp_dir("del-ws"));
+        let id = "shell-history-del";
+        turn(id, &config, &workspace, Model::new("Ok.", false), "first");
+        run(Op::Rename("Pier light".into()), &ctx(&config, id)).expect("rename");
+        run(Op::Pin, &ctx(&config, id)).expect("pin");
+        let asked = run(Op::Delete { yes: false }, &ctx(&config, id)).expect("asks");
+        assert_eq!(
+            asked.effect,
+            Effect::Confirm {
+                prompt: "Delete Pier light? The chat and its files are removed for good.".into(),
+                yes: "/delete yes".into(),
+            }
+        );
+        assert_eq!(list(&config).len(), 1, "no yes, nothing deleted");
+        assert!(config.join("sessions").join(format!("{id}.jsonl")).exists());
+        let done = run(Op::Delete { yes: true }, &ctx(&config, id)).expect("deleted");
+        assert_eq!(
+            done.effect,
+            Effect::Deleted {
+                id: id.into(),
+                title: "Pier light".into(),
+            }
+        );
+        assert_eq!(list(&config), Vec::<ChatRow>::new());
+        assert_eq!(pinned_ids(&config), Vec::<String>::new());
+    }
+
+    #[test]
+    fn context_and_usage_read_the_saved_chat_and_the_browser_sees_only_its_own() {
+        use crate::slash::Op;
+        use crate::slash_ops::{run, Ctx};
+        let (config, workspace) = (temp_dir("ctx-cfg"), temp_dir("ctx-ws"));
+        let id = "shell-history-ctx";
+        turn(
+            id,
+            &config,
+            &workspace,
+            Model::new("Blue suits it.", false),
+            "pick a colour",
+        );
+        let text = applied_text(run(Op::Context, &ctx(&config, id)).expect("context"));
+        assert!(text.starts_with("1 turn · "), "{text}");
+        assert!(text.contains(" tokens · ") && text.ends_with('%'), "{text}");
+        assert!(!applied_text(run(Op::Usage, &ctx(&config, id)).expect("usage")).is_empty());
+        let mine = |c: &str| c == id;
+        let browser = Ctx {
+            config_dir: &config,
+            conversation_id: Some(id),
+            bound: "",
+            owned: Some(&mine),
+        };
+        assert!(run(Op::Context, &browser).is_ok());
+        let sessions = applied_text(run(Op::Sessions, &browser).expect("sessions"));
+        assert_eq!(sessions, "pick a colour");
+        let other = Ctx {
+            conversation_id: Some("shell-someone-else"),
+            ..browser
+        };
+        assert_eq!(
+            run(Op::Context, &other),
+            Err(crate::remote::NOT_YOURS.to_string())
+        );
+        // On this computer /sessions opens History.
+        let here = run(Op::Sessions, &ctx(&config, id)).expect("sessions");
+        assert_eq!(here.effect, crate::slash::Effect::Open { view: "history" });
+    }
+
+    #[test]
+    fn rewind_files_restores_a_checkpointed_file_only_after_a_yes() {
+        use crate::slash::{Effect, Op};
+        use crate::slash_ops::run;
+        let config = temp_dir("rw-cfg");
+        let work = temp_dir("rw-ws");
+        let id = "shell-history-rewind";
+        let file = work.join("notes.txt");
+        std::fs::write(&file, "before").expect("seed");
+        {
+            let _config = ConfigGuard::set(&config);
+            grokhub_agent::begin_step(id).expect("step");
+            grokhub_agent::before_write(&file);
+        }
+        std::fs::write(&file, "after").expect("edit");
+        let list_text = applied_text(run(Op::RewindList, &ctx(&config, id)).expect("list"));
+        assert!(list_text.contains("notes.txt"), "{list_text}");
+        let asked = run(Op::RewindFiles { yes: false }, &ctx(&config, id)).expect("asks");
+        let Effect::Confirm { prompt, yes } = asked.effect else {
+            panic!("expected a question");
+        };
+        assert!(prompt.contains("notes.txt"), "{prompt}");
+        assert_eq!(yes, "/rewind files yes");
+        assert_eq!(std::fs::read_to_string(&file).expect("read"), "after");
+        applied_text(run(Op::RewindFiles { yes: true }, &ctx(&config, id)).expect("restore"));
+        assert_eq!(std::fs::read_to_string(&file).expect("read"), "before");
+        assert_eq!(
+            run(Op::RewindStep(99), &ctx(&config, id)),
+            Err("No checkpoint for step 99".to_string())
+        );
+        assert_eq!(
+            applied_text(run(Op::RewindNone, &ctx(&config, id)).expect("none")),
+            crate::slash_ops::REWIND_NA
+        );
+        assert_eq!(
+            run(
+                Op::RewindFiles { yes: true },
+                &ctx(&config, "shell-history-no-steps")
+            ),
+            Err("No agent file checkpoints yet. Edit a file in this chat first.".to_string())
+        );
+    }
+
+    #[test]
+    fn a_saved_chat_exports_as_html_and_json() {
+        let (config, workspace) = (temp_dir("fmt-cfg"), temp_dir("fmt-ws"));
+        let out = temp_dir("fmt-out");
+        let id = "shell-history-fmt";
+        turn(
+            id,
+            &config,
+            &workspace,
+            Model::new("Blue suits it.", false),
+            "pick a colour",
+        );
+        let html =
+            crate::export::export_into_as(&config, id, &out, 0, 0, grokhub_core::ChatExport::Html)
+                .expect("html");
+        assert_eq!(
+            html.file_name().and_then(|n| n.to_str()),
+            Some("pick a colour-19700101-0000.html")
+        );
+        let page = std::fs::read_to_string(&html).expect("read");
+        for part in ["pick a colour", "Blue suits it."] {
+            assert!(page.contains(part), "{part} missing from {page}");
+        }
+        let json =
+            crate::export::export_into_as(&config, id, &out, 0, 0, grokhub_core::ChatExport::Json)
+                .expect("json");
+        assert_eq!(
+            json.file_name().and_then(|n| n.to_str()),
+            Some("pick a colour-19700101-0000.json")
+        );
+        let raw = std::fs::read_to_string(&json).expect("read");
+        let value: serde_json::Value = serde_json::from_str(&raw).expect("valid json");
+        assert!(value.is_object(), "{raw}");
+        assert!(
+            raw.contains("Blue suits it.") && raw.contains("pick a colour"),
+            "{raw}"
+        );
     }
 }
