@@ -4,9 +4,9 @@
 //! successful runs of the same kind took (the ask's topic signature), or of
 //! every successful run when that kind has too few, never under [`FLOOR`].
 //! Reaching it doesn't stop the run: it gets one redirect, a note to step
-//! back, drop what isn't working and finish the shortest way. A run that nears
-//! its token budget gets one redirect of its own before that budget pauses it.
-//! With too little history there is no step budget, only the token redirect.
+//! back, drop what isn't working and finish the shortest way. With too little
+//! history there is no step budget. A run has no token cap; [`crate::stall`]
+//! catches one that stops getting anywhere.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -22,8 +22,6 @@ pub const FLOOR: u32 = 12;
 pub const CLASS_RUNS: usize = 5;
 /// Successful runs in all before any budget is learned.
 pub const ALL_RUNS: usize = 10;
-/// Percent of the token budget where the token redirect comes.
-pub const TOKEN_REDIRECT_PERCENT: u64 = 80;
 
 /// The 90th percentile (nearest rank) of `steps`.
 pub fn p90(mut steps: Vec<u32>) -> Option<u32> {
@@ -96,13 +94,12 @@ pub fn for_ask(config_dir: &Path, ask: &str) -> Option<u32> {
     learned(&runs(config_dir), &topic_signature(ask))
 }
 
-/// One run's steps and tokens against its budgets. Each redirect comes once.
+/// One run's steps against its learned budget. The redirect comes once.
 #[derive(Debug, Default)]
 pub struct TurnBudget {
     steps_budget: Option<u32>,
     steps: u32,
     step_redirected: bool,
-    token_redirected: bool,
 }
 
 impl TurnBudget {
@@ -127,24 +124,6 @@ impl TurnBudget {
              approach that isn't working, and finish the shortest way. If something blocks \
              you, stop and say what.",
             self.steps
-        ))
-    }
-
-    /// `sent` input tokens so far against `budget`: the redirect note once
-    /// they pass [`TOKEN_REDIRECT_PERCENT`] of it.
-    pub fn after_tokens(&mut self, sent: u64, budget: Option<u64>) -> Option<String> {
-        let budget = budget.filter(|b| *b > 0)?;
-        if self.token_redirected
-            || sent.saturating_mul(100) < budget.saturating_mul(TOKEN_REDIRECT_PERCENT)
-        {
-            return None;
-        }
-        self.token_redirected = true;
-        Some(format!(
-            "Redirect: this run has used most of its budget (about {}k of {}k tokens) and \
-             pauses when it runs out. Finish the most important part now, then say what's left.",
-            sent / 1000,
-            budget / 1000
         ))
     }
 }

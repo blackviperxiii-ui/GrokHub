@@ -129,24 +129,6 @@ pub enum StopReason {
 
 /// Cut-off replies in a row before the run stops instead of asking again.
 pub const TRUNCATED_STREAK_LIMIT: u32 = 3;
-/// Input tokens one unbounded run may send, summed over its requests, before it
-/// pauses for the user. Each request resends the whole context, so a run that
-/// loops burns this fast; a "continue" starts a fresh budget.
-pub const RUN_INPUT_TOKEN_BUDGET: u64 = 1_000_000;
-/// The same for a subagent, halved again for each level below it. A child
-/// works one task, so it stops sooner and hands back what it found.
-pub const CHILD_RUN_INPUT_TOKEN_BUDGET: u64 = 400_000;
-
-/// Input tokens this run may send before it stops: a bounded root run (a
-/// script, a scheduled job) keeps its own turn limit instead.
-pub fn run_token_budget(max_turns: u32, depth: u32) -> Option<u64> {
-    match depth {
-        0 if max_turns == 0 => Some(RUN_INPUT_TOKEN_BUDGET),
-        0 => None,
-        d => Some(CHILD_RUN_INPUT_TOKEN_BUDGET >> (d - 1).min(8)),
-    }
-}
-
 /// HTTP 400 or 422: the provider refused what was sent, which a bad tool
 /// schema can cause.
 fn refused_over_a_schema(err: &ClientError) -> bool {
@@ -165,34 +147,12 @@ Say continue and I'll try again.";
 const TRUNCATED_STOP: &str = "I stopped here: my last three replies were cut off at the output \
 limit before they finished. Say continue and I'll go on in smaller steps.";
 
-fn budget_pause(sent: u64, depth: u32) -> String {
-    if depth > 0 {
-        return format!(
-            "I stopped here: this subagent has sent about {}k tokens to the model, \
-             its share for one task. What I found so far is above.",
-            sent / 1000
-        );
-    }
-    format!(
-        "I paused here: this run has sent about {}k tokens to the model so far. \
-         Say continue and I'll pick it up where I stopped.",
-        sent / 1000
-    )
-}
-
 /// The request lets the model start a subagent, which may fork from it.
 fn offers_spawn(tools: &[serde_json::Value]) -> bool {
     tools.iter().any(|tool| {
         tool.get("name").and_then(|n| n.as_str()) == Some("spawn_subagent")
             || tool.pointer("/function/name").and_then(|n| n.as_str()) == Some("spawn_subagent")
     })
-}
-
-/// Tokens one request asks the model to read: its input plus the tool schemas.
-fn request_tokens(req: &ResponsesRequest) -> u64 {
-    let tools = serde_json::to_vec(&req.tools).map(|b| b.len()).unwrap_or(0);
-    crate::compact::estimate_input_tokens(&req.input)
-        .saturating_add(crate::tokens::estimate_token_bytes(tools as u64))
 }
 
 fn stop_with_note(history: &mut Vec<InputItem>, on_event: &mut dyn FnMut(LoopEvent), note: String) {
@@ -520,13 +480,6 @@ fn run_turn(
     on_event: &mut dyn FnMut(LoopEvent),
 ) -> LoopOut {
     let first_turn = history.is_empty();
-    // A fork starts with its chat's history. Its budget counts what it adds
-    // on top, until a compaction turns that history into its own.
-    let mut inherited_tokens = if input.depth > 0 {
-        crate::compact::estimate_input_tokens(history)
-    } else {
-        0
-    };
     // Brain 5: the turn's talk style sits in the system prompt's volatile tail.
     let style = (input.depth == 0)
         .then(|| crate::checkpoint::turn_style(input.conversation_id))
@@ -639,7 +592,9 @@ fn run_turn(
     let mut stop_hook_active = false;
     let mut truncated_streak = 0u32;
     let mut bad_args_streak = 0u32;
-    let mut run_tokens = 0u64;
+    // No token cap: a run goes on until the task is done. A run that stops
+    // getting anywhere is caught by the stall check instead.
+    let mut stall = crate::stall::Stall::default();
     // A subagent's checklist belongs to its parent; plan mode can't do the work.
     let mut drive = (input.depth == 0 && !plan_at_start && !input.conversation_id.is_empty())
         .then(|| crate::drive::Drive::new(&crate::session_tools::todos_for(input.conversation_id)));
@@ -702,8 +657,7 @@ fn run_turn(
     let mut turns = 0u32;
     // Steps sent again after a busy or dropped model, this turn.
     let mut resumes = 0u32;
-    // Item 33: a step budget learned from past runs of this kind, and one
-    // redirect before the token budget pauses the run.
+    // Item 33: a step budget learned from past runs of this kind.
     let mut turn_budget = crate::turn_budget::TurnBudget::new(
         (input.depth == 0)
             .then(|| crate::turn_budget::for_ask(&crate::perm::config_dir(), user_text))
@@ -786,7 +740,6 @@ fn run_turn(
                         compacted_once = true;
                         turns_since_compact = 0;
                         prompt_mark = None;
-                        inherited_tokens = 0;
                         let now = crate::compact::trigger_tokens(history, None);
                         let still =
                             crate::compact::needs_auto_compact_at(now, input.context_length)
@@ -856,15 +809,6 @@ fn run_turn(
             ),
             call_timeout: None,
         };
-        let req_tokens = request_tokens(&req).saturating_sub(inherited_tokens);
-        if turns > 1
-            && run_token_budget(input.max_turns, input.depth)
-                .is_some_and(|budget| run_tokens.saturating_add(req_tokens) > budget)
-        {
-            stop_with_note(history, on_event, budget_pause(run_tokens, input.depth));
-            return finish(input, StopReason::MaxTurns, usage, compacted_once, true);
-        }
-        run_tokens = run_tokens.saturating_add(req_tokens);
         // Each request should extend the last one; a rewrite logs its first changed segment.
         crate::prefix_guard::observe(&guard_key, &req);
         last_tools.clone_from(&req.tools);
@@ -988,7 +932,6 @@ fn run_turn(
                     && crate::mcp::bare_schema_named_in(input.conversation_id, &err.to_string())
                 {
                     turns = turns.saturating_sub(1);
-                    run_tokens = run_tokens.saturating_sub(req_tokens);
                     continue;
                 }
                 // A reply cut off partway stays as the chat showed it, so the
@@ -1042,7 +985,6 @@ fn run_turn(
                         return finish(input, StopReason::Cancelled, usage, compacted_once, true);
                     }
                     turns = turns.saturating_sub(1);
-                    run_tokens = run_tokens.saturating_sub(req_tokens);
                     continue;
                 }
                 return finish(
@@ -1718,10 +1660,13 @@ fn run_turn(
         if let Some(note) = turn_budget.after_steps(calls_ran) {
             history.push(cabin_note(&note));
         }
-        if let Some(note) =
-            turn_budget.after_tokens(run_tokens, run_token_budget(input.max_turns, input.depth))
-        {
-            history.push(cabin_note(&note));
+        match stall.after_step(evidence) {
+            crate::stall::Verdict::Go => {}
+            crate::stall::Verdict::Redirect(note) => history.push(cabin_note(note)),
+            crate::stall::Verdict::Stop => {
+                stop_with_note(history, on_event, crate::stall::STOP_NOTE.into());
+                return finish(input, StopReason::MaxTurns, usage, compacted_once, true);
+            }
         }
         if let Some(note) = progress.as_mut().and_then(|p| {
             p.check(
@@ -3720,156 +3665,77 @@ mod tests {
     }
 
     #[test]
-    fn an_unbounded_run_pauses_once_it_has_sent_its_token_budget() {
-        let dir = workspace("budget");
-        let config = dir.join("config");
-        std::fs::create_dir_all(&config).unwrap();
-        let _guard = crate::perm::ConfigGuard::set(&config);
-        let client = AlwaysTool {
-            calls: AtomicUsize::new(0),
-        };
-        // About 600k tokens of context: the second request would cross the budget.
-        let system = "x".repeat(2_400_000);
-        let input = LoopIn {
-            client: &client,
-            workspace: &dir,
-            model: "grok-4.7",
-            effort: None,
-            system: &system,
-            conversation_id: "budget",
-            max_turns: 0,
-            usage_base: Usage::default(),
-            cancel: &CancelToken::new(),
-            steer: &SteerQueue::new(),
-            halt: &NeverHalt,
-            gate: Gate::phase_readonly(),
-            desktop: None,
-            permits: &gate::ClosedPermits,
-            perms: None,
-            context_length: 0,
-            tasks: None,
-            depth: 0,
-            agent_id: None,
-            shared_client: None,
-            shared_permits: None,
-            shared_desktop: None,
-        };
-        let mut history = Vec::new();
-        let mut texts = Vec::new();
-        let out = run_loop(&input, &mut history, "go", None, &mut |ev| {
-            if let LoopEvent::Text(t) = ev {
-                texts.push(t);
-            }
-        });
-        assert_eq!(out.stop, StopReason::MaxTurns);
-        assert_eq!(client.calls.load(Ordering::SeqCst), 1);
-        assert!(
-            texts.iter().any(|t| t.contains("I paused here")),
-            "{texts:?}"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn a_subagent_stops_at_its_smaller_token_budget() {
-        assert_eq!(run_token_budget(0, 0), Some(RUN_INPUT_TOKEN_BUDGET));
-        assert_eq!(run_token_budget(8, 0), None);
-        assert_eq!(run_token_budget(50, 1), Some(CHILD_RUN_INPUT_TOKEN_BUDGET));
-        assert_eq!(
-            run_token_budget(50, 2),
-            Some(CHILD_RUN_INPUT_TOKEN_BUDGET / 2)
-        );
-
-        let dir = workspace("child-budget");
-        let config = dir.join("config");
-        std::fs::create_dir_all(&config).unwrap();
-        let _guard = crate::perm::ConfigGuard::set(&config);
-        let client = AlwaysTool {
-            calls: AtomicUsize::new(0),
-        };
-        // About 250k tokens of context: well under a root run's budget, but the
-        // second request would take a child past its 400k.
-        let system = "x".repeat(1_000_000);
-        let input = LoopIn {
-            client: &client,
-            workspace: &dir,
-            model: "grok-4.7",
-            effort: None,
-            system: &system,
-            conversation_id: "child-budget",
-            max_turns: 50,
-            usage_base: Usage::default(),
-            cancel: &CancelToken::new(),
-            steer: &SteerQueue::new(),
-            halt: &NeverHalt,
-            gate: Gate::phase_readonly(),
-            desktop: None,
-            permits: &gate::ClosedPermits,
-            perms: None,
-            context_length: 0,
-            tasks: None,
-            depth: 1,
-            agent_id: Some("a1"),
-            shared_client: None,
-            shared_permits: None,
-            shared_desktop: None,
-        };
-        let mut history = Vec::new();
-        let mut texts = Vec::new();
-        let out = run_loop(&input, &mut history, "go", None, &mut |ev| {
-            if let LoopEvent::Text(t) = ev {
-                texts.push(t);
-            }
-        });
-        assert_eq!(out.stop, StopReason::MaxTurns);
-        assert_eq!(client.calls.load(Ordering::SeqCst), 1);
-        assert!(
-            texts.iter().any(|t| t.contains("this subagent has sent")),
-            "{texts:?}"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn a_fork_counts_only_what_it_adds_to_the_chat_it_inherited() {
-        let dir = workspace("fork-budget");
-        let config = dir.join("config");
-        std::fs::create_dir_all(&config).unwrap();
-        let _guard = crate::perm::ConfigGuard::set(&config);
-        let client = AlwaysTool {
-            calls: AtomicUsize::new(0),
-        };
-        let input = LoopIn {
-            client: &client,
-            workspace: &dir,
-            model: "grok-4.7",
-            effort: None,
-            system: "sys",
-            conversation_id: "fork-budget",
-            max_turns: 3,
-            usage_base: Usage::default(),
-            cancel: &CancelToken::new(),
-            steer: &SteerQueue::new(),
-            halt: &NeverHalt,
-            gate: Gate::phase_readonly(),
-            desktop: None,
-            permits: &gate::ClosedPermits,
-            perms: None,
-            context_length: 0,
-            tasks: None,
-            depth: 1,
-            agent_id: Some("a1"),
-            shared_client: None,
-            shared_permits: None,
-            shared_desktop: None,
-        };
-        // About 250k tokens inherited: two requests would be 500k in all, but
-        // only what the fork adds counts against its 400k.
-        let mut history = vec![user_message(&"x".repeat(1_000_000), None)];
-        let out = run_loop(&input, &mut history, "task", None, &mut |_| {});
-        assert_eq!(out.stop, StopReason::MaxTurns);
-        assert_eq!(client.calls.load(Ordering::SeqCst), 3);
-        let _ = std::fs::remove_dir_all(&dir);
+    fn a_run_has_no_token_cap_and_stops_only_when_it_gets_nowhere() {
+        // A root run and a subagent, each sending about 600k tokens a request:
+        // far past the old caps, neither pauses on tokens. Every call fails
+        // (no such folder), so the stall check redirects once, then stops.
+        for (depth, max_turns, label) in [(0u32, 0u32, "no-cap"), (1, 50, "no-cap-child")] {
+            let dir = workspace(label);
+            let config = dir.join("config");
+            std::fs::create_dir_all(&config).unwrap();
+            let _guard = crate::perm::ConfigGuard::set(&config);
+            let client = AlwaysTool {
+                calls: AtomicUsize::new(0),
+            };
+            let system = "x".repeat(2_400_000);
+            let input = LoopIn {
+                client: &client,
+                workspace: &dir,
+                model: "grok-4.7",
+                effort: None,
+                system: &system,
+                conversation_id: label,
+                max_turns,
+                usage_base: Usage::default(),
+                cancel: &CancelToken::new(),
+                steer: &SteerQueue::new(),
+                halt: &NeverHalt,
+                gate: Gate::phase_readonly(),
+                desktop: None,
+                permits: &gate::ClosedPermits,
+                perms: None,
+                context_length: 0,
+                tasks: None,
+                depth,
+                agent_id: (depth > 0).then_some("a1"),
+                shared_client: None,
+                shared_permits: None,
+                shared_desktop: None,
+            };
+            let mut history = Vec::new();
+            let mut texts = Vec::new();
+            let out = run_loop(&input, &mut history, "go", None, &mut |ev| {
+                if let LoopEvent::Text(t) = ev {
+                    texts.push(t);
+                }
+            });
+            assert_eq!(out.stop, StopReason::MaxTurns, "depth {depth}");
+            assert_eq!(
+                client.calls.load(Ordering::SeqCst),
+                crate::stall::STOP_AFTER as usize,
+                "depth {depth}"
+            );
+            assert!(
+                texts.iter().any(|t| t.contains(crate::stall::STOP_NOTE)),
+                "{texts:?}"
+            );
+            assert!(
+                !texts
+                    .iter()
+                    .any(|t| t.contains("I paused here") || t.contains("has sent about")),
+                "{texts:?}"
+            );
+            let redirects = history
+                .iter()
+                .filter(|item| {
+                    matches!(item, InputItem::Message { content, .. }
+                        if content.iter().any(|part| matches!(part,
+                            ContentPart::InputText(text) if text.contains("did no new work"))))
+                })
+                .count();
+            assert_eq!(redirects, 1, "depth {depth}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     #[test]
@@ -3992,6 +3858,11 @@ mod tests {
     #[test]
     fn no_turn_cap_runs_past_fifty_tool_turns_to_the_reply() {
         let dir = workspace("nocap");
+        // Each step lists a folder that exists, so every step does new work
+        // and the stall check never trips.
+        for n in 0..80 {
+            std::fs::create_dir_all(dir.join(format!("p{n}"))).unwrap();
+        }
         let mut turns: Vec<ScriptTurn> = (0..80)
             .map(|n| ScriptTurn {
                 text: String::new(),

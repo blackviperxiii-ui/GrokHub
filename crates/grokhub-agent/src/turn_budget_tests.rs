@@ -75,15 +75,6 @@ fn each_redirect_comes_once() {
     // No learned budget: no step redirect, ever.
     let mut none = TurnBudget::new(None);
     assert_eq!(none.after_steps(500), None);
-    // The token redirect comes at 80% of the budget, once.
-    assert_eq!(none.after_tokens(799_999, Some(1_000_000)), None);
-    let note = none
-        .after_tokens(800_000, Some(1_000_000))
-        .expect("redirect");
-    assert!(note.contains("800k of 1000k"), "{note}");
-    assert_eq!(none.after_tokens(950_000, Some(1_000_000)), None);
-    // A bounded run has no token budget.
-    assert_eq!(TurnBudget::new(None).after_tokens(u64::MAX, None), None);
 }
 
 /// One reply of `calls` reads, then a plain answer.
