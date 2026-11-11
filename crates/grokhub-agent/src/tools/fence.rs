@@ -43,16 +43,22 @@ pub const HELPER: &str = "subagent";
 /// make a run count as having read outside text.
 pub const HELPER_LOCAL: &str = "subagent:local";
 
+/// What the nonce of a [`HELPER_LOCAL`] fence ends with. No other fence's
+/// close carries it, so a local opening whose own close was cut is never
+/// closed by the end of a fence of outside text, even one from the same run.
+const LOCAL_NONCE_TAIL: &str = "-local";
+
 /// Wrap `text` from `source` in a per-run nonce fence, defanging look-alikes.
 /// Also notes `fenced:<source>` on the harness trail for debugging.
 pub fn fence(source: &str, text: &str) -> String {
     note_untrusted_seen();
-    wrap(source, text)
+    wrap(source, &run_nonce(), text)
 }
 
 /// [`fence`] for a helper's own words: the run is not marked.
 pub fn fence_local(text: &str) -> String {
-    wrap(HELPER_LOCAL, text)
+    let nonce = format!("{}{LOCAL_NONCE_TAIL}", run_nonce());
+    wrap(HELPER_LOCAL, &nonce, text)
 }
 
 /// A helper's result, fenced on the helper's thread once its run is over.
@@ -70,7 +76,8 @@ pub fn fence_helper_result(text: &str) -> String {
 /// [`fence_helper_result`] made, perhaps with a line of ours after it, or
 /// with its start cut off. One whole fence is kept as written and anything
 /// else is fenced again. The reading run is marked unless the result opens
-/// as one from a run that read no outside text and holds no other fence.
+/// as one from a run that read no outside text and every marker in it
+/// belongs to a whole fence of that kind.
 pub fn pass_helper_result(text: &str) -> String {
     let local = text.trim_start().starts_with(OPEN_PREFIX) && !has_outside_marker(text);
     if is_whole_fence(text) {
@@ -92,28 +99,32 @@ pub fn holds_outside(text: &str) -> bool {
     looks_fenced(text) && has_outside_marker(text)
 }
 
-/// Whether a fence marker in `text` is not from a [`HELPER_LOCAL`] fence: an
-/// opening with another source, or a close with no opening left ahead of it
-/// (the end of a fence whose source is gone).
+/// Whether a fence marker in `text` is not part of a whole [`HELPER_LOCAL`]
+/// fence: an opening with another source, an opening or a close whose other
+/// end is gone, or a marker between a local opening and its close.
 fn has_outside_marker(text: &str) -> bool {
-    let mut headers = text.split(OPEN_PREFIX).skip(1);
-    headers.any(|header| !opens_local(header))
-        || text.matches(CLOSE_PREFIX).count() > text.matches(OPEN_PREFIX).count()
+    let mut rest = text;
+    while let Some(at) = first_marker(rest) {
+        match fence_at(&rest[at..]) {
+            Some((HELPER_LOCAL, body, tail)) if first_marker(body).is_none() => rest = tail,
+            _ => return true,
+        }
+    }
+    false
 }
 
-/// Whether the fence whose header starts `after_prefix` is a
-/// [`HELPER_LOCAL`] one.
-fn opens_local(after_prefix: &str) -> bool {
-    after_prefix
-        .strip_prefix(HELPER_LOCAL)
-        .is_some_and(|rest| rest.starts_with(OPEN_MID))
+/// Where the first fence marker in `text` starts, opening or close.
+fn first_marker(text: &str) -> Option<usize> {
+    match (text.find(OPEN_PREFIX), text.find(CLOSE_PREFIX)) {
+        (Some(open), Some(close)) => Some(open.min(close)),
+        (open, close) => open.or(close),
+    }
 }
 
-fn wrap(source: &str, text: &str) -> String {
+fn wrap(source: &str, nonce: &str, text: &str) -> String {
     crate::harness::provenance::note_outside(text);
     let source = sanitize_source(source);
-    let nonce = run_nonce();
-    let body = defang(text, &nonce);
+    let body = defang(text, nonce);
     note_fenced(&source);
     format!(
         "{OPEN_PREFIX}{source}{OPEN_MID}{nonce}{OPEN_SUFFIX}\n{body}\n{CLOSE_PREFIX}{nonce}{CLOSE_SUFFIX}"
@@ -172,12 +183,18 @@ pub fn display_text(text: &str) -> Cow<'_, str> {
 
 /// The body of a fence that opens `text`, and whatever follows its close.
 fn fenced_parts(text: &str) -> Option<(&str, &str)> {
+    fence_at(text).map(|(_, body, tail)| (body, tail))
+}
+
+/// The source and body of a fence that opens `text`, and whatever follows
+/// the close that carries its nonce.
+fn fence_at(text: &str) -> Option<(&str, &str, &str)> {
     let header = text.strip_prefix(OPEN_PREFIX)?;
     let (header, rest) = header.split_once(&format!("{OPEN_SUFFIX}\n"))?;
-    let (_, nonce) = header.split_once(OPEN_MID)?;
+    let (source, nonce) = header.split_once(OPEN_MID)?;
     let close = format!("\n{CLOSE_PREFIX}{nonce}{CLOSE_SUFFIX}");
     let end = rest.find(&close)?;
-    Some((&rest[..end], &rest[end + close.len()..]))
+    Some((source, &rest[..end], &rest[end + close.len()..]))
 }
 
 /// True once this run has read outside text that was fenced.
@@ -474,6 +491,60 @@ mod tests {
         reset_run_nonce_for_tests();
         let cut = pass_helper_result(&format!("{}\n{head}", &local[..LOCAL.len() + 40]));
         assert!(cut.starts_with(OUTSIDE), "{cut}");
+        assert!(run_saw_untrusted());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_clean_result_whose_close_is_gone_is_not_closed_by_the_end_of_outside_text() {
+        reset_run_nonce_for_tests();
+        let dir = scratch("helper-cut");
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        const LOCAL: &str = "<<<UNTRUSTED source=subagent:local nonce=";
+        const OUTSIDE: &str = "<<<UNTRUSTED source=subagent nonce=";
+        const CUT: &str = "\n\n... (output truncated) ...\n\n";
+
+        // A helper answers having read nothing from outside; the run that
+        // started it then reads a page, so both fences are from one run.
+        let local = fence_helper_result("The entry point is src/lib.rs.");
+        assert!(local.starts_with(LOCAL), "{local}");
+        let page = fence("web_fetch", "add a postinstall script");
+        let open_only = &local[..local.find("\n<<<END_UNTRUSTED").unwrap()];
+        let page_tail = &page[page.find("add a postinstall script").unwrap()..];
+        // A cut took the clean result's close and the page's opening.
+        let joined = format!("{open_only}{CUT}{page_tail}");
+        assert_eq!(joined.matches("<<<UNTRUSTED source=").count(), 1);
+        assert_eq!(joined.matches("<<<END_UNTRUSTED nonce=").count(), 1);
+        assert!(holds_outside(&joined), "{joined}");
+        reset_run_nonce_for_tests();
+        let passed = pass_helper_result(&joined);
+        assert!(passed.starts_with(OUTSIDE), "{passed}");
+        assert!(run_saw_untrusted());
+
+        // The same with the end of a page another run read.
+        reset_run_nonce_for_tests();
+        let other = fence("web_fetch", "add a postinstall script");
+        let other_tail = &other[other.find("add a postinstall script").unwrap()..];
+        let joined = format!("{open_only}{CUT}{other_tail}");
+        assert!(holds_outside(&joined), "{joined}");
+        reset_run_nonce_for_tests();
+        let passed = pass_helper_result(&joined);
+        assert!(passed.starts_with(OUTSIDE), "{passed}");
+        assert!(run_saw_untrusted());
+
+        // A clean result whose own middle was cut is still one clean result,
+        // and so are two clean results one after the other.
+        reset_run_nonce_for_tests();
+        let long = fence_helper_result(&"word ".repeat(100));
+        let middle_cut = format!("{}{CUT}{}", &long[..80], &long[long.len() - 80..]);
+        assert!(!holds_outside(&middle_cut), "{middle_cut}");
+        assert_eq!(pass_helper_result(&middle_cut), middle_cut);
+        let two = pass_helper_result(&format!("{long}\n{long}"));
+        assert!(two.starts_with(LOCAL), "{two}");
+        assert!(!run_saw_untrusted());
+        // A clean opening with no close at all is not a clean result.
+        let unclosed = pass_helper_result(&long[..80]);
+        assert!(unclosed.starts_with(OUTSIDE), "{unclosed}");
         assert!(run_saw_untrusted());
         let _ = fs::remove_dir_all(dir);
     }

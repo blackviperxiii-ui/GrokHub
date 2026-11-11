@@ -526,11 +526,15 @@ fn run_job(job: ChildJob, tx: Option<Sender<ChildNote>>) {
         &done.text,
     );
     if !done.looked_at.is_empty() {
-        if !done.text.is_empty() {
+        let listed = format!("looked at: {}", done.looked_at.join(", "));
+        if done.text.is_empty() {
+            // With no answer the list is the whole result, fenced like one, so
+            // it too says whether the helper's run read outside text.
+            done.text = crate::tools::fence::fence_helper_result(&listed);
+        } else {
             done.text.push('\n');
+            done.text.push_str(&listed);
         }
-        done.text
-            .push_str(&format!("looked at: {}", done.looked_at.join(", ")));
     }
     let cancelled = matches!(done.stop, StopReason::Cancelled | StopReason::Halted);
     if cancelled {
@@ -3402,6 +3406,12 @@ mod tests {
                 &mut |_| {},
             );
             assert!(crate::tools::fence::run_saw_untrusted());
+            // The result itself says its helper read outside text.
+            assert!(
+                joined_outputs(&history).starts_with("<<<UNTRUSTED source=subagent nonce="),
+                "{}",
+                joined_outputs(&history)
+            );
             assert!(
                 !dir.join("package.json").exists(),
                 "{}",
@@ -3529,6 +3539,11 @@ mod tests {
                 Some("get_command_or_subagent_output"),
                 true,
             );
+            // The result itself says its helper read outside text.
+            assert!(
+                all.contains("exit_code: 0\noutput:\n<<<UNTRUSTED source=subagent nonce="),
+                "{all}"
+            );
             assert_eq!(written, None, "{all}");
             assert!(all.contains(&crate::gate::user_rejected("write")), "{all}");
         })
@@ -3540,6 +3555,11 @@ mod tests {
     fn a_background_helpers_finish_notice_marks_the_parent_run() {
         thread::spawn(|| {
             let (all, written) = background_result_then_build_file("fencebgnote", None, true);
+            // The result itself says its helper read outside text.
+            assert!(
+                all.contains(" finished.\n<<<UNTRUSTED source=subagent nonce="),
+                "{all}"
+            );
             assert_eq!(written, None, "{all}");
             assert!(all.contains(&crate::gate::user_rejected("write")), "{all}");
         })
@@ -3562,6 +3582,105 @@ mod tests {
             .join()
             .unwrap();
         }
+    }
+
+    #[test]
+    fn a_background_helper_that_ends_with_only_a_list_of_what_it_read_leaves_the_run_clean() {
+        thread::spawn(|| {
+            let _ = drain_side_events();
+            let dir = scratch("fencebglist");
+            let cfg = scratch("fencebglistcfg");
+            let _guard = crate::perm::ConfigGuard::set(&cfg);
+            let sid = session("fencebglist");
+            crate::tools::fence::reset_run_nonce_for_tests();
+            std::fs::create_dir_all(dir.join("src")).unwrap();
+            std::fs::write(dir.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
+            let parent_id = sid.clone();
+            let client = fake(&sid, move |req, _cancel, n| {
+                if depth_of(&parent_id, &req.conversation_id) == 1 {
+                    // It reads a file of the workspace, then ends with no answer.
+                    return Ok(match n {
+                        0 => calls_turn(
+                            vec![call("f", "read_file", r#"{"path":"src/lib.rs"}"#)],
+                            Usage::default(),
+                        ),
+                        _ => text_turn("", Usage::default()),
+                    });
+                }
+                match n {
+                    0 => Ok(calls_turn(
+                        vec![call(
+                            "s",
+                            "spawn_subagent",
+                            &spawn_args("find the entry point", "general", true, "none"),
+                        )],
+                        Usage::default(),
+                    )),
+                    1 => {
+                        let id = task_line(&last_output(req), "task id:").unwrap_or_default();
+                        Ok(calls_turn(
+                            vec![call(
+                                "r",
+                                "get_command_or_subagent_output",
+                                &json!({"task_id": id, "timeout_ms": 5000}).to_string(),
+                            )],
+                            Usage::default(),
+                        ))
+                    }
+                    2 => Ok(calls_turn(
+                        vec![call(
+                            "w",
+                            "write",
+                            r#"{"path":"package.json","content":"{}"}"#,
+                        )],
+                        Usage::default(),
+                    )),
+                    _ => Ok(text_turn("done", Usage::default())),
+                }
+            });
+            let (_, history) = run_parent(
+                &client,
+                &dir,
+                &sid,
+                chat(PermMode::Always, false, true),
+                &closed(),
+                &CancelToken::new(),
+                &mut |_| {},
+            );
+            let outputs = joined_outputs(&history);
+            let nonce = outputs
+                .split("output:\n<<<UNTRUSTED source=subagent:local nonce=")
+                .nth(1)
+                .and_then(|rest| rest.split_once(">>>"))
+                .map(|(nonce, _)| nonce.to_string())
+                .unwrap_or_else(|| panic!("the list is fenced as a clean helper's: {outputs}"));
+            assert!(
+                outputs.contains(&format!(
+                    "status: exited\nexit_code: 0\noutput:\n\
+                     <<<UNTRUSTED source=subagent:local nonce={nonce}>>>\n\
+                     looked at: src/lib.rs\n\
+                     <<<END_UNTRUSTED nonce={nonce}>>>"
+                )),
+                "{outputs}"
+            );
+            assert!(!crate::tools::fence::run_saw_untrusted(), "{outputs}");
+            assert_eq!(
+                std::fs::read_to_string(dir.join("package.json"))
+                    .ok()
+                    .as_deref(),
+                Some("{}"),
+                "{outputs}"
+            );
+            assert!(
+                outputs.contains("wrote 2 bytes to package.json"),
+                "{outputs}"
+            );
+            let _ = drain_side_events();
+            let _ = std::fs::remove_dir_all(&dir);
+            let _ = std::fs::remove_dir_all(&cfg);
+        })
+        .join()
+        .unwrap();
     }
 
     #[test]
