@@ -652,7 +652,7 @@ export interface SlashHit {
 export type SlashEffect =
   | { kind: "newChat" }
   | { kind: "mode"; mode: SessionMode; text: string | null }
-  | { kind: "open"; view: "settings" | "memory" | "automations" | "connectors" | "history" }
+  | { kind: "open"; view: "settings" | "memory" | "automations" | "connectors" | "history" | "skills" }
   | { kind: "notice"; text: string }
   | { kind: "export" }
   | { kind: "exportAs"; format: "html" | "json" }

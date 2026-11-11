@@ -15,6 +15,7 @@ pub mod background;
 #[cfg(test)]
 mod brand_guard;
 pub mod capabilities;
+pub mod changes;
 pub mod chips;
 // The Code tab's logic lives in grokhub-code (shared with the cabin); the
 // old module names stay so the commands below and settings read the same.
