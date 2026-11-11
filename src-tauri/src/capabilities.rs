@@ -38,6 +38,9 @@ pub struct Capabilities {
     pub auto_setup: bool,
     /// The Code tab: this computer's repos, read through git. Desktops only.
     pub code: bool,
+    /// The Mods page: this computer's moddable games, browse, search and
+    /// For you. Desktops only.
+    pub mods: bool,
 }
 
 /// The report for an OS name as `std::env::consts::OS` spells it. Linux,
@@ -67,6 +70,7 @@ pub fn for_env(os: &str, wayland: bool) -> Capabilities {
         library: desktop,
         code: desktop,
         auto_setup: desktop,
+        mods: desktop,
     }
 }
 
@@ -118,6 +122,7 @@ mod tests {
             library: true,
             auto_setup: true,
             code: true,
+            mods: true,
         };
         assert_eq!(for_os("linux"), all);
         assert_eq!(for_os("windows"), all);
@@ -141,6 +146,7 @@ mod tests {
             library: false,
             auto_setup: false,
             code: false,
+            mods: false,
         };
         assert_eq!(for_os("android"), none);
         assert_eq!(
@@ -211,6 +217,7 @@ mod tests {
                 "library": false,
                 "autoSetup": false,
                 "code": false,
+                "mods": false,
             })
         );
     }
