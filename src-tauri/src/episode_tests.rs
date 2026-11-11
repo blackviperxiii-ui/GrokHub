@@ -336,3 +336,88 @@ fn the_cua_gate_registers_only_on_linux_with_both_switches_and_the_hub() {
     assert_eq!(sync_cua(true, true, hub), cfg!(target_os = "linux"));
     assert!(!sync_cua(true, true, None));
 }
+
+#[test]
+fn the_hub_is_found_next_to_the_app_or_in_the_package_lib_dir() {
+    let me = Path::new("/usr/bin/loadout");
+    assert_eq!(
+        hub_candidates(me, false),
+        vec![
+            PathBuf::from("/usr/bin/grokhub-hub"),
+            PathBuf::from("/usr/bin/../lib/loadout/grokhub-hub"),
+        ]
+    );
+    assert_eq!(
+        hub_candidates(Path::new("C:/Apps/Loadout/loadout.exe"), true),
+        vec![PathBuf::from("C:/Apps/Loadout/grokhub-hub.exe")]
+    );
+    assert!(hub_candidates(Path::new("/"), false).is_empty());
+}
+
+#[test]
+fn the_askpass_server_starts_only_with_a_hub_path_on_linux() {
+    assert!(!start_askpass(None), "no grokhub-hub, no askpass server");
+    if !cfg!(target_os = "linux") {
+        assert!(!start_askpass(Some(PathBuf::from(
+            "/opt/loadout/grokhub-hub"
+        ))));
+    }
+}
+
+#[test]
+fn the_shell_starts_askpass_with_the_bundled_hub_and_registers_cua_with_it() {
+    let lib = include_str!("lib.rs");
+    let setup = lib
+        .split("episode::start_askpass(episode::hub_exe());")
+        .count();
+    assert_eq!(setup, 2, "setup starts the askpass server exactly once");
+    let episode = include_str!("episode.rs");
+    assert!(
+        episode.contains("grokhub_agent::sudo_pass::install(exe)"),
+        "the askpass helper is the bundled grokhub-hub path"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn cua_on_shows_the_hub_with_mcp_cua_and_either_switch_off_removes_it() {
+    let hub = PathBuf::from("/opt/loadout/grokhub-hub");
+    assert!(sync_cua(true, true, Some(hub)));
+    let row = grokhub_agent::mcp::doctor()
+        .into_iter()
+        .find(|r| r.name == grokhub_core::CUA_MCP_SERVER)
+        .expect("the Cua gate row");
+    assert_eq!(row.detail, "/opt/loadout/grokhub-hub --mcp-cua");
+    assert!(!sync_cua(
+        false,
+        true,
+        Some(PathBuf::from("/opt/loadout/grokhub-hub"))
+    ));
+    assert!(!sync_cua(
+        true,
+        false,
+        Some(PathBuf::from("/opt/loadout/grokhub-hub"))
+    ));
+    assert!(grokhub_agent::mcp::doctor()
+        .into_iter()
+        .all(|r| r.name != grokhub_core::CUA_MCP_SERVER));
+}
+
+#[test]
+fn the_linux_bundles_list_grokhub_hub_beside_the_fps_probe() {
+    let conf: serde_json::Value =
+        serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json");
+    for kind in ["deb", "appimage"] {
+        let files = &conf["bundle"]["linux"][kind]["files"];
+        assert_eq!(
+            files["/usr/lib/loadout/grokhub-hub"], "../target/hub/release/grokhub-hub",
+            "{kind} bundle"
+        );
+        assert_eq!(
+            files["/usr/lib/loadout/fps-probe"], "../target/fps-probe/release/loadout-fps-probe",
+            "{kind} bundle"
+        );
+    }
+    let script = include_str!("../../scripts/shell-fps-probe.mjs");
+    assert!(script.contains("[\"grokhub-hub\", \"hub\"]"));
+}

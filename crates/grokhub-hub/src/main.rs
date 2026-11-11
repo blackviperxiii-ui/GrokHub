@@ -1,6 +1,6 @@
 //! LAN hub — same /v1 contract as grokhub --hub — plus the headless tools
 //! the desktop shell has no console for (`--mcp-self`, `--mcp-desktop`,
-//! `--mcp-cua`, `--doctor`, `--update`, `--askpass`, `bench local`).
+//! `--mcp-cua`, `--doctor`, `--oauth`, `--update`, `--askpass`, `bench local`).
 
 use grokhub_core::DEFAULT_PORT;
 use grokhub_hub::{askpass_socket, parse_args, Launch};
@@ -47,6 +47,7 @@ grokhub-hub --mcp-self   the agent's skill, connection and automation tools on s
 grokhub-hub --mcp-desktop  desktop tools on stdin (Settings switch and hard gate)\n  \
 grokhub-hub --mcp-cua    Cua Driver gate on stdin (Linux, cuaDriver flag)\n  \
 grokhub-hub --doctor     auth / memory / hub checks\n  \
+grokhub-hub --oauth      sign in with Grok (device code) for the desktop app\n  \
 grokhub-hub --update     how this install updates (runs nothing)\n  \
 grokhub-hub bench local  on-device speed + eval\n  \
 grokhub-hub --askpass <socket>  answer a sudo prompt (the app runs this)\n  \
@@ -89,6 +90,15 @@ fn main() {
                 grokhub_hub::doctor::report(&grokhub_hub::doctor::gather(&dir, hub_port()));
             print!("{text}");
             std::process::exit(if ok { 0 } else { 1 });
+        }
+        Launch::OAuth => {
+            use_os_stores();
+            std::process::exit(grokhub_hub::oauth_cli::run(
+                &grokhub_agent::xai_keychain::Keychain,
+                &std::thread::sleep,
+                &mut std::io::stdout(),
+                &mut std::io::stderr(),
+            ));
         }
         Launch::Update => {
             use grokhub_hub::update::{advice, install_kind};
@@ -154,6 +164,7 @@ mod tests {
             "  grokhub-hub --mcp-desktop  desktop tools on stdin (Settings switch and hard gate)\n",
             "  grokhub-hub --mcp-cua    Cua Driver gate on stdin (Linux, cuaDriver flag)\n",
             "  grokhub-hub --doctor     auth / memory / hub checks\n",
+            "  grokhub-hub --oauth      sign in with Grok (device code) for the desktop app\n",
             "  grokhub-hub --update     how this install updates (runs nothing)\n",
         ] {
             assert!(help.contains(line), "{line} missing from {help}");

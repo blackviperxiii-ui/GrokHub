@@ -1,24 +1,35 @@
-// Tauri's beforeBundleCommand: builds the small frame-rate probe that the
-// shell's Linux bundles ship as /usr/lib/loadout/fps-probe (tauri.conf.json
-// bundle.linux.*.files). It needs only libc, so it still starts once Home's
-// Frame Rate setup gives it CAP_PERFMON. Other platforms need nothing here.
+// Tauri's beforeBundleCommand: builds the two helpers the shell's Linux
+// bundles ship next to the app (tauri.conf.json bundle.linux.*.files):
+//   /usr/lib/loadout/fps-probe   the small frame-rate probe. It needs only
+//     libc, so it still starts once Home's Frame Rate setup gives it
+//     CAP_PERFMON.
+//   /usr/lib/loadout/grokhub-hub the headless tools (--oauth, --doctor,
+//     --mcp-self, --mcp-desktop, --mcp-cua, --askpass). The app starts the
+//     sudo askpass server and the Cua gate with it, and finds it at
+//     ../lib/loadout/ from the app binary (src-tauri/src/episode.rs).
+// Other platforms need nothing here.
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 if (process.platform === "linux") {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-  execFileSync(
-    "cargo",
-    [
-      "build",
-      "--release",
-      "--locked",
-      "-p",
-      "grokhub-fps-probe",
-      "--target-dir",
-      path.join(root, "target", "fps-probe"),
-    ],
-    { cwd: root, stdio: "inherit" },
-  );
+  for (const [pkg, dir] of [
+    ["grokhub-fps-probe", "fps-probe"],
+    ["grokhub-hub", "hub"],
+  ]) {
+    execFileSync(
+      "cargo",
+      [
+        "build",
+        "--release",
+        "--locked",
+        "-p",
+        pkg,
+        "--target-dir",
+        path.join(root, "target", dir),
+      ],
+      { cwd: root, stdio: "inherit" },
+    );
+  }
 }

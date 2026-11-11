@@ -2,13 +2,13 @@
 //! xAI API key. The calls go to xAI's auth host only, with codes and tokens and
 //! no chats or memory, so each one passes the quiet egress guard (Offline only
 //! refuses it). Tokens live in the system keychain, never in a file, and never
-//! in the Grok CLI's or the cabin's files.
-
+//! in the Grok CLI's or the cabin's files. The desktop shell and
+//! `grokhub-hub --oauth` share this one store.
 use std::io::Read;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use grokhub_agent::harness as hx;
+use crate::harness as hx;
 use grokhub_core::http;
 use grokhub_core::{
     apply_profile, merge_refreshed, next_oauth_poll_secs, parse_device_start, parse_poll_result,
@@ -40,7 +40,7 @@ pub trait Store: Sync {
 pub struct Keychain;
 
 fn entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(crate::credential::SERVICE, ACCOUNT).map_err(keychain_message)
+    keyring::Entry::new(grokhub_core::brand::INTERNAL_ID, ACCOUNT).map_err(keychain_message)
 }
 
 fn keychain_message(err: keyring::Error) -> String {
@@ -155,10 +155,7 @@ fn agent() -> http::Agent {
 }
 
 fn guard(url: &str) -> Result<(), String> {
-    hx::guard_quiet(
-        &grokhub_agent::perm::config_dir(),
-        &hx::EgressReq::new(url, &[]),
-    )
+    hx::guard_quiet(&crate::perm::config_dir(), &hx::EgressReq::new(url, &[]))
 }
 
 fn read_json(resp: http::Response) -> Result<Value, String> {
@@ -175,7 +172,7 @@ fn get_json(url: &str, bearer: Option<&str>) -> Result<Value, String> {
     let mut call = agent()
         .get(url)
         .header("accept", "application/json")
-        .header("user-agent", grokhub_agent::USER_AGENT);
+        .header("user-agent", crate::USER_AGENT);
     if let Some(token) = bearer {
         call = call.header("authorization", &format!("Bearer {token}"));
     }
@@ -194,7 +191,7 @@ fn post_form(url: &str, pairs: &[(&str, &str)]) -> Result<(bool, Value), String>
         .post(url)
         .header("content-type", "application/x-www-form-urlencoded")
         .header("accept", "application/json")
-        .header("user-agent", grokhub_agent::USER_AGENT)
+        .header("user-agent", crate::USER_AGENT)
         .send_string(&body)
     {
         Ok(resp) => Ok((true, read_json(resp)?)),
@@ -517,14 +514,14 @@ pub(crate) mod tests {
         Base(())
     }
 
-    fn config(name: &str) -> (std::path::PathBuf, grokhub_agent::perm::ConfigGuard) {
+    fn config(name: &str) -> (std::path::PathBuf, crate::perm::ConfigGuard) {
         let dir = std::env::temp_dir().join(format!(
             "grokhub-shell-oauth-{name}-{}-{}",
             std::process::id(),
             grokhub_core::now_ms()
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        let guard = grokhub_agent::perm::ConfigGuard::set(&dir);
+        let guard = crate::perm::ConfigGuard::set(&dir);
         (dir, guard)
     }
 
