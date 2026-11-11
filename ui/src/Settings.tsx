@@ -26,6 +26,7 @@ import { Interests } from "./Interests";
 import { AiModels } from "./AiModels";
 import { LocalAi } from "./LocalAi";
 import { Permissions } from "./Permissions";
+import { PcHelpers } from "./PcHelpers";
 import { Personality } from "./Personality";
 import { Playbooks } from "./Playbooks";
 import { Learned } from "./Learned";
@@ -277,6 +278,7 @@ export function Settings({
             {section === "privacy" && <Learned />}
             {section === "background" && <Background />}
             {section === "autoSetup" && <AutoSetupPage />}
+            {section === "pcHelpers" && caps.autoSetup && <PcHelpers />}
             {section === "code" && caps.code && <CodeSettings />}
             {section === "pulse" && caps.pulse && <Interests />}
             {section === "localAi" && caps.localAi && <LocalAi />}

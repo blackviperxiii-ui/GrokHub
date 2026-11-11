@@ -5,6 +5,7 @@
 pub mod action_mode;
 pub mod adult_guard;
 pub mod amr;
+pub mod app_json;
 pub mod app_lock;
 pub mod appearance;
 pub mod attach;

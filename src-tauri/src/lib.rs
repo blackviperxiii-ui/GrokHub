@@ -32,6 +32,8 @@ pub mod export;
 pub mod game_companion;
 pub mod goals;
 mod helper_asks;
+#[cfg(desktop)]
+mod helper_loop;
 pub mod history;
 pub mod home;
 #[cfg(desktop)]
@@ -58,6 +60,7 @@ pub mod onboard;
 pub mod opener;
 #[cfg(desktop)]
 mod os_extras;
+pub mod pc_helpers;
 pub mod permissions;
 pub mod personality;
 pub mod playbooks;
@@ -3136,6 +3139,42 @@ fn forget_all_devices(web: State<'_, Arc<remote::WebAccess>>) -> remote_devices:
     web.forget_all()
 }
 
+/// Settings → Your PC → PC helpers: the wellbeing and focus switches.
+#[tauri::command]
+async fn get_pc_helpers(state: State<'_, ShellState>) -> Result<pc_helpers::PcHelpers, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || pc_helpers::read(&dir)).await
+}
+
+/// Turn one PC helper switch on or off (`focusHelp`, `windDown`, `rhythm`,
+/// `rhythmGames`).
+#[tauri::command]
+async fn set_pc_helper(
+    state: State<'_, ShellState>,
+    key: String,
+    on: bool,
+) -> Result<pc_helpers::PcHelpers, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || pc_helpers::set_switch(&dir, &key, on)).await?
+}
+
+/// Wind-down's idle time, one of the offered choices.
+#[tauri::command]
+async fn set_pc_auto_sleep(
+    state: State<'_, ShellState>,
+    minutes: u32,
+) -> Result<pc_helpers::PcHelpers, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || pc_helpers::set_auto_sleep(&dir, minutes)).await?
+}
+
+/// Forget the learned daily rhythm.
+#[tauri::command]
+async fn forget_pc_rhythm(state: State<'_, ShellState>) -> Result<pc_helpers::PcHelpers, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || pc_helpers::forget_rhythm(&dir)).await?
+}
+
 /// Settings → Behavior: the tray, the composer and the limits on scheduled work.
 #[tauri::command]
 fn get_behavior(state: State<'_, ShellState>) -> settings::BehaviorView {
@@ -4051,6 +4090,12 @@ pub fn run() {
             // The internet log, when it's on and the cabin isn't running.
             #[cfg(desktop)]
             net_watch::start(app.state::<ShellState>().config_dir.clone());
+            // The wellbeing helpers' minute tick, while the cabin is closed.
+            #[cfg(desktop)]
+            helper_loop::start(
+                app.state::<ShellState>().config_dir.clone(),
+                app.handle().clone(),
+            );
             // The Workboard's local tidy, while the cabin is closed. No model.
             #[cfg(desktop)]
             workboard::start_sweeper(app.state::<ShellState>().config_dir.clone());
@@ -4281,6 +4326,10 @@ pub fn run() {
             get_workboard_tidy,
             set_workboard_tidy,
             get_behavior,
+            get_pc_helpers,
+            set_pc_helper,
+            set_pc_auto_sleep,
+            forget_pc_rhythm,
             save_behavior,
             save_defaults,
             get_privacy,
