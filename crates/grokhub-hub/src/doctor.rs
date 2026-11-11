@@ -7,7 +7,7 @@ use std::path::Path;
 use std::time::Duration;
 
 /// The shell's keychain accounts (`src-tauri/src/credential.rs` and
-/// `oauth.rs`), under the service `grokhub_core::brand::INTERNAL_ID`.
+/// `grokhub_agent::xai_keychain`), under the service `grokhub_core::brand::INTERNAL_ID`.
 pub const SHELL_KEY_ACCOUNT: &str = "shell-console-key";
 pub const SHELL_SIGN_IN_ACCOUNT: &str = "shell-xai-oauth";
 
@@ -200,9 +200,6 @@ mod tests {
             "pub const ACCOUNT: &str = \"{SHELL_KEY_ACCOUNT}\";"
         )));
         assert!(cred.contains("pub const SERVICE: &str = grokhub_core::brand::INTERNAL_ID;"));
-        let oauth = include_str!("../../../src-tauri/src/oauth.rs");
-        assert!(oauth.contains(&format!(
-            "pub const ACCOUNT: &str = \"{SHELL_SIGN_IN_ACCOUNT}\";"
-        )));
+        assert_eq!(grokhub_agent::xai_keychain::ACCOUNT, SHELL_SIGN_IN_ACCOUNT);
     }
 }

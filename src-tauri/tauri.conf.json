@@ -39,10 +39,16 @@
     "targets": ["deb", "appimage", "nsis", "dmg", "app"],
     "linux": {
       "appimage": {
-        "files": { "/usr/lib/loadout/fps-probe": "../target/fps-probe/release/loadout-fps-probe" }
+        "files": {
+          "/usr/lib/loadout/fps-probe": "../target/fps-probe/release/loadout-fps-probe",
+          "/usr/lib/loadout/grokhub-hub": "../target/hub/release/grokhub-hub"
+        }
       },
       "deb": {
-        "files": { "/usr/lib/loadout/fps-probe": "../target/fps-probe/release/loadout-fps-probe" }
+        "files": {
+          "/usr/lib/loadout/fps-probe": "../target/fps-probe/release/loadout-fps-probe",
+          "/usr/lib/loadout/grokhub-hub": "../target/hub/release/grokhub-hub"
+        }
       }
     },
     "icon": [
