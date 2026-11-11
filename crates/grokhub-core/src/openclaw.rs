@@ -39,24 +39,35 @@ pub fn clip_import(s: &str, max: usize) -> String {
     format!("{}… [truncated {} chars]", clipped, chars - max)
 }
 
-pub fn import_memory_file(name: &str, content: &str) -> Option<(String, String)> {
+/// Whether `name` is one of the workspace's own files, in any letter case.
+pub fn is_core(name: &str) -> bool {
+    OPENCLAW_CORE.iter().any(|c| c.eq_ignore_ascii_case(name))
+}
+
+/// The memory file a workspace file goes to, from its name alone, so a
+/// caller can decide before it reads the file. `None`: it is not imported.
+pub fn import_dest(name: &str) -> Option<&'static str> {
     let n = name.rsplit('/').next().unwrap_or(name);
-    if !OPENCLAW_CORE.iter().any(|c| c.eq_ignore_ascii_case(n)) && !n.ends_with(".md") {
+    if !is_core(n) && !n.ends_with(".md") {
         return None;
     }
     if n.eq_ignore_ascii_case("TOOLS.md") {
         return None;
     }
-    if !is_plain_text(content) {
-        return None;
-    }
-    let dest = if n.eq_ignore_ascii_case("SOUL.md") {
+    Some(if n.eq_ignore_ascii_case("SOUL.md") {
         "SOUL.md"
     } else if n.eq_ignore_ascii_case("USER.md") {
         "USER.md"
     } else {
         "MEMORY.md"
-    };
+    })
+}
+
+pub fn import_memory_file(name: &str, content: &str) -> Option<(String, String)> {
+    let dest = import_dest(name)?;
+    if !is_plain_text(content) {
+        return None;
+    }
     Some((dest.into(), clip_import(content.trim(), 8_000)))
 }
 
@@ -103,5 +114,25 @@ mod tests {
             "import must not clobber MEMORY.md with the last readdir file"
         );
         assert_eq!(merge_imported_memory("", "notes", "MEMORY.md"), "notes");
+    }
+
+    #[test]
+    fn the_name_alone_says_where_a_file_goes() {
+        assert_eq!(import_dest("SOUL.md"), Some("SOUL.md"));
+        assert_eq!(import_dest("soul.md"), Some("SOUL.md"));
+        assert_eq!(import_dest("USER.md"), Some("USER.md"));
+        assert_eq!(import_dest("AGENTS.md"), Some("MEMORY.md"));
+        assert_eq!(import_dest("notes/habits.md"), Some("MEMORY.md"));
+        assert_eq!(import_dest("TOOLS.md"), None);
+        assert_eq!(import_dest("export.log"), None);
+        assert_eq!(import_dest("state.sqlite"), None);
+        assert!(is_core("Soul.md"));
+        assert!(!is_core("habits.md"));
+        // The content check is unchanged: a name that passes still needs plain text.
+        assert_eq!(
+            import_memory_file("habits.md", "Reads before bed.\n"),
+            Some(("MEMORY.md".to_string(), "Reads before bed.".to_string()))
+        );
+        assert_eq!(import_memory_file("export.log", "plain"), None);
     }
 }

@@ -107,6 +107,41 @@ fn a_file_with_real_words_keeps_them_and_gets_the_new_lines_below() {
 }
 
 #[test]
+fn a_line_already_in_the_file_is_not_added_again() {
+    let tone = Answers {
+        tone: "friendly".into(),
+        ..Answers::default()
+    };
+    let own = Existing {
+        soul: "- Dry, formal, no jokes.\n".into(),
+        ..seeds()
+    };
+    let once = drafts(&tone, &own, "2026-01-02");
+    assert_eq!(
+        once.soul,
+        "- Dry, formal, no jokes.\n\n## From get to know you\n\n\
+         - Tone: friendly. Warm, plain words and a little encouragement.\n"
+    );
+    // The same answers over the saved file: nothing is added a second time.
+    let saved = Existing {
+        soul: once.soul.clone(),
+        ..seeds()
+    };
+    assert_eq!(drafts(&tone, &saved, "2026-01-02").soul, once.soul);
+    // A new answer still lands, without the line that is already there.
+    let more = Answers {
+        soul_notes: "Never use emoji".into(),
+        ..tone
+    };
+    assert_eq!(
+        drafts(&more, &saved, "2026-01-02").soul,
+        "- Dry, formal, no jokes.\n\n## From get to know you\n\n\
+         - Tone: friendly. Warm, plain words and a little encouragement.\n\n\
+         ## From get to know you\n\n- Always / never: Never use emoji\n"
+    );
+}
+
+#[test]
 fn emails_numbers_and_secrets_are_masked_and_lines_stay_single() {
     assert_eq!(clean("  write to sam@example.com  "), "write to [email]");
     assert_eq!(clean("key sk-abcdefghijklmnopqrstuv"), "key [redacted]");

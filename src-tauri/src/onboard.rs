@@ -50,7 +50,7 @@ pub struct Reply {
     /// An OpenClaw or Hermes workspace is on this computer.
     pub openclaw: bool,
     pub saved: Option<Saved>,
-    /// Why the last act did nothing.
+    /// What the last act could not do, or left out, and why.
     pub note: Option<String>,
 }
 
@@ -71,19 +71,36 @@ pub fn act(
             onboard::keep(config_dir, step, &answers)?;
         }
         Act::Draft { answers } => {
-            onboard::keep(config_dir, Step::Review, &answers)?;
+            // The step is kept so a quit resumes at Review. /import asks for
+            // the drafts over a stage that is not waiting: nothing to resume,
+            // so the progress file is left as it is.
+            if onboard::pending(config_dir) {
+                onboard::keep(config_dir, Step::Review, &answers)?;
+            }
             drafts = Some(onboard::draft(config_dir, &answers, now_ms));
+            note = too_big(&onboard::too_big(config_dir), "Save leaves it alone.");
         }
         Act::Openclaw { drafts: base } => {
-            match home.and_then(|h| onboard::openclaw_preview(h, &base)) {
-                Some(d) => drafts = Some(d),
+            let held = too_big(&onboard::too_big(config_dir), "Save leaves it alone.");
+            match home.and_then(|h| onboard::openclaw_import(h, &base)) {
+                Some(import) => {
+                    drafts = Some(import.drafts);
+                    note = match (held, import.note) {
+                        (Some(a), Some(b)) => Some(format!("{a} {b}")),
+                        (a, b) => a.or(b),
+                    };
+                }
                 None => {
                     note = Some("No OpenClaw or Hermes workspace on this computer.".into());
                     drafts = Some(base);
                 }
             }
         }
-        Act::Save { drafts: d } => saved = Some(onboard::commit(config_dir, &d, now_ms)?),
+        Act::Save { drafts: d } => {
+            let done = onboard::commit(config_dir, &d, now_ms)?;
+            note = too_big(&done.skipped, "it was left alone.");
+            saved = Some(done);
+        }
         Act::Skip => {
             onboard::skip(config_dir, now_ms)?;
         }
@@ -93,7 +110,10 @@ pub fn act(
     }
     let p = onboard::load(config_dir);
     let mut answers = p.answers;
-    if answers.tone.is_empty() && p.stage == Stage::Pending {
+    // Up to the soul step an empty tone means "not asked yet"; past it, the
+    // person cleared it, and it stays cleared.
+    let before_soul = matches!(p.step, Step::Welcome | Step::About | Step::Soul);
+    if answers.tone.is_empty() && p.stage == Stage::Pending && before_soul {
         answers.tone = tone_for_personality(personality).to_string();
     }
     Ok(Reply {
@@ -107,6 +127,15 @@ pub fn act(
         saved,
         note,
     })
+}
+
+/// One sentence per file that is over the size cap, or `None` without one.
+fn too_big(names: &[String], then: &str) -> Option<String> {
+    let lines: Vec<String> = names
+        .iter()
+        .map(|name| format!("{name} is too big to change here; {then}"))
+        .collect();
+    (!lines.is_empty()).then(|| lines.join(" "))
 }
 
 #[cfg(test)]

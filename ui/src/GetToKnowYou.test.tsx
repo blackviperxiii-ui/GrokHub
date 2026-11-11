@@ -58,6 +58,7 @@ function shell(over: Partial<OnboardReply> = {}) {
           step: "done",
           saved: {
             files: ["USER.md", "SOUL.md", "MEMORY.md"],
+            skipped: [],
             rows: over.amr === false ? 0 : 2,
             amr: over.amr ?? true,
           },
@@ -222,5 +223,128 @@ describe("OnboardStage", () => {
     await userEvent.click(screen.getByRole("button", { name: "Remove: Call me Sam" }));
     expect(screen.queryByRole("button", { name: "Remove: Call me Sam" })).toBeNull();
     expect(acts()).not.toContain("save");
+  });
+  describe("/import over a finished stage", () => {
+    const DONE: OnboardReply = { ...BASE, pending: false, stage: "done", step: "done", answers: EMPTY_ANSWERS, openclaw: true };
+    const withNotes: Drafts = { ...DRAFTS, user: `${DRAFTS.user}\n## From OpenClaw USER.md\n\nLikes tea.\n` };
+
+    /** The shell after Get to know you was finished: nothing is pending. */
+    function finished(over: Partial<Record<OnboardAct["act"], () => Promise<OnboardReply>>> = {}) {
+      mock.onboard.mockImplementation(async (act) => {
+        const own = over[act.act];
+        if (own) return own();
+        switch (act.act) {
+          case "draft":
+            return { ...DONE, drafts: DRAFTS };
+          case "openclaw":
+            return { ...DONE, drafts: withNotes };
+          case "save":
+            return {
+              ...DONE,
+              pending: true,
+              saved: { files: ["USER.md"], skipped: [], rows: 0, amr: true },
+            };
+          default:
+            return DONE;
+        }
+      });
+    }
+
+    async function open() {
+      render(<OnboardStage after />);
+      await waitFor(() => expect(acts()).toEqual(["view"]));
+      expect(screen.queryByRole("dialog")).toBeNull();
+      window.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail: { import: true } }));
+    }
+
+    it("asks for the files as they are: the stage is not opened again and no answer is sent", async () => {
+      finished();
+      await open();
+      await waitFor(() => expect(acts()).toContain("openclaw"));
+      expect(acts()).toEqual(["view", "draft", "openclaw"]);
+      expect(mock.onboard).toHaveBeenCalledWith({ act: "draft", answers: EMPTY_ANSWERS });
+      expect(mock.onboard).toHaveBeenCalledWith({ act: "openclaw", drafts: DRAFTS });
+      expect(await screen.findByRole("dialog", { name: "Check what I'll save" })).toBeInTheDocument();
+      expect(screen.getByLabelText("About you (USER.md)")).toHaveValue(withNotes.user);
+      // The notes are in, so nothing offers to add them again; there is no
+      // step to go back to and nothing to skip.
+      expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["Remove", "Remove", "Cancel", "Save"]);
+    });
+
+    it("Escape closes it and tells the shell nothing", async () => {
+      finished();
+      await open();
+      expect(await screen.findByLabelText("About you (USER.md)")).toBeInTheDocument();
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(acts()).toEqual(["view", "draft", "openclaw"]);
+    });
+
+    it("Save shows what was saved, and Done closes it", async () => {
+      finished();
+      await open();
+      await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+      expect(mock.onboard).toHaveBeenLastCalledWith({ act: "save", drafts: withNotes });
+      expect(await screen.findByText("Saved USER.md. Edit any of it later in Settings → Personal.")).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Done" }));
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    it("shows the shell's note under the drafts", async () => {
+      const note = "The OpenClaw notes are already in these files; nothing was added.";
+      finished({ openclaw: async () => ({ ...DONE, drafts: DRAFTS, note }) });
+      await open();
+      expect(await screen.findByText(note)).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Add from OpenClaw" })).toBeNull();
+    });
+
+    it("a failure says why in the window instead of showing nothing", async () => {
+      finished({ draft: () => Promise.reject("Couldn't read your notes folder.") });
+      await open();
+      expect(await screen.findByText("Couldn't read your notes folder.")).toBeInTheDocument();
+      expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["Cancel"]);
+      await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(acts()).toEqual(["view", "draft"]);
+    });
+  });
+
+  it("Add from OpenClaw is not offered again once it added the notes", async () => {
+    shell({ step: "review", openclaw: true });
+    const withNotes: Drafts = { ...DRAFTS, soul: `${DRAFTS.soul}\n## From OpenClaw SOUL.md\n\nBe calm.\n` };
+    const plain = mock.onboard.getMockImplementation()!;
+    mock.onboard.mockImplementation(async (act) =>
+      act.act === "openclaw" ? { ...BASE, step: "review", openclaw: true, drafts: withNotes } : plain(act),
+    );
+    render(<OnboardStage after />);
+    await userEvent.click(await screen.findByRole("button", { name: "Add from OpenClaw" }));
+    await waitFor(() => expect(screen.getByLabelText("How I sound (SOUL.md)")).toHaveValue(withNotes.soul));
+    expect(screen.queryByRole("button", { name: "Add from OpenClaw" })).toBeNull();
+    // Back and forward drafts again from the answers, without the notes.
+    await userEvent.click(screen.getByRole("button", { name: "Back" }));
+    await userEvent.click(screen.getByRole("button", { name: "Review" }));
+    expect(await screen.findByRole("button", { name: "Add from OpenClaw" })).toBeInTheDocument();
+    expect(screen.getByLabelText("How I sound (SOUL.md)")).toHaveValue(DRAFTS.soul);
+  });
+
+  it("a file too big to change is named on the Saved screen", async () => {
+    shell({ step: "review" });
+    const plain = mock.onboard.getMockImplementation()!;
+    const note = "MEMORY.md is too big to change here; it was left alone.";
+    mock.onboard.mockImplementation(async (act) =>
+      act.act === "save"
+        ? {
+            ...BASE,
+            stage: "done",
+            step: "done",
+            saved: { files: ["USER.md"], skipped: ["MEMORY.md"], rows: 0, amr: true },
+            note,
+          }
+        : plain(act),
+    );
+    render(<OnboardStage after />);
+    await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Saved USER.md. Edit any of it later in Settings → Personal.")).toBeInTheDocument();
+    expect(screen.getByText(note)).toBeInTheDocument();
   });
 });

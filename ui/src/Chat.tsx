@@ -71,7 +71,7 @@ import { needsSettings } from "./ui";
 import { SavedCard } from "./SavedCard";
 import { settingAsk } from "./autoSetupApi";
 import { Episode } from "./Episode";
-import { OPEN_EVENT } from "./onboardApi";
+import { openImport } from "./onboardApi";
 
 export type Item =
   | { kind: "user"; text: string }
@@ -1100,9 +1100,12 @@ export function Chat({
           setItems((now) => withNotice(now, { kind: "slash", command, text: `${command} works on your computer.` }));
         }
         break;
-      case "import":
-        window.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail: { import: true } }));
+      case "import": {
+        // Review opens with the workspace's notes; with none to read, the chat says so.
+        const text = await openImport();
+        if (text !== null) setItems((now) => withNotice(now, { kind: "slash", command, text }));
         break;
+      }
       case "notice":
         setItems((now) => withNotice(now, { kind: "slash", command, text: effect.text }));
         break;

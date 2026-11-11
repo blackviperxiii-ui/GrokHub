@@ -299,22 +299,25 @@ fn auto_setup(
 }
 
 /// Get to know you: the stage after Auto Setup's first run, and Settings →
-/// Personal → Get to know you.
+/// Personal → Get to know you. It reads the memory files and an OpenClaw
+/// workspace and Save writes them, so it runs off the main thread.
 #[tauri::command]
-fn onboard_identity(
+async fn onboard_identity(
     state: State<'_, ShellState>,
     act: onboard::Act,
 ) -> Result<onboard::Reply, String> {
     capabilities::needs(capabilities::current().auto_setup, "Get to know you")?;
     let personality = current(&state).personality;
-    let home = grokhub_core::paths::user_home();
-    onboard::act(
-        &grokhub_agent::perm::config_dir(),
-        home.as_deref(),
-        &personality,
-        act,
-        grokhub_core::now_ms(),
-    )
+    off_main(move || {
+        onboard::act(
+            &grokhub_agent::perm::config_dir(),
+            grokhub_core::paths::user_home().as_deref(),
+            &personality,
+            act,
+            grokhub_core::now_ms(),
+        )
+    })
+    .await?
 }
 
 /// The window's zoom follows Settings → Appearance → Text size.
@@ -5163,6 +5166,22 @@ mod command_tests {
         assert!(
             !src.contains("#[tauri::command(async)]\nfn get_settings("),
             "a sync body on an async worker panics in zbus"
+        );
+    }
+
+    #[test]
+    fn get_to_know_you_runs_on_the_blocking_pool() {
+        // It reads an OpenClaw workspace and writes three files and the rows
+        // store: disk work that must not hold up the window.
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        let body = src
+            .split(concat!("async fn ", "onboard_identity("))
+            .nth(1)
+            .and_then(|s| s.split("\n}\n").next())
+            .expect("onboard_identity is an async fn");
+        assert!(
+            body.contains("off_main(move || {\n        onboard::act("),
+            "onboard::act must run through off_main: {body}"
         );
     }
 

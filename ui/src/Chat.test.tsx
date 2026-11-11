@@ -463,6 +463,18 @@ describe("Chat", () => {
     expect(screen.queryByRole("button", { name: "Show in folder" })).toBeNull();
   });
 
+  it("/import with no OpenClaw workspace to read says so in the chat and opens nothing", async () => {
+    api.runSlash.mockReset().mockResolvedValue({ kind: "import" });
+    const opened = vi.fn();
+    window.addEventListener("onboard:open", opened);
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "/import{Enter}");
+    expect(await screen.findByText("No OpenClaw or Hermes workspace on this computer.")).toBeInTheDocument();
+    expect(opened).not.toHaveBeenCalled();
+    window.removeEventListener("onboard:open", opened);
+    expect(api.sendChat).not.toHaveBeenCalled();
+  });
+
   it("sends the text and streams its own conversation's reply", async () => {
     const finish = holdTurn();
     render(<Chat onOpenSettings={() => {}} />);

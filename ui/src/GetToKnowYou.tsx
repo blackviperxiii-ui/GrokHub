@@ -46,8 +46,12 @@ export function OnboardStage({ after }: { after: boolean }) {
   const [answers, setAnswers] = useState<Answers>(EMPTY_ANSWERS);
   const [drafts, setDrafts] = useState<Drafts | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // /import opened Review over a stage that is not waiting.
+  const [importing, setImporting] = useState(false);
+  // This Review's drafts already hold the OpenClaw notes.
+  const [added, setAdded] = useState(false);
   const box = useRef<HTMLDivElement>(null);
-  const shown = after && reply?.pending === true;
+  const shown = after && (importing || reply?.pending === true);
 
   const run = useCallback(async (a: OnboardAct) => {
     try {
@@ -56,6 +60,8 @@ export function OnboardStage({ after }: { after: boolean }) {
       if (!next) return null;
       setReply(next);
       if (next.drafts) setDrafts(next.drafts);
+      if (a.act === "draft") setAdded(false);
+      if (a.act === "openclaw" && next.drafts) setAdded(true);
       return next;
     } catch (err) {
       setError(String(err));
@@ -66,16 +72,13 @@ export function OnboardStage({ after }: { after: boolean }) {
   /** Show what the shell said: its step and answers, and Review's drafts. */
   const take = useCallback((next: OnboardReply | null) => {
     if (!next) return;
+    setImporting(false);
+    setAdded(false);
     setReply(next);
     setStep(next.step === "done" ? "welcome" : next.step);
     setAnswers({ ...EMPTY_ANSWERS, ...next.answers });
-    if (next.step === "review") {
-      onboard({ act: "draft", answers: next.answers }).then(
-        (r) => r?.drafts && setDrafts(r.drafts),
-        (err) => setError(String(err)),
-      );
-    }
-  }, []);
+    if (next.step === "review") void run({ act: "draft", answers: next.answers });
+  }, [run]);
 
   useEffect(() => {
     if (!after) return;
@@ -85,22 +88,23 @@ export function OnboardStage({ after }: { after: boolean }) {
   useEffect(() => {
     const onOpen = (e: Event) => {
       const asked = (e as CustomEvent<{ import?: boolean } | undefined>).detail?.import === true;
-      const reopened = onboard({ act: "reopen" });
       if (!asked) {
-        reopened.then(take, (err) => setError(String(err)));
+        onboard({ act: "reopen" }).then(take, (err) => setError(String(err)));
         return;
       }
       // /import: straight to Review with the OpenClaw notes added, never saved
-      // until the person accepts.
-      reopened
-        .then(async (first) => {
-          if (!first) return;
-          setReply(first);
-          setStep("review");
-          const a = { ...EMPTY_ANSWERS, ...first.answers };
-          setAnswers(a);
-          const base = await onboard({ act: "draft", answers: a });
-          if (base?.drafts) await run({ act: "openclaw", drafts: base.drafts });
+      // until the person accepts. The stage is not opened again and no answer
+      // is sent, so the drafts are the files as they are plus the notes.
+      setImporting(true);
+      setStep("review");
+      setAnswers(EMPTY_ANSWERS);
+      setDrafts(null);
+      setAdded(false);
+      setError(null);
+      onboard({ act: "draft", answers: EMPTY_ANSWERS })
+        .then((base) => {
+          if (base?.drafts) return run({ act: "openclaw", drafts: base.drafts });
+          setImporting(false);
         })
         .catch((err) => setError(String(err)));
     };
@@ -114,7 +118,7 @@ export function OnboardStage({ after }: { after: boolean }) {
   }, [shown, step]);
   useModalFocus(box, shown);
 
-  if (!shown || !reply) return null;
+  if (!shown) return null;
 
   const go = (to: Step) => {
     setStep(to);
@@ -123,11 +127,18 @@ export function OnboardStage({ after }: { after: boolean }) {
   };
   const skip = () => {
     setStep("welcome");
+    if (importing) {
+      // Nothing was opened, so there is nothing to skip: only this window closes.
+      setImporting(false);
+      setDrafts(null);
+      setError(null);
+      return;
+    }
     void run({ act: "skip" });
   };
   const set = (key: keyof Answers) => (value: string) => setAnswers((a) => ({ ...a, [key]: value }));
   const at = ORDER.indexOf(step);
-  const back = at > 1 && step !== "done" ? ORDER[at - 1] : null;
+  const back = at > 1 && step !== "done" && !importing ? ORDER[at - 1] : null;
   const next = ORDER[at + 1];
 
   let title: string;
@@ -191,24 +202,27 @@ export function OnboardStage({ after }: { after: boolean }) {
       body = drafts ? (
         <Review
           drafts={drafts}
-          amr={reply.amr}
-          openclaw={reply.openclaw}
-          note={reply.note}
+          amr={reply?.amr === true}
+          openclaw={reply?.openclaw === true && !added}
+          note={reply?.note ?? null}
           onChange={setDrafts}
           onImport={() => void run({ act: "openclaw", drafts })}
         />
       ) : (
-        <p className="note">Drafting…</p>
+        !error && <p className="note">Drafting…</p>
       );
       break;
     case "done": {
       title = "Saved";
-      const s = reply.saved;
+      const s = reply?.saved;
       const rows = s && s.rows > 0 ? ` and ${s.rows} Personal ${s.rows === 1 ? "row" : "rows"}` : "";
       body = (
-        <p>
-          {s && s.files.length > 0 ? `Saved ${s.files.join(", ")}${rows}.` : "Nothing changed."} {DONE_NOTE}
-        </p>
+        <>
+          <p>
+            {s && s.files.length > 0 ? `Saved ${s.files.join(", ")}${rows}.` : "Nothing changed."} {DONE_NOTE}
+          </p>
+          {reply?.note && <p className="note">{reply.note}</p>}
+        </>
       );
       break;
     }
@@ -238,7 +252,7 @@ export function OnboardStage({ after }: { after: boolean }) {
           )}
           {step !== "done" && (
             <button type="button" className="chip" onClick={skip}>
-              Skip for now
+              {importing ? "Cancel" : "Skip for now"}
             </button>
           )}
           {step === "welcome" && (
@@ -262,7 +276,13 @@ export function OnboardStage({ after }: { after: boolean }) {
             </button>
           )}
           {step === "done" && (
-            <button type="button" onClick={() => setReply(null)}>
+            <button
+              type="button"
+              onClick={() => {
+                setReply(null);
+                setImporting(false);
+              }}
+            >
               Done
             </button>
           )}

@@ -35,6 +35,8 @@ export interface Drafts {
 
 export interface Saved {
   files: string[];
+  /** Files over the size cap, which Save left alone. */
+  skipped: string[];
   rows: number;
   amr: boolean;
 }
@@ -60,8 +62,11 @@ export type OnboardAct =
   | { act: "skip" }
   | { act: "reopen" };
 
-/** Settings → Personal sends this so the stage opens again. */
+/** Settings → Personal sends this so the stage opens again. With
+ * `detail: { import: true }` it is /import: Review only, see `openImport`. */
 export const OPEN_EVENT = "onboard:open";
+
+export const NO_WORKSPACE = "No OpenClaw or Hermes workspace on this computer.";
 
 export const EMPTY_ANSWERS: Answers = {
   name: "",
@@ -81,4 +86,18 @@ export const EMPTY_ANSWERS: Answers = {
 export async function onboard(act: OnboardAct): Promise<OnboardReply | null> {
   if (!inShell()) return null;
   return call<OnboardReply>("onboard_identity", { act });
+}
+
+/** /import: opens Review with the workspace's notes added. When there is no
+ * workspace to read, or the shell refuses, nothing opens and nothing changes:
+ * the line to show in the chat comes back instead. */
+export async function openImport(): Promise<string | null> {
+  try {
+    const seen = await onboard({ act: "view" });
+    if (!seen?.openclaw) return NO_WORKSPACE;
+  } catch (err) {
+    return String(err);
+  }
+  window.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail: { import: true } }));
+  return null;
 }

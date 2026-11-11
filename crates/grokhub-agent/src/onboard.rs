@@ -9,7 +9,10 @@ use grokhub_core::amr::PersonalGroup;
 use grokhub_core::onboard_identity::{
     self as oi, Answers, Drafts, Existing, Progress, Stage, Step,
 };
-use grokhub_core::openclaw::{default_openclaw_paths, import_memory_file, is_openclaw_workspace};
+use grokhub_core::openclaw::{
+    default_openclaw_paths, import_dest, import_memory_file, is_core, is_openclaw_workspace,
+    merge_imported_memory,
+};
 use serde::Serialize;
 
 /// The three files, in the order Review shows them.
@@ -18,12 +21,17 @@ pub const FILES: [&str; 3] = ["USER.md", "SOUL.md", "MEMORY.md"];
 /// Bigger than this is not a notes file; it is neither read nor replaced.
 const FILE_CAP: u64 = 1024 * 1024;
 
+/// The most workspace files one import reads.
+pub const IMPORT_MAX: usize = 64;
+
 /// What Save did.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Saved {
     /// The files whose text changed, by name.
     pub files: Vec<String>,
+    /// The files left alone because they are over the size cap.
+    pub skipped: Vec<String>,
     /// Personal rows added (0 with AMR off).
     pub rows: usize,
     pub amr: bool,
@@ -45,6 +53,21 @@ fn read_file(path: &Path) -> String {
         }
         _ => String::new(),
     }
+}
+
+fn over_cap(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() > FILE_CAP)
+}
+
+/// The files that are over the size cap, by name. Review shows them empty
+/// and Save leaves them alone, so the apps say so.
+pub fn too_big(config_dir: &Path) -> Vec<String> {
+    let dir = memory_dir(config_dir);
+    FILES
+        .iter()
+        .filter(|name| over_cap(&dir.join(name)))
+        .map(|name| (*name).to_string())
+        .collect()
 }
 
 /// The three files as they are now.
@@ -112,9 +135,20 @@ fn group(key: &str) -> Option<PersonalGroup> {
     })
 }
 
-/// Write one memory file: never through a link, the old text kept as
-/// `{name}.prev`, and only when the text changed. Returns whether it did.
-fn write_file(dir: &Path, name: &str, body: &str) -> Result<bool, String> {
+/// What [`write_file`] did with one file.
+#[derive(PartialEq, Eq)]
+enum Wrote {
+    Changed,
+    Same,
+    /// The file on disk is over the cap: its text was never read, so it is
+    /// not replaced.
+    TooBig,
+}
+
+/// Write one memory file: never through a link, never over a file too big
+/// to have been read, the old text kept as `{name}.prev`, and only when the
+/// text changed.
+fn write_file(dir: &Path, name: &str, body: &str) -> Result<Wrote, String> {
     let path = dir.join(name);
     if let Ok(meta) = std::fs::symlink_metadata(&path) {
         if meta.file_type().is_symlink() {
@@ -123,16 +157,19 @@ fn write_file(dir: &Path, name: &str, body: &str) -> Result<bool, String> {
             ));
         }
     }
+    if over_cap(&path) {
+        return Ok(Wrote::TooBig);
+    }
     let before = read_file(&path);
     if before == body {
-        return Ok(false);
+        return Ok(Wrote::Same);
     }
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     if path.exists() {
         let _ = std::fs::copy(&path, dir.join(format!("{name}.prev")));
     }
     grokhub_core::pulse_writer::write_atomic(&path, body)?;
-    Ok(true)
+    Ok(Wrote::Changed)
 }
 
 /// Save what the person reviewed: the three files always, and the Personal
@@ -142,9 +179,15 @@ pub fn commit(config_dir: &Path, drafts: &Drafts, now_ms: u64) -> Result<Saved, 
     let d = oi::reviewed(drafts);
     let dir = memory_dir(config_dir);
     let mut files = Vec::new();
+    let mut skipped = Vec::new();
     for (name, body) in FILES.iter().zip([&d.user, &d.soul, &d.memory]) {
-        if !body.trim().is_empty() && write_file(&dir, name, body)? {
-            files.push((*name).to_string());
+        if body.trim().is_empty() {
+            continue;
+        }
+        match write_file(&dir, name, body)? {
+            Wrote::Changed => files.push((*name).to_string()),
+            Wrote::TooBig => skipped.push((*name).to_string()),
+            Wrote::Same => {}
         }
     }
     let amr = crate::memory::amr_enabled_at(config_dir);
@@ -173,7 +216,12 @@ pub fn commit(config_dir: &Path, drafts: &Drafts, now_ms: u64) -> Result<Saved, 
         interests,
         now_ms,
     ));
-    Ok(Saved { files, rows, amr })
+    Ok(Saved {
+        files,
+        skipped,
+        rows,
+        amr,
+    })
 }
 
 /// Skip for now: the stage stays closed until Settings opens it again.
@@ -216,40 +264,126 @@ pub fn openclaw_workspace(home: &Path) -> Option<PathBuf> {
         })
 }
 
-/// `drafts` with an OpenClaw workspace's files added for Review: each lands
-/// under its own heading below what is there, so nothing is replaced.
-/// `TOOLS.md` and files with secrets stay out. `None` without a workspace.
+/// What an import added, and what it could not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Import {
+    pub drafts: Drafts,
+    /// What was left out and why, for the person.
+    pub note: Option<String>,
+}
+
+/// `drafts` with an OpenClaw workspace's files added for Review. `None`
+/// without a workspace. The cabin shows the drafts; see [`openclaw_import`].
 pub fn openclaw_preview(home: &Path, drafts: &Drafts) -> Option<Drafts> {
+    openclaw_import(home, drafts).map(|i| i.drafts)
+}
+
+/// Whether `slot` already holds `block` as whole lines.
+fn has_block(slot: &str, block: &str) -> bool {
+    let (slot, block) = (slot.trim(), block.trim());
+    let line_end = |at: usize| slot.as_bytes().get(at).is_none_or(|b| *b == b'\n');
+    slot.match_indices(block)
+        .any(|(at, _)| (at == 0 || slot.as_bytes()[at - 1] == b'\n') && line_end(at + block.len()))
+}
+
+/// `drafts` with an OpenClaw workspace's files added for Review: each lands
+/// under its own heading below what is there, so nothing is replaced, and a
+/// block that is already there (as read, or as Save wrote it) is not added
+/// again. `TOOLS.md` and files with secrets stay out. Only files whose name
+/// can be imported are read, at most [`IMPORT_MAX`] of them (the workspace's
+/// own files first), and a file that would take its slot past the size cap
+/// is left out. `None` without a workspace.
+pub fn openclaw_import(home: &Path, drafts: &Drafts) -> Option<Import> {
     let root = openclaw_workspace(home)?;
     let mut names: Vec<(String, PathBuf)> = std::fs::read_dir(&root)
         .ok()?
         .flatten()
         .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
         .map(|e| (e.file_name().to_string_lossy().into_owned(), e.path()))
+        .filter(|(name, _)| import_dest(name).is_some())
         .collect();
     names.sort();
+    let found = names.len();
+    let mut room = IMPORT_MAX.saturating_sub(names.iter().filter(|(n, _)| is_core(n)).count());
+    names.retain(|(name, _)| {
+        is_core(name) || {
+            let fits = room > 0;
+            room = room.saturating_sub(1);
+            fits
+        }
+    });
+    names.truncate(IMPORT_MAX);
     let mut out = drafts.clone();
-    for (name, path) in names {
-        let Some((dest, content)) = import_memory_file(&name, &read_file(&path)) else {
+    let mut added = 0;
+    let mut already = 0;
+    let mut full: Vec<(&str, usize)> = Vec::new();
+    for (name, path) in &names {
+        let Some((dest, content)) = import_memory_file(name, &read_file(path)) else {
             continue;
         };
+        if content.is_empty() {
+            continue;
+        }
         let heading = format!("From OpenClaw {name}");
-        let (slot, title) = match dest.as_str() {
-            "USER.md" => (&mut out.user, "# User"),
-            "SOUL.md" => (&mut out.soul, "# Soul"),
-            _ => (&mut out.memory, "# Memory"),
+        let (slot, title, file) = match dest.as_str() {
+            "USER.md" => (&mut out.user, "# User", FILES[0]),
+            "SOUL.md" => (&mut out.soul, "# Soul", FILES[1]),
+            _ => (&mut out.memory, "# Memory", FILES[2]),
         };
+        let block = merge_imported_memory("", &content, &heading);
+        let as_saved = oi::reviewed(&Drafts {
+            memory: block.clone(),
+            ..Drafts::default()
+        })
+        .memory;
+        if has_block(slot, &block) || has_block(slot, &as_saved) {
+            already += 1;
+            continue;
+        }
         let base = if oi::is_seed(slot) {
             title
         } else {
             slot.as_str()
         };
-        *slot = format!(
+        let next = format!(
             "{}\n",
-            grokhub_core::openclaw::merge_imported_memory(base, &content, &heading).trim_end()
+            merge_imported_memory(base, &content, &heading).trim_end()
         );
+        if next.len() as u64 > FILE_CAP {
+            match full.iter_mut().find(|(f, _)| *f == file) {
+                Some((_, n)) => *n += 1,
+                None => full.push((file, 1)),
+            }
+            continue;
+        }
+        *slot = next;
+        added += 1;
     }
-    Some(out)
+    let mut notes = Vec::new();
+    if found > names.len() {
+        notes.push(format!(
+            "Only the first {IMPORT_MAX} notes files were read; {} were left out.",
+            found - names.len()
+        ));
+    }
+    for (file, n) in full {
+        let files = match n {
+            1 => "1 file was".to_string(),
+            n => format!("{n} files were"),
+        };
+        notes.push(format!("{file} is nearly full; {files} left out."));
+    }
+    if notes.is_empty() && added == 0 {
+        notes.push(if already > 0 {
+            "The OpenClaw notes are already in these files; nothing was added.".to_string()
+        } else {
+            "The OpenClaw workspace has no notes to add.".to_string()
+        });
+    }
+    Some(Import {
+        drafts: out,
+        note: (!notes.is_empty()).then(|| notes.join(" ")),
+    })
 }
 
 #[cfg(test)]
