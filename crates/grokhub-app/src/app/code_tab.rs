@@ -135,10 +135,22 @@ pub(super) struct Loaded {
     pub(super) diff: Option<repo::Diff>,
 }
 
+/// Ends the test run or deploy in progress when the Code tab goes, which is
+/// when the cabin quits: no run outlives the cabin.
+#[derive(Default)]
+struct EndsRuns;
+
+impl Drop for EndsRuns {
+    fn drop(&mut self) {
+        runs::stop();
+    }
+}
+
 /// What the Code tab holds between frames.
 pub(super) struct CodeTab {
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
+    _ends_runs: EndsRuns,
     /// The workspace last loaded; a different project folder loads again.
     loaded_for: Option<PathBuf>,
     pub(super) loading: bool,
@@ -176,6 +188,7 @@ impl Default for CodeTab {
         Self {
             tx,
             rx,
+            _ends_runs: EndsRuns,
             loaded_for: None,
             loading: false,
             repo: None,

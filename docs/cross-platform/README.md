@@ -454,7 +454,8 @@ uses too; the shell wraps it in the `code_*` commands
   hook is passed over. The command on the confirm card is the git command
   without those switches. A rejected push is reported, never retried.
 - Stop, beside a running test or deploy, ends the run and everything it
-  started (`code_run_stop`). Quitting the app ends it too.
+  started (`code_run_stop`). Quitting the app ends it too. The cabin has no
+  Stop button; quitting the cabin ends the run.
 - Secrets. Only the names are saved (`code-secrets.json` in the config
   folder); the values live in the OS keychain and never come back to the
   window. A deploy gets them as environment variables and stops before it

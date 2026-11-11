@@ -53,6 +53,9 @@ pub struct Chunk {
 pub struct Chunker {
     pending: Vec<u8>,
     held: Vec<String>,
+    /// What has been shown so far ends inside a word, so a key prefix at the
+    /// start of the next piece is the middle of a name, not a key.
+    glued: bool,
 }
 
 fn utf8_safe_len(bytes: &[u8]) -> usize {
@@ -117,21 +120,47 @@ fn open_escape(hay: &[u8], cut: usize) -> Option<usize> {
     (at + len > cut || (!whole && at + len == hay.len())).then_some(at)
 }
 
+/// A character that joins a key prefix to the word before it. Keep in step
+/// with `grokhub_core::redact`.
+fn word_char(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '-' | '_' | '.')
+}
+
+/// The token patterns on one stretch of text. With `glued`, the text shown
+/// just before it ended inside a word, so a key prefix at its very start is
+/// the middle of a name.
+fn redact_words(text: &str, glued: bool) -> String {
+    if !glued {
+        return redact_secret_words(text);
+    }
+    // A `.` in front stands for that word. No pattern starts with one, so it
+    // comes back first and unchanged.
+    let shown = redact_secret_words(&format!(".{text}"));
+    shown.strip_prefix('.').unwrap_or(&shown).to_string()
+}
+
 /// The terminal's redaction: the project's own values, then the token
 /// patterns. A key prefix counts only at the start of a word, so
 /// `task-definitions.json` stays readable. Escape sequences (colours) are
 /// stepped over: a key right after one is still at the start of a word.
-fn redact_shown(text: &str, held: &[String]) -> String {
+/// `glued` says whether the piece shown before this one ended inside a word,
+/// and is set for the next piece.
+fn redact_shown(text: &str, held: &[String], glued: &mut bool) -> String {
     let text = redact_held_secrets(text, held);
     let mut out = String::with_capacity(text.len());
     let mut rest = text.as_str();
     while let Some(esc) = rest.find('\x1b') {
-        out.push_str(&redact_secret_words(&rest[..esc]));
+        out.push_str(&redact_words(&rest[..esc], *glued));
         let end = esc + escape_at(&rest.as_bytes()[esc..]).0;
         out.push_str(&rest[esc..end]);
         rest = &rest[end..];
+        *glued = false;
     }
-    out.push_str(&redact_secret_words(rest));
+    let tail = redact_words(rest, *glued);
+    if let Some(last) = tail.chars().next_back() {
+        *glued = word_char(last);
+    }
+    out.push_str(&tail);
     out
 }
 
@@ -148,12 +177,13 @@ impl Chunker {
         Self {
             pending: Vec::new(),
             held,
+            glued: false,
         }
     }
 
     fn take(&mut self, len: usize) -> String {
         let head: Vec<u8> = self.pending.drain(..len).collect();
-        redact_shown(&String::from_utf8_lossy(&head), &self.held)
+        redact_shown(&String::from_utf8_lossy(&head), &self.held, &mut self.glued)
     }
 
     /// Move `cut` back until it splits no project secret, no key prefix, no
@@ -245,7 +275,7 @@ mod desktop {
     use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
     use std::io::{Read, Write};
     use std::path::Path;
-    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
     use std::sync::mpsc::{channel, sync_channel, RecvTimeoutError, SyncSender, TrySendError};
     use std::sync::{Arc, Mutex, MutexGuard};
     use std::time::{Duration, Instant};
@@ -270,6 +300,8 @@ mod desktop {
         shell: Shell,
         /// Set once the end of the shell has been reported.
         ended: Arc<AtomicBool>,
+        /// Set once this terminal has been closed and its handles let go.
+        closed: Arc<AtomicBool>,
     }
 
     /// The one open terminal of the window, if any.
@@ -383,11 +415,27 @@ mod desktop {
         let ended = Arc::new(AtomicBool::new(false));
         let id = sessions.next.fetch_add(1, Ordering::SeqCst) + 1;
 
+        let closed = Arc::new(AtomicBool::new(false));
+        // How many bytes the reader has handed to the watcher below.
+        let read = Arc::new(AtomicU64::new(0));
         let (tx, rx) = channel::<Vec<u8>>();
+        let (handed, shut) = (Arc::clone(&read), Arc::clone(&closed));
         std::thread::spawn(move || {
             let mut buf = [0u8; 4096];
+            // Once the end has been reported nothing more goes to the window,
+            // but the output is still read, and dropped, until the terminal
+            // is closed: a job that outlived the shell is not left blocked in
+            // its write, and a pseudoconsole can close while it is drained.
+            let mut wanted = true;
             while let Ok(n) = reader.read(&mut buf) {
-                if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
+                if n == 0 {
+                    break;
+                }
+                if wanted {
+                    handed.fetch_add(n as u64, Ordering::SeqCst);
+                    wanted = tx.send(buf[..n].to_vec()).is_ok();
+                }
+                if !wanted && shut.load(Ordering::SeqCst) {
                     break;
                 }
             }
@@ -418,12 +466,17 @@ mod desktop {
                     emit(Chunk { id, text, exited });
                 }
             };
+            // How many of the reader's bytes have been shown.
+            let mut shown = 0u64;
             // The end is taken from the shell itself, not from the end of the
             // output: a job the shell left running keeps the output open.
             let mut checked = Instant::now();
             loop {
                 match rx.recv_timeout(QUIET) {
-                    Ok(bytes) => say(chunker.push(&bytes), false),
+                    Ok(bytes) => {
+                        shown += bytes.len() as u64;
+                        say(chunker.push(&bytes), false);
+                    }
                     Err(RecvTimeoutError::Timeout) => say(chunker.flush(), false),
                     Err(RecvTimeoutError::Disconnected) => break,
                 }
@@ -435,9 +488,21 @@ mod desktop {
                         // not waited for.
                         while checked.elapsed() < LAST_WORDS {
                             match rx.recv_timeout(LAST_QUIET) {
-                                Ok(bytes) => say(chunker.push(&bytes), false),
+                                Ok(bytes) => {
+                                    shown += bytes.len() as u64;
+                                    say(chunker.push(&bytes), false);
+                                }
                                 Err(_) => break,
                             }
+                        }
+                        // The time limit is on waiting for new output. What
+                        // has been read by now is shown whole, however long
+                        // the window takes over each piece.
+                        let due = read.load(Ordering::SeqCst);
+                        while shown < due {
+                            let Ok(bytes) = rx.recv() else { break };
+                            shown += bytes.len() as u64;
+                            say(chunker.push(&bytes), false);
                         }
                         break;
                     }
@@ -445,8 +510,9 @@ mod desktop {
             }
             over.store(true, Ordering::SeqCst);
             say(chunker.finish(), true);
-            // `rx` is dropped here: the reader stops at its next read, so a
-            // job that outlived the shell no longer reaches the window.
+            // `rx` is dropped here: what a job that outlived the shell prints
+            // from now on is read by the reader and no longer reaches the
+            // window.
         });
 
         *lock(&sessions.open) = Some(Terminal {
@@ -455,6 +521,7 @@ mod desktop {
             input,
             shell,
             ended,
+            closed,
         });
         Ok(id)
     }
@@ -508,6 +575,11 @@ mod desktop {
                 // The shell is ended before `t` goes: dropping the input lets
                 // the writer thread finish, and that writes a last newline.
                 stop(&t.shell);
+                // The reader is told only after the terminal's handles have
+                // gone: until then it drains what is still being printed.
+                let closed = Arc::clone(&t.closed);
+                drop(t);
+                closed.store(true, Ordering::SeqCst);
                 true
             }
             None => false,
@@ -771,6 +843,127 @@ mod desktop {
         }
 
         #[test]
+        fn output_read_before_the_shell_ended_is_shown_whole_by_a_slow_window() {
+            let root = temp("tail");
+            let sessions = Sessions::default();
+            let (tx, rx) = mpsc::channel();
+            let id = open_with(&sessions, &root, "/bin/sh", Vec::new(), 24, 80, move |c| {
+                // A window that takes a microsecond over each byte it is given.
+                std::thread::sleep(Duration::from_micros(c.text.len() as u64));
+                let _ = tx.send(c);
+            })
+            .unwrap();
+            write(&sessions, id, "seq 1 200000; exit\n").unwrap();
+            let (out, exited) = collect_for(&rx, 60, |_, e| e);
+            assert!(exited, "shell end was not reported");
+            // The first number can share its line with the prompt.
+            let numbers = out
+                .lines()
+                .filter(|l| {
+                    l.rsplit(' ')
+                        .next()
+                        .is_some_and(|w| w.parse::<u32>().is_ok())
+                })
+                .count();
+            let tail = &out[out.len().saturating_sub(40)..];
+            assert_eq!(numbers, 200_000, "the listing ends early: {tail:?}");
+            assert!(
+                out.contains("\r\n199999\r\n200000\r\n"),
+                "the last lines are missing: {tail:?}"
+            );
+            close(&sessions);
+        }
+
+        #[test]
+        fn the_shell_ending_is_reported_while_a_job_prints_without_a_pause() {
+            let root = temp("flood");
+            let sessions = Sessions::default();
+            let (tx, rx) = mpsc::channel();
+            let id = open_with(&sessions, &root, "/bin/sh", Vec::new(), 24, 80, move |c| {
+                let _ = tx.send(c);
+            })
+            .unwrap();
+            // A job that prints about every 20 ms for some eight seconds.
+            // It stops at the first print that fails, so the close ends it.
+            let job =
+                "(i=0; while [ $i -lt 400 ] && echo tick; do sleep 0.02; i=$((i+1)); done) &\n";
+            write(&sessions, id, job).unwrap();
+            let (out, _) = collect_until(&rx, |all, _| all.matches("tick\r\n").count() >= 2);
+            assert!(
+                out.matches("tick\r\n").count() >= 2,
+                "the job did not print: {out:?}"
+            );
+            write(&sessions, id, "exit\n").unwrap();
+            let (_, exited) = collect_for(&rx, 3, |_, e| e);
+            assert!(exited, "the printing job held back the news of the end");
+            assert!(close(&sessions));
+        }
+
+        #[test]
+        fn a_job_that_outlives_the_shell_is_not_left_blocked_in_its_output() {
+            let root = temp("drain");
+            let sessions = Sessions::default();
+            let (tx, rx) = mpsc::channel();
+            let id = open_with(&sessions, &root, "/bin/sh", Vec::new(), 24, 80, move |c| {
+                let _ = tx.send(c);
+            })
+            .unwrap();
+            // A second after the shell has gone the job prints far more than
+            // a terminal buffers, then leaves a file to say it got through.
+            let job = "(sleep 1; yes | head -c 300000; : > printed) &\n";
+            write(&sessions, id, job).unwrap();
+            write(&sessions, id, "exit\n").unwrap();
+            let (_, exited) = collect_for(&rx, 5, |_, e| e);
+            assert!(exited, "shell end was not reported");
+
+            let printed = root.join("printed");
+            let end = std::time::Instant::now() + Duration::from_secs(8);
+            while !printed.exists() && std::time::Instant::now() < end {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            let got_through = printed.exists();
+            assert_eq!(
+                rx.try_recv().ok(),
+                None,
+                "the job's output reached the window after the end"
+            );
+            assert!(close(&sessions));
+            assert!(got_through, "the job was left blocked in its write");
+        }
+
+        #[test]
+        fn closing_cuts_off_a_job_that_goes_on_printing() {
+            let root = temp("cut");
+            let sessions = Sessions::default();
+            let (tx, rx) = mpsc::channel();
+            let id = open_with(&sessions, &root, "/bin/sh", Vec::new(), 24, 80, move |c| {
+                let _ = tx.send(c);
+            })
+            .unwrap();
+            // Prints for some twenty seconds unless a print fails; then it
+            // leaves a file with how far it got.
+            let job = "(trap '' HUP; i=0; while [ $i -lt 100 ] && echo tick; do sleep 0.2; \
+                       i=$((i+1)); done; echo $i > stopped) &\n";
+            write(&sessions, id, job).unwrap();
+            let (out, _) = collect_until(&rx, |all, _| all.matches("tick\r\n").count() >= 2);
+            assert!(
+                out.matches("tick\r\n").count() >= 2,
+                "the job did not print: {out:?}"
+            );
+
+            assert!(close(&sessions));
+            let stopped = root.join("stopped");
+            let end = std::time::Instant::now() + Duration::from_secs(5);
+            while !stopped.exists() && std::time::Instant::now() < end {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            assert!(
+                stopped.exists(),
+                "the job went on printing into a closed terminal"
+            );
+        }
+
+        #[test]
         fn two_opens_at_the_same_moment_leave_one_shell() {
             use std::os::unix::fs::PermissionsExt;
             use std::sync::{Arc, Barrier};
@@ -911,6 +1104,55 @@ mod tests {
             c.push(b"KEY=sk-abcdefghijklmnopqrstuv\n"),
             "KEY=[redacted]\n"
         );
+    }
+
+    #[test]
+    fn a_name_with_a_key_prefix_stays_readable_when_an_escape_code_follows_it() {
+        // A shell that redraws its line prints the name, then "erase to the
+        // end of the line".
+        let mut c = Chunker::default();
+        let mut out = c.push(b"cat task-definitions.json\x1b[K");
+        out.push_str(&c.flush());
+        assert_eq!(out, "cat task-definitions.json\x1b[K");
+
+        // Coloured output whose newline comes with the next read.
+        let mut c = Chunker::default();
+        let mut out = c.push(b"\x1b[01;32mtask-definitions.json\x1b[0m");
+        out.push_str(&c.push(b"\r\n"));
+        assert_eq!(out, "\x1b[01;32mtask-definitions.json\x1b[0m\r\n");
+
+        let mut c = Chunker::default();
+        let mut out = c.push(b"* \x1b[32mfix/disk-partition-table\x1b[m");
+        out.push_str(&c.flush());
+        assert_eq!(out, "* \x1b[32mfix/disk-partition-table\x1b[m");
+
+        // A key in the same place is still hidden.
+        let mut c = Chunker::default();
+        let mut out = c.push(b"KEY=sk-abcdefghijklmnopqrstuv\x1b[K");
+        out.push_str(&c.flush());
+        assert_eq!(out, "KEY=[redacted]\x1b[K");
+    }
+
+    #[test]
+    fn a_name_that_arrives_in_two_pieces_stays_readable() {
+        // Tab completion: `ta`, then the rest of the name.
+        let mut c = Chunker::default();
+        assert_eq!(c.push(b"cat ta"), "cat ");
+        assert_eq!(c.flush(), "ta");
+        assert_eq!(c.push(b"sk-definitions.json "), "sk-definitions.json ");
+
+        // A key that starts a piece is still hidden: after a space, after a
+        // colour code, and after a project secret.
+        let mut c = Chunker::new(vec!["hunter2secretvalue".to_string()]);
+        assert_eq!(c.push(b"echo "), "echo ");
+        assert_eq!(c.push(b"sk-abcdefghijklmnopqrstuv "), "[redacted] ");
+        assert_eq!(c.push(b"ta\x1b[0m"), "ta");
+        assert_eq!(c.flush(), "\x1b[0m");
+        assert_eq!(c.push(b"sk-abcdefghijklmnopqrstuv\n"), "[redacted]\n");
+        assert_eq!(c.push(b"hunter2secretvalue"), "");
+        assert_eq!(c.flush(), "[redacted]");
+        assert_eq!(c.push(b"sk-abcdefghijklmnopqrstuv\n"), "[redacted]\n");
+        assert_eq!(c.flush(), "");
     }
 
     #[test]

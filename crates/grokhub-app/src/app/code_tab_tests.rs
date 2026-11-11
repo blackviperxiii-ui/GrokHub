@@ -220,6 +220,57 @@ fn run_output_hides_held_secret_values() {
     let _ = std::fs::remove_dir_all(&ws);
 }
 
+#[cfg(unix)]
+#[test]
+fn a_run_still_going_ends_when_the_code_tab_goes() {
+    let _g = RUNS.lock().unwrap_or_else(|e| e.into_inner());
+    let config = temp("quit-config");
+    let ws = temp("quit-ws");
+    let mut tab = CodeTab {
+        command: "echo up; sleep 30".into(),
+        ..Default::default()
+    };
+    assert_eq!(tab.begin_run().as_deref(), Some("echo up; sleep 30"));
+    let tx = tab.sender();
+    let (job_config, job_ws) = (config.clone(), ws.clone());
+    let job = std::thread::spawn(move || {
+        let none = || {};
+        run_job(
+            &job_config,
+            &job_ws,
+            "echo up; sleep 30",
+            true,
+            Vec::new(),
+            &tx,
+            &none,
+        );
+    });
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !tab.log.contains("up") && std::time::Instant::now() < end {
+        tab.drain();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(tab.log, "up\n");
+    assert!(tab.running);
+
+    // The cabin quits: its Code tab goes, and the run with it. The proof is
+    // that the next run can start (there is one at a time).
+    drop(tab);
+    let again = || runs::run(&config, &ws, "exit 3", true, runs::Mode::Auto, |_| {});
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut next = again();
+    while next.is_err() && std::time::Instant::now() < end {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        next = again();
+    }
+    // Whatever happened, the 30-second sleep is not left behind.
+    runs::stop();
+    assert_eq!(next.map(|done| done.exit), Ok(3));
+    job.join().expect("run job");
+    let _ = std::fs::remove_dir_all(&config);
+    let _ = std::fs::remove_dir_all(&ws);
+}
+
 #[test]
 fn the_diff_refuses_a_path_outside_the_workspace() {
     let ws = temp("guard-ws");
