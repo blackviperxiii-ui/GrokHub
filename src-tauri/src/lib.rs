@@ -2109,12 +2109,16 @@ async fn code_term_open(
             let id = code_term::open(code_term::global(), &dir, held, rows, cols, move |chunk| {
                 let _ = app.emit(code_term::EVENT, chunk);
             })?;
-            code_term::log(
-                &config,
-                &dir,
-                "Opened a terminal in the project folder.",
-                keep,
-            );
+            // The shell is already printing and the window needs the id to
+            // show it, so the id goes back first and the log is written after.
+            std::thread::spawn(move || {
+                code_term::log(
+                    &config,
+                    &dir,
+                    "Opened a terminal in the project folder.",
+                    keep,
+                );
+            });
             Ok(id)
         })
         .await?
