@@ -267,6 +267,7 @@ mod self_review_ui;
 mod settings;
 mod setup_wizard;
 pub(crate) use setup_wizard::models_dir;
+mod code_deploy_ui;
 mod code_secrets_ui;
 mod code_ship_ui;
 mod code_tab;
