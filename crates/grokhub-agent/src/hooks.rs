@@ -136,12 +136,22 @@ pub fn discover_hooks(
 }
 
 pub fn attach(session: &str, workspace: &Path, _attended: bool) -> HookGuard {
-    let hooks = load_all(
+    let hooks = attachable(
         workspace,
         grokhub_core::user_home().as_deref(),
         &crate::plugins::hook_paths(workspace),
     );
-    install(session, runnable(hooks, folder_trusted(workspace)))
+    install(session, hooks)
+}
+
+/// The hooks a chat in `workspace` runs. Untrusted project hooks go before
+/// duplicates are merged, so a folder that repeats a plugin's hook cannot
+/// take its place and then be dropped with it.
+fn attachable(workspace: &Path, home: Option<&Path>, plugin_dirs: &[PathBuf]) -> Vec<Loaded> {
+    dedupe(runnable(
+        load_raw(workspace, home, plugin_dirs),
+        folder_trusted(workspace),
+    ))
 }
 
 /// Project hooks come from the repository, so they only run once this folder is
@@ -254,7 +264,7 @@ pub fn install_test_hooks(session: &str, hooks: Vec<TestHook>) -> HookGuard {
 pub fn constrain_tool(hook: ToolHook<'_>) -> ToolConstraint {
     let subjects = tool_subjects(hook.name);
     let refs: Vec<&str> = subjects.iter().map(String::as_str).collect();
-    let found = hooks_matching(hook.session, "PreToolUse", &refs);
+    let found = hooks_matching(root(hook.session), "PreToolUse", &refs);
     let cwd = hook.workspace.display().to_string();
     let body = payload(
         "PreToolUse",
@@ -356,7 +366,7 @@ pub fn on_permission_denied(
 ) {
     let subjects = tool_subjects(name);
     let refs: Vec<&str> = subjects.iter().map(String::as_str).collect();
-    let found = hooks_matching(session, "PermissionDenied", &refs);
+    let found = hooks_matching(root(session), "PermissionDenied", &refs);
     if found.is_empty() {
         return;
     }
@@ -391,7 +401,7 @@ pub fn after_tool(
     };
     let subjects = tool_subjects(name);
     let refs: Vec<&str> = subjects.iter().map(String::as_str).collect();
-    let found = hooks_matching(session, event, &refs);
+    let found = hooks_matching(root(session), event, &refs);
     if found.is_empty() {
         return String::new();
     }
@@ -455,7 +465,7 @@ fn fire_stop(
     stop_hook_active: bool,
     subject: &str,
 ) -> Option<String> {
-    let found = hooks_matching(session, event, &[subject]);
+    let found = hooks_matching(subagent_owner(session, event), event, &[subject]);
     if found.is_empty() {
         return None;
     }
@@ -483,7 +493,7 @@ fn observe(
     arguments: &str,
     stop_active: bool,
 ) {
-    let found = hooks_matching(session, event, &[subject]);
+    let found = hooks_matching(subagent_owner(session, event), event, &[subject]);
     if found.is_empty() {
         return;
     }
@@ -878,6 +888,23 @@ fn install(session: &str, hooks: Vec<Loaded>) -> HookGuard {
     }
 }
 
+/// The chat a helper belongs to (`chat/s1` is a helper of `chat`). Hooks are
+/// installed under the chat, and its tool hooks check its helpers' calls too.
+fn root(session: &str) -> &str {
+    session.split('/').next().unwrap_or(session)
+}
+
+/// Where the hooks for `event` are installed. A helper that starts or stops
+/// a helper of its own (`chat/s1`) fires the chat's SubagentStart and
+/// SubagentStop hooks. Every other event here belongs to the session itself.
+fn subagent_owner<'a>(session: &'a str, event: &str) -> &'a str {
+    if matches!(event, "SubagentStart" | "SubagentStop") {
+        root(session)
+    } else {
+        session
+    }
+}
+
 fn hooks_matching(session: &str, event: &str, subjects: &[&str]) -> Vec<Loaded> {
     let map = sessions();
     let Some(installed) = map.get(session) else {
@@ -892,7 +919,8 @@ fn hooks_matching(session: &str, event: &str, subjects: &[&str]) -> Vec<Loaded> 
 }
 
 fn matcher_ok(hook: &Loaded, event: &str, subjects: &[&str]) -> bool {
-    if matches!(event, "UserPromptSubmit" | "Stop") || hook.matcher.trim().is_empty() {
+    let matcher = hook.matcher.trim();
+    if matches!(event, "UserPromptSubmit" | "Stop") || matcher.is_empty() || matcher == "*" {
         return true;
     }
     let Ok(re) = regex::Regex::new(&hook.matcher) else {
@@ -920,6 +948,10 @@ fn tool_subjects(name: &str) -> Vec<String> {
 }
 
 fn load_all(workspace: &Path, home: Option<&Path>, plugin_dirs: &[PathBuf]) -> Vec<Loaded> {
+    dedupe(load_raw(workspace, home, plugin_dirs))
+}
+
+fn load_raw(workspace: &Path, home: Option<&Path>, plugin_dirs: &[PathBuf]) -> Vec<Loaded> {
     let mut raw = Vec::new();
     if let Some(home) = home {
         let grok = home.join(".grok");
@@ -964,7 +996,7 @@ fn load_all(workspace: &Path, home: Option<&Path>, plugin_dirs: &[PathBuf]) -> V
             raw.extend(parse_hooks(&text, &path, HookOrigin::Plugin));
         }
     }
-    dedupe(raw)
+    raw
 }
 
 fn dedupe(hooks: Vec<Loaded>) -> Vec<Loaded> {
@@ -1471,6 +1503,180 @@ mod tests {
         assert!(!folder_trusted(&repo));
         assert!(set_folder_trust(Path::new("/"), true).is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tool_hooks_of_a_chat_also_check_its_helpers_tool_calls() {
+        let dir = scratch("helper");
+        let session = format!("helper-{}", std::process::id());
+        let helper = format!("{session}/s1");
+        let sid_path = dir.join("sid");
+        let record = if cfg!(windows) {
+            format!(
+                "[IO.File]::WriteAllText('{}', $env:GROK_SESSION_ID)",
+                sid_path.display()
+            )
+        } else {
+            format!(
+                "printf '%s' \"$GROK_SESSION_ID\" > '{}'",
+                sid_path.display()
+            )
+        };
+        let hook = |event: &str, command: String| TestHook {
+            event: event.into(),
+            matcher: "Write".into(),
+            command,
+            timeout: Duration::from_secs(5),
+            source_dir: dir.clone(),
+        };
+        let _hooks = install_test_hooks(
+            &session,
+            vec![
+                hook(
+                    "PreToolUse",
+                    test_echo(r#"{"decision":"deny","reason":"nope"}"#, None),
+                ),
+                hook(
+                    "PostToolUse",
+                    test_echo(r#"{"additionalContext":"seen"}"#, None),
+                ),
+                hook("PermissionDenied", record),
+            ],
+        );
+        let denied = constrain_tool(ToolHook {
+            session: &helper,
+            workspace: &dir,
+            attended: true,
+            decision: Decision::Run,
+            ask_reason: String::new(),
+            name: "write",
+            arguments: r#"{"path":"out.txt"}"#,
+            tool_use_id: "t1",
+        });
+        match denied.decision {
+            Decision::Refuse(text) => assert_eq!(text, "nope"),
+            other => panic!("the helper's write ran past the hook: {other:?}"),
+        }
+        assert_eq!(
+            after_tool(&helper, &dir, "write", "{}", "t1", false, ""),
+            "seen"
+        );
+        on_permission_denied(&helper, &dir, "write", "{}", "t1");
+        assert_eq!(fs::read_to_string(&sid_path).unwrap(), helper);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn subagent_hooks_of_a_chat_also_run_for_a_helpers_helper() {
+        let dir = scratch("nested");
+        let session = format!("nested-{}", std::process::id());
+        let helper = format!("{session}/s1");
+        let sid_path = dir.join("sid");
+        let record = if cfg!(windows) {
+            format!(
+                "[IO.File]::WriteAllText('{}', $env:GROK_SESSION_ID)",
+                sid_path.display()
+            )
+        } else {
+            format!(
+                "printf '%s' \"$GROK_SESSION_ID\" > '{}'",
+                sid_path.display()
+            )
+        };
+        let hook = |event: &str, command: String| TestHook {
+            event: event.into(),
+            matcher: String::new(),
+            command,
+            timeout: Duration::from_secs(5),
+            source_dir: dir.clone(),
+        };
+        let _hooks = install_test_hooks(
+            &session,
+            vec![
+                hook("SubagentStart", record),
+                hook(
+                    "SubagentStop",
+                    test_echo(r#"{"decision":"deny","reason":"run the tests too"}"#, None),
+                ),
+                hook(
+                    "Stop",
+                    test_echo(r#"{"decision":"deny","reason":"keep going"}"#, None),
+                ),
+            ],
+        );
+        // `chat/s1` starts and stops a helper of its own.
+        on_subagent_start(&helper, &dir, "explore");
+        assert_eq!(fs::read_to_string(&sid_path).unwrap(), helper);
+        assert_eq!(
+            on_subagent_stop(&session, &dir, "explore", false),
+            Some("run the tests too".to_string())
+        );
+        assert_eq!(
+            on_subagent_stop(&helper, &dir, "explore", false),
+            Some("run the tests too".to_string())
+        );
+        // The chat's own Stop hook is not a helper's.
+        assert_eq!(
+            on_stop(&session, &dir, "Stop", false),
+            Some("keep going".to_string())
+        );
+        assert_eq!(on_stop(&helper, &dir, "Stop", false), None);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_star_matcher_checks_every_tool() {
+        let dir = scratch("star");
+        let session = format!("star-{}", std::process::id());
+        let _hooks = install_test_hooks(
+            &session,
+            vec![TestHook {
+                event: "PreToolUse".into(),
+                matcher: "*".into(),
+                command: test_echo(r#"{"decision":"deny","reason":"nope"}"#, None),
+                timeout: Duration::from_secs(5),
+                source_dir: dir.clone(),
+            }],
+        );
+        for name in ["run_terminal_command", "write", "notes__search"] {
+            let out = constrain_tool(ToolHook {
+                session: &session,
+                workspace: &dir,
+                attended: true,
+                decision: Decision::Run,
+                ask_reason: String::new(),
+                name,
+                arguments: "{}",
+                tool_use_id: "t1",
+            });
+            match out.decision {
+                Decision::Refuse(text) => assert_eq!(text, "nope", "{name}"),
+                other => panic!("{name} ran past the hook: {other:?}"),
+            }
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_untrusted_folder_cannot_displace_a_plugin_hook_by_repeating_it() {
+        let dir = scratch("displace");
+        let _cfg = crate::perm::ConfigGuard::set(dir.join("cfg"));
+        let repo = dir.join("repo");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        let body = r#"{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"echo guard"}]}]}}"#;
+        write_hook(&repo.join(".claude"), "settings.json", body);
+        write_hook(&dir.join("plugin"), "hooks.json", body);
+        let plugin_file = dir.join("plugin").join("hooks.json");
+        assert!(!folder_trusted(&repo));
+        let untrusted = attachable(&repo, None, std::slice::from_ref(&plugin_file));
+        assert_eq!(untrusted.len(), 1);
+        assert_eq!(untrusted[0].origin, HookOrigin::Plugin);
+        assert_eq!(untrusted[0].path, plugin_file);
+        set_folder_trust(&repo, true).unwrap();
+        let trusted = attachable(&repo, None, std::slice::from_ref(&plugin_file));
+        assert_eq!(trusted.len(), 1);
+        assert_eq!(trusted[0].origin, HookOrigin::Project);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[cfg(unix)]
