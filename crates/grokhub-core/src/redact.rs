@@ -81,11 +81,14 @@ fn redact_patterns(input: &str, word_start: bool) -> String {
 }
 
 /// A bare token with no `KEY=` in front: a prefix that starts a word, then at
-/// least `min` characters that pass `ok`.
+/// least `min` characters that pass `ok`. Where a long hyphenated file name
+/// fits that too, `mixed` asks for what a key has and such a name does not:
+/// a digit or a capital in the body.
 struct TokenShape {
     prefix: &'static str,
     min: usize,
     ok: fn(char) -> bool,
+    mixed: bool,
 }
 
 const TOKEN_SHAPES: &[TokenShape] = &[
@@ -93,61 +96,160 @@ const TOKEN_SHAPES: &[TokenShape] = &[
         prefix: "AKIA",
         min: 16,
         ok: is_upper_alnum,
+        mixed: false,
     },
     TokenShape {
         prefix: "ASIA",
         min: 16,
         ok: is_upper_alnum,
+        mixed: false,
     },
     TokenShape {
         prefix: "xoxb-",
         min: 10,
         ok: is_slack_char,
+        mixed: false,
     },
     TokenShape {
         prefix: "xoxp-",
         min: 10,
         ok: is_slack_char,
+        mixed: false,
     },
     TokenShape {
         prefix: "xapp-",
         min: 10,
         ok: is_slack_char,
+        mixed: false,
     },
     TokenShape {
         prefix: "sk_live_",
         min: 10,
         ok: is_alnum,
+        mixed: false,
     },
     TokenShape {
         prefix: "rk_live_",
         min: 10,
         ok: is_alnum,
+        mixed: false,
     },
     TokenShape {
         prefix: "sk_test_",
         min: 10,
         ok: is_alnum,
+        mixed: false,
     },
     TokenShape {
         prefix: "rk_test_",
         min: 10,
         ok: is_alnum,
+        mixed: false,
     },
     TokenShape {
         prefix: "AIza",
         min: 30,
         ok: is_url_b64,
+        mixed: false,
     },
     TokenShape {
         prefix: "ntn_",
         min: 20,
         ok: is_alnum,
+        mixed: false,
     },
     TokenShape {
         prefix: "secret_",
         min: 20,
         ok: is_alnum,
+        mixed: false,
+    },
+    TokenShape {
+        prefix: "hf_",
+        min: 30,
+        ok: is_alnum,
+        mixed: false,
+    },
+    TokenShape {
+        prefix: "glpat-",
+        min: 20,
+        ok: is_url_b64_dot,
+        mixed: true,
+    },
+    TokenShape {
+        prefix: "npm_",
+        min: 36,
+        ok: is_alnum,
+        mixed: false,
+    },
+    TokenShape {
+        prefix: "xoxa-",
+        min: 10,
+        ok: is_slack_char,
+        mixed: false,
+    },
+    TokenShape {
+        prefix: "xoxr-",
+        min: 10,
+        ok: is_slack_char,
+        mixed: false,
+    },
+    TokenShape {
+        prefix: "xoxs-",
+        min: 10,
+        ok: is_slack_char,
+        mixed: false,
+    },
+    TokenShape {
+        prefix: "xoxe-",
+        min: 10,
+        ok: is_slack_char,
+        mixed: false,
+    },
+    // With rotation on, an access token is `xoxe.xoxp-…`, `xoxe.xoxb-…` or
+    // `xoxe.xapp-…`. The `.` keeps the inner prefix from starting a word, so
+    // `xoxe.` is the shape and the inner prefix is part of the body.
+    TokenShape {
+        prefix: "xoxe.",
+        min: 10,
+        ok: is_slack_char,
+        mixed: false,
+    },
+    TokenShape {
+        prefix: "whsec_",
+        min: 24,
+        ok: is_b64,
+        mixed: false,
+    },
+    TokenShape {
+        prefix: "ghr_",
+        min: 30,
+        ok: is_alnum,
+        mixed: false,
+    },
+    TokenShape {
+        prefix: "gsk_",
+        min: 30,
+        ok: is_alnum,
+        mixed: false,
+    },
+    TokenShape {
+        prefix: "pypi-",
+        min: 30,
+        ok: is_url_b64,
+        mixed: true,
+    },
+    TokenShape {
+        prefix: "GOCSPX-",
+        min: 20,
+        ok: is_url_b64,
+        mixed: false,
+    },
+    TokenShape {
+        prefix: "ya29.",
+        min: 30,
+        ok: is_url_b64_dot,
+        mixed: false,
     },
 ];
 
@@ -167,14 +269,24 @@ fn is_url_b64(c: char) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, '-' | '_')
 }
 
+fn is_url_b64_dot(c: char) -> bool {
+    is_url_b64(c) || c == '.'
+}
+
+/// Standard base64, padding included.
+fn is_b64(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '=')
+}
+
 fn is_word_char(c: char) -> bool {
     c.is_alphanumeric() || matches!(c, '-' | '_' | '.')
 }
 
 /// Redact keys that [`redact_secrets`] does not know, for exports that leave
-/// the app: AWS access keys, Slack, Stripe, Google API and Notion tokens,
-/// JWTs, passwords in URLs (`scheme://user:pass@host`) and PEM private key
-/// blocks. Ordinary words and paths stay.
+/// the app: AWS access keys, Slack, Stripe, Google, Notion, Hugging Face,
+/// GitLab, npm, PyPI, Groq and GitHub refresh tokens, JWTs, passwords in
+/// URLs (`scheme://user:pass@host`) and PEM private key blocks. Ordinary
+/// words and paths stay.
 pub fn redact_token_shapes(input: &str) -> String {
     let s = redact_pem_private_keys(input);
     let s = redact_url_passwords(&s);
@@ -187,21 +299,33 @@ pub fn redact_token_shapes(input: &str) -> String {
 }
 
 fn redact_prefixed(input: &str, shape: &TokenShape) -> String {
-    let TokenShape { prefix, min, ok } = *shape;
+    let TokenShape {
+        prefix,
+        min,
+        ok,
+        mixed,
+    } = *shape;
     let mut out = String::with_capacity(input.len());
     let mut rest = input;
     while let Some(idx) = rest.find(prefix) {
         out.push_str(&rest[..idx]);
         let after = &rest[idx + prefix.len()..];
-        let n = after.chars().take_while(|c| ok(*c)).count();
+        // The body is measured only where a key could start. Measured after
+        // every prefix inside one long run, it costs the run's length squared.
         let starts_word = !out.chars().next_back().is_some_and(is_word_char);
-        if !starts_word || n < min {
+        let n = after.chars().take_while(|c| starts_word && ok(*c)).count();
+        let body = &after[..after.chars().take(n).map(char::len_utf8).sum::<usize>()];
+        let name = mixed
+            && !body
+                .chars()
+                .any(|c| c.is_ascii_digit() || c.is_ascii_uppercase());
+        if !starts_word || n < min || name {
             out.push_str(prefix);
             rest = after;
             continue;
         }
         out.push_str("[redacted]");
-        rest = &after[after.chars().take(n).map(char::len_utf8).sum::<usize>()..];
+        rest = &after[body.len()..];
     }
     out.push_str(rest);
     out
@@ -214,27 +338,31 @@ fn redact_jwts(input: &str) -> String {
     while let Some(idx) = rest.find("eyJ") {
         out.push_str(&rest[..idx]);
         let cand = &rest[idx..];
-        let parts: Vec<usize> = cand
-            .splitn(4, '.')
-            .take(3)
-            .map(|p| p.chars().take_while(|c| is_url_b64(*c)).count())
-            .collect();
-        let whole = parts.len() == 3
-            && parts[0] >= 10
-            && parts[1] >= 4
-            && parts[2] >= 4
-            && cand.split('.').take(2).all(|p| p.chars().all(is_url_b64));
+        // Measured only where a token could start, and no further than its
+        // own characters run: looking for the dots after every `eyJ` costs
+        // the length of what follows each time.
         let starts_word = !out.chars().next_back().is_some_and(is_word_char);
-        if !(whole && starts_word) {
+        let Some(len) = starts_word.then(|| jwt_len(cand)).flatten() else {
             out.push_str("eyJ");
             rest = &cand[3..];
             continue;
-        }
+        };
         out.push_str("[redacted]");
-        rest = &cand[parts[0] + parts[1] + parts[2] + 2..];
+        rest = &cand[len..];
     }
     out.push_str(rest);
     out
+}
+
+/// How long the JWT at the start of `s` is: base64url runs of at least 10, 4
+/// and 4 characters, with a dot right after the first and the second.
+fn jwt_len(s: &str) -> Option<usize> {
+    let run = |s: &str| s.chars().take_while(|c| is_url_b64(*c)).count();
+    let head = run(s);
+    let after_head = s[head..].strip_prefix('.')?;
+    let payload = run(after_head);
+    let sig = run(after_head[payload..].strip_prefix('.')?);
+    (head >= 10 && payload >= 4 && sig >= 4).then_some(head + payload + sig + 2)
 }
 
 /// `scheme://user:pass@host` keeps the user and host and drops the password.
@@ -490,5 +618,101 @@ mod tests {
                     AKIA short, http://example.com:8080/x, user@example.com, \
                     -----BEGIN CERTIFICATE----- eyJnot.a.jwt";
         assert_eq!(redact_token_shapes(kept), kept);
+    }
+
+    #[test]
+    fn more_bare_token_shapes_are_redacted_and_look_alike_words_stay() {
+        // Fakes a secret scanner would read as real are written in parts.
+        for token in [
+            // Hugging Face
+            concat!("hf_", "abcdefghijklmnopqrstuvwxyzABCDEFGH"),
+            // GitLab
+            concat!("glpat-", "FAKEfake_FAKE-fake00"),
+            // GitLab routable token: payload, version, then length and checksum
+            concat!("glpat-", "FAKEfake_FAKE-fake00FAKE.01.0a1b2c3d4"),
+            // npm
+            "npm_FAKEfakeFAKEfakeFAKEfakeFAKEfakeFAKE",
+            // Slack: app, refresh, session and rotating tokens
+            "xoxa-0000-FAKE-fake",
+            "xoxr-0000-FAKE-fake",
+            "xoxs-0000-FAKE-fake",
+            "xoxe-0000-FAKE-fake",
+            // Slack access tokens once rotation is on
+            concat!("xoxe.", "xoxp-", "1-FAKEfake0000FAKEfake"),
+            concat!("xoxe.", "xoxb-", "1-FAKEfake0000FAKEfake"),
+            concat!("xoxe.", "xapp-", "1-FAKEfake0000FAKEfake"),
+            // Stripe webhook signing secret
+            "whsec_FAKEfakeFAKEfakeFAKEfake",
+            // The same prefix on a standard base64 secret
+            "whsec_FAKEfakeFAKEfakeFAKE+fake/FAKEfake=",
+            // GitHub refresh token
+            "ghr_FAKEfakeFAKEfakeFAKEfakeFAKEfa",
+            // Groq
+            "gsk_FAKEfakeFAKEfakeFAKEfakeFAKEfa",
+            // PyPI
+            "pypi-FAKEfake_FAKE-fakeFAKEfakeFAKE",
+            // Google OAuth client secret and access token
+            "GOCSPX-FAKEfake_FAKE-fake00",
+            "ya29.FAKEfake_FAKE-fake.FAKEfakeFAKE",
+        ] {
+            assert_eq!(
+                redact_token_shapes(&format!("t {token} x")),
+                "t [redacted] x",
+                "{token}"
+            );
+        }
+        let kept = "npm_config_cache hf_hub_download /tmp/glpat-notes pypi-mirror \
+                    xoxa-short whsec_short my_gsk_FAKEfakeFAKEfakeFAKEfakeFAKEfa \
+                    ya29.txt GOCSPX-short ghr_fake";
+        assert_eq!(redact_token_shapes(kept), kept);
+        // A long hyphenated name has no digit and no capital; a key has.
+        let names = "/home/user/.cache/pypi-dependency-confusion-attack-demo/x \
+                     see pypi-attestations-publishing-workflow-notes.md \
+                     glpat-rotation-procedure-for-ci.md";
+        assert_eq!(redact_token_shapes(names), names);
+    }
+
+    #[test]
+    fn a_prefix_that_does_not_start_a_word_has_no_body_measured() {
+        use std::cell::Cell;
+        thread_local! {
+            static LOOKS: Cell<usize> = const { Cell::new(0) };
+        }
+        fn counted(c: char) -> bool {
+            LOOKS.with(|n| n.set(n.get() + 1));
+            is_slack_char(c)
+        }
+        let shape = TokenShape {
+            prefix: "xoxb-",
+            min: 10,
+            ok: counted,
+            mixed: false,
+        };
+        // The `a` in front joins the whole run into one word.
+        let run = format!("a{}", "xoxb-".repeat(1000));
+        assert!(redact_prefixed(&run, &shape) == run);
+        assert_eq!(LOOKS.with(Cell::get), 0);
+        // A key that does start a word is measured once, with the one
+        // character that ends it.
+        assert_eq!(
+            redact_prefixed("t xoxb-0000-FAKE-fake x", &shape),
+            "t [redacted] x"
+        );
+        assert_eq!(LOOKS.with(Cell::get), 15);
+    }
+
+    #[test]
+    fn a_planted_run_of_token_starts_is_read_in_step_with_its_size() {
+        // Each of these once cost the square of its length: minutes here.
+        for (what, input) in [
+            ("eyJ run", format!("a{}", "eyJ".repeat(80_000))),
+            ("eyJ words", " eyJa".repeat(400_000)),
+            ("ya29. run", format!("a{}", "ya29.".repeat(48_000))),
+        ] {
+            let start = std::time::Instant::now();
+            assert!(redact_token_shapes(&input) == input, "{what}");
+            let took = start.elapsed();
+            assert!(took.as_secs() < 5, "{what}: {took:?}");
+        }
     }
 }

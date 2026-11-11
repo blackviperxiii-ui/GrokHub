@@ -432,6 +432,10 @@ const CREDENTIAL_KEYS: &[&str] = &[
     "api-key",
     "access_key",
     "accesskey",
+    "accountkey",
+    "account_key",
+    "account-key",
+    "storage_key",
     "private_key",
     "privatekey",
     "credential",
@@ -1011,6 +1015,31 @@ mod tests {
              api_key: \"[redacted]\" next\n\
              max_tokens: 4000\n\
              author: Pat"
+        );
+    }
+
+    #[test]
+    fn storage_connection_string_keys_are_redacted() {
+        assert_eq!(
+            redact_for_diagnostics(
+                "AccountName=harbor;AccountKey=FAKEfakeFAKEfake+FAKE/fake==;EndpointSuffix=example.com \
+                 SharedAccessKey=FAKEfakeFAKEfake+FAKE/fake= accountkeeper: Pat",
+                None
+            ),
+            "AccountName=harbor;AccountKey=[redacted];EndpointSuffix=example.com \
+             SharedAccessKey=[redacted] accountkeeper: Pat"
+        );
+        // The same key as an environment variable, a config line and JSON.
+        assert_eq!(
+            redact_for_diagnostics(
+                "AZURE_STORAGE_ACCOUNT_KEY=FAKEfakeFAKEfake+FAKE/fake== \
+                 account_key: FAKEfakeFAKEfake+FAKE/fake== \
+                 \"account-key\": \"FAKEfakeFAKEfake+FAKE/fake==\" \
+                 AZURE_STORAGE_KEY=FAKEfakeFAKEfake+FAKE/fake== storage_class: hot",
+                None
+            ),
+            "AZURE_STORAGE_ACCOUNT_KEY=[redacted] account_key: [redacted] \
+             \"account-key\": \"[redacted]\" AZURE_STORAGE_KEY=[redacted] storage_class: hot"
         );
     }
 

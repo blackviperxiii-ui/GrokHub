@@ -321,6 +321,27 @@ fn each_file_offers_one_way_to_get_it() {
         offer(&file("1", Download::Browser(page.into())), key, &[], None),
         Offer::Browser(page.into())
     );
+    // An installed mod whose newer file is a browser download gets the same
+    // browser download and pickup as its first install, not a direct Update.
+    let browser = Download::Browser(page.into());
+    assert_eq!(
+        offer(&file("2", browser.clone()), key, &[had("1.2")], None),
+        Offer::Browser(page.into())
+    );
+    assert_eq!(
+        offer(&file("1.2", browser.clone()), key, &[had("1.2")], None),
+        Offer::Installed
+    );
+    // Another file of the same mod (an optional or patch file) is not the
+    // update of the installed one: the pickup would take that one out.
+    let optional = ModFile {
+        primary: false,
+        ..file("0.3", browser)
+    };
+    assert_eq!(
+        offer(&optional, key, &[had("1.2")], None),
+        Offer::Update("1.2".into())
+    );
     assert_eq!(
         offer(&file("1", direct), key, &[], Some("Vortex looks after it")),
         Offer::Blocked("Vortex looks after it".into()),

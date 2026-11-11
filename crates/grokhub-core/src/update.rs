@@ -1655,6 +1655,10 @@ mod tests {
             install_win.contains("Overlay-Locked") && install_win.contains("Rename-Item"),
             "clone overlay must replace a running grokhub.exe: {install_win}"
         );
+        assert!(
+            install_win.contains("cargo build --release --locked -p grokhub-app -p grokhub-hub"),
+            "the clone overlay must build from Cargo.lock as it is: {install_win}"
+        );
         assert_eq!(release_update_cmds(), vec![rel.to_string()]);
         for target in [Channel::Beta, Channel::Stable] {
             let switch = crate::release_verify::release_switch_step(target);

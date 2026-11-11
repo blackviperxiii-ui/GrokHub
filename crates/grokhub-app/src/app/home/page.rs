@@ -296,7 +296,7 @@ impl Cabin {
             }
             TileAction::OpenUrl { url } => {
                 if url.starts_with("https://") {
-                    let _ = crate::desktop::open_path(&url);
+                    let _ = crate::desktop::open_url(&url);
                 }
             }
             TileAction::Play { app_id } => {

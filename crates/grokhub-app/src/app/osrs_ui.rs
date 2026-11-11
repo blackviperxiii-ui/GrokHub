@@ -207,6 +207,9 @@ impl Cabin {
     fn forget_osrs(&mut self) {
         let o = &mut self.focus.osrs;
         o.saved = None;
+        // A read still under way is this player's: it must not land on the
+        // next one saved.
+        o.pending = None;
         o.note = "Player forgotten.".into();
         if !cfg!(test) {
             let _ = std::fs::remove_file(osrs::saved_path(&crate::config::config_dir()));
@@ -282,6 +285,27 @@ mod tests {
         assert!(cabin.focus.osrs.note.is_empty());
         cabin.forget_osrs();
         assert!(cabin.focus.osrs.saved.is_none());
+    }
+
+    #[test]
+    fn a_read_under_way_for_a_forgotten_player_is_not_kept_for_the_next_one() {
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.focus.osrs.loaded = true;
+        cabin.focus.osrs.name_draft = "Zezima".into();
+        cabin.save_osrs_name();
+        let (tx, rx) = mpsc::channel();
+        cabin.focus.osrs.pending = Some(rx);
+        cabin.forget_osrs();
+        cabin.focus.osrs.name_draft = "Tester 2".into();
+        cabin.save_osrs_name();
+        // The first player's read comes back late.
+        let late = tx.send(Ok(osrs::parse(LITE, 5).unwrap()));
+        cabin.tick_osrs();
+        let saved = cabin.focus.osrs.saved.as_ref().unwrap();
+        assert_eq!(saved.name, "Tester 2");
+        assert_eq!(saved.snapshots.len(), 0);
+        assert!(cabin.focus.osrs.pending.is_none());
+        assert!(late.is_err(), "nothing waits for the late read");
     }
 
     #[test]

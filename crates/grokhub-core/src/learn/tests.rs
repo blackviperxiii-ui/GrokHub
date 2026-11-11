@@ -1472,6 +1472,87 @@ fn a_backup_moves_what_was_learned_to_another_folder_and_the_import_can_be_put_b
 }
 
 #[test]
+fn an_import_or_put_back_that_cannot_write_the_decisions_fails_and_keeps_the_restore_point() {
+    use super::backup::RESTORE;
+    use super::decide::{Area, Dial};
+    let pick = |id: &str| Signal::new(T0, Kind::Picked, subject(id));
+
+    let old = temp("backup-half-old");
+    let mut a = Engine::open(&old);
+    a.record(pick("chip:brief"));
+    decide::with_state(&old, |s| s.set_dial(Area::Settings, Dial::Offer));
+    let file = a.export(T0).unwrap();
+
+    // This PC holds one line and one dial of its own, both saved.
+    let new = temp("backup-half-new");
+    let mut b = Engine::open(&new);
+    b.record(pick("chip:patch-notes"));
+    b.flush(T0);
+    decide::with_state(&new, |s| s.set_dial(Area::Skills, Dial::Watch));
+    let own = decide::load(&new);
+    fs::copy(&file, new.join("learned-backup.json")).unwrap();
+
+    assert_eq!(b.import(T0 + 1), Ok(1));
+    assert_eq!(decide::load(&new).dial(Area::Settings), Dial::Offer);
+    let point = store::dir(&new).join(RESTORE);
+    assert!(point.exists());
+
+    // A folder where the decisions file goes: its write cannot land.
+    let decisions = store::dir(&new).join(decide::FILE);
+    let aside = store::dir(&new).join("decisions.aside");
+    let block = |on: bool| {
+        if on {
+            fs::rename(&decisions, &aside).unwrap();
+            fs::create_dir_all(decisions.join("in-the-way")).unwrap();
+        } else {
+            fs::remove_dir_all(&decisions).unwrap();
+            fs::rename(&aside, &decisions).unwrap();
+        }
+    };
+
+    // Putting it back cannot write the decisions, so it fails, the point is
+    // kept, and the lines stay the imported ones here and in the folder.
+    block(true);
+    assert!(
+        b.restore().is_err(),
+        "a put back that could not write the decisions must not say it worked"
+    );
+    assert!(point.exists());
+    assert_eq!(store::load_beliefs(&new).len(), 1);
+    assert!(store::load_beliefs(&new)
+        .get(&subject("chip:brief"))
+        .is_some());
+    assert_eq!(b.beliefs(), &store::load_beliefs(&new));
+    block(false);
+    // The same point then puts all of it back, once.
+    assert_eq!(b.restore(), Ok(()));
+    assert_eq!(
+        store::load_beliefs(&new)
+            .get(&subject("chip:patch-notes"))
+            .unwrap()
+            .shape,
+        Shape::Rate { yes: 1.0, no: 0.0 }
+    );
+    assert_eq!(store::load_beliefs(&new).len(), 1);
+    assert_eq!(decide::load(&new), own);
+    assert_eq!(decide::load(&new).dial(Area::Skills), Dial::Watch);
+    assert!(!point.exists());
+
+    // An import that cannot write the decisions fails the same way.
+    block(true);
+    assert!(
+        b.import(T0 + 2).is_err(),
+        "an import that could not write the decisions must not say it worked"
+    );
+    assert!(point.exists());
+    assert_eq!(store::load_beliefs(&new).len(), 1);
+    assert!(store::load_beliefs(&new)
+        .get(&subject("chip:patch-notes"))
+        .is_some());
+    assert_eq!(b.beliefs(), &store::load_beliefs(&new));
+}
+
+#[test]
 fn an_experiment_is_one_try_a_day_and_not_the_same_thing_for_two_weeks() {
     use super::decide::{Area, Dial, Outcome, Situation, State};
     use super::experiment::{PER_DAY, REST_MS};

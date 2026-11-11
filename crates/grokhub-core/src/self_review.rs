@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use crate::organs::LocalClock;
 use crate::outcome::{OutcomeResult, TaskOutcome, REASON_FINDING};
 use crate::protected_surface::{ProtectedSurface, TuneTarget};
-use crate::redact::redact_secrets;
+use crate::redact::{redact_secrets, redact_token_shapes};
 use crate::run_metrics::RunMetrics;
 
 /// At most this many proposal cards a week.
@@ -627,9 +627,10 @@ pub fn issue_text(title: &str, text: &str, version: &str, home: Option<&str>) ->
     redact_for_issue(&body, home)
 }
 
-/// [`redact_secrets`], then home folders as `~` and email addresses as `[email]`.
+/// [`redact_token_shapes`] and [`redact_secrets`], then home folders as `~`
+/// and email addresses as `[email]`.
 pub fn redact_for_issue(text: &str, home: Option<&str>) -> String {
-    let mut out = redact_secrets(text);
+    let mut out = redact_secrets(&redact_token_shapes(text));
     if let Some(home) = home
         .map(|h| h.trim_end_matches(['/', '\\']))
         .filter(|h| h.len() > 1)
@@ -1477,6 +1478,25 @@ mod tests {
         );
         assert!(!out.contains("user"));
         assert!(!out.contains("sk-abcdefghijklmnopqrstuv"));
+    }
+
+    #[test]
+    fn an_issue_copy_drops_bare_token_shapes_too() {
+        assert_eq!(
+            // The fake key is written in two parts, so no scanner reads this
+            // file as holding one.
+            redact_for_issue(
+                concat!(
+                    "Evidence: push failed with xoxb-0000-FAKE-fake-token, ",
+                    "hf_",
+                    "abcdefghijklmnopqrstuvwxyzABCDEFGH and ",
+                    "https://app:hunter2fake@example.com/repo.git; npm_config_cache stays",
+                ),
+                None
+            ),
+            "Evidence: push failed with [redacted], [redacted] and \
+             https://app:[redacted]@example.com/repo.git; npm_config_cache stays"
+        );
     }
 
     #[test]
