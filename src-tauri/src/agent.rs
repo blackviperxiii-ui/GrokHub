@@ -270,6 +270,9 @@ pub struct Route {
     pub voice_session: Option<grokhub_agent::voice_session::VoiceConfig>,
     /// Settings → Behavior → Suggestions: follow-ups after each reply.
     pub suggestions: bool,
+    /// A session the Code tab's agent window started: it plans first and
+    /// hands its tasks to helpers.
+    pub lead: bool,
 }
 
 struct Job {
@@ -752,6 +755,7 @@ impl Drop for Session {
     fn drop(&mut self) {
         grokhub_agent::detach_elicit(&self.id);
         grokhub_agent::set_plan_session(&self.id, false);
+        grokhub_agent::set_lead_session(&self.id, None);
     }
 }
 
@@ -895,6 +899,17 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
         // Plan holds the turn read-only until its plan is approved; Chat and
         // btw clear a plan left from an earlier message.
         grokhub_agent::set_plan_session(&conversation_id, route.session == SessionMode::Plan);
+        // A lead session's turn plans or works; a side answer on it is no
+        // lead turn. Set on every message, so an old mark never outlives it.
+        let lead_phase = match route.session {
+            _ if !route.lead => None,
+            SessionMode::Btw => None,
+            SessionMode::Plan => Some(grokhub_agent::LeadPhase::Plan),
+            SessionMode::Chat => Some(grokhub_agent::LeadPhase::Work),
+        };
+        grokhub_agent::set_lead_session(&conversation_id, lead_phase);
+        let mut plan_watch = crate::lead::PlanWatch::default();
+        crate::helper_asks::turn_started(&conversation_id);
         let engine = match (&mut engine, inbox.take()) {
             (Some(engine), _) => {
                 engine.set_workspace(route.workspace);
@@ -963,6 +978,19 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
             let Some(mut ui) = ui_event(event) else {
                 return;
             };
+            if lead_phase.is_some() {
+                crate::helper_asks::turn_ask(&conversation_id, &ui);
+                // The lead's own plan is saved with the session: the draft,
+                // and the text as the person edited it.
+                let plan = match &ui {
+                    UiEvent::Plan { text } => Some(text.as_str()),
+                    _ => None,
+                };
+                let planning = grokhub_agent::plan_on(&conversation_id);
+                if let Some(text) = plan_watch.keep(plan, planning) {
+                    let _ = crate::lead::save_plan(&config_dir, &conversation_id, text);
+                }
+            }
             if let UiEvent::Done { stop: s } = &mut ui {
                 // Halt cancels a waiting tool too; the turn reads as halted.
                 if halted.load(Ordering::SeqCst) {
@@ -1040,6 +1068,13 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
             }
             emit(ui);
         });
+        crate::helper_asks::turn_ended(&conversation_id);
+        // A planning turn that ends out of plan mode had its plan approved.
+        if lead_phase == Some(grokhub_agent::LeadPhase::Plan)
+            && !grokhub_agent::plan_on(&conversation_id)
+        {
+            let _ = crate::lead::approve(&config_dir, &conversation_id);
+        }
         let result = match (ran, error) {
             _ if halted.load(Ordering::SeqCst) => Ok(HALTED.to_string()),
             (Err(err), _) => Err(err),
@@ -1198,8 +1233,30 @@ mod tests {
         workspace: &std::path::Path,
         config: &std::path::Path,
     ) -> Run {
+        let who = Who {
+            id: "gate-test",
+            lead: false,
+        };
+        start_as(who, mode, desktop, chip, client, workspace, config)
+    }
+
+    /// Whose turn a test runs: the chat's id, and whether it is a lead session.
+    struct Who {
+        id: &'static str,
+        lead: bool,
+    }
+
+    fn start_as(
+        who: Who,
+        mode: PermMode,
+        desktop: bool,
+        chip: SessionMode,
+        client: Arc<OneTool>,
+        workspace: &std::path::Path,
+        config: &std::path::Path,
+    ) -> Run {
         let session = Arc::new(Session::spawn_with(
-            "gate-test",
+            who.id,
             config.to_path_buf(),
             fake_desktop,
         ));
@@ -1215,6 +1272,7 @@ mod tests {
             voice: String::new(),
             voice_session: None,
             suggestions: true,
+            lead: who.lead,
         };
         let runner = Arc::clone(&session);
         let result = std::thread::spawn(move || {
@@ -1427,6 +1485,152 @@ mod tests {
             Some("Plan approved. Plan mode is off.")
         );
         assert!(!grokhub_agent::plan_on("gate-test"));
+    }
+
+    const LEAD_DRAFT: &str = "Read the code.\n\nTasks\n1. Write the note";
+
+    /// The first request's input, as text.
+    fn first_ask(client: &OneTool) -> String {
+        let requests = client.requests.lock().expect("requests");
+        format!("{:?}", requests.first().expect("a request").input)
+    }
+
+    #[test]
+    fn a_lead_plan_is_saved_and_its_approval_is_remembered() {
+        let (workspace, config) = (temp_dir("lead-ws"), temp_dir("lead-cfg"));
+        let id = "lead-plan-test";
+        let client = OneTool::new("exit_plan_mode", serde_json::json!({"plan": LEAD_DRAFT}));
+        let run = start_as(
+            Who { id, lead: true },
+            PermMode::Ask,
+            false,
+            SessionMode::Plan,
+            Arc::clone(&client),
+            &workspace,
+            &config,
+        );
+        let card = wait_for_elicit(&run);
+        let plan_file = config.join("sessions").join(id).join("plan.md");
+        assert_eq!(
+            std::fs::read_to_string(&plan_file).expect("plan.md"),
+            LEAD_DRAFT
+        );
+        assert!(!crate::lead::approved(&config, id));
+        assert!(crate::helper_asks::needs_you(id));
+        let asked = first_ask(&client);
+        assert!(
+            asked.contains("You are the lead for this session."),
+            "{asked}"
+        );
+        assert!(asked.contains("Plan first."), "{asked}");
+
+        run.session.answer_elicit(
+            &elicit_id(&card),
+            "accept",
+            Some("plan"),
+            "Read the code.\n\nTasks\n1. Write the page",
+        );
+        assert_eq!(run.result.join().expect("join"), Ok("end_turn".into()));
+        assert_eq!(
+            std::fs::read_to_string(&plan_file).expect("plan.md"),
+            "Read the code.\n\nTasks\n1. Write the page"
+        );
+        assert!(crate::lead::approved(&config, id));
+        assert!(!crate::helper_asks::needs_you(id));
+        let output = client.tool_output().expect("tool output");
+        assert!(
+            output.starts_with(
+                "Plan approved. Plan mode is off. The user edited the plan. Follow this text, \
+                 not your draft:\nRead the code.\n\nTasks\n1. Write the page\n\nThe plan is approved."
+            ),
+            "{output}"
+        );
+        drop(run.session);
+        assert!(!grokhub_agent::lead_on(id));
+    }
+
+    #[test]
+    fn a_chat_plan_saves_no_file() {
+        let (workspace, config) = (temp_dir("chat-plan-ws"), temp_dir("chat-plan-cfg"));
+        let id = "chat-plan-test";
+        let client = OneTool::new("exit_plan_mode", serde_json::json!({"plan": LEAD_DRAFT}));
+        let run = start_as(
+            Who { id, lead: false },
+            PermMode::Ask,
+            false,
+            SessionMode::Plan,
+            Arc::clone(&client),
+            &workspace,
+            &config,
+        );
+        let card = wait_for_elicit(&run);
+        assert!(!grokhub_agent::lead_on(id));
+        assert!(!crate::helper_asks::needs_you(id));
+        assert!(!first_ask(&client).contains("You are the lead"));
+        run.session
+            .answer_elicit(&elicit_id(&card), "accept", Some("plan"), "1. Edited");
+        assert_eq!(run.result.join().expect("join"), Ok("end_turn".into()));
+        assert!(!config.join("sessions").join(id).join("plan.md").exists());
+        assert!(!crate::lead::approved(&config, id));
+        assert_eq!(
+            client.tool_output().as_deref(),
+            Some("Plan approved. Plan mode is off.")
+        );
+    }
+
+    #[test]
+    fn a_lead_turn_needs_the_person_while_its_card_waits() {
+        let (workspace, config) = (temp_dir("lead-ask-ws"), temp_dir("lead-ask-cfg"));
+        let id = "lead-ask-test";
+        let client = OneTool::new(
+            "write",
+            serde_json::json!({"path": "note.txt", "content": "hi"}),
+        );
+        let run = start_as(
+            Who { id, lead: true },
+            PermMode::Ask,
+            false,
+            SessionMode::Chat,
+            Arc::clone(&client),
+            &workspace,
+            &config,
+        );
+        wait_for_permission(&run);
+        assert!(crate::helper_asks::needs_you(id));
+        // A turn that works carries the lead note, and claims no approval.
+        let asked = first_ask(&client);
+        assert!(
+            asked.contains("You are the lead for this session."),
+            "{asked}"
+        );
+        assert!(asked.contains("Keep working from the task list"), "{asked}");
+        assert!(!asked.contains("The plan is approved"), "{asked}");
+
+        run.session.answer("call-1", PermAnswer::Allow);
+        assert_eq!(run.result.join().expect("join"), Ok("end_turn".to_string()));
+        assert!(!crate::helper_asks::needs_you(id));
+        // A turn that worked approves nothing and saves no plan.
+        assert!(!crate::lead::approved(&config, id));
+        assert!(!config.join("sessions").join(id).join("plan.md").exists());
+    }
+
+    #[test]
+    fn a_side_answer_on_a_lead_session_is_no_lead_turn() {
+        let (workspace, config) = (temp_dir("lead-btw-ws"), temp_dir("lead-btw-cfg"));
+        let id = "lead-btw-test";
+        let client = OneTool::new("read", serde_json::json!({"path": "missing.txt"}));
+        let run = start_as(
+            Who { id, lead: true },
+            PermMode::Ask,
+            false,
+            SessionMode::Btw,
+            Arc::clone(&client),
+            &workspace,
+            &config,
+        );
+        assert_eq!(run.result.join().expect("join"), Ok("end_turn".into()));
+        assert!(!first_ask(&client).contains("You are the lead"));
+        assert!(!grokhub_agent::lead_on(id));
     }
 
     #[test]
@@ -1736,6 +1940,7 @@ mod tests {
             voice: crate::personality::voice(&config, &settings),
             voice_session: Some(crate::personality::voice_config(&config, &settings, 0)),
             suggestions: true,
+            lead: false,
         };
         assert_eq!(grokhub_agent::voice_session::active_voice(id), None);
         let result = session.prompt("hello", Vec::new(), route, Box::new(|_| {}));
@@ -1990,6 +2195,7 @@ mod tests {
             voice: String::new(),
             voice_session: None,
             suggestions: true,
+            lead: false,
         };
         let result = session.prompt(text, files, route, Box::new(|_| {}));
         let requests = client.requests.lock().expect("requests");

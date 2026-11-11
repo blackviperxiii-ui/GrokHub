@@ -52,6 +52,7 @@ pub mod hub_share;
 pub mod imagine;
 pub mod interests;
 pub mod journal;
+mod lead;
 pub mod library;
 pub mod local_ai;
 pub mod local_engine;
@@ -579,6 +580,8 @@ fn route(
         // A chat turn adds its voice settings (`chat_turn`); automations have none.
         voice_session: None,
         suggestions: settings.behavior.suggestions,
+        // Only a session the agent window started leads (`chat_turn`).
+        lead: false,
     })
 }
 
@@ -673,7 +676,13 @@ async fn chat_turn(
         clock,
     } = turn;
     let files = state.trays.take(&conversation_id, &attachments)?;
-    let mode = mode.unwrap_or_else(|| turns::pick_mode(state, &conversation_id, &text));
+    // A session the agent window started, while it shows it, has a lead: it
+    // plans first, until its first plan is approved.
+    let lead = state.code_sessions.holds(&conversation_id)
+        && lead::is_lead(&state.config_dir, &conversation_id);
+    let approved = lead && lead::approved(&state.config_dir, &conversation_id);
+    let mode = lead::first_mode(mode, lead, approved)
+        .unwrap_or_else(|| turns::pick_mode(state, &conversation_id, &text));
     let session = session(state, &conversation_id);
     let config_dir = state.config_dir.clone();
     // A Code tab session works in its own project's folder, not the app's.
@@ -687,6 +696,7 @@ async fn chat_turn(
         if let Some(dir) = own_folder {
             route.workspace = dir;
         }
+        route.lead = lead;
         // Dynamic chat and quips step per turn from this chat's voice settings,
         // at the page's local hour (UTC when the page sent no clock).
         let offset = clock.map_or(0, |c| c.at(grokhub_core::now_ms()).utc_offset_min());
@@ -1152,6 +1162,9 @@ fn close_chat(state: State<'_, ShellState>, conversation_id: String) {
 
 fn end_chat(state: &ShellState, conversation_id: &str) {
     drop_worker(state, conversation_id);
+    if state.code_sessions.holds(conversation_id) {
+        lead::closed(&state.config_dir, conversation_id);
+    }
     state.code_sessions.forget(conversation_id);
     if current(state).last_chat == conversation_id {
         set_last_chat(state, "");
@@ -2152,13 +2165,29 @@ async fn code_project_new(app: AppHandle, name: String) -> Result<projects::Code
 
 /// Code tab: the agent window shows this session. It takes the open
 /// project's folder unless it has one already; the answer is its folder.
+/// A session with no saved turns yet started here, so it has a lead.
 #[tauri::command]
 fn code_session_bind(state: State<'_, ShellState>, conversation_id: String) -> String {
+    lead::shown(&state.config_dir, &conversation_id);
     state
         .code_sessions
         .bind(&conversation_id, &workspace(&state))
         .to_string_lossy()
         .into_owned()
+}
+
+/// Code tab: whether the session started in the agent window, so it has a
+/// lead and its plan can be edited there.
+#[tauri::command]
+fn code_session_lead(state: State<'_, ShellState>, conversation_id: String) -> bool {
+    lead::is_lead(&state.config_dir, &conversation_id)
+}
+
+/// Code tab: the session's saved plan, as last shown or as the person
+/// edited it. `None` for a session with no plan.
+#[tauri::command]
+fn code_session_plan(state: State<'_, ShellState>, conversation_id: String) -> Option<String> {
+    lead::read_plan(&state.config_dir, &conversation_id)
 }
 
 /// Code tab: the workspace's repo, read only.
@@ -5080,6 +5109,8 @@ pub fn run() {
             code_project_pick,
             code_project_new,
             code_session_bind,
+            code_session_lead,
+            code_session_plan,
             get_code_ship,
             save_code_ship,
             get_journal,

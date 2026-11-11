@@ -578,6 +578,14 @@ fn run_turn(
         (None, Some(b)) => Some(b),
         (None, None) => None,
     };
+    // A lead session's note for the turn: plan first, or work from the tasks.
+    let lead_block = (input.depth == 0)
+        .then(|| crate::lead::turn_note(input.conversation_id))
+        .flatten();
+    let volatile_intentions = match (volatile_intentions, lead_block) {
+        (Some(a), Some(b)) => Some(format!("{a}\n\n{b}")),
+        (a, b) => a.or(b),
+    };
     let volatile = crate::prefix_cache::TurnVolatile::assemble(
         input.workspace,
         user_text,

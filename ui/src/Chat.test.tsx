@@ -47,6 +47,7 @@ const api = vi.hoisted(() => ({
   revealSaved: vi.fn(),
   quickChips: vi.fn<(surface: string, id?: string, draft?: string, mode?: SessionMode) => Promise<QuickChip[]>>(),
   chipOutcome: vi.fn<(surface: string, id: string, picked: boolean) => Promise<boolean>>(),
+  codeSessionPlan: vi.fn<(id: string) => Promise<string | null>>(),
   goalAct: vi.fn(() => Promise.resolve({ board: { today: [], mine: [], suggested: [], season: { label: "", done: 0, trophies: [], badges: [] } } })),
 }));
 
@@ -80,6 +81,7 @@ vi.mock("./api", () => ({
   quickChips: api.quickChips,
   chipOutcome: api.chipOutcome,
   goalAct: api.goalAct,
+  codeSessionPlan: api.codeSessionPlan,
   onChatEvent: (handler: (envelope: ChatEnvelope) => void) => {
     api.handler = handler;
     return Promise.resolve(() => {});
@@ -108,6 +110,7 @@ import {
   EARLIER_STEP,
   EVENTS_LOST,
   HALTED_LINE,
+  NO_PLAN,
   itemsFrom,
   MISSION_BUSY,
   OPEN_BUSY,
@@ -1533,5 +1536,124 @@ describe("Chat queue", () => {
     await userEvent.click(screen.getByRole("button", { name: "New session" }));
     await waitFor(() => expect(onConversation).toHaveBeenCalledTimes(2));
     expect(onConversation.mock.calls[1][0]).not.toBe(first);
+  });
+
+  it("in the agent window a queued message is sent with no mode when the reply ends", async () => {
+    const ends = turns();
+    render(<Chat onOpenSettings={() => {}} embedded />);
+    await userEvent.type(screen.getByLabelText(AGENT_PLACEHOLDER), "add a health check{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    const id = api.sendChat.mock.calls[0][0];
+    await userEvent.type(screen.getByLabelText(AGENT_PLACEHOLDER), "then deploy{Enter}");
+    expect(await screen.findByText("1 message waits for this reply to end.")).toBeInTheDocument();
+    await act(async () => ends[0]("end_turn"));
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(2));
+    expect(api.sendChat.mock.calls).toEqual([
+      [id, "add a health check", undefined],
+      [id, "then deploy", undefined],
+    ]);
+  });
+
+  it("an embedded plan card sends the edited plan, or sends it back for changes", async () => {
+    turns();
+    api.answerElicit.mockReset().mockResolvedValue();
+    render(<Chat onOpenSettings={() => {}} embedded lead />);
+    await userEvent.type(screen.getByLabelText(AGENT_PLACEHOLDER), "tidy the build{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    const id = api.sendChat.mock.calls[0][0];
+    const plan = (cardId: string): ChatEvent => ({
+      kind: "elicit",
+      id: cardId,
+      server: "Plan",
+      message: "1. Read build.rs",
+      mode: "form",
+      url: "",
+      fieldName: null,
+      fieldTitle: "",
+      secret: false,
+    });
+    emit(id, plan("plan-1"));
+    const first = screen.getByRole("group", { name: "The plan" });
+    await userEvent.type(within(first).getByRole("textbox", { name: "What should change" }), "add a test step");
+    await userEvent.click(within(first).getByRole("button", { name: "Ask for changes" }));
+    expect(api.answerElicit).toHaveBeenLastCalledWith(
+      id,
+      "plan-1",
+      "accept",
+      "reply",
+      "Change the plan: add a test step",
+    );
+    expect(first).toHaveTextContent("Sent back for changes.");
+
+    emit(id, plan("plan-2"));
+    const second = screen.getAllByRole("group", { name: "The plan" })[1];
+    const box = within(second).getByRole("textbox", { name: "Plan" });
+    expect(box).toHaveValue("1. Read build.rs");
+    await userEvent.type(box, "{Enter}2. Run the tests");
+    await userEvent.click(within(second).getByRole("button", { name: "Approve plan" }));
+    expect(api.answerElicit).toHaveBeenLastCalledWith(
+      id,
+      "plan-2",
+      "accept",
+      "plan",
+      "1. Read build.rs\n2. Run the tests",
+    );
+    expect(second).toHaveTextContent("2. Run the testsApproved. Loadout can make the changes now.");
+    expect(api.answerElicit).toHaveBeenCalledTimes(2);
+  });
+
+  it("a session in the agent window that has no lead keeps the plain plan card", async () => {
+    turns();
+    api.answerElicit.mockReset().mockResolvedValue();
+    render(<Chat onOpenSettings={() => {}} embedded />);
+    await userEvent.type(screen.getByLabelText(AGENT_PLACEHOLDER), "tidy the build{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    const id = api.sendChat.mock.calls[0][0];
+    emit(id, {
+      kind: "elicit",
+      id: "plan-1",
+      server: "Plan",
+      message: "1. Read build.rs",
+      mode: "form",
+      url: "",
+      fieldName: null,
+      fieldTitle: "",
+      secret: false,
+    });
+    const card = screen.getByRole("group", { name: "The plan" });
+    expect(within(card).queryByRole("textbox")).toBeNull();
+    await userEvent.click(within(card).getByRole("button", { name: "Approve plan" }));
+    expect(api.answerElicit).toHaveBeenLastCalledWith(id, "plan-1", "accept", null, "");
+  });
+
+  it("view-plan in the agent window shows the saved plan", async () => {
+    api.codeSessionPlan.mockReset().mockResolvedValueOnce("1. Edited").mockResolvedValueOnce(null);
+    api.runSlash.mockReset().mockResolvedValue({ kind: "viewPlan" });
+    const onConversation = vi.fn();
+    render(<Chat onOpenSettings={() => {}} embedded onConversation={onConversation} />);
+    await waitFor(() => expect(onConversation).toHaveBeenCalledTimes(1));
+    const id = onConversation.mock.calls[0][0];
+    await userEvent.type(screen.getByLabelText(AGENT_PLACEHOLDER), "/view-plan{Enter}");
+    expect(await screen.findByRole("status", { name: "/view-plan result" })).toHaveTextContent("1. Edited");
+    expect(api.codeSessionPlan).toHaveBeenLastCalledWith(id);
+    // No saved plan and no plan card: it says there is none.
+    await userEvent.type(screen.getByLabelText(AGENT_PLACEHOLDER), "/view-plan{Enter}");
+    await waitFor(() => expect(screen.getAllByRole("status", { name: "/view-plan result" })).toHaveLength(2));
+    expect(screen.getAllByRole("status", { name: "/view-plan result" })[1]).toHaveTextContent(
+      "No plan yet. Use Plan mode.",
+    );
+    expect(NO_PLAN).toBe("No plan yet. Use Plan mode.");
+    expect(api.codeSessionPlan).toHaveBeenCalledTimes(2);
+  });
+
+  it("view-plan in the Chat tab never reads a saved plan", async () => {
+    api.codeSessionPlan.mockReset().mockResolvedValue("1. Edited");
+    api.runSlash.mockReset().mockResolvedValue({ kind: "viewPlan" });
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "/view-plan{Enter}");
+    expect(await screen.findByRole("status", { name: "/view-plan result" })).toHaveTextContent(
+      "No plan yet. Use Plan mode.",
+    );
+    expect(api.codeSessionPlan).not.toHaveBeenCalled();
   });
 });

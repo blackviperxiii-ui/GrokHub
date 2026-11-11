@@ -12,6 +12,7 @@ import {
 import {
   addAutomation,
   answerElicit,
+  codeSessionPlan,
   answerPermission,
   cancelChat,
   closeChat,
@@ -438,15 +439,18 @@ function LogItem({
   onConfirm,
   onStopAsking,
   nyxUrl,
+  editable,
 }: {
   item: Item;
   busy: boolean;
+  /** The agent window: a plan card can be edited and sent back. */
+  editable: boolean;
   /** The bubble's Delete message… menu; absent where it can't be offered. */
   onMenu?: MenuAt;
   /** Nyx's face beside each reply, when Nyx is on. */
   nyxUrl?: string;
   onAnswer: (id: string, answer: Answer) => void;
-  onAnswerCard: (item: ElicitItem, action: ElicitAction, value: string) => void;
+  onAnswerCard: (item: ElicitItem, action: ElicitAction, value: string, field?: string) => void;
   /** Yes or Cancel on a slash command's question. */
   onConfirm: (item: Item, yes: boolean) => void;
   /** Stop asking me on a permission card, while the setting is Ask me first. */
@@ -486,7 +490,12 @@ function LogItem({
     case "elicit":
       return (
         <ViewTransition>
-          <ElicitCard key={item.id} item={item} onAnswer={(action, value) => onAnswerCard(item, action, value)} />
+          <ElicitCard
+            key={item.id}
+            item={item}
+            editable={editable}
+            onAnswer={(action, value, field) => onAnswerCard(item, action, value, field)}
+          />
         </ViewTransition>
       );
     case "slash":
@@ -556,6 +565,7 @@ export function Chat({
   remote = false,
   grokSignIn = false,
   embedded = false,
+  lead = false,
   onConversation,
   onBusy,
   onRan,
@@ -584,6 +594,8 @@ export function Chat({
   /** The Code tab's agent window: it starts on a new session instead of the
    * last chat, has no dock, and names itself Agent. */
   embedded?: boolean;
+  /** The agent window's session has a lead: its plan card can be edited. */
+  lead?: boolean;
   /** The conversation on screen, at the start and each time it changes. */
   onConversation?: (conversationId: string) => void;
   /** A reply started or ended. */
@@ -1014,7 +1026,7 @@ export function Chat({
     }
   }
 
-  async function answerCard(item: ElicitItem, action: ElicitAction, value: string) {
+  async function answerCard(item: ElicitItem, action: ElicitAction, value: string, field?: string) {
     const mark = (from: ElicitAction | null, to: ElicitAction | null) =>
       setItems((now) =>
         now.map((it) =>
@@ -1023,7 +1035,7 @@ export function Chat({
       );
     mark(null, action);
     try {
-      await answerElicit(conversationId, item.id, action, item.fieldName, value);
+      await answerElicit(conversationId, item.id, action, field ?? item.fieldName, value);
     } catch (err) {
       // It never reached the agent, which is still asking: give the card back.
       mark(action, null);
@@ -1211,10 +1223,10 @@ export function Chat({
         break;
       case "viewPlan": {
         const plan = [...items].reverse().find((it) => it.kind === "elicit" && it.server === "Plan");
-        setItems((now) => [
-          ...now,
-          { kind: "slash", command, text: plan?.kind === "elicit" ? plan.message : NO_PLAN },
-        ]);
+        const shown = plan?.kind === "elicit" ? plan.message : NO_PLAN;
+        // The agent window's plan is saved with the session, edits included.
+        const saved = embedded ? await codeSessionPlan(conversationId).catch(() => null) : null;
+        setItems((now) => [...now, { kind: "slash", command, text: saved || shown }]);
         break;
       }
       case "loop":
@@ -1438,6 +1450,7 @@ export function Chat({
             nyxUrl={nyx?.url}
             onAnswer={answer}
             onAnswerCard={answerCard}
+            editable={embedded && lead}
             onConfirm={settleConfirm}
             onStopAsking={!remote && settings?.approvals === "ask" ? stopAsking : undefined}
           />

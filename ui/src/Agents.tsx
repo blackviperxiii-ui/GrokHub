@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getQueue, stopTask, type Queue, type TaskStatus } from "./api";
+import { getQueue, stopTask, type Queue, type TaskStatus, type TodoState } from "./api";
 
 /** How often the page reads the queue again while it is on screen. */
 export const POLL_MS = 2000;
@@ -10,8 +10,18 @@ export const AGENTS_NO_CHAT =
 export const AGENTS_EMPTY = "No jobs yet. Queued work from this chat shows up here.";
 
 /** The Code tab's Tasks panel, beside the agent window. */
-export const TASKS_NOTE = "The agent's to-dos and helpers for this session.";
-export const TASKS_EMPTY = "No tasks yet. The agent's to-dos and helpers show up here.";
+export const TASKS_NOTE = "The lead's tasks and helpers for this session.";
+export const TASKS_EMPTY = "No tasks yet. The lead's tasks and helpers show up here.";
+
+/** A task's state in the Tasks panel, from its status and its helper. */
+export const LEAD_LABELS: Record<TodoState, string> = {
+  planned: "Planned",
+  running: "Running",
+  needsYou: "Needs you",
+  review: "Review",
+  done: "Done",
+  failed: "Failed",
+};
 
 export const TASK_LABELS: Record<TaskStatus, string> = {
   running: "Running",
@@ -102,6 +112,8 @@ export function Agents({
   const tasks = queue?.tasks ?? [];
   const todos = queue?.todos ?? [];
   const running = tasks.filter((task) => task.live).length;
+  // Beside the agent window the lead's tasks come first, then what runs for them.
+  const hubTitle = onOpenChat ? "Tasks" : "Helpers and commands";
 
   return (
     <section className={onOpenChat ? "agents" : "agents embedded"} aria-label={onOpenChat ? "Agents" : "Agent tasks"}>
@@ -133,10 +145,26 @@ export function Agents({
       {queue && tasks.length === 0 && todos.length === 0 && (
         <p className="empty">{onOpenChat ? AGENTS_EMPTY : TASKS_EMPTY}</p>
       )}
-      {tasks.length > 0 && (
+      {!onOpenChat && todos.length > 0 && (
         <>
           <h2>Tasks</h2>
           <ul className="rows" aria-label="Tasks">
+            {todos.map((todo) => (
+              <li key={todo.id} className={`card agent ${todo.status}`} aria-label={todo.content}>
+                <div className="card-title">{todo.content}</div>
+                <div className="card-status">
+                  {LEAD_LABELS[todo.state]}
+                  {todo.owner ? ` · helper ${todo.owner}` : ""}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {tasks.length > 0 && (
+        <>
+          <h2>{hubTitle}</h2>
+          <ul className="rows" aria-label={hubTitle}>
             {tasks.map((task) => (
               <li key={task.id} className={`card agent ${task.status}`} aria-label={task.title}>
                 {onOpenChat ? (
@@ -166,19 +194,15 @@ export function Agents({
           </ul>
         </>
       )}
-      {todos.length > 0 && (
+      {onOpenChat && todos.length > 0 && (
         <>
           <h2>To-dos</h2>
           <ul className="rows" aria-label="To-dos">
             {todos.map((todo) => (
               <li key={todo.id} className={`card agent ${todo.status}`} aria-label={todo.content}>
-                {onOpenChat ? (
-                  <button type="button" className="card-title link" onClick={onOpenChat}>
-                    {todo.content}
-                  </button>
-                ) : (
-                  <div className="card-title">{todo.content}</div>
-                )}
+                <button type="button" className="card-title link" onClick={onOpenChat}>
+                  {todo.content}
+                </button>
                 <div className="card-status">{todoLabel(todo.status)}</div>
               </li>
             ))}

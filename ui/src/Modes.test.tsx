@@ -2,7 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { ElicitCard, type ElicitItem } from "./Modes";
+import { changeRequest, ElicitCard, PLAN_SENT_BACK, type ElicitItem } from "./Modes";
 
 vi.mock("./api", () => ({}));
 
@@ -97,5 +97,63 @@ describe("ElicitCard", () => {
     render(<ElicitCard item={card({ server: "Plan", fieldName: null, answer: "decline" })} onAnswer={() => {}} />);
     expect(screen.getByText("Kept in plan mode.")).toBeVisible();
     expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("an editable plan approves with the text as edited", async () => {
+    const onAnswer = vi.fn();
+    const item = card({ server: "Plan", fieldName: null, message: "1. Draft" });
+    const view = render(<ElicitCard item={item} onAnswer={onAnswer} editable />);
+    const plan = screen.getByRole("textbox", { name: "Plan" });
+    expect(plan).toHaveValue("1. Draft");
+    await userEvent.clear(plan);
+    // An emptied plan is not a plan to approve.
+    expect(screen.getByRole("button", { name: "Approve plan" })).toBeDisabled();
+    await userEvent.type(plan, "1. Edited");
+    await userEvent.click(screen.getByRole("button", { name: "Approve plan" }));
+    expect(onAnswer.mock.calls).toEqual([["accept", "1. Edited", "plan"]]);
+    view.rerender(<ElicitCard item={{ ...item, answer: "accept" }} onAnswer={onAnswer} editable />);
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.getByRole("group", { name: "The plan" })).toHaveTextContent(
+      "1. EditedApproved. Loadout can make the changes now.",
+    );
+  });
+
+  it("ask for changes needs a note and sends it as a reply", async () => {
+    const onAnswer = vi.fn();
+    const item = card({ server: "Plan", fieldName: null, message: "1. Draft" });
+    const view = render(<ElicitCard item={item} onAnswer={onAnswer} editable />);
+    const ask = screen.getByRole("button", { name: "Ask for changes" });
+    expect(ask).toBeDisabled();
+    await userEvent.type(screen.getByRole("textbox", { name: "What should change" }), "make step 2 smaller");
+    expect(ask).toBeEnabled();
+    await userEvent.click(ask);
+    expect(onAnswer.mock.calls).toEqual([["accept", "Change the plan: make step 2 smaller", "reply"]]);
+    view.rerender(<ElicitCard item={{ ...item, answer: "accept" }} onAnswer={onAnswer} editable />);
+    expect(PLAN_SENT_BACK).toBe("Sent back for changes.");
+    expect(screen.getByText("Sent back for changes.")).toBeVisible();
+    expect(screen.queryByText("Approved. Loadout can make the changes now.")).toBeNull();
+  });
+
+  it("a change request carries the plan only when it was edited", () => {
+    expect(changeRequest(" make step 2 smaller ", "1. Draft\n", "1. Draft")).toBe(
+      "Change the plan: make step 2 smaller",
+    );
+    expect(changeRequest("make step 2 smaller", "1. Edited", "1. Draft")).toBe(
+      "Change the plan: make step 2 smaller\n\nThe plan as I edited it:\n1. Edited",
+    );
+  });
+
+  it("a plan card outside the agent window is not editable", async () => {
+    const onAnswer = vi.fn();
+    render(<ElicitCard item={card({ server: "Plan", fieldName: null, message: "1. Draft" })} onAnswer={onAnswer} />);
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Ask for changes" })).toBeNull();
+    expect(screen.getByText("1. Draft")).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Approve plan" }));
+    await userEvent.click(screen.getByRole("button", { name: "Keep planning" }));
+    expect(onAnswer.mock.calls).toEqual([
+      ["accept", ""],
+      ["decline", ""],
+    ]);
   });
 });

@@ -2783,11 +2783,18 @@ export interface QueueTask {
   live: boolean;
 }
 
+/** A to-do as the Code tab's Tasks panel shows it. */
+export type TodoState = "planned" | "running" | "needsYou" | "review" | "done" | "failed";
+
 /** A to-do Grok wrote in the chat: "pending", "in_progress", "completed" or "cancelled". */
 export interface QueueTodo {
   id: string;
   content: string;
   status: string;
+  /** The helper that has the task, by its task id ("s3"); none before one starts. */
+  owner?: string;
+  /** Where the task stands, from its status and its helper. */
+  state: TodoState;
 }
 
 export interface Queue {
@@ -3123,6 +3130,17 @@ export function codeProjectNew(name: string): Promise<CodeProjects> {
  * unless it has one already. Resolves with the folder it works in. */
 export function codeSessionBind(conversationId: string): Promise<string> {
   return invoke<string>("code_session_bind", { conversationId });
+}
+
+/** Whether the session started in the agent window, so it has a lead and
+ * its plan can be edited there. Ask after `codeSessionBind`. */
+export function codeSessionLead(conversationId: string): Promise<boolean> {
+  return invoke<boolean>("code_session_lead", { conversationId });
+}
+
+/** The session's saved plan, as last shown or edited; null when it has none. */
+export function codeSessionPlan(conversationId: string): Promise<string | null> {
+  return invoke<string | null>("code_session_plan", { conversationId });
 }
 
 export function codeRepo(): Promise<CodeRepo> {

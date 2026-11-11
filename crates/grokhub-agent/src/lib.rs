@@ -26,6 +26,7 @@ mod hooks;
 pub mod identity;
 mod image_budget;
 pub mod indexers;
+mod lead;
 mod loopback;
 mod lru_map;
 pub mod mcp;
@@ -105,6 +106,7 @@ pub use hooks::{
     HookInfo, HookOrigin,
 };
 pub use identity::{identity_blocks, SOUL_BYTE_CAP, USER_BYTE_CAP};
+pub use lead::{lead_on, set_lead_session, LeadPhase};
 pub use mcp::{
     alias_elicit, attach_elicit, configured, detach_elicit, doctor, import_documents, import_paths,
     restart, set_workspace, shutdown_all, unalias_elicit, DoctorRow, ElicitInbox, ElicitNote,

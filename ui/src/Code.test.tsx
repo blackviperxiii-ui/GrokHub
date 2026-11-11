@@ -36,6 +36,7 @@ const api = vi.hoisted(() => ({
   codeDeployRun: vi.fn<(command: string, confirmed: boolean) => Promise<{ command: string; exit: number; output: string; cut: boolean }>>(),
   onCodeDeployRun: vi.fn(() => Promise.resolve(() => {})),
   codeSessionBind: vi.fn<(conversationId: string) => Promise<string>>(),
+  codeSessionLead: vi.fn<(conversationId: string) => Promise<boolean>>(),
 }));
 
 vi.mock("./api", () => api);
@@ -46,6 +47,7 @@ vi.mock("./Chat", async () => {
   let made = 0;
   interface StubProps {
     embedded?: boolean;
+    lead?: boolean;
     active?: boolean;
     prefill?: { text: string; conversationId?: string };
     open?: { id: string };
@@ -54,13 +56,13 @@ vi.mock("./Chat", async () => {
     onRan?: () => void;
     deleted?: { n: number };
   }
-  function Chat({ embedded, active, prefill, open, onConversation, onBusy, onRan, deleted }: StubProps) {
+  function Chat({ embedded, lead, active, prefill, open, onConversation, onBusy, onRan, deleted }: StubProps) {
     const [busy, setBusy] = useState(false);
     const id = open?.id ?? prefill?.conversationId ?? "shell-first";
     useEffect(() => onConversation?.(id), [id, onConversation]);
     useEffect(() => onBusy?.(busy), [busy, onBusy]);
     return (
-      <div data-testid="agent-chat" data-embedded={String(embedded)} data-active={String(active)}>
+      <div data-testid="agent-chat" data-embedded={String(embedded)} data-lead={String(lead)} data-active={String(active)}>
         <span>session {id}</span>
         <span>box [{prefill?.text ?? ""}]</span>
         <span>deleted {deleted?.n ?? 0}</span>
@@ -151,6 +153,8 @@ describe("Code tab", () => {
     api.codeRepo.mockReset();
     api.codeSessionBind.mockReset();
     api.codeSessionBind.mockResolvedValue("/work/demo");
+    api.codeSessionLead.mockReset();
+    api.codeSessionLead.mockResolvedValue(false);
     api.codeDiff.mockReset();
     api.codeBuiltins.mockReset();
     api.codeBuiltins.mockResolvedValue([]);
@@ -800,6 +804,23 @@ describe("Code tab", () => {
     await userEvent.click(screen.getByRole("button", { name: "stub folder demo" }));
     await waitFor(() => expect(chat).not.toHaveTextContent("session shell-first"));
     expect(await screen.findByText("Works in demo")).toBeInTheDocument();
+  });
+
+  it("tells the agent window whether its session has a lead, after the session has its folder", async () => {
+    api.codeRepo.mockResolvedValue(repo());
+    api.codeSessionLead.mockImplementation((id) => Promise.resolve(id === "shell-first"));
+    render(<Tab shown />);
+    const chat = screen.getByTestId("agent-chat");
+    await waitFor(() => expect(chat).toHaveAttribute("data-lead", "true"));
+    expect(api.codeSessionLead).toHaveBeenLastCalledWith("shell-first");
+    expect(api.codeSessionBind.mock.invocationCallOrder[0]).toBeLessThan(
+      api.codeSessionLead.mock.invocationCallOrder[0],
+    );
+    // A saved chat opened here has none.
+    await userEvent.click(screen.getByRole("button", { name: "stub open session" }));
+    await waitFor(() => expect(chat).toHaveTextContent("session chat-7"));
+    await waitFor(() => expect(api.codeSessionLead).toHaveBeenLastCalledWith("chat-7"));
+    expect(chat).toHaveAttribute("data-lead", "false");
   });
 
   it("keeps the agent window mounted and idle while another tab shows", async () => {

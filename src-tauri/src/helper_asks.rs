@@ -59,11 +59,86 @@ pub fn waiting(chat: &str) -> Vec<UiEvent> {
 /// The question `id` in `chat` was answered.
 pub fn answered(chat: &str, id: &str) {
     pending().answered(chat, id);
+    let mut asks = turn_asks().lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(list) = asks.get_mut(chat) {
+        list.retain(|ask| ask != id);
+        if list.is_empty() {
+            asks.remove(chat);
+        }
+    }
 }
 
 /// The chat's worker ended, and its helpers with it: nothing waits now.
 pub fn chat_ended(chat: &str) {
     pending().chat_ended(chat);
+    turn_ended(chat);
+}
+
+/// The ids of the asks a lead session's running turn waits on. Such an ask
+/// (the lead's own, or a foreground helper's) is shown by the turn's own
+/// stream, so only its id is kept here and no card is shown twice.
+fn turn_asks() -> &'static Mutex<HashMap<String, Vec<String>>> {
+    static ASKS: std::sync::OnceLock<Mutex<HashMap<String, Vec<String>>>> =
+        std::sync::OnceLock::new();
+    ASKS.get_or_init(Mutex::default)
+}
+
+/// Reads one event of a lead session's turn and keeps it when it is an ask.
+pub fn turn_ask(chat: &str, ui: &UiEvent) {
+    let Some(id) = ask_id(ui) else {
+        return;
+    };
+    turn_asks()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .entry(chat.to_string())
+        .or_default()
+        .push(id.to_string());
+}
+
+/// The chats with a turn running now.
+fn turns() -> &'static Mutex<std::collections::HashSet<String>> {
+    static TURNS: std::sync::OnceLock<Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    TURNS.get_or_init(Mutex::default)
+}
+
+/// The chat's turn started.
+pub fn turn_started(chat: &str) {
+    turns()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(chat.to_string());
+}
+
+/// True while a turn of the chat runs.
+pub fn in_turn(chat: &str) -> bool {
+    turns()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains(chat)
+}
+
+/// The chat's turn ended: none of its asks waits now.
+pub fn turn_ended(chat: &str) {
+    turns()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(chat);
+    turn_asks()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(chat);
+}
+
+/// True while the session waits on the person: a background helper's
+/// question, or an ask of the running turn.
+pub fn needs_you(chat: &str) -> bool {
+    !pending().waiting(chat).is_empty()
+        || turn_asks()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(chat)
 }
 
 /// Asks waiting for an answer, by chat.
@@ -198,5 +273,46 @@ mod tests {
         assert_eq!(pending.waiting("chat-b").len(), 1);
         pending.chat_ended("chat-b");
         assert!(pending.waiting("chat-b").is_empty());
+    }
+
+    #[test]
+    fn a_turn_ask_waits_until_it_is_answered_or_the_turn_ends() {
+        let chat = "turn-ask-test";
+        let ask = |id: &str| UiEvent::Permission {
+            id: id.into(),
+            title: "write".into(),
+            action: "note.txt".into(),
+            reason: String::new(),
+        };
+        assert!(!needs_you(chat));
+        assert!(!in_turn(chat));
+        turn_started(chat);
+        assert!(in_turn(chat));
+        turn_ask(
+            chat,
+            &UiEvent::Text {
+                text: "reading".into(),
+            },
+        );
+        assert!(!needs_you(chat));
+
+        turn_ask(chat, &ask("p1"));
+        assert!(needs_you(chat));
+        assert_eq!(waiting(chat), Vec::<UiEvent>::new());
+        answered(chat, "other");
+        assert!(needs_you(chat));
+        answered(chat, "p1");
+        assert!(!needs_you(chat));
+
+        turn_ask(chat, &ask("p2"));
+        assert!(needs_you(chat));
+        turn_ended(chat);
+        assert!(!needs_you(chat));
+        assert!(!in_turn(chat));
+
+        turn_ask(chat, &ask("p3"));
+        chat_ended(chat);
+        assert!(!needs_you(chat));
+        assert_eq!(waiting(chat), Vec::<UiEvent>::new());
     }
 }

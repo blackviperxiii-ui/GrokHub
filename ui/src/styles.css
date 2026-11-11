@@ -2141,6 +2141,14 @@ span.chip.quiet {
   flex: 1 1 200px;
 }
 
+/* The agent window's plan: a document to edit before it is approved. */
+.card.elicit textarea.plan-draft {
+  flex-basis: 100%;
+  box-sizing: border-box;
+  width: 100%;
+  resize: vertical;
+}
+
 .signed-out {
   margin: auto;
   max-width: 420px;

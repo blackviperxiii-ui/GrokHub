@@ -10,7 +10,7 @@ const api = vi.hoisted(() => ({
 
 vi.mock("./api", () => api);
 
-import { Agents, AGENTS_EMPTY, AGENTS_NO_CHAT, TASKS_EMPTY, TASKS_NOTE } from "./Agents";
+import { Agents, AGENTS_EMPTY, AGENTS_NO_CHAT, LEAD_LABELS, TASKS_EMPTY, TASKS_NOTE } from "./Agents";
 
 const QUEUE: Queue = {
   tasks: [
@@ -20,8 +20,8 @@ const QUEUE: Queue = {
     { id: "m4", title: "Monitor: build log", status: "done", live: false },
   ],
   todos: [
-    { id: "a", content: "Read the spec", status: "completed" },
-    { id: "b", content: "Write the page", status: "in_progress" },
+    { id: "a", content: "Read the spec", status: "completed", state: "done" },
+    { id: "b", content: "Write the page", status: "in_progress", state: "running", owner: "s2" },
   ],
 };
 
@@ -139,6 +139,7 @@ describe("Agents", () => {
 
     const panel = screen.getByRole("region", { name: "Agent tasks" });
     expect(within(panel).getByText(TASKS_NOTE)).toBeInTheDocument();
+    expect(TASKS_NOTE).toBe("The lead's tasks and helpers for this session.");
     expect(await within(panel).findByText("Write the page")).toBeInTheDocument();
     expect(within(panel).queryByRole("button", { name: "Open chat" })).not.toBeInTheDocument();
     expect(within(panel).queryByRole("button", { name: "Write the page" })).not.toBeInTheDocument();
@@ -146,6 +147,51 @@ describe("Agents", () => {
     const live = within(panel).getByRole("listitem", { name: "cargo test --workspace" });
     await userEvent.click(within(live).getByRole("button", { name: "Stop" }));
     expect(api.stopTask).toHaveBeenCalledWith("shell-c1", "t1");
+  });
+
+  it("the Tasks panel lists the lead's tasks first, each with its state and helper", async () => {
+    api.getQueue.mockResolvedValue({
+      tasks: QUEUE.tasks,
+      todos: [
+        { id: "task-1", content: "Add the parser", status: "in_progress", state: "running", owner: "s2" },
+        { id: "task-2", content: "Wire the page", status: "in_progress", state: "review", owner: "s3" },
+        { id: "task-3", content: "Write the docs", status: "pending", state: "planned" },
+        { id: "task-4", content: "Ask about the port", status: "in_progress", state: "needsYou", owner: "s5" },
+        { id: "task-5", content: "Read the spec", status: "completed", state: "done", owner: "s1" },
+        { id: "task-6", content: "Drop the old flag", status: "cancelled", state: "failed" },
+      ],
+    });
+    render(<Agents conversationId="shell-c1" />);
+
+    const tasks = await screen.findByRole("list", { name: "Tasks" });
+    expect(within(tasks).getAllByRole("listitem").map((row) => row.textContent)).toEqual([
+      "Add the parserRunning · helper s2",
+      "Wire the pageReview · helper s3",
+      "Write the docsPlanned",
+      "Ask about the portNeeds you · helper s5",
+      "Read the specDone · helper s1",
+      "Drop the old flagFailed",
+    ]);
+    const hub = screen.getByRole("list", { name: "Helpers and commands" });
+    expect(within(hub).getAllByRole("listitem").map((row) => row.querySelector(".card-status")?.textContent)).toEqual([
+      "Running · t1",
+      "Failed · s2",
+      "Failed · t3",
+      "Done · m4",
+    ]);
+    expect(screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent)).toEqual([
+      "Tasks",
+      "Helpers and commands",
+    ]);
+    expect(screen.queryByRole("list", { name: "To-dos" })).toBeNull();
+    expect(LEAD_LABELS).toEqual({
+      planned: "Planned",
+      running: "Running",
+      needsYou: "Needs you",
+      review: "Review",
+      done: "Done",
+      failed: "Failed",
+    });
   });
 
   it("the Tasks panel of a session with nothing queued says what will show up", async () => {

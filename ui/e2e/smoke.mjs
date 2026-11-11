@@ -35,9 +35,11 @@ const PROMPT = "write a note from the smoke test";
 const NOTE = "smoke-note.txt";
 const NOTE_TEXT = "written after Allow once";
 const DRIVER = "http://127.0.0.1:4444";
-// The Code tab's agent window: one message that writes a note in its
-// session's folder and ticks a to-do.
+// The Code tab's agent window: one message that plans first and then, once
+// its plan is approved, writes a note in its session's folder and ticks a
+// to-do.
 const AGENT_PROMPT = "smoke agent window: write the session note";
+const AGENT_PLAN = "Write one note in the project.\n\nTasks\n1. write the session note";
 const AGENT_NOTE = "agent-session-note.txt";
 const AGENT_NOTE_TEXT = "written by the agent window's session";
 const AGENT_TODO = "write the session note";
@@ -93,6 +95,10 @@ function mockReply(callNumber, body) {
     return textReply(AGENT_REPLY_2);
   }
   if (body.includes(AGENT_PROMPT)) {
+    // A session started in the agent window plans first.
+    if (!body.includes("smoke-agent-plan")) {
+      return toolCall("smoke-agent-plan", "exit_plan_mode", { plan: AGENT_PLAN });
+    }
     if (!body.includes("smoke-agent-write")) {
       return toolCall("smoke-agent-write", "write", { path: AGENT_NOTE, content: AGENT_NOTE_TEXT });
     }
@@ -1330,8 +1336,10 @@ async function codeProjects(s, config, workspace) {
 // The Code tab's agent window: a message sent there runs on the Code tab, in
 // the folder of the project its session started in. While its reply runs the
 // app is moved to the second project from Chat (`/project bind`); the note
-// must still land in the first project. Its to-do shows in the Tasks panel,
-// and the session is listed under the first project.
+// must still land in the first project. The session plans first: its plan
+// shows as a card that can be edited, is saved with the session, and nothing
+// is written until Approve plan. Its to-do shows in the Tasks panel, and the
+// session is listed under the first project.
 async function codeAgent(s, config, workspace) {
   const xp = (value) => wd("POST", `${s}/elements`, { using: "xpath", value });
   const bound = () => JSON.parse(readFileSync(join(config, "shell.json"), "utf8")).workspace;
@@ -1407,6 +1415,42 @@ async function codeAgent(s, config, workspace) {
 
   release();
   agentHold = null;
+  // The first message plans: the plan waits on its card, where it can be
+  // edited, and it is saved with the session. Nothing is written yet.
+  const planCard = await waitFor("the plan card in the agent window", () =>
+    find(s, `${pane} .card.elicit[aria-label="The plan"]`),
+  );
+  const draft = await find(s, `${pane} textarea[aria-label='Plan']`);
+  const drafted = await wd("GET", `${s}/element/${draft}/property/value`);
+  if (drafted !== AGENT_PLAN) throw new Error(`the plan box held ${JSON.stringify(drafted)}`);
+  const lead = (c) => c.body.includes(AGENT_PROMPT) && c.body.includes("You are the lead for this session.");
+  if (!mockSeen.some(lead)) {
+    throw new Error("the agent window's first message carried no lead note");
+  }
+  await waitFor("the plan saved with the session", () => {
+    const sessions = join(config, "sessions");
+    if (!existsSync(sessions)) return null;
+    return readdirSync(sessions).some((id) => {
+      const file = join(sessions, id, "plan.md");
+      return existsSync(file) && readFileSync(file, "utf8") === AGENT_PLAN;
+    })
+      ? true
+      : null;
+  });
+  await sleep(500);
+  if (existsSync(join(workspace, AGENT_NOTE)) || existsSync(join(other, AGENT_NOTE))) {
+    throw new Error("the agent window wrote the note before its plan was approved");
+  }
+  if (mockSeen.some((c) => c.body.includes("smoke-agent-plan") && c.body.includes("function_call_output"))) {
+    throw new Error("the planning turn went on before its plan was answered");
+  }
+  await shot(s, "code-agent-plan");
+  const approve = await wd("POST", `${s}/element/${planCard}/element`, {
+    using: "xpath",
+    value: ".//button[normalize-space()='Approve plan']",
+  });
+  await clickStill(s, approve[ELEMENT], "Approve plan in the agent window");
+  console.log("code tab: the agent window planned first, saved the plan and waited for Approve plan");
   await wrote(AGENT_NOTE, AGENT_REPLY);
 
   // A message that starts after the move: the app is in the second project,
