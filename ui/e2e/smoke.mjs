@@ -687,12 +687,19 @@ async function pulse(s, config) {
   });
   await wd("POST", `${s}/element/${close[ELEMENT]}/click`, {});
 
-  // No menu: Dismiss, last in the row, takes the post away.
+  // No menu: Dismiss, last in the row, asks first then takes the post away.
   const dismiss = await wd("POST", `${s}/element`, {
     using: "xpath",
     value: `${post}//div[contains(@class,'card-row')]/button[last()][normalize-space()='Dismiss']`,
   });
   await wd("POST", `${s}/element/${dismiss[ELEMENT]}/click`, {});
+  const dismissConfirm = await waitFor("dismiss confirm", () =>
+    wd("POST", `${s}/element`, {
+      using: "xpath",
+      value: `${post}//div[@role='group' and @aria-label='Dismiss this post?']//button[normalize-space()='Dismiss']`,
+    }).catch(() => null),
+  );
+  await wd("POST", `${s}/element/${dismissConfirm[ELEMENT]}/click`, {});
   await waitFor("the dismissed post", async () => {
     const left = await wd("POST", `${s}/elements`, { using: "xpath", value: post });
     return left.length === 0;
@@ -734,7 +741,7 @@ async function pulse(s, config) {
   }
   await shot(s, "pulse-ideas");
   await wd("POST", `${s}/element/${rowButtons[0][ELEMENT]}/click`, {});
-  await waitFor("More like this kept", async () => {
+  await waitFor("Like kept for the next run", async () => {
     try {
       const state = JSON.parse(readFileSync(join(config, "pulse-ideas.json"), "utf8"));
       return state.moreLike?.[0] === PULSE_IDEA.title ? true : null;
@@ -744,7 +751,7 @@ async function pulse(s, config) {
   });
   console.log(`idea row: ${labels.join(", ")}; Like kept for the next run`);
 
-  // The rows stay disabled until More like this has returned, and the kept
+  // The rows stay disabled until Like has returned, and the kept
   // file is written before it does, so a click right away can land on a
   // disabled row and do nothing.
   const run = await waitFor("the idea row, enabled", async () => {

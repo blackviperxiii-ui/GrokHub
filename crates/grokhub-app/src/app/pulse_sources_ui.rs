@@ -633,40 +633,71 @@ impl Cabin {
                 self.heartbeat_card_dismissed();
             }
             SourceAct::MoreLike => {
-                let text = format!(
-                    "{} {}",
-                    card.title,
-                    card.pulse.because.as_deref().unwrap_or("")
-                );
-                self.interests_feedback_anchored(
-                    &text,
-                    card.pulse.because.as_deref(),
-                    InterestSignal::MoreLikeThis,
-                );
-                self.nudge_post_source(&card, 1, true);
-                let followed = self.learn_place_from_card(&card);
-                let was_busy = self.sources_busy();
-                let search_on = self.cfg.pulse_sources.hacker_news
-                    || self.cfg.pulse_sources.reddit
-                    || self.cfg.pulse_sources.web_search;
-                self.kick_source_fetch();
-                if self.sources.rx.is_some() && !was_busy {
-                    self.sources.looking_more = true;
-                    if !followed {
-                        self.status = "Looking for more like this…".into();
-                    }
-                } else if was_busy {
-                    self.sources.looking_more = true;
-                    if !followed {
-                        self.status = "More like this queued — check already running.".into();
-                    }
-                } else if !followed && !search_on {
-                    self.status =
-                        "Turn on Hacker News, Reddit, or Web search to look for more.".into();
-                } else if !followed {
-                    self.status = "More like this queued for the next check.".into();
-                }
+                // Also reached from pulse_like (More like this folded into Like).
+                self.source_more_like(&card);
             }
+        }
+    }
+
+    /// More like this effects: topic weight, source nudge, related search, place.
+    pub(super) fn source_more_like(&mut self, card: &grokhub_core::UpdateCard) {
+        let text = format!(
+            "{} {}",
+            card.title,
+            card.pulse.because.as_deref().unwrap_or("")
+        );
+        self.interests_feedback_anchored(
+            &text,
+            card.pulse.because.as_deref(),
+            InterestSignal::MoreLikeThis,
+        );
+        self.nudge_post_source(card, 1, true);
+        let followed = self.learn_place_from_card(card);
+        let was_busy = self.sources_busy();
+        let search_on = self.cfg.pulse_sources.hacker_news
+            || self.cfg.pulse_sources.reddit
+            || self.cfg.pulse_sources.web_search;
+        self.kick_source_fetch();
+        if self.sources.rx.is_some() && !was_busy {
+            self.sources.looking_more = true;
+            if !followed {
+                self.status = "Looking for more like this…".into();
+            }
+        } else if was_busy {
+            self.sources.looking_more = true;
+            if !followed {
+                self.status = "More like this queued — check already running.".into();
+            }
+        } else if !followed && !search_on {
+            self.status = "Turn on Hacker News, Reddit, or Web search to look for more.".into();
+        } else if !followed {
+            self.status = "More like this queued for the next check.".into();
+        }
+    }
+
+    /// Unlike on a source post: retract More like this weight and the source nudge.
+    /// Does not unfollow a place already added.
+    pub(super) fn source_unlike_more(&mut self, card: &grokhub_core::UpdateCard) {
+        let text = format!(
+            "{} {}",
+            card.title,
+            card.pulse.because.as_deref().unwrap_or("")
+        );
+        let now = now_ms();
+        let profile = self.interests_now();
+        let before = profile.clone();
+        profile.retract_feedback(&text, InterestSignal::MoreLikeThis, now);
+        if *profile != before {
+            self.persist_interests();
+        }
+        self.nudge_post_source(card, -1, false);
+        self.sources.looking_more = false;
+        // Retract category lift from Like→More like this.
+        self.react_more(card, false);
+        if let Some((category, _)) = grokhub_core::reactions::card_category_tag(card) {
+            self.reactions_now()
+                .retract(grokhub_core::reactions::Outcome::Accepted, &category);
+            self.save_reactions();
         }
     }
 
@@ -1516,20 +1547,29 @@ mod tests {
             .and_then(|rest| rest.split("\n            }\n        }\n    }").next())
             .expect("MoreLike arm");
         assert!(
-            act.contains("self.kick_source_fetch()"),
-            "More like this must start a check now: {act}"
+            act.contains("self.source_more_like(&card)"),
+            "MoreLike aliases source_more_like (folded into Like): {act}"
+        );
+        let more = include_str!("pulse_sources_ui.rs")
+            .split("fn source_more_like(")
+            .nth(1)
+            .and_then(|rest| rest.split("\n    pub(super) fn ").next())
+            .expect("source_more_like");
+        assert!(
+            more.contains("self.kick_source_fetch()"),
+            "More like this must start a check now: {more}"
         );
         assert!(
-            act.contains("Looking for more like this…"),
-            "status must name the look: {act}"
+            more.contains("Looking for more like this…"),
+            "status must name the look: {more}"
         );
         assert!(
-            act.contains("looking_more = true"),
-            "Feed button needs looking_more: {act}"
+            more.contains("looking_more = true"),
+            "in-flight look needs looking_more: {more}"
         );
         assert!(
-            act.contains("Turn on Hacker News, Reddit, or Web search"),
-            "off-search path must say what to turn on: {act}"
+            more.contains("Turn on Hacker News, Reddit, or Web search"),
+            "off-search path must say what to turn on: {more}"
         );
         let kick = include_str!("pulse_sources_ui.rs")
             .split("fn kick_source_fetch(")
@@ -1541,7 +1581,14 @@ mod tests {
             "related queue clears only after search reqs exist: {kick}"
         );
         let ui = include_str!("pulse_ui.rs");
-        assert!(ui.contains("\"Looking…\""), "button label while looking");
+        assert!(
+            !ui.contains("\"More like this\"") && !ui.contains("\"Looking…\""),
+            "row no longer shows More like this / Looking…"
+        );
+        assert!(
+            ui.contains("self.source_more_like(&card)"),
+            "Like on a source post calls source_more_like"
+        );
         let status = ui
             .split("fn paint_source_status(")
             .nth(1)

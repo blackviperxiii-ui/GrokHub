@@ -670,12 +670,14 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
     let Some(card) = cards.iter().find(|c| c.id == id).cloned() else {
         return Err("That card is gone. The page now shows what is left.".into());
     };
+    let source = ps::is_source_post(&card);
     let (outcome, shift) = match act {
-        // Dismiss carries no weight; Not interested trains card taste only, so
-        // one or two clicks stay small.
-        Act::Dismiss | Act::Dislike => (None, None),
-        Act::Delete => (Some(Outcome::Dismissed), None),
+        // Dismiss absorbs Delete: no category outcome (Delete taste is below).
+        // Not interested trains card taste only, so one or two clicks stay small.
+        Act::Dismiss | Act::Delete | Act::Dislike => (None, None),
         Act::NotThis | Act::NotInterested => (Some(Outcome::Dismissed), Some(false)),
+        // Love on a source post also absorbs More like this (shift true).
+        Act::Love if source => (Some(Outcome::Accepted), Some(true)),
         Act::Love | Act::Accept | Act::Save => (Some(Outcome::Accepted), None),
         Act::Unlove => (None, None),
         Act::MoreLike if card.reaction == Some(CardReaction::Up) => (None, None),
@@ -703,7 +705,22 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
         }
     }
     let changed = match act {
-        Act::Dismiss => remove(&mut cards),
+        Act::Dismiss | Act::Delete => {
+            // Dismiss absorbs Delete: Delete taste when shell Delete would have,
+            // then drop the row the way Delete did (retain — no leftover live row).
+            let housekeeping = grokhub_core::card_offers::stale(&card, now_ms)
+                || grokhub_core::card_offers::one_off(&card);
+            if card.kind != UpdateKind::Idea && !housekeeping {
+                learn_taste(config_dir, &card, Some(Reaction::Delete), None, now_ms)?;
+            }
+            if card.kind == UpdateKind::Idea {
+                grokhub_core::dismiss_idea(&mut cards, id)
+            } else {
+                let before = cards.len();
+                cards.retain(|c| c.id != id);
+                cards.len() != before
+            }
+        }
         Act::Dislike => {
             if card.kind != UpdateKind::Idea {
                 learn_taste(config_dir, &card, Some(Reaction::Dislike), None, now_ms)?;
@@ -729,6 +746,10 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
                 if let Some(saved) = cards.iter_mut().find(|c| c.id == id) {
                     saved.reaction = Some(CardReaction::Up);
                 }
+                // Like absorbs More like this on source posts.
+                if source && act == Act::Love {
+                    source_more_like(config_dir, &card, now_ms)?;
+                }
                 true
             }
         }
@@ -750,21 +771,13 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
                             s.forget_more_like(&card.title)
                         })?;
                         retract_idea_like_learned(config_dir, &card);
+                    } else if source {
+                        source_unlike_more(config_dir, &card, now_ms)?;
                     }
                     true
                 }
                 None => false,
             }
-        }
-        Act::Delete => {
-            let housekeeping = grokhub_core::card_offers::stale(&card, now_ms)
-                || grokhub_core::card_offers::one_off(&card);
-            if card.kind != UpdateKind::Idea && !housekeeping {
-                learn_taste(config_dir, &card, Some(Reaction::Delete), None, now_ms)?;
-            }
-            let before = cards.len();
-            cards.retain(|c| c.id != id);
-            cards.len() != before
         }
         Act::Snooze => {
             if card.kind != UpdateKind::Idea {
@@ -842,6 +855,78 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
         crate::nudges::dismissed(config_dir, &card);
     }
     Ok(page(config_dir, &cards, now_ms))
+}
+
+/// More like this on a source post: topic weight, source nudge, related search, place.
+fn source_more_like(config_dir: &Path, card: &UpdateCard, now_ms: u64) -> Result<(), String> {
+    let text = format!(
+        "{} {}",
+        card.title,
+        card.pulse.because.as_deref().unwrap_or("")
+    );
+    crate::interests::feedback(config_dir, &text, InterestSignal::MoreLikeThis, now_ms)
+        .map(|_| ())?;
+    let cache_path = config_dir.join(ps::CACHE_FILE);
+    let mut cache = ps::load_cache(&cache_path);
+    cache.nudge_source(card.pulse.source_name.as_deref().unwrap_or(""), 1);
+    cache.queue_related(
+        &ps::related_query(&card.title),
+        card.pulse.because.as_deref(),
+    );
+    if let Some((kind, entry)) = ps::place_from_card(card) {
+        let ready = cache.note_place(kind, &entry);
+        ps::save_cache(&cache_path, &cache)?;
+        if ready {
+            follow_place(config_dir, kind, &entry)?;
+        }
+    } else {
+        ps::save_cache(&cache_path, &cache)?;
+    }
+    Ok(())
+}
+
+/// After enough Save / Like hits, add the place to Pulse sources in app.json.
+fn follow_place(config_dir: &Path, kind: ps::SourceKind, entry: &str) -> Result<(), String> {
+    let path = config_dir.join("app.json");
+    let mut root: serde_json::Value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    let mut settings: ps::SourceSettings = root
+        .get("pulseSources")
+        .cloned()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+    if !settings.on(kind) {
+        return Ok(());
+    }
+    match settings.add(kind, entry) {
+        Ok(_) => {
+            root["pulseSources"] = serde_json::to_value(&settings).map_err(|e| e.to_string())?;
+            let body = serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?;
+            std::fs::write(&path, body).map_err(|e| e.to_string())?;
+            Ok(())
+        }
+        Err(_) => Ok(()),
+    }
+}
+
+/// Unlike on a source post: retract More like this weight and the source nudge.
+fn source_unlike_more(config_dir: &Path, card: &UpdateCard, now_ms: u64) -> Result<(), String> {
+    let text = format!(
+        "{} {}",
+        card.title,
+        card.pulse.because.as_deref().unwrap_or("")
+    );
+    crate::interests::retract_feedback(config_dir, &text, InterestSignal::MoreLikeThis, now_ms)
+        .map(|_| ())?;
+    let cache_path = config_dir.join(ps::CACHE_FILE);
+    let mut cache = ps::load_cache(&cache_path);
+    cache.nudge_source(card.pulse.source_name.as_deref().unwrap_or(""), -1);
+    ps::save_cache(&cache_path, &cache)?;
+    // Take back Accepted + More like this category points Love wrote.
+    retract_idea_like_learned(config_dir, card);
+    Ok(())
 }
 
 /// Move the interest topics an idea's text names.
@@ -1668,7 +1753,7 @@ mod tests {
 
         let gone = act(&d.config, "post-1", Act::Dismiss, &day(), tomorrow).expect("dismiss");
         assert!(gone.feed.is_empty());
-        // Dismiss carries no weight: no ledger line, no taste.
+        // Housekeeping one-off: Dismiss records no Delete taste (and no ledger).
         // Compare on LF: Windows checkouts may leave CRLF in the ledger.
         let mem = memory().replace("\r\n", "\n");
         assert!(mem.ends_with("reason=liked\n"), "{mem:?}");
@@ -1677,7 +1762,7 @@ mod tests {
         assert_eq!(
             kinds,
             [Reaction::Like, Reaction::Snooze],
-            "none from Dismiss"
+            "none from housekeeping Dismiss"
         );
         assert_eq!(
             act(&d.config, "nope", Act::Dismiss, &day(), NOW),
@@ -1726,7 +1811,7 @@ mod tests {
     }
 
     #[test]
-    fn open_snooze_and_delete_feed_card_taste_lightly() {
+    fn open_snooze_and_dismiss_feed_card_taste_lightly() {
         let mut cards = sample();
         cards[1].kind = UpdateKind::Suggestion;
         let d = dirs("signals", &cards);
@@ -1738,15 +1823,22 @@ mod tests {
             .map(|e| e.reaction)
             .collect();
         assert_eq!(kinds, [Reaction::Engage, Reaction::Snooze]);
-        // A fresh card deleted is a small "less of this".
-        let d = dirs("signals-delete", &cards);
-        act(&d.config, "post-1", Act::Delete, &day(), NOW).expect("delete");
+        // A fresh card dismissed (Delete folded in) is a small "less of this".
+        let d = dirs("signals-dismiss", &cards);
+        act(&d.config, "post-1", Act::Dismiss, &day(), NOW).expect("dismiss");
         let taste = card_taste::load(&d.config);
         assert_eq!(taste.events.len(), 1);
         assert_eq!(taste.events[0].reaction, Reaction::Delete);
-        // A finished run deleted is housekeeping: nothing learned.
-        let d = dirs("signals-housekeeping", &sample());
+        // Alias still works.
+        let d = dirs("signals-delete", &cards);
         act(&d.config, "post-1", Act::Delete, &day(), NOW).expect("delete");
+        assert_eq!(
+            card_taste::load(&d.config).events[0].reaction,
+            Reaction::Delete
+        );
+        // A finished run dismissed is housekeeping: nothing learned.
+        let d = dirs("signals-housekeeping", &sample());
+        act(&d.config, "post-1", Act::Dismiss, &day(), NOW).expect("dismiss");
         assert!(card_taste::load(&d.config).events.is_empty());
     }
 
