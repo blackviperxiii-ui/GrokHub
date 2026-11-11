@@ -98,8 +98,10 @@ fn an_unremembered_run_asks_a_confirmed_one_runs_and_forget_asks_again() {
         matches!(&msgs[0], Msg::Ask { command } if command == "echo cabin-code-ok"),
         "{msgs:?}"
     );
-    let mut tab = CodeTab::default();
-    tab.command = "echo cabin-code-ok".into();
+    let mut tab = CodeTab {
+        command: "echo cabin-code-ok".into(),
+        ..Default::default()
+    };
     assert_eq!(tab.begin_run().as_deref(), Some("echo cabin-code-ok"));
     assert!(tab.running);
     for m in msgs {
@@ -414,24 +416,28 @@ fn a_skill_that_left_the_list_closes_and_one_still_listed_stays_open() {
         body: "body".into(),
         overridden_by: None,
     };
-    let loaded = |names: &[&str]| Msg::Loaded {
-        repo: Repo {
-            workspace: "w".into(),
-            is_repo: false,
-            branch: None,
-            upstream: None,
-            ahead: 0,
-            behind: 0,
-            files: Vec::new(),
-            more: false,
-        },
-        builtins: names.iter().map(|n| skill(n)).collect(),
-        plan: Ok(plan("", true, None)),
-        activity: Vec::new(),
-        diff: None,
+    let loaded = |names: &[&str]| {
+        Msg::Loaded(Box::new(Loaded {
+            repo: Repo {
+                workspace: "w".into(),
+                is_repo: false,
+                branch: None,
+                upstream: None,
+                ahead: 0,
+                behind: 0,
+                files: Vec::new(),
+                more: false,
+            },
+            builtins: names.iter().map(|n| skill(n)).collect(),
+            plan: Ok(plan("", true, None)),
+            activity: Vec::new(),
+            diff: None,
+        }))
     };
-    let mut tab = CodeTab::default();
-    tab.open_skill = Some("review".into());
+    let mut tab = CodeTab {
+        open_skill: Some("review".into()),
+        ..Default::default()
+    };
     tab.apply(loaded(&["review", "ship"]));
     assert_eq!(tab.open_skill.as_deref(), Some("review"));
     tab.apply(loaded(&["ship"]));
