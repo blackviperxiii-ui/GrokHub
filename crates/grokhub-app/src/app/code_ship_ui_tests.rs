@@ -20,8 +20,8 @@ const PR_CMD: &str = "gh pr create --base beta --head code/fix --fill";
 
 fn plans(push: Plan, pr: Plan, then: Option<Action>) -> ShipOut {
     ShipOut::Plans {
-        push,
-        pr,
+        push: Box::new(push),
+        pr: Box::new(pr),
         cfg: CodeShip::default(),
         then,
     }
@@ -287,7 +287,7 @@ mod repo {
 
     fn read(f: &Fixture) -> (Plan, Plan, Vec<Entry>) {
         match (ShipJob::Refresh { then: None }).run(&f.config, &f.work, &none) {
-            ShipOut::Plans { push, pr, .. } => (push, pr, activity::list(&f.config, 10)),
+            ShipOut::Plans { push, pr, .. } => (*push, *pr, activity::list(&f.config, 10)),
             other => panic!("expected plans, got {other:?}"),
         }
     }

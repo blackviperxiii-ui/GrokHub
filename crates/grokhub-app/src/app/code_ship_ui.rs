@@ -20,6 +20,8 @@ use grokhub_code::activity::Entry;
 use grokhub_code::secrets;
 use grokhub_code::ship::{self, Action, CodeShip, Plan, ShipMode};
 
+use super::confirm::{paint_confirm_sheet, ConfirmAct, ConfirmSpec};
+
 pub(super) const SHIP_TITLE: &str = "Push and PR";
 pub(super) const SHIP_CONFIRM_PUSH: &str = "Push this branch?";
 pub(super) const SHIP_CONFIRM_PR: &str = "Open this PR?";
@@ -27,6 +29,24 @@ pub(super) const SHIP_RULES: &str =
     "Never pushes main or the default branch, never force-pushes, never deletes a branch.";
 pub(super) const SHIP_SETTINGS_NOTE: &str = "Change these in the desktop app's Code settings.";
 pub(super) const BRANCH_HINT: &str = "code/fix-typo";
+
+/// The push and PR confirms: the exact command shows under each.
+pub(super) fn confirm_spec(action: Action) -> ConfirmSpec {
+    match action {
+        Action::Push => ConfirmSpec {
+            title: SHIP_CONFIRM_PUSH,
+            consequence: "It sends this branch to origin. Never main or the default branch, never a force-push.",
+            primary: "Push",
+            danger: false,
+        },
+        Action::Pr => ConfirmSpec {
+            title: SHIP_CONFIRM_PR,
+            consequence: "It opens a pull request from this branch on GitHub, titled from its commits.",
+            primary: "Open PR",
+            danger: false,
+        },
+    }
+}
 
 /// The Push and PR settings, read fresh for every plan and run so a change
 /// made in the desktop app counts at once. Read only here.
@@ -83,8 +103,8 @@ pub(super) enum ShipJob {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ShipOut {
     Plans {
-        push: Plan,
-        pr: Plan,
+        push: Box<Plan>,
+        pr: Box<Plan>,
         cfg: CodeShip,
         then: Option<Action>,
     },
@@ -119,8 +139,14 @@ impl ShipJob {
         let held = held();
         match self {
             ShipJob::Refresh { then } => ShipOut::Plans {
-                push: clean_plan(ship::plan(config_dir, ws, &cfg, Action::Push), &held),
-                pr: clean_plan(ship::plan(config_dir, ws, &cfg, Action::Pr), &held),
+                push: Box::new(clean_plan(
+                    ship::plan(config_dir, ws, &cfg, Action::Push),
+                    &held,
+                )),
+                pr: Box::new(clean_plan(
+                    ship::plan(config_dir, ws, &cfg, Action::Pr),
+                    &held,
+                )),
                 cfg,
                 then,
             },
@@ -234,8 +260,8 @@ impl ShipPanel {
                         self.confirming = None;
                     }
                 }
-                self.push = Some(push);
-                self.pr = Some(pr);
+                self.push = Some(*push);
+                self.pr = Some(*pr);
                 self.cfg = Some(cfg);
                 let Some(action) = then else {
                     self.busy = false;
@@ -405,13 +431,11 @@ impl ShipPanel {
         });
         if let Some(plan) = self.confirming.clone() {
             ui.add_space(8.0);
-            confirm_card(ui, &plan, &mut |yes| {
-                if yes {
-                    job = self.confirm();
-                } else {
-                    self.cancel();
-                }
-            });
+            match paint_confirm_sheet(ui, confirm_spec(plan.action), &plan.command) {
+                Some(ConfirmAct::Confirm) => job = self.confirm(),
+                Some(ConfirmAct::Cancel) => self.cancel(),
+                None => {}
+            }
         }
         if let Some(note) = &self.note {
             ui.add_space(8.0);
@@ -450,41 +474,6 @@ fn mono_block(ui: &mut egui::Ui, text: &str) {
             ui.add(
                 egui::Label::new(RichText::new(text).monospace().color(crate::theme::fg())).wrap(),
             );
-        });
-}
-
-/// The confirm card: the question, the exact command, then the action and Cancel.
-fn confirm_card(ui: &mut egui::Ui, plan: &Plan, on: &mut dyn FnMut(bool)) {
-    let (question, primary) = match plan.action {
-        Action::Push => (SHIP_CONFIRM_PUSH, "Push"),
-        Action::Pr => (SHIP_CONFIRM_PR, "Open PR"),
-    };
-    egui::Frame::NONE
-        .fill(crate::theme::elevated())
-        .corner_radius(crate::theme::CARD_RADIUS)
-        .stroke(egui::Stroke::new(2.0_f32, crate::theme::border_strong()))
-        .inner_margin(egui::Margin::same(12))
-        .show(ui, |ui| {
-            ui.label(
-                RichText::new(question)
-                    .size(crate::theme::TYPE_UI)
-                    .color(crate::theme::fg()),
-            );
-            ui.add_space(6.0);
-            ui.label(
-                RichText::new(&plan.command)
-                    .monospace()
-                    .color(crate::theme::fg()),
-            );
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if crate::cards::white_pill(ui, primary) {
-                    on(true);
-                }
-                if crate::cards::ghost_pill(ui, "Cancel") {
-                    on(false);
-                }
-            });
         });
 }
 

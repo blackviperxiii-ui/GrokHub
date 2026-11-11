@@ -11,12 +11,24 @@ use std::sync::mpsc;
 use eframe::egui::{self, RichText};
 use grokhub_code::secrets::{self, Vault};
 
+use super::confirm::{paint_confirm_sheet, ConfirmAct, ConfirmSpec};
+
 pub(super) const SECRETS_TITLE: &str = "Secrets";
 pub(super) const SECRETS_NOTE: &str = "Deploy runs get these as environment variables. Values stay in your system keychain and are hidden in output; only the names are saved here.";
 pub(super) const SECRETS_NONE: &str = "No secrets for this project yet.";
 pub(super) const SECRETS_DELETE_NOTE: &str =
     "Its value is removed from the keychain. A deploy that needs it stops until you add it again.";
 pub(super) const NAME_HINT: &str = "DEPLOY_TOKEN";
+
+/// The delete confirm; the secret's name shows under it.
+pub(super) fn delete_spec() -> ConfirmSpec {
+    ConfirmSpec {
+        title: "Delete this secret?",
+        consequence: SECRETS_DELETE_NOTE,
+        primary: "Delete",
+        danger: true,
+    }
+}
 
 /// The project's key, the same one the shell's Code tab uses.
 pub(super) fn repo_key_of(ws: &Path) -> String {
@@ -248,28 +260,11 @@ impl SecretsPanel {
         }
         if let Some(target) = self.deleting.clone() {
             ui.add_space(8.0);
-            egui::Frame::NONE
-                .fill(crate::theme::elevated())
-                .corner_radius(crate::theme::CARD_RADIUS)
-                .stroke(egui::Stroke::new(2.0_f32, crate::theme::border_strong()))
-                .inner_margin(egui::Margin::same(12))
-                .show(ui, |ui| {
-                    ui.label(
-                        RichText::new(format!("Delete {target}?"))
-                            .size(crate::theme::TYPE_UI)
-                            .color(crate::theme::fg()),
-                    );
-                    muted(ui, SECRETS_DELETE_NOTE);
-                    ui.add_space(8.0);
-                    ui.horizontal(|ui| {
-                        if crate::cards::danger_pill(ui, "Delete") {
-                            job = self.confirm_delete();
-                        }
-                        if crate::cards::ghost_pill(ui, "Cancel") {
-                            self.cancel_delete();
-                        }
-                    });
-                });
+            match paint_confirm_sheet(ui, delete_spec(), &target) {
+                Some(ConfirmAct::Confirm) => job = self.confirm_delete(),
+                Some(ConfirmAct::Cancel) => self.cancel_delete(),
+                None => {}
+            }
         }
         ui.add_space(8.0);
         let mut enter = false;
