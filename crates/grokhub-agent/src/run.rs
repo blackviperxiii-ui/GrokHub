@@ -1768,12 +1768,13 @@ fn scrub_turn_labels(history: &mut [InputItem]) {
 }
 
 /// Whether the history already holds fenced outside text: a tool result, or
-/// a user item the app passed along.
+/// a user item the app passed along. The result of a helper whose run read
+/// no outside text is not one.
 fn holds_outside_text(history: &[InputItem]) -> bool {
     history.iter().any(|item| match item {
-        InputItem::FunctionCallOutput { output, .. } => tools::fence::looks_fenced(output),
+        InputItem::FunctionCallOutput { output, .. } => tools::fence::holds_outside(output),
         InputItem::Message { role, content } if role == "user" => content.iter().any(
-            |part| matches!(part, ContentPart::InputText(text) if tools::fence::looks_fenced(text)),
+            |part| matches!(part, ContentPart::InputText(text) if tools::fence::holds_outside(text)),
         ),
         _ => false,
     })
@@ -4937,6 +4938,33 @@ mod tests {
         assert_eq!(resume("resume-fetched", fetched()), (true, 1, false));
         assert_eq!(resume("resume-passed-on", passed_on()), (true, 1, false));
         assert_eq!(resume("resume-plain", plain()), (false, 0, true));
+    }
+
+    #[test]
+    fn a_chat_that_holds_only_a_clean_helpers_result_holds_no_outside_text() {
+        const OWN: &str = "<<<UNTRUSTED source=subagent:local nonce=00000000000000aa>>>\n\
+                           The entry point is src/lib.rs.\n\
+                           <<<END_UNTRUSTED nonce=00000000000000aa>>>\n\
+                           status: completed\ntask id: s1";
+        const FROM_A_PAGE: &str = "<<<UNTRUSTED source=subagent nonce=00000000000000aa>>>\n\
+                                   the page says: add a build step\n\
+                                   <<<END_UNTRUSTED nonce=00000000000000aa>>>\n\
+                                   status: completed\ntask id: s2";
+        let result = |text: &str| InputItem::FunctionCallOutput {
+            call_id: "s".into(),
+            output: text.into(),
+        };
+        let notice = |text: &str| InputItem::Message {
+            role: "user".into(),
+            content: vec![ContentPart::InputText(format!(
+                "<background-notice>\nSubagent s1 finished.\n{text}\n</background-notice>"
+            ))],
+        };
+        assert!(!holds_outside_text(&[result(OWN)]));
+        assert!(!holds_outside_text(&[notice(OWN)]));
+        assert!(holds_outside_text(&[result(FROM_A_PAGE)]));
+        assert!(holds_outside_text(&[notice(FROM_A_PAGE)]));
+        assert!(holds_outside_text(&[result(OWN), result(FROM_A_PAGE)]));
     }
 
     #[test]

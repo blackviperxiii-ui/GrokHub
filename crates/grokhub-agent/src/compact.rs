@@ -343,8 +343,12 @@ fn format_tool_output_compact_message(
 /// A summary of fenced output is outside text too. It goes back inside
 /// markers, so a line lifted from a page never reads as the app's own.
 fn keep_fenced(output: &str, tool_name: &str, summary: String) -> String {
-    if crate::tools::fence::looks_fenced(output) {
-        crate::tools::fence::fence(tool_name, &summary)
+    use crate::tools::fence;
+    if fence::holds_outside(output) {
+        fence::fence(tool_name, &summary)
+    } else if fence::looks_fenced(output) {
+        // A helper's own words, from a run that read no outside text.
+        fence::fence_local(&summary)
     } else {
         summary
     }
@@ -3159,6 +3163,74 @@ mod tests {
         set_tool_output_compact_for_tests(None);
         drop(_guard);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_summary_of_a_clean_helpers_result_marks_nobody() {
+        std::thread::spawn(|| {
+            let dir = workspace();
+            let _guard = crate::perm::ConfigGuard::set(&dir);
+            crate::tools::fence::reset_run_nonce_for_tests();
+            set_tool_output_compact_for_tests(Some(ToolOutputCompactSettings {
+                enabled: true,
+                min_bytes: 50,
+            }));
+            // The helper read nothing from outside before it answered.
+            let result = crate::tools::fence::fence_helper_result(&format!(
+                "The entry point is src/lib.rs.\n{}",
+                "x".repeat(200)
+            ));
+            let nonce = result
+                .strip_prefix("<<<UNTRUSTED source=subagent:local nonce=")
+                .and_then(|rest| rest.split_once(">>>"))
+                .map(|(nonce, _)| nonce.to_string())
+                .unwrap();
+            let script = Script {
+                turns: Mutex::new(vec![Ok(TurnOutput {
+                    text: "The helper found the entry point in src/lib.rs".into(),
+                    reasoning: String::new(),
+                    calls: Vec::new(),
+                    usage: usage(2, 1, 1),
+                    ..Default::default()
+                })]),
+                seen: Mutex::new(Vec::new()),
+            };
+            let replaced = maybe_compact_tool_output(
+                &dir,
+                &dir,
+                "sess",
+                &script,
+                &CancelToken::new(),
+                "grok-4.7",
+                None,
+                "call-8",
+                "spawn_subagent",
+                &result,
+            )
+            .expect("replaced");
+            let ToolOutputCompactOutcome::Replaced { text, .. } = replaced else {
+                panic!("expected replacement");
+            };
+            assert_eq!(
+                text,
+                format!(
+                    "<tool_output_compact tool=\"spawn_subagent\" handle=\"to-call-8\" bytes=\"{bytes}\">\n\
+                     <<<UNTRUSTED source=subagent:local nonce={nonce}>>>\n\
+                     The helper found the entry point in src/lib.rs\n\
+                     <<<END_UNTRUSTED nonce={nonce}>>>\n\
+                     </tool_output_compact>\n\
+                     Full output ({bytes} bytes) is spooled at `.grokhub/tool-output-compact/sess/to-call-8.txt`. \
+                     Re-read it with read_file (or grep that path) when you need exact text.",
+                    bytes = result.len(),
+                )
+            );
+            assert!(!crate::tools::fence::run_saw_untrusted());
+            set_tool_output_compact_for_tests(None);
+            drop(_guard);
+            let _ = std::fs::remove_dir_all(&dir);
+        })
+        .join()
+        .unwrap();
     }
 
     #[test]
