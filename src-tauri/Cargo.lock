@@ -2088,6 +2088,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "grokhub-hub"
+version = "3.5.0"
+dependencies = [
+ "grokhub-agent",
+ "grokhub-core",
+ "grokhub-desktop",
+ "keyring",
+ "serde",
+ "serde_json",
+ "tiny_http",
+ "winresource",
+]
+
+[[package]]
 name = "grokhub-proto"
 version = "3.5.0"
 dependencies = [
@@ -2105,6 +2119,7 @@ dependencies = [
  "grokhub-core",
  "grokhub-desktop",
  "grokhub-fps-probe",
+ "grokhub-hub",
  "image",
  "keyring",
  "minisign-verify",

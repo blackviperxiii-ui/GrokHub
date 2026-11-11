@@ -3025,6 +3025,10 @@ label.toggle-row {
   margin-inline: auto;
 }
 
+.devices textarea {
+  flex-shrink: 0;
+}
+
 .devices h2 {
   margin: 8px 0 0;
   font-size: var(--font-prose);
@@ -5136,4 +5140,25 @@ label.toggle-row {
   gap: 4px 8px;
   margin: 0 0 8px;
   font-size: var(--font-body);
+}
+
+/* Record my screen / Check my audio: the top bar's always-visible indicator. */
+.record-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--danger-text);
+  font-size: var(--font-caption);
+  white-space: nowrap;
+}
+
+.topbar .record-stop {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+  font-weight: 600;
+}
+
+.topbar .record-stop:hover:not(:disabled) {
+  filter: brightness(1.1);
 }
