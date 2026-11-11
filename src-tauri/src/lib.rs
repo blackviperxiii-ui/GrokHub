@@ -415,14 +415,8 @@ fn engine_op(state: &ShellState, op: &slash::Op) -> Result<Option<slash::Effect>
                 route.workspace,
                 task,
             )?;
-            let lead = if matches!(op, slash::Op::Send(_)) {
-                "Sent"
-            } else {
-                "Background"
-            };
-            notice(format!(
-                "{lead} · {title}. It reads and reports, and can't change files. /bg shows how it went."
-            ))
+            let sent = matches!(op, slash::Op::Send(_));
+            notice(bg_runs::started_text(sent, &title))
         }
         slash::Op::Consult(question) => {
             let settings = current(state);

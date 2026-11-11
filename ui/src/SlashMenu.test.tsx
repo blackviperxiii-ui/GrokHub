@@ -305,6 +305,23 @@ describe("composer slash commands", () => {
     await waitFor(() => expect(onOpenView).toHaveBeenCalledWith("skills"));
   });
 
+  it("/hub where this app has no Devices page says so instead of doing nothing", async () => {
+    const onOpenView = vi.fn(() => false);
+    render(<Chat onOpenSettings={() => {}} onOpenView={onOpenView} />);
+    api.runSlash.mockResolvedValueOnce({ kind: "open", view: "devices" });
+    await userEvent.type(screen.getByLabelText("Message"), "/hub{Enter}");
+    expect(await screen.findByRole("status", { name: "/hub result" })).toHaveTextContent(
+      "/hub works on your computer.",
+    );
+    expect(onOpenView).toHaveBeenCalledWith("devices");
+    // A page that opened leaves no line behind.
+    onOpenView.mockReturnValue(true);
+    api.runSlash.mockResolvedValueOnce({ kind: "open", view: "skills" });
+    await userEvent.type(screen.getByLabelText("Message"), "/skills{Enter}");
+    await waitFor(() => expect(onOpenView).toHaveBeenCalledWith("skills"));
+    expect(screen.queryByRole("status", { name: "/skills result" })).toBeNull();
+  });
+
   it("/queue with nothing running sends the message as a chat turn", async () => {
     api.runSlash.mockResolvedValueOnce({ kind: "queue", text: "then run the tests" });
     render(<Chat onOpenSettings={() => {}} />);

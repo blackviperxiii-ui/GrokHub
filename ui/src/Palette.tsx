@@ -152,6 +152,12 @@ export function pageViews(caps: Capabilities): View[] {
   return code < 0 ? pages : [...pages.slice(0, code + 1), "command", ...pages.slice(code + 1)];
 }
 
+/** Whether this app has `view` to open. Updates & Drivers has no tab, and
+ * reads this computer. */
+export function hasPage(caps: Capabilities, view: View): boolean {
+  return pageViews(caps).includes(view) || (view === "updates" && !caps.remote);
+}
+
 /** The rows for `query`, in order: suggestions (while nothing is typed),
  * pages, commands, slash commands (for a query that starts with `/`), recent
  * chats, Settings sections, then Ask with the typed text, which puts it in the

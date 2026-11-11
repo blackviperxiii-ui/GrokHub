@@ -182,6 +182,14 @@ pub fn stop_text() -> String {
     }
 }
 
+/// What `/send` (`sent`) and `/bg <task>` answer once the run is going.
+pub fn started_text(sent: bool, title: &str) -> String {
+    let lead = if sent { "Sent" } else { "Background" };
+    format!(
+        "{lead} · {title}. It reads and reports, and can't change files. /bg shows how it went."
+    )
+}
+
 /// Whether anything is still running (for the status line).
 pub fn any_live() -> bool {
     live_count() > 0
@@ -234,7 +242,16 @@ mod tests {
         }
     }
 
-    fn temp_dir(name: &str) -> PathBuf {
+    /// A test's scratch folder, removed when the test ends, pass or fail.
+    struct Scratch(PathBuf);
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn temp_dir(name: &str) -> Scratch {
         let dir = std::env::temp_dir().join(format!(
             "grokhub-shell-bg-{name}-{}-{}",
             std::process::id(),
@@ -242,7 +259,29 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("temp dir");
-        dir
+        Scratch(dir)
+    }
+
+    #[test]
+    fn a_tests_scratch_folder_is_gone_when_the_test_ends() {
+        let dir = temp_dir("gone");
+        let path = dir.0.clone();
+        std::fs::write(path.join("left.txt"), "x").expect("write");
+        assert!(path.join("left.txt").is_file());
+        drop(dir);
+        assert!(!path.exists(), "{}", path.display());
+    }
+
+    #[test]
+    fn send_and_bg_say_what_started_and_that_it_cannot_change_files() {
+        assert_eq!(
+            started_text(true, "count the files"),
+            "Sent · count the files. It reads and reports, and can't change files. /bg shows how it went."
+        );
+        assert_eq!(
+            started_text(false, "index the repo"),
+            "Background · index the repo. It reads and reports, and can't change files. /bg shows how it went."
+        );
     }
 
     #[test]
@@ -254,10 +293,10 @@ mod tests {
             requests: Mutex::new(Vec::new()),
         });
         let title = start(
-            cfg.clone(),
+            cfg.0.clone(),
             client.clone(),
             "grok-4.7".into(),
-            ws.clone(),
+            ws.0.clone(),
             "write out.txt with x",
         )
         .expect("started");
@@ -269,7 +308,7 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
         assert!(!any_live(), "the run ended");
-        assert!(!ws.join("out.txt").exists(), "the write was refused");
+        assert!(!ws.0.join("out.txt").exists(), "the write was refused");
         let requests = client.requests.lock().expect("requests");
         let refused = requests[1]
             .input
@@ -292,8 +331,9 @@ mod tests {
         let client = Arc::new(WantsToWrite {
             requests: Mutex::new(Vec::new()),
         });
+        let (cfg, ws) = (temp_dir("blank"), temp_dir("w"));
         assert_eq!(
-            start(temp_dir("blank"), client, "m".into(), temp_dir("w"), "  ").err(),
+            start(cfg.0.clone(), client, "m".into(), ws.0.clone(), "  ").err(),
             Some("Nothing to run".to_string())
         );
     }
@@ -315,15 +355,9 @@ mod tests {
         let client = Arc::new(WantsToWrite {
             requests: Mutex::new(Vec::new()),
         });
+        let (cfg, ws) = (temp_dir("max"), temp_dir("w"));
         assert_eq!(
-            start(
-                temp_dir("max"),
-                client,
-                "m".into(),
-                temp_dir("w"),
-                "one more"
-            )
-            .err(),
+            start(cfg.0.clone(), client, "m".into(), ws.0.clone(), "one more").err(),
             Some("3 background tasks are already running. Stop one first.".to_string())
         );
         assert_eq!(stop_text(), "Stopped 3 background tasks");

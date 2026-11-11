@@ -197,6 +197,12 @@ export const OPEN_BUSY = "A reply is still running. Stop it or wait, then open t
 
 export const EVENTS_LOST = `Lost touch with ${PRODUCT_NAME} on your computer for a while. Part of this reply may be missing.`;
 export const MISSION_BUSY = "A reply is still running. Stop it or wait, then press To mission again.";
+/** Slash lines that leave the running reply alone, so they run beside it. */
+const BESIDE_REPLY = /^\/(queue|bg|background|send|consult)(\s|$)/i;
+/** Every other slash line typed during a reply stays in the box with this. */
+export const SLASH_WAITS = "That command waits for the reply. /stop ends it.";
+/** The web app has no /stop. */
+export const SLASH_WAITS_REMOTE = "That command waits for the reply.";
 
 export function newConversationId(): string {
   return `shell-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -234,6 +240,14 @@ export function applyEvent(items: Item[], event: ChatEvent): Item[] {
     default:
       return items;
   }
+}
+
+/** Adds a command's line to the log. A reply that is streaming stays the last
+ * item, so its next words join the same bubble: the line goes just above it. */
+function withNotice(items: Item[], notice: Item): Item[] {
+  const last = items[items.length - 1];
+  if (last?.kind === "assistant" && last.streaming) return [...items.slice(0, -1), notice, last];
+  return [...items, notice];
 }
 
 /** The turn ended: stop streaming, and retire cards nobody answered. A
@@ -531,8 +545,8 @@ export function Chat({
   /** The signed-out card's button: Settings → Account. */
   onSignIn?: () => void;
   /** `/memory`, `/connectors` and the like open their page, and so does a
-   * chip that goes somewhere. */
-  onOpenView?: (view: View) => void;
+   * chip that goes somewhere. `false` back: this app has no such page. */
+  onOpenView?: (view: View) => boolean | void;
   /** `/palette` opens the command palette. */
   onOpenPalette?: () => void;
   /** The messages waiting behind the running reply, for the Activity menu. */
@@ -1082,13 +1096,15 @@ export function Chat({
         break;
       }
       case "open":
-        onOpenView?.(effect.view);
+        if (onOpenView?.(effect.view) === false) {
+          setItems((now) => withNotice(now, { kind: "slash", command, text: `${command} works on your computer.` }));
+        }
         break;
       case "import":
         window.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail: { import: true } }));
         break;
       case "notice":
-        setItems((now) => [...now, { kind: "slash", command, text: effect.text }]);
+        setItems((now) => withNotice(now, { kind: "slash", command, text: effect.text }));
         break;
       case "export":
       case "exportAs":
@@ -1192,11 +1208,15 @@ export function Chat({
     // While a reply runs, the app reads what the message is for (files wait
     // in the box). A typed /btw or /side asks on the side.
     if (busy) {
-      if (/^\/(stop|undo)$/i.test(text) && !remote) {
+      if ((/^\/(stop|undo)$/i.test(text) && !remote) || BESIDE_REPLY.test(text)) {
         await slash(text);
         return;
       }
-      if (!text || (isSlashCommand(text) && !/^\/(btw|side)\s+\S/i.test(text))) return;
+      if (!text) return;
+      if (isSlashCommand(text) && !/^\/(btw|side)\s+\S/i.test(text)) {
+        setError(remote ? SLASH_WAITS_REMOTE : SLASH_WAITS);
+        return;
+      }
       setDraft("");
       // The web app lines messages up behind the reply, as before. In a chat
       // opened while another chat's reply ends, the message waits for it.

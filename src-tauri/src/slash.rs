@@ -292,7 +292,10 @@ pub const SHELL_SLASH: &[ShellCmd] = &[
         "/always-approve",
     ),
     row("/auto", "Where approvals are set", "/auto"),
-    row("/hub", "Open Devices", "/hub"),
+    ShellCmd {
+        desktop_only: true,
+        ..row("/hub", "Open Devices", "/hub")
+    },
     ShellCmd {
         desktop_only: true,
         ..row("/host", "This computer's engine status", "/host")
@@ -1403,6 +1406,59 @@ mod tests {
             parse("/goal ship the harbor", false),
             Ok(Action::Op(Op::Goal("ship the harbor".into())))
         );
+    }
+
+    #[test]
+    fn the_browser_cant_open_devices() {
+        assert_eq!(
+            parse("/hub", true),
+            Err("/hub works on your computer.".into())
+        );
+        let hit = hits("/hub", true)
+            .into_iter()
+            .find(|h| h.cmd == "/hub")
+            .expect("hub row");
+        assert_eq!(hit.disabled.as_deref(), Some(ON_YOUR_COMPUTER));
+    }
+
+    #[test]
+    fn the_browser_schedules_and_queues_but_starts_no_run_on_the_computer() {
+        assert_eq!(
+            parse("/loop every day at 9 summarize my inbox", true),
+            Ok(Action::Effect(Effect::Loop {
+                seed: "every day at 9 summarize my inbox".into()
+            }))
+        );
+        assert_eq!(
+            parse("/loop", true),
+            Ok(Action::Effect(Effect::Open {
+                view: "automations"
+            }))
+        );
+        assert_eq!(
+            parse("/board", true),
+            Ok(Action::Effect(Effect::Open { view: "workboard" }))
+        );
+        for (line, word) in [
+            ("/send audit the logs", "/send"),
+            ("/bg stop", "/bg"),
+            ("/background index the repo", "/bg"),
+            ("/goal ship the harbor", "/goal"),
+            ("/fix", "/fix"),
+            ("/host", "/host"),
+            ("/update", "/update"),
+        ] {
+            assert_eq!(
+                parse(line, true),
+                Err(format!("{word} works on your computer.")),
+                "{line}"
+            );
+            let hit = hits(word, true)
+                .into_iter()
+                .find(|h| h.cmd == word)
+                .expect(word);
+            assert_eq!(hit.disabled.as_deref(), Some(ON_YOUR_COMPUTER), "{word}");
+        }
     }
 
     #[test]

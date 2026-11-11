@@ -46,7 +46,7 @@ import { Chat, newConversationId, type Prefill, type QueueAct } from "./Chat";
 import { useChipRow } from "./Chips";
 import { RecordIndicator } from "./RecordIndicator";
 import { HALT_DONE, HALT_FAILED, HaltButton, HaltNote, haltShown, isHaltKey } from "./Halt";
-import { NO_SOURCES, Palette, VIEW_LABELS, pageViews, views, type PaletteAction, type View } from "./Palette";
+import { NO_SOURCES, Palette, VIEW_LABELS, hasPage, views, type PaletteAction, type View } from "./Palette";
 import { COMPOSER_SLASH, shellKeys, type CommandRunners } from "./paletteCommands";
 import { Shortcuts } from "./Shortcuts";
 import type { Section } from "./sections";
@@ -433,9 +433,11 @@ export function App() {
   }, [canHalt, halt]);
 
   /** A page a tile, a chip or the chat asks for: opened only if this app has
-   * it. Updates & Drivers has no tab, and reads this computer. */
-  function openView(next: View) {
-    if (pageViews(caps).includes(next) || (next === "updates" && !caps.remote)) setView(next);
+   * it (`hasPage`). Whether it opened, so `/hub` can say when it did not. */
+  function openView(next: View): boolean {
+    const here = hasPage(caps, next);
+    if (here) setView(next);
+    return here;
   }
 
   /** A task the person typed and ran on another page: Chat opens and sends it. */
