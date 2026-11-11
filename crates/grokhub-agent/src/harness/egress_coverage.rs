@@ -91,6 +91,7 @@ const WRAPPED: &[(&str, usize, &str)] = &[
     ("grokhub-app/src/github.rs", 1, "run_github_tool: egress_ok (chat)"),
     ("grokhub-app/src/imagine_auth.rs", 1, "auth_agent callers post_form / imagine_discovery: egress_ok (no user data)"),
     ("grokhub-app/src/oauth.rs", 1, "auth_agent callers discovery / post_form / userinfo / photo: egress_ok (no user data)"),
+    ("grokhub-agent/src/xai_keychain.rs", 1, "Sign in with Grok get_json / post_form (desktop app and grokhub-hub --oauth): guard_quiet (codes and tokens only) before every call; the test override is loopback only"),
     ("grokhub-app/src/release_update.rs", 1, "fetch (release list, SHA256SUMS, asset): egress_ok (no user data) to GitHub"),
     ("grokhub-app/src/update.rs", 1, "latest cabin tag: egress_ok (no user data)"),
     ("grokhub-app/src/xai.rs", 1, "xai_agent callers: grok_json, STT, TTS, polls, downloads"),
