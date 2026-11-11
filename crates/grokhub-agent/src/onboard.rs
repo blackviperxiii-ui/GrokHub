@@ -30,7 +30,8 @@ pub const IMPORT_MAX: usize = 64;
 pub struct Saved {
     /// The files whose text changed, by name.
     pub files: Vec<String>,
-    /// The files left alone because they are over the size cap.
+    /// The files left alone because their text could not be read: too big,
+    /// not text, not a file, or no access. [`saved_note`] says why.
     pub skipped: Vec<String>,
     /// Personal rows added (0 with AMR off).
     pub rows: usize,
@@ -45,38 +46,116 @@ fn progress_path(config_dir: &Path) -> PathBuf {
     config_dir.join(oi::PROGRESS_FILE)
 }
 
-/// A file's text, or empty when it is missing, a link or too big.
-fn read_file(path: &Path) -> String {
-    match std::fs::symlink_metadata(path) {
-        Ok(meta) if meta.is_file() && meta.len() <= FILE_CAP => {
-            std::fs::read_to_string(path).unwrap_or_default()
+/// Why a notes file's text can't be read. Review shows such a file empty,
+/// and Save never replaces text it could not show.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Why {
+    TooBig,
+    NotText,
+    NoAccess,
+    Link,
+    NotAFile,
+}
+
+impl Why {
+    /// What follows the file's name in the note.
+    fn says(self) -> &'static str {
+        match self {
+            Why::TooBig => "is too big to change here",
+            Why::NotText => "is not plain text (UTF-8)",
+            Why::NoAccess => "can't be opened",
+            Why::Link => "is a link to another file",
+            Why::NotAFile => "is not a file",
         }
-        _ => String::new(),
     }
 }
 
-fn over_cap(path: &Path) -> bool {
-    std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() > FILE_CAP)
+/// What is at a notes file's path.
+enum Read {
+    Missing,
+    Text(String),
+    Held(Why),
 }
 
-/// The files that are over the size cap, by name. Review shows them empty
-/// and Save leaves them alone, so the apps say so.
-pub fn too_big(config_dir: &Path) -> Vec<String> {
+fn read_file(path: &Path) -> Read {
+    use std::io::ErrorKind;
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Read::Missing,
+        Err(_) => return Read::Held(Why::NoAccess),
+    };
+    if meta.file_type().is_symlink() {
+        return Read::Held(Why::Link);
+    }
+    if !meta.is_file() {
+        return Read::Held(Why::NotAFile);
+    }
+    if meta.len() > FILE_CAP {
+        return Read::Held(Why::TooBig);
+    }
+    match std::fs::read_to_string(path) {
+        Ok(text) => Read::Text(text),
+        Err(e) if e.kind() == ErrorKind::InvalidData => Read::Held(Why::NotText),
+        Err(e) if e.kind() == ErrorKind::NotFound => Read::Missing,
+        Err(_) => Read::Held(Why::NoAccess),
+    }
+}
+
+/// A file's text, or empty when it is missing or can't be read.
+fn text_of(path: &Path) -> String {
+    match read_file(path) {
+        Read::Text(text) => text,
+        Read::Missing | Read::Held(_) => String::new(),
+    }
+}
+
+/// The files whose text can't be read, by name, and why.
+fn held(config_dir: &Path) -> Vec<(&'static str, Why)> {
     let dir = memory_dir(config_dir);
     FILES
         .iter()
-        .filter(|name| over_cap(&dir.join(name)))
-        .map(|name| (*name).to_string())
+        .filter_map(|name| match read_file(&dir.join(name)) {
+            Read::Held(why) => Some((*name, why)),
+            Read::Missing | Read::Text(_) => None,
+        })
         .collect()
+}
+
+/// What Review says under the drafts: one sentence per file it shows empty
+/// because the text can't be read, and what Save does about it. `None` when
+/// every file could be read.
+pub fn review_note(config_dir: &Path) -> Option<String> {
+    let lines: Vec<String> = held(config_dir)
+        .into_iter()
+        .map(|(name, why)| match why {
+            Why::Link => format!(
+                "{name} {}; Save won't run until its box is empty.",
+                why.says()
+            ),
+            _ => format!("{name} {}; Save leaves it alone.", why.says()),
+        })
+        .collect();
+    (!lines.is_empty()).then(|| lines.join(" "))
+}
+
+/// What to say after Save: one sentence per file it left alone, with why.
+/// `None` when it skipped none.
+pub fn saved_note(config_dir: &Path, saved: &Saved) -> Option<String> {
+    let lines: Vec<String> = held(config_dir)
+        .into_iter()
+        .filter(|(name, _)| saved.skipped.iter().any(|s| s == name))
+        .map(|(name, why)| format!("{name} {}; it was left alone.", why.says()))
+        .collect();
+    (!lines.is_empty()).then(|| lines.join(" "))
 }
 
 /// The three files as they are now.
 pub fn existing(config_dir: &Path) -> Existing {
     let dir = memory_dir(config_dir);
     Existing {
-        user: read_file(&dir.join("USER.md")),
-        soul: read_file(&dir.join("SOUL.md")),
-        memory: read_file(&dir.join("MEMORY.md")),
+        user: text_of(&dir.join("USER.md")),
+        soul: text_of(&dir.join("SOUL.md")),
+        memory: text_of(&dir.join("MEMORY.md")),
     }
 }
 
@@ -140,32 +219,30 @@ fn group(key: &str) -> Option<PersonalGroup> {
 enum Wrote {
     Changed,
     Same,
-    /// The file on disk is over the cap: its text was never read, so it is
-    /// not replaced.
-    TooBig,
+    /// The file's text could not be read, so it is not replaced.
+    Held,
 }
 
-/// Write one memory file: never through a link, never over a file too big
-/// to have been read, the old text kept as `{name}.prev`, and only when the
-/// text changed.
+fn link_error(name: &str) -> String {
+    format!("{name} {}; it was left alone.", Why::Link.says())
+}
+
+/// Write one memory file: never through a link, never over a file whose
+/// text could not be read, the old text kept as `{name}.prev`, and only when
+/// the text changed.
 fn write_file(dir: &Path, name: &str, body: &str) -> Result<Wrote, String> {
     let path = dir.join(name);
-    if let Ok(meta) = std::fs::symlink_metadata(&path) {
-        if meta.file_type().is_symlink() {
-            return Err(format!(
-                "{name} is a link to another file; it was left alone."
-            ));
-        }
-    }
-    if over_cap(&path) {
-        return Ok(Wrote::TooBig);
-    }
-    let before = read_file(&path);
-    if before == body {
+    let before = match read_file(&path) {
+        Read::Held(Why::Link) => return Err(link_error(name)),
+        Read::Held(_) => return Ok(Wrote::Held),
+        Read::Text(text) => Some(text),
+        Read::Missing => None,
+    };
+    if before.as_deref() == Some(body) {
         return Ok(Wrote::Same);
     }
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    if path.exists() {
+    if before.is_some() {
         let _ = std::fs::copy(&path, dir.join(format!("{name}.prev")));
     }
     grokhub_core::pulse_writer::write_atomic(&path, body)?;
@@ -180,13 +257,22 @@ pub fn commit(config_dir: &Path, drafts: &Drafts, now_ms: u64) -> Result<Saved, 
     let dir = memory_dir(config_dir);
     let mut files = Vec::new();
     let mut skipped = Vec::new();
-    for (name, body) in FILES.iter().zip([&d.user, &d.soul, &d.memory]) {
-        if body.trim().is_empty() {
-            continue;
+    let bodies: Vec<(&str, &String)> = FILES
+        .into_iter()
+        .zip([&d.user, &d.soul, &d.memory])
+        .filter(|(_, body)| !body.trim().is_empty())
+        .collect();
+    // A link stops Save, so it is looked for before any file is written:
+    // the files before it are not saved without it.
+    for (name, _) in &bodies {
+        if matches!(read_file(&dir.join(name)), Read::Held(Why::Link)) {
+            return Err(link_error(name));
         }
+    }
+    for (name, body) in bodies {
         match write_file(&dir, name, body)? {
-            Wrote::Changed => files.push((*name).to_string()),
-            Wrote::TooBig => skipped.push((*name).to_string()),
+            Wrote::Changed => files.push(name.to_string()),
+            Wrote::Held => skipped.push(name.to_string()),
             Wrote::Same => {}
         }
     }
@@ -318,7 +404,7 @@ pub fn openclaw_import(home: &Path, drafts: &Drafts) -> Option<Import> {
     let mut already = 0;
     let mut full: Vec<(&str, usize)> = Vec::new();
     for (name, path) in &names {
-        let Some((dest, content)) = import_memory_file(name, &read_file(path)) else {
+        let Some((dest, content)) = import_memory_file(name, &text_of(path)) else {
             continue;
         };
         if content.is_empty() {

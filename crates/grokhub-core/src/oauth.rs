@@ -98,7 +98,17 @@ fn https_host(rest: &str) -> Result<String, String> {
     }
 }
 
+/// Whether `text` holds a space or a control character. An address has
+/// neither, and a line break in one would print a second address under the
+/// first in a terminal.
+fn has_blank(text: &str) -> bool {
+    text.chars().any(|c| c.is_whitespace() || c.is_control())
+}
+
 pub fn trusted_xai_url(url: &str) -> Result<String, String> {
+    if has_blank(url) {
+        return Err("Untrusted xAI address: it holds a space or a control character".into());
+    }
     let rest = url
         .strip_prefix("https://")
         .ok_or_else(|| "xAI OAuth requires https".to_string())?;
@@ -110,6 +120,11 @@ pub fn trusted_xai_url(url: &str) -> Result<String, String> {
 
 pub fn trusted_profile_photo_url(url: &str) -> Result<String, String> {
     let url = url.trim();
+    if has_blank(url) {
+        return Err(
+            "Untrusted profile photo address: it holds a space or a control character".into(),
+        );
+    }
     let rest = url
         .strip_prefix("https://")
         .ok_or_else(|| "Profile photo requires https".to_string())?;
@@ -314,6 +329,11 @@ pub fn parse_device_start(json: &Value) -> Result<DeviceCodeStart, String> {
         .unwrap_or("")
         .to_string();
     if device_code.is_empty() || user_code.is_empty() || verification_uri.is_empty() {
+        return Err("Invalid device code response from xAI".into());
+    }
+    // The code is shown and printed as it is: a line break in it would put
+    // text of the sender's choosing on a line of its own.
+    if user_code.chars().any(char::is_control) {
         return Err("Invalid device code response from xAI".into());
     }
     trusted_xai_url(&verification_uri)?;
@@ -624,6 +644,68 @@ mod tests {
         assert_eq!(
             parse_device_start(&start).map(|_| ()),
             Err("Untrusted xAI host: not-xai.example".to_string())
+        );
+        // A line break after the host would print a second address under the
+        // real one in a terminal; no address holds a space or a control.
+        for bad in [
+            "https://accounts.x.ai/device\nhttps://not-xai.example/device",
+            "https://accounts.x.ai/device\r\nhttps://not-xai.example/device",
+            "https://accounts.x.ai/device https://not-xai.example/device",
+            "https://accounts.x.ai/device\thttps://not-xai.example/device",
+            "https://accounts.x.ai/device\u{1b}[2Khttps://not-xai.example/device",
+            "https://accounts.x.ai/device\u{85}https://not-xai.example/device",
+            "https://accounts.x.ai/device\u{2028}https://not-xai.example/device",
+            "https://accounts.x.ai/device\n",
+        ] {
+            assert_eq!(
+                trusted_xai_url(bad),
+                Err("Untrusted xAI address: it holds a space or a control character".to_string()),
+                "{bad:?}"
+            );
+        }
+        assert_eq!(
+            trusted_profile_photo_url("https://pbs.twimg.com/a.jpg\nhttps://not-xai.example/b.jpg"),
+            Err(
+                "Untrusted profile photo address: it holds a space or a control character"
+                    .to_string()
+            )
+        );
+        // Spaces around a photo address are dropped, as before.
+        assert_eq!(
+            trusted_profile_photo_url(" https://pbs.twimg.com/a.jpg\n"),
+            Ok("https://pbs.twimg.com/a.jpg".to_string())
+        );
+        let start = json!({
+            "device_code": "dev-1",
+            "user_code": "ABCD-EFGH",
+            "verification_uri": "https://accounts.x.ai/device\nhttps://not-xai.example/device",
+        });
+        assert_eq!(
+            parse_device_start(&start).map(|_| ()),
+            Err("Untrusted xAI address: it holds a space or a control character".to_string())
+        );
+        assert_eq!(
+            trusted_xai_url("https://accounts.x.ai/device?next=a@b"),
+            Ok("https://accounts.x.ai/device?next=a@b".to_string())
+        );
+        // The code is printed too.
+        let start = json!({
+            "device_code": "dev-1",
+            "user_code": "ABCD-EFGH\nhttps://not-xai.example/device",
+            "verification_uri": "https://accounts.x.ai/device",
+        });
+        assert_eq!(
+            parse_device_start(&start).map(|_| ()),
+            Err("Invalid device code response from xAI".to_string())
+        );
+        let start = json!({
+            "device_code": "dev-1",
+            "user_code": "ABCD EFGH",
+            "verification_uri": "https://accounts.x.ai/device",
+        });
+        assert_eq!(
+            parse_device_start(&start).map(|s| s.user_code),
+            Ok("ABCD EFGH".to_string())
         );
     }
 

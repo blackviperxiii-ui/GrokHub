@@ -50,6 +50,8 @@ export function OnboardStage({ after }: { after: boolean }) {
   const [importing, setImporting] = useState(false);
   // This Review's drafts already hold the OpenClaw notes.
   const [added, setAdded] = useState(false);
+  // A Save is out: a second press would save the same drafts again.
+  const [saving, setSaving] = useState(false);
   const box = useRef<HTMLDivElement>(null);
   const shown = after && (importing || reply?.pending === true);
 
@@ -268,8 +270,14 @@ export function OnboardStage({ after }: { after: boolean }) {
           {step === "review" && drafts && (
             <button
               type="button"
+              disabled={saving}
               onClick={async () => {
-                if (await run({ act: "save", drafts })) setStep("done");
+                setSaving(true);
+                try {
+                  if (await run({ act: "save", drafts })) setStep("done");
+                } finally {
+                  setSaving(false);
+                }
               }}
             >
               Save

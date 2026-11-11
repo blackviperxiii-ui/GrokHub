@@ -327,6 +327,29 @@ describe("OnboardStage", () => {
     expect(screen.getByLabelText("How I sound (SOUL.md)")).toHaveValue(DRAFTS.soul);
   });
 
+  it("Save pressed again while it is saving sends one save", async () => {
+    shell({ step: "review" });
+    const plain = mock.onboard.getMockImplementation()!;
+    let finish = () => {};
+    mock.onboard.mockImplementation((act) =>
+      act.act === "save"
+        ? new Promise((done) => {
+            finish = () => void plain(act).then(done);
+          })
+        : plain(act),
+    );
+    render(<OnboardStage after />);
+    const save = await screen.findByRole("button", { name: "Save" });
+    await userEvent.click(save);
+    expect(save).toBeDisabled();
+    await userEvent.click(save);
+    expect(acts().filter((a) => a === "save")).toEqual(["save"]);
+    finish();
+    expect(
+      await screen.findByText("Saved USER.md, SOUL.md, MEMORY.md and 2 Personal rows. Edit any of it later in Settings → Personal."),
+    ).toBeInTheDocument();
+  });
+
   it("a file too big to change is named on the Saved screen", async () => {
     shell({ step: "review" });
     const plain = mock.onboard.getMockImplementation()!;

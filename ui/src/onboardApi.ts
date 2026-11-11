@@ -35,7 +35,8 @@ export interface Drafts {
 
 export interface Saved {
   files: string[];
-  /** Files over the size cap, which Save left alone. */
+  /** Files Save left alone because their text can't be read (too big, not
+   * plain text, not a file, no access). `note` says why. */
   skipped: string[];
   rows: number;
   amr: boolean;

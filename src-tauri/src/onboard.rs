@@ -4,6 +4,7 @@
 //! `grokhub_agent::onboard`, the same writer the cabin uses.
 
 use std::path::Path;
+use std::sync::Mutex;
 
 use grokhub_agent::onboard::{self, Saved};
 use grokhub_core::onboard_identity::{tone_for_personality, Answers, Drafts, Stage, Step};
@@ -54,6 +55,11 @@ pub struct Reply {
     pub note: Option<String>,
 }
 
+/// The command runs off the main thread, so the page can have two acts out
+/// at once (Save pressed twice, Next pressed quickly). Two writers of one
+/// file would share its temp file and its `.prev` copy, so acts take turns.
+static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+
 /// One act. `personality` is the voice picked now, the soul step's start.
 pub fn act(
     config_dir: &Path,
@@ -62,6 +68,7 @@ pub fn act(
     act: Act,
     now_ms: u64,
 ) -> Result<Reply, String> {
+    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
     let mut drafts = None;
     let mut saved = None;
     let mut note = None;
@@ -78,10 +85,10 @@ pub fn act(
                 onboard::keep(config_dir, Step::Review, &answers)?;
             }
             drafts = Some(onboard::draft(config_dir, &answers, now_ms));
-            note = too_big(&onboard::too_big(config_dir), "Save leaves it alone.");
+            note = onboard::review_note(config_dir);
         }
         Act::Openclaw { drafts: base } => {
-            let held = too_big(&onboard::too_big(config_dir), "Save leaves it alone.");
+            let held = onboard::review_note(config_dir);
             match home.and_then(|h| onboard::openclaw_import(h, &base)) {
                 Some(import) => {
                     drafts = Some(import.drafts);
@@ -98,7 +105,7 @@ pub fn act(
         }
         Act::Save { drafts: d } => {
             let done = onboard::commit(config_dir, &d, now_ms)?;
-            note = too_big(&done.skipped, "it was left alone.");
+            note = onboard::saved_note(config_dir, &done);
             saved = Some(done);
         }
         Act::Skip => {
@@ -127,15 +134,6 @@ pub fn act(
         saved,
         note,
     })
-}
-
-/// One sentence per file that is over the size cap, or `None` without one.
-fn too_big(names: &[String], then: &str) -> Option<String> {
-    let lines: Vec<String> = names
-        .iter()
-        .map(|name| format!("{name} is too big to change here; {then}"))
-        .collect();
-    (!lines.is_empty()).then(|| lines.join(" "))
 }
 
 #[cfg(test)]

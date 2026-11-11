@@ -108,7 +108,8 @@ pub enum Poll {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CallError {
     /// No answer came back: no network, a refused or dropped connection, a
-    /// timeout. The same call can work a moment later.
+    /// timeout, or a server error in place of xAI's answer. The same call can
+    /// work a moment later.
     NoAnswer(String),
     /// Refused before the call, or an answer that can't be read. Asking again
     /// is unlikely to help.
@@ -228,6 +229,8 @@ fn get_json(url: &str, bearer: Option<&str>) -> Result<Value, CallError> {
 }
 
 /// POSTs a form. `false` with the error body when xAI answers with an error.
+/// A server error (5xx), or "too many requests" with no error of xAI's own,
+/// says nothing about the request, so it is [`CallError::NoAnswer`].
 fn post_form(url: &str, pairs: &[(&str, &str)]) -> Result<(bool, Value), CallError> {
     guard(url)?;
     let body = pairs
@@ -243,8 +246,18 @@ fn post_form(url: &str, pairs: &[(&str, &str)]) -> Result<(bool, Value), CallErr
         .send_string(&body)
     {
         Ok(resp) => Ok((true, read_json(resp)?)),
-        Err(http::Error::Status { body, .. }) => {
-            Ok((false, serde_json::from_str(&body).unwrap_or(Value::Null)))
+        Err(http::Error::Status {
+            code,
+            body,
+            message,
+            ..
+        }) => {
+            let v: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+            if code >= 500 || (code == 429 && v.get("error").is_none()) {
+                Err(CallError::NoAnswer(message))
+            } else {
+                Ok((false, v))
+            }
         }
         Err(e) => Err(e.into()),
     }
@@ -756,6 +769,63 @@ pub(crate) mod tests {
         // The code is still held, so the next ask goes out too.
         assert!(matches!(flow.ask(&store), Err(CallError::NoAnswer(_))));
         assert!(matches!(flow.poll(&store), Err(text) if text.starts_with(&m.base)));
+    }
+
+    #[test]
+    fn a_server_error_is_no_answer_and_the_code_is_kept() {
+        let (_dir, _cfg) = config("busy");
+        let m = mock(vec![
+            ("/device", 200, START),
+            ("/token", 503, "<html>Service Unavailable</html>"),
+            ("/token", 500, r#"{"error":"server_error"}"#),
+            ("/token", 429, "Too Many Requests"),
+            ("/token", 429, r#"{"error":"slow_down"}"#),
+            ("/token", 400, "<html>Bad Request</html>"),
+        ]);
+        let _base = use_base(&m.base);
+        let flow = SignIn::default();
+        let store = Mem::default();
+        flow.start().expect("start");
+        for code in [503, 500, 429] {
+            assert_eq!(
+                flow.ask(&store),
+                Err(CallError::NoAnswer(format!(
+                    "{}/token: status code {code}",
+                    m.base
+                )))
+            );
+        }
+        // xAI's own "slow down" is an answer, whatever its status.
+        assert_eq!(flow.ask(&store), Ok(Poll::Pending { interval: 10 }));
+        // A refusal the server did not explain still ends the sign-in.
+        assert_eq!(
+            flow.ask(&store),
+            Ok(Poll::Failed {
+                error: "oauth error (unknown)".into()
+            })
+        );
+        assert_eq!(flow.ask(&store), Err(CallError::Other(NOT_STARTED.into())));
+    }
+
+    #[test]
+    fn a_server_error_on_refresh_does_not_say_to_sign_in_again() {
+        let (_dir, _cfg) = config("refresh-busy");
+        let server = mock(vec![("/token", 503, "<html>Service Unavailable</html>")]);
+        let _base = use_base(&server.base);
+        let store = Mem::default();
+        let old = XaiOAuthTokens {
+            access_token: "at-old".into(),
+            refresh_token: Some("rt-old".into()),
+            expires_at: Some(1),
+            ..Default::default()
+        };
+        save(&store, &old).unwrap();
+        assert_eq!(
+            bearer(&store),
+            Err(format!("{}/token: status code 503", server.base))
+        );
+        // The tokens are as they were, for the next try.
+        assert_eq!(load(&store), Ok(Some(old)));
     }
 
     #[test]

@@ -383,3 +383,85 @@ fn a_tone_the_person_cleared_stays_cleared_when_review_resumes() {
         "no Tone line the person did not pick"
     );
 }
+
+#[test]
+fn a_file_that_is_not_text_is_named_in_review_and_left_alone_by_save() {
+    let (dir, _g) = finished("not-text");
+    let path = dir.join("memory").join("USER.md");
+    // Saved by an editor in Latin-1: one byte that is not UTF-8.
+    let old: &[u8] = b"# User\n\n- Likes caf\xe9s\n";
+    fs::write(&path, old).unwrap();
+    let home = fixture_home("not-text");
+    let review = import(&dir, &home);
+    assert_eq!(
+        review.note.as_deref(),
+        Some("USER.md is not plain text (UTF-8); Save leaves it alone.")
+    );
+    let drafts = review.drafts.expect("drafts");
+    assert_eq!(
+        drafts.user,
+        "# User\n\n## From OpenClaw USER.md\n\nLikes tea.\n"
+    );
+    let done = act(&dir, Some(&home), "nyx", Act::Save { drafts }, NOW).unwrap();
+    assert_eq!(
+        done.saved,
+        Some(Saved {
+            files: vec!["SOUL.md".into()],
+            skipped: vec!["USER.md".into()],
+            rows: 0,
+            amr: true,
+        })
+    );
+    assert_eq!(
+        done.note.as_deref(),
+        Some("USER.md is not plain text (UTF-8); it was left alone.")
+    );
+    assert_eq!(fs::read(&path).unwrap(), old);
+    assert!(!dir.join("memory").join("USER.md.prev").exists());
+}
+
+#[test]
+fn two_saves_at_once_both_finish_and_the_old_text_is_kept() {
+    let (dir, _g) = finished("two-saves");
+    // AMR off: the three files only.
+    fs::write(dir.join("app.json"), "{}\n").unwrap();
+    let path = dir.join("memory").join("MEMORY.md");
+    let prev = dir.join("memory").join("MEMORY.md.prev");
+    for round in 0..60 {
+        fs::write(&path, OWN_MEMORY).unwrap();
+        let _ = fs::remove_file(&prev);
+        let drafts = Drafts {
+            memory: format!("# Memory\n\n- round {round}\n"),
+            ..Drafts::default()
+        };
+        let save = || {
+            let (dir, drafts) = (dir.clone(), drafts.clone());
+            std::thread::spawn(move || act(&dir, None, "nyx", Act::Save { drafts }, NOW))
+        };
+        let (a, b) = (save(), save());
+        let got = [a.join().unwrap(), b.join().unwrap()].map(|r| r.map(|reply| reply.saved));
+        // One Save writes the file; the other finds it written.
+        let wrote = |files: &[&str]| {
+            Ok(Some(Saved {
+                files: files.iter().map(|f| f.to_string()).collect(),
+                skipped: vec![],
+                rows: 0,
+                amr: false,
+            }))
+        };
+        assert!(
+            got == [wrote(&["MEMORY.md"]), wrote(&[])]
+                || got == [wrote(&[]), wrote(&["MEMORY.md"])],
+            "round {round}: {got:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            format!("# Memory\n\n- round {round}\n")
+        );
+        assert_eq!(
+            fs::read_to_string(&prev).unwrap(),
+            OWN_MEMORY,
+            "round {round}"
+        );
+    }
+}

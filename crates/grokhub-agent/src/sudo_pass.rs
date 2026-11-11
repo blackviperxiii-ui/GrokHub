@@ -183,7 +183,7 @@ pub fn client(_socket: &str) -> i32 {
 #[cfg(target_os = "linux")]
 mod linux {
     use std::io::{BufRead, BufReader, Read, Write};
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
     use std::os::unix::io::AsRawFd;
     use std::os::unix::net::{UnixListener, UnixStream};
     use std::path::{Path, PathBuf};
@@ -209,19 +209,11 @@ mod linux {
             return Ok(());
         }
         let config_dir = crate::perm::config_dir();
-        let base = helper_base(
+        let dir = helper_dir(
             std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from),
+            &shared_roots(&config_dir),
             &config_dir,
-        );
-        if !base.is_dir() {
-            std::fs::create_dir_all(&base)?;
-            std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700))?;
-        }
-        sweep(&base);
-        let dir = base.join(format!("grokhub-askpass-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir(&dir)?;
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+        )?;
         let socket = dir.join("s");
         let script = dir.join("askpass");
         let listener = bind_socket(&socket)?;
@@ -251,11 +243,65 @@ mod linux {
         Ok(())
     }
 
-    /// The folder the helper dir is made in: `XDG_RUNTIME_DIR` when it is a
-    /// folder, else `run` in the config folder. Never a temp folder: sandboxed
+    /// The folders every sandboxed command may write, whatever its workspace:
+    /// the sandbox's own list, asked with no workspace and no home.
+    pub(super) fn shared_roots(config_dir: &Path) -> Vec<PathBuf> {
+        crate::sandbox::writable_roots(Path::new(""), None, config_dir, &[])
+    }
+
+    /// `XDG_RUNTIME_DIR` when the helper may live there: a folder that is
+    /// this user's alone, as a login session makes it, and outside `shared`.
+    /// A session without a login manager often exports one under the temp
+    /// folder, and after `su` the variable can still name the other user's.
+    pub(super) fn runtime_dir(xdg: Option<PathBuf>, shared: &[PathBuf]) -> Option<PathBuf> {
+        let dir = xdg?.canonicalize().ok()?;
+        let meta = std::fs::metadata(&dir).ok()?;
+        // SAFETY: geteuid has no preconditions.
+        let me = unsafe { libc::geteuid() };
+        let ours = meta.is_dir() && private_to(meta.uid(), meta.mode(), me);
+        (ours && !shared.iter().any(|root| dir.starts_with(root))).then_some(dir)
+    }
+
+    /// Owned by `me`, with nothing allowed to the group or to others.
+    pub(super) fn private_to(owner: u32, mode: u32, me: u32) -> bool {
+        owner == me && mode & 0o077 == 0
+    }
+
+    /// This process's helper dir, made new and private: in the runtime folder
+    /// when [`runtime_dir`] takes it and the dir can be made there, else in
+    /// `run` in the config folder.
+    pub(super) fn helper_dir(
+        xdg: Option<PathBuf>,
+        shared: &[PathBuf],
+        config_dir: &Path,
+    ) -> std::io::Result<PathBuf> {
+        let run = config_dir.join("run");
+        let base = helper_base(runtime_dir(xdg, shared), config_dir);
+        match make_helper_dir(&base) {
+            Err(_) if base != run => make_helper_dir(&run),
+            made => made,
+        }
+    }
+
+    fn make_helper_dir(base: &Path) -> std::io::Result<PathBuf> {
+        if !base.is_dir() {
+            std::fs::create_dir_all(base)?;
+            std::fs::set_permissions(base, std::fs::Permissions::from_mode(0o700))?;
+        }
+        sweep(base);
+        let dir = base.join(format!("grokhub-askpass-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir)?;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+        Ok(dir)
+    }
+
+    /// The folder the helper dir is made in: the runtime folder when there is
+    /// one, else `run` in the config folder. Never a temp folder: sandboxed
     /// agent commands may write those, and one that rewrote the `sudo` wrapper
     /// would decide what the next approved `sudo` runs. The config folder is
-    /// read-only to them.
+    /// read-only to them. [`runtime_dir`] is what keeps a runtime folder they
+    /// may write from getting here.
     pub(super) fn helper_base(xdg: Option<PathBuf>, config_dir: &Path) -> PathBuf {
         xdg.filter(|p| p.is_dir())
             .unwrap_or_else(|| config_dir.join("run"))
@@ -828,6 +874,97 @@ mod linux {
                 base.display()
             );
             let _ = std::fs::remove_dir_all(ws);
+        }
+
+        #[test]
+        fn a_runtime_folder_sandboxed_commands_may_write_is_not_used() {
+            // A session without a login manager often exports a runtime
+            // folder under the temp folder.
+            let xdg = scratch("xdg-tmp");
+            std::fs::set_permissions(&xdg, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let cfg = scratch("xdg-tmp-cfg");
+            let tmp = std::env::temp_dir().canonicalize().unwrap();
+            let name = format!("grokhub-askpass-{}", std::process::id());
+            assert_eq!(
+                helper_dir(Some(xdg.clone()), std::slice::from_ref(&tmp), &cfg).unwrap(),
+                cfg.join("run").join(&name)
+            );
+            assert!(!xdg.join(&name).exists());
+            assert_eq!(
+                std::fs::metadata(cfg.join("run").join(&name))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o700
+            );
+            // The temp folder is one of the folders the sandbox opens.
+            let roots = shared_roots(Path::new("/home/user/.config/GrokHub"));
+            assert!(roots.iter().any(|r| tmp.starts_with(r)), "{roots:?}");
+            assert_eq!(runtime_dir(Some(xdg.clone()), &roots), None);
+            let _ = std::fs::remove_dir_all(xdg);
+            let _ = std::fs::remove_dir_all(cfg);
+        }
+
+        #[test]
+        fn a_runtime_folder_is_used_only_when_it_is_this_users_alone() {
+            let xdg = scratch("xdg-own");
+            let real = xdg.canonicalize().unwrap();
+            let mode = |m| std::fs::set_permissions(&xdg, std::fs::Permissions::from_mode(m));
+            mode(0o700).unwrap();
+            assert_eq!(runtime_dir(Some(xdg.clone()), &[]), Some(real.clone()));
+            // Open to the group or to others, it is not a runtime folder.
+            mode(0o750).unwrap();
+            assert_eq!(runtime_dir(Some(xdg.clone()), &[]), None);
+            mode(0o701).unwrap();
+            assert_eq!(runtime_dir(Some(xdg.clone()), &[]), None);
+            // Another user's (after `su`, the variable can still name it).
+            assert!(private_to(1000, 0o40700, 1000));
+            assert!(!private_to(1001, 0o40700, 1000));
+            assert!(!private_to(0, 0o40700, 1000));
+            assert!(!private_to(1000, 0o40770, 1000));
+            // Not there, not a folder, not set.
+            assert_eq!(
+                runtime_dir(Some(PathBuf::from("/nonexistent/run/user/1000")), &[]),
+                None
+            );
+            mode(0o700).unwrap();
+            std::fs::write(xdg.join("file"), "").unwrap();
+            std::fs::set_permissions(xdg.join("file"), std::fs::Permissions::from_mode(0o600))
+                .unwrap();
+            assert_eq!(runtime_dir(Some(xdg.join("file")), &[]), None);
+            assert_eq!(runtime_dir(None, &[]), None);
+            // Used: the helper dir is made in it.
+            let cfg = scratch("xdg-own-cfg");
+            let name = format!("grokhub-askpass-{}", std::process::id());
+            assert_eq!(
+                helper_dir(Some(xdg.clone()), &[], &cfg).unwrap(),
+                real.join(&name)
+            );
+            assert!(!cfg.join("run").exists());
+            let _ = std::fs::remove_dir_all(xdg);
+            let _ = std::fs::remove_dir_all(cfg);
+        }
+
+        #[test]
+        fn a_runtime_folder_that_cannot_hold_the_helper_gives_way_to_the_config_folder() {
+            // This process's own, private, and nothing can be made in it.
+            let xdg = PathBuf::from("/proc/self/fd");
+            assert_eq!(
+                runtime_dir(Some(xdg.clone()), &[]),
+                Some(PathBuf::from(format!("/proc/{}/fd", std::process::id())))
+            );
+            let cfg = scratch("xdg-full-cfg");
+            assert_eq!(
+                helper_dir(Some(xdg), &[], &cfg).unwrap(),
+                cfg.join("run")
+                    .join(format!("grokhub-askpass-{}", std::process::id()))
+            );
+            // With nowhere else to go the error comes back.
+            let file = cfg.join("not-a-folder");
+            std::fs::write(&file, "").unwrap();
+            assert!(helper_dir(None, &[], &file).is_err());
+            let _ = std::fs::remove_dir_all(cfg);
         }
 
         #[test]

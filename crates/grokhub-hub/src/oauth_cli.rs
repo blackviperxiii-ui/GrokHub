@@ -5,9 +5,9 @@
 
 use grokhub_agent::xai_keychain::{CallError, Poll, SignIn, Store};
 use std::io::Write;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-/// How many polls to try before giving up (the code lasts ten minutes).
+/// The most polls, however long the code says it lasts.
 const MAX_POLLS: u32 = 180;
 
 /// How many polls in a row may fail for a reason other than a lost connection
@@ -16,8 +16,9 @@ const MAX_REFUSALS: u32 = 3;
 
 /// Runs the flow against `store`. `wait` sleeps between polls. Returns the
 /// exit code: 0 once signed in, 1 on any failure. A poll that gets no answer
-/// (no network, a dropped connection) is asked again while the code is good;
-/// why is printed once.
+/// (no network, a dropped connection, a server error) is asked again while
+/// the code is good; why is printed once. The code is good for as long as
+/// xAI said it lasts, counted from the waits and the time the polls took.
 pub fn run(
     store: &dyn Store,
     wait: &dyn Fn(Duration),
@@ -40,9 +41,18 @@ pub fn run(
     let mut interval = started.interval.max(1);
     let mut told: Option<String> = None;
     let mut refusals = 0;
+    let lasts = Duration::from_secs(started.expires_in);
+    let mut spent = Duration::ZERO;
     for _ in 0..MAX_POLLS {
-        wait(Duration::from_secs(interval));
-        match flow.ask(store) {
+        if spent >= lasts {
+            break;
+        }
+        let pause = Duration::from_secs(interval);
+        wait(pause);
+        let asked = Instant::now();
+        let got = flow.ask(store);
+        spent += pause + asked.elapsed();
+        match got {
             Ok(Poll::Pending { interval: next }) => {
                 interval = next.max(1);
                 refusals = 0;
@@ -241,6 +251,57 @@ mod tests {
         );
         assert_eq!(waits, vec![5, 5, 5]);
         assert_eq!(err, "expected value at line 1 column 1\n");
+    }
+
+    #[test]
+    fn a_passing_server_error_is_asked_again_while_the_code_is_good() {
+        let (code, out, err, waits, base) = run_against(
+            "busy",
+            vec![
+                ("/device", 200, START),
+                ("/token", 503, "<html>Service Unavailable</html>"),
+                ("/token", 502, "<html>Bad Gateway</html>"),
+                ("/token", 400, PENDING),
+                ("/token", 200, TOKENS),
+                ("/userinfo", 200, USERINFO),
+            ],
+        );
+        assert_eq!(code, 0, "{err}");
+        assert_eq!(
+            out,
+            "Grok OAuth user code: ABCD-EFGH\nhttps://accounts.x.ai/device\nconnected Sam Rivera\n"
+        );
+        assert_eq!(waits, vec![5, 5, 5, 5]);
+        assert_eq!(
+            err,
+            format!("{base}/token: status code 503\n{base}/token: status code 502\n")
+        );
+    }
+
+    #[test]
+    fn with_no_answers_it_stops_when_the_code_has_run_out() {
+        const SHORT: &str = r#"{"device_code":"dev-1","user_code":"ABCD-EFGH","verification_uri":"https://accounts.x.ai/device","expires_in":20,"interval":5}"#;
+        let (code, out, err, waits, base) = run_against(
+            "offline",
+            vec![
+                ("/device", 200, SHORT),
+                ("/token", 0, ""),
+                ("/token", 0, ""),
+                ("/token", 0, ""),
+                ("/token", 0, ""),
+            ],
+        );
+        assert_eq!(code, 1);
+        assert_eq!(
+            out,
+            "Grok OAuth user code: ABCD-EFGH\nhttps://accounts.x.ai/device\n"
+        );
+        // The code lasts 20 seconds: four polls five seconds apart, no more.
+        assert_eq!(waits, vec![5, 5, 5, 5]);
+        let lines: Vec<&str> = err.lines().collect();
+        assert_eq!(lines.len(), 2, "{err}");
+        assert!(lines[0].starts_with(&format!("{base}/token: ")), "{err}");
+        assert_eq!(lines[1], "The code ran out. Start again.");
     }
 
     /// The env var and the config dir are process-wide, so the run holds
