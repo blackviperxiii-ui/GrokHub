@@ -20,8 +20,10 @@ pub(super) const EDITOR_SAVING: &str = "Saving…";
 pub(super) const EDITOR_MORE: &str = "This folder has more entries than this list shows.";
 /// Width of the file list beside the editor.
 const TREE_W: f32 = 220.0;
-/// Shortest the editor box gets, in points.
+/// Shortest and tallest the editor gets, in points. The Code page scrolls,
+/// so the editor keeps its own height and scrolls inside it.
 const MIN_EDIT_H: f32 = 320.0;
+const MAX_EDIT_H: f32 = 560.0;
 
 /// One file open in the editor.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -202,8 +204,10 @@ impl CodeEditor {
     }
 
     /// Start saving the open file off the UI thread (the save also looks up
-    /// the repo for the activity log). False when there is nothing to save.
-    pub(super) fn save(&mut self, config_dir: &Path, keep: usize) -> bool {
+    /// the repo for the activity log). `keep` is how many activity lines
+    /// stay; `None` reads the desktop app's Code setting, like every other
+    /// Code tab log line. False when there is nothing to save.
+    pub(super) fn save(&mut self, config_dir: &Path, keep: Option<usize>) -> bool {
         if self.saving.is_some() {
             return false;
         }
@@ -224,6 +228,8 @@ impl CodeEditor {
         });
         self.note = None;
         std::thread::spawn(move || {
+            let keep = keep
+                .unwrap_or_else(|| grokhub_code::ship::load_from_shell_json(&config).activity_keep);
             let _ = tx.send(files::write_logged(&config, &ws, &path, &text, keep));
         });
         true
@@ -258,13 +264,7 @@ impl CodeEditor {
     }
 
     /// The editor, drawn into the Code page.
-    pub(super) fn ui(
-        &mut self,
-        ui: &mut egui::Ui,
-        workspace: &Path,
-        config_dir: &Path,
-        keep: usize,
-    ) {
+    pub(super) fn ui(&mut self, ui: &mut egui::Ui, workspace: &Path, config_dir: &Path) {
         self.set_workspace(workspace);
         if self.poll_save() {
             ui.ctx().request_repaint();
@@ -276,7 +276,7 @@ impl CodeEditor {
         crate::cards::section_label(ui, EDITOR_TITLE);
         let mut browse_to: Option<String> = None;
         let mut picked: Option<String> = None;
-        let height = ui.available_height().max(MIN_EDIT_H);
+        let height = ui.available_height().clamp(MIN_EDIT_H, MAX_EDIT_H);
         ui.horizontal_top(|ui| {
             ui.allocate_ui_with_layout(
                 egui::vec2(TREE_W, height),
@@ -291,7 +291,7 @@ impl CodeEditor {
                 },
             );
             ui.separator();
-            ui.vertical(|ui| self.ui_pane(ui, config_dir, keep, height));
+            ui.vertical(|ui| self.ui_pane(ui, config_dir, height));
         });
         if let Some(note) = &self.note {
             crate::cards::help_text(ui, note);
@@ -350,7 +350,7 @@ impl CodeEditor {
         }
     }
 
-    fn ui_pane(&mut self, ui: &mut egui::Ui, config_dir: &Path, keep: usize, height: f32) {
+    fn ui_pane(&mut self, ui: &mut egui::Ui, config_dir: &Path, height: f32) {
         let saving = self.saving.is_some();
         let Some(open) = self.open.as_ref() else {
             crate::cards::help_text(ui, EDITOR_EMPTY);
@@ -439,7 +439,7 @@ impl CodeEditor {
             save = true;
         }
         if save {
-            self.save(config_dir, keep);
+            self.save(config_dir, None);
         }
     }
 

@@ -192,13 +192,13 @@ fn save_writes_the_file_and_logs_only_path_and_size() {
     let config = temp("save-config");
     ed.pick("src/a.rs");
     // A clean file has nothing to save.
-    assert!(!ed.save(&config, activity::KEEP_DEFAULT));
+    assert!(!ed.save(&config, Some(activity::KEEP_DEFAULT)));
     let body = "fn a() { let token = \"sk-not-in-the-log\"; }\n";
     ed.open.as_mut().unwrap().text = body.into();
-    assert!(ed.save(&config, activity::KEEP_DEFAULT));
+    assert!(ed.save(&config, Some(activity::KEEP_DEFAULT)));
     assert!(ed.is_saving());
     // A second press while the first save runs does nothing.
-    assert!(!ed.save(&config, activity::KEEP_DEFAULT));
+    assert!(!ed.save(&config, Some(activity::KEEP_DEFAULT)));
     finish_save(&mut ed);
     assert!(!ed.is_saving());
     assert_eq!(std::fs::read_to_string(ws.join("src/a.rs")).unwrap(), body);
@@ -222,7 +222,7 @@ fn typing_during_a_save_stays_unsaved() {
     let config = temp("save-race-config");
     ed.pick("src/a.rs");
     ed.open.as_mut().unwrap().text = "fn a() { 3 }\n".into();
-    assert!(ed.save(&config, activity::KEEP_DEFAULT));
+    assert!(ed.save(&config, Some(activity::KEEP_DEFAULT)));
     ed.open.as_mut().unwrap().text = "fn a() { 4 }\n".into();
     finish_save(&mut ed);
     let open = ed.open.clone().unwrap();
@@ -240,7 +240,7 @@ fn a_refused_save_keeps_the_edits_and_says_why() {
     let config = temp("save-refused-config");
     ed.pick("src/a.rs");
     ed.open.as_mut().unwrap().text = "a".repeat(files::MAX_BYTES + 1);
-    assert!(ed.save(&config, activity::KEEP_DEFAULT));
+    assert!(ed.save(&config, Some(activity::KEEP_DEFAULT)));
     finish_save(&mut ed);
     assert_eq!(ed.note.as_deref(), Some(files::TOO_BIG));
     assert!(ed.open.clone().unwrap().dirty());
@@ -249,4 +249,25 @@ fn a_refused_save_keeps_the_edits_and_says_why() {
         "fn a() {}\n"
     );
     assert!(activity::list(&config, 10).is_empty());
+}
+
+#[test]
+fn the_ui_save_keeps_as_many_log_lines_as_the_desktop_setting_says() {
+    let (_ws, mut ed) = project("save-keep");
+    let config = temp("save-keep-config");
+    std::fs::write(
+        config.join("shell.json"),
+        r#"{"codeShip":{"activityKeep":1}}"#,
+    )
+    .unwrap();
+    ed.pick("src/a.rs");
+    ed.open.as_mut().unwrap().text = "fn a() { 5 }\n".into();
+    assert!(ed.save(&config, None));
+    finish_save(&mut ed);
+    ed.open.as_mut().unwrap().text = "fn a() { 6 }\n".into();
+    assert!(ed.save(&config, None));
+    finish_save(&mut ed);
+    let log = activity::list(&config, 10);
+    assert_eq!(log.len(), 1);
+    assert_eq!(log[0].summary, "Saved src/a.rs (13 bytes).");
 }
