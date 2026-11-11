@@ -832,7 +832,13 @@ export type SlashEffect =
   | { kind: "mode"; mode: SessionMode; text: string | null }
   | {
       kind: "open";
-      view: "settings" | "memory" | "automations" | "connectors" | "history";
+      view:
+        | "settings"
+        | "memory"
+        | "automations"
+        | "connectors"
+        | "history"
+        | "skills";
     }
   | { kind: "notice"; text: string }
   | { kind: "export" }
