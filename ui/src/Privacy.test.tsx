@@ -13,7 +13,7 @@ const api = vi.hoisted(() => ({
 
 vi.mock("./api", () => api);
 
-import { FILES_NOTE, OFFLINE_NOT_READY, Privacy } from "./Privacy";
+import { DIAGNOSTICS_PRIVACY_NOTE, FILES_NOTE, OFFLINE_NOT_READY, Privacy } from "./Privacy";
 
 function page(over: Partial<PrivacyPage> = {}): PrivacyPage {
   return {
@@ -69,6 +69,7 @@ describe("Privacy", () => {
     render(<Privacy />);
     expect(await screen.findByText("/home/user/Documents/Loadout")).toBeInTheDocument();
     expect(screen.getByText(FILES_NOTE)).toBeInTheDocument();
+    expect(screen.getByText(DIAGNOSTICS_PRIVACY_NOTE)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Open" }));
     expect(api.openFilesFolder).toHaveBeenCalledTimes(1);
     // The picker was closed: nothing changes and nothing is said.

@@ -30,11 +30,14 @@ pub use grokhub_code::ship as code_ship;
 pub use grokhub_code::term as code_term;
 pub mod connectors;
 pub mod credential;
+pub mod diagnostics;
 pub mod episode;
 pub mod export;
 pub mod game_companion;
 pub mod goals;
 mod helper_asks;
+#[cfg(desktop)]
+mod helper_loop;
 pub mod history;
 pub mod home;
 #[cfg(desktop)]
@@ -63,6 +66,7 @@ pub mod onboard;
 pub mod opener;
 #[cfg(desktop)]
 mod os_extras;
+pub mod pc_helpers;
 pub mod permissions;
 pub mod personality;
 pub mod playbooks;
@@ -1157,6 +1161,85 @@ async fn delete_chat(state: State<'_, ShellState>, id: String) -> Result<(), Str
     off_main(move || history::delete(&dir, &doomed)).await??;
     end_chat(&state, &id);
     Ok(())
+}
+
+/// Where History's Delete all is armed; the second click inside its window
+/// deletes (`history::delete_all`).
+static DELETE_ALL_ARM: Mutex<history::DeleteArm> = Mutex::new(history::DeleteArm::new());
+
+/// Delete all: the first click arms it, a second within 5 s (and not within
+/// half a second, a double-click's second half) deletes every chat of this
+/// app. Replies still running stop.
+#[tauri::command]
+async fn delete_all_chats(state: State<'_, ShellState>) -> Result<history::DeleteAll, String> {
+    let dir = state.config_dir.clone();
+    let ids: Vec<String> = history::list(&dir).into_iter().map(|r| r.id).collect();
+    let done = off_main(move || {
+        let mut arm = DELETE_ALL_ARM.lock().unwrap_or_else(|e| e.into_inner());
+        history::delete_all(&dir, &mut arm, std::time::Instant::now())
+    })
+    .await??;
+    if done.state == history::Arm::Deleted {
+        for id in &ids {
+            end_chat(&state, id);
+        }
+    }
+    Ok(done)
+}
+
+/// Cancel on the armed Delete all, or its window lapsing on the page.
+#[tauri::command]
+fn cancel_delete_all() {
+    DELETE_ALL_ARM
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .cancel();
+}
+
+/// The sidebar's projects and folders, for History's Projects tree.
+#[tauri::command]
+async fn list_project_nodes(
+    state: State<'_, ShellState>,
+) -> Result<Vec<grokhub_core::ProjectNode>, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || history::project_nodes(&dir)).await?
+}
+
+/// Pins the chat, or unpins it when it is pinned; true when pinned now.
+#[tauri::command]
+async fn pin_chat(state: State<'_, ShellState>, id: String) -> Result<bool, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || history::toggle_pin(&dir, &id)).await?
+}
+
+/// Grok CLI sessions and the cabin's chats, read only.
+#[tauri::command]
+async fn list_read_only_chats(
+    state: State<'_, ShellState>,
+    query: String,
+) -> Result<Vec<history::ReadOnlyRow>, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || history::read_only(&dir, None, &query)).await
+}
+
+/// One of those chats' newest lines, shown in place; never resumed.
+#[tauri::command]
+async fn view_read_only_chat(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<history::Transcript, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || history::view_read_only(&dir, None, &id, history::LOAD_CAP)).await?
+}
+
+/// Tool steps a History search matched, over this app's chats.
+#[tauri::command]
+async fn search_steps(
+    state: State<'_, ShellState>,
+    query: String,
+) -> Result<Vec<history::StepRow>, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || history::step_search(&dir, &query)).await
 }
 
 /// A bubble's Delete message…, after the page asked. The ask `text` goes
@@ -3329,6 +3412,42 @@ fn forget_all_devices(web: State<'_, Arc<remote::WebAccess>>) -> remote_devices:
     web.forget_all()
 }
 
+/// Settings → Your PC → PC helpers: the wellbeing and focus switches.
+#[tauri::command]
+async fn get_pc_helpers(state: State<'_, ShellState>) -> Result<pc_helpers::PcHelpers, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || pc_helpers::read(&dir)).await
+}
+
+/// Turn one PC helper switch on or off (`focusHelp`, `windDown`, `rhythm`,
+/// `rhythmGames`).
+#[tauri::command]
+async fn set_pc_helper(
+    state: State<'_, ShellState>,
+    key: String,
+    on: bool,
+) -> Result<pc_helpers::PcHelpers, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || pc_helpers::set_switch(&dir, &key, on)).await?
+}
+
+/// Wind-down's idle time, one of the offered choices.
+#[tauri::command]
+async fn set_pc_auto_sleep(
+    state: State<'_, ShellState>,
+    minutes: u32,
+) -> Result<pc_helpers::PcHelpers, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || pc_helpers::set_auto_sleep(&dir, minutes)).await?
+}
+
+/// Forget the learned daily rhythm.
+#[tauri::command]
+async fn forget_pc_rhythm(state: State<'_, ShellState>) -> Result<pc_helpers::PcHelpers, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || pc_helpers::forget_rhythm(&dir)).await?
+}
+
 /// Devices → Start share: whether this computer's LAN hub is on, its pairing
 /// code and the computers paired with it. Desktop only.
 #[cfg(desktop)]
@@ -3419,6 +3538,49 @@ async fn set_offline_only(state: State<'_, ShellState>, on: bool) -> Result<priv
         ))
     })
     .await?
+}
+
+/// Settings → Labs → Diagnostics mode: the two switches and what a Save holds.
+#[tauri::command]
+fn get_diagnostics(state: State<'_, ShellState>) -> diagnostics::Page {
+    diagnostics::page(&state.config_dir)
+}
+
+#[tauri::command]
+fn set_diagnostics(
+    state: State<'_, ShellState>,
+    mode: bool,
+    include_logs: bool,
+) -> Result<diagnostics::Page, String> {
+    capabilities::needs(capabilities::current().plugins, "Diagnostics")?;
+    diagnostics::set(&state.config_dir, mode, include_logs)
+}
+
+/// Builds the redacted bundle and keeps it for Save; nothing is written yet.
+/// `chat` is the one chat whose text goes in (none: no chat text at all).
+#[tauri::command]
+async fn diagnostics_preview(
+    state: State<'_, ShellState>,
+    chat: Option<String>,
+) -> Result<diagnostics::Preview, String> {
+    capabilities::needs(capabilities::current().plugins, "Diagnostics")?;
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        diagnostics::preview(
+            &dir,
+            env!("CARGO_PKG_VERSION"),
+            credential::has_key(),
+            chat.as_deref(),
+        )
+    })
+    .await?
+}
+
+/// Writes exactly the bundle the preview showed.
+#[tauri::command]
+fn diagnostics_save(state: State<'_, ShellState>) -> Result<diagnostics::Saved, String> {
+    capabilities::needs(capabilities::current().plugins, "Diagnostics")?;
+    diagnostics::save(&state.config_dir)
 }
 
 #[tauri::command]
@@ -4290,6 +4452,12 @@ pub fn run() {
             // The internet log, when it's on and the cabin isn't running.
             #[cfg(desktop)]
             net_watch::start(app.state::<ShellState>().config_dir.clone());
+            // The wellbeing helpers' minute tick, while the cabin is closed.
+            #[cfg(desktop)]
+            helper_loop::start(
+                app.state::<ShellState>().config_dir.clone(),
+                app.handle().clone(),
+            );
             // The Workboard's local tidy, while the cabin is closed. No model.
             #[cfg(desktop)]
             workboard::start_sweeper(app.state::<ShellState>().config_dir.clone());
@@ -4353,6 +4521,13 @@ pub fn run() {
             load_chat,
             get_last_chat,
             rename_chat,
+            delete_all_chats,
+            cancel_delete_all,
+            list_project_nodes,
+            pin_chat,
+            list_read_only_chats,
+            view_read_only_chat,
+            search_steps,
             delete_chat,
             forget_message,
             stage_attachment,
@@ -4536,9 +4711,17 @@ pub fn run() {
             get_workboard_tidy,
             set_workboard_tidy,
             get_behavior,
+            get_pc_helpers,
+            set_pc_helper,
+            set_pc_auto_sleep,
+            forget_pc_rhythm,
             save_behavior,
             save_defaults,
             get_privacy,
+            get_diagnostics,
+            set_diagnostics,
+            diagnostics_preview,
+            diagnostics_save,
             set_offline_only,
             open_data_folder,
             open_files_folder,
