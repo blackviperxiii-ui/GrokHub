@@ -881,6 +881,6 @@ mod tests {
                 | Nav::Settings => {}
             }
         }
-        assert_eq!(all.len(), 17);
+        assert_eq!(all.len(), 18);
     }
 }
