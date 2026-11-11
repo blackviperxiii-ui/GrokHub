@@ -68,6 +68,7 @@ mod turn_budget;
 mod unattended;
 pub mod voice_session;
 mod ws_mode;
+pub mod xai_keychain;
 
 pub use client::{
     map_http_status, request_headers, responses_body, AuthKind, CancelToken, ClientError,

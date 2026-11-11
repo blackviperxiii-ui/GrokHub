@@ -65,7 +65,7 @@ pub mod model_library;
 mod net_watch;
 mod nudges;
 pub mod nyx;
-pub mod oauth;
+pub use grokhub_agent::xai_keychain as oauth;
 pub mod onboard;
 pub mod opener;
 #[cfg(desktop)]
@@ -4704,6 +4704,7 @@ pub fn run() {
             #[cfg(desktop)]
             {
                 install_desktop_host();
+                episode::start_askpass(episode::hub_exe());
                 if loaded.desktop_control && capabilities::current().desktop_control {
                     grokhub_desktop::set_desktop_enabled(true);
                 }

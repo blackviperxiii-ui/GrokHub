@@ -3,6 +3,7 @@
 #![cfg_attr(not(test), warn(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod doctor;
+pub mod oauth_cli;
 mod server;
 pub mod update;
 
@@ -26,6 +27,8 @@ pub enum Launch {
     Doctor,
     /// Says how this install updates. Runs nothing.
     Update,
+    /// Sign in with Grok (device code) into the shell's keychain entry.
+    OAuth,
 }
 
 /// `grokhub-hub --askpass <socket> [prompt]`: `sudo` runs this through the
@@ -52,6 +55,7 @@ pub fn parse_args(args: &[String]) -> Launch {
             "--mcp-cua" => return Launch::McpCua,
             "--doctor" => return Launch::Doctor,
             "--update" => return Launch::Update,
+            "--oauth" => return Launch::OAuth,
             _ => {}
         }
     }
@@ -252,6 +256,10 @@ mod tests {
         assert_eq!(
             parse_args(&args(&["grokhub-hub", "--doctor"])),
             Launch::Doctor
+        );
+        assert_eq!(
+            parse_args(&args(&["grokhub-hub", "--oauth"])),
+            Launch::OAuth
         );
         assert_eq!(
             parse_args(&args(&["grokhub-hub", "--update"])),

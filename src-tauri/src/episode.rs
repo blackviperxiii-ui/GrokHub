@@ -520,16 +520,44 @@ pub fn watch(
     }
 }
 
-/// The `grokhub-hub` binary that serves `--mcp-cua`, next to this app.
-pub fn hub_exe() -> Option<PathBuf> {
-    let me = std::env::current_exe().ok()?;
-    let name = if cfg!(windows) {
+/// Where the bundled `grokhub-hub` can be, best first, for an app at `me`:
+/// next to the app (Windows, macOS, a plain folder), then `../lib/loadout/`
+/// (the deb and AppImage layout, `/usr/bin/loadout` beside
+/// `/usr/lib/loadout/grokhub-hub`).
+pub fn hub_candidates(me: &Path, windows: bool) -> Vec<PathBuf> {
+    let name = if windows {
         "grokhub-hub.exe"
     } else {
         "grokhub-hub"
     };
-    let path = me.parent()?.join(name);
-    path.is_file().then_some(path)
+    let Some(dir) = me.parent() else {
+        return Vec::new();
+    };
+    let mut found = vec![dir.join(name)];
+    if !windows {
+        found.push(dir.join("../lib/loadout").join(name));
+    }
+    found
+}
+
+/// The `grokhub-hub` binary that serves `--mcp-cua` and `--askpass`.
+pub fn hub_exe() -> Option<PathBuf> {
+    let me = std::env::current_exe().ok()?;
+    hub_candidates(&me, cfg!(windows))
+        .into_iter()
+        .find(|p| p.is_file())
+}
+
+/// `sudo` in agent commands asks once per session through the OS dialog: the
+/// askpass server starts with the bundled `grokhub-hub` as the helper the
+/// script runs. Linux only; elsewhere, or without the binary, nothing starts.
+/// Returns whether the server started.
+#[cfg(desktop)]
+pub fn start_askpass(hub: Option<PathBuf>) -> bool {
+    match hub {
+        Some(exe) if cfg!(target_os = "linux") => grokhub_agent::sudo_pass::install(exe).is_ok(),
+        _ => false,
+    }
 }
 
 /// Registers (or removes) the Cua gate as the engine's native MCP server:
