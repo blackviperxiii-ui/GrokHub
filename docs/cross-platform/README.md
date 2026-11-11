@@ -342,9 +342,27 @@ the same hard gate as the cabin (`src-tauri/src/agent.rs`).
 - The shell is the crate's host: its config folder, its switch, and on Linux
   the lock-screen and click-target readers in `grokhub-desktop/src/screen.rs`
   (the AT-SPI walk now lives in `grokhub_core::ATSPI_PY` for both apps).
-- Not yet: desktop episodes (the cabin's observe, act, verify loop) and the
-  Cua driver. macOS has no desktop backend
-  yet, so desktop calls fail there with the no-display error.
+- Desktop episodes (the cabin's observe, act, verify loop) run in the shell
+  (`src-tauri/src/episode.rs`, `ui/src/Episode.tsx`). The "Supervised desktop
+  session" switch above the composer (shown while desktop control is on) arms
+  the chat; its next messages then run through `grokhub_agent::episode`, the
+  cabin's own kernel, with the same hard gate and spans (`path E`). A hard-class
+  step (delete, send, money, credentials) parks for an OK in every approvals
+  mode, Always included; Allow and Deny answer the park file the kernel reads.
+  The panel (`episode://event`) lists the steps, the latest screen as a
+  thumbnail held in memory only (hidden on a lock screen and while a
+  credentials step waits) and Pause, Stop and Halt. Pause stops after the
+  step it is on and keeps the session open; Stop ends it and denies every
+  waiting card; Halt is the same Halt as everywhere. A finished or stopped
+  session disarms the chat. Desktop only: none of it is in
+  `remote::WEB_COMMANDS`.
+- Cua driver: with desktop control and the cabin's `cuaDriver` flag both on
+  (Linux), the shell registers `grokhub-hub --mcp-cua`, found next to the app,
+  as the engine's native Cua server (`episode::sync_cua`), and the panel says
+  "Using the Cua driver". The shell has no Cua switch of its own; it reads the
+  one the cabin saved in `app.json`. Without the hub binary it stays off.
+  macOS has no desktop backend yet, so desktop calls fail there with the
+  no-display error.
 - Rust tests cover the switch, a refused call while it's off, a typed delete
   that waits in Always and is denied, and an allowed step that runs. The
   smoke test turns the switch on with approvals at Always, has the model
@@ -353,6 +371,14 @@ the same hard gate as the cabin (`src-tauri/src/agent.rs`).
   Halt's Rust tests park a desktop step, halt, and check that the turn ends
   as halted, the step never runs and the stamp is written; a prompt sent after
   the Halt still runs. The smoke test has no Halt walk yet.
+  Episodes' Rust tests drive the real session, kernel, gate and span store with
+  a scripted model and a fixture driver: two steps observe, act and verify to
+  a verified end; a send step waits for an OK in Always and a Deny sends
+  nothing; Halt mid-session stops before the next step; Pause keeps it open
+  and Stop ends it and denies its cards; an unarmed chat stays a plain turn.
+  The smoke test arms the switch, has the mocked model type a delete, checks
+  the card waits in Always, that Deny writes the answer, and that Stop ends
+  the session.
 
 **3h, chat history.** Chats now survive New chat, a reload and quitting
 (`src-tauri/src/history.rs`, `ui/src/History.tsx`).

@@ -14,7 +14,16 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:http";
 import { connect as tlsConnect } from "node:tls";
 import { tmpdir } from "node:os";
@@ -65,6 +74,14 @@ function mockReply(callNumber, body) {
     return textReply(JSON.stringify([PULSE_IDEA]));
   }
   if (body.includes(WEB_PROMPT)) return textReply(WEB_REPLY);
+  // A supervised desktop session: its first step types a delete (the card
+  // waits), the next says it is waiting. Checked before the desktop prompt,
+  // whose turn the chat carries as history.
+  if (body.includes(EP_PROMPT)) {
+    const asks = mockSeen.filter((c) => c.path === "/v1/responses" && c.body.includes(EP_PROMPT)).length;
+    if (asks <= 1) return toolCall("smoke-ep", "type", { text: EP_TEXT });
+    return textReply(EP_REPLY);
+  }
   if (body.includes(DESK_PROMPT)) {
     if (!body.includes("smoke-desk")) return toolCall("smoke-desk", "type", { text: DESK_TEXT });
     return textReply(DESK_REPLY);
@@ -256,6 +273,9 @@ const PLAN_REPLY = "Plan approved, ready to tidy";
 const DESK_PROMPT = "clear out the old folder from the terminal";
 const DESK_TEXT = "rm -rf ~/old";
 const DESK_REPLY = "Left the old folder alone";
+const EP_PROMPT = "tidy the old folder as a watched session";
+const EP_TEXT = "rm -rf ~/old";
+const EP_REPLY = "Waiting for your OK on the delete";
 const WEB_PROMPT = "hello from the browser smoke test";
 const WEB_REPLY = "Hello, browser";
 
@@ -1344,6 +1364,7 @@ async function main() {
     await permissions(s, config);
     await appearance(s, config);
     await desktop(s, config);
+    await episode(s, config);
     if (process.env.SMOKE_WEB === "1") await web(s);
     console.log("smoke ok");
   } catch (err) {
@@ -1453,6 +1474,51 @@ async function desktop(s, config) {
     throw new Error("Deny never reached the model as a refusal");
   }
   console.log("Deny reached the model as a refusal");
+}
+
+// A supervised desktop session: with desktop control on, the switch arms the
+// chat, the mocked model types a delete, and the session panel shows the card
+// waiting for an OK in every approvals mode (Always is still on). Deny writes
+// the answer the session reads, and Stop ends the session with nothing run.
+async function episode(s, config) {
+  await tab(s, "Chat");
+  await click(s, ".episode-arm input");
+  await waitFor("the switch to read on", async () => {
+    const [on] = await wd("POST", `${s}/elements`, { using: "css selector", value: ".episode-arm input:checked" });
+    return Boolean(on);
+  });
+  await shot(s, "episode-armed");
+  const box = await waitFor("the message box", () => find(s, "textarea[aria-label='Message']"));
+  await wd("POST", `${s}/element/${box}/value`, { text: EP_PROMPT });
+  await click(s, "form.composer button[type='submit']");
+  await waitFor("the session's waiting card", async () => {
+    const [el] = await wd("POST", `${s}/elements`, { using: "css selector", value: ".episode .episode-park" });
+    return el ? wd("GET", `${s}/element/${el[ELEMENT]}/text`) : null;
+  });
+  await shot(s, "episode-card");
+  console.log("session card waits for an OK, in Always mode");
+  const parkDir = join(config, "harness", "park");
+  const deny = await wd("POST", `${s}/element`, {
+    using: "xpath",
+    value: "//section[contains(@class,'episode')]//div[contains(@class,'episode-park')]//button[normalize-space()='Deny']",
+  });
+  await wd("POST", `${s}/element/${deny[ELEMENT]}/click`, {});
+  await waitFor("the deny answer file", () =>
+    existsSync(parkDir) &&
+    readdirSync(parkDir).some((f) => f.endsWith(".answer") && readFileSync(join(parkDir, f), "utf8").trim() === "deny"),
+  );
+  console.log("Deny wrote the answer the session reads");
+  const stop = await wd("POST", `${s}/element`, {
+    using: "xpath",
+    value: "//section[contains(@class,'episode')]//button[normalize-space()='Stop']",
+  });
+  await wd("POST", `${s}/element/${stop[ELEMENT]}/click`, {});
+  await waitFor("the session to end", async () => {
+    const [el] = await wd("POST", `${s}/elements`, { using: "css selector", value: ".episode .note[role='status']" });
+    return el ? (await wd("GET", `${s}/element/${el[ELEMENT]}/text`)).includes("Stopped") : false;
+  });
+  await shot(s, "episode-stopped");
+  console.log("Stop ended the session");
 }
 
 // Web access: the window turns it on, and Chromium pairs from the localhost
