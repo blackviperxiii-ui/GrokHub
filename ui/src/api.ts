@@ -2973,6 +2973,63 @@ export function libraryPlay(appId: number): Promise<string> {
   return invoke<string>("library_play", { appId });
 }
 
+/** One Battle.net game tile (src-tauri/src/battlenet.rs). */
+export interface BattlenetGame {
+  product: string;
+  name: string;
+  install: string;
+  prefix?: string | null;
+  /** Painted cover colour seed. */
+  seed: number;
+}
+
+export interface BattlenetPage {
+  found: boolean;
+  games: BattlenetGame[];
+}
+
+export function getBattlenet(): Promise<BattlenetPage> {
+  return invoke<BattlenetPage>("get_battlenet");
+}
+
+/** Ask Battle.net to start the product. */
+export function battlenetPlay(product: string): Promise<string> {
+  return invoke<string>("battlenet_play", { product });
+}
+
+/** Open the install folder for a Battle.net product. */
+export function battlenetOpenFolder(product: string): Promise<string> {
+  return invoke<string>("battlenet_open_folder", { product });
+}
+
+/** Per-game companion frame: note, news since last play, guides link. */
+export interface CompanionNews {
+  title: string;
+  url: string;
+}
+
+export interface CompanionFrame {
+  note: string;
+  news: CompanionNews[];
+  guidesUrl: string | null;
+}
+
+export function companionFrame(
+  noteId: number,
+  lastPlayed: number,
+  steamAppId?: number | null,
+): Promise<CompanionFrame> {
+  return invoke<CompanionFrame>("companion_frame", {
+    noteId,
+    lastPlayed,
+    steamAppId: steamAppId ?? null,
+  });
+}
+
+export function companionSetNote(appId: number, text: string): Promise<string> {
+  return invoke<string>("companion_set_note", { appId, text });
+}
+
 /** A Home tile's Turn on, for a switch that needs nothing else. */
 export function homeTurnOn(feature: string): Promise<void> {
   return invoke<void>("home_turn_on", { feature });

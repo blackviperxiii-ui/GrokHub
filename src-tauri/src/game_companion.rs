@@ -124,6 +124,70 @@ pub fn start(dir: PathBuf) {
 #[cfg(mobile)]
 pub fn start(_dir: PathBuf) {}
 
+/// One news headline for the companion frame.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewsItem {
+    pub title: String,
+    pub url: String,
+}
+
+/// What the per-game companion frame shows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Frame {
+    pub note: String,
+    pub news: Vec<NewsItem>,
+    pub guides_url: Option<String>,
+}
+
+/// Notes + news since last play + guides link. `steam` gates the Steam
+/// guides URL; Battle.net tiles pass false and keep notes by cover seed.
+pub fn frame(
+    dir: &Path,
+    note_id: u32,
+    steam_app_id: Option<u32>,
+    news: Option<Vec<(String, String)>>,
+) -> Frame {
+    let notes = gc::load_notes(dir);
+    Frame {
+        note: notes.get(note_id).unwrap_or("").to_string(),
+        news: news
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(title, url)| NewsItem { title, url })
+            .collect(),
+        guides_url: steam_app_id.filter(|id| *id != 0).map(gc::guides_url),
+    }
+}
+
+/// Save the user's note for a game (Steam app id, or a Battle.net cover seed).
+pub fn set_note(dir: &Path, app_id: u32, text: &str) -> Result<String, String> {
+    let mut notes = gc::load_notes(dir);
+    notes.set(app_id, text);
+    gc::save_notes(dir, &notes)?;
+    Ok(notes.get(app_id).unwrap_or("").to_string())
+}
+
+/// The note for a game, if any.
+pub fn get_note(dir: &Path, app_id: u32) -> String {
+    gc::load_notes(dir)
+        .get(app_id)
+        .unwrap_or("")
+        .to_string()
+}
+
+/// News for a Steam library game since it was last played.
+pub fn steam_news(app_id: u32, last_played: u64) -> Option<Vec<(String, String)>> {
+    let root = grokhub_core::steam::detect_root()?;
+    let game = grokhub_core::steam::read_library(&root)
+        .into_iter()
+        .find(|g| g.app_id == app_id)?;
+    let mut game = game;
+    game.last_played = last_played;
+    read_news(&game)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -161,6 +225,31 @@ mod tests {
         assert!(is_on(&dir));
         set(&dir, false).unwrap();
         assert!(!is_on(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn companion_notes_round_trip_and_frame_shows_guides() {
+        let dir = std::env::temp_dir().join(format!("shell-companion-frame-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(set_note(&dir, 620, "finish the co-op").unwrap(), "finish the co-op");
+        assert_eq!(get_note(&dir, 620), "finish the co-op");
+        let f = frame(
+            &dir,
+            620,
+            Some(620),
+            Some(vec![("Update".into(), "https://example.com/u".into())]),
+        );
+        assert_eq!(f.note, "finish the co-op");
+        assert_eq!(f.news.len(), 1);
+        assert_eq!(f.news[0].title, "Update");
+        assert_eq!(
+            f.guides_url.as_deref(),
+            Some("https://steamcommunity.com/app/620/guides/?browsefilter=toprated")
+        );
+        assert_eq!(set_note(&dir, 620, "").unwrap(), "");
+        assert_eq!(get_note(&dir, 620), "");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
