@@ -4,3 +4,4 @@
 - Building the desktop app on Windows or macOS: `node scripts/stage-hub-sidecar.mjs` stages the grokhub-hub it just built for this computer also when `CARGO_BUILD_TARGET` or a cargo config names a build target; before, it could stage a copy left by an earlier build.
 - `docs/cross-platform/README.md` says to run `node scripts/stage-hub-sidecar.mjs` before any cargo or tauri command in `src-tauri` on Windows and macOS, and what the error is without it.
 - CI: the cross-platform lint jobs pass again for macOS, iOS and Android (items only Linux, Windows or macOS use are no longer compiled elsewhere).
+- CI: the macOS sandbox tests of the agent compile again (a test helper existed only on Linux).
