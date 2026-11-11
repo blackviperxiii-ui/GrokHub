@@ -4084,7 +4084,11 @@ fn a_rate_limit_cools_for_minutes_and_an_outage_for_one() {
     };
     live::cool_down_for(&dir, "openrouter/a/b", &limited, NOW);
     assert!(live::cooling(&dir, "openrouter/a/b", NOW + 61_000));
-    assert!(!live::cooling(&dir, "openrouter/a/b", NOW + live::LIMIT_COOL_MS));
+    assert!(!live::cooling(
+        &dir,
+        "openrouter/a/b",
+        NOW + live::LIMIT_COOL_MS
+    ));
     assert!(!live::cooling(&dir, "openrouter/a/c", NOW + 1));
     let wait = ClientError::RateLimited {
         retry_after_secs: Some(900),
