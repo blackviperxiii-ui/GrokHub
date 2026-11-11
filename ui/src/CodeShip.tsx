@@ -8,6 +8,7 @@ import {
   type CodeShipAction,
   type CodeShipPlan,
 } from "./api";
+import { useCardFocus } from "./ui";
 
 export const SHIP_TITLE = "Push and PR";
 export const SHIP_CONFIRM_PUSH = "Push this branch?";
@@ -32,8 +33,9 @@ export function activityTime(ms: number): string {
   return new Date(ms).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
-/** The Code tab's push, PR and activity section. Every push goes through the guard in the app. */
-export function CodeShip({ onShipped }: { onShipped?: () => void }) {
+/** The Code tab's push, PR and activity section. Every push goes through the guard in the app.
+ * `refreshKey` is a counter: a new value reads the plans and the activity list again and keeps the rest. */
+export function CodeShip({ onShipped, refreshKey = 0 }: { onShipped?: () => void; refreshKey?: number }) {
   const [push, setPush] = useState<CodeShipPlan | null>(null);
   const [pr, setPr] = useState<CodeShipPlan | null>(null);
   const [confirming, setConfirming] = useState<CodeShipPlan | null>(null);
@@ -42,6 +44,7 @@ export function CodeShip({ onShipped }: { onShipped?: () => void }) {
   const [note, setNote] = useState<string | null>(null);
   const [output, setOutput] = useState("");
   const [activity, setActivity] = useState<CodeActivityEntry[]>([]);
+  const cancel = useCardFocus<HTMLButtonElement>(confirming);
 
   const show = useCallback((nextPush: CodeShipPlan, nextPr: CodeShipPlan, log: CodeActivityEntry[]) => {
     setPush(nextPush);
@@ -61,13 +64,14 @@ export function CodeShip({ onShipped }: { onShipped?: () => void }) {
     return { push: nextPush, pr: nextPr };
   }, [show]);
 
-  // Runs each time the tab shows, so a card left open for another branch's command goes too.
+  // Runs each time the tab shows, so a card left open for another branch's command goes too,
+  // and when something else on the tab (a deploy) added to the activity list.
   useEffect(() => {
     Promise.all([codeShipPlan("push"), codeShipPlan("pr"), codeActivity()]).then(
       ([nextPush, nextPr, log]) => show(nextPush, nextPr, log),
       (err) => setNote(String(err)),
     );
-  }, [show]);
+  }, [show, refreshKey]);
 
   async function start(action: CodeShipAction) {
     if (busy) return;
@@ -180,7 +184,7 @@ export function CodeShip({ onShipped }: { onShipped?: () => void }) {
             <button type="button" onClick={() => void run(confirming.action, confirming.command)} disabled={busy}>
               {confirming.action === "push" ? "Push" : "Open PR"}
             </button>
-            <button type="button" className="quiet" onClick={() => setConfirming(null)} disabled={busy}>
+            <button ref={cancel} type="button" className="quiet" onClick={() => setConfirming(null)} disabled={busy}>
               Cancel
             </button>
           </div>
@@ -192,7 +196,7 @@ export function CodeShip({ onShipped }: { onShipped?: () => void }) {
         </p>
       )}
       {output && (
-        <pre className="code-log" aria-label="Push output">
+        <pre className="code-log" tabIndex={0} role="log" aria-label="Push output">
           {output}
         </pre>
       )}

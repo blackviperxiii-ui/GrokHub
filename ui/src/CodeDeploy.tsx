@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
-import { codeDeployPlan, codeDeployRun, onCodeDeployRun, type CodeDeployPlan } from "./api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { codeDeployPlan, codeDeployRun, codeRunStop, onCodeDeployRun, type CodeDeployPlan } from "./api";
+import { useCardFocus } from "./ui";
 
 export const DEPLOY_TITLE = "Deploy";
 export const DEPLOY_CONFIRM = "Run this deploy command?";
 export const DEPLOY_OFF = "Deploy is off for this project. Turn it on in Settings → Code.";
+export const DEPLOY_STOPPED = "Deploy stopped.";
 export const DEPLOY_RULES = "Your project's secrets are set as environment variables for the run and hidden in the output and the activity list.";
 
 /** The Code tab's deploy section: one button, and a confirm card that shows the exact command. */
@@ -13,16 +15,27 @@ export function CodeDeploy({ onDeployed }: { onDeployed?: () => void }) {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [log, setLog] = useState("");
+  const [stopping, setStopping] = useState(false);
+  // True from a press on Stop until the next run starts.
+  const stopAsked = useRef(false);
+  const cancel = useCardFocus<HTMLButtonElement>(confirming);
+
+  const show = useCallback((next: CodeDeployPlan) => {
+    setPlan(next);
+    // A card for a command that would no longer run goes away, so nobody confirms the old one.
+    setConfirming((open) => (open && next.deployEnabled && !next.blocked && next.command === open ? open : null));
+  }, []);
 
   const refresh = useCallback(async () => {
     const next = await codeDeployPlan();
-    setPlan(next);
+    show(next);
     return next;
-  }, []);
+  }, [show]);
 
+  // Runs each time the tab shows, so a card left open for a command changed in Settings goes too.
   useEffect(() => {
-    codeDeployPlan().then(setPlan, (err) => setNote(String(err)));
-  }, []);
+    codeDeployPlan().then(show, (err) => setNote(String(err)));
+  }, [show]);
 
   useEffect(() => {
     let gone = false;
@@ -67,16 +80,32 @@ export function CodeDeploy({ onDeployed }: { onDeployed?: () => void }) {
     setBusy(true);
     setLog("");
     setNote(null);
+    stopAsked.current = false;
     try {
       const done = await codeDeployRun(command, confirmed);
       setLog(done.output + (done.cut ? "\n… cut here; the output is too long to show in full." : ""));
-      setNote(done.exit === 0 ? "Deploy finished." : `Deploy exited with ${done.exit}.`);
+      const stopped = stopAsked.current && done.exit !== 0;
+      setNote(done.exit === 0 ? "Deploy finished." : stopped ? DEPLOY_STOPPED : `Deploy exited with ${done.exit}.`);
     } catch (err) {
-      setNote(String(err));
+      setNote(stopAsked.current ? DEPLOY_STOPPED : String(err));
     } finally {
       setBusy(false);
       onDeployed?.();
       refresh().catch(() => {});
+    }
+  }
+
+  /** Stop the running deploy and everything it started; the run then ends by itself. */
+  async function stopRun() {
+    setStopping(true);
+    stopAsked.current = true;
+    try {
+      await codeRunStop();
+    } catch (err) {
+      stopAsked.current = false;
+      setNote(String(err));
+    } finally {
+      setStopping(false);
     }
   }
 
@@ -93,6 +122,11 @@ export function CodeDeploy({ onDeployed }: { onDeployed?: () => void }) {
         <button type="button" onClick={() => void start()} disabled={busy || !plan || off}>
           {busy ? "Deploying…" : "Deploy"}
         </button>
+        {busy && (
+          <button type="button" className="quiet" onClick={() => void stopRun()} disabled={stopping}>
+            {stopping ? "Stopping…" : "Stop"}
+          </button>
+        )}
       </div>
       {confirming && (
         <div className="card confirm-window" role="group" aria-label={DEPLOY_CONFIRM}>
@@ -104,7 +138,7 @@ export function CodeDeploy({ onDeployed }: { onDeployed?: () => void }) {
             <button type="button" onClick={() => void run(confirming, true)} disabled={busy}>
               Deploy
             </button>
-            <button type="button" className="quiet" onClick={() => setConfirming(null)} disabled={busy}>
+            <button ref={cancel} type="button" className="quiet" onClick={() => setConfirming(null)} disabled={busy}>
               Cancel
             </button>
           </div>
@@ -116,7 +150,7 @@ export function CodeDeploy({ onDeployed }: { onDeployed?: () => void }) {
         </p>
       )}
       {(log || busy) && (
-        <pre className="code-log" aria-label="Deploy output">
+        <pre className="code-log" tabIndex={0} role="log" aria-label="Deploy output">
           {log || "Running…"}
         </pre>
       )}

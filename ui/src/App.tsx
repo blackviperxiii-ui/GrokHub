@@ -12,6 +12,7 @@ import {
   onLocalEngineEvent,
   onUpdateAvailable,
   shareSchedulerClock,
+  WEB,
   workboardSweepUndo,
   type BoardSwept,
   type Capabilities,
@@ -51,6 +52,7 @@ import type { Section } from "./sections";
 import { useOverscroll } from "./rubberBand";
 import { useHidingBar } from "./tabBar";
 import { applyTheme } from "./theme";
+import { inShell } from "./transport";
 import { LOGO_MARK_URL, PRODUCT_NAME } from "./brand";
 import { TabIcon } from "./TabIcon";
 import { ChatTabMenu, ClearChatDialog } from "./ClearChat";
@@ -140,7 +142,9 @@ export function runNoticeAction(run: RunNotice): NoticeAction {
 export function App() {
   const [view, setView] = useState<View>("chat");
   const [prefill, setPrefill] = useState<Prefill>();
-  const [caps, setCaps] = useState<Capabilities>(CORE_ONLY);
+  // A browser is the web app from its first render: it must not run a
+  // desktop-only step (the last chat, say) while its capabilities load.
+  const [caps, setCaps] = useState<Capabilities>(() => (inShell() ? CORE_ONLY : WEB));
   const [palette, setPalette] = useState(false);
   const [sheet, setSheet] = useState(false);
   const paletteChips = useChipRow({ surface: "palette", active: palette });

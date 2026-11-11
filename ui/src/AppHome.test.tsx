@@ -17,6 +17,7 @@ const api = vi.hoisted(() => {
   };
   return {
     CORE_ONLY,
+    WEB: { ...CORE_ONLY, pulse: true, remote: true },
     getCapabilities: vi.fn<() => Promise<Capabilities>>(),
     getSettings: vi.fn(() => Promise.resolve({ theme: "light", desktopControl: false })),
     haltDesktop: vi.fn(() => Promise.resolve([])),

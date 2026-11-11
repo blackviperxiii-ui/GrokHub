@@ -125,3 +125,54 @@ describe("styles.css views bar in a narrow window", () => {
     expect(rule(last, ".tabs {")).toContain("flex-wrap: nowrap;");
   });
 });
+
+// The Code tab is a column flex box that scrolls. A section allowed to shrink
+// is squeezed to nothing as soon as the tab is taller than the window, and its
+// content then paints over the section below it.
+describe("styles.css Code tab layout", () => {
+  it("lets no section of the Code tab shrink, so the changed-files list keeps its height", () => {
+    expect(rule(CSS, ".automations,\n.memory,\n.connectors,\n.journal,\n.code,")).toContain("overflow-y: auto;");
+    expect(rule(CSS, ".code > * {")).toBe(".code > * { flex-shrink: 0; }");
+  });
+
+  it("gives the Activity list its own scroll", () => {
+    expect(rule(CSS, ".code-activity {")).toContain("max-height: 40vh; overflow-y: auto;");
+  });
+
+  it("draws the changed-files list without bullets, and marks the open file", () => {
+    expect(rule(CSS, ".code > .code-split > .rows {")).toBe(
+      ".code > .code-split > .rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }",
+    );
+    expect(rule(CSS, '.code-file[aria-pressed="true"] {')).toBe(
+      '.code-file[aria-pressed="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }',
+    );
+    expect(CSS).not.toContain('.code-tree .code-file[aria-pressed="true"]');
+  });
+
+  it("styles the Deploy heading like the other sections, and the Mode and Channel boxes", () => {
+    expect(rule(CSS, ".code-tests h3,\n.code-deploy h3 {")).toBe(
+      ".code-tests h3, .code-deploy h3 { margin: 0 0 8px; font-size: var(--font-body); font-weight: 600; }",
+    );
+    expect(rule(CSS, ".code-deploy {")).toBe(".code-deploy { margin-top: 8px; }");
+    expect(rule(CSS, "fieldset.channel {")).toBe(
+      "fieldset.channel { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 12px; margin: 0 0 8px; display: flex; flex-direction: column; gap: 4px; }",
+    );
+    // Settings stacks a label over its field; a radio sits beside its text.
+    expect(rule(CSS, ".settings label {")).toContain("flex-direction: column;");
+    expect(rule(CSS, "fieldset.channel label {")).toBe(
+      "fieldset.channel label { display: flex; flex-direction: row; align-items: center; gap: 8px; }",
+    );
+  });
+
+  it("shows a focus ring on the panes that scroll, and on the editor's frame rather than inside it", () => {
+    expect(rule(CSS, ".code-diff:focus-visible,\n.code-log:focus-visible {")).toBe(
+      ".code-diff:focus-visible, .code-log:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }",
+    );
+    expect(rule(CSS, ".code-editor-host:focus-within {")).toBe(
+      ".code-editor-host:focus-within { box-shadow: var(--ring); }",
+    );
+    expect(rule(CSS, ".code-editor-host .cm-editor.cm-focused {")).toBe(
+      ".code-editor-host .cm-editor.cm-focused { outline: none; }",
+    );
+  });
+});

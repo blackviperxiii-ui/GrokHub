@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { codeSecretDelete, codeSecretList, codeSecretSet } from "./api";
+import { useCardFocus } from "./ui";
 
 export const SECRETS_TITLE = "Secrets";
 export const SECRETS_NOTE =
@@ -16,6 +17,7 @@ export function CodeSecrets() {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const valueField = useRef<HTMLInputElement>(null);
+  const cancel = useCardFocus<HTMLButtonElement>(deleting);
 
   useEffect(() => {
     codeSecretList().then(
@@ -115,7 +117,7 @@ export function CodeSecrets() {
             <button type="button" className="quiet danger" onClick={() => void remove(deleting)} disabled={busy}>
               Delete
             </button>
-            <button type="button" className="quiet" onClick={() => setDeleting(null)} disabled={busy}>
+            <button ref={cancel} type="button" className="quiet" onClick={() => setDeleting(null)} disabled={busy}>
               Cancel
             </button>
           </div>

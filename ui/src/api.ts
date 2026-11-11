@@ -2696,6 +2696,12 @@ export function onCodeRun(handler: (chunk: CodeRunChunk) => void): Promise<Unlis
   return subscribe<CodeRunChunk>("code-run", handler);
 }
 
+/** Stop the running test or deploy and everything it started (desktop app
+ * only). Resolves to false when nothing was running. */
+export function codeRunStop(): Promise<boolean> {
+  return invoke<boolean>("code_run_stop");
+}
+
 /** Code tab editor: one entry of a project folder. */
 export interface CodeFileEntry {
   name: string;
@@ -2714,6 +2720,8 @@ export interface CodeFileListing {
 export interface CodeFileText {
   path: string;
   text: string;
+  /** The project folder the file was read from; a save sends it back. */
+  root: string;
 }
 
 /** One folder of the project (desktop app only). */
@@ -2726,9 +2734,11 @@ export function codeFileRead(path: string): Promise<CodeFileText> {
   return invoke<CodeFileText>("code_file_read", { path });
 }
 
-/** Save a text file of the project; the save goes in the activity log. */
-export function codeFileWrite(path: string, text: string): Promise<CodeFileText> {
-  return invoke<CodeFileText>("code_file_write", { path, text });
+/** Save a text file of the project; the save goes in the activity log.
+ * `root` is the project folder the file was opened from: the desktop refuses
+ * the save when that is no longer the project folder. */
+export function codeFileWrite(path: string, text: string, root: string): Promise<CodeFileText> {
+  return invoke<CodeFileText>("code_file_write", { path, text, root });
 }
 
 /** Redacted terminal output, or the news that the shell ended. */
