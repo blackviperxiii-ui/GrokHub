@@ -464,7 +464,7 @@ function LogItem({
           <span className="card-title">{item.command}</span>
           <p className="card-detail-line plain">{item.prompt}</p>
           <div className="card-buttons">
-            <button type="button" className="danger" onClick={() => onConfirm(item, true)}>
+            <button type="button" className="quiet danger" onClick={() => onConfirm(item, true)}>
               Yes
             </button>
             <button type="button" onClick={() => onConfirm(item, false)}>
