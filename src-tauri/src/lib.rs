@@ -40,6 +40,8 @@ pub mod home;
 mod home_fps;
 pub mod home_tiles;
 mod home_updates;
+#[cfg(desktop)]
+pub mod hub_share;
 pub mod imagine;
 pub mod interests;
 pub mod journal;
@@ -3326,6 +3328,37 @@ fn forget_all_devices(web: State<'_, Arc<remote::WebAccess>>) -> remote_devices:
     web.forget_all()
 }
 
+/// Devices → Start share: whether this computer's LAN hub is on, its pairing
+/// code and the computers paired with it. Desktop only.
+#[cfg(desktop)]
+#[tauri::command]
+fn get_share(share: State<'_, Arc<hub_share::HubShare>>) -> hub_share::ShareView {
+    share.view()
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+async fn start_share(
+    share: State<'_, Arc<hub_share::HubShare>>,
+) -> Result<hub_share::ShareView, String> {
+    let share = Arc::clone(&share);
+    tauri::async_runtime::spawn_blocking(move || share.start())
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn stop_share(share: State<'_, Arc<hub_share::HubShare>>) -> hub_share::ShareView {
+    share.stop()
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn new_share_code(share: State<'_, Arc<hub_share::HubShare>>) -> hub_share::ShareView {
+    share.new_code()
+}
+
 /// Settings → Behavior: the tray, the composer and the limits on scheduled work.
 #[tauri::command]
 fn get_behavior(state: State<'_, ShellState>) -> settings::BehaviorView {
@@ -4238,6 +4271,10 @@ pub fn run() {
                     .global_halt
                     .store(global, std::sync::atomic::Ordering::SeqCst);
             }
+            #[cfg(desktop)]
+            app.manage(Arc::new(hub_share::HubShare::open(
+                &app.state::<ShellState>().config_dir,
+            )));
             let web = Arc::new(remote::WebAccess::default());
             app.manage(Arc::clone(&web));
             // Chat events reach paired browsers too; each page keeps its own
@@ -4458,6 +4495,14 @@ pub fn run() {
             set_web_access,
             get_devices,
             forget_all_devices,
+            #[cfg(desktop)]
+            get_share,
+            #[cfg(desktop)]
+            start_share,
+            #[cfg(desktop)]
+            stop_share,
+            #[cfg(desktop)]
+            new_share_code,
             get_update_status,
             set_update_channel,
             check_shell_update,

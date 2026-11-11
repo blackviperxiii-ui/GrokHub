@@ -1957,6 +1957,40 @@ export function forgetAllDevices(): Promise<Devices> {
   return invoke<Devices>("forget_all_devices");
 }
 
+/** A computer paired with this one's LAN hub. */
+export interface SharePeer {
+  name: string;
+  /** Unix ms; 0 before its first call. */
+  lastSeen: number;
+}
+
+/** Devices → Start share (src-tauri/src/hub_share.rs); desktop only. */
+export interface Share {
+  on: boolean;
+  port: number;
+  /** The live pairing code while sharing; empty otherwise. Never log it. */
+  code: string;
+  /** What the other computer opens, without the code; empty while off. */
+  address: string;
+  peers: SharePeer[];
+}
+
+export function getShare(): Promise<Share> {
+  return invoke<Share>("get_share");
+}
+
+export function startShare(): Promise<Share> {
+  return invoke<Share>("start_share");
+}
+
+export function stopShare(): Promise<Share> {
+  return invoke<Share>("stop_share");
+}
+
+export function newShareCode(): Promise<Share> {
+  return invoke<Share>("new_share_code");
+}
+
 /** Settings → Labs → Plugins (src-tauri/src/plugins.rs). */
 export interface PluginRow {
   name: string;
