@@ -97,8 +97,14 @@ fn deploy_is_off_until_turned_on_and_press_runs_nothing() {
     let mut panel = DeployPanel::default();
     assert_eq!(panel.press(&p), None);
     assert_eq!(panel.confirming, None);
-    assert_eq!(panel.note.as_deref(), Some(deploy::DISABLED));
-    assert_eq!(mode_line(Some(&p)), deploy::DISABLED);
+    assert_eq!(
+        panel.note.as_deref(),
+        Some("Deploy is off for this project. Turn it on below.")
+    );
+    assert_eq!(
+        mode_line(Some(&p)),
+        "Deploy is off for this project. Turn it on below."
+    );
 }
 
 #[test]
@@ -122,7 +128,7 @@ fn an_empty_command_cannot_be_turned_on() {
     assert!(!panel.loading);
     assert_eq!(
         panel.settings_note.as_deref(),
-        Some("Set a deploy command in Settings → Code first.")
+        Some("Type a deploy command and save it, then turn deploy on.")
     );
     assert!(!plan(&config, ShipMode::Ask).deploy_enabled);
 }
@@ -373,4 +379,46 @@ fn a_new_plan_resets_the_draft_and_the_mode_line_follows_it() {
         mode_line(panel.plan.as_ref()),
         "Ask: every deploy shows the exact command first. Your project's secrets are set as environment variables for the run and hidden in the output and the activity list."
     );
+}
+
+#[test]
+fn a_missing_secret_value_is_named_and_points_at_this_page() {
+    assert_eq!(
+        here("DEPLOY_TOKEN has no value in the keychain. Set it again in Settings → Code."),
+        "DEPLOY_TOKEN has no value in the keychain. Set it again below."
+    );
+    assert_eq!(here(deploy::CHANGED), deploy::CHANGED);
+}
+
+#[test]
+fn a_listed_secret_with_no_value_stops_the_deploy_before_it_runs() {
+    let config = dir("novalue-config");
+    let work = dir("novalue-work");
+    secrets::set(&config, &MemVault::default(), KEY, "DEPLOY_TOKEN", VALUE).unwrap();
+    turn_on(&config, "echo should-not-run");
+    let mut panel = DeployPanel::default();
+    panel.begin();
+    panel.watch(spawn_run_with(
+        config.clone(),
+        KEY.into(),
+        work,
+        ship(ShipMode::Ask),
+        "echo should-not-run".into(),
+        true,
+        // A different (empty) keychain: the name is listed, the value is gone.
+        Box::new(MemVault::default()),
+        deploy::Where {
+            host: "github".into(),
+            branch: "main".into(),
+        },
+        None,
+    ));
+    drain(&mut panel);
+    assert_eq!(
+        panel.note.as_deref(),
+        Some("DEPLOY_TOKEN has no value in the keychain. Set it again below.")
+    );
+    assert_eq!(panel.log, "");
+    assert!(activity::list(&config, 5).is_empty());
+    assert_eq!(runs::remembered(&config, Kind::Deploy, KEY).unwrap(), None);
 }

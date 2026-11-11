@@ -31,6 +31,14 @@ pub(super) const NOTHING_REMEMBERED: &str =
     "Nothing remembered yet. The next deploy will ask you to confirm the command.";
 pub(super) const CUT_NOTE: &str = "\n… cut here; the output is too long to show in full.";
 pub(super) const RUNNING: &str = "Running…";
+/// The switch was turned on with no command saved.
+pub(super) const TYPE_FIRST: &str = "Type a deploy command and save it, then turn deploy on.";
+
+/// The shared messages point at the desktop app's Settings → Code; here the
+/// settings sit right under the button.
+pub(super) fn here(msg: &str) -> String {
+    msg.replace(" in Settings → Code", " below")
+}
 
 /// What a worker sends back.
 pub(super) enum Msg {
@@ -66,7 +74,7 @@ pub(super) fn start_step(plan: &Plan) -> Start {
 /// The line under the Deploy title.
 pub(super) fn mode_line(plan: Option<&Plan>) -> String {
     match plan {
-        Some(p) if !p.deploy_enabled => deploy::DISABLED.to_string(),
+        Some(p) if !p.deploy_enabled => here(deploy::DISABLED),
         Some(p) if p.mode == ShipMode::AutoBeta.id() => format!("{MODE_AUTO} {DEPLOY_RULES}"),
         _ => format!("{MODE_ASK} {DEPLOY_RULES}"),
     }
@@ -223,7 +231,7 @@ impl DeployPanel {
         self.note = None;
         match start_step(plan) {
             Start::Blocked(why) => {
-                self.note = Some(why);
+                self.note = Some(here(&why));
                 None
             }
             Start::Confirm(cmd) => {
@@ -242,6 +250,7 @@ impl DeployPanel {
     /// A run starts: the log clears and the button waits.
     pub(super) fn begin(&mut self) {
         self.confirming = None;
+        self.settings_note = None;
         self.busy = true;
         self.log.clear();
         self.note = None;
@@ -256,7 +265,7 @@ impl DeployPanel {
             }
             Msg::Plan(Err(err)) => {
                 self.loading = false;
-                self.note = Some(err);
+                self.note = Some(here(&err));
             }
             Msg::Saved(Ok(_)) => {
                 self.loading = false;
@@ -264,7 +273,11 @@ impl DeployPanel {
             }
             Msg::Saved(Err(err)) => {
                 self.loading = false;
-                self.settings_note = Some(err);
+                self.settings_note = Some(if err == deploy::NO_COMMAND {
+                    TYPE_FIRST.to_string()
+                } else {
+                    here(&err)
+                });
             }
             Msg::Chunk(text) => self.log.push_str(&text),
             Msg::Done(result) => {
@@ -278,7 +291,7 @@ impl DeployPanel {
                             self.log.push_str(CUT_NOTE);
                         }
                     }
-                    Err(err) => self.note = Some(err),
+                    Err(err) => self.note = Some(here(&err)),
                 }
             }
         }
@@ -464,6 +477,9 @@ impl DeployPanel {
                 });
             }
         });
+        if let Some(note) = &self.settings_note {
+            muted(ui, note);
+        }
         if let Some(next) = save {
             self.refresh_after = true;
             self.loading = true;
@@ -494,9 +510,6 @@ impl DeployPanel {
                 }
             }
             None => muted(ui, NOTHING_REMEMBERED),
-        }
-        if let Some(note) = &self.settings_note {
-            muted(ui, note);
         }
     }
 }
@@ -539,6 +552,7 @@ fn log_pane(ui: &mut egui::Ui, text: &str) {
         .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
         .inner_margin(egui::Margin::same(12))
         .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
             egui::ScrollArea::vertical()
                 .id_salt("code-deploy-log")
                 .max_height(260.0)
