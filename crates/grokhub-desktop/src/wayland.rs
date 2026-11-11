@@ -4,14 +4,14 @@
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "linux")]
+use grokhub_core::desktop_mcp::{
+    current_desktop_is_kde, join_kscreen_with_eis, parse_kscreen_doctor,
+};
 use grokhub_core::desktop_mcp::{
     select_desktop_stack, union_monitor, CapturedShot, DesktopBackend, DesktopCaptureKind,
     DesktopInputKind, DesktopMonitorKind, DesktopProbes, DesktopSessionEnv, DesktopStack,
     EisRegion, KeyCombo, MonitorGeom, MouseButton, ShotGeom,
-};
-#[cfg(target_os = "linux")]
-use grokhub_core::desktop_mcp::{
-    current_desktop_is_kde, join_kscreen_with_eis, parse_kscreen_doctor,
 };
 use grokhub_core::{grim_capture_args, ydotool_socket_path};
 
