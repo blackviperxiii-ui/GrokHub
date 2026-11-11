@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use grokhub_agent::{
     AuthKind, CancelToken, DesktopOps, ElicitInbox, ElicitNote, Engine, EngineParts, Gate,
@@ -279,6 +279,8 @@ struct Job {
     route: Route,
     /// When the person sent it: a Halt after this stops the turn.
     asked_ms: u64,
+    /// The desktop episode this message belongs to, or `None` for a plain turn.
+    episode: Option<grokhub_agent::EpisodeSeed>,
     emit: Box<dyn FnMut(UiEvent) + Send>,
     done: Sender<Result<String, String>>,
 }
@@ -307,6 +309,15 @@ pub struct Session {
     busy: AtomicBool,
     /// Halt stopped the running prompt; its turn ends as `halted`.
     halted: Arc<AtomicBool>,
+    config_dir: PathBuf,
+    /// The person armed a supervised desktop session: messages with desktop
+    /// control on run as an episode until it ends. Off, they run as plain
+    /// turns with the hard gate asking per step.
+    armed: AtomicBool,
+    /// The open desktop episode on this chat.
+    episode: Mutex<Option<crate::episode::Open>>,
+    /// The latest screenshot, for the episode panel's thumbnail.
+    frames: crate::episode::FrameSlot,
 }
 
 impl Session {
@@ -348,7 +359,10 @@ impl Session {
         let worker_cancel = cancel.clone();
         let halted = Arc::new(AtomicBool::new(false));
         let steer = SteerQueue::new();
+        let frames = crate::episode::FrameSlot::default();
+        let worker_dir = config_dir.clone();
         let worker = Worker {
+            frames: frames.clone(),
             id: conversation_id.to_string(),
             resume: resume_id.to_string(),
             config_dir,
@@ -367,6 +381,114 @@ impl Session {
             steer,
             busy: AtomicBool::new(false),
             halted,
+            config_dir: worker_dir,
+            armed: AtomicBool::new(false),
+            episode: Mutex::new(None),
+            frames,
+        }
+    }
+
+    /// Arms (or disarms) the supervised desktop session: the next messages
+    /// sent with desktop control on run as an episode. An open episode stays
+    /// open either way.
+    pub fn arm_episode(&self, on: bool) {
+        self.armed.store(on, Ordering::SeqCst);
+    }
+
+    pub fn episode_armed(&self) -> bool {
+        self.armed.load(Ordering::SeqCst)
+    }
+
+    /// The open desktop episode on this chat, if any.
+    pub fn episode(&self) -> Option<crate::episode::Open> {
+        self.episode
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    pub fn frame(&self) -> Option<String> {
+        self.frames.get()
+    }
+
+    /// A message with desktop control on opens the chat's episode, or goes on
+    /// in the open one (a paused one runs again).
+    fn open_episode(&self) -> grokhub_agent::EpisodeSeed {
+        let now = grokhub_core::now_ms();
+        let mut slot = self.episode.lock().unwrap_or_else(|e| e.into_inner());
+        let open = slot.get_or_insert_with(|| crate::episode::Open {
+            id: grokhub_agent::episode::new_episode_id(now),
+            started_ms: now,
+            turn: 0,
+            paused: false,
+            cua: crate::episode::cua_in_use(&self.config_dir),
+        });
+        open.paused = false;
+        open.turn += 1;
+        grokhub_agent::EpisodeSeed {
+            id: open.id.clone(),
+            chat_id: self.id.clone(),
+            turn: open.turn,
+            resume: false,
+            config_dir: self.config_dir.clone(),
+            held: Vec::new(),
+            access: grokhub_agent::harness::AccessMode::Supervised,
+        }
+    }
+
+    /// Pause: the running step loop stops after the step it is on, the
+    /// episode stays open, and the next message runs it again. False when
+    /// no episode runs.
+    pub fn pause_episode(&self) -> bool {
+        let mut slot = self.episode.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(open) = slot.as_mut() else {
+            return false;
+        };
+        if !self.busy.load(Ordering::SeqCst) {
+            return false;
+        }
+        open.paused = true;
+        self.cancel.cancel();
+        true
+    }
+
+    /// Stop: ends the episode. A running loop ends it itself (every open
+    /// card is denied); with none running the end is written here.
+    pub fn stop_episode(&self) -> bool {
+        let open = {
+            let slot = self.episode.lock().unwrap_or_else(|e| e.into_inner());
+            match slot.as_ref() {
+                Some(open) => open.clone(),
+                None => return false,
+            }
+        };
+        if self.busy.load(Ordering::SeqCst) {
+            if let Some(o) = self
+                .episode
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_mut()
+            {
+                o.paused = false;
+            }
+            self.cancel.cancel();
+        } else {
+            crate::episode::write_end(&self.config_dir, &self.id, &open.id, "stop");
+            *self.episode.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            self.armed.store(false, Ordering::SeqCst);
+        }
+        true
+    }
+
+    /// After a prompt: a stop that ends the episode closes it; a Pause's
+    /// cancel keeps it open.
+    fn settle_episode(&self, stop: &str) {
+        let mut slot = self.episode.lock().unwrap_or_else(|e| e.into_inner());
+        let paused = slot.as_ref().is_some_and(|o| o.paused);
+        if crate::episode::ends(stop) && !(paused && stop == "cancelled") {
+            *slot = None;
+            // The session is over: the next message is a plain turn again.
+            self.armed.store(false, Ordering::SeqCst);
         }
     }
 
@@ -382,6 +504,8 @@ impl Session {
         if text.trim().is_empty() && attachments.is_empty() {
             return Err("Type a message first.".into());
         }
+        let seed = (route.desktop && (self.episode_armed() || self.episode().is_some()))
+            .then(|| self.open_episode());
         let (done, wait) = channel();
         self.halted.store(false, Ordering::SeqCst);
         self.busy.store(true, Ordering::SeqCst);
@@ -392,6 +516,7 @@ impl Session {
                 attachments,
                 route,
                 asked_ms: grokhub_core::now_ms(),
+                episode: seed,
                 emit,
                 done,
             })
@@ -401,6 +526,9 @@ impl Session {
                     .map_err(|_| "The chat worker stopped.".to_string())?
             });
         self.busy.store(false, Ordering::SeqCst);
+        if let Ok(stop) = &ran {
+            self.settle_episode(stop);
+        }
         ran
     }
 
@@ -558,6 +686,7 @@ struct Worker {
     cancel: CancelToken,
     steer: SteerQueue,
     halted: Arc<AtomicBool>,
+    frames: crate::episode::FrameSlot,
 }
 
 fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
@@ -569,6 +698,7 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
         cancel,
         steer,
         halted,
+        frames,
     } = worker;
     let _config = grokhub_agent::perm::ConfigGuard::set(&config_dir);
     let mut engine: Option<NativeEngine> = None;
@@ -579,6 +709,7 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
             attachments,
             route,
             asked_ms,
+            episode,
             mut emit,
             done,
         } = job;
@@ -639,7 +770,10 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                     steer: steer.clone(),
                     halt: Box::new(NeverHalted),
                     gate,
-                    desktop: Some(desktop()),
+                    desktop: Some(Box::new(crate::episode::FrameTap {
+                        inner: desktop(),
+                        slot: frames.clone(),
+                    })),
                     permits: Arc::new(inbox),
                 }));
                 // A chat saved earlier (opened from History, or the last chat
@@ -650,6 +784,8 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                 engine
             }
         };
+        // A message with desktop control on belongs to the chat's episode.
+        engine.set_episode(episode.filter(|_| route.desktop));
         // The desktop Halt (the cabin's hotkey or a halt stamp) stops this prompt too.
         #[cfg(desktop)]
         engine.set_halt(Box::new(grokhub_agent::StampHalt {
@@ -1791,3 +1927,7 @@ mod tests {
         assert_eq!(empty, Err("Type a message first.".to_string()));
     }
 }
+
+#[cfg(test)]
+#[path = "agent_episode_tests.rs"]
+mod episode_tests;
