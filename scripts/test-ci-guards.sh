@@ -38,8 +38,57 @@ mkdir -p "$W/packaging/windows"
 printf '#define MyAppName "Old"\n#ifndef MyAppVersion\n  #define MyAppVersion "1.0.0"\n#endif\n' >"$W/packaging/windows/grokhub.iss"
 mkdir -p "$W/.github/workflows"
 SHA=0123456789abcdef0123456789abcdef01234567
-printf 'jobs:\n  a:\n    steps:\n      - uses: actions/checkout@%s # v4\n      - uses: ./.github/actions/local\n' "$SHA" \
-  >"$W/.github/workflows/ci.yml"
+# Job `a` stays last: the pinned-action cases append steps to it.
+cat >"$W/.github/workflows/ci.yml" <<YAML
+jobs:
+  changes:
+    outputs:
+      code: \${{ github.event_name != 'pull_request' || steps.filter.outputs.code == 'true' || steps.paths.outputs.embedded == 'true' }}
+      windows: \${{ github.event_name != 'pull_request' || steps.filter.outputs.windows == 'true' || steps.paths.outputs.embedded == 'true' }}
+    steps:
+      - id: paths
+        with:
+          filters: |
+            embedded:
+              - 'crates/**/*.md'
+              - 'src-tauri/**/*.md'
+              - 'PRIVACY.md'
+              - 'docs/compass/**'
+              - 'docs/eval/**'
+  linux:
+    needs: changes
+    if: \${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
+    steps:
+      - name: changes job must succeed
+        if: needs.changes.result != 'success'
+        run: exit 1
+  windows:
+    needs: changes
+    if: \${{ !cancelled() && (needs.changes.result != 'success' || (needs.changes.outputs.code == 'true' && needs.changes.outputs.windows == 'true')) }}
+    steps:
+      - name: changes job must succeed
+        if: needs.changes.result != 'success'
+        run: exit 1
+  a:
+    steps:
+      - uses: actions/checkout@$SHA # v4
+      - uses: ./.github/actions/local
+YAML
+cat >"$W/.github/workflows/release.yml" <<'YAML'
+jobs:
+  plan:
+    steps:
+      - name: Plan
+        id: plan
+        run: |
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            # Before any build or signing: the tag must be this commit's VERSION.
+            bash scripts/release-tag-check.sh "$GITHUB_REF_NAME" || exit 1
+            echo "build=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "build=true" >> "$GITHUB_OUTPUT"
+YAML
 "$REAL_GIT" -C "$W" add -A
 "$REAL_GIT" -C "$W" commit -q -m base
 "$REAL_GIT" -C "$W" push -q origin HEAD:beta
@@ -164,6 +213,31 @@ commit_pr
 run_guard fail "unpinned action in a flow-style step fails"
 
 fresh_pr
+printf '      - "uses": actions/cache@v4\n' >>"$W/.github/workflows/ci.yml"
+commit_pr
+run_guard fail "unpinned action under a double-quoted uses key fails"
+
+fresh_pr
+printf "      - 'uses': actions/cache@v4\n" >>"$W/.github/workflows/ci.yml"
+commit_pr
+run_guard fail "unpinned action under a single-quoted uses key fails"
+
+fresh_pr
+printf '      - uses : actions/cache@v4\n' >>"$W/.github/workflows/ci.yml"
+commit_pr
+run_guard fail "unpinned action with a space before the colon fails"
+
+fresh_pr
+printf '      - {"uses": actions/cache@v4}\n' >>"$W/.github/workflows/ci.yml"
+commit_pr
+run_guard fail "unpinned action under a quoted key in a flow-style step fails"
+
+fresh_pr
+printf '      - "uses": actions/cache@%s\n      - uses : actions/cache@%s\n' "$SHA" "$SHA" >>"$W/.github/workflows/ci.yml"
+commit_pr
+run_guard pass "pinned action under a quoted or spaced uses key passes"
+
+fresh_pr
 printf '  b:\n    steps: [{name: x, uses: actions/cache@v4}]\n' >>"$W/.github/workflows/ci.yml"
 commit_pr
 run_guard fail "unpinned action in a flow-style list fails"
@@ -210,13 +284,194 @@ printf '      - uses: docker://alpine@sha256:%s%s\n' "$SHA" "0123456789abcdef012
 commit_pr
 run_guard pass "docker action with a digest passes"
 
+CI_YML="$W/.github/workflows/ci.yml"
+
+# merged_download [pattern line]: a step that merges every artifact it
+# downloads into one directory, with an optional `pattern:` input.
+merged_download() {
+  printf '      - uses: actions/download-artifact@%s # v8\n        with:\n          path: dist-release\n          merge-multiple: true\n' "$SHA" >>"$CI_YML"
+  if (($# > 0)); then
+    printf '          %s\n' "$1" >>"$CI_YML"
+  fi
+}
+
+fresh_pr
+merged_download
+commit_pr
+run_guard fail "a merged download without a pattern fails"
+
+fresh_pr
+merged_download 'pattern: "{linux,windows,shell-*}"'
+commit_pr
+run_guard pass "a merged download that names the release artifacts passes"
+
+fresh_pr
+merged_download "pattern: 'linux' # one artifact"
+commit_pr
+run_guard pass "a merged download of one named artifact passes"
+
+fresh_pr
+merged_download 'pattern: "*"'
+commit_pr
+run_guard fail "a merged download of every artifact fails"
+
+fresh_pr
+merged_download 'pattern: "{linux,windows*,shell-*}"'
+commit_pr
+run_guard fail "a merged download whose pattern takes the unsigned Windows staging files fails"
+
+fresh_pr
+merged_download 'pattern: "{linux,windows-signpath-unsigne?}"'
+commit_pr
+run_guard fail "a merged download that matches the staging files with ? fails"
+
+fresh_pr
+merged_download 'pattern: "windows{,-signpath-unsigned}"'
+commit_pr
+run_guard fail "a merged download pattern with an empty alternative fails"
+
+fresh_pr
+merged_download 'pattern: "!(linux)"'
+commit_pr
+run_guard fail "a merged download pattern the guard cannot read fails"
+
+fresh_pr
+merged_download 'pattern: {linux,windows}'
+commit_pr
+run_guard fail "an unquoted brace pattern, which YAML reads as a map, fails"
+
+fresh_pr
+printf '      - uses: actions/download-artifact@%s # v8\n        with:\n          name: linux\n          path: dist-release\n' "$SHA" >>"$CI_YML"
+commit_pr
+run_guard pass "a download of one artifact by name, not merged, passes"
+
+fresh_pr
+sed -i "/^  linux:/,/^  windows:/s/^    if: .*/    if: needs.changes.outputs.code == 'true'/" "$CI_YML"
+commit_pr
+run_guard fail "linux skipping when the changes job fails is rejected"
+
+fresh_pr
+sed -i "/^  windows:/,/^  a:/s/^    if: .*/    if: needs.changes.outputs.code == 'true' \&\& needs.changes.outputs.windows == 'true'/" "$CI_YML"
+commit_pr
+run_guard fail "windows skipping when the changes job fails is rejected"
+
+fresh_pr
+sed -i '/^  windows:/,/^  a:/s/!cancelled() && //' "$CI_YML"
+commit_pr
+run_guard fail "windows without !cancelled() is rejected"
+
+fresh_pr
+sed -i '/^  linux:/,/^  windows:/{/run: exit 1/d}' "$CI_YML"
+commit_pr
+run_guard fail "linux without the step that fails on a failed changes job is rejected"
+
+fresh_pr
+sed -i 's/^  linux:/  linux-tests:/' "$CI_YML"
+commit_pr
+run_guard fail "a missing linux job is rejected"
+
+fresh_pr
+printf 'const A: &str = include_str!("../../../../README.md");\n' >>"$W/crates/grokhub-core/src/slash/mod.rs"
+commit_pr
+run_guard fail "embedding the root README, outside the embedded filter, fails"
+
+fresh_pr
+printf 'const A: &str = include_str!("../../../../docs/guide.txt");\n' >>"$W/crates/grokhub-core/src/slash/mod.rs"
+commit_pr
+run_guard fail "embedding a file under docs/ fails"
+
+fresh_pr
+printf 'const A: &[u8] = include_bytes!(\n    "../../../../screenshots/home.png"\n);\n' >>"$W/crates/grokhub-core/src/slash/mod.rs"
+commit_pr
+run_guard fail "embedding a screenshot with the path on the next line fails"
+
+fresh_pr
+printf 'const A: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md"));\n' >>"$W/crates/grokhub-core/src/slash/mod.rs"
+commit_pr
+run_guard fail "embedding Markdown through a computed path fails"
+
+fresh_pr
+printf 'const A: &str = include_str!("prompt.md");\nconst B: &str = include_str!("../../../../PRIVACY.md");\n' >>"$W/crates/grokhub-core/src/slash/mod.rs"
+commit_pr
+run_guard pass "embedding Markdown under crates/ and the root PRIVACY.md passes"
+
+fresh_pr
+sed -i "/- 'PRIVACY.md'/d" "$CI_YML"
+commit_pr
+run_guard fail "an embedded filter that drops a path is rejected"
+
+# Tests read these two directories from disk when they run, so no
+# include_str! names them and only the list in the guard keeps them covered.
+fresh_pr
+sed -i "/- 'docs\/compass\/\*\*'/d" "$CI_YML"
+commit_pr
+run_guard fail "an embedded filter without docs/compass/, which a test reads when it runs, is rejected"
+
+fresh_pr
+sed -i "/- 'docs\/eval\/\*\*'/d" "$CI_YML"
+commit_pr
+run_guard fail "an embedded filter without docs/eval/, which a test reads when it runs, is rejected"
+
+fresh_pr
+printf 'const A: &str = include_str!("../../../../docs/eval/golden.md");\n' >>"$W/crates/grokhub-core/src/slash/mod.rs"
+commit_pr
+run_guard pass "embedding a file under docs/eval/, which the embedded filter covers, passes"
+
+fresh_pr
+sed -i "/^      code: /s/ || steps.paths.outputs.embedded == 'true'//" "$CI_YML"
+commit_pr
+run_guard fail "a code output that ignores the embedded filter is rejected"
+
+fresh_pr
+sed -i "/^      windows: /s/ || steps.paths.outputs.embedded == 'true'//" "$CI_YML"
+commit_pr
+run_guard fail "a windows output that ignores the embedded filter is rejected"
+
+REL_YML="$W/.github/workflows/release.yml"
+
+fresh_pr
+sed -i '/release-tag-check\.sh/d' "$REL_YML"
+commit_pr
+run_guard fail "release.yml building a tag without the tag check is rejected"
+
+fresh_pr
+sed -i -e '/release-tag-check\.sh/d' \
+  -e '/exit 0$/a\            bash scripts/release-tag-check.sh "$GITHUB_REF_NAME" || exit 1' "$REL_YML"
+commit_pr
+run_guard fail "a tag check that runs after build=true is rejected"
+
+fresh_pr
+sed -i '/release-tag-check\.sh/s/|| exit 1$/|| true/' "$REL_YML"
+commit_pr
+run_guard fail "a tag check whose failure is ignored is rejected"
+
+fresh_pr
+sed -i 's/^\( *\)bash scripts\/release-tag-check/\1# bash scripts\/release-tag-check/' "$REL_YML"
+commit_pr
+run_guard fail "a commented-out tag check is rejected"
+
+fresh_pr
+sed -i '/^          if \[ "\$GITHUB_REF_TYPE" = tag \]; then$/i\          echo "build=true" >> "$GITHUB_OUTPUT"; exit 0' "$REL_YML"
+commit_pr
+run_guard fail "a plan step that sets build=true before the tag branch is rejected"
+
+fresh_pr
+sed -i 's/^  plan:/  decide:/' "$REL_YML"
+commit_pr
+run_guard fail "a release.yml without a plan job is rejected"
+
+fresh_pr
+"$REAL_GIT" -C "$W" mv "$REL_YML" "$W/.github/workflows/publish.yml"
+commit_pr
+run_guard fail "a missing release.yml is rejected"
+
 fresh_pr
 mkdir -p "$W/.github/workflows/unreadable.yml"
 run_guard fail "unreadable workflow file fails"
 rmdir "$W/.github/workflows/unreadable.yml"
 
 fresh_pr
-"$REAL_GIT" -C "$W" rm -q "$W/.github/workflows/ci.yml"
+"$REAL_GIT" -C "$W" rm -q "$W/.github/workflows/ci.yml" "$REL_YML"
 commit_pr
 run_guard fail "no workflows at all fails"
 

@@ -9,16 +9,16 @@ These rules apply to every contributor and every bot (Cursor, Claude, GrokHub). 
 - Hotfixes go to `main` only when the maintainer approves. Afterward, `main` is merged back into `beta` with a merge commit, never a force-push.
 - Never push straight to `main` or `beta`, never force-push, and never delete branches unless user asks.
 
-## Green and ready, then stop
+## Green, then merge into beta
 
-- Bots take a PR to green (Linux and Windows CI passing) and ready to merge, with proof of work, then stop and report it.
-- Nobody merges, tags, or releases anything without the maintainer's explicit approval. When merging, it's squash and merge.
-- **Latest base branch:** the base is `beta` for feature and fix PRs, and `main` for hotfixes and the promotion. Fetch origin and merge the latest base into your branch (a merge commit, no rebase or force-push) before you start, before reporting the PR ready, and right before any merge or tag the maintainer asked for. Name the base branch and its starting SHA in the PR body.
+- Every agent and bot finishes its own work: get the PR into `beta` green (Linux and Windows CI passing), with proof of work, then squash-merge it into `beta` right away. There is no human-review hold.
+- Only promoting `beta` to `main`, and the tag and release that follow, need the maintainer's approval. Stop and ask only when CI can't go green or a product decision only the maintainer can make comes up.
+- **Latest base branch:** the base is `beta` for feature and fix PRs, and `main` for hotfixes and the promotion. Fetch origin and merge the latest base into your branch (a merge commit, no rebase or force-push) before you start, before reporting the PR ready, right before merging into `beta`, and again before a tag the maintainer asked for. Name the base branch and its starting SHA in the PR body.
 - Every PR body has the proof of work (the real run path exercised and what was seen) and a **Skipped / not verified** section.
 
 ## Versions
 
-- PRs into `beta` don't bump the version. They add their notes under `## Unreleased` in `CHANGELOG.md`.
+- PRs into `beta` don't bump the version. They add a fragment under `changelog.d/<slug>.md` (see `changelog.d/README.md`) and do not edit `CHANGELOG.md` or the version files; the `guards` check fails a PR without the `release` label that touches them.
 - Semver: PATCH (`x.y.Z`) for a fix or polish rollout, MINOR (`x.Y.0`) for a promotion with at least one new user-facing feature, MAJOR (`X.0.0`) only with the maintainer's approval. No cap on any part.
 - Beta builds carry `-beta.N` (e.g. `2.11.0-beta.3`): `GrokHub 2.11.0-beta.3 (beta @ abc1234)`. `crates/grokhub-app/build.rs` sets N from commits since the newest stable `vX.Y.Z` tag; never edit the Cargo version for them.
 - Each `beta` → `main` promotion carries exactly one bump (PATCH or MINOR) and one release.

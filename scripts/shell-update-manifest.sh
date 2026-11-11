@@ -24,6 +24,12 @@ if [[ ! "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
   exit 2
 fi
 ver="$(tr -d '[:space:]' < "$(cd "$(dirname "$0")/.." && pwd)/VERSION")"
+# The manifest's version is the tag; the assets and the shell inside them say
+# VERSION. A tag for another version would be offered forever, or never.
+if [[ "${tag#v}" != "$ver" && "${tag#v}" != "$ver"-beta.* ]]; then
+  echo "shell-update-manifest: tag '$tag' is not v$ver or v$ver-beta.N (VERSION is $ver)" >&2
+  exit 2
+fi
 
 # one <platform key> <asset name>: the asset and its .minisig must exist.
 entries=()

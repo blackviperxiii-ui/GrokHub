@@ -133,11 +133,19 @@ def set_card(page_id, status, result=None):
     notion(f"/pages/{page_id}", "PATCH", {"properties": props})
 
 
+def trusted(issue):
+    """Anyone can open an issue and paste a card marker into it, so a marker
+    only counts on an issue the sync opened itself (the workflow's own login;
+    its issues report no association) or one from the project's own people."""
+    return ((issue.get("user") or {}).get("login") == "github-actions[bot]"
+            or issue.get("author_association") in ("OWNER", "MEMBER", "COLLABORATOR"))
+
+
 def card_issues(state):
     issues = gh_all(f"/repos/{REPO}/issues?state={state}&sort=updated&direction=desc")
     out = {}
     for i in issues:
-        if "pull_request" in i:
+        if "pull_request" in i or not trusted(i):
             continue
         m = MARK_RE.search(i.get("body") or "")
         if m:
@@ -335,13 +343,13 @@ def done():
         for n in set(CLOSES_RE.findall(pr.get("body") or "")):
             issue = gh(f"/repos/{REPO}/issues/{n}")
             m = MARK_RE.search(issue.get("body") or "")
-            if m:
+            if m and trusted(issue):
                 mark_done(m.group(1).replace("-", ""), pr["html_url"],
                           issue["number"] if issue.get("state") == "open" else None)
     elif "issue" in event:
         issue = event["issue"]
         m = MARK_RE.search(issue.get("body") or "")
-        if m and issue.get("state_reason") == "completed":
+        if m and trusted(issue) and issue.get("state_reason") == "completed":
             mark_done(m.group(1).replace("-", ""), issue["html_url"])
 
 

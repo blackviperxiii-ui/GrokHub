@@ -103,5 +103,23 @@ for t in "v$ver-rc.1" "$ver" "v$ver-beta."; do
   fi
 done
 
+# A tag for another version than VERSION: the assets and binaries say $ver,
+# so the manifest must not be written under a different number.
+for t in "v9.9.9" "v9.9.9-beta.7" "v${ver}0" "v${ver}0-beta.7"; do
+  rm -f "$d/latest.json"
+  rc=0
+  bash "$script" "$d" "$t" "blackviperxiii-ui/GrokHub" >/dev/null 2>"$TMP/err.log" || rc=$?
+  if ((rc == 2)) && [ ! -e "$d/latest.json" ] && grep -qF "VERSION is $ver" "$TMP/err.log"; then
+    ok "tag '$t' is refused: not VERSION $ver"
+  else
+    bad "tag '$t' is refused: not VERSION $ver (rc=$rc)"
+  fi
+done
+if bash "$script" "$d" "v$ver" "blackviperxiii-ui/GrokHub" >/dev/null && check "assert m['version'] == '$ver', m['version']"; then
+  ok "the stable tag v$ver still writes a manifest"
+else
+  bad "the stable tag v$ver still writes a manifest"
+fi
+
 echo "passed=$pass failed=$failed"
 (( failed == 0 ))

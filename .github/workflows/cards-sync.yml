@@ -39,8 +39,13 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: python3 .github/scripts/cards_sync.py sync
   done:
+    # An issue counts only when the sync opened it or one of the project's own
+    # people did (cards_sync.py checks the same), so an outsider's issue never
+    # starts the job that holds the board token.
     if: >-
-      (github.event_name == 'issues' && github.event.issue.state_reason == 'completed') ||
+      (github.event_name == 'issues' && github.event.issue.state_reason == 'completed' &&
+       (github.event.issue.user.login == 'github-actions[bot]' ||
+        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association))) ||
       (github.event_name == 'pull_request' && github.event.pull_request.merged == true &&
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
