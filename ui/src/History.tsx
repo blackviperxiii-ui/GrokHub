@@ -240,7 +240,10 @@ export function History({
                         onClick={() => onOpen(row.id)}
                       >
                         <span className="card-title">{row.title}</span>
-                        <span className="card-status">{whenLabel(row.updated)}</span>
+                        <span className="card-status">
+                          {row.pinned ? "Pinned · " : ""}
+                          {whenLabel(row.updated)}
+                        </span>
                       </button>
                       <ChatMenu
                         title={row.title}
