@@ -3747,11 +3747,15 @@ async fn pc_net_csv(state: State<'_, ShellState>) -> Result<String, String> {
 }
 
 /// Devices → Start share: whether this computer's LAN hub is on, its pairing
-/// code and the computers paired with it. Desktop only.
+/// code and the computers paired with it. Desktop only. Each of the four
+/// can write `hub-state.json`, so none runs on the main thread.
 #[cfg(desktop)]
 #[tauri::command]
-fn get_share(share: State<'_, Arc<hub_share::HubShare>>) -> hub_share::ShareView {
-    share.view()
+async fn get_share(
+    share: State<'_, Arc<hub_share::HubShare>>,
+) -> Result<hub_share::ShareView, String> {
+    let share = Arc::clone(&share);
+    off_main(move || share.view()).await
 }
 
 #[cfg(desktop)]
@@ -3760,21 +3764,25 @@ async fn start_share(
     share: State<'_, Arc<hub_share::HubShare>>,
 ) -> Result<hub_share::ShareView, String> {
     let share = Arc::clone(&share);
-    tauri::async_runtime::spawn_blocking(move || share.start())
-        .await
-        .map_err(|e| e.to_string())?
+    off_main(move || share.start()).await?
 }
 
 #[cfg(desktop)]
 #[tauri::command]
-fn stop_share(share: State<'_, Arc<hub_share::HubShare>>) -> hub_share::ShareView {
-    share.stop()
+async fn stop_share(
+    share: State<'_, Arc<hub_share::HubShare>>,
+) -> Result<hub_share::ShareView, String> {
+    let share = Arc::clone(&share);
+    off_main(move || share.stop()).await
 }
 
 #[cfg(desktop)]
 #[tauri::command]
-fn new_share_code(share: State<'_, Arc<hub_share::HubShare>>) -> hub_share::ShareView {
-    share.new_code()
+async fn new_share_code(
+    share: State<'_, Arc<hub_share::HubShare>>,
+) -> Result<hub_share::ShareView, String> {
+    let share = Arc::clone(&share);
+    off_main(move || share.new_code()).await
 }
 
 /// Settings → Behavior: the tray, the composer and the limits on scheduled work.
@@ -5105,13 +5113,20 @@ pub fn run() {
         ])
         .build(tauri::generate_context!());
     match built {
-        Ok(app) => app.run(|_, event| {
+        Ok(app) => app.run(|app, event| {
             // What the learning engine holds in memory is written on the way out.
             if let tauri::RunEvent::Exit = event {
                 grokhub_core::learn::hub::flush();
                 // A test run or deploy does not outlive the app.
                 code_runs::stop();
+                // A computer that paired since Devices last looked stays paired.
+                #[cfg(desktop)]
+                if let Some(share) = app.try_state::<Arc<hub_share::HubShare>>() {
+                    share.save();
+                }
             }
+            #[cfg(not(desktop))]
+            let _ = app;
         }),
         Err(err) => {
             eprintln!(
@@ -5153,6 +5168,29 @@ mod command_tests {
         let has = include_str!("../build.rs").contains("app_manifest");
         let says = include_str!("../capabilities/default.json").contains("build manifest");
         assert_eq!(says, has);
+    }
+
+    #[test]
+    fn the_share_commands_run_on_the_blocking_pool() {
+        // Stop share writes and fsyncs hub-state.json, and the page's poll
+        // saves a new pairing: neither may hold up the window.
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        for (name, call) in [
+            ("get_share", "off_main(move || share.view()).await"),
+            ("start_share", "off_main(move || share.start()).await?"),
+            ("stop_share", "off_main(move || share.stop()).await"),
+            ("new_share_code", "off_main(move || share.new_code()).await"),
+        ] {
+            let body = src
+                .split(&format!("async fn {name}("))
+                .nth(1)
+                .and_then(|s| s.split("\n}\n").next())
+                .unwrap_or_else(|| panic!("{name} must be an async command"));
+            assert!(
+                body.contains(call),
+                "{name} must run through off_main: {body}"
+            );
+        }
     }
 }
 

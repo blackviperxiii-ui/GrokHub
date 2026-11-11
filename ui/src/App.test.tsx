@@ -1,9 +1,9 @@
 import "@testing-library/jest-dom/vitest";
 import { Profiler } from "react";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Capabilities } from "./api";
+import type { Capabilities, RecordStatus } from "./api";
 
 // The App's own chat listener (the Activity Dock); tests push events through it.
 const chatHandlers = vi.hoisted(() => [] as ((envelope: unknown) => void)[]);
@@ -53,7 +53,7 @@ const api = vi.hoisted(() => ({
   shareSchedulerClock: vi.fn(() => Promise.resolve()),
   quickChips: vi.fn(() => Promise.resolve([])),
   chipOutcome: vi.fn(() => Promise.resolve(true)),
-  recordStatus: vi.fn(() => Promise.resolve({ recording: null, listening: null, events: [] })),
+  recordStatus: vi.fn<() => Promise<RecordStatus>>(() => Promise.resolve({ recording: null, listening: null, events: [] })),
   recordStop: vi.fn(() => Promise.resolve(false)),
 }));
 
@@ -583,6 +583,46 @@ describe("App", () => {
       });
     }
     expect(commits - before).toBeLessThanOrEqual(2);
+  });
+
+  it("keeps the bar, with the recording's clock and Stop, in a narrow window while a recording runs", async () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: query === "(max-width: 600px)",
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      })),
+    );
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    // The user scrolls the page down, far enough for the bar to slide away.
+    const swipeDown = (page: HTMLElement) => {
+      for (const top of [50, 200]) {
+        fireEvent.touchMove(page);
+        page.scrollTop = top;
+        fireEvent.scroll(page);
+      }
+    };
+    try {
+      const idle = render(<App />);
+      swipeDown(await screen.findByText(/^Chat page/));
+      expect(idle.container.querySelector(".app")).toHaveClass("bar-away");
+      idle.unmount();
+
+      api.recordStatus.mockResolvedValue({
+        recording: { secs: 42, text: "● Recording 0:42 of 2:00" },
+        listening: null,
+        events: [],
+      });
+      const live = render(<App />);
+      expect(await screen.findByText("● Recording 0:42 of 2:00")).toBeInTheDocument();
+      swipeDown(screen.getByText(/^Chat page/));
+      expect(live.container.querySelector(".app")).not.toHaveClass("bar-away");
+      expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+    } finally {
+      api.recordStatus.mockResolvedValue({ recording: null, listening: null, events: [] });
+      vi.unstubAllGlobals();
+    }
   });
 
   describe("Halt", () => {

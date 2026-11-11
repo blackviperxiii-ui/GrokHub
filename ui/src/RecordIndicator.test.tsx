@@ -65,6 +65,32 @@ describe("RecordIndicator", () => {
     expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
   });
 
+  it("reports live while a recording or an audio check runs, once per change", async () => {
+    vi.useFakeTimers();
+    const onLive = vi.fn();
+    const poll = vi
+      .fn()
+      .mockResolvedValueOnce(IDLE)
+      .mockResolvedValueOnce(LIVE)
+      .mockResolvedValueOnce({ ...IDLE, listening: { secs: 1, text: "● Audio check: listening 0:01 of 0:05" } })
+      .mockResolvedValue(IDLE);
+    render(<RecordIndicator onEvent={vi.fn()} onLive={onLive} poll={poll} everyMs={1000} />);
+    await act(async () => {});
+    expect(onLive).not.toHaveBeenCalled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(onLive.mock.calls).toEqual([[true]]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(onLive.mock.calls).toEqual([[true]]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(onLive.mock.calls).toEqual([[true], [false]]);
+  });
+
   it("hands each finished run over once", async () => {
     const onEvent = vi.fn();
     const done = { kind: "record" as const, ok: true, text: "Screen recording 0:07: 4 stills saved" };

@@ -666,4 +666,14 @@ mod tests {
         let remote = crate::slash::hits("/audio", true);
         assert_eq!(remote[0].disabled.as_deref(), Some("On your computer"));
     }
+
+    #[test]
+    fn the_record_row_promises_stills_not_a_diagnosis() {
+        let rec = crate::slash::hits("/record", false);
+        assert_eq!(rec[0].cmd, "/record");
+        assert_eq!(
+            rec[0].hint,
+            "Record my screen as stills, 2 minutes at most (say what's wrong)"
+        );
+    }
 }

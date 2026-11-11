@@ -21,7 +21,9 @@ import {
   NONE_PAIRED,
   OFF_NOTE,
   PAIR_STEP,
+  CODE_GONE,
   PAIRED_NOTE,
+  RUN_NOTE,
   SHARE_OFF,
   SIGNED_OUT,
 } from "./Devices";
@@ -37,12 +39,13 @@ const ON: Shape = {
     { name: "Safari on iPhone", firstSeen: NOW - 3 * 60 * MINUTE, lastCall: NOW - 5 * MINUTE, chats: 1 },
   ],
 };
-const SHARE_OFF_VIEW: Share = { on: false, port: 18766, code: "", address: "", peers: [] };
+const SHARE_OFF_VIEW: Share = { on: false, port: 18766, code: "", address: "", pairedSinceCode: false, peers: [] };
 const SHARE_ON_VIEW: Share = {
   on: true,
   port: 18766,
   code: "K7M2QX",
   address: "http://192.168.1.20:18766",
+  pairedSinceCode: false,
   peers: [],
 };
 const SIGNED_OUT_VIEW: Shape = { ...ON, browsers: [] };
@@ -147,7 +150,8 @@ describe("Devices", () => {
     api.getShare.mockResolvedValue({
       ...SHARE_ON_VIEW,
       code: "",
-      peers: [{ name: "Laptop", lastSeen: 0 }],
+      pairedSinceCode: true,
+      peers: [{ id: "laptop-1", name: "Laptop", lastSeen: 0 }],
     });
     api.newShareCode.mockResolvedValue({ ...SHARE_ON_VIEW, code: "P4R8TZ" });
     render(<Devices onOpenWebAccess={() => {}} />);
@@ -161,6 +165,53 @@ describe("Devices", () => {
     expect(await screen.findByLabelText("Pairing code")).toHaveTextContent("P4R8TZ");
   });
 
+  it("a dead code with nobody paired does not say Paired", async () => {
+    api.getDevices.mockResolvedValue(OFF);
+    // Ten wrong guesses burned the code: sharing is on, no code, nobody joined.
+    api.getShare.mockResolvedValue({ ...SHARE_ON_VIEW, code: "", pairedSinceCode: false });
+    render(<Devices onOpenWebAccess={() => {}} />);
+    const card = await screen.findByLabelText("Share");
+    expect(await within(card).findByText("That code stopped working. Make a new one.")).toBeInTheDocument();
+    expect(CODE_GONE).toBe("That code stopped working. Make a new one.");
+    expect(within(card).queryByText(PAIRED_NOTE)).toBeNull();
+    expect(screen.queryByRole("list", { name: "Paired computers" })).toBeNull();
+    expect(within(card).getByRole("button", { name: "New code" })).toBeEnabled();
+  });
+
+  it("a code that stopped working after an earlier pairing does not say Paired either", async () => {
+    api.getDevices.mockResolvedValue(OFF);
+    api.getShare.mockResolvedValue({
+      ...SHARE_ON_VIEW,
+      code: "",
+      pairedSinceCode: false,
+      peers: [{ id: "laptop-1", name: "Laptop", lastSeen: 0 }],
+    });
+    render(<Devices onOpenWebAccess={() => {}} />);
+    const card = await screen.findByLabelText("Share");
+    expect(await within(card).findByText(CODE_GONE)).toBeInTheDocument();
+    expect(within(card).queryByText(PAIRED_NOTE)).toBeNull();
+  });
+
+  it("lists two paired computers with the same name as two rows", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    api.getDevices.mockResolvedValue(OFF);
+    api.getShare.mockResolvedValue({
+      ...SHARE_ON_VIEW,
+      peers: [
+        { id: "pc-a", name: "Computer", lastSeen: 0 },
+        { id: "pc-b", name: "Computer", lastSeen: NOW - 5 * MINUTE },
+      ],
+    });
+    render(<Devices onOpenWebAccess={() => {}} />);
+    const rows = within(await screen.findByRole("list", { name: "Paired computers" })).getAllByRole("listitem");
+    expect(rows.map((row) => row.textContent)).toEqual([
+      "ComputerPaired, not used yet",
+      "ComputerLast used 5 min ago",
+    ]);
+    expect(errors).not.toHaveBeenCalled();
+    errors.mockRestore();
+  });
+
   it("shows why share could not start", async () => {
     api.getDevices.mockResolvedValue(OFF);
     api.startShare.mockRejectedValue("Port 18766 is already in use.");
@@ -169,11 +220,22 @@ describe("Devices", () => {
     expect(await screen.findByRole("status")).toHaveTextContent("Port 18766 is already in use.");
   });
 
-  it("sends a task to a chat from Run it here", async () => {
+  it("says the task goes to the chat box, not that it runs", async () => {
+    api.getDevices.mockResolvedValue(OFF);
+    render(<Devices onOpenWebAccess={() => {}} onRun={vi.fn()} />);
+    expect(await screen.findByRole("button", { name: "Put it in chat" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Run it here" })).toBeNull();
+    expect(screen.getByText(RUN_NOTE)).toBeInTheDocument();
+    expect(RUN_NOTE).toBe(
+      "Puts this task in the chat box. Press Send there and it runs on this PC, with the same approvals as anything else you ask.",
+    );
+  });
+
+  it("puts a task in a chat from Put it in chat", async () => {
     api.getDevices.mockResolvedValue(OFF);
     const run = vi.fn();
     render(<Devices onOpenWebAccess={() => {}} onRun={run} />);
-    const button = await screen.findByRole("button", { name: "Run it here" });
+    const button = await screen.findByRole("button", { name: "Put it in chat" });
     expect(button).toBeDisabled();
     await userEvent.type(screen.getByLabelText("Task for this PC"), "  tidy my downloads  ");
     await userEvent.click(button);

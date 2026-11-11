@@ -2254,6 +2254,8 @@ export function forgetAllDevices(): Promise<Devices> {
 
 /** A computer paired with this one's LAN hub. */
 export interface SharePeer {
+  /** The computer's device id; two computers can share a name. */
+  id: string;
   name: string;
   /** Unix ms; 0 before its first call. */
   lastSeen: number;
@@ -2267,6 +2269,9 @@ export interface Share {
   code: string;
   /** What the other computer opens, without the code; empty while off. */
   address: string;
+  /** With no code while on: true when a computer paired with it, false when
+   * it stopped working some other way (wrong guesses burned it). */
+  pairedSinceCode: boolean;
   peers: SharePeer[];
 }
 

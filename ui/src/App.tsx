@@ -187,7 +187,10 @@ export function App() {
   // The pages opened so far. Each mounts the first time it opens, not before.
   const [opened, setOpened] = useState<ReadonlySet<View>>(() => new Set(["chat"]));
   if (!opened.has(view)) setOpened(new Set(opened).add(view));
-  const barAway = useHidingBar(palette);
+  // A screen recording or an audio check is running: the bar holding its
+  // clock and Stop stays on screen in a narrow window too.
+  const [recLive, setRecLive] = useState(false);
+  const barAway = useHidingBar(palette || (canHalt && recLive));
   // Closing Settings goes back to the screen that was open before it, and its
   // Back button names that screen.
   const [before, setBefore] = useState<View>("chat");
@@ -555,6 +558,7 @@ export function App() {
             onEvent={(event) =>
               notify(event.ok ? "success" : "error", event.text, undefined, event.kind === "audio" ? "Audio check" : "Screen recording")
             }
+            onLive={setRecLive}
           />
         )}
         <NoticeBell
