@@ -82,10 +82,11 @@ fn lists_the_project_root_folders_first_without_dot_git() {
 
 #[test]
 fn opens_a_file_inside_the_project() {
-    let (_ws, mut ed) = project("open");
+    let (ws, mut ed) = project("open");
     assert_eq!(ed.pick("src/a.rs"), Pick::Opened);
     let open = ed.open.clone().unwrap();
     assert_eq!(open.path, "src/a.rs");
+    assert_eq!(open.root, ws.to_string_lossy());
     assert_eq!(open.text, "fn a() {}\n");
     assert!(!open.dirty());
     assert_eq!(ed.pick("src/a.rs"), Pick::Same);
@@ -248,6 +249,39 @@ fn a_refused_save_keeps_the_edits_and_says_why() {
         std::fs::read_to_string(ws.join("src/a.rs")).unwrap(),
         "fn a() {}\n"
     );
+    assert!(activity::list(&config, 10).is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_save_is_refused_when_the_project_folder_became_another_one() {
+    let (first, _) = project("swap-first");
+    let (second, _) = project("swap-second");
+    let config = temp("swap-config");
+    // The cabin's project folder is a link, and the link is moved to another
+    // project while the file is open.
+    let link = temp("swap-link").join("project");
+    std::os::unix::fs::symlink(&first, &link).unwrap();
+    let mut ed = CodeEditor::default();
+    ed.set_workspace(&link);
+    assert_eq!(ed.pick("src/a.rs"), Pick::Opened);
+    assert_eq!(ed.open.clone().unwrap().root, first.to_string_lossy());
+    ed.open.as_mut().unwrap().text = "fn a() { 7 }\n".into();
+    std::fs::remove_file(&link).unwrap();
+    std::os::unix::fs::symlink(&second, &link).unwrap();
+    assert!(ed.save(&config, Some(activity::KEEP_DEFAULT)));
+    finish_save(&mut ed);
+    assert_eq!(
+        ed.note.as_deref(),
+        Some("The project folder changed since this file was opened. Nothing was saved.")
+    );
+    assert!(ed.open.clone().unwrap().dirty());
+    for ws in [&first, &second] {
+        assert_eq!(
+            std::fs::read_to_string(ws.join("src/a.rs")).unwrap(),
+            "fn a() {}\n"
+        );
+    }
     assert!(activity::list(&config, 10).is_empty());
 }
 

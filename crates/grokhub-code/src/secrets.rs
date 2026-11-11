@@ -44,8 +44,19 @@ pub trait Vault {
 /// The OS keychain, under the same service as the shell's API key.
 pub struct Keychain;
 
+/// A keychain failure in plain words, without the library's own wording.
 fn keychain_message(err: keyring::Error) -> String {
-    format!("The system keychain is not available: {err}")
+    match err {
+        // The keychain is looked for once, the first time it is used: one
+        // that starts later is not seen until the app starts again.
+        keyring::Error::NoDefaultStore => {
+            "No system keychain is running. Start one, then restart the app.".into()
+        }
+        keyring::Error::TooLong(_, limit) => {
+            format!("That is too long for the system keychain (its limit is {limit}).")
+        }
+        _ => "The system keychain is not available.".into(),
+    }
 }
 
 fn entry(account: &str) -> Result<keyring::Entry, String> {
@@ -276,72 +287,144 @@ impl Loaded {
         redact(text, &held)
     }
 
-    /// A redactor for one run's output that never lets a value slip through
-    /// split across two reads.
-    pub fn shield(&self) -> Shield {
-        Shield::new(self.held())
-    }
-
     /// The values, for redacting text built elsewhere (the activity log).
     pub fn held(&self) -> Vec<String> {
         self.pairs.iter().map(|(_, v)| v.clone()).collect()
     }
 }
 
-/// Redacts a child's output as it streams. Output is held back to the end of
-/// each line, so a value split across two reads is still hidden whole. With no
-/// values to hide it passes text straight through (token patterns only).
+/// Redacts a child's output as it streams. With values to hide, output is
+/// held back to the end of each line. With none, only an unfinished key or
+/// character is held. Either way a value or a key that is split across two
+/// reads is still hidden whole.
 #[derive(Debug, Default)]
 pub struct Shield {
     held: Vec<String>,
-    pending: String,
-    longest: usize,
+    pending: Vec<u8>,
 }
 
-/// A line this long with no newline is let out, keeping back enough to hide a
-/// value that straddles the cut.
+/// A line this long with no newline is let out, up to any value or key that
+/// is still unfinished at its end.
 const SHIELD_LINE_LIMIT: usize = 32 * 1024;
+/// An unfinished key is held whole up to this length. A longer run with no
+/// break in it is no key, and is let out.
+const KEY_MAX: usize = 4096;
+/// What a key starts with. Keep in step with `grokhub_core::redact`.
+const KEY_PREFIXES: [&str; 7] = ["sk-", "xai-", "ghp_", "github_pat_", "gho_", "ghu_", "ghs_"];
+/// The words whose next word is hidden.
+const BEARER_WORDS: [&str; 2] = ["Bearer ", "bearer "];
+
+/// How much of `bytes` is whole characters: one that is unfinished at the
+/// end is left out.
+fn whole_chars(bytes: &[u8]) -> usize {
+    match std::str::from_utf8(bytes) {
+        Err(e) if e.error_len().is_none() => e.valid_up_to(),
+        _ => bytes.len(),
+    }
+}
+
+/// A character a key can be made of (the same set the redactor reads).
+fn key_char(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~' | b'+' | b'/' | b'=')
+}
+
+/// Where a `needle` begins that starts before `cut` and runs past it, whole
+/// or cut short by the end of `hay`.
+fn straddling(hay: &[u8], cut: usize, needle: &[u8]) -> Option<usize> {
+    let from = cut.saturating_sub(needle.len().saturating_sub(1));
+    (from..cut).find(|&at| {
+        let n = needle.len().min(hay.len() - at);
+        hay[at..at + n] == needle[..n]
+    })
+}
+
+/// Where a key begins that is still unfinished at `cut`: a key prefix with
+/// nothing but key characters up to the cut, or the `Bearer` before them.
+fn open_key(hay: &[u8], cut: usize) -> Option<usize> {
+    let low = cut.saturating_sub(KEY_MAX);
+    let run = hay[low..cut]
+        .iter()
+        .rposition(|b| !key_char(*b))
+        .map_or(low, |i| low + i + 1);
+    if let Some(word) = BEARER_WORDS
+        .iter()
+        .find(|w| hay[..run].ends_with(w.as_bytes()))
+    {
+        return Some(run - word.len());
+    }
+    (run..cut).find(|&at| {
+        KEY_PREFIXES
+            .iter()
+            .any(|p| hay[at..cut].starts_with(p.as_bytes()))
+    })
+}
 
 impl Shield {
     pub fn new(held: Vec<String>) -> Self {
-        let held: Vec<String> = held
-            .into_iter()
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty())
-            .collect();
-        let longest = held.iter().map(String::len).max().unwrap_or(0);
         Self {
-            held,
-            pending: String::new(),
-            longest,
+            held: hidden(&held),
+            pending: Vec::new(),
         }
+    }
+
+    /// Move `cut` back until it splits no held value, no key prefix, no
+    /// unfinished key and no `Bearer` from its value.
+    fn safe_cut(&self, mut cut: usize) -> usize {
+        loop {
+            let before = cut;
+            let needles = self
+                .held
+                .iter()
+                .map(String::as_str)
+                .chain(KEY_PREFIXES)
+                .chain(BEARER_WORDS);
+            for needle in needles {
+                if let Some(at) = straddling(&self.pending, cut, needle.as_bytes()) {
+                    cut = at;
+                }
+            }
+            if let Some(at) = open_key(&self.pending, cut) {
+                cut = at;
+            }
+            if cut == before {
+                return cut;
+            }
+        }
+    }
+
+    fn take(&mut self, len: usize) -> String {
+        let head: Vec<u8> = self.pending.drain(..len).collect();
+        hide(&String::from_utf8_lossy(&head), &self.held)
     }
 
     /// Redacted text that is safe to show so far.
     pub fn push(&mut self, text: &str) -> String {
-        if self.held.is_empty() {
-            return redact(text, &[]);
-        }
-        self.pending.push_str(text);
-        let mut cut = self.pending.rfind('\n').map(|i| i + 1).unwrap_or(0);
-        if cut == 0 && self.pending.len() > SHIELD_LINE_LIMIT {
-            cut = self
-                .pending
-                .len()
-                .saturating_sub(self.longest.saturating_sub(1));
-            while cut > 0 && !self.pending.is_char_boundary(cut) {
-                cut -= 1;
-            }
-        }
-        let rest = self.pending.split_off(cut);
-        let ready = std::mem::replace(&mut self.pending, rest);
-        redact(&ready, &self.held)
+        self.push_bytes(text.as_bytes())
+    }
+
+    /// [`Shield::push`] for bytes as they were read: a character that is
+    /// split across two reads is put back together.
+    pub fn push_bytes(&mut self, bytes: &[u8]) -> String {
+        self.pending.extend_from_slice(bytes);
+        let line = self
+            .pending
+            .iter()
+            .rposition(|b| *b == b'\n')
+            .map_or(0, |i| i + 1);
+        let long = line == 0 && self.pending.len() > SHIELD_LINE_LIMIT;
+        let end = if self.held.is_empty() || long {
+            whole_chars(&self.pending)
+        } else {
+            line
+        };
+        let cut = self.safe_cut(end);
+        self.take(cut)
     }
 
     /// Whatever is still held back, redacted. Call once the output has ended.
     pub fn finish(&mut self) -> String {
-        let ready = std::mem::take(&mut self.pending);
-        redact(&ready, &self.held)
+        let all = self.pending.len();
+        self.take(all)
     }
 }
 
@@ -373,17 +456,35 @@ pub fn held_values(config_dir: &Path, vault: &dyn Vault, repo_key: &str) -> Vec<
         .collect()
 }
 
+/// What to look for in output: each value trimmed, and each line of a value
+/// with line breaks as well (a command can print such a value a line at a
+/// time). Longest first, so a value that contains another is hidden whole.
+fn hidden(held: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for value in held.iter().map(|v| v.trim()).filter(|v| !v.is_empty()) {
+        out.push(value.to_string());
+        if value.contains('\n') {
+            let lines = value
+                .lines()
+                .map(str::trim)
+                .filter(|line| line.chars().count() >= MIN_VALUE_CHARS);
+            out.extend(lines.map(str::to_string));
+        }
+    }
+    out.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+    out.dedup();
+    out
+}
+
+/// Replace each of `hidden` with [`MARKER`], then redact the usual token patterns.
+fn hide(text: &str, hidden: &[String]) -> String {
+    redact_secrets(&redact_held_secrets(text, hidden))
+}
+
 /// Replace each held value with [`MARKER`] (longest first, so a value that
 /// contains another is hidden whole), then redact the usual token patterns.
 pub fn redact(text: &str, held: &[String]) -> String {
-    let mut held: Vec<String> = held
-        .iter()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .collect();
-    held.sort_by_key(|v| std::cmp::Reverse(v.len()));
-    let out = redact_held_secrets(text, &held);
-    redact_secrets(&out)
+    hide(text, &hidden(held))
 }
 
 // ---- what the Code tab calls ----

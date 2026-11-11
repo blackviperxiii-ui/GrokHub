@@ -4,7 +4,7 @@
 //! not been forgotten. Callers pass a [`Mode`] so Ask still confirms every
 //! time and Auto may run a remembered command without asking.
 
-use crate::secrets::Loaded;
+use crate::secrets::{Keychain, Loaded, Shield, Vault};
 use grokhub_core::model_download::sha256_hex;
 use grokhub_core::proc_util::hide_windows_console;
 use serde::{Deserialize, Serialize};
@@ -26,6 +26,16 @@ pub const RUN_EVENT: &str = "code-run";
 pub enum Kind {
     Test,
     Deploy,
+}
+
+impl Kind {
+    /// The word for this kind of command in an error sentence.
+    fn word(self) -> &'static str {
+        match self {
+            Kind::Test => "test",
+            Kind::Deploy => "deploy",
+        }
+    }
 }
 
 /// How a remembered command is treated.
@@ -99,7 +109,9 @@ struct Entry {
     command: String,
 }
 
+/// The process id of the one test run or deploy in progress, if any.
 static CURRENT: Mutex<Option<u32>> = Mutex::new(None);
+const BUSY: &str = "A run is already in progress.";
 
 /// A stable id for a project: sha256 of `remote + newline + repo root`, or
 /// just the root when there is no remote. The raw URL and path are not stored.
@@ -297,14 +309,31 @@ pub fn forget_test(config_dir: &Path, workspace: &Path) -> Result<RememberedView
 /// Confirm (when needed), remember, and run the test command in the workspace.
 ///
 /// Output is redacted before `on_chunk` sees it and before it is stored in the
-/// result. [`Mode::Ask`] still requires `confirmed` on every run; memory is
-/// kept so a later Auto call can use it.
+/// result: the usual token patterns, and the project's secret values from the
+/// keychain (a test run never has them in its environment, but the project
+/// may print them itself). [`Mode::Ask`] still requires `confirmed` on every
+/// run; memory is kept so a later Auto call can use it.
 pub fn run(
     config_dir: &Path,
     workspace: &Path,
     command: &str,
     confirmed: bool,
     mode: Mode,
+    on_chunk: impl FnMut(&str),
+) -> Result<RunResult, String> {
+    run_with(
+        config_dir, workspace, command, confirmed, mode, &Keychain, on_chunk,
+    )
+}
+
+/// [`run`], with the project's secret values read from `vault`.
+pub fn run_with(
+    config_dir: &Path,
+    workspace: &Path,
+    command: &str,
+    confirmed: bool,
+    mode: Mode,
+    vault: &dyn Vault,
     mut on_chunk: impl FnMut(&str),
 ) -> Result<RunResult, String> {
     let command = command.trim();
@@ -322,25 +351,29 @@ pub fn run(
         }
         Decision::Remembered => {}
     }
-    exec(workspace, command, None, &mut on_chunk)
+    let held = crate::secrets::held_values(config_dir, vault, &key);
+    exec(workspace, command, Kind::Test, &held, None, &mut on_chunk)
 }
 
-/// Run `command` in the workspace through the shell. With `secrets`, each
-/// value is set in the child's environment and hidden from every line of output.
+/// Run `command` in the workspace through the shell, as a test run or a
+/// deploy. Each of `held` is hidden from the output. With `env`, the
+/// project's secrets are also set in the child's environment.
 pub(crate) fn exec(
     workspace: &Path,
     command: &str,
-    secrets: Option<&Loaded>,
+    kind: Kind,
+    held: &[String],
+    env: Option<&Loaded>,
     on_chunk: &mut impl FnMut(&str),
 ) -> Result<RunResult, String> {
     if !workspace.is_dir() {
         return Err("The workspace folder isn't there.".into());
     }
-    {
-        let current = CURRENT.lock().map_err(|e| e.to_string())?;
-        if current.is_some() {
-            return Err("A run is already in progress.".into());
-        }
+    // Held from the check until the child's id is stored, so two calls at the
+    // same moment can never both start.
+    let mut current = CURRENT.lock().map_err(|e| e.to_string())?;
+    if current.is_some() {
+        return Err(BUSY.into());
     }
 
     #[cfg(windows)]
@@ -361,54 +394,59 @@ pub(crate) fn exec(
         .stderr(Stdio::piped())
         .env("TERM", "dumb")
         .env("GIT_TERMINAL_PROMPT", "0");
-    if let Some(secrets) = secrets {
+    // The child leads its own process group, so [`stop`] reaches everything
+    // the command started.
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut c, 0);
+    if let Some(secrets) = env {
         secrets.inject(&mut c);
     }
     hide_windows_console(&mut c);
     let mut child = c
         .spawn()
-        .map_err(|e| format!("couldn't start the test command: {e}"))?;
+        .map_err(|e| format!("couldn't start the {} command: {e}", kind.word()))?;
     let pid = child.id();
-    *CURRENT.lock().map_err(|e| e.to_string())? = Some(pid);
+    *current = Some(pid);
+    drop(current);
     // Frees the runner however this function leaves, a panic included.
     let _running = Running(pid);
 
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
-    let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
-    if let Some(out) = stdout {
-        spawn_pump(out, tx.clone());
+    let (tx, rx) = std::sync::mpsc::channel::<(usize, Vec<u8>)>();
+    if let Some(out) = child.stdout.take() {
+        spawn_pump(0, out, tx.clone());
     }
-    if let Some(err) = stderr {
-        spawn_pump(err, tx.clone());
+    if let Some(err) = child.stderr.take() {
+        spawn_pump(1, err, tx.clone());
     }
     drop(tx);
 
     let mut output = String::new();
     let mut cut = false;
-    let mut shield = secrets.map(Loaded::shield).unwrap_or_default();
-    for item in rx.iter().map(Some).chain(std::iter::once(None)) {
-        let chunk = match item {
-            Some(buf) if buf.is_empty() => continue,
-            Some(buf) => shield.push(&String::from_utf8_lossy(&buf)),
-            None => shield.finish(),
-        };
+    let mut keep = |chunk: String| {
         if chunk.is_empty() {
-            continue;
+            return;
         }
         // Once a chunk hasn't fit, the output has ended: a later, shorter
         // chunk is not kept or sent, even if the cut left a byte or two free.
         if cut || output.len() >= OUTPUT_CAP {
             cut = true;
-            continue;
+            return;
         }
         cut |= push_capped(&mut output, &chunk, OUTPUT_CAP);
         on_chunk(&chunk);
+    };
+    // One shield for each stream: a line on one never lands inside a
+    // half-written line of the other and splits a value there.
+    let mut shields = [Shield::new(held.to_vec()), Shield::new(held.to_vec())];
+    for (stream, buf) in rx {
+        keep(shields[stream].push_bytes(&buf));
     }
-    let status = child.wait();
-    let exit = match status {
+    for shield in &mut shields {
+        keep(shield.finish());
+    }
+    let exit = match child.wait() {
         Ok(st) => st.code().unwrap_or(-1),
-        Err(e) => return Err(format!("the test command did not finish: {e}")),
+        Err(e) => return Err(format!("the {} command did not finish: {e}", kind.word())),
     };
     Ok(RunResult {
         command: command.to_string(),
@@ -418,14 +456,53 @@ pub(crate) fn exec(
     })
 }
 
-fn spawn_pump<R: Read + Send + 'static>(mut pipe: R, tx: std::sync::mpsc::Sender<Vec<u8>>) {
+/// Stop the test run or deploy in progress, and everything it started. False
+/// when nothing is running. The stopped run ends by itself, with exit -1.
+pub fn stop() -> bool {
+    let current = CURRENT.lock().unwrap_or_else(|e| e.into_inner());
+    match *current {
+        Some(pid) => kill_tree(pid),
+        None => false,
+    }
+}
+
+/// Kill the run's whole process group: its shell and what the shell started.
+#[cfg(unix)]
+fn kill_tree(pid: u32) -> bool {
+    Command::new("kill")
+        .args(["-KILL", "--", &format!("-{pid}")])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|st| st.success())
+}
+
+/// Kill the run's shell and every process under it.
+#[cfg(not(unix))]
+fn kill_tree(pid: u32) -> bool {
+    let mut c = Command::new("taskkill");
+    c.args(["/PID", &pid.to_string(), "/T", "/F"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    hide_windows_console(&mut c);
+    c.status().is_ok_and(|st| st.success())
+}
+
+/// Send what `pipe` gives, read by read, marked with its `stream` number.
+fn spawn_pump<R: Read + Send + 'static>(
+    stream: usize,
+    mut pipe: R,
+    tx: std::sync::mpsc::Sender<(usize, Vec<u8>)>,
+) {
     std::thread::spawn(move || {
         let mut buf = [0u8; 8192];
         loop {
             match pipe.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    if tx.send(buf[..n].to_vec()).is_err() {
+                    if tx.send((stream, buf[..n].to_vec())).is_err() {
                         break;
                     }
                 }
@@ -708,11 +785,11 @@ mod tests {
     #[test]
     fn a_second_run_starts_once_the_first_has_ended() {
         let work = temp_dir("twice-work");
-        let one = exec(&work, "echo one", None, &mut |_: &str| {}).unwrap();
+        let one = exec(&work, "echo one", Kind::Test, &[], None, &mut |_: &str| {}).unwrap();
         assert_eq!(one.exit, 0);
         assert_eq!(one.output.lines().collect::<Vec<_>>(), ["one"]);
         assert_eq!(*CURRENT.lock().unwrap(), None);
-        let two = exec(&work, "echo two", None, &mut |_: &str| {}).unwrap();
+        let two = exec(&work, "echo two", Kind::Test, &[], None, &mut |_: &str| {}).unwrap();
         assert_eq!(two.exit, 0);
         assert_eq!(two.output.lines().collect::<Vec<_>>(), ["two"]);
         assert_eq!(*CURRENT.lock().unwrap(), None);
@@ -730,7 +807,7 @@ mod tests {
             printf zz";
         let mark = work.join("sent");
         let mut sent = String::new();
-        let out = exec(&work, command, None, &mut |chunk: &str| {
+        let out = exec(&work, command, Kind::Test, &[], None, &mut |chunk: &str| {
             sent.push_str(chunk);
             if chunk.contains(['\u{20ac}', '\u{fffd}']) {
                 std::fs::write(&mark, "").unwrap();
@@ -742,6 +819,125 @@ mod tests {
         assert_eq!(out.output.len(), 262_143);
         assert!(out.output.ends_with("ab\nab\n"));
         assert!(!sent.contains('z'), "a chunk was sent after the cut");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_key_that_falls_across_two_reads_is_hidden_whole() {
+        let config = temp_dir("split");
+        let work = temp_dir("split-work");
+        // The shell writes 8192 bytes, then the rest: the cut lands 13
+        // characters into the key.
+        let key = concat!("ghp_abcdefghijklm", "nopqrstuvwxyz0123456789");
+        std::fs::write(
+            work.join("t.sh"),
+            format!("printf '%s key=%s end\\n' \"$(head -c 8170 /dev/zero | tr '\\0' a)\" {key}\n"),
+        )
+        .unwrap();
+        let mut chunks = String::new();
+        let out = run(&config, &work, "sh t.sh", true, Mode::Auto, |c| {
+            chunks.push_str(c)
+        })
+        .unwrap();
+        let expected = format!("{} key=[redacted] end\n", "a".repeat(8170));
+        assert_eq!(out.output, expected);
+        assert_eq!(chunks, expected);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_character_that_falls_across_two_reads_stays_whole() {
+        let config = temp_dir("utf8");
+        let work = temp_dir("utf8-work");
+        // 8191 bytes, then a three-byte euro sign across byte 8192.
+        std::fs::write(
+            work.join("t.sh"),
+            "printf '%s\\342\\202\\254\\n' \"$(head -c 8191 /dev/zero | tr '\\0' a)\"\n",
+        )
+        .unwrap();
+        let out = run(&config, &work, "sh t.sh", true, Mode::Auto, |_| {}).unwrap();
+        assert_eq!(out.output, format!("{}\u{20ac}\n", "a".repeat(8191)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn two_runs_started_together_never_both_run() {
+        let work = temp_dir("pair-work");
+        for round in 0..20 {
+            let gate = std::sync::Barrier::new(2);
+            let results: Vec<Result<RunResult, String>> = std::thread::scope(|s| {
+                let both: Vec<_> = (0..2)
+                    .map(|_| {
+                        s.spawn(|| {
+                            gate.wait();
+                            exec(
+                                &work,
+                                "sleep 0.3; echo x",
+                                Kind::Test,
+                                &[],
+                                None,
+                                &mut |_: &str| {},
+                            )
+                        })
+                    })
+                    .collect();
+                both.into_iter().map(|h| h.join().unwrap()).collect()
+            });
+            let ran = results
+                .iter()
+                .filter(|r| r.as_ref().is_ok_and(|done| done.output == "x\n"))
+                .count();
+            let refused = results
+                .iter()
+                .filter(|r| r.as_ref().err().map(String::as_str) == Some(BUSY))
+                .count();
+            assert_eq!((ran, refused), (1, 1), "round {round}: {results:?}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stop_ends_a_run_and_everything_it_started() {
+        let work = temp_dir("stop-work");
+        // Nothing is running yet.
+        assert!(!stop());
+        let up = std::sync::atomic::AtomicBool::new(false);
+        let started = std::time::Instant::now();
+        let (stopped, result) = std::thread::scope(|s| {
+            // The background sleep holds the output open after the shell is
+            // gone, so the run ends early only if that sleep is killed too.
+            let run = s.spawn(|| {
+                exec(
+                    &work,
+                    "sleep 8 & echo up; sleep 8",
+                    Kind::Test,
+                    &[],
+                    None,
+                    &mut |chunk: &str| {
+                        if chunk.contains("up") {
+                            up.store(true, std::sync::atomic::Ordering::SeqCst);
+                        }
+                    },
+                )
+            });
+            while !up.load(std::sync::atomic::Ordering::SeqCst) && !run.is_finished() {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            (stop(), run.join().unwrap())
+        });
+        assert!(stopped);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(4),
+            "the run went on for {:?}",
+            started.elapsed()
+        );
+        let done = result.unwrap();
+        assert_eq!((done.exit, done.output.as_str()), (-1, "up\n"));
+        assert_eq!(*CURRENT.lock().unwrap(), None);
+        // A new run starts at once, and there is nothing left to stop.
+        let next = exec(&work, "echo next", Kind::Test, &[], None, &mut |_: &str| {}).unwrap();
+        assert_eq!(next.output, "next\n");
+        assert!(!stop());
     }
 
     #[test]

@@ -258,6 +258,75 @@ pub const SHELL_SLASH: &[ShellCmd] = &[
         "/health",
     ),
     ShellCmd {
+        desktop_only: true,
+        ..row("/send", "Run a task on its own, read only…", "/send ")
+    },
+    ShellCmd {
+        desktop_only: true,
+        ..row("/bg", "Run a task in the background, or list them…", "/bg ")
+    },
+    row("/queue", "Send after the live reply ends…", "/queue "),
+    row("/loop", "Schedule a repeating job…", "/loop "),
+    row("/board", "Open Workboards", "/board"),
+    ShellCmd {
+        desktop_only: true,
+        ..row("/goal", "Pin a goal, or show or clear it…", "/goal ")
+    },
+    ShellCmd {
+        desktop_only: true,
+        ..row("/fix", "Health check, then Settings", "/fix")
+    },
+    ShellCmd {
+        desktop_only: true,
+        ..row("/diagnose", "Check this computer (read only)", "/diagnose")
+    },
+    row("/consult", "One-shot consult…", "/consult "),
+    row("/inspect", "Open Connectors: tools and servers", "/inspect"),
+    row("/hooks", "Open Connectors", "/hooks"),
+    row("/workflow", "Workflows", "/workflow"),
+    row("/worktree", "Worktrees", "/worktree"),
+    row("/view-plan", "Show the plan from Plan mode", "/view-plan"),
+    row(
+        "/always-approve",
+        "Where approvals are set",
+        "/always-approve",
+    ),
+    row("/auto", "Where approvals are set", "/auto"),
+    row("/hub", "Open Devices", "/hub"),
+    ShellCmd {
+        desktop_only: true,
+        ..row("/host", "This computer's engine status", "/host")
+    },
+    ShellCmd {
+        desktop_only: true,
+        ..row("/update", "Open Updates", "/update")
+    },
+    row("/palette", "Command palette", "/palette"),
+    ShellCmd {
+        ready: false,
+        ..row("/sh", "Run a shell line…", "/sh ")
+    },
+    ShellCmd {
+        ready: false,
+        ..row("/scratch", "New scratch chat (no memory)", "/scratch")
+    },
+    ShellCmd {
+        ready: false,
+        ..row("/sync", "Sync with paired computers", "/sync")
+    },
+    ShellCmd {
+        ready: false,
+        ..row(
+            "/inhabit",
+            "Hand this chat to another computer…",
+            "/inhabit ",
+        )
+    },
+    ShellCmd {
+        ready: false,
+        ..row("/room", "Speak the room…", "/room ")
+    },
+    ShellCmd {
         ready: false,
         ..row("/history", "Past chats", "/history")
     },
@@ -310,6 +379,16 @@ pub enum Effect {
     Confirm { prompt: String, yes: String },
     /// `/delete yes` removed this chat.
     Deleted { id: String, title: String },
+    /// `/queue <message>`: held until the live reply ends, or sent at once.
+    Queue { text: String },
+    /// `/palette`: open the command palette.
+    Palette,
+    /// `/view-plan`: show the latest plan from Plan mode.
+    ViewPlan,
+    /// `/loop <words>`: save the words as an automation, then show the page.
+    Loop { seed: String },
+    /// A page opens, and `text` says why.
+    OpenNote { view: &'static str, text: String },
 }
 
 /// What `run` needs done outside this module.
@@ -326,18 +405,27 @@ pub enum Action {
 pub enum Op {
     Rename(String),
     Pin,
-    Delete { yes: bool },
+    Delete {
+        yes: bool,
+    },
     Sessions,
     Context,
     Usage,
     RewindNone,
     RewindList,
     RewindStep(u64),
-    RewindFiles { yes: bool },
+    RewindFiles {
+        yes: bool,
+    },
     Project(crate::projects::Op),
     Recall(String),
-    Forget { topic: Option<String>, yes: bool },
-    MemoryPrune { yes: bool },
+    Forget {
+        topic: Option<String>,
+        yes: bool,
+    },
+    MemoryPrune {
+        yes: bool,
+    },
     MemoryDream,
     Dream,
     Learned(String),
@@ -350,6 +438,16 @@ pub enum Op {
     Privacy,
     Brief,
     Health,
+    Diagnose,
+    Fix,
+    Goal(String),
+    HostStatus,
+    /// `/send <task>`: an unattended read-only run.
+    Send(String),
+    /// `/bg [task|stop]`.
+    Bg(String),
+    /// `/consult <question>`.
+    Consult(String),
 }
 
 /// The command word, when `line` is a slash command at all. `/usr/bin` and
@@ -444,6 +542,13 @@ pub fn parse(line: &str, remote: bool) -> Result<Action, String> {
     let word = match word.as_str() {
         "/title" => "/rename".to_string(),
         "/close" => "/delete".to_string(),
+        "/background" => "/bg".to_string(),
+        "/resume" | "/dashboard" | "/agents-dashboard" => "/sessions".to_string(),
+        "/status" | "/info" | "/session-info" | "/doctor" => "/inspect".to_string(),
+        "/plugins" | "/marketplace" | "/mcps" => "/connectors".to_string(),
+        "/show-plan" | "/plan-view" => "/view-plan".to_string(),
+        "/yolo" => "/always-approve".to_string(),
+        "/workflows" => "/workflow".to_string(),
         other => other.to_string(),
     };
     if word == "/connections" {
@@ -589,6 +694,57 @@ fn more(line: &str, word: &str, rest: &str, remote: bool) -> Option<Result<Actio
         "/privacy" => mine(Op::Privacy),
         "/brief" => mine(Op::Brief),
         "/health" => mine(Op::Health),
+        _ => extras(word, rest),
+    }
+}
+
+/// What the cabin's retired CLI features answer.
+pub const WORKFLOWS_GONE: &str = "Workflows were a grok CLI feature and are not in this app";
+pub const WORKTREE_GONE: &str =
+    "Worktrees were a grok CLI feature; chats run in the bound project folder";
+pub const PERMISSION_IN_SETTINGS: &str =
+    "Permissions are set in Settings → Defaults, under When the AI wants to change things";
+
+/// The background-work, view and routing commands. `None` when `word`
+/// isn't one of them.
+fn extras(word: &str, rest: &str) -> Option<Result<Action, String>> {
+    let mine = |op: Op| Some(Ok(Action::Op(op)));
+    let fx = |e: Effect| Some(Ok(Action::Effect(e)));
+    let open = |view: &'static str| fx(Effect::Open { view });
+    match word {
+        "/send" if rest.is_empty() => Some(Err("Type the task after /send.".into())),
+        "/send" => mine(Op::Send(rest.to_string())),
+        "/bg" => mine(Op::Bg(rest.to_string())),
+        "/queue" if rest.is_empty() => Some(Err("Type the message after /queue.".into())),
+        "/queue" => fx(Effect::Queue {
+            text: rest.to_string(),
+        }),
+        "/loop" if rest.is_empty() => open("automations"),
+        "/loop" => fx(Effect::Loop {
+            seed: rest.to_string(),
+        }),
+        "/board" => open("workboard"),
+        "/goal" => mine(Op::Goal(rest.to_string())),
+        "/fix" => mine(Op::Fix),
+        "/diagnose" => mine(Op::Diagnose),
+        "/consult" if rest.is_empty() => Some(Err("Type the question after /consult.".into())),
+        "/consult" => mine(Op::Consult(rest.to_string())),
+        "/inspect" | "/hooks" => open("connectors"),
+        "/workflow" => fx(Effect::Notice {
+            text: WORKFLOWS_GONE.into(),
+        }),
+        "/worktree" => fx(Effect::Notice {
+            text: WORKTREE_GONE.into(),
+        }),
+        "/view-plan" => fx(Effect::ViewPlan),
+        "/always-approve" | "/auto" => fx(Effect::OpenNote {
+            view: "settings",
+            text: PERMISSION_IN_SETTINGS.into(),
+        }),
+        "/hub" => open("devices"),
+        "/host" => mine(Op::HostStatus),
+        "/update" => open("updates"),
+        "/palette" => fx(Effect::Palette),
         _ => None,
     }
 }
@@ -664,12 +820,12 @@ mod tests {
 
     #[test]
     fn a_cabin_only_command_is_listed_greyed_and_not_run() {
-        let hits = hits("/diag", false);
-        assert_eq!(cmds(&hits), vec!["/diagnose"]);
+        let hits = hits("/jour", false);
+        assert_eq!(cmds(&hits), vec!["/journal"]);
         assert_eq!(hits[0].disabled.as_deref(), Some(IN_THE_CABIN));
         assert_eq!(
-            parse("/diagnose", false),
-            Err("/diagnose runs in the cabin, not here.".into())
+            parse("/journal", false),
+            Err("/journal runs in the cabin, not here.".into())
         );
     }
 
@@ -1154,5 +1310,167 @@ mod tests {
         let help = help();
         assert!(help.contains("/recall — Search chats and memory"));
         assert!(!help.contains("/skills undo"));
+    }
+
+    #[test]
+    fn background_work_commands_read_their_words() {
+        assert_eq!(
+            parse("/send", false),
+            Err("Type the task after /send.".into())
+        );
+        assert_eq!(
+            parse("/send audit the logs", false),
+            Ok(Action::Op(Op::Send("audit the logs".into())))
+        );
+        assert_eq!(
+            parse("/background", false),
+            Ok(Action::Op(Op::Bg(String::new())))
+        );
+        assert_eq!(
+            parse("/bg stop", false),
+            Ok(Action::Op(Op::Bg("stop".into())))
+        );
+        assert_eq!(
+            parse("/bg", true),
+            Err("/bg works on your computer.".into())
+        );
+        assert_eq!(
+            parse("/queue", false),
+            Err("Type the message after /queue.".into())
+        );
+        assert_eq!(
+            parse("/queue then run the tests", true),
+            Ok(Action::Effect(Effect::Queue {
+                text: "then run the tests".into()
+            }))
+        );
+        assert_eq!(
+            parse("/loop every day at 9 summarize my inbox", false),
+            Ok(Action::Effect(Effect::Loop {
+                seed: "every day at 9 summarize my inbox".into()
+            }))
+        );
+        assert_eq!(
+            parse("/loop", false),
+            Ok(Action::Effect(Effect::Open {
+                view: "automations"
+            }))
+        );
+        assert_eq!(
+            parse("/consult", false),
+            Err("Type the question after /consult.".into())
+        );
+        assert_eq!(
+            parse("/consult tabs or spaces", false),
+            Ok(Action::Op(Op::Consult("tabs or spaces".into())))
+        );
+    }
+
+    #[test]
+    fn view_and_routing_commands_open_what_the_cabin_opens() {
+        let open = |view| Ok(Action::Effect(Effect::Open { view }));
+        assert_eq!(parse("/board", false), open("workboard"));
+        assert_eq!(parse("/inspect", false), open("connectors"));
+        assert_eq!(parse("/doctor", false), open("connectors"));
+        assert_eq!(parse("/hooks", false), open("connectors"));
+        assert_eq!(parse("/mcps", false), open("connectors"));
+        assert_eq!(parse("/hub", false), open("devices"));
+        assert_eq!(parse("/update", false), open("updates"));
+        assert_eq!(parse("/resume", false), Ok(Action::Op(Op::Sessions)));
+        assert_eq!(parse("/palette", true), Ok(Action::Effect(Effect::Palette)));
+        assert_eq!(
+            parse("/show-plan", false),
+            Ok(Action::Effect(Effect::ViewPlan))
+        );
+        for line in ["/auto", "/always-approve", "/yolo"] {
+            assert_eq!(
+                parse(line, false),
+                Ok(Action::Effect(Effect::OpenNote {
+                    view: "settings",
+                    text: PERMISSION_IN_SETTINGS.into()
+                })),
+                "{line}"
+            );
+        }
+        assert_eq!(parse("/diagnose", false), Ok(Action::Op(Op::Diagnose)));
+        assert_eq!(
+            parse("/diagnose", true),
+            Err("/diagnose works on your computer.".into())
+        );
+        assert_eq!(parse("/fix", false), Ok(Action::Op(Op::Fix)));
+        assert_eq!(parse("/host", false), Ok(Action::Op(Op::HostStatus)));
+        assert_eq!(
+            parse("/goal ship the harbor", false),
+            Ok(Action::Op(Op::Goal("ship the harbor".into())))
+        );
+    }
+
+    #[test]
+    fn retired_cli_features_answer_in_the_cabins_words() {
+        for line in ["/workflow", "/workflows", "/workflow pause nightly"] {
+            assert_eq!(
+                parse(line, false),
+                Ok(Action::Effect(Effect::Notice {
+                    text: "Workflows were a grok CLI feature and are not in this app".into()
+                })),
+                "{line}"
+            );
+        }
+        assert_eq!(
+            parse("/worktree", false),
+            Ok(Action::Effect(Effect::Notice {
+                text: "Worktrees were a grok CLI feature; chats run in the bound project folder"
+                    .into()
+            }))
+        );
+    }
+
+    #[test]
+    fn what_waits_on_another_card_is_greyed_not_in_the_cabin() {
+        for cmd in ["/sh", "/scratch", "/sync", "/inhabit", "/room"] {
+            let hit = hits(cmd, false)
+                .into_iter()
+                .find(|h| h.cmd == cmd)
+                .expect(cmd);
+            assert_eq!(hit.disabled.as_deref(), Some(NOT_YET), "{cmd}");
+            assert_eq!(
+                parse(cmd, false),
+                Err(format!("{cmd} isn't in this app yet.")),
+                "{cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_scope_commands_are_runnable_rows() {
+        for cmd in [
+            "/send",
+            "/bg",
+            "/queue",
+            "/loop",
+            "/board",
+            "/goal",
+            "/fix",
+            "/diagnose",
+            "/consult",
+            "/inspect",
+            "/hooks",
+            "/workflow",
+            "/worktree",
+            "/view-plan",
+            "/always-approve",
+            "/auto",
+            "/hub",
+            "/host",
+            "/update",
+            "/palette",
+        ] {
+            let hit = hits(cmd, false)
+                .into_iter()
+                .find(|h| h.cmd == cmd)
+                .expect(cmd);
+            assert_eq!(hit.disabled, None, "{cmd}");
+        }
+        assert!(help().contains("/palette — Command palette"));
     }
 }

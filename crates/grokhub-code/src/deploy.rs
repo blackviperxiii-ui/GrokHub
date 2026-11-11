@@ -213,7 +213,14 @@ pub fn run_with(
         code_runs::remember(config_dir, Kind::Deploy, repo_key, &s.command)?;
     }
     let held = secrets.held();
-    let result = code_runs::exec(workspace, &s.command, Some(&secrets), &mut on_chunk);
+    let result = code_runs::exec(
+        workspace,
+        &s.command,
+        Kind::Deploy,
+        &held,
+        Some(&secrets),
+        &mut on_chunk,
+    );
     let (exit, summary) = match &result {
         Ok(done) if done.exit == 0 => (Some(0), "Deploy finished.".to_string()),
         Ok(done) => (

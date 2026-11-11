@@ -404,6 +404,97 @@ the same hard gate as the cabin (`src-tauri/src/agent.rs`).
   and Chat reopening the last chat. Not yet: the smoke test does not walk
   History.
 
+**3i, the Code tab.** A Code page for the project folder. Its logic is the
+`grokhub-code` crate (`crates/grokhub-code`), which the egui cabin's Code tab
+uses too; the shell wraps it in the `code_*` commands
+(`src-tauri/src/lib.rs`) and the pages in `ui/src/Code*.tsx`.
+
+- Desktops only. The capability report's `code` flag is off on phones, the
+  web app doesn't show the page, and no Code tab command is in
+  `WEB_COMMANDS`.
+- Read only: the branch, up to 500 changed files, one file's diff (the first
+  256 KB), and the built-in skills with what overrides them. Review puts a
+  prompt in Chat that asks the agent to look over the uncommitted changes.
+- What asks first:
+  - Tests. The first run of a command shows the exact command and asks.
+    After a yes, the same command text runs without asking in that project
+    until it changes or Settings → Code forgets it.
+  - Deploy. Off until it is turned on for the project in Settings → Code.
+    Ask mode shows the command and asks every time. Auto-beta runs a deploy
+    confirmed once without asking until its command changes; Forget makes
+    the next one ask.
+  - Push and Open PR. Ask mode (the default) shows the command and asks
+    every time. Auto-beta skips the ask only for a branch made in the Code
+    tab, on GitHub, when the repo's default branch could be read and the
+    branch has no PR yet or one into the PR base (`beta` unless changed). A
+    yes counts only for the command on the card: if the branch changed
+    since, nothing runs.
+  - Deleting a secret.
+  - New branch, an editor save and opening the terminal don't ask.
+- What is always refused, in either mode:
+  - A push of `main`, of the repo's default branch (read from the local
+    `origin/HEAD`), or of a branch protected in Settings → Code.
+  - A force-push, and deleting a branch. The app builds every git and gh
+    argument itself and never passes a force, mirror, delete or prune flag.
+  - A push from a detached HEAD, with no `origin` remote, or of a branch
+    name git wouldn't take as a plain name (one that starts with `-`, for
+    one). A host other than GitHub is refused until it is turned on in
+    Settings, and then always asks. A PR opens on GitHub only, and not when
+    the branch already has one open.
+  - In the editor: a path outside the project (`..`, a link that leads out,
+    a link whose target is missing), anything in `.git`, a file over 512 KB
+    or not UTF-8 text, a save into something that isn't a plain file, and a
+    save after the project folder changed ("The project folder changed
+    since this file was opened. Nothing was saved.").
+  - A secret name that changes how programs run (`PATH`, `HOME`, `SHELL`,
+    `TERM`, `GIT_TERMINAL_PROMPT`, anything starting `LD_` or `DYLD_`).
+  - A second test run or deploy while one is running.
+- Git hooks do not run. The app's own push and new-branch calls run git with
+  hooks and fsmonitor off (`grokhub_core::git_cmd`), so a repo's `pre-push`
+  hook is passed over. The command on the confirm card is the git command
+  without those switches. A rejected push is reported, never retried.
+- Stop, beside a running test or deploy, ends the run and everything it
+  started (`code_run_stop`). Quitting the app ends it too. The cabin has no
+  Stop button; quitting the cabin ends the run.
+- Secrets. Only the names are saved (`code-secrets.json` in the config
+  folder); the values live in the OS keychain and never come back to the
+  window. A deploy gets them as environment variables and stops before it
+  runs when a listed secret has no value. Test runs and the terminal don't
+  get them. Test and deploy output and the Activity list show a value as
+  `[redacted]`, along with key-shaped tokens.
+- Editor. Opens and saves one text file at a time inside the project. A file
+  whose line endings are all CRLF keeps them on save, and a save with
+  nothing changed writes nothing. Not yet: a save doesn't check whether the
+  file changed on disk since it was opened.
+- Terminal. The user's own shell on a pseudo-terminal, started in the
+  project folder, one at a time; it keeps running while another tab is
+  shown and ends with Close terminal.
+  - Output passes through a filter before it reaches the window. It hides
+    the project's secret values as they were in the keychain when the
+    terminal opened (one saved later is hidden after the terminal is closed
+    and opened again) and key-shaped tokens (`sk-`, `xai-`, `ghp_`,
+    `github_pat_`, `gho_`, `ghu_`, `ghs_`, and the word after `Bearer`).
+  - The filter reads what the shell prints. A value that reaches the screen
+    a piece at a time, like one typed by hand, is not hidden.
+  - Commands typed there, `git push` included, are not checked by the push
+    guard, and the tab says so.
+  - Input never waits for the shell. When the program in it isn't reading,
+    a paste is refused with "The terminal is busy. Try again when the
+    program is reading input."; after the shell ended, with "The terminal
+    has ended." One paste is at most 65,536 bytes.
+- Activity. `code-activity.jsonl` in the config folder gets one line per
+  push, PR, new branch, blocked attempt, deploy, secret change (the name
+  only), editor save (path and size) and terminal opening or closing, never
+  what was typed or shown. The tab lists this project's newest 50. Test
+  runs are not in it.
+- Tests: Rust tests in `crates/grokhub-code` cover the push guard and its
+  commands, the remembered test and deploy commands, Stop, the secret store
+  and the redactors, the editor's path rules and the terminal.
+  `no_code_tab_command_is_a_web_command` (`src-tauri/src/remote.rs`) reads
+  the window's handler list and fails when a Code command is on the web
+  list. vitest covers the pages. Not yet: the smoke test does not walk the
+  Code tab.
+
 Phase 3 met its accept line: risky desktop steps wait for an OK in the Rust
 gate tests on all three desktop OSes, and the smoke test confirms it on
 Linux and Windows. tauri-driver has no macOS backend, so the smoke test

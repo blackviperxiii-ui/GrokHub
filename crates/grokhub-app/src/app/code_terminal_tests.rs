@@ -230,7 +230,7 @@ fn shown(panel: &TermPanel) -> String {
         .unwrap_or_default()
 }
 
-/// The one test that uses the window's real terminal (there is only one).
+/// Uses the window's real terminal (there is only one).
 #[cfg(unix)]
 #[test]
 fn a_shell_opens_in_the_project_hides_a_token_resizes_and_ends_on_close() {
@@ -310,6 +310,127 @@ fn a_shell_opens_in_the_project_hides_a_token_resizes_and_ends_on_close() {
         .iter()
         .any(|s| s.contains("ghp_") || s.contains("echo")));
     let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Uses the window's real terminal, like the test above; each test has its
+/// own process, or they run one at a time.
+#[cfg(unix)]
+#[test]
+fn a_busy_note_goes_away_once_the_shell_takes_input_again() {
+    let base = std::env::temp_dir().join(format!("gh-cabin-term-busy-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let root = base.join("proj");
+    let config = base.join("config");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&config).unwrap();
+    let root = root.canonicalize().unwrap();
+
+    let mut panel = TermPanel::default();
+    panel.open(&root, &config, GridSize { rows: 10, cols: 80 }, || {});
+    assert!(wait_for(&mut panel, |p| p
+        .live
+        .as_ref()
+        .is_some_and(|l| l.id.is_some())));
+
+    // Two seconds in which nothing reads what is typed.
+    panel.send(b"sleep 2\r");
+    std::thread::sleep(Duration::from_millis(300));
+    // The most one paste may hold (1,024 lines that do nothing), then keys
+    // until one is refused.
+    let paste = format!(":{}\r", " ".repeat(62)).repeat(1024);
+    assert_eq!(paste.len(), 65_536);
+    panel.send(paste.as_bytes());
+    assert_eq!(panel.status, None);
+    for _ in 0..200 {
+        panel.send(b":\r");
+        if panel.status.is_some() {
+            break;
+        }
+    }
+    assert_eq!(
+        panel.status.as_deref(),
+        Some("The terminal is busy. Try again when the program is reading input.")
+    );
+
+    // The shell reads again once the sleep is over: the next key it takes
+    // clears the note.
+    let end = Instant::now() + Duration::from_secs(30);
+    let mut taken = false;
+    while !taken && Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(100));
+        panel.pump();
+        let id = panel.live.as_ref().and_then(|l| l.id).unwrap();
+        taken = backend::write(backend::global(), id, ":\r").is_ok();
+    }
+    assert!(taken, "the shell never took input again");
+    let end = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < end {
+        panel.send(b":\r");
+        if panel.status.is_none() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(panel.status, None);
+
+    let id = panel.live.as_ref().and_then(|l| l.id).unwrap();
+    panel.close(&config);
+    // Closing runs off the UI thread; the next test's terminal must not be
+    // the one it closes.
+    let end = Instant::now() + Duration::from_secs(10);
+    let mut after = backend::write(backend::global(), id, ":\r");
+    while after.as_ref().err().map(String::as_str) != Some("The terminal has ended.")
+        && Instant::now() < end
+    {
+        std::thread::sleep(Duration::from_millis(20));
+        after = backend::write(backend::global(), id, ":\r");
+    }
+    assert_eq!(after.unwrap_err(), "The terminal has ended.");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn the_answers_to_one_chunk_go_to_the_shell_as_one_write() {
+    let mut live = Live {
+        id: Some(7),
+        screen: screen(5, 20),
+        early: Vec::new(),
+        exited: false,
+    };
+    live.screen.feed("\x1b[3;7H");
+    let mut writes: Vec<(u32, String)> = Vec::new();
+    // A chunk with 100 cursor-position queries in it.
+    let chunk = Chunk {
+        id: 7,
+        text: "\x1b[6n".repeat(100),
+        exited: false,
+    };
+    apply(&mut live, chunk, &mut |id, reply| {
+        writes.push((id, reply.to_string()))
+    });
+    assert_eq!(writes, vec![(7, "\x1b[3;7R".repeat(100))]);
+
+    // A chunk with no query in it writes nothing, and another session's
+    // chunk is not answered.
+    writes.clear();
+    let plain = Chunk {
+        id: 7,
+        text: "hello".into(),
+        exited: false,
+    };
+    apply(&mut live, plain, &mut |id, reply| {
+        writes.push((id, reply.to_string()))
+    });
+    let other = Chunk {
+        id: 8,
+        text: "\x1b[6n".into(),
+        exited: true,
+    };
+    apply(&mut live, other, &mut |id, reply| {
+        writes.push((id, reply.to_string()))
+    });
+    assert_eq!(writes, Vec::new());
+    assert!(!live.exited);
 }
 
 #[test]

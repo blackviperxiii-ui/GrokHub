@@ -447,3 +447,78 @@ fn the_shield_lets_a_very_long_line_out_without_splitting_a_value() {
     assert!(!out.contains(VALUE));
     assert_eq!(out, format!("{long}[redacted] end"));
 }
+
+#[cfg(unix)]
+#[test]
+fn a_value_split_around_a_line_of_the_other_stream_stays_hidden() {
+    let config = dir("streams");
+    let work = dir("streams-work");
+    let vault = MockVault::default();
+    code_secrets::set(&config, &vault, KEY, "DEPLOY_TOKEN", VALUE).unwrap();
+    // Half the value on stdout, a whole line on stderr, then the other half.
+    let command = "printf 'token=abcd12'; sleep 0.3; echo warn >&2; sleep 0.3; echo 34XYZ ok";
+    on(&config, command);
+    let mut chunks = String::new();
+    let done = run_with(
+        &config,
+        KEY,
+        &work,
+        &ship(ShipMode::Ask),
+        command,
+        true,
+        &vault,
+        &place(),
+        |c| chunks.push_str(c),
+    )
+    .unwrap();
+    assert_eq!(done.output, "warn\ntoken=[redacted] ok\n");
+    assert_eq!(chunks, "warn\ntoken=[redacted] ok\n");
+}
+
+#[test]
+fn a_deploy_that_cannot_start_is_called_a_deploy() {
+    let config = dir("no-start");
+    let work = dir("no-start-work");
+    // No program can be started with a NUL in its arguments.
+    on(&config, "echo a\0b");
+    let err = go(
+        &config,
+        &work,
+        ShipMode::Ask,
+        "echo a\0b",
+        true,
+        &MockVault::default(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.split(": ").next(),
+        Some("couldn't start the deploy command")
+    );
+    let rows = code_activity::list(&config, 10);
+    assert_eq!(
+        rows[0].summary.split(": ").take(2).collect::<Vec<_>>(),
+        ["Deploy didn't run", "couldn't start the deploy command"]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_test_run_hides_the_projects_secret_values_and_does_not_set_them() {
+    let config = dir("test-held");
+    let work = dir("test-held-work");
+    let vault = MockVault::default();
+    let key = code_runs::repo_key(&work, None);
+    code_secrets::set(&config, &vault, &key, "DEPLOY_TOKEN", VALUE).unwrap();
+    std::fs::write(
+        work.join("t.sh"),
+        format!("echo value={VALUE}\necho \"env=[$DEPLOY_TOKEN]\"\n"),
+    )
+    .unwrap();
+    let mut chunks = String::new();
+    let done = code_runs::run_with(&config, &work, "sh t.sh", true, Mode::Auto, &vault, |c| {
+        chunks.push_str(c)
+    })
+    .unwrap();
+    assert_eq!(done.output, "value=[redacted]\nenv=[]\n");
+    assert_eq!(chunks, "value=[redacted]\nenv=[]\n");
+}

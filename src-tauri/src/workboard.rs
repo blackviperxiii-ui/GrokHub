@@ -151,6 +151,9 @@ pub struct Card {
     pub user_steps: bool,
     /// The steps as the editor shows them, one a line with its mark.
     pub steps_text: String,
+    /// The card as one mission (Doing or Blocked): checklist, status and
+    /// header, projected from its steps, checkpoint and newest outcome.
+    pub mission: Option<grokhub_core::MissionView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -334,7 +337,7 @@ fn progress(card: &BoardCard) -> [u32; 2] {
     [filled, total]
 }
 
-fn card(c: &BoardCard, all: &[BoardCard]) -> Card {
+fn card(config_dir: &Path, c: &BoardCard, all: &[BoardCard]) -> Card {
     Card {
         id: c.id.clone(),
         title: c.title.clone(),
@@ -377,6 +380,7 @@ fn card(c: &BoardCard, all: &[BoardCard]) -> Card {
         flow: c.flow.as_ref().map(|f| f.line()),
         user_steps: c.user_steps,
         steps_text: wt::steps_text(c),
+        mission: crate::mission::project(config_dir, c),
     }
 }
 
@@ -543,7 +547,10 @@ fn page(config_dir: &Path, cards: &[BoardCard], stamp: u64) -> Page {
             Column {
                 lane,
                 label: col.label().to_string(),
-                cards: here.into_iter().map(|i| card(&cards[i], cards)).collect(),
+                cards: here
+                    .into_iter()
+                    .map(|i| card(config_dir, &cards[i], cards))
+                    .collect(),
             }
         })
         .collect();
@@ -554,7 +561,10 @@ fn page(config_dir: &Path, cards: &[BoardCard], stamp: u64) -> Page {
     archived.sort_by_key(|c| std::cmp::Reverse(c.archived_ms));
     Page {
         columns,
-        archived: archived.into_iter().map(|c| card(c, cards)).collect(),
+        archived: archived
+            .into_iter()
+            .map(|c| card(config_dir, c, cards))
+            .collect(),
         stamp,
         swept: swept_for(config_dir, cards),
         queue_note: (cards.iter().any(wt::is_queued)

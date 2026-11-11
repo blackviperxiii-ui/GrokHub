@@ -1,0 +1,3 @@
+- The desktop app now notices what you might need while the GrokHub cabin is closed: it offers blocked cards, unread reports and failing automations as a few well-timed Pulse suggestions, shares the card budget and mutes with the cabin so nothing doubles, and still asks before any action.
+- The desktop app runs the local nudge watchers you turned on in the cabin (game patches, GPU driver, low disk, crash spikes, OS updates, controllers and printers), once each across both apps.
+- Workboard cards that are running or blocked now carry a mission view: a checklist from their steps, a status and what to do next.

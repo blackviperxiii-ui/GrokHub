@@ -1,4 +1,5 @@
 import "@testing-library/jest-dom/vitest";
+import { Activity } from "react";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,7 +11,7 @@ const transport = vi.hoisted(() => ({
 vi.mock("./transport", () => transport);
 
 import { externalUrlOk, openExternal } from "./external";
-import { ConfirmRow, ExternalLink, needsSettings, StatusLine } from "./ui";
+import { ConfirmRow, ExternalLink, needsSettings, StatusLine, useCardFocus } from "./ui";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -114,5 +115,50 @@ describe("status line and confirm", () => {
     expect(onConfirm).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole("button", { name: "Delete" }));
     expect(onConfirm).toHaveBeenCalledOnce();
+  });
+});
+
+describe("a confirm card's focus", () => {
+  function Card({ card }: { card: string | null }) {
+    const keep = useCardFocus<HTMLButtonElement>(card);
+    return card ? (
+      <button ref={keep} type="button">
+        Keep
+      </button>
+    ) : null;
+  }
+  function Page({ shown, card }: { shown: boolean; card: string | null }) {
+    return (
+      <>
+        <button type="button">Elsewhere</button>
+        <Activity mode={shown ? "visible" : "hidden"}>
+          <Card card={card} />
+        </Activity>
+      </>
+    );
+  }
+
+  it("goes to the safe button when the card appears, and is not taken again when its page shows again", () => {
+    const { rerender } = render(<Page shown card={null} />);
+    expect(document.activeElement).toBe(document.body);
+    rerender(<Page shown card="first" />);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Keep" }));
+
+    // The person moves on with the card still open, and visits another page.
+    const elsewhere = screen.getByRole("button", { name: "Elsewhere" });
+    elsewhere.focus();
+    rerender(<Page shown={false} card="first" />);
+    rerender(<Page shown card="first" />);
+    expect(document.activeElement).toBe(elsewhere);
+
+    // Another card is a new question.
+    rerender(<Page shown card="second" />);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Keep" }));
+
+    // And so is the same card, closed and opened again.
+    elsewhere.focus();
+    rerender(<Page shown card={null} />);
+    rerender(<Page shown card="second" />);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Keep" }));
   });
 });

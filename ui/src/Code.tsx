@@ -3,6 +3,7 @@ import {
   codeBuiltins,
   codeDiff,
   codeRepo,
+  codeRunStop,
   codeTestPlan,
   codeTestRun,
   onCodeRun,
@@ -15,6 +16,7 @@ import { newConversationId } from "./Chat";
 import { CodeDeploy } from "./CodeDeploy";
 import { CodeShip } from "./CodeShip";
 import { inShell } from "./transport";
+import { useCardFocus } from "./ui";
 
 // CodeMirror and xterm load only when the tab first shows them.
 const CodeEditor = lazy(() => import("./CodeEditor"));
@@ -29,6 +31,7 @@ export const CODE_BUILTINS = "Built-in skills";
 export const CODE_TESTS = "Tests";
 export const CODE_CONFIRM = "Run this test command?";
 export const CODE_NO_COMMAND = "Type a test command to run.";
+export const CODE_STOPPED = "Tests stopped.";
 
 /** The label on a built-in row that a same-name skill currently shadows. */
 export function overrideLabel(over: CodeOverriddenBy): string {
@@ -55,6 +58,12 @@ export function Code({ onTask }: { onTask: (task: CodeTask) => void }) {
   const [log, setLog] = useState("");
   const [runNote, setRunNote] = useState<string | null>(null);
   const [activityKey, setActivityKey] = useState(0);
+  const [stopping, setStopping] = useState(false);
+  // Counts Refresh presses, for the editor's file list.
+  const [refreshes, setRefreshes] = useState(0);
+  // True from a press on Stop until the next run starts.
+  const stopAsked = useRef(false);
+  const cancel = useCardFocus<HTMLButtonElement>(confirming);
 
   // The file whose diff is on screen, the newest change to that pane, and the
   // newest file picked: an answer to an older one is dropped.
@@ -76,6 +85,7 @@ export function Code({ onTask }: { onTask: (task: CodeTask) => void }) {
   const load = useCallback(async () => {
     setBusy(true);
     setNote(null);
+    setRefreshes((n) => n + 1);
     try {
       const [next, skills] = await Promise.all([codeRepo(), codeBuiltins()]);
       setRepo(next);
@@ -185,18 +195,37 @@ export function Code({ onTask }: { onTask: (task: CodeTask) => void }) {
     setRunning(true);
     setLog("");
     setRunNote(null);
+    stopAsked.current = false;
     try {
       const result = await codeTestRun(cmd, confirmed);
       setLog(
         result.output + (result.cut ? "\n… cut here; the output is too long to show in full." : ""),
       );
-      setRunNote(result.exit === 0 ? "Tests passed." : `Tests exited with ${result.exit}.`);
+      const stopped = stopAsked.current && result.exit !== 0;
+      setRunNote(result.exit === 0 ? "Tests passed." : stopped ? CODE_STOPPED : `Tests exited with ${result.exit}.`);
       const plan = await codeTestPlan(cmd);
       setNeedsConfirm(plan.needsConfirm);
     } catch (err) {
-      setRunNote(String(err));
+      setRunNote(stopAsked.current ? CODE_STOPPED : String(err));
     } finally {
       setRunning(false);
+    }
+  }
+
+  /** Stop the running tests and everything they started; the run then ends by itself. */
+  async function stopRun() {
+    setStopping(true);
+    // True already when an earlier Stop of this run worked: a later one that fails does not undo it.
+    const before = stopAsked.current;
+    stopAsked.current = true;
+    try {
+      // False: nothing was running any more, or the kill failed. The run's own result stands.
+      if (!(await codeRunStop())) stopAsked.current = before;
+    } catch (err) {
+      stopAsked.current = before;
+      setRunNote(String(err));
+    } finally {
+      setStopping(false);
     }
   }
 
@@ -240,12 +269,12 @@ export function Code({ onTask }: { onTask: (task: CodeTask) => void }) {
       )}
       {repo?.isRepo && repo.files.length > 0 && (
         <div className="code-split">
-          <ul className="rows" aria-label="Changed files">
+          <ul className="rows code-changed" aria-label="Changed files">
             {repo.files.map((f) => (
               <li key={f.path}>
                 <button
                   type="button"
-                  className={`code-file ${f.status}`}
+                  className={`code-file quiet ${f.status}`}
                   aria-pressed={diff?.path === f.path}
                   onClick={() => void open(f.path)}
                 >
@@ -257,7 +286,7 @@ export function Code({ onTask }: { onTask: (task: CodeTask) => void }) {
             {repo.more && <li className="note">More files changed than this list shows.</li>}
           </ul>
           {diff && (
-            <pre className="code-diff" aria-label={`Diff of ${diff.path}`}>
+            <pre className="code-diff" tabIndex={0} role="region" aria-label={`Diff of ${diff.path}`}>
               {diff.text || "No text changes (binary or mode change)."}
               {diff.cut && "\n… cut here; the file's diff is too long to show in full."}
             </pre>
@@ -267,7 +296,7 @@ export function Code({ onTask }: { onTask: (task: CodeTask) => void }) {
       {repo !== null &&
         (inShell() ? (
           <Suspense fallback={<p className="note">Loading the editor and terminal…</p>}>
-            <CodeEditor />
+            <CodeEditor refresh={refreshes} />
             <CodeTerminal />
           </Suspense>
         ) : (
@@ -294,6 +323,11 @@ export function Code({ onTask }: { onTask: (task: CodeTask) => void }) {
           <button type="button" onClick={() => void requestRun()} disabled={running || !command.trim()}>
             {running ? "Running…" : "Run tests"}
           </button>
+          {running && (
+            <button type="button" className="quiet" onClick={() => void stopRun()} disabled={stopping}>
+              {stopping ? "Stopping…" : "Stop"}
+            </button>
+          )}
         </div>
         {!command.trim() && <p className="note">{CODE_NO_COMMAND}</p>}
         {confirming && (
@@ -306,7 +340,7 @@ export function Code({ onTask }: { onTask: (task: CodeTask) => void }) {
               <button type="button" onClick={() => void confirmRun()} disabled={running}>
                 Run tests
               </button>
-              <button type="button" className="quiet" onClick={() => setConfirming(false)} disabled={running}>
+              <button ref={cancel} type="button" className="quiet" onClick={() => setConfirming(false)} disabled={running}>
                 Cancel
               </button>
             </div>
@@ -318,7 +352,7 @@ export function Code({ onTask }: { onTask: (task: CodeTask) => void }) {
           </p>
         )}
         {(log || running) && (
-          <pre className="code-log" aria-label="Test output">
+          <pre className="code-log" tabIndex={0} role="log" aria-label="Test output">
             {log || "Running…"}
           </pre>
         )}
@@ -326,7 +360,7 @@ export function Code({ onTask }: { onTask: (task: CodeTask) => void }) {
           <p className="note">The first run of this command will ask before it starts.</p>
         )}
       </div>
-      {repo?.isRepo && <CodeShip key={activityKey} onShipped={() => void load()} />}
+      {repo?.isRepo && <CodeShip refreshKey={activityKey} onShipped={() => void load()} />}
       {repo?.isRepo && <CodeDeploy onDeployed={() => setActivityKey((n) => n + 1)} />}
       {builtins && builtins.length > 0 && (
         <div className="code-skills">
@@ -351,7 +385,7 @@ export function Code({ onTask }: { onTask: (task: CodeTask) => void }) {
               ))}
             </ul>
             {openSkill && (
-              <pre className="code-diff" aria-label={`Built-in skill ${openSkill.name}`}>
+              <pre className="code-diff" tabIndex={0} role="region" aria-label={`Built-in skill ${openSkill.name}`}>
                 {openSkill.body}
               </pre>
             )}
