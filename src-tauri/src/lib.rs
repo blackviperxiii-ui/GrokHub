@@ -1162,6 +1162,85 @@ async fn delete_chat(state: State<'_, ShellState>, id: String) -> Result<(), Str
     Ok(())
 }
 
+/// Where History's Delete all is armed; the second click inside its window
+/// deletes (`history::delete_all`).
+static DELETE_ALL_ARM: Mutex<history::DeleteArm> = Mutex::new(history::DeleteArm::new());
+
+/// Delete all: the first click arms it, a second within 5 s (and not within
+/// half a second, a double-click's second half) deletes every chat of this
+/// app. Replies still running stop.
+#[tauri::command]
+async fn delete_all_chats(state: State<'_, ShellState>) -> Result<history::DeleteAll, String> {
+    let dir = state.config_dir.clone();
+    let ids: Vec<String> = history::list(&dir).into_iter().map(|r| r.id).collect();
+    let done = off_main(move || {
+        let mut arm = DELETE_ALL_ARM.lock().unwrap_or_else(|e| e.into_inner());
+        history::delete_all(&dir, &mut arm, std::time::Instant::now())
+    })
+    .await??;
+    if done.state == history::Arm::Deleted {
+        for id in &ids {
+            end_chat(&state, id);
+        }
+    }
+    Ok(done)
+}
+
+/// Cancel on the armed Delete all, or its window lapsing on the page.
+#[tauri::command]
+fn cancel_delete_all() {
+    DELETE_ALL_ARM
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .cancel();
+}
+
+/// The sidebar's projects and folders, for History's Projects tree.
+#[tauri::command]
+async fn list_project_nodes(
+    state: State<'_, ShellState>,
+) -> Result<Vec<grokhub_core::ProjectNode>, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || history::project_nodes(&dir)).await?
+}
+
+/// Pins the chat, or unpins it when it is pinned; true when pinned now.
+#[tauri::command]
+async fn pin_chat(state: State<'_, ShellState>, id: String) -> Result<bool, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || history::toggle_pin(&dir, &id)).await?
+}
+
+/// Grok CLI sessions and the cabin's chats, read only.
+#[tauri::command]
+async fn list_read_only_chats(
+    state: State<'_, ShellState>,
+    query: String,
+) -> Result<Vec<history::ReadOnlyRow>, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || history::read_only(&dir, None, &query)).await
+}
+
+/// One of those chats' newest lines, shown in place; never resumed.
+#[tauri::command]
+async fn view_read_only_chat(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<history::Transcript, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || history::view_read_only(&dir, None, &id, history::LOAD_CAP)).await?
+}
+
+/// Tool steps a History search matched, over this app's chats.
+#[tauri::command]
+async fn search_steps(
+    state: State<'_, ShellState>,
+    query: String,
+) -> Result<Vec<history::StepRow>, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || history::step_search(&dir, &query)).await
+}
+
 /// A bubble's Delete message…, after the page asked. The ask `text` goes
 /// alone; with `reply` its reply goes whole. A reply still running refuses.
 /// The idle worker ends, so the next message resumes from the trimmed file.
@@ -4441,6 +4520,13 @@ pub fn run() {
             load_chat,
             get_last_chat,
             rename_chat,
+            delete_all_chats,
+            cancel_delete_all,
+            list_project_nodes,
+            pin_chat,
+            list_read_only_chats,
+            view_read_only_chat,
+            search_steps,
             delete_chat,
             forget_message,
             stage_attachment,
