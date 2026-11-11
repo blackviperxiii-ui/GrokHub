@@ -5,3 +5,4 @@
 - `docs/cross-platform/README.md` says to run `node scripts/stage-hub-sidecar.mjs` before any cargo or tauri command in `src-tauri` on Windows and macOS, and what the error is without it.
 - CI: the cross-platform lint jobs pass again for macOS, iOS and Android (items only Linux, Windows or macOS use are no longer compiled elsewhere).
 - CI: the macOS sandbox tests of the agent compile again (a test helper existed only on Linux).
+- CI: the desktop shell lints clean on Windows again (a variable was mutable only on Unix).
