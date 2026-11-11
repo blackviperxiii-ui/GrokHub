@@ -159,6 +159,9 @@ pub(super) struct CodeTab {
     pub(super) running: bool,
     pub(super) log: String,
     pub(super) run_note: Option<String>,
+    /// The editor: the open file and its unsaved edits stay here while
+    /// another tab is up.
+    pub(super) editor: super::code_editor::CodeEditor,
     /// Push and PR, behind the shared push guard.
     pub(super) ship: super::code_ship_ui::ShipPanel,
     /// This project's deploy secrets, names only.
@@ -190,6 +193,7 @@ impl Default for CodeTab {
             running: false,
             log: String::new(),
             run_note: None,
+            editor: Default::default(),
             ship: Default::default(),
             secrets: Default::default(),
             deploy: Default::default(),
@@ -592,6 +596,8 @@ impl Cabin {
                     self.ui_code_tests(ui, &ctx);
                     ui.add_space(crate::theme::SPACING_24);
                     self.ui_code_ship(ui, &ctx);
+                    ui.add_space(crate::theme::SPACING_24);
+                    self.ui_code_editor(ui);
                     ui.add_space(crate::theme::SPACING_24);
                     self.ui_code_terminal(ui);
                     ui.add_space(crate::theme::SPACING_24);

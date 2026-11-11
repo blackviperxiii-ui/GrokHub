@@ -160,6 +160,7 @@ mod change_undo;
 mod chat_tabs;
 mod chat_ui;
 pub(crate) mod chips;
+mod code_editor;
 mod code_resume_ui;
 mod confirm;
 mod connectivity_ui;
