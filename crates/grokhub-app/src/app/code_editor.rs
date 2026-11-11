@@ -391,7 +391,7 @@ impl CodeEditor {
         if let Some(pending) = self.pending.clone() {
             self.ui_discard(ui, &path, &pending);
         }
-        ui.add_space(6.0);
+        ui.add_space(crate::theme::SPACING_8);
         let Some(open) = self.open.as_mut() else {
             return;
         };
@@ -463,7 +463,7 @@ impl CodeEditor {
                     ))
                     .color(crate::theme::fg()),
                 );
-                ui.add_space(6.0);
+                ui.add_space(crate::theme::SPACING_8);
                 ui.horizontal(|ui| {
                     if crate::cards::danger_pill(ui, &discard_label(pending)) {
                         act = Some(true);
