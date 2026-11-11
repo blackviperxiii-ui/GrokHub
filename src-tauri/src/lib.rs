@@ -49,9 +49,11 @@ mod local_governor;
 #[cfg(test)]
 mod md_fixtures;
 pub mod memory;
+mod mission;
 pub mod model_library;
 #[cfg(desktop)]
 mod net_watch;
+mod nudges;
 pub mod nyx;
 pub mod oauth;
 pub mod onboard;
@@ -63,6 +65,7 @@ pub mod personality;
 pub mod playbooks;
 pub mod plugins;
 pub mod privacy;
+pub mod proactive;
 pub mod pulse;
 pub mod pulse_feed;
 pub mod queue;
@@ -4003,6 +4006,9 @@ pub fn run() {
             // The Workboard's local tidy, while the cabin is closed. No model.
             #[cfg(desktop)]
             workboard::start_sweeper(app.state::<ShellState>().config_dir.clone());
+            // The proactive engine and nudge watchers, while the cabin is closed.
+            #[cfg(desktop)]
+            proactive::start(app.state::<ShellState>().config_dir.clone());
             build_main_window(app)?;
             #[cfg(desktop)]
             build_tray(app)?;
