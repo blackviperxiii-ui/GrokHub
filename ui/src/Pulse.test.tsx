@@ -252,7 +252,7 @@ describe("Pulse", () => {
     expect(within(card).queryByRole("menu")).not.toBeInTheDocument();
   });
 
-  it("Snooze and Delete sit before Not interested when the card suits them", async () => {
+  it("Snooze sits before Not interested; Delete is gone; Dismiss asks first", async () => {
     const both = { ...PAGE, feed: [post({ snooze: true, delete: true })] };
     api.getPulse.mockResolvedValue(both);
     api.pulseAct.mockResolvedValue(both);
@@ -263,15 +263,16 @@ describe("Pulse", () => {
     const labels = within(row)
       .getAllByRole("button")
       .map((b) => b.getAttribute("aria-label") ?? b.textContent);
-    expect(labels).toEqual(["Like", "Discuss", "Read it", "Snooze", "Delete", "Not interested", "Dismiss"]);
+    expect(labels).toEqual(["Like", "Discuss", "Read it", "Snooze", "Not interested", "Dismiss"]);
+    expect(labels).not.toContain("Delete");
     await userEvent.click(within(row).getByRole("button", { name: "Snooze" }));
     expect(api.pulseAct).toHaveBeenLastCalledWith("post-1", "snooze");
-    // Delete asks first.
-    await userEvent.click(within(row).getByRole("button", { name: "Delete" }));
-    expect(api.pulseAct).not.toHaveBeenLastCalledWith("post-1", "delete");
-    const confirm = within(card).getByRole("group", { name: "Delete this post?" });
-    await userEvent.click(within(confirm).getByRole("button", { name: "Delete" }));
-    expect(api.pulseAct).toHaveBeenLastCalledWith("post-1", "delete");
+    // Dismiss asks first (Delete folded in).
+    await userEvent.click(within(row).getByRole("button", { name: "Dismiss" }));
+    expect(api.pulseAct).not.toHaveBeenLastCalledWith("post-1", "dismiss");
+    const confirm = within(card).getByRole("group", { name: "Dismiss this post?" });
+    await userEvent.click(within(confirm).getByRole("button", { name: "Dismiss" }));
+    expect(api.pulseAct).toHaveBeenLastCalledWith("post-1", "dismiss");
   });
 
   it("every card has one row: Like first, its own buttons, Not interested, Dismiss last", async () => {
@@ -292,14 +293,15 @@ describe("Pulse", () => {
     expect(labels[labels.length - 1]).toBe("Dismiss");
     expect(labels).toContain("Discuss");
 
-    for (const [label, act, note] of [
-      ["Dismiss", "dismiss", "Dismissed."],
-      ["Not interested", "dislike", "Got it. A few less like that."],
-    ] as const) {
-      await userEvent.click(within(row).getByRole("button", { name: label }));
-      expect(api.pulseAct).toHaveBeenLastCalledWith("post-1", act);
-      expect(await screen.findByRole("status")).toHaveTextContent(note);
-    }
+    await userEvent.click(within(row).getByRole("button", { name: "Not interested" }));
+    expect(api.pulseAct).toHaveBeenLastCalledWith("post-1", "dislike");
+    expect(await screen.findByRole("status")).toHaveTextContent("Got it. A few less like that.");
+
+    await userEvent.click(within(row).getByRole("button", { name: "Dismiss" }));
+    const confirm = within(card).getByRole("group", { name: "Dismiss this post?" });
+    await userEvent.click(within(confirm).getByRole("button", { name: "Dismiss" }));
+    expect(api.pulseAct).toHaveBeenLastCalledWith("post-1", "dismiss");
+    expect(await screen.findByRole("status")).toHaveTextContent("Dismissed.");
   });
 
   it("an error reads as an error, not as a result", async () => {
@@ -309,6 +311,8 @@ describe("Pulse", () => {
 
     const card = await screen.findByRole("listitem", { name: TITLE });
     await userEvent.click(within(card).getByRole("button", { name: "Dismiss" }));
+    const confirm = within(card).getByRole("group", { name: "Dismiss this post?" });
+    await userEvent.click(within(confirm).getByRole("button", { name: "Dismiss" }));
     const status = await screen.findByRole("status");
     expect(status).toHaveTextContent("That card is gone.");
     expect(status).toHaveClass("status--error");
@@ -685,6 +689,9 @@ describe("Pulse", () => {
     expect(await screen.findByRole("status")).toHaveTextContent(NOT_INTERESTED_NOTE);
 
     await userEvent.click(within(row).getByRole("button", { name: "Dismiss" }));
+    expect(api.pulseAct).not.toHaveBeenLastCalledWith("idea-2", "dismiss");
+    const dismissAsk = within(row).getByRole("group", { name: "Dismiss this post?" });
+    await userEvent.click(within(dismissAsk).getByRole("button", { name: "Dismiss" }));
     expect(api.pulseAct).toHaveBeenLastCalledWith("idea-2", "dismiss");
 
     await userEvent.click(main);

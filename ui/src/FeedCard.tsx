@@ -260,8 +260,6 @@ export interface FeedCardProps {
   onWhy?: () => Promise<string>;
   /** Hidden until the next 9 AM. Shown when the card says it suits. */
   onSnooze?: () => void;
-  /** Gone for good, after a confirm. Shown when the card says it suits. */
-  onDelete?: () => void;
   /** Save: the post goes to the Saved page. Shown on source posts. */
   onSave?: () => void;
   /** A chip under the card other than Discuss: a fix, Ignore for now, or
@@ -271,9 +269,9 @@ export interface FeedCardProps {
 
 /** One Feed post, always fully open: icon, title, where it is from and why,
  * verdict, cited snippet, the full report, media; then one row of buttons
- * (Like, the card's chips or Discuss, Read it, Snooze and Delete when they
- * suit the card, Not interested, Dismiss). The ⋯ menu holds only "Why I
- * created this"; nothing collapses. */
+ * (Like, the card's chips or Discuss, Read it, Snooze when it suits the card,
+ * Not interested, Dismiss). Dismiss asks first (Delete folded in). The ⋯ menu
+ * holds only "Why I created this"; nothing collapses. */
 export function FeedCard({
   post,
   busy,
@@ -284,7 +282,6 @@ export function FeedCard({
   onDismiss,
   onWhy,
   onSnooze,
-  onDelete,
   onSave,
   onChip,
 }: FeedCardProps) {
@@ -354,15 +351,15 @@ export function FeedCard({
           {why}
         </p>
       )}
-      {asking && onDelete && (
+      {asking && (
         <ConfirmRow
-          question="Delete this post?"
+          question="Dismiss this post?"
           detail="It won't come back."
-          action="Delete"
+          action="Dismiss"
           busy={busy}
           onConfirm={() => {
             setAsking(false);
-            onDelete();
+            onDismiss();
           }}
           onCancel={() => setAsking(false)}
         />
@@ -372,7 +369,7 @@ export function FeedCard({
         busy={busy}
         onLike={onLove}
         onDislike={onDislike}
-        onDismiss={onDismiss}
+        onDismiss={() => setAsking(true)}
       >
         {chips.length === 0 ? (
           <button type="button" className="quiet" disabled={busy} onClick={onDiscuss}>
@@ -412,11 +409,6 @@ export function FeedCard({
             Snooze
           </button>
         )}
-        {post.delete && onDelete && (
-          <button type="button" className="quiet" disabled={busy} onClick={() => setAsking(true)}>
-            Delete
-          </button>
-        )}
       </CardButtons>
     </li>
   );
@@ -432,7 +424,7 @@ export interface IdeaRowProps {
   onMoreLike: () => void;
   /** Not interested: the idea goes, with some of its topics' weight. */
   onNotInterested: () => void;
-  /** Off the page. Carries no weight. */
+  /** Off the page, after a confirm. */
   onDismiss: () => void;
   /** A chip on a card that found something; Discuss goes to `onDiscuss`. */
   onChip?: (chip: PulseChip) => void;
@@ -458,6 +450,7 @@ export function IdeaRow({
   const chips = idea.chips ?? [];
   const fix = idea.fix && onFix ? onFix : null;
   const main = fix ?? onDo;
+  const [asking, setAsking] = useState(false);
   return (
     <li className="idea-row" aria-label={idea.title}>
       <button type="button" className="idea-main" disabled={busy} onClick={main}>
@@ -478,12 +471,25 @@ export function IdeaRow({
           <Markdown text={idea.more} />
         </div>
       )}
+      {asking && (
+        <ConfirmRow
+          question="Dismiss this post?"
+          detail="It won't come back."
+          action="Dismiss"
+          busy={busy}
+          onConfirm={() => {
+            setAsking(false);
+            onDismiss();
+          }}
+          onCancel={() => setAsking(false)}
+        />
+      )}
       <CardButtons
         liked={idea.loved}
         busy={busy}
         onLike={onMoreLike}
         onDislike={onNotInterested}
-        onDismiss={onDismiss}
+        onDismiss={() => setAsking(true)}
       >
         {chips.length === 0 ? (
           <>

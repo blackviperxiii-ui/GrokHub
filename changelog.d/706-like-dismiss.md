@@ -1,0 +1,1 @@
+- Pulse: Like absorbs More like this (unlike retracts); Dismiss absorbs Delete with a confirm.
