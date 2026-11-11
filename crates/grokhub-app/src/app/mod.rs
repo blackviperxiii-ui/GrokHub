@@ -266,6 +266,8 @@ mod self_review_ui;
 mod settings;
 mod setup_wizard;
 pub(crate) use setup_wizard::models_dir;
+#[allow(dead_code)] // Wired into the Code tab once the tab lands.
+mod code_terminal;
 #[cfg(test)]
 mod one_reply_each_tests;
 mod sidebar;
