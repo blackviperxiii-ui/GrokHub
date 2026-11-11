@@ -52,6 +52,8 @@ const api = vi.hoisted(() => ({
   shareSchedulerClock: vi.fn(() => Promise.resolve()),
   quickChips: vi.fn(() => Promise.resolve([])),
   chipOutcome: vi.fn(() => Promise.resolve(true)),
+  recordStatus: vi.fn(() => Promise.resolve({ recording: null, listening: null, events: [] })),
+  recordStop: vi.fn(() => Promise.resolve(false)),
 }));
 
 vi.mock("./api", () => api);

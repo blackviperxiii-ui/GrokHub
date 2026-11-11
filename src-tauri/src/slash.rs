@@ -66,6 +66,22 @@ pub const SHELL_SLASH: &[ShellCmd] = &[
     row("/sessions", "Past chats", "/sessions"),
     ShellCmd {
         desktop_only: true,
+        ..row(
+            "/record",
+            "Record my screen and diagnose it (say what's wrong)",
+            "/record ",
+        )
+    },
+    ShellCmd {
+        desktop_only: true,
+        ..row(
+            "/audiocheck",
+            "Check my audio: devices, levels, clipping, crackle",
+            "/audiocheck",
+        )
+    },
+    ShellCmd {
+        desktop_only: true,
         ..row("/retry", "Ask the last message again", "/retry")
     },
     ShellCmd {
