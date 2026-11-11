@@ -964,6 +964,7 @@ pub const GROK_NAV: &[(&str, &str)] = &[
 pub const LOADOUT_NAV: &[(&str, &str)] = &[
     ("home", "Home"),
     ("chat", "Chat"),
+    ("code", "Code"),
     ("objectives", "Objectives"),
     ("workboard", "Workboards"),
     ("pulse", "Pulse"),

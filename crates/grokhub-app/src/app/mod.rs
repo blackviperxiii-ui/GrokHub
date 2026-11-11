@@ -266,6 +266,7 @@ mod self_review_ui;
 mod settings;
 mod setup_wizard;
 pub(crate) use setup_wizard::models_dir;
+mod code_tab;
 #[cfg(test)]
 mod one_reply_each_tests;
 mod sidebar;
@@ -317,6 +318,8 @@ enum Nav {
     /// Modular Mission Control (rail Home). No chat tab bar.
     Home,
     Chat,
+    /// The workspace's repo, built-in skills and test runner (desktop cabin only).
+    Code,
     Devices,
     Memory,
     Personal,
@@ -783,6 +786,7 @@ pub struct Cabin {
     greeting_busy: bool,
     greeting_llm_at: u64,
     continue_hint: String,
+    code_tab: code_tab::CodeTab,
     skills_tab: skills_tab::SkillsTab,
     personal: personal_ui::PersonalPage,
     pending_connectors: Vec<(String, String, String)>,
@@ -1427,6 +1431,7 @@ impl Cabin {
             greeting_busy: false,
             greeting_llm_at: 0,
             continue_hint: String::new(),
+            code_tab: code_tab::CodeTab::default(),
             skills_tab: skills_tab::SkillsTab::default(),
             personal: personal_ui::PersonalPage::default(),
             pending_connectors: vec![],
@@ -1929,6 +1934,7 @@ impl Cabin {
             greeting_busy: false,
             greeting_llm_at: 0,
             continue_hint: String::new(),
+            code_tab: code_tab::CodeTab::default(),
             skills_tab: skills_tab::SkillsTab::default(),
             personal: personal_ui::PersonalPage::default(),
             pending_connectors: Vec::new(),
@@ -5550,6 +5556,7 @@ impl eframe::App for Cabin {
                     Nav::Workboard => self.ui_board(ui),
                     Nav::Pulse => self.ui_pulse(ui),
                     Nav::Imagine => self.ui_imagine(ui),
+                    Nav::Code => self.ui_code(ui),
                     Nav::Skills => self.ui_skills(ui),
                     Nav::Library => self.ui_library(ui),
                     Nav::Mods => self.ui_mods(ui),

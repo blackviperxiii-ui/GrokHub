@@ -1146,6 +1146,7 @@ impl Cabin {
             "journal" => Nav::Journal,
             "workboard" => Nav::Workboard,
             "pulse" | "ideas" => Nav::Pulse,
+            "code" => Nav::Code,
             "skills" => Nav::Skills,
             "library" => Nav::Library,
             "mods" => Nav::Mods,

@@ -840,6 +840,7 @@ mod tests {
         let all = [
             Nav::Home,
             Nav::Chat,
+            Nav::Code,
             Nav::Devices,
             Nav::Memory,
             Nav::Workboard,
@@ -861,6 +862,7 @@ mod tests {
             match n {
                 Nav::Home
                 | Nav::Chat
+                | Nav::Code
                 | Nav::Devices
                 | Nav::Memory
                 | Nav::Personal
