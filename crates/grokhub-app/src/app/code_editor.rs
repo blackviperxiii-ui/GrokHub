@@ -60,6 +60,7 @@ pub(super) enum Pick {
 
 /// A save running off the UI thread: the text it wrote and how it went.
 struct Saving {
+    workspace: PathBuf,
     path: String,
     text: String,
     rx: mpsc::Receiver<Result<FileText, String>>,
@@ -208,7 +209,7 @@ impl CodeEditor {
     /// stay; `None` reads the desktop app's Code setting, like every other
     /// Code tab log line. False when there is nothing to save.
     pub(super) fn save(&mut self, config_dir: &Path, keep: Option<usize>) -> bool {
-        if self.saving.is_some() {
+        if self.is_saving() {
             return false;
         }
         let Some(open) = self.open.as_ref().filter(|f| f.dirty()) else {
@@ -222,6 +223,7 @@ impl CodeEditor {
             open.text.clone(),
         );
         self.saving = Some(Saving {
+            workspace: ws.clone(),
             path: path.clone(),
             text: text.clone(),
             rx,
@@ -235,41 +237,44 @@ impl CodeEditor {
         true
     }
 
-    /// Take a finished save, if there is one. True when one finished.
-    pub(super) fn poll_save(&mut self) -> bool {
-        let Some(saving) = &self.saving else {
-            return false;
-        };
+    /// Take a finished save, if there is one: `Some(true)` when it saved,
+    /// `Some(false)` when it was refused, `None` while nothing finished.
+    pub(super) fn poll_save(&mut self) -> Option<bool> {
+        let saving = self.saving.as_ref()?;
         let got = match saving.rx.try_recv() {
             Ok(got) => got,
-            Err(mpsc::TryRecvError::Empty) => return false,
+            Err(mpsc::TryRecvError::Empty) => return None,
             Err(mpsc::TryRecvError::Disconnected) => {
                 Err("The save stopped before it finished.".into())
             }
         };
-        let Some(saving) = self.saving.take() else {
-            return false;
-        };
+        let saving = self.saving.take()?;
         match got {
             Ok(done) => {
-                if let Some(open) = self.open.as_mut().filter(|f| f.path == saving.path) {
+                if let Some(open) = self
+                    .open
+                    .as_mut()
+                    .filter(|f| f.path == saving.path && f.workspace == saving.workspace)
+                {
                     // Typing during the save keeps those newer edits unsaved.
                     open.saved = saving.text;
                 }
                 self.note = Some(format!("Saved {}.", done.path));
+                Some(true)
             }
-            Err(e) => self.note = Some(e),
+            Err(e) => {
+                self.note = Some(e);
+                Some(false)
+            }
         }
-        true
     }
 
-    /// The editor, drawn into the Code page.
-    pub(super) fn ui(&mut self, ui: &mut egui::Ui, workspace: &Path, config_dir: &Path) {
+    /// The editor, drawn into the Code page. True on the frame a save lands,
+    /// so the page can read the repo's changes again.
+    pub(super) fn ui(&mut self, ui: &mut egui::Ui, workspace: &Path, config_dir: &Path) -> bool {
         self.set_workspace(workspace);
-        if self.poll_save() {
-            ui.ctx().request_repaint();
-        }
-        if self.saving.is_some() {
+        let saved = self.poll_save() == Some(true);
+        if self.is_saving() {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(100));
         }
@@ -302,6 +307,7 @@ impl CodeEditor {
         if let Some(path) = picked {
             self.pick(&path);
         }
+        saved
     }
 
     fn ui_tree(
@@ -351,7 +357,7 @@ impl CodeEditor {
     }
 
     fn ui_pane(&mut self, ui: &mut egui::Ui, config_dir: &Path, height: f32) {
-        let saving = self.saving.is_some();
+        let saving = self.is_saving();
         let Some(open) = self.open.as_ref() else {
             crate::cards::help_text(ui, EDITOR_EMPTY);
             return;
@@ -473,6 +479,19 @@ impl CodeEditor {
             }
             Some(false) => self.keep_editing(),
             None => {}
+        }
+    }
+}
+
+impl super::Cabin {
+    /// The Code page's Editor section, on the same project folder as the
+    /// rest of the page. A save reads the repo again, so the changed-files
+    /// list and the open diff show it.
+    pub(super) fn ui_code_editor(&mut self, ui: &mut egui::Ui) {
+        let workspace = self.grok_cwd();
+        let config = crate::config::config_dir();
+        if self.code_editor.ui(ui, &workspace, &config) {
+            self.code_kick_load(ui.ctx());
         }
     }
 }

@@ -788,6 +788,9 @@ pub struct Cabin {
     greeting_llm_at: u64,
     continue_hint: String,
     code_tab: code_tab::CodeTab,
+    /// The Code page's editor: the open file and its unsaved edits stay
+    /// here while another tab is up.
+    code_editor: code_editor::CodeEditor,
     skills_tab: skills_tab::SkillsTab,
     personal: personal_ui::PersonalPage,
     pending_connectors: Vec<(String, String, String)>,
@@ -1433,6 +1436,7 @@ impl Cabin {
             greeting_llm_at: 0,
             continue_hint: String::new(),
             code_tab: code_tab::CodeTab::default(),
+            code_editor: code_editor::CodeEditor::default(),
             skills_tab: skills_tab::SkillsTab::default(),
             personal: personal_ui::PersonalPage::default(),
             pending_connectors: vec![],
@@ -1936,6 +1940,7 @@ impl Cabin {
             greeting_llm_at: 0,
             continue_hint: String::new(),
             code_tab: code_tab::CodeTab::default(),
+            code_editor: code_editor::CodeEditor::default(),
             skills_tab: skills_tab::SkillsTab::default(),
             personal: personal_ui::PersonalPage::default(),
             pending_connectors: Vec::new(),

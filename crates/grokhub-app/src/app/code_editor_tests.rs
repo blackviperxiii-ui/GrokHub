@@ -25,7 +25,7 @@ fn project(name: &str) -> (PathBuf, CodeEditor) {
 /// Wait for a started save to come back.
 fn finish_save(ed: &mut CodeEditor) {
     for _ in 0..500 {
-        if ed.poll_save() {
+        if ed.poll_save().is_some() {
             return;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
