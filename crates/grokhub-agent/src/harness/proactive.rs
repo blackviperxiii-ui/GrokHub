@@ -103,8 +103,7 @@ pub fn step_class(tool: &str, arguments: &str) -> Option<String> {
 /// Only these steps can be put back from the ledger, so only these may
 /// auto-act. [`step_undo`] says which rung of the ceiling each one is on.
 pub fn ledger_target(tool: &str, arguments: &str) -> Option<(ChangeKind, String)> {
-    let leaf = tool.rsplit("__").next().unwrap_or(tool);
-    let kind = match leaf {
+    let kind = match crate::self_manage::self_tool(tool)? {
         "connection_disable" | "connection_add" => ChangeKind::Connection,
         "skill_modify" => ChangeKind::Skill,
         _ => return None,
@@ -318,6 +317,23 @@ mod tests {
         }
         assert_eq!(ledger_target("write", r#"{"path":"a.txt"}"#), None);
         assert_eq!(ledger_target("click", r#"{"x":1,"y":2}"#), None);
+    }
+
+    #[test]
+    fn another_servers_tool_of_the_same_name_has_no_ledger_target() {
+        let foo = r#"{"name":"foo"}"#;
+        let notes = r#"{"name":"notes"}"#;
+        assert_eq!(ledger_target("mcp__x__skill_modify", foo), None);
+        assert_eq!(ledger_target("notes__connection_add", notes), None);
+        assert_eq!(step_undo("notes__connection_disable", notes), Undo::Never);
+        assert_eq!(
+            ledger_target("grokhub-self__skill_modify", foo),
+            Some((ChangeKind::Skill, "foo".into()))
+        );
+        assert_eq!(
+            step_undo("grokhub-self__connection_disable", notes),
+            Undo::OneClick
+        );
     }
 
     #[test]

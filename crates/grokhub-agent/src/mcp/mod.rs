@@ -1317,6 +1317,13 @@ fn connect_if_needed(slot: &Mutex<SlotInner>, workspace: &Path) {
 }
 
 fn open_def(name: &str, def: &ServerDef, workspace: &Path) -> Result<(Conn, Vec<RawTool>), String> {
+    // A key is saved under its connector's own name, so an entry that names
+    // any other key is asking for one it was never given.
+    if def.token_ref.as_deref().is_some_and(|key| key != name) {
+        return Err(format!(
+            "{name} names another connector's key, so it was not used: save a key for {name} in Settings, Connectors"
+        ));
+    }
     match &def.transport {
         TransportDef::Stdio {
             command,
@@ -1701,6 +1708,267 @@ mod tests {
         std::fs::write(&cred, "marker").unwrap();
         let err = read_mcp_text(&cred).unwrap_err();
         assert!(err.contains("refusing"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    const FAKE_KEY: &str = "sk-abcdefghijklmnopqrstuv";
+
+    /// A loopback server that keeps each request's `Authorization` value and
+    /// answers 500.
+    struct AuthSeen {
+        port: u16,
+        seen: std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>>,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl AuthSeen {
+        fn start() -> Self {
+            use std::io::{BufRead, Read, Write};
+            use std::sync::atomic::Ordering;
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let (seen2, stop2) = (seen.clone(), stop.clone());
+            std::thread::spawn(move || {
+                while !stop2.load(Ordering::SeqCst) {
+                    let Ok((mut sock, _)) = listener.accept() else {
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                        continue;
+                    };
+                    let _ = sock.set_nonblocking(false);
+                    let _ = sock.set_read_timeout(Some(std::time::Duration::from_secs(3)));
+                    let mut reader = std::io::BufReader::new(sock.try_clone().unwrap());
+                    let (mut auth, mut len) = (None, 0usize);
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                            break;
+                        }
+                        if let Some((name, value)) = line.split_once(':') {
+                            match name.trim().to_ascii_lowercase().as_str() {
+                                "authorization" => auth = Some(value.trim().to_string()),
+                                "content-length" => len = value.trim().parse().unwrap_or(0),
+                                _ => {}
+                            }
+                        }
+                    }
+                    let mut body = vec![0u8; len];
+                    let _ = reader.read_exact(&mut body);
+                    seen2.lock().unwrap().push(auth);
+                    let _ = sock.write_all(
+                        b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
+                }
+            });
+            Self { port, seen, stop }
+        }
+
+        fn url(&self) -> String {
+            format!("http://127.0.0.1:{}/mcp", self.port)
+        }
+
+        /// Each different `Authorization` value seen, `None` for a request without one.
+        fn auth_values(&self) -> Vec<Option<String>> {
+            let mut all = self.seen.lock().unwrap().clone();
+            all.sort();
+            all.dedup();
+            all
+        }
+    }
+
+    impl Drop for AuthSeen {
+        fn drop(&mut self) {
+            self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    fn sealed_cfg(label: &str) -> (PathBuf, ConfigGuard) {
+        let dir = crate::harness::test_dir(label);
+        let guard = ConfigGuard::set(&dir);
+        crate::harness::seal_connection_token(&dir, "github", FAKE_KEY).unwrap();
+        super::invalidate();
+        (dir, guard)
+    }
+
+    #[test]
+    fn an_imported_entry_cannot_name_a_saved_key() {
+        let (dir, _guard) = sealed_cfg("mcp-import-token-ref");
+        let server = AuthSeen::start();
+        let doc = json!({"mcpServers": {
+            "weather": {"url": server.url(), "tokenRef": "github"},
+            "notes": {"command": "notes-mcp", "tokenRef": "github", "tokenEnv": "NOTES_KEY", "enabled": false}
+        }});
+        let report = import_documents(&[doc.to_string()]).unwrap();
+        assert_eq!(
+            report.added,
+            vec!["notes".to_string(), "weather".to_string()]
+        );
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("mcp.json")).unwrap()).unwrap();
+        assert_eq!(
+            saved["mcpServers"]["weather"],
+            json!({"url": server.url(), "type": "http"})
+        );
+        // The variable its key goes in stays; the key it named is gone.
+        assert_eq!(
+            saved["mcpServers"]["notes"],
+            json!({"command": "notes-mcp", "tokenEnv": "NOTES_KEY", "enabled": false})
+        );
+        super::doctor();
+        assert_eq!(server.auth_values(), vec![None]);
+        super::shutdown_all();
+        super::invalidate();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_imported_entry_keeps_its_key_variable_for_the_key_saved_later() {
+        let dir = crate::harness::test_dir("mcp-import-token-env");
+        let _guard = ConfigGuard::set(&dir);
+        super::invalidate();
+        let pasted = json!({"mcpServers": {"brave-search": {
+            "command": "npx", "args": ["-y", "brave-search-mcp"],
+            "tokenRef": "brave-search", "tokenEnv": "BRAVE_API_KEY", "enabled": false
+        }}});
+        let report = import_documents(&[pasted.to_string()]).unwrap();
+        assert_eq!(report.added, vec!["brave-search".to_string()]);
+        let saved = || -> serde_json::Value {
+            serde_json::from_str(&std::fs::read_to_string(dir.join("mcp.json")).unwrap()).unwrap()
+        };
+        assert_eq!(
+            saved()["mcpServers"]["brave-search"],
+            json!({
+                "command": "npx", "args": ["-y", "brave-search-mcp"],
+                "tokenEnv": "BRAVE_API_KEY", "enabled": false
+            })
+        );
+        assert_eq!(
+            super::save_key("brave-search", FAKE_KEY).unwrap(),
+            "Saved the key for brave-search"
+        );
+        assert_eq!(
+            saved()["mcpServers"]["brave-search"],
+            json!({
+                "command": "npx", "args": ["-y", "brave-search-mcp"],
+                "tokenRef": "brave-search", "tokenEnv": "BRAVE_API_KEY", "enabled": false
+            })
+        );
+        let def = &super::load_servers()["brave-search"];
+        assert_eq!(
+            (def.token_ref.as_deref(), def.token_env.as_deref()),
+            (Some("brave-search"), Some("BRAVE_API_KEY"))
+        );
+        super::invalidate();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A stdio entry whose program writes the value of `var` to a file as it
+    /// starts, and the file.
+    #[cfg(unix)]
+    fn env_probe(dir: &Path, var: &str, key_name: &str) -> (serde_json::Value, PathBuf) {
+        let seen = dir.join(format!("{var}.seen"));
+        let script = format!("printf '%s' \"${var}\" > '{}'", seen.display());
+        let entry = json!({
+            "command": "/bin/sh", "args": ["-c", script],
+            "tokenRef": key_name, "tokenEnv": var
+        });
+        (entry, seen)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_pasted_stdio_connector_starts_with_the_key_saved_for_it() {
+        let dir = crate::harness::test_dir("mcp-import-save-start");
+        let _guard = ConfigGuard::set(&dir);
+        super::invalidate();
+        let (entry, seen) = env_probe(&dir, "BRAVE_API_KEY", "brave-search");
+        let pasted = json!({"mcpServers": {"brave-search": entry}});
+        import_documents(&[pasted.to_string()]).unwrap();
+        // No key saved yet: it starts without one.
+        super::doctor();
+        assert_eq!(std::fs::read_to_string(&seen).unwrap(), "");
+        assert_eq!(
+            super::save_key("brave-search", FAKE_KEY).unwrap(),
+            "Saved the key for brave-search"
+        );
+        super::doctor();
+        assert_eq!(
+            std::fs::read_to_string(&seen).unwrap(),
+            "sk-abcdefghijklmnopqrstuv"
+        );
+        super::shutdown_all();
+        super::invalidate();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_imported_stdio_entry_never_starts_with_another_entrys_key() {
+        let (dir, _guard) = sealed_cfg("mcp-import-other-env");
+        let (entry, seen) = env_probe(&dir, "NOTES_KEY", "github");
+        let pasted = json!({"mcpServers": {"notes": entry}});
+        import_documents(&[pasted.to_string()]).unwrap();
+        super::doctor();
+        assert_eq!(std::fs::read_to_string(&seen).unwrap(), "");
+        // Put back by hand, the name of github's key stops the start.
+        std::fs::remove_file(&seen).unwrap();
+        let by_hand = json!({"mcpServers": {"notes": env_probe(&dir, "NOTES_KEY", "github").0}});
+        std::fs::write(dir.join("mcp.json"), by_hand.to_string()).unwrap();
+        super::invalidate();
+        let rows = super::doctor();
+        assert_eq!(
+            rows.iter().find(|r| r.name == "notes").expect("row").last_error,
+            "notes names another connector's key, so it was not used: save a key for notes in Settings, Connectors"
+        );
+        assert!(!seen.exists());
+        super::shutdown_all();
+        super::invalidate();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_entry_that_names_another_connectors_key_is_not_opened() {
+        let (dir, _guard) = sealed_cfg("mcp-other-token-ref");
+        let server = AuthSeen::start();
+        let doc = json!({"mcpServers": {
+            "weather": {"url": server.url(), "tokenRef": "github"},
+            "notes": {"command": "definitely-not-a-real-binary-xyz", "tokenRef": "github", "tokenEnv": "NOTES_KEY"}
+        }});
+        std::fs::write(dir.join("mcp.json"), doc.to_string()).unwrap();
+        super::invalidate();
+        let rows = super::doctor();
+        let row = |name: &str| rows.iter().find(|r| r.name == name).expect("row");
+        assert_eq!(row("weather").status, "error");
+        assert_eq!(
+            row("weather").last_error,
+            "weather names another connector's key, so it was not used: save a key for weather in Settings, Connectors"
+        );
+        assert_eq!(
+            row("notes").last_error,
+            "notes names another connector's key, so it was not used: save a key for notes in Settings, Connectors"
+        );
+        assert_eq!(server.auth_values(), Vec::<Option<String>>::new());
+        super::shutdown_all();
+        super::invalidate();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_entry_sends_the_key_saved_under_its_own_name() {
+        let (dir, _guard) = sealed_cfg("mcp-own-token-ref");
+        let server = AuthSeen::start();
+        let doc = json!({"mcpServers": {"github": {"url": server.url(), "tokenRef": "github"}}});
+        std::fs::write(dir.join("mcp.json"), doc.to_string()).unwrap();
+        super::invalidate();
+        super::doctor();
+        assert_eq!(
+            server.auth_values(),
+            vec![Some("Bearer sk-abcdefghijklmnopqrstuv".to_string())]
+        );
+        super::shutdown_all();
+        super::invalidate();
         let _ = std::fs::remove_dir_all(&dir);
     }
 

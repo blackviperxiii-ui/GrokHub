@@ -1,0 +1,7 @@
+- Chat asks before more shell commands that can write or run a program and used to run with no card: `git grep -O`, more `git branch` forms, `kubectl` with a config, server or identity flag, `sort /O`, `date -s`, `hostname NAME`, a wrapper run from a path (`./env ls`), a redirect such as `>&2file`, and a second command hidden behind `""#` or an empty quoted word.
+- Windows: a PowerShell command with a backslash path, a curly quote or a bare carriage return can no longer hide a second statement from the approval check.
+- Hooks now apply to tool calls made by helper agents, a `*` matcher runs on every tool, a folder you have not trusted cannot displace a plugin's hook, and `.grok/./hooks` or `..` paths get the agent-settings card.
+- Text read from outside (web pages, tool results) stays marked across helper agents, resumed chats, summaries and `grep`, so an edit that follows it still asks.
+- The approval card for a new connection shows the program and arguments it will run, not another field.
+- A connector entry can use only the key saved under its own name, an imported entry cannot name a saved key, replies from a remote connector are size-capped, and a backslash can no longer redirect a connector's message address.
+- Driver roll-back runs only for driver packages it verified.

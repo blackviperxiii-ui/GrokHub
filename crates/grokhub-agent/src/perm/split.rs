@@ -52,7 +52,13 @@ struct Peel {
 }
 
 pub fn analyze(script: &str) -> Facts {
-    analyze_depth(script, 0)
+    analyze_with(script, cfg!(windows))
+}
+
+/// `powershell` is the shell that will run the script. There a backslash is
+/// a plain character (a path separator), not an escape.
+pub fn analyze_with(script: &str, powershell: bool) -> Facts {
+    analyze_depth(script, powershell, 0)
 }
 
 /// The peeled command when the script is one plain segment. `None` when it does not peel cleanly.
@@ -66,7 +72,7 @@ pub fn peeled_primary(script: &str) -> Option<String> {
     }
 }
 
-fn analyze_depth(script: &str, depth: usize) -> Facts {
+fn analyze_depth(script: &str, powershell: bool, depth: usize) -> Facts {
     if depth > 4 {
         return Facts {
             segments: None,
@@ -74,7 +80,7 @@ fn analyze_depth(script: &str, depth: usize) -> Facts {
             dangerous: true,
         };
     }
-    let Some(raw) = split_words(script) else {
+    let Some(raw) = split_words(script, powershell) else {
         return Facts {
             segments: None,
             probes: Vec::new(),
@@ -100,7 +106,7 @@ fn analyze_depth(script: &str, depth: usize) -> Facts {
         dangerous |= peel.dangerous_env;
         if peel.opaque {
             if let Some(payload) = peel.payload {
-                let inner = analyze_depth(&payload, depth + 1);
+                let inner = analyze_depth(&payload, powershell, depth + 1);
                 probes.extend(inner.probes);
             }
             return Facts {
@@ -210,6 +216,11 @@ fn peel_wrappers(words: &[String]) -> Peel {
                 opaque: false,
                 payload: None,
             };
+        }
+        // A wrapper run from a path could be any program. Keep peeling so the
+        // wrapped command is still judged, but it earns no pass.
+        if !current.first().is_some_and(|tok| risk::trusted_head(tok)) {
+            eligible = false;
         }
         match strip_one(&current) {
             Strip::Inner { words, env_risk } => {
@@ -449,11 +460,19 @@ fn strip_env(words: &[String]) -> Strip {
     }
 }
 
-fn split_words(script: &str) -> Option<Vec<RawSeg>> {
+fn split_words(script: &str, powershell: bool) -> Option<Vec<RawSeg>> {
+    // PowerShell also opens and closes a string at a curly quote, so where a
+    // string ends there cannot be told from the ASCII quotes alone.
+    if powershell && script.contains(|c: char| ('\u{2018}'..='\u{201e}').contains(&c)) {
+        return None;
+    }
     let chars: Vec<char> = script.chars().collect();
     let mut i = 0usize;
     let mut words: Vec<String> = Vec::new();
     let mut cur = String::new();
+    // A quote or an escape wrote part of the word in `cur`. Such a word has
+    // started even while `cur` is empty (`''`), and is never a descriptor.
+    let mut quoted = false;
     let mut quote: Option<char> = None;
     let mut segs: Vec<RawSeg> = Vec::new();
     let mut pipe_in = false;
@@ -466,7 +485,7 @@ fn split_words(script: &str) -> Option<Vec<RawSeg>> {
                 i += 1;
                 continue;
             }
-            if q == '"' && c == '\\' {
+            if q == '"' && c == '\\' && !powershell {
                 let next = *chars.get(i + 1)?;
                 if next == '$' || next == '`' {
                     return None;
@@ -489,11 +508,12 @@ fn split_words(script: &str) -> Option<Vec<RawSeg>> {
             i += 1;
             continue;
         }
-        if c == '\\' {
+        if c == '\\' && !powershell {
             match chars.get(i + 1).copied() {
                 Some('\n') => i += 2,
                 Some(next) => {
                     cur.push(next);
+                    quoted = true;
                     i += 2;
                 }
                 None => return None,
@@ -502,20 +522,23 @@ fn split_words(script: &str) -> Option<Vec<RawSeg>> {
         }
         if c == '\'' || c == '"' {
             quote = Some(c);
+            quoted = true;
             i += 1;
             continue;
         }
         if matches!(c, '`' | '$' | '(' | ')' | '{' | '}') {
             return None;
         }
-        if c == '#' && cur.is_empty() {
-            while i < chars.len() && chars[i] != '\n' {
+        // `#` starts a comment only where a word would start. PowerShell
+        // ends the comment at a return as well.
+        if c == '#' && cur.is_empty() && !quoted {
+            while i < chars.len() && chars[i] != '\n' && !(powershell && chars[i] == '\r') {
                 i += 1;
             }
             continue;
         }
-        if c == '\n' || c == '\r' || c == ';' {
-            flush_word(&mut cur, &mut words);
+        if c == '\n' || c == ';' || (c == '\r' && powershell) {
+            flush_word(&mut cur, &mut quoted, &mut words);
             end_seg(&mut segs, &mut words, pipe_in, true)?;
             pipe_in = false;
             i += 1;
@@ -523,7 +546,7 @@ fn split_words(script: &str) -> Option<Vec<RawSeg>> {
         }
         if c == '&' {
             if chars.get(i + 1) == Some(&'&') {
-                flush_word(&mut cur, &mut words);
+                flush_word(&mut cur, &mut quoted, &mut words);
                 end_seg(&mut segs, &mut words, pipe_in, false)?;
                 pipe_in = false;
                 i += 2;
@@ -535,7 +558,7 @@ fn split_words(script: &str) -> Option<Vec<RawSeg>> {
                 } else {
                     i + 2
                 };
-                let (target, next) = read_word(&chars, start)?;
+                let (target, next) = read_word(&chars, start, powershell)?;
                 if !safe_sink(&target) {
                     return None;
                 }
@@ -546,7 +569,7 @@ fn split_words(script: &str) -> Option<Vec<RawSeg>> {
         }
         if c == '|' {
             if chars.get(i + 1) == Some(&'|') {
-                flush_word(&mut cur, &mut words);
+                flush_word(&mut cur, &mut quoted, &mut words);
                 end_seg(&mut segs, &mut words, pipe_in, false)?;
                 pipe_in = false;
                 i += 2;
@@ -555,20 +578,28 @@ fn split_words(script: &str) -> Option<Vec<RawSeg>> {
             if chars.get(i + 1) == Some(&'&') {
                 return None;
             }
-            flush_word(&mut cur, &mut words);
+            flush_word(&mut cur, &mut quoted, &mut words);
             end_seg(&mut segs, &mut words, pipe_in, false)?;
             pipe_in = true;
             i += 1;
             continue;
         }
         if c == '>' || c == '<' {
-            i = consume_redirect(&chars, i, &mut cur)?;
+            // A number is a descriptor only when every digit was written bare.
+            let fd = !quoted && !cur.is_empty() && cur.chars().all(|c| c.is_ascii_digit());
+            i = consume_redirect(&chars, i, &mut cur, fd, powershell)?;
             continue;
         }
-        if c.is_whitespace() {
-            flush_word(&mut cur, &mut words);
+        if c == ' ' || c == '\t' {
+            flush_word(&mut cur, &mut quoted, &mut words);
             i += 1;
             continue;
+        }
+        // Bash reads any other blank (a return, a no-break space) as part of
+        // the word, so a `#` after it is not a comment. Shells differ on
+        // these, so they ask.
+        if c.is_whitespace() {
+            return None;
         }
         cur.push(c);
         i += 1;
@@ -576,7 +607,7 @@ fn split_words(script: &str) -> Option<Vec<RawSeg>> {
     if quote.is_some() {
         return None;
     }
-    flush_word(&mut cur, &mut words);
+    flush_word(&mut cur, &mut quoted, &mut words);
     if !words.is_empty() {
         segs.push(RawSeg { words, pipe_in });
     }
@@ -587,10 +618,11 @@ fn split_words(script: &str) -> Option<Vec<RawSeg>> {
     }
 }
 
-fn flush_word(cur: &mut String, words: &mut Vec<String>) {
-    if !cur.is_empty() {
+fn flush_word(cur: &mut String, quoted: &mut bool, words: &mut Vec<String>) {
+    if !cur.is_empty() || *quoted {
         words.push(std::mem::take(cur));
     }
+    *quoted = false;
 }
 
 fn end_seg(
@@ -612,49 +644,46 @@ fn end_seg(
     Some(())
 }
 
-fn consume_redirect(chars: &[char], i: usize, cur: &mut String) -> Option<usize> {
-    let fd = !cur.is_empty() && cur.chars().all(|c| c.is_ascii_digit());
+fn consume_redirect(
+    chars: &[char],
+    i: usize,
+    cur: &mut String,
+    fd: bool,
+    powershell: bool,
+) -> Option<usize> {
     if chars.get(i) == Some(&'>') {
         let mut j = i + 1;
         if chars.get(j) == Some(&'>') {
             j += 1;
         }
         if chars.get(j) == Some(&'&') {
-            j += 1;
-            if chars
-                .get(j)
-                .is_some_and(|c| c.is_ascii_digit() || *c == '-')
-                && (fd || cur.is_empty())
-            {
+            let next = fd_copy_end(chars, j + 1, powershell)?;
+            if fd || cur.is_empty() {
                 cur.clear();
-                return Some(j + 1);
+                return Some(next);
             }
             return None;
         }
-        let (target, next) = read_word(chars, skip_ws(chars, j))?;
+        let (target, next) = read_word(chars, skip_ws(chars, j), powershell)?;
         if safe_sink(&target) && (fd || cur.is_empty()) {
             cur.clear();
             return Some(next);
         }
         return None;
     }
-    let mut j = i + 1;
+    let j = i + 1;
     if chars.get(j) == Some(&'<') {
         return None;
     }
     if chars.get(j) == Some(&'&') {
-        j += 1;
-        if chars
-            .get(j)
-            .is_some_and(|c| c.is_ascii_digit() || *c == '-')
-            && (fd || cur.is_empty())
-        {
+        let next = fd_copy_end(chars, j + 1, powershell)?;
+        if fd || cur.is_empty() {
             cur.clear();
-            return Some(j + 1);
+            return Some(next);
         }
         return None;
     }
-    let (target, next) = read_word(chars, skip_ws(chars, j))?;
+    let (target, next) = read_word(chars, skip_ws(chars, j), powershell)?;
     if safe_sink(&target) && (fd || cur.is_empty()) {
         cur.clear();
         return Some(next);
@@ -662,7 +691,20 @@ fn consume_redirect(chars: &[char], i: usize, cur: &mut String) -> Option<usize>
     None
 }
 
-fn read_word(chars: &[char], mut i: usize) -> Option<(String, usize)> {
+/// After `>&` or `<&`: a descriptor number or `-` on its own copies or closes
+/// a descriptor. A longer word (`2notes.txt`) is a file to write.
+fn fd_copy_end(chars: &[char], j: usize, powershell: bool) -> Option<usize> {
+    if !chars
+        .get(j)
+        .is_some_and(|c| c.is_ascii_digit() || *c == '-')
+    {
+        return None;
+    }
+    let (target, next) = read_word(chars, j, powershell)?;
+    (target == "-" || target.bytes().all(|b| b.is_ascii_digit())).then_some(next)
+}
+
+fn read_word(chars: &[char], mut i: usize, powershell: bool) -> Option<(String, usize)> {
     i = skip_ws(chars, i);
     if i >= chars.len() {
         return None;
@@ -692,7 +734,7 @@ fn read_word(chars: &[char], mut i: usize) -> Option<(String, usize)> {
         if c.is_whitespace() || matches!(c, '&' | '|' | ';' | '\n' | '<' | '>') {
             break;
         }
-        if c == '\\' {
+        if c == '\\' && !powershell {
             i += 1;
             out.push(*chars.get(i)?);
             i += 1;
@@ -712,10 +754,7 @@ fn read_word(chars: &[char], mut i: usize) -> Option<(String, usize)> {
 }
 
 fn skip_ws(chars: &[char], mut i: usize) -> usize {
-    while chars
-        .get(i)
-        .is_some_and(|c| c.is_whitespace() && *c != '\n')
-    {
+    while chars.get(i).is_some_and(|c| matches!(c, ' ' | '\t')) {
         i += 1;
     }
     i
