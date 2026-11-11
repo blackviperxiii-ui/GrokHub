@@ -1,13 +1,14 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChatEnvelope, ChatEvent, SessionMode, Settings, SlashEffect } from "./api";
+import type { ChatEnvelope, ChatEvent, SessionMode, Settings, SlashEffect, SlashHit } from "./api";
 
 const api = vi.hoisted(() => ({
   handler: null as ((envelope: ChatEnvelope) => void) | null,
   sendChat: vi.fn<(id: string, text: string, mode?: SessionMode) => Promise<string>>(),
   getSettings: vi.fn<() => Promise<Settings>>(),
   runSlash: vi.fn<(line: string, id?: string) => Promise<SlashEffect>>(),
+  slashHits: vi.fn<(draft: string) => Promise<SlashHit[]>>(),
   cancelChat: vi.fn<(id: string) => Promise<void>>(),
   readTurn: vi.fn((text: string) => Promise.resolve({ route: "queue", text, ack: "Queued for after this reply" })),
 }));
@@ -19,7 +20,7 @@ vi.mock("./api", () => ({
   chipOutcome: () => Promise.resolve(true),
   sendChat: api.sendChat,
   getSettings: api.getSettings,
-  slashHits: () => Promise.resolve([]),
+  slashHits: api.slashHits,
   runSlash: api.runSlash,
   cancelChat: api.cancelChat,
   readTurn: api.readTurn,
@@ -42,7 +43,7 @@ vi.mock("./api", () => ({
   removeAttachment: vi.fn(),
 }));
 
-import { Chat, SLASH_WAITS, SLASH_WAITS_REMOTE } from "./Chat";
+import { Chat, SLASH_RUNNING, SLASH_WAITS, SLASH_WAITS_REMOTE } from "./Chat";
 
 const SETTINGS: Settings = {
   closeToTray: true,
@@ -68,6 +69,24 @@ function turns() {
   return ends;
 }
 
+/** The slash menu offers one row, `cmd`, which runs when picked. */
+function menuOffers(cmd: string) {
+  api.slashHits.mockImplementation((draft) =>
+    Promise.resolve(
+      draft.startsWith("/") && cmd.startsWith(draft.trim())
+        ? [{ cmd, hint: "", insert: `${cmd} `, runOnPick: true, disabled: null }]
+        : [],
+    ),
+  );
+}
+
+/** Each runSlash waits until the returned `answer(effect)` is called. */
+function slowSlash() {
+  const answers: ((effect: SlashEffect) => void)[] = [];
+  api.runSlash.mockReset().mockImplementation(() => new Promise<SlashEffect>((resolve) => answers.push(resolve)));
+  return answers;
+}
+
 /** A chat whose first reply is running. The chat's id. */
 async function replying(): Promise<string> {
   await userEvent.type(screen.getByLabelText("Message"), "write a long essay{Enter}");
@@ -80,6 +99,7 @@ describe("slash commands typed while a reply runs", () => {
     vi.clearAllMocks();
     api.getSettings.mockResolvedValue(SETTINGS);
     api.cancelChat.mockResolvedValue();
+    api.slashHits.mockReset().mockResolvedValue([]);
   });
 
   it("/queue holds its message until the reply ends, then sends it", async () => {
@@ -176,5 +196,86 @@ describe("slash commands typed while a reply runs", () => {
     await act(async () => ends[0]("end_turn"));
     await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(2));
     expect(api.sendChat.mock.calls[1][1]).toBe("then run the tests");
+  });
+
+  it.each([
+    ["on the computer", false],
+    ["in a paired browser", true],
+  ])("/queue answered just after the reply ended is sent, not lost (%s)", async (_where, remote) => {
+    const ends = turns();
+    const answers = slowSlash();
+    render(<Chat onOpenSettings={() => {}} remote={remote} />);
+    await replying();
+    const box = screen.getByLabelText("Message");
+    await userEvent.type(box, "/queue then run the tests{Enter}");
+    await waitFor(() => expect(api.runSlash).toHaveBeenCalledTimes(1));
+    // The reply ends while run_slash is on its way back.
+    await act(async () => ends[0]("end_turn"));
+    await act(async () => answers[0]({ kind: "queue", text: "then run the tests" }));
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(2));
+    expect(api.sendChat.mock.calls[1][1]).toBe("then run the tests");
+    expect(api.sendChat.mock.calls[1][2]).toBe("chat");
+    expect(box).toHaveValue("");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it.each([
+    ["/ne", "/new", false, "That command waits for the reply. /stop ends it."],
+    ["/ret", "/retry", false, "That command waits for the reply. /stop ends it."],
+    ["/comp", "/compact", false, "That command waits for the reply. /stop ends it."],
+    ["/ne", "/new", true, "That command waits for the reply."],
+  ])("%s + Enter on the menu's %s row waits for the reply and says so (paired browser: %s)", async (typed, cmd, remote, reason) => {
+    turns();
+    menuOffers(cmd);
+    api.runSlash.mockResolvedValue({ kind: "notice", text: "It ran" });
+    render(<Chat onOpenSettings={() => {}} remote={remote} />);
+    await replying();
+    const box = screen.getByLabelText("Message");
+    await userEvent.type(box, typed);
+    await screen.findByRole("listbox", { name: "Commands" });
+    await userEvent.type(box, "{Enter}");
+    expect((await screen.findByRole("alert")).textContent).toBe(reason);
+    expect(box).toHaveValue(typed);
+    expect(api.runSlash).not.toHaveBeenCalled();
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("a row that leaves the reply alone still runs when picked from the menu", async () => {
+    turns();
+    menuOffers("/bg");
+    api.runSlash.mockResolvedValue({ kind: "notice", text: "No background runs" });
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await replying();
+    const box = screen.getByLabelText("Message");
+    await userEvent.type(box, "/b");
+    await screen.findByRole("listbox", { name: "Commands" });
+    await userEvent.type(box, "{Enter}");
+    expect(await screen.findByRole("status", { name: "/bg result" })).toHaveTextContent("No background runs");
+    expect(api.runSlash).toHaveBeenCalledTimes(1);
+    expect(api.runSlash).toHaveBeenCalledWith("/bg", id);
+    expect(box).toHaveValue("");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("a command still running is not started twice, and its answer leaves what was typed meanwhile", async () => {
+    turns();
+    const answers = slowSlash();
+    render(<Chat onOpenSettings={() => {}} />);
+    await replying();
+    const box = screen.getByLabelText("Message");
+    await userEvent.type(box, "/consult tabs or spaces{Enter}");
+    await waitFor(() => expect(api.runSlash).toHaveBeenCalledTimes(1));
+    expect(box).toHaveValue("/consult tabs or spaces");
+    // Enter again while the first is still out.
+    await userEvent.type(box, "{Enter}");
+    expect(api.runSlash).toHaveBeenCalledTimes(1);
+    expect((await screen.findByText("That command is still running.")).getAttribute("role")).toBe("status");
+    expect(SLASH_RUNNING).toBe("That command is still running.");
+    await userEvent.clear(box);
+    await userEvent.type(box, "half a thought");
+    await act(async () => answers[0]({ kind: "notice", text: "Tabs" }));
+    expect(await screen.findByRole("status", { name: "/consult result" })).toHaveTextContent("Tabs");
+    expect(box).toHaveValue("half a thought");
+    expect(screen.queryByText("That command is still running.")).toBeNull();
   });
 });

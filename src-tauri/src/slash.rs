@@ -1422,7 +1422,13 @@ mod tests {
     }
 
     #[test]
-    fn the_browser_schedules_and_queues_but_starts_no_run_on_the_computer() {
+    fn the_browser_schedules_and_queues_and_is_refused_the_desktop_only_commands() {
+        assert_eq!(
+            parse("/queue then run the tests", true),
+            Ok(Action::Effect(Effect::Queue {
+                text: "then run the tests".into()
+            }))
+        );
         assert_eq!(
             parse("/loop every day at 9 summarize my inbox", true),
             Ok(Action::Effect(Effect::Loop {

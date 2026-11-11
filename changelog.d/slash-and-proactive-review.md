@@ -1,0 +1,5 @@
+- Chat box: `/queue` typed just as the reply ends is sent instead of being lost.
+- Chat box: a command picked from the slash menu while a reply runs says it waits for the reply instead of vanishing.
+- Chat box: Enter pressed again on a command that is still running starts no second run, and its answer no longer clears what you typed meanwhile.
+- `/goal` pins a goal when the settings file is empty.
+- Pulse: a click on a suggestion that fails no longer counts against the suggestion budget, and a suggestion that could not be saved gives its place back.

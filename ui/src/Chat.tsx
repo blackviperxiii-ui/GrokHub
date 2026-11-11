@@ -203,6 +203,14 @@ const BESIDE_REPLY = /^\/(queue|bg|background|send|consult)(\s|$)/i;
 export const SLASH_WAITS = "That command waits for the reply. /stop ends it.";
 /** The web app has no /stop. */
 export const SLASH_WAITS_REMOTE = "That command waits for the reply.";
+/** Enter again on a slash line whose answer is still out. */
+export const SLASH_RUNNING = "That command is still running.";
+
+/** Whether a slash line runs while a reply does: /stop and /undo act on the
+ * reply (the web app has neither), the rest leave it alone. */
+function runsBesideReply(line: string, remote?: boolean): boolean {
+  return (/^\/(stop|undo)$/i.test(line) && !remote) || BESIDE_REPLY.test(line);
+}
 
 export function newConversationId(): string {
   return `shell-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -595,6 +603,8 @@ export function Chat({
   /** Questions answered beside the running reply. */
   const [sides, setSides] = useState<Side[]>([]);
   const sideN = useRef(0);
+  /** Slash lines sent and not yet answered: Enter again starts no second run. */
+  const slashing = useRef(new Set<string>());
   /** The line shown the moment a message typed mid-reply is routed. */
   const [ack, setAck] = useState<string | null>(null);
   /** A reply's follow-ups landed: the chip row is asked for again. */
@@ -1061,17 +1071,28 @@ export function Chat({
     changeQueue([...queueRef.current, text]);
   }
 
-  /** Runs a slash line and applies what it did. */
-  async function slash(line: string) {
+  /** Runs a slash line and applies what it did. `box` is what the box held
+   * when the line was sent. */
+  async function slash(line: string, box = line) {
+    if (slashing.current.has(line)) {
+      setAck(SLASH_RUNNING);
+      return;
+    }
     setError(null);
+    slashing.current.add(line);
     let effect: SlashEffect;
     try {
       effect = await runSlash(line, conversationId);
     } catch (err) {
+      slashing.current.delete(line);
+      setAck((now) => (now === SLASH_RUNNING ? null : now));
       setError(String(err));
       return;
     }
-    setDraft("");
+    slashing.current.delete(line);
+    setAck((now) => (now === SLASH_RUNNING ? null : now));
+    // Only the line that was sent leaves the box: words typed while it ran stay.
+    setDraft((now) => (now.trim() === box.trim() ? "" : now));
     const command = line.split(/\s+/)[0];
     switch (effect.kind) {
       case "newChat":
@@ -1153,7 +1174,9 @@ export function Chat({
         break;
       case "queue":
         if (busyRef.current) changeQueue([...queueRef.current, effect.text]);
-        else void deliver(effect.text, [], false, "chat");
+        // Sent from the next render: the reply may have ended while the line
+        // was read, and this render's `deliver` still sees it running.
+        else setNextUp((now) => ({ text: effect.text, n: (now?.n ?? 0) + 1, as: "chat" }));
         break;
       case "palette":
         onOpenPalette?.();
@@ -1197,8 +1220,16 @@ export function Chat({
       setError(`${hit.cmd}: ${hit.disabled}`);
       return;
     }
-    if (run && hit.runOnPick) void slash(hit.cmd);
-    else setDraft(hit.insert);
+    if (!run || !hit.runOnPick) {
+      setDraft(hit.insert);
+      return;
+    }
+    // The same rule as a typed line: a command that waits for the reply says so.
+    if (busy && !runsBesideReply(hit.cmd, remote)) {
+      setError(remote ? SLASH_WAITS_REMOTE : SLASH_WAITS);
+      return;
+    }
+    void slash(hit.cmd, draft);
   }
 
   // Declared after what they call: React Compiler skips a component that
@@ -1211,7 +1242,7 @@ export function Chat({
     // While a reply runs, the app reads what the message is for (files wait
     // in the box). A typed /btw or /side asks on the side.
     if (busy) {
-      if ((/^\/(stop|undo)$/i.test(text) && !remote) || BESIDE_REPLY.test(text)) {
+      if (runsBesideReply(text, remote)) {
         await slash(text);
         return;
       }

@@ -153,6 +153,7 @@ pub fn tick(
     };
     let mind = Mind::read(config_dir);
     let mut posted = Vec::new();
+    let mut failed = None;
     for c in &surfaced {
         let key = mind_key(&c.topic);
         if mind.never(&key) {
@@ -166,12 +167,21 @@ pub fn tick(
             break;
         }
         let card = pro::proactive_card(c, route, now_ms);
-        if crate::pulse::add_post(config_dir, card.clone())? {
-            posted.push(card);
+        match crate::pulse::add_post(config_dir, card.clone()) {
+            Ok(true) => posted.push(card),
+            Ok(false) => {}
+            Err(e) => {
+                failed = Some(e);
+                break;
+            }
         }
     }
+    // Before the error goes back: a card that could not be saved cost nothing.
     refund(config_dir, now_ms, surfaced.len() - posted.len());
-    Ok(posted)
+    match failed {
+        Some(e) => Err(e),
+        None => Ok(posted),
+    }
 }
 
 /// Only a card that reached the page costs a slot. `surface` charged one for
@@ -534,6 +544,59 @@ mod tests {
             );
         }
         assert_eq!(load_budget(&dir).shown, vec![NOW]);
+    }
+
+    #[test]
+    fn a_click_that_fails_teaches_the_budget_nothing_and_the_retry_counts_once() {
+        let dir = temp_dir("failed-click");
+        let _config = grokhub_agent::perm::ConfigGuard::set(dir.to_path_buf());
+        blocked_board(&dir);
+        let card = tick(&dir, PID, NOW, false).expect("tick").remove(0);
+        // Card taste cannot be saved: a folder sits where its file goes.
+        let taste = grokhub_core::card_taste::path(&dir);
+        std::fs::create_dir_all(taste.join("in-the-way")).expect("folder");
+        let click = || {
+            crate::pulse::act(
+                &dir,
+                &card.id,
+                crate::pulse::Act::Dislike,
+                &day(),
+                NOW + MIN,
+            )
+        };
+        assert!(click().is_err());
+        let on_page = crate::pulse::cards(&dir).expect("cards");
+        assert_eq!(on_page.len(), 1);
+        assert_eq!(on_page[0].id, card.id);
+        assert_eq!(on_page[0].status, card.status, "the card is still up");
+        let budget = load_budget(&dir);
+        assert_eq!(budget.dismiss_streak, 0);
+        assert!(!budget.muted("Renew the domain", NOW + 2 * MIN));
+        // A second failed click must not be the second dismissal that halves the budget.
+        assert!(click().is_err());
+        assert_eq!(load_budget(&dir).caps(NOW + 2 * MIN), (3, 8));
+        // The same click once the file can be written counts, once.
+        std::fs::remove_dir_all(&taste).expect("clear");
+        click().expect("act");
+        let budget = load_budget(&dir);
+        assert_eq!(budget.dismiss_streak, 1);
+        assert!(budget.muted("Renew the domain", NOW + 6 * 24 * 60 * MIN));
+        assert_eq!(budget.caps(NOW + 2 * MIN), (3, 8));
+    }
+
+    #[test]
+    fn a_look_whose_post_cannot_be_saved_gives_its_budget_back() {
+        let dir = temp_dir("post-fails");
+        blocked_board(&dir);
+        // The feed cannot be saved: a folder sits where its temp file goes.
+        let tmp = dir.join(format!("updates.json.shell-{}.tmp", std::process::id()));
+        std::fs::create_dir_all(&tmp).expect("folder");
+        assert!(tick(&dir, PID, NOW, false).is_err());
+        assert_eq!(load_budget(&dir).shown, Vec::<u64>::new());
+        std::fs::remove_dir_all(&tmp).expect("clear");
+        let posted = tick(&dir, PID, NOW + 15 * MIN, false).expect("tick");
+        assert_eq!(posted.len(), 1);
+        assert_eq!(load_budget(&dir).shown, vec![NOW + 15 * MIN]);
     }
 
     #[test]

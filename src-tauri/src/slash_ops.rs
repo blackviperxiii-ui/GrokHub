@@ -326,11 +326,15 @@ const GOAL_PIN_MAX: usize = 200;
 
 /// Sets the pin, keeping every other key in `app.json` as it is, under the
 /// lock the shell's other writers of that file take. A file that doesn't
-/// parse is left alone.
+/// parse is left alone; an empty one holds no settings yet.
 fn set_goal_pin(config_dir: &Path, pin: &str) -> Result<(), String> {
     let path = config_dir.join("app.json");
     if std::fs::metadata(&path).is_ok_and(|m| m.len() > APP_JSON_CAP) {
         return Err("The settings file is too big to change here.".into());
+    }
+    // Nothing is lost with an empty file, and without one the pin starts a new file.
+    if std::fs::read_to_string(&path).is_ok_and(|raw| raw.trim().is_empty()) {
+        let _ = std::fs::remove_file(&path);
     }
     grokhub_core::app_json::patch(config_dir, &[("goalPin", serde_json::json!(pin))]).map_err(|e| {
         match grokhub_core::app_json::read(config_dir) {
@@ -826,6 +830,22 @@ mod tests {
         assert_eq!(app["goalPin"], "ship the harbor");
         assert_eq!(text(go(&h, "/goal clear")), "Goal cleared");
         assert_eq!(text(go(&h, "/goal")), "No goal pin");
+    }
+
+    #[test]
+    fn goal_pins_in_a_settings_file_that_is_empty() {
+        for (name, empty) in [("goalempty", ""), ("goalblank", " \n\t\n")] {
+            let h = home(name);
+            std::fs::write(h.config.join("app.json"), empty).expect("seed");
+            assert_eq!(text(go(&h, "/goal ship it")), "Goal: ship it", "{empty:?}");
+            let app: serde_json::Value = serde_json::from_str(
+                &std::fs::read_to_string(h.config.join("app.json")).expect("read"),
+            )
+            .expect("json");
+            assert_eq!(app, serde_json::json!({"goalPin": "ship it"}), "{empty:?}");
+            assert_eq!(text(go(&h, "/goal")), "Goal: ship it", "{empty:?}");
+            let _ = std::fs::remove_dir_all(h.config.parent().expect("root"));
+        }
     }
 
     #[test]
