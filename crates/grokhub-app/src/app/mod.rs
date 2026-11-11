@@ -270,6 +270,7 @@ mod code_deploy_ui;
 mod code_secrets_ui;
 mod code_ship_ui;
 mod code_tab;
+mod code_terminal;
 #[cfg(test)]
 mod one_reply_each_tests;
 mod sidebar;
@@ -790,6 +791,7 @@ pub struct Cabin {
     greeting_llm_at: u64,
     continue_hint: String,
     code_tab: code_tab::CodeTab,
+    code_term: code_terminal::TermPanel,
     skills_tab: skills_tab::SkillsTab,
     personal: personal_ui::PersonalPage,
     pending_connectors: Vec<(String, String, String)>,
@@ -1435,6 +1437,7 @@ impl Cabin {
             greeting_llm_at: 0,
             continue_hint: String::new(),
             code_tab: code_tab::CodeTab::default(),
+            code_term: code_terminal::TermPanel::default(),
             skills_tab: skills_tab::SkillsTab::default(),
             personal: personal_ui::PersonalPage::default(),
             pending_connectors: vec![],
@@ -1938,6 +1941,7 @@ impl Cabin {
             greeting_llm_at: 0,
             continue_hint: String::new(),
             code_tab: code_tab::CodeTab::default(),
+            code_term: code_terminal::TermPanel::default(),
             skills_tab: skills_tab::SkillsTab::default(),
             personal: personal_ui::PersonalPage::default(),
             pending_connectors: Vec::new(),
@@ -5573,6 +5577,7 @@ impl eframe::App for Cabin {
                 }
             }
         }
+        self.code_terminal_end_frame();
         // Latest chip → Settings → Update must paint on top of Get Started.
         // A first-frame Area over empty chat does not draw; this overlay opens
         // after GitHub Latest returns, when the window is already sized.

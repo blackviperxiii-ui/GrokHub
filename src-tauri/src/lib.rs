@@ -28,6 +28,7 @@ pub use grokhub_code::ship as code_ship;
 pub use grokhub_code::term as code_term;
 pub mod connectors;
 pub mod credential;
+pub mod episode;
 pub mod export;
 pub mod game_companion;
 pub mod goals;
@@ -215,8 +216,15 @@ fn save_settings(
     };
     settings::save(&state.config_dir, &next)?;
     #[cfg(desktop)]
-    if current(&state).desktop_control != desktop_control {
-        grokhub_desktop::set_desktop_enabled(desktop_control);
+    {
+        if current(&state).desktop_control != desktop_control {
+            grokhub_desktop::set_desktop_enabled(desktop_control);
+        }
+        episode::sync_cua(
+            desktop_control,
+            episode::cua_flag(&state.config_dir),
+            episode::hub_exe(),
+        );
     }
     *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
     Ok(view(&next))
@@ -586,6 +594,24 @@ async fn chat_turn(
         let offset = clock.map_or(0, |c| c.at(grokhub_core::now_ms()).utc_offset_min());
         route.voice_session = Some(personality::voice_config(&config_dir, &settings, offset));
         let id = conversation_id.clone();
+        // The episode panel follows the chat's open episode while it runs.
+        let halt_watch = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let watcher = route.desktop.then(|| {
+            let (app, session, stop) = (app.clone(), Arc::clone(&session), Arc::clone(&halt_watch));
+            let (config_dir, chat) = (config_dir.clone(), conversation_id.clone());
+            std::thread::spawn(move || {
+                episode::watch(
+                    &stop,
+                    &config_dir,
+                    &chat,
+                    &|| session.episode(),
+                    &|| session.frame(),
+                    &mut |panel| {
+                        let _ = app.emit(episode::EPISODE_EVENT, panel);
+                    },
+                );
+            })
+        });
         let stop = session.prompt(
             &text,
             files,
@@ -602,6 +628,10 @@ async fn chat_turn(
                 );
             }),
         );
+        halt_watch.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(watcher) = watcher {
+            let _ = watcher.join();
+        }
         if stop
             .as_deref()
             .is_ok_and(|s| s != agent::HALTED && s != "error")
@@ -750,6 +780,145 @@ fn halt_desktop(app: AppHandle) -> Result<Vec<String>, String> {
         let _ = app;
         Err("Halt stops desktop control, which runs on a computer.".into())
     }
+}
+
+/// The chat's open desktop episode as the panel draws it now, or `None`.
+/// Desktop only, like Halt: a browser never sees the computer's screen.
+#[tauri::command]
+fn episode_state(state: State<'_, ShellState>, conversation_id: String) -> Option<episode::Panel> {
+    let session = state
+        .chats
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&conversation_id)
+        .cloned()?;
+    let open = session.episode()?;
+    Some(episode::panel(
+        &state.config_dir,
+        &conversation_id,
+        &open.id,
+        open.started_ms,
+        grokhub_core::now_ms(),
+        session.frame(),
+        open.paused,
+        open.cua,
+    ))
+}
+
+/// Arms or disarms the supervised desktop session for a chat: its next
+/// messages, sent with desktop control on, run as an episode. Returns whether
+/// it is armed now.
+#[tauri::command]
+fn episode_arm(state: State<'_, ShellState>, conversation_id: String, on: bool) -> bool {
+    let session = session(&state, &conversation_id);
+    session.arm_episode(on);
+    session.episode_armed()
+}
+
+/// Whether the chat's supervised desktop session is armed or open.
+#[tauri::command]
+fn episode_armed(state: State<'_, ShellState>, conversation_id: String) -> bool {
+    state
+        .chats
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&conversation_id)
+        .is_some_and(|s| s.episode_armed() || s.episode().is_some())
+}
+
+/// Tells the page where the chat's episode stands now, for a change made
+/// while no prompt runs (the watcher only runs with one).
+fn emit_episode(
+    app: &AppHandle,
+    state: &ShellState,
+    session: &agent::Session,
+    chat: &str,
+    open: &episode::Open,
+) {
+    let panel = episode::panel(
+        &state.config_dir,
+        chat,
+        &open.id,
+        open.started_ms,
+        grokhub_core::now_ms(),
+        session.frame(),
+        session.episode().is_some_and(|o| o.paused),
+        open.cua,
+    );
+    let _ = app.emit(episode::EPISODE_EVENT, &panel);
+}
+
+/// OK or Deny on a card the episode parked.
+#[tauri::command]
+fn episode_answer(
+    app: AppHandle,
+    state: State<'_, ShellState>,
+    conversation_id: String,
+    park_id: String,
+    approve: bool,
+) -> Result<(), String> {
+    let session = state
+        .chats
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&conversation_id)
+        .cloned()
+        .ok_or_else(|| "That chat is closed.".to_string())?;
+    let open = session
+        .episode()
+        .ok_or_else(|| "No desktop session is open on this chat.".to_string())?;
+    episode::answer(&state.config_dir, &open.id, &park_id, approve)?;
+    emit_episode(&app, &state, &session, &conversation_id, &open);
+    Ok(())
+}
+
+/// Pause the open episode after the step it is on; the next message runs it
+/// again. False when none is running.
+#[tauri::command]
+fn episode_pause(state: State<'_, ShellState>, conversation_id: String) -> bool {
+    state
+        .chats
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&conversation_id)
+        .is_some_and(|session| session.pause_episode())
+}
+
+/// Stop the open episode: nothing more runs and every waiting card is denied.
+#[tauri::command]
+fn episode_stop(app: AppHandle, state: State<'_, ShellState>, conversation_id: String) -> bool {
+    let session = state
+        .chats
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&conversation_id)
+        .cloned();
+    let Some(session) = session else {
+        return false;
+    };
+    let Some(open) = session.episode() else {
+        return false;
+    };
+    let stopped = session.stop_episode();
+    // A running loop ends it and its watcher says so; with none running, say it here.
+    if stopped {
+        let mut panel = episode::panel(
+            &state.config_dir,
+            &conversation_id,
+            &open.id,
+            open.started_ms,
+            grokhub_core::now_ms(),
+            session.frame(),
+            false,
+            open.cua,
+        );
+        if panel.ended.is_none() {
+            panel.ended = Some("stop".into());
+        }
+        panel.state = "ended".into();
+        let _ = app.emit(episode::EPISODE_EVENT, &panel);
+    }
+    stopped
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -3922,8 +4091,8 @@ mod tests {
     }
 }
 
-/// The desktop tools' host: the shell's config folder and its switch. Cua is a
-/// cabin-only spike, so it stays off here.
+/// The desktop tools' host: the shell's config folder and its switch. Cua
+/// follows the `cuaDriver` flag the cabin saved (Linux only).
 #[cfg(desktop)]
 fn install_desktop_host() {
     // Pin the start time now, as the cabin does: a Halt after it keeps desktop
@@ -3931,10 +4100,16 @@ fn install_desktop_host() {
     grokhub_desktop::process_started_ms();
     grokhub_desktop::host::install(grokhub_desktop::host::Host {
         config_dir: grokhub_agent::perm::config_dir,
-        settings: || grokhub_desktop::host::Settings {
-            desktop_control: settings::load(&grokhub_agent::perm::config_dir()).desktop_control
-                && capabilities::current().desktop_control,
-            ..Default::default()
+        settings: || {
+            let dir = grokhub_agent::perm::config_dir();
+            let saved = grokhub_desktop::host::saved_settings(&dir);
+            grokhub_desktop::host::Settings {
+                desktop_control: settings::load(&dir).desktop_control
+                    && capabilities::current().desktop_control,
+                // The shell has no Cua switch; it reads the cabin's saved one.
+                cua_driver: saved.cua_driver,
+                cua_driver_path: saved.cua_driver_path,
+            }
         },
         #[cfg(target_os = "linux")]
         lock_titles: grokhub_desktop::screen::lock_titles,
@@ -4024,6 +4199,11 @@ pub fn run() {
                 if loaded.desktop_control && capabilities::current().desktop_control {
                     grokhub_desktop::set_desktop_enabled(true);
                 }
+                episode::sync_cua(
+                    loaded.desktop_control && capabilities::current().desktop_control,
+                    episode::cua_flag(&config_dir),
+                    episode::hub_exe(),
+                );
             }
             // The router takes Local AI's switch, OpenRouter's policy and the
             // spend limits from the cabin's settings from the start.
@@ -4144,6 +4324,12 @@ pub fn run() {
             turns::side_chat,
             turns::tell_main,
             halt_desktop,
+            episode_state,
+            episode_arm,
+            episode_armed,
+            episode_answer,
+            episode_pause,
+            episode_stop,
             get_halt_keys,
             close_chat,
             list_chats,
