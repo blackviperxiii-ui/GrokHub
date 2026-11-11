@@ -130,13 +130,12 @@ fn run(cmd: &str, args: &[&str]) -> Option<String> {
 /// The milliseconds in `(uint64 4200,)` (gdbus) or `4200` (xprintidle).
 #[cfg(any(target_os = "linux", test))]
 fn parse_idle_ms(text: &str) -> Option<u64> {
-    let digits: String = text
-        .trim()
-        .trim_start_matches(|c: char| !c.is_ascii_digit())
-        .chars()
-        .take_while(char::is_ascii_digit)
-        .collect();
-    digits.parse().ok()
+    // gdbus replies "(uint64 4200,)": the type name carries digits too,
+    // so the idle time is the last run of digits, not the first.
+    text.split(|c: char| !c.is_ascii_digit())
+        .rfind(|run| !run.is_empty())?
+        .parse()
+        .ok()
 }
 
 #[cfg(windows)]
