@@ -9,6 +9,7 @@ pub mod ai_models;
 #[cfg(desktop)]
 mod app_guard;
 pub mod attach;
+pub mod audio_check;
 pub mod auto_setup;
 pub mod automations;
 pub mod background;
@@ -73,6 +74,7 @@ pub mod remote_devices;
 pub mod remote_tls;
 #[cfg(desktop)]
 pub mod scheduler;
+pub mod screen_record;
 pub mod settings;
 pub mod shell_update;
 pub mod skills;
@@ -340,6 +342,10 @@ fn run_slash_line(
     conversation_id: Option<&str>,
     owned: Option<&dyn Fn(&str) -> bool>,
 ) -> Result<slash::Effect, String> {
+    // Screen recording and the audio check run on this computer only.
+    if let Some(done) = screen_record::slash(line, &state.config_dir, remote) {
+        return done;
+    }
     let op = match slash::parse(line, remote)? {
         slash::Action::Op(op) => op,
         other => return slash::apply(other, &workspace(state)),
@@ -756,12 +762,27 @@ fn steer_chat(state: State<'_, ShellState>, conversation_id: String, text: Strin
 #[cfg(desktop)]
 fn halt_now(app: &AppHandle) -> Vec<String> {
     let state = app.state::<ShellState>();
+    // Halt ends a screen recording too.
+    screen_record::stop();
     let busy = {
         let chats = state.chats.lock().unwrap_or_else(|e| e.into_inner());
         agent::halt(&state.config_dir, chats.values())
     };
     let _ = app.emit(HALT_EVENT, &busy);
     busy
+}
+
+/// The top bar's recording indicator, the audio check's line and any run that
+/// just finished (each handed over once). The window asks every second.
+#[tauri::command]
+fn record_status() -> screen_record::Status {
+    screen_record::status()
+}
+
+/// The indicator's Stop. True when a recording was running.
+#[tauri::command]
+fn record_stop() -> bool {
+    screen_record::stop()
 }
 
 /// Halt. Desktop only: phones have no desktop control, and the web app never
@@ -4264,6 +4285,8 @@ pub fn run() {
             set_api_key,
             slash_hits,
             run_slash,
+            record_status,
+            record_stop,
             clear_api_key,
             start_grok_sign_in,
             poll_grok_sign_in,
