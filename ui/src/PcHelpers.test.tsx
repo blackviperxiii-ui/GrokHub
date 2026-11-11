@@ -12,6 +12,7 @@ const api = vi.hoisted(() => ({
 }));
 
 vi.mock("./api", () => api);
+vi.mock("./PcFiles", () => ({ PcFiles: () => <p>Files panel</p> }));
 
 import { PcHelpers, WIND_BLIND_NOTE } from "./PcHelpers";
 

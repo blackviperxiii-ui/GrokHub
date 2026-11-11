@@ -7,6 +7,7 @@ import {
   type PcHelperKey,
   type PcHelpers as Shape,
 } from "./api";
+import { PcFiles } from "./PcFiles";
 import { Toggle } from "./Toggle";
 
 export const FOCUS_NOTE =
@@ -94,6 +95,7 @@ export function PcHelpers() {
           {note}
         </p>
       )}
+      <PcFiles />
     </div>
   );
 }
