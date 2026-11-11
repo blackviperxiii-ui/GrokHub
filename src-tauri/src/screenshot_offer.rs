@@ -101,7 +101,11 @@ pub fn set_enabled(config_dir: &Path, on: bool, now_ms: u64) -> Result<View, Str
     }
     Ok(View {
         enabled: on,
-        offer: if on { offer_view(&ledger, now_ms) } else { None },
+        offer: if on {
+            offer_view(&ledger, now_ms)
+        } else {
+            None
+        },
     })
 }
 

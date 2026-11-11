@@ -3783,12 +3783,16 @@ async fn explain_screenshot_offer(
         let state = app.state::<ShellState>();
         let dir = state.config_dir.clone();
         screenshot_offer::explain(&dir, grokhub_core::now_ms(), |path| {
-            stage_paths(&state, &conversation_id, std::iter::once(path.to_path_buf()))
-                .pop()
-                .unwrap_or(attach::Outcome {
-                    staged: None,
-                    error: Some(screenshot_offer::GONE.into()),
-                })
+            stage_paths(
+                &state,
+                &conversation_id,
+                std::iter::once(path.to_path_buf()),
+            )
+            .pop()
+            .unwrap_or(attach::Outcome {
+                staged: None,
+                error: Some(screenshot_offer::GONE.into()),
+            })
         })
     })
     .await?
