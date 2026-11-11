@@ -159,8 +159,13 @@ pub async fn side_chat(
         so_far.as_deref().unwrap_or(""),
     );
     let id = side_id.clone();
+    // A side answer reads the folder its chat works in.
+    let own_folder = state.code_sessions.of(&conversation_id);
     let stop = tauri::async_runtime::spawn_blocking(move || {
         let mut route = crate::route(&settings, agent::SessionMode::Btw, &config_dir)?;
+        if let Some(dir) = own_folder {
+            route.workspace = dir;
+        }
         route.suggestions = false;
         session.prompt(
             &prompt,
