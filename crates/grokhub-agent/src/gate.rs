@@ -264,8 +264,14 @@ pub fn is_media(name: &str) -> bool {
     MEDIA.contains(&name)
 }
 
+/// The look-only screenshot ([`crate::tools::LOOK_AT_SCREEN`]).
+pub fn is_look(name: &str) -> bool {
+    name == crate::tools::LOOK_AT_SCREEN
+}
+
 pub fn is_known(name: &str) -> bool {
     is_readonly(name)
+        || is_look(name)
         || EDIT.contains(&name)
         || SHELL.contains(&name)
         || CONTROL.contains(&name)
@@ -295,7 +301,7 @@ pub fn mcp_policy_deny(name: &str) -> String {
 }
 
 pub fn unattended_deny(name: &str) -> String {
-    let label = if is_desktop(name) {
+    let label = if is_desktop(name) || is_look(name) {
         "mcp matching \"grokhub-desktop__*\""
     } else if SHELL.contains(&name) || name == "kill_command_or_subagent" || name == "monitor" {
         "bash"
@@ -342,6 +348,26 @@ pub fn decide(gate: &Gate, name: &str, latched_always: bool, desk: Option<DeskFl
     }
     if !is_known(name) {
         return Decision::Refuse(format!("unknown tool `{name}`"));
+    }
+    if is_look(name) {
+        // A look reads the screen and changes nothing, so it needs no desktop
+        // control. Halt and a locked screen still stop it. With control off it
+        // asks every time (unless the person chose Always for it): seeing the
+        // screen is still the person's call.
+        match desk {
+            Some(DeskFlags { halted: true, .. }) => {
+                return Decision::Refuse((*HALT_MSG).to_string())
+            }
+            Some(DeskFlags { locked: true, .. }) => return Decision::Refuse(LOCK_MSG.to_string()),
+            _ => {}
+        }
+        if latched_always || (gate.desktop && gate.mode == PermMode::Always) {
+            return Decision::Run;
+        }
+        if gate.attended {
+            return Decision::Ask;
+        }
+        return Decision::Refuse(unattended_deny(name));
     }
     if is_desktop(name) {
         if !gate.desktop {
@@ -613,6 +639,75 @@ mod tests {
             ),
             Decision::Refuse(unattended_deny("screenshot"))
         );
+    }
+
+    #[test]
+    fn a_look_at_the_screen_needs_no_desktop_control_but_asks() {
+        let look = crate::tools::LOOK_AT_SCREEN;
+        let free = Some(DeskFlags {
+            halted: false,
+            locked: false,
+        });
+        // Control off, attended: it asks every time, even under Always.
+        for mode in [PermMode::Ask, PermMode::Auto, PermMode::Always] {
+            assert_eq!(
+                decide(&gate(mode, false, true, false), look, false, free),
+                Decision::Ask
+            );
+        }
+        // Always chosen on its card, or control on with Always: it runs.
+        assert_eq!(
+            decide(&gate(PermMode::Ask, false, true, false), look, true, free),
+            Decision::Run
+        );
+        assert_eq!(
+            decide(
+                &gate(PermMode::Always, false, true, true),
+                look,
+                false,
+                free
+            ),
+            Decision::Run
+        );
+        // Nobody there: refused, as other desktop tools are.
+        assert_eq!(
+            decide(
+                &gate(PermMode::Always, false, false, false),
+                look,
+                false,
+                free
+            ),
+            Decision::Refuse(unattended_deny(look))
+        );
+        // Halt and a locked screen still stop it; plan mode refuses it.
+        assert_eq!(
+            decide(
+                &gate(PermMode::Ask, false, true, false),
+                look,
+                true,
+                Some(DeskFlags {
+                    halted: true,
+                    locked: false
+                })
+            ),
+            Decision::Refuse((*HALT_MSG).into())
+        );
+        assert_eq!(
+            decide(
+                &gate(PermMode::Ask, false, true, false),
+                look,
+                true,
+                Some(DeskFlags {
+                    halted: false,
+                    locked: true
+                })
+            ),
+            Decision::Refuse(LOCK_MSG.into())
+        );
+        assert!(matches!(
+            decide(&gate(PermMode::Always, true, true, true), look, true, free),
+            Decision::Refuse(text) if text.contains(READ_ONLY_PHASE)
+        ));
     }
 
     #[test]

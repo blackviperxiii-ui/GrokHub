@@ -391,6 +391,11 @@ impl DesktopOps for Switched {
         }
         self.inner.hint(name, args)
     }
+
+    /// A look needs no desktop control, so it passes with the switch off.
+    fn look(&self, args: &serde_json::Value) -> ToolOutput {
+        self.inner.look(args)
+    }
 }
 
 /// OK or Deny on a card the episode posted. Only this episode's cards
@@ -471,6 +476,11 @@ impl DesktopOps for FrameTap {
 
     fn hint(&self, name: &str, args: &serde_json::Value) -> serde_json::Value {
         self.inner.hint(name, args)
+    }
+
+    /// A look stays out of the episode panel's frame: it belongs to the chat.
+    fn look(&self, args: &serde_json::Value) -> ToolOutput {
+        self.inner.look(args)
     }
 }
 
