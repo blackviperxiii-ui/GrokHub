@@ -231,6 +231,7 @@ pub fn filter_palette(q: &str) -> Vec<(&'static str, &'static str)> {
     let rows = [
         ("Home", "nav:home"),
         ("Chat", "nav:chat"),
+        ("Code", "nav:code"),
         ("Objectives", "nav:objectives"),
         ("Pulse", "nav:pulse"),
         ("Library", "nav:library"),
@@ -285,9 +286,10 @@ mod tests {
         assert_eq!(filter_palette("skills"), vec![("Skills", "nav:skills")]);
         assert_eq!(filter_palette("ideas"), vec![("Pulse", "nav:pulse")]);
         assert!(filter_palette("set").iter().any(|(l, _)| *l == "Settings"));
-        // Every page has a row; an empty query hides Agents and Command (27 - 2).
+        // Every page has a row; an empty query hides Agents and Command (28 - 2).
         // Night is not its own row; `night` still resolves to Automations above.
-        assert_eq!(filter_palette("").len(), 25);
+        assert_eq!(filter_palette("").len(), 26);
+        assert_eq!(filter_palette("code"), vec![("Code", "nav:code")]);
         assert_eq!(
             filter_palette("record"),
             vec![("Record my screen", "/record")]

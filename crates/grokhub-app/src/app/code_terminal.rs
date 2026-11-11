@@ -33,6 +33,13 @@ const MAX_ROWS: u16 = 500;
 const MIN_COLS: u16 = 2;
 const MAX_COLS: u16 = 1000;
 const FONT_SIZE: f32 = 13.0;
+/// The screen's height in points.
+const SCREEN_HEIGHT: f32 = 360.0;
+/// Space between the screen's edge and the text, like the tab's other wells.
+const INSET: f32 = 10.0;
+/// The section title and the line shown once the shell has ended.
+pub(super) const TITLE: &str = "Terminal";
+pub(super) const ENDED: &str = "The shell ended. Open the terminal again to start a new one.";
 
 /// Collects what the parser wants written back to the shell (answers to
 /// cursor-position and device queries).
@@ -356,6 +363,11 @@ pub(super) fn paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {
     }
 }
 
+/// How many activity lines to keep, from the desktop app's Code settings.
+fn keep_of(config_dir: &Path) -> usize {
+    grokhub_code::ship::load_from_shell_json(config_dir).activity_keep
+}
+
 /// What the shell thread or the open thread reports back.
 enum Msg {
     Opened(Result<u32, String>),
@@ -381,6 +393,8 @@ pub(super) struct TermPanel {
     root: Option<PathBuf>,
     /// The last error or note to show under the header.
     status: Option<String>,
+    /// Drawn this frame; a terminal not drawn for a frame is closed.
+    painted: bool,
 }
 
 impl Default for TermPanel {
@@ -392,6 +406,7 @@ impl Default for TermPanel {
             live: None,
             root: None,
             status: None,
+            painted: false,
         }
     }
 }
@@ -416,7 +431,6 @@ impl TermPanel {
         &mut self,
         root: &Path,
         config_dir: &Path,
-        keep: usize,
         size: GridSize,
         repaint: impl Fn() + Send + Sync + 'static,
     ) {
@@ -452,7 +466,7 @@ impl TermPanel {
                     &config,
                     &root,
                     "Opened a terminal in the project folder.",
-                    keep,
+                    keep_of(&config),
                 );
             }
             let _ = tx.send(Msg::Opened(opened));
@@ -461,7 +475,7 @@ impl TermPanel {
     }
 
     /// End the shell. Logged when one was open.
-    pub(super) fn close(&mut self, config_dir: &Path, keep: usize) {
+    pub(super) fn close(&mut self, config_dir: &Path) {
         if self.live.take().is_none() {
             return;
         }
@@ -471,7 +485,7 @@ impl TermPanel {
             if backend::close(backend::global())
                 && let Some(root) = root
             {
-                backend::log(&config, &root, "Closed the terminal.", keep);
+                backend::log(&config, &root, "Closed the terminal.", keep_of(&config));
             }
         });
     }
@@ -538,49 +552,79 @@ fn cell_size(ui: &egui::Ui, font: &FontId) -> Vec2 {
 
 /// Draw the terminal panel: header with the push-guard notice, Open / Close,
 /// and the screen. `root` is the project folder.
-pub(super) fn ui(
-    panel: &mut TermPanel,
-    ui: &mut egui::Ui,
-    root: &Path,
-    config_dir: &Path,
-    keep: usize,
-) {
+pub(super) fn panel_ui(panel: &mut TermPanel, ui: &mut egui::Ui, root: &Path, config_dir: &Path) {
+    panel.painted = true;
     panel.pump();
-    ui.horizontal(|ui| {
-        ui.strong("Terminal");
-        if panel.is_open() {
-            if ui.button("Close").clicked() {
-                panel.close(config_dir, keep);
-            }
-        } else if ui.button("Open terminal").clicked() {
+    // A shell left in another project's folder is closed.
+    if panel.live.is_some() && panel.root.as_deref().is_some_and(|r| r != root) {
+        panel.close(config_dir);
+    }
+    crate::cards::section_label(ui, TITLE);
+    ui.label(
+        egui::RichText::new(NOTICE)
+            .size(crate::theme::TYPE_CAPTION)
+            .color(crate::theme::muted()),
+    );
+    ui.add_space(crate::theme::SPACING_8);
+    let open = panel.is_open();
+    let label = if open {
+        "Close terminal"
+    } else {
+        "Open terminal"
+    };
+    let pressed = if open {
+        crate::cards::ghost_pill(ui, label)
+    } else {
+        crate::cards::white_pill(ui, label)
+    };
+    if pressed {
+        panel.close(config_dir);
+        if !open {
             let font = FontId::monospace(FONT_SIZE);
             let cell = cell_size(ui, &font);
-            let area = Vec2::new(ui.available_width(), 320.0);
+            let area = Vec2::new(ui.available_width(), SCREEN_HEIGHT) - Vec2::splat(2.0 * INSET);
             let ctx = ui.ctx().clone();
-            panel.close(config_dir, keep);
-            panel.open(root, config_dir, keep, grid_for(area, cell), move || {
+            panel.open(root, config_dir, grid_for(area, cell), move || {
                 ctx.request_repaint()
             });
         }
-    });
-    ui.label(egui::RichText::new(NOTICE).small().weak());
+    }
     if let Some(s) = &panel.status {
-        ui.colored_label(ui.visuals().warn_fg_color, s);
+        ui.colored_label(crate::theme::muted(), s);
     }
     if panel.live.as_ref().is_some_and(|l| l.exited) {
-        ui.label("The shell ended.");
+        ui.colored_label(crate::theme::muted(), ENDED);
     }
     if panel.live.is_some() {
+        ui.add_space(crate::theme::SPACING_8);
         screen_ui(panel, ui);
+    }
+}
+
+impl super::Cabin {
+    /// The Code tab's terminal section.
+    pub(super) fn ui_code_terminal(&mut self, ui: &mut egui::Ui) {
+        let root = self.grok_cwd();
+        panel_ui(&mut self.code_term, ui, &root, &crate::config::config_dir());
+    }
+
+    /// Call once per frame after the page is drawn: a terminal the Code tab
+    /// didn't draw this frame (the tab was left) is closed.
+    pub(super) fn code_terminal_end_frame(&mut self) {
+        let panel = &mut self.code_term;
+        if !std::mem::take(&mut panel.painted) && panel.live.is_some() {
+            panel.close(&crate::config::config_dir());
+        }
     }
 }
 
 fn screen_ui(panel: &mut TermPanel, ui: &mut egui::Ui) {
     let font = FontId::monospace(FONT_SIZE);
     let cell = cell_size(ui, &font);
-    let height = ui.available_height().max(cell.y * 8.0).min(cell.y * 40.0);
-    let (rect, resp) =
+    let height = SCREEN_HEIGHT.max(cell.y * 8.0);
+    let (outer, resp) =
         ui.allocate_exact_size(Vec2::new(ui.available_width(), height), Sense::click());
+    let rect = outer.shrink(INSET);
     if resp.clicked() {
         resp.request_focus();
     }
@@ -680,16 +724,27 @@ fn screen_ui(panel: &mut TermPanel, ui: &mut egui::Ui) {
     }
 
     if let Some(live) = panel.live.as_ref() {
+        let painter = ui.painter_at(outer);
+        painter.rect_filled(outer, crate::theme::CARD_RADIUS, crate::theme::code_well());
+        let edge = if focused {
+            crate::theme::fg().gamma_multiply(0.5)
+        } else {
+            crate::theme::border()
+        };
+        painter.rect_stroke(
+            outer,
+            crate::theme::CARD_RADIUS,
+            egui::Stroke::new(1.0, edge),
+            egui::StrokeKind::Inside,
+        );
         paint(ui, rect, cell, &font, &live.screen, focused);
     }
 }
 
 fn paint(ui: &egui::Ui, rect: Rect, cell: Vec2, font: &FontId, screen: &Screen, focused: bool) {
     let painter = ui.painter_at(rect);
-    let visuals = ui.visuals();
-    let bg = visuals.extreme_bg_color;
-    let fg = visuals.text_color();
-    painter.rect_filled(rect, 4.0, bg);
+    let bg = crate::theme::code_well();
+    let fg = crate::theme::fg();
     let content = screen.term.renderable_content();
     let offset = content.display_offset as i32;
     let colors = content.colors;

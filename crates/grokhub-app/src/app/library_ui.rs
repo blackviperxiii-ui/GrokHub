@@ -797,6 +797,7 @@ mod tests {
             [
                 "home",
                 "chat",
+                "code",
                 "objectives",
                 "workboard",
                 "pulse",

@@ -110,6 +110,7 @@ pub(super) fn nav_name(nav: Nav) -> &'static str {
     match nav {
         Nav::Home => "Home",
         Nav::Chat => "Chat",
+        Nav::Code => "Code",
         Nav::Settings => "Settings",
         Nav::Objectives => "Objectives",
         Nav::Pulse => "Pulse",

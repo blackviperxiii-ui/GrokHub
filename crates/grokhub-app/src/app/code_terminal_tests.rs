@@ -246,7 +246,6 @@ fn a_shell_opens_in_the_project_hides_a_token_resizes_and_ends_on_close() {
     panel.open(
         &root,
         &config,
-        100,
         GridSize {
             rows: 10,
             cols: 120,
@@ -284,7 +283,7 @@ fn a_shell_opens_in_the_project_hides_a_token_resizes_and_ends_on_close() {
         shown(&panel)
     );
 
-    panel.close(&config, 100);
+    panel.close(&config);
     assert!(!panel.is_open());
     // Closing runs off the UI thread; the shell is gone soon after.
     let end = Instant::now() + Duration::from_secs(10);
@@ -319,7 +318,7 @@ fn a_missing_folder_shows_the_reason_and_no_screen() {
     let gone = std::env::temp_dir().join("gh-cabin-term-no-such-dir");
     let config = std::env::temp_dir().join(format!("gh-cabin-term-cfg-{}", std::process::id()));
     std::fs::create_dir_all(&config).unwrap();
-    panel.open(&gone, &config, 100, GridSize { rows: 5, cols: 20 }, || {});
+    panel.open(&gone, &config, GridSize { rows: 5, cols: 20 }, || {});
     let end = Instant::now() + Duration::from_secs(10);
     while panel.live.is_some() && Instant::now() < end {
         panel.pump();
