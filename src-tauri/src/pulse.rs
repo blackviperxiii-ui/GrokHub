@@ -702,6 +702,31 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
             ps::save_saved(&path, &list)?;
         }
     }
+    // The proactive budget and the nudge ledger hear what you did with their cards.
+    match act {
+        Act::Dismiss => {
+            crate::proactive::card_acted(
+                config_dir,
+                &card,
+                crate::proactive::Feedback::Dismiss,
+                now_ms,
+            );
+            crate::nudges::dismissed(config_dir, &card);
+        }
+        Act::NotThis => crate::proactive::card_acted(
+            config_dir,
+            &card,
+            crate::proactive::Feedback::NotThis,
+            now_ms,
+        ),
+        Act::Accept | Act::Love => crate::proactive::card_acted(
+            config_dir,
+            &card,
+            crate::proactive::Feedback::Used,
+            now_ms,
+        ),
+        _ => {}
+    }
     let changed = match act {
         Act::Dismiss => remove(&mut cards),
         Act::Dislike => {
