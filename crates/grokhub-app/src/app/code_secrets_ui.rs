@@ -35,6 +35,12 @@ pub(super) fn repo_key_of(ws: &Path) -> String {
     grokhub_code::runs::repo_key(ws, grokhub_code::repo::origin_url(ws).as_deref())
 }
 
+/// The Value field's id for one generation: a new generation is a field
+/// egui has never seen, with no undo history.
+fn value_id(generation: u64) -> egui::Id {
+    egui::Id::new(("code-secret-value", generation))
+}
+
 /// Work for the worker thread. The value rides along only to the keychain.
 pub(super) enum SecretJob {
     List,
@@ -106,6 +112,12 @@ pub(super) struct SecretsPanel {
     pub(super) busy: bool,
     pub(super) note: Option<String>,
     focus_value: bool,
+    /// Counts the times a value left the panel (a save, another project).
+    /// It is part of the Value field's id, so the field's undo history is
+    /// left behind with the value.
+    value_gen: u64,
+    /// Field generations below this one had their undo history cleared.
+    value_wiped: u64,
     ws: Option<PathBuf>,
     rx: Option<mpsc::Receiver<SecretOut>>,
 }
@@ -130,6 +142,9 @@ impl SecretsPanel {
         self.busy = true;
         self.note = None;
         let value = std::mem::take(&mut self.value);
+        // The field's undo history holds the value too: a new field id
+        // starts with none, so Ctrl+Z can't bring it back.
+        self.value_gen += 1;
         Some(SecretJob::Set {
             name: self.name.trim().to_string(),
             value,
@@ -227,11 +242,24 @@ impl SecretsPanel {
             *self = Self {
                 ws: Some(ws.to_path_buf()),
                 busy: true,
+                // A value typed for the other project goes, undo history too.
+                value_gen: self.value_gen + 1,
+                value_wiped: self.value_wiped,
                 ..Self::default()
             };
             self.start(Some(SecretJob::List), &ctx, config_dir, ws);
         }
         self.poll();
+        // egui keeps a field's undo history by id. The fields a value left
+        // are never drawn again, and what they remembered is dropped here.
+        while self.value_wiped < self.value_gen {
+            let old = value_id(self.value_wiped);
+            if let Some(mut state) = egui::TextEdit::load_state(&ctx, old) {
+                state.clear_undoer();
+                egui::TextEdit::store_state(&ctx, old, state);
+            }
+            self.value_wiped += 1;
+        }
 
         crate::cards::section_label(ui, SECRETS_TITLE);
         muted(ui, SECRETS_NOTE);
@@ -280,6 +308,7 @@ impl SecretsPanel {
             let r = ui.add_enabled(
                 !self.busy,
                 egui::TextEdit::singleline(&mut self.value)
+                    .id(value_id(self.value_gen))
                     .password(true)
                     .hint_text("Value")
                     .desired_width(240.0),

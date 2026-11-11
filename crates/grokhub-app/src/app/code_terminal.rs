@@ -9,6 +9,7 @@
 //! tab's push guard, and the header says so.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
@@ -40,6 +41,15 @@ const INSET: f32 = crate::theme::SPACING_12;
 /// The section title and the line shown once the shell has ended.
 pub(super) const TITLE: &str = "Terminal";
 pub(super) const ENDED: &str = "The shell ended. Open the terminal again to start a new one.";
+/// The most output one pump feeds the screen. A backlog (the window was
+/// hidden, or a program prints fast) is taken in pieces, so no pass stalls.
+const PUMP_BUDGET: usize = 1024 * 1024;
+/// What an open reports when the terminal was closed before it finished.
+/// Never shown: the panel has moved on by then.
+const CLOSED_EARLY: &str = "The terminal was closed before it opened.";
+/// One open or close reaches the backend at a time, so "is this open still
+/// wanted?" and the open itself are never split by a close.
+static TURN: Mutex<()> = Mutex::new(());
 
 /// Collects what the parser wants written back to the shell (answers to
 /// cursor-position and device queries).
@@ -373,8 +383,30 @@ fn keep_of(config_dir: &Path) -> usize {
 
 /// What the shell thread or the open thread reports back.
 enum Msg {
-    Opened(Result<u32, String>),
+    /// How the open with this number went. One for an open that was closed
+    /// or replaced since is dropped.
+    Opened(u64, Result<u32, String>),
     Out(Chunk),
+}
+
+/// Run `open` if the open numbered `mine` is still the one `wanted`. A shell
+/// that was closed while it started is ended here: nothing else knows it.
+/// `None` when the open was not made or not kept.
+fn open_if_wanted(
+    wanted: &AtomicU64,
+    mine: u64,
+    open: impl FnOnce() -> Result<u32, String>,
+) -> Option<Result<u32, String>> {
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    if wanted.load(Ordering::SeqCst) != mine {
+        return None;
+    }
+    let opened = open();
+    if opened.is_ok() && wanted.load(Ordering::SeqCst) != mine {
+        backend::close(backend::global());
+        return None;
+    }
+    Some(opened)
 }
 
 /// One terminal session as the widget sees it.
@@ -398,6 +430,12 @@ pub(super) struct TermPanel {
     status: Option<String>,
     /// Drawn this frame; a terminal not drawn for a frame is closed.
     painted: bool,
+    /// The number of the newest open or close. An open still on its way
+    /// checks it, so a close (or a newer open) that came first wins.
+    wanted: Arc<AtomicU64>,
+    /// The shell had the keyboard when the panel was last drawn. The cabin's
+    /// own shortcuts (Ctrl+G, Ctrl+K and the rest) stay out of the way then.
+    pub(super) keys_held: bool,
 }
 
 impl Default for TermPanel {
@@ -410,12 +448,16 @@ impl Default for TermPanel {
             root: None,
             status: None,
             painted: false,
+            wanted: Arc::new(AtomicU64::new(0)),
+            keys_held: false,
         }
     }
 }
 
 impl Drop for TermPanel {
     fn drop(&mut self) {
+        // An open still on its way ends its own shell when it sees this.
+        self.wanted.fetch_add(1, Ordering::SeqCst);
         // Only a session the backend opened; a panel that never opened one
         // leaves the window's terminal alone.
         if self.live.as_ref().is_some_and(|l| l.id.is_some()) {
@@ -447,6 +489,8 @@ impl TermPanel {
             exited: false,
         });
         self.root = Some(root.to_path_buf());
+        let mine = self.wanted.fetch_add(1, Ordering::SeqCst) + 1;
+        let wanted = Arc::clone(&self.wanted);
         let tx = self.tx.clone();
         let root = root.to_path_buf();
         let config = config_dir.to_path_buf();
@@ -455,18 +499,22 @@ impl TermPanel {
             let held = grokhub_code::secrets::held_for(&config, &root);
             let out = tx.clone();
             let wake = Arc::clone(&repaint);
-            let opened = backend::open(
-                backend::global(),
-                &root,
-                held,
-                size.rows,
-                size.cols,
-                move |chunk| {
-                    let _ = out.send(Msg::Out(chunk));
-                    wake();
-                },
-            );
-            if opened.is_ok() {
+            // A close that came while the keychain was read (or comes while
+            // the shell starts) must not leave a shell with no panel.
+            let opened = open_if_wanted(&wanted, mine, || {
+                backend::open(
+                    backend::global(),
+                    &root,
+                    held,
+                    size.rows,
+                    size.cols,
+                    move |chunk| {
+                        let _ = out.send(Msg::Out(chunk));
+                        wake();
+                    },
+                )
+            });
+            if matches!(opened, Some(Ok(_))) {
                 backend::log(
                     &config,
                     &root,
@@ -474,50 +522,75 @@ impl TermPanel {
                     keep_of(&config),
                 );
             }
-            let _ = tx.send(Msg::Opened(opened));
+            let report = opened.unwrap_or_else(|| Err(CLOSED_EARLY.to_string()));
+            let _ = tx.send(Msg::Opened(mine, report));
             repaint();
         });
     }
 
     /// End the shell. Logged when one was open.
     pub(super) fn close(&mut self, config_dir: &Path) {
-        if self.live.take().is_none() {
+        self.keys_held = false;
+        let Some(live) = self.live.take() else {
             return;
-        }
+        };
+        let had_shell = live.id.is_some();
+        // An open still on its way sees this and ends its own shell.
+        let mine = self.wanted.fetch_add(1, Ordering::SeqCst) + 1;
+        let wanted = Arc::clone(&self.wanted);
         let root = self.root.take();
         let config = config_dir.to_path_buf();
         std::thread::spawn(move || {
-            if backend::close(backend::global())
-                && let Some(root) = root
-            {
+            let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+            // Open was pressed again already: that open ends the old shell
+            // itself, and a close that ran after it would end the new one.
+            let closed = if wanted.load(Ordering::SeqCst) == mine {
+                backend::close(backend::global())
+            } else {
+                had_shell
+            };
+            if closed && let Some(root) = root {
                 backend::log(&config, &root, "Closed the terminal.", keep_of(&config));
             }
         });
     }
 
-    /// Apply what the backend sent since the last frame.
-    fn pump(&mut self) {
-        while let Ok(msg) = self.rx.try_recv() {
+    /// Apply what the backend sent, up to [`PUMP_BUDGET`] bytes of output.
+    /// True when it stopped there, so more may be waiting. The page calls it
+    /// when it draws; the cabin's `logic` calls it on every pass, hidden
+    /// window included, so output never piles up unseen.
+    pub(super) fn pump(&mut self) -> bool {
+        let turn = self.wanted.load(Ordering::SeqCst);
+        let mut fed = 0usize;
+        while fed < PUMP_BUDGET {
+            let Ok(msg) = self.rx.try_recv() else {
+                return false;
+            };
             let Some(live) = self.live.as_mut() else {
                 continue;
             };
             match msg {
-                Msg::Opened(Ok(id)) => {
+                Msg::Opened(n, _) if n != turn => {}
+                Msg::Opened(_, Ok(id)) => {
                     live.id = Some(id);
                     for chunk in std::mem::take(&mut live.early) {
                         apply(live, chunk, &mut answer);
                     }
                 }
-                Msg::Opened(Err(e)) => {
+                Msg::Opened(_, Err(e)) => {
                     self.live = None;
                     self.status = Some(e);
                 }
-                Msg::Out(chunk) => match live.id {
-                    None => live.early.push(chunk),
-                    Some(_) => apply(live, chunk, &mut answer),
-                },
+                Msg::Out(chunk) => {
+                    fed += chunk.text.len();
+                    match live.id {
+                        None => live.early.push(chunk),
+                        Some(_) => apply(live, chunk, &mut answer),
+                    }
+                }
             }
         }
+        true
     }
 
     fn send(&mut self, bytes: &[u8]) {
@@ -567,7 +640,10 @@ fn cell_size(ui: &egui::Ui, font: &FontId) -> Vec2 {
 /// and the screen. `root` is the project folder.
 pub(super) fn panel_ui(panel: &mut TermPanel, ui: &mut egui::Ui, root: &Path, config_dir: &Path) {
     panel.painted = true;
-    panel.pump();
+    panel.keys_held = false;
+    if panel.pump() {
+        ui.ctx().request_repaint();
+    }
     // A shell left in another project's folder is closed.
     if panel.live.is_some() && panel.root.as_deref().is_some_and(|r| r != root) {
         panel.close(config_dir);
@@ -621,13 +697,30 @@ impl super::Cabin {
         panel_ui(&mut self.code_term, ui, &root, &crate::config::config_dir());
     }
 
-    /// Call once per frame after the page is drawn: a terminal the Code tab
-    /// didn't draw this frame (the tab was left) is closed.
+    /// Call once per frame after the page is drawn.
     pub(super) fn code_terminal_end_frame(&mut self) {
-        let panel = &mut self.code_term;
-        if !std::mem::take(&mut panel.painted) && panel.live.is_some() {
-            panel.close(&crate::config::config_dir());
+        end_frame(&mut self.code_term, &crate::config::config_dir());
+    }
+
+    /// Call from `logic`, which also runs while the window is hidden: the
+    /// shell's output goes into the screen (its scrollback is capped) instead
+    /// of waiting, without limit, for the page to draw.
+    pub(super) fn code_terminal_tick(&mut self, ctx: &egui::Context) {
+        if self.code_term.pump() {
+            ctx.request_repaint();
         }
+    }
+}
+
+/// The end of a frame: a terminal the Code tab didn't draw this frame (the
+/// tab was left) is closed, and it no longer holds the keyboard.
+pub(super) fn end_frame(panel: &mut TermPanel, config_dir: &Path) {
+    if std::mem::take(&mut panel.painted) {
+        return;
+    }
+    panel.keys_held = false;
+    if panel.live.is_some() {
+        panel.close(config_dir);
     }
 }
 
@@ -642,6 +735,9 @@ fn screen_ui(panel: &mut TermPanel, ui: &mut egui::Ui) {
         resp.request_focus();
     }
     let focused = resp.has_focus();
+    // `logic_input_actions` reads this on the next pass: what is typed into
+    // the shell must not also fire the cabin's shortcuts.
+    panel.keys_held = focused && panel.is_open();
     if focused {
         ui.memory_mut(|m| {
             m.set_focus_lock_filter(

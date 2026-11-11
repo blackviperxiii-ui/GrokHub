@@ -422,3 +422,118 @@ fn a_listed_secret_with_no_value_stops_the_deploy_before_it_runs() {
     assert!(activity::list(&config, 5).is_empty());
     assert_eq!(runs::remembered(&config, Kind::Deploy, KEY).unwrap(), None);
 }
+
+// ---- the panel follows the project, and a deploy can be stopped ----
+
+#[test]
+fn another_project_starts_the_panel_over() {
+    let config = dir("follow");
+    turn_on(&config, "./deploy.sh");
+    let (a, b) = (Path::new("/home/user/a"), Path::new("/home/user/b"));
+    let mut panel = DeployPanel {
+        confirming: Some("./deploy.sh".into()),
+        note: Some("Deploy finished.".into()),
+        settings_note: Some("Saved.".into()),
+        log: "uploaded 3 files\n".into(),
+        loaded_for: Some(a.to_path_buf()),
+        ..DeployPanel::default()
+    };
+    panel.take_plan(plan(&config, ShipMode::Ask));
+    assert_eq!(panel.draft_command, "./deploy.sh");
+
+    // The same project: nothing changes.
+    assert!(!panel.follow(a));
+    assert_eq!(panel.confirming.as_deref(), Some("./deploy.sh"));
+
+    // Project B: project A's confirm, notes, log, plan and draft are gone.
+    assert!(panel.follow(b));
+    assert_eq!(panel.confirming, None);
+    assert_eq!(panel.note, None);
+    assert_eq!(panel.settings_note, None);
+    assert_eq!(panel.log, "");
+    assert_eq!(panel.plan, None);
+    assert_eq!(panel.draft_command, "");
+    assert!(!panel.draft_on);
+}
+
+#[test]
+fn a_running_deploy_keeps_its_panel_until_it_ends() {
+    let (a, b) = (Path::new("/home/user/a"), Path::new("/home/user/b"));
+    let mut panel = DeployPanel {
+        loaded_for: Some(a.to_path_buf()),
+        ..DeployPanel::default()
+    };
+    panel.begin();
+    panel.apply(Msg::Chunk("step 1\n".into()));
+    assert!(!panel.follow(b), "a deploy still running keeps its output");
+    assert_eq!(panel.log, "step 1\n");
+    // It ends under project B: its result goes, and the tab still reads the
+    // activity list again.
+    panel.apply(Msg::Done(Ok(RunResult {
+        command: "./deploy.sh".into(),
+        exit: 0,
+        output: "step 1\nstep 2\n".into(),
+        cut: false,
+    })));
+    assert!(panel.follow(b));
+    assert_eq!(panel.note, None);
+    assert_eq!(panel.log, "");
+    assert!(panel.changed);
+}
+
+#[cfg(unix)]
+#[test]
+fn stop_ends_a_running_deploy_and_says_so() {
+    let config = dir("stop-config");
+    let work = dir("stop-work");
+    turn_on(&config, "echo up; sleep 30");
+
+    let mut panel = DeployPanel::default();
+    assert!(!panel.stop(), "no deploy is running yet");
+    panel.begin();
+    panel.watch(spawn_run_with(
+        config.clone(),
+        KEY.into(),
+        work.clone(),
+        ship(ShipMode::Ask),
+        "echo up; sleep 30".into(),
+        true,
+        Box::new(MemVault::default()),
+        deploy::Where {
+            host: "github".into(),
+            branch: "code/deploy".into(),
+        },
+        None,
+    ));
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !panel.log.contains("up") && std::time::Instant::now() < until {
+        panel.pump();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(panel.log, "up\n");
+
+    // Stop: the 30-second sleep ends within five.
+    assert!(panel.stop());
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while panel.busy && std::time::Instant::now() < until {
+        panel.pump();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    // Whatever happened, the sleep is not left behind.
+    runs::stop();
+    assert!(!panel.busy, "Stop left the deploy going");
+    assert_eq!(panel.note.as_deref(), Some("Deploy stopped."));
+    // One run at a time: the next one starts, so the stopped one is gone.
+    let next = runs::run(&config, &work, "exit 0", true, runs::Mode::Auto, |_| {});
+    assert_eq!(next.map(|done| done.exit), Ok(0));
+
+    // A deploy that fails by itself is not called stopped.
+    panel.begin();
+    panel.apply(Msg::Done(Ok(RunResult {
+        command: "echo up; sleep 30".into(),
+        exit: 2,
+        output: String::new(),
+        cut: false,
+    })));
+    assert_eq!(panel.note.as_deref(), Some("Deploy exited with 2."));
+}

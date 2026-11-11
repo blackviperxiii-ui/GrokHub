@@ -31,6 +31,8 @@ pub(super) const NOTHING_REMEMBERED: &str =
     "Nothing remembered yet. The next deploy will ask you to confirm the command.";
 pub(super) const CUT_NOTE: &str = "\n… cut here; the output is too long to show in full.";
 pub(super) const RUNNING: &str = "Running…";
+/// The note under a deploy that Stop ended, the same words as the desktop app.
+pub(super) const DEPLOY_STOPPED: &str = "Deploy stopped.";
 /// The switch was turned on with no command saved.
 pub(super) const TYPE_FIRST: &str = "Type a deploy command and save it, then turn deploy on.";
 
@@ -173,6 +175,8 @@ pub(super) struct DeployPanel {
     /// The command a confirm is showing.
     pub(super) confirming: Option<String>,
     pub(super) busy: bool,
+    /// Stop was pressed for the deploy in progress.
+    pub(super) stopping: bool,
     /// A worker is reading or saving settings.
     pub(super) loading: bool,
     pub(super) note: Option<String>,
@@ -252,8 +256,41 @@ impl DeployPanel {
         self.confirming = None;
         self.settings_note = None;
         self.busy = true;
+        self.stopping = false;
         self.log.clear();
         self.note = None;
+    }
+
+    /// Stop was pressed: end the deploy and everything it started, off the
+    /// UI thread. The run then reports back by itself and the note says it
+    /// was stopped. False when no deploy is running here.
+    pub(super) fn stop(&mut self) -> bool {
+        if !self.busy {
+            return false;
+        }
+        self.stopping = true;
+        std::thread::spawn(|| {
+            grokhub_code::runs::stop();
+        });
+        true
+    }
+
+    /// The Code tab shows `workspace` now. What another project left here
+    /// (its plan and draft, an open confirm, the note and the log) goes, so a
+    /// yes can't run that project's command in this one. A deploy still
+    /// running keeps its output until it ends. True when the panel started
+    /// over.
+    pub(super) fn follow(&mut self, workspace: &Path) -> bool {
+        let other = self.loaded_for.as_deref().is_some_and(|w| w != workspace);
+        if !other || self.busy {
+            return false;
+        }
+        *self = Self {
+            // A deploy that just ended still has the tab read its activity.
+            changed: self.changed,
+            ..Self::default()
+        };
+        true
     }
 
     /// Apply one message from a worker.
@@ -283,9 +320,14 @@ impl DeployPanel {
             Msg::Done(result) => {
                 self.busy = false;
                 self.changed = true;
+                let stopping = std::mem::take(&mut self.stopping);
                 match result {
                     Ok(done) => {
-                        self.note = Some(done_note(&done));
+                        self.note = Some(if stopping && done.exit != 0 {
+                            DEPLOY_STOPPED.to_string()
+                        } else {
+                            done_note(&done)
+                        });
                         self.log = done.output.clone();
                         if done.cut {
                             self.log.push_str(CUT_NOTE);
@@ -313,6 +355,7 @@ impl DeployPanel {
                     if self.busy || self.loading {
                         // The worker went without a last word.
                         self.busy = false;
+                        self.stopping = false;
                         self.loading = false;
                         self.note = Some("The deploy stopped without a result.".into());
                     }
@@ -360,7 +403,9 @@ impl DeployPanel {
     /// The Deploy section.
     pub(super) fn ui(&mut self, ui: &mut egui::Ui, config_dir: &Path, workspace: &Path) {
         let ctx = ui.ctx().clone();
-        if self.pump() && std::mem::take(&mut self.refresh_after) {
+        let finished = self.pump();
+        self.follow(workspace);
+        if finished && std::mem::take(&mut self.refresh_after) {
             self.refresh(config_dir, workspace, Some(ctx.clone()));
         }
         if self.loaded_for.as_deref() != Some(workspace) && !self.busy {
@@ -373,11 +418,17 @@ impl DeployPanel {
 
         let off = self.plan.as_ref().is_none_or(|p| !p.deploy_enabled);
         let label = if self.busy { "Deploying…" } else { "Deploy" };
-        let pressed = ui
-            .add_enabled_ui(!self.busy && !self.loading && !off, |ui| {
-                crate::cards::white_pill(ui, label)
-            })
-            .inner;
+        let mut pressed = false;
+        ui.horizontal(|ui| {
+            pressed = ui
+                .add_enabled_ui(!self.busy && !self.loading && !off, |ui| {
+                    crate::cards::white_pill(ui, label)
+                })
+                .inner;
+            if self.busy && crate::cards::ghost_pill(ui, "Stop") {
+                self.stop();
+            }
+        });
         if pressed {
             if let Some(plan) = self.plan.clone() {
                 if let Some(cmd) = self.press(&plan) {
