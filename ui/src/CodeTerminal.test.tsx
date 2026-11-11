@@ -417,6 +417,47 @@ describe("Code tab → Terminal", () => {
     ]);
   });
 
+  it("sends a size again when the shell refused it and the pane still has that size", async () => {
+    render(<CodeTerminal />);
+    await userEvent.click(screen.getByRole("button", { name: "Open terminal" }));
+    await screen.findByRole("button", { name: "Close terminal" });
+    api.codeTermResize.mockRejectedValueOnce("The terminal couldn't be resized.");
+    xterm.state.rows = 30;
+    resizePane();
+    await settle();
+    expect(api.codeTermResize.mock.calls).toEqual([[7, 30, 80]]);
+
+    // The pane changes by a pixel or two: same rows and columns, and the shell still has the old ones.
+    resizePane();
+    expect(api.codeTermResize.mock.calls).toEqual([
+      [7, 30, 80],
+      [7, 30, 80],
+    ]);
+    await settle();
+    resizePane();
+    resizePane();
+    expect(api.codeTermResize).toHaveBeenCalledTimes(2);
+  });
+
+  it("a refusal that lands after a newer size was sent does not send the newer size twice", async () => {
+    render(<CodeTerminal />);
+    await userEvent.click(screen.getByRole("button", { name: "Open terminal" }));
+    await screen.findByRole("button", { name: "Close terminal" });
+    let refuse: (why: string) => void = () => {};
+    api.codeTermResize.mockImplementationOnce(() => new Promise<void>((_, no) => (refuse = no)));
+    xterm.state.rows = 30;
+    resizePane();
+    xterm.state.rows = 40;
+    resizePane();
+    await act(async () => refuse("The terminal couldn't be resized."));
+    await settle();
+    resizePane();
+    expect(api.codeTermResize.mock.calls).toEqual([
+      [7, 30, 80],
+      [7, 40, 80],
+    ]);
+  });
+
   it("sends the size the pane took while the shell was starting", async () => {
     let answer: (id: number) => void = () => {};
     api.codeTermOpen.mockImplementationOnce(() => new Promise<number>((done) => (answer = done)));

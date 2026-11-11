@@ -30,6 +30,13 @@ const SRC: CodeFileListing = {
   more: false,
 };
 
+// Every UI source except tests, as text.
+const sources = import.meta.glob<string>(["./*.ts", "./*.tsx", "!./*.test.*"], {
+  query: "?raw",
+  import: "default",
+  eager: true,
+});
+
 /** The live CodeMirror view, found through its public DOM lookup. */
 function editorView(): EditorView {
   const view = EditorView.findFromDOM(document.querySelector(".cm-editor") as HTMLElement);
@@ -273,6 +280,98 @@ describe("Code tab → Editor", () => {
     expect(api.codeFileWrite).toHaveBeenCalledTimes(1);
   });
 
+  it("a save that lands after another file was opened leaves that untouched file clean", async () => {
+    api.codeFilesList.mockResolvedValue(WIDE);
+    render(<CodeEditor />);
+    await userEvent.click(await screen.findByRole("button", { name: "README.md" }));
+    await waitFor(() => expect(editorText()).toBe("# Demo"));
+    editorView().dispatch({ changes: { from: 0, insert: "x" } });
+    await screen.findByText("· unsaved");
+
+    const slowSave = deferred<CodeFileText>();
+    api.codeFileWrite.mockReturnValueOnce(slowSave.promise);
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.click(screen.getByRole("button", { name: "b.rs" }));
+    await userEvent.click(screen.getByRole("button", { name: "Discard and open b.rs" }));
+    await waitFor(() => expect(editorText()).toBe("fn main() {}"));
+
+    slowSave.resolve({ path: "README.md", text: "x# Demo\n", root: DEMO });
+    expect(await screen.findByText("Saved README.md.")).toBeInTheDocument();
+    expect(document.querySelector(".code-editor-path")).toHaveTextContent(/^b\.rs$/);
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    // The text an edit is compared with is still b.rs's own.
+    editorView().dispatch({ changes: { from: 0, insert: "y" } });
+    await waitFor(() => expect(document.querySelector(".code-editor-path")).toHaveTextContent("b.rs · unsaved"));
+    editorView().dispatch({ changes: { from: 0, to: 1 } });
+    await waitFor(() => expect(document.querySelector(".code-editor-path")).toHaveTextContent(/^b\.rs$/));
+    expect(api.codeFileWrite).toHaveBeenCalledTimes(1);
+  });
+
+  it("picking the open file again drops a slower file still on its way", async () => {
+    api.codeFilesList.mockResolvedValue(WIDE);
+    render(<CodeEditor />);
+    await userEvent.click(await screen.findByRole("button", { name: "README.md" }));
+    await waitFor(() => expect(editorText()).toBe("# Demo"));
+    const slow = deferred<CodeFileText>();
+    api.codeFileRead.mockReturnValueOnce(slow.promise);
+    await userEvent.click(screen.getByRole("button", { name: "slow.txt" }));
+    await userEvent.click(screen.getByRole("button", { name: "README.md" }));
+    slow.resolve({ path: "slow.txt", text: "slow text\n", root: DEMO });
+    await settle();
+    expect(editorText()).toBe("# Demo");
+    expect(document.querySelector(".code-editor-path")).toHaveTextContent(/^README\.md$/);
+    expect(api.codeFileRead).toHaveBeenCalledTimes(2);
+  });
+
+  it("a file that arrives while the Code page is hidden is on screen when the page shows again", async () => {
+    function Page({ shown }: { shown: boolean }) {
+      return (
+        <Activity mode={shown ? "visible" : "hidden"}>
+          <CodeEditor />
+        </Activity>
+      );
+    }
+    const slow = deferred<CodeFileText>();
+    api.codeFileRead.mockReturnValueOnce(slow.promise);
+    const { rerender } = render(<Page shown />);
+    await userEvent.click(await screen.findByRole("button", { name: "README.md" }));
+    rerender(<Page shown={false} />);
+    slow.resolve({ path: "README.md", text: "# Read while away\n", root: DEMO });
+    await settle();
+    rerender(<Page shown />);
+    await waitFor(() => expect(editorText()).toBe("# Read while away"));
+    expect(document.querySelector(".code-editor-path")).toHaveTextContent(/^README\.md$/);
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+
+  it("a save that lands while the Code page is hidden leaves the file clean", async () => {
+    function Page({ shown }: { shown: boolean }) {
+      return (
+        <Activity mode={shown ? "visible" : "hidden"}>
+          <CodeEditor />
+        </Activity>
+      );
+    }
+    const { rerender } = render(<Page shown />);
+    await userEvent.click(await screen.findByRole("button", { name: "README.md" }));
+    await waitFor(() => expect(editorText()).toBe("# Demo"));
+    editorView().dispatch({ changes: { from: 0, insert: "x" } });
+    await screen.findByText("· unsaved");
+    const slowSave = deferred<CodeFileText>();
+    api.codeFileWrite.mockReturnValueOnce(slowSave.promise);
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(api.codeFileWrite).toHaveBeenCalledWith("README.md", "x# Demo\n", DEMO);
+
+    rerender(<Page shown={false} />);
+    slowSave.resolve({ path: "README.md", text: "x# Demo\n", root: DEMO });
+    await settle();
+    rerender(<Page shown />);
+    await waitFor(() => expect(editorText()).toBe("x# Demo"));
+    expect(screen.getByRole("status")).toHaveTextContent(/^Saved README\.md\.$/);
+    expect(document.querySelector(".code-editor-path")).toHaveTextContent(/^README\.md$/);
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+
   it("shows a refused save right under the file's name, above the editor", async () => {
     api.codeFileWrite.mockRejectedValue("That file is too big to edit here (the limit is 512 KB).");
     render(<CodeEditor />);
@@ -298,6 +397,34 @@ describe("Code tab → Editor", () => {
     await userEvent.click(screen.getByRole("button", { name: "src/" }));
     await userEvent.click(await screen.findByRole("button", { name: "main.rs" }));
     expect(screen.getByRole("group", { name: EDITOR_DISCARD })).toBeInTheDocument();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Keep editing" }));
+  });
+
+  it("a discard card raised by a late file leaves focus in the editor, so typing goes on", async () => {
+    api.codeFilesList.mockResolvedValue(WIDE);
+    render(<CodeEditor />);
+    await userEvent.click(await screen.findByRole("button", { name: "README.md" }));
+    await waitFor(() => expect(editorText()).toBe("# Demo"));
+
+    const slow = deferred<CodeFileText>();
+    api.codeFileRead.mockReturnValueOnce(slow.promise);
+    await userEvent.click(screen.getByRole("button", { name: "slow.txt" }));
+    // The person goes back to typing while the file is on its way.
+    act(() => editorView().focus());
+    const typing = document.querySelector(".cm-content");
+    expect(document.activeElement).toBe(typing);
+    editorView().dispatch({ changes: { from: 0, insert: "hello " } });
+    await screen.findByText("· unsaved");
+    slow.resolve({ path: "slow.txt", text: "slow text\n", root: DEMO });
+    await settle();
+
+    expect(screen.getByRole("group", { name: EDITOR_DISCARD })).toHaveTextContent("README.md has edits that aren't saved.");
+    expect(document.activeElement).toBe(typing);
+    expect(editorText()).toBe("hello # Demo");
+
+    // A card the person asks for with a click still takes focus.
+    await userEvent.click(screen.getByRole("button", { name: "b.rs" }));
+    expect(screen.getByRole("button", { name: "Discard and open b.rs" })).toBeInTheDocument();
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Keep editing" }));
   });
 
@@ -374,6 +501,75 @@ describe("Code tab → Editor", () => {
     expect(api.codeFilesList.mock.calls).toEqual([[""], ["src"], ["src"], ["src"]]);
   });
 
+  it("a slow Refresh does not put back the folder the person has since left", async () => {
+    const { rerender } = render(<CodeEditor refresh={0} />);
+    await screen.findByRole("button", { name: "src/" });
+    const slow = deferred<CodeFileListing>();
+    api.codeFilesList.mockReturnValueOnce(slow.promise);
+    rerender(<CodeEditor refresh={1} />);
+    await waitFor(() => expect(api.codeFilesList.mock.calls).toEqual([[""], [""]]));
+    await userEvent.click(screen.getByRole("button", { name: "src/" }));
+    expect(await screen.findByRole("button", { name: "main.rs" })).toBeInTheDocument();
+
+    slow.resolve(ROOT);
+    await settle();
+    expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["../ (up from src)", "main.rs"]);
+    expect(api.codeFilesList.mock.calls).toEqual([[""], [""], ["src"]]);
+  });
+
+  it("a slow Refresh that fails after another folder was opened says nothing", async () => {
+    const { rerender } = render(<CodeEditor refresh={0} />);
+    await screen.findByRole("button", { name: "src/" });
+    const slow = deferred<CodeFileListing>();
+    api.codeFilesList.mockReturnValueOnce(slow.promise);
+    rerender(<CodeEditor refresh={1} />);
+    await waitFor(() => expect(api.codeFilesList).toHaveBeenCalledTimes(2));
+    await userEvent.click(screen.getByRole("button", { name: "src/" }));
+    await screen.findByRole("button", { name: "main.rs" });
+    slow.reject("The project folder can't be read.");
+    await settle();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getByRole("button", { name: "main.rs" })).toBeInTheDocument();
+  });
+
+  it("the folder opened last wins when an older folder answers after it", async () => {
+    const deep: CodeFileListing = { path: "docs", entries: [{ name: "guide.md", path: "docs/guide.md", dir: false }], more: false };
+    api.codeFilesList.mockResolvedValueOnce({
+      path: "",
+      entries: [...ROOT.entries, { name: "docs", path: "docs", dir: true }],
+      more: false,
+    });
+    render(<CodeEditor />);
+    const slow = deferred<CodeFileListing>();
+    api.codeFilesList.mockReturnValueOnce(slow.promise);
+    await userEvent.click(await screen.findByRole("button", { name: "src/" }));
+    api.codeFilesList.mockResolvedValueOnce(deep);
+    await userEvent.click(screen.getByRole("button", { name: "docs/" }));
+    expect(await screen.findByRole("button", { name: "guide.md" })).toBeInTheDocument();
+    slow.resolve(SRC);
+    await settle();
+    expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["../ (up from docs)", "guide.md"]);
+  });
+
+  it("an older folder that fails after a newer one opened says nothing", async () => {
+    api.codeFilesList.mockResolvedValueOnce({
+      path: "",
+      entries: [...ROOT.entries, { name: "docs", path: "docs", dir: true }],
+      more: false,
+    });
+    render(<CodeEditor />);
+    const slow = deferred<CodeFileListing>();
+    api.codeFilesList.mockReturnValueOnce(slow.promise);
+    await userEvent.click(await screen.findByRole("button", { name: "src/" }));
+    api.codeFilesList.mockResolvedValueOnce({ path: "docs", entries: [{ name: "guide.md", path: "docs/guide.md", dir: false }], more: false });
+    await userEvent.click(screen.getByRole("button", { name: "docs/" }));
+    await screen.findByRole("button", { name: "guide.md" });
+    slow.reject("That folder isn't there.");
+    await settle();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["../ (up from docs)", "guide.md"]);
+  });
+
   it("falls back to the top folder when the open folder is gone", async () => {
     function Page({ shown }: { shown: boolean }) {
       return (
@@ -408,6 +604,18 @@ describe("Code tab → Editor", () => {
     expect(usesCrlf("one\ntwo\n")).toBe(false);
     expect(usesCrlf("one line")).toBe(false);
     expect(usesCrlf("")).toBe(false);
+  });
+
+  // WebKit before Safari 16.4 (an older system webview) cannot parse a regex
+  // lookbehind: the file that holds one fails to load at all.
+  it("no UI source uses a regex lookbehind", () => {
+    expect(Object.keys(sources)).toContain("./CodeEditor.tsx");
+    expect(Object.keys(sources).length).toBeGreaterThan(20);
+    expect(Object.values(sources).every((src) => typeof src === "string")).toBe(true);
+    const hits = Object.entries(sources)
+      .filter(([, src]) => /\(\?<[!=]/.test(src))
+      .map(([file]) => file);
+    expect(hits).toEqual([]);
   });
 
   it("picks syntax by extension and finds a parent folder", async () => {

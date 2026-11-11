@@ -204,7 +204,7 @@ export function CodeShip({ onShipped, refreshKey = 0 }: { onShipped?: () => void
       {activity.length === 0 ? (
         <p className="empty">{SHIP_NO_ACTIVITY}</p>
       ) : (
-        <ul className="rows code-activity" aria-label={SHIP_ACTIVITY}>
+        <ul className="rows code-activity" tabIndex={0} aria-label={SHIP_ACTIVITY}>
           {activity.map((e) => (
             <li key={`${e.tsMs}-${e.kind}-${e.branch}`} className={`code-activity-row ${e.kind}`}>
               <span className="code-activity-kind">{KIND_LABEL[e.kind]}</span>

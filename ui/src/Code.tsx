@@ -215,11 +215,14 @@ export function Code({ onTask }: { onTask: (task: CodeTask) => void }) {
   /** Stop the running tests and everything they started; the run then ends by itself. */
   async function stopRun() {
     setStopping(true);
+    // True already when an earlier Stop of this run worked: a later one that fails does not undo it.
+    const before = stopAsked.current;
     stopAsked.current = true;
     try {
-      await codeRunStop();
+      // False: nothing was running any more, or the kill failed. The run's own result stands.
+      if (!(await codeRunStop())) stopAsked.current = before;
     } catch (err) {
-      stopAsked.current = false;
+      stopAsked.current = before;
       setRunNote(String(err));
     } finally {
       setStopping(false);
@@ -266,7 +269,7 @@ export function Code({ onTask }: { onTask: (task: CodeTask) => void }) {
       )}
       {repo?.isRepo && repo.files.length > 0 && (
         <div className="code-split">
-          <ul className="rows" aria-label="Changed files">
+          <ul className="rows code-changed" aria-label="Changed files">
             {repo.files.map((f) => (
               <li key={f.path}>
                 <button

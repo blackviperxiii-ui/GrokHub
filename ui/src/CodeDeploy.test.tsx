@@ -184,4 +184,80 @@ describe("Code tab → Deploy", () => {
     expect(await screen.findByRole("status")).toHaveTextContent("The run could not be stopped.");
     expect(screen.getByRole("button", { name: "Stop" })).toBeEnabled();
   });
+
+  /** Start a deploy whose answer the test gives by hand, and wait for its Stop button. */
+  async function startHeldDeploy() {
+    let finish: (result: { command: string; exit: number; output: string; cut: boolean }) => void = () => {};
+    api.codeDeployRun.mockImplementationOnce(() => new Promise((done) => (finish = done)));
+    await userEvent.click(await screen.findByRole("button", { name: "Deploy" }));
+    const stop = await screen.findByRole("button", { name: "Stop" });
+    return {
+      stop,
+      finish: (exit: number, output: string) =>
+        act(async () => finish({ command: "npm run deploy -- --env staging", exit, output, cut: false })),
+    };
+  }
+
+  /** A deploy that runs without asking. */
+  function remembered() {
+    api.codeDeployPlan.mockResolvedValue(plan({ mode: "autoBeta", needsConfirm: false, remembered: "npm run deploy -- --env staging" }));
+    render(<CodeDeploy />);
+  }
+
+  it("a Stop that stopped nothing leaves the deploy's own exit code on screen", async () => {
+    remembered();
+    // Nothing was running any more, or the kill itself failed.
+    api.codeRunStop.mockResolvedValue(false);
+    const run = await startHeldDeploy();
+    await userEvent.click(run.stop);
+    expect(api.codeRunStop).toHaveBeenCalledTimes(1);
+    await run.finish(2, "upload failed\n");
+    expect(await screen.findByRole("status")).toHaveTextContent(/^Deploy exited with 2\.$/);
+    expect(screen.getByRole("log", { name: "Deploy output" })).toHaveTextContent("upload failed");
+  });
+
+  it("a deploy that fails after an earlier one was stopped shows its own exit code", async () => {
+    remembered();
+    const first = await startHeldDeploy();
+    await userEvent.click(first.stop);
+    await first.finish(-1, "uploading\n");
+    expect(await screen.findByRole("status")).toHaveTextContent(/^Deploy stopped\.$/);
+
+    const second = await startHeldDeploy();
+    await second.finish(1, "upload failed\n");
+    expect(await screen.findByRole("status")).toHaveTextContent(/^Deploy exited with 1\.$/);
+    expect(api.codeRunStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("a deploy that finishes just as Stop is pressed is reported as finished", async () => {
+    remembered();
+    const run = await startHeldDeploy();
+    await userEvent.click(run.stop);
+    await run.finish(0, "done\n");
+    expect(await screen.findByRole("status")).toHaveTextContent(/^Deploy finished\.$/);
+  });
+
+  it("a second Stop that finds nothing left to stop does not undo the first", async () => {
+    remembered();
+    const run = await startHeldDeploy();
+    await userEvent.click(run.stop);
+    // The deploy is on its way out: the desktop has nothing left to kill.
+    api.codeRunStop.mockResolvedValueOnce(false);
+    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+    api.codeRunStop.mockRejectedValueOnce("The run could not be stopped.");
+    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+    expect(api.codeRunStop).toHaveBeenCalledTimes(3);
+    await run.finish(-1, "uploading\n");
+    expect(await screen.findByRole("status")).toHaveTextContent(/^Deploy stopped\.$/);
+  });
+
+  it("a Stop that failed does not label the deploy's later failure as stopped", async () => {
+    remembered();
+    api.codeRunStop.mockRejectedValue("The run could not be stopped.");
+    const run = await startHeldDeploy();
+    await userEvent.click(run.stop);
+    expect(await screen.findByRole("status")).toHaveTextContent(/^The run could not be stopped\.$/);
+    await run.finish(1, "upload failed\n");
+    expect(await screen.findByRole("status")).toHaveTextContent(/^Deploy exited with 1\.$/);
+  });
 });

@@ -131,6 +131,27 @@ describe("Code tab → Push and PR", () => {
     expect(await screen.findByRole("status")).toHaveTextContent("On code/new now.");
   });
 
+  it("puts the Activity list, which scrolls in its own box, in the tab order", async () => {
+    api.codeActivity.mockResolvedValue([
+      {
+        tsMs: 1_700_000_000_000,
+        kind: "push",
+        repoKey: "k",
+        host: "github",
+        branch: "beta",
+        command: "git push --porcelain origin HEAD:refs/heads/beta",
+        mode: "ask",
+        approvedBy: "user",
+        exit: 0,
+        summary: "Pushed beta.",
+      },
+    ]);
+    render(<CodeShip />);
+    const log = await screen.findByRole("list", { name: "Activity" });
+    expect(log).toHaveClass("code-activity");
+    expect(log).toHaveAttribute("tabindex", "0");
+  });
+
   it("a confirm card goes away when the branch changes, and a confirm sends the command it showed", async () => {
     let branch = "code/a";
     api.codeShipPlan.mockImplementation((action) =>

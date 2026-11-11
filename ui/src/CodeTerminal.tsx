@@ -101,7 +101,10 @@ export default function CodeTerminal() {
     const size = `${t.rows}x${t.cols}`;
     if (size === sent.current) return;
     sent.current = size;
-    void codeTermResize(id, t.rows, t.cols).catch(() => {});
+    void codeTermResize(id, t.rows, t.cols).catch(() => {
+      // The shell did not take it: the next look at the pane sends it again.
+      if (sent.current === size) sent.current = "";
+    });
   }, []);
 
   // Keep the shell's size in step with the pane.

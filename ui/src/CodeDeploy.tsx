@@ -98,11 +98,14 @@ export function CodeDeploy({ onDeployed }: { onDeployed?: () => void }) {
   /** Stop the running deploy and everything it started; the run then ends by itself. */
   async function stopRun() {
     setStopping(true);
+    // True already when an earlier Stop of this deploy worked: a later one that fails does not undo it.
+    const before = stopAsked.current;
     stopAsked.current = true;
     try {
-      await codeRunStop();
+      // False: nothing was running any more, or the kill failed. The deploy's own result stands.
+      if (!(await codeRunStop())) stopAsked.current = before;
     } catch (err) {
-      stopAsked.current = false;
+      stopAsked.current = before;
       setNote(String(err));
     } finally {
       setStopping(false);

@@ -431,6 +431,12 @@ describe("Code tab", () => {
     expect(diff).toHaveTextContent("+new");
   });
 
+  it("marks the changed-files list as the one that scrolls beside the diff", async () => {
+    api.codeRepo.mockResolvedValue(repo());
+    render(<Code onTask={() => {}} />);
+    expect(await screen.findByRole("list", { name: "Changed files" })).toHaveClass("rows", "code-changed");
+  });
+
   it("gives the test output and a skill's body a role and a place in the tab order", async () => {
     api.codeRepo.mockResolvedValue(repo({ files: [] }));
     api.codeBuiltins.mockResolvedValue([{ name: "follow-through", description: "Ledger.", body: "# Follow Through", overriddenBy: null }]);
@@ -488,6 +494,80 @@ describe("Code tab", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Stop" }));
     expect(await screen.findByRole("status")).toHaveTextContent("The run could not be stopped.");
     expect(screen.getByRole("button", { name: "Stop" })).toBeEnabled();
+  });
+
+  /** Start a run whose answer the test gives by hand, and wait for its Stop button. */
+  async function startHeldRun() {
+    let finish: (result: { command: string; exit: number; output: string; cut: boolean }) => void = () => {};
+    api.codeTestRun.mockImplementationOnce(() => new Promise((done) => (finish = done)));
+    await userEvent.click(screen.getByRole("button", { name: "Run tests" }));
+    const stop = await screen.findByRole("button", { name: "Stop" });
+    return { stop, finish: (exit: number, output: string) => act(async () => finish({ command: "cargo test", exit, output, cut: false })) };
+  }
+
+  /** The Tests section with a command that runs without asking. */
+  async function testsReady() {
+    api.codeRepo.mockResolvedValue(repo({ files: [] }));
+    api.codeTestPlan.mockResolvedValue({ command: "cargo test", needsConfirm: false, remembered: "cargo test" });
+    render(<Code onTask={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText("Test command")).toHaveValue("cargo test"));
+  }
+
+  it("a Stop that stopped nothing leaves the run's own exit code on screen", async () => {
+    await testsReady();
+    // Nothing was running any more, or the kill itself failed.
+    api.codeRunStop.mockResolvedValue(false);
+    const run = await startHeldRun();
+    await userEvent.click(run.stop);
+    expect(api.codeRunStop).toHaveBeenCalledTimes(1);
+    await run.finish(101, "test result: FAILED. 3 failed\n");
+    expect(await screen.findByRole("status")).toHaveTextContent(/^Tests exited with 101\.$/);
+    expect(screen.getByRole("log", { name: "Test output" })).toHaveTextContent("test result: FAILED. 3 failed");
+  });
+
+  it("a run that fails after an earlier run was stopped shows its own exit code", async () => {
+    await testsReady();
+    const first = await startHeldRun();
+    await userEvent.click(first.stop);
+    await first.finish(-1, "running 12 tests\n");
+    expect(await screen.findByRole("status")).toHaveTextContent(/^Tests stopped\.$/);
+
+    const second = await startHeldRun();
+    await second.finish(1, "test result: FAILED. 1 failed\n");
+    expect(await screen.findByRole("status")).toHaveTextContent(/^Tests exited with 1\.$/);
+    expect(api.codeRunStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("a run that passes just as Stop is pressed is reported as passed", async () => {
+    await testsReady();
+    const run = await startHeldRun();
+    await userEvent.click(run.stop);
+    await run.finish(0, "test result: ok. 12 passed\n");
+    expect(await screen.findByRole("status")).toHaveTextContent(/^Tests passed\.$/);
+  });
+
+  it("a Stop that failed does not label the run's later failure as stopped", async () => {
+    await testsReady();
+    api.codeRunStop.mockRejectedValue("The run could not be stopped.");
+    const run = await startHeldRun();
+    await userEvent.click(run.stop);
+    expect(await screen.findByRole("status")).toHaveTextContent(/^The run could not be stopped\.$/);
+    await run.finish(1, "test result: FAILED. 1 failed\n");
+    expect(await screen.findByRole("status")).toHaveTextContent(/^Tests exited with 1\.$/);
+  });
+
+  it("a second Stop that finds nothing left to stop does not undo the first", async () => {
+    await testsReady();
+    const run = await startHeldRun();
+    await userEvent.click(run.stop);
+    // The run is on its way out: the desktop has nothing left to kill.
+    api.codeRunStop.mockResolvedValueOnce(false);
+    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+    api.codeRunStop.mockRejectedValueOnce("The run could not be stopped.");
+    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+    expect(api.codeRunStop).toHaveBeenCalledTimes(3);
+    await run.finish(-1, "running 12 tests\n");
+    expect(await screen.findByRole("status")).toHaveTextContent(/^Tests stopped\.$/);
   });
 
   it("a deploy that finishes reads the activity list again and keeps the Push and PR section as it was", async () => {

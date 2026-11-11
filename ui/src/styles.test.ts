@@ -149,6 +149,25 @@ describe("styles.css Code tab layout", () => {
     expect(CSS).not.toContain('.code-tree .code-file[aria-pressed="true"]');
   });
 
+  it("wraps a long changed-file path inside its row instead of drawing it over the diff", () => {
+    expect(rule(CSS, ".code-file {")).toBe(
+      ".code-file { width: 100%; text-align: start; font-family: ui-monospace, monospace; overflow-wrap: anywhere; }",
+    );
+  });
+
+  it("scrolls a long changed-files list beside the diff, so the diff a click opens is on screen", () => {
+    // The padding (taken back by the margin) leaves room for a row's focus ring, which a scroll box cuts off.
+    expect(rule(CSS, ".code > .code-split > .code-changed {")).toBe(
+      ".code > .code-split > .code-changed { max-height: 70vh; overflow-y: auto; padding: 4px; margin: -4px; }",
+    );
+    // It comes after the list's own rule, whose `padding: 0; margin: 0;` it replaces.
+    expect(CSS.indexOf(".code > .code-split > .code-changed {")).toBeGreaterThan(CSS.indexOf(".code > .code-split > .rows {"));
+    // One column in a narrow window: the diff is under the list, which is shorter to leave it room.
+    const narrow = mediaBlocks(CSS, "(max-width: 720px)").find((b) => b.includes(".code-split {")) ?? "";
+    expect(rule(narrow, ".code-split {")).toBe(".code-split { grid-template-columns: 1fr; }");
+    expect(rule(narrow, ".code > .code-split > .code-changed {")).toBe(".code > .code-split > .code-changed { max-height: 35vh; }");
+  });
+
   it("styles the Deploy heading like the other sections, and the Mode and Channel boxes", () => {
     expect(rule(CSS, ".code-tests h3,\n.code-deploy h3 {")).toBe(
       ".code-tests h3, .code-deploy h3 { margin: 0 0 8px; font-size: var(--font-body); font-weight: 600; }",
@@ -167,6 +186,9 @@ describe("styles.css Code tab layout", () => {
   it("shows a focus ring on the panes that scroll, and on the editor's frame rather than inside it", () => {
     expect(rule(CSS, ".code-diff:focus-visible,\n.code-log:focus-visible {")).toBe(
       ".code-diff:focus-visible, .code-log:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }",
+    );
+    expect(rule(CSS, ".code-activity:focus-visible,\n.code-diff:focus-visible,\n.code-log:focus-visible {")).toBe(
+      ".code-activity:focus-visible, .code-diff:focus-visible, .code-log:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }",
     );
     expect(rule(CSS, ".code-editor-host:focus-within {")).toBe(
       ".code-editor-host:focus-within { box-shadow: var(--ring); }",

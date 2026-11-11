@@ -48,7 +48,9 @@ export function parentOf(path: string): string {
  * LF only, so a save puts these back; a file with mixed endings is left as
  * the editor has it. */
 export function usesCrlf(text: string): boolean {
-  return text.includes("\r\n") && !/\r(?!\n)|(?<!\r)\n/.test(text);
+  // No lookbehind here: an older system WebKit cannot parse one, and the whole editor then fails to load.
+  const rest = text.replace(/\r\n/g, "");
+  return rest.length !== text.length && !/[\r\n]/.test(rest);
 }
 
 /** The Code tab's editor: a folder list of the project and one open file.
@@ -60,6 +62,8 @@ export default function CodeEditor({ refresh = 0 }: { refresh?: number }) {
   const [saving, setSaving] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
+  // True when the discard card was raised by a file that arrived late, not by a click just now.
+  const [unasked, setUnasked] = useState(false);
   const host = useRef<HTMLDivElement | null>(null);
   const view = useRef<EditorView | null>(null);
   // The saved text as the editor holds it (LF line endings), and whether the
@@ -72,7 +76,11 @@ export default function CodeEditor({ refresh = 0 }: { refresh?: number }) {
   const picked = useRef(0);
   // The folder on screen, so the list comes back to it.
   const folder = useRef("");
-  const keep = useCardFocus<HTMLButtonElement>(pending);
+  // Counts folder listings asked for: only the newest answer is shown.
+  const listed = useRef(0);
+  // A card nobody just asked for leaves focus where it is: the person may be
+  // typing in the editor, and the next Space would press the card's button.
+  const keep = useCardFocus<HTMLButtonElement>(unasked ? null : pending);
   // The project folder the open file was read from. A save sends it back, and
   // the desktop refuses the save when the project folder has changed since.
   const root = useRef("");
@@ -85,10 +93,12 @@ export default function CodeEditor({ refresh = 0 }: { refresh?: number }) {
 
   const browse = useCallback(
     async (to: string) => {
+      const ask = ++listed.current;
       try {
-        list(await codeFilesList(to));
+        const next = await codeFilesList(to);
+        if (ask === listed.current) list(next);
       } catch (err) {
-        setNote(String(err));
+        if (ask === listed.current) setNote(String(err));
       }
     },
     [list],
@@ -98,12 +108,21 @@ export default function CodeEditor({ refresh = 0 }: { refresh?: number }) {
   // listed again, or the top folder when it is gone.
   useEffect(() => {
     const at = folder.current;
+    const ask = ++listed.current;
     codeFilesList(at)
       .catch((err) => {
         if (at === "") throw err;
         return codeFilesList("");
       })
-      .then(list, (err) => setNote(String(err)));
+      .then(
+        (next) => {
+          // A folder opened while this was on its way stays on screen.
+          if (ask === listed.current) list(next);
+        },
+        (err) => {
+          if (ask === listed.current) setNote(String(err));
+        },
+      );
   }, [list, refresh]);
 
   // When the Code page is hidden its effects pause: the open file's state is
@@ -181,6 +200,7 @@ export default function CodeEditor({ refresh = 0 }: { refresh?: number }) {
       // Edits typed while it was on its way are not thrown away unasked.
       const now = docText();
       if (!discard && now !== null && now !== saved.current) {
+        setUnasked(true);
         setPending(file);
         return;
       }
@@ -194,8 +214,10 @@ export default function CodeEditor({ refresh = 0 }: { refresh?: number }) {
     // The newest pick wins: an older one still on its way is dropped.
     picked.current += 1;
     if (file === path) return;
-    if (dirty) setPending(file);
-    else void open(file);
+    if (dirty) {
+      setUnasked(false);
+      setPending(file);
+    } else void open(file);
   }
 
   async function save() {
