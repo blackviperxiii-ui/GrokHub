@@ -28,8 +28,9 @@ pub const DIR: &str = "web-access";
 const MAX_CONNECTIONS: usize = 64;
 /// How many of those one address may hold, so one device can't take them all.
 const MAX_PER_PEER: usize = 16;
-/// A connection is closed after this long with nothing sent either way. An
-/// open event stream gets a ping every 15 s (`remote.rs`), so it stays.
+/// A connection is closed after this long with no whole request waiting and
+/// nothing sent back. An open event stream gets a ping every 15 s
+/// (`remote.rs`), so it stays.
 pub(crate) const IDLE: Duration = Duration::from_secs(60);
 /// A client that hasn't finished the handshake by then is dropped.
 const HANDSHAKE: Duration = Duration::from_secs(10);
@@ -185,10 +186,30 @@ async fn pass(out: &mut (impl AsyncWrite + Unpin), bytes: &[u8], idle: Duration)
     matches!(sent.await, Ok(Ok(())))
 }
 
+/// Counts in `seen` how much of `\r\n\r\n`, the blank line that ends a
+/// request head, the browser's bytes have spelled so far. True when `bytes`
+/// finish it. `seen` is kept between reads: the four can arrive apart.
+fn ends_head(seen: &mut usize, bytes: &[u8]) -> bool {
+    for &byte in bytes {
+        *seen = match (*seen, byte) {
+            (0 | 2, b'\r') | (1 | 3, b'\n') => *seen + 1,
+            (_, b'\r') => 1,
+            _ => 0,
+        };
+        if *seen == 4 {
+            *seen = 0;
+            return true;
+        }
+    }
+    false
+}
+
 /// Copies both ways between the browser and the inner server until the
-/// server closes, either side fails, or nothing moved for `idle`. A request
-/// still waiting for the first byte of its reply is not idle: a chat turn
-/// holds its call open and silent until the whole reply is ready.
+/// server closes, either side fails, or `idle` passed since the server last
+/// sent anything. A whole request still waiting for the first byte of its
+/// reply is not idle: a chat turn holds its call open and silent until the
+/// whole reply is ready. A request whose head never ends is: its bytes are
+/// passed on but don't hold the connection open, however slowly they come.
 async fn pump<F, B>(front: F, back: B, idle: Duration)
 where
     F: AsyncRead + AsyncWrite + Unpin,
@@ -200,6 +221,8 @@ where
     let mut down = vec![0u8; 16 * 1024];
     let mut sending = true;
     let mut awaiting = false;
+    let mut head = 0;
+    let mut quiet_from = tokio::time::Instant::now();
     loop {
         tokio::select! {
             read = front_in.read(&mut up), if sending => match read {
@@ -211,7 +234,9 @@ where
                     }
                 }
                 Ok(n) => {
-                    awaiting = true;
+                    if !awaiting && ends_head(&mut head, &up[..n]) {
+                        awaiting = true;
+                    }
                     if !pass(&mut back_out, &up[..n], idle).await {
                         break;
                     }
@@ -221,13 +246,15 @@ where
             read = back_in.read(&mut down) => match read {
                 Ok(n) if n > 0 => {
                     awaiting = false;
+                    head = 0;
                     if !pass(&mut front_out, &down[..n], idle).await {
                         break;
                     }
+                    quiet_from = tokio::time::Instant::now();
                 }
                 _ => break,
             },
-            () = tokio::time::sleep(idle), if !awaiting => break,
+            () = tokio::time::sleep_until(quiet_from + idle), if !awaiting => break,
         }
     }
     // Tells the browser the connection ended on purpose.
@@ -582,5 +609,86 @@ mod tests {
         let cert = Cert::make(&hosts("192.168.1.20")).unwrap();
         let front = front(inner, &cert, 2, Duration::from_millis(300));
         assert_eq!(get(connect(front.port, &cert)), (REPLY.to_string(), true));
+    }
+
+    /// One byte, or headers with no blank line after them, is not a call: the
+    /// connection is closed like a silent one.
+    #[test]
+    fn a_half_sent_request_is_closed_as_idle() {
+        let inner = inner_server(|mut sock| {
+            let mut buf = [0u8; 256];
+            while sock.read(&mut buf).is_ok_and(|n| n > 0) {}
+        });
+        let cert = Cert::make(&hosts("192.168.1.20")).unwrap();
+        let front = front(inner, &cert, 2, Duration::from_millis(300));
+        for sent in [
+            "G",
+            "POST /remote/v1/call/get_behavior HTTP/1.1\r\nHost: x\r\n",
+        ] {
+            let mut tls = connect(front.port, &cert);
+            tls.write_all(sent.as_bytes()).unwrap();
+            tls.flush().unwrap();
+            assert_eq!(tls.read(&mut [0u8; 16]).ok(), Some(0), "{sent:?}");
+        }
+    }
+
+    /// A byte every 100 ms for three seconds never finishes the request, so
+    /// the 300 ms limit still closes the connection.
+    #[test]
+    fn a_dripped_request_head_does_not_extend_the_idle_limit() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let closed = runtime.block_on(async {
+            let (mut browser, front) = tokio::io::duplex(1024);
+            let (back, _inner) = tokio::io::duplex(1024);
+            tokio::spawn(async move {
+                for byte in b"GET /remote/v1/hello HTTP/1.1\r\n" {
+                    if browser.write_all(&[*byte]).await.is_err() {
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            });
+            let pumped = pump(front, back, Duration::from_millis(300));
+            tokio::time::timeout(Duration::from_millis(1500), pumped)
+                .await
+                .is_ok()
+        });
+        assert!(closed);
+    }
+
+    /// The blank line that ends the request can come in a later read than the
+    /// rest; the call still waits out three idle limits for its reply.
+    #[test]
+    fn a_request_head_split_across_reads_still_waits_for_its_reply() {
+        const REPLY: &str = "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\ndone";
+        let inner = inner_server(|mut sock| {
+            let mut head = Vec::new();
+            let mut buf = [0u8; 256];
+            while !head.ends_with(b"\r\n\r\n") {
+                match sock.read(&mut buf) {
+                    Ok(n) if n > 0 => head.extend_from_slice(&buf[..n]),
+                    _ => return,
+                }
+            }
+            std::thread::sleep(Duration::from_millis(1500));
+            let _ = sock.write_all(REPLY.as_bytes());
+        });
+        let cert = Cert::make(&hosts("192.168.1.20")).unwrap();
+        let front = front(inner, &cert, 2, Duration::from_millis(500));
+        let mut tls = connect(front.port, &cert);
+        tls.write_all(b"GET /remote/v1/hello HTTP/1.1\r\nHost: x\r\n\r")
+            .unwrap();
+        tls.flush().unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        tls.write_all(b"\n").unwrap();
+        let mut reply = Vec::new();
+        let closed = tls.read_to_end(&mut reply).is_ok();
+        assert_eq!(
+            (String::from_utf8_lossy(&reply).into_owned(), closed),
+            (REPLY.to_string(), true)
+        );
     }
 }

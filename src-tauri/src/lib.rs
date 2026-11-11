@@ -4556,6 +4556,15 @@ mod command_tests {
             "a sync body on an async worker panics in zbus"
         );
     }
+
+    #[test]
+    fn the_capability_file_claims_a_manifest_only_if_the_build_has_one() {
+        // With no app manifest in build.rs, Tauri allows every app command
+        // from the app's own page. The capability file must not say otherwise.
+        let has = include_str!("../build.rs").contains("app_manifest");
+        let says = include_str!("../capabilities/default.json").contains("build manifest");
+        assert_eq!(says, has);
+    }
 }
 
 #[cfg(test)]
