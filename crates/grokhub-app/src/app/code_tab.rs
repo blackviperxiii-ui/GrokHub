@@ -105,14 +105,7 @@ pub(super) fn activity_line(e: &activity::Entry) -> String {
 /// What a background job sends back to the page.
 #[derive(Debug)]
 pub(super) enum Msg {
-    Loaded {
-        repo: repo::Repo,
-        builtins: Vec<repo::Builtin>,
-        plan: Result<runs::Plan, String>,
-        activity: Vec<activity::Entry>,
-        /// The open file's diff read again, or `None` once it has no changes.
-        diff: Option<repo::Diff>,
-    },
+    Loaded(Box<Loaded>),
     Diff {
         pick: u64,
         result: Result<repo::Diff, String>,
@@ -129,6 +122,17 @@ pub(super) enum Msg {
         plan: Result<runs::Plan, String>,
         fill: bool,
     },
+}
+
+/// One load's answers.
+#[derive(Debug)]
+pub(super) struct Loaded {
+    pub(super) repo: repo::Repo,
+    pub(super) builtins: Vec<repo::Builtin>,
+    pub(super) plan: Result<runs::Plan, String>,
+    pub(super) activity: Vec<activity::Entry>,
+    /// The open file's diff read again, or `None` once it has no changes.
+    pub(super) diff: Option<repo::Diff>,
 }
 
 /// What the Code tab holds between frames.
@@ -259,13 +263,14 @@ impl CodeTab {
 
     pub(super) fn apply(&mut self, msg: Msg) {
         match msg {
-            Msg::Loaded {
-                repo,
-                builtins,
-                plan,
-                activity,
-                diff,
-            } => {
+            Msg::Loaded(loaded) => {
+                let Loaded {
+                    repo,
+                    builtins,
+                    plan,
+                    activity,
+                    diff,
+                } = *loaded;
                 self.loading = false;
                 self.repo = Some(repo);
                 if self
@@ -345,13 +350,13 @@ pub(super) fn load_job(
     let diff = open
         .filter(|p| r.files.iter().any(|f| f.path == *p))
         .and_then(|p| repo::diff(workspace, p).ok());
-    let msg = Msg::Loaded {
+    let msg = Msg::Loaded(Box::new(Loaded {
         builtins: repo::builtins(workspace, home, config),
         plan: runs::plan(config, workspace, None, runs::Mode::Auto),
         activity: activity::list(config, ACTIVITY_ROWS),
         diff,
         repo: r,
-    };
+    }));
     let _ = tx.send(msg);
 }
 
