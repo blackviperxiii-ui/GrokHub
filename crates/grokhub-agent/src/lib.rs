@@ -57,6 +57,7 @@ mod session_tools;
 mod skills;
 mod slash_parity;
 mod sse;
+mod stall;
 mod subagent;
 mod subagent_policy;
 pub mod sudo_pass;
