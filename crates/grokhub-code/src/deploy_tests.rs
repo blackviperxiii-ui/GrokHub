@@ -63,11 +63,9 @@ fn on(config: &Path, command: &str) {
     .unwrap();
 }
 
-#[cfg(windows)]
-fn echo_secret() -> String {
-    "echo value=%DEPLOY_TOKEN%".into()
-}
-#[cfg(not(windows))]
+// Only the unix-gated secret test calls this; a windows variant would be dead code
+// under the workspace clippy run.
+#[cfg(unix)]
 fn echo_secret() -> String {
     "echo value=$DEPLOY_TOKEN; echo more=$DEPLOY_TOKEN >&2".into()
 }
