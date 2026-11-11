@@ -27,7 +27,7 @@ Columns, left to right:
 | `windows-release` | no | no | no | no | no | yes ² | yes |
 | `nightly-green` | no | no | no | no | no | yes | no |
 
-1. Skipped when a PR touches only `docs/`, `*.md`, `screenshots/` or `research/`. Markdown that is compiled into the binaries counts as code: a PR that touches `crates/**/*.md`, `src-tauri/**/*.md` or `PRIVACY.md` runs `linux` and `windows`. The `guards` job fails when Rust embeds a skipped file from anywhere else.
+1. Skipped when a PR touches only `docs/`, `*.md`, `screenshots/` or `research/`. Markdown that is compiled into the binaries counts as code: a PR that touches `crates/**/*.md`, `src-tauri/**/*.md` or `PRIVACY.md` runs `linux` and `windows`. So does a PR that touches `docs/compass/` or `docs/eval/`, which tests read from disk when they run. The `guards` job fails when Rust embeds a skipped file from anywhere else with `include_str!` or `include_bytes!`. It cannot see a file that a test opens when it runs, so a new test of that kind needs its path added to the `embedded` filter in `ci.yml` and to `scripts/ci-guards.d/90-embedded-markdown.sh`.
 2. Skipped when `beta` has not moved since the last green nightly (see below).
 3. Same as 1, and also skipped when a PR touches only `ui/` or workflows other than `ci.yml`.
 4. Only when `Cargo.lock` or `deny.toml` changes.
@@ -59,7 +59,7 @@ The `changes` job looks up the cache key `ci-nightly-green-<beta sha>`. If the k
 
 - Rust caches (`linux-release`, `windows-release`, `shell-<os>`) are used only on the `beta` ref. Tags and the nightly build cold.
 - A newer beta build cancels one still running. Tag runs never cancel.
-- A tag builds only when it is `v<VERSION>` or `v<VERSION>-beta.N` for the tagged commit. `plan` runs `scripts/release-tag-check.sh` before any build or signing.
+- A tag builds only when it is `v<VERSION>` or `v<VERSION>-beta.N` for the tagged commit. `plan` runs `scripts/release-tag-check.sh` before any build or signing, and the `guards` job fails when that call is missing or is not the first command for a tag (`scripts/ci-guards.sh`).
 - `publish` downloads only the `linux`, `windows` and `shell-*` artifacts, so the unsigned Windows files staged for SignPath never reach a release (`scripts/ci-guards.sh`).
 - A manual run on any branch other than `beta` builds nothing.
 - Pull requests and pushes to `main` never run release.yml.

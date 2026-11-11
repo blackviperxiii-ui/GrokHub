@@ -126,11 +126,14 @@ jobs:
               - '!ui/**'
               - '!.github/**'
       # `embedded` is the Markdown that include_str! compiles into the binaries
-      # (the agent prompt and built-in skills, and PRIVACY.md in a test). The
-      # filter above drops every *.md and can't take one back, so this one
+      # (the agent prompt and built-in skills, and PRIVACY.md in a test), plus
+      # the docs that tests read from disk when they run: docs/compass/
+      # (compass_paths.rs) and docs/eval/ (eval_r6.rs). The filter above drops
+      # every *.md and all of docs/ and can't take one back, so this one
       # turns `code` and `windows` on again.
       # scripts/ci-guards.d/90-embedded-markdown.sh fails when a new embedded
-      # file falls outside it.
+      # file falls outside it. It cannot see a file a test opens when it
+      # runs, so add that path here and in the guard by hand.
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: paths
         if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
@@ -145,6 +148,8 @@ jobs:
               - 'crates/**/*.md'
               - 'src-tauri/**/*.md'
               - 'PRIVACY.md'
+              - 'docs/compass/**'
+              - 'docs/eval/**'
             phone:
               - 'ui/**'
               - 'src-tauri/**'

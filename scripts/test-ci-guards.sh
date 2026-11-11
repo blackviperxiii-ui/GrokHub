@@ -53,6 +53,8 @@ jobs:
               - 'crates/**/*.md'
               - 'src-tauri/**/*.md'
               - 'PRIVACY.md'
+              - 'docs/compass/**'
+              - 'docs/eval/**'
   linux:
     needs: changes
     if: \${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
@@ -71,6 +73,21 @@ jobs:
     steps:
       - uses: actions/checkout@$SHA # v4
       - uses: ./.github/actions/local
+YAML
+cat >"$W/.github/workflows/release.yml" <<'YAML'
+jobs:
+  plan:
+    steps:
+      - name: Plan
+        id: plan
+        run: |
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            # Before any build or signing: the tag must be this commit's VERSION.
+            bash scripts/release-tag-check.sh "$GITHUB_REF_NAME" || exit 1
+            echo "build=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "build=true" >> "$GITHUB_OUTPUT"
 YAML
 "$REAL_GIT" -C "$W" add -A
 "$REAL_GIT" -C "$W" commit -q -m base
@@ -383,6 +400,23 @@ sed -i "/- 'PRIVACY.md'/d" "$CI_YML"
 commit_pr
 run_guard fail "an embedded filter that drops a path is rejected"
 
+# Tests read these two directories from disk when they run, so no
+# include_str! names them and only the list in the guard keeps them covered.
+fresh_pr
+sed -i "/- 'docs\/compass\/\*\*'/d" "$CI_YML"
+commit_pr
+run_guard fail "an embedded filter without docs/compass/, which a test reads when it runs, is rejected"
+
+fresh_pr
+sed -i "/- 'docs\/eval\/\*\*'/d" "$CI_YML"
+commit_pr
+run_guard fail "an embedded filter without docs/eval/, which a test reads when it runs, is rejected"
+
+fresh_pr
+printf 'const A: &str = include_str!("../../../../docs/eval/golden.md");\n' >>"$W/crates/grokhub-core/src/slash/mod.rs"
+commit_pr
+run_guard pass "embedding a file under docs/eval/, which the embedded filter covers, passes"
+
 fresh_pr
 sed -i "/^      code: /s/ || steps.paths.outputs.embedded == 'true'//" "$CI_YML"
 commit_pr
@@ -393,13 +427,51 @@ sed -i "/^      windows: /s/ || steps.paths.outputs.embedded == 'true'//" "$CI_Y
 commit_pr
 run_guard fail "a windows output that ignores the embedded filter is rejected"
 
+REL_YML="$W/.github/workflows/release.yml"
+
+fresh_pr
+sed -i '/release-tag-check\.sh/d' "$REL_YML"
+commit_pr
+run_guard fail "release.yml building a tag without the tag check is rejected"
+
+fresh_pr
+sed -i -e '/release-tag-check\.sh/d' \
+  -e '/exit 0$/a\            bash scripts/release-tag-check.sh "$GITHUB_REF_NAME" || exit 1' "$REL_YML"
+commit_pr
+run_guard fail "a tag check that runs after build=true is rejected"
+
+fresh_pr
+sed -i '/release-tag-check\.sh/s/|| exit 1$/|| true/' "$REL_YML"
+commit_pr
+run_guard fail "a tag check whose failure is ignored is rejected"
+
+fresh_pr
+sed -i 's/^\( *\)bash scripts\/release-tag-check/\1# bash scripts\/release-tag-check/' "$REL_YML"
+commit_pr
+run_guard fail "a commented-out tag check is rejected"
+
+fresh_pr
+sed -i '/^          if \[ "\$GITHUB_REF_TYPE" = tag \]; then$/i\          echo "build=true" >> "$GITHUB_OUTPUT"; exit 0' "$REL_YML"
+commit_pr
+run_guard fail "a plan step that sets build=true before the tag branch is rejected"
+
+fresh_pr
+sed -i 's/^  plan:/  decide:/' "$REL_YML"
+commit_pr
+run_guard fail "a release.yml without a plan job is rejected"
+
+fresh_pr
+"$REAL_GIT" -C "$W" mv "$REL_YML" "$W/.github/workflows/publish.yml"
+commit_pr
+run_guard fail "a missing release.yml is rejected"
+
 fresh_pr
 mkdir -p "$W/.github/workflows/unreadable.yml"
 run_guard fail "unreadable workflow file fails"
 rmdir "$W/.github/workflows/unreadable.yml"
 
 fresh_pr
-"$REAL_GIT" -C "$W" rm -q "$W/.github/workflows/ci.yml"
+"$REAL_GIT" -C "$W" rm -q "$W/.github/workflows/ci.yml" "$REL_YML"
 commit_pr
 run_guard fail "no workflows at all fails"
 

@@ -6,8 +6,13 @@
 # path filter in ci.yml turns the build jobs back on for it. This guard fails
 # when such a file sits where that filter does not reach, or when ci.yml and
 # the list below stop agreeing.
+# The last two entries are docs that tests read from disk when they run:
+# crates/grokhub-core/tests/compass_paths.rs reads docs/compass/ and
+# crates/grokhub-agent/tests/eval_r6.rs reads docs/eval/. The scan below only
+# finds include_str! and include_bytes!, so a test that opens another skipped
+# file when it runs needs its path added here and in ci.yml by hand.
 embedded_yml=.github/workflows/ci.yml
-embedded_want=$'crates/**/*.md\nsrc-tauri/**/*.md\nPRIVACY.md'
+embedded_want=$'crates/**/*.md\nsrc-tauri/**/*.md\nPRIVACY.md\ndocs/compass/**\ndocs/eval/**'
 embedded_bad=0
 if [[ ! -f "$embedded_yml" ]]; then
   echo "ci-guards: missing $embedded_yml" >&2
@@ -61,7 +66,7 @@ embedded_scan=$(git ls-files -z -- '*.rs' | xargs -0 awk '
       sub(/".*$/, "", target)
       path = resolve(FILENAME, target)
       if (path !~ /\.md$/ && path !~ /^(docs|screenshots|research)\//) return
-      if (path == "PRIVACY.md" || path ~ /^(crates|src-tauri)\/.*\.md$/) print "ok " path
+      if (path == "PRIVACY.md" || path ~ /^(crates|src-tauri)\/.*\.md$/ || path ~ /^docs\/(compass|eval)\//) print "ok " path
       else printf "bad %s:%d: %s\n", FILENAME, FNR, path
     } else if (arg ~ /\.md"|(docs|screenshots|research)\//) {
       printf "bad %s:%d: a computed path, write it as one plain string\n", FILENAME, FNR

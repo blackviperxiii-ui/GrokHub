@@ -14,10 +14,13 @@
 #       of a full commit SHA, or no workflow file can be read
 #   75) a workflow step merges downloaded artifacts without a pattern, or with
 #       one that takes the unsigned Windows staging files
+#   76) release.yml's plan job could build a tag before
+#       scripts/release-tag-check.sh has passed it
 #   80) our code uses an API anti-cheats flag: memory reads, module lists,
 #       injection or global keyboard/mouse hooks
 #   90) Rust embeds Markdown or a docs/, screenshots/ or research/ file that
-#       the embedded path filter in ci.yml does not cover
+#       the embedded path filter in ci.yml does not cover, or that filter
+#       drops the docs that tests read when they run
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
