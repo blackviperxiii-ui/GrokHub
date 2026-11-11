@@ -2159,6 +2159,7 @@ fn quiet_cabin() -> Cabin {
         code_tab: super::code_tab::CodeTab::default(),
         code_editor: super::code_editor::CodeEditor::default(),
         skills_tab: super::skills_tab::SkillsTab::default(),
+        code_term: super::code_terminal::TermPanel::default(),
         personal: personal_ui::PersonalPage::default(),
         pending_connectors: Vec::new(),
         auto_compose: false,
