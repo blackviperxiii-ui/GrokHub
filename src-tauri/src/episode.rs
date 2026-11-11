@@ -76,6 +76,9 @@ pub struct Panel {
     pub cua: bool,
     /// The picture is the one the page already has, so it is not sent again.
     pub frame_same: bool,
+    /// An allowed step waits with no reply running to take it: the page
+    /// sends the resume (`agent::RESUME_TEXT`) now.
+    pub resume: bool,
 }
 
 /// A step of an episode, as the header counts it: a tool call the gate
@@ -102,12 +105,21 @@ fn one_line(text: &str, cap: usize) -> String {
         .collect()
 }
 
+/// What a waiting card says, for the page: all of it, since it is what the
+/// person approves (a cut would hide the end of a typed command), with every
+/// line end marked so an Enter inside typed text shows. Keys are scrubbed.
+fn card_text(action: &str) -> String {
+    grokhub_core::redact_secrets(action)
+        .replace("\r\n", "\n")
+        .replace('\n', "\u{23ce}\n")
+}
+
 /// One listed step and, while it is a hard step nobody settled yet, the card
-/// it waits on and the tool and args its settling span will carry.
+/// it waits on.
 #[derive(Debug, Clone)]
 struct Seen {
     row: StepRow,
-    card: Option<(String, String)>,
+    card: Option<String>,
 }
 
 /// What the panel has read of one episode's spans. A re-read parses only the
@@ -124,14 +136,9 @@ pub struct Cursor {
     ended: Option<String>,
 }
 
-/// The tool and args a hard step's own spans share (its park, then its
-/// approve or deny).
-fn card_key(s: &hx::Span) -> String {
-    format!("{}\n{}", s.tool, s.args_redacted)
-}
-
-/// The card a parked step's span waits on: the kernel names it after the
-/// episode and the step number in the span's claim (`episode step N`).
+/// The card a parked step's spans belong to (its park, then its approve or
+/// deny): the kernel names it after the episode and the step number in the
+/// span's claim (`episode step N`), which a step keeps when it settles later.
 fn card_of(s: &hx::Span, id: &str) -> Option<String> {
     let n: u32 = s.claim.strip_prefix("episode step ")?.parse().ok()?;
     Some(format!("{}{id}-{n}", ep::PARK_PREFIX))
@@ -184,19 +191,20 @@ impl Cursor {
             }
             return;
         }
-        // An approve or a deny settles the oldest waiting step with the same
-        // tool and args. A park past its TTL is denied for now and waits on.
+        // An approve or a deny settles the waiting step it names: its own
+        // step number, not its tool and args, which another step can share
+        // (typed text is kept as its length). A park past its TTL is denied
+        // for now and waits on.
         let settles = match s.decision.as_str() {
             "approve" => true,
             "deny" => !s.result.ends_with(ep::STILL_WAITING),
             _ => false,
         };
-        if settles {
-            let key = card_key(&s);
+        if let Some(card) = card_of(&s, &self.id).filter(|_| settles) {
             let waiting = self
                 .rows
                 .iter_mut()
-                .find(|seen| seen.card.as_ref().is_some_and(|(_, k)| *k == key));
+                .find(|seen| seen.card.as_ref() == Some(&card));
             if let Some(seen) = waiting {
                 seen.card = None;
                 if s.decision == "approve" {
@@ -213,8 +221,7 @@ impl Cursor {
         }
         let card = (s.decision == "park")
             .then(|| card_of(&s, &self.id))
-            .flatten()
-            .map(|card| (card, card_key(&s)));
+            .flatten();
         self.rows.push(Seen {
             row: StepRow {
                 n: self.rows.len() as u32 + 1,
@@ -246,7 +253,7 @@ impl Cursor {
             .map(|p| ParkRow {
                 id: p.id,
                 tool: p.tool,
-                action: one_line(&p.action, 200),
+                action: card_text(&p.action),
                 class: p.class,
             })
             .collect();
@@ -258,7 +265,7 @@ impl Cursor {
                 // A parked step whose card has its answer: allowed and not
                 // run yet (no loop took the answer, or it is running), or
                 // denied and not settled yet.
-                if let Some((card, _)) = &seen.card {
+                if let Some(card) = &seen.card {
                     if !parks.iter().any(|p| p.id == *card) {
                         let answer = hx::park_dir(config_dir).join(format!("{card}.answer"));
                         let denied =
@@ -272,9 +279,10 @@ impl Cursor {
             .collect();
         // No picture while a credentials step waits: the screen may show the field.
         let frame = frame.filter(|_| !parks.iter().any(|p| p.class == "credentials"));
+        // An end marker wins: the shell may have last seen it paused.
         let state = match (&self.ended, paused) {
-            (_, true) => "paused",
-            (Some(_), false) => "ended",
+            (Some(_), _) => "ended",
+            (None, true) => "paused",
             (None, false) => "running",
         };
         Panel {
@@ -291,6 +299,7 @@ impl Cursor {
             ended: self.ended.clone(),
             cua,
             frame_same: false,
+            resume: false,
         }
     }
 }
@@ -307,6 +316,23 @@ pub fn panel(
     cua: bool,
 ) -> Panel {
     Cursor::default().panel(config_dir, chat, id, started_ms, now_ms, frame, paused, cua)
+}
+
+/// The panel that tells the page to send the resume: a reply ended with an
+/// allowed step nobody ran (`agent::Session::take_resume_owed`).
+pub fn resume_panel(config_dir: &Path, chat: &str, open: &Open, frame: Option<String>) -> Panel {
+    let mut panel = panel(
+        config_dir,
+        chat,
+        &open.id,
+        open.started_ms,
+        grokhub_core::now_ms(),
+        frame,
+        open.paused,
+        open.cua,
+    );
+    panel.resume = true;
+    panel
 }
 
 /// The panel of an episode that was ended with no loop running (Stop, Halt,
@@ -380,6 +406,24 @@ pub fn answer(config_dir: &Path, id: &str, park_id: &str, approve: bool) -> Resu
         return Err("That step already has an answer.".into());
     }
     hx::answer_park(config_dir, park_id, approve)
+}
+
+/// Whether one of the episode's cards was allowed and no loop took the
+/// answer yet: its answer file still says `approve`.
+pub fn allowed(config_dir: &Path, id: &str) -> bool {
+    let mine = format!("{}{id}-", ep::PARK_PREFIX);
+    std::fs::read_dir(hx::park_dir(config_dir))
+        .map(|rd| {
+            rd.flatten().map(|e| e.path()).any(|path| {
+                path.extension().is_some_and(|x| x == "answer")
+                    && path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n.starts_with(&mine))
+                    && std::fs::read_to_string(&path).is_ok_and(|word| word.trim() == "approve")
+            })
+        })
+        .unwrap_or(false)
 }
 
 /// The latest screenshot, held in memory only: never written to a span, a

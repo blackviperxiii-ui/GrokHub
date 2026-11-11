@@ -31,7 +31,16 @@ vi.mock("./episodeApi", () => ({
 }));
 vi.mock("./api", () => ({ haltDesktop: api.halt }));
 
-import { ARM_LABEL, Episode, endedLine, RESUME_TEXT, stepWords, WAITING_NOTE } from "./Episode";
+import {
+  ARM_LABEL,
+  CARD_ACTION,
+  classWords,
+  Episode,
+  endedLine,
+  RESUME_TEXT,
+  stepWords,
+  WAITING_NOTE,
+} from "./Episode";
 
 function panel(over: Partial<EpisodePanel> = {}): EpisodePanel {
   return {
@@ -205,6 +214,39 @@ describe("Episode", () => {
     await waitFor(() => expect(onResume).toHaveBeenCalledTimes(1));
     expect(onResume).toHaveBeenCalledWith("Continue");
     expect(RESUME_TEXT).toBe("Continue");
+  });
+
+  it("a panel that says the resume is due sends it through the chat, once", async () => {
+    const onResume = vi.fn<(text: string) => void>();
+    api.state.mockResolvedValue(null);
+    render(<Episode conversationId="c1" desktopOn onResume={onResume} />);
+    await waitFor(() => expect(api.handler).not.toBeNull());
+    // The reply ended with an allowed step nobody ran: the shell says so.
+    act(() => api.handler?.({ ...panel(), resume: true } as EpisodePanel));
+    expect(onResume.mock.calls).toEqual([["Continue"]]);
+    expect(screen.getByText("Desktop session · 2 steps · 1 min")).toBeInTheDocument();
+    // An ordinary panel, and another chat's signal, send nothing.
+    act(() => api.handler?.(panel()));
+    act(() => api.handler?.({ ...panel({ conversationId: "c2" }), resume: true } as EpisodePanel));
+    expect(onResume).toHaveBeenCalledTimes(1);
+  });
+
+  it("a card names the kind of step and shows every line of what will be typed", async () => {
+    await open();
+    const typed = "cd /tmp\u23ce\nrm -rf ~/Documents";
+    const parks = [
+      { id: "epk-ep-1-3", tool: "type", action: typed, class: "delete" },
+      { id: "epk-ep-1-4", tool: "click", action: "Loadout wants to click Send in Mail", class: "send" },
+      { id: "epk-ep-1-5", tool: "key", action: "press Enter in Shop", class: "something_new" },
+    ];
+    act(() => api.handler?.(panel({ parks })));
+    const kinds = screen.getAllByRole("group").map((card) => card.querySelector(".episode-park-class")?.textContent);
+    expect(kinds).toEqual(["Delete", "Send", "Needs your OK"]);
+    // The text keeps its line ends, so the page can wrap and scroll it whole.
+    const actions = screen.getAllByRole("region", { name: CARD_ACTION }).map((el) => el.textContent);
+    expect(actions).toEqual([typed, "Loadout wants to click Send in Mail", "press Enter in Shop"]);
+    expect(classWords("money")).toBe("Spend money");
+    expect(classWords("credentials")).toBe("Password or key");
   });
 
   it("an Allow a running reply picks up, and a Deny, send nothing", async () => {

@@ -4,6 +4,7 @@
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use serde_json::{json, Value};
 
@@ -71,6 +72,11 @@ const LOOP_ONLY: &[&str] = &[
 pub trait Parks {
     fn post(&self, req: &ParkRequest) -> bool;
     fn answer(&self, id: &str) -> Option<bool>;
+    /// How long ago the card got its answer, read before [`Self::answer`]
+    /// takes it. `None` when there is no answer or the store can't tell.
+    fn answer_age(&self, _id: &str) -> Option<Duration> {
+        None
+    }
     fn withdraw(&self, id: &str);
 }
 
@@ -84,6 +90,12 @@ impl Parks for FileParks<'_> {
 
     fn answer(&self, id: &str) -> Option<bool> {
         harness::take_answer(self.0, id)
+    }
+
+    fn answer_age(&self, id: &str) -> Option<Duration> {
+        let answer = harness::park_dir(self.0).join(format!("{id}.answer"));
+        let written = std::fs::metadata(answer).ok()?.modified().ok()?;
+        written.elapsed().ok()
     }
 
     fn withdraw(&self, id: &str) {
@@ -315,6 +327,12 @@ pub fn run_episode(
             continue;
         }
         if turn.calls.is_empty() {
+            // The card was on screen while the worker wrote this: an answer
+            // given meanwhile is acted on now, and the worker goes on from
+            // there, instead of the turn ending on a step already answered.
+            if run.settle_late(on_event) {
+                continue;
+            }
             match run.claim(&turn.text) {
                 Some(stop) => {
                     let reply = run.end_note.take().unwrap_or(turn.text);
@@ -364,8 +382,23 @@ impl Run<'_, '_> {
 
     /// Record a step: its span, its view line, and the fold calls it caused.
     fn record(&mut self, shape: &StepShape, args_redacted: &str, class: &str, view_id: &str) {
+        self.record_as(self.ep.steps, shape, args_redacted, class, view_id);
+    }
+
+    /// [`Self::record`] with the step number the span names. A parked step
+    /// that settles later keeps the number it parked under, which its card
+    /// is named after, so a host can tell which waiting step a span settles.
+    fn record_as(
+        &mut self,
+        step: u32,
+        shape: &StepShape,
+        args_redacted: &str,
+        class: &str,
+        view_id: &str,
+    ) {
         let tokens = self.tokens.take();
-        let span = step_span(self.ep, shape, args_redacted, class, tokens);
+        let mut span = step_span(self.ep, shape, args_redacted, class, tokens);
+        span.claim = format!("episode step {step}");
         let raw = serde_json::to_string(&span).unwrap_or_default();
         self.write(span);
         let line = shape.line(self.ep.steps);
@@ -774,14 +807,34 @@ impl Run<'_, '_> {
         self.end(why);
     }
 
+    /// The worker stopped with steps still parked: settle the ones answered
+    /// while it was thinking. True when one settled, so the loop goes round
+    /// again. A Halt, Stop or Pause is left to the top of the loop.
+    fn settle_late(&mut self, on_event: &mut dyn FnMut(LoopEvent)) -> bool {
+        if self.ep.parks.is_empty()
+            || self.k.halt.halted()
+            || self.k.cancel.is_cancelled()
+            || self.k.pause.load(Ordering::SeqCst)
+        {
+            return false;
+        }
+        let open = self.ep.parks.len();
+        self.settle_parks(on_event);
+        self.ep.parks.len() < open
+    }
+
     /// Answered parks run once or are denied. One past the TTL is denied for
     /// now (not run) and keeps waiting: a late Approve still runs it once.
+    /// An Approve nobody acted on for the TTL is refused: it was for a
+    /// screen long gone.
     fn settle_parks(&mut self, on_event: &mut dyn FnMut(LoopEvent)) {
         let now = self.now();
         for mut park in std::mem::take(&mut self.ep.parks) {
+            let age = self.k.parks.answer_age(&park.id);
             let answer = self.k.parks.answer(&park.id);
             let expired = now.saturating_sub(park.parked_ms) >= APPROVAL_TTL.as_millis() as u64;
             let deny = match answer {
+                Some(true) if age.is_some_and(|age| age >= APPROVAL_TTL) => Some(stale_ok()),
                 // The OK was for the screen as it was. A Halt or a lock
                 // screen since then refuses the step, as it would any other.
                 Some(true) => self.desk_stopped(&park.tool),
@@ -798,7 +851,8 @@ impl Run<'_, '_> {
                             ui_changed: None,
                             result: timed_out(&park),
                         };
-                        self.record(
+                        self.record_as(
+                            park.step,
                             &shape,
                             &park.args_redacted,
                             park.class.as_str(),
@@ -819,7 +873,13 @@ impl Run<'_, '_> {
                         ui_changed: None,
                         result: reason,
                     };
-                    self.record(&shape, &park.args_redacted, park.class.as_str(), &id);
+                    self.record_as(
+                        park.step,
+                        &shape,
+                        &park.args_redacted,
+                        park.class.as_str(),
+                        &id,
+                    );
                 }
                 None => {
                     let call = FunctionCall {
@@ -846,7 +906,13 @@ impl Run<'_, '_> {
                         ui_changed: ui,
                         result: result_text(&out),
                     };
-                    self.record(&shape, &park.args_redacted, park.class.as_str(), &id);
+                    self.record_as(
+                        park.step,
+                        &shape,
+                        &park.args_redacted,
+                        park.class.as_str(),
+                        &id,
+                    );
                 }
             }
         }
@@ -1207,6 +1273,14 @@ fn timed_out(park: &OpenPark) -> String {
     format!(
         "hard-class {} unanswered after {}s — not run; {STILL_WAITING}",
         park.class.as_str(),
+        APPROVAL_TTL.as_secs()
+    )
+}
+
+/// The step span's result for an Approve older than the approval TTL.
+fn stale_ok() -> String {
+    format!(
+        "your OK was given more than {}s ago — not run",
         APPROVAL_TTL.as_secs()
     )
 }

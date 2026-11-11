@@ -2,7 +2,7 @@
 // thumbnail (never while a credentials step waits), the cards for steps that
 // wait for an OK, and Pause, Stop and Halt. It follows `episode://event`.
 // An Allow with no reply running goes on at once: the chat sends the resume.
-import { useEffect, useState } from "react";
+import { useEffect, useEffectEvent, useState } from "react";
 import { haltDesktop } from "./api";
 import {
   episodeAnswer,
@@ -26,9 +26,31 @@ export const CUA_NOTE = "Using the Cua driver";
  * the session keeps its goal and runs the allowed step now. */
 export const RESUME_TEXT = "Continue";
 
+/** The label of the part of a card that says what the step does. */
+export const CARD_ACTION = "What this step does";
+/** The kind of step a card waits on, by the shell's hard class. */
+export const CLASS_WORDS: Record<string, string> = {
+  send: "Send",
+  delete: "Delete",
+  money: "Spend money",
+  credentials: "Password or key",
+  irreversible_os: "Can't be undone",
+  system_admin: "Admin rights or system protection",
+  agent_config: "Agent instructions and settings",
+  automation: "New automation",
+  outside_value: "Value from outside text",
+  runs_later: "File that runs code later",
+  flagged_driver: "Driver anti-cheats block",
+};
+
+export function classWords(cls: string): string {
+  return CLASS_WORDS[cls] ?? "Needs your OK";
+}
+
 /** A panel as the shell sends it. `frameSame`: the picture is the one the
- * page already has, so it was left out. */
-type SentPanel = EpisodePanel & { frameSame?: boolean };
+ * page already has, so it was left out. `resume`: a reply ended with an
+ * allowed step nobody ran, so the chat sends the resume now. */
+type SentPanel = EpisodePanel & { frameSame?: boolean; resume?: boolean };
 
 /** The panel to draw for `next`, with the picture kept when the shell left
  * it out as the same one. */
@@ -69,7 +91,11 @@ export function stepWords(step: EpisodeStep, over: boolean): string {
 function ParkCard({ park, onAnswer }: { park: EpisodePark; onAnswer: (approve: boolean) => void }) {
   return (
     <div className="episode-park" role="group" aria-label={`Waiting: ${park.action}`}>
-      <p className="episode-park-action">{park.action}</p>
+      <p className="episode-park-class">{classWords(park.class)}</p>
+      {/* All of it, lines kept: it wraps, and scrolls (by keyboard too) when long. */}
+      <div className="episode-park-action" role="region" aria-label={CARD_ACTION} tabIndex={0}>
+        {park.action}
+      </div>
       <p className="note">{WAITING_NOTE}</p>
       <div className="episode-actions">
         <button type="button" onClick={() => onAnswer(true)}>
@@ -175,12 +201,15 @@ export function Episode({
   const [panel, setPanel] = useState<SentPanel | null>(null);
   const [armed, setArmed] = useState(false);
   const [failed, setFailed] = useState("");
+  const resume = useEffectEvent(() => onResume?.(RESUME_TEXT));
 
   useEffect(() => {
     let dropped = false;
     let stop: (() => void) | undefined;
-    void onEpisode((next) => {
-      if (next.conversationId === conversationId) setPanel((had) => withFrame(next, had));
+    void onEpisode((next: SentPanel) => {
+      if (next.conversationId !== conversationId) return;
+      setPanel((had) => withFrame(next, had));
+      if (next.resume) resume();
     }).then((unlisten) => {
       if (dropped) unlisten();
       else stop = unlisten;
@@ -216,8 +245,8 @@ export function Episode({
   const answer = (parkId: string, approve: boolean) => {
     setFailed("");
     episodeAnswer(conversationId, parkId, approve)
-      .then((resume: unknown) => {
-        if (resume === true) onResume?.(RESUME_TEXT);
+      .then((due: unknown) => {
+        if (due === true) onResume?.(RESUME_TEXT);
       })
       .catch((e: unknown) => setFailed(String(e)));
   };

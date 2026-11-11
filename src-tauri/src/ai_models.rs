@@ -784,6 +784,17 @@ mod tests {
         assert!(!kept.exists());
     }
 
+    /// Whether `setup` (the body of the app's start) calls the keyring
+    /// install as a statement of its own, before the state is managed.
+    fn installs_keyring_first(setup: &str) -> bool {
+        let Some(state) = setup.find("app.manage(ShellState") else {
+            return false;
+        };
+        setup[..state]
+            .lines()
+            .any(|line| line.trim() == "grokhub_agent::route::providers::use_os_vault();")
+    }
+
     #[test]
     fn the_keyring_is_installed_when_the_app_starts() {
         // A chat sent before Settings → AI models is opened reads the saved keys.
@@ -793,13 +804,24 @@ mod tests {
             .nth(1)
             .and_then(|s| s.split(".on_window_event(").next())
             .expect("run setup");
-        let install = setup
-            .find("grokhub_agent::route::providers::use_os_vault();")
-            .expect("setup installs the keyring");
-        assert!(
-            install < setup.find("app.manage(ShellState").expect("state"),
-            "{setup}"
-        );
+        assert!(installs_keyring_first(setup), "{setup}");
+        // The check reads code, not words: a call that is commented out, sits
+        // in a string or comes after the state is not an install.
+        let call = "grokhub_agent::route::providers::use_os_vault();";
+        let state = "app.manage(ShellState::new());";
+        assert!(installs_keyring_first(&format!(
+            "    {call}\n    {state}\n"
+        )));
+        assert!(!installs_keyring_first(&format!(
+            "    // {call}\n    {state}\n"
+        )));
+        assert!(!installs_keyring_first(&format!(
+            "    let note = \"{call}\";\n    {state}\n"
+        )));
+        assert!(!installs_keyring_first(&format!(
+            "    {state}\n    {call}\n"
+        )));
+        assert!(!installs_keyring_first(&format!("    {call}\n")));
     }
 
     #[test]

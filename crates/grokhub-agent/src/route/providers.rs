@@ -231,12 +231,29 @@ pub fn providers_path(config_dir: &Path) -> PathBuf {
 /// private host) or no longer gives that id (the file was edited to point at
 /// another host) is skipped, so its key is never sent there.
 pub fn load_providers(config_dir: &Path) -> Vec<Provider> {
-    read_json::<ProviderList>(&providers_path(config_dir))
-        .map(|l| l.providers)
-        .unwrap_or_default()
+    saved_rows(config_dir)
         .into_iter()
         .filter(|p| parse_base_url(&p.base_url).is_ok_and(|(_, _, id)| id == p.id))
         .collect()
+}
+
+/// Every row in the saved file, the ones [`load_providers`] skips too. Adding
+/// and removing write this list back, so a skipped row is not erased with its
+/// key left behind in the keyring, and it can still be removed.
+fn saved_rows(config_dir: &Path) -> Vec<Provider> {
+    read_json::<ProviderList>(&providers_path(config_dir))
+        .map(|l| l.providers)
+        .unwrap_or_default()
+}
+
+/// An id an address can give ([`parse_base_url`]): letters, digits and `-`.
+/// A hand-written row with any other id is never matched by it, so the id
+/// never names a keyring entry or a file.
+fn id_shaped(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
 fn save_providers(config_dir: &Path, providers: &[Provider]) -> Result<(), String> {
@@ -311,7 +328,7 @@ pub fn add_provider_as(
         .map_err(|_| KEYRING_OFF.to_string())?;
     forget_key_cache(config_dir, &id);
     forget_listing(config_dir, &id);
-    let mut all = load_providers(config_dir);
+    let mut all = saved_rows(config_dir);
     let p = Provider {
         id: id.clone(),
         kind,
@@ -331,9 +348,10 @@ pub fn add_provider_as(
 /// Only an id in the saved list is removed, so the caller's text never names a
 /// keyring entry or a file. While the keyring can't delete the key the
 /// provider stays listed: the row is the only sign a key may still be there.
+/// A row [`load_providers`] skips is in the saved list too: it goes with its key.
 pub fn remove_provider(config_dir: &Path, id: &str) -> Result<(), String> {
-    let mut all = load_providers(config_dir);
-    if !all.iter().any(|p| p.id == id) {
+    let mut all = saved_rows(config_dir);
+    if !id_shaped(id) || !all.iter().any(|p| p.id == id) {
         return Err(NOT_ADDED.into());
     }
     if let Some(v) = vault_for(config_dir) {

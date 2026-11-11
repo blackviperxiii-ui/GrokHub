@@ -742,3 +742,85 @@ fn the_linux_bundles_list_grokhub_hub_beside_the_fps_probe() {
     let script = include_str!("../../scripts/shell-fps-probe.mjs");
     assert!(script.contains("[\"grokhub-hub\", \"hub\"]"));
 }
+
+/// Two steps share a tool and redacted args (typed text is kept as its
+/// length). A refusal of the second must not settle the first, whose card
+/// still waits, and the first must read as run once it has.
+#[test]
+fn a_refusal_of_another_step_with_the_same_tool_and_args_leaves_a_waiting_row_alone() {
+    let d = dir("park-row-other-deny");
+    span(
+        &d,
+        "ep-1",
+        1,
+        "type",
+        "park",
+        "parked: waiting for your approval",
+    );
+    let card = park(&d, "ep-1", 1, "delete");
+    span(&d, "ep-1", 2, "type", "deny", "You said no to type.");
+    let p = panel(&d, "chat", "ep-1", 0, 0, None, false, false);
+    assert_eq!(
+        decisions(&p),
+        vec![
+            (1, "park", "parked: waiting for your approval"),
+            (2, "deny", "You said no to type.")
+        ]
+    );
+    assert_eq!(p.parks.len(), 1, "its card still waits");
+    assert_eq!(answer(&d, "ep-1", &card, true), Ok(()));
+    assert_eq!(hx::take_answer(&d, &card), Some(true));
+    span(&d, "ep-1", 1, "type", "approve", "type ok");
+    let p = panel(&d, "chat", "ep-1", 0, 0, None, false, false);
+    assert_eq!(
+        decisions(&p),
+        vec![
+            (1, "approve", "type ok"),
+            (2, "deny", "You said no to type.")
+        ]
+    );
+}
+
+/// The card is what the person approves: it shows all of the typed text,
+/// however long, with every line end marked.
+#[test]
+fn a_card_shows_the_whole_action_with_its_line_ends_marked() {
+    let d = dir("card-whole");
+    let tail = "; rm -rf ~/Documents";
+    let long = format!("echo {}{tail}", "a".repeat(375));
+    assert_eq!(long.chars().count(), 400);
+    let park_id = format!("{}ep-1-1", ep::PARK_PREFIX);
+    hx::post_park(
+        &d,
+        &hx::ParkRequest {
+            id: park_id,
+            path: "E".into(),
+            tool: "type".into(),
+            action: format!("cd /tmp\r\nls\n{long}"),
+            class: "delete".into(),
+            ts_ms: 1,
+        },
+    )
+    .expect("park");
+    let p = panel(&d, "chat", "ep-1", 0, 0, None, false, false);
+    assert_eq!(
+        p.parks[0].action,
+        format!("cd /tmp\u{23ce}\nls\u{23ce}\n{long}")
+    );
+    assert!(p.parks[0].action.ends_with(tail));
+}
+
+/// A session the engine ended is over, whatever the shell last knew of it:
+/// a Pause followed by the reply's own Stop must not leave a "Paused" panel
+/// with Stop and Halt buttons.
+#[test]
+fn an_ended_episode_never_reads_paused() {
+    let d = dir("ended-not-paused");
+    step(&d, "chat", "ep-1", "click", "allow", "click ok");
+    step(&d, "chat", "ep-1", ep::EPISODE_TOOL, "end", "stop");
+    let p = panel(&d, "chat", "ep-1", 0, 0, None, true, false);
+    assert_eq!(
+        (p.state.as_str(), p.ended.as_deref()),
+        ("ended", Some("stop"))
+    );
+}

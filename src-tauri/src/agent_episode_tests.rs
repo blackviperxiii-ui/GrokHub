@@ -955,3 +955,202 @@ fn a_chat_on_a_desktop_turn_or_session_says_so() {
     assert!(session.stop_episode());
     assert!(!session.on_desktop());
 }
+
+#[test]
+fn an_allow_during_the_last_model_call_runs_the_step_in_that_turn() {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    reset();
+    let cfg = config("allow-mid-turn");
+    let session = Arc::new(Session::spawn_with(CHAT, cfg.clone(), fixture));
+    session.arm_episode(true);
+    // The card is on screen while the reply is still being written: the
+    // person clicks Allow during the call that only says it is done.
+    let (clicker, dir) = (Arc::clone(&session), cfg.clone());
+    let told: Arc<Mutex<Vec<Result<bool, String>>>> = Arc::default();
+    let heard = Arc::clone(&told);
+    let model = Arc::new(Model {
+        script: vec![Act::Send, Act::Done, Act::Done],
+        calls: AtomicUsize::new(0),
+        on_call: Box::new(move |n| {
+            if n == 1 {
+                let open = clicker.episode().expect("open");
+                let card = panel_of(&dir, &open).parks[0].id.clone();
+                heard
+                    .lock()
+                    .expect("told")
+                    .push(clicker.answer_episode(&card, true));
+            }
+        }),
+    });
+    let stop = session.prompt(
+        GOAL,
+        Vec::new(),
+        route(model, PermMode::Always),
+        Box::new(|_| {}),
+    );
+    // A reply was running, so the window is not asked to send anything.
+    assert_eq!(*told.lock().expect("told"), vec![Ok(false)]);
+    assert_eq!(stop, Ok("episode_verified".to_string()));
+    assert!(!session.take_resume_owed(), "the loop took the answer");
+    let sends = desk_calls().iter().filter(|c| *c == "click Send").count();
+    assert_eq!(sends, 1, "{:?}", desk_calls());
+    assert!(session.episode().is_none());
+    assert_eq!(park_files(&cfg), Vec::<String>::new());
+}
+
+#[test]
+fn an_allow_after_the_loops_last_look_is_owed_a_resume_when_the_reply_ends() {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    reset();
+    let cfg = config("allow-late");
+    let session = Arc::new(Session::spawn_with(CHAT, cfg.clone(), fixture));
+    session.arm_episode(true);
+    let model = Model::new(vec![Act::Send, Act::Done, Act::Click, Act::Done]);
+    // The Allow lands when the loop has returned and the reply is being
+    // wrapped up: the chat is still busy, and no loop will look again.
+    let (clicker, dir) = (Arc::clone(&session), cfg.clone());
+    let told: Arc<Mutex<Vec<Result<bool, String>>>> = Arc::default();
+    let heard = Arc::clone(&told);
+    let first = session.prompt(
+        GOAL,
+        Vec::new(),
+        route(Arc::clone(&model), PermMode::Always),
+        Box::new(move |event| {
+            if let UiEvent::Done { .. } = event {
+                let open = clicker.episode().expect("open");
+                let card = panel_of(&dir, &open).parks[0].id.clone();
+                heard
+                    .lock()
+                    .expect("told")
+                    .push(clicker.answer_episode(&card, true));
+            }
+        }),
+    );
+    assert_eq!(first, Ok("end_turn".to_string()));
+    assert_eq!(*told.lock().expect("told"), vec![Ok(false)]);
+    assert!(!desk_calls().iter().any(|c| c == "click Send"));
+    let open = session.episode().expect("it waits on the resume");
+    // The end of the reply owes the window the resume, once.
+    assert!(session.take_resume_owed());
+    assert!(!session.take_resume_owed());
+    assert!(crate::episode::resume_panel(&cfg, CHAT, &open, None).resume);
+    assert!(!panel_of(&cfg, &open).resume);
+    // The window sends the resume: the step runs once and the goal is kept.
+    let second = session.prompt(
+        RESUME_TEXT,
+        Vec::new(),
+        route(model, PermMode::Always),
+        Box::new(|_| {}),
+    );
+    assert_eq!(second, Ok("episode_verified".to_string()));
+    let step = |decision: &str| ("click".to_string(), decision.to_string(), GOAL.to_string());
+    assert_eq!(
+        goal_steps(&cfg, &open.id),
+        vec![step("park"), step("approve"), step("allow")]
+    );
+}
+
+#[test]
+fn a_stop_from_the_composer_after_a_pause_ends_the_session() {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    // Pause then the reply's own Stop, and the other way round: the engine
+    // ends the session either way, so the shell must not keep it as paused.
+    for (label, pause_first) in [("pause-then-stop", true), ("stop-then-pause", false)] {
+        reset();
+        let cfg = config(label);
+        let session = Arc::new(Session::spawn_with(CHAT, cfg.clone(), fixture));
+        session.arm_episode(true);
+        let presser = Arc::clone(&session);
+        let model = Arc::new(Model {
+            script: vec![Act::Click, Act::Click, Act::Click],
+            calls: AtomicUsize::new(0),
+            on_call: Box::new(move |n| {
+                if n == 1 {
+                    if pause_first {
+                        assert!(presser.pause_episode());
+                        presser.cancel();
+                    } else {
+                        presser.cancel();
+                        assert!(presser.pause_episode());
+                    }
+                }
+            }),
+        });
+        let stop = session.prompt(
+            GOAL,
+            Vec::new(),
+            route(model, PermMode::Always),
+            Box::new(|_| {}),
+        );
+        assert_eq!(stop, Ok("cancelled".to_string()), "{label}");
+        let all = grokhub_agent::harness::read_spans(&cfg, CHAT).expect("spans");
+        let end = all.last().expect("a span");
+        assert_eq!(
+            (
+                end.tool.as_str(),
+                end.decision.as_str(),
+                end.result.as_str()
+            ),
+            ("episode", "end", "stop"),
+            "{label}"
+        );
+        assert!(
+            session.episode().is_none(),
+            "{label}: the shell kept a session the engine ended"
+        );
+        assert!(!session.episode_armed(), "{label}");
+        assert!(!session.on_desktop(), "{label}");
+        assert!(
+            !session.resume_due.load(Ordering::SeqCst),
+            "{label}: a later Continue would be read as a resume"
+        );
+    }
+}
+
+#[test]
+fn a_paused_session_with_an_allowed_step_waits_for_the_person() {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    reset();
+    let cfg = config("allow-paused");
+    let session = Arc::new(Session::spawn_with(CHAT, cfg.clone(), fixture));
+    session.arm_episode(true);
+    let pauser = Arc::clone(&session);
+    let model = Arc::new(Model {
+        script: vec![Act::Send, Act::Click, Act::Done, Act::Done],
+        calls: AtomicUsize::new(0),
+        on_call: Box::new(move |n| {
+            if n == 1 {
+                assert!(pauser.pause_episode());
+            }
+        }),
+    });
+    // The Allow lands as the paused turn is wrapped up.
+    let (clicker, dir) = (Arc::clone(&session), cfg.clone());
+    let first = session.prompt(
+        GOAL,
+        Vec::new(),
+        route(Arc::clone(&model), PermMode::Always),
+        Box::new(move |event| {
+            if let UiEvent::Done { .. } = event {
+                let open = clicker.episode().expect("open");
+                let card = panel_of(&dir, &open).parks[0].id.clone();
+                assert_eq!(clicker.answer_episode(&card, true), Ok(false));
+            }
+        }),
+    );
+    assert_eq!(first, Ok("cancelled".to_string()));
+    assert_eq!(session.episode().map(|o| o.paused), Some(true));
+    // Pause was the person's word: nothing is sent for them.
+    assert!(!session.take_resume_owed());
+    assert!(!desk_calls().iter().any(|c| c == "click Send"));
+    // Their own Continue runs the allowed step once.
+    let second = session.prompt(
+        RESUME_TEXT,
+        Vec::new(),
+        route(model, PermMode::Always),
+        Box::new(|_| {}),
+    );
+    assert_eq!(second, Ok("episode_verified".to_string()));
+    let sends = desk_calls().iter().filter(|c| *c == "click Send").count();
+    assert_eq!(sends, 1, "{:?}", desk_calls());
+}

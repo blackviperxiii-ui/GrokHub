@@ -1397,7 +1397,12 @@ export function Chat({
         key={conversationId}
         conversationId={conversationId}
         desktopOn={!remote && Boolean(settings?.desktopControl)}
-        onResume={(text) => void deliver(text, [], false)}
+        onResume={(text) => {
+          // A reply still running or ending here takes the resume when it
+          // ends (a send now would be dropped); otherwise it goes at once.
+          if (busyRef.current) changeQueue([text, ...queueRef.current]);
+          else setNextUp((now) => ({ text, n: (now?.n ?? 0) + 1 }));
+        }}
       />
       <AttachChips files={attach.files} note={attach.note} onRemove={attach.remove} busy={busy} />
       <form className="composer slash-wrap" onSubmit={send}>

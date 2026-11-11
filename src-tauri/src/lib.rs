@@ -694,6 +694,7 @@ async fn chat_turn(
                 );
             })
         });
+        let resume_to = app.clone();
         let stop = session.prompt(
             &text,
             files,
@@ -713,6 +714,14 @@ async fn chat_turn(
         halt_watch.store(true, std::sync::atomic::Ordering::SeqCst);
         if let Some(watcher) = watcher {
             let _ = watcher.join();
+        }
+        // An Allow that landed after the session's last look at its cards:
+        // the page sends the resume, so the step runs now and not with
+        // whatever message comes next.
+        if let Some(open) = session.episode().filter(|_| session.take_resume_owed()) {
+            let panel =
+                episode::resume_panel(&config_dir, &conversation_id, &open, session.frame());
+            let _ = resume_to.emit(episode::EPISODE_EVENT, &panel);
         }
         if stop
             .as_deref()

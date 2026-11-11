@@ -359,6 +359,8 @@ struct FakeParks {
     posted: Mutex<Vec<ParkRequest>>,
     answers: Mutex<HashMap<String, bool>>,
     withdrawn: Mutex<Vec<String>>,
+    /// How long ago every answer was given, when the test says.
+    answered_ago: Mutex<Option<std::time::Duration>>,
 }
 
 impl FakeParks {
@@ -387,6 +389,10 @@ impl Parks for FakeParks {
         self.answers.lock().unwrap().remove(id)
     }
 
+    fn answer_age(&self, _id: &str) -> Option<std::time::Duration> {
+        *self.answered_ago.lock().unwrap()
+    }
+
     fn withdraw(&self, id: &str) {
         self.withdrawn.lock().unwrap().push(id.into());
     }
@@ -399,6 +405,10 @@ impl Parks for Arc<FakeParks> {
 
     fn answer(&self, id: &str) -> Option<bool> {
         self.as_ref().answer(id)
+    }
+
+    fn answer_age(&self, id: &str) -> Option<std::time::Duration> {
+        self.as_ref().answer_age(id)
     }
 
     fn withdraw(&self, id: &str) {
@@ -2169,4 +2179,154 @@ fn pause_returns_before_the_next_step_and_keeps_the_episode_its_goal_and_its_car
         ]
     );
     assert!(r.spans().iter().all(|s| s.goal_step != "Continue"));
+}
+
+/// The card is on screen while the reply is still being written. An Allow
+/// that lands during the worker's last call (the one that only says it is
+/// done) is acted on before the turn returns, not left for the next message.
+#[test]
+fn an_allow_given_during_the_workers_last_call_runs_the_step_in_that_turn() {
+    let mut r = rig(
+        "allow-last-call",
+        Box::new(|n| if n == 0 { Act::HardClick } else { Act::Done }),
+    );
+    r.model.answer_at = Some((1, Arc::clone(&r.parks), true));
+    let mut ep = r.episode("Reply to the thread");
+    let out = r.run(&mut ep, &mut EpisodeView::default());
+    assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    assert_eq!(sends(&r), 1, "the allowed Send ran once");
+    assert!(ep.parks.is_empty());
+    let decided: Vec<(String, String)> = r
+        .spans()
+        .into_iter()
+        .filter(|s| s.tool == "click")
+        .map(|s| (s.decision, s.goal_step))
+        .collect();
+    let goal = "Reply to the thread".to_string();
+    assert_eq!(
+        decided,
+        vec![
+            ("park".to_string(), goal.clone()),
+            ("approve".to_string(), goal)
+        ]
+    );
+}
+
+/// A Deny that lands during the last call settles there too, and the worker
+/// is asked again with the step refused.
+#[test]
+fn a_deny_given_during_the_workers_last_call_settles_in_that_turn() {
+    let mut r = rig(
+        "deny-last-call",
+        Box::new(|n| if n == 0 { Act::HardClick } else { Act::Done }),
+    );
+    r.model.answer_at = Some((1, Arc::clone(&r.parks), false));
+    let mut ep = r.episode("Reply to the thread");
+    let out = r.run(&mut ep, &mut EpisodeView::default());
+    assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    assert_eq!(sends(&r), 0);
+    assert!(ep.parks.is_empty());
+    assert_eq!(r.model.worker_calls.lock().unwrap().len(), 3);
+}
+
+/// An Allow nobody acted on for longer than the approval TTL was given for a
+/// screen that is long gone: the step is refused, not run with whatever
+/// message comes next.
+#[test]
+fn an_allow_older_than_the_approval_ttl_is_refused_not_run() {
+    let r = rig(
+        "stale-allow",
+        Box::new(|n| if n == 0 { Act::HardClick } else { Act::Done }),
+    );
+    let mut ep = r.episode("Reply to the thread");
+    let mut view = EpisodeView::default();
+    assert_eq!(r.run(&mut ep, &mut view).stop, EpisodeStop::Waiting);
+    r.parks.answer_all(true);
+    *r.parks.answered_ago.lock().unwrap() = Some(std::time::Duration::from_secs(300));
+    r.run(&mut ep, &mut view);
+    assert_eq!(sends(&r), 0, "a stale Allow ran");
+    let denied: Vec<String> = r
+        .spans()
+        .into_iter()
+        .filter(|s| s.decision == "deny")
+        .map(|s| s.result)
+        .collect();
+    assert_eq!(
+        denied,
+        vec!["your OK was given more than 300s ago — not run".to_string()]
+    );
+    assert!(ep.parks.is_empty(), "the card is spent");
+    // One second younger still runs.
+    let r = rig(
+        "fresh-allow",
+        Box::new(|n| if n == 0 { Act::HardClick } else { Act::Done }),
+    );
+    let mut ep = r.episode("Reply to the thread");
+    let mut view = EpisodeView::default();
+    assert_eq!(r.run(&mut ep, &mut view).stop, EpisodeStop::Waiting);
+    r.parks.answer_all(true);
+    *r.parks.answered_ago.lock().unwrap() = Some(std::time::Duration::from_secs(299));
+    r.run(&mut ep, &mut view);
+    assert_eq!(sends(&r), 1);
+}
+
+/// The park files say when a card was answered: the answer file's age.
+#[test]
+fn the_park_files_tell_how_long_ago_a_card_was_answered() {
+    let dir = crate::harness::test_dir("episode-answer-age");
+    let parks = FileParks(&dir);
+    let id = format!("{PARK_PREFIX}ep-1-3");
+    assert!(parks.post(&ParkRequest {
+        id: id.clone(),
+        path: "E".into(),
+        tool: "click".into(),
+        action: "Loadout wants to click Send in Mail".into(),
+        class: "send".into(),
+        ts_ms: T0,
+    }));
+    assert_eq!(parks.answer_age(&id), None, "no answer yet");
+    crate::harness::answer_park(&dir, &id, true).unwrap();
+    let answer = crate::harness::park_dir(&dir).join(format!("{id}.answer"));
+    let then = std::time::SystemTime::now() - std::time::Duration::from_secs(600);
+    std::fs::File::options()
+        .write(true)
+        .open(&answer)
+        .unwrap()
+        .set_modified(then)
+        .unwrap();
+    let age = parks.answer_age(&id).expect("an age").as_secs();
+    assert!((600..660).contains(&age), "{age}");
+    assert_eq!(parks.answer(&id), Some(true));
+    assert_eq!(parks.answer_age(&id), None, "taken");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A parked step's later spans (still waiting past the TTL, then run or
+/// refused) carry the number of the step that parked, which its card is
+/// named after, not the step the episode has reached since.
+#[test]
+fn a_parked_steps_later_spans_carry_its_own_step_number() {
+    let r = send_parked_past_ttl("park-step-number");
+    let mut ep = r.episode("Reply to the thread");
+    assert_eq!(
+        r.run(&mut ep, &mut EpisodeView::default()).stop,
+        EpisodeStop::Waiting
+    );
+    r.parks.answer_all(true);
+    r.run(&mut ep, &mut EpisodeView::default());
+    let own: Vec<(String, String)> = r
+        .spans()
+        .into_iter()
+        .filter(|s| s.approval_class == "send")
+        .map(|s| (s.decision, s.claim))
+        .collect();
+    let step = "episode step 8".to_string();
+    assert_eq!(
+        own,
+        vec![
+            ("park".to_string(), step.clone()),
+            ("deny".to_string(), step.clone()),
+            ("approve".to_string(), step),
+        ]
+    );
 }

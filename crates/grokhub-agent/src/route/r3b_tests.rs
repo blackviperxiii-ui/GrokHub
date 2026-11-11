@@ -3957,3 +3957,67 @@ fn a_keyring_that_refuses_the_key_says_so_in_plain_words_and_saves_no_provider()
     assert!(!providers::providers_path(&dir).exists());
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// A row the loader skips (its address was edited by hand) is not shown or
+/// used, but it stays in the file through another provider's add and remove,
+/// and it can still be removed together with its key.
+#[test]
+fn a_skipped_provider_stays_in_the_file_and_can_still_be_removed_with_its_key() {
+    let dir = moved_provider(
+        "r3b-skipped-kept",
+        "models.example.org",
+        "http://models.example.org/v1",
+    );
+    let rows = |dir: &Path| -> Vec<String> {
+        let raw = std::fs::read_to_string(providers::providers_path(dir)).unwrap();
+        let file: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        file["providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| {
+                format!(
+                    "{} {}",
+                    p["id"].as_str().unwrap(),
+                    p["base_url"].as_str().unwrap()
+                )
+            })
+            .collect()
+    };
+    let skipped = "models http://models.example.org/v1".to_string();
+    assert_eq!(providers::load_providers(&dir), Vec::new());
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    assert_eq!(
+        rows(&dir),
+        vec![skipped.clone(), format!("openrouter {OR_URL}")]
+    );
+    providers::remove_provider(&dir, "openrouter").unwrap();
+    assert_eq!(rows(&dir), vec![skipped]);
+    // Still hidden and unused, and its key is still in the keyring.
+    assert_eq!(providers::load_providers(&dir), Vec::new());
+    assert!(providers::has_key(&dir, "models"));
+    assert_eq!(providers::remove_provider(&dir, "models"), Ok(()));
+    assert_eq!(rows(&dir), Vec::<String>::new());
+    assert!(!providers::has_key(&dir, "models"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A hand-written row whose id is not one an address gives (a path) is never
+/// removed by that id: the id would name a file.
+#[test]
+fn a_saved_row_with_a_path_for_an_id_is_not_removed_by_it() {
+    let (dir, _wire) = setup("r3b-skipped-path-id");
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    let path = providers::providers_path(&dir);
+    let raw = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(raw.matches("\"openrouter\"").count(), 1);
+    std::fs::write(&path, raw.replace("\"openrouter\"", "\"x/../../app\"")).unwrap();
+    std::fs::create_dir_all(dir.join("models").join("listing-x")).unwrap();
+    std::fs::write(dir.join("app.json"), "{}").unwrap();
+    assert_eq!(
+        providers::remove_provider(&dir, "x/../../app").unwrap_err(),
+        "That provider isn't added."
+    );
+    assert_eq!(std::fs::read_to_string(dir.join("app.json")).unwrap(), "{}");
+    let _ = std::fs::remove_dir_all(dir);
+}

@@ -5227,6 +5227,19 @@ fieldset.channel label {
   margin: 0 0 4px;
 }
 
+.episode-park-class {
+  font-weight: 600;
+}
+
+/* What the person approves, whole: long typed text wraps and scrolls. */
+.episode-park-action {
+  margin: 0 0 4px;
+  max-height: 12em;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .episode-actions {
   display: flex;
   align-items: center;
