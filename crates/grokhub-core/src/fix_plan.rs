@@ -453,6 +453,7 @@ const DELETE_HEADS: &[&str] = &[
     "del",
     "erase",
     "rd",
+    "ri",
     "remove-item",
     "clear-recyclebin",
 ];
@@ -505,6 +506,8 @@ mod tests {
     fn hard_classes_tag_delete_credentials_and_irreversible_steps() {
         let delete = step_from_text("HOST_CMD: rm -f ~/Downloads/old.pkg");
         assert_eq!(delete.approval, ApprovalNeed::Hard(HardApproval::Delete));
+        let alias = step_from_text("HOST_CMD: ri -Recurse -Force build");
+        assert_eq!(alias.approval, ApprovalNeed::Hard(HardApproval::Delete));
         let cred = step_from_text("Type your API key into the sign-in field");
         assert_eq!(cred.approval, ApprovalNeed::Hard(HardApproval::Credentials));
         let os = step_from_text("HOST_CMD: sudo shutdown -h now");

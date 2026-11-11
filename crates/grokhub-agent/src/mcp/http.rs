@@ -21,6 +21,7 @@ use grokhub_core::http;
 
 use super::headers::{self, ParamHeader};
 use super::rpc::{self, Era, RawTool};
+use super::stdio::{read_line_capped, MESSAGE_CAP};
 use crate::harness::egress_dest;
 
 const USER_AGENT: &str = concat!("GrokHub/", env!("CARGO_PKG_VERSION"));
@@ -717,15 +718,12 @@ fn read_sse(reader: &mut impl BufRead) -> Result<Option<(String, String)>, Strin
     let mut data = String::new();
     loop {
         let mut line = String::new();
-        let n = reader.read_line(&mut line).map_err(|err| err.to_string())?;
+        let n = read_line_capped(reader, &mut line, MESSAGE_CAP)?;
         if n == 0 {
             if data.is_empty() && event.is_empty() {
                 return Ok(None);
             }
             break;
-        }
-        if line.len() > 8 * 1024 * 1024 {
-            return Err("message too large".into());
         }
         let line = line.trim_end_matches(['\r', '\n']);
         if line.is_empty() {
@@ -741,10 +739,14 @@ fn read_sse(reader: &mut impl BufRead) -> Result<Option<(String, String)>, Strin
         if let Some(rest) = line.strip_prefix("event:") {
             event = rest.trim().to_string();
         } else if let Some(rest) = line.strip_prefix("data:") {
+            let rest = rest.trim_start();
+            if data.len() + rest.len() + 1 > MESSAGE_CAP {
+                return Err("message too large".into());
+            }
             if !data.is_empty() {
                 data.push('\n');
             }
-            data.push_str(rest.trim_start());
+            data.push_str(rest);
         }
     }
     Ok(Some((event, data)))
@@ -757,7 +759,7 @@ fn http_origin(url: &str) -> Option<String> {
         .strip_prefix("https://")
         .map(|rest| ("https", rest))
         .or_else(|| url.strip_prefix("http://").map(|rest| ("http", rest)))?;
-    let authority = rest.split(['/', '?', '#']).next()?.trim();
+    let authority = rest.split(['/', '\\', '?', '#']).next()?.trim();
     if authority.is_empty() {
         return None;
     }
@@ -1193,6 +1195,86 @@ pub(crate) mod tests {
         assert_eq!(
             resolve_endpoint("https://mcp.example.test/sse", "http://127.0.0.1:9/x").unwrap_err(),
             "MCP endpoint must stay on the same host"
+        );
+    }
+
+    #[test]
+    fn a_backslash_cannot_hide_another_host_in_an_sse_endpoint() {
+        for (base, endpoint) in [
+            (
+                "http://mcp.evil.example/sse",
+                "http://127.0.0.1:6800\\@mcp.evil.example/jsonrpc",
+            ),
+            (
+                "http://mcp.evil.example/sse",
+                "http://127.0.0.1:6800\\@mcp.evil.example/../jsonrpc",
+            ),
+            (
+                "http://mcp.evil.example/sse",
+                "http://169.254.169.254\\@mcp.evil.example/x",
+            ),
+            (
+                "http://mcp.evil.example/sse",
+                "http://[::1]:6800\\@mcp.evil.example/x",
+            ),
+            (
+                "https://mcp.good.example/sse",
+                "https://collector.other.example\\@mcp.good.example/messages",
+            ),
+        ] {
+            assert_eq!(
+                resolve_endpoint(base, endpoint),
+                Err("MCP endpoint must stay on the same host".to_string()),
+                "{endpoint}"
+            );
+        }
+    }
+
+    /// Hands out `x` with no newline and counts the bytes it gave.
+    struct Flood {
+        left: usize,
+        pulled: usize,
+    }
+
+    impl Read for Flood {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = buf.len().min(self.left);
+            buf[..n].fill(b'x');
+            self.left -= n;
+            self.pulled += n;
+            Ok(n)
+        }
+    }
+
+    #[test]
+    fn an_sse_line_with_no_newline_stops_at_the_message_cap() {
+        let mut reader = BufReader::with_capacity(
+            8192,
+            Flood {
+                left: 32 * 1024 * 1024,
+                pulled: 0,
+            },
+        );
+        assert_eq!(read_sse(&mut reader), Err("message too large".to_string()));
+        assert_eq!(reader.get_ref().pulled, 8 * 1024 * 1024 + 8192);
+    }
+
+    #[test]
+    fn sse_data_lines_that_add_up_past_the_message_cap_are_refused() {
+        let line = format!("data: {}\n", "x".repeat(1017));
+        assert_eq!(line.len(), 1024);
+        let stream = line.repeat(9 * 1024);
+        let mut reader = BufReader::new(stream.as_bytes());
+        let held = read_sse(&mut reader).map(|event| event.map(|(_, data)| data.len()));
+        assert_eq!(held, Err("message too large".to_string()));
+    }
+
+    #[test]
+    fn sse_data_lines_of_one_event_join_with_a_newline() {
+        let mut reader = BufReader::new("data: a\ndata: b\n\n".as_bytes());
+        assert_eq!(
+            read_sse(&mut reader),
+            Ok(Some((String::new(), "a\nb".to_string())))
         );
     }
 

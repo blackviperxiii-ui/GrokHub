@@ -276,6 +276,16 @@ pub fn is_known(name: &str) -> bool {
         || crate::self_manage::self_tool(name).is_some()
 }
 
+/// Every tool name in the lists above, for tests that must cover them all.
+#[cfg(test)]
+pub(crate) fn native_names() -> Vec<&'static str> {
+    [READONLY, EDIT, SHELL, CONTROL, DESKTOP, MEDIA]
+        .concat()
+        .into_iter()
+        .chain([WEB_FETCH, WEB_SEARCH])
+        .collect()
+}
+
 pub fn readonly_refusal(name: &str) -> String {
     format!("{READ_ONLY_PHASE}: `{name}` is not available. Use read_file, list_dir, grep, or glob.")
 }
