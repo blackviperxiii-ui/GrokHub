@@ -494,7 +494,7 @@ impl super::Cabin {
     pub(super) fn ui_code_editor(&mut self, ui: &mut egui::Ui) {
         let workspace = self.grok_cwd();
         let config = crate::config::config_dir();
-        if self.code_editor.ui(ui, &workspace, &config) {
+        if self.code_tab.editor.ui(ui, &workspace, &config) {
             self.code_kick_load(ui.ctx());
         }
     }
