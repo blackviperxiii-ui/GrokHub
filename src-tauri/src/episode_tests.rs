@@ -685,6 +685,31 @@ fn the_askpass_server_starts_only_with_a_hub_path_on_linux() {
     }
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn with_the_hub_there_the_askpass_server_starts_and_shell_commands_get_its_helper() {
+    let d = dir("askpass");
+    let _cfg = grokhub_agent::perm::ConfigGuard::set(&d);
+    let hub = d.join("grokhub-hub");
+    std::fs::write(&hub, "").expect("hub");
+    assert!(start_askpass(Some(hub.clone())));
+    let env = grokhub_agent::sudo_pass::shell_env();
+    assert_eq!(env[0].0, "SUDO_ASKPASS");
+    let script = PathBuf::from(&env[0].1);
+    let helper_dir = script.parent().expect("helper dir");
+    assert_eq!(
+        std::fs::read_to_string(&script).expect("script"),
+        format!(
+            "#!/bin/sh\nexec '{}' --askpass '{}' \"$@\"\n",
+            hub.display(),
+            helper_dir.join("s").display()
+        ),
+        "the helper sudo runs is the bundled grokhub-hub"
+    );
+    let _ = std::fs::remove_dir_all(helper_dir);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
 #[test]
 fn the_shell_starts_askpass_with_the_bundled_hub_and_registers_cua_with_it() {
     let lib = include_str!("lib.rs");

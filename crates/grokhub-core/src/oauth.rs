@@ -75,15 +75,36 @@ pub fn next_oauth_poll_secs(interval: u64, status: PollStatus) -> Option<u64> {
     }
 }
 
+/// The host an `https://` address reaches, lowercase, from the text after the
+/// scheme. The host ends at the first `/`, `?`, `#` or `\`, as it does in a
+/// browser, and a port (digits only) is dropped. `Err` holds that text as
+/// written when it has user-info (`@`), a port that is not a number, or a
+/// host with anything but letters, digits, `-` and `.`.
+fn https_host(rest: &str) -> Result<String, String> {
+    let authority = rest.split(['/', '?', '#', '\\']).next().unwrap_or("");
+    let host = match authority.rsplit_once(':') {
+        Some((host, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => host,
+        Some(_) => return Err(authority.to_string()),
+        None => authority,
+    };
+    let plain = !host.is_empty()
+        && host
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.');
+    if plain {
+        Ok(host.to_ascii_lowercase())
+    } else {
+        Err(authority.to_string())
+    }
+}
+
 pub fn trusted_xai_url(url: &str) -> Result<String, String> {
     let rest = url
         .strip_prefix("https://")
         .ok_or_else(|| "xAI OAuth requires https".to_string())?;
-    let host = rest.split('/').next().unwrap_or("");
-    if host == "x.ai" || host.ends_with(".x.ai") {
-        Ok(url.to_string())
-    } else {
-        Err(format!("Untrusted xAI host: {host}"))
+    match https_host(rest) {
+        Ok(host) if host == "x.ai" || host.ends_with(".x.ai") => Ok(url.to_string()),
+        Ok(host) | Err(host) => Err(format!("Untrusted xAI host: {host}")),
     }
 }
 
@@ -92,18 +113,9 @@ pub fn trusted_profile_photo_url(url: &str) -> Result<String, String> {
     let rest = url
         .strip_prefix("https://")
         .ok_or_else(|| "Profile photo requires https".to_string())?;
-    let host = rest
-        .split('/')
-        .next()
-        .unwrap_or("")
-        .split(':')
-        .next()
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    if profile_photo_host_ok(&host) {
-        Ok(url.to_string())
-    } else {
-        Err(format!("Untrusted profile photo host: {host}"))
+    match https_host(rest) {
+        Ok(host) if profile_photo_host_ok(&host) => Ok(url.to_string()),
+        Ok(host) | Err(host) => Err(format!("Untrusted profile photo host: {host}")),
     }
 }
 
@@ -565,6 +577,54 @@ mod tests {
         assert_eq!(realtime_bearer("xai-k", "tok").as_deref(), Some("xai-k"));
         assert_eq!(realtime_bearer("", "tok"), None);
         assert_eq!(realtime_bearer("", ""), None);
+    }
+
+    #[test]
+    fn a_trusted_address_is_judged_by_the_host_a_browser_would_open() {
+        for (bad, host) in [
+            ("https://not-xai.example?.x.ai/device", "not-xai.example"),
+            ("https://not-xai.example#.x.ai", "not-xai.example"),
+            ("https://not-xai.example\\.x.ai/", "not-xai.example"),
+            ("https://x.ai@not-xai.example/", "x.ai@not-xai.example"),
+            ("https://not-xai.example:x.x.ai/", "not-xai.example:x.x.ai"),
+        ] {
+            assert_eq!(
+                trusted_xai_url(bad),
+                Err(format!("Untrusted xAI host: {host}")),
+                "{bad}"
+            );
+            assert_eq!(
+                trusted_profile_photo_url(bad),
+                Err(format!("Untrusted profile photo host: {host}")),
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            trusted_xai_url("https://auth.x.ai/oauth2/token"),
+            Ok("https://auth.x.ai/oauth2/token".to_string())
+        );
+        assert_eq!(
+            trusted_xai_url("https://auth.x.ai:443/x"),
+            Ok("https://auth.x.ai:443/x".to_string())
+        );
+        assert_eq!(
+            trusted_xai_url("https://accounts.x.ai?code=ABCD-EFGH"),
+            Ok("https://accounts.x.ai?code=ABCD-EFGH".to_string())
+        );
+        assert_eq!(
+            trusted_profile_photo_url("https://pbs.twimg.com:443/profile_images/user.jpg"),
+            Ok("https://pbs.twimg.com:443/profile_images/user.jpg".to_string())
+        );
+        // A page with a device code that reaches another host must not start a sign-in.
+        let start = json!({
+            "device_code": "dev-1",
+            "user_code": "ABCD-EFGH",
+            "verification_uri": "https://not-xai.example?.x.ai/device",
+        });
+        assert_eq!(
+            parse_device_start(&start).map(|_| ()),
+            Err("Untrusted xAI host: not-xai.example".to_string())
+        );
     }
 
     #[test]
