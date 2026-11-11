@@ -650,7 +650,10 @@ mod tests {
         });
         // Control off, attended: it asks every time, even under Always.
         for mode in [PermMode::Ask, PermMode::Auto, PermMode::Always] {
-            assert_eq!(decide(&gate(mode, false, true, false), look, false, free), Decision::Ask);
+            assert_eq!(
+                decide(&gate(mode, false, true, false), look, false, free),
+                Decision::Ask
+            );
         }
         // Always chosen on its card, or control on with Always: it runs.
         assert_eq!(
@@ -658,12 +661,22 @@ mod tests {
             Decision::Run
         );
         assert_eq!(
-            decide(&gate(PermMode::Always, false, true, true), look, false, free),
+            decide(
+                &gate(PermMode::Always, false, true, true),
+                look,
+                false,
+                free
+            ),
             Decision::Run
         );
         // Nobody there: refused, as other desktop tools are.
         assert_eq!(
-            decide(&gate(PermMode::Always, false, false, false), look, false, free),
+            decide(
+                &gate(PermMode::Always, false, false, false),
+                look,
+                false,
+                free
+            ),
             Decision::Refuse(unattended_deny(look))
         );
         // Halt and a locked screen still stop it; plan mode refuses it.
