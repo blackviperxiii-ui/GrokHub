@@ -14,7 +14,7 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock("./api", () => api);
 
-import { AiModels, PREMIUM_NONE } from "./AiModels";
+import { AiModels, LOCAL_NOTE, PREMIUM_NONE } from "./AiModels";
 
 const EMPTY: AiModelsView = {
   providers: [],
@@ -54,6 +54,13 @@ beforeEach(() => {
 });
 
 describe("AiModels", () => {
+  it("points local models and Dynamic to the Local AI page instead of repeating them", async () => {
+    render(<AiModels />);
+    expect(await screen.findByText(LOCAL_NOTE)).toBeVisible();
+    expect(LOCAL_NOTE).toBe("Models that run on this PC, and whether each task gets its own model, are set in Local AI.");
+    expect(screen.queryByText("Dynamic")).toBeNull();
+  });
+
   it("renders the sections with nothing set up", async () => {
     render(<AiModels />);
     expect(await screen.findByText("No other providers yet.")).toBeVisible();

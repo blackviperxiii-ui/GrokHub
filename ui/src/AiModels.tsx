@@ -17,6 +17,7 @@ export const ALLOW_NOTE =
   "Your chats and memory would go to this provider. Allow keeps it until you revoke it in Settings → Permissions.";
 export const SPEND_NOTE =
   "API key only. At 80% background work moves to cheaper settings. At 100% it pauses and chats ask first. These are limits; nothing here spends money.";
+export const LOCAL_NOTE = "Models that run on this PC, and whether each task gets its own model, are set in Local AI.";
 export const PREMIUM_NONE = "None. A model over your price limit asks once before Auto uses it.";
 
 export function capLabel(usd: number): string {
@@ -253,6 +254,7 @@ export function AiModels() {
       </ul>
 
       <h3>Routing table</h3>
+      <p className="note">{LOCAL_NOTE}</p>
       {view.table.length === 0 ? (
         <p className="empty">No routing table yet. It builds after the first few chats.</p>
       ) : (
