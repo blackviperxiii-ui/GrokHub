@@ -218,6 +218,8 @@ pub fn is_quiet(behavior: &crate::settings::Behavior, hour: u32, minute: u32) ->
 
 /// The background thread: one look shortly after launch, then every 15
 /// minutes. It waits for the window's clock like the scheduler does.
+/// Desktop only: the scheduler clock it reads is not built on phones.
+#[cfg(desktop)]
 pub fn start(config_dir: PathBuf) {
     std::thread::spawn(move || {
         std::thread::sleep(FIRST_LOOK);
