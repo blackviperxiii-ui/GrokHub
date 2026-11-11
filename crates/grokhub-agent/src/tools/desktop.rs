@@ -98,6 +98,22 @@ pub fn schemas() -> Vec<Value> {
     out
 }
 
+/// [`super::LOOK_AT_SCREEN`]: look at the screen without desktop control.
+pub fn look_schema() -> Value {
+    tool(
+        super::LOOK_AT_SCREEN,
+        "Look at the screen and get it back as an image. Works on Wayland, X11, Windows and \
+         macOS, with or without desktop control. Use this whenever you need to see the screen; \
+         never shell screenshot commands (spectacle, grim, import, ffmpeg x11grab), which the \
+         shell sandbox can't run. Only when the task needs to see the screen.",
+        json!({ "monitor": {
+            "type": "string",
+            "description": "Monitor id, or \"all\". Defaults to \"all\"."
+        }}),
+        &[],
+    )
+}
+
 fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
     json!({
         "type": "function",

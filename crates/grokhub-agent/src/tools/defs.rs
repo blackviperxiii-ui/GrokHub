@@ -34,6 +34,12 @@ fn desktop_on(gate: &Gate) -> bool {
     gate.desktop
 }
 
+/// The look-only screenshot: any attended chat that may act, desktop control
+/// on or off. An unattended run has nobody to say yes to it.
+fn look_on(gate: &Gate) -> bool {
+    !gate.readonly_session && gate.attended
+}
+
 /// Mod tools only where the app hosts them, so other hosts' lists stay as they were.
 fn mods_on(_gate: &Gate) -> bool {
     mods::available()
@@ -156,7 +162,7 @@ pub fn read_defs() -> &'static [ToolDef] {
 /// Mutating and gated tools. Edit and shell stay eager (the general coding set);
 /// scheduler, media, desktop, connection and the rest are deferred.
 pub fn action_defs() -> &'static [ToolDef] {
-    static DEFS: [ToolDef; 22] = [
+    static DEFS: [ToolDef; 23] = [
         ToolDef {
             name: "send_subagent_message",
             blurb: "Send a message to a spawned subagent",
@@ -291,6 +297,13 @@ pub fn action_defs() -> &'static [ToolDef] {
             defer: true,
             schema: show_panel::schema,
             visible: generative_ui_on,
+        },
+        ToolDef {
+            name: super::LOOK_AT_SCREEN,
+            blurb: "Look at the screen (no desktop control needed)",
+            defer: false,
+            schema: desktop::look_schema,
+            visible: look_on,
         },
         ToolDef {
             name: "screenshot",

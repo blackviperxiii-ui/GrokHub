@@ -1,0 +1,1 @@
+- The agent has one built-in `look_at_screen` tool that works on KDE and GNOME Wayland, X11, Windows and macOS through the app's own capture, even with desktop control off (it still asks first, unless you allowed it always). Shell screenshot commands like spectacle, grim or scrot are refused with a pointer to it, so the agent stops fighting the sandbox to see the screen.

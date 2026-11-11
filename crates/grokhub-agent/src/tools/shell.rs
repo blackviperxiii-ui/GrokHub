@@ -82,6 +82,56 @@ pub(crate) fn names_a_tool(command: &str) -> Option<String> {
     ))
 }
 
+/// Programs that grab the screen. Run from the shell they fail: the sandbox
+/// keeps commands away from the display (the Wayland and X sockets, the
+/// session's runtime folder), so each try is a wasted step.
+const SCREEN_GRABBERS: &[&str] = &[
+    "spectacle",
+    "grim",
+    "scrot",
+    "maim",
+    "import",
+    "gnome-screenshot",
+    "flameshot",
+    "xwd",
+    "screencapture",
+];
+
+/// The refusal for a shell command that tries to grab the screen.
+pub(crate) const USE_LOOK: &str = "Nothing ran: the shell can't reach the screen (the sandbox \
+blocks the display). Call look_at_screen instead; it captures the screen on Wayland, X11, \
+Windows and macOS.";
+
+/// True when `command` runs a screenshot program (`spectacle -b`, `grim`,
+/// `magick import -window root`, `ffmpeg -f x11grab`, …).
+pub(crate) fn grabs_screen(command: &str) -> bool {
+    simple_commands(command).iter().any(|cmd| {
+        let mut words = cmd
+            .words
+            .iter()
+            .skip_while(|w| {
+                is_assignment(w)
+                    || matches!(w.as_str(), "sudo" | "env" | "timeout")
+                    || w.chars().all(|c| c.is_ascii_digit())
+            })
+            .map(|w| w.rsplit('/').next().unwrap_or(w));
+        let Some(first) = words.next() else {
+            return false;
+        };
+        let first = if first == "magick" {
+            words.next().unwrap_or("")
+        } else {
+            first
+        };
+        SCREEN_GRABBERS.contains(&first)
+            || (first == "ffmpeg"
+                && cmd
+                    .words
+                    .iter()
+                    .any(|w| matches!(w.as_str(), "x11grab" | "kmsgrab" | "gdigrab")))
+    })
+}
+
 /// The tool call a command stands for when the whole command is one
 /// read-only lookup (`web_search "q"`, `web_fetch https://…`) whose argument
 /// reads plainly, with nothing a shell would expand or redirect. Anything
@@ -1221,6 +1271,31 @@ pub(crate) fn plain_dir(path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn screen_grabs_are_spotted_and_ordinary_commands_are_not() {
+        for grab in [
+            "spectacle -b -n -f -o /tmp/shot.png",
+            "WAYLAND_DISPLAY=wayland-0 spectacle -b -n -o x.png",
+            "cd /tmp && import -window root x.png",
+            "magick import -window root png:/tmp/x.png",
+            "ffmpeg -f x11grab -i :0 -frames:v 1 /tmp/s.png",
+            "/usr/bin/grim /tmp/a.png",
+            "bash -c 'scrot /tmp/s.png'",
+            "timeout 5 gnome-screenshot -f a.png",
+        ] {
+            assert!(super::grabs_screen(grab), "{grab}");
+        }
+        for plain in [
+            "ls -la ~/.local/opt",
+            "python3 -c 'import json'",
+            "ffmpeg -i in.mp4 out.webm",
+            "grep -r spectacle ~/.config",
+            "echo import",
+        ] {
+            assert!(!super::grabs_screen(plain), "{plain}");
+        }
+    }
+
     #[test]
     fn a_tool_typed_into_the_shell_is_turned_back() {
         for typed in [
