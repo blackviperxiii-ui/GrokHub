@@ -73,7 +73,7 @@ fn home() -> Option<String> {
     std::env::var("HOME").ok()
 }
 
-fn same_folder(a: &str, b: &str, home: Option<&str>) -> bool {
+pub(crate) fn same_folder(a: &str, b: &str, home: Option<&str>) -> bool {
     let key = |p: &str| {
         grokhub_core::normalize_host_path(&grokhub_core::expand_project_root(p, home))
             .trim_end_matches('/')

@@ -10,6 +10,7 @@ import {
   type PluginRow,
 } from "./api";
 import { PRODUCT_NAME } from "./brand";
+import { Diagnostics } from "./Diagnostics";
 import { StatusLine, useNote } from "./ui";
 
 export const LABS_NOTE = "Early features. They work, but they may change.";
@@ -192,6 +193,7 @@ export function Labs() {
           ))}
         </ul>
       )}
+      <Diagnostics />
     </div>
   );
 }

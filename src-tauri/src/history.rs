@@ -7,10 +7,11 @@
 //! its threads on its own History page, so no file has two writers.
 
 use std::path::Path;
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use grokhub_agent::perm::ConfigGuard;
 use grokhub_agent::{InputItem, SessionInfo};
+use grokhub_core::{ProjectKind, ProjectNode};
 use serde::Serialize;
 
 /// The shell's conversation ids (`newConversationId` in ui/src/Chat.tsx).
@@ -34,8 +35,11 @@ pub struct ChatRow {
     pub created: u64,
     /// Unix ms of its last saved turn; the page groups and sorts by it.
     pub updated: u64,
-    /// Pinned with `/pin`: it lists first.
+    /// Pinned with `/pin` or the row's menu: it lists first.
     pub pinned: bool,
+    /// The id of the project (`projects.json`) whose folder the chat works
+    /// in, so History lists it under that project like the cabin does.
+    pub project: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -93,6 +97,7 @@ fn row(info: &SessionInfo) -> ChatRow {
         created: info.created,
         updated: updated_ms(info),
         pinned: false,
+        project: None,
     }
 }
 
@@ -137,9 +142,13 @@ fn shell_sessions() -> Vec<(ChatRow, SessionInfo)> {
         .filter(|info| info.id.starts_with(PREFIX))
         .map(|info| (row(&info), info))
         .collect();
-    let pins = pinned_ids(&grokhub_agent::perm::config_dir());
-    for (row, _) in &mut found {
+    let config_dir = grokhub_agent::perm::config_dir();
+    let pins = pinned_ids(&config_dir);
+    let nodes = crate::projects::load(&config_dir).unwrap_or_default();
+    let home = std::env::var("HOME").ok();
+    for (row, info) in &mut found {
         row.pinned = pins.contains(&row.id);
+        row.project = project_of(&nodes, &info.cwd, home.as_deref());
     }
     found.sort_by(|(a, _), (b, _)| {
         b.pinned
@@ -294,6 +303,301 @@ pub fn forget(
 
 /// Delete message… with no message named.
 pub const NO_MESSAGE: &str = "Pick the message to delete.";
+
+/// The project row whose folder is `cwd`, if the list has one.
+fn project_of(nodes: &[ProjectNode], cwd: &str, home: Option<&str>) -> Option<String> {
+    nodes
+        .iter()
+        .find(|n| {
+            n.kind == ProjectKind::Project && crate::projects::same_folder(&n.path, cwd, home)
+        })
+        .map(|n| n.id.clone())
+}
+
+/// The sidebar's folders and projects from `{config}/projects.json`, in file
+/// order; the page builds the tree from `parent`.
+pub fn project_nodes(config_dir: &Path) -> Result<Vec<ProjectNode>, String> {
+    crate::projects::load(config_dir)
+}
+
+/// Delete all asks twice: the first click arms it, and a second click inside
+/// [`DELETE_ALL_ARM`] deletes, but never sooner than [`DELETE_ALL_MIN`] after
+/// the first (the second half of a double-click), as the cabin's does.
+pub const DELETE_ALL_ARM: Duration = Duration::from_secs(5);
+pub const DELETE_ALL_MIN: Duration = Duration::from_millis(500);
+
+/// Where Delete all stands after a click.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Arm {
+    /// Armed (or still armed after a too-quick second click): ask again.
+    Armed,
+    /// Every chat was deleted.
+    Deleted,
+}
+
+/// The armed state, shared by the Delete all button.
+#[derive(Debug, Default)]
+pub struct DeleteArm {
+    at: Option<Instant>,
+}
+
+impl DeleteArm {
+    pub const fn new() -> Self {
+        Self { at: None }
+    }
+
+    /// A click at `now`. True when it should delete.
+    pub fn click(&mut self, now: Instant) -> bool {
+        match self.at.take() {
+            Some(at) if now.saturating_duration_since(at) < DELETE_ALL_MIN => {
+                self.at = Some(at);
+                false
+            }
+            Some(at) if now.saturating_duration_since(at) <= DELETE_ALL_ARM => true,
+            _ => {
+                self.at = Some(now);
+                false
+            }
+        }
+    }
+
+    pub fn cancel(&mut self) {
+        self.at = None;
+    }
+}
+
+/// Delete all's answer: where it stands, and how many chats a yes removes
+/// (or removed).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DeleteAll {
+    pub state: Arm,
+    pub count: usize,
+}
+
+/// One Delete all click. Nothing is deleted unless the click is the armed
+/// second one; then every shell chat and its forks go, and the pins file with
+/// them. Grok CLI and cabin chats are not this app's to delete.
+pub fn delete_all(
+    config_dir: &Path,
+    arm: &mut DeleteArm,
+    now: Instant,
+) -> Result<DeleteAll, String> {
+    let ids: Vec<String> = list(config_dir).into_iter().map(|r| r.id).collect();
+    if !arm.click(now) {
+        return Ok(DeleteAll {
+            state: Arm::Armed,
+            count: ids.len(),
+        });
+    }
+    for id in &ids {
+        delete(config_dir, id)?;
+    }
+    Ok(DeleteAll {
+        state: Arm::Deleted,
+        count: ids.len(),
+    })
+}
+
+/// A chat this app lists but never writes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadOnlyRow {
+    pub id: String,
+    pub title: String,
+    /// Unix ms of the file's last change; 0 when it can't be read.
+    pub updated: u64,
+    /// "cli" for a Grok CLI session, "cabin" for a chat from the egui cabin.
+    pub source: &'static str,
+}
+
+fn modified_ms(path: &Path) -> u64 {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|at| at.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |at| at.as_millis() as u64)
+}
+
+/// Grok CLI sessions (`cli_home`) and the cabin's own chats, read-only.
+///
+/// Cabin chats list read-only while both apps ship: a session file has one
+/// writer, so the shell never resumes, renames or deletes them. Once the cabin
+/// is retired this is where they become the shell's own. Forks (`/bg` and
+/// scheduled runs) and the shell's own chats stay off this list.
+pub fn read_only(config_dir: &Path, cli_home: Option<&Path>, query: &str) -> Vec<ReadOnlyRow> {
+    let needle = query.trim().to_lowercase();
+    let _config = ConfigGuard::set(config_dir);
+    let cli = match cli_home {
+        Some(home) => grokhub_core::cli_history::discover_session_files_in(home),
+        None => grokhub_core::cli_history::discover_session_files(),
+    };
+    let mut seen = std::collections::HashSet::new();
+    let mut rows: Vec<ReadOnlyRow> = Vec::new();
+    for session in cli {
+        if !seen.insert(session.id.clone()) {
+            continue;
+        }
+        rows.push(ReadOnlyRow {
+            updated: session.path.as_deref().map_or(0, modified_ms),
+            id: session.id,
+            title: session.title,
+            source: "cli",
+        });
+    }
+    for info in grokhub_agent::list_sessions() {
+        if info.id.starts_with(PREFIX)
+            || !info.forked_from.is_empty()
+            || !seen.insert(info.id.clone())
+        {
+            continue;
+        }
+        rows.push(ReadOnlyRow {
+            updated: updated_ms(&info),
+            id: info.id,
+            title: info.title,
+            source: "cabin",
+        });
+    }
+    rows.retain(|r| needle.is_empty() || r.title.to_lowercase().contains(&needle));
+    rows.sort_by(|a, b| b.updated.cmp(&a.updated).then(a.id.cmp(&b.id)));
+    rows.truncate(SEARCH_CAP);
+    rows
+}
+
+/// The text of a CLI `chat_history.jsonl` record's content: strings and
+/// `text` fields, in order.
+fn json_texts(v: &serde_json::Value, out: &mut Vec<String>) {
+    match v {
+        serde_json::Value::String(s) => out.push(s.clone()),
+        serde_json::Value::Array(items) => items.iter().for_each(|i| json_texts(i, out)),
+        serde_json::Value::Object(map) => {
+            if let Some(t) = map.get("text") {
+                json_texts(t, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// How much of a CLI session file a view reads.
+const CLI_VIEW_BYTES: u64 = 2 * 1024 * 1024;
+
+fn cli_lines(path: &Path) -> Result<Vec<Line>, String> {
+    use std::io::Read;
+    let mut raw = String::new();
+    std::fs::File::open(path)
+        .and_then(|f| f.take(CLI_VIEW_BYTES).read_to_string(&mut raw))
+        .map_err(|_| "That session's file couldn't be read.".to_string())?;
+    if path.extension().and_then(|e| e.to_str()) == Some("md") {
+        return Ok(grokhub_core::cli_history::parse_session_markdown(&raw)
+            .into_iter()
+            .map(|(role, text)| Line {
+                role: if role.eq_ignore_ascii_case("user") {
+                    Role::User
+                } else {
+                    Role::Assistant
+                },
+                text,
+            })
+            .collect());
+    }
+    let mut out = Vec::new();
+    for rec in raw
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+    {
+        let role = match rec.get("type").and_then(|t| t.as_str()) {
+            Some("user") => Role::User,
+            Some("assistant") => Role::Assistant,
+            _ => continue,
+        };
+        let mut texts = Vec::new();
+        if let Some(c) = rec.get("content") {
+            json_texts(c, &mut texts);
+        }
+        let text = texts.join("\n").trim().to_string();
+        if !text.is_empty() {
+            out.push(Line { role, text });
+        }
+    }
+    Ok(out)
+}
+
+/// A read-only chat's newest `limit` lines, for the page to show in place.
+/// Only ids `read_only` lists open; never a shell chat, so the view can't
+/// become a second writer.
+pub fn view_read_only(
+    config_dir: &Path,
+    cli_home: Option<&Path>,
+    id: &str,
+    limit: usize,
+) -> Result<Transcript, String> {
+    let id = id.trim();
+    if id.starts_with(PREFIX) {
+        return Err(NOT_READ_ONLY.into());
+    }
+    let row = read_only(config_dir, cli_home, "")
+        .into_iter()
+        .find(|r| r.id == id)
+        .ok_or_else(|| NOT_READ_ONLY.to_string())?;
+    let mut all = if row.source == "cabin" {
+        let _config = ConfigGuard::set(config_dir);
+        lines(&grokhub_agent::load_session(id)?)
+    } else {
+        let cli = match cli_home {
+            Some(home) => grokhub_core::cli_history::discover_session_files_in(home),
+            None => grokhub_core::cli_history::discover_session_files(),
+        };
+        let path = cli
+            .into_iter()
+            .find(|s| s.id == id)
+            .and_then(|s| s.path)
+            .ok_or_else(|| NOT_READ_ONLY.to_string())?;
+        cli_lines(&path)?
+    };
+    let earlier = all.len().saturating_sub(limit.max(1));
+    let lines = all.split_off(earlier);
+    Ok(Transcript {
+        id: row.id,
+        title: row.title,
+        lines,
+        earlier,
+    })
+}
+
+pub const NOT_READ_ONLY: &str = "That isn't a chat this page can show.";
+
+/// A tool step a search matched: the chat, the turn, and the row's text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StepRow {
+    pub chat: String,
+    pub turn: u32,
+    pub line: String,
+}
+
+/// Tool steps (from `spans/*.jsonl`) whose chat title, tool, decision or
+/// claim hold every word of `query`, over the shell's own chats only. Reads
+/// span files, so call it off the main thread.
+pub fn step_search(config_dir: &Path, query: &str) -> Vec<StepRow> {
+    let titles: std::collections::HashMap<String, String> = {
+        let _config = ConfigGuard::set(config_dir);
+        shell_sessions()
+            .into_iter()
+            .map(|(row, _)| (row.id, row.title))
+            .collect()
+    };
+    grokhub_agent::harness::search_spans(config_dir, query, &titles, &[])
+        .hits
+        .into_iter()
+        .map(|h| StepRow {
+            chat: h.chat_id,
+            turn: h.turn,
+            line: h.line,
+        })
+        .collect()
+}
 
 #[cfg(test)]
 mod tests {
@@ -994,5 +1298,239 @@ mod tests {
             raw.contains("Blue suits it.") && raw.contains("pick a colour"),
             "{raw}"
         );
+    }
+
+    fn node(
+        id: &str,
+        name: &str,
+        kind: ProjectKind,
+        path: &str,
+        parent: Option<&str>,
+    ) -> ProjectNode {
+        ProjectNode {
+            id: id.into(),
+            name: name.into(),
+            kind,
+            path: path.into(),
+            parent: parent.map(str::to_string),
+            open: true,
+        }
+    }
+
+    #[test]
+    fn a_project_lists_its_chats_and_pin_moves_a_chat_to_the_top() {
+        let config = temp_dir("tree-cfg");
+        let (ws_pier, ws_other) = (temp_dir("tree-pier"), temp_dir("tree-other"));
+        for (id, ws, text) in [
+            ("shell-tree-a", &ws_pier, "first in pier"),
+            ("shell-tree-b", &ws_pier, "second in pier"),
+            ("shell-tree-c", &ws_other, "loose chat"),
+        ] {
+            turn(id, &config, ws, Model::new("Ok.", false), text);
+        }
+        crate::projects::save(
+            &config,
+            &[
+                node("f1", "Boats", ProjectKind::Folder, "", None),
+                node(
+                    "p1",
+                    "Pier",
+                    ProjectKind::Project,
+                    &ws_pier.to_string_lossy(),
+                    Some("f1"),
+                ),
+            ],
+        )
+        .expect("save projects");
+        let nodes = project_nodes(&config).expect("nodes");
+        assert_eq!(
+            nodes.iter().map(|n| n.name.as_str()).collect::<Vec<_>>(),
+            ["Boats", "Pier"]
+        );
+        assert_eq!(nodes[1].parent.as_deref(), Some("f1"));
+        let rows = list(&config);
+        let mut in_pier: Vec<&str> = rows
+            .iter()
+            .filter(|r| r.project.as_deref() == Some("p1"))
+            .map(|r| r.id.as_str())
+            .collect();
+        in_pier.sort();
+        assert_eq!(in_pier, ["shell-tree-a", "shell-tree-b"]);
+        let loose = rows.iter().find(|r| r.id == "shell-tree-c").expect("loose");
+        assert_eq!(loose.project, None);
+        assert!(rows.iter().all(|r| !r.pinned));
+        assert!(toggle_pin(&config, "shell-tree-c").expect("pin"));
+        let rows = list(&config);
+        assert_eq!(rows[0].id, "shell-tree-c");
+        assert!(rows[0].pinned && rows[1..].iter().all(|r| !r.pinned));
+        assert!(!toggle_pin(&config, "shell-tree-c").expect("unpin"));
+        assert!(list(&config).iter().all(|r| !r.pinned));
+    }
+
+    #[test]
+    fn delete_all_deletes_nothing_until_the_armed_second_click() {
+        let (config, workspace) = (temp_dir("all-cfg"), temp_dir("all-ws"));
+        for id in ["shell-all-a", "shell-all-b"] {
+            turn(id, &config, &workspace, Model::new("Ok.", false), "hello");
+        }
+        toggle_pin(&config, "shell-all-a").expect("pin");
+        let mut arm = DeleteArm::default();
+        let t0 = Instant::now();
+        // First click arms: nothing is deleted.
+        let first = delete_all(&config, &mut arm, t0).expect("first");
+        assert_eq!(
+            first,
+            DeleteAll {
+                state: Arm::Armed,
+                count: 2
+            }
+        );
+        assert_eq!(list(&config).len(), 2);
+        // A double-click's second half (100 ms later) keeps it armed.
+        let quick = delete_all(&config, &mut arm, t0 + Duration::from_millis(100)).expect("quick");
+        assert_eq!(quick.state, Arm::Armed);
+        assert_eq!(list(&config).len(), 2);
+        // Cancel disarms, so the next click only arms again.
+        arm.cancel();
+        let again = delete_all(&config, &mut arm, t0 + Duration::from_secs(1)).expect("again");
+        assert_eq!(again.state, Arm::Armed);
+        assert_eq!(list(&config).len(), 2);
+        // A second click after the 5 s window only re-arms.
+        let late = delete_all(&config, &mut arm, t0 + Duration::from_secs(7)).expect("late");
+        assert_eq!(late.state, Arm::Armed);
+        assert_eq!(list(&config).len(), 2);
+        // A real second click inside the window deletes every chat and pin.
+        let done = delete_all(&config, &mut arm, t0 + Duration::from_secs(9)).expect("done");
+        assert_eq!(
+            done,
+            DeleteAll {
+                state: Arm::Deleted,
+                count: 2
+            }
+        );
+        assert_eq!(list(&config), Vec::<ChatRow>::new());
+        assert_eq!(pinned_ids(&config), Vec::<String>::new());
+    }
+
+    #[test]
+    fn cli_and_cabin_chats_list_read_only_and_never_open_for_writing() {
+        let (config, workspace) = (temp_dir("ro-cfg"), temp_dir("ro-ws"));
+        let cli_home = temp_dir("ro-cli");
+        let cli_id = "0198f2a4-7b1c-7d2e-9a3f-5c6d7e8f9a0b";
+        let dir = cli_home.join("sessions").join(cli_id);
+        std::fs::create_dir_all(&dir).expect("cli dir");
+        std::fs::write(
+            dir.join("chat_history.jsonl"),
+            concat!(
+                r#"{"type":"user","content":[{"text":"<user_query>Sketch the harbor wall</user_query>"}]}"#,
+                "\n",
+                r#"{"type":"assistant","content":[{"text":"Here is a sketch."}]}"#,
+                "\n"
+            ),
+        )
+        .expect("cli file");
+        turn(
+            "shell-ro-own",
+            &config,
+            &workspace,
+            Model::new("Ok.", false),
+            "mine",
+        );
+        turn(
+            "cabin-ro-thread",
+            &config,
+            &workspace,
+            Model::new("Cabin reply.", false),
+            "from the cabin",
+        );
+
+        let rows = read_only(&config, Some(&cli_home), "");
+        let mut ids: Vec<(&str, &str)> = rows.iter().map(|r| (r.id.as_str(), r.source)).collect();
+        ids.sort();
+        assert_eq!(ids, [(cli_id, "cli"), ("cabin-ro-thread", "cabin")]);
+        assert_eq!(
+            read_only(&config, Some(&cli_home), "harbor").len(),
+            1,
+            "search narrows by title"
+        );
+
+        let cli = view_read_only(&config, Some(&cli_home), cli_id, 50).expect("cli view");
+        assert_eq!(cli.lines.len(), 2);
+        assert_eq!(cli.lines[0].role, Role::User);
+        assert!(cli.lines[0].text.contains("Sketch the harbor wall"));
+        assert_eq!(line(Role::Assistant, "Here is a sketch."), cli.lines[1]);
+        let cabin =
+            view_read_only(&config, Some(&cli_home), "cabin-ro-thread", 50).expect("cabin view");
+        assert_eq!(cabin.lines[0], line(Role::User, "from the cabin"));
+        assert_eq!(cabin.lines[1], line(Role::Assistant, "Cabin reply."));
+        // The shell's own chats and unknown ids never open this way, and
+        // nothing here renames or deletes a read-only chat.
+        assert_eq!(
+            view_read_only(&config, Some(&cli_home), "shell-ro-own", 50),
+            Err(NOT_READ_ONLY.into())
+        );
+        assert_eq!(
+            view_read_only(&config, Some(&cli_home), "../escape", 50),
+            Err(NOT_READ_ONLY.into())
+        );
+        assert_eq!(
+            rename(&config, "cabin-ro-thread", "x"),
+            Err(NOT_SHELL.into())
+        );
+        assert_eq!(delete(&config, "cabin-ro-thread"), Err(NOT_SHELL.into()));
+        assert_eq!(
+            list(&config).len(),
+            1,
+            "only the shell's own chat is the shell's"
+        );
+    }
+
+    #[test]
+    fn a_step_search_finds_a_fixture_tool_call_in_this_apps_chats_only() {
+        use grokhub_agent::harness::{append_span, AccessMode, Span};
+        let (config, workspace) = (temp_dir("step-cfg"), temp_dir("step-ws"));
+        turn(
+            "shell-step-a",
+            &config,
+            &workspace,
+            Model::new("Ok.", false),
+            "make a note",
+        );
+        let step = |chat: &str, turn: u32, tool: &str, claim: &str| {
+            Span::soft_allow(
+                chat,
+                tool,
+                "{}",
+                "ok",
+                claim,
+                AccessMode::Supervised,
+                "grok_build",
+            )
+            .in_turn(chat, turn)
+        };
+        append_span(
+            &config,
+            &step("shell-step-a", 2, "write_file", "write notes.md"),
+        )
+        .expect("span");
+        append_span(
+            &config,
+            &step("cabin-elsewhere", 1, "write_file", "write notes.md"),
+        )
+        .expect("span");
+        let hits = step_search(&config, "write notes");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].chat, "shell-step-a");
+        assert_eq!(hits[0].turn, 2);
+        assert!(
+            hits[0].line.contains("turn 2 · write_file · allow"),
+            "{}",
+            hits[0].line
+        );
+        assert_eq!(
+            step_search(&config, "nothing like this"),
+            Vec::<StepRow>::new()
+        );
+        assert_eq!(step_search(&config, "  "), Vec::<StepRow>::new());
     }
 }

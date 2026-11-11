@@ -88,7 +88,13 @@ export type Answer = "allow" | "always" | "deny";
 export type ChatEvent =
   | { kind: "text"; text: string }
   | { kind: "tool"; id: string; title: string; status: string; detail: string }
-  | { kind: "permission"; id: string; title: string; action: string; reason: string }
+  | {
+      kind: "permission";
+      id: string;
+      title: string;
+      action: string;
+      reason: string;
+    }
   /** A permission card answered away from the page, such as Deny on its notification. */
   | { kind: "answered"; id: string; answer: Answer }
   | { kind: "error"; message: string }
@@ -140,17 +146,36 @@ export function quickChips(
   draft?: string,
   mode?: SessionMode,
 ): Promise<QuickChip[]> {
-  return invoke<QuickChip[]>("quick_chips", { surface, conversationId, draft, mode, clock: wallClock() });
+  return invoke<QuickChip[]>("quick_chips", {
+    surface,
+    conversationId,
+    draft,
+    mode,
+    clock: wallClock(),
+  });
 }
 
 /** A tap (`picked`) or a hide on a chip of that row; it teaches the ranker.
  * The page acts on the tap itself. */
-export function chipOutcome(surface: ChipSurface, id: string, picked: boolean): Promise<boolean> {
-  return invoke<boolean>("chip_outcome", { surface, id, picked, clock: wallClock() });
+export function chipOutcome(
+  surface: ChipSurface,
+  id: string,
+  picked: boolean,
+): Promise<boolean> {
+  return invoke<boolean>("chip_outcome", {
+    surface,
+    id,
+    picked,
+    clock: wallClock(),
+  });
 }
 
 /** One answer on a question card; the label is what gets sent. */
-export type ElicitChoice = { label: string; description: string; recommended: boolean };
+export type ElicitChoice = {
+  label: string;
+  description: string;
+  recommended: boolean;
+};
 
 /** How one message runs: Chat, Plan (read-only until the plan is approved)
  * or btw (a look-only side answer). The app picks it; `/plan` and `/chat`
@@ -172,7 +197,8 @@ export function getSettings(): Promise<Settings> {
   return invoke<Settings>("get_settings");
 }
 
-export type Theme = "system" | "dark" | "ops-dark" | "oled-black" | "soft-charcoal" | "light";
+export type Theme =
+  "system" | "dark" | "ops-dark" | "oled-black" | "soft-charcoal" | "light";
 
 export function setTheme(theme: Theme): Promise<Settings> {
   return invoke<Settings>("set_theme", { theme });
@@ -228,7 +254,13 @@ export function sendChat(
   mode?: SessionMode,
   attachments: string[] = [],
 ): Promise<string> {
-  return invoke<string>("send_chat", { conversationId, text, mode, attachments, clock: wallClock() });
+  return invoke<string>("send_chat", {
+    conversationId,
+    text,
+    mode,
+    attachments,
+    clock: wallClock(),
+  });
 }
 
 /** What a message typed during a reply is for (src-tauri/src/turns.rs). */
@@ -243,7 +275,10 @@ export interface TurnRead {
 }
 
 /** Reads a message typed while a reply runs. Instant: no model call. */
-export function readTurn(text: string, conversationId?: string): Promise<TurnRead> {
+export function readTurn(
+  text: string,
+  conversationId?: string,
+): Promise<TurnRead> {
   return invoke<TurnRead>("read_turn", { text, conversationId });
 }
 
@@ -256,7 +291,13 @@ export function sideChat(
   ask: string,
   soFar: string,
 ): Promise<string> {
-  return invoke<string>("side_chat", { conversationId, sideId, question, ask, soFar });
+  return invoke<string>("side_chat", {
+    conversationId,
+    sideId,
+    question,
+    ask,
+    soFar,
+  });
 }
 
 /** Tell the main task: `steered` when the words joined the running reply;
@@ -266,7 +307,11 @@ export interface Told {
   steered: boolean;
 }
 
-export function tellMain(conversationId: string, question: string, answer: string): Promise<Told> {
+export function tellMain(
+  conversationId: string,
+  question: string,
+  answer: string,
+): Promise<Told> {
   return invoke<Told>("tell_main", { conversationId, question, answer });
 }
 
@@ -289,31 +334,49 @@ export interface StageOutcome {
 }
 
 /** A pasted or dropped file's bytes, as base64. */
-export function stageAttachment(conversationId: string, name: string, data: string): Promise<Staged> {
+export function stageAttachment(
+  conversationId: string,
+  name: string,
+  data: string,
+): Promise<Staged> {
   return invoke<Staged>("stage_attachment", { conversationId, name, data });
 }
 
 /** Files dropped on the window, by path (the desktop window only). */
-export function stageAttachmentPaths(conversationId: string, paths: string[]): Promise<StageOutcome[]> {
-  return invoke<StageOutcome[]>("stage_attachment_paths", { conversationId, paths });
+export function stageAttachmentPaths(
+  conversationId: string,
+  paths: string[],
+): Promise<StageOutcome[]> {
+  return invoke<StageOutcome[]>("stage_attachment_paths", {
+    conversationId,
+    paths,
+  });
 }
 
 /** The + button: the system file picker, then each pick is staged. */
-export function pickAttachments(conversationId: string): Promise<StageOutcome[]> {
+export function pickAttachments(
+  conversationId: string,
+): Promise<StageOutcome[]> {
   return invoke<StageOutcome[]>("pick_attachments", { conversationId });
 }
 
-export function removeAttachment(conversationId: string, path: string): Promise<void> {
+export function removeAttachment(
+  conversationId: string,
+  path: string,
+): Promise<void> {
   return invoke<void>("remove_attachment", { conversationId, path });
 }
 
 /** Files dropped on the desktop window arrive as paths. Outside the shell
  * this never fires; the page's own drop event has the files. */
-export async function onFileDrop(handler: (paths: string[]) => void): Promise<UnlistenFn> {
+export async function onFileDrop(
+  handler: (paths: string[]) => void,
+): Promise<UnlistenFn> {
   if (!inShell()) return () => {};
   const { getCurrentWebview } = await import("@tauri-apps/api/webview");
   return getCurrentWebview().onDragDropEvent((event) => {
-    if (event.payload.type === "drop" && event.payload.paths.length > 0) handler(event.payload.paths);
+    if (event.payload.type === "drop" && event.payload.paths.length > 0)
+      handler(event.payload.paths);
   });
 }
 
@@ -330,7 +393,13 @@ export function answerElicit(
   field: string | null = null,
   value = "",
 ): Promise<void> {
-  return invoke<void>("answer_elicit", { conversationId, id, action, field, value });
+  return invoke<void>("answer_elicit", {
+    conversationId,
+    id,
+    action,
+    field,
+    value,
+  });
 }
 
 export function answerPermission(
@@ -353,7 +422,10 @@ export function cancelChat(conversationId: string): Promise<void> {
 
 /** Steer now: queued words join the running reply at its next step. False
  * when that chat has no reply running, so the words stay queued. */
-export function steerChat(conversationId: string, text: string): Promise<boolean> {
+export function steerChat(
+  conversationId: string,
+  text: string,
+): Promise<boolean> {
   return invoke<boolean>("steer_chat", { conversationId, text });
 }
 
@@ -369,8 +441,41 @@ export interface ChatRow {
   created: number;
   /** Unix ms of its last saved turn. */
   updated: number;
-  /** Pinned with /pin: it lists first. */
+  /** Pinned with /pin or the row's menu: it lists first. */
   pinned?: boolean;
+  /** The id of the project whose folder the chat works in. */
+  project?: string | null;
+}
+
+/** A project or folder from the sidebar list the cabin shares (projects.json). */
+export interface ProjectNode {
+  id: string;
+  name: string;
+  kind: "project" | "folder";
+  parent?: string | null;
+  open: boolean;
+}
+
+/** A Grok CLI session or a cabin chat: listed, never written. */
+export interface ReadOnlyRow {
+  id: string;
+  title: string;
+  /** Unix ms; 0 when unknown. */
+  updated: number;
+  source: "cli" | "cabin";
+}
+
+/** A tool step a History search matched. */
+export interface StepRow {
+  chat: string;
+  turn: number;
+  line: string;
+}
+
+/** Where Delete all stands: armed asks for a second click, deleted is done. */
+export interface DeleteAllResult {
+  state: "armed" | "deleted";
+  count: number;
 }
 
 /** "tools": a run of tool steps, named on one muted line (not replayed as cards). */
@@ -412,6 +517,39 @@ export function renameChat(id: string, title: string): Promise<void> {
   return invoke<void>("rename_chat", { id, title });
 }
 
+/** Pins the chat, or unpins it; true when pinned now. */
+export function pinChat(id: string): Promise<boolean> {
+  return invoke<boolean>("pin_chat", { id });
+}
+
+/** The sidebar's projects and folders, for the History tree. */
+export function listProjectNodes(): Promise<ProjectNode[]> {
+  return invoke<ProjectNode[]>("list_project_nodes");
+}
+
+export function listReadOnlyChats(query: string): Promise<ReadOnlyRow[]> {
+  return invoke<ReadOnlyRow[]>("list_read_only_chats", { query });
+}
+
+/** A read-only chat's newest lines; it is never resumed. */
+export function viewReadOnlyChat(id: string): Promise<Transcript> {
+  return invoke<Transcript>("view_read_only_chat", { id });
+}
+
+export function searchSteps(query: string): Promise<StepRow[]> {
+  return invoke<StepRow[]>("search_steps", { query });
+}
+
+/** Delete all: the first call arms it; a second inside 5 s (and not within
+ * half a second of the first) deletes every chat of this app. */
+export function deleteAllChats(): Promise<DeleteAllResult> {
+  return invoke<DeleteAllResult>("delete_all_chats");
+}
+
+export function cancelDeleteAll(): Promise<void> {
+  return invoke<void>("cancel_delete_all");
+}
+
 /** Deletes the saved chat; a reply still running in it stops. */
 export function deleteChat(id: string): Promise<void> {
   return invoke<void>("delete_chat", { id });
@@ -434,7 +572,10 @@ export interface SavedFile {
 }
 
 /** `/export` and History's Export: the chat as Markdown in your Chats folder. */
-export function exportChat(id: string, format?: "html" | "json"): Promise<SavedFile> {
+export function exportChat(
+  id: string,
+  format?: "html" | "json",
+): Promise<SavedFile> {
   return invoke<SavedFile>("export_chat", { id, clock: wallClock(), format });
 }
 
@@ -453,18 +594,26 @@ export function forgetMessage(
   id: string,
   cut: { reply: boolean; text: string | null; later: number },
 ): Promise<boolean> {
-  return invoke<boolean>("forget_message", { id, reply: cut.reply, text: cut.text, later: cut.later });
+  return invoke<boolean>("forget_message", {
+    id,
+    reply: cut.reply,
+    text: cut.text,
+    later: cut.later,
+  });
 }
 
 /** Opens a reply's http(s) link in the default browser (`open_url`, which
  * refuses anything else). Shell only: in the web app links open in a new tab
  * and never reach the computer. */
 export function openUrl(url: string): Promise<void> {
-  if (!inShell()) return Promise.reject(new Error("Links open in this browser's own tabs."));
+  if (!inShell())
+    return Promise.reject(new Error("Links open in this browser's own tabs."));
   return invoke<void>("open_url", { url });
 }
 
-export function onChatEvent(handler: (envelope: ChatEnvelope) => void): Promise<UnlistenFn> {
+export function onChatEvent(
+  handler: (envelope: ChatEnvelope) => void,
+): Promise<UnlistenFn> {
   return subscribe<ChatEnvelope>(CHAT_EVENT, handler);
 }
 
@@ -475,12 +624,15 @@ export const HALT_EVENT = "halt://done";
  * with the chats it stopped mid-reply. Desktop only; the web app and phones
  * are refused. */
 export function haltDesktop(): Promise<string[]> {
-  if (!inShell()) return Promise.reject(new Error("Halt runs on the computer itself."));
+  if (!inShell())
+    return Promise.reject(new Error("Halt runs on the computer itself."));
   return invoke<string[]>("halt_desktop");
 }
 
 /** The chats a Halt stopped, whichever way it was pressed. */
-export function onHalt(handler: (stopped: string[]) => void): Promise<UnlistenFn> {
+export function onHalt(
+  handler: (stopped: string[]) => void,
+): Promise<UnlistenFn> {
   return subscribe<string[]>(HALT_EVENT, handler);
 }
 
@@ -519,7 +671,11 @@ export interface RunResult {
 
 /** The local wall clock, so next-run times read in the user's own zone. */
 export function wallClock(now: Date = new Date()) {
-  return { weekday: now.getDay(), hour: now.getHours(), minute: now.getMinutes() };
+  return {
+    weekday: now.getDay(),
+    hour: now.getHours(),
+    minute: now.getMinutes(),
+  };
 }
 
 export function listAutomations(): Promise<AutomationRow[]> {
@@ -527,23 +683,43 @@ export function listAutomations(): Promise<AutomationRow[]> {
 }
 
 export function addAutomation(text: string): Promise<AutomationRow[]> {
-  return invoke<AutomationRow[]>("add_automation", { text, clock: wallClock() });
+  return invoke<AutomationRow[]>("add_automation", {
+    text,
+    clock: wallClock(),
+  });
 }
 
-export function setAutomationEnabled(id: string, enabled: boolean): Promise<AutomationRow[]> {
-  return invoke<AutomationRow[]>("set_automation_enabled", { id, enabled, clock: wallClock() });
+export function setAutomationEnabled(
+  id: string,
+  enabled: boolean,
+): Promise<AutomationRow[]> {
+  return invoke<AutomationRow[]>("set_automation_enabled", {
+    id,
+    enabled,
+    clock: wallClock(),
+  });
 }
 
 export function removeAutomation(id: string): Promise<AutomationRow[]> {
-  return invoke<AutomationRow[]>("remove_automation", { id, clock: wallClock() });
+  return invoke<AutomationRow[]>("remove_automation", {
+    id,
+    clock: wallClock(),
+  });
 }
 
 export function runAutomation(id: string): Promise<RunResult> {
   return invoke<RunResult>("run_automation", { id });
 }
 
-export function editAutomation(id: string, text: string): Promise<AutomationRow[]> {
-  return invoke<AutomationRow[]>("edit_automation", { id, text, clock: wallClock() });
+export function editAutomation(
+  id: string,
+  text: string,
+): Promise<AutomationRow[]> {
+  return invoke<AutomationRow[]>("edit_automation", {
+    id,
+    text,
+    clock: wallClock(),
+  });
 }
 
 /** A scheduled run the shell fired, from `automations://ran`. */
@@ -555,7 +731,9 @@ export interface ScheduledRun {
 
 export const AUTOMATION_RAN_EVENT = "automations://ran";
 
-export function onAutomationRan(handler: (run: ScheduledRun) => void): Promise<UnlistenFn> {
+export function onAutomationRan(
+  handler: (run: ScheduledRun) => void,
+): Promise<UnlistenFn> {
   return subscribe<ScheduledRun>(AUTOMATION_RAN_EVENT, handler);
 }
 
@@ -652,7 +830,16 @@ export interface SlashHit {
 export type SlashEffect =
   | { kind: "newChat" }
   | { kind: "mode"; mode: SessionMode; text: string | null }
-  | { kind: "open"; view: "settings" | "memory" | "automations" | "connectors" | "history" }
+  | {
+      kind: "open";
+      view:
+        | "settings"
+        | "memory"
+        | "automations"
+        | "connectors"
+        | "history"
+        | "skills";
+    }
   | { kind: "notice"; text: string }
   | { kind: "export" }
   | { kind: "exportAs"; format: "html" | "json" }
@@ -669,7 +856,10 @@ export function slashHits(draft: string): Promise<SlashHit[]> {
 }
 
 /** `conversationId` is the chat the line was typed in. */
-export function runSlash(line: string, conversationId?: string): Promise<SlashEffect> {
+export function runSlash(
+  line: string,
+  conversationId?: string,
+): Promise<SlashEffect> {
   return invoke<SlashEffect>("run_slash", { line, conversationId });
 }
 
@@ -705,7 +895,10 @@ export function setMemoryWrites(on: boolean): Promise<MemoryNotes> {
 }
 
 /** Keep a learned line but stop using it, or use it again. */
-export function pauseMemoryRow(id: string, paused: boolean): Promise<MemoryNotes> {
+export function pauseMemoryRow(
+  id: string,
+  paused: boolean,
+): Promise<MemoryNotes> {
   return invoke<MemoryNotes>("pause_memory_row", { id, paused });
 }
 
@@ -721,7 +914,10 @@ export const PERSONAL_ADD_GROUPS = [
 export type PersonalGroupKey = (typeof PERSONAL_ADD_GROUPS)[number][0];
 
 /** Add a line about you in your own words. */
-export function addPersonalFact(text: string, group: PersonalGroupKey): Promise<MemoryNotes> {
+export function addPersonalFact(
+  text: string,
+  group: PersonalGroupKey,
+): Promise<MemoryNotes> {
   return invoke<MemoryNotes>("add_personal_fact", { text, group });
 }
 
@@ -826,7 +1022,10 @@ export function addConnectorConfig(text: string): Promise<ConnectorsChanged> {
   return invoke<ConnectorsChanged>("add_connector_config", { text });
 }
 
-export function setConnectorEnabled(name: string, on: boolean): Promise<ConnectorsChanged> {
+export function setConnectorEnabled(
+  name: string,
+  on: boolean,
+): Promise<ConnectorsChanged> {
   return invoke<ConnectorsChanged>("set_connector_enabled", { name, on });
 }
 
@@ -840,7 +1039,10 @@ export function saveConnectorKey(name: string, key: string): Promise<KeyCard> {
   return invoke<KeyCard>("save_connector_key", { name, key });
 }
 
-export function answerConnectorKey(id: string, approve: boolean): Promise<ConnectorsChanged> {
+export function answerConnectorKey(
+  id: string,
+  approve: boolean,
+): Promise<ConnectorsChanged> {
   return invoke<ConnectorsChanged>("answer_connector_key", { id, approve });
 }
 
@@ -1128,7 +1330,12 @@ export function imagineGenerate(
   count: number,
   kind: ImagineKind,
 ): Promise<ImagineMade> {
-  return invoke<ImagineMade>("imagine_generate", { prompt, aspect, count, kind });
+  return invoke<ImagineMade>("imagine_generate", {
+    prompt,
+    aspect,
+    count,
+    kind,
+  });
 }
 
 export function imagineCancel(): Promise<boolean> {
@@ -1188,7 +1395,10 @@ export function journalAct(id: string, act: JournalAct): Promise<JournalPage> {
   return invoke<JournalPage>("journal_act", { id, act });
 }
 
-export function journalToMission(id: string, conversationId: string): Promise<JournalMission> {
+export function journalToMission(
+  id: string,
+  conversationId: string,
+): Promise<JournalMission> {
   return invoke<JournalMission>("journal_to_mission", { id, conversationId });
 }
 
@@ -1220,7 +1430,12 @@ export interface BoardCard {
   /** Where the work left off. */
   leftOff: string | null;
   steps: WorkStepView[];
-  checkpoint: { goal: string; next: string; blocker: string; refs: string[] } | null;
+  checkpoint: {
+    goal: string;
+    next: string;
+    blocker: string;
+    refs: string[];
+  } | null;
   /** Steps done and in all. */
   progress: [number, number];
   /** A paused or interrupted run: Resume and Hand back apply. */
@@ -1291,7 +1506,11 @@ export type BoardAct =
 
 /** Make it recurring: the schedules offered, in the order the shell's
  * `work_triage::RECUR_CHOICES` keeps them. */
-export const RECUR_CHOICES = ["Every day at 9 AM", "Every weekday at 9 AM", "Every day at 6 PM"] as const;
+export const RECUR_CHOICES = [
+  "Every day at 9 AM",
+  "Every weekday at 9 AM",
+  "Every day at 6 PM",
+] as const;
 
 export interface WorkLogLine {
   at: number;
@@ -1326,7 +1545,10 @@ export function workboardLog(id: string): Promise<WorkLogLine[]> {
   return invoke<WorkLogLine[]>("workboard_log", { id });
 }
 
-export function workboardAdd(title: string, detail: string): Promise<BoardPage> {
+export function workboardAdd(
+  title: string,
+  detail: string,
+): Promise<BoardPage> {
   return invoke<BoardPage>("workboard_add", { title, detail });
 }
 
@@ -1339,13 +1561,21 @@ export function workboardWork(id: string): Promise<BoardWork> {
 }
 
 /** Start a playbook on a card: it links the playbook, then starts as Work. */
-export function workboardPlaybook(id: string, playbook: string, name: string): Promise<BoardWork> {
+export function workboardPlaybook(
+  id: string,
+  playbook: string,
+  name: string,
+): Promise<BoardWork> {
   return invoke<BoardWork>("workboard_playbook", { id, playbook, name });
 }
 
 /** Make it recurring: an automation from the card, `choice` in RECUR_CHOICES. */
 export function workboardRecur(id: string, choice: number): Promise<BoardPage> {
-  return invoke<BoardPage>("workboard_recur", { id, choice, clock: wallClock() });
+  return invoke<BoardPage>("workboard_recur", {
+    id,
+    choice,
+    clock: wallClock(),
+  });
 }
 
 /** Delete archived cards archived `days` ago or more (0: all of them), with
@@ -1372,13 +1602,17 @@ export function setWorkboardTidy(autoDeleteDays: number): Promise<BoardTidy> {
 }
 
 /** Resume a paused run. A stub until KB-03 fills in the real resume. */
-export function workboardResume(id: string, conversationId: string): Promise<BoardResume> {
+export function workboardResume(
+  id: string,
+  conversationId: string,
+): Promise<BoardResume> {
   return invoke<BoardResume>("workboard_resume", { id, conversationId });
 }
 
 /** Home and Objectives (src-tauri/src/home.rs): the cabin's tiles from
  * home_layout.json, and the open chat's checklist with level and XP. */
-export type StepStatus = "planned" | "attempted" | "verified" | "unverified" | "cancelled";
+export type StepStatus =
+  "planned" | "attempted" | "verified" | "unverified" | "cancelled";
 
 export interface MissionStep {
   id: string;
@@ -1437,8 +1671,15 @@ export interface MissionPage {
 export type HomeTile =
   | { kind: "objectives"; mission: Mission | null; xp: Xp; followUp?: FollowUp }
   | { kind: "streak"; xp: Xp }
-  | { kind: "recentChats"; chats: { id: string; title: string; updated: number }[] }
-  | { kind: "automations"; active: number; next: { id: string; name: string; summary: string }[] }
+  | {
+      kind: "recentChats";
+      chats: { id: string; title: string; updated: number }[];
+    }
+  | {
+      kind: "automations";
+      active: number;
+      next: { id: string; name: string; summary: string }[];
+    }
   | {
       kind: "pulse";
       post: { id: string; title: string; summary: string; ago: string } | null;
@@ -1451,7 +1692,8 @@ export type HomeTile =
   | { kind: "view"; view: TileView };
 
 export type TileTone = "normal" | "warn" | "alert" | "quiet";
-export type TileState = "ready" | "empty" | "off" | "error" | "offline" | "unsupported";
+export type TileState =
+  "ready" | "empty" | "off" | "error" | "offline" | "unsupported";
 
 /** What a tile, row or button does; Home maps it onto its routes. */
 export type TileAction =
@@ -1477,7 +1719,12 @@ export interface TileView {
   state: TileState;
   tag: string | null;
   text: { big: string; caption: string; detail: string | null; tone: TileTone };
-  rows: { label: string; value: string; tone: TileTone; tap: TileAction | null }[];
+  rows: {
+    label: string;
+    value: string;
+    tone: TileTone;
+    tap: TileAction | null;
+  }[];
   progress: number | null;
   buttons: { label: string; action: TileAction; primary: boolean }[];
   tap: TileAction | null;
@@ -1503,7 +1750,13 @@ export interface HomePage {
   xpBar: boolean;
   slots: HomeSlot[];
   xp: Xp;
-  glance: { memories: number | null; proposed: number; connectors: number; connected: number; failing: number };
+  glance: {
+    memories: number | null;
+    proposed: number;
+    connectors: number;
+    connected: number;
+    failing: number;
+  };
 }
 
 export function getHome(conversationId?: string): Promise<HomePage> {
@@ -1520,7 +1773,13 @@ export interface HomePick {
 
 export interface HomeCatalog {
   current: HomePick;
-  modules: { id: string; name: string; category: string; sizes: SlotSize[]; purpose: string }[];
+  modules: {
+    id: string;
+    name: string;
+    category: string;
+    sizes: SlotSize[];
+    purpose: string;
+  }[];
   presets: { id: string; label: string; pick: HomePick }[];
 }
 
@@ -1533,12 +1792,22 @@ export function setHomeLayout(pick: HomePick): Promise<void> {
 }
 
 export function getMission(conversationId?: string): Promise<MissionPage> {
-  return invoke<MissionPage>("get_mission", { clock: wallClock(), conversationId });
+  return invoke<MissionPage>("get_mission", {
+    clock: wallClock(),
+    conversationId,
+  });
 }
 
 /** Accept as done (`done`) or Undo. Desktop only. */
-export function setMissionDone(done: boolean, conversationId?: string): Promise<MissionPage> {
-  return invoke<MissionPage>("set_mission_done", { clock: wallClock(), conversationId, done });
+export function setMissionDone(
+  done: boolean,
+  conversationId?: string,
+): Promise<MissionPage> {
+  return invoke<MissionPage>("set_mission_done", {
+    clock: wallClock(),
+    conversationId,
+    done,
+  });
 }
 
 /** One goal row on Objectives (grokhub-core objectives::GoalCard). */
@@ -1675,7 +1944,8 @@ export interface LocalFileRow {
 }
 
 /** `state_word` and the not-set-up line in `local_ai.rs`. */
-export type LocalStatusState = "Normal" | "Throttled" | "Ramping up" | "Paused" | "Not set up";
+export type LocalStatusState =
+  "Normal" | "Throttled" | "Ramping up" | "Paused" | "Not set up";
 
 export interface LocalStatus {
   tier: string;
@@ -1698,7 +1968,8 @@ export type LocalEngineState = "ready" | "missing" | "downloading" | "noBuild";
 /** What the engine download emits: it never reports `noBuild`. */
 export type LocalEngineEventState = "downloading" | "ready" | "missing";
 /** What the draft model download emits. */
-export type LocalDrafterState = "downloading" | "done" | "error" | "paused" | "cancelled";
+export type LocalDrafterState =
+  "downloading" | "done" | "error" | "paused" | "cancelled";
 
 export interface LocalEngineInfo {
   state: LocalEngineState;
@@ -1731,7 +2002,11 @@ export interface LocalDraftProgress {
 export interface LocalAiView {
   config: LocalAiConfig;
   status: LocalStatus;
-  picker: { models: LocalModelRow[]; onThisPc: LocalFileRow[]; selected: string };
+  picker: {
+    models: LocalModelRow[];
+    onThisPc: LocalFileRow[];
+    selected: string;
+  };
   /** What hardware detection couldn't see. */
   limits: string[];
   maxThreads: number;
@@ -1869,7 +2144,9 @@ export function removeLibraryModel(id: string): Promise<LibraryView> {
   return invoke<LibraryView>("remove_library_model", { id });
 }
 
-export function onModelLibraryEvent(handler: (status: LibraryStatus) => void): Promise<UnlistenFn> {
+export function onModelLibraryEvent(
+  handler: (status: LibraryStatus) => void,
+): Promise<UnlistenFn> {
   return subscribe<LibraryStatus>("model-library", handler);
 }
 
@@ -1885,8 +2162,12 @@ export function cancelLocalEngineDownload(): Promise<void> {
   return invoke("cancel_local_engine_download");
 }
 
-export function startLocalDrafterDownload(targetId: string): Promise<LocalDraftOffer | null> {
-  return invoke<LocalDraftOffer | null>("start_local_drafter_download", { targetId });
+export function startLocalDrafterDownload(
+  targetId: string,
+): Promise<LocalDraftOffer | null> {
+  return invoke<LocalDraftOffer | null>("start_local_drafter_download", {
+    targetId,
+  });
 }
 
 export function cancelLocalDrafterDownload(): Promise<void> {
@@ -1957,6 +2238,40 @@ export function forgetAllDevices(): Promise<Devices> {
   return invoke<Devices>("forget_all_devices");
 }
 
+/** A computer paired with this one's LAN hub. */
+export interface SharePeer {
+  name: string;
+  /** Unix ms; 0 before its first call. */
+  lastSeen: number;
+}
+
+/** Devices → Start share (src-tauri/src/hub_share.rs); desktop only. */
+export interface Share {
+  on: boolean;
+  port: number;
+  /** The live pairing code while sharing; empty otherwise. Never log it. */
+  code: string;
+  /** What the other computer opens, without the code; empty while off. */
+  address: string;
+  peers: SharePeer[];
+}
+
+export function getShare(): Promise<Share> {
+  return invoke<Share>("get_share");
+}
+
+export function startShare(): Promise<Share> {
+  return invoke<Share>("start_share");
+}
+
+export function stopShare(): Promise<Share> {
+  return invoke<Share>("stop_share");
+}
+
+export function newShareCode(): Promise<Share> {
+  return invoke<Share>("new_share_code");
+}
+
 /** Settings → Labs → Plugins (src-tauri/src/plugins.rs). */
 export interface PluginRow {
   name: string;
@@ -1986,6 +2301,43 @@ export interface PluginEntry {
 export interface PluginMarket {
   entries: PluginEntry[];
   page: PluginPage;
+}
+
+export interface DiagnosticsPage {
+  mode: boolean;
+  includeLogs: boolean;
+  /** What each Save includes, the cabin's own lines. */
+  preview: string[];
+}
+
+export interface DiagnosticsPreview {
+  /** "Redacted: 1 key, 0 emails, …", what Copy summary copies. */
+  summary: string;
+  /** The redacted bundle as readable text. */
+  markdown: string;
+  turns: number;
+}
+
+export interface DiagnosticsSaved {
+  path: string;
+  status: string;
+}
+
+export function getDiagnostics(): Promise<DiagnosticsPage> {
+  return invoke<DiagnosticsPage>("get_diagnostics");
+}
+
+export function setDiagnostics(mode: boolean, includeLogs: boolean): Promise<DiagnosticsPage> {
+  return invoke<DiagnosticsPage>("set_diagnostics", { mode, includeLogs });
+}
+
+/** Builds the redacted bundle for Save. `chat` is the one chat whose text goes in. */
+export function diagnosticsPreview(chat: string | null): Promise<DiagnosticsPreview> {
+  return invoke<DiagnosticsPreview>("diagnostics_preview", { chat });
+}
+
+export function diagnosticsSave(): Promise<DiagnosticsSaved> {
+  return invoke<DiagnosticsSaved>("diagnostics_save");
 }
 
 export type PluginAct = "trust" | "enable" | "disable" | "remove";
@@ -2061,7 +2413,9 @@ export function setPersonality(id: string): Promise<PersonalityPage> {
   return invoke<PersonalityPage>("set_personality", { id });
 }
 
-export function setExplicitPersonalities(on: boolean): Promise<PersonalityPage> {
+export function setExplicitPersonalities(
+  on: boolean,
+): Promise<PersonalityPage> {
   return invoke<PersonalityPage>("set_explicit_personalities", { on });
 }
 
@@ -2079,11 +2433,15 @@ export function setDynamicChat(on: boolean): Promise<PersonalityPage> {
 }
 
 /** The copy's id, then the page. */
-export function duplicatePersonality(id: string): Promise<[string, PersonalityPage]> {
+export function duplicatePersonality(
+  id: string,
+): Promise<[string, PersonalityPage]> {
   return invoke<[string, PersonalityPage]>("duplicate_personality", { id });
 }
 
-export function savePersonality(edit: PersonalityEdit): Promise<PersonalityPage> {
+export function savePersonality(
+  edit: PersonalityEdit,
+): Promise<PersonalityPage> {
   return invoke<PersonalityPage>("save_personality", { edit });
 }
 
@@ -2131,7 +2489,8 @@ export function resetPlaybook(id: string): Promise<PlaybookPage> {
 }
 
 /** Settings → Privacy & data → What the app learned (grokhub_core::learn::view). */
-export type LearnedStage = "watching" | "suggesting" | "acting" | "measuring" | "wrong" | "pinned";
+export type LearnedStage =
+  "watching" | "suggesting" | "acting" | "measuring" | "wrong" | "pinned";
 
 export interface LearnedRow {
   /** The belief's id, e.g. "card:suggestion". Forget and That's wrong take it. */
@@ -2155,7 +2514,8 @@ export interface LearnedView {
   trust: LearnedTrust;
 }
 
-export type TrustArea = "settings" | "skills" | "router" | "local-ai" | "proactive" | "chips";
+export type TrustArea =
+  "settings" | "skills" | "router" | "local-ai" | "proactive" | "chips";
 /** How far an area may go: learn only, offer changes, or make them when sure. */
 export type TrustDial = "watch" | "offer" | "act";
 
@@ -2190,7 +2550,13 @@ export interface LearnedTrust {
   /** What matters most to the user, first to last. */
   goals: { goal: TrustGoal; label: string }[];
   /** What is going on right now, as the app last told the engine. */
-  now: { quiet: boolean; busy: boolean; halted: boolean; gaming: boolean; onBattery: boolean };
+  now: {
+    quiet: boolean;
+    busy: boolean;
+    halted: boolean;
+    gaming: boolean;
+    onBattery: boolean;
+  };
   /** Too much was undone lately, so everything asks first for now. */
   askingFirst: boolean;
   /** Changes the app may still make on its own today. */
@@ -2244,7 +2610,10 @@ export interface InterestPage {
   note: string;
 }
 
-export type InterestAct = { kind: "pin"; on: boolean } | { kind: "mute"; on: boolean } | { kind: "remove" };
+export type InterestAct =
+  | { kind: "pin"; on: boolean }
+  | { kind: "mute"; on: boolean }
+  | { kind: "remove" };
 
 export function getInterests(): Promise<InterestPage> {
   return invoke<InterestPage>("get_interests");
@@ -2254,7 +2623,10 @@ export function addInterest(text: string): Promise<InterestPage> {
   return invoke<InterestPage>("add_interest", { text });
 }
 
-export function interestAct(topic: string, act: InterestAct): Promise<InterestPage> {
+export function interestAct(
+  topic: string,
+  act: InterestAct,
+): Promise<InterestPage> {
   return invoke<InterestPage>("interest_act", { topic, act });
 }
 
@@ -2280,11 +2652,17 @@ export function getPermissions(): Promise<PermissionPage> {
   return invoke<PermissionPage>("get_permissions");
 }
 
-export function addPermissionRule(rule: string, kind: RuleKind): Promise<PermissionPage> {
+export function addPermissionRule(
+  rule: string,
+  kind: RuleKind,
+): Promise<PermissionPage> {
   return invoke<PermissionPage>("add_permission_rule", { rule, kind });
 }
 
-export function removePermissionRule(index: number, rule: string): Promise<PermissionPage> {
+export function removePermissionRule(
+  index: number,
+  rule: string,
+): Promise<PermissionPage> {
   return invoke<PermissionPage>("remove_permission_rule", { index, rule });
 }
 
@@ -2330,7 +2708,9 @@ export function installShellUpdate(): Promise<void> {
   return invoke<void>("install_shell_update");
 }
 
-export function onUpdateAvailable(handler: (view: UpdateView) => void): Promise<UnlistenFn> {
+export function onUpdateAvailable(
+  handler: (view: UpdateView) => void,
+): Promise<UnlistenFn> {
   return subscribe<UpdateView>(UPDATE_EVENT, handler);
 }
 
@@ -2363,7 +2743,10 @@ export function setSkillOn(name: string, on: boolean): Promise<SkillPage> {
 }
 
 /** The shell finds the folder from the source and name itself. */
-export function openSkillFolder(source: SkillSource, name: string): Promise<void> {
+export function openSkillFolder(
+  source: SkillSource,
+  name: string,
+): Promise<void> {
   return invoke<void>("open_skill_folder", { source, name });
 }
 
@@ -2396,7 +2779,10 @@ export function getQueue(conversationId: string): Promise<Queue> {
 }
 
 /** Stops one task, or every task of the chat when `taskId` is left out. */
-export function stopTask(conversationId: string, taskId?: string): Promise<Queue> {
+export function stopTask(
+  conversationId: string,
+  taskId?: string,
+): Promise<Queue> {
   return invoke<Queue>("stop_task", { conversationId, taskId: taskId ?? null });
 }
 
@@ -2423,12 +2809,51 @@ export function getBehavior(): Promise<BehaviorPage> {
   return invoke<BehaviorPage>("get_behavior");
 }
 
-export function saveBehavior(closeToTray: boolean, behavior: Behavior): Promise<BehaviorPage> {
+export function saveBehavior(
+  closeToTray: boolean,
+  behavior: Behavior,
+): Promise<BehaviorPage> {
   return invoke<BehaviorPage>("save_behavior", { closeToTray, behavior });
 }
 
+/** Settings → Your PC → PC helpers (src-tauri/src/pc_helpers.rs). */
+export interface PcHelpers {
+  focusHelp: boolean;
+  windDown: boolean;
+  /** The saved idle time in minutes, once one is picked. */
+  autoSleepMin: number | null;
+  sleepChoices: { minutes: number; label: string }[];
+  /** The last read couldn't see a game, fullscreen app or GPU work. */
+  sleepBlind: boolean;
+  rhythm: boolean;
+  rhythmGames: boolean;
+  rhythmMinutes: number;
+  rhythmSummary: string;
+}
+
+export type PcHelperKey = "focusHelp" | "windDown" | "rhythm" | "rhythmGames";
+
+export function getPcHelpers(): Promise<PcHelpers> {
+  return invoke<PcHelpers>("get_pc_helpers");
+}
+
+export function setPcHelper(key: PcHelperKey, on: boolean): Promise<PcHelpers> {
+  return invoke<PcHelpers>("set_pc_helper", { key, on });
+}
+
+export function setPcAutoSleep(minutes: number): Promise<PcHelpers> {
+  return invoke<PcHelpers>("set_pc_auto_sleep", { minutes });
+}
+
+export function forgetPcRhythm(): Promise<PcHelpers> {
+  return invoke<PcHelpers>("forget_pc_rhythm");
+}
+
 /** Settings → Defaults: the work folder and the approvals. */
-export function saveDefaults(workspace: string, approvals: Approvals): Promise<Settings> {
+export function saveDefaults(
+  workspace: string,
+  approvals: Approvals,
+): Promise<Settings> {
   return invoke<Settings>("save_defaults", { workspace, approvals });
 }
 
@@ -2475,7 +2900,13 @@ export interface BackgroundPage {
   nextDue: string | null;
   quiet: string;
   budget: string;
-  rows: { id: string; name: string; next: string; last: string; health: string | null }[];
+  rows: {
+    id: string;
+    name: string;
+    next: string;
+    last: string;
+    health: string | null;
+  }[];
 }
 
 export function getBackground(): Promise<BackgroundPage> {
@@ -2509,7 +2940,10 @@ export function getLibrary(): Promise<LibraryPage> {
 }
 
 /** A cover as a `data:` URL, or null when Steam has none (paint a placeholder). */
-export function libraryCover(appId: number, shape: CoverShape): Promise<string | null> {
+export function libraryCover(
+  appId: number,
+  shape: CoverShape,
+): Promise<string | null> {
   return invoke<string | null>("library_cover", { appId, shape });
 }
 
@@ -2599,7 +3033,14 @@ export function runUpdateOffer(offer: UpdateOffer): Promise<string> {
 /** Code tab: one changed file in the workspace's repo. */
 export interface CodeChanged {
   path: string;
-  status: "modified" | "added" | "deleted" | "renamed" | "untracked" | "conflict" | "changed";
+  status:
+    | "modified"
+    | "added"
+    | "deleted"
+    | "renamed"
+    | "untracked"
+    | "conflict"
+    | "changed";
   staged: boolean;
 }
 
@@ -2647,7 +3088,6 @@ export function codeBuiltins(): Promise<CodeBuiltin[]> {
   return invoke<CodeBuiltin[]>("code_builtins");
 }
 
-
 /** Code tab: the test command to show, and whether the first run still needs a confirm. */
 export interface CodeTestPlan {
   command: string;
@@ -2680,7 +3120,10 @@ export function codeTestPlan(command?: string | null): Promise<CodeTestPlan> {
   return invoke<CodeTestPlan>("code_test_plan", { command: command ?? null });
 }
 
-export function codeTestRun(command: string, confirmed: boolean): Promise<CodeTestResult> {
+export function codeTestRun(
+  command: string,
+  confirmed: boolean,
+): Promise<CodeTestResult> {
   return invoke<CodeTestResult>("code_test_run", { command, confirmed });
 }
 
@@ -2692,7 +3135,9 @@ export function codeTestForget(): Promise<CodeTestRemembered> {
   return invoke<CodeTestRemembered>("code_test_forget");
 }
 
-export function onCodeRun(handler: (chunk: CodeRunChunk) => void): Promise<UnlistenFn> {
+export function onCodeRun(
+  handler: (chunk: CodeRunChunk) => void,
+): Promise<UnlistenFn> {
   return subscribe<CodeRunChunk>("code-run", handler);
 }
 
@@ -2757,7 +3202,11 @@ export function codeTermWrite(id: number, data: string): Promise<void> {
   return invoke<void>("code_term_write", { id, data });
 }
 
-export function codeTermResize(id: number, rows: number, cols: number): Promise<void> {
+export function codeTermResize(
+  id: number,
+  rows: number,
+  cols: number,
+): Promise<void> {
   return invoke<void>("code_term_resize", { id, rows, cols });
 }
 
@@ -2765,7 +3214,9 @@ export function codeTermClose(): Promise<void> {
   return invoke<void>("code_term_close");
 }
 
-export function onCodeTerm(handler: (chunk: CodeTermChunk) => void): Promise<UnlistenFn> {
+export function onCodeTerm(
+  handler: (chunk: CodeTermChunk) => void,
+): Promise<UnlistenFn> {
   return subscribe<CodeTermChunk>("code-term", handler);
 }
 
@@ -2807,7 +3258,15 @@ export interface CodeShipped {
 /** One line of the Code tab's activity log. */
 export interface CodeActivityEntry {
   tsMs: number;
-  kind: "push" | "pr" | "branch" | "blocked" | "deploy" | "secret" | "edit" | "terminal";
+  kind:
+    | "push"
+    | "pr"
+    | "branch"
+    | "blocked"
+    | "deploy"
+    | "secret"
+    | "edit"
+    | "terminal";
   repoKey: string;
   host: string;
   branch: string;
@@ -2823,8 +3282,16 @@ export function codeShipPlan(action: CodeShipAction): Promise<CodeShipPlan> {
 }
 
 /** `command` is the command the confirm card showed; the app refuses when it would now run a different one. */
-export function codeShipRun(action: CodeShipAction, confirmed: boolean, command?: string | null): Promise<CodeShipped> {
-  return invoke<CodeShipped>("code_ship_run", { action, confirmed, command: command ?? null });
+export function codeShipRun(
+  action: CodeShipAction,
+  confirmed: boolean,
+  command?: string | null,
+): Promise<CodeShipped> {
+  return invoke<CodeShipped>("code_ship_run", {
+    action,
+    confirmed,
+    command: command ?? null,
+  });
 }
 
 export function codeNewBranch(name: string): Promise<string> {
@@ -2839,7 +3306,9 @@ export function getCodeShip(): Promise<CodeShipSettings> {
   return invoke<CodeShipSettings>("get_code_ship");
 }
 
-export function saveCodeShip(ship: CodeShipSettings): Promise<CodeShipSettings> {
+export function saveCodeShip(
+  ship: CodeShipSettings,
+): Promise<CodeShipSettings> {
   return invoke<CodeShipSettings>("save_code_ship", { ship });
 }
 
@@ -2853,12 +3322,18 @@ export function codeSecretList(): Promise<CodeSecretList> {
 }
 
 /** Add a secret or replace its value. The value goes to the system keychain. */
-export function codeSecretSet(name: string, value: string): Promise<CodeSecretList> {
+export function codeSecretSet(
+  name: string,
+  value: string,
+): Promise<CodeSecretList> {
   return invoke<CodeSecretList>("code_secret_set", { name, value });
 }
 
 /** Delete a secret. The shell refuses unless `confirmed` is true. */
-export function codeSecretDelete(name: string, confirmed: boolean): Promise<CodeSecretList> {
+export function codeSecretDelete(
+  name: string,
+  confirmed: boolean,
+): Promise<CodeSecretList> {
   return invoke<CodeSecretList>("code_secret_delete", { name, confirmed });
 }
 
@@ -2884,8 +3359,14 @@ export function codeDeployPlan(): Promise<CodeDeployPlan> {
   return invoke<CodeDeployPlan>("code_deploy_plan");
 }
 
-export function codeDeploySave(deployEnabled: boolean, command: string): Promise<CodeDeploySettings> {
-  return invoke<CodeDeploySettings>("code_deploy_save", { deployEnabled, command });
+export function codeDeploySave(
+  deployEnabled: boolean,
+  command: string,
+): Promise<CodeDeploySettings> {
+  return invoke<CodeDeploySettings>("code_deploy_save", {
+    deployEnabled,
+    command,
+  });
 }
 
 export function codeDeployForget(): Promise<CodeDeployPlan> {
@@ -2893,11 +3374,16 @@ export function codeDeployForget(): Promise<CodeDeployPlan> {
 }
 
 /** Run the deploy. `command` is the text the person was shown; the shell refuses if it changed. */
-export function codeDeployRun(command: string, confirmed: boolean): Promise<CodeTestResult> {
+export function codeDeployRun(
+  command: string,
+  confirmed: boolean,
+): Promise<CodeTestResult> {
   return invoke<CodeTestResult>("code_deploy_run", { command, confirmed });
 }
 
-export function onCodeDeployRun(handler: (chunk: CodeRunChunk) => void): Promise<UnlistenFn> {
+export function onCodeDeployRun(
+  handler: (chunk: CodeRunChunk) => void,
+): Promise<UnlistenFn> {
   return subscribe<CodeRunChunk>("code-deploy-run", handler);
 }
 
@@ -2962,7 +3448,10 @@ export function getAiModels(): Promise<AiModelsView> {
 }
 
 /** Posts the key's approval card; nothing is saved until `answerAiModelsCard`. */
-export function addAiProvider(baseUrl: string, key: string): Promise<AiModelsCard> {
+export function addAiProvider(
+  baseUrl: string,
+  key: string,
+): Promise<AiModelsCard> {
   return invoke<AiModelsCard>("add_ai_provider", { baseUrl, key });
 }
 
@@ -2970,7 +3459,10 @@ export function allowAiProvider(id: string): Promise<AiModelsCard> {
   return invoke<AiModelsCard>("allow_ai_provider", { id });
 }
 
-export function answerAiModelsCard(id: string, approve: boolean): Promise<AiModelsView> {
+export function answerAiModelsCard(
+  id: string,
+  approve: boolean,
+): Promise<AiModelsView> {
   return invoke<AiModelsView>("answer_ai_models_card", { id, approve });
 }
 
@@ -2978,10 +3470,42 @@ export function removeAiProvider(id: string): Promise<AiModelsView> {
   return invoke<AiModelsView>("remove_ai_provider", { id });
 }
 
-export function saveAiSpend(cap: number, ceiling: number): Promise<AiModelsView> {
+export function saveAiSpend(
+  cap: number,
+  ceiling: number,
+): Promise<AiModelsView> {
   return invoke<AiModelsView>("save_ai_spend", { cap, ceiling });
 }
 
 export function revokeAiPremium(id: string): Promise<AiModelsView> {
   return invoke<AiModelsView>("revoke_ai_premium", { id });
+}
+
+/** One line of the top bar while a recording or an audio check runs. */
+export interface RecordLine {
+  secs: number;
+  text: string;
+}
+
+/** A run that just finished (src-tauri/src/screen_record.rs). */
+export interface RecordEvent {
+  kind: "record" | "audio";
+  ok: boolean;
+  text: string;
+}
+
+export interface RecordStatus {
+  recording: RecordLine | null;
+  listening: RecordLine | null;
+  events: RecordEvent[];
+}
+
+/** The recording indicator, the audio check's line and finished runs (each once). */
+export function recordStatus(): Promise<RecordStatus> {
+  return invoke<RecordStatus>("record_status");
+}
+
+/** The indicator's Stop. */
+export function recordStop(): Promise<boolean> {
+  return invoke<boolean>("record_stop");
 }

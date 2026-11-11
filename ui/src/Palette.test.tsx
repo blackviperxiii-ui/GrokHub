@@ -64,6 +64,7 @@ describe("paletteRows", () => {
       "Settings: Privacy & data",
       "Settings: Background",
       "Settings: Auto setup",
+      "Settings: PC helpers",
       "Settings: Pulse",
       "Settings: Local AI",
       "Settings: AI models",

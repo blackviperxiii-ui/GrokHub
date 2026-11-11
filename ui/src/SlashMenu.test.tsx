@@ -241,4 +241,65 @@ describe("composer slash commands", () => {
     await userEvent.type(screen.getByLabelText("Message"), "/stop{Enter}");
     expect(await screen.findByRole("status", { name: "/stop result" })).toHaveTextContent("Nothing is running");
   });
+  it("lists the memory, skill and ledger commands as runnable, not greyed", async () => {
+    const more: SlashHit[] = [
+      { cmd: "/recall", hint: "Search chats and memory…", insert: "/recall ", runOnPick: false, disabled: null },
+      { cmd: "/forget", hint: "Remove a memory topic (asks first)…", insert: "/forget ", runOnPick: false, disabled: null },
+      { cmd: "/skills changes", hint: "What the app changed in your skills", insert: "/skills changes", runOnPick: true, disabled: null },
+    ];
+    api.slashHits.mockResolvedValue(more);
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "/");
+    for (const name of [/\/recall/, /\/forget/, /\/skills changes/]) {
+      expect(await screen.findByRole("option", { name })).not.toHaveAttribute("aria-disabled");
+    }
+  });
+
+  it("/forget shows what goes, and only Yes sends the --yes line", async () => {
+    api.runSlash.mockResolvedValueOnce({
+      kind: "confirm",
+      prompt: "Forget harbor? These go:\n- MEMORY.md: the harbor light is green",
+      yes: "/forget --yes harbor",
+    });
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "/forget harbor{Enter}");
+    const card = await screen.findByRole("group", { name: "/forget asks first" });
+    expect(card).toHaveTextContent("the harbor light is green");
+    expect(api.runSlash).toHaveBeenCalledTimes(1);
+    api.runSlash.mockResolvedValueOnce({ kind: "notice", text: "Forgot harbor: 1 note in the memory repo" });
+    await userEvent.click(within(card).getByRole("button", { name: "Yes" }));
+    await waitFor(() =>
+      expect(api.runSlash).toHaveBeenLastCalledWith("/forget --yes harbor", expect.stringMatching(/^shell-/)),
+    );
+    expect(await screen.findByRole("status", { name: "/forget result" })).toBeInTheDocument();
+  });
+
+  it("Cancel on /memory prune retires nothing and never sends the yes", async () => {
+    api.runSlash.mockResolvedValueOnce({
+      kind: "confirm",
+      prompt: "Retire 2 unsure notes? They stay on disk, marked forgotten.",
+      yes: "/memory prune yes",
+    });
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "/memory prune{Enter}");
+    const card = await screen.findByRole("group", { name: "/memory asks first" });
+    await userEvent.click(within(card).getByRole("button", { name: "Cancel" }));
+    expect(await screen.findByRole("status", { name: "/memory result" })).toHaveTextContent(
+      "Cancelled. Nothing changed.",
+    );
+    expect(api.runSlash).toHaveBeenCalledTimes(1);
+  });
+
+  it("/recall posts the matches and /skills opens Skills", async () => {
+    const onOpenView = vi.fn();
+    render(<Chat onOpenSettings={() => {}} onOpenView={onOpenView} />);
+    api.runSlash.mockResolvedValueOnce({ kind: "notice", text: "Recalled for ferry\n- workspace: the ferry leaves at nine" });
+    await userEvent.type(screen.getByLabelText("Message"), "/recall ferry{Enter}");
+    expect(await screen.findByRole("status", { name: "/recall result" })).toHaveTextContent(
+      "the ferry leaves at nine",
+    );
+    api.runSlash.mockResolvedValueOnce({ kind: "open", view: "skills" });
+    await userEvent.type(screen.getByLabelText("Message"), "/skills{Enter}");
+    await waitFor(() => expect(onOpenView).toHaveBeenCalledWith("skills"));
+  });
 });

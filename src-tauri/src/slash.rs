@@ -66,6 +66,22 @@ pub const SHELL_SLASH: &[ShellCmd] = &[
     row("/sessions", "Past chats", "/sessions"),
     ShellCmd {
         desktop_only: true,
+        ..row(
+            "/record",
+            "Record my screen and diagnose it (say what's wrong)",
+            "/record ",
+        )
+    },
+    ShellCmd {
+        desktop_only: true,
+        ..row(
+            "/audiocheck",
+            "Check my audio: devices, levels, clipping, crackle",
+            "/audiocheck",
+        )
+    },
+    ShellCmd {
+        desktop_only: true,
         ..row("/retry", "Ask the last message again", "/retry")
     },
     ShellCmd {
@@ -162,6 +178,81 @@ pub const SHELL_SLASH: &[ShellCmd] = &[
         desktop_only: true,
         ..row("/export json", "Save this chat as JSON", "/export json")
     },
+    row("/recall", "Search chats and memory…", "/recall "),
+    ShellCmd {
+        desktop_only: true,
+        ..row("/forget", "Remove a memory topic (asks first)…", "/forget ")
+    },
+    row("/memory note", "Save a memory note…", "/memory note "),
+    ShellCmd {
+        desktop_only: true,
+        ..row(
+            "/memory prune",
+            "Retire stale learned notes (asks first)",
+            "/memory prune",
+        )
+    },
+    row(
+        "/memory dream",
+        "Show the latest memory dream",
+        "/memory dream",
+    ),
+    ShellCmd {
+        desktop_only: true,
+        ..row("/dream", "Dream over your memory now", "/dream")
+    },
+    ShellCmd {
+        desktop_only: true,
+        ..row(
+            "/learned",
+            "What the app learned, and how sure it is",
+            "/learned",
+        )
+    },
+    row("/skill", "Run a skill…", "/skill "),
+    row("/skills", "Open Skills", "/skills"),
+    row(
+        "/skills changes",
+        "What the app changed in your skills",
+        "/skills changes",
+    ),
+    ShellCmd {
+        desktop_only: true,
+        ..row(
+            "/skills undo",
+            "Undo the newest change to a skill…",
+            "/skills undo ",
+        )
+    },
+    ShellCmd {
+        desktop_only: true,
+        ..row(
+            "/skills restore",
+            "Bring back a removed skill…",
+            "/skills restore ",
+        )
+    },
+    row(
+        "/connections changes",
+        "What the app changed in your connections",
+        "/connections changes",
+    ),
+    row(
+        "/automations changes",
+        "What the app changed in your automations",
+        "/automations changes",
+    ),
+    row(
+        "/privacy",
+        "What left this computer, and your grants",
+        "/privacy",
+    ),
+    row("/brief", "The latest weekly systems briefing", "/brief"),
+    row(
+        "/health",
+        "Updates, failed services and the last dream",
+        "/health",
+    ),
     ShellCmd {
         ready: false,
         ..row("/history", "Past chats", "/history")
@@ -237,6 +328,21 @@ pub enum Op {
     RewindStep(u64),
     RewindFiles { yes: bool },
     Project(crate::projects::Op),
+    Recall(String),
+    Forget { topic: Option<String>, yes: bool },
+    MemoryPrune { yes: bool },
+    MemoryDream,
+    Dream,
+    Learned(String),
+    Skill(String),
+    SkillChanges,
+    SkillUndo(String),
+    SkillRestore(String),
+    ConnectionChanges,
+    AutomationChanges,
+    Privacy,
+    Brief,
+    Health,
 }
 
 /// The command word, when `line` is a slash command at all. `/usr/bin` and
@@ -333,6 +439,12 @@ pub fn parse(line: &str, remote: bool) -> Result<Action, String> {
         "/close" => "/delete".to_string(),
         other => other.to_string(),
     };
+    if word == "/connections" {
+        return match grokhub_core::parse_slash(line) {
+            Some(grokhub_core::Slash::ConnectionChanges) => Ok(Action::Op(Op::ConnectionChanges)),
+            _ => Err("Use /connections changes.".into()),
+        };
+    }
     let Some(cmd) = find(&word) else {
         if grokhub_core::parse_slash(line).is_some()
             || !grokhub_core::filter_slash_hits(&word, &[]).is_empty()
@@ -348,6 +460,9 @@ pub fn parse(line: &str, remote: bool) -> Result<Action, String> {
         return Err(format!("{word} works on your computer."));
     }
     let text = (!rest.is_empty()).then(|| rest.to_string());
+    if let Some(done) = more(line, &word, rest, remote) {
+        return done;
+    }
     let effect = match word.as_str() {
         "/help" => Effect::Notice { text: help() },
         "/new" | "/clear" => Effect::NewChat,
@@ -356,6 +471,7 @@ pub fn parse(line: &str, remote: bool) -> Result<Action, String> {
         "/btw" => Effect::Mode { mode: "btw", text },
         "/settings" => Effect::Open { view: "settings" },
         "/memory" => Effect::Open { view: "memory" },
+        "/skills" => Effect::Open { view: "skills" },
         "/automations" => Effect::Open {
             view: "automations",
         },
@@ -396,11 +512,77 @@ fn split_yes(line: &str) -> (String, bool) {
                 | "/rewind files"
                 | "/rewind --files"
                 | "/rewind --code"
+                | "/memory prune"
         ) {
             return (t[..head.len()].to_string(), true);
         }
     }
     (t.to_string(), false)
+}
+
+const FORGET_USAGE: &str = "Use /forget <topic>, or /forget to empty MEMORY.md.";
+
+/// The memory, learning, skill and ledger commands. `None` when `word` isn't
+/// one of them. The ones that change anything are refused in a paired browser
+/// and answer with a question first; the same line with `yes` runs them.
+fn more(line: &str, word: &str, rest: &str, remote: bool) -> Option<Result<Action, String>> {
+    use grokhub_core::Slash;
+    let mine = |op: Op| Some(Ok(Action::Op(op)));
+    let on_computer = || Some(Err(format!("{word} works on your computer.")));
+    match word {
+        "/recall" if rest.is_empty() => Some(Err("Type what to recall after /recall.".into())),
+        "/recall" => mine(Op::Recall(rest.to_string())),
+        "/forget" => {
+            let (yes, topic) = match rest.strip_prefix("--yes") {
+                Some(after) if after.is_empty() || after.starts_with(' ') => (true, after.trim()),
+                _ => (false, rest),
+            };
+            if rest.contains('\n') {
+                return Some(Err(FORGET_USAGE.into()));
+            }
+            mine(Op::Forget {
+                topic: (!topic.is_empty()).then(|| topic.to_string()),
+                yes,
+            })
+        }
+        "/memory" if rest.is_empty() => None,
+        "/memory" => {
+            let (line, yes) = split_yes(line);
+            match grokhub_core::parse_slash(&line) {
+                Some(Slash::MemoryShow) => {
+                    Some(Ok(Action::Effect(Effect::Open { view: "memory" })))
+                }
+                Some(Slash::MemoryDream) => mine(Op::MemoryDream),
+                Some(Slash::MemoryPrune) if remote => on_computer(),
+                Some(Slash::MemoryPrune) => mine(Op::MemoryPrune { yes }),
+                Some(Slash::MemoryNote(note)) => Some(Ok(Action::Remember(note))),
+                _ => Some(Err(
+                    "Use /memory, /memory show, note <text>, prune or dream.".into(),
+                )),
+            }
+        }
+        "/dream" => mine(Op::Dream),
+        "/learned" => mine(Op::Learned(rest.to_string())),
+        "/skill" if rest.is_empty() => Some(Err("Type the skill's name after /skill.".into())),
+        "/skill" => mine(Op::Skill(rest.to_string())),
+        "/skills" if rest.is_empty() => None,
+        "/skills" => match grokhub_core::parse_slash(line) {
+            Some(Slash::SkillChanges) => mine(Op::SkillChanges),
+            Some(Slash::SkillUndo(_) | Slash::SkillRestore(_)) if remote => on_computer(),
+            Some(Slash::SkillUndo(name)) => mine(Op::SkillUndo(name)),
+            Some(Slash::SkillRestore(name)) => mine(Op::SkillRestore(name)),
+            _ => Some(Ok(Action::Effect(Effect::Open { view: "skills" }))),
+        },
+        "/automations" if rest.is_empty() => None,
+        "/automations" => match grokhub_core::parse_slash(line) {
+            Some(Slash::AutomationChanges) => mine(Op::AutomationChanges),
+            _ => Some(Err("Use /automations changes.".into())),
+        },
+        "/privacy" => mine(Op::Privacy),
+        "/brief" => mine(Op::Brief),
+        "/health" => mine(Op::Health),
+        _ => None,
+    }
 }
 
 const PROJECT_USAGE: &str =
@@ -830,5 +1012,139 @@ mod tests {
         );
         assert!(help().contains("/delete — Delete this chat (asks first)"));
         assert!(!help().contains("/project new"));
+    }
+
+    #[test]
+    fn memory_learning_skill_and_ledger_commands_read_like_the_cabin() {
+        assert_eq!(
+            op_of("/recall ferry times"),
+            Op::Recall("ferry times".into())
+        );
+        assert_eq!(
+            parse("/recall", false),
+            Err("Type what to recall after /recall.".into())
+        );
+        assert_eq!(
+            op_of("/forget wifi"),
+            Op::Forget {
+                topic: Some("wifi".into()),
+                yes: false
+            }
+        );
+        assert_eq!(
+            op_of("/forget --yes wifi"),
+            Op::Forget {
+                topic: Some("wifi".into()),
+                yes: true
+            }
+        );
+        assert_eq!(
+            op_of("/forget"),
+            Op::Forget {
+                topic: None,
+                yes: false
+            }
+        );
+        // A topic that merely ends in the word yes is still a topic.
+        assert_eq!(
+            op_of("/forget say yes"),
+            Op::Forget {
+                topic: Some("say yes".into()),
+                yes: false
+            }
+        );
+        assert_eq!(op_of("/memory prune"), Op::MemoryPrune { yes: false });
+        assert_eq!(op_of("/memory prune yes"), Op::MemoryPrune { yes: true });
+        assert_eq!(op_of("/memory dream"), Op::MemoryDream);
+        assert_eq!(
+            parse("/memory note prefer nvim", false),
+            Ok(Action::Remember("prefer nvim".into()))
+        );
+        assert_eq!(effect_of("/memory show"), Effect::Open { view: "memory" });
+        assert_eq!(effect_of("/memory"), Effect::Open { view: "memory" });
+        assert_eq!(op_of("/dream"), Op::Dream);
+        assert_eq!(op_of("/learned forget n1"), Op::Learned("forget n1".into()));
+        assert_eq!(op_of("/skill tidy"), Op::Skill("tidy".into()));
+        assert_eq!(effect_of("/skills"), Effect::Open { view: "skills" });
+        assert_eq!(op_of("/skills changes"), Op::SkillChanges);
+        assert_eq!(op_of("/skills undo tidy"), Op::SkillUndo("tidy".into()));
+        assert_eq!(
+            op_of("/skills restore tidy"),
+            Op::SkillRestore("tidy".into())
+        );
+        assert_eq!(op_of("/connections changes"), Op::ConnectionChanges);
+        assert_eq!(op_of("/connections"), Op::ConnectionChanges);
+        assert_eq!(op_of("/automations changes"), Op::AutomationChanges);
+        assert_eq!(
+            effect_of("/automations"),
+            Effect::Open {
+                view: "automations"
+            }
+        );
+        assert_eq!(
+            parse("/connections nope", false),
+            Err("Use /connections changes.".into())
+        );
+        assert_eq!(op_of("/privacy"), Op::Privacy);
+        assert_eq!(op_of("/brief"), Op::Brief);
+        assert_eq!(op_of("/health"), Op::Health);
+    }
+
+    #[test]
+    fn the_browser_can_read_but_not_change_memory_or_skills() {
+        for line in [
+            "/recall x",
+            "/memory dream",
+            "/skills changes",
+            "/privacy",
+            "/health",
+            "/brief",
+        ] {
+            assert!(parse(line, true).is_ok(), "{line}");
+        }
+        for line in [
+            "/forget wifi",
+            "/dream",
+            "/learned",
+            "/memory prune",
+            "/skills undo tidy",
+            "/skills restore tidy",
+        ] {
+            let word = line.split_whitespace().next().expect("word");
+            assert_eq!(
+                parse(line, true),
+                Err(format!("{word} works on your computer.")),
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
+    fn these_commands_are_listed_ready_and_the_rest_of_learn_stays_in_the_cabin() {
+        for word in [
+            "/recall", "/forget", "/dream", "/learned", "/skills", "/privacy", "/brief", "/health",
+        ] {
+            let row = hits(word, false)
+                .into_iter()
+                .find(|h| h.cmd == word)
+                .unwrap_or_else(|| panic!("{word} is listed"));
+            assert_eq!(row.disabled, None, "{word}");
+        }
+        assert_eq!(
+            cmds(&hits("/skills", false)),
+            vec![
+                "/skills",
+                "/skills changes",
+                "/skills undo",
+                "/skills restore"
+            ]
+        );
+        assert_eq!(
+            parse("/learn reflect", false),
+            Err("/learn runs in the cabin, not here.".into())
+        );
+        let help = help();
+        assert!(help.contains("/recall — Search chats and memory"));
+        assert!(!help.contains("/skills undo"));
     }
 }

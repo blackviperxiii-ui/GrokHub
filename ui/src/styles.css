@@ -3025,6 +3025,10 @@ label.toggle-row {
   margin-inline: auto;
 }
 
+.devices textarea {
+  flex-shrink: 0;
+}
+
 .devices h2 {
   margin: 8px 0 0;
   font-size: var(--font-prose);
@@ -3197,6 +3201,51 @@ label.toggle-row {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* History: search with Delete all beside it, the Projects tree, read-only chats. */
+.history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.history-head input[type="search"] {
+  flex: 1;
+  min-width: 0;
+}
+
+.history .project-tree,
+.history .project-children {
+  list-style: none;
+}
+
+.history .project-children {
+  margin: 4px 0 0 16px;
+  padding: 0;
+}
+
+.project-toggle {
+  text-align: left;
+}
+
+.history-note {
+  margin: 0;
+  color: var(--muted);
+}
+
+.readonly-view {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.readonly-line {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 /* A reopened chat's tool steps: one quiet line instead of cards. */
@@ -5160,4 +5209,25 @@ fieldset.channel label {
   gap: 4px 8px;
   margin: 0 0 8px;
   font-size: var(--font-body);
+}
+
+/* Record my screen / Check my audio: the top bar's always-visible indicator. */
+.record-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--danger-text);
+  font-size: var(--font-caption);
+  white-space: nowrap;
+}
+
+.topbar .record-stop {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+  font-weight: 600;
+}
+
+.topbar .record-stop:hover:not(:disabled) {
+  filter: brightness(1.1);
 }

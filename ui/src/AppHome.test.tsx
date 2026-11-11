@@ -46,6 +46,8 @@ const api = vi.hoisted(() => {
     homeRunPlaybook: vi.fn(),
     libraryPlay: vi.fn(),
     openUrl: vi.fn(),
+    recordStatus: vi.fn(() => Promise.resolve({ recording: null, listening: null, events: [] })),
+    recordStop: vi.fn(() => Promise.resolve(false)),
   };
 });
 
