@@ -160,10 +160,12 @@ jobs:
               - 'src-tauri/**'
               - 'crates/grokhub-core/**'
               - 'crates/grokhub-agent/**'
+              - 'crates/grokhub-code/**'
               - 'crates/grokhub-desktop/**'
               - 'crates/grokhub-fps-probe/**'
               - 'crates/grokhub-proto/**'
               - 'scripts/shell-fps-probe.mjs'
+              - 'scripts/stage-hub-sidecar.mjs'
               - '.github/workflows/ci.yml'
       # Shell matrix: PRs run ubuntu only, when shell/UI paths change (the
       # Windows WebView2 smoke runs on merge_group, push to main, tags, nightly
@@ -431,6 +433,13 @@ jobs:
           driver=webkit2gtk-driver
           apt-cache policy "$driver" | grep -q 'Candidate: [0-9]' || driver=webkitgtk-webdriver
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev "$driver" xvfb
+      # Windows and macOS bundle grokhub-hub as a sidecar
+      # (src-tauri/tauri.{windows,macos}.conf.json). Tauri's build script
+      # checks the staged binary exists, so it goes in before any src-tauri
+      # cargo step. Linux ships it as a package file instead.
+      - name: Stage the grokhub-hub sidecar
+        if: runner.os != 'Linux'
+        run: node scripts/stage-hub-sidecar.mjs
       - run: npm ci --prefix ui
       - run: npm run lint --prefix ui
       - run: npm test --prefix ui

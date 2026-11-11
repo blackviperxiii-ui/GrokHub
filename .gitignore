@@ -41,3 +41,6 @@ secrets.json
 credentials.json
 
 __pycache__/
+
+# Tauri sidecar staged by scripts/stage-hub-sidecar.mjs
+src-tauri/grokhub-hub-*

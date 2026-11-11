@@ -7,7 +7,8 @@
 //     --mcp-self, --mcp-desktop, --mcp-cua, --askpass). The app starts the
 //     sudo askpass server and the Cua gate with it, and finds it at
 //     ../lib/loadout/ from the app binary (src-tauri/src/episode.rs).
-// Other platforms need nothing here.
+// Windows and macOS bundle grokhub-hub as a Tauri sidecar instead
+// (scripts/stage-hub-sidecar.mjs, before the src-tauri build).
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
