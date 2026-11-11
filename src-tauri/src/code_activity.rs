@@ -1,7 +1,8 @@
-//! The Code tab's activity log: one JSON line per push, PR, new branch or
-//! blocked attempt, in `code-activity.jsonl` in the config folder. Commands
-//! and summaries pass through the secret redactor (and any held project
-//! secret values) before they are written.
+//! The Code tab's activity log: one JSON line per push, PR, new branch,
+//! blocked attempt, deploy, secret change, editor save or terminal session,
+//! in `code-activity.jsonl` in the config folder. Commands and summaries pass
+//! through the secret redactor (and any held project secret values) before
+//! they are written.
 
 use serde::{Deserialize, Serialize};
 use std::io::Write;
@@ -23,6 +24,10 @@ pub enum Kind {
     Blocked,
     Deploy,
     Secret,
+    /// A file saved from the editor (path and size only).
+    Edit,
+    /// A terminal opened or closed (never what was typed or shown).
+    Terminal,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

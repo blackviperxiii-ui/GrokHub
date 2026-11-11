@@ -359,6 +359,17 @@ pub fn load_values(config_dir: &Path, vault: &dyn Vault, repo_key: &str) -> Resu
     Ok(Loaded { pairs })
 }
 
+/// Every value this project has in the keychain, for hiding them in output
+/// (the terminal). Unlike [`load_values`], a name with no value is skipped:
+/// nothing runs with these, they are only redacted.
+pub fn held_values(config_dir: &Path, vault: &dyn Vault, repo_key: &str) -> Vec<String> {
+    names_in(&load(config_dir), repo_key)
+        .into_iter()
+        .filter_map(|name| vault.get(&account(repo_key, &name)).ok().flatten())
+        .filter(|v| !v.trim().is_empty())
+        .collect()
+}
+
 /// Replace each held value with [`MARKER`] (longest first, so a value that
 /// contains another is hidden whole), then redact the usual token patterns.
 pub fn redact(text: &str, held: &[String]) -> String {
@@ -448,6 +459,11 @@ pub fn delete_logged(
         keep,
     );
     Ok(list)
+}
+
+/// [`held_values`] for the workspace's project, from the keychain.
+pub fn held_for(config_dir: &Path, workspace: &Path) -> Vec<String> {
+    held_values(config_dir, &Keychain, &key_of(workspace))
 }
 
 pub fn set_for(

@@ -18,9 +18,11 @@ pub mod chips;
 pub mod code;
 pub mod code_activity;
 pub mod code_deploy;
+pub mod code_files;
 pub mod code_runs;
 pub mod code_secrets;
 pub mod code_ship;
+pub mod code_term;
 pub mod connectors;
 pub mod credential;
 pub mod export;
@@ -1838,6 +1840,119 @@ async fn code_deploy_run(
         result
     })
     .await?
+}
+/// Code tab editor: one folder of the project.
+#[tauri::command]
+async fn code_files_list(
+    state: State<'_, ShellState>,
+    path: String,
+) -> Result<code_files::Listing, String> {
+    let dir = workspace(&state);
+    off_main(move || code_files::list(&dir, &path)).await?
+}
+
+/// Code tab editor: open a text file of the project.
+#[tauri::command]
+async fn code_file_read(
+    state: State<'_, ShellState>,
+    path: String,
+) -> Result<code_files::FileText, String> {
+    let dir = workspace(&state);
+    off_main(move || code_files::read(&dir, &path)).await?
+}
+
+/// Code tab editor: save a text file of the project. The save is logged.
+#[tauri::command]
+async fn code_file_write(
+    state: State<'_, ShellState>,
+    path: String,
+    text: String,
+) -> Result<code_files::FileText, String> {
+    let dir = workspace(&state);
+    let config = state.config_dir.clone();
+    let keep = current(&state).code_ship.activity_keep;
+    off_main(move || code_files::write_logged(&config, &dir, &path, &text, keep)).await?
+}
+
+/// Code tab terminal: open the user's shell in the project folder.
+#[tauri::command]
+async fn code_term_open(
+    app: AppHandle,
+    state: State<'_, ShellState>,
+    rows: u16,
+    cols: u16,
+) -> Result<u32, String> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = (&app, &state, rows, cols);
+        Err(code_term::NONE.to_string())
+    }
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        let dir = workspace(&state);
+        let config = state.config_dir.clone();
+        let keep = current(&state).code_ship.activity_keep;
+        off_main(move || {
+            let held = code_secrets::held_for(&config, &dir);
+            let id = code_term::open(code_term::global(), &dir, held, rows, cols, move |chunk| {
+                let _ = app.emit(code_term::EVENT, chunk);
+            })?;
+            code_term::log(
+                &config,
+                &dir,
+                "Opened a terminal in the project folder.",
+                keep,
+            );
+            Ok(id)
+        })
+        .await?
+    }
+}
+
+/// Code tab terminal: send typed text to the shell.
+#[tauri::command]
+fn code_term_write(id: u32, data: String) -> Result<(), String> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = (id, data);
+        Err(code_term::NONE.to_string())
+    }
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    code_term::write(code_term::global(), id, &data)
+}
+
+/// Code tab terminal: the window changed size.
+#[tauri::command]
+fn code_term_resize(id: u32, rows: u16, cols: u16) -> Result<(), String> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = (id, rows, cols);
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    code_term::resize(code_term::global(), id, rows, cols)
+}
+
+/// Code tab terminal: end the shell (the tab closing or the Close button).
+#[tauri::command]
+async fn code_term_close(state: State<'_, ShellState>) -> Result<(), String> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = &state;
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        let dir = workspace(&state);
+        let config = state.config_dir.clone();
+        let keep = current(&state).code_ship.activity_keep;
+        off_main(move || {
+            if code_term::close(code_term::global()) {
+                code_term::log(&config, &dir, "Closed the terminal.", keep);
+            }
+        })
+        .await
+    }
 }
 
 /// Settings → Code → Pushes and PRs.
@@ -3920,6 +4035,13 @@ pub fn run() {
             code_deploy_save,
             code_deploy_forget,
             code_deploy_run,
+            code_files_list,
+            code_file_read,
+            code_file_write,
+            code_term_open,
+            code_term_write,
+            code_term_resize,
+            code_term_close,
             get_code_ship,
             save_code_ship,
             get_journal,

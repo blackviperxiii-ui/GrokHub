@@ -2685,6 +2685,69 @@ export function onCodeRun(handler: (chunk: CodeRunChunk) => void): Promise<Unlis
   return subscribe<CodeRunChunk>("code-run", handler);
 }
 
+/** Code tab editor: one entry of a project folder. */
+export interface CodeFileEntry {
+  name: string;
+  /** From the project root, with `/` between parts. */
+  path: string;
+  dir: boolean;
+}
+
+export interface CodeFileListing {
+  /** The folder, from the project root (`""` for the root). */
+  path: string;
+  entries: CodeFileEntry[];
+  more: boolean;
+}
+
+export interface CodeFileText {
+  path: string;
+  text: string;
+}
+
+/** One folder of the project (desktop app only). */
+export function codeFilesList(path: string): Promise<CodeFileListing> {
+  return invoke<CodeFileListing>("code_files_list", { path });
+}
+
+/** A text file of the project, for the editor (desktop app only). */
+export function codeFileRead(path: string): Promise<CodeFileText> {
+  return invoke<CodeFileText>("code_file_read", { path });
+}
+
+/** Save a text file of the project; the save goes in the activity log. */
+export function codeFileWrite(path: string, text: string): Promise<CodeFileText> {
+  return invoke<CodeFileText>("code_file_write", { path, text });
+}
+
+/** Redacted terminal output, or the news that the shell ended. */
+export interface CodeTermChunk {
+  id: number;
+  text: string;
+  exited: boolean;
+}
+
+/** Start the user's shell in the project folder; resolves to the session id. */
+export function codeTermOpen(rows: number, cols: number): Promise<number> {
+  return invoke<number>("code_term_open", { rows, cols });
+}
+
+export function codeTermWrite(id: number, data: string): Promise<void> {
+  return invoke<void>("code_term_write", { id, data });
+}
+
+export function codeTermResize(id: number, rows: number, cols: number): Promise<void> {
+  return invoke<void>("code_term_resize", { id, rows, cols });
+}
+
+export function codeTermClose(): Promise<void> {
+  return invoke<void>("code_term_close");
+}
+
+export function onCodeTerm(handler: (chunk: CodeTermChunk) => void): Promise<UnlistenFn> {
+  return subscribe<CodeTermChunk>("code-term", handler);
+}
+
 /** Settings → Code → Pushes and PRs (`shell.json` → `codeShip`). */
 export type CodeShipMode = "ask" | "autoBeta";
 export interface CodeShipSettings {
@@ -2723,7 +2786,7 @@ export interface CodeShipped {
 /** One line of the Code tab's activity log. */
 export interface CodeActivityEntry {
   tsMs: number;
-  kind: "push" | "pr" | "branch" | "blocked" | "deploy" | "secret";
+  kind: "push" | "pr" | "branch" | "blocked" | "deploy" | "secret" | "edit" | "terminal";
   repoKey: string;
   host: string;
   branch: string;
