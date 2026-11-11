@@ -188,7 +188,7 @@ fn a_linked_file_is_never_written_through() {
 fn openclaw_files_are_added_below_for_review_and_tools_stay_out() {
     let (dir, _guard) = temp_cfg("openclaw");
     let home = dir.join("home");
-    assert_eq!(openclaw_preview(&home, &Drafts::default()), None);
+    assert_eq!(openclaw_import(&home, &Drafts::default()), None);
     let ws = home.join(".openclaw").join("workspace");
     fs::create_dir_all(&ws).unwrap();
     fs::write(ws.join("SOUL.md"), "Be calm.").unwrap();
@@ -196,7 +196,7 @@ fn openclaw_files_are_added_below_for_review_and_tools_stay_out() {
     fs::write(ws.join("NOTES.md"), "token sk-abcdefghijklmnopqrstuv").unwrap();
     fs::write(ws.join("HABITS.md"), "Reads before bed.").unwrap();
     let base = draft(&dir, &answers(), NOW);
-    let got = openclaw_preview(&home, &base).unwrap();
+    let got = openclaw_import(&home, &base).unwrap().drafts;
     assert_eq!(got.user, base.user);
     assert_eq!(
         got.soul,
@@ -214,7 +214,7 @@ fn openclaw_files_are_added_below_for_review_and_tools_stay_out() {
     );
     // A seed is replaced by the import, not kept above it.
     let seeds = draft(&dir, &Answers::default(), NOW);
-    let got = openclaw_preview(&home, &seeds).unwrap();
+    let got = openclaw_import(&home, &seeds).unwrap().drafts;
     assert_eq!(got.soul, "# Soul\n\n## From OpenClaw SOUL.md\n\nBe calm.\n");
 }
 

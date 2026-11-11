@@ -358,12 +358,6 @@ pub struct Import {
     pub note: Option<String>,
 }
 
-/// `drafts` with an OpenClaw workspace's files added for Review. `None`
-/// without a workspace. The cabin shows the drafts; see [`openclaw_import`].
-pub fn openclaw_preview(home: &Path, drafts: &Drafts) -> Option<Drafts> {
-    openclaw_import(home, drafts).map(|i| i.drafts)
-}
-
 /// Whether `slot` already holds `block` as whole lines.
 fn has_block(slot: &str, block: &str) -> bool {
     let (slot, block) = (slot.trim(), block.trim());

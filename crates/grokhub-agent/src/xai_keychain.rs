@@ -102,6 +102,11 @@ pub enum Poll {
     Failed {
         error: String,
     },
+    /// No answer came back this time ([`CallError::NoAnswer`]). The code is
+    /// still held, so the same poll can work a moment later.
+    NoAnswer {
+        error: String,
+    },
 }
 
 /// Why a sign-in call gave nothing to act on.
@@ -366,7 +371,10 @@ impl SignIn {
     /// Asks once whether the code was approved. On approval the tokens go to
     /// `store`, with the name and email when xAI gives them.
     pub fn poll(&self, store: &dyn Store) -> Result<Poll, String> {
-        Ok(self.ask(store)?)
+        match self.ask(store) {
+            Err(CallError::NoAnswer(error)) => Ok(Poll::NoAnswer { error }),
+            other => Ok(other?),
+        }
     }
 
     /// [`poll`](Self::poll) for a caller that keeps asking by itself: the
@@ -768,7 +776,43 @@ pub(crate) mod tests {
         assert!(text.starts_with(&format!("{}/token: ", m.base)), "{text}");
         // The code is still held, so the next ask goes out too.
         assert!(matches!(flow.ask(&store), Err(CallError::NoAnswer(_))));
-        assert!(matches!(flow.poll(&store), Err(text) if text.starts_with(&m.base)));
+        // The app's poll says so in an answer, so the page keeps the code up.
+        assert!(matches!(
+            flow.poll(&store),
+            Ok(Poll::NoAnswer { error }) if error.starts_with(&format!("{}/token: ", m.base))
+        ));
+    }
+
+    /// A store that takes nothing, as a keychain with no secret service does.
+    struct Shut;
+
+    impl Store for Shut {
+        fn get(&self) -> Result<Option<String>, String> {
+            Ok(None)
+        }
+        fn set(&self, _value: &str) -> Result<(), String> {
+            Err("The system keychain is not available.".into())
+        }
+        fn delete(&self) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_sign_in_the_store_cannot_keep_is_an_error_not_a_poll_to_repeat() {
+        let (_dir, _cfg) = config("shut");
+        let m = mock(vec![
+            ("/device", 200, START),
+            ("/token", 200, TOKENS),
+            ("/userinfo", 200, r#"{"name":"Sam"}"#),
+        ]);
+        let _base = use_base(&m.base);
+        let flow = SignIn::default();
+        flow.start().expect("start");
+        assert_eq!(
+            flow.poll(&Shut),
+            Err("The system keychain is not available.".to_string())
+        );
     }
 
     #[test]

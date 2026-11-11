@@ -803,7 +803,9 @@ export interface GrokSignInStart {
 export type GrokSignInPoll =
   | { status: "pending"; interval: number }
   | { status: "ready"; signedIn: SignedIn }
-  | { status: "failed"; error: string };
+  | { status: "failed"; error: string }
+  /** No answer came back this time; the shell still holds the code. */
+  | { status: "noAnswer"; error: string };
 
 export function startGrokSignIn(): Promise<GrokSignInStart> {
   return invoke<GrokSignInStart>("start_grok_sign_in");

@@ -71,13 +71,15 @@ pub fn run(
                 let _ = writeln!(err, "{error}");
                 return 1;
             }
+            // `ask` reports a call with no answer as an error; the variant is
+            // what the app's own `poll` hands its page.
+            Ok(Poll::NoAnswer { error }) => {
+                say_once(err, &mut told, error);
+                refusals = 0;
+            }
             Err(e) => {
                 let lost = matches!(e, CallError::NoAnswer(_));
-                let why = String::from(e);
-                if told.as_deref() != Some(why.as_str()) {
-                    let _ = writeln!(err, "{why}");
-                    told = Some(why);
-                }
+                say_once(err, &mut told, String::from(e));
                 refusals = if lost { 0 } else { refusals + 1 };
                 if refusals == MAX_REFUSALS {
                     return 1;
@@ -87,6 +89,14 @@ pub fn run(
     }
     let _ = writeln!(err, "The code ran out. Start again.");
     1
+}
+
+/// Prints why a poll failed, once for each run of the same reason.
+fn say_once(err: &mut dyn Write, told: &mut Option<String>, why: String) {
+    if told.as_deref() != Some(why.as_str()) {
+        let _ = writeln!(err, "{why}");
+        *told = Some(why);
+    }
 }
 
 #[cfg(test)]

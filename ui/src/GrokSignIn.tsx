@@ -21,10 +21,6 @@ export function signedInAs(who: SignedIn): string {
   return who.name ?? who.email ?? "your Grok account";
 }
 
-/** The shell's answer to a poll when it holds no code (`NOT_STARTED` in
- * `xai_keychain.rs`): there is nothing left to wait for. */
-const NO_CODE = "Start Sign in with Grok first.";
-
 /** Whether a code good until `deadline` (ms on this computer's clock) ran out. */
 function ranOut(deadline: number): boolean {
   return Date.now() >= deadline;
@@ -32,8 +28,8 @@ function ranOut(deadline: number): boolean {
 
 /** Settings → Account: Sign in with Grok by device code. The page shows the
  * code with Copy and Open x.ai, asks xAI every few seconds, and shows the
- * account once it says yes. A poll that fails leaves the code up and is asked
- * again, until the code's own time is up. `onChange` gets the settings after
+ * account once it says yes. A check xAI did not answer leaves the code up and
+ * is asked again, until the code's own time is up. `onChange` gets the settings after
  * a change. */
 export function GrokSignIn({
   signedIn,
@@ -87,24 +83,25 @@ export function GrokSignIn({
     try {
       got = await pollGrokSignIn();
     } catch (err) {
-      // The shell drops the code only with a "failed" answer. A poll that
-      // rejects (no answer from xAI, say) left it held, so ask again.
-      const why = String(err);
+      // A check the shell could not make or finish (it holds no code, or xAI
+      // said yes and the sign-in could not be kept): asking again can't help.
       if (asked !== round.current) {
-        // An earlier code's poll: it says nothing about the one on screen.
+        // An earlier code's check: it says nothing about the one on screen.
         wait(interval.current);
-      } else if (why === NO_CODE) {
-        setCode(null);
-        fail(why);
       } else {
-        setTrouble(why);
-        wait(interval.current);
+        setCode(null);
+        fail(err);
       }
       return;
     } finally {
       polling.current = false;
     }
-    if (got.status === "pending") {
+    if (got.status === "noAnswer") {
+      // xAI gave no answer this time and the shell still holds the code, so
+      // ask again. A late one for an earlier code says nothing about this one.
+      if (asked === round.current) setTrouble(got.error);
+      wait(interval.current);
+    } else if (got.status === "pending") {
       setTrouble(null);
       wait(got.interval);
     } else if (got.status === "failed") {

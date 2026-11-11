@@ -149,7 +149,7 @@ describe("Sign in with Grok", () => {
 
   it("a poll with no answer keeps the code up, and the next answer signs in", async () => {
     api.pollGrokSignIn
-      .mockRejectedValueOnce("xAI didn't answer.")
+      .mockResolvedValueOnce({ status: "noAnswer", error: "xAI didn't answer." })
       .mockResolvedValueOnce({ status: "ready", signedIn: { name: "Sam", email: null } });
     api.getSettings.mockResolvedValue(SETTINGS);
     const onChange = vi.fn();
@@ -175,8 +175,8 @@ describe("Sign in with Grok", () => {
 
   it("says why once while polls keep failing, then plain waiting on an answer", async () => {
     api.pollGrokSignIn
-      .mockRejectedValueOnce("xAI didn't answer.")
-      .mockRejectedValueOnce("xAI didn't answer.")
+      .mockResolvedValueOnce({ status: "noAnswer", error: "xAI didn't answer." })
+      .mockResolvedValueOnce({ status: "noAnswer", error: "xAI didn't answer." })
       .mockResolvedValue({ status: "pending", interval: 1 });
     render(<GrokSignIn signedIn={null} onChange={() => {}} />);
     await userEvent.click(screen.getByRole("button", { name: "Sign in with Grok" }));
@@ -199,7 +199,7 @@ describe("Sign in with Grok", () => {
 
   it("a refusal after a failed poll still stops and says so", async () => {
     api.pollGrokSignIn
-      .mockRejectedValueOnce("xAI didn't answer.")
+      .mockResolvedValueOnce({ status: "noAnswer", error: "xAI didn't answer." })
       .mockResolvedValue({ status: "failed", error: "The sign-in was refused." });
     render(<GrokSignIn signedIn={null} onChange={() => {}} />);
     await userEvent.click(screen.getByRole("button", { name: "Sign in with Grok" }));
@@ -215,7 +215,7 @@ describe("Sign in with Grok", () => {
 
   it("a code xAI says ran out after a failed poll still stops", async () => {
     api.pollGrokSignIn
-      .mockRejectedValueOnce("xAI didn't answer.")
+      .mockResolvedValueOnce({ status: "noAnswer", error: "xAI didn't answer." })
       .mockResolvedValue({ status: "failed", error: "The code ran out. Start again." });
     render(<GrokSignIn signedIn={null} onChange={() => {}} />);
     await userEvent.click(screen.getByRole("button", { name: "Sign in with Grok" }));
@@ -230,7 +230,7 @@ describe("Sign in with Grok", () => {
 
   it("stops when the code's own time is up, however the polls fail", async () => {
     api.startGrokSignIn.mockResolvedValue({ ...CODE, interval: 2, expiresIn: 6 });
-    api.pollGrokSignIn.mockRejectedValue("xAI didn't answer.");
+    api.pollGrokSignIn.mockResolvedValue({ status: "noAnswer", error: "xAI didn't answer." });
     render(<GrokSignIn signedIn={null} onChange={() => {}} />);
     await userEvent.click(screen.getByRole("button", { name: "Sign in with Grok" }));
     await screen.findByLabelText("Sign-in code");
@@ -261,8 +261,26 @@ describe("Sign in with Grok", () => {
     expect(api.pollGrokSignIn).toHaveBeenCalledTimes(1);
   });
 
+  it("a check that fails another way stops and says why, as a keychain that can't save does", async () => {
+    // xAI said yes, then the shell could not keep the sign-in: asking again
+    // can't help, and the person has already approved.
+    api.pollGrokSignIn.mockRejectedValue("The system keychain is not available: no secret service.");
+    render(<GrokSignIn signedIn={null} onChange={() => {}} />);
+    await userEvent.click(screen.getByRole("button", { name: "Sign in with Grok" }));
+    await screen.findByLabelText("Sign-in code");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(screen.getByRole("status").textContent).toBe(
+      "The system keychain is not available: no secret service.",
+    );
+    expect(screen.queryByLabelText("Sign-in code")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sign in with Grok" })).toBeInTheDocument();
+    expect(api.pollGrokSignIn).toHaveBeenCalledTimes(1);
+  });
+
   it("asks nothing more once the page is closed after a failed poll", async () => {
-    api.pollGrokSignIn.mockRejectedValue("xAI didn't answer.");
+    api.pollGrokSignIn.mockResolvedValue({ status: "noAnswer", error: "xAI didn't answer." });
     const { unmount } = render(<GrokSignIn signedIn={null} onChange={() => {}} />);
     await userEvent.click(screen.getByRole("button", { name: "Sign in with Grok" }));
     await screen.findByLabelText("Sign-in code");
@@ -281,8 +299,8 @@ describe("Sign in with Grok", () => {
   it("a poll that fails after the page is closed asks nothing more", async () => {
     let lose: (why: string) => void = () => {};
     api.pollGrokSignIn.mockReturnValue(
-      new Promise<GrokSignInPoll>((_, reject) => {
-        lose = reject;
+      new Promise<GrokSignInPoll>((resolve) => {
+        lose = (error) => resolve({ status: "noAnswer", error });
       }),
     );
     const { unmount } = render(<GrokSignIn signedIn={null} onChange={() => {}} />);
@@ -301,7 +319,7 @@ describe("Sign in with Grok", () => {
   });
 
   it("a new code starts without the last code's failed check", async () => {
-    api.pollGrokSignIn.mockRejectedValue("xAI didn't answer.");
+    api.pollGrokSignIn.mockResolvedValue({ status: "noAnswer", error: "xAI didn't answer." });
     render(<GrokSignIn signedIn={null} onChange={() => {}} />);
     await userEvent.click(screen.getByRole("button", { name: "Sign in with Grok" }));
     await screen.findByLabelText("Sign-in code");
@@ -318,7 +336,7 @@ describe("Sign in with Grok", () => {
   });
 
   it("Cancel after a failed check takes the code down and asks nothing more", async () => {
-    api.pollGrokSignIn.mockRejectedValue("xAI didn't answer.");
+    api.pollGrokSignIn.mockResolvedValue({ status: "noAnswer", error: "xAI didn't answer." });
     render(<GrokSignIn signedIn={null} onChange={() => {}} />);
     await userEvent.click(screen.getByRole("button", { name: "Sign in with Grok" }));
     await screen.findByLabelText("Sign-in code");
@@ -339,8 +357,8 @@ describe("Sign in with Grok", () => {
   it("a check that fails after Cancel asks nothing more and says nothing", async () => {
     let lose: (why: string) => void = () => {};
     api.pollGrokSignIn.mockReturnValue(
-      new Promise<GrokSignInPoll>((_, reject) => {
-        lose = reject;
+      new Promise<GrokSignInPoll>((resolve) => {
+        lose = (error) => resolve({ status: "noAnswer", error });
       }),
     );
     render(<GrokSignIn signedIn={null} onChange={() => {}} />);
@@ -362,7 +380,7 @@ describe("Sign in with Grok", () => {
 
   it("hidden and shown between failed checks, it still asks once per interval", async () => {
     api.startGrokSignIn.mockResolvedValue({ ...CODE, interval: 2 });
-    api.pollGrokSignIn.mockRejectedValue("xAI didn't answer.");
+    api.pollGrokSignIn.mockResolvedValue({ status: "noAnswer", error: "xAI didn't answer." });
     const page = (mode: "visible" | "hidden") => (
       <Activity mode={mode}>
         <GrokSignIn signedIn={null} onChange={() => {}} />
@@ -401,11 +419,11 @@ describe("Sign in with Grok", () => {
       .mockResolvedValueOnce({ ...CODE, userCode: "WXYZ-1234", interval: 5 });
     api.pollGrokSignIn
       .mockReturnValueOnce(
-        new Promise<GrokSignInPoll>((_, reject) => {
-          lose = reject;
+        new Promise<GrokSignInPoll>((resolve) => {
+          lose = (error) => resolve({ status: "noAnswer", error });
         }),
       )
-      .mockRejectedValue("xAI is busy.");
+      .mockResolvedValue({ status: "noAnswer", error: "xAI is busy." });
     render(<GrokSignIn signedIn={null} onChange={() => {}} />);
     await userEvent.click(screen.getByRole("button", { name: "Sign in with Grok" }));
     await screen.findByLabelText("Sign-in code");
