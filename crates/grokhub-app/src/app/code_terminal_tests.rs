@@ -330,3 +330,76 @@ fn a_missing_folder_shows_the_reason_and_no_screen() {
         Some("The project folder isn't there.")
     );
 }
+
+/// Every glyph the panel painted in one frame, with its color.
+fn painted_glyphs(panel: &mut TermPanel) -> Vec<(String, Color32)> {
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_on(&ctx);
+    let root = std::env::temp_dir();
+    let config = std::env::temp_dir().join(format!("gh-cabin-term-paint-{}", std::process::id()));
+    let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+        panel_ui(panel, ui, &root, &config);
+    });
+    out.textures_delta.clear();
+    let mut glyphs = Vec::new();
+    for clipped in out.shapes {
+        if let egui::Shape::Text(t) = clipped.shape {
+            glyphs.push((t.galley.text().to_string(), t.fallback_color));
+        }
+    }
+    glyphs
+}
+
+fn live_panel(text: &str) -> TermPanel {
+    let mut screen = screen(4, 30);
+    screen.feed(text);
+    let mut panel = TermPanel::default();
+    panel.live = Some(Live {
+        id: None,
+        screen,
+        early: Vec::new(),
+        exited: false,
+    });
+    panel.root = Some(std::env::temp_dir());
+    panel
+}
+
+#[test]
+fn a_frame_paints_the_notice_and_each_cell_in_its_color() {
+    let mut panel = live_panel("ok \x1b[31mred\x1b[0m");
+    let glyphs = painted_glyphs(&mut panel);
+    let texts: Vec<&str> = glyphs.iter().map(|(t, _)| t.as_str()).collect();
+    assert!(texts.contains(&TITLE), "{texts:?}");
+    assert!(texts.iter().any(|t| t.contains("git push")), "{texts:?}");
+    assert!(texts.contains(&"Close terminal"), "{texts:?}");
+    let red = Color32::from_rgb(0xcc, 0x66, 0x66);
+    let reds: String = glyphs
+        .iter()
+        .filter(|(_, c)| *c == red)
+        .map(|(t, _)| t.as_str())
+        .collect();
+    assert_eq!(reds, "red");
+    assert!(glyphs
+        .iter()
+        .any(|(t, c)| t == "o" && *c == crate::theme::fg()));
+    assert!(panel.painted);
+}
+
+#[test]
+fn a_panel_not_drawn_has_no_screen_and_an_ended_shell_says_so() {
+    let mut idle = TermPanel::default();
+    let texts: Vec<String> = painted_glyphs(&mut idle).into_iter().map(|g| g.0).collect();
+    assert!(texts.contains(&"Open terminal".to_string()), "{texts:?}");
+    assert!(!texts.contains(&"o".to_string()));
+
+    let mut ended = live_panel("bye");
+    if let Some(l) = ended.live.as_mut() {
+        l.exited = true;
+    }
+    let texts: Vec<String> = painted_glyphs(&mut ended)
+        .into_iter()
+        .map(|g| g.0)
+        .collect();
+    assert!(texts.contains(&ENDED.to_string()), "{texts:?}");
+    assert!(texts.contains(&"Open terminal".to_string()), "{texts:?}");
+}

@@ -416,7 +416,9 @@ impl Default for TermPanel {
 
 impl Drop for TermPanel {
     fn drop(&mut self) {
-        if self.live.is_some() {
+        // Only a session the backend opened; a panel that never opened one
+        // leaves the window's terminal alone.
+        if self.live.as_ref().is_some_and(|l| l.id.is_some()) {
             backend::close(backend::global());
         }
     }
