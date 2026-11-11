@@ -641,8 +641,16 @@ fn run_turn(
     let mut bad_args_streak = 0u32;
     let mut run_tokens = 0u64;
     // A subagent's checklist belongs to its parent; plan mode can't do the work.
-    let mut drive = (input.depth == 0 && !plan_at_start && !input.conversation_id.is_empty())
-        .then(|| crate::drive::Drive::new(&crate::session_tools::todos_for(input.conversation_id)));
+    // "continue" (not a bare "ok") carries on the checklist an earlier run left open.
+    let mut drive =
+        (input.depth == 0 && !plan_at_start && !input.conversation_id.is_empty()).then(|| {
+            let todos = crate::session_tools::todos_for(input.conversation_id);
+            if crate::brain::is_go_on(user_text) {
+                crate::drive::Drive::resumed(&todos)
+            } else {
+                crate::drive::Drive::new(&todos)
+            }
+        });
     let mut evidence = 0usize;
     // This run's tool calls, for the checks before the turn ends.
     let mut ran: Vec<crate::post_check::Ran> = Vec::new();
