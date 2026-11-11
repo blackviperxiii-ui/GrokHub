@@ -36,6 +36,7 @@ pub mod credential;
 pub mod diagnostics;
 pub mod episode;
 pub mod export;
+pub mod battlenet;
 pub mod game_companion;
 pub mod goals;
 mod helper_asks;
@@ -3129,6 +3130,59 @@ async fn library_play(app_id: u32) -> Result<String, String> {
     off_main(move || library::play(grokhub_core::steam::detect_root().as_deref(), app_id)).await?
 }
 
+#[tauri::command]
+async fn get_battlenet() -> Result<battlenet::Page, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(battlenet::page).await
+}
+
+#[tauri::command]
+async fn battlenet_play(product: String) -> Result<String, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(move || {
+        let games = grokhub_core::battlenet::detect();
+        battlenet::play(&games, &product)
+    })
+    .await?
+}
+
+#[tauri::command]
+async fn battlenet_open_folder(product: String) -> Result<String, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(move || {
+        let games = grokhub_core::battlenet::detect();
+        battlenet::open_folder(&games, &product)
+    })
+    .await?
+}
+
+#[tauri::command]
+async fn companion_frame(
+    state: State<'_, ShellState>,
+    note_id: u32,
+    last_played: u64,
+    steam_app_id: Option<u32>,
+) -> Result<game_companion::Frame, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        let news = steam_app_id.and_then(|id| game_companion::steam_news(id, last_played));
+        game_companion::frame(&dir, note_id, steam_app_id, news)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn companion_set_note(
+    state: State<'_, ShellState>,
+    app_id: u32,
+    text: String,
+) -> Result<String, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || game_companion::set_note(&dir, app_id, &text)).await?
+}
+
 /// A Home tile's Turn on, for a switch that needs nothing else. The rest
 /// open their Settings row instead.
 #[tauri::command]
@@ -5244,6 +5298,11 @@ pub fn run() {
             get_library,
             library_cover,
             library_play,
+            get_battlenet,
+            battlenet_play,
+            battlenet_open_folder,
+            companion_frame,
+            companion_set_note,
             home_open_clip,
             library_friends,
             library_steam_settings,
