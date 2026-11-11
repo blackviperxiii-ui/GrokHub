@@ -13,6 +13,7 @@ pub mod audio_check;
 pub mod auto_setup;
 pub mod automations;
 pub mod background;
+pub mod bg_runs;
 #[cfg(test)]
 mod brand_guard;
 pub mod capabilities;
@@ -334,7 +335,7 @@ fn slash_hits(draft: String) -> Vec<slash::Hit> {
 /// Runs a slash line instead of sending it. Nothing reaches the model.
 /// `conversation_id` is the chat the line was typed in.
 #[tauri::command]
-fn run_slash(
+async fn run_slash(
     state: State<'_, ShellState>,
     line: String,
     conversation_id: Option<String>,
@@ -357,6 +358,9 @@ fn run_slash_line(
         slash::Action::Op(op) => op,
         other => return slash::apply(other, &workspace(state)),
     };
+    if let Some(done) = engine_op(state, &op)? {
+        return Ok(done);
+    }
     let bound = current(state).workspace;
     let done = slash_ops::run(
         op,
@@ -379,6 +383,63 @@ fn run_slash_line(
         end_chat(state, id);
     }
     Ok(done.effect)
+}
+
+/// The slash commands that run the model on their own: `/send`, `/bg`,
+/// `/consult`, and `/host`. Each is read only and unattended.
+fn engine_op(state: &ShellState, op: &slash::Op) -> Result<Option<slash::Effect>, String> {
+    let notice = |text: String| Ok(Some(slash::Effect::Notice { text }));
+    match op {
+        slash::Op::Bg(arg) if arg.trim().is_empty() => notice(bg_runs::status()),
+        slash::Op::Bg(arg) if arg.trim().eq_ignore_ascii_case("stop") => {
+            notice(bg_runs::stop_text())
+        }
+        slash::Op::Bg(task) | slash::Op::Send(task) => {
+            let settings = current(state);
+            let route = route(&settings, agent::SessionMode::Chat, &state.config_dir)?;
+            let title = bg_runs::start(
+                state.config_dir.clone(),
+                route.client,
+                grokhub_agent::route::host::chat_start().0,
+                route.workspace,
+                task,
+            )?;
+            let lead = if matches!(op, slash::Op::Send(_)) {
+                "Sent"
+            } else {
+                "Background"
+            };
+            notice(format!(
+                "{lead} · {title}. It reads and reports, and can't change files. /bg shows how it went."
+            ))
+        }
+        slash::Op::Consult(question) => {
+            let settings = current(state);
+            let route = route(&settings, agent::SessionMode::Chat, &state.config_dir)?;
+            let _config = grokhub_agent::perm::ConfigGuard::set(&state.config_dir);
+            let done = bg_runs::ask_once(
+                route.client,
+                grokhub_core::model_for_mode("fast"),
+                route.workspace,
+                format!("shell-consult-{}", grokhub_core::now_ms()),
+                question.clone(),
+                grokhub_agent::CancelToken::new(),
+            );
+            let _ = grokhub_agent::delete_session(&done.session_id);
+            if !done.error.is_empty() && done.text.trim().is_empty() {
+                return Err(done.error);
+            }
+            notice(grokhub_core::format_consult_reply(question, &done.text))
+        }
+        slash::Op::HostStatus => notice(match chat_client() {
+            Ok(_) => format!(
+                "{} is ready on this computer",
+                grokhub_core::brand::product_name()
+            ),
+            Err(e) => e,
+        }),
+        _ => Ok(None),
+    }
 }
 
 #[tauri::command]

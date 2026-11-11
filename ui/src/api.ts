@@ -838,7 +838,10 @@ export type SlashEffect =
         | "automations"
         | "connectors"
         | "history"
-        | "skills";
+        | "skills"
+        | "workboard"
+        | "devices"
+        | "updates";
     }
   | { kind: "notice"; text: string }
   | { kind: "export" }
@@ -849,7 +852,17 @@ export type SlashEffect =
   | { kind: "compact" }
   /** A destructive command waits for a yes: run `yes` when the person agrees. */
   | { kind: "confirm"; prompt: string; yes: string }
-  | { kind: "deleted"; id: string; title: string };
+  | { kind: "deleted"; id: string; title: string }
+  /** `/queue`: held until the live reply ends, or sent at once. */
+  | { kind: "queue"; text: string }
+  /** `/palette`. */
+  | { kind: "palette" }
+  /** `/view-plan`: the latest plan from Plan mode. */
+  | { kind: "viewPlan" }
+  /** `/loop <words>`: saved as an automation, then its page opens. */
+  | { kind: "loop"; seed: string }
+  /** A page opens, with a line saying why. */
+  | { kind: "openNote"; view: "settings"; text: string };
 
 export function slashHits(draft: string): Promise<SlashHit[]> {
   return invoke<SlashHit[]>("slash_hits", { draft });

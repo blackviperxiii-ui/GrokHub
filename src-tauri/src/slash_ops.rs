@@ -281,6 +281,18 @@ pub fn run(op: Op, cx: &Ctx) -> Result<Applied, String> {
         Op::Privacy => notice(privacy_text(cx.config_dir)),
         Op::Brief => notice(brief_text(cx.config_dir)),
         Op::Health => notice(health_text(cx.config_dir)),
+        Op::Fix => Ok(Applied {
+            effect: Effect::OpenNote {
+                view: "settings",
+                text: health_text(cx.config_dir),
+            },
+            workspace: None,
+        }),
+        Op::Goal(arg) => notice(goal(cx.config_dir, &arg)?),
+        Op::Diagnose => notice(diagnose(cx.config_dir, cx.conversation_id)),
+        Op::HostStatus | Op::Send(_) | Op::Bg(_) | Op::Consult(_) => {
+            Err("That command runs the engine, so the app starts it.".into())
+        }
         Op::Project(op) => {
             let done = projects::run(cx.config_dir, cx.bound, op)?;
             if let Some(prompt) = done.ask {
@@ -292,6 +304,87 @@ pub fn run(op: Op, cx: &Ctx) -> Result<Applied, String> {
             })
         }
     }
+}
+
+const APP_JSON_CAP: u64 = 4 * 1024 * 1024;
+
+/// The pinned goal in `app.json` (`goalPin`), the cabin's own key.
+pub fn goal_pin(config_dir: &Path) -> String {
+    let path = config_dir.join("app.json");
+    if !std::fs::metadata(&path).is_ok_and(|m| m.is_file() && m.len() <= APP_JSON_CAP) {
+        return String::new();
+    }
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|app| app.get("goalPin")?.as_str().map(str::to_string))
+        .unwrap_or_default()
+}
+
+/// Sets the pin, keeping every other key in `app.json` as it is. A file that
+/// doesn't parse is left alone.
+fn set_goal_pin(config_dir: &Path, pin: &str) -> Result<(), String> {
+    let path = config_dir.join("app.json");
+    let mut app = match std::fs::read_to_string(&path) {
+        Ok(raw) if raw.len() as u64 > APP_JSON_CAP => {
+            return Err("The settings file is too big to change here.".into());
+        }
+        Ok(raw) if raw.trim().is_empty() => serde_json::json!({}),
+        Ok(raw) => serde_json::from_str::<serde_json::Value>(&raw)
+            .ok()
+            .filter(serde_json::Value::is_object)
+            .ok_or("The settings file can't be read, so it was left as it is.")?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
+        Err(e) => return Err(e.to_string()),
+    };
+    let map = app
+        .as_object_mut()
+        .ok_or("The settings file isn't an object.")?;
+    map.insert("goalPin".into(), serde_json::json!(pin));
+    std::fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
+    let tmp = config_dir.join("app.json.tmp");
+    let body = serde_json::to_string_pretty(&app).map_err(|e| e.to_string())?;
+    std::fs::write(&tmp, body).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
+}
+
+/// `/goal`: show, clear or pin. The cabin's words.
+fn goal(config_dir: &Path, arg: &str) -> Result<String, String> {
+    let arg = arg.trim();
+    if arg.is_empty() || arg.eq_ignore_ascii_case("status") {
+        let pin = goal_pin(config_dir);
+        return Ok(if pin.is_empty() {
+            "No goal pin".into()
+        } else {
+            format!("Goal: {pin}")
+        });
+    }
+    if arg.eq_ignore_ascii_case("clear") {
+        set_goal_pin(config_dir, "")?;
+        return Ok("Goal cleared".into());
+    }
+    set_goal_pin(config_dir, arg)?;
+    Ok(format!("Goal: {arg}"))
+}
+
+/// `/diagnose`: the read-only checks of disk, services, logs and updates,
+/// under the same consent gate the cabin uses. When "System state" is off
+/// nothing runs and the answer says how to allow it.
+fn diagnose(config_dir: &Path, session: Option<&str>) -> String {
+    use grokhub_agent::harness as hx;
+    use grokhub_agent::repair;
+    let ledger = hx::ConsentLedger::load(config_dir);
+    let ctx = repair::DiagnoseCtx {
+        config_dir,
+        session_id: session.unwrap_or("session"),
+        ledger: &ledger,
+        access: hx::AccessMode::Supervised,
+        os: repair::Os::current(),
+        has_bin: &repair::on_path,
+        runner: &repair::run_spec,
+        subject: None,
+    };
+    repair::report_text(&repair::diagnose(&ctx, &[]))
 }
 
 /// `/privacy`: the grants that are on and what left this computer in the
@@ -616,5 +709,58 @@ mod tests {
             other => panic!("{other:?}"),
         }
         assert_eq!(go(&h, "/skill nope"), Err("No skill nope".to_string()));
+    }
+
+    #[test]
+    fn goal_pins_shows_and_clears_and_keeps_the_other_settings() {
+        let h = home("goal");
+        std::fs::write(h.config.join("app.json"), r#"{"weeklySpendCapUsd": 20}"#).expect("seed");
+        assert_eq!(text(go(&h, "/goal")), "No goal pin");
+        assert_eq!(
+            text(go(&h, "/goal ship the harbor")),
+            "Goal: ship the harbor"
+        );
+        assert_eq!(goal_pin(&h.config), "ship the harbor");
+        assert_eq!(text(go(&h, "/goal status")), "Goal: ship the harbor");
+        let app: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(h.config.join("app.json")).expect("read"),
+        )
+        .expect("json");
+        assert_eq!(app["weeklySpendCapUsd"], 20);
+        assert_eq!(app["goalPin"], "ship the harbor");
+        assert_eq!(text(go(&h, "/goal clear")), "Goal cleared");
+        assert_eq!(text(go(&h, "/goal")), "No goal pin");
+    }
+
+    #[test]
+    fn a_settings_file_that_does_not_parse_is_left_alone_by_goal() {
+        let h = home("goalbad");
+        std::fs::write(h.config.join("app.json"), "{not json").expect("seed");
+        assert_eq!(
+            go(&h, "/goal ship it"),
+            Err("The settings file can't be read, so it was left as it is.".into())
+        );
+        assert_eq!(
+            std::fs::read_to_string(h.config.join("app.json")).expect("read"),
+            "{not json"
+        );
+    }
+
+    #[test]
+    fn diagnose_asks_first_when_system_state_is_off_and_runs_nothing() {
+        let h = home("diag");
+        assert_eq!(text(go(&h, "/diagnose")), grokhub_agent::repair::SCOPE_ASK);
+    }
+
+    #[test]
+    fn fix_opens_settings_with_the_health_lines() {
+        let h = home("fix");
+        match go(&h, "/fix") {
+            Ok(Effect::OpenNote { view, text }) => {
+                assert_eq!(view, "settings");
+                assert!(text.contains("Updates: Settings → Updates"), "{text}");
+            }
+            other => panic!("{other:?}"),
+        }
     }
 }
