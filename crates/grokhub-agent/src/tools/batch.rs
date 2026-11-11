@@ -134,7 +134,7 @@ where
         .collect::<Vec<ToolOutput>>();
     if outputs
         .iter()
-        .any(|out| super::fence::looks_fenced(&out.text))
+        .any(|out| super::fence::holds_outside(&out.text))
     {
         super::fence::note_untrusted_seen();
     }

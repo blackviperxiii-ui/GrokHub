@@ -413,11 +413,11 @@ fn read_stdout(stdout: std::process::ChildStdout, tx: mpsc::Sender<IoMsg>) {
 }
 
 /// The largest message a server may send: one line, or one framed body.
-const MESSAGE_CAP: usize = 8 * 1024 * 1024;
+pub(super) const MESSAGE_CAP: usize = 8 * 1024 * 1024;
 
 /// Read one line, never holding more than `cap` bytes of it: a server that
 /// streams without a newline fails here instead of growing memory without end.
-fn read_line_capped(
+pub(super) fn read_line_capped(
     reader: &mut impl BufRead,
     line: &mut String,
     cap: usize,
