@@ -24,6 +24,19 @@ const api = vi.hoisted(() => ({
     (noteId: number, lastPlayed: number, steamAppId?: number | null) => Promise<CompanionFrame>
   >(),
   companionSetNote: vi.fn<(appId: number, text: string) => Promise<string>>(),
+  gameWow: vi.fn(),
+  gameWowAddon: vi.fn(),
+  gameGw2: vi.fn(),
+  gameGw2Refresh: vi.fn(),
+  gameGw2StartKey: vi.fn(),
+  gameGw2AnswerKey: vi.fn(),
+  gameGw2RemoveKey: vi.fn(),
+  gameEso: vi.fn(),
+  gameEsoAddon: vi.fn(),
+  gameOsrs: vi.fn(),
+  gameOsrsSave: vi.fn(),
+  gameOsrsForget: vi.fn(),
+  gameOsrsRefresh: vi.fn(),
 }));
 
 vi.mock("./api", () => api);
@@ -120,6 +133,39 @@ describe("Library", () => {
     api.getBattlenet.mockResolvedValue({ found: false, games: [] });
     api.getMission.mockResolvedValue({ mission: null, xp: EMPTY_XP });
     api.companionFrame.mockResolvedValue({ note: "", news: [], guidesUrl: null });
+    api.gameWow.mockResolvedValue({
+      title: "WORLD OF WARCRAFT",
+      running: false,
+      caption: "Retail · Battle.net",
+      logging: null,
+      watcherNote: null,
+      flavors: [],
+      installAll: null,
+      note: "",
+    });
+    api.gameGw2.mockResolvedValue({
+      status: "Guild Wars 2: add a read-only API key to read your account through ArenaNet's official API.",
+      hasKey: false,
+      accountLine: null,
+      note: "",
+      keyHint: "Make a key at account.arena.net",
+    });
+    api.gameEso.mockResolvedValue({
+      servers: [],
+      character: null,
+      note: "",
+      empty: "No Elder Scrolls Online add-on folders found on this computer.",
+    });
+    api.gameOsrs.mockResolvedValue({
+      status: "Old School RuneScape: add your display name to read Jagex's official hiscores.",
+      gains: null,
+      hasPlayer: false,
+      name: null,
+      kind: "Normal",
+      kinds: ["Normal", "Ironman", "Hardcore ironman", "Ultimate ironman"],
+      note: "",
+      nameHint: "Your display name on Jagex's public hiscores. No password or key.",
+    });
   });
 
   it("filters the grid by tab and search", async () => {
@@ -162,6 +208,33 @@ describe("Library", () => {
     expect(detail.getByText("Battle.net")).toBeVisible();
     expect(detail.getByRole("region", { name: "Game companion" })).toBeVisible();
     expect(api.companionFrame).toHaveBeenCalledWith(42, 0, null);
+    expect(await detail.findByRole("region", { name: "World of Warcraft" })).toBeVisible();
+    expect(api.gameWow).toHaveBeenCalled();
+  });
+
+  it("mounts GW2, ESO and OSRS screens for their Steam tiles", async () => {
+    api.getLibrary.mockResolvedValue({
+      steamFound: true,
+      games: [
+        game({ appId: 1284210, name: "Guild Wars 2" }),
+        game({ appId: 306130, name: "The Elder Scrolls Online" }),
+        game({ appId: 1343370, name: "Old School RuneScape" }),
+      ],
+    });
+    render(<Library />);
+    await screen.findByRole("button", { name: "Guild Wars 2" });
+    await userEvent.click(screen.getByRole("button", { name: "Guild Wars 2" }));
+    expect(
+      await screen.findByRole("region", { name: "Guild Wars 2" }),
+    ).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "The Elder Scrolls Online" }));
+    expect(
+      await screen.findByRole("region", { name: "The Elder Scrolls Online" }),
+    ).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Old School RuneScape" }));
+    expect(
+      await screen.findByRole("region", { name: "Old School RuneScape" }),
+    ).toBeVisible();
   });
 
   it("On objective filters by the open mission", async () => {

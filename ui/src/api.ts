@@ -3030,6 +3030,123 @@ export function companionSetNote(appId: number, text: string): Promise<string> {
   return invoke<string>("companion_set_note", { appId, text });
 }
 
+/** Per-game companion screens (src-tauri/src/games.rs). */
+export interface WowFlavorRow {
+  install: string;
+  flavor: string;
+  label: string;
+  addonLine: string;
+  action: string | null;
+  characters: string[];
+  events: string[];
+  emptySaved: string | null;
+}
+
+export interface WowView {
+  title: string;
+  running: boolean;
+  caption: string;
+  logging: string | null;
+  watcherNote: string | null;
+  flavors: WowFlavorRow[];
+  installAll: string | null;
+  note: string;
+}
+
+export interface Gw2View {
+  status: string;
+  hasKey: boolean;
+  accountLine: string | null;
+  note: string;
+  keyHint: string;
+}
+
+export interface Gw2KeyCard {
+  id: string;
+  action: string;
+}
+
+export interface EsoServerRow {
+  dir: string;
+  label: string;
+  status: string;
+  action: string | null;
+}
+
+export interface EsoView {
+  servers: EsoServerRow[];
+  character: string | null;
+  note: string;
+  empty: string | null;
+}
+
+export interface OsrsView {
+  status: string;
+  gains: string | null;
+  hasPlayer: boolean;
+  name: string | null;
+  kind: string;
+  kinds: string[];
+  note: string;
+  nameHint: string;
+}
+
+export function gameWow(): Promise<WowView> {
+  return invoke<WowView>("game_wow");
+}
+
+export function gameWowAddon(
+  install: string,
+  flavor: string,
+  action: string,
+): Promise<WowView> {
+  return invoke<WowView>("game_wow_addon", { install, flavor, action });
+}
+
+export function gameGw2(): Promise<Gw2View> {
+  return invoke<Gw2View>("game_gw2");
+}
+
+export function gameGw2Refresh(): Promise<Gw2View> {
+  return invoke<Gw2View>("game_gw2_refresh");
+}
+
+export function gameGw2StartKey(key: string): Promise<Gw2KeyCard> {
+  return invoke<Gw2KeyCard>("game_gw2_start_key", { key });
+}
+
+export function gameGw2AnswerKey(id: string, approve: boolean): Promise<Gw2View> {
+  return invoke<Gw2View>("game_gw2_answer_key", { id, approve });
+}
+
+export function gameGw2RemoveKey(): Promise<Gw2View> {
+  return invoke<Gw2View>("game_gw2_remove_key");
+}
+
+export function gameEso(): Promise<EsoView> {
+  return invoke<EsoView>("game_eso");
+}
+
+export function gameEsoAddon(dir: string, install: boolean): Promise<EsoView> {
+  return invoke<EsoView>("game_eso_addon", { dir, install });
+}
+
+export function gameOsrs(): Promise<OsrsView> {
+  return invoke<OsrsView>("game_osrs");
+}
+
+export function gameOsrsSave(name: string, kind: string): Promise<OsrsView> {
+  return invoke<OsrsView>("game_osrs_save", { name, kind });
+}
+
+export function gameOsrsForget(): Promise<OsrsView> {
+  return invoke<OsrsView>("game_osrs_forget");
+}
+
+export function gameOsrsRefresh(): Promise<OsrsView> {
+  return invoke<OsrsView>("game_osrs_refresh");
+}
+
 /** A Home tile's Turn on, for a switch that needs nothing else. */
 export function homeTurnOn(feature: string): Promise<void> {
   return invoke<void>("home_turn_on", { feature });

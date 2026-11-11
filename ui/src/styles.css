@@ -3542,6 +3542,45 @@ label.toggle-row {
   margin-top: 4px;
 }
 
+.game-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.game-screen h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  letter-spacing: 0.04em;
+}
+
+.game-screen-running {
+  margin: 0;
+  color: #f0b429;
+  font-weight: 600;
+  font-size: 0.8rem;
+}
+
+.game-screen-row,
+.game-screen-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.game-screen-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.game-screen-field input,
+.game-screen-field select {
+  max-width: 100%;
+}
+
 @media (max-width: 600px) {
   .library-body {
     grid-template-columns: minmax(0, 1fr);

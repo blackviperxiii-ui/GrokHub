@@ -38,6 +38,7 @@ pub mod episode;
 pub mod export;
 pub mod battlenet;
 pub mod game_companion;
+pub mod games;
 pub mod goals;
 mod helper_asks;
 #[cfg(desktop)]
@@ -3184,6 +3185,109 @@ async fn companion_set_note(
     off_main(move || game_companion::set_note(&dir, app_id, &text)).await?
 }
 
+#[tauri::command]
+async fn game_wow() -> Result<games::WowView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    // Shell has no game-watcher switch yet; companion screens follow combat log when possible.
+    off_main(|| games::wow_view(true)).await
+}
+
+#[tauri::command]
+async fn game_wow_addon(
+    install: String,
+    flavor: String,
+    action: String,
+) -> Result<games::WowView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(move || games::wow_addon_action(Path::new(&install), &flavor, &action)).await?
+}
+
+#[tauri::command]
+async fn game_gw2(state: State<'_, ShellState>) -> Result<games::Gw2View, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || games::gw2_view(&dir, grokhub_core::now_ms())).await
+}
+
+#[tauri::command]
+async fn game_gw2_refresh(state: State<'_, ShellState>) -> Result<games::Gw2View, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || games::gw2_refresh(&dir, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn game_gw2_start_key(
+    state: State<'_, ShellState>,
+    key: String,
+) -> Result<games::Gw2KeyCard, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || games::gw2_start_key(&dir, key)).await?
+}
+
+#[tauri::command]
+async fn game_gw2_answer_key(
+    state: State<'_, ShellState>,
+    id: String,
+    approve: bool,
+) -> Result<games::Gw2View, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || games::gw2_answer_key(&dir, &id, approve, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn game_gw2_remove_key(state: State<'_, ShellState>) -> Result<games::Gw2View, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || games::gw2_remove_key(&dir, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn game_eso() -> Result<games::EsoView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(|| games::eso_view(grokhub_core::steam::detect_root().as_deref())).await
+}
+
+#[tauri::command]
+async fn game_eso_addon(dir: String, install: bool) -> Result<games::EsoView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    off_main(move || games::eso_addon_action(Path::new(&dir), install)).await?
+}
+
+#[tauri::command]
+async fn game_osrs(state: State<'_, ShellState>) -> Result<games::OsrsView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || games::osrs_view(&dir, grokhub_core::now_ms())).await
+}
+
+#[tauri::command]
+async fn game_osrs_save(
+    state: State<'_, ShellState>,
+    name: String,
+    kind: String,
+) -> Result<games::OsrsView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || games::osrs_save(&dir, &name, &kind, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn game_osrs_forget(state: State<'_, ShellState>) -> Result<games::OsrsView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || games::osrs_forget(&dir, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn game_osrs_refresh(state: State<'_, ShellState>) -> Result<games::OsrsView, String> {
+    capabilities::needs(capabilities::current().library, "Library")?;
+    let dir = state.config_dir.clone();
+    off_main(move || games::osrs_refresh(&dir, grokhub_core::now_ms())).await?
+}
+
 /// A Home tile's Turn on, for a switch that needs nothing else. The rest
 /// open their Settings row instead.
 #[tauri::command]
@@ -5367,6 +5471,19 @@ pub fn run() {
             battlenet_open_folder,
             companion_frame,
             companion_set_note,
+            game_wow,
+            game_wow_addon,
+            game_gw2,
+            game_gw2_refresh,
+            game_gw2_start_key,
+            game_gw2_answer_key,
+            game_gw2_remove_key,
+            game_eso,
+            game_eso_addon,
+            game_osrs,
+            game_osrs_save,
+            game_osrs_forget,
+            game_osrs_refresh,
             home_open_clip,
             library_friends,
             library_steam_settings,

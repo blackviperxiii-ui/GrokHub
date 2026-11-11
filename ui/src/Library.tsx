@@ -14,6 +14,7 @@ import {
   type Mission,
 } from "./api";
 import { GameCompanion, type CompanionTarget } from "./GameCompanion";
+import { companionScreen } from "./games";
 
 export type LibraryTab = "all" | "installed" | "backlog" | "onObjective";
 
@@ -394,7 +395,9 @@ export function Library() {
                 </div>
               </>
             )}
-            <GameCompanion key={tileKey(tile)} target={companionTarget(tile)} />
+            <GameCompanion key={tileKey(tile)} target={companionTarget(tile)}>
+              {companionScreen(tile)}
+            </GameCompanion>
           </aside>
         </div>
       )}
