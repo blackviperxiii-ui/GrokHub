@@ -746,6 +746,7 @@ mod tests {
             match nav {
                 Nav::Home
                 | Nav::Chat
+                | Nav::Code
                 | Nav::Devices
                 | Nav::Memory
                 | Nav::Personal

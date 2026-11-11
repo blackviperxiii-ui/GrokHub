@@ -8,7 +8,7 @@ egui_phosphor::subset! {
     /// Subset Phosphor regular icons used by tile / rail / bar paint.
     pub mod ph {
         use regular::{
-            ARROW_DOWN, ARROW_UP, BRAIN, CHAT, CHECK_CIRCLE, CLOCK, CLOCK_COUNTER_CLOCKWISE,
+            ARROW_DOWN, ARROW_UP, BRAIN, CHAT, CODE, CHECK_CIRCLE, CLOCK, CLOCK_COUNTER_CLOCKWISE,
             DESKTOP, FILE, FOLDER, GEAR, GITHUB_LOGO, HOUSE, IMAGE, KANBAN, LIGHTNING, LIST,
             BELL, BOOKS, MAGNIFYING_GLASS, MOON, NOTE_PENCIL, PAPER_PLANE_TILT, PENCIL_SIMPLE, PLUGS,
             PULSE, PUSH_PIN, PUZZLE_PIECE, QUESTION, SQUARES_FOUR, SUN, TARGET, USER, X,
@@ -71,6 +71,7 @@ fn rail_phosphor(icon: RailIcon) -> &'static str {
         // apart from Library's tiles and Mods' puzzle piece.
         RailIcon::Skills => ph::regular::LIGHTNING,
         RailIcon::Mods => ph::regular::PUZZLE_PIECE,
+        RailIcon::Code => ph::regular::CODE,
         RailIcon::Pc => ph::regular::DESKTOP,
         RailIcon::Profile => ph::regular::USER,
         RailIcon::Settings => ph::regular::GEAR,
@@ -144,6 +145,7 @@ pub enum RailIcon {
     Library,
     Skills,
     Mods,
+    Code,
     Pc,
     Profile,
     Settings,
@@ -156,6 +158,7 @@ pub fn rail_icon_for(id: &str) -> RailIcon {
         "imagine" => RailIcon::Imagine,
         "automations" => RailIcon::Clock,
         "skills" => RailIcon::Skills,
+        "code" => RailIcon::Code,
         "connectors" => RailIcon::Grid,
         "library" => RailIcon::Library,
         "mods" => RailIcon::Mods,
@@ -195,6 +198,7 @@ pub fn rail_kick(icon: RailIcon) -> Kick {
         | RailIcon::Library
         | RailIcon::Skills
         | RailIcon::Mods
+        | RailIcon::Code
         | RailIcon::Pc
         | RailIcon::Profile => Kick::Lift,
     }

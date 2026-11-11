@@ -840,6 +840,7 @@ mod tests {
         let all = [
             Nav::Home,
             Nav::Chat,
+            Nav::Code,
             Nav::Devices,
             Nav::Memory,
             Nav::Workboard,
@@ -861,6 +862,7 @@ mod tests {
             match n {
                 Nav::Home
                 | Nav::Chat
+                | Nav::Code
                 | Nav::Devices
                 | Nav::Memory
                 | Nav::Personal
@@ -879,6 +881,6 @@ mod tests {
                 | Nav::Settings => {}
             }
         }
-        assert_eq!(all.len(), 17);
+        assert_eq!(all.len(), 18);
     }
 }
