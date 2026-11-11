@@ -71,6 +71,7 @@ import { needsSettings } from "./ui";
 import { SavedCard } from "./SavedCard";
 import { settingAsk } from "./autoSetupApi";
 import { Episode } from "./Episode";
+import { OPEN_EVENT } from "./onboardApi";
 
 export type Item =
   | { kind: "user"; text: string }
@@ -1078,6 +1079,9 @@ export function Chat({
       }
       case "open":
         onOpenView?.(effect.view);
+        break;
+      case "import":
+        window.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail: { import: true } }));
         break;
       case "notice":
         setItems((now) => [...now, { kind: "slash", command, text: effect.text }]);

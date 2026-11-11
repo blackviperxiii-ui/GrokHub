@@ -204,4 +204,23 @@ describe("OnboardStage", () => {
     await userEvent.keyboard("{Escape}");
     expect(mock.onboard).toHaveBeenLastCalledWith({ act: "skip" });
   });
+
+  it("/import opens Review with the OpenClaw notes added and saves nothing", async () => {
+    const withNotes: Drafts = { ...DRAFTS, user: `${DRAFTS.user}\n## From OpenClaw USER.md\n\nLikes tea.\n` };
+    shell({ openclaw: true });
+    mock.onboard.mockImplementation(async (act) => {
+      if (act.act === "openclaw") return { ...BASE, openclaw: true, step: "review", drafts: withNotes };
+      if (act.act === "draft") return { ...BASE, openclaw: true, step: "review", answers: act.answers, drafts: DRAFTS };
+      return { ...BASE, openclaw: true };
+    });
+    render(<OnboardStage after />);
+    await waitFor(() => expect(acts()).toContain("view"));
+    window.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail: { import: true } }));
+    expect(await screen.findByLabelText("About you (USER.md)")).toHaveValue(withNotes.user);
+    expect(mock.onboard).toHaveBeenCalledWith({ act: "openclaw", drafts: DRAFTS });
+    expect(acts()).not.toContain("save");
+    await userEvent.click(screen.getByRole("button", { name: "Remove: Call me Sam" }));
+    expect(screen.queryByRole("button", { name: "Remove: Call me Sam" })).toBeNull();
+    expect(acts()).not.toContain("save");
+  });
 });

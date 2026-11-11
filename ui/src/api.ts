@@ -844,6 +844,7 @@ export type SlashEffect =
         | "updates";
     }
   | { kind: "notice"; text: string }
+  | { kind: "import" }
   | { kind: "export" }
   | { kind: "exportAs"; format: "html" | "json" }
   | { kind: "retry" }

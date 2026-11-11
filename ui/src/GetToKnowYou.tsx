@@ -83,12 +83,30 @@ export function OnboardStage({ after }: { after: boolean }) {
   }, [after, take]);
 
   useEffect(() => {
-    const onOpen = () => {
-      onboard({ act: "reopen" }).then(take, (err) => setError(String(err)));
+    const onOpen = (e: Event) => {
+      const asked = (e as CustomEvent<{ import?: boolean } | undefined>).detail?.import === true;
+      const reopened = onboard({ act: "reopen" });
+      if (!asked) {
+        reopened.then(take, (err) => setError(String(err)));
+        return;
+      }
+      // /import: straight to Review with the OpenClaw notes added, never saved
+      // until the person accepts.
+      reopened
+        .then(async (first) => {
+          if (!first) return;
+          setReply(first);
+          setStep("review");
+          const a = { ...EMPTY_ANSWERS, ...first.answers };
+          setAnswers(a);
+          const base = await onboard({ act: "draft", answers: a });
+          if (base?.drafts) await run({ act: "openclaw", drafts: base.drafts });
+        })
+        .catch((err) => setError(String(err)));
     };
     window.addEventListener(OPEN_EVENT, onOpen);
     return () => window.removeEventListener(OPEN_EVENT, onOpen);
-  }, [take]);
+  }, [take, run]);
 
   // Each step starts with focus in the window, so Escape and Tab work there.
   useEffect(() => {
