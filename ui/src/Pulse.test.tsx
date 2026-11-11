@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -132,6 +132,11 @@ function trigger(el: Element, ratio: number) {
   for (const o of observers) {
     if (o.els.has(el)) o.trigger(el, ratio);
   }
+}
+
+/** The dwell effect attaches its observer after the card renders, so wait for it before faking time. */
+async function watched(el: Element) {
+  await waitFor(() => expect(observers.some((o) => o.els.has(el))).toBe(true));
 }
 
 function setHidden(hidden: boolean) {
@@ -918,6 +923,7 @@ describe("Pulse", () => {
     api.pulseAct.mockResolvedValue(PAGE);
     render(<Pulse onRun={() => {}} />);
     const card = await screen.findByRole("listitem", { name: TITLE });
+    await watched(card);
     vi.useFakeTimers();
     try {
       trigger(card, DWELL_RATIO);
@@ -937,6 +943,7 @@ describe("Pulse", () => {
     api.pulseAct.mockResolvedValue(PAGE);
     render(<Pulse onRun={() => {}} />);
     const card = await screen.findByRole("listitem", { name: TITLE });
+    await watched(card);
     vi.useFakeTimers();
     try {
       trigger(card, DWELL_RATIO);
@@ -959,6 +966,7 @@ describe("Pulse", () => {
     api.pulseAct.mockResolvedValue(PAGE);
     render(<Pulse onRun={() => {}} />);
     const card = await screen.findByRole("listitem", { name: TITLE });
+    await watched(card);
     vi.useFakeTimers();
     try {
       setHidden(true);
