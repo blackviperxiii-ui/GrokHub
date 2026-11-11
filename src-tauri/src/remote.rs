@@ -1142,6 +1142,14 @@ mod tests {
             "updates_page",
             "run_update_offer",
             "set_mission_done",
+            // Provider keys, grants and spend limits stay on the computer.
+            "get_ai_models",
+            "add_ai_provider",
+            "allow_ai_provider",
+            "answer_ai_models_card",
+            "remove_ai_provider",
+            "save_ai_spend",
+            "revoke_ai_premium",
         ] {
             assert!(!web_command(name), "{name}");
         }

@@ -2879,3 +2879,88 @@ export function codeDeployRun(command: string, confirmed: boolean): Promise<Code
 export function onCodeDeployRun(handler: (chunk: CodeRunChunk) => void): Promise<UnlistenFn> {
   return subscribe<CodeRunChunk>("code-deploy-run", handler);
 }
+
+/** One other AI provider you added. The key itself never reaches the page. */
+export interface AiProviderRow {
+  id: string;
+  kind: string;
+  baseUrl: string;
+  dest: string;
+  hasKey: boolean;
+  /** "No key", "Not allowed yet" or "Allowed". */
+  state: string;
+  ready: boolean;
+}
+
+export interface AiSpend {
+  weeklyCapUsd: number;
+  priceCeilingUsdPerM: number;
+  caps: number[];
+  ceilings: number[];
+}
+
+export interface AiPremiumRow {
+  id: string;
+  label: string;
+}
+
+export interface AiTableRow {
+  model: string;
+  effort: string | null;
+  quality: number | null;
+  estCostUsd: number | null;
+  p50LatencyMs: number | null;
+  why: string;
+}
+
+export interface AiClassView {
+  class: string;
+  rows: AiTableRow[];
+}
+
+export interface AiModelsView {
+  providers: AiProviderRow[];
+  spend: AiSpend;
+  premium: AiPremiumRow[];
+  table: AiClassView[];
+  tableBuiltAt: number;
+  locked: string;
+  status: string;
+}
+
+/** A card waiting for Save/Allow or Deny. It never holds a key. */
+export interface AiModelsCard {
+  id: string;
+  kind: "key" | "allow";
+  provider: string;
+  action: string;
+}
+
+export function getAiModels(): Promise<AiModelsView> {
+  return invoke<AiModelsView>("get_ai_models");
+}
+
+/** Posts the key's approval card; nothing is saved until `answerAiModelsCard`. */
+export function addAiProvider(baseUrl: string, key: string): Promise<AiModelsCard> {
+  return invoke<AiModelsCard>("add_ai_provider", { baseUrl, key });
+}
+
+export function allowAiProvider(id: string): Promise<AiModelsCard> {
+  return invoke<AiModelsCard>("allow_ai_provider", { id });
+}
+
+export function answerAiModelsCard(id: string, approve: boolean): Promise<AiModelsView> {
+  return invoke<AiModelsView>("answer_ai_models_card", { id, approve });
+}
+
+export function removeAiProvider(id: string): Promise<AiModelsView> {
+  return invoke<AiModelsView>("remove_ai_provider", { id });
+}
+
+export function saveAiSpend(cap: number, ceiling: number): Promise<AiModelsView> {
+  return invoke<AiModelsView>("save_ai_spend", { cap, ceiling });
+}
+
+export function revokeAiPremium(id: string): Promise<AiModelsView> {
+  return invoke<AiModelsView>("revoke_ai_premium", { id });
+}

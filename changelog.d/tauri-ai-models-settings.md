@@ -1,0 +1,1 @@
+- Settings → AI models in the new app: add your own AI provider with a key (saved only after you approve a card), allow where chats go, see the router's table, set the weekly spend cap and price limit, and revoke paid-upgrade grants.
