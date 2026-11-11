@@ -179,10 +179,23 @@ vi.mock("./Code", () => ({
   ),
 }));
 vi.mock("./Agents", () => ({
-  Agents: ({ conversationId, onOpenChat }: { conversationId?: string; onOpenChat: () => void }) => (
-    <button type="button" onClick={onOpenChat}>
-      Agents for {conversationId ?? "no chat"}
-    </button>
+  Agents: ({
+    conversationId,
+    onOpenChat,
+    onRun,
+  }: {
+    conversationId?: string;
+    onOpenChat: () => void;
+    onRun?: (prompt: string, threadId: string) => void;
+  }) => (
+    <>
+      <button type="button" onClick={onOpenChat}>
+        Agents for {conversationId ?? "no chat"}
+      </button>
+      <button type="button" onClick={() => onRun?.("Summarize the logs", "shell-t7")}>
+        Run queued job
+      </button>
+    </>
   ),
 }));
 vi.mock("./Connectors", () => ({ Connectors: () => null }));
@@ -442,6 +455,16 @@ describe("App", () => {
     await userEvent.click(screen.getByRole("button", { name: "Code" }));
     await userEvent.click(screen.getByRole("button", { name: "That session is in Chat" }));
     expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("Run on a queued job opens Chat in the job's chat and sends its prompt", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Agents" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Run queued job" }));
+    expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("Chat page: Summarize the logs in shell-t7")).toBeInTheDocument();
+    expect(screen.getByText("Sends Summarize the logs")).toBeInTheDocument();
   });
 
   it("Agents does not follow the agent window's session, which has its own Tasks panel", async () => {

@@ -456,6 +456,13 @@ export function App() {
     setView("chat");
   }
 
+  /** Queue → Run: Chat opens in the job's chat and sends its prompt as a
+   * normal turn (the cabin's `start_queued_job`). */
+  function runQueued(prompt: string, threadId: string) {
+    setPrefill((now) => ({ text: prompt, n: (now?.n ?? 0) + 1, send: true, ...(threadId ? { conversationId: threadId } : {}) }));
+    setView("chat");
+  }
+
   /** Text for the chat box; with `conversationId`, in that chat (a Pulse card's own). */
   function ask(text: string, conversationId?: string) {
     setPrefill((now) => ({ text, n: (now?.n ?? 0) + 1, ...(conversationId ? { conversationId } : {}) }));
@@ -809,7 +816,11 @@ export function App() {
       )}
       {opened.has("agents") && (
         <Page shown={view === "agents"}>
-          <Agents conversationId={openChat} onOpenChat={() => setView("chat")} />
+          <Agents
+            conversationId={openChat}
+            onOpenChat={() => setView("chat")}
+            onRun={(prompt, threadId) => runQueued(prompt, threadId)}
+          />
         </Page>
       )}
     </div>

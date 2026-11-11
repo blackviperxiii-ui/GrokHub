@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   getImagine,
   imagineCancel,
@@ -110,6 +110,7 @@ export function Imagine() {
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<ImagineTile | null>(null);
+  const promptBox = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     getImagine().then(setPage, (err) => setError(String(err)));
@@ -134,6 +135,17 @@ export function Imagine() {
     }
   }
 
+  /** The cabin's + New project: a fresh start. The prompt, the last result
+   * line and any error clear, and the prompt takes the cursor. The gallery
+   * stays, as the cabin's wall does. */
+  function newProject() {
+    setPrompt("");
+    setStatus(null);
+    setError(null);
+    setOpen(null);
+    promptBox.current?.focus();
+  }
+
   function stop() {
     void imagineCancel().catch(() => {});
   }
@@ -142,10 +154,16 @@ export function Imagine() {
   const needsSignIn = signIn || error === NEED_SIGNIN;
   return (
     <section className="imagine" aria-label="Imagine">
+      <div className="card-buttons">
+        <button type="button" className="quiet" onClick={newProject}>
+          + New project
+        </button>
+      </div>
       <form className="card imagine-bar" onSubmit={(e) => void make(e)}>
         <label className="imagine-prompt">
           <span>What to make</span>
           <textarea
+            ref={promptBox}
             value={prompt}
             rows={3}
             placeholder="A snowy cabin at night, one window lit"
