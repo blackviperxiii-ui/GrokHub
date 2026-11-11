@@ -305,6 +305,23 @@ describe("composer slash commands", () => {
     await waitFor(() => expect(onOpenView).toHaveBeenCalledWith("skills"));
   });
 
+  it("/hub where this app has no Devices page says so instead of doing nothing", async () => {
+    const onOpenView = vi.fn(() => false);
+    render(<Chat onOpenSettings={() => {}} onOpenView={onOpenView} />);
+    api.runSlash.mockResolvedValueOnce({ kind: "open", view: "devices" });
+    await userEvent.type(screen.getByLabelText("Message"), "/hub{Enter}");
+    expect(await screen.findByRole("status", { name: "/hub result" })).toHaveTextContent(
+      "/hub works on your computer.",
+    );
+    expect(onOpenView).toHaveBeenCalledWith("devices");
+    // A page that opened leaves no line behind.
+    onOpenView.mockReturnValue(true);
+    api.runSlash.mockResolvedValueOnce({ kind: "open", view: "skills" });
+    await userEvent.type(screen.getByLabelText("Message"), "/skills{Enter}");
+    await waitFor(() => expect(onOpenView).toHaveBeenCalledWith("skills"));
+    expect(screen.queryByRole("status", { name: "/skills result" })).toBeNull();
+  });
+
   it("/queue with nothing running sends the message as a chat turn", async () => {
     api.runSlash.mockResolvedValueOnce({ kind: "queue", text: "then run the tests" });
     render(<Chat onOpenSettings={() => {}} />);
@@ -359,5 +376,48 @@ describe("composer slash commands", () => {
     await userEvent.type(screen.getByLabelText("Message"), "/auto{Enter}");
     await waitFor(() => expect(onOpenView).toHaveBeenCalledWith("settings"));
     expect(await screen.findByRole("status", { name: "/auto result" })).toHaveTextContent("Defaults");
+  });
+
+  describe("while the list for the newest keystroke is still on its way", () => {
+    const CLEAR: SlashHit = { cmd: "/clear", hint: "New chat", insert: "/clear", runOnPick: true, disabled: null };
+    const CHAT: SlashHit = { cmd: "/chat", hint: "Chat mode", insert: "/chat", runOnPick: true, disabled: null };
+    /** `/c` answers at once; every later draft waits for `answer`. */
+    function slowAfterC() {
+      let answer: (rows: SlashHit[]) => void = () => {};
+      api.slashHits.mockImplementation((draft) =>
+        draft === "/c" ? Promise.resolve([CLEAR, CHAT]) : new Promise((resolve) => (answer = resolve)),
+      );
+      return (rows: SlashHit[]) => answer(rows);
+    }
+
+    it("Enter runs the line as typed, not the top row of the last keystroke's list", async () => {
+      slowAfterC();
+      api.runSlash.mockRejectedValue("Unknown command /ch. Type /help for the list.");
+      render(<Chat onOpenSettings={() => {}} />);
+      const box = screen.getByLabelText("Message");
+      await userEvent.type(box, "/c");
+      await screen.findByRole("option", { name: /\/clear/ });
+      await userEvent.type(box, "h{Enter}");
+      await waitFor(() => expect(api.runSlash).toHaveBeenCalled());
+      expect(api.runSlash.mock.calls.map(([line]) => line)).toEqual(["/ch"]);
+      expect(await screen.findByRole("alert")).toHaveTextContent("Unknown command /ch");
+      expect(api.closeChat).not.toHaveBeenCalled();
+    });
+
+    it("Tab waits for the list, then fills in its pick", async () => {
+      const answer = slowAfterC();
+      render(<Chat onOpenSettings={() => {}} />);
+      const box = screen.getByLabelText("Message");
+      await userEvent.type(box, "/c");
+      await screen.findByRole("option", { name: /\/clear/ });
+      await userEvent.type(box, "h{Tab}");
+      expect(box).toHaveValue("/ch");
+      expect(box).toHaveFocus();
+      answer([CHAT]);
+      await waitFor(() => expect(screen.queryByRole("option", { name: /\/clear/ })).toBeNull());
+      await userEvent.keyboard("{Tab}");
+      expect(box).toHaveValue("/chat");
+      expect(api.runSlash).not.toHaveBeenCalled();
+    });
   });
 });

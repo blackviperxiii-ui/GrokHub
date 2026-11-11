@@ -28,6 +28,8 @@ pub(super) const CODE_NO_COMMAND: &str = "Type a test command to run.";
 pub(super) const CODE_FIRST_ASK: &str = "The first run of this command will ask before it starts.";
 pub(super) const CODE_ACTIVITY: &str = "Recent activity";
 pub(super) const CODE_PASSED: &str = "Tests passed.";
+/// The note under a run that Stop ended, the same words as the desktop app.
+pub(super) const CODE_STOPPED: &str = "Tests stopped.";
 pub(super) const OUTPUT_CUT: &str = "\n… cut here; the output is too long to show in full.";
 pub(super) const DIFF_CUT: &str = "\n… cut here; the file's diff is too long to show in full.";
 /// Activity rows the tab lists.
@@ -136,7 +138,8 @@ pub(super) struct Loaded {
 }
 
 /// Ends the test run or deploy in progress when the Code tab goes, which is
-/// when the cabin quits: no run outlives the cabin.
+/// when the cabin quits: no run outlives the cabin. Stop beside a running
+/// test or deploy ends it sooner.
 #[derive(Default)]
 struct EndsRuns;
 
@@ -169,6 +172,8 @@ pub(super) struct CodeTab {
     pub(super) remembered: Option<String>,
     pub(super) confirming: bool,
     pub(super) running: bool,
+    /// Stop was pressed for the run in progress.
+    pub(super) stopping: bool,
     pub(super) log: String,
     pub(super) run_note: Option<String>,
     /// The editor: the open file and its unsaved edits stay here while
@@ -204,6 +209,7 @@ impl Default for CodeTab {
             remembered: None,
             confirming: false,
             running: false,
+            stopping: false,
             log: String::new(),
             run_note: None,
             editor: Default::default(),
@@ -247,6 +253,11 @@ impl CodeTab {
             // Another project: its files, diff and plan replace this one's.
             self.diff = None;
             self.repo = None;
+            // A confirm, a run note and a log belong to the project they
+            // were opened in.
+            self.confirming = false;
+            self.log.clear();
+            self.run_note = None;
         }
         self.loaded_for = Some(workspace.to_path_buf());
     }
@@ -278,9 +289,24 @@ impl CodeTab {
         }
         self.confirming = false;
         self.running = true;
+        self.stopping = false;
         self.log.clear();
         self.run_note = None;
         Some(command)
+    }
+
+    /// Stop was pressed: end the run and everything it started, off the UI
+    /// thread. The run then reports back by itself and the note says it was
+    /// stopped. False when nothing is running here.
+    pub(super) fn stop(&mut self) -> bool {
+        if !self.running {
+            return false;
+        }
+        self.stopping = true;
+        std::thread::spawn(|| {
+            runs::stop();
+        });
+        true
     }
 
     pub(super) fn cancel_confirm(&mut self) {
@@ -298,6 +324,9 @@ impl CodeTab {
                     diff,
                 } = *loaded;
                 self.loading = false;
+                // The branch was switched elsewhere (the terminal, the
+                // agent): the Push button must not keep the old name.
+                self.ship.saw_branch(repo.branch.as_deref());
                 self.repo = Some(repo);
                 if self
                     .open_skill
@@ -335,10 +364,16 @@ impl CodeTab {
                 if done.cut {
                     self.log.push_str(OUTPUT_CUT);
                 }
-                self.run_note = Some(run_note_for(done.exit));
+                let stopped = std::mem::take(&mut self.stopping) && done.exit != 0;
+                self.run_note = Some(if stopped {
+                    CODE_STOPPED.to_string()
+                } else {
+                    run_note_for(done.exit)
+                });
             }
             Msg::Ran(Err(e)) => {
                 self.running = false;
+                self.stopping = false;
                 self.run_note = Some(e);
             }
             Msg::Plan { plan, fill } => self.apply_plan(plan, fill),
@@ -351,7 +386,10 @@ impl CodeTab {
                 self.needs_confirm = p.needs_confirm;
                 self.remembered = p.remembered;
                 if fill {
-                    if self.command == self.planned {
+                    if self.command == self.planned && self.command != p.command {
+                        // The confirm showed the old command; a yes must
+                        // never land on one that was swapped in under it.
+                        self.confirming = false;
                         self.command = p.command.clone();
                     }
                     self.planned = p.command;
@@ -697,12 +735,14 @@ impl Cabin {
         let mut run = false;
         ui.horizontal(|ui| {
             let tab = &mut self.code_tab;
+            // Room for the Stop pill beside a running test.
+            let pills = if tab.running { 220.0 } else { 140.0 };
             let edit = ui.add_enabled(
                 !tab.running,
                 egui::TextEdit::singleline(&mut tab.command)
                     .font(egui::TextStyle::Monospace)
                     .hint_text(crate::theme::hint("cargo test"))
-                    .desired_width((ui.available_width() - 140.0).max(160.0)),
+                    .desired_width((ui.available_width() - pills).max(160.0)),
             );
             if edit.changed() {
                 tab.edit_command();
@@ -717,6 +757,9 @@ impl Cabin {
             };
             if crate::cards::white_pill(ui, label) {
                 run = true;
+            }
+            if tab.running && crate::cards::ghost_pill(ui, "Stop") {
+                tab.stop();
             }
         });
         if run {

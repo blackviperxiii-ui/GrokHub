@@ -32,7 +32,12 @@ enum Act {
     /// The same "Save" click every time.
     ClickSave,
     HardClick,
+    /// A click at the Send button's point with no label of the model's own:
+    /// only the driver's hint says what is there.
+    BareClick,
     Type,
+    /// Types this text.
+    TypeText(&'static str),
     Zoom(&'static str),
     Reads(usize),
     Done,
@@ -65,6 +70,8 @@ struct FakeModel {
     answer_at: Option<(usize, Arc<FakeParks>, bool)>,
     /// Stop pressed while this worker call is in flight.
     cancel_at: Option<(usize, CancelToken)>,
+    /// Pause pressed while this worker call is in flight.
+    pause_at: Option<(usize, Arc<AtomicBool>)>,
 }
 
 fn first_text(req: &ResponsesRequest, at: usize) -> String {
@@ -149,6 +156,11 @@ impl ModelClient for FakeModel {
                 parks.answer_all(*approve);
             }
         }
+        if let Some((at, pause)) = &self.pause_at {
+            if *at == n {
+                pause.store(true, Ordering::SeqCst);
+            }
+        }
         if let Some((at, token)) = &self.cancel_at {
             if *at == n {
                 token.cancel();
@@ -188,7 +200,12 @@ impl ModelClient for FakeModel {
                     json!({"x": 900, "y": 40, "label": "Send"}),
                 )],
             ),
+            Act::BareClick => (
+                String::new(),
+                vec![call(n, "click", json!({"x": 900, "y": 40}))],
+            ),
             Act::Type => (String::new(), vec![call(n, "type", json!({"text": TYPED}))]),
+            Act::TypeText(text) => (String::new(), vec![call(n, "type", json!({"text": text}))]),
             Act::Zoom(id) => (
                 String::new(),
                 vec![call(n, "zoom", json!({"span_ref": id, "n": 1}))],
@@ -244,6 +261,14 @@ struct FakeDesk {
     fail_label: Option<&'static str>,
     /// Every screenshot fails with this.
     shot_error: Option<&'static str>,
+    /// The driver reads a Halt (the stamp) that the turn's own halt check,
+    /// started after it, does not.
+    stamped: AtomicBool,
+    /// The lock screen is up.
+    lock: AtomicBool,
+    /// Add what the real driver reads beside a call: the control under a
+    /// click at the Send button's point, and the focused window.
+    hints: bool,
 }
 
 impl FakeDesk {
@@ -263,11 +288,28 @@ impl FakeDesk {
 
 impl DesktopOps for FakeDesk {
     fn halted(&self) -> bool {
-        self.halt.load(Ordering::SeqCst)
+        self.halt.load(Ordering::SeqCst) || self.stamped.load(Ordering::SeqCst)
     }
 
     fn locked(&self) -> bool {
-        false
+        self.lock.load(Ordering::SeqCst)
+    }
+
+    fn hint(&self, name: &str, args: &Value) -> Value {
+        let mut hinted = args.clone();
+        if !self.hints {
+            return hinted;
+        }
+        match name {
+            "click" if args["x"] == json!(900) => {
+                hinted["_target"] =
+                    json!({"label": "Send", "role": "push button", "window": "Mail"});
+            }
+            "click" => hinted["_target"] = json!({"unknown": true, "window": "Mail"}),
+            "type" => hinted["window"] = json!("Terminal"),
+            _ => {}
+        }
+        hinted
     }
 
     fn call(&self, name: &str, args: &Value) -> ToolOutput {
@@ -317,6 +359,8 @@ struct FakeParks {
     posted: Mutex<Vec<ParkRequest>>,
     answers: Mutex<HashMap<String, bool>>,
     withdrawn: Mutex<Vec<String>>,
+    /// How long ago every answer was given, when the test says.
+    answered_ago: Mutex<Option<std::time::Duration>>,
 }
 
 impl FakeParks {
@@ -345,6 +389,10 @@ impl Parks for FakeParks {
         self.answers.lock().unwrap().remove(id)
     }
 
+    fn answer_age(&self, _id: &str) -> Option<std::time::Duration> {
+        *self.answered_ago.lock().unwrap()
+    }
+
     fn withdraw(&self, id: &str) {
         self.withdrawn.lock().unwrap().push(id.into());
     }
@@ -357,6 +405,10 @@ impl Parks for Arc<FakeParks> {
 
     fn answer(&self, id: &str) -> Option<bool> {
         self.as_ref().answer(id)
+    }
+
+    fn answer_age(&self, id: &str) -> Option<std::time::Duration> {
+        self.as_ref().answer_age(id)
     }
 
     fn withdraw(&self, id: &str) {
@@ -373,6 +425,10 @@ struct Rig {
     clock: Arc<AtomicU64>,
     cancel: CancelToken,
     perms: Option<crate::perm::Policy>,
+    pause: Arc<AtomicBool>,
+    mode: PermMode,
+    /// The soft asks the kernel raised: the tool and the card's line.
+    asks: Mutex<Vec<(String, String)>>,
 }
 
 const T0: u64 = 1_800_000_000_000;
@@ -396,6 +452,7 @@ fn rig(label: &str, script: Script) -> Rig {
             steer: None,
             answer_at: None,
             cancel_at: None,
+            pause_at: None,
         },
         desk,
         parks: Arc::new(FakeParks::default()),
@@ -403,6 +460,9 @@ fn rig(label: &str, script: Script) -> Rig {
         clock,
         cancel: CancelToken::new(),
         perms: None,
+        pause: Arc::new(AtomicBool::new(false)),
+        mode: PermMode::Always,
+        asks: Mutex::new(Vec::new()),
     }
 }
 
@@ -420,7 +480,7 @@ impl Rig {
             workspace: &self.dir,
             config_dir: &self.dir,
             gate: Gate {
-                mode: PermMode::Always,
+                mode: self.mode,
                 readonly_session: false,
                 attended: true,
                 desktop: true,
@@ -431,12 +491,17 @@ impl Rig {
             permits: &ClosedPermits,
             halt: &halt,
             cancel: &self.cancel,
+            pause: &self.pause,
             steer: &self.steer,
             clock: &now,
             held: &[],
             perms: self.perms.as_ref(),
         };
-        run_episode(&k, ep, view, &mut |_| {})
+        run_episode(&k, ep, view, &mut |ev| {
+            if let crate::run::LoopEvent::Permission { name, action, .. } = ev {
+                self.asks.lock().unwrap().push((name, action));
+            }
+        })
     }
 
     fn episode(&self, goal: &str) -> Episode {
@@ -553,7 +618,8 @@ fn an_unanswered_hard_step_parks_only_itself_and_the_episode_waits_instead_of_en
         EpisodeStop::Waiting,
         "a parked step keeps the episode open"
     );
-    let action = r#"click {"label":"Send","x":900,"y":40}"#;
+    // The card names the control, not the span's redacted args.
+    let action = "Loadout wants to click Send in the focused window";
     assert_eq!(r.parks.posted.lock().unwrap()[0].action, action);
     assert_eq!(
         out.reply,
@@ -1923,4 +1989,344 @@ fn a_screenshot_that_fails_on_one_backend_never_pauses_and_no_backend_at_all_pau
         .filter(|s| s.tool == crate::harness::RECOVERY_TOOL && s.decision == "pause")
         .count();
     assert_eq!(pauses, 1);
+}
+
+/// Clicks that landed on the Send button's point.
+fn send_clicks(r: &Rig) -> usize {
+    r.desk
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(name, args)| name == "click" && args["x"] == json!(900))
+        .count()
+}
+
+/// The next turn's loop settles an approved card. A Halt in between (the
+/// driver reads the stamp; the new turn's own halt check started after it)
+/// or a locked screen must not let it run.
+#[test]
+fn an_approved_park_does_not_run_once_the_desktop_is_halted_or_locked() {
+    for (label, lock, why) in [
+        (
+            "park-halted",
+            false,
+            "Desktop control was halted (Ctrl+Alt+H). Open Loadout again to use the screen.",
+        ),
+        (
+            "park-locked",
+            true,
+            "The lock screen is up. Unlock this computer, then try again.",
+        ),
+    ] {
+        let r = rig(
+            label,
+            Box::new(|n| if n == 0 { Act::HardClick } else { Act::Done }),
+        );
+        let mut ep = r.episode("Reply to the thread");
+        let mut view = EpisodeView::default();
+        assert_eq!(r.run(&mut ep, &mut view).stop, EpisodeStop::Waiting);
+        r.parks.answer_all(true);
+        if lock {
+            r.desk.lock.store(true, Ordering::SeqCst);
+        } else {
+            r.desk.stamped.store(true, Ordering::SeqCst);
+        }
+        r.run(&mut ep, &mut view);
+        assert_eq!(send_clicks(&r), 0, "{label}: the approved Send ran");
+        let spans = r.spans();
+        assert_eq!(
+            spans.iter().filter(|s| s.decision == "approve").count(),
+            0,
+            "{label}"
+        );
+        let denied: Vec<(&str, &str, &str)> = spans
+            .iter()
+            .filter(|s| s.decision == "deny")
+            .map(|s| {
+                (
+                    s.tool.as_str(),
+                    s.approval_class.as_str(),
+                    s.result.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(denied, vec![("click", "send", why)], "{label}");
+        assert!(ep.parks.is_empty(), "{label}: the card is spent");
+    }
+}
+
+#[test]
+fn a_hard_card_names_the_control_a_click_lands_on_and_the_command_typed() {
+    let mut r = rig(
+        "card-text",
+        Box::new(|n| match n {
+            0 => Act::BareClick,
+            1 => Act::TypeText("rm -rf ~/Documents\n"),
+            _ => Act::Done,
+        }),
+    );
+    r.desk.hints = true;
+    let mut ep = r.episode("Tidy up and reply");
+    let out = r.run(&mut ep, &mut EpisodeView::default());
+    assert_eq!(out.stop, EpisodeStop::Waiting);
+    let cards: Vec<(String, String, String)> = r
+        .parks
+        .posted
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|p| (p.tool.clone(), p.class.clone(), p.action.clone()))
+        .collect();
+    assert_eq!(
+        cards,
+        vec![
+            (
+                "click".to_string(),
+                "send".to_string(),
+                "Loadout wants to click Send in Mail".to_string()
+            ),
+            (
+                "type".to_string(),
+                "delete".to_string(),
+                "rm -rf ~/Documents".to_string()
+            ),
+        ]
+    );
+    assert_eq!(
+        out.reply,
+        format!("All set.\n\n{WAITING_ON_YOU}\u{201c}Loadout wants to click Send in Mail\u{201d}; \u{201c}rm -rf ~/Documents\u{201d}. Approve their cards and I'll run it once and go on.")
+    );
+    // The spans keep the redacted args only: no typed text, no hint.
+    let parked: Vec<String> = r
+        .spans()
+        .into_iter()
+        .filter(|s| s.decision == "park")
+        .map(|s| s.args_redacted)
+        .collect();
+    assert_eq!(parked, vec![r#"{"x":900,"y":40}"#, r#"{"chars":19}"#]);
+    assert_eq!(r.desk.total(), r.desk.count("screenshot"), "nothing ran");
+}
+
+#[test]
+fn a_soft_ask_for_typing_says_how_much_goes_into_which_window() {
+    let mut r = rig(
+        "ask-text",
+        Box::new(|n| {
+            if n == 0 {
+                Act::TypeText("echo hello\n")
+            } else {
+                Act::Done
+            }
+        }),
+    );
+    r.desk.hints = true;
+    r.mode = PermMode::Ask;
+    let mut ep = r.episode("Say hello in the terminal");
+    r.run(&mut ep, &mut EpisodeView::default());
+    assert_eq!(
+        *r.asks.lock().unwrap(),
+        vec![(
+            "type".to_string(),
+            "type 11 chars into Terminal and press Enter".to_string()
+        )]
+    );
+    assert_eq!(r.desk.count("type"), 0, "nobody answered: it did not run");
+}
+
+/// Pause is not Stop: the loop returns before the next step, and the
+/// episode, its goal and its waiting card are all still there for the next
+/// message.
+#[test]
+fn pause_returns_before_the_next_step_and_keeps_the_episode_its_goal_and_its_cards() {
+    let mut r = rig(
+        "pause",
+        Box::new(|n| match n {
+            0 => Act::HardClick,
+            1..=3 => Act::Click(n as u32),
+            _ => Act::Done,
+        }),
+    );
+    // Pause lands while the third worker call is thinking.
+    r.model.pause_at = Some((2, Arc::clone(&r.pause)));
+    let mut ep = r.episode("Reply to the thread");
+    let mut view = EpisodeView::default();
+    let out = r.run(&mut ep, &mut view);
+    assert_eq!((out.stop, out.reply.as_str()), (EpisodeStop::Waiting, ""));
+    assert_eq!(r.desk.count("click"), 1, "the step it proposed did not run");
+    assert_eq!(ep.ended, None);
+    assert_eq!(ep.parks.len(), 1, "the card still waits");
+    assert!(r.parks.withdrawn.lock().unwrap().is_empty());
+    assert!(!r.pause.load(Ordering::SeqCst), "the pause is spent");
+    let markers = |r: &Rig| -> Vec<(String, String)> {
+        r.spans()
+            .into_iter()
+            .filter(|s| s.tool == EPISODE_TOOL && matches!(s.decision.as_str(), "begin" | "end"))
+            .map(|s| (s.decision, s.result))
+            .collect()
+    };
+    assert_eq!(markers(&r), vec![("begin".to_string(), "open".to_string())]);
+    // The next message: the card is approved and the same goal goes on.
+    r.parks.answer_all(true);
+    let out = r.run(&mut ep, &mut view);
+    assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    assert_eq!(sends(&r), 1);
+    assert_eq!(
+        markers(&r),
+        vec![
+            ("begin".to_string(), "open".to_string()),
+            ("end".to_string(), "verified".to_string())
+        ]
+    );
+    assert!(r.spans().iter().all(|s| s.goal_step != "Continue"));
+}
+
+/// The card is on screen while the reply is still being written. An Allow
+/// that lands during the worker's last call (the one that only says it is
+/// done) is acted on before the turn returns, not left for the next message.
+#[test]
+fn an_allow_given_during_the_workers_last_call_runs_the_step_in_that_turn() {
+    let mut r = rig(
+        "allow-last-call",
+        Box::new(|n| if n == 0 { Act::HardClick } else { Act::Done }),
+    );
+    r.model.answer_at = Some((1, Arc::clone(&r.parks), true));
+    let mut ep = r.episode("Reply to the thread");
+    let out = r.run(&mut ep, &mut EpisodeView::default());
+    assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    assert_eq!(sends(&r), 1, "the allowed Send ran once");
+    assert!(ep.parks.is_empty());
+    let decided: Vec<(String, String)> = r
+        .spans()
+        .into_iter()
+        .filter(|s| s.tool == "click")
+        .map(|s| (s.decision, s.goal_step))
+        .collect();
+    let goal = "Reply to the thread".to_string();
+    assert_eq!(
+        decided,
+        vec![
+            ("park".to_string(), goal.clone()),
+            ("approve".to_string(), goal)
+        ]
+    );
+}
+
+/// A Deny that lands during the last call settles there too, and the worker
+/// is asked again with the step refused.
+#[test]
+fn a_deny_given_during_the_workers_last_call_settles_in_that_turn() {
+    let mut r = rig(
+        "deny-last-call",
+        Box::new(|n| if n == 0 { Act::HardClick } else { Act::Done }),
+    );
+    r.model.answer_at = Some((1, Arc::clone(&r.parks), false));
+    let mut ep = r.episode("Reply to the thread");
+    let out = r.run(&mut ep, &mut EpisodeView::default());
+    assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    assert_eq!(sends(&r), 0);
+    assert!(ep.parks.is_empty());
+    assert_eq!(r.model.worker_calls.lock().unwrap().len(), 3);
+}
+
+/// An Allow nobody acted on for longer than the approval TTL was given for a
+/// screen that is long gone: the step is refused, not run with whatever
+/// message comes next.
+#[test]
+fn an_allow_older_than_the_approval_ttl_is_refused_not_run() {
+    let r = rig(
+        "stale-allow",
+        Box::new(|n| if n == 0 { Act::HardClick } else { Act::Done }),
+    );
+    let mut ep = r.episode("Reply to the thread");
+    let mut view = EpisodeView::default();
+    assert_eq!(r.run(&mut ep, &mut view).stop, EpisodeStop::Waiting);
+    r.parks.answer_all(true);
+    *r.parks.answered_ago.lock().unwrap() = Some(std::time::Duration::from_secs(300));
+    r.run(&mut ep, &mut view);
+    assert_eq!(sends(&r), 0, "a stale Allow ran");
+    let denied: Vec<String> = r
+        .spans()
+        .into_iter()
+        .filter(|s| s.decision == "deny")
+        .map(|s| s.result)
+        .collect();
+    assert_eq!(
+        denied,
+        vec!["your OK was given more than 300s ago — not run".to_string()]
+    );
+    assert!(ep.parks.is_empty(), "the card is spent");
+    // One second younger still runs.
+    let r = rig(
+        "fresh-allow",
+        Box::new(|n| if n == 0 { Act::HardClick } else { Act::Done }),
+    );
+    let mut ep = r.episode("Reply to the thread");
+    let mut view = EpisodeView::default();
+    assert_eq!(r.run(&mut ep, &mut view).stop, EpisodeStop::Waiting);
+    r.parks.answer_all(true);
+    *r.parks.answered_ago.lock().unwrap() = Some(std::time::Duration::from_secs(299));
+    r.run(&mut ep, &mut view);
+    assert_eq!(sends(&r), 1);
+}
+
+/// The park files say when a card was answered: the answer file's age.
+#[test]
+fn the_park_files_tell_how_long_ago_a_card_was_answered() {
+    let dir = crate::harness::test_dir("episode-answer-age");
+    let parks = FileParks(&dir);
+    let id = format!("{PARK_PREFIX}ep-1-3");
+    assert!(parks.post(&ParkRequest {
+        id: id.clone(),
+        path: "E".into(),
+        tool: "click".into(),
+        action: "Loadout wants to click Send in Mail".into(),
+        class: "send".into(),
+        ts_ms: T0,
+    }));
+    assert_eq!(parks.answer_age(&id), None, "no answer yet");
+    crate::harness::answer_park(&dir, &id, true).unwrap();
+    let answer = crate::harness::park_dir(&dir).join(format!("{id}.answer"));
+    let then = std::time::SystemTime::now() - std::time::Duration::from_secs(600);
+    std::fs::File::options()
+        .write(true)
+        .open(&answer)
+        .unwrap()
+        .set_modified(then)
+        .unwrap();
+    let age = parks.answer_age(&id).expect("an age").as_secs();
+    assert!((600..660).contains(&age), "{age}");
+    assert_eq!(parks.answer(&id), Some(true));
+    assert_eq!(parks.answer_age(&id), None, "taken");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A parked step's later spans (still waiting past the TTL, then run or
+/// refused) carry the number of the step that parked, which its card is
+/// named after, not the step the episode has reached since.
+#[test]
+fn a_parked_steps_later_spans_carry_its_own_step_number() {
+    let r = send_parked_past_ttl("park-step-number");
+    let mut ep = r.episode("Reply to the thread");
+    assert_eq!(
+        r.run(&mut ep, &mut EpisodeView::default()).stop,
+        EpisodeStop::Waiting
+    );
+    r.parks.answer_all(true);
+    r.run(&mut ep, &mut EpisodeView::default());
+    let own: Vec<(String, String)> = r
+        .spans()
+        .into_iter()
+        .filter(|s| s.approval_class == "send")
+        .map(|s| (s.decision, s.claim))
+        .collect();
+    let step = "episode step 8".to_string();
+    assert_eq!(
+        own,
+        vec![
+            ("park".to_string(), step.clone()),
+            ("deny".to_string(), step.clone()),
+            ("approve".to_string(), step),
+        ]
+    );
 }

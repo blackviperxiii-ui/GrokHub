@@ -58,6 +58,7 @@ fn a_fresh_profile_shows_the_stage_and_save_writes_the_files_and_rows() {
         done.saved,
         Some(Saved {
             files: vec!["USER.md".into(), "SOUL.md".into(), "MEMORY.md".into()],
+            skipped: vec![],
             rows: 2,
             amr: true,
         })
@@ -223,4 +224,244 @@ fn an_existing_user_file_is_unchanged_until_save() {
         fs::read_to_string(&user_path).unwrap(),
         "# User\n\n- Real note\n"
     );
+}
+
+const OWN_USER: &str = "# User\n\n- Likes tea\n";
+const OWN_SOUL: &str = "- Dry, formal, no jokes.\n";
+const OWN_MEMORY: &str = "# Memory\n\n- 2025-12-30: Remember: Allergic to peanuts\n";
+const FINISHED: &str = "{\"stage\":\"done\",\"step\":\"done\"}\n";
+
+/// A profile whose Get to know you is finished, holding the person's own
+/// three files.
+fn finished(tag: &str) -> (PathBuf, grokhub_agent::perm::ConfigGuard) {
+    let (dir, guard) = temp(tag);
+    for (name, body) in [
+        ("USER.md", OWN_USER),
+        ("SOUL.md", OWN_SOUL),
+        ("MEMORY.md", OWN_MEMORY),
+    ] {
+        fs::write(dir.join("memory").join(name), body).unwrap();
+    }
+    fs::write(dir.join("onboard-identity.json"), FINISHED).unwrap();
+    (dir, guard)
+}
+
+/// What the page sends for /import, with the default voice (friendly): the
+/// files as they are, then the workspace's notes.
+fn import(dir: &Path, home: &Path) -> Reply {
+    let base = act(
+        dir,
+        Some(home),
+        "nyx",
+        Act::Draft {
+            answers: Answers::default(),
+        },
+        NOW,
+    )
+    .unwrap();
+    let drafts = base.drafts.expect("drafts");
+    act(dir, Some(home), "nyx", Act::Openclaw { drafts }, NOW).unwrap()
+}
+
+#[test]
+fn import_through_the_shell_adds_only_the_workspace_notes() {
+    let (dir, _g) = finished("import");
+    let home = fixture_home("import");
+    let r = import(&dir, &home);
+    assert_eq!(
+        r.drafts,
+        Some(Drafts {
+            user: "# User\n\n- Likes tea\n\n## From OpenClaw USER.md\n\nLikes tea.\n".into(),
+            soul: "- Dry, formal, no jokes.\n\n## From OpenClaw SOUL.md\n\nBe brief and kind.\n"
+                .into(),
+            memory: OWN_MEMORY.into(),
+            rows: vec![],
+        })
+    );
+    assert_eq!(r.note, None);
+    // Asking opened nothing again and kept nothing: the stage is as it was.
+    assert!(!r.pending);
+    assert_eq!(r.stage, Stage::Done);
+    assert_eq!(
+        fs::read_to_string(dir.join("onboard-identity.json")).unwrap(),
+        FINISHED
+    );
+    assert_eq!(
+        fs::read_to_string(dir.join("memory").join("SOUL.md")).unwrap(),
+        OWN_SOUL
+    );
+}
+
+#[test]
+fn a_second_import_adds_nothing_new() {
+    let (dir, _g) = finished("import-twice");
+    let home = fixture_home("twice");
+    let first = import(&dir, &home).drafts.expect("drafts");
+    let done = act(&dir, Some(&home), "nyx", Act::Save { drafts: first }, NOW).unwrap();
+    assert_eq!(
+        done.saved.map(|s| s.files),
+        Some(vec!["USER.md".to_string(), "SOUL.md".to_string()])
+    );
+    let second = import(&dir, &home);
+    assert_eq!(
+        second.drafts,
+        Some(Drafts {
+            user: "# User\n\n- Likes tea\n\n## From OpenClaw USER.md\n\nLikes tea.\n".into(),
+            soul: "- Dry, formal, no jokes.\n\n## From OpenClaw SOUL.md\n\nBe brief and kind.\n"
+                .into(),
+            memory: OWN_MEMORY.into(),
+            rows: vec![],
+        })
+    );
+    assert_eq!(
+        second.note.as_deref(),
+        Some("The OpenClaw notes are already in these files; nothing was added.")
+    );
+    let drafts = second.drafts.expect("drafts");
+    let again = act(&dir, Some(&home), "nyx", Act::Save { drafts }, NOW).unwrap();
+    assert_eq!(again.saved.map(|s| s.files), Some(vec![]));
+}
+
+#[test]
+fn a_file_too_big_to_change_is_named_in_review_and_left_alone_by_save() {
+    let (dir, _g) = finished("too-big");
+    let path = dir.join("memory").join("MEMORY.md");
+    let big = "a line of old notes\n".repeat(52_500);
+    fs::write(&path, &big).unwrap();
+    let review = run(
+        &dir,
+        Act::Draft {
+            answers: Answers::default(),
+        },
+    );
+    assert_eq!(
+        review.note.as_deref(),
+        Some("MEMORY.md is too big to change here; Save leaves it alone.")
+    );
+    let mut drafts = review.drafts.expect("drafts");
+    assert_eq!(drafts.memory, "");
+    drafts.memory = "# Memory\n\n- x\n".into();
+    let done = run(&dir, Act::Save { drafts });
+    assert_eq!(
+        done.saved,
+        Some(Saved {
+            files: vec![],
+            skipped: vec!["MEMORY.md".into()],
+            rows: 0,
+            amr: true,
+        })
+    );
+    assert_eq!(
+        done.note.as_deref(),
+        Some("MEMORY.md is too big to change here; it was left alone.")
+    );
+    assert_eq!(fs::read_to_string(&path).unwrap().len(), 1_050_000);
+    assert!(!dir.join("memory").join("MEMORY.md.prev").exists());
+}
+
+#[test]
+fn a_tone_the_person_cleared_stays_cleared_when_review_resumes() {
+    let (dir, _g) = temp("tone");
+    let nyx = |a: Act| act(&dir, None, "nyx", a, NOW).unwrap();
+    // Before the soul step the voice picked now is where it starts.
+    assert_eq!(nyx(Act::View).answers.tone, "friendly");
+    // Past it, an empty tone is the person's answer: Review was reached
+    // with the tone cleared, then the app was closed.
+    let answers = Answers {
+        call_me: "Sam".into(),
+        ..Answers::default()
+    };
+    nyx(Act::Draft { answers });
+    let back = nyx(Act::View);
+    assert_eq!((back.step, back.answers.tone.as_str()), (Step::Review, ""));
+    let again = nyx(Act::Draft {
+        answers: back.answers,
+    });
+    assert_eq!(
+        again.drafts.map(|d| d.soul),
+        Some(String::new()),
+        "no Tone line the person did not pick"
+    );
+}
+
+#[test]
+fn a_file_that_is_not_text_is_named_in_review_and_left_alone_by_save() {
+    let (dir, _g) = finished("not-text");
+    let path = dir.join("memory").join("USER.md");
+    // Saved by an editor in Latin-1: one byte that is not UTF-8.
+    let old: &[u8] = b"# User\n\n- Likes caf\xe9s\n";
+    fs::write(&path, old).unwrap();
+    let home = fixture_home("not-text");
+    let review = import(&dir, &home);
+    assert_eq!(
+        review.note.as_deref(),
+        Some("USER.md is not plain text (UTF-8); Save leaves it alone.")
+    );
+    let drafts = review.drafts.expect("drafts");
+    assert_eq!(
+        drafts.user,
+        "# User\n\n## From OpenClaw USER.md\n\nLikes tea.\n"
+    );
+    let done = act(&dir, Some(&home), "nyx", Act::Save { drafts }, NOW).unwrap();
+    assert_eq!(
+        done.saved,
+        Some(Saved {
+            files: vec!["SOUL.md".into()],
+            skipped: vec!["USER.md".into()],
+            rows: 0,
+            amr: true,
+        })
+    );
+    assert_eq!(
+        done.note.as_deref(),
+        Some("USER.md is not plain text (UTF-8); it was left alone.")
+    );
+    assert_eq!(fs::read(&path).unwrap(), old);
+    assert!(!dir.join("memory").join("USER.md.prev").exists());
+}
+
+#[test]
+fn two_saves_at_once_both_finish_and_the_old_text_is_kept() {
+    let (dir, _g) = finished("two-saves");
+    // AMR off: the three files only.
+    fs::write(dir.join("app.json"), "{}\n").unwrap();
+    let path = dir.join("memory").join("MEMORY.md");
+    let prev = dir.join("memory").join("MEMORY.md.prev");
+    for round in 0..60 {
+        fs::write(&path, OWN_MEMORY).unwrap();
+        let _ = fs::remove_file(&prev);
+        let drafts = Drafts {
+            memory: format!("# Memory\n\n- round {round}\n"),
+            ..Drafts::default()
+        };
+        let save = || {
+            let (dir, drafts) = (dir.clone(), drafts.clone());
+            std::thread::spawn(move || act(&dir, None, "nyx", Act::Save { drafts }, NOW))
+        };
+        let (a, b) = (save(), save());
+        let got = [a.join().unwrap(), b.join().unwrap()].map(|r| r.map(|reply| reply.saved));
+        // One Save writes the file; the other finds it written.
+        let wrote = |files: &[&str]| {
+            Ok(Some(Saved {
+                files: files.iter().map(|f| f.to_string()).collect(),
+                skipped: vec![],
+                rows: 0,
+                amr: false,
+            }))
+        };
+        assert!(
+            got == [wrote(&["MEMORY.md"]), wrote(&[])]
+                || got == [wrote(&[]), wrote(&["MEMORY.md"])],
+            "round {round}: {got:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            format!("# Memory\n\n- round {round}\n")
+        );
+        assert_eq!(
+            fs::read_to_string(&prev).unwrap(),
+            OWN_MEMORY,
+            "round {round}"
+        );
+    }
 }

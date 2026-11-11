@@ -212,6 +212,7 @@ async fn get_settings(state: State<'_, ShellState>) -> Result<SettingsView, Stri
 
 #[tauri::command]
 fn save_settings(
+    app: AppHandle,
     state: State<'_, ShellState>,
     close_to_tray: bool,
     workspace: String,
@@ -233,6 +234,7 @@ fn save_settings(
     {
         if current(&state).desktop_control != desktop_control {
             grokhub_desktop::set_desktop_enabled(desktop_control);
+            desktop_switched(&app, &state, desktop_control);
         }
         episode::sync_cua(
             desktop_control,
@@ -240,6 +242,8 @@ fn save_settings(
             episode::hub_exe(),
         );
     }
+    #[cfg(mobile)]
+    let _ = &app;
     *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
     Ok(view(&next))
 }
@@ -295,22 +299,25 @@ fn auto_setup(
 }
 
 /// Get to know you: the stage after Auto Setup's first run, and Settings →
-/// Personal → Get to know you.
+/// Personal → Get to know you. It reads the memory files and an OpenClaw
+/// workspace and Save writes them, so it runs off the main thread.
 #[tauri::command]
-fn onboard_identity(
+async fn onboard_identity(
     state: State<'_, ShellState>,
     act: onboard::Act,
 ) -> Result<onboard::Reply, String> {
     capabilities::needs(capabilities::current().auto_setup, "Get to know you")?;
     let personality = current(&state).personality;
-    let home = grokhub_core::paths::user_home();
-    onboard::act(
-        &grokhub_agent::perm::config_dir(),
-        home.as_deref(),
-        &personality,
-        act,
-        grokhub_core::now_ms(),
-    )
+    off_main(move || {
+        onboard::act(
+            &grokhub_agent::perm::config_dir(),
+            grokhub_core::paths::user_home().as_deref(),
+            &personality,
+            act,
+            grokhub_core::now_ms(),
+        )
+    })
+    .await?
 }
 
 /// The window's zoom follows Settings → Appearance → Text size.
@@ -411,14 +418,8 @@ fn engine_op(state: &ShellState, op: &slash::Op) -> Result<Option<slash::Effect>
                 route.workspace,
                 task,
             )?;
-            let lead = if matches!(op, slash::Op::Send(_)) {
-                "Sent"
-            } else {
-                "Background"
-            };
-            notice(format!(
-                "{lead} · {title}. It reads and reports, and can't change files. /bg shows how it went."
-            ))
+            let sent = matches!(op, slash::Op::Send(_));
+            notice(bg_runs::started_text(sent, &title))
         }
         slash::Op::Consult(question) => {
             let settings = current(state);
@@ -690,6 +691,7 @@ async fn chat_turn(
                 );
             })
         });
+        let resume_to = app.clone();
         let stop = session.prompt(
             &text,
             files,
@@ -709,6 +711,14 @@ async fn chat_turn(
         halt_watch.store(true, std::sync::atomic::Ordering::SeqCst);
         if let Some(watcher) = watcher {
             let _ = watcher.join();
+        }
+        // An Allow that landed after the session's last look at its cards:
+        // the page sends the resume, so the step runs now and not with
+        // whatever message comes next.
+        if let Some(open) = session.episode().filter(|_| session.take_resume_owed()) {
+            let panel =
+                episode::resume_panel(&config_dir, &conversation_id, &open, session.frame());
+            let _ = resume_to.emit(episode::EPISODE_EVENT, &panel);
         }
         if stop
             .as_deref()
@@ -839,12 +849,68 @@ fn halt_now(app: &AppHandle) -> Vec<String> {
     let state = app.state::<ShellState>();
     // Halt ends a screen recording too.
     screen_record::stop();
-    let busy = {
+    let (busy, open) = {
         let chats = state.chats.lock().unwrap_or_else(|e| e.into_inner());
-        agent::halt(&state.config_dir, chats.values())
+        // Halt ends an idle chat's desktop session itself; the page is told.
+        let open = open_episodes(&chats);
+        (agent::halt(&state.config_dir, chats.values()), open)
     };
     let _ = app.emit(HALT_EVENT, &busy);
+    emit_ended(app, open, "halt");
     busy
+}
+
+/// A chat's open desktop session, with the chat it is on.
+#[cfg(desktop)]
+type OpenEpisode = (String, Arc<agent::Session>, episode::Open);
+
+/// The chats with a desktop session open right now.
+#[cfg(desktop)]
+fn open_episodes(chats: &HashMap<String, Arc<agent::Session>>) -> Vec<OpenEpisode> {
+    chats
+        .iter()
+        .filter_map(|(id, session)| Some((id.clone(), Arc::clone(session), session.episode()?)))
+        .collect()
+}
+
+/// Tells the page about the sessions among `open` that were ended with no
+/// loop running (a running loop's watcher says so itself), as `why`. The
+/// spans are read off the caller's thread.
+#[cfg(desktop)]
+fn emit_ended(app: &AppHandle, open: Vec<OpenEpisode>, why: &'static str) {
+    if open.is_empty() {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<ShellState>();
+        for (chat, session, open) in open {
+            if session.episode().is_some() {
+                continue;
+            }
+            let panel = episode::ended_panel(&state.config_dir, &chat, &open, session.frame(), why);
+            let _ = app.emit(episode::EPISODE_EVENT, &panel);
+        }
+    });
+}
+
+/// Settings turned desktop control on or off. Off stops every chat's desktop
+/// session (a running one is cancelled, an idle one is closed and its cards
+/// denied), disarms the chats, and refuses the later desktop calls of a turn
+/// that started with the switch on.
+#[cfg(desktop)]
+fn desktop_switched(app: &AppHandle, state: &ShellState, on: bool) {
+    let chats = state.chats.lock().unwrap_or_else(|e| e.into_inner());
+    if on {
+        chats.values().for_each(|session| session.desktop_on());
+        return;
+    }
+    let open = open_episodes(&chats);
+    chats.values().for_each(|session| {
+        session.desktop_off();
+    });
+    drop(chats);
+    emit_ended(app, open, "stop");
 }
 
 /// The top bar's recording indicator, the audio check's line and any run that
@@ -877,25 +943,36 @@ fn halt_desktop(app: AppHandle) -> Result<Vec<String>, String> {
 
 /// The chat's open desktop episode as the panel draws it now, or `None`.
 /// Desktop only, like Halt: a browser never sees the computer's screen.
+/// The spans are read off the main thread.
 #[tauri::command]
-fn episode_state(state: State<'_, ShellState>, conversation_id: String) -> Option<episode::Panel> {
+async fn episode_state(
+    state: State<'_, ShellState>,
+    conversation_id: String,
+) -> Result<Option<episode::Panel>, String> {
     let session = state
         .chats
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .get(&conversation_id)
-        .cloned()?;
-    let open = session.episode()?;
-    Some(episode::panel(
-        &state.config_dir,
-        &conversation_id,
-        &open.id,
-        open.started_ms,
-        grokhub_core::now_ms(),
-        session.frame(),
-        open.paused,
-        open.cua,
-    ))
+        .cloned();
+    let Some(open) = session.as_ref().and_then(|session| session.episode()) else {
+        return Ok(None);
+    };
+    let frame = session.and_then(|session| session.frame());
+    let config_dir = state.config_dir.clone();
+    off_main(move || {
+        Some(episode::panel(
+            &config_dir,
+            &conversation_id,
+            &open.id,
+            open.started_ms,
+            grokhub_core::now_ms(),
+            frame,
+            open.paused,
+            open.cua,
+        ))
+    })
+    .await
 }
 
 /// Arms or disarms the supervised desktop session for a chat: its next
@@ -919,37 +996,18 @@ fn episode_armed(state: State<'_, ShellState>, conversation_id: String) -> bool 
         .is_some_and(|s| s.episode_armed() || s.episode().is_some())
 }
 
-/// Tells the page where the chat's episode stands now, for a change made
-/// while no prompt runs (the watcher only runs with one).
-fn emit_episode(
-    app: &AppHandle,
-    state: &ShellState,
-    session: &agent::Session,
-    chat: &str,
-    open: &episode::Open,
-) {
-    let panel = episode::panel(
-        &state.config_dir,
-        chat,
-        &open.id,
-        open.started_ms,
-        grokhub_core::now_ms(),
-        session.frame(),
-        session.episode().is_some_and(|o| o.paused),
-        open.cua,
-    );
-    let _ = app.emit(episode::EPISODE_EVENT, &panel);
-}
-
-/// OK or Deny on a card the episode parked.
+/// OK or Deny on a card the episode parked. True when the window should
+/// send the resume ([`agent::RESUME_TEXT`]) now: an Allow with no reply
+/// running, which no loop would pick up until the next message. The page is
+/// told where the episode stands (the watcher only runs with a prompt).
 #[tauri::command]
-fn episode_answer(
+async fn episode_answer(
     app: AppHandle,
     state: State<'_, ShellState>,
     conversation_id: String,
     park_id: String,
     approve: bool,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let session = state
         .chats
         .lock()
@@ -957,12 +1015,25 @@ fn episode_answer(
         .get(&conversation_id)
         .cloned()
         .ok_or_else(|| "That chat is closed.".to_string())?;
-    let open = session
-        .episode()
-        .ok_or_else(|| "No desktop session is open on this chat.".to_string())?;
-    episode::answer(&state.config_dir, &open.id, &park_id, approve)?;
-    emit_episode(&app, &state, &session, &conversation_id, &open);
-    Ok(())
+    let config_dir = state.config_dir.clone();
+    off_main(move || {
+        let resume = session.answer_episode(&park_id, approve)?;
+        if let Some(open) = session.episode() {
+            let panel = episode::panel(
+                &config_dir,
+                &conversation_id,
+                &open.id,
+                open.started_ms,
+                grokhub_core::now_ms(),
+                session.frame(),
+                open.paused,
+                open.cua,
+            );
+            let _ = app.emit(episode::EPISODE_EVENT, &panel);
+        }
+        Ok(resume)
+    })
+    .await?
 }
 
 /// Pause the open episode after the step it is on; the next message runs it
@@ -979,7 +1050,11 @@ fn episode_pause(state: State<'_, ShellState>, conversation_id: String) -> bool 
 
 /// Stop the open episode: nothing more runs and every waiting card is denied.
 #[tauri::command]
-fn episode_stop(app: AppHandle, state: State<'_, ShellState>, conversation_id: String) -> bool {
+async fn episode_stop(
+    app: AppHandle,
+    state: State<'_, ShellState>,
+    conversation_id: String,
+) -> Result<bool, String> {
     let session = state
         .chats
         .lock()
@@ -987,31 +1062,28 @@ fn episode_stop(app: AppHandle, state: State<'_, ShellState>, conversation_id: S
         .get(&conversation_id)
         .cloned();
     let Some(session) = session else {
-        return false;
+        return Ok(false);
     };
     let Some(open) = session.episode() else {
-        return false;
+        return Ok(false);
     };
-    let stopped = session.stop_episode();
-    // A running loop ends it and its watcher says so; with none running, say it here.
-    if stopped {
-        let mut panel = episode::panel(
-            &state.config_dir,
-            &conversation_id,
-            &open.id,
-            open.started_ms,
-            grokhub_core::now_ms(),
-            session.frame(),
-            false,
-            open.cua,
-        );
-        if panel.ended.is_none() {
-            panel.ended = Some("stop".into());
+    let config_dir = state.config_dir.clone();
+    off_main(move || {
+        let stopped = session.stop_episode();
+        // A running loop ends it and its watcher says so; with none running, say it here.
+        if stopped {
+            let panel = episode::ended_panel(
+                &config_dir,
+                &conversation_id,
+                &open,
+                session.frame(),
+                "stop",
+            );
+            let _ = app.emit(episode::EPISODE_EVENT, &panel);
         }
-        panel.state = "ended".into();
-        let _ = app.emit(episode::EPISODE_EVENT, &panel);
-    }
-    stopped
+        stopped
+    })
+    .await
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -1236,21 +1308,18 @@ async fn delete_chat(state: State<'_, ShellState>, id: String) -> Result<(), Str
 static DELETE_ALL_ARM: Mutex<history::DeleteArm> = Mutex::new(history::DeleteArm::new());
 
 /// Delete all: the first click arms it, a second within 5 s (and not within
-/// half a second, a double-click's second half) deletes every chat of this
-/// app. Replies still running stop.
+/// half a second, a double-click's second half) deletes the chats of this
+/// app the first click counted, and answers with their ids. Replies still
+/// running stop. When a chat can't be deleted, the ones before it are gone
+/// and still named, with the reason in `error`, so their replies stop too.
 #[tauri::command]
 async fn delete_all_chats(state: State<'_, ShellState>) -> Result<history::DeleteAll, String> {
     let dir = state.config_dir.clone();
-    let ids: Vec<String> = history::list(&dir).into_iter().map(|r| r.id).collect();
-    let done = off_main(move || {
-        let mut arm = DELETE_ALL_ARM.lock().unwrap_or_else(|e| e.into_inner());
-        history::delete_all(&dir, &mut arm, std::time::Instant::now())
-    })
-    .await??;
-    if done.state == history::Arm::Deleted {
-        for id in &ids {
-            end_chat(&state, id);
-        }
+    let done =
+        off_main(move || history::delete_all(&dir, &DELETE_ALL_ARM, std::time::Instant::now()))
+            .await??;
+    for id in &done.ids {
+        end_chat(&state, id);
     }
     Ok(done)
 }
@@ -3685,11 +3754,15 @@ async fn pc_net_csv(state: State<'_, ShellState>) -> Result<String, String> {
 }
 
 /// Devices → Start share: whether this computer's LAN hub is on, its pairing
-/// code and the computers paired with it. Desktop only.
+/// code and the computers paired with it. Desktop only. Each of the four
+/// can write `hub-state.json`, so none runs on the main thread.
 #[cfg(desktop)]
 #[tauri::command]
-fn get_share(share: State<'_, Arc<hub_share::HubShare>>) -> hub_share::ShareView {
-    share.view()
+async fn get_share(
+    share: State<'_, Arc<hub_share::HubShare>>,
+) -> Result<hub_share::ShareView, String> {
+    let share = Arc::clone(&share);
+    off_main(move || share.view()).await
 }
 
 #[cfg(desktop)]
@@ -3698,21 +3771,25 @@ async fn start_share(
     share: State<'_, Arc<hub_share::HubShare>>,
 ) -> Result<hub_share::ShareView, String> {
     let share = Arc::clone(&share);
-    tauri::async_runtime::spawn_blocking(move || share.start())
-        .await
-        .map_err(|e| e.to_string())?
+    off_main(move || share.start()).await?
 }
 
 #[cfg(desktop)]
 #[tauri::command]
-fn stop_share(share: State<'_, Arc<hub_share::HubShare>>) -> hub_share::ShareView {
-    share.stop()
+async fn stop_share(
+    share: State<'_, Arc<hub_share::HubShare>>,
+) -> Result<hub_share::ShareView, String> {
+    let share = Arc::clone(&share);
+    off_main(move || share.stop()).await
 }
 
 #[cfg(desktop)]
 #[tauri::command]
-fn new_share_code(share: State<'_, Arc<hub_share::HubShare>>) -> hub_share::ShareView {
-    share.new_code()
+async fn new_share_code(
+    share: State<'_, Arc<hub_share::HubShare>>,
+) -> Result<hub_share::ShareView, String> {
+    let share = Arc::clone(&share);
+    off_main(move || share.new_code()).await
 }
 
 /// Settings → Behavior: the tray, the composer and the limits on scheduled work.
@@ -3940,6 +4017,20 @@ fn web_send(
     Ok((conversation_id, turn))
 }
 
+/// The chat a browser may steer or answer: one it started, and not while the
+/// computer runs a desktop turn or a supervised desktop session in it.
+fn web_drive(
+    web: &remote::WebAccess,
+    on_desktop: impl Fn(&str) -> bool,
+    args: &Value,
+) -> Result<String, String> {
+    let id: String = arg(args, "conversationId")?;
+    if !web.owns(&id) || on_desktop(&id) {
+        return Err(remote::NOT_YOURS.into());
+    }
+    Ok(id)
+}
+
 /// One of `remote::WEB_COMMANDS` from a paired browser, run as the window
 /// would run it. A web chat never gets the desktop tools.
 fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, String> {
@@ -3954,6 +4045,16 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         } else {
             Err(remote::NOT_YOURS.into())
         }
+    };
+    // Steering a reply or answering its asks: not while the computer drives
+    // the desktop in that chat.
+    let drive = |args: &Value| -> Result<String, String> {
+        let on_desktop = |id: &str| {
+            let state = app.state::<ShellState>();
+            let chats = state.chats.lock().unwrap_or_else(|e| e.into_inner());
+            chats.get(id).is_some_and(|session| session.on_desktop())
+        };
+        web_drive(&web, on_desktop, args)
     };
     match command {
         "get_settings" => out(view(&current(&state))),
@@ -4005,7 +4106,7 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         "answer_elicit" => {
             answer_elicit(
                 state,
-                own(args)?,
+                drive(args)?,
                 arg(args, "id")?,
                 arg(args, "action")?,
                 arg(args, "field")?,
@@ -4017,7 +4118,7 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             answer_permission(
                 app.clone(),
                 state,
-                own(args)?,
+                drive(args)?,
                 arg(args, "callId")?,
                 arg(args, "answer")?,
             )?;
@@ -4027,7 +4128,7 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             cancel_chat(state, own(args)?);
             Ok(Value::Null)
         }
-        "steer_chat" => out(steer_chat(state, own(args)?, arg(args, "text")?)),
+        "steer_chat" => out(steer_chat(state, drive(args)?, arg(args, "text")?)),
         "close_chat" => {
             close_chat(state, own(args)?);
             Ok(Value::Null)
@@ -4623,6 +4724,9 @@ pub fn run() {
             // The router takes Local AI's switch, OpenRouter's policy and the
             // spend limits from the cabin's settings from the start.
             grokhub_agent::route::host::sync(&config_dir);
+            // Provider keys are read from the OS keyring from the first chat,
+            // not only once Settings → AI models has been opened.
+            grokhub_agent::route::providers::use_os_vault();
             // The full device profile, shared with the cabin: sizes local
             // model launches and sets the router's battery and low-end tier.
             #[cfg(desktop)]
@@ -5017,13 +5121,20 @@ pub fn run() {
         ])
         .build(tauri::generate_context!());
     match built {
-        Ok(app) => app.run(|_, event| {
+        Ok(app) => app.run(|app, event| {
             // What the learning engine holds in memory is written on the way out.
             if let tauri::RunEvent::Exit = event {
                 grokhub_core::learn::hub::flush();
                 // A test run or deploy does not outlive the app.
                 code_runs::stop();
+                // A computer that paired since Devices last looked stays paired.
+                #[cfg(desktop)]
+                if let Some(share) = app.try_state::<Arc<hub_share::HubShare>>() {
+                    share.save();
+                }
             }
+            #[cfg(not(desktop))]
+            let _ = app;
         }),
         Err(err) => {
             eprintln!(
@@ -5059,12 +5170,89 @@ mod command_tests {
     }
 
     #[test]
+    fn get_to_know_you_runs_on_the_blocking_pool() {
+        // It reads an OpenClaw workspace and writes three files and the rows
+        // store: disk work that must not hold up the window.
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        let body = src
+            .split(concat!("async fn ", "onboard_identity("))
+            .nth(1)
+            .and_then(|s| s.split("\n}\n").next())
+            .expect("onboard_identity is an async fn");
+        assert!(
+            body.contains("off_main(move || {\n        onboard::act("),
+            "onboard::act must run through off_main: {body}"
+        );
+    }
+
+    #[test]
     fn the_capability_file_claims_a_manifest_only_if_the_build_has_one() {
         // With no app manifest in build.rs, Tauri allows every app command
         // from the app's own page. The capability file must not say otherwise.
         let has = include_str!("../build.rs").contains("app_manifest");
         let says = include_str!("../capabilities/default.json").contains("build manifest");
         assert_eq!(says, has);
+    }
+
+    #[test]
+    fn the_share_commands_run_on_the_blocking_pool() {
+        // Stop share writes and fsyncs hub-state.json, and the page's poll
+        // saves a new pairing: neither may hold up the window.
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        for (name, call) in [
+            ("get_share", "off_main(move || share.view()).await"),
+            ("start_share", "off_main(move || share.start()).await?"),
+            ("stop_share", "off_main(move || share.stop()).await"),
+            ("new_share_code", "off_main(move || share.new_code()).await"),
+        ] {
+            let body = src
+                .split(&format!("async fn {name}("))
+                .nth(1)
+                .and_then(|s| s.split("\n}\n").next())
+                .unwrap_or_else(|| panic!("{name} must be an async command"));
+            assert!(
+                body.contains(call),
+                "{name} must run through off_main: {body}"
+            );
+        }
+    }
+
+    /// True when the `RunEvent::Exit` arm of `run` in `src` saves the share,
+    /// looked up as the type it is managed as.
+    fn quitting_saves_the_share(src: &str) -> bool {
+        let app = src.split("\n#[cfg(test)]\nmod command_tests {").next();
+        let arm = app
+            .and_then(|s| s.split("if let tauri::RunEvent::Exit = event {").nth(1))
+            .and_then(|s| s.split("\n            }\n").next())
+            .expect("run must have an Exit arm");
+        arm.contains("if let Some(share) = app.try_state::<Arc<hub_share::HubShare>>() {")
+            && arm.contains("share.save();")
+    }
+
+    #[test]
+    fn quitting_saves_a_pairing_made_since_the_page_last_looked() {
+        // A computer pairs inside the hub server, and the page's poll is
+        // what writes it down. Quit before the next poll and only this hook
+        // keeps the pairing.
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        assert!(
+            src.contains("app.manage(Arc::new(hub_share::HubShare::open("),
+            "the share is managed as Arc<hub_share::HubShare>"
+        );
+        assert!(quitting_saves_the_share(&src));
+        // The check tells a hook that is gone, or that asks for a type the
+        // app never manages (try_state then finds nothing, and nothing is
+        // saved), from the real one.
+        let hook = "                if let Some(share) = app.try_state::<Arc<hub_share::HubShare>>() {\n                    share.save();\n                }\n";
+        assert_eq!(src.matches(hook).count(), 1);
+        assert!(!quitting_saves_the_share(&src.replace(hook, "")));
+        assert!(!quitting_saves_the_share(&src.replace(
+            "app.try_state::<Arc<hub_share::HubShare>>()",
+            "app.try_state::<hub_share::HubShare>()"
+        )));
+        assert!(!quitting_saves_the_share(
+            &src.replace("                    share.save();\n", "")
+        ));
     }
 }
 
@@ -5119,6 +5307,38 @@ mod web_command_tests {
             .collect();
         assert_eq!(unlisted, Vec::<&str>::new());
         assert_eq!(arms.len(), crate::remote::WEB_COMMANDS.len());
+    }
+
+    /// The phone that started a chat can't steer it, or answer its asks,
+    /// while the computer drives the desktop in it.
+    #[test]
+    fn a_browser_cannot_steer_or_answer_a_chat_running_a_desktop_session() {
+        use serde_json::json;
+        let web = crate::remote::WebAccess::default();
+        assert!(web.adopt("a1"));
+        let mine = json!({ "conversationId": "a1", "text": "click Send now" });
+        let idle = |_: &str| false;
+        let on_desktop = |id: &str| id == "a1";
+        assert_eq!(super::web_drive(&web, idle, &mine), Ok("a1".to_string()));
+        assert_eq!(
+            super::web_drive(&web, on_desktop, &mine),
+            Err("That chat isn't open in this browser.".to_string())
+        );
+        let other = json!({ "conversationId": "b2", "text": "hello" });
+        assert_eq!(
+            super::web_drive(&web, idle, &other),
+            Err("That chat isn't open in this browser.".to_string())
+        );
+        // The arms that steer a reply or answer its asks go through it;
+        // stopping a reply stays open to the browser that started the chat.
+        let body = remote_call_src();
+        for name in ["answer_elicit", "answer_permission", "steer_chat"] {
+            assert!(arm(&body, name).contains("drive(args)?"), "{name}");
+            assert!(!arm(&body, name).contains("own(args)?"), "{name}");
+        }
+        for name in ["cancel_chat", "close_chat"] {
+            assert!(arm(&body, name).contains("own(args)?"), "{name}");
+        }
     }
 
     /// A send that is refused takes no chat: the browser's chats grow only

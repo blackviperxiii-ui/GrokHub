@@ -494,3 +494,210 @@ fn a_skill_that_left_the_list_closes_and_one_still_listed_stays_open() {
     tab.apply(loaded(&["ship"]));
     assert_eq!(tab.open_skill, None);
 }
+
+// ---- a confirm belongs to its project, and a run can be stopped ----
+
+fn loaded_with(plan_command: &str) -> Msg {
+    Msg::Loaded(Box::new(Loaded {
+        repo: Repo {
+            workspace: "w".into(),
+            is_repo: false,
+            branch: None,
+            upstream: None,
+            ahead: 0,
+            behind: 0,
+            files: Vec::new(),
+            more: false,
+        },
+        builtins: Vec::new(),
+        plan: Ok(plan(plan_command, true, None)),
+        activity: Vec::new(),
+        diff: None,
+    }))
+}
+
+#[test]
+fn a_project_change_takes_the_test_confirm_the_note_and_the_log_with_it() {
+    let (a, b) = (Path::new("/home/user/a"), Path::new("/home/user/b"));
+    // Project A: the box holds the detected command, and Run tests asked.
+    let mut tab = CodeTab::default();
+    tab.begin_load(a);
+    tab.apply(loaded_with("cargo test"));
+    assert_eq!(tab.command, "cargo test");
+    tab.apply(Msg::Ask {
+        command: "cargo test".into(),
+    });
+    assert!(tab.confirming);
+    tab.log = "running 3 tests\n".into();
+    tab.run_note = Some("Tests exited with 101.".into());
+
+    // Project B is picked while the sheet is still open.
+    tab.begin_load(b);
+    assert!(!tab.confirming, "nobody pressed Run tests in project B");
+    assert_eq!(tab.log, "");
+    assert_eq!(tab.run_note, None);
+    tab.apply(loaded_with("npm test"));
+    assert_eq!(tab.command, "npm test");
+    assert!(!tab.confirming);
+
+    // A typed command: the sheet goes too, and the text stays the user's.
+    let mut tab = CodeTab::default();
+    tab.begin_load(a);
+    tab.apply(loaded_with("cargo test"));
+    tab.command = "cargo test -p one".into();
+    tab.edit_command();
+    tab.apply(Msg::Ask {
+        command: "cargo test -p one".into(),
+    });
+    assert!(tab.confirming);
+    tab.begin_load(b);
+    tab.apply(loaded_with("npm test"));
+    assert!(!tab.confirming);
+    assert_eq!(tab.command, "cargo test -p one");
+}
+
+#[test]
+fn a_reload_that_swaps_the_command_closes_its_confirm() {
+    let ws = Path::new("/home/user/a");
+    let mut tab = CodeTab::default();
+    tab.begin_load(ws);
+    tab.apply(loaded_with("cargo test"));
+    tab.apply(Msg::Ask {
+        command: "cargo test".into(),
+    });
+    assert!(tab.confirming);
+    // The same project read again with the same command: the sheet stays.
+    tab.begin_load(ws);
+    tab.apply(loaded_with("cargo test"));
+    assert!(tab.confirming);
+    assert_eq!(tab.command, "cargo test");
+    // Read again after its test command changed (a package.json appeared):
+    // the sheet showed the old one, so it goes.
+    tab.begin_load(ws);
+    tab.apply(loaded_with("npm test"));
+    assert_eq!(tab.command, "npm test");
+    assert!(!tab.confirming);
+}
+
+#[cfg(unix)]
+#[test]
+fn stop_ends_a_running_test_and_the_next_run_can_start() {
+    let _g = RUNS.lock().unwrap_or_else(|e| e.into_inner());
+    let config = temp("stop-config");
+    let ws = temp("stop-ws");
+    let mut tab = CodeTab {
+        command: "echo up; sleep 30".into(),
+        ..Default::default()
+    };
+    assert!(!tab.stop(), "nothing is running yet");
+    assert_eq!(tab.begin_run().as_deref(), Some("echo up; sleep 30"));
+    let tx = tab.sender();
+    let (job_config, job_ws) = (config.clone(), ws.clone());
+    let job = std::thread::spawn(move || {
+        let none = || {};
+        run_job(
+            &job_config,
+            &job_ws,
+            "echo up; sleep 30",
+            true,
+            Vec::new(),
+            &tx,
+            &none,
+        );
+    });
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !tab.log.contains("up") && std::time::Instant::now() < end {
+        tab.drain();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(tab.log, "up\n");
+
+    // Stop: the 30-second sleep ends within five.
+    assert!(tab.stop());
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while tab.running && std::time::Instant::now() < end {
+        tab.drain();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(!tab.running, "Stop left the run going");
+    assert_eq!(tab.run_note.as_deref(), Some("Tests stopped."));
+    job.join().expect("run job");
+    // One run at a time: the next one starts, so the stopped one is gone.
+    let next = runs::run(&config, &ws, "exit 0", true, runs::Mode::Auto, |_| {});
+    assert_eq!(next.map(|done| done.exit), Ok(0));
+    // The next run starts clean: a failure after it is not called stopped.
+    assert_eq!(tab.begin_run().as_deref(), Some("echo up; sleep 30"));
+    tab.apply(Msg::Ran(Ok(runs::RunResult {
+        command: "echo up; sleep 30".into(),
+        exit: 2,
+        output: String::new(),
+        cut: false,
+    })));
+    assert_eq!(tab.run_note.as_deref(), Some("Tests exited with 2."));
+    let _ = std::fs::remove_dir_all(&config);
+    let _ = std::fs::remove_dir_all(&ws);
+}
+
+#[test]
+fn a_run_that_passed_after_stop_was_pressed_still_says_passed() {
+    let mut tab = CodeTab {
+        command: "true".into(),
+        ..Default::default()
+    };
+    tab.begin_run();
+    tab.stopping = true;
+    tab.apply(Msg::Ran(Ok(runs::RunResult {
+        command: "true".into(),
+        exit: 0,
+        output: String::new(),
+        cut: false,
+    })));
+    assert_eq!(tab.run_note.as_deref(), Some("Tests passed."));
+    assert!(!tab.stopping);
+}
+
+/// The LAN is served by the hub crate, with what the core, agent and desktop
+/// crates give it. None of them can call the Code logic: only the cabin app
+/// links `grokhub-code`. The old check read one file of this crate, which a
+/// route added anywhere else would have passed.
+#[test]
+fn no_crate_the_lan_is_served_from_links_the_code_logic() {
+    let crates = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("the crates folder")
+        .to_path_buf();
+    let mut linked: Vec<String> = Vec::new();
+    let mut seen = 0;
+    for entry in std::fs::read_dir(&crates).expect("crates folder") {
+        let dir = entry.expect("entry").path();
+        let Ok(manifest) = std::fs::read_to_string(dir.join("Cargo.toml")) else {
+            continue;
+        };
+        seen += 1;
+        if manifest.contains("grokhub-code") {
+            linked.push(dir.file_name().unwrap().to_string_lossy().into_owned());
+        }
+    }
+    linked.sort();
+    assert!(seen >= 4, "only {seen} crate manifests were read");
+    assert_eq!(linked, vec!["grokhub-app", "grokhub-code"]);
+    assert!(crates.join("grokhub-hub/Cargo.toml").is_file());
+
+    // In this crate, the file that reads the LAN address imports nothing
+    // from the app's pages.
+    let lan = include_str!("lan_host.rs");
+    let imports: Vec<&str> = lan
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.starts_with("use "))
+        .collect();
+    assert_eq!(
+        imports,
+        vec![
+            "use std::sync::Mutex;",
+            "use std::time::Instant;",
+            "use grokhub_core::{hub_pair_url, parse_hostname_i, pick_lan_ipv4};",
+        ]
+    );
+    assert!(!lan.contains("super::"), "lan_host.rs reaches into the app");
+}

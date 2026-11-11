@@ -99,7 +99,39 @@ pub(super) enum ShipJob {
     },
 }
 
-/// What the worker sends back. Every string in it is already redacted.
+/// The push and PR commands as the guard builds them, before the project's
+/// secret values are hidden. A confirm sends its one back to the guard, which
+/// compares it with the command it is about to run; the redacted text on the
+/// card would never match. Never drawn and never printed.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub(super) struct Real {
+    push: String,
+    pr: String,
+}
+
+impl Real {
+    /// The command for `action`, or `shown` when none was read.
+    fn of(&self, action: Action, shown: &str) -> String {
+        let real = match action {
+            Action::Push => &self.push,
+            Action::Pr => &self.pr,
+        };
+        if real.is_empty() {
+            shown.to_string()
+        } else {
+            real.clone()
+        }
+    }
+}
+
+impl std::fmt::Debug for Real {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Real(..)")
+    }
+}
+
+/// What the worker sends back. Every string in it is already redacted,
+/// except `real`, which is never shown.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ShipOut {
     Plans {
@@ -107,6 +139,7 @@ pub(super) enum ShipOut {
         pr: Box<Plan>,
         cfg: CodeShip,
         then: Option<Action>,
+        real: Real,
     },
     Shipped(Result<(String, String), String>),
     Branch(Result<String, String>),
@@ -138,18 +171,21 @@ impl ShipJob {
         let cfg = settings(config_dir);
         let held = held();
         match self {
-            ShipJob::Refresh { then } => ShipOut::Plans {
-                push: Box::new(clean_plan(
-                    ship::plan(config_dir, ws, &cfg, Action::Push),
-                    &held,
-                )),
-                pr: Box::new(clean_plan(
-                    ship::plan(config_dir, ws, &cfg, Action::Pr),
-                    &held,
-                )),
-                cfg,
-                then,
-            },
+            ShipJob::Refresh { then } => {
+                let push = ship::plan(config_dir, ws, &cfg, Action::Push);
+                let pr = ship::plan(config_dir, ws, &cfg, Action::Pr);
+                let real = Real {
+                    push: push.command.clone(),
+                    pr: pr.command.clone(),
+                };
+                ShipOut::Plans {
+                    push: Box::new(clean_plan(push, &held)),
+                    pr: Box::new(clean_plan(pr, &held)),
+                    cfg,
+                    then,
+                    real,
+                }
+            }
             ShipJob::Run {
                 action,
                 confirmed,
@@ -180,6 +216,15 @@ pub(super) struct ShipPanel {
     pub(super) cfg: Option<CodeShip>,
     /// The plan whose command the confirm card shows.
     pub(super) confirming: Option<Plan>,
+    /// That card's command before redaction: what its confirm sends.
+    confirm_real: String,
+    /// The newest plans' commands before redaction.
+    real: Real,
+    /// The branch the pressed button named; `None` when it named none.
+    pressed_branch: Option<String>,
+    /// The repo was read with another branch checked out than the Push
+    /// button names: read the plans again.
+    reread: bool,
     pub(super) branch_name: String,
     pub(super) busy: bool,
     pub(super) note: Option<String>,
@@ -192,8 +237,9 @@ pub(super) struct ShipPanel {
 }
 
 impl ShipPanel {
-    /// The tab just showed (or the project changed): read everything again,
-    /// so a confirm left open for another branch's command goes too.
+    /// The project changed, the page's Refresh was pressed or the repo was
+    /// read on another branch: read everything again, so a confirm left open
+    /// for another branch's command goes too.
     pub(super) fn shown(&mut self) -> Option<ShipJob> {
         if self.busy {
             return None;
@@ -210,7 +256,23 @@ impl ShipPanel {
         self.busy = true;
         self.note = None;
         self.output.clear();
+        let shown = match action {
+            Action::Push => &self.push,
+            Action::Pr => &self.pr,
+        };
+        self.pressed_branch = shown.as_ref().and_then(|p| p.branch.clone());
         Some(ShipJob::Refresh { then: Some(action) })
+    }
+
+    /// The repo was just read with `branch` checked out. When the Push button
+    /// names another one (it was switched in the terminal or by the agent),
+    /// the plans are read again on the next frame.
+    pub(super) fn saw_branch(&mut self, branch: Option<&str>) {
+        if let Some(push) = &self.push {
+            if push.branch.as_deref() != branch {
+                self.reread = true;
+            }
+        }
     }
 
     /// The confirm card's Push or Open PR: runs only the command it showed.
@@ -220,15 +282,19 @@ impl ShipPanel {
         }
         let plan = self.confirming.take()?;
         self.busy = true;
+        let real = std::mem::take(&mut self.confirm_real);
         Some(ShipJob::Run {
             action: plan.action,
             confirmed: true,
-            expected: Some(plan.command),
+            // The command before redaction when one was read: the guard
+            // compares this with what it is about to run.
+            expected: Some(if real.is_empty() { plan.command } else { real }),
         })
     }
 
     pub(super) fn cancel(&mut self) {
         self.confirming = None;
+        self.confirm_real.clear();
     }
 
     pub(super) fn make_branch(&mut self) -> Option<ShipJob> {
@@ -249,24 +315,31 @@ impl ShipPanel {
                 pr,
                 cfg,
                 then,
+                real,
             } => {
-                // A card for a command that would no longer run goes away.
+                // A card for a command that would no longer run goes away,
+                // also when only the part hidden as [redacted] changed.
                 if let Some(open) = &self.confirming {
                     let now = match open.action {
                         Action::Push => &push,
                         Action::Pr => &pr,
                     };
-                    if now.command != open.command || now.blocked.is_some() {
+                    let same = now.command == open.command
+                        && real.of(open.action, &now.command) == self.confirm_real;
+                    if !same || now.blocked.is_some() {
                         self.confirming = None;
+                        self.confirm_real.clear();
                     }
                 }
                 self.push = Some(*push);
                 self.pr = Some(*pr);
                 self.cfg = Some(cfg);
+                self.real = real;
                 let Some(action) = then else {
                     self.busy = false;
                     return None;
                 };
+                let pressed = self.pressed_branch.take();
                 let plan = match action {
                     Action::Push => self.push.clone(),
                     Action::Pr => self.pr.clone(),
@@ -276,7 +349,19 @@ impl ShipPanel {
                     self.busy = false;
                     return None;
                 }
+                // The button named one branch and another is checked out
+                // now: nothing runs or asks until the button says so too.
+                if let (Some(was), Some(now)) = (&pressed, &plan.branch) {
+                    if was != now {
+                        self.note = Some(format!(
+                            "You are on {now} now, not {was}. Check the button and press again."
+                        ));
+                        self.busy = false;
+                        return None;
+                    }
+                }
                 if plan.needs_confirm {
+                    self.confirm_real = self.real.of(action, &plan.command);
                     self.confirming = Some(plan);
                     self.busy = false;
                     return None;
@@ -304,6 +389,7 @@ impl ShipPanel {
                     Ok(made) => {
                         // An open card shows the command for the branch just left.
                         self.confirming = None;
+                        self.confirm_real.clear();
                         self.branch_name.clear();
                         self.note = Some(format!("On {made} now."));
                     }
@@ -374,6 +460,11 @@ impl ShipPanel {
             self.start(job, &ctx, config_dir, ws);
         }
         self.poll(&ctx, config_dir, ws);
+        if self.reread && !self.busy {
+            self.reread = false;
+            let job = self.shown();
+            self.start(job, &ctx, config_dir, ws);
+        }
 
         crate::cards::section_label(ui, SHIP_TITLE);
         let cfg = self.cfg.clone().unwrap_or_default();

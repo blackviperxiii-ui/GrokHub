@@ -287,6 +287,9 @@ struct Job {
 
 /// The stop reason of a turn Halt ended.
 pub const HALTED: &str = "halted";
+/// What the window sends to go on with a desktop session after an Allow or
+/// a Pause (the cabin's resume text). It is not a new goal step.
+pub const RESUME_TEXT: &str = "Continue";
 
 pub struct NeverHalted;
 
@@ -318,6 +321,25 @@ pub struct Session {
     episode: Mutex<Option<crate::episode::Open>>,
     /// The latest screenshot, for the episode panel's thumbnail.
     frames: crate::episode::FrameSlot,
+    /// Pause for the running episode turn: the kernel spends it and returns
+    /// before its next step, with the episode, its goal and its cards kept.
+    pause: Arc<AtomicBool>,
+    /// The running turn was paused, so it ends as `cancelled` for the page
+    /// (nothing queued behind it sends).
+    paused_turn: Arc<AtomicBool>,
+    /// An Allow with no reply running, or a Pause: the next message, when it
+    /// is [`RESUME_TEXT`], goes on with the goal step kept.
+    resume_due: AtomicBool,
+    /// An Allow landed while a reply ran, after its loop's last look: when
+    /// the reply ended the window was owed the resume ([`Self::take_resume_owed`]).
+    resume_owed: AtomicBool,
+    /// Halt was pressed on this chat since the app started.
+    halt_seen: AtomicBool,
+    /// Settings → Let Grok control the desktop, live: off refuses every
+    /// later desktop call of a turn that started with it on.
+    desk_on: Arc<AtomicBool>,
+    /// The running prompt was sent with desktop control on.
+    desk_turn: AtomicBool,
 }
 
 impl Session {
@@ -361,7 +383,13 @@ impl Session {
         let steer = SteerQueue::new();
         let frames = crate::episode::FrameSlot::default();
         let worker_dir = config_dir.clone();
+        let pause = Arc::new(AtomicBool::new(false));
+        let paused_turn = Arc::new(AtomicBool::new(false));
+        let desk_on = Arc::new(AtomicBool::new(true));
         let worker = Worker {
+            pause: Arc::clone(&pause),
+            paused_turn: Arc::clone(&paused_turn),
+            desk_on: Arc::clone(&desk_on),
             frames: frames.clone(),
             id: conversation_id.to_string(),
             resume: resume_id.to_string(),
@@ -385,6 +413,13 @@ impl Session {
             armed: AtomicBool::new(false),
             episode: Mutex::new(None),
             frames,
+            pause,
+            paused_turn,
+            resume_due: AtomicBool::new(false),
+            resume_owed: AtomicBool::new(false),
+            halt_seen: AtomicBool::new(false),
+            desk_on,
+            desk_turn: AtomicBool::new(false),
         }
     }
 
@@ -412,8 +447,9 @@ impl Session {
     }
 
     /// A message with desktop control on opens the chat's episode, or goes on
-    /// in the open one (a paused one runs again).
-    fn open_episode(&self) -> grokhub_agent::EpisodeSeed {
+    /// in the open one (a paused one runs again). `resume`: the message is
+    /// the window's [`RESUME_TEXT`], not a new goal step.
+    fn open_episode(&self, resume: bool) -> grokhub_agent::EpisodeSeed {
         let now = grokhub_core::now_ms();
         let mut slot = self.episode.lock().unwrap_or_else(|e| e.into_inner());
         let open = slot.get_or_insert_with(|| crate::episode::Open {
@@ -429,16 +465,90 @@ impl Session {
             id: open.id.clone(),
             chat_id: self.id.clone(),
             turn: open.turn,
-            resume: false,
+            resume,
             config_dir: self.config_dir.clone(),
             held: Vec::new(),
             access: grokhub_agent::harness::AccessMode::Supervised,
         }
     }
 
+    /// OK or Deny on a card the open episode posted. True when the window
+    /// should send [`RESUME_TEXT`] now: an Allow with no reply running, which
+    /// no loop would pick up until the next message. An Allow while a reply
+    /// runs answers false: its loop takes it, or the end of the reply owes
+    /// the resume ([`Self::take_resume_owed`]). After Halt an Allow is
+    /// refused; a Deny still answers.
+    pub fn answer_episode(&self, park_id: &str, approve: bool) -> Result<bool, String> {
+        // Held over the answer and the look at `busy`, as the end of
+        // `prompt` holds it: exactly one of the two says the resume is due.
+        let slot = self.episode.lock().unwrap_or_else(|e| e.into_inner());
+        let open = slot
+            .as_ref()
+            .ok_or_else(|| "No desktop session is open on this chat.".to_string())?;
+        if approve && self.halt_seen.load(Ordering::SeqCst) {
+            return Err((*grokhub_core::desktop_mcp::HALT_MSG).to_string());
+        }
+        crate::episode::answer(&self.config_dir, &open.id, park_id, approve)?;
+        let due = approve && !self.busy.load(Ordering::SeqCst);
+        if due {
+            self.resume_due.store(true, Ordering::SeqCst);
+        }
+        Ok(due)
+    }
+
+    /// True once after a reply ended with an Allow nobody acted on (it landed
+    /// after the loop's last look): the window sends [`RESUME_TEXT`] now.
+    pub fn take_resume_owed(&self) -> bool {
+        self.resume_owed.swap(false, Ordering::SeqCst)
+    }
+
+    /// Settings turned desktop control off: a running turn's later desktop
+    /// calls are refused, the session ends (a running one stops, an idle one
+    /// is closed and its cards denied) and the chat is disarmed, so nothing
+    /// comes back when the switch does. True when a session was open.
+    pub fn desktop_off(&self) -> bool {
+        self.desk_on.store(false, Ordering::SeqCst);
+        let stopped = self.stop_episode();
+        self.armed.store(false, Ordering::SeqCst);
+        stopped
+    }
+
+    /// Settings turned desktop control back on.
+    pub fn desktop_on(&self) {
+        self.desk_on.store(true, Ordering::SeqCst);
+    }
+
+    /// Whether this chat drives the desktop right now: a supervised session
+    /// is armed or open on it, or its running reply was sent with desktop
+    /// control on. A paired browser can't steer or answer it meanwhile.
+    pub fn on_desktop(&self) -> bool {
+        self.episode_armed()
+            || self.episode().is_some()
+            || (self.busy.load(Ordering::SeqCst) && self.desk_turn.load(Ordering::SeqCst))
+    }
+
+    /// Ends the open episode while no loop runs it: its end is written,
+    /// every card it left (an allowed one too) is taken back, and the chat
+    /// is disarmed. False when none is open.
+    fn end_idle_episode(&self, why: &str) -> bool {
+        let open = self
+            .episode
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        self.armed.store(false, Ordering::SeqCst);
+        self.resume_due.store(false, Ordering::SeqCst);
+        let Some(open) = open else {
+            return false;
+        };
+        crate::episode::write_end(&self.config_dir, &self.id, &open.id, why);
+        true
+    }
+
     /// Pause: the running step loop stops after the step it is on, the
-    /// episode stays open, and the next message runs it again. False when
-    /// no episode runs.
+    /// episode stays open with its goal and its cards, and the next message
+    /// goes on with it. Nothing is cancelled or denied. False when no
+    /// episode runs.
     pub fn pause_episode(&self) -> bool {
         let mut slot = self.episode.lock().unwrap_or_else(|e| e.into_inner());
         let Some(open) = slot.as_mut() else {
@@ -448,20 +558,18 @@ impl Session {
             return false;
         }
         open.paused = true;
-        self.cancel.cancel();
+        self.paused_turn.store(true, Ordering::SeqCst);
+        self.resume_due.store(true, Ordering::SeqCst);
+        self.pause.store(true, Ordering::SeqCst);
         true
     }
 
     /// Stop: ends the episode. A running loop ends it itself (every open
     /// card is denied); with none running the end is written here.
     pub fn stop_episode(&self) -> bool {
-        let open = {
-            let slot = self.episode.lock().unwrap_or_else(|e| e.into_inner());
-            match slot.as_ref() {
-                Some(open) => open.clone(),
-                None => return false,
-            }
-        };
+        if self.episode().is_none() {
+            return false;
+        }
         if self.busy.load(Ordering::SeqCst) {
             if let Some(o) = self
                 .episode
@@ -471,24 +579,29 @@ impl Session {
             {
                 o.paused = false;
             }
+            // Stop after a Pause in the same turn: the Stop wins.
+            self.paused_turn.store(false, Ordering::SeqCst);
             self.cancel.cancel();
         } else {
-            crate::episode::write_end(&self.config_dir, &self.id, &open.id, "stop");
-            *self.episode.lock().unwrap_or_else(|e| e.into_inner()) = None;
-            self.armed.store(false, Ordering::SeqCst);
+            self.end_idle_episode("stop");
         }
         true
     }
 
     /// After a prompt: a stop that ends the episode closes it; a Pause's
-    /// cancel keeps it open.
-    fn settle_episode(&self, stop: &str) {
-        let mut slot = self.episode.lock().unwrap_or_else(|e| e.into_inner());
-        let paused = slot.as_ref().is_some_and(|o| o.paused);
+    /// cancel keeps it open. `ran`: the prompt was a turn of the episode.
+    /// Its `cancelled` is the Pause's only while `paused_turn` still stands:
+    /// the worker clears it when a real Stop ended the turn, and then the
+    /// engine has ended the episode, so the slot closes with it.
+    fn settle_episode(&self, slot: &mut Option<crate::episode::Open>, stop: &str, ran: bool) {
+        let paused = slot.as_ref().is_some_and(|o| o.paused)
+            && (!ran || self.paused_turn.load(Ordering::SeqCst));
         if crate::episode::ends(stop) && !(paused && stop == "cancelled") {
             *slot = None;
-            // The session is over: the next message is a plain turn again.
+            // The session is over: the next message is a plain turn again,
+            // and a "Continue" is not a resume of anything.
             self.armed.store(false, Ordering::SeqCst);
+            self.resume_due.store(false, Ordering::SeqCst);
         }
     }
 
@@ -504,10 +617,18 @@ impl Session {
         if text.trim().is_empty() && attachments.is_empty() {
             return Err("Type a message first.".into());
         }
+        // The resume is the window's own text; anything else the person
+        // typed is a new goal step, and either way the resume is spent.
+        let resume = self.resume_due.swap(false, Ordering::SeqCst) && text.trim() == RESUME_TEXT;
         let seed = (route.desktop && (self.episode_armed() || self.episode().is_some()))
-            .then(|| self.open_episode());
+            .then(|| self.open_episode(resume));
+        let in_episode = seed.is_some();
         let (done, wait) = channel();
+        self.resume_owed.store(false, Ordering::SeqCst);
         self.halted.store(false, Ordering::SeqCst);
+        self.pause.store(false, Ordering::SeqCst);
+        self.paused_turn.store(false, Ordering::SeqCst);
+        self.desk_turn.store(route.desktop, Ordering::SeqCst);
         self.busy.store(true, Ordering::SeqCst);
         let ran = self
             .jobs
@@ -525,10 +646,25 @@ impl Session {
                 wait.recv()
                     .map_err(|_| "The chat worker stopped.".to_string())?
             });
+        // "No reply runs" and the look for an Allow no loop took are one
+        // step under the episode lock, as an answer is (`answer_episode`):
+        // an Allow lands wholly before (seen here) or wholly after (its own
+        // return says the resume is due).
+        let mut slot = self.episode.lock().unwrap_or_else(|e| e.into_inner());
         self.busy.store(false, Ordering::SeqCst);
+        self.desk_turn.store(false, Ordering::SeqCst);
         if let Ok(stop) = &ran {
-            self.settle_episode(stop);
+            self.settle_episode(&mut slot, stop, in_episode);
         }
+        // A paused session waits for the person; anything else goes on.
+        let owed = slot.as_ref().is_some_and(|open| {
+            !open.paused && crate::episode::allowed(&self.config_dir, &open.id)
+        });
+        if owed {
+            self.resume_due.store(true, Ordering::SeqCst);
+            self.resume_owed.store(true, Ordering::SeqCst);
+        }
+        drop(slot);
         ran
     }
 
@@ -571,11 +707,19 @@ impl Session {
     }
 
     /// Halt for this chat: the running prompt ends as `halted` and a waiting
-    /// tool does not run. True when a prompt was running.
+    /// tool does not run. With no prompt running, an open desktop session
+    /// ends here (its loop is not there to end it): its cards are taken back,
+    /// an allowed one too, so nothing queued runs with a later message. True
+    /// when a prompt was running.
     pub fn halt(&self) -> bool {
         self.halted.store(true, Ordering::SeqCst);
+        self.halt_seen.store(true, Ordering::SeqCst);
         self.cancel.cancel();
-        self.busy.load(Ordering::SeqCst)
+        let busy = self.busy.load(Ordering::SeqCst);
+        if !busy {
+            self.end_idle_episode("halt");
+        }
+        busy
     }
 }
 
@@ -687,6 +831,9 @@ struct Worker {
     steer: SteerQueue,
     halted: Arc<AtomicBool>,
     frames: crate::episode::FrameSlot,
+    pause: Arc<AtomicBool>,
+    paused_turn: Arc<AtomicBool>,
+    desk_on: Arc<AtomicBool>,
 }
 
 fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
@@ -699,6 +846,9 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
         steer,
         halted,
         frames,
+        pause,
+        paused_turn,
+        desk_on,
     } = worker;
     let _config = grokhub_agent::perm::ConfigGuard::set(&config_dir);
     let mut engine: Option<NativeEngine> = None;
@@ -771,11 +921,15 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                     halt: Box::new(NeverHalted),
                     gate,
                     desktop: Some(Box::new(crate::episode::FrameTap {
-                        inner: desktop(),
+                        inner: Box::new(crate::episode::Switched {
+                            inner: desktop(),
+                            on: Arc::clone(&desk_on),
+                        }),
                         slot: frames.clone(),
                     })),
                     permits: Arc::new(inbox),
                 }));
+                engine.set_pause(Arc::clone(&pause));
                 // A chat saved earlier (opened from History, or the last chat
                 // after a restart) goes on from its saved turns, as the cabin's does.
                 if let Ok(info) = grokhub_agent::load_session(&resume) {
@@ -813,6 +967,15 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                 // Halt cancels a waiting tool too; the turn reads as halted.
                 if halted.load(Ordering::SeqCst) {
                     *s = HALTED.into();
+                } else if paused_turn.load(Ordering::SeqCst) {
+                    if s == "end_turn" {
+                        // A paused session's turn: stopped, not finished.
+                        *s = "cancelled".into();
+                    } else {
+                        // Something else ended it (the reply's own Stop):
+                        // the Pause did not, and the session is not paused.
+                        paused_turn.store(false, Ordering::SeqCst);
+                    }
                 }
             }
             match &mut ui {

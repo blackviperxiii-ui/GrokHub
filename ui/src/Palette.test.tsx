@@ -3,7 +3,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Capabilities, QuickChip } from "./api";
-import { NO_SOURCES, Palette, paletteRows, type PaletteExtras, type PaletteSources } from "./Palette";
+import { hasPage, NO_SOURCES, Palette, paletteRows, type PaletteExtras, type PaletteSources } from "./Palette";
 import { answersTo, PALETTE_SYNONYMS, shellKeys, type ChatHit, type CommandRunners } from "./paletteCommands";
 
 vi.mock("./api", () => ({}));
@@ -210,6 +210,18 @@ describe("paletteRows", () => {
     expect(paletteRows(DESKTOP, "zzz")).toEqual([
       { label: "Ask Loadout: zzz", action: { kind: "ask", text: "zzz" } },
     ]);
+  });
+});
+
+describe("hasPage", () => {
+  it("Devices opens only on a desktop with Web access, and Updates only on this computer", () => {
+    expect(hasPage(DESKTOP, "devices")).toBe(true);
+    expect(hasPage(PHONE, "devices")).toBe(false);
+    expect(hasPage({ ...DESKTOP, remote: true }, "devices")).toBe(false);
+    expect(hasPage(DESKTOP, "updates")).toBe(true);
+    expect(hasPage(WEB, "updates")).toBe(false);
+    expect(hasPage(WEB, "workboard")).toBe(true);
+    expect(hasPage(WEB, "history")).toBe(false);
   });
 });
 

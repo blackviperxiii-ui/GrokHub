@@ -308,6 +308,13 @@ fn find_signals_json(dir: &Path, id: &str, depth: u8) -> Option<crate::wire::Gro
     None
 }
 
+/// A link among the sessions is never followed: the CLI's sign-in and
+/// settings files sit beside them, and a link (one a checked-out repository
+/// under `worktrees/` can carry) would lead this reader to them.
+fn is_link(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink())
+}
+
 pub fn discover_session_files_in(home: &Path) -> Vec<GrokSession> {
     let mut out = Vec::new();
     let roots = [
@@ -331,7 +338,7 @@ fn walk_session_dirs(dir: &Path, depth: u8, out: &mut Vec<GrokSession>) {
     };
     for e in entries.flatten() {
         let path = e.path();
-        if !path.is_dir() {
+        if is_link(&path) || !path.is_dir() {
             continue;
         }
         let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
@@ -340,10 +347,11 @@ fn walk_session_dirs(dir: &Path, depth: u8, out: &mut Vec<GrokSession>) {
                 continue;
             }
             let title = session_title_from_dir(&path, name);
+            let history = path.join("chat_history.jsonl");
             out.push(GrokSession {
                 id: name.to_string(),
                 title,
-                path: Some(path.join("chat_history.jsonl")),
+                path: (!is_link(&history)).then_some(history),
                 cwd: None,
                 cabin: false,
             });
@@ -374,6 +382,9 @@ fn session_title_from_dir(dir: &Path, fallback: &str) -> String {
 }
 
 fn session_title_from_jsonl_path(path: &Path) -> Option<String> {
+    if is_link(path) {
+        return None;
+    }
     let f = std::fs::File::open(path).ok()?;
     let reader = BufReader::new(f);
     let mut seen = 0usize;
@@ -401,6 +412,9 @@ fn walk_session_md(dir: &Path, depth: u8, out: &mut Vec<GrokSession>) {
     };
     for e in entries.flatten() {
         let path = e.path();
+        if is_link(&path) {
+            continue;
+        }
         if path.is_dir() {
             walk_session_md(&path, depth + 1, out);
             continue;
@@ -451,6 +465,9 @@ fn walk_session_md(dir: &Path, depth: u8, out: &mut Vec<GrokSession>) {
 const SESSION_MD_CAP: usize = 8 * 1024;
 
 fn read_file_capped(path: &Path, cap: usize) -> String {
+    if is_link(path) {
+        return String::new();
+    }
     let mut f = match std::fs::File::open(path) {
         Ok(f) => f,
         Err(_) => return String::new(),
@@ -461,4 +478,88 @@ fn read_file_capped(path: &Path, cap: usize) -> String {
         Err(_) => return String::new(),
     };
     String::from_utf8_lossy(&buf[..n]).into_owned()
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::symlink;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "grokhub-cli-history-{name}-{}-{}",
+            std::process::id(),
+            crate::now_ms()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        dir
+    }
+
+    /// A made-up CLI folder; the real one is never touched.
+    #[test]
+    fn a_link_among_the_sessions_never_leads_to_a_file_outside_them() {
+        let home = temp_dir("links");
+        let outside = temp_dir("links-outside");
+        let sessions = home.join("sessions");
+        std::fs::create_dir_all(&sessions).expect("sessions");
+        // Stand-ins for the CLI's sign-in and settings files, shaped so that
+        // each way of reading a session would show their text as a title.
+        std::fs::write(
+            home.join("auth.json"),
+            "{\"title\":\"FAKE-AUTH-TITLE\",\"type\":\"user\",\"content\":\"<user_query>FAKE-AUTH-QUERY</user_query>\"}\n",
+        )
+        .expect("fake auth");
+        std::fs::write(home.join("config.toml"), "# FAKE-CONFIG-TITLE\n").expect("fake config");
+
+        let real = "0198f2a4-1111-7d2e-9a3f-5c6d7e8f9a01";
+        std::fs::write(sessions.join(format!("{real}.md")), "# Harbor sketch\n").expect("real");
+        // A markdown session that is a link to the settings file.
+        let md_link = "0198f2a4-2222-7d2e-9a3f-5c6d7e8f9a02";
+        symlink("../config.toml", sessions.join(format!("{md_link}.md"))).expect("md link");
+        // Session folders whose summary or history is a link to the sign-in file.
+        let summary_link = "0198f2a4-3333-7d2e-9a3f-5c6d7e8f9a03";
+        std::fs::create_dir_all(sessions.join(summary_link)).expect("dir");
+        symlink(
+            "../../auth.json",
+            sessions.join(summary_link).join("summary.json"),
+        )
+        .expect("summary link");
+        let history_link = "0198f2a4-4444-7d2e-9a3f-5c6d7e8f9a04";
+        std::fs::create_dir_all(sessions.join(history_link)).expect("dir");
+        symlink(
+            "../../auth.json",
+            sessions.join(history_link).join("chat_history.jsonl"),
+        )
+        .expect("history link");
+        // A linked folder that leaves the CLI folder.
+        let far = "0198f2a4-5555-7d2e-9a3f-5c6d7e8f9a05";
+        std::fs::write(outside.join(format!("{far}.md")), "# OUTSIDE-TITLE\n").expect("outside");
+        std::fs::create_dir_all(home.join("worktrees").join("repo")).expect("worktree");
+        symlink(&outside, home.join("worktrees").join("repo").join("notes")).expect("dir link");
+
+        let mut found: Vec<(String, String, Option<PathBuf>)> = discover_session_files_in(&home)
+            .into_iter()
+            .map(|s| (s.id, s.title, s.path))
+            .collect();
+        found.sort();
+        assert_eq!(
+            found,
+            [
+                (
+                    real.to_string(),
+                    "Harbor sketch".to_string(),
+                    Some(sessions.join(format!("{real}.md")))
+                ),
+                (
+                    summary_link.to_string(),
+                    summary_link.to_string(),
+                    Some(sessions.join(summary_link).join("chat_history.jsonl"))
+                ),
+                (history_link.to_string(), history_link.to_string(), None),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
 }

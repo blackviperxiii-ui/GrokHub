@@ -27,6 +27,7 @@ export const SHARE_NOTE =
 export const SHARE_OFF = "Not sharing. Start share to pair another computer.";
 export const PAIR_STEP = "Open this address on the other computer and enter the code.";
 export const PAIRED_NOTE = "Paired. Make a new code after another computer joins.";
+export const CODE_GONE = "That code stopped working. Make a new one.";
 export const RUN_NOTE =
   "Opens a chat with this task, so it runs on this PC with the same approvals as anything else you ask.";
 
@@ -147,7 +148,9 @@ export function Devices({
             <div className="card-detail-line">{`${PAIR_STEP} ${share.address}`}</div>
           </>
         )}
-        {share?.on && !share.code && <div className="card-detail-line">{PAIRED_NOTE}</div>}
+        {share?.on && !share.code && (
+          <div className="card-detail-line">{share.pairedSinceCode ? PAIRED_NOTE : CODE_GONE}</div>
+        )}
         <div className="card-buttons">
           {share?.on ? (
             <>
@@ -168,7 +171,7 @@ export function Devices({
       {share && share.peers.length > 0 && (
         <ul className="rows" aria-label="Paired computers">
           {share.peers.map((peer) => (
-            <li key={peer.name} className="card device">
+            <li key={peer.id} className="card device">
               <div className="card-title">{peer.name}</div>
               <div className="card-status">
                 {peer.lastSeen > 0 ? `Last used ${ago(peer.lastSeen, now)}` : "Paired, not used yet"}

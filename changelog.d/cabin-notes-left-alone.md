@@ -1,0 +1,1 @@
+- In the cabin, Get to know you says on Review and on the Saved screen when USER.md, SOUL.md or MEMORY.md was left alone and why, and "Add from OpenClaw" says when an import was cut short or the notes were already there.

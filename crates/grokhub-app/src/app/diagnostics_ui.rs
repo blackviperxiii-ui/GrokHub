@@ -4,8 +4,9 @@ use super::*;
 use grokhub_core::{
     content_level_label, diagnostics_markdown, diagnostics_preview_lines,
     diagnostics_redaction_summary, diagnostics_saved_status, redact_for_diagnostics, redact_turn,
-    turn_says, why_chat_vs_task, write_diagnostics_zip, DiagnosticsClassifier, DiagnosticsExport,
-    DiagnosticsPlaybook, DiagnosticsPolicy, DiagnosticsToolCall, DiagnosticsTurn,
+    redacted_clip, redacted_log_tail, turn_says, why_chat_vs_task, write_diagnostics_zip,
+    DiagnosticsClassifier, DiagnosticsExport, DiagnosticsPlaybook, DiagnosticsPolicy,
+    DiagnosticsToolCall, DiagnosticsTurn,
 };
 use std::time::SystemTime;
 
@@ -282,7 +283,7 @@ impl Cabin {
             for span in spans {
                 started = started.min(span.ts_ms);
                 finished = finished.max(span.ts_ms);
-                let summary = redact_for_diagnostics(&clip_chars(&span.result, 160), home_ref);
+                let summary = redacted_clip(&span.result, home_ref, 160);
                 turn.tool_calls.push(DiagnosticsToolCall {
                     tool: span.tool.clone(),
                     decision: span.decision.clone(),
@@ -302,10 +303,7 @@ impl Cabin {
                     || span.result.starts_with("error")
                     || span.claim.to_ascii_lowercase().contains("error")
                 {
-                    turn.errors.push(redact_for_diagnostics(
-                        &clip_chars(&span.claim, 200),
-                        home_ref,
-                    ));
+                    turn.errors.push(redacted_clip(&span.claim, home_ref, 200));
                 }
             }
             if started != u64::MAX {
@@ -318,10 +316,8 @@ impl Cabin {
                 }
             }
             if assistant_raw.trim_start().starts_with("Error:") {
-                turn.errors.push(redact_for_diagnostics(
-                    &clip_chars(&assistant_raw, 240),
-                    home_ref,
-                ));
+                turn.errors
+                    .push(redacted_clip(&assistant_raw, home_ref, 240));
             }
 
             export.turns.push(redact_turn(turn, home_ref));
@@ -514,9 +510,8 @@ impl Cabin {
             dir.join("hub.log"),
         ];
         for path in candidates {
-            if let Ok(text) = std::fs::read_to_string(&path) {
-                let tail = tail_chars(&text, 4_000);
-                return redact_for_diagnostics(&tail, home);
+            if let Some(tail) = redacted_log_tail(&path, home, 4_000) {
+                return tail;
             }
         }
         String::new()
@@ -572,26 +567,6 @@ fn build_turns(messages: &[(String, String)]) -> Vec<TurnGroup> {
     out
 }
 
-fn clip_chars(s: &str, max: usize) -> String {
-    let n = s.chars().count();
-    if n <= max {
-        s.to_string()
-    } else {
-        let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
-        out.push('…');
-        out
-    }
-}
-
-fn tail_chars(s: &str, max: usize) -> String {
-    let n = s.chars().count();
-    if n <= max {
-        s.to_string()
-    } else {
-        s.chars().skip(n - max).collect()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -629,6 +604,26 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn a_key_the_log_cut_lands_inside_is_still_hidden() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("diag-logcut");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let _pin = crate::config::TestConfigDir::set(root.clone());
+        // The last 4,000 characters of the log start four characters into
+        // the key.
+        let rest = format!(" accepted\n{}", "y".repeat(4_000 - 21 - 10));
+        let log = format!("started\nsk-abcdefghijklmnopqrstuv{rest}");
+        std::fs::write(root.join("cabin.log"), log).unwrap();
+        let cabin = Cabin::quiet_for_test();
+        assert_eq!(
+            cabin.diagnostics_recent_logs(None),
+            format!("started\n[redacted]{rest}")
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

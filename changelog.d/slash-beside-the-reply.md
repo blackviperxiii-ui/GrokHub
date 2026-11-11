@@ -1,0 +1,2 @@
+- Chat box: `/queue`, `/bg`, `/bg stop`, `/send` and `/consult` typed while a reply is running now run beside it; any other command typed then stays in the box and says it waits for the reply.
+- `/hub` is greyed as "On your computer" in a paired browser, and says so where the app has no Devices page instead of doing nothing.

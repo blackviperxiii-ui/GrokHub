@@ -276,3 +276,175 @@ fn approve_remembers_and_returns_the_agents_message() {
     let _ = std::fs::remove_dir_all(&config);
     let _ = std::fs::remove_dir_all(&work);
 }
+
+/// A line with a key-shaped value in it, written in two parts.
+fn keyed_line() -> String {
+    format!(
+        "curl -H \"Authorization: Bearer {}{}\" https://api.example.com/v1/x",
+        "sk-abcdefghij", "klmnopqrstuv"
+    )
+}
+
+#[test]
+fn a_line_with_a_key_in_it_is_never_stored_and_asks_every_time() {
+    let dir = temp_dir("keyed");
+    let line = keyed_line();
+    remember(&dir, "repo-a", "git status").expect("remember");
+    remember(&dir, "repo-a", &line).expect("remember");
+    assert_eq!(remembered(&dir, "repo-a"), vec!["git status"]);
+    let raw = std::fs::read_to_string(dir.join(FILE)).expect("store");
+    assert!(!raw.contains("klmnopqrstuv"), "{raw}");
+    // Even with the line handed in as remembered, it asks.
+    assert_eq!(
+        judge(&line, ROOT, HOME, std::slice::from_ref(&line), &repo()),
+        Verdict::Confirm {
+            command: line.clone(),
+            destructive: false,
+        }
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_keyed_line_an_older_version_stored_is_not_listed_or_queued_and_leaves_the_file() {
+    let config = temp_dir("keyed-old-cfg");
+    let work = temp_dir("keyed-old-ws");
+    let line = keyed_line();
+    let key = repo_key(&work);
+    let old = serde_json::json!({
+        "repos": [{ "repoKey": key, "commands": ["git status", line] }]
+    });
+    std::fs::write(config.join(FILE), old.to_string()).expect("seed");
+
+    assert_eq!(view(&config, &work).remembered, vec!["git status"]);
+    // Showing the page is enough to take it out of the file: nothing else
+    // has to be remembered first.
+    let raw = std::fs::read_to_string(config.join(FILE)).expect("store");
+    assert!(!raw.contains("klmnopqrstuv"), "{raw}");
+    assert_eq!(remembered(&config, &key), vec!["git status"]);
+    assert_eq!(
+        check(&config, &work, &line, CodeShip::default()),
+        Verdict::Confirm {
+            command: line.clone(),
+            destructive: false,
+        }
+    );
+    remember(&config, &key, "ls").expect("remember");
+    assert_eq!(remembered(&config, &key), vec!["git status", "ls"]);
+    let raw = std::fs::read_to_string(config.join(FILE)).expect("store");
+    assert!(!raw.contains("klmnopqrstuv"), "{raw}");
+    let _ = std::fs::remove_dir_all(&config);
+    let _ = std::fs::remove_dir_all(&work);
+}
+
+/// Lines with a secret the Code tab's word redactor does not know and the
+/// debug bundle hides, with the part of each that must not reach the file.
+/// The key-shaped values are written in two parts.
+fn other_keyed_lines() -> Vec<(String, &'static str)> {
+    vec![
+        // Bare tokens, told by their shape.
+        (
+            format!(
+                "python push.py --hub {}{}",
+                "hf_AbCdEfGhIjKlMnOp", "QrStUvWxYz0123456789"
+            ),
+            "QrStUvWxYz0123456789",
+        ),
+        (
+            format!(
+                "node bot.js --slack {}{}",
+                "xoxb-123456789012", "-abcdefghijkl"
+            ),
+            "-abcdefghijkl",
+        ),
+        (
+            format!(
+                "aws configure set aws_access_key_id {}{}",
+                "AKIAABCDEF", "GHIJKLMNOP"
+            ),
+            "GHIJKLMNOP",
+        ),
+        // A password in a URL.
+        (
+            format!(
+                "curl https://user:{}@example.com/o/r.tar.gz -o r.tar.gz",
+                "hunter2fake"
+            ),
+            "hunter2fake",
+        ),
+        // `KEY=value` and `--key=value`, told by the key's name.
+        (
+            "API_KEY=plainvalue123 npm run deploy".to_string(),
+            "plainvalue123",
+        ),
+        (
+            "mysqldump -u root --password=hunter2fake demo".to_string(),
+            "hunter2fake",
+        ),
+        // A header whose credential is not a key shape, or is a short one.
+        (
+            format!(
+                "curl -H \"Authorization: Basic {}\" https://api.example.com",
+                "YWRtaW46aHVudGVyMmZha2U="
+            ),
+            "YWRtaW46aHVudGVyMmZha2U",
+        ),
+        (
+            "curl -H \"Authorization: Bearer short123\" https://api.example.com".to_string(),
+            "short123",
+        ),
+    ]
+}
+
+#[test]
+fn a_line_with_any_secret_the_debug_bundle_hides_is_never_stored_and_asks_every_time() {
+    let dir = temp_dir("keyed-more");
+    remember(&dir, "repo-a", "git status").expect("remember");
+    for (line, secret) in other_keyed_lines() {
+        remember(&dir, "repo-a", &line).expect("remember");
+        assert_eq!(remembered(&dir, "repo-a"), vec!["git status"], "{line}");
+        let raw = std::fs::read_to_string(dir.join(FILE)).expect("store");
+        assert!(!raw.contains(secret), "{line}: {raw}");
+        // Even with the line handed in as remembered, it asks.
+        assert_eq!(
+            judge(&line, ROOT, HOME, std::slice::from_ref(&line), &repo()),
+            Verdict::Confirm {
+                command: line.clone(),
+                destructive: false,
+            },
+            "{line}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_line_that_only_names_a_secret_is_still_remembered() {
+    let dir = temp_dir("names-a-secret");
+    let lines = [
+        "gh secret set DEPLOY_TOKEN",
+        "docker login --password-stdin registry.example.com",
+        "cargo run -- --max_tokens=4000",
+        "cat docs/secret-santa.md",
+    ];
+    for line in lines {
+        remember(&dir, "repo-a", line).expect("remember");
+    }
+    assert_eq!(remembered(&dir, "repo-a"), lines);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_branch_or_file_name_that_only_looks_like_a_key_prefix_is_still_remembered() {
+    let dir = temp_dir("not-a-key");
+    remember(&dir, "repo-a", "git push -u origin fix/desk-sessions-halt").expect("remember");
+    remember(&dir, "repo-a", "cat docs/task-runner-notes.md").expect("remember");
+    assert_eq!(
+        remembered(&dir, "repo-a"),
+        vec![
+            "git push -u origin fix/desk-sessions-halt",
+            "cat docs/task-runner-notes.md"
+        ]
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

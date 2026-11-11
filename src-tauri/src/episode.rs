@@ -74,6 +74,11 @@ pub struct Panel {
     pub ended: Option<String>,
     /// Steps run through the Cua driver's gate instead of the built-in tools.
     pub cua: bool,
+    /// The picture is the one the page already has, so it is not sent again.
+    pub frame_same: bool,
+    /// An allowed step waits with no reply running to take it: the page
+    /// sends the resume (`agent::RESUME_TEXT`) now.
+    pub resume: bool,
 }
 
 /// A step of an episode, as the header counts it: a tool call the gate
@@ -100,7 +105,206 @@ fn one_line(text: &str, cap: usize) -> String {
         .collect()
 }
 
-/// The panel for episode `id` on chat `chat`, read from disk.
+/// What a waiting card says, for the page: all of it, since it is what the
+/// person approves (a cut would hide the end of a typed command), with every
+/// line end marked so an Enter inside typed text shows. Keys are scrubbed.
+fn card_text(action: &str) -> String {
+    grokhub_core::redact_secrets(action)
+        .replace("\r\n", "\n")
+        .replace('\n', "\u{23ce}\n")
+}
+
+/// One listed step and, while it is a hard step nobody settled yet, the card
+/// it waits on.
+#[derive(Debug, Clone)]
+struct Seen {
+    row: StepRow,
+    card: Option<String>,
+}
+
+/// What the panel has read of one episode's spans. A re-read parses only the
+/// whole lines appended since (as the cabin's step count does), so a long
+/// chat's span file is not parsed again three times a second, and a torn or
+/// bad line is skipped instead of blanking the list.
+#[derive(Debug, Default)]
+pub struct Cursor {
+    chat: String,
+    id: String,
+    /// Bytes of the span file read so far: the end of its last whole line.
+    at: u64,
+    rows: Vec<Seen>,
+    ended: Option<String>,
+}
+
+/// The card a parked step's spans belong to (its park, then its approve or
+/// deny): the kernel names it after the episode and the step number in the
+/// span's claim (`episode step N`), which a step keeps when it settles later.
+fn card_of(s: &hx::Span, id: &str) -> Option<String> {
+    let n: u32 = s.claim.strip_prefix("episode step ")?.parse().ok()?;
+    Some(format!("{}{id}-{n}", ep::PARK_PREFIX))
+}
+
+impl Cursor {
+    /// Reads what was appended to the chat's span file since the last call.
+    fn read(&mut self, config_dir: &Path, chat: &str, id: &str) {
+        use std::io::{Read, Seek, SeekFrom};
+        if self.chat != chat || self.id != id {
+            *self = Self {
+                chat: chat.to_string(),
+                id: id.to_string(),
+                ..Self::default()
+            };
+        }
+        let Ok(mut file) = std::fs::File::open(hx::span_path(config_dir, chat)) else {
+            return;
+        };
+        let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+        if len < self.at {
+            // A shorter file is another file: read it from the start.
+            self.at = 0;
+            self.rows.clear();
+            self.ended = None;
+        }
+        let mut buf = Vec::new();
+        if file.seek(SeekFrom::Start(self.at)).is_err() || file.read_to_end(&mut buf).is_err() {
+            return;
+        }
+        // A last line still being written waits for its newline.
+        let whole = buf.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1);
+        self.at += whole as u64;
+        for line in String::from_utf8_lossy(&buf[..whole]).lines() {
+            if let Ok(span) = serde_json::from_str::<hx::Span>(line.trim()) {
+                if span.episode == self.id {
+                    self.note(span);
+                }
+            }
+        }
+    }
+
+    fn note(&mut self, s: hx::Span) {
+        if s.tool == ep::EPISODE_TOOL {
+            // The newest begin or end marker says whether it is over.
+            match s.decision.as_str() {
+                "begin" => self.ended = None,
+                "end" => self.ended = Some(s.result),
+                _ => {}
+            }
+            return;
+        }
+        // An approve or a deny settles the waiting step it names: its own
+        // step number, not its tool and args, which another step can share
+        // (typed text is kept as its length). A park past its TTL is denied
+        // for now and waits on.
+        let settles = match s.decision.as_str() {
+            "approve" => true,
+            "deny" => !s.result.ends_with(ep::STILL_WAITING),
+            _ => false,
+        };
+        if let Some(card) = card_of(&s, &self.id).filter(|_| settles) {
+            let waiting = self
+                .rows
+                .iter_mut()
+                .find(|seen| seen.card.as_ref() == Some(&card));
+            if let Some(seen) = waiting {
+                seen.card = None;
+                if s.decision == "approve" {
+                    seen.row.decision = "approve".into();
+                    seen.row.result = one_line(&s.result, ep::STEP_RESULT_CAP);
+                } else {
+                    seen.row.decision = "deny".into();
+                    seen.row.result = String::new();
+                }
+            }
+        }
+        if !is_step(&s, &self.id) {
+            return;
+        }
+        let card = (s.decision == "park")
+            .then(|| card_of(&s, &self.id))
+            .flatten();
+        self.rows.push(Seen {
+            row: StepRow {
+                n: self.rows.len() as u32 + 1,
+                tool: s.tool,
+                decision: s.decision,
+                result: one_line(&s.result, ep::STEP_RESULT_CAP),
+                goal_step: one_line(&s.goal_step, 60),
+            },
+            card,
+        });
+    }
+
+    /// The panel for episode `id` on chat `chat` as it stands now.
+    pub fn panel(
+        &mut self,
+        config_dir: &Path,
+        chat: &str,
+        id: &str,
+        started_ms: u64,
+        now_ms: u64,
+        frame: Option<String>,
+        paused: bool,
+        cua: bool,
+    ) -> Panel {
+        self.read(config_dir, chat, id);
+        let parks: Vec<ParkRow> = hx::pending_parks(config_dir)
+            .into_iter()
+            .filter(|p| owns(&p.id, id))
+            .map(|p| ParkRow {
+                id: p.id,
+                tool: p.tool,
+                action: card_text(&p.action),
+                class: p.class,
+            })
+            .collect();
+        let skip = self.rows.len().saturating_sub(STEP_ROWS);
+        let steps: Vec<StepRow> = self.rows[skip..]
+            .iter()
+            .map(|seen| {
+                let mut row = seen.row.clone();
+                // A parked step whose card has its answer: allowed and not
+                // run yet (no loop took the answer, or it is running), or
+                // denied and not settled yet.
+                if let Some(card) = &seen.card {
+                    if !parks.iter().any(|p| p.id == *card) {
+                        let answer = hx::park_dir(config_dir).join(format!("{card}.answer"));
+                        let denied =
+                            std::fs::read_to_string(answer).is_ok_and(|word| word.trim() == "deny");
+                        row.decision = if denied { "deny" } else { "allowed" }.into();
+                        row.result = String::new();
+                    }
+                }
+                row
+            })
+            .collect();
+        // No picture while a credentials step waits: the screen may show the field.
+        let frame = frame.filter(|_| !parks.iter().any(|p| p.class == "credentials"));
+        // An end marker wins: the shell may have last seen it paused.
+        let state = match (&self.ended, paused) {
+            (Some(_), _) => "ended",
+            (None, true) => "paused",
+            (None, false) => "running",
+        };
+        Panel {
+            conversation_id: chat.to_string(),
+            episode_id: id.to_string(),
+            header: ep::episode_header(
+                self.rows.len() as u32,
+                Duration::from_millis(now_ms.saturating_sub(started_ms)),
+            ),
+            steps,
+            parks,
+            frame,
+            state: state.into(),
+            ended: self.ended.clone(),
+            cua,
+            frame_same: false,
+            resume: false,
+        }
+    }
+}
+
+/// The panel for episode `id` on chat `chat`, read from disk in one go.
 pub fn panel(
     config_dir: &Path,
     chat: &str,
@@ -111,63 +315,81 @@ pub fn panel(
     paused: bool,
     cua: bool,
 ) -> Panel {
-    let spans: Vec<hx::Span> = hx::read_spans(config_dir, chat)
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|s| s.episode == id)
-        .collect();
-    // The newest begin or end marker says whether it is over: a paused
-    // episode that runs again writes a new begin after its old end.
-    let ended = spans
-        .iter()
-        .rev()
-        .find(|s| s.tool == ep::EPISODE_TOOL && matches!(s.decision.as_str(), "begin" | "end"))
-        .filter(|s| s.decision == "end")
-        .map(|s| s.result.clone());
-    let all: Vec<StepRow> = spans
-        .iter()
-        .filter(|s| is_step(s, id))
-        .enumerate()
-        .map(|(i, s)| StepRow {
-            n: i as u32 + 1,
-            tool: s.tool.clone(),
-            decision: s.decision.clone(),
-            result: one_line(&s.result, ep::STEP_RESULT_CAP),
-            goal_step: one_line(&s.goal_step, 60),
-        })
-        .collect();
-    let total = all.len() as u32;
-    let skip = all.len().saturating_sub(STEP_ROWS);
-    let parks: Vec<ParkRow> = hx::pending_parks(config_dir)
-        .into_iter()
-        .filter(|p| owns(&p.id, id))
-        .map(|p| ParkRow {
-            id: p.id,
-            tool: p.tool,
-            action: one_line(&p.action, 200),
-            class: p.class,
-        })
-        .collect();
-    // No picture while a credentials step waits: the screen may show the field.
-    let frame = frame.filter(|_| !parks.iter().any(|p| p.class == "credentials"));
-    let state = match (&ended, paused) {
-        (_, true) => "paused",
-        (Some(_), false) => "ended",
-        (None, false) => "running",
-    };
-    Panel {
-        conversation_id: chat.to_string(),
-        episode_id: id.to_string(),
-        header: ep::episode_header(
-            total,
-            Duration::from_millis(now_ms.saturating_sub(started_ms)),
-        ),
-        steps: all.into_iter().skip(skip).collect(),
-        parks,
+    Cursor::default().panel(config_dir, chat, id, started_ms, now_ms, frame, paused, cua)
+}
+
+/// The panel that tells the page to send the resume: a reply ended with an
+/// allowed step nobody ran (`agent::Session::take_resume_owed`).
+pub fn resume_panel(config_dir: &Path, chat: &str, open: &Open, frame: Option<String>) -> Panel {
+    let mut panel = panel(
+        config_dir,
+        chat,
+        &open.id,
+        open.started_ms,
+        grokhub_core::now_ms(),
         frame,
-        state: state.into(),
-        ended,
-        cua,
+        open.paused,
+        open.cua,
+    );
+    panel.resume = true;
+    panel
+}
+
+/// The panel of an episode that was ended with no loop running (Stop, Halt,
+/// or the desktop switch going off): ended as `why` unless its spans say how.
+pub fn ended_panel(
+    config_dir: &Path,
+    chat: &str,
+    open: &Open,
+    frame: Option<String>,
+    why: &str,
+) -> Panel {
+    let mut panel = panel(
+        config_dir,
+        chat,
+        &open.id,
+        open.started_ms,
+        grokhub_core::now_ms(),
+        frame,
+        false,
+        open.cua,
+    );
+    if panel.ended.is_none() {
+        panel.ended = Some(why.into());
+    }
+    panel.state = "ended".into();
+    panel
+}
+
+/// The desktop behind the live Settings switch. The gate reads the switch
+/// once per message; this refuses every later call of a running turn once
+/// the switch goes off, and reads nothing off the screen for it.
+pub struct Switched {
+    pub inner: Box<dyn DesktopOps>,
+    pub on: Arc<AtomicBool>,
+}
+
+impl DesktopOps for Switched {
+    fn halted(&self) -> bool {
+        self.inner.halted()
+    }
+
+    fn locked(&self) -> bool {
+        self.inner.locked()
+    }
+
+    fn call(&self, name: &str, args: &serde_json::Value) -> ToolOutput {
+        if !self.on.load(Ordering::SeqCst) {
+            return ToolOutput::err(*grokhub_core::desktop_mcp::OFF_MSG);
+        }
+        self.inner.call(name, args)
+    }
+
+    fn hint(&self, name: &str, args: &serde_json::Value) -> serde_json::Value {
+        if !self.on.load(Ordering::SeqCst) {
+            return args.clone();
+        }
+        self.inner.hint(name, args)
     }
 }
 
@@ -184,6 +406,24 @@ pub fn answer(config_dir: &Path, id: &str, park_id: &str, approve: bool) -> Resu
         return Err("That step already has an answer.".into());
     }
     hx::answer_park(config_dir, park_id, approve)
+}
+
+/// Whether one of the episode's cards was allowed and no loop took the
+/// answer yet: its answer file still says `approve`.
+pub fn allowed(config_dir: &Path, id: &str) -> bool {
+    let mine = format!("{}{id}-", ep::PARK_PREFIX);
+    std::fs::read_dir(hx::park_dir(config_dir))
+        .map(|rd| {
+            rd.flatten().map(|e| e.path()).any(|path| {
+                path.extension().is_some_and(|x| x == "answer")
+                    && path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n.starts_with(&mine))
+                    && std::fs::read_to_string(&path).is_ok_and(|word| word.trim() == "approve")
+            })
+        })
+        .unwrap_or(false)
 }
 
 /// The latest screenshot, held in memory only: never written to a span, a
@@ -244,9 +484,34 @@ pub struct Open {
     pub cua: bool,
 }
 
+/// Everything the page draws but the header, whose minutes move on their own.
+fn same_but_header(a: &Panel, b: &Panel) -> bool {
+    (
+        &a.conversation_id,
+        &a.episode_id,
+        &a.steps,
+        &a.parks,
+        &a.frame,
+        &a.state,
+        &a.ended,
+        a.cua,
+    ) == (
+        &b.conversation_id,
+        &b.episode_id,
+        &b.steps,
+        &b.parks,
+        &b.frame,
+        &b.state,
+        &b.ended,
+        b.cua,
+    )
+}
+
 /// Re-reads the panel until `stop` is set, calling `emit` whenever it
 /// changed, and once more at the end (with `ended` when the chat's episode
-/// closed meanwhile). `current` is the chat's open episode.
+/// closed meanwhile). `current` is the chat's open episode. Only the spans
+/// appended since the last look are parsed, and a picture goes to the page
+/// once: a panel that changed around the same picture says `frame_same`.
 pub fn watch(
     stop: &AtomicBool,
     config_dir: &Path,
@@ -256,6 +521,7 @@ pub fn watch(
     emit: &mut dyn FnMut(&Panel),
 ) {
     let mut last: Option<(Open, Panel)> = None;
+    let mut cursor = Cursor::default();
     loop {
         let done = stop.load(Ordering::SeqCst);
         let open = current();
@@ -263,7 +529,7 @@ pub fn watch(
             .clone()
             .or_else(|| last.as_ref().map(|(o, _)| o.clone()));
         if let Some(seen) = seen {
-            let mut p = panel(
+            let mut p = cursor.panel(
                 config_dir,
                 chat,
                 &seen.id,
@@ -277,15 +543,17 @@ pub fn watch(
                 p.state = "ended".into();
                 p.ended = Some("stop".into());
             }
-            // The header's minutes move on their own; compare without it.
-            let same = last.as_ref().is_some_and(|(_, l)| {
-                Panel {
-                    header: p.header.clone(),
-                    ..l.clone()
-                } == p
-            });
-            if !same {
-                emit(&p);
+            let before = last.as_ref().map(|(_, l)| l);
+            if !before.is_some_and(|l| same_but_header(l, &p)) {
+                if p.frame.is_some() && before.is_some_and(|l| l.frame == p.frame) {
+                    let frame = p.frame.take();
+                    p.frame_same = true;
+                    emit(&p);
+                    p.frame = frame;
+                    p.frame_same = false;
+                } else {
+                    emit(&p);
+                }
             }
             last = Some((seen, p));
         }
@@ -354,12 +622,29 @@ pub fn cua_in_use(config_dir: &Path) -> bool {
 }
 
 /// The end of an episode no loop is running: its marker span, and every card
-/// it left open is withdrawn and denied with a span.
+/// it still has on disk is taken back and denied with a span. A card that was
+/// already allowed goes too: an Allow no loop picked up must not be left for
+/// a later one to run.
 pub fn write_end(config_dir: &Path, chat: &str, id: &str, why: &str) {
-    for park in hx::pending_parks(config_dir)
-        .into_iter()
-        .filter(|p| owns(&p.id, id))
-    {
+    let dir = hx::park_dir(config_dir);
+    let mine = format!("{}{id}-", ep::PARK_PREFIX);
+    let left: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .map(|rd| rd.flatten().map(|e| e.path()).collect())
+        .unwrap_or_default();
+    let named = |path: &Path| {
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with(&mine))
+    };
+    let mut cards: Vec<hx::ParkRequest> = left
+        .iter()
+        .filter(|path| named(path) && path.extension().is_some_and(|x| x == "json"))
+        .filter_map(|path| std::fs::read_to_string(path).ok())
+        .filter_map(|body| serde_json::from_str::<hx::ParkRequest>(&body).ok())
+        .filter(|park| owns(&park.id, id))
+        .collect();
+    cards.sort_by_key(|park| park.ts_ms);
+    for park in cards {
         hx::clear_park(config_dir, &park.id);
         let span = hx::Span::deny(
             chat,
@@ -369,6 +654,11 @@ pub fn write_end(config_dir: &Path, chat: &str, id: &str, why: &str) {
             &park.class,
         );
         let _ = hx::append_span(config_dir, &span.in_episode(id).on_path("E"));
+    }
+    // Whatever else carries the episode's card names (an answer with no
+    // request, a file half written) goes with them.
+    for path in left.iter().filter(|path| named(path)) {
+        let _ = std::fs::remove_file(path);
     }
     let mut span = hx::Span::deny(chat, ep::EPISODE_TOOL, "{}", why, "soft");
     span.decision = "end".into();

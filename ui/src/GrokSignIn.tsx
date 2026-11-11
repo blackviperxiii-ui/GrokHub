@@ -4,6 +4,7 @@ import {
   grokSignOut,
   pollGrokSignIn,
   startGrokSignIn,
+  type GrokSignInPoll,
   type GrokSignInStart,
   type Settings,
   type SignedIn,
@@ -20,9 +21,16 @@ export function signedInAs(who: SignedIn): string {
   return who.name ?? who.email ?? "your Grok account";
 }
 
+/** Whether a code good until `deadline` (ms on this computer's clock) ran out. */
+function ranOut(deadline: number): boolean {
+  return Date.now() >= deadline;
+}
+
 /** Settings → Account: Sign in with Grok by device code. The page shows the
  * code with Copy and Open x.ai, asks xAI every few seconds, and shows the
- * account once it says yes. `onChange` gets the settings after a change. */
+ * account once it says yes. A check xAI did not answer leaves the code up and
+ * is asked again, until the code's own time is up. `onChange` gets the settings after
+ * a change. */
 export function GrokSignIn({
   signedIn,
   onChange,
@@ -32,6 +40,8 @@ export function GrokSignIn({
 }) {
   const [code, setCode] = useState<GrokSignInStart | null>(null);
   const [busy, setBusy] = useState(false);
+  // Why the last poll failed, while the page is still asking.
+  const [trouble, setTrouble] = useState<string | null>(null);
   const { note, ok, fail, clear } = useNote();
   const timer = useRef<number | null>(null);
   // The last interval xAI asked for (slow_down raises it), whether a poll is
@@ -39,6 +49,11 @@ export function GrokSignIn({
   const interval = useRef(0);
   const polling = useRef(false);
   const live = useRef(false);
+  // When the code on screen stops being good, by this computer's clock.
+  const deadline = useRef(0);
+  // Which code is on screen, counted from the first, so a poll that answers
+  // late knows the code it asked about is gone.
+  const round = useRef(0);
 
   function stop() {
     if (timer.current !== null) window.clearTimeout(timer.current);
@@ -51,37 +66,69 @@ export function GrokSignIn({
     if (live.current) timer.current = window.setTimeout(() => void poll(), seconds * 1000);
   }
 
+  function expire() {
+    setCode(null);
+    fail("The code ran out. Start again.");
+  }
+
   async function poll() {
     timer.current = null;
+    if (ranOut(deadline.current)) {
+      expire();
+      return;
+    }
+    const asked = round.current;
     polling.current = true;
+    let got: GrokSignInPoll;
     try {
-      const got = await pollGrokSignIn();
-      if (got.status === "pending") wait(got.interval);
-      else if (got.status === "failed") {
-        setCode(null);
-        fail(got.error);
+      got = await pollGrokSignIn();
+    } catch (err) {
+      // A check the shell could not make or finish (it holds no code, or xAI
+      // said yes and the sign-in could not be kept): asking again can't help.
+      if (asked !== round.current) {
+        // An earlier code's check: it says nothing about the one on screen.
+        wait(interval.current);
       } else {
         setCode(null);
-        onChange(await getSettings());
-        ok(`Signed in as ${signedInAs(got.signedIn)}.`);
+        fail(err);
       }
-    } catch (err) {
-      setCode(null);
-      fail(err);
+      return;
     } finally {
       polling.current = false;
+    }
+    if (got.status === "noAnswer") {
+      // xAI gave no answer this time and the shell still holds the code, so
+      // ask again. A late one for an earlier code says nothing about this one.
+      if (asked === round.current) setTrouble(got.error);
+      wait(interval.current);
+    } else if (got.status === "pending") {
+      setTrouble(null);
+      wait(got.interval);
+    } else if (got.status === "failed") {
+      setCode(null);
+      fail(got.error);
+    } else {
+      setCode(null);
+      try {
+        onChange(await getSettings());
+        ok(`Signed in as ${signedInAs(got.signedIn)}.`);
+      } catch (err) {
+        fail(err);
+      }
     }
   }
 
   // Settings sits in an <Activity>: hiding it runs this cleanup and showing it
   // runs the effect again, so a code still on screen goes back to waiting. A
-  // poll still out re-arms itself when it answers.
-  const resume = useEffectEvent((seconds: number) => {
-    if (!polling.current) wait(interval.current || seconds);
+  // poll still out re-arms itself when it answers. A code that ran out while
+  // the page was hidden goes at once.
+  const resume = useEffectEvent(() => {
+    if (ranOut(deadline.current)) expire();
+    else if (!polling.current) wait(interval.current);
   });
   useEffect(() => {
     live.current = code !== null;
-    if (code) resume(code.interval);
+    if (code) resume();
     return () => {
       live.current = false;
       stop();
@@ -93,7 +140,11 @@ export function GrokSignIn({
     setBusy(true);
     try {
       const got = await startGrokSignIn();
-      interval.current = 0;
+      // Never 0 while a code is up: a poll still out waits this long too.
+      interval.current = got.interval;
+      deadline.current = Date.now() + got.expiresIn * 1000;
+      round.current += 1;
+      setTrouble(null);
       setCode(got);
     } catch (err) {
       fail(err);
@@ -159,7 +210,9 @@ export function GrokSignIn({
             </button>
           </div>
           <p className="note" role="status">
-            Waiting for you to approve it on x.ai…
+            {trouble
+              ? `Still waiting for you to approve it on x.ai. The last check failed: ${trouble}`
+              : "Waiting for you to approve it on x.ai…"}
           </p>
         </>
       ) : (

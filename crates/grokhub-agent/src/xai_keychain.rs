@@ -102,6 +102,46 @@ pub enum Poll {
     Failed {
         error: String,
     },
+    /// No answer came back this time ([`CallError::NoAnswer`]). The code is
+    /// still held, so the same poll can work a moment later.
+    NoAnswer {
+        error: String,
+    },
+}
+
+/// Why a sign-in call gave nothing to act on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CallError {
+    /// No answer came back: no network, a refused or dropped connection, a
+    /// timeout, or a server error in place of xAI's answer. The same call can
+    /// work a moment later.
+    NoAnswer(String),
+    /// Refused before the call, or an answer that can't be read. Asking again
+    /// is unlikely to help.
+    Other(String),
+}
+
+impl From<String> for CallError {
+    fn from(text: String) -> Self {
+        Self::Other(text)
+    }
+}
+
+impl From<http::Error> for CallError {
+    fn from(err: http::Error) -> Self {
+        match err {
+            http::Error::Transport { message, .. } => Self::NoAnswer(message),
+            http::Error::Status { message, .. } => Self::Other(message),
+        }
+    }
+}
+
+impl From<CallError> for String {
+    fn from(err: CallError) -> Self {
+        match err {
+            CallError::NoAnswer(text) | CallError::Other(text) => text,
+        }
+    }
 }
 
 struct Pending {
@@ -126,13 +166,27 @@ thread_local! {
     static TEST_BASE: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
 }
 
+/// `raw` when it is a plain-http address on this computer. The host is read
+/// the way the request reads it: user-info (`@`), `\`, `?` and `#` are refused
+/// outright, the host ends at the first `/`, and a port is digits only.
 fn loopback(raw: &str) -> Option<String> {
     let raw = raw.trim().trim_end_matches('/');
     let rest = raw.strip_prefix("http://")?;
-    let host = rest.split(['/', ':']).next()?;
-    matches!(host, "127.0.0.1" | "localhost")
-        .then(|| raw.to_string())
-        .or_else(|| rest.starts_with("[::1]").then(|| raw.to_string()))
+    if rest.contains(['@', '\\', '?', '#']) {
+        return None;
+    }
+    let authority = rest.split('/').next()?;
+    // `[::1]` has colons of its own; its port follows the bracket.
+    let (host, port) = match authority.strip_prefix("[::1]") {
+        Some("") => ("[::1]", None),
+        Some(after) => ("[::1]", Some(after.strip_prefix(':')?)),
+        None => match authority.split_once(':') {
+            Some((host, port)) => (host, Some(port)),
+            None => (authority, None),
+        },
+    };
+    let port_ok = port.is_none_or(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+    (port_ok && matches!(host, "127.0.0.1" | "localhost" | "[::1]")).then(|| raw.to_string())
 }
 
 /// The loopback mock base, when one is set.
@@ -158,16 +212,16 @@ fn guard(url: &str) -> Result<(), String> {
     hx::guard_quiet(&crate::perm::config_dir(), &hx::EgressReq::new(url, &[]))
 }
 
-fn read_json(resp: http::Response) -> Result<Value, String> {
+fn read_json(resp: http::Response) -> Result<Value, CallError> {
     let mut buf = Vec::new();
     resp.into_reader()
         .take(TEXT_FILE_CAP as u64)
         .read_to_end(&mut buf)
-        .map_err(|e| e.to_string())?;
-    serde_json::from_slice(&buf).map_err(|e| e.to_string())
+        .map_err(|e| CallError::NoAnswer(e.to_string()))?;
+    serde_json::from_slice(&buf).map_err(|e| CallError::Other(e.to_string()))
 }
 
-fn get_json(url: &str, bearer: Option<&str>) -> Result<Value, String> {
+fn get_json(url: &str, bearer: Option<&str>) -> Result<Value, CallError> {
     guard(url)?;
     let mut call = agent()
         .get(url)
@@ -176,11 +230,13 @@ fn get_json(url: &str, bearer: Option<&str>) -> Result<Value, String> {
     if let Some(token) = bearer {
         call = call.header("authorization", &format!("Bearer {token}"));
     }
-    read_json(call.call().map_err(|e| e.to_string())?)
+    read_json(call.call()?)
 }
 
 /// POSTs a form. `false` with the error body when xAI answers with an error.
-fn post_form(url: &str, pairs: &[(&str, &str)]) -> Result<(bool, Value), String> {
+/// A server error (5xx), or "too many requests" with no error of xAI's own,
+/// says nothing about the request, so it is [`CallError::NoAnswer`].
+fn post_form(url: &str, pairs: &[(&str, &str)]) -> Result<(bool, Value), CallError> {
     guard(url)?;
     let body = pairs
         .iter()
@@ -195,10 +251,20 @@ fn post_form(url: &str, pairs: &[(&str, &str)]) -> Result<(bool, Value), String>
         .send_string(&body)
     {
         Ok(resp) => Ok((true, read_json(resp)?)),
-        Err(http::Error::Status { body, .. }) => {
-            Ok((false, serde_json::from_str(&body).unwrap_or(Value::Null)))
+        Err(http::Error::Status {
+            code,
+            body,
+            message,
+            ..
+        }) => {
+            let v: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+            if code >= 500 || (code == 429 && v.get("error").is_none()) {
+                Err(CallError::NoAnswer(message))
+            } else {
+                Ok((false, v))
+            }
         }
-        Err(e) => Err(e.to_string()),
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -224,7 +290,7 @@ fn error_text(v: &Value, fallback: &str) -> String {
 }
 
 /// xAI's endpoints from discovery, each checked to be on xAI's auth host.
-fn endpoints() -> Result<Endpoints, String> {
+fn endpoints() -> Result<Endpoints, CallError> {
     if let Some(base) = test_base() {
         return Ok(Endpoints {
             device: format!("{base}/device"),
@@ -305,6 +371,16 @@ impl SignIn {
     /// Asks once whether the code was approved. On approval the tokens go to
     /// `store`, with the name and email when xAI gives them.
     pub fn poll(&self, store: &dyn Store) -> Result<Poll, String> {
+        match self.ask(store) {
+            Err(CallError::NoAnswer(error)) => Ok(Poll::NoAnswer { error }),
+            other => Ok(other?),
+        }
+    }
+
+    /// [`poll`](Self::poll) for a caller that keeps asking by itself: the
+    /// error says whether the call got no answer (the code is still good) or
+    /// failed some other way.
+    pub fn ask(&self, store: &dyn Store) -> Result<Poll, CallError> {
         let (device_code, interval) = {
             let held = self.pending.lock().unwrap_or_else(|e| e.into_inner());
             let p = held.as_ref().ok_or_else(|| NOT_STARTED.to_string())?;
@@ -651,6 +727,149 @@ pub(crate) mod tests {
         assert_eq!(loopback("https://127.0.0.1:9"), None);
         assert_eq!(loopback("http://auth.example.com"), None);
         assert_eq!(loopback("http://127.0.0.1.evil.com"), None);
+    }
+
+    #[test]
+    fn an_override_is_judged_by_the_host_the_request_would_reach() {
+        for raw in [
+            "http://127.0.0.1:9@127.0.0.2:1",
+            "http://localhost:1@not-loopback.example",
+            "http://127.0.0.1:x@h",
+            "http://127.0.0.1\\@not-loopback.example",
+            "http://localhost?@not-loopback.example",
+            "http://localhost#@not-loopback.example",
+            "http://127.0.0.1:x",
+            "http://127.0.0.1:",
+            "http://[::1].not-loopback.example",
+            "http://[::1]x:9",
+        ] {
+            assert_eq!(loopback(raw), None, "{raw}");
+        }
+        assert_eq!(
+            loopback("http://127.0.0.1:48212/"),
+            Some("http://127.0.0.1:48212".into())
+        );
+        assert_eq!(loopback("http://[::1]:9"), Some("http://[::1]:9".into()));
+        assert_eq!(
+            loopback("http://localhost"),
+            Some("http://localhost".into())
+        );
+    }
+
+    #[test]
+    fn ask_tells_a_call_with_no_answer_from_one_that_cannot_work() {
+        let (_dir, _cfg) = config("ask");
+        let store = Mem::default();
+        assert_eq!(
+            SignIn::default().ask(&store),
+            Err(CallError::Other(NOT_STARTED.into()))
+        );
+        // The auth server hands out the code, then goes away.
+        let m = mock(vec![("/device", 200, START)]);
+        let _base = use_base(&m.base);
+        let flow = SignIn::default();
+        flow.start().expect("start");
+        let err = flow.ask(&store).expect_err("nobody answers");
+        let CallError::NoAnswer(text) = &err else {
+            panic!("{err:?}");
+        };
+        assert!(text.starts_with(&format!("{}/token: ", m.base)), "{text}");
+        // The code is still held, so the next ask goes out too.
+        assert!(matches!(flow.ask(&store), Err(CallError::NoAnswer(_))));
+        // The app's poll says so in an answer, so the page keeps the code up.
+        assert!(matches!(
+            flow.poll(&store),
+            Ok(Poll::NoAnswer { error }) if error.starts_with(&format!("{}/token: ", m.base))
+        ));
+    }
+
+    /// A store that takes nothing, as a keychain with no secret service does.
+    struct Shut;
+
+    impl Store for Shut {
+        fn get(&self) -> Result<Option<String>, String> {
+            Ok(None)
+        }
+        fn set(&self, _value: &str) -> Result<(), String> {
+            Err("The system keychain is not available.".into())
+        }
+        fn delete(&self) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_sign_in_the_store_cannot_keep_is_an_error_not_a_poll_to_repeat() {
+        let (_dir, _cfg) = config("shut");
+        let m = mock(vec![
+            ("/device", 200, START),
+            ("/token", 200, TOKENS),
+            ("/userinfo", 200, r#"{"name":"Sam"}"#),
+        ]);
+        let _base = use_base(&m.base);
+        let flow = SignIn::default();
+        flow.start().expect("start");
+        assert_eq!(
+            flow.poll(&Shut),
+            Err("The system keychain is not available.".to_string())
+        );
+    }
+
+    #[test]
+    fn a_server_error_is_no_answer_and_the_code_is_kept() {
+        let (_dir, _cfg) = config("busy");
+        let m = mock(vec![
+            ("/device", 200, START),
+            ("/token", 503, "<html>Service Unavailable</html>"),
+            ("/token", 500, r#"{"error":"server_error"}"#),
+            ("/token", 429, "Too Many Requests"),
+            ("/token", 429, r#"{"error":"slow_down"}"#),
+            ("/token", 400, "<html>Bad Request</html>"),
+        ]);
+        let _base = use_base(&m.base);
+        let flow = SignIn::default();
+        let store = Mem::default();
+        flow.start().expect("start");
+        for code in [503, 500, 429] {
+            assert_eq!(
+                flow.ask(&store),
+                Err(CallError::NoAnswer(format!(
+                    "{}/token: status code {code}",
+                    m.base
+                )))
+            );
+        }
+        // xAI's own "slow down" is an answer, whatever its status.
+        assert_eq!(flow.ask(&store), Ok(Poll::Pending { interval: 10 }));
+        // A refusal the server did not explain still ends the sign-in.
+        assert_eq!(
+            flow.ask(&store),
+            Ok(Poll::Failed {
+                error: "oauth error (unknown)".into()
+            })
+        );
+        assert_eq!(flow.ask(&store), Err(CallError::Other(NOT_STARTED.into())));
+    }
+
+    #[test]
+    fn a_server_error_on_refresh_does_not_say_to_sign_in_again() {
+        let (_dir, _cfg) = config("refresh-busy");
+        let server = mock(vec![("/token", 503, "<html>Service Unavailable</html>")]);
+        let _base = use_base(&server.base);
+        let store = Mem::default();
+        let old = XaiOAuthTokens {
+            access_token: "at-old".into(),
+            refresh_token: Some("rt-old".into()),
+            expires_at: Some(1),
+            ..Default::default()
+        };
+        save(&store, &old).unwrap();
+        assert_eq!(
+            bearer(&store),
+            Err(format!("{}/token: status code 503", server.base))
+        );
+        // The tokens are as they were, for the next try.
+        assert_eq!(load(&store), Ok(Some(old)));
     }
 
     #[test]

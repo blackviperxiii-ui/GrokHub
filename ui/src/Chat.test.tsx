@@ -200,6 +200,8 @@ describe("Chat", () => {
     ]) {
       fn.mockReset();
     }
+    // The real call always answers with a promise; the page handles its refusal.
+    api.closeChat.mockResolvedValue();
     api.getLastChat.mockReset().mockResolvedValue(null);
     api.quickChips.mockReset().mockResolvedValue([]);
     api.chipOutcome.mockReset().mockResolvedValue(true);
@@ -459,6 +461,18 @@ describe("Chat", () => {
     await userEvent.type(screen.getByLabelText("Message"), "/export{Enter}");
     expect(await screen.findByText("There's nothing in this chat to save yet.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Show in folder" })).toBeNull();
+  });
+
+  it("/import with no OpenClaw workspace to read says so in the chat and opens nothing", async () => {
+    api.runSlash.mockReset().mockResolvedValue({ kind: "import" });
+    const opened = vi.fn();
+    window.addEventListener("onboard:open", opened);
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "/import{Enter}");
+    expect(await screen.findByText("No OpenClaw or Hermes workspace on this computer.")).toBeInTheDocument();
+    expect(opened).not.toHaveBeenCalled();
+    window.removeEventListener("onboard:open", opened);
+    expect(api.sendChat).not.toHaveBeenCalled();
   });
 
   it("sends the text and streams its own conversation's reply", async () => {
@@ -770,6 +784,54 @@ describe("Chat", () => {
     expect(second).not.toBe(first);
   });
 
+  it("New chat still starts a fresh chat when the app refuses to close the old one, with no stray rejection", async () => {
+    const unhandled = vi.fn<(reason: unknown) => void>();
+    // The test runner's Node process reports a rejection nothing handled.
+    type Rejections = Record<"on" | "off", (event: "unhandledRejection", listener: (reason: unknown) => void) => void>;
+    const node = (globalThis as unknown as { process: Rejections }).process;
+    node.on("unhandledRejection", unhandled);
+    try {
+      // A paired browser's chat with no message sent: the computer refuses the close.
+      // The mock library handles a rejected promise it returns; this one is
+      // left for the page to handle, as a real call's is.
+      api.closeChat.mockImplementation(() => {
+        const real = Promise.reject(new Error("That chat isn't open in this browser."));
+        return { then: real.then.bind(real), catch: real.catch.bind(real) } as unknown as Promise<void>;
+      });
+      api.sendChat.mockResolvedValue("end_turn");
+      render(<Chat onOpenSettings={() => {}} remote />);
+      await userEvent.click(screen.getByRole("button", { name: "New chat" }));
+      expect(api.closeChat).toHaveBeenCalledTimes(1);
+      const refused = api.closeChat.mock.calls[0][0];
+      // Node reports an unhandled rejection after the microtasks drain.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled.mock.calls.map(([reason]) => String(reason))).toEqual([]);
+      expect(await startTurn("hi")).not.toBe(refused);
+    } finally {
+      node.off("unhandledRejection", unhandled);
+    }
+  });
+
+  it("the web app asks for a new chat's chips without the chat id, and with it once a message is sent", async () => {
+    api.sendChat.mockResolvedValue("end_turn");
+    api.quickChips.mockResolvedValue([chip("start", "Start here", "Start here")]);
+    render(<Chat onOpenSettings={() => {}} remote />);
+    const row = await screen.findByRole("group", { name: "Suggestions" });
+    expect(within(row).getByRole("button", { name: "Start here" })).toBeVisible();
+    // The computer refuses chips for a chat this browser has not sent in.
+    expect(api.quickChips.mock.calls.map(([surface, id]) => [surface, id])).toEqual([["composer", undefined]]);
+
+    const id = await startTurn("hi");
+    emit(id, { kind: "done", stop: "end_turn" });
+    await waitFor(() => expect(api.quickChips).toHaveBeenLastCalledWith("composer", id, "", undefined));
+  });
+
+  it("the desktop window asks for a new chat's chips with the chat id", async () => {
+    render(<Chat onOpenSettings={() => {}} />);
+    await waitFor(() => expect(api.quickChips).toHaveBeenCalled());
+    expect(api.quickChips).toHaveBeenLastCalledWith("composer", expect.stringMatching(/^shell-/), "", undefined);
+  });
+
   it("Shift+Enter adds a line instead of sending", async () => {
     render(<Chat onOpenSettings={() => {}} />);
     await userEvent.type(screen.getByLabelText("Message"), "a{Shift>}{Enter}{/Shift}b");
@@ -1006,6 +1068,7 @@ describe("applyEvent", () => {
 describe("Chat history", () => {
   beforeEach(() => {
     for (const fn of [api.sendChat, api.closeChat, api.cancelChat, api.loadChat]) fn.mockReset();
+    api.closeChat.mockResolvedValue();
     api.getSettings.mockReset().mockResolvedValue(SETTINGS);
     api.getLastChat.mockReset().mockResolvedValue(null);
     api.handler = null;
@@ -1399,7 +1462,8 @@ describe("Chat queue", () => {
     await userEvent.type(screen.getByLabelText("Message"), "use staging{Enter}");
     rerender(chat({ op: "remove", index: 0, n: 1 }));
     await waitFor(() => expect(screen.getByLabelText("Message")).toHaveValue("then deploy"));
-    expect(onQueue).toHaveBeenLastCalledWith(id, ["use staging"]);
+    // The queue is reported from an effect, which can run after the box shows the words.
+    await waitFor(() => expect(onQueue).toHaveBeenLastCalledWith(id, ["use staging"]));
     rerender(chat({ op: "steer", index: 0, n: 2 }));
     await waitFor(() => expect(api.steerChat).toHaveBeenCalledWith(id, "use staging"));
     await waitFor(() => expect(onQueue).toHaveBeenLastCalledWith(id, []));

@@ -11,6 +11,7 @@
 use std::collections::BTreeSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::time::Duration;
 
 use grokhub_core::backup_nudge::{self as bn, Reminder};
@@ -239,8 +240,13 @@ fn models_tick(
 
 // ---- Code resume and backup ----------------------------------------------
 
+/// One read-only git call. The shell is a windows-subsystem app, so a git
+/// started without `hide_windows_console` would flash a console window.
 fn run_git(args: &[&str]) -> Option<String> {
-    let out = grokhub_core::git_cmd::git().args(args).output().ok()?;
+    let mut cmd = grokhub_core::git_cmd::git();
+    cmd.args(args).stdin(Stdio::null()).stderr(Stdio::null());
+    grokhub_core::proc_util::hide_windows_console(&mut cmd);
+    let out = cmd.output().ok()?;
     out.status
         .success()
         .then(|| String::from_utf8_lossy(&out.stdout).into_owned())

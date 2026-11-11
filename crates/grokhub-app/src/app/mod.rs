@@ -5085,6 +5085,11 @@ impl Cabin {
         }) {
             self.halt_everything("Stopped");
         }
+        // The Code tab terminal has the keyboard: Ctrl+G, Ctrl+K and the rest
+        // are the shell's (nano, readline). Only the panic stop above stays.
+        if self.code_term.keys_held {
+            return;
+        }
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::G) && !i.modifiers.shift) {
             self.listen_voice();
         }
@@ -5522,6 +5527,7 @@ impl eframe::App for Cabin {
         // occluded, so these keep ticking from the tray. `ui` runs them again
         // after a painted frame's clicks.
         self.sync_idea_card_actions();
+        self.code_terminal_tick(ctx);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {

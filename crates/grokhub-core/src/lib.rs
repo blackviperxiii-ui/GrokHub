@@ -403,9 +403,10 @@ pub use diagnostics::{
     content_level_label, desktop_dir, diagnostics_bundle, diagnostics_markdown, diagnostics_place,
     diagnostics_preview_lines, diagnostics_redaction_summary, diagnostics_saved_status,
     diagnostics_zip_name, diagnostics_zip_path, diagnostics_zip_path_in, dir_is_cloud_synced,
-    documents_dir, downloads_dir, redact_for_diagnostics, redact_turn, why_chat_vs_task,
-    write_diagnostics_zip, DiagnosticsClassifier, DiagnosticsExport, DiagnosticsPlace,
-    DiagnosticsPlaybook, DiagnosticsPolicy, DiagnosticsToolCall, DiagnosticsTurn,
+    documents_dir, downloads_dir, redact_for_diagnostics, redact_turn, redacted_clip,
+    redacted_log_tail, why_chat_vs_task, write_diagnostics_zip, DiagnosticsClassifier,
+    DiagnosticsExport, DiagnosticsPlace, DiagnosticsPlaybook, DiagnosticsPolicy,
+    DiagnosticsToolCall, DiagnosticsTurn,
 };
 pub use doctor::{
     doctor_cabin_line, doctor_extras, doctor_hands_line, doctor_lines, doctor_ok,

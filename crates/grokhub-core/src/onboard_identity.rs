@@ -169,13 +169,20 @@ fn labelled(out: &mut Vec<String>, label: &str, value: &str) {
 
 /// `existing` with `lines` added: a seed file is replaced by `heading` and
 /// the lines; a file with the person's own words keeps every one of them and
-/// gets the lines under [`ADDED_HEADING`]. No lines leaves it unchanged.
+/// gets the lines under [`ADDED_HEADING`], except a line that is already in
+/// the file, which is not added again. No new lines leaves it unchanged.
 fn merged(existing: &str, heading: &str, lines: &[String]) -> String {
-    if lines.is_empty() {
+    let seed = is_seed(existing);
+    let bullets: String = lines
+        .iter()
+        .map(|l| format!("- {l}"))
+        .filter(|b| seed || !existing.lines().any(|have| have.trim() == b))
+        .map(|b| format!("{b}\n"))
+        .collect();
+    if bullets.is_empty() {
         return existing.to_string();
     }
-    let bullets: String = lines.iter().map(|l| format!("- {l}\n")).collect();
-    if is_seed(existing) {
+    if seed {
         format!("{heading}\n\n{bullets}")
     } else {
         format!("{}\n\n{ADDED_HEADING}\n\n{bullets}", existing.trim_end())

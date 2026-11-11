@@ -1,0 +1,1 @@
+- Sign in with Grok in the desktop app keeps the code on screen and keeps waiting when one check gets no answer, until you approve it, it is refused, or the code runs out.

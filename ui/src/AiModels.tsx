@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   addAiProvider,
   allowAiProvider,
@@ -32,6 +32,17 @@ function quality(q: number | null): string {
   return q === null ? "unscored" : `${Math.round(q * 100)}%`;
 }
 
+/** Deny a card nobody is left to answer, so the app drops the key now and not after its wait. */
+function deny(id: string) {
+  void (async () => {
+    try {
+      await answerAiModelsCard(id, false);
+    } catch {
+      // The page is gone: there is nowhere to show it, and the card's own wait still ends it.
+    }
+  })();
+}
+
 /** Settings → AI models: other providers, the routing table, spend limits. */
 export function AiModels() {
   const [view, setView] = useState<AiModelsView | null>(null);
@@ -41,6 +52,31 @@ export function AiModels() {
   const [removing, setRemoving] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const { note, ok, fail } = useNote();
+  // The card on screen, for the moment the page is left.
+  const openCard = useRef<string | null>(null);
+  const gone = useRef(false);
+
+  // Settings unmounts this page when another section is picked. Leaving is a Deny.
+  useEffect(() => {
+    gone.current = false;
+    return () => {
+      gone.current = true;
+      const id = openCard.current;
+      openCard.current = null;
+      if (id) deny(id);
+    };
+  }, []);
+
+  function show(next: AiModelsCard) {
+    // The page was left while the card was on its way.
+    if (gone.current) {
+      deny(next.id);
+      return;
+    }
+    openCard.current = next.id;
+    setCard(next);
+    ok(null);
+  }
 
   const apply = useCallback(
     (next: AiModelsView) => {
@@ -65,12 +101,15 @@ export function AiModels() {
     };
   }, [fail]);
 
-  async function run(step: () => Promise<AiModelsView>) {
+  /** True when the step went through. */
+  async function run(step: () => Promise<AiModelsView>): Promise<boolean> {
     setBusy(true);
     try {
       apply(await step());
+      return true;
     } catch (err) {
       fail(err);
+      return false;
     } finally {
       setBusy(false);
     }
@@ -82,8 +121,7 @@ export function AiModels() {
     setKey("");
     setBusy(true);
     try {
-      setCard(await addAiProvider(baseUrl, sent));
-      ok(null);
+      show(await addAiProvider(baseUrl, sent));
     } catch (err) {
       fail(err);
     } finally {
@@ -94,8 +132,7 @@ export function AiModels() {
   async function startAllow(id: string) {
     setBusy(true);
     try {
-      setCard(await allowAiProvider(id));
-      ok(null);
+      show(await allowAiProvider(id));
     } catch (err) {
       fail(err);
     } finally {
@@ -107,15 +144,16 @@ export function AiModels() {
     if (!card) return;
     const id = card.id;
     const wasKey = card.kind === "key";
+    openCard.current = null;
     setCard(null);
-    await run(() => answerAiModelsCard(id, approve));
-    if (wasKey && approve) setBaseUrl("");
+    const done = await run(() => answerAiModelsCard(id, approve));
+    // A key that wasn't saved keeps its address, so only the key is pasted again.
+    if (wasKey && approve && done) setBaseUrl("");
   }
 
   if (!view) {
     return (
       <section className="ai-models" aria-label="AI models">
-        <h2>AI models</h2>
         <StatusLine note={note} />
       </section>
     );
@@ -124,7 +162,6 @@ export function AiModels() {
   const { spend } = view;
   return (
     <section className="ai-models" aria-label="AI models">
-      <h2>AI models</h2>
       <StatusLine note={note} />
       {view.locked && <p className="status status--error">{view.locked}</p>}
 

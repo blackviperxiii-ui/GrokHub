@@ -48,10 +48,23 @@ pub fn run_check(
     Ok(ac::audio_report(&outputs, &inputs, input, &levels))
 }
 
+/// The recorders and the device list are Linux tools (`parecord`, `pw-record`,
+/// `pactl`), so only Linux can run the check for now.
+fn supported(os: &str) -> bool {
+    os == "linux"
+}
+
 /// `/audiocheck [input]`. The report arrives as an event when the clip is done.
 pub fn start(want: &str, remote: bool) -> Result<String, String> {
+    start_on(std::env::consts::OS, want, remote)
+}
+
+fn start_on(os: &str, want: &str, remote: bool) -> Result<String, String> {
     if remote {
         return Err("The audio check works on your computer.".into());
+    }
+    if !supported(os) {
+        return Err("The audio check works on Linux for now. On this computer, use the system's sound settings to test the microphone.".into());
     }
     {
         let mut at = live();
@@ -279,6 +292,26 @@ mod tests {
         assert_eq!(
             err,
             "Couldn't record from Yeti Stereo Microphone: no recorder found"
+        );
+    }
+
+    #[test]
+    fn windows_and_macos_are_told_the_check_is_linux_only_and_nothing_listens() {
+        assert!(supported("linux"));
+        assert!(!supported("windows"));
+        assert!(!supported("macos"));
+        for os in ["windows", "macos"] {
+            assert_eq!(
+                start_on(os, "", false).unwrap_err(),
+                "The audio check works on Linux for now. On this computer, use the system's sound settings to test the microphone.",
+                "{os}"
+            );
+            assert!(listening().is_none(), "{os}");
+        }
+        // A browser is told about the computer first, whatever that computer runs.
+        assert_eq!(
+            start_on("windows", "", true).unwrap_err(),
+            "The audio check works on your computer."
         );
     }
 

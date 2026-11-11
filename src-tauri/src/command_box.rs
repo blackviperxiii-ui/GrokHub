@@ -8,7 +8,8 @@
 //! push guard. The first run of an exact line asks on the page and shows it;
 //! after a yes it is remembered for this repo, and changed text asks again.
 //! A destructive line (`rm`, `--force`, `sudo`) asks every time, as the
-//! cabin's host confirm does.
+//! cabin's host confirm does. So does a line with a key or token in it: it is
+//! never written to the remembered lines or listed on the page.
 
 use std::path::Path;
 
@@ -85,7 +86,7 @@ pub fn judge(
         return Verdict::Blocked { command, message };
     }
     let destructive = grokhub_core::host_risk(&command) == HostRisk::Destructive;
-    if destructive || !remembered.iter().any(|r| r == &command) {
+    if destructive || holds_secret(&command) || !remembered.iter().any(|r| r == &command) {
         return Verdict::Confirm {
             command,
             destructive,
@@ -95,6 +96,24 @@ pub fn judge(
         prompt: agent_prompt(&command),
         command,
     }
+}
+
+/// True when the app's redactors would change `command`: it has a key, a
+/// token or a password in it. Such a line is never remembered. Three
+/// redactors are asked, and each counts a key only where one can start, so
+/// a branch named `fix/desk-sessions-halt` or a file named
+/// `task-runner-notes.md` is not taken for a key:
+/// - the one the Code tab's terminal uses for typed commands (`sk-…`,
+///   `xai-…`, GitHub tokens, `Bearer …`);
+/// - the debug bundle's token shapes (AWS, Slack, Hugging Face, GitLab, npm
+///   and the like, a password in a URL, a JWT);
+/// - the debug bundle's credential assignments: `API_KEY=…`,
+///   `--password=…`, an `Authorization` header. This one goes by the key's
+///   name, so `TOKEN=abc make` asks every time too.
+fn holds_secret(command: &str) -> bool {
+    grokhub_core::redact_secret_words(command) != command
+        || grokhub_core::redact::redact_token_shapes(command) != command
+        || grokhub_core::diagnostics::has_credential_value(command)
 }
 
 /// Why `command` doesn't run at all, if it doesn't.
@@ -235,11 +254,28 @@ struct Entry {
     commands: Vec<String>,
 }
 
+/// The store as it may be used: a line with a secret in it, kept by a
+/// version that stored lines as typed, is dropped on the way in, so it is
+/// never listed or matched. The file is written back without it there and
+/// then, so the secret does not sit on disk until some other line is
+/// remembered.
 fn load(config_dir: &Path) -> Store {
-    std::fs::read_to_string(config_dir.join(FILE))
+    let mut store: Store = std::fs::read_to_string(config_dir.join(FILE))
         .ok()
         .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let mut dropped = false;
+    for entry in &mut store.repos {
+        let before = entry.commands.len();
+        entry.commands.retain(|c| !holds_secret(c));
+        dropped |= entry.commands.len() != before;
+    }
+    if dropped {
+        // Best effort: a file that can't be written is read the same way
+        // next time.
+        let _ = save(config_dir, &store);
+    }
+    store
 }
 
 fn save(config_dir: &Path, store: &Store) -> Result<(), String> {
@@ -261,10 +297,14 @@ pub fn remembered(config_dir: &Path, repo_key: &str) -> Vec<String> {
 }
 
 /// Remembers `command` for `repo_key` after a yes on the page. A
-/// destructive line is never remembered: it asks every time.
+/// destructive line is never remembered: it asks every time. Neither is a
+/// line with a key or token in it, so the secret is not kept in the file.
 pub fn remember(config_dir: &Path, repo_key: &str, command: &str) -> Result<(), String> {
     let command = command.trim();
-    if command.is_empty() || grokhub_core::host_risk(command) == HostRisk::Destructive {
+    if command.is_empty()
+        || grokhub_core::host_risk(command) == HostRisk::Destructive
+        || holds_secret(command)
+    {
         return Ok(());
     }
     let mut store = load(config_dir);

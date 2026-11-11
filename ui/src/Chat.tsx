@@ -71,7 +71,7 @@ import { needsSettings } from "./ui";
 import { SavedCard } from "./SavedCard";
 import { settingAsk } from "./autoSetupApi";
 import { Episode } from "./Episode";
-import { OPEN_EVENT } from "./onboardApi";
+import { openImport } from "./onboardApi";
 
 export type Item =
   | { kind: "user"; text: string }
@@ -197,6 +197,20 @@ export const OPEN_BUSY = "A reply is still running. Stop it or wait, then open t
 
 export const EVENTS_LOST = `Lost touch with ${PRODUCT_NAME} on your computer for a while. Part of this reply may be missing.`;
 export const MISSION_BUSY = "A reply is still running. Stop it or wait, then press To mission again.";
+/** Slash lines that leave the running reply alone, so they run beside it. */
+const BESIDE_REPLY = /^\/(queue|bg|background|send|consult)(\s|$)/i;
+/** Every other slash line typed during a reply stays in the box with this. */
+export const SLASH_WAITS = "That command waits for the reply. /stop ends it.";
+/** The web app has no /stop. */
+export const SLASH_WAITS_REMOTE = "That command waits for the reply.";
+/** Enter again on a slash line whose answer is still out. */
+export const SLASH_RUNNING = "That command is still running.";
+
+/** Whether a slash line runs while a reply does: /stop and /undo act on the
+ * reply (the web app has neither), the rest leave it alone. */
+function runsBesideReply(line: string, remote?: boolean): boolean {
+  return (/^\/(stop|undo)$/i.test(line) && !remote) || BESIDE_REPLY.test(line);
+}
 
 export function newConversationId(): string {
   return `shell-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -234,6 +248,14 @@ export function applyEvent(items: Item[], event: ChatEvent): Item[] {
     default:
       return items;
   }
+}
+
+/** Adds a command's line to the log. A reply that is streaming stays the last
+ * item, so its next words join the same bubble: the line goes just above it. */
+function withNotice(items: Item[], notice: Item): Item[] {
+  const last = items[items.length - 1];
+  if (last?.kind === "assistant" && last.streaming) return [...items.slice(0, -1), notice, last];
+  return [...items, notice];
 }
 
 /** The turn ended: stop streaming, and retire cards nobody answered. A
@@ -507,7 +529,8 @@ function LogItem({
  * where the approvals stay the computer's. Finished automation runs go to the
  * Notifications menu, not this log. `open`: a saved chat History picked;
  * a new `n` shows it, and the next message carries it on. `deleted`: a chat
- * History deleted; if it is the open one, a new chat starts. `clear`: the
+ * History deleted (`ids`: every chat it has deleted, since Delete all reports
+ * many at once); if the open one is among them, a new chat starts. `clear`: the
  * Chat tab's Clear chat, already confirmed; a new `n` deletes the open chat's
  * saved history for good and starts a new one. On the desktop
  * the chat open at the last close comes back on mount. */
@@ -530,8 +553,8 @@ export function Chat({
   /** The signed-out card's button: Settings → Account. */
   onSignIn?: () => void;
   /** `/memory`, `/connectors` and the like open their page, and so does a
-   * chip that goes somewhere. */
-  onOpenView?: (view: View) => void;
+   * chip that goes somewhere. `false` back: this app has no such page. */
+  onOpenView?: (view: View) => boolean | void;
   /** `/palette` opens the command palette. */
   onOpenPalette?: () => void;
   /** The messages waiting behind the running reply, for the Activity menu. */
@@ -541,7 +564,7 @@ export function Chat({
   queueAct?: QueueAct;
   prefill?: Prefill;
   open?: { id: string; n: number };
-  deleted?: { id: string; n: number };
+  deleted?: { id: string; ids?: string[]; n: number };
   clear?: { n: number };
   active?: boolean;
   remote?: boolean;
@@ -580,6 +603,8 @@ export function Chat({
   /** Questions answered beside the running reply. */
   const [sides, setSides] = useState<Side[]>([]);
   const sideN = useRef(0);
+  /** Slash lines sent and not yet answered: Enter again starts no second run. */
+  const slashing = useRef(new Set<string>());
   /** The line shown the moment a message typed mid-reply is routed. */
   const [ack, setAck] = useState<string | null>(null);
   /** A reply's follow-ups landed: the chip row is asked for again. */
@@ -588,7 +613,7 @@ export function Chat({
   const [goalAsk, setGoalAsk] = useState<{ id: string; title: string } | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
   const attach = useAttachments(conversationId, { remote, active });
-  const slashRows = useSlashHits(draft);
+  const { rows: slashRows, fresh: slashFresh } = useSlashHits(draft);
   const [slashAt, setSlashAt] = useState(0);
   // Escape hides the list until the draft changes.
   const [slashShut, setSlashShut] = useState<string | null>(null);
@@ -596,7 +621,9 @@ export function Chat({
   const slashPick = Math.min(slashAt, slashRows.length - 1);
   const row = useChipRow({
     surface: "composer",
-    conversationId,
+    // The computer refuses a browser chips for a chat it has not sent in, so
+    // the web app's new chat asks for the new-chat row.
+    conversationId: remote && !items.some((it) => it.kind === "user") ? undefined : conversationId,
     draft,
     turn: followed,
     busy,
@@ -692,7 +719,7 @@ export function Chat({
       return;
     }
     touched.current = true;
-    void closeChat(conversationId);
+    closeChat(conversationId).catch(() => {});
     loadChat(id).then(show, (err) => setError(String(err)));
   });
 
@@ -701,15 +728,15 @@ export function Chat({
   }, [open]);
 
   // Deleting the chat on screen starts a new one; deleting another leaves it.
-  const dropDeleted = useEffectEvent((id: string) => {
-    if (id === conversationId) startFresh();
+  const dropDeleted = useEffectEvent((ids: string[]) => {
+    if (ids.includes(conversationId)) startFresh();
   });
 
   useEffect(() => {
     if (!deleted) return;
-    const id = deleted.id;
+    const ids = deleted.ids ?? [deleted.id];
     // After this render, so the reset is one render of its own.
-    const timer = window.setTimeout(() => dropDeleted(id), 0);
+    const timer = window.setTimeout(() => dropDeleted(ids), 0);
     return () => window.clearTimeout(timer);
   }, [deleted]);
 
@@ -746,7 +773,7 @@ export function Chat({
         return;
       }
       touched.current = true;
-      void closeChat(conversationId);
+      closeChat(conversationId).catch(() => {});
       leaveSides();
       setGoalAsk(null);
       setItems([]);
@@ -824,7 +851,8 @@ export function Chat({
 
   function startOver() {
     if (busy) return;
-    void closeChat(conversationId);
+    // A browser's chat with no message sent is refused; the new chat starts anyway.
+    closeChat(conversationId).catch(() => {});
     startFresh();
   }
 
@@ -1043,17 +1071,28 @@ export function Chat({
     changeQueue([...queueRef.current, text]);
   }
 
-  /** Runs a slash line and applies what it did. */
-  async function slash(line: string) {
+  /** Runs a slash line and applies what it did. `box` is what the box held
+   * when the line was sent. */
+  async function slash(line: string, box = line) {
+    if (slashing.current.has(line)) {
+      setAck(SLASH_RUNNING);
+      return;
+    }
     setError(null);
+    slashing.current.add(line);
     let effect: SlashEffect;
     try {
       effect = await runSlash(line, conversationId);
     } catch (err) {
+      slashing.current.delete(line);
+      setAck((now) => (now === SLASH_RUNNING ? null : now));
       setError(String(err));
       return;
     }
-    setDraft("");
+    slashing.current.delete(line);
+    setAck((now) => (now === SLASH_RUNNING ? null : now));
+    // Only the line that was sent leaves the box: words typed while it ran stay.
+    setDraft((now) => (now.trim() === box.trim() ? "" : now));
     const command = line.split(/\s+/)[0];
     switch (effect.kind) {
       case "newChat":
@@ -1078,13 +1117,18 @@ export function Chat({
         break;
       }
       case "open":
-        onOpenView?.(effect.view);
+        if (onOpenView?.(effect.view) === false) {
+          setItems((now) => withNotice(now, { kind: "slash", command, text: `${command} works on your computer.` }));
+        }
         break;
-      case "import":
-        window.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail: { import: true } }));
+      case "import": {
+        // Review opens with the workspace's notes; with none to read, the chat says so.
+        const text = await openImport();
+        if (text !== null) setItems((now) => withNotice(now, { kind: "slash", command, text }));
         break;
+      }
       case "notice":
-        setItems((now) => [...now, { kind: "slash", command, text: effect.text }]);
+        setItems((now) => withNotice(now, { kind: "slash", command, text: effect.text }));
         break;
       case "export":
       case "exportAs":
@@ -1130,7 +1174,9 @@ export function Chat({
         break;
       case "queue":
         if (busyRef.current) changeQueue([...queueRef.current, effect.text]);
-        else void deliver(effect.text, [], false, "chat");
+        // Sent from the next render: the reply may have ended while the line
+        // was read, and this render's `deliver` still sees it running.
+        else setNextUp((now) => ({ text: effect.text, n: (now?.n ?? 0) + 1, as: "chat" }));
         break;
       case "palette":
         onOpenPalette?.();
@@ -1174,8 +1220,16 @@ export function Chat({
       setError(`${hit.cmd}: ${hit.disabled}`);
       return;
     }
-    if (run && hit.runOnPick) void slash(hit.cmd);
-    else setDraft(hit.insert);
+    if (!run || !hit.runOnPick) {
+      setDraft(hit.insert);
+      return;
+    }
+    // The same rule as a typed line: a command that waits for the reply says so.
+    if (busy && !runsBesideReply(hit.cmd, remote)) {
+      setError(remote ? SLASH_WAITS_REMOTE : SLASH_WAITS);
+      return;
+    }
+    void slash(hit.cmd, draft);
   }
 
   // Declared after what they call: React Compiler skips a component that
@@ -1188,11 +1242,15 @@ export function Chat({
     // While a reply runs, the app reads what the message is for (files wait
     // in the box). A typed /btw or /side asks on the side.
     if (busy) {
-      if (/^\/(stop|undo)$/i.test(text) && !remote) {
+      if (runsBesideReply(text, remote)) {
         await slash(text);
         return;
       }
-      if (!text || (isSlashCommand(text) && !/^\/(btw|side)\s+\S/i.test(text))) return;
+      if (!text) return;
+      if (isSlashCommand(text) && !/^\/(btw|side)\s+\S/i.test(text)) {
+        setError(remote ? SLASH_WAITS_REMOTE : SLASH_WAITS);
+        return;
+      }
       setDraft("");
       // The web app lines messages up behind the reply, as before. In a chat
       // opened while another chat's reply ends, the message waits for it.
@@ -1254,7 +1312,8 @@ export function Chat({
       }
       if (event.key === "Tab" && !event.shiftKey) {
         event.preventDefault();
-        pickSlash(slashRows[slashPick], false);
+        // A list still answering an earlier keystroke fills nothing in.
+        if (slashFresh) pickSlash(slashRows[slashPick], false);
         return;
       }
       if (event.key === "Escape") {
@@ -1262,7 +1321,8 @@ export function Chat({
         setSlashShut(draft);
         return;
       }
-      if (event.key === "Enter" && !event.shiftKey) {
+      // Until the list answers this draft, Enter runs the line as typed.
+      if (event.key === "Enter" && !event.shiftKey && slashFresh) {
         const hit = slashRows[slashPick];
         // A typed full command runs as typed; otherwise the pick is used.
         if (hit && hit.cmd !== draft.trim().toLowerCase()) {
@@ -1387,7 +1447,17 @@ export function Chat({
         </p>
       )}
       <SideCards sides={sides} onStop={stopSide} onTell={(side) => void tellSide(side)} onDismiss={dismissSide} />
-      <Episode key={conversationId} conversationId={conversationId} desktopOn={!remote && Boolean(settings?.desktopControl)} />
+      <Episode
+        key={conversationId}
+        conversationId={conversationId}
+        desktopOn={!remote && Boolean(settings?.desktopControl)}
+        onResume={(text) => {
+          // A reply still running or ending here takes the resume when it
+          // ends (a send now would be dropped); otherwise it goes at once.
+          if (busyRef.current) changeQueue([text, ...queueRef.current]);
+          else setNextUp((now) => ({ text, n: (now?.n ?? 0) + 1 }));
+        }}
+      />
       <AttachChips files={attach.files} note={attach.note} onRemove={attach.remove} busy={busy} />
       <form className="composer slash-wrap" onSubmit={send}>
         {slashOpen && (

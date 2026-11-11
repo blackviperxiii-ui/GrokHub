@@ -6,7 +6,7 @@
 //! under the user's home become `/home/user`; tokens, emails, and credential-
 //! like strings are redacted before anything is written.
 
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -364,6 +364,64 @@ pub fn redact_for_diagnostics(input: &str, home: Option<&str>) -> String {
     s
 }
 
+/// How much of a log's end is read to show its last characters. Redacting
+/// takes time with every byte, and a log has no size limit.
+const LOG_READ: u64 = 64 * 1024;
+/// The redacted text that must stand before the tail shown when only the end
+/// of a log was read. A private key block that began before the part read is
+/// not redacted in it; this much text in front keeps what is left of the
+/// block out of the tail. A log so full of secrets that the part read
+/// redacts down to less is read whole instead.
+const LOG_LEAD: usize = 16_000;
+
+/// The last `most` bytes of a log, from the start of a line, and whether
+/// that is the whole log. A cut falls inside a line, maybe inside a key or a
+/// character, so what is left of that line is dropped.
+fn log_end(file: &mut (impl Read + Seek), most: u64) -> std::io::Result<(String, bool)> {
+    let len = file.seek(SeekFrom::End(0))?;
+    let from = len.saturating_sub(most);
+    file.seek(SeekFrom::Start(from))?;
+    let mut bytes = Vec::new();
+    file.take(most).read_to_end(&mut bytes)?;
+    if from > 0 {
+        let line = bytes
+            .iter()
+            .position(|b| *b == b'\n')
+            .map_or(bytes.len(), |at| at + 1);
+        bytes.drain(..line);
+    }
+    let text = String::from_utf8(bytes)
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+    Ok((text, from == 0))
+}
+
+/// The last `tail` characters of the redacted log at `path`, for a
+/// diagnostics export; `None` when it can't be read as text. Redacted first,
+/// then cut: a key the cut lands inside is still a key.
+pub fn redacted_log_tail(path: &Path, home: Option<&str>, tail: usize) -> Option<String> {
+    let mut file = std::fs::File::open(path).ok()?;
+    let (text, whole) = log_end(&mut file, LOG_READ).ok()?;
+    let mut redacted = redact_for_diagnostics(&text, home);
+    if !whole && redacted.chars().count() < tail + LOG_LEAD {
+        let (text, _) = log_end(&mut file, u64::MAX).ok()?;
+        redacted = redact_for_diagnostics(&text, home);
+    }
+    let n = redacted.chars().count();
+    Some(redacted.chars().skip(n.saturating_sub(tail)).collect())
+}
+
+/// The first `max` characters of redacted `input`, the last one "…" when
+/// more was cut. Redacted first, then cut, as [`redacted_log_tail`] does.
+pub fn redacted_clip(input: &str, home: Option<&str>, max: usize) -> String {
+    let redacted = redact_for_diagnostics(input, home);
+    if redacted.chars().count() <= max {
+        return redacted;
+    }
+    let mut out: String = redacted.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
 /// Apply [`redact_for_diagnostics`] to every string field on a turn,
 /// metadata included (custom playbook names, policy reasons, tool names).
 pub fn redact_turn(mut turn: DiagnosticsTurn, home: Option<&str>) -> DiagnosticsTurn {
@@ -452,8 +510,69 @@ fn is_credential_key(key: &str) -> bool {
     CREDENTIAL_KEYS.iter().any(|k| key.contains(k))
 }
 
+/// The quote a header at `at` sits inside, if its line opened one before it
+/// (`curl -H 'Authorization: …'`).
+fn open_quote_before(b: &[u8], at: usize) -> Option<u8> {
+    let line = b[..at]
+        .iter()
+        .rposition(|c| *c == b'\n')
+        .map_or(0, |n| n + 1);
+    let mut open = None;
+    for c in &b[line..at] {
+        match open {
+            Some(q) if *c == q => open = None,
+            None if matches!(*c, b'"' | b'\'') => open = Some(*c),
+            _ => {}
+        }
+    }
+    open
+}
+
+/// How far an `Authorization` header's value runs past its scheme.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AuthReach {
+    /// `Basic dXNlcjpwYXNz`: the scheme and the one word after it.
+    Word,
+    /// `Digest username=…, response=…`: to the end of the line.
+    Line,
+}
+
+const AUTH_SCHEMES: &[(&str, AuthReach)] = &[
+    ("basic", AuthReach::Word),
+    ("bearer", AuthReach::Word),
+    ("token", AuthReach::Word),
+    ("digest", AuthReach::Line),
+    ("negotiate", AuthReach::Line),
+    ("ntlm", AuthReach::Line),
+    ("aws4-hmac-sha256", AuthReach::Line),
+];
+
+/// A blank between a header's scheme and its credential; a shell writes it
+/// `\ ` outside quotes.
+fn is_header_blank(b: u8) -> bool {
+    matches!(b, b' ' | b'\t' | b'\\')
+}
+
+/// The scheme `value` starts with, when it is an `Authorization` header's
+/// value: how far the value runs, and where the credential starts. Text that
+/// only has the word before a colon (`the user's authorization: it is…`)
+/// starts with no scheme.
+fn auth_scheme(value: &str) -> Option<(AuthReach, usize)> {
+    let b = value.as_bytes();
+    let lead = b.iter().take_while(|c| is_header_blank(**c)).count();
+    AUTH_SCHEMES.iter().find_map(|(scheme, reach)| {
+        let end = lead + scheme.len();
+        let named = b.get(lead..end)?.eq_ignore_ascii_case(scheme.as_bytes());
+        let gap = b[end..].iter().take_while(|c| is_header_blank(**c)).count();
+        (named && gap > 0).then_some((*reach, end + gap))
+    })
+}
+
 /// Mask the value in `KEY=value`, `KEY: value` and `"key": "value"` when the
-/// key names a credential, numbers and escaped quotes included.
+/// key names a credential, numbers and escaped quotes included. An
+/// `Authorization` header's value is a scheme and then the credential
+/// (`Basic dXNlcjpwYXNz`), so the scheme does not stand in for the value:
+/// both are masked ([`AuthReach`]).
 fn redact_credential_values(input: &str) -> String {
     let b = input.as_bytes();
     let mut out = String::with_capacity(input.len());
@@ -492,10 +611,29 @@ fn redact_credential_values(input: &str) -> String {
             j += 1;
         }
         let vstart = j;
+        let header = quote.is_none()
+            && input[start..i]
+                .to_ascii_lowercase()
+                .contains("authorization");
+        let scheme = if header {
+            auth_scheme(&input[vstart..])
+        } else {
+            None
+        };
+        let closing = scheme.and_then(|_| open_quote_before(b, start));
+        if let Some((_, credential)) = scheme {
+            j = vstart + credential;
+        }
         while j < b.len()
-            && match quote {
-                Some(q) => b[j] != q && b[j] != b'\n',
-                None => !b[j].is_ascii_whitespace() && !matches!(b[j], b',' | b';' | b'}'),
+            && match (quote, scheme) {
+                (Some(q), _) => b[j] != q && b[j] != b'\n',
+                (None, Some((AuthReach::Line, _))) => {
+                    !matches!(b[j], b'\n' | b'\r') && Some(b[j]) != closing
+                }
+                (None, Some((AuthReach::Word, _))) => {
+                    !b[j].is_ascii_whitespace() && Some(b[j]) != closing
+                }
+                (None, None) => !b[j].is_ascii_whitespace() && !matches!(b[j], b',' | b';' | b'}'),
             }
         {
             // `\"` inside a quoted value is part of it.
@@ -513,6 +651,13 @@ fn redact_credential_values(input: &str) -> String {
         i = j;
     }
     out
+}
+
+/// True when `input` holds a credential assignment the bundle would mask:
+/// `API_KEY=…`, `--password=…`, `"token": "…"` or an `Authorization`
+/// header. For a caller that must not keep such a line.
+pub fn has_credential_value(input: &str) -> bool {
+    redact_credential_values(input) != input
 }
 
 /// Short reason line for intent (chat vs task and friends).
@@ -848,7 +993,68 @@ fn redact_home_paths(input: &str, home: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Read;
+
+    /// A file that counts the bytes read from it.
+    struct Counted<R> {
+        inner: R,
+        read: usize,
+    }
+
+    impl<R: Read> Read for Counted<R> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = self.inner.read(buf)?;
+            self.read += n;
+            Ok(n)
+        }
+    }
+
+    impl<R: Seek> Seek for Counted<R> {
+        fn seek(&mut self, to: SeekFrom) -> std::io::Result<u64> {
+            self.inner.seek(to)
+        }
+    }
+
+    #[test]
+    fn only_the_end_of_a_long_log_is_read_from_the_start_of_a_line() {
+        // 304,000 bytes of 19-byte lines. The last 65,536 bytes start 14
+        // bytes into a line; the 5 bytes left of it are dropped, and 3,449
+        // whole lines stay.
+        let line = "2026-01-01 step ok\n";
+        let log = line.repeat(16_000);
+        let mut file = Counted {
+            inner: std::io::Cursor::new(log.as_bytes()),
+            read: 0,
+        };
+        let (text, whole) = log_end(&mut file, LOG_READ).expect("read");
+        assert_eq!(
+            file.read, 65_536,
+            "a long log is not read whole to show its last characters"
+        );
+        assert!(!whole);
+        assert_eq!(text.len(), 65_531);
+        assert_eq!(text, line.repeat(3_449));
+
+        // A log shorter than that is read whole, from its first byte.
+        let mut short = Counted {
+            inner: std::io::Cursor::new("started\nready\n".as_bytes()),
+            read: 0,
+        };
+        assert_eq!(
+            log_end(&mut short, LOG_READ).expect("read"),
+            ("started\nready\n".to_string(), true)
+        );
+    }
+
+    #[test]
+    fn a_clip_redacts_before_it_cuts() {
+        // Cut first, the 160 characters would end nine characters into the
+        // key, and what is left of it is no longer a key to the redactor.
+        let lead = "x".repeat(150);
+        let text = format!("{lead}sk-abcdefghijklmnopqrstuv");
+        assert_eq!(redacted_clip(&text, None, 160), format!("{lead}[redacted]"));
+        assert_eq!(redacted_clip("short", None, 160), "short");
+        assert_eq!(redacted_clip("abcdef", None, 4), "abc…");
+    }
 
     #[test]
     fn no_secret_leak() {
@@ -1016,6 +1222,109 @@ mod tests {
              max_tokens: 4000\n\
              author: Pat"
         );
+    }
+
+    #[test]
+    fn an_authorization_header_is_redacted_to_the_end_of_its_value() {
+        // The value is base64 of a made-up name and password.
+        let raw = concat!(
+            "Authorization: Basic ",
+            "YWRtaW46aHVudGVyMmZha2U=\n",
+            "Proxy-Authorization: Basic ",
+            "abc=\n",
+            "curl -H 'Authorization: Basic ",
+            "YWRtaW46aHVudGVyMmZha2U=' https://example.com\n",
+            "curl -H \"authorization: Digest username=user, response=",
+            "0a1b2c3d\" -v\n",
+            "{\"Authorization\": \"Basic ",
+            "YWRtaW46aHVudGVyMmZha2U=\", \"name\": \"harbor\"}\n",
+            "the line after stays"
+        );
+        assert_eq!(
+            redact_for_diagnostics(raw, None),
+            "Authorization: [redacted]\n\
+             Proxy-Authorization: [redacted]\n\
+             curl -H 'Authorization: [redacted]' https://example.com\n\
+             curl -H \"authorization: [redacted]\" -v\n\
+             {\"Authorization\": \"[redacted]\", \"name\": \"harbor\"}\n\
+             the line after stays"
+        );
+    }
+
+    #[test]
+    fn only_a_real_authorization_header_loses_the_rest_of_its_value() {
+        // Ordinary text with the word before a colon keeps its line: one
+        // word goes, as for any other credential key.
+        assert_eq!(
+            redact_for_diagnostics(
+                "We need the user's authorization: it is required before the deploy step runs, see notes.",
+                None
+            ),
+            "We need the user's authorization: [redacted] is required before the deploy step runs, see notes."
+        );
+        assert_eq!(
+            redact_for_diagnostics(
+                "authorization_endpoint: https://example.com/oauth/authorize and then other words here",
+                None
+            ),
+            "authorization_endpoint: [redacted] and then other words here"
+        );
+        assert_eq!(
+            redact_for_diagnostics(
+                "{\"authorization\": null, \"name\": \"harbor\", \"note\": \"kept?\"}",
+                None
+            ),
+            "{\"authorization\": [redacted], \"name\": \"harbor\", \"note\": \"kept?\"}"
+        );
+        // Basic, Bearer and Token: the scheme and the one word after it.
+        let raw = concat!(
+            "it's fine. Authorization: Basic ",
+            "YWRtaW46aHVudGVyMmZha2U= and it's done\n",
+            "AUTHORIZATION: BEARER ",
+            "abcdefghijklmnopqrstuvwxyz then the next step ran\n",
+            "Authorization: Token ",
+            "0a1b2c3d4e5f retry in 5 s\n",
+            "curl -H Authorization:\\ Basic\\ ",
+            "YWRtaW46aHVudGVyMmZha2U= https://example.com\n",
+            // Any other scheme this knows: to the end of the line.
+            "Authorization: Negotiate ",
+            "YIIFaAYGKwYBBQUCoIIFXDCC and more\n",
+            "Authorization: AWS4-HMAC-SHA256 Credential=FAKE/20260101/region/s3/aws4_request, Signature=",
+            "0a1b2c3d\n",
+            "the line after stays"
+        );
+        assert_eq!(
+            redact_for_diagnostics(raw, None),
+            "it's fine. Authorization: [redacted] and it's done\n\
+             AUTHORIZATION: [redacted] then the next step ran\n\
+             Authorization: [redacted] retry in 5 s\n\
+             curl -H Authorization:[redacted] https://example.com\n\
+             Authorization: [redacted]\n\
+             Authorization: [redacted]\n\
+             the line after stays"
+        );
+    }
+
+    #[test]
+    fn a_line_with_a_credential_assignment_is_told_from_one_without() {
+        for line in [
+            "export API_KEY=plainvalue123",
+            "mysql -u root --password=hunter2fake",
+            concat!(
+                "curl -H \"Authorization: Basic ",
+                "YWRtaW46aHVudGVyMmZha2U=\" https://example.com"
+            ),
+        ] {
+            assert!(has_credential_value(line), "{line}");
+        }
+        for line in [
+            "git status",
+            "cat docs/secret-santa.md",
+            "cargo run -- --max_tokens=4000",
+            "docker login --password-stdin",
+        ] {
+            assert!(!has_credential_value(line), "{line}");
+        }
     }
 
     #[test]

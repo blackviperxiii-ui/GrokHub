@@ -88,6 +88,8 @@ const PAIRS: [string, string, number][] = [
   ["danger-text", "bg", 4.5],
   ["danger-text", "panel", 4.5],
   ["danger-text", "raised", 4.5],
+  // A danger button under the pointer, and a disabled one.
+  ["danger-text", "hover", 4.5],
   ["accent", "bg", 3],
   ["accent", "panel", 3],
   ["field-border", "bg", 3],
@@ -106,6 +108,18 @@ describe("theme contrast", () => {
 
   it("catches a failing pair (the old danger red on the Soft Charcoal panel)", () => {
     expect(contrast("#c8304a", "#1d1e22")).toBeLessThan(4.5);
+  });
+
+  // A danger button's text is danger-text. On the accent fill every plain
+  // button starts with it could not be read, so the button is outlined.
+  it("a danger button is outlined, because danger text on the accent fill can't be read", () => {
+    const block = /\nbutton\.danger:not\(:disabled\) \{([^}]*)\}/.exec(css)?.[1] ?? "";
+    expect(block.trim()).toBe("background: transparent;");
+    const ratios = THEMES.map((id) => {
+      const vars = theme(rules, id);
+      return Number(contrast(resolve(vars, "danger-text"), resolve(vars, "accent")).toFixed(2));
+    });
+    expect(ratios).toEqual([1.5, 1.5, 1.5, 2.32]);
   });
 
   it("reads the real themes, not an empty table", () => {

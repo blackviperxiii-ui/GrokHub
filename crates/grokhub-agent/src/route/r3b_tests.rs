@@ -3756,3 +3756,268 @@ fn the_connection_check_asks_the_wire_and_reports_what_it_said() {
         let _ = std::fs::remove_dir_all(d);
     }
 }
+
+// ---- The keyring and the saved list, read with care ---------------------------
+
+/// A keyring that fails the calls it is told to and otherwise keeps keys in memory.
+#[derive(Default)]
+struct ShakyVault {
+    keys: MemoryVault,
+    /// How many reads fail before one answers.
+    failed_reads: Mutex<u32>,
+    /// How many times the keyring was read.
+    reads: Mutex<u32>,
+    set_fails: bool,
+    delete_fails: bool,
+}
+
+impl providers::KeyVault for ShakyVault {
+    fn get(&self, id: &str) -> Result<Option<zeroize::Zeroizing<String>>, String> {
+        *self.reads.lock().unwrap() += 1;
+        let mut left = self.failed_reads.lock().unwrap();
+        if *left > 0 {
+            *left -= 1;
+            return Err("the keyring is locked".into());
+        }
+        self.keys.get(id)
+    }
+
+    fn set(&self, id: &str, key: &str) -> Result<(), String> {
+        if self.set_fails {
+            return Err("No default store has been set, so cannot search or create entries".into());
+        }
+        self.keys.set(id, key)
+    }
+
+    fn delete(&self, id: &str) -> Result<(), String> {
+        if self.delete_fails {
+            return Err("no secret service".into());
+        }
+        self.keys.delete(id)
+    }
+}
+
+#[test]
+fn a_keyring_read_that_failed_is_asked_again_and_not_remembered_as_no_key() {
+    use providers::KeyVault;
+    use std::time::{Duration, Instant};
+    let dir = test_dir("r3b-key-reread");
+    let vault = Arc::new(ShakyVault {
+        failed_reads: Mutex::new(1),
+        ..ShakyVault::default()
+    });
+    vault.keys.set("openrouter", KEY).unwrap();
+    providers::use_vault_for(&dir, vault.clone());
+    let start = Instant::now();
+    assert!(
+        !providers::has_key_at(&dir, "openrouter", start),
+        "the keyring could not be read"
+    );
+    // A page that repaints many times a second does not ask a failing keyring each time.
+    assert!(!providers::has_key_at(
+        &dir,
+        "openrouter",
+        start + Duration::from_secs(4)
+    ));
+    assert_eq!(*vault.reads.lock().unwrap(), 1);
+    assert_eq!(providers::KEY_RETRY, Duration::from_secs(5));
+    assert!(
+        providers::has_key_at(&dir, "openrouter", start + providers::KEY_RETRY),
+        "the keyring is asked again"
+    );
+    // An answer the keyring gave is remembered.
+    assert!(providers::has_key(&dir, "openrouter"));
+    assert_eq!(*vault.reads.lock().unwrap(), 2);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_keyring_installed_after_the_first_ask_finds_the_saved_key() {
+    use providers::KeyVault;
+    let dir = test_dir("r3b-key-late-vault");
+    assert!(
+        !providers::has_key(&dir, "openrouter"),
+        "no keyring yet: no key"
+    );
+    let vault = MemoryVault::default();
+    vault.set("openrouter", KEY).unwrap();
+    providers::use_default_vault(Some(Arc::new(vault)));
+    let found = providers::has_key(&dir, "openrouter");
+    // A vault that answered "no key" is remembered until a new one is installed.
+    providers::use_default_vault(Some(Arc::new(MemoryVault::default())));
+    let gone = providers::has_key(&dir, "openrouter");
+    let late = MemoryVault::default();
+    late.set("openrouter", KEY).unwrap();
+    providers::use_default_vault(Some(Arc::new(late)));
+    let back = providers::has_key(&dir, "openrouter");
+    providers::use_default_vault(None);
+    assert_eq!((found, gone, back), (true, false, true));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Add `https://models.example.org/v1` with a key, then edit its address in the saved file by hand.
+fn moved_provider(label: &str, granted: &str, address: &str) -> PathBuf {
+    let (dir, _wire) = setup(label);
+    add_provider(&dir, "https://models.example.org/v1", KEY, NOW).unwrap();
+    grant_destination(&dir, granted, CALL_DATA, UserClick::from_click()).unwrap();
+    let path = providers::providers_path(&dir);
+    let raw = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(raw.matches("https://models.example.org/v1").count(), 1);
+    std::fs::write(&path, raw.replace("https://models.example.org/v1", address)).unwrap();
+    dir
+}
+
+#[test]
+fn a_saved_provider_moved_to_plain_http_is_not_loaded_and_gets_no_key() {
+    let dir = moved_provider(
+        "r3b-moved-http",
+        "models.example.org",
+        "http://models.example.org/v1",
+    );
+    assert_eq!(providers::load_providers(&dir), Vec::new());
+    assert_eq!(usable(&dir, CALL_DATA), Vec::<String>::new());
+    assert!(providers::sources(&dir).is_empty());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_saved_provider_moved_to_another_host_is_not_loaded_and_gets_no_key() {
+    let dir = moved_provider(
+        "r3b-moved-host",
+        "other.example.net",
+        "https://other.example.net/v1",
+    );
+    assert_eq!(providers::load_providers(&dir), Vec::new());
+    assert_eq!(usable(&dir, CALL_DATA), Vec::<String>::new());
+    assert!(providers::sources(&dir).is_empty());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn an_untouched_saved_provider_still_loads() {
+    let (dir, _wire) = setup("r3b-saved-loads");
+    let p = add_provider(&dir, "https://models.example.org/v1/", KEY, NOW).unwrap();
+    assert_eq!(p.base_url, "https://models.example.org/v1");
+    assert_eq!(providers::load_providers(&dir), vec![p]);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn removing_a_provider_that_was_never_added_says_so_and_reaches_no_other_file() {
+    let (dir, _wire) = setup("r3b-remove-unknown");
+    assert_eq!(
+        providers::remove_provider(&dir, "nope").unwrap_err(),
+        "That provider isn't added."
+    );
+    // An id shaped like a path: `models/listing-x/../../app.json` is the settings file.
+    std::fs::create_dir_all(dir.join("models").join("listing-x")).unwrap();
+    std::fs::write(dir.join("app.json"), "{}").unwrap();
+    assert_eq!(
+        providers::remove_provider(&dir, "x/../../app").unwrap_err(),
+        "That provider isn't added."
+    );
+    assert_eq!(std::fs::read_to_string(dir.join("app.json")).unwrap(), "{}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn removing_with_the_keyring_down_keeps_the_provider_and_says_why() {
+    let dir = test_dir("r3b-remove-keyring-down");
+    providers::use_vault_for(
+        &dir,
+        Arc::new(ShakyVault {
+            delete_fails: true,
+            ..ShakyVault::default()
+        }),
+    );
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    assert_eq!(
+        providers::remove_provider(&dir, "openrouter").unwrap_err(),
+        "The keyring isn't available, so openrouter wasn't removed. Try again when it is."
+    );
+    assert_eq!(providers::load_providers(&dir).len(), 1);
+    assert!(providers::has_key(&dir, "openrouter"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_keyring_that_refuses_the_key_says_so_in_plain_words_and_saves_no_provider() {
+    let dir = test_dir("r3b-add-keyring-off");
+    providers::use_vault_for(
+        &dir,
+        Arc::new(ShakyVault {
+            set_fails: true,
+            ..ShakyVault::default()
+        }),
+    );
+    assert_eq!(
+        add_provider(&dir, OR_URL, KEY, NOW).unwrap_err(),
+        "The keyring isn't available, so the key wasn't saved."
+    );
+    assert!(!providers::providers_path(&dir).exists());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A row the loader skips (its address was edited by hand) is not shown or
+/// used, but it stays in the file through another provider's add and remove,
+/// and it can still be removed together with its key.
+#[test]
+fn a_skipped_provider_stays_in_the_file_and_can_still_be_removed_with_its_key() {
+    let dir = moved_provider(
+        "r3b-skipped-kept",
+        "models.example.org",
+        "http://models.example.org/v1",
+    );
+    let rows = |dir: &Path| -> Vec<String> {
+        let raw = std::fs::read_to_string(providers::providers_path(dir)).unwrap();
+        let file: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        file["providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| {
+                format!(
+                    "{} {}",
+                    p["id"].as_str().unwrap(),
+                    p["base_url"].as_str().unwrap()
+                )
+            })
+            .collect()
+    };
+    let skipped = "models http://models.example.org/v1".to_string();
+    assert_eq!(providers::load_providers(&dir), Vec::new());
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    assert_eq!(
+        rows(&dir),
+        vec![skipped.clone(), format!("openrouter {OR_URL}")]
+    );
+    providers::remove_provider(&dir, "openrouter").unwrap();
+    assert_eq!(rows(&dir), vec![skipped]);
+    // Still hidden and unused, and its key is still in the keyring.
+    assert_eq!(providers::load_providers(&dir), Vec::new());
+    assert!(providers::has_key(&dir, "models"));
+    assert_eq!(providers::remove_provider(&dir, "models"), Ok(()));
+    assert_eq!(rows(&dir), Vec::<String>::new());
+    assert!(!providers::has_key(&dir, "models"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A hand-written row whose id is not one an address gives (a path) is never
+/// removed by that id: the id would name a file.
+#[test]
+fn a_saved_row_with_a_path_for_an_id_is_not_removed_by_it() {
+    let (dir, _wire) = setup("r3b-skipped-path-id");
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    let path = providers::providers_path(&dir);
+    let raw = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(raw.matches("\"openrouter\"").count(), 1);
+    std::fs::write(&path, raw.replace("\"openrouter\"", "\"x/../../app\"")).unwrap();
+    std::fs::create_dir_all(dir.join("models").join("listing-x")).unwrap();
+    std::fs::write(dir.join("app.json"), "{}").unwrap();
+    assert_eq!(
+        providers::remove_provider(&dir, "x/../../app").unwrap_err(),
+        "That provider isn't added."
+    );
+    assert_eq!(std::fs::read_to_string(dir.join("app.json")).unwrap(), "{}");
+    let _ = std::fs::remove_dir_all(dir);
+}

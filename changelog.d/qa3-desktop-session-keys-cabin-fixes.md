@@ -1,0 +1,6 @@
+- Desktop session (desktop app): a step you allowed never runs after Halt or on a locked screen, and Halt with no reply running ends the session and takes its cards back.
+- Desktop session: an approval card says what the step does (the control a click lands on, the command typed) and what kind it is (Send, Delete, Spend money). It shows all of the typed text, however long, with each line end marked.
+- Desktop session: Allow acts at once, also when you click it while the reply is still being written. An Allow that was not run within 5 minutes is refused instead of running with a later message.
+- Desktop session: Pause keeps the session, its goal and its cards, and the reply's Stop after a Pause ends the session. Turning off "Let Grok control the desktop" stops a running session. The step list no longer marks a waiting step "not run" because another step with the same tool was refused.
+- AI models: a saved provider key is found after a restart without opening Settings. A provider whose saved address was edited by hand is skipped, so its key is never sent to the new address; it stays in the file and can still be removed with its key.
+- Cabin Code tab: keys typed in the terminal no longer fire the cabin's shortcuts, a running test or deploy has a Stop button, and a test or deploy confirm closes when the project changes.

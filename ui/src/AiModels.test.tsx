@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AiModelsCard, AiModelsView } from "./api";
@@ -179,5 +179,83 @@ describe("AiModels", () => {
     const confirm = await screen.findByRole("group", { name: "Remove openrouter?" });
     await userEvent.click(within(confirm).getByRole("button", { name: "Remove" }));
     expect(api.removeAiProvider).toHaveBeenCalledWith("openrouter");
+  });
+
+  it("shows the page title once: the Settings page already has the heading", async () => {
+    const { container } = render(<AiModels />);
+    // While it loads, and after.
+    expect(screen.queryByRole("heading", { name: "AI models" })).toBeNull();
+    await screen.findByText("No other providers yet.");
+    expect(screen.queryByRole("heading", { name: "AI models" })).toBeNull();
+    expect(container.querySelector("section")).toHaveAttribute("aria-label", "AI models");
+  });
+
+  it("denies a key card that is still open when the page is left", async () => {
+    api.addAiProvider.mockResolvedValue(KEY_CARD);
+    api.answerAiModelsCard.mockResolvedValue(EMPTY);
+    const { unmount } = render(<AiModels />);
+    await screen.findByText("No other providers yet.");
+    await userEvent.type(screen.getByLabelText("Provider address"), "https://openrouter.ai/api/v1");
+    await userEvent.type(screen.getByLabelText("Provider API key"), "test-key-aaaaaaaa");
+    await userEvent.click(screen.getByRole("button", { name: "Add provider" }));
+    await screen.findByRole("group", { name: "Save its API key (openrouter)" });
+    expect(api.answerAiModelsCard).not.toHaveBeenCalled();
+    unmount();
+    expect(api.answerAiModelsCard).toHaveBeenCalledTimes(1);
+    expect(api.answerAiModelsCard).toHaveBeenCalledWith("ai-key-openrouter-1", false);
+  });
+
+  it("denies a card that arrives after the page was left", async () => {
+    let arrive: (card: AiModelsCard) => void = () => undefined;
+    api.addAiProvider.mockReturnValue(
+      new Promise<AiModelsCard>((resolve) => {
+        arrive = resolve;
+      }),
+    );
+    api.answerAiModelsCard.mockResolvedValue(EMPTY);
+    const { unmount } = render(<AiModels />);
+    await screen.findByText("No other providers yet.");
+    await userEvent.type(screen.getByLabelText("Provider address"), "https://openrouter.ai/api/v1");
+    await userEvent.type(screen.getByLabelText("Provider API key"), "test-key-aaaaaaaa");
+    await userEvent.click(screen.getByRole("button", { name: "Add provider" }));
+    unmount();
+    expect(api.answerAiModelsCard).not.toHaveBeenCalled();
+    arrive(KEY_CARD);
+    await waitFor(() => expect(api.answerAiModelsCard).toHaveBeenCalledWith("ai-key-openrouter-1", false));
+    expect(api.answerAiModelsCard).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers a card once: leaving after Deny or with no card sends nothing more", async () => {
+    api.addAiProvider.mockResolvedValue(KEY_CARD);
+    api.answerAiModelsCard.mockResolvedValue({ ...EMPTY, status: "Nothing saved. The key was denied." });
+    const first = render(<AiModels />);
+    await screen.findByText("No other providers yet.");
+    first.unmount();
+    expect(api.answerAiModelsCard).not.toHaveBeenCalled();
+
+    const second = render(<AiModels />);
+    await screen.findByText("No other providers yet.");
+    await userEvent.type(screen.getByLabelText("Provider address"), "https://openrouter.ai/api/v1");
+    await userEvent.type(screen.getByLabelText("Provider API key"), "test-key-aaaaaaaa");
+    await userEvent.click(screen.getByRole("button", { name: "Add provider" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Deny" }));
+    await screen.findByText("Nothing saved. The key was denied.");
+    second.unmount();
+    expect(api.answerAiModelsCard).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a key the keyring could not take as an error and keeps the address", async () => {
+    api.addAiProvider.mockResolvedValue(KEY_CARD);
+    api.answerAiModelsCard.mockRejectedValue("The keyring isn't available, so the key wasn't saved.");
+    render(<AiModels />);
+    await screen.findByText("No other providers yet.");
+    await userEvent.type(screen.getByLabelText("Provider address"), "https://openrouter.ai/api/v1");
+    await userEvent.type(screen.getByLabelText("Provider API key"), "test-key-aaaaaaaa");
+    await userEvent.click(screen.getByRole("button", { name: "Add provider" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+    const said = await screen.findByText("The keyring isn't available, so the key wasn't saved.");
+    expect(said).toHaveClass("status--error");
+    expect(screen.getByLabelText("Provider address")).toHaveValue("https://openrouter.ai/api/v1");
+    expect(screen.getByLabelText("Provider API key")).toHaveValue("");
   });
 });

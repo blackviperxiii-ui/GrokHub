@@ -1311,6 +1311,17 @@ button.danger {
   border-color: var(--danger-text);
 }
 
+/* Outlined like a quiet button: danger text on the accent fill is 1.5:1. A
+   disabled one keeps the disabled fill. */
+button.danger:not(:disabled) {
+  background: transparent;
+}
+
+button.danger:hover:not(:disabled):not([role="menuitem"]) {
+  filter: none;
+  background: var(--hover);
+}
+
 .automations,
 .memory,
 .connectors,
@@ -5214,6 +5225,19 @@ fieldset.channel label {
 
 .episode-park p {
   margin: 0 0 4px;
+}
+
+.episode-park-class {
+  font-weight: 600;
+}
+
+/* What the person approves, whole: long typed text wraps and scrolls. */
+.episode-park-action {
+  margin: 0 0 4px;
+  max-height: 12em;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .episode-actions {

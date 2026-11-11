@@ -339,3 +339,23 @@ fn every_job_stays_idle_while_its_switch_is_off_and_while_the_cabin_runs() {
     assert_eq!(beat(&c, 7, NOW, &mut run), Did::default());
     assert!(!run.backup_checked, "the cabin's fresh beat wins");
 }
+
+/// A `Command`'s creation flags can't be read back, so the source is the
+/// guard: the shell is a windows-subsystem app, and a git started without
+/// `hide_windows_console` flashes a console window for every call.
+#[test]
+fn git_runs_with_no_console_window_and_no_stdin() {
+    let src = include_str!("pc_files_run.rs").replace("\r\n", "\n");
+    let start = src.find("fn run_git(").expect("run_git");
+    let body = &src[start..start + src[start..].find("\n}\n").expect("end of run_git")];
+    assert!(
+        body.contains("grokhub_core::proc_util::hide_windows_console(&mut cmd);"),
+        "{body}"
+    );
+    assert!(body.contains(".stdin(Stdio::null())"), "{body}");
+    assert_eq!(
+        src.matches("git_cmd::git()").count(),
+        1,
+        "every git call in this file goes through run_git"
+    );
+}

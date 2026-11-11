@@ -6,7 +6,8 @@ import type { EpisodePanel } from "./episodeApi";
 const api = vi.hoisted(() => ({
   handler: null as ((panel: EpisodePanel) => void) | null,
   state: vi.fn<(id: string) => Promise<EpisodePanel | null>>(),
-  answer: vi.fn<(id: string, parkId: string, approve: boolean) => Promise<void>>(),
+  // The command answers whether the window should send the resume now.
+  answer: vi.fn<(id: string, parkId: string, approve: boolean) => Promise<boolean>>(),
   pause: vi.fn<(id: string) => Promise<boolean>>(),
   stop: vi.fn<(id: string) => Promise<boolean>>(),
   halt: vi.fn<() => Promise<string[]>>(),
@@ -30,7 +31,16 @@ vi.mock("./episodeApi", () => ({
 }));
 vi.mock("./api", () => ({ haltDesktop: api.halt }));
 
-import { ARM_LABEL, Episode, endedLine, stepWords, WAITING_NOTE } from "./Episode";
+import {
+  ARM_LABEL,
+  CARD_ACTION,
+  classWords,
+  Episode,
+  endedLine,
+  RESUME_TEXT,
+  stepWords,
+  WAITING_NOTE,
+} from "./Episode";
 
 function panel(over: Partial<EpisodePanel> = {}): EpisodePanel {
   return {
@@ -59,7 +69,7 @@ async function open(p: EpisodePanel | null = null, desktopOn = true) {
 beforeEach(() => {
   api.handler = null;
   api.state.mockReset();
-  api.answer.mockReset().mockResolvedValue(undefined);
+  api.answer.mockReset().mockResolvedValue(false);
   api.pause.mockReset().mockResolvedValue(true);
   api.stop.mockReset().mockResolvedValue(true);
   api.halt.mockReset().mockResolvedValue(["c1"]);
@@ -190,6 +200,105 @@ describe("Episode", () => {
     expect(screen.getByRole("listitem")).toHaveTextContent("3typenot run");
   });
 
+  it("Allow with no reply running sends the resume through the chat, once", async () => {
+    const onResume = vi.fn<(text: string) => void>();
+    api.state.mockResolvedValue(null);
+    render(<Episode conversationId="c1" desktopOn onResume={onResume} />);
+    await waitFor(() => expect(api.handler).not.toBeNull());
+    const parks = [{ id: "epk-ep-1-3", tool: "click", action: "Loadout wants to click Send in Mail", class: "send" }];
+    act(() => api.handler?.(panel({ parks })));
+    expect(screen.getByRole("group", { name: "Waiting: Loadout wants to click Send in Mail" })).toBeInTheDocument();
+    // The shell says a resume is due: nothing runs to pick the answer up.
+    api.answer.mockResolvedValue(true);
+    await userEvent.click(screen.getByRole("button", { name: "Allow" }));
+    await waitFor(() => expect(onResume).toHaveBeenCalledTimes(1));
+    expect(onResume).toHaveBeenCalledWith("Continue");
+    expect(RESUME_TEXT).toBe("Continue");
+  });
+
+  it("a panel that says the resume is due sends it through the chat, once", async () => {
+    const onResume = vi.fn<(text: string) => void>();
+    api.state.mockResolvedValue(null);
+    render(<Episode conversationId="c1" desktopOn onResume={onResume} />);
+    await waitFor(() => expect(api.handler).not.toBeNull());
+    // The reply ended with an allowed step nobody ran: the shell says so.
+    act(() => api.handler?.({ ...panel(), resume: true } as EpisodePanel));
+    expect(onResume.mock.calls).toEqual([["Continue"]]);
+    expect(screen.getByText("Desktop session · 2 steps · 1 min")).toBeInTheDocument();
+    // An ordinary panel, and another chat's signal, send nothing.
+    act(() => api.handler?.(panel()));
+    act(() => api.handler?.({ ...panel({ conversationId: "c2" }), resume: true } as EpisodePanel));
+    expect(onResume).toHaveBeenCalledTimes(1);
+  });
+
+  it("a card names the kind of step and shows every line of what will be typed", async () => {
+    await open();
+    const typed = "cd /tmp\u23ce\nrm -rf ~/Documents";
+    const parks = [
+      { id: "epk-ep-1-3", tool: "type", action: typed, class: "delete" },
+      { id: "epk-ep-1-4", tool: "click", action: "Loadout wants to click Send in Mail", class: "send" },
+      { id: "epk-ep-1-5", tool: "key", action: "press Enter in Shop", class: "something_new" },
+    ];
+    act(() => api.handler?.(panel({ parks })));
+    const kinds = screen.getAllByRole("group").map((card) => card.querySelector(".episode-park-class")?.textContent);
+    expect(kinds).toEqual(["Delete", "Send", "Needs your OK"]);
+    // The text keeps its line ends, so the page can wrap and scroll it whole.
+    const actions = screen.getAllByRole("region", { name: CARD_ACTION }).map((el) => el.textContent);
+    expect(actions).toEqual([typed, "Loadout wants to click Send in Mail", "press Enter in Shop"]);
+    expect(classWords("money")).toBe("Spend money");
+    expect(classWords("credentials")).toBe("Password or key");
+  });
+
+  it("an Allow a running reply picks up, and a Deny, send nothing", async () => {
+    const onResume = vi.fn<(text: string) => void>();
+    api.state.mockResolvedValue(null);
+    render(<Episode conversationId="c1" desktopOn onResume={onResume} />);
+    await waitFor(() => expect(api.handler).not.toBeNull());
+    act(() => api.handler?.(panel({ parks: [{ id: "epk-ep-1-3", tool: "click", action: "Click Send", class: "send" }] })));
+    await userEvent.click(screen.getByRole("button", { name: "Allow" }));
+    await userEvent.click(screen.getByRole("button", { name: "Deny" }));
+    await waitFor(() => expect(api.answer).toHaveBeenCalledTimes(2));
+    expect(api.answer.mock.calls).toEqual([
+      ["c1", "epk-ep-1-3", true],
+      ["c1", "epk-ep-1-3", false],
+    ]);
+    expect(onResume).not.toHaveBeenCalled();
+  });
+
+  it("an allowed step reads allowed until it runs, then what it did", async () => {
+    await open();
+    const row = (decision: string, result: string) => ({ n: 3, tool: "click", decision, result, goalStep: "" });
+    act(() => api.handler?.(panel({ steps: [row("allowed", "")] })));
+    expect(screen.getByRole("listitem")).toHaveTextContent("3clickallowed, not run yet");
+    act(() => api.handler?.(panel({ steps: [row("approve", "click ok")] })));
+    expect(screen.getByRole("listitem")).toHaveTextContent("3clickran: click ok");
+    act(() => api.handler?.(panel({ steps: [row("allowed", "")], state: "ended", ended: "halt" })));
+    expect(screen.getByRole("listitem")).toHaveTextContent("3clicknot run");
+  });
+
+  it("keeps the picture it has when the shell says it is the same, and drops it when there is none", async () => {
+    await open();
+    act(() => api.handler?.(panel({ frame: "data:image/png;base64,ONE" })));
+    expect(screen.getByRole("img")).toHaveAttribute("src", "data:image/png;base64,ONE");
+    act(() => api.handler?.({ ...panel({ frame: null }), frameSame: true } as EpisodePanel));
+    expect(screen.getByRole("img")).toHaveAttribute("src", "data:image/png;base64,ONE");
+    act(() => api.handler?.(panel({ frame: "data:image/png;base64,TWO" })));
+    expect(screen.getByRole("img")).toHaveAttribute("src", "data:image/png;base64,TWO");
+    act(() => api.handler?.(panel({ frame: null })));
+    expect(screen.queryByRole("img")).toBeNull();
+  });
+
+  it("a panel that opens on a same-picture event takes the picture from the first read", async () => {
+    let read: (p: EpisodePanel) => void = () => {};
+    api.state.mockReturnValue(new Promise<EpisodePanel | null>((resolve) => (read = resolve)));
+    render(<Episode conversationId="c1" desktopOn />);
+    await waitFor(() => expect(api.handler).not.toBeNull());
+    act(() => api.handler?.({ ...panel({ frame: null }), frameSame: true } as EpisodePanel));
+    expect(screen.queryByRole("img")).toBeNull();
+    await act(async () => read(panel({ frame: "data:image/png;base64,ONE" })));
+    expect(screen.getByRole("img")).toHaveAttribute("src", "data:image/png;base64,ONE");
+  });
+
   it("words for the steps and the endings", () => {
     const step = (decision: string, result: string) => ({ n: 1, tool: "click", decision, result, goalStep: "" });
     expect([
@@ -200,6 +309,12 @@ describe("Episode", () => {
       stepWords(step("deny", "denied"), false),
       stepWords(step("deny", ""), true),
     ]).toEqual(["ran", "ran: ok", "waiting for your OK", "not run", "not run: denied", "not run"]);
+    expect([
+      stepWords(step("allowed", ""), false),
+      stepWords(step("allowed", ""), true),
+      stepWords(step("approve", "click ok"), false),
+      stepWords(step("approve", ""), true),
+    ]).toEqual(["allowed, not run yet", "not run", "ran: click ok", "ran"]);
     expect(endedLine("verified")).toBe("Done, and checked.");
     expect(endedLine("unconfirmed")).toBe("Ended: the check couldn't confirm it.");
     expect(endedLine("whatever")).toBe("Ended.");

@@ -305,3 +305,161 @@ fn the_ui_save_keeps_as_many_log_lines_as_the_desktop_setting_says() {
     assert_eq!(log.len(), 1);
     assert_eq!(log[0].summary, "Saved src/a.rs (13 bytes).");
 }
+
+// ---- in the window, lists and reads run off the UI thread ----
+
+/// A project like `project`, with the editor set up as the window sets it
+/// up: lists and reads go to a worker and come back through `poll`.
+fn windowed(name: &str) -> (PathBuf, CodeEditor) {
+    let ws = temp(name);
+    std::fs::create_dir_all(ws.join("src")).unwrap();
+    std::fs::write(ws.join("src/a.rs"), "fn a() {}\n").unwrap();
+    std::fs::write(ws.join("src/b.rs"), "fn b() {}\n").unwrap();
+    let mut ed = CodeEditor::default();
+    ed.wake_with(|| {});
+    (ws, ed)
+}
+
+/// Poll until `done` holds (or 10 s pass).
+fn poll_until(ed: &mut CodeEditor, done: impl Fn(&CodeEditor) -> bool) -> bool {
+    for _ in 0..1000 {
+        ed.poll();
+        if done(ed) {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    false
+}
+
+fn read_of(ws: &Path, ask: u64, path: &str, text: &str) -> Answer {
+    Answer::Read {
+        ask,
+        workspace: ws.to_path_buf(),
+        discard: false,
+        path: path.into(),
+        result: Ok(FileText {
+            path: path.into(),
+            text: text.into(),
+            root: ws.to_string_lossy().into_owned(),
+        }),
+    }
+}
+
+#[test]
+fn in_the_window_a_list_and_a_read_come_back_through_poll() {
+    let (ws, mut ed) = windowed("off-thread");
+    // The call returns before the folder is listed.
+    ed.set_workspace(&ws);
+    assert!(ed.listing.is_none(), "the list ran on the calling thread");
+    assert!(ed.listing_out);
+    assert!(poll_until(&mut ed, |e| e.listing.is_some()));
+    assert!(!ed.listing_out);
+    let names: Vec<String> = ed
+        .listing
+        .clone()
+        .unwrap()
+        .entries
+        .into_iter()
+        .map(|e| e.name)
+        .collect();
+    assert_eq!(names, vec!["src"]);
+
+    // So does a pick: the file opens when its read lands.
+    assert_eq!(ed.pick("src/a.rs"), Pick::Loading);
+    assert!(ed.open.is_none(), "the read ran on the calling thread");
+    assert!(poll_until(&mut ed, |e| e.open.is_some()));
+    let open = ed.open.clone().unwrap();
+    assert_eq!(open.path, "src/a.rs");
+    assert_eq!(open.text, "fn a() {}\n");
+    assert_eq!(open.workspace, ws);
+    assert_eq!(ed.pick("src/a.rs"), Pick::Same);
+
+    // A refusal arrives the same way.
+    assert_eq!(ed.pick("../secret.txt"), Pick::Loading);
+    assert!(poll_until(&mut ed, |e| e.note.is_some()));
+    assert_eq!(ed.note.as_deref(), Some(files::OUTSIDE));
+    assert_eq!(ed.open.clone().unwrap().path, "src/a.rs");
+}
+
+#[test]
+fn only_the_newest_pick_opens_and_another_projects_answer_is_dropped() {
+    let (ws, mut ed) = windowed("stale");
+    ed.set_workspace(&ws);
+    assert!(poll_until(&mut ed, |e| e.listing.is_some()));
+    // Two picks in a row; the first read is the slow one.
+    assert_eq!(ed.pick("src/a.rs"), Pick::Loading);
+    assert_eq!(ed.pick("src/b.rs"), Pick::Loading);
+    assert_eq!(ed.read_ask, 2);
+    assert_eq!(
+        ed.apply(read_of(&ws, 2, "src/b.rs", "fn b() {}\n")),
+        Some(Pick::Opened)
+    );
+    assert_eq!(ed.apply(read_of(&ws, 1, "src/a.rs", "fn a() {}\n")), None);
+    assert_eq!(ed.open.clone().unwrap().path, "src/b.rs");
+
+    // An answer read in a project folder the editor has left.
+    let other = temp("stale-other");
+    assert_eq!(
+        ed.apply(read_of(&other, 2, "src/a.rs", "from the other project\n")),
+        None
+    );
+    assert_eq!(ed.open.clone().unwrap().text, "fn b() {}\n");
+    let listed = Answer::Listed {
+        ask: ed.list_ask,
+        workspace: other,
+        result: Ok(Listing {
+            path: String::new(),
+            entries: Vec::new(),
+            more: false,
+        }),
+    };
+    assert_eq!(ed.apply(listed), None);
+    assert_eq!(ed.listing.clone().unwrap().entries.len(), 1);
+
+    // An older list is dropped too: the tree shows the folder asked for last.
+    ed.browse("src");
+    ed.browse("");
+    let older = Answer::Listed {
+        ask: ed.list_ask - 1,
+        workspace: ws.clone(),
+        result: Ok(Listing {
+            path: "src".into(),
+            entries: Vec::new(),
+            more: false,
+        }),
+    };
+    assert_eq!(ed.apply(older), None);
+    assert_eq!(ed.listing.clone().unwrap().path, "");
+}
+
+#[test]
+fn edits_typed_while_a_read_was_out_are_not_replaced() {
+    let (ws, mut ed) = windowed("typed-meanwhile");
+    ed.set_workspace(&ws);
+    assert_eq!(ed.pick("src/a.rs"), Pick::Loading);
+    assert!(poll_until(&mut ed, |e| e.open.is_some()));
+    // b.rs is picked, and a.rs is typed into before b.rs has been read.
+    assert_eq!(ed.pick("src/b.rs"), Pick::Loading);
+    ed.open
+        .as_mut()
+        .unwrap()
+        .text
+        .push_str("// typed meanwhile\n");
+    let ask = ed.read_ask;
+    assert_eq!(
+        ed.apply(read_of(&ws, ask, "src/b.rs", "fn b() {}\n")),
+        Some(Pick::Asked)
+    );
+    let open = ed.open.clone().unwrap();
+    assert_eq!(open.path, "src/a.rs");
+    assert_eq!(open.text, "fn a() {}\n// typed meanwhile\n");
+    assert_eq!(ed.pending.as_deref(), Some("src/b.rs"));
+    // "Discard and open" is the one read that replaces unsaved edits.
+    assert_eq!(ed.discard_and_open(), Pick::Loading);
+    assert!(poll_until(&mut ed, |e| e
+        .open
+        .as_ref()
+        .is_some_and(|f| f.path == "src/b.rs")));
+    assert_eq!(ed.open.clone().unwrap().text, "fn b() {}\n");
+}

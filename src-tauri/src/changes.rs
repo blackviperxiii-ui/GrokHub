@@ -17,10 +17,6 @@ const ROWS_MAX: usize = 6;
 /// Longest reason a report prints, in chars.
 const REASON_SHOWN: usize = 72;
 
-/// What `/skills undo` says when the line did not come from the person typing.
-pub const UNDO_NEEDS_YOU: &str =
-    "Skill undo runs from your own typing or an Undo click. The rows are below.";
-
 fn who(origin: Origin) -> &'static str {
     match origin {
         Origin::User => "you",
@@ -215,8 +211,10 @@ fn revert_line(kind: ChangeKind, id: &str, done: &hx::Reverted) -> String {
 }
 
 /// The proof the person asked: their own typed line, or a click on a row.
-/// Only the composer's slash line and a Settings click may call the functions
-/// below, never a model reply, an automation or a background run.
+/// The callers of the functions below are the composer's slash line and a
+/// click on a row. Nothing here can check that: this app has no automation
+/// or background run that feeds the slash runner, and a paired browser's
+/// `/skills undo` or `/skills restore` is refused in `slash::parse`.
 fn ask(click: bool) -> hx::UndoAsk {
     if click {
         hx::UndoAsk::from_click()

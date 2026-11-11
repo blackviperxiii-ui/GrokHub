@@ -524,3 +524,484 @@ fn a_panel_not_drawn_has_no_screen_and_an_ended_shell_says_so() {
     assert!(texts.contains(&ENDED.to_string()), "{texts:?}");
     assert!(texts.contains(&"Open terminal".to_string()), "{texts:?}");
 }
+
+// ---- the keyboard, the hidden window, and the ways a shell ends ----
+
+/// A temp project folder and config folder for one real-shell test.
+#[cfg(unix)]
+fn shell_dirs(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
+    let base = std::env::temp_dir().join(format!("gh-cabin-term-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let root = base.join("proj");
+    let config = base.join("config");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&config).unwrap();
+    (base, root.canonicalize().unwrap(), config)
+}
+
+/// Open the window's real terminal in `root` and wait for the backend's id.
+#[cfg(unix)]
+fn open_shell(panel: &mut TermPanel, root: &Path, config: &Path) -> u32 {
+    panel.open(root, config, GridSize { rows: 10, cols: 80 }, || {});
+    assert!(wait_for(panel, |p| p
+        .live
+        .as_ref()
+        .is_some_and(|l| l.id.is_some())));
+    panel.live.as_ref().and_then(|l| l.id).unwrap()
+}
+
+/// Wait until a write to the shell `id` is refused, and return the refusal.
+#[cfg(unix)]
+fn refusal_after_end(id: u32) -> String {
+    let end = Instant::now() + Duration::from_secs(10);
+    loop {
+        match backend::write(backend::global(), id, "") {
+            Err(e) if e == "The terminal has ended." => return e,
+            other if Instant::now() >= end => return format!("still open: {other:?}"),
+            _ => std::thread::sleep(Duration::from_millis(20)),
+        }
+    }
+}
+
+fn key(key: Key, modifiers: Modifiers) -> egui::Event {
+    egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers,
+    }
+}
+
+/// Ctrl as Linux and Windows report it: egui's `command` is set with it.
+fn ctrl() -> Modifiers {
+    Modifiers {
+        ctrl: true,
+        command: true,
+        ..Modifiers::NONE
+    }
+}
+
+/// One cabin pass with Ctrl held and `k` pressed, through the same shortcut
+/// code the window runs.
+fn press_ctrl(cabin: &mut crate::app::Cabin, k: Key) {
+    let ctx = egui::Context::default();
+    let raw = egui::RawInput {
+        events: vec![egui::Event::ModifiersChanged(ctrl()), key(k, ctrl())],
+        ..Default::default()
+    };
+    let _ = crate::theme::test_pass(&ctx, raw, |ui| {
+        let ctx = ui.ctx().clone();
+        cabin.logic_input_actions(&ctx);
+    });
+}
+
+#[test]
+fn keys_typed_in_the_terminal_do_not_fire_the_cabin_shortcuts() {
+    use crate::app::{Cabin, Nav};
+    // The terminal has the keyboard: Ctrl+G, K, N, / and , are the shell's.
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.nav = Nav::Code;
+    cabin.code_term.keys_held = true;
+    let status = cabin.status.clone();
+    let chats = cabin.threads.len();
+    press_ctrl(&mut cabin, Key::G);
+    assert_eq!(cabin.status, status, "Ctrl+G reached the voice shortcut");
+    press_ctrl(&mut cabin, Key::K);
+    assert!(!cabin.palette_open, "Ctrl+K opened the palette");
+    press_ctrl(&mut cabin, Key::N);
+    assert_eq!(cabin.threads.len(), chats, "Ctrl+N started a new chat");
+    press_ctrl(&mut cabin, Key::Slash);
+    assert!(!cabin.shortcuts_open, "Ctrl+/ opened Shortcuts");
+    press_ctrl(&mut cabin, Key::Comma);
+    assert_eq!(cabin.nav, Nav::Code, "Ctrl+, left the Code tab");
+
+    // The same keys still work once the terminal lets go of the keyboard.
+    cabin.code_term.keys_held = false;
+    press_ctrl(&mut cabin, Key::K);
+    assert!(cabin.palette_open);
+    press_ctrl(&mut cabin, Key::Slash);
+    assert!(cabin.shortcuts_open);
+    press_ctrl(&mut cabin, Key::Comma);
+    assert_eq!(cabin.nav, Nav::Settings);
+}
+
+#[test]
+fn a_closed_or_undrawn_terminal_gives_the_keyboard_back() {
+    let config = std::env::temp_dir().join(format!("gh-cabin-term-keys-{}", std::process::id()));
+    // Closing it.
+    let mut panel = live_panel("x");
+    panel.keys_held = true;
+    panel.close(&config);
+    assert!(!panel.keys_held);
+    // A frame that did not draw it (the tab was left).
+    let mut panel = TermPanel::default();
+    panel.keys_held = true;
+    end_frame(&mut panel, &config);
+    assert!(!panel.keys_held);
+    // A frame that drew it without focus.
+    let mut panel = live_panel("x");
+    panel.keys_held = true;
+    painted_glyphs(&mut panel);
+    assert!(!panel.keys_held);
+}
+
+/// One chunk of exactly 4,096 bytes that ends its line with `n`.
+fn numbered_chunk(id: u32, n: usize) -> Msg {
+    let text = format!("{}{n:07}\r\n", "x".repeat(4087));
+    assert_eq!(text.len(), 4096);
+    Msg::Out(Chunk {
+        id,
+        text,
+        exited: false,
+    })
+}
+
+fn last_line(panel: &TermPanel) -> String {
+    let live = panel.live.as_ref().expect("a live screen");
+    live.screen
+        .lines()
+        .into_iter()
+        .rev()
+        .find(|l| !l.is_empty())
+        .unwrap_or_default()
+}
+
+#[test]
+fn a_backlog_is_taken_a_budget_at_a_time_without_the_page_drawing() {
+    // 1,000 chunks of 4 KB wait while nothing draws the panel.
+    let mut panel = live_panel("");
+    if let Some(live) = panel.live.as_mut() {
+        live.id = Some(1);
+    }
+    for n in 0..1000 {
+        panel.tx.send(numbered_chunk(1, n)).unwrap();
+    }
+    panel
+        .tx
+        .send(Msg::Out(Chunk {
+            id: 1,
+            text: "the-end".into(),
+            exited: false,
+        }))
+        .unwrap();
+
+    // One pump takes 1 MB (256 chunks) and says more is waiting.
+    assert!(panel.pump());
+    assert_eq!(last_line(&panel), "xxxxxxx0000255");
+    // 1,000 chunks are four pumps; the last one finds the queue empty.
+    let mut pumps = 1;
+    while panel.pump() {
+        pumps += 1;
+        assert!(pumps < 100, "the queue never emptied");
+    }
+    assert_eq!(pumps + 1, 4);
+    assert_eq!(last_line(&panel), "the-end");
+    assert!(!panel.pump());
+    assert!(!panel.painted, "nothing drew the panel");
+}
+
+#[test]
+fn the_cabin_takes_terminal_output_on_every_logic_pass() {
+    let mut cabin = crate::app::Cabin::quiet_for_test();
+    cabin.code_term = live_panel("");
+    if let Some(live) = cabin.code_term.live.as_mut() {
+        live.id = Some(1);
+    }
+    cabin
+        .code_term
+        .tx
+        .send(Msg::Out(Chunk {
+            id: 1,
+            text: "printed while hidden".into(),
+            exited: false,
+        }))
+        .unwrap();
+    // No frame is painted: this is what `logic` runs from the tray.
+    cabin.code_terminal_tick(&egui::Context::default());
+    assert_eq!(last_line(&cabin.code_term), "printed while hidden");
+
+    // `logic` is the pass a hidden window still gets, and it makes the call.
+    let src = include_str!("mod.rs").replace("\r\n", "\n");
+    let logic = src
+        .split("\n    fn logic(&mut self, ctx: &egui::Context")
+        .nth(1)
+        .and_then(|rest| rest.split("\n    fn ui(&mut self").next())
+        .expect("the cabin's logic pass");
+    assert!(logic.contains("self.code_terminal_tick(ctx);"));
+}
+
+#[cfg(unix)]
+#[test]
+fn closing_before_the_open_finishes_leaves_no_shell() {
+    let (base, root, config) = shell_dirs("early-close");
+    let mut panel = TermPanel::default();
+    panel.open(&root, &config, GridSize { rows: 10, cols: 80 }, || {});
+    // The second press lands while the shell is still starting.
+    panel.close(&config);
+    assert!(!panel.is_open());
+    // The open thread reports when it is done, whatever it did.
+    let end = Instant::now() + Duration::from_secs(20);
+    let mut reported = false;
+    while !reported && Instant::now() < end {
+        match panel.rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(Msg::Opened(..)) => reported = true,
+            Ok(Msg::Out(_)) | Err(_) => {}
+        }
+    }
+    assert!(reported, "the open never reported");
+    // Nothing is left for a close to end.
+    assert!(
+        !backend::close(backend::global()),
+        "a shell was left running with no panel"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_shell_closed_while_it_started_is_ended_by_its_own_open() {
+    let (base, root, _config) = shell_dirs("mid-close");
+    let wanted = AtomicU64::new(1);
+    // The close comes after the open's first look and before its second.
+    let got = open_if_wanted(&wanted, 1, || {
+        let id = backend::open(backend::global(), &root, Vec::new(), 10, 80, |_| {});
+        wanted.store(2, Ordering::SeqCst);
+        id
+    });
+    assert_eq!(got, None);
+    assert!(!backend::close(backend::global()));
+    // An open nobody wants any more is not made at all.
+    let mut made = false;
+    let got = open_if_wanted(&wanted, 1, || {
+        made = true;
+        Ok(7)
+    });
+    assert_eq!(got, None);
+    assert!(!made);
+    // The newest one goes through.
+    assert_eq!(open_if_wanted(&wanted, 2, || Ok(7)), Some(Ok(7)));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn a_report_from_an_open_that_was_replaced_is_dropped() {
+    let mut panel = live_panel("");
+    panel.wanted.store(2, Ordering::SeqCst);
+    // The first open's shell is gone; its id must not become the screen's.
+    panel.tx.send(Msg::Opened(1, Ok(41))).unwrap();
+    panel.pump();
+    assert_eq!(panel.live.as_ref().and_then(|l| l.id), None);
+    panel.tx.send(Msg::Opened(1, Err("late".into()))).unwrap();
+    panel.pump();
+    assert!(panel.live.is_some());
+    assert_eq!(panel.status, None);
+    panel.tx.send(Msg::Opened(2, Ok(42))).unwrap();
+    panel.pump();
+    assert_eq!(panel.live.as_ref().and_then(|l| l.id), Some(42));
+}
+
+#[cfg(unix)]
+#[test]
+fn leaving_the_tab_ends_the_shell_and_a_drawn_frame_keeps_it() {
+    let (base, root, config) = shell_dirs("leave");
+    let mut panel = TermPanel::default();
+    let id = open_shell(&mut panel, &root, &config);
+
+    // A frame that drew the terminal: the shell stays.
+    panel.painted = true;
+    end_frame(&mut panel, &config);
+    assert!(panel.is_open());
+    assert_eq!(backend::write(backend::global(), id, ""), Ok(()));
+
+    // A frame that did not (another tab is up): the shell ends.
+    end_frame(&mut panel, &config);
+    assert!(!panel.is_open());
+    assert_eq!(refusal_after_end(id), "The terminal has ended.");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[cfg(unix)]
+#[test]
+fn dropping_the_panel_ends_its_shell() {
+    let (base, root, config) = shell_dirs("drop");
+    let mut panel = TermPanel::default();
+    let id = open_shell(&mut panel, &root, &config);
+    // The cabin quits: its terminal panel goes.
+    drop(panel);
+    assert_eq!(refusal_after_end(id), "The terminal has ended.");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// One painted frame of the panel in a fixed 800 by 1200 window.
+#[cfg(unix)]
+fn frame(
+    ctx: &egui::Context,
+    panel: &mut TermPanel,
+    root: &Path,
+    config: &Path,
+    events: Vec<egui::Event>,
+) -> egui::FullOutput {
+    let raw = egui::RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 1200.0))),
+        events,
+        ..Default::default()
+    };
+    crate::theme::test_pass(ctx, raw, |ui| panel_ui(panel, ui, root, config))
+}
+
+#[cfg(unix)]
+#[test]
+fn keys_text_paste_copy_and_cut_reach_the_shell_as_a_terminal_sends_them() {
+    let (base, root, config) = shell_dirs("events");
+    let mut panel = TermPanel::default();
+    let id = open_shell(&mut panel, &root, &config);
+    // `cat -v` prints control bytes as ^X; with echo off only cat answers.
+    // The last echo runs only if cat ends by itself (an end of input), not
+    // when it is interrupted.
+    panel.send(b"stty -echo; echo ready-$((40+2)); cat -v; echo eof-$((70+7))\r");
+    assert!(
+        wait_for(&mut panel, |p| shown(p).contains("ready-42")),
+        "{}",
+        shown(&panel)
+    );
+
+    // Click the screen: it takes the keyboard.
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_on(&ctx);
+    let first = frame(&ctx, &mut panel, &root, &config, Vec::new());
+    assert!(!panel.keys_held, "nothing has focus yet");
+    let well = crate::theme::code_well();
+    let at = first
+        .shapes
+        .iter()
+        .find_map(|c| match &c.shape {
+            egui::Shape::Rect(r) if r.fill == well => Some(r.rect.center()),
+            _ => None,
+        })
+        .expect("the terminal screen was painted");
+    let button = |pressed| egui::Event::PointerButton {
+        pos: at,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
+    frame(
+        &ctx,
+        &mut panel,
+        &root,
+        &config,
+        vec![egui::Event::PointerMoved(at), button(true)],
+    );
+    frame(&ctx, &mut panel, &root, &config, vec![button(false)]);
+    frame(&ctx, &mut panel, &root, &config, Vec::new());
+    assert!(panel.keys_held, "the clicked screen holds the keyboard");
+
+    // Text, cut (Ctrl+X), a two-line paste and Ctrl+G in one frame.
+    frame(
+        &ctx,
+        &mut panel,
+        &root,
+        &config,
+        vec![
+            egui::Event::Text("a".into()),
+            egui::Event::Cut,
+            egui::Event::Paste("p\nq".into()),
+            egui::Event::ModifiersChanged(ctrl()),
+            key(Key::G, ctrl()),
+            egui::Event::ModifiersChanged(Modifiers::NONE),
+        ],
+    );
+    let has_line = |p: &TermPanel, want: &str| shown(p).lines().any(|l| l == want);
+    assert!(
+        wait_for(&mut panel, |p| has_line(p, "a^Xp")),
+        "{}",
+        shown(&panel)
+    );
+    // Enter ends the second line: the q of the paste, then the Ctrl+G byte.
+    frame(
+        &ctx,
+        &mut panel,
+        &root,
+        &config,
+        vec![key(Key::Enter, Modifiers::NONE)],
+    );
+    assert!(
+        wait_for(&mut panel, |p| has_line(p, "q^G")),
+        "{}",
+        shown(&panel)
+    );
+
+    // Copy is Ctrl+C here: it interrupts cat, and the shell takes a command.
+    frame(&ctx, &mut panel, &root, &config, vec![egui::Event::Copy]);
+    frame(
+        &ctx,
+        &mut panel,
+        &root,
+        &config,
+        vec![
+            egui::Event::Text("echo back-$((50+5))".into()),
+            key(Key::Enter, Modifiers::NONE),
+        ],
+    );
+    assert!(
+        wait_for(&mut panel, |p| shown(p).contains("back-55")),
+        "{}",
+        shown(&panel)
+    );
+    assert!(
+        !shown(&panel).contains("eof-77"),
+        "cat ended without an interrupt: {}",
+        shown(&panel)
+    );
+
+    panel.close(&config);
+    assert_eq!(refusal_after_end(id), "The terminal has ended.");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[cfg(unix)]
+#[test]
+fn open_pressed_again_at_once_keeps_the_new_shell_and_logs_the_old_one_closed() {
+    let (base, root, config) = shell_dirs("reopen");
+    let mut panel = TermPanel::default();
+    let first = open_shell(&mut panel, &root, &config);
+    // What the button does once the shell has ended: close, then open.
+    panel.close(&config);
+    let second = open_shell(&mut panel, &root, &config);
+    assert_ne!(first, second);
+    // The close that was already on its way did not end the new shell.
+    std::thread::sleep(Duration::from_millis(300));
+    panel.send(b"echo still-$((60+6))\r");
+    assert!(
+        wait_for(&mut panel, |p| shown(p).contains("still-66")),
+        "{}",
+        shown(&panel)
+    );
+    assert_eq!(
+        backend::write(backend::global(), first, ""),
+        Err("The terminal has ended.".to_string())
+    );
+    // Both openings and the close in between are in the activity list.
+    let end = Instant::now() + Duration::from_secs(10);
+    let mut said: Vec<String> = Vec::new();
+    while said.len() < 3 && Instant::now() < end {
+        said = grokhub_code::activity::list(&config, 10)
+            .into_iter()
+            .map(|r| r.summary)
+            .collect();
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    said.sort();
+    assert_eq!(
+        said,
+        vec![
+            "Closed the terminal.",
+            "Opened a terminal in the project folder.",
+            "Opened a terminal in the project folder.",
+        ]
+    );
+    panel.close(&config);
+    assert_eq!(refusal_after_end(second), "The terminal has ended.");
+    let _ = std::fs::remove_dir_all(&base);
+}

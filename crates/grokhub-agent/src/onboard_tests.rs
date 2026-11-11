@@ -71,6 +71,7 @@ fn save_with_amr_on_writes_the_three_files_and_the_personal_rows() {
         saved,
         Saved {
             files: vec!["USER.md".into(), "SOUL.md".into(), "MEMORY.md".into()],
+            skipped: vec![],
             rows: 6,
             amr: true,
         }
@@ -187,7 +188,7 @@ fn a_linked_file_is_never_written_through() {
 fn openclaw_files_are_added_below_for_review_and_tools_stay_out() {
     let (dir, _guard) = temp_cfg("openclaw");
     let home = dir.join("home");
-    assert_eq!(openclaw_preview(&home, &Drafts::default()), None);
+    assert_eq!(openclaw_import(&home, &Drafts::default()), None);
     let ws = home.join(".openclaw").join("workspace");
     fs::create_dir_all(&ws).unwrap();
     fs::write(ws.join("SOUL.md"), "Be calm.").unwrap();
@@ -195,7 +196,7 @@ fn openclaw_files_are_added_below_for_review_and_tools_stay_out() {
     fs::write(ws.join("NOTES.md"), "token sk-abcdefghijklmnopqrstuv").unwrap();
     fs::write(ws.join("HABITS.md"), "Reads before bed.").unwrap();
     let base = draft(&dir, &answers(), NOW);
-    let got = openclaw_preview(&home, &base).unwrap();
+    let got = openclaw_import(&home, &base).unwrap().drafts;
     assert_eq!(got.user, base.user);
     assert_eq!(
         got.soul,
@@ -213,6 +214,277 @@ fn openclaw_files_are_added_below_for_review_and_tools_stay_out() {
     );
     // A seed is replaced by the import, not kept above it.
     let seeds = draft(&dir, &Answers::default(), NOW);
-    let got = openclaw_preview(&home, &seeds).unwrap();
+    let got = openclaw_import(&home, &seeds).unwrap().drafts;
     assert_eq!(got.soul, "# Soul\n\n## From OpenClaw SOUL.md\n\nBe calm.\n");
+}
+
+/// A workspace under `dir/home` holding `files`.
+fn workspace(dir: &Path, files: &[(&str, &str)]) -> PathBuf {
+    let home = dir.join("home");
+    let ws = home.join(".openclaw").join("workspace");
+    fs::create_dir_all(&ws).unwrap();
+    for (name, body) in files {
+        fs::write(ws.join(name), body).unwrap();
+    }
+    home
+}
+
+#[test]
+fn a_file_over_the_cap_is_left_alone() {
+    let (dir, _guard) = temp_cfg("too-big");
+    fs::write(dir.join("app.json"), "{}\n").unwrap();
+    let path = dir.join("memory").join("MEMORY.md");
+    let big = "a line of old notes\n".repeat(52_500);
+    assert_eq!(big.len() as u64, FILE_CAP + 1_424);
+    assert_eq!(held(&dir), vec![]);
+    fs::write(&path, &big).unwrap();
+    assert_eq!(held(&dir), vec![("MEMORY.md", Why::TooBig)]);
+    let d = Drafts {
+        user: "# User\n\n- Call me: Sam\n".into(),
+        memory: "# Memory\n\n- x\n".into(),
+        ..Drafts::default()
+    };
+    let saved = commit(&dir, &d, NOW).unwrap();
+    assert_eq!(saved.files, vec!["USER.md".to_string()]);
+    assert_eq!(saved.skipped, vec!["MEMORY.md".to_string()]);
+    assert_eq!(fs::read_to_string(&path).unwrap(), big);
+    assert!(!dir.join("memory").join("MEMORY.md.prev").exists());
+}
+
+#[test]
+fn an_import_already_in_the_drafts_is_not_added_again() {
+    let (dir, _guard) = temp_cfg("import-twice");
+    fs::write(dir.join("app.json"), "{}\n").unwrap();
+    let home = workspace(
+        &dir,
+        &[
+            ("SOUL.md", "Be calm.\r\nNo jokes.\n"),
+            ("USER.md", "Likes tea.\nMail sam@example.com\n"),
+            ("AGENTS.md", "Workspace rules.\n"),
+        ],
+    );
+    let base = draft(&dir, &Answers::default(), NOW);
+    let first = openclaw_import(&home, &base).unwrap();
+    assert_eq!(first.note, None);
+    assert_eq!(
+        first.drafts.memory,
+        "# Memory\n\n## From OpenClaw AGENTS.md\n\nWorkspace rules.\n"
+    );
+    // Pressed again in the same Review: the drafts stay as they are.
+    let again = openclaw_import(&home, &first.drafts).unwrap();
+    assert_eq!(again.drafts, first.drafts);
+    assert_eq!(
+        again.note.as_deref(),
+        Some("The OpenClaw notes are already in these files; nothing was added.")
+    );
+    // Saved, then imported again: the saved text (line ends and an email
+    // as Save writes them) still counts as already there.
+    commit(&dir, &first.drafts, NOW).unwrap();
+    assert_eq!(
+        read(&dir, "USER.md"),
+        "# User\n\n## From OpenClaw USER.md\n\nLikes tea.\nMail [email]\n"
+    );
+    assert_eq!(
+        read(&dir, "SOUL.md"),
+        "# Soul\n\n## From OpenClaw SOUL.md\n\nBe calm.\nNo jokes.\n"
+    );
+    let saved = draft(&dir, &Answers::default(), NOW);
+    let second = openclaw_import(&home, &saved).unwrap();
+    assert_eq!(second.drafts, saved);
+    assert_eq!(
+        commit(&dir, &second.drafts, NOW).unwrap().files,
+        Vec::<String>::new()
+    );
+    // A file that changed in the workspace is new text, so it is added.
+    fs::write(
+        home.join(".openclaw").join("workspace").join("AGENTS.md"),
+        "Workspace rules.\nAsk before deleting.\n",
+    )
+    .unwrap();
+    let third = openclaw_import(&home, &saved).unwrap();
+    assert_eq!(
+        third.drafts.memory,
+        "# Memory\n\n## From OpenClaw AGENTS.md\n\nWorkspace rules.\n\n\
+         ## From OpenClaw AGENTS.md\n\nWorkspace rules.\nAsk before deleting.\n"
+    );
+    assert_eq!(third.note, None);
+}
+
+#[test]
+fn an_import_reads_a_fixed_number_of_files_and_says_what_it_left_out() {
+    let (dir, _guard) = temp_cfg("import-many");
+    let home = workspace(
+        &dir,
+        &[("SOUL.md", "Be calm.\n"), ("export.log", "not notes\n")],
+    );
+    let ws = home.join(".openclaw").join("workspace");
+    for i in 0..200 {
+        fs::write(ws.join(format!("a{i:03}.md")), format!("note {i}\n")).unwrap();
+    }
+    let got = openclaw_import(&home, &Drafts::default()).unwrap();
+    // The workspace's own files are read first, then notes in name order.
+    assert_eq!(
+        got.drafts.soul,
+        "# Soul\n\n## From OpenClaw SOUL.md\n\nBe calm.\n"
+    );
+    assert_eq!(got.drafts.memory.matches("## From OpenClaw ").count(), 63);
+    assert!(got
+        .drafts
+        .memory
+        .starts_with("# Memory\n\n## From OpenClaw a000.md\n\nnote 0\n"));
+    assert!(got
+        .drafts
+        .memory
+        .ends_with("## From OpenClaw a062.md\n\nnote 62\n"));
+    assert_eq!(
+        got.note.as_deref(),
+        Some("Only the first 64 notes files were read; 137 were left out.")
+    );
+}
+
+#[test]
+fn an_import_stops_before_a_file_would_pass_the_cap() {
+    let (dir, _guard) = temp_cfg("import-full");
+    let home = workspace(
+        &dir,
+        &[
+            ("SOUL.md", "Be calm.\n"),
+            ("HABITS.md", "Reads before bed.\n"),
+        ],
+    );
+    let nearly = format!("# Memory\n\n{}", "- old\n".repeat(174_760));
+    assert_eq!(nearly.len() as u64, FILE_CAP - 6);
+    let base = Drafts {
+        memory: nearly.clone(),
+        ..Drafts::default()
+    };
+    let got = openclaw_import(&home, &base).unwrap();
+    assert_eq!(got.drafts.memory, nearly);
+    assert_eq!(
+        got.drafts.soul,
+        "# Soul\n\n## From OpenClaw SOUL.md\n\nBe calm.\n"
+    );
+    assert_eq!(
+        got.note.as_deref(),
+        Some("MEMORY.md is nearly full; 1 file was left out.")
+    );
+}
+
+#[test]
+fn a_file_that_is_not_text_is_left_alone() {
+    let (dir, _guard) = temp_cfg("not-text");
+    fs::write(dir.join("app.json"), "{}\n").unwrap();
+    let path = dir.join("memory").join("MEMORY.md");
+    // One Latin-1 letter: the file is not UTF-8, so its text can't be shown.
+    let old: &[u8] = b"# Memory\n\n- caf\xe9\n";
+    fs::write(&path, old).unwrap();
+    assert_eq!(existing(&dir).memory, "");
+    assert_eq!(held(&dir), vec![("MEMORY.md", Why::NotText)]);
+    assert_eq!(
+        review_note(&dir).as_deref(),
+        Some("MEMORY.md is not plain text (UTF-8); Save leaves it alone.")
+    );
+    let d = Drafts {
+        user: "# User\n\n- Call me: Sam\n".into(),
+        memory: "# Memory\n\n- x\n".into(),
+        ..Drafts::default()
+    };
+    let saved = commit(&dir, &d, NOW).unwrap();
+    assert_eq!(saved.files, vec!["USER.md".to_string()]);
+    assert_eq!(saved.skipped, vec!["MEMORY.md".to_string()]);
+    assert_eq!(
+        saved_note(&dir, &saved).as_deref(),
+        Some("MEMORY.md is not plain text (UTF-8); it was left alone.")
+    );
+    assert_eq!(fs::read(&path).unwrap(), old);
+    assert!(!dir.join("memory").join("MEMORY.md.prev").exists());
+    // The same Save again leaves nothing to say about USER.md, and the
+    // undecodable file is still not a seed to write over.
+    let again = commit(&dir, &d, NOW).unwrap();
+    assert_eq!(again.files, Vec::<String>::new());
+    assert_eq!(again.skipped, vec!["MEMORY.md".to_string()]);
+    assert_eq!(fs::read(&path).unwrap(), old);
+}
+
+#[test]
+fn a_folder_where_a_file_belongs_is_named_and_left_alone() {
+    let (dir, _guard) = temp_cfg("not-a-file");
+    fs::write(dir.join("app.json"), "{}\n").unwrap();
+    let path = dir.join("memory").join("SOUL.md");
+    fs::remove_file(&path).unwrap();
+    fs::create_dir(&path).unwrap();
+    assert_eq!(held(&dir), vec![("SOUL.md", Why::NotAFile)]);
+    assert_eq!(
+        review_note(&dir).as_deref(),
+        Some("SOUL.md is not a file; Save leaves it alone.")
+    );
+    let saved = commit(&dir, &draft(&dir, &answers(), NOW), NOW).unwrap();
+    assert_eq!(
+        saved.files,
+        vec!["USER.md".to_string(), "MEMORY.md".to_string()]
+    );
+    assert_eq!(saved.skipped, vec!["SOUL.md".to_string()]);
+    assert_eq!(
+        saved_note(&dir, &saved).as_deref(),
+        Some("SOUL.md is not a file; it was left alone.")
+    );
+    assert!(path.is_dir());
+    assert_eq!(read(&dir, "MEMORY.md"), MEMORY_WANT);
+    assert_eq!(load(&dir).stage, Stage::Done);
+}
+
+#[test]
+fn files_that_can_be_read_leave_nothing_to_say() {
+    let (dir, _guard) = temp_cfg("readable");
+    fs::remove_file(dir.join("memory").join("SOUL.md")).unwrap();
+    assert_eq!(held(&dir), vec![]);
+    assert_eq!(review_note(&dir), None);
+    let saved = commit(&dir, &draft(&dir, &answers(), NOW), NOW).unwrap();
+    assert_eq!(saved.skipped, Vec::<String>::new());
+    assert_eq!(saved_note(&dir, &saved), None);
+    // A file that was not there is written, with no `.prev` beside it.
+    assert_eq!(read(&dir, "SOUL.md"), SOUL_WANT);
+    assert!(!dir.join("memory").join("SOUL.md.prev").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_link_stops_save_before_any_file_is_written() {
+    let (dir, _guard) = temp_cfg("link-last");
+    fs::write(dir.join("app.json"), "{}\n").unwrap();
+    let target = dir.join("elsewhere.md");
+    fs::write(&target, "keep\n").unwrap();
+    fs::remove_file(dir.join("memory").join("MEMORY.md")).unwrap();
+    std::os::unix::fs::symlink(&target, dir.join("memory").join("MEMORY.md")).unwrap();
+    // Review names the link before Save is pressed.
+    assert_eq!(held(&dir), vec![("MEMORY.md", Why::Link)]);
+    assert_eq!(
+        review_note(&dir).as_deref(),
+        Some("MEMORY.md is a link to another file; Save won't run until its box is empty.")
+    );
+    let err = commit(&dir, &draft(&dir, &answers(), NOW), NOW).unwrap_err();
+    assert_eq!(
+        err,
+        "MEMORY.md is a link to another file; it was left alone."
+    );
+    // The files before the link are as they were, and the stage is not done.
+    assert_eq!(read(&dir, "USER.md"), "# User\n\nWho you are. Edit this.\n");
+    assert_eq!(
+        read(&dir, "SOUL.md"),
+        "# Soul\n\nWho your assistant is. Edit this.\n"
+    );
+    assert!(!dir.join("memory").join("USER.md.prev").exists());
+    assert_eq!(fs::read_to_string(&target).unwrap(), "keep\n");
+    assert_eq!(load(&dir).stage, Stage::Pending);
+    // With its box emptied the other two are saved, and the link is not named
+    // as skipped: nothing was asked of it.
+    let mut d = draft(&dir, &answers(), NOW);
+    d.memory = String::new();
+    let saved = commit(&dir, &d, NOW).unwrap();
+    assert_eq!(
+        saved.files,
+        vec!["USER.md".to_string(), "SOUL.md".to_string()]
+    );
+    assert_eq!(saved.skipped, Vec::<String>::new());
+    assert_eq!(fs::read_to_string(&target).unwrap(), "keep\n");
 }

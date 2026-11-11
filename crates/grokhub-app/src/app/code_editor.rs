@@ -6,11 +6,16 @@
 //! leads out, and anything under `.git` are refused there. A save is logged
 //! by path and size only, never the text. The open file and its unsaved
 //! edits live on the cabin, so they are still there after a tab switch.
+//!
+//! In the window a list, a read and a save each run on a worker thread and
+//! come back through a channel, so a slow or stalled folder never holds up a
+//! frame. Only the newest list and the newest read count; an older answer, or
+//! one for another project folder, is dropped.
 
 use eframe::egui::{self, RichText};
 use grokhub_code::files::{self, FileText, Listing};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc};
 
 pub(super) const EDITOR_TITLE: &str = "Editor";
 pub(super) const EDITOR_EMPTY: &str = "Pick a file on the left to open it.";
@@ -18,6 +23,7 @@ pub(super) const EDITOR_DISCARD: &str = "Discard unsaved changes?";
 pub(super) const EDITOR_UNSAVED: &str = "· unsaved";
 pub(super) const EDITOR_SAVING: &str = "Saving…";
 pub(super) const EDITOR_MORE: &str = "This folder has more entries than this list shows.";
+pub(super) const EDITOR_LOADING: &str = "Loading…";
 /// Width of the file list beside the editor.
 const TREE_W: f32 = 220.0;
 /// Shortest and tallest the editor gets, in points. The Code page scrolls,
@@ -59,7 +65,31 @@ pub(super) enum Pick {
     Asked,
     /// It couldn't be opened; the note says why.
     Refused,
+    /// The read is running off the UI thread; its answer opens the file.
+    Loading,
 }
+
+/// What a list or a read sends back. `ask` is the number it was started
+/// with and `workspace` the project folder it ran in.
+pub(super) enum Answer {
+    Listed {
+        ask: u64,
+        workspace: PathBuf,
+        result: Result<Listing, String>,
+    },
+    Read {
+        ask: u64,
+        workspace: PathBuf,
+        /// "Discard and open" asked for it: it replaces unsaved edits.
+        discard: bool,
+        /// The path as picked, for the discard question.
+        path: String,
+        result: Result<FileText, String>,
+    },
+}
+
+/// Wakes the window when an answer is ready.
+type Wake = Arc<dyn Fn() + Send + Sync>;
 
 /// A save running off the UI thread: the text it wrote and how it went.
 struct Saving {
@@ -70,7 +100,6 @@ struct Saving {
 }
 
 /// What the editor holds between frames.
-#[derive(Default)]
 pub(super) struct CodeEditor {
     /// The project folder the list shows. A different one lists again.
     workspace: Option<PathBuf>,
@@ -81,6 +110,37 @@ pub(super) struct CodeEditor {
     /// The last error or "Saved …" line.
     pub(super) note: Option<String>,
     saving: Option<Saving>,
+    tx: mpsc::Sender<Answer>,
+    rx: mpsc::Receiver<Answer>,
+    /// Set once the editor is drawn in a window: lists and reads then run
+    /// on a worker and this wakes the window when one lands. Without it
+    /// there is no frame to wait in, and a call runs where it is made.
+    wake: Option<Wake>,
+    /// The newest list and the newest read asked for.
+    list_ask: u64,
+    read_ask: u64,
+    /// A list is out: the tree says so.
+    pub(super) listing_out: bool,
+}
+
+impl Default for CodeEditor {
+    fn default() -> Self {
+        let (tx, rx) = mpsc::channel();
+        Self {
+            workspace: None,
+            listing: None,
+            open: None,
+            pending: None,
+            note: None,
+            saving: None,
+            tx,
+            rx,
+            wake: None,
+            list_ask: 0,
+            read_ask: 0,
+            listing_out: false,
+        }
+    }
 }
 
 /// The highlighter language for a file, by its extension. egui_extras' own
@@ -142,14 +202,112 @@ impl CodeEditor {
         self.browse("");
     }
 
-    /// List one folder of the project.
+    /// Run lists and reads on a worker from now on; `wake` is called when
+    /// an answer is ready for [`Self::poll`].
+    pub(super) fn wake_with(&mut self, wake: impl Fn() + Send + Sync + 'static) {
+        self.wake = Some(Arc::new(wake));
+    }
+
+    /// List one folder of the project. With a window the listing arrives
+    /// through [`Self::poll`].
     pub(super) fn browse(&mut self, folder: &str) {
         let Some(ws) = self.workspace.clone() else {
             return;
         };
-        match files::list(&ws, folder) {
-            Ok(listing) => self.listing = Some(listing),
-            Err(e) => self.note = Some(e),
+        self.list_ask += 1;
+        let ask = self.list_ask;
+        let folder = folder.to_string();
+        let job = move || {
+            let result = files::list(&ws, &folder);
+            Answer::Listed {
+                ask,
+                workspace: ws,
+                result,
+            }
+        };
+        self.listing_out = true;
+        self.run(job);
+    }
+
+    /// Run a list or a read: on a worker when there is a window to wake,
+    /// here otherwise. The answer's own pick, when it ran here.
+    fn run(&mut self, job: impl FnOnce() -> Answer + Send + 'static) -> Option<Pick> {
+        match self.wake.clone() {
+            Some(wake) => {
+                let tx = self.tx.clone();
+                std::thread::spawn(move || {
+                    let _ = tx.send(job());
+                    wake();
+                });
+                None
+            }
+            None => self.apply(job()),
+        }
+    }
+
+    /// Take the answers that have arrived. True when any did.
+    pub(super) fn poll(&mut self) -> bool {
+        let mut any = false;
+        while let Ok(answer) = self.rx.try_recv() {
+            self.apply(answer);
+            any = true;
+        }
+        any
+    }
+
+    /// One answer. `None` when it was dropped: an older ask, or one for a
+    /// project folder the editor has left.
+    pub(super) fn apply(&mut self, answer: Answer) -> Option<Pick> {
+        match answer {
+            Answer::Listed {
+                ask,
+                workspace,
+                result,
+            } => {
+                if ask != self.list_ask || self.workspace.as_deref() != Some(workspace.as_path()) {
+                    return None;
+                }
+                self.listing_out = false;
+                match result {
+                    Ok(listing) => self.listing = Some(listing),
+                    Err(e) => self.note = Some(e),
+                }
+                None
+            }
+            Answer::Read {
+                ask,
+                workspace,
+                discard,
+                path,
+                result,
+            } => {
+                if ask != self.read_ask || self.workspace.as_deref() != Some(workspace.as_path()) {
+                    return None;
+                }
+                // Edits typed while the read was out are not thrown away:
+                // the file waits behind the discard question instead.
+                if !discard && self.open.as_ref().is_some_and(OpenFile::dirty) {
+                    self.pending = Some(path);
+                    return Some(Pick::Asked);
+                }
+                match result {
+                    Ok(got) => {
+                        self.note = None;
+                        self.open = Some(OpenFile {
+                            workspace,
+                            root: got.root,
+                            path: got.path,
+                            saved: got.text.clone(),
+                            text: got.text,
+                        });
+                        Some(Pick::Opened)
+                    }
+                    Err(e) => {
+                        self.note = Some(e);
+                        Some(Pick::Refused)
+                    }
+                }
+            }
         }
     }
 
@@ -164,13 +322,13 @@ impl CodeEditor {
                 return Pick::Asked;
             }
         }
-        self.open_file(path)
+        self.open_file(path, false)
     }
 
     /// "Discard and open": drop the unsaved edits and open the waiting file.
     pub(super) fn discard_and_open(&mut self) -> Pick {
         match self.pending.take() {
-            Some(path) => self.open_file(&path),
+            Some(path) => self.open_file(&path, true),
             None => Pick::Refused,
         }
     }
@@ -180,28 +338,26 @@ impl CodeEditor {
         self.pending = None;
     }
 
-    fn open_file(&mut self, path: &str) -> Pick {
+    fn open_file(&mut self, path: &str, discard: bool) -> Pick {
         self.pending = None;
         let Some(ws) = self.workspace.clone() else {
             return Pick::Refused;
         };
-        match files::read(&ws, path) {
-            Ok(got) => {
-                self.note = None;
-                self.open = Some(OpenFile {
-                    workspace: ws,
-                    root: got.root,
-                    path: got.path,
-                    saved: got.text.clone(),
-                    text: got.text,
-                });
-                Pick::Opened
+        self.read_ask += 1;
+        let ask = self.read_ask;
+        let path = path.to_string();
+        let job = move || {
+            let result = files::read(&ws, &path);
+            Answer::Read {
+                ask,
+                workspace: ws,
+                discard,
+                path,
+                result,
             }
-            Err(e) => {
-                self.note = Some(e);
-                Pick::Refused
-            }
-        }
+        };
+        // With a window the answer comes through `poll`.
+        self.run(job).unwrap_or(Pick::Loading)
     }
 
     pub(super) fn is_saving(&self) -> bool {
@@ -277,7 +433,12 @@ impl CodeEditor {
     /// The editor, drawn into the Code page. True on the frame a save lands,
     /// so the page can read the repo's changes again.
     pub(super) fn ui(&mut self, ui: &mut egui::Ui, workspace: &Path, config_dir: &Path) -> bool {
+        if self.wake.is_none() {
+            let ctx = ui.ctx().clone();
+            self.wake_with(move || ctx.request_repaint());
+        }
         self.set_workspace(workspace);
+        self.poll();
         let saved = self.poll_save() == Some(true);
         if self.is_saving() {
             ui.ctx()
@@ -323,6 +484,9 @@ impl CodeEditor {
         browse_to: &mut Option<String>,
         picked: &mut Option<String>,
     ) {
+        if self.listing_out {
+            crate::cards::help_text(ui, EDITOR_LOADING);
+        }
         let Some(listing) = &self.listing else {
             return;
         };

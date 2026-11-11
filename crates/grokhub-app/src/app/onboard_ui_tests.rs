@@ -106,6 +106,241 @@ fn save_with_amr_off_writes_no_rows() {
 }
 
 #[test]
+fn review_says_which_notes_file_save_will_leave_alone() {
+    let root = temp_root("review-note");
+    std::fs::write(root.join("app.json"), "{}\n").unwrap();
+    // A folder where SOUL.md should be: there is no text to show.
+    std::fs::create_dir_all(root.join("memory").join("SOUL.md")).unwrap();
+    let _pin = crate::config::TestConfigDir::set(root.clone());
+    let _agent = grokhub_agent::perm::ConfigGuard::set(root.clone());
+    let mut app = Cabin::quiet_for_test();
+    app.open_onboard(false);
+    assert_eq!(app.setup.onboard.note, None);
+    app.onboard_go(Step::Review);
+    assert_eq!(
+        app.setup.onboard.note.as_deref(),
+        Some("SOUL.md is not a file; Save leaves it alone.")
+    );
+    // Back: the note is Review's, so it goes.
+    app.onboard_go(Step::Life);
+    assert_eq!(app.setup.onboard.note, None);
+    app.onboard_go(Step::Review);
+    // Quit on Review: the next launch opens there and says it again.
+    let mut again = Cabin::quiet_for_test();
+    again.open_onboard(false);
+    assert_eq!(again.setup.onboard.step, Step::Review);
+    assert_eq!(
+        again.setup.onboard.note.as_deref(),
+        Some("SOUL.md is not a file; Save leaves it alone.")
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn save_names_a_notes_file_that_is_not_text_and_leaves_its_bytes_alone() {
+    let root = temp_root("not-text");
+    std::fs::write(root.join("app.json"), "{}\n").unwrap();
+    // Old notes saved in another encoding: not valid UTF-8.
+    let memory = root.join("memory").join("MEMORY.md");
+    let bytes = [0xff, 0xfe, b'o', 0x00, b'l', 0x00, b'd', 0x00];
+    std::fs::write(&memory, bytes).unwrap();
+    let _pin = crate::config::TestConfigDir::set(root.clone());
+    let _agent = grokhub_agent::perm::ConfigGuard::set(root.clone());
+    let mut app = Cabin::quiet_for_test();
+    app.open_onboard(false);
+    app.setup.onboard.answers.call_me = "Sam".into();
+    app.setup.onboard.answers.routines = "Gym before work".into();
+    app.onboard_go(Step::Review);
+    // The person reviewed a MEMORY.md draft, so Save was asked to write it.
+    let d = app.setup.onboard.drafts.clone().expect("drafts");
+    assert!(
+        d.memory.ends_with(": Routines: Gym before work\n"),
+        "{}",
+        d.memory
+    );
+    app.onboard_save();
+    assert_eq!(app.setup.onboard.step, Step::Done);
+    let saved = app.setup.onboard.saved.clone().expect("saved");
+    assert_eq!(saved.files, ["USER.md", "SOUL.md"]);
+    assert_eq!(saved.skipped, ["MEMORY.md"]);
+    assert_eq!(
+        done_line(&app.setup.onboard),
+        "Saved USER.md, SOUL.md. MEMORY.md is not plain text (UTF-8); it was left alone."
+    );
+    assert_eq!(std::fs::read(&memory).unwrap(), bytes);
+    assert!(!root.join("memory").join("MEMORY.md.prev").exists());
+    assert_eq!(read(&root, "USER.md"), "# User\n\n- Call me: Sam\n");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// The text the stage paints in a 1100x720 window, in paint order. Two
+/// passes, because a window's first pass only measures it.
+fn painted(app: &mut Cabin) -> Vec<String> {
+    fn text_of(shape: &egui::Shape, out: &mut Vec<String>) {
+        match shape {
+            egui::Shape::Text(t) => out.push(t.galley.job.text.clone()),
+            egui::Shape::Vec(all) => all.iter().for_each(|s| text_of(s, out)),
+            _ => {}
+        }
+    }
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_on(&ctx);
+    let raw = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(1100.0, 720.0),
+        )),
+        ..Default::default()
+    };
+    let mut texts = Vec::new();
+    for _ in 0..2 {
+        texts.clear();
+        let out = crate::theme::test_pass(&ctx, raw.clone(), |ui| app.paint_onboard(ui.ctx()));
+        for clipped in &out.shapes {
+            text_of(&clipped.shape, &mut texts);
+        }
+    }
+    texts
+}
+
+#[test]
+fn review_paints_its_note_and_the_saved_screen_says_left_alone_once() {
+    let root = temp_root("painted");
+    std::fs::write(root.join("app.json"), "{}\n").unwrap();
+    let memory = root.join("memory").join("MEMORY.md");
+    std::fs::write(&memory, [0xff, 0xfe, b'o', 0x00, b'l', 0x00, b'd', 0x00]).unwrap();
+    let _pin = crate::config::TestConfigDir::set(root.clone());
+    let _agent = grokhub_agent::perm::ConfigGuard::set(root.clone());
+    let mut app = Cabin::quiet_for_test();
+    app.open_onboard(false);
+    app.setup.onboard.answers.call_me = "Sam".into();
+    app.setup.onboard.answers.routines = "Gym before work".into();
+    app.onboard_go(Step::Review);
+    let review = painted(&mut app);
+    let count = |texts: &[String], line: &str| texts.iter().filter(|t| *t == line).count();
+    assert_eq!(count(&review, "Check what I'll save"), 1, "{review:?}");
+    assert_eq!(
+        count(
+            &review,
+            "This is exactly what Save writes. Edit or delete anything first."
+        ),
+        1,
+        "{review:?}"
+    );
+    assert_eq!(
+        count(
+            &review,
+            "MEMORY.md is not plain text (UTF-8); Save leaves it alone."
+        ),
+        1,
+        "{review:?}"
+    );
+    app.onboard_save();
+    assert_eq!(app.setup.onboard.step, Step::Done);
+    // The whole Saved screen: the title, one line, one button.
+    assert_eq!(
+        painted(&mut app),
+        [
+            "Saved",
+            "Saved USER.md, SOUL.md. MEMORY.md is not plain text (UTF-8); it was left alone. \
+             Edit any of it later in Settings → Personal.",
+            "Done"
+        ]
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn save_that_wrote_nothing_still_names_the_file_it_left_alone() {
+    let root = temp_root("too-big");
+    std::fs::write(root.join("app.json"), "{}\n").unwrap();
+    let memory = root.join("memory").join("MEMORY.md");
+    let big = "a line of old notes\n".repeat(52_500);
+    assert_eq!(big.len(), 1_050_000);
+    std::fs::write(&memory, &big).unwrap();
+    let _pin = crate::config::TestConfigDir::set(root.clone());
+    let _agent = grokhub_agent::perm::ConfigGuard::set(root.clone());
+    let mut app = Cabin::quiet_for_test();
+    app.open_onboard(false);
+    app.onboard_go(Step::Review);
+    assert_eq!(
+        app.setup.onboard.note.as_deref(),
+        Some("MEMORY.md is too big to change here; Save leaves it alone.")
+    );
+    // The person empties the other two boxes and types one note.
+    app.setup.onboard.drafts = Some(Drafts {
+        memory: "# Memory\n\n- Keep this\n".into(),
+        ..Drafts::default()
+    });
+    app.onboard_save();
+    let saved = app.setup.onboard.saved.clone().expect("saved");
+    assert_eq!(saved.files, Vec::<String>::new());
+    assert_eq!(saved.skipped, ["MEMORY.md"]);
+    assert_eq!(
+        done_line(&app.setup.onboard),
+        "Nothing changed. MEMORY.md is too big to change here; it was left alone."
+    );
+    assert_eq!(std::fs::read_to_string(&memory).unwrap(), big);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_save_that_left_nothing_alone_says_only_what_it_saved() {
+    let root = temp_root("plain-save");
+    std::fs::write(root.join("app.json"), "{}\n").unwrap();
+    let _pin = crate::config::TestConfigDir::set(root.clone());
+    let _agent = grokhub_agent::perm::ConfigGuard::set(root.clone());
+    let mut app = Cabin::quiet_for_test();
+    app.open_onboard(false);
+    app.setup.onboard.answers.call_me = "Sam".into();
+    app.onboard_go(Step::Review);
+    assert_eq!(app.setup.onboard.note, None);
+    app.onboard_save();
+    assert_eq!(app.setup.onboard.note, None);
+    assert_eq!(done_line(&app.setup.onboard), "Saved USER.md, SOUL.md.");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn adding_from_openclaw_says_when_the_notes_are_already_there() {
+    let root = temp_root("openclaw");
+    std::fs::write(root.join("app.json"), "{}\n").unwrap();
+    std::fs::write(root.join("memory").join("MEMORY.md"), [0xff, 0xfe]).unwrap();
+    let home = root.join("home");
+    let ws = home.join(".openclaw").join("workspace");
+    std::fs::create_dir_all(&ws).unwrap();
+    std::fs::write(ws.join("SOUL.md"), "Be calm.\n").unwrap();
+    let _pin = crate::config::TestConfigDir::set(root.clone());
+    let _agent = grokhub_agent::perm::ConfigGuard::set(root.clone());
+    let mut app = Cabin::quiet_for_test();
+    app.open_onboard(false);
+    app.setup.onboard.answers.tone.clear();
+    app.onboard_go(Step::Review);
+    app.onboard_openclaw(&home);
+    let first = app.setup.onboard.drafts.clone().expect("drafts");
+    assert_eq!(
+        first.soul,
+        "# Soul\n\n## From OpenClaw SOUL.md\n\nBe calm.\n"
+    );
+    // The import had nothing to say; Review's own note stays.
+    assert_eq!(
+        app.setup.onboard.note.as_deref(),
+        Some("MEMORY.md is not plain text (UTF-8); Save leaves it alone.")
+    );
+    // Pressed again: nothing to add, and it says so.
+    app.onboard_openclaw(&home);
+    assert_eq!(app.setup.onboard.drafts, Some(first));
+    assert_eq!(
+        app.setup.onboard.note.as_deref(),
+        Some(
+            "MEMORY.md is not plain text (UTF-8); Save leaves it alone. \
+             The OpenClaw notes are already in these files; nothing was added."
+        )
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn skip_closes_it_and_personal_opens_it_again_over_real_files() {
     let root = temp_root("skip");
     let _pin = crate::config::TestConfigDir::set(root.clone());

@@ -46,7 +46,7 @@ import { Chat, newConversationId, type Prefill, type QueueAct } from "./Chat";
 import { useChipRow } from "./Chips";
 import { RecordIndicator } from "./RecordIndicator";
 import { HALT_DONE, HALT_FAILED, HaltButton, HaltNote, haltShown, isHaltKey } from "./Halt";
-import { NO_SOURCES, Palette, VIEW_LABELS, pageViews, views, type PaletteAction, type View } from "./Palette";
+import { NO_SOURCES, Palette, VIEW_LABELS, hasPage, views, type PaletteAction, type View } from "./Palette";
 import { COMPOSER_SLASH, shellKeys, type CommandRunners } from "./paletteCommands";
 import { Shortcuts } from "./Shortcuts";
 import type { Section } from "./sections";
@@ -155,7 +155,9 @@ export function App() {
   const [goTo, setGoTo] = useState<{ section: Section; n: number }>();
   const [notices, setNotices] = useState<Notices>(NO_NOTICES);
   const [open, setOpen] = useState<{ id: string; n: number }>();
-  const [deleted, setDeleted] = useState<{ id: string; n: number }>();
+  /** The chat History deleted last, and every chat it has deleted: Delete all
+   * reports its chats in one tick, so one id would lose all but the last. */
+  const [deleted, setDeleted] = useState<{ id: string; ids: string[]; n: number }>();
   /** The Chat tab's right-click menu, at the pointer; then its confirm; then the clear. */
   const [tabMenu, setTabMenu] = useState<{ x: number; y: number } | null>(null);
   const [askClear, setAskClear] = useState(false);
@@ -185,7 +187,10 @@ export function App() {
   // The pages opened so far. Each mounts the first time it opens, not before.
   const [opened, setOpened] = useState<ReadonlySet<View>>(() => new Set(["chat"]));
   if (!opened.has(view)) setOpened(new Set(opened).add(view));
-  const barAway = useHidingBar(palette);
+  // A screen recording or an audio check is running: the bar holding its
+  // clock and Stop stays on screen in a narrow window too.
+  const [recLive, setRecLive] = useState(false);
+  const barAway = useHidingBar(palette || (canHalt && recLive));
   // Closing Settings goes back to the screen that was open before it, and its
   // Back button names that screen.
   const [before, setBefore] = useState<View>("chat");
@@ -428,9 +433,17 @@ export function App() {
   }, [canHalt, halt]);
 
   /** A page a tile, a chip or the chat asks for: opened only if this app has
-   * it. Updates & Drivers has no tab, and reads this computer. */
-  function openView(next: View) {
-    if (pageViews(caps).includes(next) || (next === "updates" && !caps.remote)) setView(next);
+   * it (`hasPage`). Whether it opened, so `/hub` can say when it did not. */
+  function openView(next: View): boolean {
+    const here = hasPage(caps, next);
+    if (here) setView(next);
+    return here;
+  }
+
+  /** A task the person typed and ran on another page: Chat opens and sends it. */
+  function askNow(text: string) {
+    setPrefill((now) => ({ text, n: (now?.n ?? 0) + 1, send: true }));
+    setView("chat");
   }
 
   /** Text for the chat box; with `conversationId`, in that chat (a Pulse card's own). */
@@ -553,6 +566,7 @@ export function App() {
             onEvent={(event) =>
               notify(event.ok ? "success" : "error", event.text, undefined, event.kind === "audio" ? "Audio check" : "Screen recording")
             }
+            onLive={setRecLive}
           />
         )}
         <NoticeBell
@@ -701,10 +715,7 @@ export function App() {
       {opened.has("command") && !caps.remote && (
         <Page shown={view === "command"}>
           <CommandBox
-            onRun={(prompt) => {
-              setPrefill((now) => ({ text: prompt, n: (now?.n ?? 0) + 1, send: true }));
-              setView("chat");
-            }}
+            onRun={askNow}
           />
         </Page>
       )}
@@ -722,7 +733,9 @@ export function App() {
         <Page shown={view === "history"}>
           <History
             onOpen={openSaved}
-            onDeleted={(id) => setDeleted((now) => ({ id, n: (now?.n ?? 0) + 1 }))}
+            onDeleted={(id) =>
+              setDeleted((now) => ({ id, ids: [...(now?.ids ?? []), id], n: (now?.n ?? 0) + 1 }))
+            }
           />
         </Page>
       )}
@@ -763,7 +776,7 @@ export function App() {
       )}
       {opened.has("devices") && caps.webAccess && !caps.remote && (
         <Page shown={view === "devices"}>
-          <Devices onOpenWebAccess={() => run({ kind: "settings", section: "webAccess" })} onRun={ask} />
+          <Devices onOpenWebAccess={() => run({ kind: "settings", section: "webAccess" })} onRun={askNow} />
         </Page>
       )}
       {opened.has("imagine") && (

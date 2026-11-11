@@ -24,6 +24,7 @@ fn plans(push: Plan, pr: Plan, then: Option<Action>) -> ShipOut {
         pr: Box::new(pr),
         cfg: CodeShip::default(),
         then,
+        real: Real::default(),
     }
 }
 
@@ -195,6 +196,114 @@ fn a_result_or_an_error_shows_then_reads_again() {
     assert_eq!(next, Some(ShipJob::Refresh { then: None }));
     assert_eq!(p.note.as_deref(), Some("On code/fix now."));
     assert_eq!(p.branch_name, "");
+}
+
+#[test]
+fn a_press_stops_when_the_branch_is_not_the_one_the_button_named() {
+    let on = |branch: &str, needs_confirm: bool| Plan {
+        branch: Some(branch.into()),
+        ..plan(
+            Action::Push,
+            &format!("git push --porcelain origin HEAD:refs/heads/{branch}"),
+            needs_confirm,
+            None,
+        )
+    };
+    // The button reads "Push code/a"; code/b was checked out in the terminal.
+    let mut p = ShipPanel {
+        push: Some(on("code/a", false)),
+        pr: Some(plan(Action::Pr, PR_CMD, false, None)),
+        ..ShipPanel::default()
+    };
+    assert_eq!(
+        p.press(Action::Push),
+        Some(ShipJob::Refresh {
+            then: Some(Action::Push)
+        })
+    );
+    // Auto-beta would push with no confirm: nothing runs.
+    let next = p.apply(plans(
+        on("code/b", false),
+        plan(Action::Pr, PR_CMD, false, None),
+        Some(Action::Push),
+    ));
+    assert_eq!(next, None);
+    assert_eq!(
+        p.note.as_deref(),
+        Some("You are on code/b now, not code/a. Check the button and press again.")
+    );
+    assert!(!p.busy);
+    assert_eq!(p.confirming, None);
+    // The button names code/b now, and the next press goes through.
+    assert_eq!(
+        p.push.as_ref().and_then(|x| x.branch.as_deref()),
+        Some("code/b")
+    );
+    p.press(Action::Push);
+    let next = p.apply(plans(
+        on("code/b", false),
+        plan(Action::Pr, PR_CMD, false, None),
+        Some(Action::Push),
+    ));
+    assert_eq!(
+        next,
+        Some(ShipJob::Run {
+            action: Action::Push,
+            confirmed: false,
+            expected: None,
+        })
+    );
+
+    // Ask mode: no card opens for a branch the button did not name.
+    let mut p = ShipPanel {
+        push: Some(on("code/a", true)),
+        ..ShipPanel::default()
+    };
+    p.press(Action::Push);
+    let next = p.apply(plans(
+        on("code/b", true),
+        plan(Action::Pr, PR_CMD, true, None),
+        Some(Action::Push),
+    ));
+    assert_eq!(next, None);
+    assert_eq!(p.confirming, None);
+    assert_eq!(
+        p.note.as_deref(),
+        Some("You are on code/b now, not code/a. Check the button and press again.")
+    );
+}
+
+#[test]
+fn a_repo_read_on_another_branch_asks_for_the_plans_again() {
+    let mut p = ShipPanel::default();
+    // Nothing shown yet: the first read is already on its way.
+    p.saw_branch(Some("code/a"));
+    assert!(!p.reread);
+    p.push = Some(plan(Action::Push, PUSH_CMD, true, None));
+    p.saw_branch(Some("code/fix"));
+    assert!(!p.reread, "the button already names this branch");
+    p.saw_branch(Some("code/other"));
+    assert!(p.reread);
+    p.reread = false;
+    p.saw_branch(None);
+    assert!(p.reread, "a detached HEAD is not the branch on the button");
+}
+
+#[test]
+fn the_real_commands_never_print() {
+    let real = Real {
+        push: "git push --porcelain origin HEAD:refs/heads/tok-9f8e7d6c".into(),
+        pr: "gh pr create --base beta --head tok-9f8e7d6c --fill".into(),
+    };
+    assert_eq!(format!("{real:?}"), "Real(..)");
+    let out = ShipOut::Plans {
+        push: Box::new(plan(Action::Push, "shown", true, None)),
+        pr: Box::new(plan(Action::Pr, "shown", true, None)),
+        cfg: CodeShip::default(),
+        then: None,
+        real,
+    };
+    assert!(!format!("{out:?}").contains("tok-9f8e7d6c"));
 }
 
 #[cfg(unix)]
@@ -475,6 +584,74 @@ mod repo {
         let blocked = activity.first().expect("the blocked try is logged");
         assert_eq!(blocked.branch, "[redacted]");
         assert!(!blocked.command.contains("tok-9f8e7d6c"));
+    }
+
+    #[test]
+    fn a_push_can_be_confirmed_when_a_secret_value_is_part_of_the_command() {
+        let _online = grokhub_core::offline::force_for_thread(false);
+        let f = fixture("held-confirm");
+        other_hosts_on(&f.config);
+        sh_git(&f.work, &["switch", "-c", "fix/prod-banner"]);
+        commit(&f.work, "two\n");
+        // The project holds a secret whose value is a word of the branch name.
+        let held = || vec!["prod".to_string()];
+        let mut panel = ShipPanel::default();
+        let job = panel.press(Action::Push).expect("a refresh");
+        assert_eq!(panel.apply(job.run(&f.config, &f.work, &held)), None);
+        // The card hides the value.
+        assert_eq!(
+            panel.confirming.as_ref().map(|c| c.command.as_str()),
+            Some("git push --porcelain origin HEAD:refs/heads/fix/[redacted]-banner")
+        );
+        // Push on the card: the guard gets the command it built, and pushes.
+        let job = panel.confirm().expect("the confirmed push");
+        let out = job.run(&f.config, &f.work, &held);
+        match out {
+            ShipOut::Shipped(Ok((summary, _))) => {
+                assert_eq!(summary, "Pushed fix/[redacted]-banner to origin.")
+            }
+            other => panic!("expected a push, got {other:?}"),
+        }
+        let pushed = Command::new("git")
+            .args([
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "refs/heads/fix/prod-banner",
+            ])
+            .current_dir(&f.bare)
+            .output()
+            .unwrap();
+        assert!(pushed.status.success(), "origin has the branch now");
+    }
+
+    #[test]
+    fn a_card_goes_when_only_the_hidden_part_of_its_command_changed() {
+        let _online = grokhub_core::offline::force_for_thread(false);
+        let f = fixture("held-swap");
+        other_hosts_on(&f.config);
+        sh_git(&f.work, &["switch", "-c", "tok-9f8e7d6c"]);
+        commit(&f.work, "two\n");
+        // Two held values: both branch names show as [redacted].
+        let held = || vec!["tok-9f8e7d6c".to_string(), "tok-1a2b3c4d".to_string()];
+        let mut panel = ShipPanel::default();
+        let job = panel.press(Action::Push).expect("a refresh");
+        panel.apply(job.run(&f.config, &f.work, &held));
+        let shown = "git push --porcelain origin HEAD:refs/heads/[redacted]";
+        assert_eq!(
+            panel.confirming.as_ref().map(|c| c.command.as_str()),
+            Some(shown)
+        );
+        // Another branch is checked out; its command reads the same on the card.
+        sh_git(&f.work, &["switch", "-c", "tok-1a2b3c4d"]);
+        let job = panel.shown().expect("a refresh");
+        let out = job.run(&f.config, &f.work, &held);
+        let ShipOut::Plans { push, .. } = &out else {
+            panic!("expected plans, got {out:?}");
+        };
+        assert_eq!(push.command, shown);
+        panel.apply(out);
+        assert_eq!(panel.confirming, None, "the card was for the other branch");
     }
 
     #[test]

@@ -73,6 +73,24 @@ pub(in crate::app) fn saved_line(s: &Saved) -> String {
     format!("Saved {}{rows}.", s.files.join(", "))
 }
 
+/// The Saved screen's line: what Save wrote, then each file it left alone
+/// and why (the writer's own sentence, kept in `note` by Save).
+pub(in crate::app) fn done_line(o: &Onboard) -> String {
+    let line = o.saved.as_ref().map(saved_line).unwrap_or_default();
+    match &o.note {
+        Some(left) => format!("{line} {left}"),
+        None => line,
+    }
+}
+
+/// Two notes as one; either can be missing.
+fn both(a: Option<String>, b: Option<String>) -> Option<String> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(format!("{a} {b}")),
+        (a, b) => a.or(b),
+    }
+}
+
 fn line_field(ui: &mut egui::Ui, label: &str, value: &mut String) {
     ui.label(
         RichText::new(label)
@@ -95,6 +113,15 @@ fn long_field(ui: &mut egui::Ui, label: &str, value: &mut String, rows: usize) {
             .desired_width(f32::INFINITY),
     );
     ui.add_space(8.0);
+}
+
+impl Onboard {
+    /// Review opens: the drafts for the answers, and after any note already
+    /// there, which files Review shows empty because their text can't be read.
+    fn open_review(&mut self, dir: &std::path::Path) {
+        self.drafts = Some(onboard::draft(dir, &self.answers, grokhub_core::now_ms()));
+        self.note = both(self.note.take(), onboard::review_note(dir));
+    }
 }
 
 impl Cabin {
@@ -120,19 +147,20 @@ impl Cabin {
         }
         o.saved = None;
         o.note = None;
-        o.drafts = (o.step == Step::Review)
-            .then(|| onboard::draft(&dir, &o.answers, grokhub_core::now_ms()));
+        o.drafts = None;
+        if o.step == Step::Review {
+            o.open_review(&dir);
+        }
     }
 
     pub(in crate::app) fn onboard_go(&mut self, to: Step) {
         let dir = crate::config::config_dir();
         let o = &mut self.setup.onboard;
         o.step = to;
-        if let Err(e) = onboard::keep(&dir, to, &o.answers) {
-            o.note = Some(e);
-        }
+        // A note belongs to the step it was said on.
+        o.note = onboard::keep(&dir, to, &o.answers).err();
         if to == Step::Review {
-            o.drafts = Some(onboard::draft(&dir, &o.answers, grokhub_core::now_ms()));
+            o.open_review(&dir);
         }
     }
 
@@ -148,35 +176,38 @@ impl Cabin {
             return;
         };
         let name = oi::clean(&self.setup.onboard.answers.name);
-        match onboard::commit(
-            &crate::config::config_dir(),
-            &drafts,
-            grokhub_core::now_ms(),
-        ) {
+        let dir = crate::config::config_dir();
+        match onboard::commit(&dir, &drafts, grokhub_core::now_ms()) {
             Ok(saved) => {
                 if !name.is_empty() && self.cfg.display_name != name {
                     self.cfg.display_name = name;
                     self.persist_cfg();
                 }
                 let o = &mut self.setup.onboard;
+                o.note = onboard::saved_note(&dir, &saved);
                 o.saved = Some(saved);
                 o.step = Step::Done;
-                o.note = None;
             }
             Err(e) => self.setup.onboard.note = Some(e),
         }
     }
 
-    fn onboard_openclaw(&mut self) {
+    /// Add the workspace's notes under `home` to Review's drafts, and say
+    /// what the import left out or found already there.
+    pub(in crate::app) fn onboard_openclaw(&mut self, home: &std::path::Path) {
         let o = &mut self.setup.onboard;
         let Some(base) = o.drafts.clone() else {
             return;
         };
-        let home = grokhub_core::paths::user_home().unwrap_or_default();
-        match onboard::openclaw_preview(&home, &base) {
-            Some(d) => o.drafts = Some(d),
-            None => o.note = Some("No OpenClaw or Hermes workspace on this computer.".into()),
-        }
+        let held = onboard::review_note(&crate::config::config_dir());
+        let said = match onboard::openclaw_import(home, &base) {
+            Some(import) => {
+                o.drafts = Some(import.drafts);
+                import.note
+            }
+            None => Some("No OpenClaw or Hermes workspace on this computer.".into()),
+        };
+        o.note = both(held, said);
     }
 
     pub(in crate::app) fn paint_onboard(&mut self, ctx: &egui::Context) {
@@ -279,11 +310,11 @@ impl Cabin {
                             }
                         }
                         Step::Done => {
-                            let line = o.saved.as_ref().map(saved_line).unwrap_or_default();
-                            crate::cards::settings_note(ui, &format!("{line} {DONE_NOTE}"));
+                            crate::cards::settings_note(ui, &format!("{} {DONE_NOTE}", done_line(o)));
                         }
                     }
-                    if let Some(note) = &o.note {
+                    // The Saved screen's line already ends with the note.
+                    if let Some(note) = o.note.as_ref().filter(|_| step != Step::Done) {
                         crate::cards::settings_note(ui, note);
                     }
                 });
@@ -341,7 +372,9 @@ impl Cabin {
             OnboardAct::Go(to) => self.onboard_go(to),
             OnboardAct::Skip => self.onboard_skip(),
             OnboardAct::Save => self.onboard_save(),
-            OnboardAct::OpenClaw => self.onboard_openclaw(),
+            OnboardAct::OpenClaw => {
+                self.onboard_openclaw(&grokhub_core::paths::user_home().unwrap_or_default());
+            }
             OnboardAct::Close => self.setup.onboard = Onboard::default(),
         }
     }
