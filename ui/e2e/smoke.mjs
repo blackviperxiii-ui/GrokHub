@@ -1482,10 +1482,17 @@ async function desktop(s, config) {
 // the answer the session reads, and Stop ends the session with nothing run.
 async function episode(s, config) {
   await tab(s, "Chat");
-  await click(s, ".episode-arm input");
+  // The Deny reply above is still settling (the card leaves, the chat
+  // scrolls), and WebKitGTK refuses a click on a moving switch as "element
+  // click intercepted". Click once it sits still, again until it reads on.
   await waitFor("the switch to read on", async () => {
     const [on] = await wd("POST", `${s}/elements`, { using: "css selector", value: ".episode-arm input:checked" });
-    return Boolean(on);
+    if (on) return true;
+    const [el] = await wd("POST", `${s}/elements`, { using: "css selector", value: ".episode-arm input" });
+    if (el && (await settled(s, el[ELEMENT]))) {
+      await wd("POST", `${s}/element/${el[ELEMENT]}/click`, {});
+    }
+    return null;
   });
   await shot(s, "episode-armed");
   const box = await waitFor("the message box", () => find(s, "textarea[aria-label='Message']"));
