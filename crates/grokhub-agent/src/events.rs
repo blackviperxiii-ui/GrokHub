@@ -52,6 +52,8 @@ pub struct NativeEngine {
     episode_seed: Option<EpisodeSeed>,
     /// The episode this engine is driving, and its view.
     episode: Option<(crate::episode::Episode, crate::episode::EpisodeView)>,
+    /// Pause for the running episode turn ([`Self::set_pause`]).
+    pause: Arc<std::sync::atomic::AtomicBool>,
     /// Brain 1: an ask the rules can't sort gets one fast-model call. Off
     /// means the default Brief, with no extra request.
     brief_model: bool,
@@ -119,6 +121,7 @@ impl NativeEngine {
             origin: crate::harness::current_origin(),
             episode_seed: None,
             episode: None,
+            pause: Arc::default(),
             brief_model: false,
             last_turn_cache_pct: None,
         }
@@ -133,6 +136,13 @@ impl NativeEngine {
     /// The cabin's open episode, or `None` for a plain turn.
     pub fn set_episode(&mut self, seed: Option<EpisodeSeed>) {
         self.episode_seed = seed;
+    }
+
+    /// The host's Pause flag for an episode turn: set, the kernel returns
+    /// before its next step and keeps the episode open (the turn ends as
+    /// `end_turn`, not as a cancel).
+    pub fn set_pause(&mut self, pause: Arc<std::sync::atomic::AtomicBool>) {
+        self.pause = pause;
     }
 
     /// `/bg` leaves this false so a Halt that landed first is not cleared.
@@ -698,6 +708,7 @@ impl NativeEngine {
             permits: self.permits.as_ref(),
             halt: self.halt.as_ref(),
             cancel: &self.cancel,
+            pause: &self.pause,
             steer: &self.steer,
             clock: &clock,
             held: &seed.held,

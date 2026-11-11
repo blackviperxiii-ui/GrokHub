@@ -291,24 +291,13 @@ fn typed_action(args: &serde_json::Value, class: &str) -> String {
     format!("type {} chars into {window}{enter}", text.chars().count())
 }
 
-/// Post a park for the cabin's hard card and wait. True only on user's
-/// Approve; TTL, a halt, or a closed cabin is Deny. `tool` and `args` are the
-/// `grokhub-desktop` shape (Cua calls are mapped first, `cua_as_desk`).
-pub fn park_desk_call(
-    config_dir: &Path,
-    tool: &str,
-    args: &serde_json::Value,
-    class: &str,
-    driver: ComputerUseBackend,
-    halted: &mut dyn FnMut() -> bool,
-) -> bool {
-    static N: AtomicU64 = AtomicU64::new(0);
-    let id = format!(
-        "{}-{}",
-        std::process::id(),
-        N.fetch_add(1, Ordering::Relaxed)
-    );
-    // A credential field's value never reaches the park file, the card, or a span.
+/// What a hard card says a parked desktop call will do: the control a click
+/// lands on, the typed command, the window a key goes to, the files a delete
+/// takes. `args` carry the driver's hints (the control read at the point, the
+/// focused window). A credential field's value never reaches it, and keys and
+/// tokens anywhere in the text are scrubbed: the line is safe for a park
+/// file, a card and a reply.
+pub fn desk_action(tool: &str, args: &serde_json::Value, class: &str) -> String {
     let action = match tool {
         _ if class == HardClass::Credentials.as_str() => credential_action(args),
         "type" => typed_action(args, class),
@@ -334,12 +323,34 @@ pub fn park_desk_call(
         },
         _ => desk_args(tool, args),
     };
+    // `redact_args` catches `key=value`; keys and tokens anywhere in the text go too.
+    redact_args(&grokhub_core::redact_secret_words(&action))
+        .trim()
+        .to_string()
+}
+
+/// Post a park for the cabin's hard card and wait. True only on user's
+/// Approve; TTL, a halt, or a closed cabin is Deny. `tool` and `args` are the
+/// `grokhub-desktop` shape (Cua calls are mapped first, `cua_as_desk`).
+pub fn park_desk_call(
+    config_dir: &Path,
+    tool: &str,
+    args: &serde_json::Value,
+    class: &str,
+    driver: ComputerUseBackend,
+    halted: &mut dyn FnMut() -> bool,
+) -> bool {
+    static N: AtomicU64 = AtomicU64::new(0);
+    let id = format!(
+        "{}-{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    );
     let req = ParkRequest {
         id: id.clone(),
         path: "A".into(),
         tool: tool.into(),
-        // `redact_args` catches `key=value`; keys and tokens anywhere in the text go too.
-        action: redact_args(&grokhub_core::redact_secret_words(&action)),
+        action: desk_action(tool, args, class),
         class: class.into(),
         ts_ms: span_now(),
     };

@@ -3,6 +3,7 @@
 //! episode view; nothing grows a transcript.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::{json, Value};
 
@@ -30,7 +31,7 @@ use crate::route::{
 use crate::run::{HaltCheck, LoopEvent, SteerQueue};
 use crate::tools::{self, DesktopOps, ToolCtx, ToolOutput};
 use crate::CancelToken;
-use grokhub_core::desktop_mcp::CAPTURE_FAILED_HEAD;
+use grokhub_core::desktop_mcp::{CAPTURE_FAILED_HEAD, HALT_MSG, LOCK_MSG};
 
 /// What every worker step is told, after the cabin's own system prompt.
 /// Fixed text, so the prompt prefix stays cacheable.
@@ -50,6 +51,9 @@ pub const DEAD_WORKER: &str = "worker returned nothing";
 /// A read past [`FANOUT_CAP`] in one fan-out.
 pub const FANOUT_CAPPED: &str = "not run: one fan-out runs at most 20 reads";
 const PARKED: &str = "parked: waiting for your approval";
+/// Ends the step result of a park past the approval TTL: not run, and its
+/// card still waits (a host reads it to tell this from a card that settled).
+pub const STILL_WAITING: &str = "waiting on your card";
 /// Opens the reply when the worker has nothing left but a parked step.
 pub const WAITING_ON_YOU: &str = "Waiting on you: ";
 /// Tools only the chat run loop can serve.
@@ -105,6 +109,9 @@ pub struct KernelIn<'a> {
     pub permits: &'a dyn PermitWait,
     pub halt: &'a dyn HaltCheck,
     pub cancel: &'a CancelToken,
+    /// Pause: set by the host, spent by the loop. The turn returns before
+    /// its next step with the episode, its goal and its cards kept.
+    pub pause: &'a AtomicBool,
     pub steer: &'a SteerQueue,
     /// Wall clock in ms (a test clock in tests).
     pub clock: &'a dyn Fn() -> u64,
@@ -258,6 +265,12 @@ pub fn run_episode(
         if k.cancel.is_cancelled() {
             run.end_with_parks_denied(EpisodeEnd::Stop, "stopped — fail-closed Deny");
             return run.out(EpisodeStop::Ended(EpisodeEnd::Stop), String::new());
+        }
+        // Pause is not Stop: nothing ends and no card is denied. The turn
+        // returns here and the next message goes on with the same goal. A
+        // Stop pressed after the Pause wins (the check above).
+        if k.pause.swap(false, Ordering::SeqCst) {
+            return run.out(EpisodeStop::Waiting, String::new());
         }
         run.settle_parks(on_event);
         for note in k.steer.drain() {
@@ -769,7 +782,9 @@ impl Run<'_, '_> {
             let answer = self.k.parks.answer(&park.id);
             let expired = now.saturating_sub(park.parked_ms) >= APPROVAL_TTL.as_millis() as u64;
             let deny = match answer {
-                Some(true) => None,
+                // The OK was for the screen as it was. A Halt or a lock
+                // screen since then refuses the step, as it would any other.
+                Some(true) => self.desk_stopped(&park.tool),
                 Some(false) => Some("denied".to_string()),
                 None => {
                     if expired && !park.waiting {
@@ -837,6 +852,17 @@ impl Run<'_, '_> {
         }
     }
 
+    /// Why a desktop step can't run right now: Halt (the driver's own read,
+    /// which outlives the turn that was halted) or the lock screen. The
+    /// words the gate refuses any other desktop step with.
+    fn desk_stopped(&self, tool: &str) -> Option<String> {
+        match tools::desk_flags(tool, &self.k.gate, Some(self.k.desktop))? {
+            gate::DeskFlags { halted: true, .. } => Some((*HALT_MSG).to_string()),
+            gate::DeskFlags { locked: true, .. } => Some(LOCK_MSG.to_string()),
+            _ => None,
+        }
+    }
+
     /// Run a desktop or read tool once (the gate already said yes) and
     /// observe after a desktop act.
     fn execute(&mut self, call: &FunctionCall) -> (ToolOutput, Option<bool>) {
@@ -883,7 +909,11 @@ impl Run<'_, '_> {
             return;
         }
         for (i, call) in calls.iter().enumerate() {
-            if self.k.halt.halted() || self.k.cancel.is_cancelled() {
+            // A Pause stops before the next step; the top of the loop spends it.
+            if self.k.halt.halted()
+                || self.k.cancel.is_cancelled()
+                || self.k.pause.load(Ordering::SeqCst)
+            {
                 return;
             }
             if !self.step(call, on_event) {
@@ -959,7 +989,9 @@ impl Run<'_, '_> {
             result,
         };
         emit(on_event, call, "in_progress", "", None);
-        match self.verdict(call) {
+        // Read once: the gate and the card must speak of the same control.
+        let hinted = self.hinted(call);
+        match self.verdict_on(call, hinted.as_ref()) {
             GateOutcome::Refuse { reason } => {
                 emit(on_event, call, "failed", &reason, None);
                 let class = hard_class(&call.name, &call.arguments).map_or("soft", |c| c.as_str());
@@ -969,7 +1001,7 @@ impl Run<'_, '_> {
             GateOutcome::Park {
                 hard: Some(class), ..
             } => {
-                self.park(call, class, n, &args_redacted);
+                self.park(call, hinted.as_ref(), class, n, &args_redacted);
                 emit(on_event, call, "completed", PARKED, None);
                 self.record(
                     &shape("park", None, PARKED.into()),
@@ -982,7 +1014,7 @@ impl Run<'_, '_> {
             GateOutcome::Park {
                 hard: None, reason, ..
             } => {
-                if !self.ask(call, &reason, on_event) {
+                if !self.ask(call, hinted.as_ref(), &reason, on_event) {
                     emit(
                         on_event,
                         call,
@@ -1043,6 +1075,20 @@ impl Run<'_, '_> {
     /// read by its args, as on path A), then the soft gate for Ask / Auto /
     /// Always. `zoom` is a read: decide only, it never runs anything.
     fn verdict(&self, call: &FunctionCall) -> GateOutcome {
+        self.verdict_on(call, self.hinted(call).as_ref())
+    }
+
+    /// A desktop call's args plus what the driver reads beside them (the
+    /// control under a click, the focused window). `None` for any other tool.
+    fn hinted(&self, call: &FunctionCall) -> Option<Value> {
+        gate::is_desktop(&call.name).then(|| {
+            let args: Value = serde_json::from_str(&call.arguments).unwrap_or_else(|_| json!({}));
+            self.k.desktop.hint(&call.name, &args)
+        })
+    }
+
+    /// [`Self::verdict`] on args already hinted ([`Self::hinted`]).
+    fn verdict_on(&self, call: &FunctionCall, hinted: Option<&Value>) -> GateOutcome {
         let hard = harness::decide(Step::Tool {
             name: &call.name,
             arguments: &call.arguments,
@@ -1050,12 +1096,10 @@ impl Run<'_, '_> {
         if !hard.is_allow() {
             return hard;
         }
-        if gate::is_desktop(&call.name) {
-            let args: Value = serde_json::from_str(&call.arguments).unwrap_or_else(|_| json!({}));
-            let args = self.k.desktop.hint(&call.name, &args);
+        if let Some(args) = hinted {
             let desk = harness::decide(Step::Desk {
                 tool: &call.name,
-                args: &args,
+                args,
             });
             if !desk.is_allow() {
                 return desk;
@@ -1085,16 +1129,22 @@ impl Run<'_, '_> {
     }
 
     /// A soft ask: the cabin's own permission card, like any native step.
+    /// The card says what the step does (`hinted`: a desktop call's args with
+    /// the driver's hints), not the span's redacted args.
     fn ask(
         &mut self,
         call: &FunctionCall,
+        hinted: Option<&Value>,
         reason: &str,
         on_event: &mut dyn FnMut(LoopEvent),
     ) -> bool {
         on_event(LoopEvent::Permission {
             id: call.call_id.clone(),
             name: call.name.clone(),
-            action: arg_line(&call.name, &call.arguments),
+            action: match hinted {
+                Some(args) => harness::desk_action(&call.name, args, "soft"),
+                None => arg_line(&call.name, &call.arguments),
+            },
             reason: reason.into(),
         });
         let halt = self.k.halt;
@@ -1106,14 +1156,25 @@ impl Run<'_, '_> {
         )
     }
 
-    fn park(&mut self, call: &FunctionCall, class: HardClass, step: u32, args_redacted: &str) {
+    /// Post the card for a hard step. It names what the step does: the
+    /// control a click lands on, the command typed (`hinted`, a desktop
+    /// call's args with the driver's hints), never a credential's value.
+    fn park(
+        &mut self,
+        call: &FunctionCall,
+        hinted: Option<&Value>,
+        class: HardClass,
+        step: u32,
+        args_redacted: &str,
+    ) {
         let now = self.now();
         let id = format!("{PARK_PREFIX}{}-{step}", self.ep.id);
-        let action = match class {
-            HardClass::Credentials => harness::credential_action(
+        let action = match (class, hinted) {
+            (HardClass::Credentials, _) => harness::credential_action(
                 &serde_json::from_str(&call.arguments).unwrap_or_else(|_| json!({})),
             ),
-            _ => format!("{} {args_redacted}", call.name),
+            (_, Some(args)) => harness::desk_action(&call.name, args, class.as_str()),
+            (_, None) => format!("{} {args_redacted}", call.name),
         };
         let req = ParkRequest {
             id: id.clone(),
@@ -1144,7 +1205,7 @@ impl Run<'_, '_> {
 /// The step span's result when a park passes the approval TTL unanswered.
 fn timed_out(park: &OpenPark) -> String {
     format!(
-        "hard-class {} unanswered after {}s — not run; waiting on your card",
+        "hard-class {} unanswered after {}s — not run; {STILL_WAITING}",
         park.class.as_str(),
         APPROVAL_TTL.as_secs()
     )

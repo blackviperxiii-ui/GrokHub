@@ -1,6 +1,7 @@
 // The supervised desktop episode panel: the step list, the latest screen as a
 // thumbnail (never while a credentials step waits), the cards for steps that
 // wait for an OK, and Pause, Stop and Halt. It follows `episode://event`.
+// An Allow with no reply running goes on at once: the chat sends the resume.
 import { useEffect, useState } from "react";
 import { haltDesktop } from "./api";
 import {
@@ -21,6 +22,20 @@ export const ARM_LABEL = "Supervised desktop session";
 export const ARM_NOTE =
   "Messages run as one watched session: you see each step, and risky steps wait for your OK.";
 export const CUA_NOTE = "Using the Cua driver";
+/** What the chat sends to go on after an Allow (the shell's `RESUME_TEXT`):
+ * the session keeps its goal and runs the allowed step now. */
+export const RESUME_TEXT = "Continue";
+
+/** A panel as the shell sends it. `frameSame`: the picture is the one the
+ * page already has, so it was left out. */
+type SentPanel = EpisodePanel & { frameSame?: boolean };
+
+/** The panel to draw for `next`, with the picture kept when the shell left
+ * it out as the same one. */
+function withFrame(next: SentPanel, had: SentPanel | null): SentPanel {
+  if (!next.frameSame || !had || had.episodeId !== next.episodeId || had.frame === null) return next;
+  return { ...next, frame: had.frame, frameSame: false };
+}
 export const ENDED_WORDS: Record<string, string> = {
   verified: "Done, and checked.",
   halt: "Halted. Nothing more ran.",
@@ -33,14 +48,17 @@ export function endedLine(ended: string): string {
   return ENDED_WORDS[ended] ?? "Ended.";
 }
 
-/** One step's outcome as words a person reads. A step still parked when the
- * session is over never ran. */
+/** One step's outcome as words a person reads. A step still parked, or
+ * allowed and never picked up, when the session is over never ran. */
 export function stepWords(step: EpisodeStep, over: boolean): string {
   switch (step.decision) {
     case "allow":
+    case "approve":
       return step.result ? `ran: ${step.result}` : "ran";
     case "park":
       return over ? "not run" : "waiting for your OK";
+    case "allowed":
+      return over ? "not run" : "allowed, not run yet";
     case "deny":
       return step.result ? `not run: ${step.result}` : "not run";
     default:
@@ -144,9 +162,17 @@ export function ArmSwitch({ on, onChange }: { on: boolean; onChange: (on: boolea
 
 /** The chat's supervised desktop session: its switch (while desktop control
  * is on) and, once one is open, its panel above the composer. Nothing
- * outside the desktop app. */
-export function Episode({ conversationId, desktopOn }: { conversationId: string; desktopOn: boolean }) {
-  const [panel, setPanel] = useState<EpisodePanel | null>(null);
+ * outside the desktop app. `onResume` sends a message through the chat. */
+export function Episode({
+  conversationId,
+  desktopOn,
+  onResume,
+}: {
+  conversationId: string;
+  desktopOn: boolean;
+  onResume?: (text: string) => void;
+}) {
+  const [panel, setPanel] = useState<SentPanel | null>(null);
   const [armed, setArmed] = useState(false);
   const [failed, setFailed] = useState("");
 
@@ -154,14 +180,19 @@ export function Episode({ conversationId, desktopOn }: { conversationId: string;
     let dropped = false;
     let stop: (() => void) | undefined;
     void onEpisode((next) => {
-      if (next.conversationId === conversationId) setPanel(next);
+      if (next.conversationId === conversationId) setPanel((had) => withFrame(next, had));
     }).then((unlisten) => {
       if (dropped) unlisten();
       else stop = unlisten;
     });
     episodeState(conversationId)
       .then((now) => {
-        if (!dropped && now) setPanel((had) => had ?? now);
+        if (dropped || !now) return;
+        // An event that came first may have left the picture out as the same one.
+        setPanel((had) => {
+          if (!had) return now;
+          return had.frameSame && had.frame === null ? { ...had, frame: now.frame, frameSame: false } : had;
+        });
       })
       .catch(() => {});
     episodeArmed(conversationId)
@@ -180,6 +211,17 @@ export function Episode({ conversationId, desktopOn }: { conversationId: string;
     did.catch((e: unknown) => setFailed(String(e)));
   };
 
+  // The shell answers true when the allowed step waits on a resume: no reply
+  // is running to pick the answer up, so the chat sends it now.
+  const answer = (parkId: string, approve: boolean) => {
+    setFailed("");
+    episodeAnswer(conversationId, parkId, approve)
+      .then((resume: unknown) => {
+        if (resume === true) onResume?.(RESUME_TEXT);
+      })
+      .catch((e: unknown) => setFailed(String(e)));
+  };
+
   const arm = (on: boolean) => {
     setFailed("");
     episodeArm(conversationId, on)
@@ -194,7 +236,7 @@ export function Episode({ conversationId, desktopOn }: { conversationId: string;
       {panel && (
         <EpisodeView
           panel={panel}
-          onAnswer={(parkId, approve) => run(episodeAnswer(conversationId, parkId, approve))}
+          onAnswer={answer}
           onPause={() => run(episodePause(conversationId))}
           onStop={() => run(episodeStop(conversationId))}
           onHalt={() => run(haltDesktop())}

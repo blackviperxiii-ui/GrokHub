@@ -100,8 +100,9 @@ pub use audit::{
     WindowSummary,
 };
 pub use backend::{
-    computer_tool_names, desk_access, desk_args, desk_decide, desk_span, grok_build_click,
-    park_desk_call, ClickOutcome, ClickRequest, ComputerUseBackend, DeskCall, CU_TRACE,
+    computer_tool_names, desk_access, desk_action, desk_args, desk_decide, desk_span,
+    grok_build_click, park_desk_call, ClickOutcome, ClickRequest, ComputerUseBackend, DeskCall,
+    CU_TRACE,
 };
 pub use brain_tune::{
     apply_brain_tweak, brain_ask, propose, user_version, BrainAsk, PlaybookTarget, PolicyTarget,

@@ -1388,7 +1388,12 @@ export function Chat({
         </p>
       )}
       <SideCards sides={sides} onStop={stopSide} onTell={(side) => void tellSide(side)} onDismiss={dismissSide} />
-      <Episode key={conversationId} conversationId={conversationId} desktopOn={!remote && Boolean(settings?.desktopControl)} />
+      <Episode
+        key={conversationId}
+        conversationId={conversationId}
+        desktopOn={!remote && Boolean(settings?.desktopControl)}
+        onResume={(text) => void deliver(text, [], false)}
+      />
       <AttachChips files={attach.files} note={attach.note} onRemove={attach.remove} busy={busy} />
       <form className="composer slash-wrap" onSubmit={send}>
         {slashOpen && (
