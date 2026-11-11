@@ -904,6 +904,7 @@ mod tests {
             match nav {
                 Nav::Home => "home",
                 Nav::Chat => "chat",
+                Nav::Code => "code",
                 Nav::Devices => "devices",
                 Nav::Memory => "memory",
                 Nav::Personal => "personal",
@@ -925,6 +926,7 @@ mod tests {
         let all = [
             Nav::Home,
             Nav::Chat,
+            Nav::Code,
             Nav::Devices,
             Nav::Memory,
             Nav::Personal,
@@ -944,8 +946,8 @@ mod tests {
         ];
         assert_eq!(
             all.len(),
-            18,
-            "Personal is the one page added since; still no inbox page"
+            19,
+            "Personal and Code are the pages added since; still no inbox page"
         );
         assert!(all.iter().all(|n| !page(*n).contains("inbox")));
         let cards: Vec<_> = [

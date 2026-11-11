@@ -179,6 +179,7 @@ fn spike3a_adds_no_nav_page() {
     let pages = [
         Nav::Home,
         Nav::Chat,
+        Nav::Code,
         Nav::Devices,
         Nav::Memory,
         Nav::Workboard,
@@ -200,6 +201,7 @@ fn spike3a_adds_no_nav_page() {
         .map(|nav| match nav {
             Nav::Home => "home",
             Nav::Chat => "chat",
+            Nav::Code => "code",
             Nav::Devices => "devices",
             Nav::Memory => "memory",
             Nav::Personal => "personal",
@@ -218,7 +220,7 @@ fn spike3a_adds_no_nav_page() {
             Nav::Settings => "settings",
         })
         .collect();
-    assert_eq!(named.len(), 17);
+    assert_eq!(named.len(), 18);
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("spike3a-nav");
     unsafe { std::env::set_var("GROKHUB_CONFIG", &root) };

@@ -498,7 +498,7 @@ impl Cabin {
                 ui.add_space(4.0);
                 crate::theme::glide_paint(ui, "rail");
                 let cur = self.rail_id();
-                // Eleven rows just fit the smallest window; a shorter one
+                // Twelve rows just fit the smallest window; a shorter one
                 // scrolls the rail instead of cutting the last rows off.
                 egui::ScrollArea::vertical()
                     .id_salt("rail-rows")
@@ -564,6 +564,7 @@ impl Cabin {
         match self.page_nav() {
             Nav::Home => "home",
             Nav::Chat => "chat",
+            Nav::Code => "code",
             Nav::History => "history",
             Nav::Journal => "journal",
             Nav::Imagine => "imagine",
@@ -622,6 +623,7 @@ impl Cabin {
                 self.settings_sec = settings::pinned_settings_sec().unwrap_or(SettingsSec::Account);
                 Nav::Settings
             }
+            "code" => Nav::Code,
             "skills" => Nav::Skills,
             "library" => Nav::Library,
             "mods" => Nav::Mods,

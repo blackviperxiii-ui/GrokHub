@@ -40,6 +40,7 @@ impl Cabin {
                 self.open_recent_chat();
                 self.nav = Nav::Chat;
             }
+            "nav:code" => self.nav = Nav::Code,
             "nav:skills" => self.nav = Nav::Skills,
             "nav:board" => self.nav = Nav::Workboard,
             "nav:pulse" => self.nav = Nav::Pulse,
