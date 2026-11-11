@@ -28,6 +28,7 @@ pub use grokhub_code::ship as code_ship;
 pub use grokhub_code::term as code_term;
 pub mod connectors;
 pub mod credential;
+pub mod diagnostics;
 pub mod episode;
 pub mod export;
 pub mod game_companion;
@@ -3366,6 +3367,49 @@ async fn set_offline_only(state: State<'_, ShellState>, on: bool) -> Result<priv
     .await?
 }
 
+/// Settings → Labs → Diagnostics mode: the two switches and what a Save holds.
+#[tauri::command]
+fn get_diagnostics(state: State<'_, ShellState>) -> diagnostics::Page {
+    diagnostics::page(&state.config_dir)
+}
+
+#[tauri::command]
+fn set_diagnostics(
+    state: State<'_, ShellState>,
+    mode: bool,
+    include_logs: bool,
+) -> Result<diagnostics::Page, String> {
+    capabilities::needs(capabilities::current().plugins, "Diagnostics")?;
+    diagnostics::set(&state.config_dir, mode, include_logs)
+}
+
+/// Builds the redacted bundle and keeps it for Save; nothing is written yet.
+/// `chat` is the one chat whose text goes in (none: no chat text at all).
+#[tauri::command]
+async fn diagnostics_preview(
+    state: State<'_, ShellState>,
+    chat: Option<String>,
+) -> Result<diagnostics::Preview, String> {
+    capabilities::needs(capabilities::current().plugins, "Diagnostics")?;
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        diagnostics::preview(
+            &dir,
+            env!("CARGO_PKG_VERSION"),
+            credential::has_key(),
+            chat.as_deref(),
+        )
+    })
+    .await?
+}
+
+/// Writes exactly the bundle the preview showed.
+#[tauri::command]
+fn diagnostics_save(state: State<'_, ShellState>) -> Result<diagnostics::Saved, String> {
+    capabilities::needs(capabilities::current().plugins, "Diagnostics")?;
+    diagnostics::save(&state.config_dir)
+}
+
 #[tauri::command]
 fn open_data_folder(state: State<'_, ShellState>) -> Result<(), String> {
     privacy::open_data_folder(&state.config_dir)
@@ -4470,6 +4514,10 @@ pub fn run() {
             save_behavior,
             save_defaults,
             get_privacy,
+            get_diagnostics,
+            set_diagnostics,
+            diagnostics_preview,
+            diagnostics_save,
             set_offline_only,
             open_data_folder,
             open_files_folder,

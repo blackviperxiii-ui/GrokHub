@@ -1988,6 +1988,43 @@ export interface PluginMarket {
   page: PluginPage;
 }
 
+export interface DiagnosticsPage {
+  mode: boolean;
+  includeLogs: boolean;
+  /** What each Save includes, the cabin's own lines. */
+  preview: string[];
+}
+
+export interface DiagnosticsPreview {
+  /** "Redacted: 1 key, 0 emails, …", what Copy summary copies. */
+  summary: string;
+  /** The redacted bundle as readable text. */
+  markdown: string;
+  turns: number;
+}
+
+export interface DiagnosticsSaved {
+  path: string;
+  status: string;
+}
+
+export function getDiagnostics(): Promise<DiagnosticsPage> {
+  return invoke<DiagnosticsPage>("get_diagnostics");
+}
+
+export function setDiagnostics(mode: boolean, includeLogs: boolean): Promise<DiagnosticsPage> {
+  return invoke<DiagnosticsPage>("set_diagnostics", { mode, includeLogs });
+}
+
+/** Builds the redacted bundle for Save. `chat` is the one chat whose text goes in. */
+export function diagnosticsPreview(chat: string | null): Promise<DiagnosticsPreview> {
+  return invoke<DiagnosticsPreview>("diagnostics_preview", { chat });
+}
+
+export function diagnosticsSave(): Promise<DiagnosticsSaved> {
+  return invoke<DiagnosticsSaved>("diagnostics_save");
+}
+
 export type PluginAct = "trust" | "enable" | "disable" | "remove";
 
 export function getPlugins(): Promise<PluginPage> {
