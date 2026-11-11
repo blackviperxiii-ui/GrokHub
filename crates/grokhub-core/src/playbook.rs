@@ -26,6 +26,7 @@ pub const BUILTIN: &[&str] = &[
     include_str!("../assets/playbooks/plan-day.toml"),
     include_str!("../assets/playbooks/creative.toml"),
     include_str!("../assets/playbooks/pc-tuneup.toml"),
+    include_str!("../assets/playbooks/app-update.toml"),
 ];
 
 /// The moods a Brief can carry.
@@ -42,6 +43,7 @@ pub const PLAYBOOK_LINE: &str =
 
 pub const DOMAINS: &[&str] = &[
     "system",
+    "app-update",
     "pc-health",
     "code",
     "files",
@@ -476,6 +478,7 @@ mod tests {
                 "plan-day",
                 "creative",
                 "pc-tuneup",
+                "app-update",
             ]
         );
         let game = parse(BUILTIN[8]).unwrap();
