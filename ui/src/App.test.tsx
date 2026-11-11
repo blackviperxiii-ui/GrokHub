@@ -72,7 +72,7 @@ vi.mock("./Chat", () => ({
   }: {
     onQueue?: (conversationId: string, texts: string[]) => void;
     queueAct?: { op: string; index: number; n: number };
-    prefill?: { text: string; n: number; conversationId?: string };
+    prefill?: { text: string; n: number; conversationId?: string; send?: boolean };
     open?: { id: string; n: number };
     deleted?: { id: string; ids?: string[]; n: number };
     clear?: { n: number };
@@ -80,6 +80,7 @@ vi.mock("./Chat", () => ({
   }) => (
     <div>
       <p>Chat page{prefill && `: ${prefill.text} in ${prefill.conversationId ?? "this chat"}`}</p>
+      {prefill?.send && <p>Sends {prefill.text}</p>}
       {open && <p>Opened {open.id}</p>}
       {deleted && <p>Deleted {deleted.id}</p>}
       {deleted && <p>Every deleted chat: {(deleted.ids ?? []).join(", ")}</p>}
@@ -166,10 +167,15 @@ vi.mock("./Agents", () => ({
 }));
 vi.mock("./Connectors", () => ({ Connectors: () => null }));
 vi.mock("./Devices", () => ({
-  Devices: ({ onOpenWebAccess }: { onOpenWebAccess: () => void }) => (
-    <button type="button" onClick={onOpenWebAccess}>
-      Devices page
-    </button>
+  Devices: ({ onOpenWebAccess, onRun }: { onOpenWebAccess: () => void; onRun?: (text: string) => void }) => (
+    <>
+      <button type="button" onClick={onOpenWebAccess}>
+        Devices page
+      </button>
+      <button type="button" onClick={() => onRun?.("tidy my downloads")}>
+        Devices run
+      </button>
+    </>
   ),
 }));
 vi.mock("./Skills", () => ({
@@ -280,6 +286,15 @@ describe("App", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Devices" }));
     await userEvent.click(await screen.findByRole("button", { name: "Devices page" }));
     expect(await screen.findByText("Settings for a desktop at webAccess")).toBeInTheDocument();
+  });
+
+  it("Run it here on Devices opens Chat and sends the task", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Devices" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Devices run" }));
+    expect(await screen.findByText("Sends tidy my downloads")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("puts the saved theme on the page at startup", async () => {

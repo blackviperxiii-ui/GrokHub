@@ -29,7 +29,7 @@ export const PAIR_STEP = "Open this address on the other computer and enter the 
 export const PAIRED_NOTE = "Paired. Make a new code after another computer joins.";
 export const CODE_GONE = "That code stopped working. Make a new one.";
 export const RUN_NOTE =
-  "Puts this task in the chat box. Press Send there and it runs on this PC, with the same approvals as anything else you ask.";
+  "Opens a chat with this task, so it runs on this PC with the same approvals as anything else you ask.";
 
 /** "just now", "5 min ago", "2 h ago", "3 days ago". */
 export function ago(at: number, now: number): string {
@@ -191,7 +191,7 @@ export function Devices({
       />
       <div className="card-buttons">
         <button type="button" disabled={!task.trim() || !onRun} onClick={runHere}>
-          Put it in chat
+          Run it here
         </button>
       </div>
       <h2>Paired browsers</h2>

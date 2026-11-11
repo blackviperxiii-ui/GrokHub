@@ -438,6 +438,12 @@ export function App() {
     if (pageViews(caps).includes(next) || (next === "updates" && !caps.remote)) setView(next);
   }
 
+  /** A task the person typed and ran on another page: Chat opens and sends it. */
+  function askNow(text: string) {
+    setPrefill((now) => ({ text, n: (now?.n ?? 0) + 1, send: true }));
+    setView("chat");
+  }
+
   /** Text for the chat box; with `conversationId`, in that chat (a Pulse card's own). */
   function ask(text: string, conversationId?: string) {
     setPrefill((now) => ({ text, n: (now?.n ?? 0) + 1, ...(conversationId ? { conversationId } : {}) }));
@@ -707,10 +713,7 @@ export function App() {
       {opened.has("command") && !caps.remote && (
         <Page shown={view === "command"}>
           <CommandBox
-            onRun={(prompt) => {
-              setPrefill((now) => ({ text: prompt, n: (now?.n ?? 0) + 1, send: true }));
-              setView("chat");
-            }}
+            onRun={askNow}
           />
         </Page>
       )}
@@ -771,7 +774,7 @@ export function App() {
       )}
       {opened.has("devices") && caps.webAccess && !caps.remote && (
         <Page shown={view === "devices"}>
-          <Devices onOpenWebAccess={() => run({ kind: "settings", section: "webAccess" })} onRun={ask} />
+          <Devices onOpenWebAccess={() => run({ kind: "settings", section: "webAccess" })} onRun={askNow} />
         </Page>
       )}
       {opened.has("imagine") && (

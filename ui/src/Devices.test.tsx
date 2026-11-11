@@ -220,22 +220,21 @@ describe("Devices", () => {
     expect(await screen.findByRole("status")).toHaveTextContent("Port 18766 is already in use.");
   });
 
-  it("says the task goes to the chat box, not that it runs", async () => {
+  it("says the task runs here, under the usual approvals", async () => {
     api.getDevices.mockResolvedValue(OFF);
     render(<Devices onOpenWebAccess={() => {}} onRun={vi.fn()} />);
-    expect(await screen.findByRole("button", { name: "Put it in chat" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Run it here" })).toBeNull();
+    expect(await screen.findByRole("button", { name: "Run it here" })).toBeInTheDocument();
     expect(screen.getByText(RUN_NOTE)).toBeInTheDocument();
     expect(RUN_NOTE).toBe(
-      "Puts this task in the chat box. Press Send there and it runs on this PC, with the same approvals as anything else you ask.",
+      "Opens a chat with this task, so it runs on this PC with the same approvals as anything else you ask.",
     );
   });
 
-  it("puts a task in a chat from Put it in chat", async () => {
+  it("hands a trimmed task to the chat from Run it here", async () => {
     api.getDevices.mockResolvedValue(OFF);
     const run = vi.fn();
     render(<Devices onOpenWebAccess={() => {}} onRun={run} />);
-    const button = await screen.findByRole("button", { name: "Put it in chat" });
+    const button = await screen.findByRole("button", { name: "Run it here" });
     expect(button).toBeDisabled();
     await userEvent.type(screen.getByLabelText("Task for this PC"), "  tidy my downloads  ");
     await userEvent.click(button);
