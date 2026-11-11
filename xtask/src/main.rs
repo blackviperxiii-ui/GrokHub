@@ -758,6 +758,7 @@ mod tests {
         assert_eq!(
             fx.get("src-tauri/Cargo.lock"),
             "[[package]]\nname = \"grokhub-agent\"\nversion = \"3.1.0\"\n\n\
+             [[package]]\nname = \"grokhub-code\"\nversion = \"3.1.0\"\n\n\
              [[package]]\nname = \"grokhub-core\"\nversion = \"3.1.0\"\n\n\
              [[package]]\nname = \"grokhub-desktop\"\nversion = \"3.1.0\"\n\n\
              [[package]]\nname = \"grokhub-fps-probe\"\nversion = \"3.1.0\"\n\n\
