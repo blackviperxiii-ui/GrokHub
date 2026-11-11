@@ -1,5 +1,4 @@
 use super::*;
-use grokhub_code::ship::Hosts;
 
 fn plan(action: Action, command: &str, needs_confirm: bool, blocked: Option<&str>) -> Plan {
     Plan {
@@ -201,6 +200,7 @@ fn a_result_or_an_error_shows_then_reads_again() {
 mod repo {
     use super::*;
     use grokhub_code::activity::{self, Kind};
+    use grokhub_code::ship::Hosts;
     use std::process::Command;
 
     fn sh_git(dir: &Path, args: &[&str]) {
