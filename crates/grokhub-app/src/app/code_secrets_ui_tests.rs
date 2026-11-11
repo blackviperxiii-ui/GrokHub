@@ -151,9 +151,11 @@ fn delete_asks_first_and_cancel_keeps_the_secret() {
 fn a_refused_name_or_value_shows_why_and_the_value_still_empties() {
     let d = dirs("refused");
     let vault = Mem::default();
-    let mut p = SecretsPanel::default();
-    p.name = "PATH".into();
-    p.value = VALUE.into();
+    let mut p = SecretsPanel {
+        name: "PATH".into(),
+        value: VALUE.into(),
+        ..SecretsPanel::default()
+    };
     let out = p.save().unwrap().run(&d.config, &d.ws, &vault);
     p.apply(out);
     assert_eq!(

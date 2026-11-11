@@ -180,8 +180,10 @@ fn a_confirm_for_a_command_that_changed_goes_away() {
 
 #[test]
 fn a_result_or_an_error_shows_then_reads_again() {
-    let mut p = ShipPanel::default();
-    p.busy = true;
+    let mut p = ShipPanel {
+        busy: true,
+        ..ShipPanel::default()
+    };
     let next = p.apply(ShipOut::Shipped(Err(
         "This needs a confirmation first.".into()
     )));
