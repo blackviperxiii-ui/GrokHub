@@ -76,6 +76,22 @@ pub fn reveal_label() -> &'static str {
 /// The chat's name stamped with the local day and time, as the cabin names
 /// its exports: `Trip plan?` at 14:15 on Nov 6 → `Trip plan-20261106-1415.md`.
 pub fn file_name(title: &str, now_ms: u64, offset_min: i32) -> String {
+    file_name_as(
+        title,
+        now_ms,
+        offset_min,
+        grokhub_core::ChatExport::Markdown,
+    )
+}
+
+/// [`file_name`] with the extension of `format`.
+pub fn file_name_as(
+    title: &str,
+    now_ms: u64,
+    offset_min: i32,
+    format: grokhub_core::ChatExport,
+) -> String {
+    let ext = format.file_name().rsplit('.').next().unwrap_or("md");
     let stem = grokhub_core::export_file_stem(title);
     let local = (now_ms as i64 + i64::from(offset_min) * 60_000).max(0) as u64;
     // "2026-11-06T14:15:00Z"
@@ -83,7 +99,7 @@ pub fn file_name(title: &str, now_ms: u64, offset_min: i32) -> String {
     let digits = |s: &str| s.chars().filter(char::is_ascii_digit).collect::<String>();
     let day = digits(at.get(..10).unwrap_or(""));
     let time = digits(at.get(11..16).unwrap_or(""));
-    format!("{stem}-{day}-{time}.md")
+    format!("{stem}-{day}-{time}.{ext}")
 }
 
 /// The chat as Markdown: its name, then each message under its role, and
@@ -108,6 +124,35 @@ pub fn markdown(t: &Transcript) -> String {
     grokhub_core::chat_transcript_markdown(&t.title, pairs)
 }
 
+/// The chat in `format`: Markdown as [`markdown`], a standalone page for
+/// HTML, or the whole transcript as JSON.
+pub fn render(t: &Transcript, format: grokhub_core::ChatExport, now_ms: u64) -> String {
+    let rows: Vec<(&str, String)> = t
+        .lines
+        .iter()
+        .map(|l| match l.role {
+            Role::User => ("user", l.text.clone()),
+            Role::Assistant => ("assistant", l.text.clone()),
+            Role::Tools => ("tools", format!("Used {}", l.text)),
+        })
+        .collect();
+    let pairs = rows.iter().map(|(role, text)| (*role, text.as_str()));
+    match format {
+        grokhub_core::ChatExport::Markdown => markdown(t),
+        grokhub_core::ChatExport::Html => {
+            let footer = format!(
+                "Exported from {} {}",
+                grokhub_core::brand::product_name(),
+                env!("CARGO_PKG_VERSION")
+            );
+            grokhub_core::chat_export_html(&t.title, pairs, &footer)
+        }
+        grokhub_core::ChatExport::Json => {
+            grokhub_core::chat_export_json(&t.title, &t.id, pairs, now_ms)
+        }
+    }
+}
+
 /// Writes chat `id` into `dir` as a new file (never over an older one).
 pub fn export_into(
     config_dir: &Path,
@@ -116,9 +161,28 @@ pub fn export_into(
     now_ms: u64,
     offset_min: i32,
 ) -> Result<PathBuf, String> {
+    export_into_as(
+        config_dir,
+        id,
+        dir,
+        now_ms,
+        offset_min,
+        grokhub_core::ChatExport::Markdown,
+    )
+}
+
+/// [`export_into`] in `format`.
+pub fn export_into_as(
+    config_dir: &Path,
+    id: &str,
+    dir: &Path,
+    now_ms: u64,
+    offset_min: i32,
+    format: grokhub_core::ChatExport,
+) -> Result<PathBuf, String> {
     let t = transcript(config_dir, id)?;
-    let name = file_name(&t.title, now_ms, offset_min);
-    user_files::write_new_file(dir, &name, markdown(&t).as_bytes()).map_err(|e| {
+    let name = file_name_as(&t.title, now_ms, offset_min, format);
+    user_files::write_new_file(dir, &name, render(&t, format, now_ms).as_bytes()).map_err(|e| {
         format!(
             "Couldn't save the chat: {}. Nothing was saved.",
             user_files::plain_io_error(&e)
@@ -152,6 +216,23 @@ pub fn export_to_chats(
     now_ms: u64,
     offset_min: i32,
 ) -> Result<PathBuf, String> {
+    export_to_chats_as(
+        config_dir,
+        id,
+        now_ms,
+        offset_min,
+        grokhub_core::ChatExport::Markdown,
+    )
+}
+
+/// [`export_to_chats`] in `format`.
+pub fn export_to_chats_as(
+    config_dir: &Path,
+    id: &str,
+    now_ms: u64,
+    offset_min: i32,
+    format: grokhub_core::ChatExport,
+) -> Result<PathBuf, String> {
     // Read the chat first, so an empty one doesn't make the folder.
     transcript(config_dir, id)?;
     let dir = user_files::folder(config_dir, UserFolder::Chats).map_err(|e| {
@@ -160,7 +241,7 @@ pub fn export_to_chats(
             user_files::plain_io_error(&e)
         )
     })?;
-    export_into(config_dir, id, &dir, now_ms, offset_min)
+    export_into_as(config_dir, id, &dir, now_ms, offset_min, format)
 }
 
 /// The card for a file this window just wrote.
