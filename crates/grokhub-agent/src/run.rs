@@ -2523,7 +2523,8 @@ fn dispatch_tool_call(
 /// The line a permission card shows: the one argument the named tool acts
 /// on ([`card_fields`]), never some other key the model added. A connection
 /// shows its program and every argument. A tool that acts on none of those
-/// arguments, and any other server's tool, shows all of its arguments.
+/// arguments shows all of its arguments. So does another server's tool,
+/// unless it was sent only one thing it could act on ([`lone_field`]).
 fn action_line(name: &str, arguments: &str) -> String {
     let value: serde_json::Value =
         serde_json::from_str(arguments).unwrap_or(serde_json::Value::Null);
@@ -2554,9 +2555,45 @@ fn action_line(name: &str, arguments: &str) -> String {
             .or_else(|| field("url")),
         // `message` is what gets sent when both are set.
         "send_subagent_message" if field("message").is_some() => None,
+        _ if name.contains("__") && crate::self_manage::self_tool(name).is_none() => {
+            lone_field(&value)
+        }
         _ => card_fields(tool).iter().find_map(|key| field(key)),
     };
     clip(line.as_deref().unwrap_or(arguments), 180)
+}
+
+/// For another server's tool, whose arguments nothing here can read for
+/// meaning: the one path, command, text, keys, address or prompt it was sent,
+/// when every other argument is a number, a yes/no or empty. A second text,
+/// a list or a nested object could hold what really runs, so then `None`.
+fn lone_field(value: &serde_json::Value) -> Option<String> {
+    const SHOWN: [&str; 8] = [
+        "path",
+        "file_path",
+        "target_file",
+        "command",
+        "text",
+        "keys",
+        "url",
+        "prompt",
+    ];
+    let mut found = None;
+    for (key, item) in value.as_object()? {
+        match item {
+            serde_json::Value::String(text) if SHOWN.contains(&key.as_str()) => {
+                if found.is_some() || text.trim().is_empty() {
+                    return None;
+                }
+                found = Some(text.trim().to_string());
+            }
+            serde_json::Value::String(_)
+            | serde_json::Value::Array(_)
+            | serde_json::Value::Object(_) => return None,
+            _ => {}
+        }
+    }
+    found
 }
 
 /// The arguments one of the app's own tools acts on, of those a card line
@@ -7579,6 +7616,45 @@ mod tests {
             ),
             format!("{}…", "x".repeat(180))
         );
+    }
+
+    /// Another server's tool that was sent one thing it could act on shows
+    /// that thing, as before, so a risky typed or run step is still read for
+    /// what it is. With a second candidate it shows everything.
+    #[test]
+    fn another_servers_tool_with_one_thing_to_act_on_shows_it_plainly() {
+        for (name, arguments, line) in [
+            ("notes__type", r#"{"text":"rm -rf ~/old"}"#, "rm -rf ~/old"),
+            (
+                "grokhub-cua__type_text",
+                r#"{"pid":123,"text":"rm -rf ~/old"}"#,
+                "rm -rf ~/old",
+            ),
+            (
+                "shell__exec",
+                r#"{"command":"sudo dd if=/dev/zero of=/dev/sda","timeout":30,"tty":false}"#,
+                "sudo dd if=/dev/zero of=/dev/sda",
+            ),
+        ] {
+            assert_eq!(action_line(name, arguments), line, "{name}");
+        }
+        assert_eq!(
+            crate::harness::classify_ask(
+                "notes__type",
+                &action_line("notes__type", r#"{"text":"rm -rf ~/old"}"#)
+            ),
+            crate::harness::classify_ask("type", "rm -rf ~/old")
+        );
+        // Two candidates, or one beside other text, could hide what runs.
+        for arguments in [
+            r#"{"path":"README.md","command":"rm -rf build"}"#,
+            r#"{"text":"hello","script":"rm -rf ~/old"}"#,
+            r#"{"text":"hello","steps":["rm -rf ~/old"]}"#,
+            r#"{"text":"hello","more":{"run":"rm -rf ~/old"}}"#,
+            r#"{"count":2}"#,
+        ] {
+            assert_eq!(action_line("notes__run", arguments), arguments);
+        }
     }
 
     /// The card line for every tool the app runs itself. A row's line is the
