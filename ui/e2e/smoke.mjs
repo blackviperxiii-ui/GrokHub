@@ -335,6 +335,56 @@ async function settled(s, el) {
   return x === x2 && y === y2;
 }
 
+/** What sits on top of the element's middle, for a refused click. */
+async function onTop(s, el) {
+  return wd("POST", `${s}/execute/sync`, {
+    script:
+      "const r = arguments[0].getBoundingClientRect(); const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return hit ? `${hit.tagName.toLowerCase()}.${hit.className} at ${Math.round(r.x)},${Math.round(r.y)}` : 'nothing';",
+    args: [{ [ELEMENT]: el }],
+  });
+}
+
+/** Clicks the element once it sits still. When a turn ends, the composer row
+ * changes (Stop turns back into Send, the chip row comes in) and the session
+ * switch and panel above it move up; a click sent mid-move is refused as
+ * "element click intercepted" or lands on whatever moved under it. So wait
+ * until the element holds its place, and while something else still covers
+ * it, say what and wait for it to go. */
+async function clickStill(s, el, what) {
+  await waitFor(`${what} to take a click`, async () => {
+    if (!(await settled(s, el))) return null;
+    try {
+      await wd("POST", `${s}/element/${el}/click`, {});
+    } catch (err) {
+      if (!err.message.includes("element click intercepted")) throw err;
+      throw new Error(`${what} is under ${await onTop(s, el)}`);
+    }
+    return true;
+  });
+}
+
+/** Waits for a turn to end: a finished reply holds `text` (a session's reply
+ * goes on to say what waits) and the composer shows Send again (Stop while
+ * the turn runs). */
+async function turnOver(s, text) {
+  await waitFor(`the reply ${JSON.stringify(text)} and Send`, async () => {
+    const replies = await wd("POST", `${s}/elements`, {
+      using: "css selector",
+      value: ".bubble.assistant:not(.streaming)",
+    });
+    let seen = false;
+    for (const el of replies) {
+      if ((await wd("GET", `${s}/element/${el[ELEMENT]}/text`)).includes(text)) seen = true;
+    }
+    if (!seen) return false;
+    const send = await wd("POST", `${s}/elements`, {
+      using: "xpath",
+      value: "//form[contains(@class,'composer')]//button[@type='submit'][normalize-space()='Send']",
+    });
+    return send.length === 1;
+  });
+}
+
 /** The top-row category each Settings page sits in (src/sections.ts). */
 const SETTINGS_CATEGORY = {
   Account: "Account",
@@ -1474,6 +1524,8 @@ async function desktop(s, config) {
     throw new Error("Deny never reached the model as a refusal");
   }
   console.log("Deny reached the model as a refusal");
+  await turnOver(s, DESK_REPLY);
+  console.log(`the turn ended on ${JSON.stringify(DESK_REPLY)}`);
 }
 
 // A supervised desktop session: with desktop control on, the switch arms the
@@ -1482,17 +1534,10 @@ async function desktop(s, config) {
 // the answer the session reads, and Stop ends the session with nothing run.
 async function episode(s, config) {
   await tab(s, "Chat");
-  // The Deny reply above is still settling (the card leaves, the chat
-  // scrolls), and WebKitGTK refuses a click on a moving switch as "element
-  // click intercepted". Click once it sits still, again until it reads on.
+  await clickStill(s, await find(s, ".episode-arm input"), "the session switch");
   await waitFor("the switch to read on", async () => {
     const [on] = await wd("POST", `${s}/elements`, { using: "css selector", value: ".episode-arm input:checked" });
-    if (on) return true;
-    const [el] = await wd("POST", `${s}/elements`, { using: "css selector", value: ".episode-arm input" });
-    if (el && (await settled(s, el[ELEMENT]))) {
-      await wd("POST", `${s}/element/${el[ELEMENT]}/click`, {});
-    }
-    return null;
+    return Boolean(on);
   });
   await shot(s, "episode-armed");
   const box = await waitFor("the message box", () => find(s, "textarea[aria-label='Message']"));
@@ -1502,6 +1547,7 @@ async function episode(s, config) {
     const [el] = await wd("POST", `${s}/elements`, { using: "css selector", value: ".episode .episode-park" });
     return el ? wd("GET", `${s}/element/${el[ELEMENT]}/text`) : null;
   });
+  await turnOver(s, EP_REPLY);
   await shot(s, "episode-card");
   console.log("session card waits for an OK, in Always mode");
   const parkDir = join(config, "harness", "park");
@@ -1509,7 +1555,7 @@ async function episode(s, config) {
     using: "xpath",
     value: "//section[contains(@class,'episode')]//div[contains(@class,'episode-park')]//button[normalize-space()='Deny']",
   });
-  await wd("POST", `${s}/element/${deny[ELEMENT]}/click`, {});
+  await clickStill(s, deny[ELEMENT], "the session's Deny");
   await waitFor("the deny answer file", () =>
     existsSync(parkDir) &&
     readdirSync(parkDir).some((f) => f.endsWith(".answer") && readFileSync(join(parkDir, f), "utf8").trim() === "deny"),
@@ -1519,7 +1565,7 @@ async function episode(s, config) {
     using: "xpath",
     value: "//section[contains(@class,'episode')]//button[normalize-space()='Stop']",
   });
-  await wd("POST", `${s}/element/${stop[ELEMENT]}/click`, {});
+  await clickStill(s, stop[ELEMENT], "the session's Stop");
   await waitFor("the session to end", async () => {
     const [el] = await wd("POST", `${s}/elements`, { using: "css selector", value: ".episode .note[role='status']" });
     return el ? (await wd("GET", `${s}/element/${el[ELEMENT]}/text`)).includes("Stopped") : false;
