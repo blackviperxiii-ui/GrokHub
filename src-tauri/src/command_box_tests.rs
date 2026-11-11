@@ -276,3 +276,74 @@ fn approve_remembers_and_returns_the_agents_message() {
     let _ = std::fs::remove_dir_all(&config);
     let _ = std::fs::remove_dir_all(&work);
 }
+
+/// A line with a key-shaped value in it, written in two parts.
+fn keyed_line() -> String {
+    format!(
+        "curl -H \"Authorization: Bearer {}{}\" https://api.example.com/v1/x",
+        "sk-abcdefghij", "klmnopqrstuv"
+    )
+}
+
+#[test]
+fn a_line_with_a_key_in_it_is_never_stored_and_asks_every_time() {
+    let dir = temp_dir("keyed");
+    let line = keyed_line();
+    remember(&dir, "repo-a", "git status").expect("remember");
+    remember(&dir, "repo-a", &line).expect("remember");
+    assert_eq!(remembered(&dir, "repo-a"), vec!["git status"]);
+    let raw = std::fs::read_to_string(dir.join(FILE)).expect("store");
+    assert!(!raw.contains("klmnopqrstuv"), "{raw}");
+    // Even with the line handed in as remembered, it asks.
+    assert_eq!(
+        judge(&line, ROOT, HOME, std::slice::from_ref(&line), &repo()),
+        Verdict::Confirm {
+            command: line.clone(),
+            destructive: false,
+        }
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_keyed_line_an_older_version_stored_is_not_listed_or_queued_and_leaves_the_file() {
+    let config = temp_dir("keyed-old-cfg");
+    let work = temp_dir("keyed-old-ws");
+    let line = keyed_line();
+    let key = repo_key(&work);
+    let old = serde_json::json!({
+        "repos": [{ "repoKey": key, "commands": ["git status", line] }]
+    });
+    std::fs::write(config.join(FILE), old.to_string()).expect("seed");
+
+    assert_eq!(view(&config, &work).remembered, vec!["git status"]);
+    assert_eq!(
+        check(&config, &work, &line, CodeShip::default()),
+        Verdict::Confirm {
+            command: line.clone(),
+            destructive: false,
+        }
+    );
+    // The next write drops it from the file.
+    remember(&config, &key, "ls").expect("remember");
+    assert_eq!(remembered(&config, &key), vec!["git status", "ls"]);
+    let raw = std::fs::read_to_string(config.join(FILE)).expect("store");
+    assert!(!raw.contains("klmnopqrstuv"), "{raw}");
+    let _ = std::fs::remove_dir_all(&config);
+    let _ = std::fs::remove_dir_all(&work);
+}
+
+#[test]
+fn a_branch_or_file_name_that_only_looks_like_a_key_prefix_is_still_remembered() {
+    let dir = temp_dir("not-a-key");
+    remember(&dir, "repo-a", "git push -u origin fix/desk-sessions-halt").expect("remember");
+    remember(&dir, "repo-a", "cat docs/task-runner-notes.md").expect("remember");
+    assert_eq!(
+        remembered(&dir, "repo-a"),
+        vec![
+            "git push -u origin fix/desk-sessions-halt",
+            "cat docs/task-runner-notes.md"
+        ]
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

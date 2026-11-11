@@ -67,6 +67,16 @@ describe("CommandBox", () => {
     expect(kept).toHaveTextContent("cargo build");
   });
 
+  it("the first-run ask says a line with a key or token in it is never remembered", async () => {
+    api.commandBoxCheck.mockResolvedValue({ verdict: "confirm", command: "make", destructive: false });
+    render(<CommandBox onRun={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Command"), "make{Enter}");
+    const ask = await screen.findByRole("group", { name: COMMAND_FIRST });
+    expect(ask).toHaveTextContent(
+      "After a yes it's remembered for this project. Changed text asks again. A line with a key or token in it is never remembered; it asks every time.",
+    );
+  });
+
   it("Cancel on the ask sends nothing", async () => {
     api.commandBoxCheck.mockResolvedValue({ verdict: "confirm", command: "make", destructive: false });
     const onRun = vi.fn();

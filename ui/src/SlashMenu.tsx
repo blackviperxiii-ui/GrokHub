@@ -7,10 +7,12 @@ export function isSlashCommand(draft: string): boolean {
   return /^\s*\/[A-Za-z0-9_-]+(\s|$)/.test(draft);
 }
 
-/** The command list for a draft that is still a bare `/word`. Stale answers
- * from an earlier keystroke are dropped. */
-export function useSlashHits(draft: string): SlashHit[] {
-  const [hits, setHits] = useState<SlashHit[]>([]);
+/** The command list for a draft that is still a bare `/word`. `rows` is the
+ * last answer, kept on screen while the next one is on its way; `fresh` is
+ * true only when `rows` answers this exact draft, so a key press never acts
+ * on an earlier keystroke's list. Stale answers are dropped. */
+export function useSlashHits(draft: string): { rows: SlashHit[]; fresh: boolean } {
+  const [hits, setHits] = useState<{ for: string; rows: SlashHit[] }>({ for: "", rows: [] });
   const asked = useRef(0);
   const bare = /^\s*\/\S*$/.test(draft);
   useEffect(() => {
@@ -20,14 +22,14 @@ export function useSlashHits(draft: string): SlashHit[] {
     if (!bare) return;
     slashHits(draft).then(
       (rows) => {
-        if (n === asked.current) setHits(rows);
+        if (n === asked.current) setHits({ for: draft, rows });
       },
       () => {
-        if (n === asked.current) setHits([]);
+        if (n === asked.current) setHits({ for: draft, rows: [] });
       },
     );
   }, [draft, bare]);
-  return bare ? hits : [];
+  return bare ? { rows: hits.rows, fresh: hits.for === draft } : { rows: [], fresh: false };
 }
 
 /** The list above the composer. The composer keeps focus; Up and Down move

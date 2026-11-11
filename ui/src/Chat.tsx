@@ -589,7 +589,7 @@ export function Chat({
   const [goalAsk, setGoalAsk] = useState<{ id: string; title: string } | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
   const attach = useAttachments(conversationId, { remote, active });
-  const slashRows = useSlashHits(draft);
+  const { rows: slashRows, fresh: slashFresh } = useSlashHits(draft);
   const [slashAt, setSlashAt] = useState(0);
   // Escape hides the list until the draft changes.
   const [slashShut, setSlashShut] = useState<string | null>(null);
@@ -597,7 +597,9 @@ export function Chat({
   const slashPick = Math.min(slashAt, slashRows.length - 1);
   const row = useChipRow({
     surface: "composer",
-    conversationId,
+    // The computer refuses a browser chips for a chat it has not sent in, so
+    // the web app's new chat asks for the new-chat row.
+    conversationId: remote && !items.some((it) => it.kind === "user") ? undefined : conversationId,
     draft,
     turn: followed,
     busy,
@@ -693,7 +695,7 @@ export function Chat({
       return;
     }
     touched.current = true;
-    void closeChat(conversationId);
+    closeChat(conversationId).catch(() => {});
     loadChat(id).then(show, (err) => setError(String(err)));
   });
 
@@ -747,7 +749,7 @@ export function Chat({
         return;
       }
       touched.current = true;
-      void closeChat(conversationId);
+      closeChat(conversationId).catch(() => {});
       leaveSides();
       setGoalAsk(null);
       setItems([]);
@@ -825,7 +827,8 @@ export function Chat({
 
   function startOver() {
     if (busy) return;
-    void closeChat(conversationId);
+    // A browser's chat with no message sent is refused; the new chat starts anyway.
+    closeChat(conversationId).catch(() => {});
     startFresh();
   }
 
@@ -1255,7 +1258,8 @@ export function Chat({
       }
       if (event.key === "Tab" && !event.shiftKey) {
         event.preventDefault();
-        pickSlash(slashRows[slashPick], false);
+        // A list still answering an earlier keystroke fills nothing in.
+        if (slashFresh) pickSlash(slashRows[slashPick], false);
         return;
       }
       if (event.key === "Escape") {
@@ -1263,7 +1267,8 @@ export function Chat({
         setSlashShut(draft);
         return;
       }
-      if (event.key === "Enter" && !event.shiftKey) {
+      // Until the list answers this draft, Enter runs the line as typed.
+      if (event.key === "Enter" && !event.shiftKey && slashFresh) {
         const hit = slashRows[slashPick];
         // A typed full command runs as typed; otherwise the pick is used.
         if (hit && hit.cmd !== draft.trim().toLowerCase()) {

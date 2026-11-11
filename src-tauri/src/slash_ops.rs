@@ -196,14 +196,14 @@ pub fn run(op: Op, cx: &Ctx) -> Result<Applied, String> {
                 .map(|t| format!(" {t}"))
                 .unwrap_or_default();
             if !yes {
-                return match crate::memory::forget_plan(topic.as_deref())? {
+                return match crate::memory::forget_plan(&work, topic.as_deref())? {
                     crate::memory::Plan::Nothing(text) => notice(text),
                     crate::memory::Plan::Ask(prompt) => {
                         confirm(prompt, &format!("/forget --yes{tail}"))
                     }
                 };
             }
-            notice(crate::memory::forget(topic.as_deref())?)
+            notice(crate::memory::forget(&work, topic.as_deref())?)
         }
         Op::MemoryPrune { yes } => {
             let _config = ConfigGuard::set(cx.config_dir);
@@ -599,6 +599,105 @@ mod tests {
             ""
         );
         assert_eq!(text(go(&h, "/forget")), "MEMORY.md is already empty.");
+    }
+
+    #[test]
+    fn forget_finds_and_removes_what_remember_saved_in_the_project() {
+        let h = home("forget-project");
+        assert_eq!(
+            text(go(&h, "/remember the ferry leaves at nine")),
+            "Remembered in workspace MEMORY.md"
+        );
+        crate::memory::add(&h.ws, "tea at four", false).expect("add");
+        let file = grokhub_agent::workspace_memory_path(&h.ws);
+
+        assert_eq!(
+            go(&h, "/forget ferry"),
+            Ok(Effect::Confirm {
+                prompt: "Forget ferry? These go:\n- project MEMORY.md: the ferry leaves at nine"
+                    .into(),
+                yes: "/forget --yes ferry".into(),
+            })
+        );
+        assert_eq!(
+            std::fs::read_to_string(&file).expect("read"),
+            "the ferry leaves at nine\ntea at four\n"
+        );
+
+        assert_eq!(
+            text(go(&h, "/forget --yes ferry")),
+            "Forgot ferry: 0 notes in the memory repo, 1 line in the project MEMORY.md"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&file).expect("read"),
+            "tea at four\n"
+        );
+        assert_eq!(
+            text(go(&h, "/recall ferry")),
+            "Nothing in memory matches ferry."
+        );
+        assert_eq!(
+            text(go(&h, "/forget ferry")),
+            "Nothing in memory mentions ferry."
+        );
+    }
+
+    #[test]
+    fn a_bare_forget_says_the_project_notes_stay_and_leaves_them() {
+        let h = home("forget-all-project");
+        crate::memory::add(&h.ws, "one", true).expect("add");
+        crate::memory::add(&h.ws, "the ferry leaves at nine", false).expect("add");
+        crate::memory::add(&h.ws, "tea at four", false).expect("add");
+        let file = grokhub_agent::workspace_memory_path(&h.ws);
+        assert_eq!(
+            go(&h, "/forget"),
+            Ok(Effect::Confirm {
+                prompt: "Empty MEMORY.md? All 1 line go. Learned lines stay; /forget <topic> removes those. The project MEMORY.md (2 lines) stays too.".into(),
+                yes: "/forget --yes".into(),
+            })
+        );
+        assert_eq!(text(go(&h, "/forget --yes")), "Forgot MEMORY.md");
+        assert_eq!(
+            std::fs::read_to_string(&file).expect("read"),
+            "the ferry leaves at nine\ntea at four\n"
+        );
+        assert_eq!(
+            text(go(&h, "/forget")),
+            "MEMORY.md is already empty. The project MEMORY.md (2 lines) stays; /forget <topic> removes lines from it."
+        );
+    }
+
+    #[test]
+    fn forget_previews_a_learned_note_and_leaves_no_copy_behind() {
+        let h = home("forget-learned");
+        let store = grokhub_agent::amr_store();
+        store.init().expect("init");
+        grokhub_core::amr::add_fact(
+            &store,
+            "likes jazz",
+            grokhub_core::amr::PersonalGroup::Likes,
+            grokhub_core::now_ms(),
+        )
+        .expect("fact");
+        assert_eq!(
+            go(&h, "/forget jazz"),
+            Ok(Effect::Confirm {
+                prompt: "Forget jazz? These go:\n- learned: likes jazz".into(),
+                yes: "/forget --yes jazz".into(),
+            })
+        );
+        let left: Vec<String> = std::fs::read_dir(&h.config)
+            .expect("config")
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains("trial"))
+            .collect();
+        assert_eq!(left, Vec::<String>::new());
+        // The preview ran on the copy: the note is still there to forget.
+        assert_eq!(
+            text(go(&h, "/forget --yes jazz")),
+            "Forgot jazz: 1 note in the memory repo"
+        );
     }
 
     #[test]

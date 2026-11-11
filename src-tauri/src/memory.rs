@@ -378,19 +378,62 @@ fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// A trial folder's name starts with this. It sits beside `amr` in the
+/// config folder, never inside it and never in the shared temp folder.
+const TRIAL_PREFIX: &str = "amr-trial-";
+/// A trial lives for milliseconds. One older than this was left by a run
+/// that was killed mid-command.
+const TRIAL_STALE: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Removes the trial folders a killed run left in `config`.
+fn sweep_trials(config: &Path, now: std::time::SystemTime) {
+    let Ok(entries) = std::fs::read_dir(config) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let ours = entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(TRIAL_PREFIX)
+            && entry.file_type().is_ok_and(|kind| kind.is_dir());
+        let stale = entry
+            .metadata()
+            .ok()
+            .and_then(|meta| meta.modified().ok())
+            .and_then(|at| now.duration_since(at).ok())
+            .is_some_and(|age| age > TRIAL_STALE);
+        if ours && stale {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
 fn trial() -> Result<Trial, String> {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let config = grokhub_agent::perm::config_dir();
-    let root = std::env::temp_dir().join(format!(
-        "grokhub-amr-trial-{}-{}",
+    std::fs::create_dir_all(&config).map_err(|e| e.to_string())?;
+    sweep_trials(&config, std::time::SystemTime::now());
+    let root = config.join(format!(
+        "{TRIAL_PREFIX}{}-{}-{}",
         std::process::id(),
-        grokhub_core::now_ms()
+        grokhub_core::now_ms(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
+    // A new folder only the owner can open; a name already taken is an error.
+    let mut folder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut folder, 0o700);
+    folder.create(&root).map_err(|e| e.to_string())?;
     let amr = root.join("amr");
     let source = config.join("amr");
-    if source.is_dir() {
-        copy_tree(&source, &amr).map_err(|e| e.to_string())?;
+    let filled = if source.is_dir() {
+        copy_tree(&source, &amr)
     } else {
-        std::fs::create_dir_all(&amr).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(&amr)
+    };
+    if let Err(err) = filled {
+        let _ = std::fs::remove_dir_all(&root);
+        return Err(err.to_string());
     }
     let vault = grokhub_agent::harness::LearnedVault::new(&config);
     let store = grokhub_core::amr::AmrStore::at(amr).with_sealer(std::sync::Arc::new(vault));
@@ -410,9 +453,53 @@ fn global_notes() -> Result<String, String> {
     read(&grokhub_agent::global_memory_path())
 }
 
-/// Learned lines whose text a forget on `topic` would tombstone, plus the
-/// MEMORY.md lines it would drop.
-fn forget_hits(topic: &str) -> Result<(Vec<String>, Vec<String>), String> {
+/// The project's own notes, where `/remember` files a line.
+fn project_notes(workspace: &Path) -> Result<String, String> {
+    read(&grokhub_agent::workspace_memory_path(workspace))
+}
+
+fn count_lines(text: &str) -> usize {
+    text.lines().filter(|l| !l.trim().is_empty()).count()
+}
+
+fn lines_word(n: usize) -> &'static str {
+    if n == 1 {
+        "line"
+    } else {
+        "lines"
+    }
+}
+
+/// `text` without the lines a forget on `topic` drops, and those lines.
+/// Every other byte stays as it was (line endings, blank lines): the project
+/// file is one the person also edits by hand.
+fn without_topic(text: &str, topic: &str) -> (String, Vec<String>) {
+    let mut kept = String::new();
+    let mut gone = Vec::new();
+    for line in text.split_inclusive('\n') {
+        let bare = line.trim_end_matches(['\n', '\r']);
+        if !bare.trim().is_empty() && grokhub_core::forget_topic(bare, topic).is_empty() {
+            gone.push(clip(bare));
+        } else {
+            kept.push_str(line);
+        }
+    }
+    (kept, gone)
+}
+
+/// What a forget on a topic would remove.
+struct ForgetHits {
+    /// Learned lines it would tombstone.
+    learned: Vec<String>,
+    /// Lines it would drop from the global MEMORY.md.
+    global: Vec<String>,
+    /// Lines it would drop from the project's MEMORY.md.
+    project: Vec<String>,
+}
+
+/// Reads what `/forget <topic>` would remove without changing anything: the
+/// learned lines come from running the forget on a throwaway copy.
+fn forget_hits(workspace: &Path, topic: &str) -> Result<ForgetHits, String> {
     let mut learned = Vec::new();
     if grokhub_agent::amr_enabled() {
         let trial = trial()?;
@@ -429,47 +516,74 @@ fn forget_hits(topic: &str) -> Result<(Vec<String>, Vec<String>), String> {
     }
     let before = global_notes()?;
     let after = grokhub_core::forget_topic(&before, topic);
-    let lines = before
+    let global = before
         .lines()
         .filter(|l| !l.trim().is_empty() && !after.lines().any(|k| k == *l))
         .map(clip)
         .collect();
-    Ok((learned, lines))
+    let (_, project) = without_topic(&project_notes(workspace)?, topic);
+    Ok(ForgetHits {
+        learned,
+        global,
+        project,
+    })
 }
 
-/// `/forget [topic]` without a yes: what would go.
-pub fn forget_plan(topic: Option<&str>) -> Result<Plan, String> {
+/// `/forget [topic]` without a yes: what would go. With no topic only the
+/// global MEMORY.md is emptied, as in the cabin, and the ask says the
+/// project's notes stay.
+pub fn forget_plan(workspace: &Path, topic: Option<&str>) -> Result<Plan, String> {
     let Some(topic) = topic.map(str::trim).filter(|t| !t.is_empty()) else {
-        let lines = global_notes()?
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .count();
+        let lines = count_lines(&global_notes()?);
+        let project = project_notes(workspace).map_or(0, |text| count_lines(&text));
+        let stays = format!(
+            "The project MEMORY.md ({project} {}) stays",
+            lines_word(project)
+        );
         if lines == 0 {
-            return Ok(Plan::Nothing("MEMORY.md is already empty.".into()));
+            let mut text = "MEMORY.md is already empty.".to_string();
+            if project > 0 {
+                text.push_str(&format!(" {stays}; /forget <topic> removes lines from it."));
+            }
+            return Ok(Plan::Nothing(text));
         }
-        return Ok(Plan::Ask(format!(
+        let mut ask = format!(
             "Empty MEMORY.md? All {lines} {} go. Learned lines stay; /forget <topic> removes those.",
-            if lines == 1 { "line" } else { "lines" }
-        )));
+            lines_word(lines)
+        );
+        if project > 0 {
+            ask.push_str(&format!(" {stays} too."));
+        }
+        return Ok(Plan::Ask(ask));
     };
-    let (learned, lines) = forget_hits(topic)?;
-    if learned.is_empty() && lines.is_empty() {
+    let hits = forget_hits(workspace, topic)?;
+    if hits.learned.is_empty() && hits.global.is_empty() && hits.project.is_empty() {
         return Ok(Plan::Nothing(format!(
             "Nothing in memory mentions {topic}."
         )));
     }
-    let mut all: Vec<String> = learned.iter().map(|l| format!("learned: {l}")).collect();
-    all.extend(lines.iter().map(|l| format!("MEMORY.md: {l}")));
+    let mut all: Vec<String> = hits
+        .learned
+        .iter()
+        .map(|l| format!("learned: {l}"))
+        .collect();
+    all.extend(hits.global.iter().map(|l| format!("MEMORY.md: {l}")));
+    all.extend(
+        hits.project
+            .iter()
+            .map(|l| format!("project MEMORY.md: {l}")),
+    );
     Ok(Plan::Ask(format!(
         "Forget {topic}? These go:\n{}",
         listed(&all)
     )))
 }
 
-/// `/forget [topic] --yes`: the cabin's own pair of steps. Learned lines get a
-/// tombstone and the topic's lines leave the global MEMORY.md; with no topic
-/// the file is emptied.
-pub fn forget(topic: Option<&str>) -> Result<String, String> {
+/// `/forget [topic] --yes`. Learned lines get a tombstone and the topic's
+/// lines leave the global MEMORY.md, the cabin's own pair of steps, and they
+/// leave the project's MEMORY.md too, where `/remember` files a line. With
+/// no topic the global file is emptied.
+pub fn forget(workspace: &Path, topic: Option<&str>) -> Result<String, String> {
     let path = grokhub_agent::global_memory_path();
     let Some(topic) = topic.map(str::trim).filter(|t| !t.is_empty()) else {
         read(&path)?;
@@ -479,25 +593,41 @@ pub fn forget(topic: Option<&str>) -> Result<String, String> {
         std::fs::write(&path, "").map_err(|e| e.to_string())?;
         return Ok("Forgot MEMORY.md".into());
     };
-    let mut line = format!("Forgot {topic}");
+    // Both files are read before anything changes: one this can't read (a
+    // link, not text) stops the command with nothing half done.
+    let before = read(&path)?;
+    let local = grokhub_agent::workspace_memory_path(workspace);
+    let (local_after, local_gone) = without_topic(&read(&local)?, topic);
+    let mut parts = Vec::new();
     if grokhub_agent::amr_enabled() {
         let store = open_store()?;
         let done = store.forget_matching(topic).map_err(|e| e.to_string())?;
         let n = done.forgotten.len();
-        line = format!(
-            "Forgot {topic}: {n} {} in the memory repo",
+        parts.push(format!(
+            "{n} {} in the memory repo",
             if n == 1 { "note" } else { "notes" }
-        );
+        ));
         if done.locked > 0 {
-            line.push_str(&format!(", {} private not checked", done.locked));
+            parts.push(format!("{} private not checked", done.locked));
         }
     }
-    let before = read(&path)?;
     let after = grokhub_core::forget_topic(&before, topic);
     if after != before {
         std::fs::write(&path, after).map_err(|e| e.to_string())?;
     }
-    Ok(line)
+    if !local_gone.is_empty() {
+        std::fs::write(&local, local_after).map_err(|e| e.to_string())?;
+        parts.push(format!(
+            "{} {} in the project MEMORY.md",
+            local_gone.len(),
+            lines_word(local_gone.len())
+        ));
+    }
+    Ok(if parts.is_empty() {
+        format!("Forgot {topic}")
+    } else {
+        format!("Forgot {topic}: {}", parts.join(", "))
+    })
 }
 
 /// Memory retention in days, from `app.json` (the cabin's setting). 0 keeps
@@ -621,6 +751,77 @@ mod tests {
             workspace,
             _guard: grokhub_agent::perm::ConfigGuard::set(&config),
         }
+    }
+
+    /// A preview (`/forget <topic>`, `/memory prune`) runs on a copy of the
+    /// learned notes. The copy stays in the config folder, readable by the
+    /// owner only, never in the temp folder every local account can list.
+    #[cfg(unix)]
+    #[test]
+    fn a_preview_copies_the_learned_notes_inside_the_config_folder_for_the_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let _d = dirs("trial");
+        let config = grokhub_agent::perm::config_dir();
+        let store = grokhub_agent::amr_store();
+        store.init().expect("init");
+        grokhub_core::amr::add_fact(
+            &store,
+            "likes jazz",
+            PersonalGroup::Likes,
+            grokhub_core::now_ms(),
+        )
+        .expect("fact");
+
+        let trial = trial().expect("trial");
+        let root = trial.root.clone();
+        assert_eq!(root.parent(), Some(config.as_path()));
+        let name = root
+            .file_name()
+            .expect("name")
+            .to_string_lossy()
+            .into_owned();
+        assert!(name.starts_with("amr-trial-"), "{name}");
+        let mode = std::fs::metadata(&root).expect("meta").permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
+        assert!(root.join("amr").is_dir());
+        drop(trial);
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn a_trial_folder_a_killed_run_left_is_swept_and_a_fresh_one_is_kept() {
+        let _d = dirs("sweep");
+        let config = grokhub_agent::perm::config_dir();
+        let left = config.join("amr-trial-1-1-0");
+        std::fs::create_dir_all(left.join("amr")).expect("left");
+        let learned = config.join("amr");
+        std::fs::create_dir_all(&learned).expect("amr");
+
+        // Another copy of the app may be mid-preview: a fresh folder stays.
+        let now = std::time::SystemTime::now();
+        sweep_trials(&config, now);
+        assert!(left.is_dir());
+        sweep_trials(&config, now + std::time::Duration::from_secs(601));
+        assert!(!left.exists());
+        assert!(learned.is_dir());
+    }
+
+    #[test]
+    fn forgetting_a_topic_in_the_project_notes_keeps_every_other_byte() {
+        assert_eq!(
+            without_topic(
+                "# Notes\r\n\r\nthe ferry leaves at nine\r\ntea at four",
+                "ferry"
+            ),
+            (
+                "# Notes\r\n\r\ntea at four".to_string(),
+                vec!["the ferry leaves at nine".to_string()]
+            )
+        );
+        assert_eq!(
+            without_topic("tea at four\n", "ferry"),
+            ("tea at four\n".to_string(), Vec::new())
+        );
     }
 
     #[test]

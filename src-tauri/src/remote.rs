@@ -1194,6 +1194,134 @@ mod tests {
         assert_eq!(on_the_web, Vec::<&str>::new());
     }
 
+    /// The whole web list, reviewed name by name. A command is off the web
+    /// unless it is written here: a name added to [`WEB_COMMANDS`] fails this
+    /// test until this list names it too. The window's commands are read from
+    /// its own handler list, so a new one is refused the day it is added.
+    #[test]
+    fn only_the_reviewed_commands_are_on_the_web_list() {
+        const REVIEWED: [&str; 74] = [
+            "add_automation",
+            "add_memory",
+            "add_personal_fact",
+            "answer_elicit",
+            "answer_permission",
+            "approve_memory_row",
+            "cancel_chat",
+            "check_connectors",
+            "chip_outcome",
+            "close_chat",
+            "disconnect_connector",
+            "edit_automation",
+            "edit_memory_row",
+            "forget_memory_row",
+            "get_background",
+            "get_behavior",
+            "get_feed_prompt",
+            "get_goals",
+            "get_home",
+            "get_imagine",
+            "get_memory",
+            "get_mission",
+            "get_privacy",
+            "get_pulse",
+            "get_queue",
+            "get_settings",
+            "get_skills",
+            "get_workboard",
+            "goal_act",
+            "home_catalog",
+            "imagine_cancel",
+            "imagine_generate",
+            "imagine_image",
+            "list_automations",
+            "list_connectors",
+            "nyx_look",
+            "pause_memory_row",
+            "pulse_act",
+            "pulse_discuss",
+            "pulse_fix",
+            "pulse_image",
+            "pulse_offer",
+            "pulse_remind",
+            "pulse_saved",
+            "pulse_unsave",
+            "pulse_why",
+            "quick_chips",
+            "reject_memory_row",
+            "remove_attachment",
+            "remove_automation",
+            "restart_connector",
+            "run_automation",
+            "run_slash",
+            "save_feed_prompt",
+            "save_memory",
+            "search_memory",
+            "send_chat",
+            "set_automation_enabled",
+            "set_home_layout",
+            "set_memory_writes",
+            "sign_out_connector",
+            "slash_hits",
+            "stage_attachment",
+            "steer_chat",
+            "stop_task",
+            "workboard_act",
+            "workboard_add",
+            "workboard_delete_archived",
+            "workboard_log",
+            "workboard_recur",
+            "workboard_stamp",
+            "workboard_sweep_dismiss",
+            "workboard_sweep_undo",
+            "workboard_work",
+        ];
+        let mut listed = WEB_COMMANDS.to_vec();
+        listed.sort_unstable();
+        assert_eq!(listed, REVIEWED);
+
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        let handlers: Vec<&str> = src
+            .split("generate_handler![")
+            .nth(1)
+            .and_then(|rest| rest.split("])").next())
+            .expect("the handler list in lib.rs")
+            .lines()
+            .map(|line| line.split("//").next().unwrap_or("").trim())
+            .filter(|line| !line.starts_with("#["))
+            .flat_map(|line| line.split(','))
+            .map(|name| name.trim().rsplit("::").next().unwrap_or(""))
+            .filter(|name| !name.is_empty())
+            .collect();
+        // The list was really read: these run things on the computer.
+        for name in [
+            "episode_answer",
+            "pc_tidy_trash",
+            "command_box_approve",
+            "diagnostics_save",
+            "start_share",
+            "delete_all_chats",
+            "read_turn",
+        ] {
+            assert!(
+                handlers.contains(&name),
+                "{name} is missing from the handler list"
+            );
+        }
+        let unreviewed_on_the_web: Vec<&str> = handlers
+            .iter()
+            .copied()
+            .filter(|name| !REVIEWED.contains(name) && web_command(name))
+            .collect();
+        assert_eq!(unreviewed_on_the_web, Vec::<&str>::new());
+        let not_a_command: Vec<&str> = REVIEWED
+            .iter()
+            .copied()
+            .filter(|name| !handlers.contains(name))
+            .collect();
+        assert_eq!(not_a_command, Vec::<&str>::new());
+    }
+
     #[test]
     fn the_web_has_the_workboard_but_not_resume() {
         for name in [
