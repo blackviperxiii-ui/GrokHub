@@ -13,6 +13,8 @@ import { Toggle } from "./Toggle";
 export const OFFLINE_NOTE = `${PRODUCT_NAME} stays off the internet. Chat uses Local AI if it's set up; web search, cloud models and online connectors pause.`;
 export const FILES_NOTE =
   "Chats you export, and the cabin's diagnostics, recordings, images and reports, go here.";
+export const DIAGNOSTICS_PRIVACY_NOTE =
+  "A diagnostics bundle (Settings → Labs) hides keys, tokens, emails and your home folder name, holds chat text only for a chat you pick, is saved here and is never uploaded.";
 export const OFFLINE_NOT_READY =
   "No local model is ready, and nothing can be downloaded while Offline only is on.";
 
@@ -127,6 +129,7 @@ export function Privacy({ readOnly = false }: { readOnly?: boolean }) {
         <code>{page.filesFolder}</code>
       </p>
       <p className="note">{FILES_NOTE}</p>
+      <p className="note">{DIAGNOSTICS_PRIVACY_NOTE}</p>
       {page.canOpenFolder && (
         <div className="card-buttons">
           <button type="button" className="quiet" onClick={() => void openFolder(openFilesFolder)}>
