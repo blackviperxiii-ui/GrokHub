@@ -2461,6 +2461,39 @@ export function saveBehavior(closeToTray: boolean, behavior: Behavior): Promise<
   return invoke<BehaviorPage>("save_behavior", { closeToTray, behavior });
 }
 
+/** Settings → Your PC → PC helpers (src-tauri/src/pc_helpers.rs). */
+export interface PcHelpers {
+  focusHelp: boolean;
+  windDown: boolean;
+  /** The saved idle time in minutes, once one is picked. */
+  autoSleepMin: number | null;
+  sleepChoices: { minutes: number; label: string }[];
+  /** The last read couldn't see a game, fullscreen app or GPU work. */
+  sleepBlind: boolean;
+  rhythm: boolean;
+  rhythmGames: boolean;
+  rhythmMinutes: number;
+  rhythmSummary: string;
+}
+
+export type PcHelperKey = "focusHelp" | "windDown" | "rhythm" | "rhythmGames";
+
+export function getPcHelpers(): Promise<PcHelpers> {
+  return invoke<PcHelpers>("get_pc_helpers");
+}
+
+export function setPcHelper(key: PcHelperKey, on: boolean): Promise<PcHelpers> {
+  return invoke<PcHelpers>("set_pc_helper", { key, on });
+}
+
+export function setPcAutoSleep(minutes: number): Promise<PcHelpers> {
+  return invoke<PcHelpers>("set_pc_auto_sleep", { minutes });
+}
+
+export function forgetPcRhythm(): Promise<PcHelpers> {
+  return invoke<PcHelpers>("forget_pc_rhythm");
+}
+
 /** Settings → Defaults: the work folder and the approvals. */
 export function saveDefaults(workspace: string, approvals: Approvals): Promise<Settings> {
   return invoke<Settings>("save_defaults", { workspace, approvals });

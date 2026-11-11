@@ -35,6 +35,7 @@ vi.mock("./Labs", () => ({ Labs: () => <p>Labs panel</p> }));
 vi.mock("./Personality", () => ({ Personality: () => <p>Personality panel</p> }));
 vi.mock("./Playbooks", () => ({ Playbooks: () => <p>Playbooks panel</p> }));
 vi.mock("./Interests", () => ({ Interests: () => <p>Interests panel</p> }));
+vi.mock("./PcHelpers", () => ({ PcHelpers: () => <p>PC helpers panel</p> }));
 vi.mock("./CodeSettings", () => ({ CodeSettings: () => <p>Code panel</p> }));
 vi.mock("./Learned", () => ({ Learned: () => <p>Learned panel</p> }));
 vi.mock("./Permissions", () => ({ Permissions: () => <p>Permissions panel</p> }));
@@ -307,7 +308,7 @@ describe("Settings", () => {
       Account: ["Account"],
       "Look & feel": ["Appearance"],
       "AI & chat": ["Defaults", "Personality", "Playbooks", "Pulse", "Local AI", "AI models"],
-      "Your PC": ["General", "Behavior", "Background", "Auto setup", "Code"],
+      "Your PC": ["General", "Behavior", "Background", "Auto setup", "PC helpers", "Code"],
       "Privacy & safety": ["Privacy & data", "Permissions", "Web access"],
       "Help & updates": ["About", "Labs"],
     });
