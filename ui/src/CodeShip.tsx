@@ -14,6 +14,7 @@ export const SHIP_TITLE = "Push and PR";
 export const SHIP_CONFIRM_PUSH = "Push this branch?";
 export const SHIP_CONFIRM_PR = "Open this PR?";
 export const SHIP_RULES = "Never pushes main or the default branch, never force-pushes, never deletes a branch.";
+export const SHIP_SKIPS_HOOK = "This repo has a pre-push hook. The Code tab pushes without running it.";
 export const SHIP_ACTIVITY = "Activity";
 export const SHIP_NO_ACTIVITY = "No pushes or PRs from this tab yet.";
 
@@ -180,6 +181,7 @@ export function CodeShip({ onShipped, refreshKey = 0 }: { onShipped?: () => void
           <pre className="code-command" aria-label="Command to run">
             {confirming.command}
           </pre>
+          {confirming.action === "push" && confirming.skipsHook && <p className="note">{SHIP_SKIPS_HOOK}</p>}
           <div className="card-buttons">
             <button type="button" onClick={() => void run(confirming.action, confirming.command)} disabled={busy}>
               {confirming.action === "push" ? "Push" : "Open PR"}

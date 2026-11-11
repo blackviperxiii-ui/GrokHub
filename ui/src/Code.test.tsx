@@ -27,6 +27,7 @@ const api = vi.hoisted(() => ({
       autoBase: "beta",
       appMade: false,
       prUrl: null,
+      skipsHook: false,
     }),
   ),
   codeShipRun: vi.fn(),

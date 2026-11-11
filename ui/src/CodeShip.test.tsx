@@ -14,7 +14,7 @@ const api = vi.hoisted(() => ({
 
 vi.mock("./api", () => api);
 
-import { CodeShip, SHIP_CONFIRM_PR, SHIP_CONFIRM_PUSH, SHIP_NO_ACTIVITY, SHIP_RULES } from "./CodeShip";
+import { CodeShip, SHIP_CONFIRM_PR, SHIP_CONFIRM_PUSH, SHIP_NO_ACTIVITY, SHIP_RULES, SHIP_SKIPS_HOOK } from "./CodeShip";
 
 function plan(action: "push" | "pr", over: Partial<CodeShipPlan> = {}): CodeShipPlan {
   return {
@@ -30,6 +30,7 @@ function plan(action: "push" | "pr", over: Partial<CodeShipPlan> = {}): CodeShip
     autoBase: "beta",
     appMade: true,
     prUrl: null,
+    skipsHook: false,
     ...over,
   };
 }
@@ -60,6 +61,23 @@ describe("Code tab → Push and PR", () => {
       output: "To github.com:o/r.git\n",
       summary: "Pushed code/fix to origin.",
     });
+  });
+
+  it("says on the push card when the repo's pre-push hook will not run", async () => {
+    api.codeShipPlan.mockResolvedValue(plan("push", { skipsHook: true }));
+    render(<CodeShip />);
+    await userEvent.click(await screen.findByRole("button", { name: "Push" }));
+    const card = await screen.findByRole("group", { name: SHIP_CONFIRM_PUSH });
+    expect(within(card).getByText(SHIP_SKIPS_HOOK)).toBeInTheDocument();
+    expect(SHIP_SKIPS_HOOK).toBe("This repo has a pre-push hook. The Code tab pushes without running it.");
+  });
+
+  it("says nothing about hooks on the push card when the repo has none", async () => {
+    api.codeShipPlan.mockResolvedValue(plan("push"));
+    render(<CodeShip />);
+    await userEvent.click(await screen.findByRole("button", { name: "Push" }));
+    const card = await screen.findByRole("group", { name: SHIP_CONFIRM_PUSH });
+    expect(within(card).queryByText(SHIP_SKIPS_HOOK)).toBeNull();
   });
 
   it("in Ask mode every push shows the exact command first", async () => {

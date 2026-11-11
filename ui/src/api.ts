@@ -3245,6 +3245,8 @@ export interface CodeShipPlan {
   autoBase: string;
   appMade: boolean;
   prUrl: string | null;
+  /** A push only: the repo has a pre-push hook, and this push does not run it. */
+  skipsHook: boolean;
 }
 
 /** A finished push or PR. Output is already redacted. */
