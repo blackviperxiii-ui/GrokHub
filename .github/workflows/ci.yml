@@ -57,7 +57,8 @@ env:
 jobs:
   # Decides whether the build jobs run. A PR that only touches docs, Markdown,
   # screenshots or research skips them; a skipped job counts as passed for
-  # required checks. Pushes to beta and main and manual runs always build.
+  # required checks. Markdown compiled into the binaries counts as code (the
+  # `embedded` filter). Pushes to beta and main and manual runs always build.
   # The Electron guard runs here so it covers every change, docs-only ones
   # included.
   changes:
@@ -70,7 +71,7 @@ jobs:
     # so it counts as code=true; schedule and workflow_dispatch run everything.
     outputs:
       # A nightly on a beta SHA that already had a green nightly builds nothing.
-      code: ${{ steps.dedup.outputs.cache-hit != 'true' && (github.event_name != 'pull_request' || steps.filter.outputs.code == 'true') }}
+      code: ${{ steps.dedup.outputs.cache-hit != 'true' && (github.event_name != 'pull_request' || steps.filter.outputs.code == 'true' || steps.paths.outputs.embedded == 'true') }}
       skip: ${{ steps.dedup.outputs.cache-hit == 'true' }}
       sha: ${{ steps.sha.outputs.sha }}
       # Heavy outputs are false on push to beta; nightly covers beta instead.
@@ -85,7 +86,7 @@ jobs:
       release: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
       # windows on PRs: skipped (still reports, so the required check passes)
       # when the PR only touches ui/, docs, or workflows other than this one.
-      windows: ${{ github.event_name != 'pull_request' || steps.filter.outputs.windows == 'true' || steps.paths.outputs.ci_workflow == 'true' }}
+      windows: ${{ github.event_name != 'pull_request' || steps.filter.outputs.windows == 'true' || steps.paths.outputs.ci_workflow == 'true' || steps.paths.outputs.embedded == 'true' }}
       shell_os: ${{ steps.shell.outputs.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -124,6 +125,12 @@ jobs:
               - '!research/**'
               - '!ui/**'
               - '!.github/**'
+      # `embedded` is the Markdown that include_str! compiles into the binaries
+      # (the agent prompt and built-in skills, and PRIVACY.md in a test). The
+      # filter above drops every *.md and can't take one back, so this one
+      # turns `code` and `windows` on again.
+      # scripts/ci-guards.d/90-embedded-markdown.sh fails when a new embedded
+      # file falls outside it.
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: paths
         if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
@@ -134,6 +141,10 @@ jobs:
               - 'deny.toml'
             ci_workflow:
               - '.github/workflows/ci.yml'
+            embedded:
+              - 'crates/**/*.md'
+              - 'src-tauri/**/*.md'
+              - 'PRIVACY.md'
             phone:
               - 'ui/**'
               - 'src-tauri/**'
@@ -243,12 +254,17 @@ jobs:
         run: bash scripts/ci-guards.sh
 
   # Clippy and tests in one job so they share one build and one cache.
+  # A required check that is skipped counts as passed, so when `changes` does
+  # not succeed this job still runs and fails in its first step.
   linux:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
+      - name: changes job must succeed
+        if: needs.changes.result != 'success'
+        run: exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.SOURCE_REF }}
@@ -576,12 +592,16 @@ jobs:
         run: node ui/e2e/phone.mjs ios "$APP"
 
   # Clippy and tests in one job so they share one build and one cache.
+  # Like linux, it runs and fails when `changes` did not succeed.
   windows:
     needs: changes
-    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.windows == 'true'
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || (needs.changes.outputs.code == 'true' && needs.changes.outputs.windows == 'true')) }}
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
+      - name: changes job must succeed
+        if: needs.changes.result != 'success'
+        run: exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.SOURCE_REF }}

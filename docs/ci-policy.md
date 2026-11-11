@@ -27,7 +27,7 @@ Columns, left to right:
 | `windows-release` | no | no | no | no | no | yes ² | yes |
 | `nightly-green` | no | no | no | no | no | yes | no |
 
-1. Skipped when a PR touches only `docs/`, `*.md`, `screenshots/` or `research/`.
+1. Skipped when a PR touches only `docs/`, `*.md`, `screenshots/` or `research/`. Markdown that is compiled into the binaries counts as code: a PR that touches `crates/**/*.md`, `src-tauri/**/*.md` or `PRIVACY.md` runs `linux` and `windows`. The `guards` job fails when Rust embeds a skipped file from anywhere else.
 2. Skipped when `beta` has not moved since the last green nightly (see below).
 3. Same as 1, and also skipped when a PR touches only `ui/` or workflows other than `ci.yml`.
 4. Only when `Cargo.lock` or `deny.toml` changes.
@@ -35,6 +35,8 @@ Columns, left to right:
 6. Only when `ui/`, `src-tauri/` or `ci.yml` changes.
 
 Every gate is a job-level `if:`, never a workflow-level path filter. A skipped job still reports, so a required check (`fmt`, `guards`, `linux`, `windows`, `pii-guard`) never sits waiting.
+
+A skipped required check counts as passed. So `linux` and `windows` skip only when `changes` succeeded and decided to skip them. When `changes` fails, both run and fail in their first step.
 
 A newer push to the same PR, or a newer push to `beta`, cancels the run it replaces. Runs on `main`, tags, the nightly and manual runs always finish.
 

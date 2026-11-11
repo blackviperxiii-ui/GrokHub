@@ -7,11 +7,15 @@
 #   30) a PR edits Cargo.lock without a Cargo.toml dep edit or the dependencies
 #       label, or a non-release PR touches version lockstep files
 #   40) VERSION copies disagree (cargo xtask bump --check)
+#   50) the linux or windows job in ci.yml could skip, and so pass as a
+#       required check, when the changes job fails
 #   60) a persist path spawns a thread or writes a file outside PersistService
 #   70) a workflow or composite action uses an action by tag or branch instead
 #       of a full commit SHA, or no workflow file can be read
 #   80) our code uses an API anti-cheats flag: memory reads, module lists,
 #       injection or global keyboard/mouse hooks
+#   90) Rust embeds Markdown or a docs/, screenshots/ or research/ file that
+#       the embedded path filter in ci.yml does not cover
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

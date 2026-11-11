@@ -38,8 +38,40 @@ mkdir -p "$W/packaging/windows"
 printf '#define MyAppName "Old"\n#ifndef MyAppVersion\n  #define MyAppVersion "1.0.0"\n#endif\n' >"$W/packaging/windows/grokhub.iss"
 mkdir -p "$W/.github/workflows"
 SHA=0123456789abcdef0123456789abcdef01234567
-printf 'jobs:\n  a:\n    steps:\n      - uses: actions/checkout@%s # v4\n      - uses: ./.github/actions/local\n' "$SHA" \
-  >"$W/.github/workflows/ci.yml"
+# Job `a` stays last: the pinned-action cases append steps to it.
+cat >"$W/.github/workflows/ci.yml" <<YAML
+jobs:
+  changes:
+    outputs:
+      code: \${{ github.event_name != 'pull_request' || steps.filter.outputs.code == 'true' || steps.paths.outputs.embedded == 'true' }}
+      windows: \${{ github.event_name != 'pull_request' || steps.filter.outputs.windows == 'true' || steps.paths.outputs.embedded == 'true' }}
+    steps:
+      - id: paths
+        with:
+          filters: |
+            embedded:
+              - 'crates/**/*.md'
+              - 'src-tauri/**/*.md'
+              - 'PRIVACY.md'
+  linux:
+    needs: changes
+    if: \${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
+    steps:
+      - name: changes job must succeed
+        if: needs.changes.result != 'success'
+        run: exit 1
+  windows:
+    needs: changes
+    if: \${{ !cancelled() && (needs.changes.result != 'success' || (needs.changes.outputs.code == 'true' && needs.changes.outputs.windows == 'true')) }}
+    steps:
+      - name: changes job must succeed
+        if: needs.changes.result != 'success'
+        run: exit 1
+  a:
+    steps:
+      - uses: actions/checkout@$SHA # v4
+      - uses: ./.github/actions/local
+YAML
 "$REAL_GIT" -C "$W" add -A
 "$REAL_GIT" -C "$W" commit -q -m base
 "$REAL_GIT" -C "$W" push -q origin HEAD:beta
@@ -164,6 +196,31 @@ commit_pr
 run_guard fail "unpinned action in a flow-style step fails"
 
 fresh_pr
+printf '      - "uses": actions/cache@v4\n' >>"$W/.github/workflows/ci.yml"
+commit_pr
+run_guard fail "unpinned action under a double-quoted uses key fails"
+
+fresh_pr
+printf "      - 'uses': actions/cache@v4\n" >>"$W/.github/workflows/ci.yml"
+commit_pr
+run_guard fail "unpinned action under a single-quoted uses key fails"
+
+fresh_pr
+printf '      - uses : actions/cache@v4\n' >>"$W/.github/workflows/ci.yml"
+commit_pr
+run_guard fail "unpinned action with a space before the colon fails"
+
+fresh_pr
+printf '      - {"uses": actions/cache@v4}\n' >>"$W/.github/workflows/ci.yml"
+commit_pr
+run_guard fail "unpinned action under a quoted key in a flow-style step fails"
+
+fresh_pr
+printf '      - "uses": actions/cache@%s\n      - uses : actions/cache@%s\n' "$SHA" "$SHA" >>"$W/.github/workflows/ci.yml"
+commit_pr
+run_guard pass "pinned action under a quoted or spaced uses key passes"
+
+fresh_pr
 printf '  b:\n    steps: [{name: x, uses: actions/cache@v4}]\n' >>"$W/.github/workflows/ci.yml"
 commit_pr
 run_guard fail "unpinned action in a flow-style list fails"
@@ -209,6 +266,73 @@ fresh_pr
 printf '      - uses: docker://alpine@sha256:%s%s\n' "$SHA" "0123456789abcdef01234567" >>"$W/.github/workflows/ci.yml"
 commit_pr
 run_guard pass "docker action with a digest passes"
+
+CI_YML="$W/.github/workflows/ci.yml"
+
+fresh_pr
+sed -i "/^  linux:/,/^  windows:/s/^    if: .*/    if: needs.changes.outputs.code == 'true'/" "$CI_YML"
+commit_pr
+run_guard fail "linux skipping when the changes job fails is rejected"
+
+fresh_pr
+sed -i "/^  windows:/,/^  a:/s/^    if: .*/    if: needs.changes.outputs.code == 'true' \&\& needs.changes.outputs.windows == 'true'/" "$CI_YML"
+commit_pr
+run_guard fail "windows skipping when the changes job fails is rejected"
+
+fresh_pr
+sed -i '/^  windows:/,/^  a:/s/!cancelled() && //' "$CI_YML"
+commit_pr
+run_guard fail "windows without !cancelled() is rejected"
+
+fresh_pr
+sed -i '/^  linux:/,/^  windows:/{/run: exit 1/d}' "$CI_YML"
+commit_pr
+run_guard fail "linux without the step that fails on a failed changes job is rejected"
+
+fresh_pr
+sed -i 's/^  linux:/  linux-tests:/' "$CI_YML"
+commit_pr
+run_guard fail "a missing linux job is rejected"
+
+fresh_pr
+printf 'const A: &str = include_str!("../../../../README.md");\n' >>"$W/crates/grokhub-core/src/slash/mod.rs"
+commit_pr
+run_guard fail "embedding the root README, outside the embedded filter, fails"
+
+fresh_pr
+printf 'const A: &str = include_str!("../../../../docs/guide.txt");\n' >>"$W/crates/grokhub-core/src/slash/mod.rs"
+commit_pr
+run_guard fail "embedding a file under docs/ fails"
+
+fresh_pr
+printf 'const A: &[u8] = include_bytes!(\n    "../../../../screenshots/home.png"\n);\n' >>"$W/crates/grokhub-core/src/slash/mod.rs"
+commit_pr
+run_guard fail "embedding a screenshot with the path on the next line fails"
+
+fresh_pr
+printf 'const A: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md"));\n' >>"$W/crates/grokhub-core/src/slash/mod.rs"
+commit_pr
+run_guard fail "embedding Markdown through a computed path fails"
+
+fresh_pr
+printf 'const A: &str = include_str!("prompt.md");\nconst B: &str = include_str!("../../../../PRIVACY.md");\n' >>"$W/crates/grokhub-core/src/slash/mod.rs"
+commit_pr
+run_guard pass "embedding Markdown under crates/ and the root PRIVACY.md passes"
+
+fresh_pr
+sed -i "/- 'PRIVACY.md'/d" "$CI_YML"
+commit_pr
+run_guard fail "an embedded filter that drops a path is rejected"
+
+fresh_pr
+sed -i "/^      code: /s/ || steps.paths.outputs.embedded == 'true'//" "$CI_YML"
+commit_pr
+run_guard fail "a code output that ignores the embedded filter is rejected"
+
+fresh_pr
+sed -i "/^      windows: /s/ || steps.paths.outputs.embedded == 'true'//" "$CI_YML"
+commit_pr
+run_guard fail "a windows output that ignores the embedded filter is rejected"
 
 fresh_pr
 mkdir -p "$W/.github/workflows/unreadable.yml"
