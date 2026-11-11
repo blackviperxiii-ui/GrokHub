@@ -271,14 +271,26 @@ pub fn rename(config_dir: &Path, id: &str, title: &str) -> Result<(), String> {
 /// written back. `/bg` and scheduled forks of it go with it.
 pub fn delete(config_dir: &Path, id: &str) -> Result<(), String> {
     let id = shell_id(id)?;
-    delete_chats(config_dir, &[id.to_string()]).map(|_| ())
+    match delete_chats(config_dir, &[id.to_string()]).failed {
+        Some(why) => Err(why),
+        None => Ok(()),
+    }
+}
+
+/// What deleting a list of chats did: the ones that went, and why it stopped
+/// before the end of the list when a chat could not be deleted.
+#[derive(Debug, PartialEq, Eq)]
+struct Deleted {
+    gone: Vec<String>,
+    failed: Option<String>,
 }
 
 /// Deletes these shell chats and answers with the ones that went: each
 /// chat's file and its files, then their forks in one pass over the saved
 /// sessions, then the pins in one write. A chat that can't be deleted stops
-/// it; the ones before it are gone and cleaned up after.
-fn delete_chats(config_dir: &Path, ids: &[String]) -> Result<Vec<String>, String> {
+/// it; the ones before it are gone and cleaned up after, and are still
+/// named in the answer.
+fn delete_chats(config_dir: &Path, ids: &[String]) -> Deleted {
     let _config = ConfigGuard::set(config_dir);
     let mut gone: Vec<String> = Vec::with_capacity(ids.len());
     let mut failed = None;
@@ -303,10 +315,7 @@ fn delete_chats(config_dir: &Path, ids: &[String]) -> Result<Vec<String>, String
             let _ = std::fs::write(config_dir.join(PINS_FILE), raw);
         }
     }
-    match failed {
-        Some(why) => Err(why),
-        None => Ok(gone),
-    }
+    Deleted { gone, failed }
 }
 
 /// Takes one message out of a saved shell chat, so the model never reads it
@@ -422,6 +431,10 @@ pub struct DeleteAll {
     pub count: usize,
     /// The chats that were deleted; empty until `state` is `Deleted`.
     pub ids: Vec<String>,
+    /// Why deleting stopped before the last chat named, when it did. The
+    /// chats in `ids` are gone all the same.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// One Delete all click. Nothing is deleted unless the click is the armed
@@ -442,7 +455,7 @@ fn delete_all_with(
     config_dir: &Path,
     arm: &Mutex<DeleteArm>,
     now: Instant,
-    delete: impl FnOnce(&Path, &[String]) -> Result<Vec<String>, String>,
+    delete: impl FnOnce(&Path, &[String]) -> Deleted,
 ) -> Result<DeleteAll, String> {
     // Only the click is decided under the lock: the listing before it and
     // the deleting after it read and write the disk, and Cancel (a
@@ -460,16 +473,24 @@ fn delete_all_with(
                     state: Arm::Armed,
                     count: arm.ids.len(),
                     ids: Vec::new(),
+                    error: None,
                 });
             }
         }
     };
-    let ids = delete(config_dir, &named)?;
-    Ok(DeleteAll {
-        state: Arm::Deleted,
-        count: ids.len(),
-        ids,
-    })
+    let Deleted { gone, failed } = delete(config_dir, &named);
+    match failed {
+        // Nothing went: the error is the whole answer.
+        Some(why) if gone.is_empty() => Err(why),
+        // The chats that went are named even when a later one stopped it,
+        // so the caller ends their workers and the page closes them.
+        error => Ok(DeleteAll {
+            state: Arm::Deleted,
+            count: gone.len(),
+            ids: gone,
+            error,
+        }),
+    }
 }
 
 /// A chat this app lists but never writes.
@@ -1513,6 +1534,7 @@ mod tests {
                 state: Arm::Armed,
                 count: 2,
                 ids: Vec::new(),
+                error: None,
             }
         );
         assert_eq!(list(&config).len(), 2);
@@ -1537,6 +1559,7 @@ mod tests {
                 state: Arm::Deleted,
                 count: 2,
                 ids: vec!["shell-all-a".to_string(), "shell-all-b".to_string()],
+                error: None,
             }
         );
         assert_eq!(list(&config), Vec::<ChatRow>::new());
@@ -1631,6 +1654,81 @@ mod tests {
         .expect("deletes");
         assert_eq!(free, Some(true), "the arm stayed locked while deleting");
         assert_eq!(done.ids, ["shell-lock-a"]);
+    }
+
+    #[test]
+    fn deleting_that_stops_part_way_names_the_chats_that_went() {
+        let (config, workspace) = (temp_dir("part-cfg"), temp_dir("part-ws"));
+        for id in ["shell-part-a", "shell-part-b"] {
+            turn(id, &config, &workspace, Model::new("Ok.", false), "hello");
+        }
+        toggle_pin(&config, "shell-part-a").expect("pin");
+        // The second id is not one of this app's chats, so it stops there.
+        let ids = ["shell-part-a", "cabin-part-x", "shell-part-b"].map(String::from);
+        assert_eq!(
+            delete_chats(&config, &ids),
+            Deleted {
+                gone: vec!["shell-part-a".to_string()],
+                failed: Some(NOT_SHELL.to_string()),
+            }
+        );
+        let left: Vec<String> = list(&config).into_iter().map(|r| r.id).collect();
+        assert_eq!(left, ["shell-part-b"]);
+        assert_eq!(pinned_ids(&config), Vec::<String>::new());
+    }
+
+    #[test]
+    fn delete_all_that_fails_part_way_still_answers_with_the_chats_it_deleted() {
+        let (config, workspace) = (temp_dir("partall-cfg"), temp_dir("partall-ws"));
+        for id in ["shell-partall-a", "shell-partall-b"] {
+            turn(id, &config, &workspace, Model::new("Ok.", false), "hello");
+        }
+        let arm = Mutex::new(DeleteArm::default());
+        let t0 = Instant::now();
+        delete_all(&config, &arm, t0).expect("arms");
+        // One chat goes; the other one's file can't be removed.
+        let done = delete_all_with(&config, &arm, t0 + Duration::from_secs(1), |_, ids| {
+            let mut named = ids.to_vec();
+            named.sort();
+            assert_eq!(named, ["shell-partall-a", "shell-partall-b"]);
+            Deleted {
+                gone: vec!["shell-partall-a".to_string()],
+                failed: Some("Access is denied.".to_string()),
+            }
+        });
+        assert_eq!(
+            done,
+            Ok(DeleteAll {
+                state: Arm::Deleted,
+                count: 1,
+                ids: vec!["shell-partall-a".to_string()],
+                error: Some("Access is denied.".to_string()),
+            })
+        );
+        // The page reads the reason from `error`; an answer with none has no
+        // such field.
+        assert_eq!(
+            serde_json::to_value(done.expect("answer")).expect("json"),
+            serde_json::json!({
+                "state": "deleted",
+                "count": 1,
+                "ids": ["shell-partall-a"],
+                "error": "Access is denied.",
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(
+                delete_all(&config, &arm, t0 + Duration::from_secs(2)).expect("arms")
+            )
+            .expect("json"),
+            serde_json::json!({ "state": "armed", "count": 2, "ids": [] })
+        );
+        // With no chat deleted, the error is the whole answer.
+        let none = delete_all_with(&config, &arm, t0 + Duration::from_secs(3), |_, _| Deleted {
+            gone: Vec::new(),
+            failed: Some("Access is denied.".to_string()),
+        });
+        assert_eq!(none, Err("Access is denied.".to_string()));
     }
 
     #[test]

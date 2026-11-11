@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Activity, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -557,6 +557,52 @@ describe("Projects tree, Pinned group and read-only chats", () => {
     await userEvent.keyboard("{Enter}");
     await waitFor(() => expect(api.deleteAllChats).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(onDeleted).toHaveBeenCalledWith("shell-a"));
+  });
+
+  it("a held Enter on Delete all is one press: its key repeats never click", async () => {
+    api.listChats.mockResolvedValue([TODAY]);
+    api.deleteAllChats.mockResolvedValue({ state: "armed", count: 1 });
+    render(<History onOpen={() => {}} onDeleted={() => {}} />);
+    await screen.findByText("Fix the build");
+    const button = screen.getByRole("button", { name: "Delete all" });
+    // A browser clicks the focused button on every Enter keydown, the
+    // repeats of a held key included, unless the keydown is cancelled. A
+    // repeat half a second after the first press would be the click that
+    // deletes. fireEvent answers false when the keydown was cancelled.
+    expect(fireEvent.keyDown(button, { key: "Enter" })).toBe(true);
+    expect(fireEvent.keyDown(button, { key: "Enter", repeat: true })).toBe(false);
+    await userEvent.click(button);
+    const armed = await screen.findByRole("button", {
+      name: "Delete all 1 chat?",
+    });
+    expect(fireEvent.keyDown(armed, { key: "Enter", repeat: true })).toBe(false);
+    expect(fireEvent.keyDown(armed, { key: "Enter" })).toBe(true);
+    // A held Tab still moves on past the button.
+    expect(fireEvent.keyDown(armed, { key: "Tab", repeat: true })).toBe(true);
+  });
+
+  it("when Delete all stops part-way, the chats that went are reported and the reason shows", async () => {
+    api.listChats.mockResolvedValue([TODAY, WEEK]);
+    // The app's answer when the first chat went and the second could not.
+    const stopped: DeleteAllResult & { ids: string[]; error: string } = {
+      ...gone(["shell-a"]),
+      error: "Access is denied.",
+    };
+    api.deleteAllChats
+      .mockResolvedValueOnce({ state: "armed", count: 2 })
+      .mockResolvedValueOnce(stopped);
+    const onDeleted = vi.fn();
+    render(<History onOpen={() => {}} onDeleted={onDeleted} />);
+    await screen.findByText("Fix the build");
+    await userEvent.click(screen.getByRole("button", { name: "Delete all" }));
+    api.listChats.mockResolvedValue([WEEK]);
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Delete all 2 chats?" }),
+    );
+    expect(await screen.findByText("Access is denied.")).toBeVisible();
+    expect(onDeleted.mock.calls).toEqual([["shell-a"]]);
+    expect(screen.getByRole("button", { name: "Delete all" })).toBeVisible();
+    expect(screen.getByText("Plan a trip")).toBeVisible();
   });
 
   it("shows read-only CLI and cabin chats that open to look at, with no menu", async () => {

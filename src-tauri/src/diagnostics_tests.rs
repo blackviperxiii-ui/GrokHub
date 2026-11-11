@@ -259,6 +259,100 @@ fn a_key_the_log_tail_starts_inside_is_still_hidden() {
     assert!(export.recent_logs.chars().count() <= LOG_TAIL);
 }
 
+/// A file that counts the bytes read from it.
+struct Counted<R> {
+    inner: R,
+    read: usize,
+}
+
+impl<R: std::io::Read> std::io::Read for Counted<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.read += n;
+        Ok(n)
+    }
+}
+
+impl<R: std::io::Seek> std::io::Seek for Counted<R> {
+    fn seek(&mut self, to: std::io::SeekFrom) -> std::io::Result<u64> {
+        self.inner.seek(to)
+    }
+}
+
+#[test]
+fn only_the_end_of_a_long_log_is_read_from_the_start_of_a_line() {
+    // 304,000 bytes of 19-byte lines. The last 65,536 bytes start 14 bytes
+    // into a line; the 5 bytes left of it are dropped, and 3,449 whole lines
+    // stay.
+    let line = "2026-01-01 step ok\n";
+    let log = line.repeat(16_000);
+    let mut file = Counted {
+        inner: std::io::Cursor::new(log.as_bytes()),
+        read: 0,
+    };
+    let (text, whole) = log_end(&mut file, LOG_READ).expect("read");
+    assert_eq!(
+        file.read, 65_536,
+        "a long log is not read whole to show its last {LOG_TAIL} characters"
+    );
+    assert!(!whole);
+    assert_eq!(text.len(), 65_531);
+    assert_eq!(text, line.repeat(3_449));
+
+    // A log shorter than that is read whole, from its first byte.
+    let mut short = Counted {
+        inner: std::io::Cursor::new("started\nready\n".as_bytes()),
+        read: 0,
+    };
+    assert_eq!(
+        log_end(&mut short, LOG_READ).expect("read"),
+        ("started\nready\n".to_string(), true)
+    );
+}
+
+#[test]
+fn a_key_at_the_cut_of_a_long_log_is_still_hidden() {
+    let config = temp_dir("logcut-long");
+    // As a_key_the_log_tail_starts_inside_is_still_hidden, behind 300 KB of
+    // older lines: the last 4,000 characters start four characters into the
+    // key.
+    let rest = format!(" accepted\n{}", "y".repeat(LOG_TAIL - 21 - 10));
+    let log = format!("{}{SK_KEY}{rest}", "2026-01-01 step ok\n".repeat(16_000));
+    std::fs::write(config.join("cabin.log"), log).unwrap();
+    set(&config, true, true).unwrap();
+    let export = build(&config, "1.0.0", true, None, Some(HOME)).expect("bundle");
+    // The key is 15 characters shorter redacted, so the cut moves back into
+    // the line before it.
+    assert_eq!(export.recent_logs, format!("01 step ok\n[redacted]{rest}"));
+}
+
+#[test]
+fn a_private_key_that_starts_before_the_part_of_the_log_read_is_still_hidden() {
+    let config = temp_dir("logcut-pem");
+    // The last 65,536 bytes start inside the private key block, so the part
+    // read has the block's later lines with no BEGIN line before them. What
+    // follows redacts down to a few hundred characters, so those lines would
+    // be in the last 4,000.
+    let body = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7fakefakefake\n";
+    let block = format!(
+        "-----BEGIN {0}-----\n{1}-----END {0}-----\n",
+        "PRIVATE KEY",
+        body.repeat(40)
+    );
+    let after = format!("deploy_token={}\n", "z".repeat(1_000)).repeat(64);
+    assert!(after.len() < 65_536 && after.len() + 1_500 > 65_536);
+    std::fs::write(config.join("cabin.log"), format!("started\n{block}{after}")).unwrap();
+    set(&config, true, true).unwrap();
+    let export = build(&config, "1.0.0", true, None, Some(HOME)).expect("bundle");
+    assert_eq!(
+        export.recent_logs,
+        format!(
+            "started\n[redacted private key]\n{}",
+            "deploy_token=[redacted]\n".repeat(64)
+        )
+    );
+}
+
 #[test]
 fn a_key_a_step_result_or_error_is_cut_inside_is_still_hidden() {
     use grokhub_agent::harness::{append_span, AccessMode, Span};

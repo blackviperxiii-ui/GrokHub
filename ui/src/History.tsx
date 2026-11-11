@@ -43,8 +43,9 @@ export const DELETE_ALL_ARM_MS = 5000;
 export const DELETE_ALL_NONE = "There are no saved chats to delete.";
 
 /** Delete all's answer as the app sends it: with the click that deletes,
- * `ids` names the chats that went. */
-type DeleteAllAnswer = DeleteAllResult & { ids?: string[] };
+ * `ids` names the chats that went, and `error` says why it stopped when a
+ * chat could not be deleted (the chats before that one are gone). */
+type DeleteAllAnswer = DeleteAllResult & { ids?: string[]; error?: string };
 
 /** A project or folder with its children, in the file's order. */
 export interface TreeNode {
@@ -336,12 +337,14 @@ export function History({
     // Not `disabled` while busy: that would drop keyboard focus to the page.
     if (busy) return;
     let none = false;
+    let stopped: string | undefined;
     void act(async () => {
       const result: DeleteAllAnswer = await deleteAllChats();
       if (result.state === "deleted") {
         window.clearTimeout(armTimer.current);
         setArmedCount(null);
         for (const id of result.ids ?? []) onDeleted(id);
+        stopped = result.error;
         return;
       }
       if (result.count === 0) {
@@ -355,6 +358,7 @@ export function History({
       setArmedCount(result.count);
     }).then(() => {
       if (none) ok(DELETE_ALL_NONE);
+      if (stopped) fail(stopped);
     });
   }
 
@@ -494,6 +498,11 @@ export function History({
             disabled={all.length === 0 && !searching && !armed}
             aria-disabled={busy}
             onClick={deleteAll}
+            // A held Enter clicks again on every key repeat, and a repeat
+            // half a second in would be the click that deletes.
+            onKeyDown={(event) => {
+              if (event.repeat && event.key === "Enter") event.preventDefault();
+            }}
           >
             {armed
               ? `Delete all ${armedCount} ${armedCount === 1 ? "chat" : "chats"}?`

@@ -470,10 +470,51 @@ fn open_quote_before(b: &[u8], at: usize) -> Option<u8> {
     open
 }
 
+/// How far an `Authorization` header's value runs past its scheme.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AuthReach {
+    /// `Basic dXNlcjpwYXNz`: the scheme and the one word after it.
+    Word,
+    /// `Digest username=…, response=…`: to the end of the line.
+    Line,
+}
+
+const AUTH_SCHEMES: &[(&str, AuthReach)] = &[
+    ("basic", AuthReach::Word),
+    ("bearer", AuthReach::Word),
+    ("token", AuthReach::Word),
+    ("digest", AuthReach::Line),
+    ("negotiate", AuthReach::Line),
+    ("ntlm", AuthReach::Line),
+    ("aws4-hmac-sha256", AuthReach::Line),
+];
+
+/// A blank between a header's scheme and its credential; a shell writes it
+/// `\ ` outside quotes.
+fn is_header_blank(b: u8) -> bool {
+    matches!(b, b' ' | b'\t' | b'\\')
+}
+
+/// The scheme `value` starts with, when it is an `Authorization` header's
+/// value: how far the value runs, and where the credential starts. Text that
+/// only has the word before a colon (`the user's authorization: it is…`)
+/// starts with no scheme.
+fn auth_scheme(value: &str) -> Option<(AuthReach, usize)> {
+    let b = value.as_bytes();
+    let lead = b.iter().take_while(|c| is_header_blank(**c)).count();
+    AUTH_SCHEMES.iter().find_map(|(scheme, reach)| {
+        let end = lead + scheme.len();
+        let named = b.get(lead..end)?.eq_ignore_ascii_case(scheme.as_bytes());
+        let gap = b[end..].iter().take_while(|c| is_header_blank(**c)).count();
+        (named && gap > 0).then_some((*reach, end + gap))
+    })
+}
+
 /// Mask the value in `KEY=value`, `KEY: value` and `"key": "value"` when the
 /// key names a credential, numbers and escaped quotes included. An
 /// `Authorization` header's value is a scheme and then the credential
-/// (`Basic dXNlcjpwYXNz`), so it is masked to the end of its line.
+/// (`Basic dXNlcjpwYXNz`), so the scheme does not stand in for the value:
+/// both are masked ([`AuthReach`]).
 fn redact_credential_values(input: &str) -> String {
     let b = input.as_bytes();
     let mut out = String::with_capacity(input.len());
@@ -516,16 +557,25 @@ fn redact_credential_values(input: &str) -> String {
             && input[start..i]
                 .to_ascii_lowercase()
                 .contains("authorization");
-        let closing = if header {
-            open_quote_before(b, start)
+        let scheme = if header {
+            auth_scheme(&input[vstart..])
         } else {
             None
         };
+        let closing = scheme.and_then(|_| open_quote_before(b, start));
+        if let Some((_, credential)) = scheme {
+            j = vstart + credential;
+        }
         while j < b.len()
-            && match quote {
-                Some(q) => b[j] != q && b[j] != b'\n',
-                None if header => !matches!(b[j], b'\n' | b'\r') && Some(b[j]) != closing,
-                None => !b[j].is_ascii_whitespace() && !matches!(b[j], b',' | b';' | b'}'),
+            && match (quote, scheme) {
+                (Some(q), _) => b[j] != q && b[j] != b'\n',
+                (None, Some((AuthReach::Line, _))) => {
+                    !matches!(b[j], b'\n' | b'\r') && Some(b[j]) != closing
+                }
+                (None, Some((AuthReach::Word, _))) => {
+                    !b[j].is_ascii_whitespace() && Some(b[j]) != closing
+                }
+                (None, None) => !b[j].is_ascii_whitespace() && !matches!(b[j], b',' | b';' | b'}'),
             }
         {
             // `\"` inside a quoted value is part of it.
@@ -543,6 +593,13 @@ fn redact_credential_values(input: &str) -> String {
         i = j;
     }
     out
+}
+
+/// True when `input` holds a credential assignment the bundle would mask:
+/// `API_KEY=…`, `--password=…`, `"token": "…"` or an `Authorization`
+/// header. For a caller that must not keep such a line.
+pub fn has_credential_value(input: &str) -> bool {
+    redact_credential_values(input) != input
 }
 
 /// Short reason line for intent (chat vs task and friends).
@@ -1073,6 +1130,82 @@ mod tests {
              {\"Authorization\": \"[redacted]\", \"name\": \"harbor\"}\n\
              the line after stays"
         );
+    }
+
+    #[test]
+    fn only_a_real_authorization_header_loses_the_rest_of_its_value() {
+        // Ordinary text with the word before a colon keeps its line: one
+        // word goes, as for any other credential key.
+        assert_eq!(
+            redact_for_diagnostics(
+                "We need the user's authorization: it is required before the deploy step runs, see notes.",
+                None
+            ),
+            "We need the user's authorization: [redacted] is required before the deploy step runs, see notes."
+        );
+        assert_eq!(
+            redact_for_diagnostics(
+                "authorization_endpoint: https://example.com/oauth/authorize and then other words here",
+                None
+            ),
+            "authorization_endpoint: [redacted] and then other words here"
+        );
+        assert_eq!(
+            redact_for_diagnostics(
+                "{\"authorization\": null, \"name\": \"harbor\", \"note\": \"kept?\"}",
+                None
+            ),
+            "{\"authorization\": [redacted], \"name\": \"harbor\", \"note\": \"kept?\"}"
+        );
+        // Basic, Bearer and Token: the scheme and the one word after it.
+        let raw = concat!(
+            "it's fine. Authorization: Basic ",
+            "YWRtaW46aHVudGVyMmZha2U= and it's done\n",
+            "AUTHORIZATION: BEARER ",
+            "abcdefghijklmnopqrstuvwxyz then the next step ran\n",
+            "Authorization: Token ",
+            "0a1b2c3d4e5f retry in 5 s\n",
+            "curl -H Authorization:\\ Basic\\ ",
+            "YWRtaW46aHVudGVyMmZha2U= https://example.com\n",
+            // Any other scheme this knows: to the end of the line.
+            "Authorization: Negotiate ",
+            "YIIFaAYGKwYBBQUCoIIFXDCC and more\n",
+            "Authorization: AWS4-HMAC-SHA256 Credential=FAKE/20260101/region/s3/aws4_request, Signature=",
+            "0a1b2c3d\n",
+            "the line after stays"
+        );
+        assert_eq!(
+            redact_for_diagnostics(raw, None),
+            "it's fine. Authorization: [redacted] and it's done\n\
+             AUTHORIZATION: [redacted] then the next step ran\n\
+             Authorization: [redacted] retry in 5 s\n\
+             curl -H Authorization:[redacted] https://example.com\n\
+             Authorization: [redacted]\n\
+             Authorization: [redacted]\n\
+             the line after stays"
+        );
+    }
+
+    #[test]
+    fn a_line_with_a_credential_assignment_is_told_from_one_without() {
+        for line in [
+            "export API_KEY=plainvalue123",
+            "mysql -u root --password=hunter2fake",
+            concat!(
+                "curl -H \"Authorization: Basic ",
+                "YWRtaW46aHVudGVyMmZha2U=\" https://example.com"
+            ),
+        ] {
+            assert!(has_credential_value(line), "{line}");
+        }
+        for line in [
+            "git status",
+            "cat docs/secret-santa.md",
+            "cargo run -- --max_tokens=4000",
+            "docker login --password-stdin",
+        ] {
+            assert!(!has_credential_value(line), "{line}");
+        }
     }
 
     #[test]

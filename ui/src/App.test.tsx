@@ -74,7 +74,7 @@ vi.mock("./Chat", () => ({
     queueAct?: { op: string; index: number; n: number };
     prefill?: { text: string; n: number; conversationId?: string };
     open?: { id: string; n: number };
-    deleted?: { id: string; n: number };
+    deleted?: { id: string; ids?: string[]; n: number };
     clear?: { n: number };
     onSignIn: () => void;
   }) => (
@@ -82,6 +82,7 @@ vi.mock("./Chat", () => ({
       <p>Chat page{prefill && `: ${prefill.text} in ${prefill.conversationId ?? "this chat"}`}</p>
       {open && <p>Opened {open.id}</p>}
       {deleted && <p>Deleted {deleted.id}</p>}
+      {deleted && <p>Every deleted chat: {(deleted.ids ?? []).join(", ")}</p>}
       {clear && <p>Cleared {clear.n}</p>}
       {queueAct && (
         <p>
@@ -112,6 +113,15 @@ vi.mock("./History", () => ({
       </button>
       <button type="button" onClick={() => onDeleted("shell-gone")}>
         Delete a chat
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          // Delete all reports every chat it deleted in one tick.
+          for (const id of ["shell-a", "shell-b", "shell-c"]) onDeleted(id);
+        }}
+      >
+        Delete three chats
       </button>
     </div>
   ),
@@ -327,6 +337,18 @@ describe("App", () => {
     await userEvent.click(await screen.findByRole("button", { name: "To mission" }));
     expect(screen.getByText("Chat page: Mission: Q in shell-m1")).toBeVisible();
     expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("every chat Delete all deleted reaches Chat, not only the last one", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "History" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Delete a chat" }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete three chats" }));
+    expect(screen.getByText("Deleted shell-c")).toBeInTheDocument();
+    expect(
+      screen.getByText("Every deleted chat: shell-gone, shell-a, shell-b, shell-c"),
+    ).toBeInTheDocument();
   });
 
   it("a chat picked in History opens in Chat, and a deleted one is passed on", async () => {

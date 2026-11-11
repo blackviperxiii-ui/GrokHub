@@ -1304,7 +1304,8 @@ static DELETE_ALL_ARM: Mutex<history::DeleteArm> = Mutex::new(history::DeleteArm
 /// Delete all: the first click arms it, a second within 5 s (and not within
 /// half a second, a double-click's second half) deletes the chats of this
 /// app the first click counted, and answers with their ids. Replies still
-/// running stop.
+/// running stop. When a chat can't be deleted, the ones before it are gone
+/// and still named, with the reason in `error`, so their replies stop too.
 #[tauri::command]
 async fn delete_all_chats(state: State<'_, ShellState>) -> Result<history::DeleteAll, String> {
     let dir = state.config_dir.clone();
@@ -5192,6 +5193,44 @@ mod command_tests {
                 "{name} must run through off_main: {body}"
             );
         }
+    }
+
+    /// True when the `RunEvent::Exit` arm of `run` in `src` saves the share,
+    /// looked up as the type it is managed as.
+    fn quitting_saves_the_share(src: &str) -> bool {
+        let app = src.split("\n#[cfg(test)]\nmod command_tests {").next();
+        let arm = app
+            .and_then(|s| s.split("if let tauri::RunEvent::Exit = event {").nth(1))
+            .and_then(|s| s.split("\n            }\n").next())
+            .expect("run must have an Exit arm");
+        arm.contains("if let Some(share) = app.try_state::<Arc<hub_share::HubShare>>() {")
+            && arm.contains("share.save();")
+    }
+
+    #[test]
+    fn quitting_saves_a_pairing_made_since_the_page_last_looked() {
+        // A computer pairs inside the hub server, and the page's poll is
+        // what writes it down. Quit before the next poll and only this hook
+        // keeps the pairing.
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        assert!(
+            src.contains("app.manage(Arc::new(hub_share::HubShare::open("),
+            "the share is managed as Arc<hub_share::HubShare>"
+        );
+        assert!(quitting_saves_the_share(&src));
+        // The check tells a hook that is gone, or that asks for a type the
+        // app never manages (try_state then finds nothing, and nothing is
+        // saved), from the real one.
+        let hook = "                if let Some(share) = app.try_state::<Arc<hub_share::HubShare>>() {\n                    share.save();\n                }\n";
+        assert_eq!(src.matches(hook).count(), 1);
+        assert!(!quitting_saves_the_share(&src.replace(hook, "")));
+        assert!(!quitting_saves_the_share(&src.replace(
+            "app.try_state::<Arc<hub_share::HubShare>>()",
+            "app.try_state::<hub_share::HubShare>()"
+        )));
+        assert!(!quitting_saves_the_share(
+            &src.replace("                    share.save();\n", "")
+        ));
     }
 }
 

@@ -98,13 +98,22 @@ pub fn judge(
     }
 }
 
-/// True when the app's redactor would change `command`: it has a key or a
-/// bearer token in it. Such a line is never remembered. This is the redactor
-/// the Code tab's terminal uses for typed commands: a key prefix counts only
-/// at the start of a word, so a branch named `fix/desk-sessions-halt` or a
-/// file named `task-runner-notes.md` is not taken for a key.
+/// True when the app's redactors would change `command`: it has a key, a
+/// token or a password in it. Such a line is never remembered. Three
+/// redactors are asked, and each counts a key only where one can start, so
+/// a branch named `fix/desk-sessions-halt` or a file named
+/// `task-runner-notes.md` is not taken for a key:
+/// - the one the Code tab's terminal uses for typed commands (`sk-…`,
+///   `xai-…`, GitHub tokens, `Bearer …`);
+/// - the debug bundle's token shapes (AWS, Slack, Hugging Face, GitLab, npm
+///   and the like, a password in a URL, a JWT);
+/// - the debug bundle's credential assignments: `API_KEY=…`,
+///   `--password=…`, an `Authorization` header. This one goes by the key's
+///   name, so `TOKEN=abc make` asks every time too.
 fn holds_secret(command: &str) -> bool {
     grokhub_core::redact_secret_words(command) != command
+        || grokhub_core::redact::redact_token_shapes(command) != command
+        || grokhub_core::diagnostics::has_credential_value(command)
 }
 
 /// Why `command` doesn't run at all, if it doesn't.
@@ -247,14 +256,24 @@ struct Entry {
 
 /// The store as it may be used: a line with a secret in it, kept by a
 /// version that stored lines as typed, is dropped on the way in, so it is
-/// never listed or matched and the next write leaves it out of the file.
+/// never listed or matched. The file is written back without it there and
+/// then, so the secret does not sit on disk until some other line is
+/// remembered.
 fn load(config_dir: &Path) -> Store {
     let mut store: Store = std::fs::read_to_string(config_dir.join(FILE))
         .ok()
         .and_then(|raw| serde_json::from_str(&raw).ok())
         .unwrap_or_default();
+    let mut dropped = false;
     for entry in &mut store.repos {
+        let before = entry.commands.len();
         entry.commands.retain(|c| !holds_secret(c));
+        dropped |= entry.commands.len() != before;
+    }
+    if dropped {
+        // Best effort: a file that can't be written is read the same way
+        // next time.
+        let _ = save(config_dir, &store);
     }
     store
 }
