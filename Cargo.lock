@@ -1946,6 +1946,7 @@ dependencies = [
  "egui_plot",
  "global-hotkey",
  "grokhub-agent",
+ "grokhub-code",
  "grokhub-core",
  "grokhub-desktop",
  "grokhub-hub",
