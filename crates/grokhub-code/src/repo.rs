@@ -8,6 +8,7 @@
 use grokhub_agent::perm::ConfigGuard;
 use grokhub_agent::{plugins, SkillSource, BUILTIN_SKILL_BODIES};
 use serde::Serialize;
+use std::io::Read;
 use std::path::{Component, Path};
 use std::process::{Command, Stdio};
 
@@ -15,6 +16,7 @@ use std::process::{Command, Stdio};
 pub const DIFF_CAP: usize = 256 * 1024;
 /// The most changed files the list shows.
 pub const FILES_CAP: usize = 500;
+const UNREADABLE: &str = "That file couldn't be read.";
 
 #[derive(Serialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -236,14 +238,29 @@ pub fn diff(dir: &Path, rel: &str) -> Result<Diff, String> {
     })
 }
 
-/// A file git doesn't track yet, as an all-added diff body.
+/// A file git doesn't track yet, as an all-added diff body. Only a plain
+/// file is read: a link is not followed (it may lead out of the workspace,
+/// or to a device that never ends), and a folder or pipe has no text.
 fn as_new(path: &Path) -> Result<String, String> {
-    let bytes = std::fs::read(path).map_err(|_| "That file couldn't be read.".to_string())?;
-    let bytes = &bytes[..bytes.len().min(DIFF_CAP + 1)];
+    if !std::fs::symlink_metadata(path).is_ok_and(|m| m.is_file()) {
+        return Err(UNREADABLE.into());
+    }
+    let file = std::fs::File::open(path).map_err(|_| UNREADABLE.to_string())?;
+    as_new_from(file)
+}
+
+/// [`as_new`] for anything that can be read. It reads one byte past
+/// [`DIFF_CAP`] and no further, however big the file is.
+fn as_new_from(reader: impl Read) -> Result<String, String> {
+    let mut bytes = Vec::new();
+    reader
+        .take(DIFF_CAP as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| UNREADABLE.to_string())?;
     if bytes.contains(&0) {
         return Ok("New binary file.".into());
     }
-    let body = String::from_utf8_lossy(bytes);
+    let body = String::from_utf8_lossy(&bytes);
     let mut out = String::from("New file, not tracked yet.\n");
     for line in body.lines() {
         out.push('+');
@@ -421,6 +438,80 @@ mod tests {
         assert!(n.text.contains("+new"), "{}", n.text);
         assert!(diff(&dir, "../x").is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Hands out `left` bytes of `a` and counts them.
+    struct Counted {
+        left: usize,
+        given: usize,
+    }
+
+    impl Read for Counted {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = buf.len().min(self.left);
+            buf[..n].fill(b'a');
+            self.left -= n;
+            self.given += n;
+            Ok(n)
+        }
+    }
+
+    #[test]
+    fn an_untracked_file_is_read_only_one_byte_past_the_diff_cap() {
+        let mut big = Counted {
+            left: 4 * DIFF_CAP,
+            given: 0,
+        };
+        let text = as_new_from(&mut big).unwrap();
+        assert_eq!(big.given, DIFF_CAP + 1);
+        assert_eq!(big.given, 262_145);
+        let head = "New file, not tracked yet.\n+";
+        assert!(text.starts_with(head), "{}", &text[..40]);
+        assert_eq!(text.len(), head.len() + DIFF_CAP + 1 + 1);
+        assert_eq!(
+            as_new_from(&b"one\ntwo\n"[..]).unwrap(),
+            "New file, not tracked yet.\n+one\n+two\n"
+        );
+        assert_eq!(as_new_from(&b"a\0b"[..]).unwrap(), "New binary file.");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_untracked_link_is_not_read_through() {
+        let root = std::env::temp_dir().join(format!(
+            "grokhub-code-tab-link-{}-{}",
+            std::process::id(),
+            grokhub_core::now_ms()
+        ));
+        let (dir, outside) = (root.join("repo"), root.join("outside"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let run = |args: &[&str]| git(&dir, args).unwrap().0;
+        if run(&["init", "-q", "-b", "main"]) != 0 {
+            return; // git missing on this runner
+        }
+        run(&["config", "user.email", "t@example.invalid"]);
+        run(&["config", "user.name", "t"]);
+        std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+        run(&["add", "a.txt"]);
+        run(&["commit", "-q", "-m", "first"]);
+        std::fs::write(outside.join("private.txt"), "not for the diff\n").unwrap();
+        std::os::unix::fs::symlink(outside.join("private.txt"), dir.join("link.txt")).unwrap();
+        std::os::unix::fs::symlink("/dev/zero", dir.join("endless")).unwrap();
+        std::fs::write(dir.join("plain.txt"), "new\n").unwrap();
+        assert_eq!(
+            diff(&dir, "link.txt"),
+            Err("That file couldn't be read.".to_string())
+        );
+        assert_eq!(
+            diff(&dir, "endless"),
+            Err("That file couldn't be read.".to_string())
+        );
+        assert_eq!(
+            diff(&dir, "plain.txt").unwrap().text,
+            "New file, not tracked yet.\n+new\n"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     fn scratch(tag: &str) -> std::path::PathBuf {

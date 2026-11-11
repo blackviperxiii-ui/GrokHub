@@ -2071,16 +2071,19 @@ async fn code_file_read(
 }
 
 /// Code tab editor: save a text file of the project. The save is logged.
+/// `root` is the project folder `code_file_read` returned with the file; the
+/// save is refused when the project folder is a different one now.
 #[tauri::command]
 async fn code_file_write(
     state: State<'_, ShellState>,
     path: String,
     text: String,
+    root: String,
 ) -> Result<code_files::FileText, String> {
     let dir = workspace(&state);
     let config = state.config_dir.clone();
     let keep = current(&state).code_ship.activity_keep;
-    off_main(move || code_files::write_logged(&config, &dir, &path, &text, keep)).await?
+    off_main(move || code_files::write_logged(&config, &dir, &path, &text, &root, keep)).await?
 }
 
 /// Code tab terminal: open the user's shell in the project folder.
