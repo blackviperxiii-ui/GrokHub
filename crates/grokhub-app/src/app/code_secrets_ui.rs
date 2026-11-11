@@ -297,7 +297,7 @@ impl SecretsPanel {
             job = job.or_else(|| self.save());
         }
         if let Some(note) = &self.note {
-            ui.add_space(6.0);
+            ui.add_space(8.0);
             muted(ui, note);
         }
         self.start(job, &ctx, config_dir, ws);

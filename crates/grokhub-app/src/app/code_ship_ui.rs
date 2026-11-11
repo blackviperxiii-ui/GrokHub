@@ -469,7 +469,7 @@ fn mono_block(ui: &mut egui::Ui, text: &str) {
         .fill(crate::theme::elevated())
         .corner_radius(crate::theme::CARD_RADIUS)
         .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-        .inner_margin(egui::Margin::same(10))
+        .inner_margin(egui::Margin::same(12))
         .show(ui, |ui| {
             ui.add(
                 egui::Label::new(RichText::new(text).monospace().color(crate::theme::fg())).wrap(),
