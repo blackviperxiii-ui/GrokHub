@@ -9,6 +9,8 @@ const api = vi.hoisted(() => ({
   pluginAct: vi.fn<(name: string, act: PluginAct) => Promise<PluginPage>>(),
   installPlugin: vi.fn<(source: string) => Promise<PluginPage>>(),
   fetchPluginMarket: vi.fn<(url: string) => Promise<PluginMarket>>(),
+  getDiagnostics: vi.fn(() => new Promise(() => {})),
+  listChats: vi.fn(() => Promise.resolve([])),
 }));
 
 vi.mock("./api", () => api);
