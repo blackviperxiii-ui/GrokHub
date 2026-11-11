@@ -4,6 +4,7 @@ import {
   grokSignOut,
   pollGrokSignIn,
   startGrokSignIn,
+  type GrokSignInPoll,
   type GrokSignInStart,
   type Settings,
   type SignedIn,
@@ -20,9 +21,20 @@ export function signedInAs(who: SignedIn): string {
   return who.name ?? who.email ?? "your Grok account";
 }
 
+/** The shell's answer to a poll when it holds no code (`NOT_STARTED` in
+ * `xai_keychain.rs`): there is nothing left to wait for. */
+const NO_CODE = "Start Sign in with Grok first.";
+
+/** Whether a code good until `deadline` (ms on this computer's clock) ran out. */
+function ranOut(deadline: number): boolean {
+  return Date.now() >= deadline;
+}
+
 /** Settings → Account: Sign in with Grok by device code. The page shows the
  * code with Copy and Open x.ai, asks xAI every few seconds, and shows the
- * account once it says yes. `onChange` gets the settings after a change. */
+ * account once it says yes. A poll that fails leaves the code up and is asked
+ * again, until the code's own time is up. `onChange` gets the settings after
+ * a change. */
 export function GrokSignIn({
   signedIn,
   onChange,
@@ -32,6 +44,8 @@ export function GrokSignIn({
 }) {
   const [code, setCode] = useState<GrokSignInStart | null>(null);
   const [busy, setBusy] = useState(false);
+  // Why the last poll failed, while the page is still asking.
+  const [trouble, setTrouble] = useState<string | null>(null);
   const { note, ok, fail, clear } = useNote();
   const timer = useRef<number | null>(null);
   // The last interval xAI asked for (slow_down raises it), whether a poll is
@@ -39,6 +53,8 @@ export function GrokSignIn({
   const interval = useRef(0);
   const polling = useRef(false);
   const live = useRef(false);
+  // When the code on screen stops being good, by this computer's clock.
+  const deadline = useRef(0);
 
   function stop() {
     if (timer.current !== null) window.clearTimeout(timer.current);
@@ -53,23 +69,44 @@ export function GrokSignIn({
 
   async function poll() {
     timer.current = null;
-    polling.current = true;
-    try {
-      const got = await pollGrokSignIn();
-      if (got.status === "pending") wait(got.interval);
-      else if (got.status === "failed") {
-        setCode(null);
-        fail(got.error);
-      } else {
-        setCode(null);
-        onChange(await getSettings());
-        ok(`Signed in as ${signedInAs(got.signedIn)}.`);
-      }
-    } catch (err) {
+    if (ranOut(deadline.current)) {
       setCode(null);
-      fail(err);
+      fail("The code ran out. Start again.");
+      return;
+    }
+    polling.current = true;
+    let got: GrokSignInPoll;
+    try {
+      got = await pollGrokSignIn();
+    } catch (err) {
+      // The shell drops the code only with a "failed" answer. A poll that
+      // rejects (no answer from xAI, say) left it held, so ask again.
+      const why = String(err);
+      if (why === NO_CODE) {
+        setCode(null);
+        fail(why);
+      } else {
+        setTrouble(why);
+        wait(interval.current);
+      }
+      return;
     } finally {
       polling.current = false;
+    }
+    if (got.status === "pending") {
+      setTrouble(null);
+      wait(got.interval);
+    } else if (got.status === "failed") {
+      setCode(null);
+      fail(got.error);
+    } else {
+      setCode(null);
+      try {
+        onChange(await getSettings());
+        ok(`Signed in as ${signedInAs(got.signedIn)}.`);
+      } catch (err) {
+        fail(err);
+      }
     }
   }
 
@@ -94,6 +131,8 @@ export function GrokSignIn({
     try {
       const got = await startGrokSignIn();
       interval.current = 0;
+      deadline.current = Date.now() + got.expiresIn * 1000;
+      setTrouble(null);
       setCode(got);
     } catch (err) {
       fail(err);
@@ -159,7 +198,9 @@ export function GrokSignIn({
             </button>
           </div>
           <p className="note" role="status">
-            Waiting for you to approve it on x.ai…
+            {trouble
+              ? `Still waiting for you to approve it on x.ai. The last check failed: ${trouble}`
+              : "Waiting for you to approve it on x.ai…"}
           </p>
         </>
       ) : (
