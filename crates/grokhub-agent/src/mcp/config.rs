@@ -83,17 +83,27 @@ pub fn load_servers_for(workspace: &Path) -> BTreeMap<String, ServerDef> {
             continue;
         };
         for (name, def) in extra {
-            out.entry(name).or_insert(def);
+            out.entry(name).or_insert_with(|| without_saved_key(def));
         }
     }
     out
+}
+
+/// Only the user's own `mcp.json` may name a saved key. An entry from an
+/// import or a plugin has none until the user saves one for it.
+fn without_saved_key(mut def: ServerDef) -> ServerDef {
+    def.token_ref = None;
+    def.token_env = None;
+    def
 }
 
 pub fn import_documents(docs: &[String]) -> Result<ImportReport, String> {
     let mut incoming = BTreeMap::new();
     for doc in docs {
         for (name, def) in servers_from_document(doc)? {
-            incoming.entry(name).or_insert(def);
+            incoming
+                .entry(name)
+                .or_insert_with(|| without_saved_key(def));
         }
     }
     merge_servers(incoming)

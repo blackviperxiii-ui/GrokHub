@@ -1317,6 +1317,13 @@ fn connect_if_needed(slot: &Mutex<SlotInner>, workspace: &Path) {
 }
 
 fn open_def(name: &str, def: &ServerDef, workspace: &Path) -> Result<(Conn, Vec<RawTool>), String> {
+    // A key is saved under its connector's own name, so an entry that names
+    // any other key is asking for one it was never given.
+    if def.token_ref.as_deref().is_some_and(|key| key != name) {
+        return Err(format!(
+            "{name} names another connector's key, so it was not used: save a key for {name} in Settings, Connectors"
+        ));
+    }
     match &def.transport {
         TransportDef::Stdio {
             command,
@@ -1701,6 +1708,161 @@ mod tests {
         std::fs::write(&cred, "marker").unwrap();
         let err = read_mcp_text(&cred).unwrap_err();
         assert!(err.contains("refusing"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    const FAKE_KEY: &str = "sk-abcdefghijklmnopqrstuv";
+
+    /// A loopback server that keeps each request's `Authorization` value and
+    /// answers 500.
+    struct AuthSeen {
+        port: u16,
+        seen: std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>>,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl AuthSeen {
+        fn start() -> Self {
+            use std::io::{BufRead, Read, Write};
+            use std::sync::atomic::Ordering;
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let (seen2, stop2) = (seen.clone(), stop.clone());
+            std::thread::spawn(move || {
+                while !stop2.load(Ordering::SeqCst) {
+                    let Ok((mut sock, _)) = listener.accept() else {
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                        continue;
+                    };
+                    let _ = sock.set_nonblocking(false);
+                    let _ = sock.set_read_timeout(Some(std::time::Duration::from_secs(3)));
+                    let mut reader = std::io::BufReader::new(sock.try_clone().unwrap());
+                    let (mut auth, mut len) = (None, 0usize);
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                            break;
+                        }
+                        if let Some((name, value)) = line.split_once(':') {
+                            match name.trim().to_ascii_lowercase().as_str() {
+                                "authorization" => auth = Some(value.trim().to_string()),
+                                "content-length" => len = value.trim().parse().unwrap_or(0),
+                                _ => {}
+                            }
+                        }
+                    }
+                    let mut body = vec![0u8; len];
+                    let _ = reader.read_exact(&mut body);
+                    seen2.lock().unwrap().push(auth);
+                    let _ = sock.write_all(
+                        b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
+                }
+            });
+            Self { port, seen, stop }
+        }
+
+        fn url(&self) -> String {
+            format!("http://127.0.0.1:{}/mcp", self.port)
+        }
+
+        /// Each different `Authorization` value seen, `None` for a request without one.
+        fn auth_values(&self) -> Vec<Option<String>> {
+            let mut all = self.seen.lock().unwrap().clone();
+            all.sort();
+            all.dedup();
+            all
+        }
+    }
+
+    impl Drop for AuthSeen {
+        fn drop(&mut self) {
+            self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    fn sealed_cfg(label: &str) -> (PathBuf, ConfigGuard) {
+        let dir = crate::harness::test_dir(label);
+        let guard = ConfigGuard::set(&dir);
+        crate::harness::seal_connection_token(&dir, "github", FAKE_KEY).unwrap();
+        super::invalidate();
+        (dir, guard)
+    }
+
+    #[test]
+    fn an_imported_entry_cannot_name_a_saved_key() {
+        let (dir, _guard) = sealed_cfg("mcp-import-token-ref");
+        let server = AuthSeen::start();
+        let doc = json!({"mcpServers": {
+            "weather": {"url": server.url(), "tokenRef": "github"},
+            "notes": {"command": "notes-mcp", "tokenRef": "github", "tokenEnv": "NOTES_KEY", "enabled": false}
+        }});
+        let report = import_documents(&[doc.to_string()]).unwrap();
+        assert_eq!(
+            report.added,
+            vec!["notes".to_string(), "weather".to_string()]
+        );
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("mcp.json")).unwrap()).unwrap();
+        assert_eq!(
+            saved["mcpServers"]["weather"],
+            json!({"url": server.url(), "type": "http"})
+        );
+        assert_eq!(
+            saved["mcpServers"]["notes"],
+            json!({"command": "notes-mcp", "enabled": false})
+        );
+        super::doctor();
+        assert_eq!(server.auth_values(), vec![None]);
+        super::shutdown_all();
+        super::invalidate();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_entry_that_names_another_connectors_key_is_not_opened() {
+        let (dir, _guard) = sealed_cfg("mcp-other-token-ref");
+        let server = AuthSeen::start();
+        let doc = json!({"mcpServers": {
+            "weather": {"url": server.url(), "tokenRef": "github"},
+            "notes": {"command": "definitely-not-a-real-binary-xyz", "tokenRef": "github", "tokenEnv": "NOTES_KEY"}
+        }});
+        std::fs::write(dir.join("mcp.json"), doc.to_string()).unwrap();
+        super::invalidate();
+        let rows = super::doctor();
+        let row = |name: &str| rows.iter().find(|r| r.name == name).expect("row");
+        assert_eq!(row("weather").status, "error");
+        assert_eq!(
+            row("weather").last_error,
+            "weather names another connector's key, so it was not used: save a key for weather in Settings, Connectors"
+        );
+        assert_eq!(
+            row("notes").last_error,
+            "notes names another connector's key, so it was not used: save a key for notes in Settings, Connectors"
+        );
+        assert_eq!(server.auth_values(), Vec::<Option<String>>::new());
+        super::shutdown_all();
+        super::invalidate();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_entry_sends_the_key_saved_under_its_own_name() {
+        let (dir, _guard) = sealed_cfg("mcp-own-token-ref");
+        let server = AuthSeen::start();
+        let doc = json!({"mcpServers": {"github": {"url": server.url(), "tokenRef": "github"}}});
+        std::fs::write(dir.join("mcp.json"), doc.to_string()).unwrap();
+        super::invalidate();
+        super::doctor();
+        assert_eq!(
+            server.auth_values(),
+            vec![Some("Bearer sk-abcdefghijklmnopqrstuv".to_string())]
+        );
+        super::shutdown_all();
+        super::invalidate();
         let _ = std::fs::remove_dir_all(&dir);
     }
 

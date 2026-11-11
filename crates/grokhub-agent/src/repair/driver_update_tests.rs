@@ -187,3 +187,31 @@ fn the_record_round_trips_through_its_file() {
     assert_eq!(load_record(&dir), None);
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn a_record_changed_on_disk_cannot_put_its_own_commands_in_the_way_back() {
+    let dir = std::env::temp_dir().join(format!("driver-record-planted-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for planted in [
+        r#"{"drivers":[],"rollback":{"cached":["$(id -un > /home/user/ran-as.txt)"]}}"#,
+        r#"{"drivers":[{"pkg":"mesa-utils","from":"1.0 || touch /home/user/x","to":"9.0.0-2"}],"rollback":"apt_versions"}"#,
+    ] {
+        std::fs::write(record_path(&dir), planted).unwrap();
+        let record = load_record(&dir).expect("the record parses");
+        assert_eq!(
+            rollback_script(&record, false),
+            Err(DriverBlock::NoWayBack),
+            "{planted}"
+        );
+    }
+    std::fs::write(
+        record_path(&dir),
+        r#"{"drivers":[{"pkg":"nvidia-utils","from":"560.35.03-1","to":"565.57.01-1"}],"rollback":{"cached":["/var/cache/pacman/pkg/nvidia-utils-560.35.03-1-x86_64.pkg.tar.zst"]}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        rollback_script(&load_record(&dir).unwrap(), false),
+        Ok("pacman -U --noconfirm /var/cache/pacman/pkg/nvidia-utils-560.35.03-1-x86_64.pkg.tar.zst".into())
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}

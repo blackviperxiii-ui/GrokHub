@@ -335,16 +335,19 @@ pub fn update_cmd(pm: PackageManager, drivers: &[VerifiedDriver]) -> Option<Stri
     update_cmd_plain(pm, drivers).map(|(cmd, _)| cmd)
 }
 
+/// A version made only of the characters package versions use, so it is one
+/// plain word in a root command.
+fn plain_version(v: &str) -> bool {
+    v.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '+' | '~' | ':' | '_'))
+}
+
 fn update_cmd_plain(pm: PackageManager, drivers: &[VerifiedDriver]) -> Option<(String, String)> {
     let names: Vec<String> = drivers
         .iter()
         .map(|d| ProgramName::parse(&d.pkg).map(|p| p.as_str().to_string()))
         .collect::<Option<_>>()?;
-    let plain_versions = |d: &VerifiedDriver| {
-        d.to.chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '+' | '~' | ':' | '_'))
-    };
-    if !drivers.iter().all(plain_versions) {
+    if !drivers.iter().all(|d| plain_version(&d.to)) {
         return None;
     }
     Some(match pm {
@@ -442,18 +445,42 @@ pub fn driver_rollback_plan(
 
 /// The command (run as root) that puts the old drivers back, when the way
 /// back is the old packages. A snapshot is rolled back with its own tool.
+/// The record comes from a file anyone running as the user can change, so the
+/// command holds only package names and versions checked here, and cache
+/// paths built from them. Anything else and there is no command.
 pub fn rollback_cmd(rollback: &Rollback, drivers: &[VerifiedDriver]) -> Option<String> {
+    if drivers.is_empty() {
+        return None;
+    }
+    let old: Vec<(ProgramName, &str)> = drivers
+        .iter()
+        .map(|d| {
+            let pkg = ProgramName::parse(&d.pkg)?;
+            plain_version(&d.from).then_some((pkg, d.from.as_str()))
+        })
+        .collect::<Option<_>>()?;
     match rollback {
         Rollback::Snapshot(_) => None,
         Rollback::Cached(files) => {
-            let paths: Vec<&str> = files.iter().filter_map(|f| f.to_str()).collect();
+            if files.len() != old.len() {
+                return None;
+            }
+            let mut paths = Vec::new();
+            for (file, (pkg, from)) in files.iter().zip(&old) {
+                let path = ["x86_64", "any"]
+                    .iter()
+                    .map(|arch| {
+                        format!("{PACMAN_CACHE}/{}-{from}-{arch}.pkg.tar.zst", pkg.as_str())
+                    })
+                    .find(|path| file.to_str() == Some(path.as_str()))?;
+                paths.push(path);
+            }
             Some(format!("pacman -U --noconfirm {}", paths.join(" ")))
         }
         Rollback::AptVersions => Some(format!(
             "apt-get install -y --allow-downgrades {}",
-            drivers
-                .iter()
-                .map(|d| format!("{}={}", d.pkg, d.from))
+            old.iter()
+                .map(|(pkg, from)| format!("{}={from}", pkg.as_str()))
                 .collect::<Vec<_>>()
                 .join(" ")
         )),
@@ -718,6 +745,91 @@ mod tests {
         assert_eq!(
             classify_step(&plan.steps[0].command, &[]),
             plan.steps[0].class
+        );
+    }
+
+    #[test]
+    fn the_way_back_runs_only_names_versions_and_cache_paths_it_checked() {
+        let nvidia = vec![VerifiedDriver {
+            pkg: "nvidia-utils".into(),
+            from: "560.35.03-1".into(),
+            to: "565.57.01-1".into(),
+        }];
+        let cached = |path: &str| Rollback::Cached(vec![PathBuf::from(path)]);
+        assert_eq!(
+            rollback_cmd(
+                &cached("/var/cache/pacman/pkg/nvidia-utils-560.35.03-1-x86_64.pkg.tar.zst"),
+                &nvidia
+            )
+            .as_deref(),
+            Some("pacman -U --noconfirm /var/cache/pacman/pkg/nvidia-utils-560.35.03-1-x86_64.pkg.tar.zst")
+        );
+        assert_eq!(
+            rollback_cmd(
+                &cached("/var/cache/pacman/pkg/nvidia-utils-560.35.03-1-any.pkg.tar.zst"),
+                &nvidia
+            )
+            .as_deref(),
+            Some("pacman -U --noconfirm /var/cache/pacman/pkg/nvidia-utils-560.35.03-1-any.pkg.tar.zst")
+        );
+        // A record with no drivers has nothing to put back.
+        assert_eq!(rollback_cmd(&cached("$(id)"), &[]), None);
+        assert_eq!(rollback_cmd(&Rollback::AptVersions, &[]), None);
+        for path in [
+            "$(id)",
+            "/home/user/nvidia-utils-560.35.03-1-x86_64.pkg.tar.zst",
+            "/var/cache/pacman/pkg/mesa-24.1-x86_64.pkg.tar.zst",
+            "/var/cache/pacman/pkg/nvidia-utils-560.35.03-1-x86_64.pkg.tar.zst; id",
+            "/var/cache/pacman/pkg/nvidia-utils-560.35.03-1-x86_64.pkg.tar.zst $(id)",
+            "/var/cache/pacman/pkg/../../../home/user/nvidia-utils-560.35.03-1-x86_64.pkg.tar.zst",
+        ] {
+            assert_eq!(rollback_cmd(&cached(path), &nvidia), None, "{path}");
+        }
+        // One file for each driver, no more.
+        assert_eq!(
+            rollback_cmd(
+                &Rollback::Cached(vec![
+                    PathBuf::from(
+                        "/var/cache/pacman/pkg/nvidia-utils-560.35.03-1-x86_64.pkg.tar.zst"
+                    ),
+                    PathBuf::from("/home/user/extra-1.0-1-x86_64.pkg.tar.zst"),
+                ]),
+                &nvidia
+            ),
+            None
+        );
+        let apt = |pkg: &str, from: &str| {
+            vec![VerifiedDriver {
+                pkg: pkg.into(),
+                from: from.into(),
+                to: "9.0.0-2".into(),
+            }]
+        };
+        assert_eq!(
+            rollback_cmd(
+                &Rollback::AptVersions,
+                &apt("nvidia-driver-550", "550.120-0ubuntu1")
+            )
+            .as_deref(),
+            Some("apt-get install -y --allow-downgrades nvidia-driver-550=550.120-0ubuntu1")
+        );
+        assert_eq!(
+            rollback_cmd(
+                &Rollback::AptVersions,
+                &apt("mesa-utils", "1.0 || touch /home/user/x")
+            ),
+            None
+        );
+        assert_eq!(
+            rollback_cmd(&Rollback::AptVersions, &apt("mesa; id", "1.0")),
+            None
+        );
+        assert_eq!(
+            rollback_cmd(
+                &cached("/var/cache/pacman/pkg/mesa; id-1.0-x86_64.pkg.tar.zst"),
+                &apt("mesa; id", "1.0")
+            ),
+            None
         );
     }
 }
