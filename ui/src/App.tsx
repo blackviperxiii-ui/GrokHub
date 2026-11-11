@@ -705,6 +705,7 @@ export function App() {
       {opened.has("code") && !caps.remote && (
         <Page shown={view === "code"}>
           <Code
+            onOpenChat={openSaved}
             onTask={({ prompt, conversationId }) => {
               setPrefill((now) => ({ text: prompt, n: (now?.n ?? 0) + 1, conversationId }));
               setView("chat");

@@ -1229,6 +1229,64 @@ async function appearance(s, config) {
   );
 }
 
+// Code tab: the project bar. The folder the chat worked in is added to the
+// project list and shows that chat as a session; a second project is switched
+// to and back, and each switch moves the app's folder and the editor's files.
+async function codeProjects(s, config, workspace) {
+  const xp = (value) => wd("POST", `${s}/elements`, { using: "xpath", value });
+  const press = async (what, value) => {
+    const el = await waitFor(what, async () => (await xp(value))[0]);
+    await clickStill(s, el[ELEMENT], what);
+  };
+  const bound = () => JSON.parse(readFileSync(join(config, "shell.json"), "utf8")).workspace;
+  const rows = () => {
+    const file = join(config, "projects.json");
+    return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : [];
+  };
+  const inBar = "//div[contains(@class,'code-projects')]";
+  const other = join(config, "second-project");
+  mkdirSync(other);
+  writeFileSync(join(other, "only-in-second.txt"), "second");
+
+  await tab(s, "Code");
+  await press("Add to projects", `${inBar}//button[normalize-space()='Add to projects']`);
+  await waitFor("the folder in the project list", () => rows().some((r) => r.kind === "project" && r.path === bound()));
+  await waitFor("the chat as a session of this project", () =>
+    find(s, ".code-sessions ul[aria-label='Sessions'] button"),
+  );
+  const first = bound();
+
+  // A project made outside the tab is there the next time the tab shows.
+  writeFileSync(
+    join(config, "projects.json"),
+    JSON.stringify([...rows(), { id: "proj-smoke-2", name: "Second smoke project", kind: "project", path: other, parent: null, open: false }]),
+  );
+  await tab(s, "Chat");
+  await tab(s, "Code");
+  await press("Switch project", `${inBar}//button[normalize-space()='Switch project']`);
+  await shot(s, "code-projects");
+  await press("the second project's row", `${inBar}//ul[@aria-label='Projects']//button[contains(.,'Second smoke project')]`);
+  await waitFor("the app in the second project", () => realpathSync(bound()) === realpathSync(other));
+  await waitFor("the second project's name on the bar", async () =>
+    (await textOf(s, ".code-projects > .code-head .card-title")) === "Second smoke project",
+  );
+  await waitFor("the second project's file in the editor", async () =>
+    (await xp("//section[@aria-label='Code']//button[normalize-space()='only-in-second.txt']"))[0],
+  );
+  const stale = await xp(`${inBar}//ul[@aria-label='Sessions']//button`);
+  if (stale.length) throw new Error("the second project lists the first project's sessions");
+  await shot(s, "code-project-switched");
+
+  await press("Switch project", `${inBar}//button[normalize-space()='Switch project']`);
+  await press("the first project's row", `${inBar}//ul[@aria-label='Projects']//button[not(@disabled)]`);
+  await waitFor("the app back in the first project", () => bound() === first);
+  if (realpathSync(first) !== realpathSync(workspace)) throw new Error(`the first project was ${first}, not ${workspace}`);
+  await waitFor("the first project's session again", () =>
+    find(s, ".code-sessions ul[aria-label='Sessions'] button"),
+  );
+  console.log("code tab: added the folder as a project, switched to a second project and back");
+}
+
 /** The window opens 900px wide (tauri.conf.json). Every tab, the brand, the
  * Activity dock and Command must fit it without the page scrolling sideways:
  * a sideways scroll puts a scrollbar along the bottom edge, and WebKit takes
@@ -1415,6 +1473,7 @@ async function main() {
     await appearance(s, config);
     await desktop(s, config);
     await episode(s, config);
+    await codeProjects(s, config, workspace);
     if (process.env.SMOKE_WEB === "1") await web(s);
     console.log("smoke ok");
   } catch (err) {

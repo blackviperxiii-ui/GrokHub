@@ -2030,6 +2030,98 @@ fn get_capabilities() -> capabilities::Capabilities {
     capabilities::current()
 }
 
+/// Code tab: the project list and which project is open.
+#[tauri::command]
+async fn code_projects(state: State<'_, ShellState>) -> Result<projects::CodeProjects, String> {
+    let (dir, bound) = (state.config_dir.clone(), current(&state).workspace);
+    off_main(move || projects::listing(&dir, &bound)).await?
+}
+
+const CODE_SWITCH_BUSY: &str =
+    "A test run or deploy is still going. Stop it or wait for it to end, then switch projects.";
+
+/// Opens `folder` as the project the app works in, as `/project bind` does,
+/// and answers with the list again.
+fn open_code_project(state: &ShellState, folder: &str) -> Result<projects::CodeProjects, String> {
+    if folder.trim().is_empty() {
+        return Err("Pick a folder to open.".into());
+    }
+    let bound = current(state).workspace;
+    if code_runs::running() && !projects::is_open(folder, &bound) {
+        return Err(CODE_SWITCH_BUSY.into());
+    }
+    let old_dir = workspace(state);
+    let done = projects::run(
+        &state.config_dir,
+        &bound,
+        projects::Op::Bind(folder.to_string()),
+    )?;
+    let path = done.workspace.unwrap_or_else(|| bound.clone());
+    let next = ShellSettings {
+        workspace: path.clone(),
+        ..current(state)
+    };
+    settings::save(&state.config_dir, &next)?;
+    let keep = next.code_ship.activity_keep;
+    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next;
+    // The terminal's shell was started in the old folder: it ends with the
+    // switch, as it does in the cabin.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    if !projects::is_open(&path, &bound) && code_term::close(code_term::global()) {
+        code_term::log(&state.config_dir, &old_dir, "Closed the terminal.", keep);
+    }
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    let _ = (old_dir, keep);
+    projects::listing(&state.config_dir, &path)
+}
+
+/// Code tab: switch to a project from the list, or open a folder by path.
+#[tauri::command]
+async fn code_project_open(app: AppHandle, path: String) -> Result<projects::CodeProjects, String> {
+    off_main(move || open_code_project(&app.state::<ShellState>(), &path)).await?
+}
+
+/// Code tab: Open folder. The system picker, then that folder opens; `None`
+/// when the picker was closed.
+#[tauri::command]
+async fn code_project_pick(app: AppHandle) -> Result<Option<projects::CodeProjects>, String> {
+    #[cfg(desktop)]
+    {
+        use tauri_plugin_dialog::DialogExt;
+        off_main(move || {
+            let picked = app
+                .dialog()
+                .file()
+                .set_title("Open a project folder")
+                .blocking_pick_folder()
+                .and_then(|p| p.into_path().ok());
+            match picked {
+                Some(dir) => {
+                    open_code_project(&app.state::<ShellState>(), &dir.to_string_lossy()).map(Some)
+                }
+                None => Ok(None),
+            }
+        })
+        .await?
+    }
+    #[cfg(mobile)]
+    {
+        let _ = app;
+        Err(attach::NO_PICKER.into())
+    }
+}
+
+/// Code tab: New project. Makes it under the work root and opens it.
+#[tauri::command]
+async fn code_project_new(app: AppHandle, name: String) -> Result<projects::CodeProjects, String> {
+    off_main(move || {
+        let state = app.state::<ShellState>();
+        let dir = projects::create(&state.config_dir, &name)?;
+        open_code_project(&state, &dir)
+    })
+    .await?
+}
+
 /// Code tab: the workspace's repo, read only.
 #[tauri::command]
 async fn code_repo(state: State<'_, ShellState>) -> Result<code::Repo, String> {
@@ -4943,6 +5035,10 @@ pub fn run() {
             code_term_write,
             code_term_resize,
             code_term_close,
+            code_projects,
+            code_project_open,
+            code_project_pick,
+            code_project_new,
             get_code_ship,
             save_code_ship,
             get_journal,

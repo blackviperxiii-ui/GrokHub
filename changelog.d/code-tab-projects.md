@@ -1,0 +1,1 @@
+- Code tab: a project bar names the open project and lets you switch to another, open a folder or start a new project, and the tab lists that project's sessions with New session and click to resume.

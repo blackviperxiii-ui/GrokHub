@@ -42,6 +42,22 @@ vi.mock("./api", () => api);
 vi.mock("./Chat", () => ({ newConversationId: () => "shell-new" }));
 // The terminal has its own tests; here it would only pull in its screen widget.
 vi.mock("./CodeTerminal", () => ({ default: () => null }));
+// The project bar has its own tests; here it is three buttons that call back.
+vi.mock("./CodeProjects", () => ({
+  CodeProjects: (p: { onSwitched: () => void; onNewSession: () => void; onOpenSession: (id: string) => void }) => (
+    <div>
+      <button type="button" onClick={p.onSwitched}>
+        stub switch
+      </button>
+      <button type="button" onClick={p.onNewSession}>
+        stub new session
+      </button>
+      <button type="button" onClick={() => p.onOpenSession("chat-7")}>
+        stub open session
+      </button>
+    </div>
+  ),
+}));
 
 import { Code, CODE_BUILTINS, CODE_CLEAN, CODE_CONFIRM, CODE_NEXT, CODE_NOT_REPO, CODE_REVIEW_PROMPT, CODE_TESTS, overrideLabel } from "./Code";
 
@@ -608,5 +624,36 @@ describe("Code tab", () => {
     await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
     expect(await screen.findByRole("button", { name: "made-outside.txt" })).toBeInTheDocument();
     expect(api.codeFilesList.mock.calls).toEqual([[""], [""]]);
+  });
+
+  it("a project switch starts the workspace afresh in the new folder", async () => {
+    api.codeRepo.mockResolvedValueOnce(repo());
+    api.codeDiff.mockResolvedValue({ path: "src/a.rs", text: "-old\n+new\n", cut: false });
+    api.codeTestPlan.mockResolvedValueOnce({ command: "cargo test", needsConfirm: true, remembered: null });
+    render(<Code onTask={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: /src\/a\.rs/ }));
+    expect(await screen.findByLabelText("Diff of src/a.rs")).toBeInTheDocument();
+    expect(screen.getByLabelText("Test command")).toHaveValue("cargo test");
+
+    api.codeRepo.mockResolvedValue(repo({ branch: "main", upstream: null, ahead: 0, files: [{ path: "lib/b.ts", status: "added", staged: true }] }));
+    api.codeTestPlan.mockResolvedValue({ command: "npm test", needsConfirm: true, remembered: null });
+    await userEvent.click(screen.getByRole("button", { name: "stub switch" }));
+    expect(await screen.findByRole("button", { name: /lib\/b\.ts/ })).toBeInTheDocument();
+    expect(screen.getByText("On main")).toBeInTheDocument();
+    // Nothing of the old project stays: its file, its open diff, its test command.
+    expect(screen.queryByRole("button", { name: /src\/a\.rs/ })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Diff of src/a.rs")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText("Test command")).toHaveValue("npm test"));
+  });
+
+  it("New session starts a fresh chat and a session row opens its saved chat", async () => {
+    api.codeRepo.mockResolvedValue(repo());
+    const onTask = vi.fn();
+    const onOpenChat = vi.fn();
+    render(<Code onTask={onTask} onOpenChat={onOpenChat} />);
+    await userEvent.click(screen.getByRole("button", { name: "stub new session" }));
+    expect(onTask).toHaveBeenCalledWith({ prompt: "", conversationId: "shell-new" });
+    await userEvent.click(screen.getByRole("button", { name: "stub open session" }));
+    expect(onOpenChat).toHaveBeenCalledWith("chat-7");
   });
 });

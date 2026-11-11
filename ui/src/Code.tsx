@@ -14,6 +14,7 @@ import {
 } from "./api";
 import { newConversationId } from "./Chat";
 import { CodeDeploy } from "./CodeDeploy";
+import { CodeProjects } from "./CodeProjects";
 import { CodeShip } from "./CodeShip";
 import { inShell } from "./transport";
 import { useCardFocus } from "./ui";
@@ -22,7 +23,7 @@ import { useCardFocus } from "./ui";
 const CodeEditor = lazy(() => import("./CodeEditor"));
 const CodeTerminal = lazy(() => import("./CodeTerminal"));
 
-export const CODE_NOT_REPO = "This workspace isn't a git repo yet. Pick a project folder in Settings, or ask the agent to start one.";
+export const CODE_NOT_REPO = "This project isn't a git repo yet. Open another project above, or ask the agent to start one.";
 export const CODE_CLEAN = "No changes since the last commit.";
 export const CODE_NEXT = "Coming next on this tab: an agent that drives the work while you watch or step in.";
 export const CODE_DESKTOP_ONLY = "The editor and terminal are only in the desktop app.";
@@ -43,8 +44,25 @@ export interface CodeTask {
   conversationId: string;
 }
 
-/** The Code tab: the workspace's repo, its changed files and one file's diff, an editor and a terminal, plus built-in skills and a test runner. */
-export function Code({ onTask }: { onTask: (task: CodeTask) => void }) {
+/** The Code tab: the project bar and the open project's sessions, then that project's workspace. */
+export function Code({ onTask, onOpenChat }: { onTask: (task: CodeTask) => void; onOpenChat?: (id: string) => void }) {
+  // Counts project switches: a new value starts the workspace below afresh in
+  // the new folder, with nothing kept from the old one.
+  const [switches, setSwitches] = useState(0);
+  return (
+    <section className="code" aria-label="Code">
+      <CodeProjects
+        onSwitched={() => setSwitches((n) => n + 1)}
+        onNewSession={() => onTask({ prompt: "", conversationId: newConversationId() })}
+        onOpenSession={(id) => onOpenChat?.(id)}
+      />
+      <CodeWorkspace key={switches} onTask={onTask} />
+    </section>
+  );
+}
+
+/** The open project's repo, its changed files and one file's diff, an editor and a terminal, plus built-in skills and a test runner. */
+function CodeWorkspace({ onTask }: { onTask: (task: CodeTask) => void }) {
   const [repo, setRepo] = useState<CodeRepo | null>(null);
   const [diff, setDiff] = useState<CodeDiff | null>(null);
   const [builtins, setBuiltins] = useState<CodeBuiltin[] | null>(null);
@@ -231,10 +249,9 @@ export function Code({ onTask }: { onTask: (task: CodeTask) => void }) {
 
   const sync = repo && (repo.ahead || repo.behind) ? ` · ${repo.ahead} ahead, ${repo.behind} behind` : "";
   return (
-    <section className="code" aria-label="Code">
+    <>
       <header className="code-head">
         <div>
-          <div className="card-title">{repo?.workspace ?? "Workspace"}</div>
           {repo?.isRepo && (
             <div className="note">
               {repo.branch ? `On ${repo.branch}` : "Detached HEAD"}
@@ -393,6 +410,6 @@ export function Code({ onTask }: { onTask: (task: CodeTask) => void }) {
         </div>
       )}
       <p className="note">{CODE_NEXT}</p>
-    </section>
+    </>
   );
 }
