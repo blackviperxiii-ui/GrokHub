@@ -57,7 +57,13 @@ pub fn seed(config_dir: &Path, card: &BoardCard) -> MissionSeed {
             .steps
             .iter()
             .enumerate()
-            .map(|(i, s)| (i.to_string(), s.text.clone(), todo_word(s.status).to_string()))
+            .map(|(i, s)| {
+                (
+                    i.to_string(),
+                    s.text.clone(),
+                    todo_word(s.status).to_string(),
+                )
+            })
             .collect(),
         todos_verified: outcome_reasons.iter().any(|r| r == "verify_ok")
             || outcome_result == "success",
@@ -67,8 +73,7 @@ pub fn seed(config_dir: &Path, card: &BoardCard) -> MissionSeed {
             format!("{steps_done} of {} steps done", card.steps.len())
         },
         running: card.status == BoardStatus::InProgress,
-        resume_ok: card.status == BoardStatus::Blocked
-            && (card.run || checkpoint.is_some()),
+        resume_ok: card.status == BoardStatus::Blocked && (card.run || checkpoint.is_some()),
         outcome_result,
         outcome_reasons,
         outcome_span_ids,
@@ -145,10 +150,7 @@ mod tests {
                 ("Print a test page", "planned"),
             ]
         );
-        assert_eq!(
-            m.header_line(),
-            "Mission · Fix the printer · active"
-        );
+        assert_eq!(m.header_line(), "Mission · Fix the printer · active");
     }
 
     #[test]

@@ -341,7 +341,12 @@ mod tests {
         assert_eq!(budget.queue.len(), 1);
         assert_eq!(budget.queue[0].topic, "Renew the domain");
         // The window ends: the queued card goes up.
-        assert_eq!(tick(&dir, PID, NOW + 8 * 60 * MIN, false).expect("tick").len(), 1);
+        assert_eq!(
+            tick(&dir, PID, NOW + 8 * 60 * MIN, false)
+                .expect("tick")
+                .len(),
+            1
+        );
     }
 
     #[test]

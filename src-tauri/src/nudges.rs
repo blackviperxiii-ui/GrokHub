@@ -14,8 +14,9 @@ use std::path::{Path, PathBuf};
 
 use grokhub_core::know_me::load_tags;
 use grokhub_core::nudge_watchers::{
-    self as nw, CacheFolder, CrashCount, DiskSnap, GpuDriverSnap, NudgeLedger, NudgeWatcherSettings,
-    OsUpdateSnap, PeripheralEvent, SteamNewsHit, TickInput, WatcherSnapshot, TICK_EVERY_MS,
+    self as nw, CacheFolder, CrashCount, DiskSnap, GpuDriverSnap, NudgeLedger,
+    NudgeWatcherSettings, OsUpdateSnap, PeripheralEvent, SteamNewsHit, TickInput, WatcherSnapshot,
+    TICK_EVERY_MS,
 };
 use grokhub_core::pulse_sources as ps;
 use grokhub_core::scheduler_lease::{read_lease, shell_may_fire};
@@ -452,8 +453,8 @@ mod tests {
         let first = tick_with(&dir, &disk_on(), &low_disk(), "2027-01-15", NOW).expect("one");
         assert_eq!(first.len(), 1);
         assert!(nw::is_nudge_watcher_card(&first[0]));
-        let again = tick_with(&dir, &disk_on(), &low_disk(), "2027-01-15", NOW + 20 * MIN)
-            .expect("two");
+        let again =
+            tick_with(&dir, &disk_on(), &low_disk(), "2027-01-15", NOW + 20 * MIN).expect("two");
         assert!(again.is_empty(), "the cooldown holds it");
         assert_eq!(crate::pulse::cards(&dir).expect("cards").len(), 1);
         let ledger = load_ledger(&dir);
@@ -465,8 +466,8 @@ mod tests {
     fn a_nudge_the_cabin_posted_is_not_posted_again_here() {
         let dir = temp_dir("shared");
         // The cabin ticked first and wrote the shared ledger and the card.
-        let cabin = tick_with(&dir, &disk_on(), &low_disk(), "2027-01-15", NOW - 20 * MIN)
-            .expect("cabin");
+        let cabin =
+            tick_with(&dir, &disk_on(), &low_disk(), "2027-01-15", NOW - 20 * MIN).expect("cabin");
         assert_eq!(cabin.len(), 1);
         let shell = tick(&dir, PID, NOW, 0).expect("shell");
         assert!(shell.is_empty());
@@ -491,16 +492,19 @@ mod tests {
         };
         let posted = tick_with(&dir, &settings, &snap, "2027-01-15", NOW).expect("tick");
         assert_eq!(posted.len(), 1, "one a day, whatever fired");
-        let next_day = tick_with(&dir, &settings, &snap, "2027-01-16", NOW + 24 * 60 * MIN)
-            .expect("next day");
+        let next_day =
+            tick_with(&dir, &settings, &snap, "2027-01-16", NOW + 24 * 60 * MIN).expect("next day");
         assert_eq!(next_day.len(), 1);
     }
 
     #[test]
     fn the_cabin_holding_the_lease_means_no_look_at_all() {
         let dir = temp_dir("lease");
-        std::fs::write(dir.join("app.json"), r#"{"nudgeWatchers":{"diskLow":true}}"#)
-            .expect("write");
+        std::fs::write(
+            dir.join("app.json"),
+            r#"{"nudgeWatchers":{"diskLow":true}}"#,
+        )
+        .expect("write");
         write_lease(
             &dir,
             &SchedulerLease {
@@ -520,8 +524,11 @@ mod tests {
         assert!(tick(&dir, PID, NOW, 0).expect("tick").is_empty());
         assert_eq!(load_ledger(&dir).last_tick_ms, NOW);
         // Turned on a minute later: the ledger's 15 minutes are not up yet.
-        std::fs::write(dir.join("app.json"), r#"{"nudgeWatchers":{"diskLow":true}}"#)
-            .expect("write");
+        std::fs::write(
+            dir.join("app.json"),
+            r#"{"nudgeWatchers":{"diskLow":true}}"#,
+        )
+        .expect("write");
         assert!(tick(&dir, PID, NOW + MIN, 0).expect("tick").is_empty());
         assert_eq!(load_ledger(&dir).last_tick_ms, NOW);
     }

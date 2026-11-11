@@ -547,7 +547,10 @@ fn page(config_dir: &Path, cards: &[BoardCard], stamp: u64) -> Page {
             Column {
                 lane,
                 label: col.label().to_string(),
-                cards: here.into_iter().map(|i| card(config_dir, &cards[i], cards)).collect(),
+                cards: here
+                    .into_iter()
+                    .map(|i| card(config_dir, &cards[i], cards))
+                    .collect(),
             }
         })
         .collect();
@@ -558,7 +561,10 @@ fn page(config_dir: &Path, cards: &[BoardCard], stamp: u64) -> Page {
     archived.sort_by_key(|c| std::cmp::Reverse(c.archived_ms));
     Page {
         columns,
-        archived: archived.into_iter().map(|c| card(config_dir, c, cards)).collect(),
+        archived: archived
+            .into_iter()
+            .map(|c| card(config_dir, c, cards))
+            .collect(),
         stamp,
         swept: swept_for(config_dir, cards),
         queue_note: (cards.iter().any(wt::is_queued)
