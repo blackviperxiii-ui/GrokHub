@@ -684,6 +684,44 @@ mod repo {
         let _ = std::fs::remove_dir_all(&f.root);
     }
 
+    /// A confirm names one command. It must not push another branch even when
+    /// that branch would have needed no confirm of its own.
+    #[test]
+    fn a_confirm_for_another_branch_does_not_push_a_no_confirm_branch() {
+        let f = fixture("stale-auto");
+        let cfg = auto();
+        sh_git(&f.work, &["switch", "-c", "mine"]);
+        commit(&f.work, "mine\n");
+        let seen = plan_with(&f.config, &f.work, &cfg, Action::Push, GITHUB_NO_PR);
+        assert_eq!(
+            seen.command,
+            "git push --porcelain origin HEAD:refs/heads/mine"
+        );
+        assert!(seen.needs_confirm);
+        // An app-made branch is checked out while that confirm is on screen.
+        assert_eq!(
+            new_branch(&f.config, &f.work, &cfg, "code/fix").unwrap(),
+            "code/fix"
+        );
+        commit(&f.work, "fix\n");
+        assert_eq!(
+            ship_with(
+                &f.config,
+                &f.work,
+                &cfg,
+                Action::Push,
+                true,
+                Some(seen.command.as_str()),
+                GITHUB_NO_PR
+            )
+            .unwrap_err(),
+            "The branch changed since you confirmed. Check the command and confirm again."
+        );
+        assert_eq!(origin_sha(&f, "mine"), None);
+        assert_eq!(origin_sha(&f, "code/fix"), None);
+        let _ = std::fs::remove_dir_all(&f.root);
+    }
+
     /// `git push origin` sends to every push URL of origin, so one that
     /// isn't GitHub makes the push a push to another host.
     #[test]

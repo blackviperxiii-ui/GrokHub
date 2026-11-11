@@ -215,6 +215,27 @@ describe("push to talk", () => {
     expect(api.sendChat).not.toHaveBeenCalled();
   });
 
+  it("a permission prompt that takes focus before the mic opens does not end the hold", async () => {
+    const mic = fakeMic();
+    let allow: () => void = () => {};
+    const stream = { getTracks: () => [{ stop: () => {} }] };
+    mic.getUserMedia.mockImplementation(() => new Promise((resolve) => (allow = () => resolve(stream as never))));
+    api.transcribe.mockResolvedValue("what I said after Allow");
+    render(<Chat onOpenSettings={() => {}} />);
+    fireEvent.keyDown(window, { key: "g", ctrlKey: true });
+    // The prompt opens and takes focus: no keyup reaches the page.
+    fireEvent.blur(window);
+    await act(async () => {
+      allow();
+    });
+    await waitFor(() => expect(mic.processor).not.toBeNull());
+    expect(screen.getByRole("button", { name: /Listening/ })).toHaveAttribute("aria-pressed", "true");
+    mic.feed(new Float32Array(4800).fill(0.25));
+    fireEvent.keyUp(window, { key: "g" });
+    await waitFor(() => expect(screen.getByLabelText("Message")).toHaveValue("what I said after Allow"));
+    expect(api.transcribe).toHaveBeenCalledTimes(1);
+  });
+
   it("a denied mic shows a note and sends nothing to transcribe", async () => {
     Object.defineProperty(navigator, "mediaDevices", {
       configurable: true,

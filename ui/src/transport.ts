@@ -233,8 +233,9 @@ export async function call<T>(command: string, args?: Record<string, unknown>): 
   if (!reply) throw UNREACHABLE;
   // The events this call caused (a chat's reply) arrive on the stream; wait
   // for them, so a turn's text is shown before the call that ran it returns.
-  if (typeof reply.seq === "number" && !(await caughtUp(now, reply.seq))) {
-    // Returning now ends the turn without them, so say they were lost.
+  if (typeof reply.seq === "number" && !(await caughtUp(now, reply.seq)) && command === "send_chat") {
+    // Returning now ends the turn without them, so say they were lost. Any
+    // other call returning says nothing about a reply that is still running.
     for (const fn of handlers.get(GAP_EVENT) ?? []) fn(null);
   }
   if (!reply.ok) throw reply.error;

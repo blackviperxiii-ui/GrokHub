@@ -775,16 +775,19 @@ fn ship_with(
             return Err(msg);
         }
     };
-    if go == Go::Confirm {
-        if !confirmed {
-            return Err("This needs a confirmation first.".into());
-        }
-        if expected != Some(command.as_str()) {
-            return Err(
-                "The branch changed since you confirmed. Check the command and confirm again."
-                    .into(),
-            );
-        }
+    // A confirm names one command. It is refused for any other, also one
+    // that would have needed no confirm.
+    let stale = match expected {
+        Some(seen) => seen != command.as_str(),
+        None => go == Go::Confirm && confirmed,
+    };
+    if go == Go::Confirm && !confirmed {
+        return Err("This needs a confirmation first.".into());
+    }
+    if stale {
+        return Err(
+            "The branch changed since you confirmed. Check the command and confirm again.".into(),
+        );
     }
     grokhub_core::offline::refuse()?;
     let approved_by = if go == Go::NoConfirm {

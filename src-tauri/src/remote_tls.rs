@@ -186,7 +186,9 @@ async fn pass(out: &mut (impl AsyncWrite + Unpin), bytes: &[u8], idle: Duration)
 }
 
 /// Copies both ways between the browser and the inner server until the
-/// server closes, either side fails, or nothing moved for `idle`.
+/// server closes, either side fails, or nothing moved for `idle`. A request
+/// still waiting for the first byte of its reply is not idle: a chat turn
+/// holds its call open and silent until the whole reply is ready.
 async fn pump<F, B>(front: F, back: B, idle: Duration)
 where
     F: AsyncRead + AsyncWrite + Unpin,
@@ -197,6 +199,7 @@ where
     let mut up = vec![0u8; 16 * 1024];
     let mut down = vec![0u8; 16 * 1024];
     let mut sending = true;
+    let mut awaiting = false;
     loop {
         tokio::select! {
             read = front_in.read(&mut up), if sending => match read {
@@ -208,6 +211,7 @@ where
                     }
                 }
                 Ok(n) => {
+                    awaiting = true;
                     if !pass(&mut back_out, &up[..n], idle).await {
                         break;
                     }
@@ -216,13 +220,14 @@ where
             },
             read = back_in.read(&mut down) => match read {
                 Ok(n) if n > 0 => {
+                    awaiting = false;
                     if !pass(&mut front_out, &down[..n], idle).await {
                         break;
                     }
                 }
                 _ => break,
             },
-            () = tokio::time::sleep(idle) => break,
+            () = tokio::time::sleep(idle), if !awaiting => break,
         }
     }
     // Tells the browser the connection ended on purpose.
@@ -551,10 +556,10 @@ mod tests {
             (": ping\n".repeat(12), true)
         );
 
-        // A connection that goes quiet after its request is still closed.
+        // A connection that goes quiet after its reply began is still closed.
         let inner = inner_server(|mut sock| {
-            let _ = sock.write_all(b": open\n");
             let _ = sock.read(&mut [0u8; 256]);
+            let _ = sock.write_all(b": open\n");
             let _ = sock.read(&mut [0u8; 256]);
         });
         let front = self::front(inner, &cert, 2, Duration::from_millis(500));
@@ -562,5 +567,20 @@ mod tests {
             get(connect(front.port, &cert)),
             (": open\n".to_string(), true)
         );
+    }
+
+    /// A chat turn holds its call open and silent until the reply is whole.
+    #[test]
+    fn a_call_waiting_for_its_reply_is_not_closed_as_idle() {
+        const REPLY: &str = "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\ndone";
+        // The reply comes after three idle limits of silence.
+        let inner = inner_server(|mut sock| {
+            let _ = sock.read(&mut [0u8; 256]);
+            std::thread::sleep(Duration::from_millis(900));
+            let _ = sock.write_all(REPLY.as_bytes());
+        });
+        let cert = Cert::make(&hosts("192.168.1.20")).unwrap();
+        let front = front(inner, &cert, 2, Duration::from_millis(300));
+        assert_eq!(get(connect(front.port, &cert)), (REPLY.to_string(), true));
     }
 }

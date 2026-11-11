@@ -227,6 +227,51 @@ describe("transport (web app)", () => {
     }
   });
 
+
+  it("a call that ran no turn raises no gap when its wait runs out", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let opens = 0;
+    let close: () => void = () => {};
+    let push: (text: string) => void = () => {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/hello")) return Response.json({ kind: "grokhub-remote", version: 1 });
+        if (url.endsWith("/call/quick_chips")) return Response.json({ ok: true, value: "chips", seq: 3 });
+        opens += 1;
+        // The stream opens once; after it drops the desktop can't be reached for it.
+        if (opens > 1) throw new TypeError("Failed to fetch");
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            push = (text) => controller.enqueue(new TextEncoder().encode(text));
+            close = () => controller.close();
+          },
+        });
+        return new Response(body, { headers: { "Content-Type": "text/event-stream" } });
+      }),
+    );
+    try {
+      await pair(CODE, BASE);
+      const gaps: unknown[] = [];
+      await subscribe(GAP_EVENT, (payload) => gaps.push(payload));
+      push("id: 1\n\n");
+      await vi.advanceTimersByTimeAsync(0);
+      close();
+      let value: string | undefined;
+      const sent = call<string>("quick_chips", { surface: "chat" }).then(
+        (stop) => (value = stop),
+      );
+      await vi.advanceTimersByTimeAsync(14000);
+      expect(value).toBeUndefined();
+      expect(gaps).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1100);
+      await sent;
+      expect(value).toBe("chips");
+      expect(gaps).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it("reopens a dropped stream from the last event it saw", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const opened: (string | null)[] = [];
