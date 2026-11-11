@@ -4,11 +4,12 @@ use grokhub_agent::{ContentPart, InputItem, Usage};
 use std::path::PathBuf;
 
 /// The cabin's own test shapes: none of these may reach the bundle.
-const XAI_KEY: &str = "xai-Zq8Lm2Vn4Rt6Yp9Ws3Kd7Fh1Jc5Bx0Ga";
-const BEARER: &str = "Bearer Qw3Er5Ty7Ui9Op1As2Df4Gh6Jk8Lz0Xc";
+const XAI_KEY: &str = concat!("xai-", "abcdefghijklmnopqrstuvwxyz012345");
+const BEARER_VALUE: &str = "zyxwvutsrqponmlkjihgfedcba543210";
+const BEARER: &str = concat!("Bearer ", "zyxwvutsrqponmlkjihgfedcba543210");
 const PAIRING: &str = "pairing_token=PR-4Q7Z-91LM-XK20";
 const AWS_KEY: &str = "AKIAIOSFODNN7EXAMPLE";
-const GH_TOKEN: &str = "ghp_16C7e42F292c6912E7710c838347Ae178B4a";
+const GH_TOKEN: &str = concat!("ghp_", "abcdefghijklmnopqrstuvwxyz0123456789");
 const PEM: &str =
     "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEF\n-----END PRIVATE KEY-----";
 const EMAIL: &str = "sam.example@fixture.test";
@@ -61,7 +62,7 @@ fn every_text(export: &DiagnosticsExport) -> String {
 
 const LEAKS: &[&str] = &[
     XAI_KEY,
-    "Qw3Er5Ty7Ui9Op1As2Df4Gh6Jk8Lz0Xc",
+    BEARER_VALUE,
     "PR-4Q7Z-91LM-XK20",
     AWS_KEY,
     GH_TOKEN,
@@ -224,4 +225,85 @@ fn asks_group_with_their_replies_and_tool_steps() {
     assert_eq!(groups[0].assistant, "one\n\ntwo");
     assert_eq!(groups[0].tools, vec!["read_file".to_string()]);
     assert_eq!((groups[1].turn, groups[1].user.as_str()), (2, "second"));
+}
+
+/// The repo's standard fake key.
+const SK_KEY: &str = "sk-abcdefghijklmnopqrstuv";
+
+#[test]
+fn a_key_the_log_tail_starts_inside_is_still_hidden() {
+    let config = temp_dir("logcut");
+    // The last 4,000 characters start four characters into the key.
+    let rest = format!(" accepted\n{}", "y".repeat(LOG_TAIL - 21 - 10));
+    let log = format!("started\n{SK_KEY}{rest}");
+    assert_eq!(
+        tail_chars(&log, LOG_TAIL)
+            .chars()
+            .take(31)
+            .collect::<String>(),
+        "bcdefghijklmnopqrstuv accepted\n"
+    );
+    std::fs::write(config.join("cabin.log"), log).unwrap();
+    set(&config, true, true).unwrap();
+    let export = build(&config, "1.0.0", true, None, Some(HOME)).expect("bundle");
+    assert!(
+        export.recent_logs.contains(" accepted\n"),
+        "{}",
+        export.recent_logs
+    );
+    assert!(
+        !export.recent_logs.contains("bcdefghijklmnopqrstuv"),
+        "most of the key is in the bundle: {}",
+        export.recent_logs.chars().take(60).collect::<String>()
+    );
+    assert!(export.recent_logs.chars().count() <= LOG_TAIL);
+}
+
+#[test]
+fn a_key_a_step_result_or_error_is_cut_inside_is_still_hidden() {
+    use grokhub_agent::harness::{append_span, AccessMode, Span};
+    let config = temp_dir("stepcut");
+    seed_chat(&config, "shell-cut");
+    // The 160-character result cap and the 200-character error cap both fall
+    // ten characters into the key.
+    let result = format!("{}{SK_KEY}", "r".repeat(150));
+    let claim = format!("error: {}{SK_KEY}", "c".repeat(183));
+    let span = Span::soft_allow(
+        "shell-cut",
+        "run_command",
+        "{}",
+        &result,
+        &claim,
+        AccessMode::Supervised,
+        "grok_build",
+    )
+    .in_turn("shell-cut", 1);
+    append_span(&config, &span).expect("span");
+    let export = build(&config, "1.0.0", true, Some("shell-cut"), Some(HOME)).expect("bundle");
+    let turn = &export.turns[0];
+    assert_eq!(turn.tool_calls.len(), 1);
+    let summary = &turn.tool_calls[0].result_summary;
+    assert!(summary.starts_with("rrrr"), "{summary}");
+    assert!(!summary.contains("sk-abc"), "{summary}");
+    assert_eq!(turn.errors.len(), 1);
+    assert!(
+        turn.errors[0].starts_with("error: cccc"),
+        "{}",
+        turn.errors[0]
+    );
+    assert!(!turn.errors[0].contains("sk-abc"), "{}", turn.errors[0]);
+}
+
+#[test]
+fn a_turn_names_the_model_its_chat_was_saved_with_and_no_provider() {
+    let config = temp_dir("model");
+    seed_chat(&config, "shell-model");
+    let export = build(&config, "1.0.0", true, Some("shell-model"), Some(HOME)).expect("bundle");
+    assert_eq!(
+        (
+            export.turns[0].model.as_str(),
+            export.turns[0].provider.as_str()
+        ),
+        ("grok-test", "")
+    );
 }

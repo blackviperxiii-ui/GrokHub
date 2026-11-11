@@ -507,7 +507,8 @@ function LogItem({
  * where the approvals stay the computer's. Finished automation runs go to the
  * Notifications menu, not this log. `open`: a saved chat History picked;
  * a new `n` shows it, and the next message carries it on. `deleted`: a chat
- * History deleted; if it is the open one, a new chat starts. `clear`: the
+ * History deleted (`ids`: every chat it has deleted, since Delete all reports
+ * many at once); if the open one is among them, a new chat starts. `clear`: the
  * Chat tab's Clear chat, already confirmed; a new `n` deletes the open chat's
  * saved history for good and starts a new one. On the desktop
  * the chat open at the last close comes back on mount. */
@@ -541,7 +542,7 @@ export function Chat({
   queueAct?: QueueAct;
   prefill?: Prefill;
   open?: { id: string; n: number };
-  deleted?: { id: string; n: number };
+  deleted?: { id: string; ids?: string[]; n: number };
   clear?: { n: number };
   active?: boolean;
   remote?: boolean;
@@ -701,15 +702,15 @@ export function Chat({
   }, [open]);
 
   // Deleting the chat on screen starts a new one; deleting another leaves it.
-  const dropDeleted = useEffectEvent((id: string) => {
-    if (id === conversationId) startFresh();
+  const dropDeleted = useEffectEvent((ids: string[]) => {
+    if (ids.includes(conversationId)) startFresh();
   });
 
   useEffect(() => {
     if (!deleted) return;
-    const id = deleted.id;
+    const ids = deleted.ids ?? [deleted.id];
     // After this render, so the reset is one render of its own.
-    const timer = window.setTimeout(() => dropDeleted(id), 0);
+    const timer = window.setTimeout(() => dropDeleted(ids), 0);
     return () => window.clearTimeout(timer);
   }, [deleted]);
 

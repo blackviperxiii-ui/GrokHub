@@ -6,7 +6,8 @@
 //! Only the shell's own chats (ids starting `shell-`) show. The cabin keeps
 //! its threads on its own History page, so no file has two writers.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use grokhub_agent::perm::ConfigGuard;
@@ -234,11 +235,16 @@ pub fn lines(info: &SessionInfo) -> Vec<Line> {
     out
 }
 
-/// The chat's newest `limit` lines (at least one), oldest first.
-pub fn load(config_dir: &Path, id: &str, limit: usize) -> Result<Transcript, String> {
+/// A saved shell chat as its file holds it.
+pub fn saved(config_dir: &Path, id: &str) -> Result<SessionInfo, String> {
     let id = shell_id(id)?;
     let _config = ConfigGuard::set(config_dir);
-    let info = grokhub_agent::load_session(id)?;
+    grokhub_agent::load_session(id)
+}
+
+/// The chat's newest `limit` lines (at least one), oldest first.
+pub fn load(config_dir: &Path, id: &str, limit: usize) -> Result<Transcript, String> {
+    let info = saved(config_dir, id)?;
     let mut all = lines(&info);
     let earlier = all.len().saturating_sub(limit.max(1));
     let lines = all.split_off(earlier);
@@ -265,17 +271,42 @@ pub fn rename(config_dir: &Path, id: &str, title: &str) -> Result<(), String> {
 /// written back. `/bg` and scheduled forks of it go with it.
 pub fn delete(config_dir: &Path, id: &str) -> Result<(), String> {
     let id = shell_id(id)?;
+    delete_chats(config_dir, &[id.to_string()]).map(|_| ())
+}
+
+/// Deletes these shell chats and answers with the ones that went: each
+/// chat's file and its files, then their forks in one pass over the saved
+/// sessions, then the pins in one write. A chat that can't be deleted stops
+/// it; the ones before it are gone and cleaned up after.
+fn delete_chats(config_dir: &Path, ids: &[String]) -> Result<Vec<String>, String> {
     let _config = ConfigGuard::set(config_dir);
-    grokhub_agent::delete_session(id)?;
-    grokhub_agent::delete_forks_of(&[id.to_string()]);
-    let mut ids = pinned_ids(config_dir);
-    if let Some(at) = ids.iter().position(|p| p == id) {
-        ids.remove(at);
-        if let Ok(raw) = serde_json::to_string(&ids) {
+    let mut gone: Vec<String> = Vec::with_capacity(ids.len());
+    let mut failed = None;
+    for id in ids {
+        let deleted = shell_id(id).and_then(|id| {
+            grokhub_agent::delete_session(id)?;
+            Ok(id.to_string())
+        });
+        match deleted {
+            Ok(id) => gone.push(id),
+            Err(why) => {
+                failed = Some(why);
+                break;
+            }
+        }
+    }
+    grokhub_agent::delete_forks_of(&gone);
+    let pins = pinned_ids(config_dir);
+    let kept: Vec<&String> = pins.iter().filter(|p| !gone.contains(p)).collect();
+    if kept.len() != pins.len() {
+        if let Ok(raw) = serde_json::to_string(&kept) {
             let _ = std::fs::write(config_dir.join(PINS_FILE), raw);
         }
     }
-    Ok(())
+    match failed {
+        Some(why) => Err(why),
+        None => Ok(gone),
+    }
 }
 
 /// Takes one message out of a saved shell chat, so the model never reads it
@@ -336,34 +367,50 @@ pub enum Arm {
     Deleted,
 }
 
-/// The armed state, shared by the Delete all button.
+/// The armed state, shared by the Delete all button: when the first click
+/// came, and the chats it counted. Those are the chats a yes deletes.
 #[derive(Debug, Default)]
 pub struct DeleteArm {
     at: Option<Instant>,
+    ids: Vec<String>,
+}
+
+/// What a Delete all click does.
+#[derive(Debug, PartialEq, Eq)]
+enum Click {
+    /// The first click, or one after the window lapsed: it arms.
+    Arm,
+    /// The second half of a double-click: still armed, nothing else.
+    Keep,
+    /// The armed second click: delete.
+    Delete,
 }
 
 impl DeleteArm {
     pub const fn new() -> Self {
-        Self { at: None }
+        Self {
+            at: None,
+            ids: Vec::new(),
+        }
     }
 
-    /// A click at `now`. True when it should delete.
-    pub fn click(&mut self, now: Instant) -> bool {
-        match self.at.take() {
-            Some(at) if now.saturating_duration_since(at) < DELETE_ALL_MIN => {
-                self.at = Some(at);
-                false
+    fn click(&mut self, now: Instant) -> Click {
+        match self.at {
+            Some(at) if now.saturating_duration_since(at) < DELETE_ALL_MIN => Click::Keep,
+            Some(at) if now.saturating_duration_since(at) <= DELETE_ALL_ARM => {
+                self.at = None;
+                Click::Delete
             }
-            Some(at) if now.saturating_duration_since(at) <= DELETE_ALL_ARM => true,
             _ => {
                 self.at = Some(now);
-                false
+                Click::Arm
             }
         }
     }
 
     pub fn cancel(&mut self) {
         self.at = None;
+        self.ids.clear();
     }
 }
 
@@ -373,29 +420,55 @@ impl DeleteArm {
 pub struct DeleteAll {
     pub state: Arm,
     pub count: usize,
+    /// The chats that were deleted; empty until `state` is `Deleted`.
+    pub ids: Vec<String>,
 }
 
 /// One Delete all click. Nothing is deleted unless the click is the armed
-/// second one; then every shell chat and its forks go, and the pins file with
-/// them. Grok CLI and cabin chats are not this app's to delete.
+/// second one; then the shell chats the first click counted go, with their
+/// forks and pins. A chat started after the first click was never named, so
+/// it stays. Grok CLI and cabin chats are not this app's to delete.
 pub fn delete_all(
     config_dir: &Path,
-    arm: &mut DeleteArm,
+    arm: &Mutex<DeleteArm>,
     now: Instant,
 ) -> Result<DeleteAll, String> {
-    let ids: Vec<String> = list(config_dir).into_iter().map(|r| r.id).collect();
-    if !arm.click(now) {
-        return Ok(DeleteAll {
-            state: Arm::Armed,
-            count: ids.len(),
-        });
-    }
-    for id in &ids {
-        delete(config_dir, id)?;
-    }
+    delete_all_with(config_dir, arm, now, delete_chats)
+}
+
+/// [`delete_all`] with the deleting step named, so a test can look at the
+/// arm while it runs.
+fn delete_all_with(
+    config_dir: &Path,
+    arm: &Mutex<DeleteArm>,
+    now: Instant,
+    delete: impl FnOnce(&Path, &[String]) -> Result<Vec<String>, String>,
+) -> Result<DeleteAll, String> {
+    // Only the click is decided under the lock: the listing before it and
+    // the deleting after it read and write the disk, and Cancel (a
+    // main-thread command) takes the same lock.
+    let listed: Vec<String> = list(config_dir).into_iter().map(|r| r.id).collect();
+    let named = {
+        let mut arm = arm.lock().unwrap_or_else(|e| e.into_inner());
+        match arm.click(now) {
+            Click::Delete => std::mem::take(&mut arm.ids),
+            click => {
+                if click == Click::Arm {
+                    arm.ids = listed;
+                }
+                return Ok(DeleteAll {
+                    state: Arm::Armed,
+                    count: arm.ids.len(),
+                    ids: Vec::new(),
+                });
+            }
+        }
+    };
+    let ids = delete(config_dir, &named)?;
     Ok(DeleteAll {
         state: Arm::Deleted,
         count: ids.len(),
+        ids,
     })
 }
 
@@ -419,6 +492,15 @@ fn modified_ms(path: &Path) -> u64 {
         .map_or(0, |at| at.as_millis() as u64)
 }
 
+/// Where a read-only row's text comes from.
+enum Source {
+    /// A Grok CLI session file, when the session has one.
+    Cli(Option<PathBuf>),
+    /// A cabin chat, as the listing read it. The listing never repairs a
+    /// file, so a view of it never writes one.
+    Cabin(Box<SessionInfo>),
+}
+
 /// Grok CLI sessions (`cli_home`) and the cabin's own chats, read-only.
 ///
 /// Cabin chats list read-only while both apps ship: a session file has one
@@ -426,6 +508,17 @@ fn modified_ms(path: &Path) -> u64 {
 /// is retired this is where they become the shell's own. Forks (`/bg` and
 /// scheduled runs) and the shell's own chats stay off this list.
 pub fn read_only(config_dir: &Path, cli_home: Option<&Path>, query: &str) -> Vec<ReadOnlyRow> {
+    read_only_sources(config_dir, cli_home, query)
+        .into_iter()
+        .map(|(row, _)| row)
+        .collect()
+}
+
+fn read_only_sources(
+    config_dir: &Path,
+    cli_home: Option<&Path>,
+    query: &str,
+) -> Vec<(ReadOnlyRow, Source)> {
     let needle = query.trim().to_lowercase();
     let _config = ConfigGuard::set(config_dir);
     let cli = match cli_home {
@@ -433,17 +526,20 @@ pub fn read_only(config_dir: &Path, cli_home: Option<&Path>, query: &str) -> Vec
         None => grokhub_core::cli_history::discover_session_files(),
     };
     let mut seen = std::collections::HashSet::new();
-    let mut rows: Vec<ReadOnlyRow> = Vec::new();
+    let mut rows: Vec<(ReadOnlyRow, Source)> = Vec::new();
     for session in cli {
         if !seen.insert(session.id.clone()) {
             continue;
         }
-        rows.push(ReadOnlyRow {
-            updated: session.path.as_deref().map_or(0, modified_ms),
-            id: session.id,
-            title: session.title,
-            source: "cli",
-        });
+        rows.push((
+            ReadOnlyRow {
+                updated: session.path.as_deref().map_or(0, modified_ms),
+                id: session.id,
+                title: session.title,
+                source: "cli",
+            },
+            Source::Cli(session.path),
+        ));
     }
     for info in grokhub_agent::list_sessions() {
         if info.id.starts_with(PREFIX)
@@ -452,15 +548,18 @@ pub fn read_only(config_dir: &Path, cli_home: Option<&Path>, query: &str) -> Vec
         {
             continue;
         }
-        rows.push(ReadOnlyRow {
-            updated: updated_ms(&info),
-            id: info.id,
-            title: info.title,
-            source: "cabin",
-        });
+        rows.push((
+            ReadOnlyRow {
+                updated: updated_ms(&info),
+                id: info.id.clone(),
+                title: info.title.clone(),
+                source: "cabin",
+            },
+            Source::Cabin(Box::new(info)),
+        ));
     }
-    rows.retain(|r| needle.is_empty() || r.title.to_lowercase().contains(&needle));
-    rows.sort_by(|a, b| b.updated.cmp(&a.updated).then(a.id.cmp(&b.id)));
+    rows.retain(|(r, _)| needle.is_empty() || r.title.to_lowercase().contains(&needle));
+    rows.sort_by(|(a, _), (b, _)| b.updated.cmp(&a.updated).then(a.id.cmp(&b.id)));
     rows.truncate(SEARCH_CAP);
     rows
 }
@@ -480,15 +579,49 @@ fn json_texts(v: &serde_json::Value, out: &mut Vec<String>) {
     }
 }
 
-/// How much of a CLI session file a view reads.
+/// How much of a CLI session file a view reads: its newest part.
 const CLI_VIEW_BYTES: u64 = 2 * 1024 * 1024;
 
-fn cli_lines(path: &Path) -> Result<Vec<Line>, String> {
-    use std::io::Read;
-    let mut raw = String::new();
-    std::fs::File::open(path)
-        .and_then(|f| f.take(CLI_VIEW_BYTES).read_to_string(&mut raw))
-        .map_err(|_| "That session's file couldn't be read.".to_string())?;
+pub const CLI_UNREADABLE: &str = "That session's file couldn't be read.";
+
+/// The newest [`CLI_VIEW_BYTES`] of a CLI session file under `home`, from
+/// the first whole line. A link is never followed, and nothing outside the
+/// CLI folder is opened: the CLI's sign-in and settings files sit beside its
+/// sessions, and this app never reads them.
+fn cli_text(home: &Path, path: &Path) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    if std::fs::symlink_metadata(path)
+        .ok()?
+        .file_type()
+        .is_symlink()
+    {
+        return None;
+    }
+    let real = std::fs::canonicalize(path).ok()?;
+    let inside = ["memory", "sessions", "worktrees"].iter().any(|root| {
+        std::fs::canonicalize(home.join(root)).is_ok_and(|root| real.starts_with(root))
+    });
+    if !inside {
+        return None;
+    }
+    let mut file = std::fs::File::open(&real).ok()?;
+    let start = file.metadata().ok()?.len().saturating_sub(CLI_VIEW_BYTES);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut raw = Vec::new();
+    file.take(CLI_VIEW_BYTES).read_to_end(&mut raw).ok()?;
+    if start > 0 {
+        // The cut fell inside a line (and maybe inside a character).
+        let line = raw
+            .iter()
+            .position(|b| *b == b'\n')
+            .map_or(raw.len(), |at| at + 1);
+        raw.drain(..line);
+    }
+    Some(String::from_utf8_lossy(&raw).into_owned())
+}
+
+fn cli_lines(home: &Path, path: &Path) -> Result<Vec<Line>, String> {
+    let raw = cli_text(home, path).ok_or_else(|| CLI_UNREADABLE.to_string())?;
     if path.extension().and_then(|e| e.to_str()) == Some("md") {
         return Ok(grokhub_core::cli_history::parse_session_markdown(&raw)
             .into_iter()
@@ -537,24 +670,20 @@ pub fn view_read_only(
     if id.starts_with(PREFIX) {
         return Err(NOT_READ_ONLY.into());
     }
-    let row = read_only(config_dir, cli_home, "")
+    let (row, source) = read_only_sources(config_dir, cli_home, "")
         .into_iter()
-        .find(|r| r.id == id)
+        .find(|(r, _)| r.id == id)
         .ok_or_else(|| NOT_READ_ONLY.to_string())?;
-    let mut all = if row.source == "cabin" {
-        let _config = ConfigGuard::set(config_dir);
-        lines(&grokhub_agent::load_session(id)?)
-    } else {
-        let cli = match cli_home {
-            Some(home) => grokhub_core::cli_history::discover_session_files_in(home),
-            None => grokhub_core::cli_history::discover_session_files(),
-        };
-        let path = cli
-            .into_iter()
-            .find(|s| s.id == id)
-            .and_then(|s| s.path)
-            .ok_or_else(|| NOT_READ_ONLY.to_string())?;
-        cli_lines(&path)?
+    let mut all = match source {
+        Source::Cabin(info) => lines(&info),
+        Source::Cli(path) => {
+            let path = path.ok_or_else(|| NOT_READ_ONLY.to_string())?;
+            let home = cli_home
+                .map(Path::to_path_buf)
+                .or_else(grokhub_core::cli_history::grok_home)
+                .ok_or_else(|| NOT_READ_ONLY.to_string())?;
+            cli_lines(&home, &path)?
+        }
     };
     let earlier = all.len().saturating_sub(limit.max(1));
     let lines = all.split_off(earlier);
@@ -1374,42 +1503,239 @@ mod tests {
             turn(id, &config, &workspace, Model::new("Ok.", false), "hello");
         }
         toggle_pin(&config, "shell-all-a").expect("pin");
-        let mut arm = DeleteArm::default();
+        let arm = Mutex::new(DeleteArm::default());
         let t0 = Instant::now();
         // First click arms: nothing is deleted.
-        let first = delete_all(&config, &mut arm, t0).expect("first");
+        let first = delete_all(&config, &arm, t0).expect("first");
         assert_eq!(
             first,
             DeleteAll {
                 state: Arm::Armed,
-                count: 2
+                count: 2,
+                ids: Vec::new(),
             }
         );
         assert_eq!(list(&config).len(), 2);
         // A double-click's second half (100 ms later) keeps it armed.
-        let quick = delete_all(&config, &mut arm, t0 + Duration::from_millis(100)).expect("quick");
+        let quick = delete_all(&config, &arm, t0 + Duration::from_millis(100)).expect("quick");
         assert_eq!(quick.state, Arm::Armed);
         assert_eq!(list(&config).len(), 2);
         // Cancel disarms, so the next click only arms again.
-        arm.cancel();
-        let again = delete_all(&config, &mut arm, t0 + Duration::from_secs(1)).expect("again");
+        arm.lock().expect("arm").cancel();
+        let again = delete_all(&config, &arm, t0 + Duration::from_secs(1)).expect("again");
         assert_eq!(again.state, Arm::Armed);
         assert_eq!(list(&config).len(), 2);
         // A second click after the 5 s window only re-arms.
-        let late = delete_all(&config, &mut arm, t0 + Duration::from_secs(7)).expect("late");
+        let late = delete_all(&config, &arm, t0 + Duration::from_secs(7)).expect("late");
         assert_eq!(late.state, Arm::Armed);
         assert_eq!(list(&config).len(), 2);
         // A real second click inside the window deletes every chat and pin.
-        let done = delete_all(&config, &mut arm, t0 + Duration::from_secs(9)).expect("done");
+        let done = delete_all(&config, &arm, t0 + Duration::from_secs(9)).expect("done");
         assert_eq!(
             done,
             DeleteAll {
                 state: Arm::Deleted,
-                count: 2
+                count: 2,
+                ids: vec!["shell-all-a".to_string(), "shell-all-b".to_string()],
             }
         );
         assert_eq!(list(&config), Vec::<ChatRow>::new());
         assert_eq!(pinned_ids(&config), Vec::<String>::new());
+    }
+
+    #[test]
+    fn delete_all_deletes_exactly_the_chats_the_armed_click_named() {
+        let (config, workspace) = (temp_dir("named-cfg"), temp_dir("named-ws"));
+        for id in ["shell-named-a", "shell-named-b", "shell-named-c"] {
+            turn(id, &config, &workspace, Model::new("Ok.", false), "hello");
+        }
+        let arm = Mutex::new(DeleteArm::default());
+        let t0 = Instant::now();
+        let asked = delete_all(&config, &arm, t0).expect("arms");
+        assert_eq!((asked.state, asked.count), (Arm::Armed, 3));
+        // A chat that starts after the question was never named in it.
+        turn(
+            "shell-named-late",
+            &config,
+            &workspace,
+            Model::new("Ok.", false),
+            "started after the question",
+        );
+        // A too-quick second click still asks about the same three.
+        let quick = delete_all(&config, &arm, t0 + Duration::from_millis(100)).expect("quick");
+        assert_eq!((quick.state, quick.count), (Arm::Armed, 3));
+        let done = delete_all(&config, &arm, t0 + Duration::from_secs(2)).expect("deletes");
+        let mut gone = done.ids.clone();
+        gone.sort();
+        assert_eq!(gone, ["shell-named-a", "shell-named-b", "shell-named-c"]);
+        assert_eq!((done.state, done.count), (Arm::Deleted, 3));
+        assert_eq!(
+            list(&config).into_iter().map(|r| r.id).collect::<Vec<_>>(),
+            ["shell-named-late"]
+        );
+    }
+
+    #[test]
+    fn delete_all_takes_each_chats_fork_and_pin_and_leaves_the_rest() {
+        let (config, workspace) = (temp_dir("batch-cfg"), temp_dir("batch-ws"));
+        for id in ["shell-batch-a", "shell-batch-b", "shell-batch-c"] {
+            turn(id, &config, &workspace, Model::new("Ok.", false), "hello");
+        }
+        toggle_pin(&config, "shell-batch-b").expect("pin");
+        let fork = {
+            let _config = ConfigGuard::set(&config);
+            grokhub_agent::rename_session("cabin-batch-keep", "Cabin chat").expect("cabin file");
+            grokhub_agent::fork_session("shell-batch-a").expect("fork")
+        };
+        let sessions = config.join("sessions");
+        assert!(sessions.join(format!("{}.jsonl", fork.id)).exists());
+        let arm = Mutex::new(DeleteArm::default());
+        let t0 = Instant::now();
+        delete_all(&config, &arm, t0).expect("arms");
+        let done = delete_all(&config, &arm, t0 + Duration::from_secs(1)).expect("deletes");
+        let mut gone = done.ids.clone();
+        gone.sort();
+        assert_eq!(gone, ["shell-batch-a", "shell-batch-b", "shell-batch-c"]);
+        let mut left: Vec<String> = std::fs::read_dir(&sessions)
+            .expect("sessions")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["cabin-batch-keep.jsonl"], "the fork goes too");
+        assert_eq!(
+            std::fs::read_to_string(config.join("shell-pins.json")).expect("pins"),
+            "[]"
+        );
+    }
+
+    #[test]
+    fn cancel_never_waits_on_the_deleting() {
+        let (config, workspace) = (temp_dir("lock-cfg"), temp_dir("lock-ws"));
+        turn(
+            "shell-lock-a",
+            &config,
+            &workspace,
+            Model::new("Ok.", false),
+            "hello",
+        );
+        let arm = Mutex::new(DeleteArm::default());
+        let t0 = Instant::now();
+        delete_all(&config, &arm, t0).expect("arms");
+        let mut free = None;
+        let done = delete_all_with(&config, &arm, t0 + Duration::from_secs(1), |dir, ids| {
+            // Cancel is a main-thread command that takes this lock.
+            free = Some(arm.try_lock().is_ok());
+            delete_chats(dir, ids)
+        })
+        .expect("deletes");
+        assert_eq!(free, Some(true), "the arm stayed locked while deleting");
+        assert_eq!(done.ids, ["shell-lock-a"]);
+    }
+
+    #[test]
+    fn viewing_a_cabin_chat_with_a_torn_last_line_leaves_its_file_as_it_is() {
+        use std::io::Write;
+        let (config, workspace) = (temp_dir("torn-cfg"), temp_dir("torn-ws"));
+        let cli_home = temp_dir("torn-cli");
+        turn(
+            "cabin-torn",
+            &config,
+            &workspace,
+            Model::new("Cabin reply.", false),
+            "from the cabin",
+        );
+        let file = config.join("sessions").join("cabin-torn.jsonl");
+        // The cabin is part-way through appending its next record.
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&file)
+            .expect("open")
+            .write_all(br#"{"type":"message","role":"user","content":[{"type":"input_te"#)
+            .expect("torn tail");
+        let before = std::fs::read_to_string(&file).expect("before");
+        let shown = view_read_only(&config, Some(&cli_home), "cabin-torn", 50).expect("cabin view");
+        assert_eq!(
+            shown.lines,
+            vec![
+                line(Role::User, "from the cabin"),
+                line(Role::Assistant, "Cabin reply.")
+            ]
+        );
+        assert_eq!(
+            std::fs::read_to_string(&file).expect("after"),
+            before,
+            "a read-only view rewrote the cabin's file"
+        );
+    }
+
+    #[test]
+    fn a_cli_session_over_the_read_cap_opens_and_shows_its_newest_lines() {
+        let config = temp_dir("big-cfg");
+        let cli_home = temp_dir("big-cli");
+        let cli_id = "0198f2a4-aaaa-7d2e-9a3f-5c6d7e8f9a0c";
+        let dir = cli_home.join("sessions").join(cli_id);
+        std::fs::create_dir_all(&dir).expect("cli dir");
+        // 65-byte records, so the 2 MB mark counted from either end falls
+        // inside a three-byte box-drawing character.
+        let record = "{\"type\":\"user\",\"content\":\"────────────\"}\n";
+        assert_eq!(record.len(), 65);
+        let mut raw = record.repeat(32_323);
+        raw.push_str("{\"type\":\"assistant\",\"content\":\"The newest line.\"}\n");
+        assert_eq!(raw.len() as u64, CLI_VIEW_BYTES + 3_893);
+        std::fs::write(dir.join("chat_history.jsonl"), raw).expect("cli file");
+        let shown = view_read_only(&config, Some(&cli_home), cli_id, 50).expect("opens");
+        assert_eq!(shown.lines.len(), 50);
+        assert_eq!(
+            shown.lines.last(),
+            Some(&line(Role::Assistant, "The newest line."))
+        );
+        assert_eq!(shown.lines[0], line(Role::User, "────────────"));
+        // The cut drops the first 60 records; 32,264 lines are read.
+        assert_eq!(shown.earlier, 32_214);
+        let _ = std::fs::remove_dir_all(&cli_home);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_cli_session_file_that_is_a_link_is_never_opened() {
+        let config = temp_dir("link-cfg");
+        let cli_home = temp_dir("link-cli");
+        // A stand-in for the CLI's credentials file; the real one is never touched.
+        std::fs::write(
+            cli_home.join("auth.json"),
+            "{\"type\":\"user\",\"content\":\"FAKE-AUTH-LINE\"}\n",
+        )
+        .expect("fake auth");
+        let cli_id = "0198f2a4-bbbb-7d2e-9a3f-5c6d7e8f9a0d";
+        let dir = cli_home.join("sessions").join(cli_id);
+        std::fs::create_dir_all(&dir).expect("cli dir");
+        std::os::unix::fs::symlink("../../auth.json", dir.join("chat_history.jsonl"))
+            .expect("link");
+        let listed = read_only(&config, Some(&cli_home), "");
+        assert_eq!(
+            listed
+                .iter()
+                .map(|r| (r.id.as_str(), r.title.as_str()))
+                .collect::<Vec<_>>(),
+            [(cli_id, cli_id)]
+        );
+        // The listing hands out no file for it, so there is nothing to open.
+        let shown = view_read_only(&config, Some(&cli_home), cli_id, 50);
+        assert_eq!(shown, Err(NOT_READ_ONLY.to_string()));
+        // Asked for by path, the link and a file beside the sessions are
+        // refused too; a session's own file reads.
+        assert_eq!(cli_text(&cli_home, &dir.join("chat_history.jsonl")), None);
+        assert_eq!(cli_text(&cli_home, &cli_home.join("auth.json")), None);
+        std::fs::write(dir.join("notes.md"), "# Harbor\n").expect("own file");
+        assert_eq!(
+            cli_text(&cli_home, &dir.join("notes.md")),
+            Some("# Harbor\n".to_string())
+        );
+        // A linked folder that leads back out of the sessions is refused.
+        std::os::unix::fs::symlink(&cli_home, dir.join("up")).expect("folder link");
+        assert_eq!(cli_text(&cli_home, &dir.join("up").join("auth.json")), None);
+        let _ = std::fs::remove_dir_all(&cli_home);
     }
 
     #[test]

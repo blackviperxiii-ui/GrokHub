@@ -452,8 +452,28 @@ fn is_credential_key(key: &str) -> bool {
     CREDENTIAL_KEYS.iter().any(|k| key.contains(k))
 }
 
+/// The quote a header at `at` sits inside, if its line opened one before it
+/// (`curl -H 'Authorization: …'`).
+fn open_quote_before(b: &[u8], at: usize) -> Option<u8> {
+    let line = b[..at]
+        .iter()
+        .rposition(|c| *c == b'\n')
+        .map_or(0, |n| n + 1);
+    let mut open = None;
+    for c in &b[line..at] {
+        match open {
+            Some(q) if *c == q => open = None,
+            None if matches!(*c, b'"' | b'\'') => open = Some(*c),
+            _ => {}
+        }
+    }
+    open
+}
+
 /// Mask the value in `KEY=value`, `KEY: value` and `"key": "value"` when the
-/// key names a credential, numbers and escaped quotes included.
+/// key names a credential, numbers and escaped quotes included. An
+/// `Authorization` header's value is a scheme and then the credential
+/// (`Basic dXNlcjpwYXNz`), so it is masked to the end of its line.
 fn redact_credential_values(input: &str) -> String {
     let b = input.as_bytes();
     let mut out = String::with_capacity(input.len());
@@ -492,9 +512,19 @@ fn redact_credential_values(input: &str) -> String {
             j += 1;
         }
         let vstart = j;
+        let header = quote.is_none()
+            && input[start..i]
+                .to_ascii_lowercase()
+                .contains("authorization");
+        let closing = if header {
+            open_quote_before(b, start)
+        } else {
+            None
+        };
         while j < b.len()
             && match quote {
                 Some(q) => b[j] != q && b[j] != b'\n',
+                None if header => !matches!(b[j], b'\n' | b'\r') && Some(b[j]) != closing,
                 None => !b[j].is_ascii_whitespace() && !matches!(b[j], b',' | b';' | b'}'),
             }
         {
@@ -1015,6 +1045,33 @@ mod tests {
              api_key: \"[redacted]\" next\n\
              max_tokens: 4000\n\
              author: Pat"
+        );
+    }
+
+    #[test]
+    fn an_authorization_header_is_redacted_to_the_end_of_its_value() {
+        // The value is base64 of a made-up name and password.
+        let raw = concat!(
+            "Authorization: Basic ",
+            "YWRtaW46aHVudGVyMmZha2U=\n",
+            "Proxy-Authorization: Basic ",
+            "abc=\n",
+            "curl -H 'Authorization: Basic ",
+            "YWRtaW46aHVudGVyMmZha2U=' https://example.com\n",
+            "curl -H \"authorization: Digest username=user, response=",
+            "0a1b2c3d\" -v\n",
+            "{\"Authorization\": \"Basic ",
+            "YWRtaW46aHVudGVyMmZha2U=\", \"name\": \"harbor\"}\n",
+            "the line after stays"
+        );
+        assert_eq!(
+            redact_for_diagnostics(raw, None),
+            "Authorization: [redacted]\n\
+             Proxy-Authorization: [redacted]\n\
+             curl -H 'Authorization: [redacted]' https://example.com\n\
+             curl -H \"authorization: [redacted]\" -v\n\
+             {\"Authorization\": \"[redacted]\", \"name\": \"harbor\"}\n\
+             the line after stays"
         );
     }
 

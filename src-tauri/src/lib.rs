@@ -1236,21 +1236,17 @@ async fn delete_chat(state: State<'_, ShellState>, id: String) -> Result<(), Str
 static DELETE_ALL_ARM: Mutex<history::DeleteArm> = Mutex::new(history::DeleteArm::new());
 
 /// Delete all: the first click arms it, a second within 5 s (and not within
-/// half a second, a double-click's second half) deletes every chat of this
-/// app. Replies still running stop.
+/// half a second, a double-click's second half) deletes the chats of this
+/// app the first click counted, and answers with their ids. Replies still
+/// running stop.
 #[tauri::command]
 async fn delete_all_chats(state: State<'_, ShellState>) -> Result<history::DeleteAll, String> {
     let dir = state.config_dir.clone();
-    let ids: Vec<String> = history::list(&dir).into_iter().map(|r| r.id).collect();
-    let done = off_main(move || {
-        let mut arm = DELETE_ALL_ARM.lock().unwrap_or_else(|e| e.into_inner());
-        history::delete_all(&dir, &mut arm, std::time::Instant::now())
-    })
-    .await??;
-    if done.state == history::Arm::Deleted {
-        for id in &ids {
-            end_chat(&state, id);
-        }
+    let done =
+        off_main(move || history::delete_all(&dir, &DELETE_ALL_ARM, std::time::Instant::now()))
+            .await??;
+    for id in &done.ids {
+        end_chat(&state, id);
     }
     Ok(done)
 }

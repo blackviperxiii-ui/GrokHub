@@ -155,7 +155,9 @@ export function App() {
   const [goTo, setGoTo] = useState<{ section: Section; n: number }>();
   const [notices, setNotices] = useState<Notices>(NO_NOTICES);
   const [open, setOpen] = useState<{ id: string; n: number }>();
-  const [deleted, setDeleted] = useState<{ id: string; n: number }>();
+  /** The chat History deleted last, and every chat it has deleted: Delete all
+   * reports its chats in one tick, so one id would lose all but the last. */
+  const [deleted, setDeleted] = useState<{ id: string; ids: string[]; n: number }>();
   /** The Chat tab's right-click menu, at the pointer; then its confirm; then the clear. */
   const [tabMenu, setTabMenu] = useState<{ x: number; y: number } | null>(null);
   const [askClear, setAskClear] = useState(false);
@@ -722,7 +724,9 @@ export function App() {
         <Page shown={view === "history"}>
           <History
             onOpen={openSaved}
-            onDeleted={(id) => setDeleted((now) => ({ id, n: (now?.n ?? 0) + 1 }))}
+            onDeleted={(id) =>
+              setDeleted((now) => ({ id, ids: [...(now?.ids ?? []), id], n: (now?.n ?? 0) + 1 }))
+            }
           />
         </Page>
       )}

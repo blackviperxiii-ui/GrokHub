@@ -19,6 +19,7 @@ import {
   searchSteps,
   viewReadOnlyChat,
   type ChatRow,
+  type DeleteAllResult,
   type ProjectNode,
   type ReadOnlyRow,
   type SavedFile,
@@ -37,6 +38,13 @@ export const HISTORY_NO_HITS = "No chats match that.";
 
 /** Delete all's window: a second click inside it deletes. Like the cabin's. */
 export const DELETE_ALL_ARM_MS = 5000;
+
+/** Delete all, pressed with a search typed and no saved chat anywhere. */
+export const DELETE_ALL_NONE = "There are no saved chats to delete.";
+
+/** Delete all's answer as the app sends it: with the click that deletes,
+ * `ids` names the chats that went. */
+type DeleteAllAnswer = DeleteAllResult & { ids?: string[] };
 
 /** A project or folder with its children, in the file's order. */
 export interface TreeNode {
@@ -194,7 +202,9 @@ function ChatMenu({
  * Projects tree (each project's chats), then the rest by day. Grok CLI and
  * cabin chats list read only below. A click opens a chat in Chat; the menu
  * pins, renames, exports or deletes it (Delete asks first). Delete all asks
- * twice: the first click arms it for a few seconds. */
+ * twice: the first click arms it for a few seconds and shows how many chats
+ * the app will delete, which is every chat, whatever a search lists.
+ * `onDeleted` is called once for each chat that was deleted. */
 export function History({
   onOpen,
   onDeleted,
@@ -218,8 +228,11 @@ export function History({
   // open flag decides the rest.
   const [folded, setFolded] = useState<Record<string, boolean>>({});
   const [viewing, setViewing] = useState<Transcript | null>(null);
-  const [armed, setArmed] = useState(false);
-  const { note, fail, clear } = useNote();
+  // The number of chats the app said a second click deletes; null when
+  // Delete all is not armed.
+  const [armedCount, setArmedCount] = useState<number | null>(null);
+  const armed = armedCount !== null;
+  const { note, ok, fail, clear } = useNote();
   // Only the newest search may fill the page.
   const asked = useRef(0);
   const armTimer = useRef<number | undefined>(undefined);
@@ -261,7 +274,13 @@ export function History({
     return () => window.clearTimeout(timer);
   }, [query]);
 
-  useEffect(() => () => window.clearTimeout(armTimer.current), []);
+  // Leaving the page (it stays mounted, hidden) drops an armed Delete all:
+  // its window lapses in the app while nobody is looking at the button.
+  const leave = useEffectEvent(() => {
+    if (armed) disarm();
+  });
+
+  useEffect(() => () => leave(), []);
 
   async function act(step: () => Promise<void>) {
     setBusy(true);
@@ -304,26 +323,38 @@ export function History({
 
   function disarm() {
     window.clearTimeout(armTimer.current);
-    setArmed(false);
+    setArmedCount(null);
     void cancelDeleteAll().catch(() => {});
   }
 
   /** The first click arms; the second (inside the window) deletes. The app
-   * keeps the clock, so a double-click's second half only keeps it armed. */
+   * keeps the clock, so a double-click's second half only keeps it armed.
+   * The app also keeps the list: it counts the chats on the first click and
+   * deletes those on the second, so the button and Chat go by its answer,
+   * never by the rows a search left on screen. */
   function deleteAll() {
-    const ids = (rows ?? []).map((r) => r.id);
+    // Not `disabled` while busy: that would drop keyboard focus to the page.
+    if (busy) return;
+    let none = false;
     void act(async () => {
-      const result = await deleteAllChats();
+      const result: DeleteAllAnswer = await deleteAllChats();
       if (result.state === "deleted") {
         window.clearTimeout(armTimer.current);
-        setArmed(false);
-        for (const id of ids) onDeleted(id);
+        setArmedCount(null);
+        for (const id of result.ids ?? []) onDeleted(id);
+        return;
+      }
+      if (result.count === 0) {
+        none = true;
+        disarm();
         return;
       }
       if (!armed) {
-        setArmed(true);
         armTimer.current = window.setTimeout(disarm, DELETE_ALL_ARM_MS);
       }
+      setArmedCount(result.count);
+    }).then(() => {
+      if (none) ok(DELETE_ALL_NONE);
     });
   }
 
@@ -460,11 +491,12 @@ export function History({
           <button
             type="button"
             className="danger"
-            disabled={busy || all.length === 0}
+            disabled={all.length === 0 && !searching && !armed}
+            aria-disabled={busy}
             onClick={deleteAll}
           >
             {armed
-              ? `Delete all ${all.length} ${all.length === 1 ? "chat" : "chats"}?`
+              ? `Delete all ${armedCount} ${armedCount === 1 ? "chat" : "chats"}?`
               : "Delete all"}
           </button>
           {armed && (
@@ -476,8 +508,9 @@ export function History({
       </div>
       {armed && (
         <p className="history-note" role="alert">
-          Click again to delete every chat and its saved files. This can't be
-          undone.
+          Click again to delete every chat and its saved files
+          {searching ? ", not only the chats this search lists" : ""}. This
+          can't be undone.
         </p>
       )}
       <StatusLine note={note} />

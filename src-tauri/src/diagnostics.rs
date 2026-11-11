@@ -206,7 +206,8 @@ fn recent_logs(config_dir: &Path, home: Option<&str>) -> String {
         config_dir.join("hub.log"),
     ] {
         if let Ok(text) = std::fs::read_to_string(&path) {
-            return redact_for_diagnostics(&tail_chars(&text, LOG_TAIL), home);
+            // Redacted whole, then cut: a key the cut lands inside is still a key.
+            return tail_chars(&redact_for_diagnostics(&text, home), LOG_TAIL);
         }
     }
     String::new()
@@ -222,12 +223,13 @@ pub fn build(
     home: Option<&str>,
 ) -> Result<DiagnosticsExport, String> {
     let include_logs = page(config_dir).include_logs;
-    let (id, title, lines) = match chat {
+    let (id, title, model, lines) = match chat {
         Some(id) => {
-            let t = history::load(config_dir, id, usize::MAX)?;
-            (t.id, t.title, t.lines)
+            let info = history::saved(config_dir, id)?;
+            let lines = history::lines(&info);
+            (info.id, info.title, info.model, lines)
         }
-        None => (String::new(), String::new(), Vec::new()),
+        None => (String::new(), String::new(), String::new(), Vec::new()),
     };
     let mut export = DiagnosticsExport::with_defaults(version, &id, &title);
     export.service_status = service_status(has_key, config_dir);
@@ -248,8 +250,9 @@ pub fn build(
             final_reply: grokhub_core::turn_says(&group.assistant)
                 .unwrap_or_else(|| group.assistant.clone()),
             raw_saved_turn: group.assistant.clone(),
-            provider: "xai".into(),
-            model: grokhub_agent::DEFAULT_MODEL.into(),
+            // The model the chat was saved with. Which provider answered a
+            // turn is not saved, so none is named.
+            model: model.clone(),
             ..DiagnosticsTurn::default()
         };
         let (mut started, mut finished) = (u64::MAX, 0u64);
@@ -260,7 +263,7 @@ pub fn build(
                 tool: span.tool.clone(),
                 decision: span.decision.clone(),
                 approval_class: span.approval_class.clone(),
-                result_summary: redact_for_diagnostics(&clip_chars(&span.result, 160), home),
+                result_summary: clip_chars(&redact_for_diagnostics(&span.result, home), 160),
                 hard_approved: span.hard_approved,
             });
             if span.decision == "park" || span.approval_class == "ask" {
@@ -275,7 +278,8 @@ pub fn build(
                 || span.result.starts_with("error")
                 || span.claim.to_ascii_lowercase().contains("error")
             {
-                turn.errors.push(clip_chars(&span.claim, 200));
+                turn.errors
+                    .push(clip_chars(&redact_for_diagnostics(&span.claim, home), 200));
             }
         }
         if started != u64::MAX {
@@ -284,7 +288,10 @@ pub fn build(
             turn.wall_ms = finished.saturating_sub(started);
         }
         if group.assistant.trim_start().starts_with("Error:") {
-            turn.errors.push(clip_chars(&group.assistant, 240));
+            turn.errors.push(clip_chars(
+                &redact_for_diagnostics(&group.assistant, home),
+                240,
+            ));
         }
         export.turns.push(redact_turn(turn, home));
     }
