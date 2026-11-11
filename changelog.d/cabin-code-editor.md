@@ -1,0 +1,1 @@
+- Cabin Code tab: an editor with a file list, syntax colors and line numbers that opens and saves files only inside the project (never .git or a path that leads out), keeps unsaved edits across tab switches, asks before dropping them, and logs each save by path and size only.
