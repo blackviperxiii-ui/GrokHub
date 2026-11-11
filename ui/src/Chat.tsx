@@ -123,6 +123,9 @@ export interface Prefill {
   text: string;
   n: number;
   conversationId?: string;
+  /** Send it as a chat message instead of filling the box (the Command
+   * line's run); behind a running reply it waits its turn. */
+  send?: boolean;
 }
 
 const PLACEHOLDER = `Message ${PRODUCT_NAME}`;
@@ -570,7 +573,7 @@ export function Chat({
   const [queue, setQueue] = useState<string[]>([]);
   const queueRef = useRef<string[]>([]);
   /** The queued message whose turn came: it sends after this render. */
-  const [nextUp, setNextUp] = useState<{ text: string; n: number }>();
+  const [nextUp, setNextUp] = useState<{ text: string; n: number; as?: SessionMode }>();
   /** `/plan` or `/chat` named how the next message runs; otherwise the app reads it. */
   const nextAs = useRef<SessionMode | undefined>(undefined);
   /** Questions answered beside the running reply. */
@@ -749,6 +752,12 @@ export function Chat({
       setEarlier(0);
       setError(null);
       setConversationId(to);
+    }
+    if (next.send && next.text) {
+      touched.current = true;
+      if (busyRef.current) changeQueue([...queueRef.current, next.text]);
+      else setNextUp((now) => ({ text: next.text, n: (now?.n ?? 0) + 1, as: "chat" }));
+      return;
     }
     // Opening the chat that is already open brings no text: keep what is typed.
     setDraft((now) => (switched || next.text ? next.text : now));
@@ -1282,11 +1291,11 @@ export function Chat({
     if (act.op === "remove") removeQueued(act.index);
     else void steerQueued(act.index);
   });
-  const sendNext = useEffectEvent((text: string) => void deliver(text, [], false));
+  const sendNext = useEffectEvent((text: string, as?: SessionMode) => void deliver(text, [], false, as));
   useEffect(() => {
     if (!nextUp) return;
-    const text = nextUp.text;
-    const timer = window.setTimeout(() => sendNext(text), 0);
+    const { text, as } = nextUp;
+    const timer = window.setTimeout(() => sendNext(text, as), 0);
     return () => window.clearTimeout(timer);
   }, [nextUp]);
   useEffect(() => {
