@@ -474,7 +474,7 @@ fn well(ui: &mut egui::Ui, salt: &str, height: f32, add: impl FnOnce(&mut egui::
         .fill(crate::theme::code_well())
         .corner_radius(crate::theme::CARD_RADIUS)
         .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-        .inner_margin(egui::Margin::same(10))
+        .inner_margin(egui::Margin::same(12))
         .show(ui, |ui| {
             egui::ScrollArea::vertical()
                 .id_salt(("code-well", salt))
