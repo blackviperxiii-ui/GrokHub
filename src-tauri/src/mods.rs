@@ -123,9 +123,21 @@ pub struct ForYouRow {
     pub m: ModRow,
 }
 
-pub const OFFLINE_NOTE: &str = "Offline only is on, so this is what Loadout saw last.";
-pub const NO_FINDS: &str =
-    "No new finds yet. Loadout checks for new mods every day and lists them here.";
+/// Shown over cached rows while Offline only is on.
+pub fn offline_note() -> String {
+    format!(
+        "Offline only is on, so this is what {} saw last.",
+        grokhub_core::brand::product_name()
+    )
+}
+
+/// Shown when New finds has nothing yet.
+pub fn no_finds() -> String {
+    format!(
+        "No new finds yet. {} checks for new mods every day and lists them here.",
+        grokhub_core::brand::product_name()
+    )
+}
 
 #[derive(Default)]
 struct State {
@@ -181,7 +193,12 @@ pub fn game_source(rail: &Rail, game: &str, source: &str) -> Result<(ModGame, So
         .games
         .iter()
         .find(|g| g.entry.id == game)
-        .ok_or_else(|| "Loadout doesn't mod that game.".to_string())?;
+        .ok_or_else(|| {
+            format!(
+                "{} doesn't mod that game.",
+                grokhub_core::brand::product_name()
+            )
+        })?;
     let s = Source::from_id(source)
         .filter(|s| g.entry.sources.contains(s))
         .ok_or_else(|| format!("{} isn't a source for {}.", source, g.entry.name))?;
@@ -296,7 +313,7 @@ pub fn search(
 ) -> PageView {
     if offline {
         let page = client.cached_search(game, source, q).unwrap_or_default();
-        return page_view(&page, q.page, adult_ok, Some(OFFLINE_NOTE.into()), true);
+        return page_view(&page, q.page, adult_ok, Some(offline_note()), true);
     }
     match client.search(game, source, q, now_ms) {
         Ok(got) => page_view(&got.value, q.page, adult_ok, None, !got.fresh),
@@ -330,7 +347,7 @@ pub fn new_finds(
             let _ = store.save(config_dir);
         }
     }
-    let note = shown.mods.is_empty().then(|| NO_FINDS.to_string());
+    let note = shown.mods.is_empty().then(no_finds);
     page_view(&shown, page, adult_ok, note, false)
 }
 
