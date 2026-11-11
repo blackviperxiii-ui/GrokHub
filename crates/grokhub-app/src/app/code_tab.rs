@@ -593,6 +593,8 @@ impl Cabin {
                     ui.add_space(crate::theme::SPACING_24);
                     self.ui_code_ship(ui, &ctx);
                     ui.add_space(crate::theme::SPACING_24);
+                    self.ui_code_terminal(ui);
+                    ui.add_space(crate::theme::SPACING_24);
                     self.ui_code_builtins(ui);
                     self.ui_code_activity(ui);
                 });

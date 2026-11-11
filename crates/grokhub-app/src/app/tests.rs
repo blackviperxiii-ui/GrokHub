@@ -2158,6 +2158,7 @@ fn quiet_cabin() -> Cabin {
         continue_hint: String::new(),
         code_tab: super::code_tab::CodeTab::default(),
         skills_tab: super::skills_tab::SkillsTab::default(),
+        code_term: super::code_terminal::TermPanel::default(),
         personal: personal_ui::PersonalPage::default(),
         pending_connectors: Vec::new(),
         auto_compose: false,

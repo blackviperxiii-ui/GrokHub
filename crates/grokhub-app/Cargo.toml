@@ -40,6 +40,9 @@ keyring = { workspace = true }
 # (no GTK, no new system libraries); Windows and macOS use their own dialogs.
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
 symphonia = { version = "0.6", default-features = false, features = ["mp3"] }
+# Code tab terminal: the screen grid and escape-sequence parser (code_terminal.rs).
+# The shell itself runs through grokhub-code's pseudo-terminal; this crate only keeps the grid.
+alacritty_terminal = "0.26"
 
 [target.'cfg(unix)'.dependencies]
 eframe = { version = "0.36.2", default-features = false, features = ["x11", "wayland"] }
