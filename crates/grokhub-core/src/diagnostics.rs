@@ -6,7 +6,7 @@
 //! under the user's home become `/home/user`; tokens, emails, and credential-
 //! like strings are redacted before anything is written.
 
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -362,6 +362,64 @@ pub fn redact_for_diagnostics(input: &str, home: Option<&str>) -> String {
         s = redact_home_paths(&s, home);
     }
     s
+}
+
+/// How much of a log's end is read to show its last characters. Redacting
+/// takes time with every byte, and a log has no size limit.
+const LOG_READ: u64 = 64 * 1024;
+/// The redacted text that must stand before the tail shown when only the end
+/// of a log was read. A private key block that began before the part read is
+/// not redacted in it; this much text in front keeps what is left of the
+/// block out of the tail. A log so full of secrets that the part read
+/// redacts down to less is read whole instead.
+const LOG_LEAD: usize = 16_000;
+
+/// The last `most` bytes of a log, from the start of a line, and whether
+/// that is the whole log. A cut falls inside a line, maybe inside a key or a
+/// character, so what is left of that line is dropped.
+fn log_end(file: &mut (impl Read + Seek), most: u64) -> std::io::Result<(String, bool)> {
+    let len = file.seek(SeekFrom::End(0))?;
+    let from = len.saturating_sub(most);
+    file.seek(SeekFrom::Start(from))?;
+    let mut bytes = Vec::new();
+    file.take(most).read_to_end(&mut bytes)?;
+    if from > 0 {
+        let line = bytes
+            .iter()
+            .position(|b| *b == b'\n')
+            .map_or(bytes.len(), |at| at + 1);
+        bytes.drain(..line);
+    }
+    let text = String::from_utf8(bytes)
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+    Ok((text, from == 0))
+}
+
+/// The last `tail` characters of the redacted log at `path`, for a
+/// diagnostics export; `None` when it can't be read as text. Redacted first,
+/// then cut: a key the cut lands inside is still a key.
+pub fn redacted_log_tail(path: &Path, home: Option<&str>, tail: usize) -> Option<String> {
+    let mut file = std::fs::File::open(path).ok()?;
+    let (text, whole) = log_end(&mut file, LOG_READ).ok()?;
+    let mut redacted = redact_for_diagnostics(&text, home);
+    if !whole && redacted.chars().count() < tail + LOG_LEAD {
+        let (text, _) = log_end(&mut file, u64::MAX).ok()?;
+        redacted = redact_for_diagnostics(&text, home);
+    }
+    let n = redacted.chars().count();
+    Some(redacted.chars().skip(n.saturating_sub(tail)).collect())
+}
+
+/// The first `max` characters of redacted `input`, the last one "…" when
+/// more was cut. Redacted first, then cut, as [`redacted_log_tail`] does.
+pub fn redacted_clip(input: &str, home: Option<&str>, max: usize) -> String {
+    let redacted = redact_for_diagnostics(input, home);
+    if redacted.chars().count() <= max {
+        return redacted;
+    }
+    let mut out: String = redacted.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
 }
 
 /// Apply [`redact_for_diagnostics`] to every string field on a turn,
@@ -935,7 +993,68 @@ fn redact_home_paths(input: &str, home: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Read;
+
+    /// A file that counts the bytes read from it.
+    struct Counted<R> {
+        inner: R,
+        read: usize,
+    }
+
+    impl<R: Read> Read for Counted<R> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = self.inner.read(buf)?;
+            self.read += n;
+            Ok(n)
+        }
+    }
+
+    impl<R: Seek> Seek for Counted<R> {
+        fn seek(&mut self, to: SeekFrom) -> std::io::Result<u64> {
+            self.inner.seek(to)
+        }
+    }
+
+    #[test]
+    fn only_the_end_of_a_long_log_is_read_from_the_start_of_a_line() {
+        // 304,000 bytes of 19-byte lines. The last 65,536 bytes start 14
+        // bytes into a line; the 5 bytes left of it are dropped, and 3,449
+        // whole lines stay.
+        let line = "2026-01-01 step ok\n";
+        let log = line.repeat(16_000);
+        let mut file = Counted {
+            inner: std::io::Cursor::new(log.as_bytes()),
+            read: 0,
+        };
+        let (text, whole) = log_end(&mut file, LOG_READ).expect("read");
+        assert_eq!(
+            file.read, 65_536,
+            "a long log is not read whole to show its last characters"
+        );
+        assert!(!whole);
+        assert_eq!(text.len(), 65_531);
+        assert_eq!(text, line.repeat(3_449));
+
+        // A log shorter than that is read whole, from its first byte.
+        let mut short = Counted {
+            inner: std::io::Cursor::new("started\nready\n".as_bytes()),
+            read: 0,
+        };
+        assert_eq!(
+            log_end(&mut short, LOG_READ).expect("read"),
+            ("started\nready\n".to_string(), true)
+        );
+    }
+
+    #[test]
+    fn a_clip_redacts_before_it_cuts() {
+        // Cut first, the 160 characters would end nine characters into the
+        // key, and what is left of it is no longer a key to the redactor.
+        let lead = "x".repeat(150);
+        let text = format!("{lead}sk-abcdefghijklmnopqrstuv");
+        assert_eq!(redacted_clip(&text, None, 160), format!("{lead}[redacted]"));
+        assert_eq!(redacted_clip("short", None, 160), "short");
+        assert_eq!(redacted_clip("abcdef", None, 4), "abc…");
+    }
 
     #[test]
     fn no_secret_leak() {

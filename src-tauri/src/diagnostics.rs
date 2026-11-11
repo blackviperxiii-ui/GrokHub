@@ -8,14 +8,14 @@
 //! a chat is picked; with none picked the bundle holds the app facts and
 //! service status alone.
 
-use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::SystemTime;
 
 use grokhub_core::{
     diagnostics_markdown, diagnostics_preview_lines, diagnostics_redaction_summary,
-    redact_for_diagnostics, redact_turn, DiagnosticsExport, DiagnosticsToolCall, DiagnosticsTurn,
+    redact_for_diagnostics, redact_turn, redacted_log_tail, DiagnosticsExport, DiagnosticsToolCall,
+    DiagnosticsTurn,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -28,15 +28,6 @@ const LOGS_KEY: &str = "diagnosticsIncludeLogs";
 const APP_JSON_CAP: u64 = 1024 * 1024;
 /// Recent app logs: the last this many characters, as in the cabin.
 const LOG_TAIL: usize = 4_000;
-/// How much of a log's end is read to show its last [`LOG_TAIL`] characters.
-/// Redacting takes time with every byte, and a log has no size limit.
-const LOG_READ: u64 = 64 * 1024;
-/// The redacted text that must stand before the tail shown when only the end
-/// of a log was read. A private key block that began before the part read is
-/// not redacted in it; this much text in front keeps what is left of the
-/// block out of the tail. A log so full of secrets that the part read
-/// redacts down to less is read whole instead.
-const LOG_LEAD: usize = 16_000;
 
 pub const MODE_OFF: &str = "Turn on Diagnostics mode in Settings → Labs first";
 pub const NO_TURNS: &str = "No turns to export";
@@ -134,11 +125,6 @@ fn clip_chars(s: &str, max: usize) -> String {
     s.chars().take(max).collect()
 }
 
-fn tail_chars(s: &str, max: usize) -> String {
-    let n = s.chars().count();
-    s.chars().skip(n.saturating_sub(max)).collect()
-}
-
 /// One ask with its replies.
 #[derive(Debug, PartialEq, Eq)]
 struct Group {
@@ -215,45 +201,11 @@ fn recent_logs(config_dir: &Path, home: Option<&str>) -> String {
         config_dir.join("cabin.log"),
         config_dir.join("hub.log"),
     ] {
-        if let Some(tail) = log_tail(&path, home) {
+        if let Some(tail) = redacted_log_tail(&path, home, LOG_TAIL) {
             return tail;
         }
     }
     String::new()
-}
-
-/// The last `most` bytes of a log, from the start of a line, and whether
-/// that is the whole log. A cut falls inside a line, maybe inside a key or a
-/// character, so what is left of that line is dropped.
-fn log_end(file: &mut (impl Read + Seek), most: u64) -> std::io::Result<(String, bool)> {
-    let len = file.seek(SeekFrom::End(0))?;
-    let from = len.saturating_sub(most);
-    file.seek(SeekFrom::Start(from))?;
-    let mut bytes = Vec::new();
-    file.take(most).read_to_end(&mut bytes)?;
-    if from > 0 {
-        let line = bytes
-            .iter()
-            .position(|b| *b == b'\n')
-            .map_or(bytes.len(), |at| at + 1);
-        bytes.drain(..line);
-    }
-    let text = String::from_utf8(bytes)
-        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
-    Ok((text, from == 0))
-}
-
-/// The redacted end of the log at `path`; `None` when it can't be read as
-/// text. Redacted first, then cut: a key the cut lands inside is still a key.
-fn log_tail(path: &Path, home: Option<&str>) -> Option<String> {
-    let mut file = std::fs::File::open(path).ok()?;
-    let (text, whole) = log_end(&mut file, LOG_READ).ok()?;
-    let mut redacted = redact_for_diagnostics(&text, home);
-    if !whole && redacted.chars().count() < LOG_TAIL + LOG_LEAD {
-        let (text, _) = log_end(&mut file, u64::MAX).ok()?;
-        redacted = redact_for_diagnostics(&text, home);
-    }
-    Some(tail_chars(&redacted, LOG_TAIL))
 }
 
 /// Builds the redacted export. `chat` is the one chat whose text goes in;

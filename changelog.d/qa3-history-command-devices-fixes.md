@@ -1,0 +1,9 @@
+- History (desktop app): Delete all deletes exactly the chats it named, also with a search typed, and a held Enter no longer confirms it. A chat you delete closes if it was open. When part of a Delete all fails, the page says so and the chats that did go are closed.
+- History: opening a chat to read it never rewrites its file, and linked files and folders in the session store are skipped.
+- Debug bundle (desktop app and cabin): text is redacted first and cut second, so a key the cut lands inside stays hidden; only the end of a long log is read; a real `Authorization` header loses its value and other lines keep theirs.
+- Command page: a line holding a key or a password is never remembered or listed, and one an older build stored is taken out of the file.
+- `/forget <topic>` also removes matching lines from the project's `MEMORY.md`, and says how many.
+- Web app: Enter in the slash menu picks a row only when the list matches what you typed.
+- Devices: a paired computer is remembered after a restart, a pairing code that ran out is replaced, and Run it here sends the task as the cabin does. A running recording keeps its clock and Stop on screen in a narrow window.
+- LAN hub: `/v1/health` no longer names the computer and the hub sends no cross-site headers, so a web page cannot read it.
+- The audio check says it works on Linux only instead of failing on other systems, and `/record` says it takes stills for 2 minutes at most.
