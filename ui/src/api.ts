@@ -61,6 +61,8 @@ export interface Capabilities {
   autoSetup?: boolean;
   /** The Code tab: this computer's repos (desktops). */
   code?: boolean;
+  /** The Mods page: this computer's moddable games (desktops). */
+  mods?: boolean;
 }
 
 /** Until the report loads, or if it fails, only the core features show. */
@@ -3603,4 +3605,117 @@ export function recordStatus(): Promise<RecordStatus> {
 /** The indicator's Stop. */
 export function recordStop(): Promise<boolean> {
   return invoke<boolean>("record_stop");
+}
+
+/** One source a game can be modded from (src-tauri/src/mods.rs). */
+export interface ModSource {
+  id: string;
+  label: string;
+}
+
+/** A game Loadout may mod. */
+export interface ModGame {
+  id: string;
+  name: string;
+  /** What Loadout mods there ("Singleplayer only" and the like). */
+  modeNote: string;
+  /** Preferred first. */
+  sources: ModSource[];
+  /** Unix seconds, 0 when never played. */
+  lastPlayed: number;
+  playtimeMin: number;
+  /** New finds not opened yet. */
+  newCount: number;
+  /** For you leaves this game out. */
+  suggestionsHidden: boolean;
+}
+
+/** A game Loadout won't mod, and why. */
+export interface CantModGame {
+  key: string;
+  name: string;
+  reason: string;
+}
+
+export interface ModGamesView {
+  /** Most recently played first. */
+  games: ModGame[];
+  /** Shown collapsed under "Can't mod". */
+  cant: CantModGame[];
+  /** What discovery is doing, one quiet line. */
+  status: string;
+  offline: boolean;
+}
+
+/** One mod in a list. */
+export interface ModRow {
+  id: string;
+  name: string;
+  author: string;
+  summary: string;
+  downloads: number;
+  likes: number;
+  /** Unix seconds, 0 when the source didn't say. */
+  updated: number;
+  /** The mod's page on the web. */
+  pageUrl: string;
+  iconUrl: string | null;
+  categories: string[];
+}
+
+export interface ModPage {
+  mods: ModRow[];
+  page: number;
+  more: boolean;
+  /** A plain line when the source failed or Offline only is on. */
+  note: string | null;
+  /** Shown from the cache rather than asked just now. */
+  cached: boolean;
+}
+
+/** The lists a game's page can show. */
+export type ModList = "popular" | "trending" | "updated";
+
+/** One For you card. */
+export interface ModSuggestion {
+  game: string;
+  gameName: string;
+  source: string;
+  /** The tab it opens on. */
+  tab: "newFinds" | "trending" | "popular";
+  /** Why it shows, in a few words. */
+  why: string;
+  mod: ModRow;
+}
+
+/** The Mods rail; also starts discovery when it is due. */
+export function modsGames(): Promise<ModGamesView> {
+  return invoke<ModGamesView>("mods_games");
+}
+
+export function modsBrowse(game: string, source: string, list: ModList, page: number): Promise<ModPage> {
+  return invoke<ModPage>("mods_browse", { game, source, list, page });
+}
+
+export function modsSearch(game: string, source: string, text: string, page: number): Promise<ModPage> {
+  return invoke<ModPage>("mods_search", { game, source, text, page });
+}
+
+/** A game's New finds; opening them marks them seen. */
+export function modsNewFinds(game: string, source: string, page: number): Promise<ModPage> {
+  return invoke<ModPage>("mods_new_finds", { game, source, page });
+}
+
+export function modsForYou(): Promise<ModSuggestion[]> {
+  return invoke<ModSuggestion[]>("mods_for_you");
+}
+
+/** That mod never shows in For you again. */
+export function modsNotForMe(source: string, id: string): Promise<void> {
+  return invoke<void>("mods_not_for_me", { source, id });
+}
+
+/** Hide or show For you's suggestions for one game. */
+export function modsHideGame(game: string, hidden: boolean): Promise<void> {
+  return invoke<void>("mods_hide_game", { game, hidden });
 }

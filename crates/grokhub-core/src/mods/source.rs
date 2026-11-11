@@ -161,6 +161,17 @@ pub struct Page {
     pub total: Option<u64>,
 }
 
+impl Page {
+    /// Whether a page after page `page` (0-based) has more: by the total
+    /// when the source gave one, else by a full page.
+    pub fn has_more(&self, page: u32) -> bool {
+        match self.total {
+            Some(total) => u64::from(page + 1) * u64::from(PAGE_SIZE) < total,
+            None => self.mods.len() >= PAGE_SIZE as usize,
+        }
+    }
+}
+
 /// One request to a source's public API.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Request {

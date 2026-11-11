@@ -37,6 +37,7 @@ export type View =
   | "connectors"
   | "settings"
   | "library"
+  | "mods"
   | "workboard"
   | "devices"
   | "updates";
@@ -112,6 +113,7 @@ export const VIEW_LABELS: Record<View, string> = {
   workboard: "Workboard",
   devices: "Devices",
   library: "Library",
+  mods: "Mods",
   updates: "Updates & Drivers",
 };
 
@@ -136,6 +138,7 @@ export function views(caps: Capabilities): View[] {
     "workboard",
     ...(caps.webAccess && !caps.remote ? (["devices"] as const) : []),
     ...(caps.library ? (["library"] as const) : []),
+    ...(caps.mods && !caps.remote ? (["mods"] as const) : []),
     "settings",
   ];
 }
