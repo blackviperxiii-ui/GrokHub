@@ -137,11 +137,11 @@ fn a_save_is_logged_with_its_path_and_size_but_not_its_text() {
         std::fs::read_to_string(ws.join("notes.md")).unwrap(),
         "hello world\n"
     );
-    let rows = crate::code_activity::list(&config, 10);
+    let rows = crate::activity::list(&config, 10);
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].kind, crate::code_activity::Kind::Edit);
+    assert_eq!(rows[0].kind, crate::activity::Kind::Edit);
     assert_eq!(rows[0].summary, "Saved notes.md (12 bytes).");
-    let raw = std::fs::read_to_string(config.join(crate::code_activity::FILE)).unwrap();
+    let raw = std::fs::read_to_string(config.join(crate::activity::FILE)).unwrap();
     assert!(
         !raw.contains("hello world"),
         "the file's text reached the log: {raw}"
@@ -150,5 +150,5 @@ fn a_save_is_logged_with_its_path_and_size_but_not_its_text() {
         write_logged(&config, &ws, "../x", "no", 100).unwrap_err(),
         OUTSIDE
     );
-    assert_eq!(crate::code_activity::list(&config, 10).len(), 1);
+    assert_eq!(crate::activity::list(&config, 10).len(), 1);
 }

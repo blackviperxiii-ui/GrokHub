@@ -8,12 +8,15 @@
 //! that child's output passes through [`redact`] before it reaches the UI, the
 //! activity log or the agent. Nothing here ever returns a value to the window.
 
-use crate::code_runs::repo_key;
+use crate::runs::repo_key;
 use grokhub_core::redact::{redact_held_secrets, redact_secrets};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
+
+/// The keychain service: the same one the shell's API key uses.
+pub const SERVICE: &str = grokhub_core::brand::INTERNAL_ID;
 
 /// Names only, in the app config folder.
 pub const FILE: &str = "code-secrets.json";
@@ -46,7 +49,7 @@ fn keychain_message(err: keyring::Error) -> String {
 }
 
 fn entry(account: &str) -> Result<keyring::Entry, String> {
-    keyring::Entry::new(crate::credential::SERVICE, account).map_err(keychain_message)
+    keyring::Entry::new(SERVICE, account).map_err(keychain_message)
 }
 
 impl Vault for Keychain {
@@ -386,7 +389,7 @@ pub fn redact(text: &str, held: &[String]) -> String {
 // ---- what the Code tab calls ----
 
 fn key_of(dir: &Path) -> String {
-    repo_key(dir, crate::code::origin_url(dir).as_deref())
+    repo_key(dir, crate::repo::origin_url(dir).as_deref())
 }
 
 pub fn list_for(config_dir: &Path, workspace: &Path) -> SecretList {
@@ -395,11 +398,11 @@ pub fn list_for(config_dir: &Path, workspace: &Path) -> SecretList {
 
 /// Put a secret change in the activity log: the name only, never the value.
 pub fn log_change(config_dir: &Path, repo_key: &str, summary: &str, keep: usize) {
-    let _ = crate::code_activity::append(
+    let _ = crate::activity::append(
         config_dir,
-        &crate::code_activity::Entry {
+        &crate::activity::Entry {
             ts_ms: grokhub_core::now_ms(),
-            kind: crate::code_activity::Kind::Secret,
+            kind: crate::activity::Kind::Secret,
             repo_key: repo_key.to_string(),
             host: String::new(),
             branch: String::new(),
@@ -494,5 +497,5 @@ pub fn delete_for(
 }
 
 #[cfg(test)]
-#[path = "code_secrets_tests.rs"]
+#[path = "secrets_tests.rs"]
 mod tests;

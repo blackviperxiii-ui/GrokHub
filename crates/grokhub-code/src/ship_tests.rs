@@ -311,7 +311,7 @@ fn the_push_argv_never_forces() {
             "feat/x"
         ]
     );
-    let src = include_str!("code_ship.rs");
+    let src = include_str!("ship.rs");
     let prod = src.split("#[cfg(test)]").next().unwrap();
     for flag in [
         "\"--force",
@@ -432,6 +432,32 @@ fn pr_view_answers() {
         Pr::None
     );
     assert_eq!(parse_pr_view(false, "", "gh: not logged in"), Pr::Unknown);
+}
+
+#[test]
+fn load_from_shell_json_reads_the_code_ship_block_or_falls_back_to_ask() {
+    let dir = std::env::temp_dir().join(format!("code-ship-load-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // No shell.json: the defaults.
+    assert_eq!(load_from_shell_json(&dir), CodeShip::default());
+    std::fs::write(
+        dir.join("shell.json"),
+        r#"{"theme":"dark","codeShip":{"mode":"autoBeta","autoBase":"next","activityKeep":50}}"#,
+    )
+    .unwrap();
+    let got = load_from_shell_json(&dir);
+    assert_eq!(got.mode, ShipMode::AutoBeta);
+    assert_eq!(got.auto_base, "next");
+    assert_eq!(got.activity_keep, 50);
+    assert_eq!(got.extra_protected, vec!["main".to_string()]);
+    // An unreadable block loads as Ask, like the shell's own settings.
+    std::fs::write(dir.join("shell.json"), r#"{"codeShip":{"mode":"yolo"}}"#).unwrap();
+    assert_eq!(load_from_shell_json(&dir).mode, ShipMode::Ask);
+    // A broken file too.
+    std::fs::write(dir.join("shell.json"), "{not json").unwrap();
+    assert_eq!(load_from_shell_json(&dir), CodeShip::default());
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[cfg(unix)]

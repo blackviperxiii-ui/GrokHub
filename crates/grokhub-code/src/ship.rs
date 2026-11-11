@@ -9,8 +9,8 @@
 //! delete or prune flag, and never deletes a branch. A rejected push is
 //! reported, never retried. Hooks and fsmonitor are off for every git call.
 
-use crate::code_activity::{self, Entry, Kind as ActKind};
-use crate::code_runs::repo_key;
+use crate::activity::{self as code_activity, Entry, Kind as ActKind};
+use crate::runs::repo_key;
 use grokhub_core::proc_util::hide_windows_console;
 use grokhub_core::redact::redact_secrets;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -93,6 +93,18 @@ impl Default for CodeShip {
 pub fn lenient<'de, D: Deserializer<'de>>(d: D) -> Result<CodeShip, D::Error> {
     let raw = Value::deserialize(d)?;
     Ok(serde_json::from_value(raw).unwrap_or_default())
+}
+
+/// The shell's `codeShip` block, read straight from `shell.json` in the
+/// config folder, so the cabin follows the same push settings. A missing
+/// file, block or unreadable value gives the defaults (Ask).
+pub fn load_from_shell_json(config_dir: &Path) -> CodeShip {
+    std::fs::read_to_string(config_dir.join("shell.json"))
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .and_then(|v| v.get("codeShip").cloned())
+        .and_then(|block| serde_json::from_value(block).ok())
+        .unwrap_or_default()
 }
 
 /// The block as typed in Settings, tidied: names trimmed, empty ones dropped.
@@ -574,7 +586,7 @@ pub fn app_made(config_dir: &Path, key: &str, branch: &str) -> bool {
 }
 
 fn key_of(dir: &Path) -> String {
-    repo_key(dir, crate::code::origin_url(dir).as_deref())
+    repo_key(dir, crate::repo::origin_url(dir).as_deref())
 }
 
 // ---- what the Code tab calls ----
@@ -910,5 +922,5 @@ pub fn new_branch(
 }
 
 #[cfg(test)]
-#[path = "code_ship_tests.rs"]
+#[path = "ship_tests.rs"]
 mod tests;

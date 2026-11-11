@@ -4,7 +4,7 @@
 //! not been forgotten. Callers pass a [`Mode`] so Ask still confirms every
 //! time and Auto may run a remembered command without asking.
 
-use crate::code_secrets::Loaded;
+use crate::secrets::Loaded;
 use grokhub_core::model_download::sha256_hex;
 use grokhub_core::proc_util::hide_windows_console;
 use serde::{Deserialize, Serialize};
@@ -250,7 +250,7 @@ fn save(config_dir: &Path, store: &Store) -> Result<(), String> {
 }
 
 fn project_key(workspace: &Path) -> String {
-    repo_key(workspace, crate::code::origin_url(workspace).as_deref())
+    repo_key(workspace, crate::repo::origin_url(workspace).as_deref())
 }
 
 /// The command the Tests section should show, and whether it still needs a confirm.

@@ -8,7 +8,7 @@
 //! This is a normal shell: a `git push` typed here is not checked by the Code
 //! tab's push guard (`code_ship.rs`), which covers the tab's own buttons.
 
-use crate::code_secrets;
+use crate::secrets as code_secrets;
 use serde::Serialize;
 use std::path::Path;
 
@@ -90,13 +90,12 @@ impl Chunker {
 /// Put a terminal opening or closing in the activity log. Never what was typed
 /// or shown.
 pub fn log(config_dir: &Path, workspace: &Path, summary: &str, keep: usize) {
-    let repo_key =
-        crate::code_runs::repo_key(workspace, crate::code::origin_url(workspace).as_deref());
-    let _ = crate::code_activity::append(
+    let repo_key = crate::runs::repo_key(workspace, crate::repo::origin_url(workspace).as_deref());
+    let _ = crate::activity::append(
         config_dir,
-        &crate::code_activity::Entry {
+        &crate::activity::Entry {
             ts_ms: grokhub_core::now_ms(),
-            kind: crate::code_activity::Kind::Terminal,
+            kind: crate::activity::Kind::Terminal,
             repo_key,
             host: String::new(),
             branch: String::new(),
@@ -508,9 +507,9 @@ mod tests {
             "Opened a terminal in the project folder.",
             100,
         );
-        let rows = crate::code_activity::list(&config, 10);
+        let rows = crate::activity::list(&config, 10);
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].kind, crate::code_activity::Kind::Terminal);
+        assert_eq!(rows[0].kind, crate::activity::Kind::Terminal);
         assert_eq!(rows[0].summary, "Opened a terminal in the project folder.");
     }
 

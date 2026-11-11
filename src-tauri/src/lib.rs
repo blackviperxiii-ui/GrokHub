@@ -15,14 +15,16 @@ pub mod background;
 mod brand_guard;
 pub mod capabilities;
 pub mod chips;
-pub mod code;
-pub mod code_activity;
-pub mod code_deploy;
-pub mod code_files;
-pub mod code_runs;
-pub mod code_secrets;
-pub mod code_ship;
-pub mod code_term;
+// The Code tab's logic lives in grokhub-code (shared with the cabin); the
+// old module names stay so the commands below and settings read the same.
+pub use grokhub_code::activity as code_activity;
+pub use grokhub_code::deploy as code_deploy;
+pub use grokhub_code::files as code_files;
+pub use grokhub_code::repo as code;
+pub use grokhub_code::runs as code_runs;
+pub use grokhub_code::secrets as code_secrets;
+pub use grokhub_code::ship as code_ship;
+pub use grokhub_code::term as code_term;
 pub mod connectors;
 pub mod credential;
 pub mod export;

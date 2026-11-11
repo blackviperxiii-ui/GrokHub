@@ -7,10 +7,10 @@
 //! environment, and the output and the activity line are redacted (held values
 //! first, then the usual token patterns).
 
-use crate::code_activity::{self, Entry, Kind as ActKind};
-use crate::code_runs::{self, Decision, Kind, Mode, RunResult};
-use crate::code_secrets::{self, Vault};
-use crate::code_ship::{CodeShip, ShipMode};
+use crate::activity::{self as code_activity, Entry, Kind as ActKind};
+use crate::runs::{self as code_runs, Decision, Kind, Mode, RunResult};
+use crate::secrets::{self as code_secrets, Vault};
+use crate::ship::{CodeShip, ShipMode};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -248,7 +248,7 @@ pub fn run_with(
 // ---- what the Code tab calls ----
 
 fn key_of(dir: &Path) -> String {
-    code_runs::repo_key(dir, crate::code::origin_url(dir).as_deref())
+    code_runs::repo_key(dir, crate::repo::origin_url(dir).as_deref())
 }
 
 pub fn settings_of(config_dir: &Path, workspace: &Path) -> Settings {
@@ -282,10 +282,10 @@ pub fn run(
     on_chunk: impl FnMut(&str),
 ) -> Result<RunResult, String> {
     let place = Where {
-        host: crate::code_ship::push_host(workspace)
+        host: crate::ship::push_host(workspace)
             .map(|host| host.id().to_string())
             .unwrap_or_else(|| "other".into()),
-        branch: crate::code_ship::current_branch(workspace).unwrap_or_default(),
+        branch: crate::ship::current_branch(workspace).unwrap_or_default(),
     };
     run_with(
         config_dir,
@@ -301,5 +301,5 @@ pub fn run(
 }
 
 #[cfg(test)]
-#[path = "code_deploy_tests.rs"]
+#[path = "deploy_tests.rs"]
 mod tests;
