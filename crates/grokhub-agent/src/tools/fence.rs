@@ -110,13 +110,14 @@ pub fn run_saw_untrusted() -> bool {
     SAW_UNTRUSTED.with(Cell::get)
 }
 
-/// Mark this run as having read outside text (a batch worker fenced it).
+/// Mark this run as having read outside text that another thread fenced
+/// (a batch worker, a helper) or that an earlier run left in the history.
 pub fn note_untrusted_seen() {
     SAW_UNTRUSTED.with(|seen| seen.set(true));
 }
 
-/// The fence state a batch worker carries from its run thread, so its
-/// fences share the run's nonce.
+/// The fence state a batch worker or a helper carries from its run thread,
+/// so its fences share the run's nonce and it knows what the run has read.
 #[derive(Debug, Clone, Default)]
 pub struct FenceState {
     nonce: Option<String>,
@@ -133,7 +134,7 @@ pub fn capture() -> FenceState {
     }
 }
 
-/// Take on a run thread's fence state (a fresh batch worker thread),
+/// Take on a run thread's fence state (a fresh batch worker or helper thread),
 /// including its origin trace until the returned scope drops.
 pub fn enter(state: &FenceState) -> crate::harness::provenance::TraceScope {
     if let Some(nonce) = &state.nonce {
