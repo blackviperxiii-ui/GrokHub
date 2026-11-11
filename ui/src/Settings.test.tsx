@@ -28,6 +28,8 @@ const api = vi.hoisted(() => ({
 vi.mock("./api", () => api);
 // Local AI has its own tests (LocalAi.test.tsx).
 vi.mock("./LocalAi", () => ({ LocalAi: () => <p>Local AI panel</p> }));
+// AI models has its own tests (AiModels.test.tsx).
+vi.mock("./AiModels", () => ({ AiModels: () => <p>AI models panel</p> }));
 vi.mock("./WebAccess", () => ({ WebAccess: () => <p>Web access panel</p> }));
 vi.mock("./Labs", () => ({ Labs: () => <p>Labs panel</p> }));
 vi.mock("./Personality", () => ({ Personality: () => <p>Personality panel</p> }));
@@ -304,7 +306,7 @@ describe("Settings", () => {
     expect(await everyPage()).toEqual({
       Account: ["Account"],
       "Look & feel": ["Appearance"],
-      "AI & chat": ["Defaults", "Personality", "Playbooks", "Pulse", "Local AI"],
+      "AI & chat": ["Defaults", "Personality", "Playbooks", "Pulse", "Local AI", "AI models"],
       "Your PC": ["General", "Behavior", "Background", "Auto setup", "Code"],
       "Privacy & safety": ["Privacy & data", "Permissions", "Web access"],
       "Help & updates": ["About", "Labs"],
@@ -391,9 +393,13 @@ describe("Settings", () => {
     expect(screen.getByText("Local AI panel")).toBeInTheDocument();
     expect(screen.queryByText("Interests panel")).toBeNull();
 
+    await openSection("AI models");
+    expect(screen.getByText("AI models panel")).toBeInTheDocument();
+    expect(screen.queryByText("Local AI panel")).toBeNull();
+
     await openSection("Web access");
     expect(screen.getByText("Web access panel")).toBeInTheDocument();
-    expect(screen.queryByText("Local AI panel")).toBeNull();
+    expect(screen.queryByText("AI models panel")).toBeNull();
 
     await openSection("Labs");
     expect(screen.getByText("Labs panel")).toBeInTheDocument();
