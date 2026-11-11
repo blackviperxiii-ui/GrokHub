@@ -82,6 +82,11 @@ pub(crate) fn same_folder(a: &str, b: &str, home: Option<&str>) -> bool {
     !a.trim().is_empty() && key(a) == key(b)
 }
 
+/// True when `folder` is the folder the app works in now (`bound`).
+pub fn is_open(folder: &str, bound: &str) -> bool {
+    same_folder(folder, bound, home().as_deref())
+}
+
 /// The row for the bound folder, when the list has one.
 fn selected(nodes: &[ProjectNode], bound: &str, home: Option<&str>) -> Option<String> {
     nodes
@@ -198,6 +203,71 @@ pub fn run_in(
             })
         }
     }
+}
+
+/// One project on the Code tab's project bar.
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeProject {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    /// The folder the app works in now.
+    pub current: bool,
+    /// The folder is no longer on disk.
+    pub missing: bool,
+}
+
+/// The Code tab's project bar: every project in the list, and which one is
+/// open. `bound` is the open folder, `""` when none is.
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeProjects {
+    pub bound: String,
+    pub projects: Vec<CodeProject>,
+}
+
+/// The saved projects in the file's order, for the Code tab.
+pub fn listing(config_dir: &Path, bound: &str) -> Result<CodeProjects, String> {
+    listing_in(config_dir, bound, home().as_deref())
+}
+
+fn listing_in(config_dir: &Path, bound: &str, home: Option<&str>) -> Result<CodeProjects, String> {
+    let projects = load(config_dir)?
+        .into_iter()
+        .filter(|n| n.kind == ProjectKind::Project)
+        .map(|n| {
+            let dir = grokhub_core::expand_project_root(&n.path, home);
+            CodeProject {
+                name: grokhub_core::project_display_name(&n.name).to_string(),
+                current: same_folder(&n.path, bound, home),
+                missing: !Path::new(&dir).is_dir(),
+                id: n.id,
+                path: n.path,
+            }
+        })
+        .collect();
+    Ok(CodeProjects {
+        bound: bound.trim().to_string(),
+        projects,
+    })
+}
+
+/// Makes a project under the work root and names its folder, so the Code tab
+/// can open it at once.
+pub fn create(config_dir: &Path, name: &str) -> Result<String, String> {
+    create_in(config_dir, name, &work_root())
+}
+
+fn create_in(config_dir: &Path, name: &str, work_root: &str) -> Result<String, String> {
+    let mut nodes = load(config_dir)?;
+    let id = grokhub_core::uid("proj");
+    let i = grokhub_core::create_project(&mut nodes, &id, name, None, work_root)
+        .map_err(str::to_string)?;
+    let dir = nodes[i].path.clone();
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    save(config_dir, &nodes)?;
+    Ok(dir)
 }
 
 #[cfg(test)]
@@ -380,5 +450,87 @@ mod tests {
             std::fs::read_to_string(config.join("projects.json")).expect("read"),
             "{not json"
         );
+    }
+
+    #[test]
+    fn the_code_tab_lists_projects_and_marks_the_open_and_the_missing_one() {
+        let (config, root) = (temp_dir("list-cfg"), temp_dir("list-root"));
+        let here = root.join("harbor");
+        std::fs::create_dir_all(&here).expect("folder");
+        let (here, gone) = (
+            here.to_string_lossy().into_owned(),
+            root.join("gone").to_string_lossy().into_owned(),
+        );
+        save(
+            &config,
+            &[
+                ProjectNode {
+                    id: "f1".into(),
+                    name: "Docks".into(),
+                    kind: ProjectKind::Folder,
+                    path: String::new(),
+                    parent: None,
+                    open: true,
+                },
+                ProjectNode {
+                    id: "p1".into(),
+                    name: "Harbor".into(),
+                    kind: ProjectKind::Project,
+                    path: here.clone(),
+                    parent: Some("f1".into()),
+                    open: false,
+                },
+                ProjectNode {
+                    id: "p2".into(),
+                    name: "Dawn".into(),
+                    kind: ProjectKind::Project,
+                    path: gone.clone(),
+                    parent: None,
+                    open: false,
+                },
+            ],
+        )
+        .expect("save");
+        let list = listing_in(&config, &format!("{here}/"), None).expect("listing");
+        assert_eq!(list.bound, format!("{here}/"));
+        assert_eq!(
+            list.projects,
+            vec![
+                CodeProject {
+                    id: "p1".into(),
+                    name: "Harbor".into(),
+                    path: here,
+                    current: true,
+                    missing: false,
+                },
+                CodeProject {
+                    id: "p2".into(),
+                    name: "Dawn".into(),
+                    path: gone,
+                    current: false,
+                    missing: true,
+                },
+            ]
+        );
+        let none = listing_in(&config, "", None).expect("unbound");
+        assert_eq!(none.bound, "");
+        assert!(none.projects.iter().all(|p| !p.current));
+    }
+
+    #[test]
+    fn create_makes_the_row_and_the_folder_and_names_it() {
+        let (config, root) = (temp_dir("make-cfg"), temp_dir("make-root"));
+        let dir = create_in(&config, "Night watch", &root.to_string_lossy()).expect("create");
+        assert!(Path::new(&dir).starts_with(&root), "{dir}");
+        assert!(Path::new(&dir).is_dir());
+        let rows = load(&config).expect("load");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "Night watch");
+        assert_eq!(rows[0].path, dir);
+        assert_eq!(
+            create_in(&config, "  ", &root.to_string_lossy()),
+            Err("need a project name".into())
+        );
+        assert_eq!(load(&config).expect("load").len(), 1);
     }
 }

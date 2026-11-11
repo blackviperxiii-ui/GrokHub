@@ -19,6 +19,7 @@ mod brand_guard;
 pub mod capabilities;
 pub mod changes;
 pub mod chips;
+mod code_sessions;
 pub mod command_box;
 // The Code tab's logic lives in grokhub-code (shared with the cabin); the
 // old module names stay so the commands below and settings read the same.
@@ -143,6 +144,8 @@ struct ShellState {
     /// A Pulse card's report, by its chat, for that chat's next message to
     /// carry unseen.
     card_carry: Mutex<HashMap<String, String>>,
+    /// The folder each Code tab session works in.
+    code_sessions: code_sessions::Folders,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -370,9 +373,9 @@ fn run_slash_line(
     }
     let op = match slash::parse(line, remote)? {
         slash::Action::Op(op) => op,
-        other => return slash::apply(other, &workspace(state)),
+        other => return slash::apply(other, &workspace_of(state, conversation_id)),
     };
-    if let Some(done) = engine_op(state, &op)? {
+    if let Some(done) = engine_op(state, &op, conversation_id)? {
         return Ok(done);
     }
     let bound = current(state).workspace;
@@ -401,8 +404,14 @@ fn run_slash_line(
 
 /// The slash commands that run the model on their own: `/send`, `/bg`,
 /// `/consult`, and `/host`. Each is read only and unattended.
-fn engine_op(state: &ShellState, op: &slash::Op) -> Result<Option<slash::Effect>, String> {
+fn engine_op(
+    state: &ShellState,
+    op: &slash::Op,
+    conversation_id: Option<&str>,
+) -> Result<Option<slash::Effect>, String> {
     let notice = |text: String| Ok(Some(slash::Effect::Notice { text }));
+    // Typed in a Code tab session, the work runs in that session's folder.
+    let own_folder = conversation_id.and_then(|id| state.code_sessions.of(id));
     match op {
         slash::Op::Bg(arg) if arg.trim().is_empty() => notice(bg_runs::status()),
         slash::Op::Bg(arg) if arg.trim().eq_ignore_ascii_case("stop") => {
@@ -415,7 +424,7 @@ fn engine_op(state: &ShellState, op: &slash::Op) -> Result<Option<slash::Effect>
                 state.config_dir.clone(),
                 route.client,
                 grokhub_agent::route::host::chat_start().0,
-                route.workspace,
+                own_folder.unwrap_or(route.workspace),
                 task,
             )?;
             let sent = matches!(op, slash::Op::Send(_));
@@ -428,7 +437,7 @@ fn engine_op(state: &ShellState, op: &slash::Op) -> Result<Option<slash::Effect>
             let done = bg_runs::ask_once(
                 route.client,
                 grokhub_core::model_for_mode("fast"),
-                route.workspace,
+                own_folder.unwrap_or(route.workspace),
                 format!("shell-consult-{}", grokhub_core::now_ms()),
                 question.clone(),
                 grokhub_agent::CancelToken::new(),
@@ -632,6 +641,11 @@ struct Turn {
 /// The chat the window has open, reopened at the next launch; empty for none.
 /// A failed write only loses that, so chat goes on.
 fn set_last_chat(state: &ShellState, conversation_id: &str) {
+    // The Chat tab's own: a session in the Code tab's agent window is not
+    // what Chat reopens.
+    if state.code_sessions.holds(conversation_id) {
+        return;
+    }
     let now = current(state);
     if now.last_chat == conversation_id {
         return;
@@ -662,12 +676,17 @@ async fn chat_turn(
     let mode = mode.unwrap_or_else(|| turns::pick_mode(state, &conversation_id, &text));
     let session = session(state, &conversation_id);
     let config_dir = state.config_dir.clone();
+    // A Code tab session works in its own project's folder, not the app's.
+    let own_folder = state.code_sessions.of(&conversation_id);
     if capabilities::current().pulse {
         // What the person says in chat steers the Feed writer's taste note.
         pulse_feed::note_chat(&config_dir, &text, grokhub_core::now_ms());
     }
     tauri::async_runtime::spawn_blocking(move || {
         let mut route = route(&settings, mode, &config_dir)?;
+        if let Some(dir) = own_folder {
+            route.workspace = dir;
+        }
         // Dynamic chat and quips step per turn from this chat's voice settings,
         // at the page's local hour (UTC when the page sent no clock).
         let offset = clock.map_or(0, |c| c.at(grokhub_core::now_ms()).utc_offset_min());
@@ -1133,6 +1152,7 @@ fn close_chat(state: State<'_, ShellState>, conversation_id: String) {
 
 fn end_chat(state: &ShellState, conversation_id: &str) {
     drop_worker(state, conversation_id);
+    state.code_sessions.forget(conversation_id);
     if current(state).last_chat == conversation_id {
         set_last_chat(state, "");
     }
@@ -1660,6 +1680,14 @@ fn workspace(state: &ShellState) -> PathBuf {
     agent::workspace_for(&current(state).workspace)
 }
 
+/// The folder a line typed in `conversation_id` works in: a Code tab
+/// session's own, else the app's.
+fn workspace_of(state: &ShellState, conversation_id: Option<&str>) -> PathBuf {
+    conversation_id
+        .and_then(|id| state.code_sessions.of(id))
+        .unwrap_or_else(|| workspace(state))
+}
+
 /// What a Home or Objectives read takes from the window or a browser.
 struct HomeArgs {
     config_dir: PathBuf,
@@ -2028,6 +2056,109 @@ async fn answer_connector_key(id: String, approve: bool) -> Result<connectors::C
 #[tauri::command]
 fn get_capabilities() -> capabilities::Capabilities {
     capabilities::current()
+}
+
+/// Code tab: the project list and which project is open.
+#[tauri::command]
+async fn code_projects(state: State<'_, ShellState>) -> Result<projects::CodeProjects, String> {
+    let (dir, bound) = (state.config_dir.clone(), current(&state).workspace);
+    off_main(move || projects::listing(&dir, &bound)).await?
+}
+
+const CODE_SWITCH_BUSY: &str =
+    "A test run or deploy is still going. Stop it or wait for it to end, then switch projects.";
+
+/// Opens `folder` as the project the app works in, as `/project bind` does,
+/// and answers with the list again.
+fn open_code_project(state: &ShellState, folder: &str) -> Result<projects::CodeProjects, String> {
+    if folder.trim().is_empty() {
+        return Err("Pick a folder to open.".into());
+    }
+    let bound = current(state).workspace;
+    if code_runs::running() && !projects::is_open(folder, &bound) {
+        return Err(CODE_SWITCH_BUSY.into());
+    }
+    let old_dir = workspace(state);
+    let done = projects::run(
+        &state.config_dir,
+        &bound,
+        projects::Op::Bind(folder.to_string()),
+    )?;
+    let path = done.workspace.unwrap_or_else(|| bound.clone());
+    let next = ShellSettings {
+        workspace: path.clone(),
+        ..current(state)
+    };
+    settings::save(&state.config_dir, &next)?;
+    let keep = next.code_ship.activity_keep;
+    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next;
+    // The terminal's shell was started in the old folder: it ends with the
+    // switch, as it does in the cabin.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    if !projects::is_open(&path, &bound) && code_term::close(code_term::global()) {
+        code_term::log(&state.config_dir, &old_dir, "Closed the terminal.", keep);
+    }
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    let _ = (old_dir, keep);
+    projects::listing(&state.config_dir, &path)
+}
+
+/// Code tab: switch to a project from the list, or open a folder by path.
+#[tauri::command]
+async fn code_project_open(app: AppHandle, path: String) -> Result<projects::CodeProjects, String> {
+    off_main(move || open_code_project(&app.state::<ShellState>(), &path)).await?
+}
+
+/// Code tab: Open folder. The system picker, then that folder opens; `None`
+/// when the picker was closed.
+#[tauri::command]
+async fn code_project_pick(app: AppHandle) -> Result<Option<projects::CodeProjects>, String> {
+    #[cfg(desktop)]
+    {
+        use tauri_plugin_dialog::DialogExt;
+        off_main(move || {
+            let picked = app
+                .dialog()
+                .file()
+                .set_title("Open a project folder")
+                .blocking_pick_folder()
+                .and_then(|p| p.into_path().ok());
+            match picked {
+                Some(dir) => {
+                    open_code_project(&app.state::<ShellState>(), &dir.to_string_lossy()).map(Some)
+                }
+                None => Ok(None),
+            }
+        })
+        .await?
+    }
+    #[cfg(mobile)]
+    {
+        let _ = app;
+        Err(attach::NO_PICKER.into())
+    }
+}
+
+/// Code tab: New project. Makes it under the work root and opens it.
+#[tauri::command]
+async fn code_project_new(app: AppHandle, name: String) -> Result<projects::CodeProjects, String> {
+    off_main(move || {
+        let state = app.state::<ShellState>();
+        let dir = projects::create(&state.config_dir, &name)?;
+        open_code_project(&state, &dir)
+    })
+    .await?
+}
+
+/// Code tab: the agent window shows this session. It takes the open
+/// project's folder unless it has one already; the answer is its folder.
+#[tauri::command]
+fn code_session_bind(state: State<'_, ShellState>, conversation_id: String) -> String {
+    state
+        .code_sessions
+        .bind(&conversation_id, &workspace(&state))
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// Code tab: the workspace's repo, read only.
@@ -4762,6 +4893,7 @@ pub fn run() {
                 notified: os_extras::Pending::default(),
                 auto: Mutex::default(),
                 card_carry: Mutex::default(),
+                code_sessions: code_sessions::Folders::default(),
             });
             if let Some(window) = app.get_webview_window("main") {
                 if text_size != 100 {
@@ -4943,6 +5075,11 @@ pub fn run() {
             code_term_write,
             code_term_resize,
             code_term_close,
+            code_projects,
+            code_project_open,
+            code_project_pick,
+            code_project_new,
+            code_session_bind,
             get_code_ship,
             save_code_ship,
             get_journal,

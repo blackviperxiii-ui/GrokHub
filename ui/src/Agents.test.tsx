@@ -10,7 +10,7 @@ const api = vi.hoisted(() => ({
 
 vi.mock("./api", () => api);
 
-import { Agents, AGENTS_EMPTY, AGENTS_NO_CHAT } from "./Agents";
+import { Agents, AGENTS_EMPTY, AGENTS_NO_CHAT, TASKS_EMPTY, TASKS_NOTE } from "./Agents";
 
 const QUEUE: Queue = {
   tasks: [
@@ -130,5 +130,38 @@ describe("Agents", () => {
       vi.advanceTimersByTime(6000);
     });
     expect(api.getQueue).toHaveBeenCalledTimes(2);
+  });
+
+  it("as the Code tab's Tasks panel it has no way out of the tab, and Stop still works", async () => {
+    api.getQueue.mockResolvedValue(QUEUE);
+    api.stopTask.mockResolvedValue({ ...QUEUE, tasks: QUEUE.tasks.map((t) => ({ ...t, live: false })) });
+    render(<Agents conversationId="shell-c1" />);
+
+    const panel = screen.getByRole("region", { name: "Agent tasks" });
+    expect(within(panel).getByText(TASKS_NOTE)).toBeInTheDocument();
+    expect(await within(panel).findByText("Write the page")).toBeInTheDocument();
+    expect(within(panel).queryByRole("button", { name: "Open chat" })).not.toBeInTheDocument();
+    expect(within(panel).queryByRole("button", { name: "Write the page" })).not.toBeInTheDocument();
+    expect(within(panel).queryByRole("button", { name: "cargo test --workspace" })).not.toBeInTheDocument();
+    const live = within(panel).getByRole("listitem", { name: "cargo test --workspace" });
+    await userEvent.click(within(live).getByRole("button", { name: "Stop" }));
+    expect(api.stopTask).toHaveBeenCalledWith("shell-c1", "t1");
+  });
+
+  it("the Tasks panel of a session with nothing queued says what will show up", async () => {
+    api.getQueue.mockResolvedValue({ tasks: [], todos: [] });
+    render(<Agents conversationId="shell-c1" />);
+    expect(await screen.findByText(TASKS_EMPTY)).toBeInTheDocument();
+    expect(screen.queryByText(AGENTS_EMPTY)).not.toBeInTheDocument();
+  });
+
+  it("reads nothing while its tab is not the one on screen, and reads when it shows", async () => {
+    api.getQueue.mockResolvedValue(QUEUE);
+    const view = render(<Agents conversationId="shell-c1" active={false} />);
+    await act(async () => {});
+    expect(api.getQueue).not.toHaveBeenCalled();
+    view.rerender(<Agents conversationId="shell-c1" active />);
+    expect(await screen.findByText("Write the page")).toBeInTheDocument();
+    expect(api.getQueue).toHaveBeenCalledTimes(1);
   });
 });

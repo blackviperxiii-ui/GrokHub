@@ -9,6 +9,10 @@ export const AGENTS_NO_CHAT =
 
 export const AGENTS_EMPTY = "No jobs yet. Queued work from this chat shows up here.";
 
+/** The Code tab's Tasks panel, beside the agent window. */
+export const TASKS_NOTE = "The agent's to-dos and helpers for this session.";
+export const TASKS_EMPTY = "No tasks yet. The agent's to-dos and helpers show up here.";
+
 export const TASK_LABELS: Record<TaskStatus, string> = {
   running: "Running",
   failed: "Failed",
@@ -34,10 +38,15 @@ export function todoLabel(status: string): string {
 export function Agents({
   conversationId,
   onOpenChat,
+  active = true,
 }: {
   /** The chat the window last heard from; none before the first message. */
   conversationId?: string;
-  onOpenChat: () => void;
+  /** Opens the chat. Without it this is the Code tab's Tasks panel, which
+   * sits beside its own conversation and has nowhere to go. */
+  onOpenChat?: () => void;
+  /** False while the panel's tab is not the one on screen: nothing is read. */
+  active?: boolean;
 }) {
   const [queue, setQueue] = useState<Queue | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -51,7 +60,7 @@ export function Agents({
   }
 
   useEffect(() => {
-    if (!conversationId) return;
+    if (!conversationId || !active) return;
     const id = conversationId;
     let gone = false;
     function read() {
@@ -75,7 +84,7 @@ export function Agents({
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", read);
     };
-  }, [conversationId]);
+  }, [conversationId, active]);
 
   async function stop(taskId?: string) {
     if (!conversationId) return;
@@ -95,11 +104,13 @@ export function Agents({
   const running = tasks.filter((task) => task.live).length;
 
   return (
-    <section className="agents" aria-label="Agents">
+    <section className={onOpenChat ? "agents" : "agents embedded"} aria-label={onOpenChat ? "Agents" : "Agent tasks"}>
       <div className="card-buttons">
-        <button type="button" disabled={!conversationId} onClick={onOpenChat}>
-          Open chat
-        </button>
+        {onOpenChat && (
+          <button type="button" disabled={!conversationId} onClick={onOpenChat}>
+            Open chat
+          </button>
+        )}
         {running > 0 && (
           <button
             type="button"
@@ -111,7 +122,7 @@ export function Agents({
           </button>
         )}
       </div>
-      <p className="note">Background jobs and to-dos for the open chat.</p>
+      <p className="note">{onOpenChat ? "Background jobs and to-dos for the open chat." : TASKS_NOTE}</p>
       {note && (
         <p className="status" role="status">
           {note}
@@ -119,16 +130,22 @@ export function Agents({
       )}
       {!conversationId && <p className="empty">{AGENTS_NO_CHAT}</p>}
       {conversationId && queue === null && !note && <p className="empty">Loading jobs…</p>}
-      {queue && tasks.length === 0 && todos.length === 0 && <p className="empty">{AGENTS_EMPTY}</p>}
+      {queue && tasks.length === 0 && todos.length === 0 && (
+        <p className="empty">{onOpenChat ? AGENTS_EMPTY : TASKS_EMPTY}</p>
+      )}
       {tasks.length > 0 && (
         <>
           <h2>Tasks</h2>
           <ul className="rows" aria-label="Tasks">
             {tasks.map((task) => (
               <li key={task.id} className={`card agent ${task.status}`} aria-label={task.title}>
-                <button type="button" className="card-title link" onClick={onOpenChat}>
-                  {task.title}
-                </button>
+                {onOpenChat ? (
+                  <button type="button" className="card-title link" onClick={onOpenChat}>
+                    {task.title}
+                  </button>
+                ) : (
+                  <div className="card-title">{task.title}</div>
+                )}
                 <div className="card-status">
                   {TASK_LABELS[task.status]} · {task.id}
                 </div>
@@ -155,9 +172,13 @@ export function Agents({
           <ul className="rows" aria-label="To-dos">
             {todos.map((todo) => (
               <li key={todo.id} className={`card agent ${todo.status}`} aria-label={todo.content}>
-                <button type="button" className="card-title link" onClick={onOpenChat}>
-                  {todo.content}
-                </button>
+                {onOpenChat ? (
+                  <button type="button" className="card-title link" onClick={onOpenChat}>
+                    {todo.content}
+                  </button>
+                ) : (
+                  <div className="card-title">{todo.content}</div>
+                )}
                 <div className="card-status">{todoLabel(todo.status)}</div>
               </li>
             ))}
