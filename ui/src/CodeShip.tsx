@@ -41,24 +41,31 @@ export function CodeShip({ onShipped }: { onShipped?: () => void }) {
   const [output, setOutput] = useState("");
   const [activity, setActivity] = useState<CodeActivityEntry[]>([]);
 
-  const refresh = useCallback(async () => {
-    const [nextPush, nextPr, log] = await Promise.all([codeShipPlan("push"), codeShipPlan("pr"), codeActivity()]);
+  const show = useCallback((nextPush: CodeShipPlan, nextPr: CodeShipPlan, log: CodeActivityEntry[]) => {
     setPush(nextPush);
     setPr(nextPr);
     setActivity(log);
-    return { push: nextPush, pr: nextPr };
+    // A card for a command that would no longer run goes away, so nobody confirms the old one.
+    setConfirming((open) => {
+      if (!open) return open;
+      const now = open.action === "push" ? nextPush : nextPr;
+      return now.command === open.command ? open : null;
+    });
   }, []);
 
+  const refresh = useCallback(async () => {
+    const [nextPush, nextPr, log] = await Promise.all([codeShipPlan("push"), codeShipPlan("pr"), codeActivity()]);
+    show(nextPush, nextPr, log);
+    return { push: nextPush, pr: nextPr };
+  }, [show]);
+
+  // Runs each time the tab shows, so a card left open for another branch's command goes too.
   useEffect(() => {
     Promise.all([codeShipPlan("push"), codeShipPlan("pr"), codeActivity()]).then(
-      ([nextPush, nextPr, log]) => {
-        setPush(nextPush);
-        setPr(nextPr);
-        setActivity(log);
-      },
+      ([nextPush, nextPr, log]) => show(nextPush, nextPr, log),
       (err) => setNote(String(err)),
     );
-  }, []);
+  }, [show]);
 
   async function start(action: CodeShipAction) {
     if (busy) return;
@@ -75,17 +82,18 @@ export function CodeShip({ onShipped }: { onShipped?: () => void }) {
         setConfirming(plan);
         return;
       }
-      await run(action, false);
+      await run(action);
     } catch (err) {
       setNote(String(err));
     }
   }
 
-  async function run(action: CodeShipAction, confirmed: boolean) {
+  /** `shown` is the command on the confirm card the person pressed, when there was one. */
+  async function run(action: CodeShipAction, shown?: string) {
     setConfirming(null);
     setBusy(true);
     try {
-      const done = await codeShipRun(action, confirmed);
+      const done = shown === undefined ? await codeShipRun(action, false) : await codeShipRun(action, true, shown);
       setNote(done.summary);
       setOutput(done.output);
       onShipped?.();
@@ -104,6 +112,8 @@ export function CodeShip({ onShipped }: { onShipped?: () => void }) {
     setNote(null);
     try {
       const made = await codeNewBranch(name);
+      // An open card shows the command for the branch just left.
+      setConfirming(null);
       setBranchName("");
       setNote(`On ${made} now.`);
       onShipped?.();
@@ -165,7 +175,7 @@ export function CodeShip({ onShipped }: { onShipped?: () => void }) {
             {confirming.command}
           </pre>
           <div className="card-buttons">
-            <button type="button" onClick={() => void run(confirming.action, true)} disabled={busy}>
+            <button type="button" onClick={() => void run(confirming.action, confirming.command)} disabled={busy}>
               {confirming.action === "push" ? "Push" : "Open PR"}
             </button>
             <button type="button" className="quiet" onClick={() => setConfirming(null)} disabled={busy}>

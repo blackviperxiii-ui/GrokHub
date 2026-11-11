@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useEffectEvent, useId, useState } from "react";
 import { homeCatalog, setHomeLayout, type HomeCatalog, type HomePick, type SlotSize } from "./api";
 
 /** The seven slots, in the order Home draws them. */
@@ -42,12 +42,15 @@ export function HomeEdit({ onDone }: { onDone: (saved: boolean) => void }) {
   const [saving, setSaving] = useState(false);
   const ids = useId();
 
+  // Runs each time the editor shows. A pick changed here and not saved stays;
+  // untouched, it takes the saved layout.
+  const refresh = useEffectEvent((c: HomeCatalog) => {
+    setCat(c);
+    if (!pick || pick === cat?.current) setPick(c.current);
+  });
   useEffect(() => {
     homeCatalog().then(
-      (c) => {
-        setCat(c);
-        setPick(c.current);
-      },
+      (c) => refresh(c),
       (err) => setNote(String(err)),
     );
   }, []);

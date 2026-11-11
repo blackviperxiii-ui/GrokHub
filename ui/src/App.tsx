@@ -44,7 +44,7 @@ import {
 import { Chat, newConversationId, type Prefill, type QueueAct } from "./Chat";
 import { useChipRow } from "./Chips";
 import { HALT_DONE, HALT_FAILED, HaltButton, HaltNote, haltShown, isHaltKey } from "./Halt";
-import { NO_SOURCES, Palette, VIEW_LABELS, views, type PaletteAction, type View } from "./Palette";
+import { NO_SOURCES, Palette, VIEW_LABELS, pageViews, views, type PaletteAction, type View } from "./Palette";
 import { COMPOSER_SLASH, shellKeys, type CommandRunners } from "./paletteCommands";
 import { Shortcuts } from "./Shortcuts";
 import type { Section } from "./sections";
@@ -420,6 +420,12 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [canHalt, halt]);
 
+  /** A page a tile, a chip or the chat asks for: opened only if this app has
+   * it. Updates & Drivers has no tab, and reads this computer. */
+  function openView(next: View) {
+    if (pageViews(caps).includes(next) || (next === "updates" && !caps.remote)) setView(next);
+  }
+
   /** Text for the chat box; with `conversationId`, in that chat (a Pulse card's own). */
   function ask(text: string, conversationId?: string) {
     setPrefill((now) => ({ text, n: (now?.n ?? 0) + 1, ...(conversationId ? { conversationId } : {}) }));
@@ -588,7 +594,7 @@ export function App() {
         <Chat
           onOpenSettings={() => setView("settings")}
           onSignIn={() => run({ kind: "settings", section: "account" })}
-          onOpenView={setView}
+          onOpenView={openView}
           onQueue={onQueue}
           queueAct={queueAct}
           prefill={prefill}
@@ -629,7 +635,7 @@ export function App() {
           <Home
             conversationId={openChat}
             remote={Boolean(caps.remote)}
-            onOpen={setView}
+            onOpen={openView}
             onOpenChat={openSaved}
             onAsk={ask}
             onSettings={(section) => run({ kind: "settings", section })}

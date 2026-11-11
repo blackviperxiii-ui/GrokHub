@@ -282,8 +282,8 @@ pub fn run(
     on_chunk: impl FnMut(&str),
 ) -> Result<RunResult, String> {
     let place = Where {
-        host: crate::code_ship::push_url(workspace)
-            .map(|u| crate::code_ship::host_of(&u).id().to_string())
+        host: crate::code_ship::push_host(workspace)
+            .map(|host| host.id().to_string())
             .unwrap_or_else(|| "other".into()),
         branch: crate::code_ship::current_branch(workspace).unwrap_or_default(),
     };

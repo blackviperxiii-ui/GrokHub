@@ -221,22 +221,43 @@ pub fn branch_ok(name: &str) -> Result<(), Blocked> {
 }
 
 /// The host in a remote URL: `https://github.com/…`, `git@github.com:…`,
-/// `ssh://git@github.com/…`. Anything else is [`Host::Other`].
+/// `ssh://git@github.com/…`. Anything else, a form this doesn't know
+/// included, is [`Host::Other`].
 pub fn host_of(url: &str) -> Host {
     let url = url.trim();
-    let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
-    // Sign-in details end at the last `@` before the path; an `@` further
-    // along belongs to the path, not the host.
-    let authority = rest.split('/').next().unwrap_or("");
-    let authority = authority
-        .rsplit_once('@')
-        .map(|(_, h)| h)
-        .unwrap_or(authority);
-    let host = authority
-        .split(':')
-        .next()
-        .unwrap_or("")
-        .to_ascii_lowercase();
+    let host = match url.split_once("://") {
+        Some((scheme, rest)) => {
+            let scheme = scheme.to_ascii_lowercase();
+            // `git+ssh` and `ssh+git` are git's other names for ssh.
+            let known = ["http", "https", "ssh", "git", "git+ssh", "ssh+git"];
+            if !known.contains(&scheme.as_str()) {
+                return Host::Other;
+            }
+            // The host is what follows the last `@` before the first `/`.
+            // git, ssh and curl disagree on where that part ends when it has
+            // a `?`, `#` or `\`, and git decodes `%2f` in an ssh or git URL
+            // before it looks, so such a URL is never GitHub.
+            let authority = rest.split('/').next().unwrap_or("");
+            let web = scheme == "http" || scheme == "https";
+            if authority.contains(['?', '#', '\\']) || (!web && authority.contains('%')) {
+                return Host::Other;
+            }
+            let host = authority
+                .rsplit_once('@')
+                .map(|(_, h)| h)
+                .unwrap_or(authority);
+            host.split(':').next().unwrap_or("")
+        }
+        // `user@host:path`. With no `:` before the first `/` git reads a
+        // local path, wherever it says github.com.
+        None => match url.split_once(':') {
+            Some((host, _)) if !host.contains('/') => {
+                host.rsplit_once('@').map(|(_, h)| h).unwrap_or(host)
+            }
+            _ => return Host::Other,
+        },
+    }
+    .to_ascii_lowercase();
     if host == "github.com" || host == "www.github.com" {
         Host::GitHub
     } else {
@@ -333,6 +354,21 @@ pub fn pr_args(base: &str, branch: &str) -> Vec<String> {
         .iter()
         .map(|s| s.to_string())
         .collect()
+}
+
+/// The gh argv that reads the branch's PR.
+pub fn pr_view_args(branch: &str) -> Vec<String> {
+    [
+        "pr",
+        "view",
+        "--json",
+        "state,baseRefName,url",
+        "--",
+        branch,
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
 }
 
 /// The command as the confirm shows it and the activity log keeps it.
@@ -434,9 +470,15 @@ pub fn default_branch(dir: &Path) -> Option<String> {
     .map(|r| r.strip_prefix("origin/").unwrap_or(&r).to_string())
 }
 
-/// Where a push to origin goes.
-pub fn push_url(dir: &Path) -> Option<String> {
-    git_line(dir, &["remote", "get-url", "--push", "origin"])
+/// The host a push to origin goes to, `None` with no origin. `git push
+/// origin` sends to every push URL, so it is GitHub only when all are.
+pub fn push_host(dir: &Path) -> Option<Host> {
+    let urls = git_line(dir, &["remote", "get-url", "--push", "--all", "origin"])?;
+    Some(if urls.lines().all(|url| host_of(url) == Host::GitHub) {
+        Host::GitHub
+    } else {
+        Host::Other
+    })
 }
 
 fn head_sha(dir: &Path) -> Option<String> {
@@ -449,7 +491,7 @@ fn pr_of(dir: &Path, branch: &str) -> Pr {
         return Pr::Unknown;
     }
     let mut c = Command::new("gh");
-    c.args(["pr", "view", branch, "--json", "state,baseRefName,url"])
+    c.args(pr_view_args(branch))
         .current_dir(dir)
         .stdin(Stdio::null())
         .env("GH_PROMPT_DISABLED", "1")
@@ -581,11 +623,11 @@ type Probe = Option<(Host, Pr)>;
 /// The facts for the checked-out branch.
 fn context(dir: &Path, config_dir: &Path, probe: &Probe) -> Result<Ctx, Blocked> {
     let branch = current_branch(dir).ok_or(Blocked::Detached)?;
-    let url = push_url(dir).ok_or(Blocked::NoRemote)?;
+    branch_ok(&branch)?;
+    let host = push_host(dir).ok_or(Blocked::NoRemote)?;
     let (host, pr) = match probe {
         Some((host, pr)) => (*host, pr.clone()),
         None => {
-            let host = host_of(&url);
             let pr = if host == Host::GitHub {
                 pr_of(dir, &branch)
             } else {
@@ -684,15 +726,18 @@ fn log(
 }
 
 /// Push or open the PR. The guard runs again here, so a stale window can't
-/// skip it; `confirmed` must be true unless the guard said no confirm.
+/// skip it. Unless the guard said no confirm, `confirmed` must be true and
+/// `expected` must be the command the person saw, so a yes given for one
+/// branch never runs for another.
 pub fn ship(
     config_dir: &Path,
     dir: &Path,
     cfg: &CodeShip,
     action: Action,
     confirmed: bool,
+    expected: Option<&str>,
 ) -> Result<Shipped, String> {
-    ship_with(config_dir, dir, cfg, action, confirmed, None)
+    ship_with(config_dir, dir, cfg, action, confirmed, expected, None)
 }
 
 fn ship_with(
@@ -701,6 +746,7 @@ fn ship_with(
     cfg: &CodeShip,
     action: Action,
     confirmed: bool,
+    expected: Option<&str>,
     probe: Probe,
 ) -> Result<Shipped, String> {
     let ctx = context(dir, config_dir, &probe)
@@ -729,8 +775,19 @@ fn ship_with(
             return Err(msg);
         }
     };
+    // A confirm names one command. It is refused for any other, also one
+    // that would have needed no confirm.
+    let stale = match expected {
+        Some(seen) => seen != command.as_str(),
+        None => go == Go::Confirm && confirmed,
+    };
     if go == Go::Confirm && !confirmed {
         return Err("This needs a confirmation first.".into());
+    }
+    if stale {
+        return Err(
+            "The branch changed since you confirmed. Check the command and confirm again.".into(),
+        );
     }
     grokhub_core::offline::refuse()?;
     let approved_by = if go == Go::NoConfirm {
@@ -832,10 +889,9 @@ pub fn new_branch(
     });
     save_made(config_dir, &store)?;
     let ctx = Ctx { key, facts };
-    let url = push_url(dir).unwrap_or_default();
     let ctx = Ctx {
         facts: Facts {
-            host: host_of(&url),
+            host: push_host(dir).unwrap_or(Host::Other),
             ..ctx.facts
         },
         ..ctx

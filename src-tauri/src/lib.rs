@@ -1689,17 +1689,20 @@ async fn code_ship_plan(
 }
 
 /// Code tab: push the current branch or open its PR, through the push guard.
-/// `confirmed` must be true unless the guard said no confirm is needed.
+/// Unless the guard said no confirm is needed, `confirmed` must be true and
+/// `command` must be the command the confirm showed.
 #[tauri::command]
 async fn code_ship_run(
     state: State<'_, ShellState>,
     action: code_ship::Action,
     confirmed: bool,
+    command: Option<String>,
 ) -> Result<code_ship::Shipped, String> {
     let dir = workspace(&state);
     let config = state.config_dir.clone();
     let cfg = current(&state).code_ship;
-    off_main(move || code_ship::ship(&config, &dir, &cfg, action, confirmed)).await?
+    off_main(move || code_ship::ship(&config, &dir, &cfg, action, confirmed, command.as_deref()))
+        .await?
 }
 
 /// Code tab: make and check out a branch the guard counts as the app's own.
@@ -3055,6 +3058,34 @@ fn out<T: Serialize>(value: T) -> Result<Value, String> {
     serde_json::to_value(value).map_err(|err| err.to_string())
 }
 
+/// A browser's send, read in full before it takes the chat, so a send that
+/// is refused keeps no chat id and starts no worker. `taken` says whether a
+/// chat with that id is open on this computer.
+fn web_send(
+    web: &remote::WebAccess,
+    taken: impl Fn(&str) -> bool,
+    args: &Value,
+) -> Result<(String, Turn), String> {
+    let conversation_id: String = arg(args, "conversationId")?;
+    if taken(&conversation_id) && !web.owns(&conversation_id) {
+        return Err(remote::NOT_YOURS.into());
+    }
+    let turn = Turn {
+        text: arg(args, "text")?,
+        mode: arg::<Option<agent::SessionMode>>(args, "mode")?,
+        attachments: arg::<Option<Vec<String>>>(args, "attachments")?.unwrap_or_default(),
+        clock: arg::<Option<automations::Clock>>(args, "clock")?,
+    };
+    // The same refusal as `agent::Session::prompt`, before a worker starts.
+    if turn.text.trim().is_empty() && turn.attachments.is_empty() {
+        return Err("Type a message first.".into());
+    }
+    if !web.adopt(&conversation_id) {
+        return Err(remote::NOT_YOURS.into());
+    }
+    Ok((conversation_id, turn))
+}
+
 /// One of `remote::WEB_COMMANDS` from a paired browser, run as the window
 /// would run it. A web chat never gets the desktop tools.
 fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, String> {
@@ -3073,25 +3104,17 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
     match command {
         "get_settings" => out(view(&current(&state))),
         "send_chat" => {
-            let conversation_id: String = arg(args, "conversationId")?;
-            let taken = state
-                .chats
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .contains_key(&conversation_id);
-            if taken && !web.owns(&conversation_id) {
-                return Err(remote::NOT_YOURS.into());
-            }
-            web.adopt(&conversation_id);
+            let taken = |id: &str| {
+                state
+                    .chats
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .contains_key(id)
+            };
+            let (conversation_id, turn) = web_send(&web, taken, args)?;
             let settings = ShellSettings {
                 desktop_control: false,
                 ..current(&state)
-            };
-            let turn = Turn {
-                text: arg(args, "text")?,
-                mode: arg::<Option<agent::SessionMode>>(args, "mode")?,
-                attachments: arg::<Option<Vec<String>>>(args, "attachments")?.unwrap_or_default(),
-                clock: arg::<Option<automations::Clock>>(args, "clock")?,
             };
             out(block_on(chat_turn(
                 app.clone(),
@@ -3112,13 +3135,14 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             if taken && !web.owns(&conversation_id) {
                 return Err(remote::NOT_YOURS.into());
             }
-            web.adopt(&conversation_id);
-            out(stage_attachment(
+            let staged = stage_attachment(
                 state,
-                conversation_id,
+                conversation_id.clone(),
                 arg(args, "name")?,
                 arg(args, "data")?,
-            )?)
+            )?;
+            web.adopt(&conversation_id);
+            out(staged)
         }
         "remove_attachment" => {
             remove_attachment(state, own(args)?, arg(args, "path")?);
@@ -4076,20 +4100,142 @@ mod command_tests {
 
 #[cfg(test)]
 mod web_command_tests {
+    /// The text of `remote_call`.
+    fn remote_call_src() -> String {
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        let start = src.find("fn remote_call(").expect("remote_call");
+        let body = &src[start..];
+        body[..body.find("\n}\n").expect("end of remote_call")].to_string()
+    }
+
+    /// One command's arm in `remote_call`, up to the next arm.
+    fn arm<'a>(body: &'a str, name: &str) -> &'a str {
+        let from = body
+            .find(&format!("\n        \"{name}\" =>"))
+            .unwrap_or_else(|| panic!("no {name} arm"));
+        let rest = &body[from + 1..];
+        &rest[..rest.find("\n        \"").unwrap_or(rest.len())]
+    }
+
     /// A name on the list with no arm in `remote_call` is refused at run
     /// time, so the web app's button for it never works.
     #[test]
     fn every_web_command_has_an_arm_in_remote_call() {
-        let src = include_str!("lib.rs").replace("\r\n", "\n");
-        let start = src.find("fn remote_call(").expect("remote_call");
-        let body = &src[start..];
-        let body = &body[..body.find("\n}\n").expect("end of remote_call")];
+        let body = remote_call_src();
         let missing: Vec<&str> = crate::remote::WEB_COMMANDS
             .iter()
             .copied()
             .filter(|name| !body.contains(&format!("\"{name}\"")))
             .collect();
         assert_eq!(missing, Vec::<&str>::new());
+    }
+
+    /// The server refuses a name that isn't on the list before `remote_call`
+    /// sees it, so an arm for one never runs.
+    #[test]
+    fn every_arm_in_remote_call_is_a_web_command() {
+        let body = remote_call_src();
+        let arms: Vec<&str> = body
+            .lines()
+            .filter_map(|line| line.strip_prefix("        \""))
+            .filter_map(|line| line.split_once(" =>"))
+            .flat_map(|(names, _)| names.split(" | "))
+            .map(|name| name.trim_matches('"'))
+            .collect();
+        let unlisted: Vec<&str> = arms
+            .iter()
+            .copied()
+            .filter(|name| !crate::remote::web_command(name))
+            .collect();
+        assert_eq!(unlisted, Vec::<&str>::new());
+        assert_eq!(arms.len(), crate::remote::WEB_COMMANDS.len());
+    }
+
+    /// A send that is refused takes no chat: the browser's chats grow only
+    /// by sends that go on to run.
+    #[test]
+    fn a_refused_send_takes_no_chat() {
+        use serde_json::json;
+        let web = crate::remote::WebAccess::default();
+        let free = |_: &str| false;
+        let open_here = |_: &str| true;
+        let refused = |taken: &dyn Fn(&str) -> bool, args: serde_json::Value| {
+            super::web_send(&web, taken, &args).map(|_| ()).unwrap_err()
+        };
+        // Nothing to send.
+        assert_eq!(
+            refused(&free, json!({ "conversationId": "a1", "text": "  " })),
+            "Type a message first."
+        );
+        assert_eq!(
+            refused(
+                &free,
+                json!({ "conversationId": "a1", "text": "", "attachments": [] })
+            ),
+            "Type a message first."
+        );
+        // A call the page never makes.
+        assert_eq!(
+            refused(&free, json!({ "conversationId": "a1" })),
+            "text: invalid type: null, expected a string"
+        );
+        assert!(!web.owns("a1"));
+        // An id no chat can have, and a chat the window started.
+        assert_eq!(
+            refused(&free, json!({ "conversationId": "../x", "text": "hi" })),
+            "That chat isn't open in this browser."
+        );
+        assert!(!web.owns("../x"));
+        assert_eq!(
+            refused(
+                &open_here,
+                json!({ "conversationId": "desk-1", "text": "hi" })
+            ),
+            "That chat isn't open in this browser."
+        );
+        assert!(!web.owns("desk-1"));
+
+        let (id, turn) =
+            super::web_send(&web, free, &json!({ "conversationId": "a1", "text": "hi" }))
+                .expect("a message sends");
+        assert_eq!(id, "a1");
+        assert_eq!(turn.text, "hi");
+        assert_eq!(turn.attachments, Vec::<String>::new());
+        assert!(web.owns("a1"));
+        // Files alone send, and the browser's own chat stays its own once
+        // it is open here.
+        let (id, turn) = super::web_send(
+            &web,
+            free,
+            &json!({ "conversationId": "a2", "text": "", "attachments": ["/tmp/a.txt"] }),
+        )
+        .expect("files alone send");
+        assert_eq!(id, "a2");
+        assert_eq!(turn.attachments, vec!["/tmp/a.txt".to_string()]);
+        assert!(web.owns("a2"));
+        let again = super::web_send(
+            &web,
+            open_here,
+            &json!({ "conversationId": "a1", "text": "more" }),
+        );
+        assert_eq!(
+            again.map(|(id, turn)| (id, turn.text)),
+            Ok(("a1".to_string(), "more".to_string()))
+        );
+    }
+
+    /// A file that was refused claims no chat. A source check: the arm
+    /// needs the running app, so this only reads the order of its two calls
+    /// and that a refusal returns before the second.
+    #[test]
+    fn the_stage_arm_takes_the_chat_only_after_the_file_is_staged() {
+        let body = remote_call_src();
+        let stage = arm(&body, "stage_attachment");
+        let staged = stage.find("stage_attachment(").expect("the staging call");
+        let adopted = stage.find("web.adopt(").expect("adopts the chat");
+        assert!(staged < adopted, "{stage}");
+        let between = &stage[staged..adopted];
+        assert!(between.trim_end().ends_with(")?;"), "{stage}");
     }
 }
 

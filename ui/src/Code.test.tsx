@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen } from "@testing-library/react";
+import { Activity } from "react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodeBuiltin, CodeDiff, CodeRepo } from "./api";
@@ -63,6 +64,18 @@ function repo(over: Partial<CodeRepo> = {}): CodeRepo {
   };
 }
 
+/** The tab as the app holds it: mounted once, hidden while another tab shows. */
+function Tab({ shown }: { shown: boolean }) {
+  return (
+    <Activity mode={shown ? "visible" : "hidden"}>
+      <Code onTask={() => {}} />
+    </Activity>
+  );
+}
+
+/** Let every answer already on its way land before looking at the page. */
+const settle = () => act(() => new Promise<void>((done) => setTimeout(done, 0)));
+
 describe("Code tab", () => {
   beforeEach(() => {
     api.codeRepo.mockReset();
@@ -85,6 +98,163 @@ describe("Code tab", () => {
     await userEvent.click(screen.getByRole("button", { name: /src\/a\.rs/ }));
     expect(api.codeDiff).toHaveBeenCalledWith("src/a.rs");
     expect(await screen.findByLabelText("Diff of src/a.rs")).toHaveTextContent("+new");
+  });
+
+  it("Refresh reads the open diff again", async () => {
+    api.codeRepo.mockResolvedValue(repo());
+    api.codeDiff.mockResolvedValue({ path: "src/a.rs", text: "-old\n+first edit\n", cut: false });
+    render(<Code onTask={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: /src\/a\.rs/ }));
+    expect(await screen.findByLabelText("Diff of src/a.rs")).toHaveTextContent("+first edit");
+    api.codeDiff.mockResolvedValue({ path: "src/a.rs", text: "-old\n+second edit\n", cut: false });
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(screen.getByLabelText("Diff of src/a.rs")).toHaveTextContent("+second edit"));
+    expect(api.codeDiff).toHaveBeenCalledTimes(2);
+    expect(api.codeDiff).toHaveBeenLastCalledWith("src/a.rs");
+  });
+
+  it("coming back to the tab reads the open diff again", async () => {
+    api.codeRepo.mockResolvedValue(repo());
+    api.codeDiff.mockResolvedValue({ path: "src/a.rs", text: "-old\n+first edit\n", cut: false });
+    const view = render(<Tab shown />);
+    await userEvent.click(await screen.findByRole("button", { name: /src\/a\.rs/ }));
+    expect(await screen.findByLabelText("Diff of src/a.rs")).toHaveTextContent("+first edit");
+    api.codeDiff.mockResolvedValue({ path: "src/a.rs", text: "-old\n+second edit\n", cut: false });
+    view.rerender(<Tab shown={false} />);
+    view.rerender(<Tab shown />);
+    await waitFor(() => expect(screen.getByLabelText("Diff of src/a.rs")).toHaveTextContent("+second edit"));
+    expect(api.codeDiff).toHaveBeenCalledTimes(2);
+  });
+
+  it("coming back closes the diff of a file that is no longer changed", async () => {
+    api.codeRepo.mockResolvedValue(repo());
+    api.codeDiff.mockResolvedValue({ path: "src/a.rs", text: "-old\n+first edit\n", cut: false });
+    const view = render(<Tab shown />);
+    await userEvent.click(await screen.findByRole("button", { name: /src\/a\.rs/ }));
+    expect(await screen.findByLabelText("Diff of src/a.rs")).toHaveTextContent("+first edit");
+    api.codeRepo.mockResolvedValue(repo({ files: [{ path: "notes.md", status: "untracked", staged: false }] }));
+    view.rerender(<Tab shown={false} />);
+    view.rerender(<Tab shown />);
+    await waitFor(() => expect(screen.queryByRole("button", { name: /src\/a\.rs/ })).toBeNull());
+    expect(screen.getByRole("button", { name: /notes\.md/ })).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByLabelText("Diff of src/a.rs")).toBeNull());
+    expect(api.codeDiff).toHaveBeenCalledTimes(1);
+  });
+
+  it("a slow refresh does not replace the diff of a file picked after it", async () => {
+    api.codeRepo.mockResolvedValue(repo());
+    api.codeDiff.mockResolvedValue({ path: "src/a.rs", text: "-old\n+a edit\n", cut: false });
+    render(<Code onTask={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: /src\/a\.rs/ }));
+    expect(await screen.findByLabelText("Diff of src/a.rs")).toHaveTextContent("+a edit");
+    let answerSlow: (diff: CodeDiff) => void = () => {};
+    api.codeDiff.mockImplementationOnce(() => new Promise<CodeDiff>((done) => (answerSlow = done)));
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(api.codeDiff).toHaveBeenCalledTimes(2));
+    api.codeDiff.mockResolvedValue({ path: "notes.md", text: "+a note\n", cut: false });
+    await userEvent.click(screen.getByRole("button", { name: /notes\.md/ }));
+    expect(await screen.findByLabelText("Diff of notes.md")).toHaveTextContent("+a note");
+    answerSlow({ path: "src/a.rs", text: "-old\n+late answer\n", cut: false });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled());
+    expect(screen.getByLabelText("Diff of notes.md")).toHaveTextContent("+a note");
+    expect(screen.queryByLabelText("Diff of src/a.rs")).toBeNull();
+  });
+
+  it("after a file fails to open, Refresh reads the diff on screen, not a file picked on the way", async () => {
+    const files = [
+      { path: "c.txt", status: "modified" as const, staged: false },
+      { path: "src/a.rs", status: "modified" as const, staged: false },
+      { path: "notes.md", status: "untracked" as const, staged: false },
+    ];
+    api.codeRepo.mockResolvedValue(repo({ files }));
+    api.codeDiff.mockResolvedValue({ path: "c.txt", text: "+c edit\n", cut: false });
+    render(<Code onTask={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: /c\.txt/ }));
+    expect(await screen.findByLabelText("Diff of c.txt")).toHaveTextContent("+c edit");
+
+    let answerSlow: (diff: CodeDiff) => void = () => {};
+    api.codeDiff.mockImplementationOnce(() => new Promise<CodeDiff>((done) => (answerSlow = done)));
+    await userEvent.click(screen.getByRole("button", { name: /src\/a\.rs/ }));
+    api.codeDiff.mockRejectedValueOnce("git diff failed");
+    await userEvent.click(screen.getByRole("button", { name: /notes\.md/ }));
+    expect(await screen.findByText("git diff failed")).toBeInTheDocument();
+    answerSlow({ path: "src/a.rs", text: "-old\n+a edit\n", cut: false });
+    await settle();
+    expect(screen.getByLabelText("Diff of c.txt")).toHaveTextContent("+c edit");
+
+    api.codeDiff.mockImplementation((path) => Promise.resolve({ path, text: `+second edit of ${path}\n`, cut: false }));
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled());
+    expect(screen.getByLabelText("Diff of c.txt")).toHaveTextContent("+second edit of c.txt");
+    expect(screen.queryByLabelText("Diff of src/a.rs")).toBeNull();
+    expect(api.codeDiff.mock.calls.map(([path]) => path)).toEqual(["c.txt", "src/a.rs", "notes.md", "c.txt"]);
+  });
+
+  it("a file that fails to open does not drop a Refresh of the diff on screen", async () => {
+    api.codeRepo.mockResolvedValue(repo());
+    api.codeDiff.mockResolvedValue({ path: "src/a.rs", text: "-old\n+first\n", cut: false });
+    render(<Code onTask={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: /src\/a\.rs/ }));
+    expect(await screen.findByLabelText("Diff of src/a.rs")).toHaveTextContent("+first");
+
+    let answerSlow: (diff: CodeDiff) => void = () => {};
+    api.codeDiff.mockImplementationOnce(() => new Promise<CodeDiff>((done) => (answerSlow = done)));
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(api.codeDiff).toHaveBeenCalledTimes(2));
+    api.codeDiff.mockRejectedValueOnce("git diff failed");
+    await userEvent.click(screen.getByRole("button", { name: /notes\.md/ }));
+    expect(await screen.findByText("git diff failed")).toBeInTheDocument();
+    answerSlow({ path: "src/a.rs", text: "-old\n+second\n", cut: false });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled());
+    expect(screen.getByLabelText("Diff of src/a.rs")).toHaveTextContent("+second");
+    expect(api.codeDiff.mock.calls.map(([path]) => path)).toEqual(["src/a.rs", "src/a.rs", "notes.md"]);
+  });
+
+  it("a file picked just before Refresh still opens", async () => {
+    api.codeRepo.mockResolvedValue(repo());
+    let answerSlow: (diff: CodeDiff) => void = () => {};
+    api.codeDiff.mockImplementationOnce(() => new Promise<CodeDiff>((done) => (answerSlow = done)));
+    api.codeDiff.mockResolvedValue({ path: "src/a.rs", text: "-old\n+new\n", cut: false });
+    render(<Code onTask={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: /src\/a\.rs/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled());
+    answerSlow({ path: "src/a.rs", text: "-old\n+new\n", cut: false });
+    expect(await screen.findByLabelText("Diff of src/a.rs")).toHaveTextContent("+new");
+    expect(screen.getByRole("button", { name: /src\/a\.rs/ })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("keeps a typed test command when the tab shows again, and runs it", async () => {
+    api.codeRepo.mockResolvedValue(repo({ files: [] }));
+    api.codeTestPlan.mockImplementation((typed) =>
+      Promise.resolve({ command: typed ?? "cargo test", needsConfirm: false, remembered: "cargo test" }),
+    );
+    const view = render(<Tab shown />);
+    const box = await screen.findByLabelText("Test command");
+    await waitFor(() => expect(box).toHaveValue("cargo test"));
+    await userEvent.clear(box);
+    await userEvent.type(box, "cargo test -p grokhub-core --lib perm");
+    view.rerender(<Tab shown={false} />);
+    view.rerender(<Tab shown />);
+    await waitFor(() => expect(api.codeTestPlan).toHaveBeenCalledTimes(2));
+    await settle();
+    expect(screen.getByLabelText("Test command")).toHaveValue("cargo test -p grokhub-core --lib perm");
+    await userEvent.click(screen.getByRole("button", { name: "Run tests" }));
+    await waitFor(() => expect(api.codeTestRun).toHaveBeenCalledTimes(1));
+    expect(api.codeTestPlan).toHaveBeenCalledWith("cargo test -p grokhub-core --lib perm");
+    expect(api.codeTestRun).toHaveBeenCalledWith("cargo test -p grokhub-core --lib perm", false);
+  });
+
+  it("an untouched test command takes the fresh one when the tab shows again", async () => {
+    api.codeRepo.mockResolvedValue(repo({ files: [] }));
+    api.codeTestPlan.mockResolvedValueOnce({ command: "cargo test", needsConfirm: true, remembered: null });
+    api.codeTestPlan.mockResolvedValue({ command: "npm test", needsConfirm: false, remembered: "npm test" });
+    const view = render(<Tab shown />);
+    await waitFor(() => expect(screen.getByLabelText("Test command")).toHaveValue("cargo test"));
+    view.rerender(<Tab shown={false} />);
+    view.rerender(<Tab shown />);
+    await waitFor(() => expect(screen.getByLabelText("Test command")).toHaveValue("npm test"));
+    expect(screen.queryByText("The first run of this command will ask before it starts.")).toBeNull();
   });
 
   it("says so when the workspace isn't a repo or has no changes", async () => {

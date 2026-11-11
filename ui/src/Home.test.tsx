@@ -461,6 +461,37 @@ describe("Home", () => {
     expect(api.libraryPlay).toHaveBeenCalledWith(620);
   });
 
+  it("on a paired browser a tile link opens a web page in a new tab, and nothing else", async () => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    const links = (url: string): HomePage => ({
+      ...PAGE,
+      slots: [
+        slot({
+          slot: "medium-1",
+          size: "medium",
+          module: "news",
+          name: "News",
+          tile: { kind: "view", view: view({ buttons: [{ label: "Read", action: { kind: "openUrl", url }, primary: true }] }) },
+        }),
+      ],
+    });
+    try {
+      api.getHome.mockResolvedValue(links("javascript:alert(1)"));
+      const { unmount } = render(<Home {...routes()} remote />);
+      await userEvent.click(within(await screen.findByRole("listitem", { name: "News" })).getByRole("button", { name: "Read" }));
+      expect(open).not.toHaveBeenCalled();
+      unmount();
+
+      api.getHome.mockResolvedValue(links("https://news.example/post"));
+      render(<Home {...routes()} remote />);
+      await userEvent.click(within(await screen.findByRole("listitem", { name: "News" })).getByRole("button", { name: "Read" }));
+      expect(open.mock.calls).toEqual([["https://news.example/post", "_blank", "noopener,noreferrer"]]);
+      expect(api.openUrl).not.toHaveBeenCalled();
+    } finally {
+      open.mockRestore();
+    }
+  });
+
   it("a tile click opens its page, a chat row its chat, and an idea fills the chat box", async () => {
     api.getHome.mockResolvedValue(PAGE);
     const go = routes();

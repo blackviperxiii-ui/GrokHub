@@ -15,17 +15,22 @@ export function takeCodeFromLink(): string {
   if (!match) return "";
   const { pathname, search } = window.location;
   window.history.replaceState(null, "", pathname + search);
+  return decoded(match[1]);
+}
+
+/** A mangled link (`#code=%zz`) carries no code: pair by hand instead of a blank page. */
+function decoded(raw: string): string {
   try {
-    return decodeURIComponent(match[1]);
+    return decodeURIComponent(raw);
   } catch {
-    // A mangled link (`#code=%zz`): pair by hand instead of a blank page.
     return "";
   }
 }
 
 /** Whether the address carries a pairing link's code (read only; `takeCodeFromLink` takes it). */
 function linkHasCode(): boolean {
-  return /(?:^#|&)code=[^&]/.test(window.location.hash);
+  const match = /(?:^#|&)code=([^&]*)/.exec(window.location.hash);
+  return match !== null && decoded(match[1]) !== "";
 }
 
 /** The web app's first screen: pair this browser with the desktop. */

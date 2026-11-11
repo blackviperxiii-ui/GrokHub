@@ -25,6 +25,7 @@ import { ChipRow, useChipRow } from "./Chips";
 import { FollowUpRow } from "./Goals";
 import { HomeEdit } from "./HomeEdit";
 import { COMPANION_NAME } from "./brand";
+import { openExternal } from "./external";
 import { artUrl } from "./nyx";
 import type { View } from "./Palette";
 import type { Section } from "./sections";
@@ -163,7 +164,7 @@ export function runAction(a: TileAction, go: HomeRoutes, remote: boolean, reload
     case "toggle":
       return go.onSettings(FEATURE_SECTION[a.feature] ?? "general");
     case "openUrl":
-      if (remote) window.open(a.url, "_blank", "noopener");
+      if (remote) void openExternal(a.url).catch(() => {});
       else void openUrl(a.url).catch(() => {});
       return;
     case "play":

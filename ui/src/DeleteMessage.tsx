@@ -3,7 +3,7 @@
 // alone; a reply goes whole, with the tools it ran.
 import { useEffect, useRef } from "react";
 import { PRODUCT_NAME } from "./brand";
-import { useDismiss } from "./ui";
+import { useDismiss, useModalFocus } from "./ui";
 
 export const DELETE_MESSAGE_LABEL = "Delete message…";
 /** The ··· button's name for screen readers. The UI font has no "⋯". */
@@ -109,6 +109,8 @@ export function DeleteMessageDialog({
   onClose: () => void;
 }) {
   const keep = useRef<HTMLButtonElement>(null);
+  const box = useRef<HTMLDivElement>(null);
+  useModalFocus(box);
   const question = reply ? DELETE_REPLY_QUESTION : DELETE_ASK_QUESTION;
   useEffect(() => {
     keep.current?.focus();
@@ -121,6 +123,7 @@ export function DeleteMessageDialog({
   return (
     <div className="fix-backdrop" onClick={onClose}>
       <div
+        ref={box}
         className="card fix-window confirm-window"
         role="alertdialog"
         aria-modal="true"

@@ -200,6 +200,42 @@ describe("push to talk", () => {
     await waitFor(() => expect(screen.getByLabelText("Message")).toHaveValue("hello"));
   });
 
+  it("a Ctrl+G hold ends when the window loses focus, with no key let go", async () => {
+    const mic = fakeMic();
+    api.transcribe.mockResolvedValue("said before switching away");
+    render(<Chat onOpenSettings={() => {}} />);
+    fireEvent.keyDown(window, { key: "g", ctrlKey: true });
+    await waitFor(() => expect(mic.processor).not.toBeNull());
+    expect(screen.getByRole("button", { name: /Listening/ })).toHaveAttribute("aria-pressed", "true");
+    mic.feed(new Float32Array(4800).fill(0.25));
+    fireEvent.blur(window);
+    await waitFor(() => expect(api.transcribe).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByLabelText("Message")).toHaveValue("said before switching away"));
+    expect(screen.getByRole("button", { name: MIC })).toHaveAttribute("aria-pressed", "false");
+    expect(api.sendChat).not.toHaveBeenCalled();
+  });
+
+  it("a permission prompt that takes focus before the mic opens does not end the hold", async () => {
+    const mic = fakeMic();
+    let allow: () => void = () => {};
+    const stream = { getTracks: () => [{ stop: () => {} }] };
+    mic.getUserMedia.mockImplementation(() => new Promise((resolve) => (allow = () => resolve(stream as never))));
+    api.transcribe.mockResolvedValue("what I said after Allow");
+    render(<Chat onOpenSettings={() => {}} />);
+    fireEvent.keyDown(window, { key: "g", ctrlKey: true });
+    // The prompt opens and takes focus: no keyup reaches the page.
+    fireEvent.blur(window);
+    await act(async () => {
+      allow();
+    });
+    await waitFor(() => expect(mic.processor).not.toBeNull());
+    expect(screen.getByRole("button", { name: /Listening/ })).toHaveAttribute("aria-pressed", "true");
+    mic.feed(new Float32Array(4800).fill(0.25));
+    fireEvent.keyUp(window, { key: "g" });
+    await waitFor(() => expect(screen.getByLabelText("Message")).toHaveValue("what I said after Allow"));
+    expect(api.transcribe).toHaveBeenCalledTimes(1);
+  });
+
   it("a denied mic shows a note and sends nothing to transcribe", async () => {
     Object.defineProperty(navigator, "mediaDevices", {
       configurable: true,

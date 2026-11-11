@@ -1,4 +1,5 @@
-import { render, screen } from "@testing-library/react";
+import { Activity } from "react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CODE_SETTINGS_NONE, CodeSettings, DEPLOY_SETTINGS_NONE, SHIP_MODE_ASK, SHIP_MODE_AUTO, SHIP_SETTINGS_RULES } from "./CodeSettings";
@@ -34,6 +35,18 @@ const DEPLOY_OFF = {
   mode: "ask" as const,
   blocked: "Deploy is off for this project. Turn it on in Settings → Code.",
 };
+
+/** The page as Settings holds it: mounted once, hidden while another tab shows. */
+function Shown({ shown }: { shown: boolean }) {
+  return (
+    <Activity mode={shown ? "visible" : "hidden"}>
+      <CodeSettings />
+    </Activity>
+  );
+}
+
+/** Let every answer already on its way land before looking at the page. */
+const settle = () => act(() => new Promise<void>((done) => setTimeout(done, 0)));
 
 describe("Settings → Code", () => {
   beforeEach(() => {
@@ -97,6 +110,69 @@ describe("Settings → Code", () => {
       extraProtected: ["main", "release"],
       hosts: { github: true, other: true },
     });
+  });
+
+  it("keeps a typed PR base and protected list when the page shows again", async () => {
+    api.codeTestRemembered.mockResolvedValue({ command: null });
+    const view = render(<Shown shown />);
+    const base = await screen.findByRole("textbox", { name: "PR base" });
+    await userEvent.clear(base);
+    await userEvent.type(base, "develop");
+    const extra = screen.getByRole("textbox", { name: "Also protected" });
+    await userEvent.clear(extra);
+    await userEvent.type(extra, "release");
+    api.getCodeShip.mockResolvedValue({ ...SHIP, mode: "autoBeta", autoBase: "next", extraProtected: ["main", "stable"] });
+    view.rerender(<Shown shown={false} />);
+    view.rerender(<Shown shown />);
+    await waitFor(() => expect(api.getCodeShip).toHaveBeenCalledTimes(2));
+    await settle();
+    expect(screen.getByRole("textbox", { name: "PR base" })).toHaveValue("develop");
+    expect(screen.getByRole("textbox", { name: "Also protected" })).toHaveValue("release");
+    expect(screen.getByRole("radio", { name: SHIP_MODE_AUTO })).toBeChecked();
+  });
+
+  it("an untouched PR base and protected list take the fresh values when the page shows again", async () => {
+    api.codeTestRemembered.mockResolvedValue({ command: null });
+    const view = render(<Shown shown />);
+    expect(await screen.findByRole("textbox", { name: "PR base" })).toHaveValue("beta");
+    expect(screen.getByRole("textbox", { name: "Also protected" })).toHaveValue("main");
+    api.getCodeShip.mockResolvedValue({ ...SHIP, autoBase: "develop", extraProtected: ["main", "release"] });
+    view.rerender(<Shown shown={false} />);
+    view.rerender(<Shown shown />);
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "PR base" })).toHaveValue("develop"));
+    expect(screen.getByRole("textbox", { name: "Also protected" })).toHaveValue("main, release");
+  });
+
+  it("keeps a typed deploy command when the page shows again", async () => {
+    api.codeTestRemembered.mockResolvedValue({ command: null });
+    const on = { ...DEPLOY_OFF, deployEnabled: true, command: "npm run deploy", blocked: null };
+    api.codeDeployPlan.mockResolvedValue(on);
+    const view = render(<Shown shown />);
+    const box = await screen.findByRole("textbox", { name: "Deploy command" });
+    expect(box).toHaveValue("npm run deploy");
+    await userEvent.clear(box);
+    await userEvent.type(box, "make deploy-staging");
+    api.codeDeployPlan.mockResolvedValue({ ...on, command: "npm run release", remembered: "npm run release" });
+    view.rerender(<Shown shown={false} />);
+    view.rerender(<Shown shown />);
+    await waitFor(() => expect(api.codeDeployPlan).toHaveBeenCalledTimes(2));
+    await settle();
+    expect(screen.getByRole("textbox", { name: "Deploy command" })).toHaveValue("make deploy-staging");
+    expect(screen.getByText("npm run release")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save deploy command" })).toBeEnabled();
+  });
+
+  it("an untouched deploy command takes the fresh one when the page shows again", async () => {
+    api.codeTestRemembered.mockResolvedValue({ command: null });
+    const on = { ...DEPLOY_OFF, deployEnabled: true, command: "npm run deploy", blocked: null };
+    api.codeDeployPlan.mockResolvedValue(on);
+    const view = render(<Shown shown />);
+    expect(await screen.findByRole("textbox", { name: "Deploy command" })).toHaveValue("npm run deploy");
+    api.codeDeployPlan.mockResolvedValue({ ...on, command: "npm run release" });
+    view.rerender(<Shown shown={false} />);
+    view.rerender(<Shown shown />);
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Deploy command" })).toHaveValue("npm run release"));
+    expect(screen.getByRole("button", { name: "Save deploy command" })).toBeDisabled();
   });
 
   it("shows why a PR base was refused", async () => {

@@ -1,4 +1,5 @@
-import { render, screen } from "@testing-library/react";
+import { Activity } from "react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Behavior as Shape, BehaviorPage } from "./api";
@@ -31,6 +32,18 @@ function page(over: Partial<Shape> = {}, closeToTray = true): BehaviorPage {
     ],
   };
 }
+
+/** The page as Settings holds it: mounted once, hidden while another tab shows. */
+function Shown({ shown }: { shown: boolean }) {
+  return (
+    <Activity mode={shown ? "visible" : "hidden"}>
+      <Behavior tray={false} />
+    </Activity>
+  );
+}
+
+/** Let every answer already on its way land before looking at the page. */
+const settle = () => act(() => new Promise<void>((done) => setTimeout(done, 0)));
 
 describe("Behavior", () => {
   beforeEach(() => {
@@ -107,6 +120,29 @@ describe("Behavior", () => {
     expect(api.saveBehavior).toHaveBeenLastCalledWith(true, { ...OFF, quietStart: "22:00", quietEnd: "07:00" });
     expect(await screen.findByText("Quiet hours saved.")).toBeInTheDocument();
     expect(screen.queryByLabelText(/in the tray/)).toBeNull();
+  });
+
+  it("keeps an unsaved quiet hour when the page shows again, and refreshes the one left alone", async () => {
+    const view = render(<Shown shown />);
+    fireEvent.change(await screen.findByLabelText("Quiet hours start"), { target: { value: "22:00" } });
+    api.getBehavior.mockResolvedValue(page({ quietStart: "08:00", quietEnd: "09:00", autocomplete: true }));
+    view.rerender(<Shown shown={false} />);
+    view.rerender(<Shown shown />);
+    await waitFor(() => expect(api.getBehavior).toHaveBeenCalledTimes(2));
+    await settle();
+    expect(screen.getByLabelText("Quiet hours start")).toHaveValue("22:00");
+    expect(screen.getByLabelText("Quiet hours end")).toHaveValue("09:00");
+    expect(screen.getByLabelText("Sentence autocomplete")).toBeChecked();
+  });
+
+  it("untouched quiet hours take the saved ones when the page shows again", async () => {
+    const view = render(<Shown shown />);
+    expect(await screen.findByLabelText("Quiet hours start")).toHaveValue("");
+    api.getBehavior.mockResolvedValue(page({ quietStart: "08:00", quietEnd: "09:00" }));
+    view.rerender(<Shown shown={false} />);
+    view.rerender(<Shown shown />);
+    await waitFor(() => expect(screen.getByLabelText("Quiet hours start")).toHaveValue("08:00"));
+    expect(screen.getByLabelText("Quiet hours end")).toHaveValue("09:00");
   });
 
   it("the web app sees the choices with nothing to change them", async () => {

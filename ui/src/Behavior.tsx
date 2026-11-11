@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useEffectEvent, useState, type FormEvent } from "react";
 import { getBehavior, saveBehavior, type Behavior as Shape, type BehaviorPage } from "./api";
 import { PRODUCT_NAME } from "./brand";
 import { Toggle } from "./Toggle";
@@ -39,8 +39,19 @@ export function Behavior({
     setEnd(next.behavior.quietEnd);
   }
 
+  // Runs each time this page shows. A quiet hour typed and not saved keeps the
+  // edit; untouched, it takes the saved one.
+  const refresh = useEffectEvent((next: BehaviorPage) => {
+    const was = page?.behavior;
+    setPage(next);
+    if (!was || start === was.quietStart) setStart(next.behavior.quietStart);
+    if (!was || end === was.quietEnd) setEnd(next.behavior.quietEnd);
+  });
   useEffect(() => {
-    getBehavior().then(show, (err) => setNote(String(err)));
+    getBehavior().then(
+      (next) => refresh(next),
+      (err) => setNote(String(err)),
+    );
   }, []);
 
   if (!page) return <p className="note">{note ?? "Loading…"}</p>;

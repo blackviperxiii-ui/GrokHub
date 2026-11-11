@@ -396,7 +396,9 @@ pub(crate) fn exec(
         if chunk.is_empty() {
             continue;
         }
-        if output.len() >= OUTPUT_CAP {
+        // Once a chunk hasn't fit, the output has ended: a later, shorter
+        // chunk is not kept or sent, even if the cut left a byte or two free.
+        if cut || output.len() >= OUTPUT_CAP {
             cut = true;
             continue;
         }
@@ -701,6 +703,45 @@ mod tests {
             "{}",
             out.output
         );
+    }
+
+    #[test]
+    fn a_second_run_starts_once_the_first_has_ended() {
+        let work = temp_dir("twice-work");
+        let one = exec(&work, "echo one", None, &mut |_: &str| {}).unwrap();
+        assert_eq!(one.exit, 0);
+        assert_eq!(one.output.lines().collect::<Vec<_>>(), ["one"]);
+        assert_eq!(*CURRENT.lock().unwrap(), None);
+        let two = exec(&work, "echo two", None, &mut |_: &str| {}).unwrap();
+        assert_eq!(two.exit, 0);
+        assert_eq!(two.output.lines().collect::<Vec<_>>(), ["two"]);
+        assert_eq!(*CURRENT.lock().unwrap(), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nothing_is_kept_or_sent_after_the_output_cap_cuts() {
+        let work = temp_dir("cap-work");
+        // 87,381 three-byte lines leave one byte of room under the cap, so
+        // the euro sign is the chunk that doesn't fit. The command prints its
+        // last two bytes only once that chunk has been sent on.
+        let command = "yes ab | head -c 262143; printf '\\342\\202\\254'; \
+            i=0; while [ ! -e sent ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done; \
+            printf zz";
+        let mark = work.join("sent");
+        let mut sent = String::new();
+        let out = exec(&work, command, None, &mut |chunk: &str| {
+            sent.push_str(chunk);
+            if chunk.contains(['\u{20ac}', '\u{fffd}']) {
+                std::fs::write(&mark, "").unwrap();
+            }
+        })
+        .unwrap();
+        assert_eq!(out.exit, 0);
+        assert!(out.cut);
+        assert_eq!(out.output.len(), 262_143);
+        assert!(out.output.ends_with("ab\nab\n"));
+        assert!(!sent.contains('z'), "a chunk was sent after the cut");
     }
 
     #[test]

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 import {
   codeBuiltins,
   codeDiff,
@@ -50,6 +50,23 @@ export function Code({ onTask }: { onTask: (task: CodeTask) => void }) {
   const [runNote, setRunNote] = useState<string | null>(null);
   const [activityKey, setActivityKey] = useState(0);
 
+  // The file whose diff is on screen, the newest change to that pane, and the
+  // newest file picked: an answer to an older one is dropped.
+  const openPath = useRef<string | null>(null);
+  const diffAsk = useRef(0);
+  const picked = useRef(0);
+
+  /** Read the open diff again, or close it when its file is no longer changed. */
+  const rereadDiff = useCallback(async (files: CodeRepo["files"]) => {
+    const path = openPath.current;
+    if (path === null) return;
+    const ask = ++diffAsk.current;
+    const next = files.some((f) => f.path === path) ? await codeDiff(path).catch(() => null) : null;
+    if (ask !== diffAsk.current) return;
+    if (!next) openPath.current = null;
+    setDiff(next);
+  }, []);
+
   const load = useCallback(async () => {
     setBusy(true);
     setNote(null);
@@ -57,26 +74,40 @@ export function Code({ onTask }: { onTask: (task: CodeTask) => void }) {
       const [next, skills] = await Promise.all([codeRepo(), codeBuiltins()]);
       setRepo(next);
       setBuiltins(skills);
-      setDiff((open) => (open && next.files.some((f) => f.path === open.path) ? open : null));
       setOpenSkill((open) => (open && skills.some((s) => s.name === open.name) ? skills.find((s) => s.name === open.name) ?? null : null));
+      await rereadDiff(next.files);
     } catch (err) {
       setNote(String(err));
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [rereadDiff]);
+
+  // Runs each time the tab shows. A command typed over the planned one stays;
+  // untouched, the box takes the fresh plan.
+  const planned = useRef("");
+  const showPlan = useEffectEvent((plan: { command: string; needsConfirm: boolean }) => {
+    if (command === planned.current) {
+      setCommand(plan.command);
+      setNeedsConfirm(plan.needsConfirm);
+    }
+    planned.current = plan.command;
+  });
 
   useEffect(() => {
-    codeRepo().then(setRepo, (err) => setNote(String(err)));
-    codeBuiltins().then(setBuiltins, (err) => setNote(String(err)));
-    codeTestPlan().then(
-      (plan) => {
-        setCommand(plan.command);
-        setNeedsConfirm(plan.needsConfirm);
+    codeRepo().then(
+      (next) => {
+        setRepo(next);
+        void rereadDiff(next.files);
       },
       (err) => setNote(String(err)),
     );
-  }, []);
+    codeBuiltins().then(setBuiltins, (err) => setNote(String(err)));
+    codeTestPlan().then(
+      (plan) => showPlan(plan),
+      (err) => setNote(String(err)),
+    );
+  }, [rereadDiff]);
 
   useEffect(() => {
     let gone = false;
@@ -99,10 +130,17 @@ export function Code({ onTask }: { onTask: (task: CodeTask) => void }) {
 
   async function open(path: string) {
     setNote(null);
+    const pick = ++picked.current;
     try {
-      setDiff(await codeDiff(path));
+      const next = await codeDiff(path);
+      if (pick !== picked.current) return;
+      // Only a file that opened takes the pane: a failed pick leaves the diff
+      // on screen, and a re-read of it still out, as they were.
+      openPath.current = path;
+      diffAsk.current += 1;
+      setDiff(next);
     } catch (err) {
-      setNote(String(err));
+      if (pick === picked.current) setNote(String(err));
     }
   }
 

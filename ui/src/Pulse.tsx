@@ -182,13 +182,19 @@ export function Pulse({
   const end = useRef<HTMLLIElement>(null);
   const feedList = useRef<HTMLUListElement>(null);
   const polls = useRef<ReturnType<typeof setTimeout>[]>([]);
+  /** Pulse has closed: a look still out must not start another. */
+  const closed = useRef(false);
   /** A tap in flight: a background look must not overwrite its page. */
   const acting = useRef(false);
 
   useEffect(() => {
+    closed.current = false;
     getPulse().then(setPage, fail);
     const timers = polls.current;
-    return () => timers.forEach(clearTimeout);
+    return () => {
+      closed.current = true;
+      timers.forEach(clearTimeout);
+    };
   }, [fail]);
 
   // New posts land in the background; look once a minute while Pulse is open.
@@ -287,13 +293,15 @@ export function Pulse({
   /** The writer posts in the background: look again until the new post shows. */
   function watchForPost() {
     const before = new Set(page?.feed.map((p) => p.id));
+    // Emptied in place: the cleanup on close holds this same array.
     polls.current.forEach(clearTimeout);
-    polls.current = [];
+    polls.current.length = 0;
     const look = (left: number) => {
       polls.current.push(
         setTimeout(() => {
           getPulse().then(
             (next) => {
+              if (closed.current) return;
               setPage(next);
               if (next.feed.some((p) => !before.has(p.id))) clear();
               else if (left > 1) look(left - 1);

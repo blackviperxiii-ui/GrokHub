@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { useModalFocus } from "./ui";
 
 /** The shortcut sheet (Ctrl+/ or the palette's Shortcuts row): the shell's
  * keys, one per line. Escape, Close or a click outside closes it. */
@@ -10,6 +11,8 @@ export function Shortcuts({
   onClose: () => void;
 }) {
   const close = useRef<HTMLButtonElement>(null);
+  const box = useRef<HTMLDivElement>(null);
+  useModalFocus(box);
   useEffect(() => {
     close.current?.focus();
   }, []);
@@ -17,6 +20,7 @@ export function Shortcuts({
   return (
     <div className="palette-backdrop" onMouseDown={onClose}>
       <div
+        ref={box}
         className="palette shortcuts"
         role="dialog"
         aria-modal="true"

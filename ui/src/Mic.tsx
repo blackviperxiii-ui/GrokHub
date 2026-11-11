@@ -176,14 +176,23 @@ export function Mic({
   const setNote = (note: string) => onError(note);
   const pending = useRef<Promise<Recording | null> | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // True once the mic is open; until then a permission prompt may hold the focus.
+  const opened = useRef(false);
 
   function start() {
     if (pending.current || busy) return;
     setState("recording");
-    pending.current = record().catch((err: unknown) => {
-      setNote(micNote(err));
-      return null;
-    });
+    opened.current = false;
+    pending.current = record().then(
+      (rec) => {
+        opened.current = true;
+        return rec;
+      },
+      (err: unknown) => {
+        setNote(micNote(err));
+        return null;
+      },
+    );
     timer.current = setTimeout(() => void finish(), MAX_MS);
   }
 
@@ -224,11 +233,19 @@ export function Mic({
     const up = (e: KeyboardEvent) => {
       if (e.key.toLowerCase() === "g" || e.key === "Control") void live.current.finish();
     };
+    // A window that loses focus never gets the keyup: end the hold as letting
+    // go does. Not while the mic is still opening: its permission prompt takes
+    // the focus too, and the keys are still held when it closes.
+    const end = () => {
+      if (opened.current) void live.current.finish();
+    };
     window.addEventListener("keydown", down);
     window.addEventListener("keyup", up);
+    window.addEventListener("blur", end);
     return () => {
       window.removeEventListener("keydown", down);
       window.removeEventListener("keyup", up);
+      window.removeEventListener("blur", end);
     };
   }, []);
 

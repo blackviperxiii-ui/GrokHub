@@ -22,7 +22,7 @@ use grokhub_core::home::{
 };
 use grokhub_core::local_profile::Gpu;
 
-use crate::home::Sources;
+use crate::home::{Sources, Viewer};
 use crate::{journal, library, local_ai, playbooks, pulse, workboard};
 
 /// Shown on a phone for a tile that reads the PC itself.
@@ -87,7 +87,7 @@ pub fn view(module: &str, src: &Sources<'_>) -> Option<TileView> {
             Err(e) => TileView::error(&e),
         },
         "journal" => match journal::load(src.config_dir) {
-            Ok(page) => journal_view(&page),
+            Ok(page) => journal_view(&page, &src.viewer),
             Err(e) => TileView::error(&e),
         },
         "playbooks" => playbooks_view(&playbooks::load(src.config_dir)),
@@ -860,7 +860,7 @@ pub fn decisions_view(page: &workboard::Page) -> TileView {
     .on_tap(TileAction::nav("workboard"))
 }
 
-pub fn journal_view(page: &journal::Page) -> TileView {
+pub fn journal_view(page: &journal::Page, viewer: &Viewer) -> TileView {
     if page.active.is_empty() {
         return TileView::empty(
             "Note a question or an experiment to keep it in view",
@@ -873,11 +873,13 @@ pub fn journal_view(page: &journal::Page) -> TileView {
         .iter()
         .take(ROWS)
         .map(|q| {
-            let tap = match &q.mission {
-                Some(id) => TileAction::OpenChat { id: id.clone() },
-                None => TileAction::nav("journal"),
-            };
-            TileRow::new(q.question.clone(), q.status.clone(), Tone::Normal).on_tap(tap)
+            let row = TileRow::new(q.question.clone(), q.status.clone(), Tone::Normal);
+            match &q.mission {
+                Some(id) if viewer.sees(id) => row.on_tap(TileAction::OpenChat { id: id.clone() }),
+                // The web app has no Journal page to fall back to.
+                _ if matches!(viewer, Viewer::Web(_)) => row,
+                _ => row.on_tap(TileAction::nav("journal")),
+            }
         })
         .collect();
     TileView::ready(TileText::new(

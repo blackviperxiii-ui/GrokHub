@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { pulseFix, type FixKind, type FixView, type PulseVerdict } from "./api";
 import { PRODUCT_NAME } from "./brand";
+import { useModalFocus } from "./ui";
 
 /** The note at the foot of the options window. */
 export const READ_ONLY_NOTE = `${PRODUCT_NAME} only reads sensors. It never changes fans, clocks or drivers, and never touches a game.`;
@@ -41,6 +42,8 @@ export function FixWindow({
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<FixKind | null>(null);
   const close = useRef<HTMLButtonElement>(null);
+  const box = useRef<HTMLDivElement>(null);
+  useModalFocus(box);
 
   useEffect(() => {
     pulseFix(id).then(setView, (err) => setError(String(err)));
@@ -58,6 +61,7 @@ export function FixWindow({
   return (
     <div className="fix-backdrop" onClick={onClose}>
       <div
+        ref={box}
         className="card fix-window"
         role="dialog"
         aria-modal="true"

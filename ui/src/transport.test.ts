@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   call,
   CODE_REFUSED,
+  GAP_EVENT,
   NOT_GROKHUB,
   NOT_PAIRED,
   onPairChange,
@@ -162,6 +163,8 @@ describe("transport (web app)", () => {
     await pair(CODE, BASE);
     const got: unknown[] = [];
     await subscribe("chat://event", (payload) => got.push(payload));
+    const gaps: unknown[] = [];
+    await subscribe(GAP_EVENT, (payload) => gaps.push(payload));
     box.push("id: 0\n\n");
     let done = false;
     const sent = call("send_chat", { conversationId: "c1", text: "hi" }).then(() => (done = true));
@@ -176,8 +179,99 @@ describe("transport (web app)", () => {
       { conversationId: "c1", text: "Hel" },
       { conversationId: "c1", text: "lo" },
     ]);
+    expect(gaps).toEqual([]);
   });
 
+  it("tells the gap listeners when a call's events never arrive", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let opens = 0;
+    let close: () => void = () => {};
+    let push: (text: string) => void = () => {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/hello")) return Response.json({ kind: "grokhub-remote", version: 1 });
+        if (url.endsWith("/call/send_chat")) return Response.json({ ok: true, value: "end_turn", seq: 3 });
+        opens += 1;
+        // The stream opens once; after it drops the desktop can't be reached for it.
+        if (opens > 1) throw new TypeError("Failed to fetch");
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            push = (text) => controller.enqueue(new TextEncoder().encode(text));
+            close = () => controller.close();
+          },
+        });
+        return new Response(body, { headers: { "Content-Type": "text/event-stream" } });
+      }),
+    );
+    try {
+      await pair(CODE, BASE);
+      const gaps: unknown[] = [];
+      await subscribe(GAP_EVENT, (payload) => gaps.push(payload));
+      push("id: 1\n\n");
+      await vi.advanceTimersByTimeAsync(0);
+      close();
+      let value: string | undefined;
+      const sent = call<string>("send_chat", { conversationId: "c1", text: "hi" }).then(
+        (stop) => (value = stop),
+      );
+      await vi.advanceTimersByTimeAsync(14000);
+      expect(value).toBeUndefined();
+      expect(gaps).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1100);
+      await sent;
+      expect(value).toBe("end_turn");
+      expect(gaps).toEqual([null]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+
+  it("a call that ran no turn raises no gap when its wait runs out", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let opens = 0;
+    let close: () => void = () => {};
+    let push: (text: string) => void = () => {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/hello")) return Response.json({ kind: "grokhub-remote", version: 1 });
+        if (url.endsWith("/call/quick_chips")) return Response.json({ ok: true, value: "chips", seq: 3 });
+        opens += 1;
+        // The stream opens once; after it drops the desktop can't be reached for it.
+        if (opens > 1) throw new TypeError("Failed to fetch");
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            push = (text) => controller.enqueue(new TextEncoder().encode(text));
+            close = () => controller.close();
+          },
+        });
+        return new Response(body, { headers: { "Content-Type": "text/event-stream" } });
+      }),
+    );
+    try {
+      await pair(CODE, BASE);
+      const gaps: unknown[] = [];
+      await subscribe(GAP_EVENT, (payload) => gaps.push(payload));
+      push("id: 1\n\n");
+      await vi.advanceTimersByTimeAsync(0);
+      close();
+      let value: string | undefined;
+      const sent = call<string>("quick_chips", { surface: "chat" }).then(
+        (stop) => (value = stop),
+      );
+      await vi.advanceTimersByTimeAsync(14000);
+      expect(value).toBeUndefined();
+      expect(gaps).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1100);
+      await sent;
+      expect(value).toBe("chips");
+      expect(gaps).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it("reopens a dropped stream from the last event it saw", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const opened: (string | null)[] = [];

@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen } from "@testing-library/react";
+import { Activity } from "react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HomeCatalog, HomePick } from "./api";
@@ -40,6 +41,18 @@ const CATALOG: HomeCatalog = {
   ],
 };
 
+/** The editor as Home holds it: mounted once, hidden while another tab shows. */
+function Shown({ shown }: { shown: boolean }) {
+  return (
+    <Activity mode={shown ? "visible" : "hidden"}>
+      <HomeEdit onDone={() => {}} />
+    </Activity>
+  );
+}
+
+/** Let every answer already on its way land before looking at the page. */
+const settle = () => act(() => new Promise<void>((done) => setTimeout(done, 0)));
+
 describe("Edit Home", () => {
   beforeEach(() => {
     api.homeCatalog.mockReset().mockResolvedValue(CATALOG);
@@ -72,6 +85,30 @@ describe("Edit Home", () => {
     expect(names).toEqual(["Objectives", "Clips", "PC Loadout"]);
     const small = screen.getByRole("combobox", { name: "Small tile 2" });
     expect(small.querySelector("option")?.textContent).toBe("Nothing here");
+  });
+
+  it("keeps an unsaved pick when the editor shows again", async () => {
+    const withJournal = { ...CATALOG, modules: [...CATALOG.modules, mod("journal", "Journal", ["large", "medium"])] };
+    api.homeCatalog.mockResolvedValue(withJournal);
+    const view = render(<Shown shown />);
+    await userEvent.selectOptions(await screen.findByRole("combobox", { name: "Big tile" }), "journal");
+    api.homeCatalog.mockResolvedValue({ ...withJournal, current: STREAMER });
+    view.rerender(<Shown shown={false} />);
+    view.rerender(<Shown shown />);
+    await waitFor(() => expect(api.homeCatalog).toHaveBeenCalledTimes(2));
+    await settle();
+    expect(screen.getByRole("combobox", { name: "Big tile" })).toHaveValue("journal");
+    expect(screen.getByRole("combobox", { name: "Middle tile 1" })).toHaveValue("pc_loadout");
+  });
+
+  it("an untouched editor takes the saved layout when it shows again", async () => {
+    const view = render(<Shown shown />);
+    expect(await screen.findByRole("combobox", { name: "Big tile" })).toHaveValue("objectives");
+    api.homeCatalog.mockResolvedValue({ ...CATALOG, current: STREAMER });
+    view.rerender(<Shown shown={false} />);
+    view.rerender(<Shown shown />);
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Big tile" })).toHaveValue("clips"));
+    expect(screen.getByRole("combobox", { name: "Middle tile 1" })).toHaveValue("squad");
   });
 
   it("keeps the editor open and says so when saving fails", async () => {

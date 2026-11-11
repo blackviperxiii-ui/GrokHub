@@ -18,7 +18,7 @@ use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -38,6 +38,9 @@ const MAX_STREAMS: usize = 8;
 const PING: Duration = Duration::from_secs(15);
 /// Recent chat frames kept for a tab that reconnects; older ones are a gap.
 const REPLAY: usize = 4096;
+/// Frames one stream may have waiting: a whole catch-up and some more. A tab
+/// that stopped reading fills it and is dropped; it catches up when it reopens.
+const STREAM_QUEUE: usize = REPLAY + 64;
 /// Sent instead of the missed frames when they are older than [`REPLAY`].
 pub const GAP_EVENT: &str = "remote://gap";
 /// How long the pairing code lasts with no paired browser calling, opening a
@@ -78,6 +81,7 @@ pub const WEB_COMMANDS: &[&str] = &[
     "add_automation",
     "set_automation_enabled",
     "remove_automation",
+    "edit_automation",
     "run_automation",
     "get_memory",
     "save_memory",
@@ -253,7 +257,7 @@ type Shared = Arc<Mutex<Pairing>>;
 /// so a tab whose stream dropped gets what it missed when it reopens.
 #[derive(Default)]
 struct Hub {
-    txs: Vec<Sender<String>>,
+    txs: Vec<SyncSender<String>>,
     /// The last [`REPLAY`] frames, oldest first, by id.
     log: VecDeque<(u64, String)>,
     /// The id of the newest frame; 0 before the first.
@@ -267,8 +271,8 @@ impl Hub {
         self.log.clear();
     }
 
-    /// Numbers a frame, keeps it for replay and sends it to every stream.
-    /// True when some stream took it.
+    /// Numbers a frame, keeps it for replay and sends it to every stream. A
+    /// stream with no room left is dropped. True when some stream took it.
     fn send(&mut self, event: &str, payload: &Value) -> bool {
         self.last += 1;
         let text = frame(self.last, event, payload);
@@ -276,7 +280,7 @@ impl Hub {
             self.log.pop_front();
         }
         self.log.push_back((self.last, text.clone()));
-        self.txs.retain(|tx| tx.send(text.clone()).is_ok());
+        self.txs.retain(|tx| tx.try_send(text.clone()).is_ok());
         !self.txs.is_empty()
     }
 
@@ -348,6 +352,16 @@ fn live<'a>(
         chats.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
     live
+}
+
+/// A conversation id as chats have them: 1 to 64 letters, digits, `-` and
+/// `_`, the same rule as its folder name (`attach.rs`).
+fn chat_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
 #[derive(Default)]
@@ -561,12 +575,17 @@ impl WebAccess {
             .contains(conversation_id)
     }
 
-    /// A browser started (or continues) this conversation.
-    pub fn adopt(&self, conversation_id: &str) {
+    /// A browser started (or continues) this conversation. False, and not
+    /// kept, when the id isn't one a chat can have.
+    pub fn adopt(&self, conversation_id: &str) -> bool {
+        if !chat_id(conversation_id) {
+            return false;
+        }
         self.chats
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(conversation_id.to_string());
+        true
     }
 }
 
@@ -822,11 +841,11 @@ fn page(req: Request, path: &str, assets: &Assets) {
 /// what it missed goes out first, under the same lock as new frames, so
 /// nothing is skipped or sent twice.
 fn stream(req: Request, streams: &Streams, since: Option<u64>) {
-    let (tx, rx) = mpsc::channel::<String>();
+    let (tx, rx) = mpsc::sync_channel::<String>(STREAM_QUEUE);
     {
         let mut hub = streams.lock().unwrap_or_else(|e| e.into_inner());
         hub.txs
-            .retain(|tx| tx.send(": ping\n\n".to_string()).is_ok());
+            .retain(|tx| tx.try_send(": ping\n\n".to_string()).is_ok());
         if hub.txs.len() >= MAX_STREAMS {
             drop(hub);
             return send_json(
@@ -841,7 +860,7 @@ fn stream(req: Request, streams: &Streams, since: Option<u64>) {
             None => vec![format!("id: {}\n\n", hub.last)],
         };
         for text in first {
-            let _ = tx.send(text);
+            let _ = tx.try_send(text);
         }
         hub.txs.push(tx);
     }
@@ -853,18 +872,24 @@ fn stream(req: Request, streams: &Streams, since: Option<u64>) {
         return;
     }
     loop {
-        let text = match rx.recv_timeout(PING) {
-            Ok(text) => text,
-            Err(RecvTimeoutError::Timeout) => ": ping\n\n".to_string(),
+        let Some(text) = next_frame(&rx, PING) else {
             // Web access went off: end the response, so the page knows.
-            Err(RecvTimeoutError::Disconnected) => {
-                let _ = out.write_all(b"0\r\n\r\n").and_then(|()| out.flush());
-                return;
-            }
+            let _ = out.write_all(b"0\r\n\r\n").and_then(|()| out.flush());
+            return;
         };
         if chunk(&mut out, &text).is_err() {
             return;
         }
+    }
+}
+
+/// What a stream writes next: the frame that came, or a ping once none came
+/// for `quiet`. `None` when web access went off.
+fn next_frame(rx: &mpsc::Receiver<String>, quiet: Duration) -> Option<String> {
+    match rx.recv_timeout(quiet) {
+        Ok(text) => Some(text),
+        Err(RecvTimeoutError::Timeout) => Some(": ping\n\n".to_string()),
+        Err(RecvTimeoutError::Disconnected) => None,
     }
 }
 
@@ -961,7 +986,7 @@ mod tests {
         let pairing: Shared = Arc::new(Mutex::new(Pairing::new(start)));
         let streams: Streams = Arc::default();
         let chats: Chats = Arc::default();
-        let (tx, rx) = mpsc::channel::<String>();
+        let (tx, rx) = mpsc::sync_channel::<String>(1);
         streams.lock().unwrap().txs.push(tx);
         chats.lock().unwrap().insert("web-chat".into());
 
@@ -993,6 +1018,10 @@ mod tests {
             "answer_permission",
             "answer_elicit",
             "get_settings",
+            "list_automations",
+            "add_automation",
+            "edit_automation",
+            "remove_automation",
             "get_memory",
             "edit_memory_row",
             "forget_memory_row",
@@ -1235,6 +1264,54 @@ mod tests {
             hub.missed(newest - 1),
             vec![frame(newest, GAP_EVENT, &Value::Null)]
         );
+    }
+
+    #[test]
+    fn a_stream_that_stops_reading_is_dropped_when_its_queue_is_full() {
+        let mut hub = Hub::default();
+        let (tx, _unread) = mpsc::sync_channel::<String>(2);
+        hub.txs.push(tx);
+        assert!(hub.send("chat://event", &text(1)));
+        assert!(hub.send("chat://event", &text(2)));
+        assert!(!hub.send("chat://event", &text(3)));
+        assert_eq!(hub.txs.len(), 0);
+        // The frames are still kept for when the tab reopens its stream.
+        assert_eq!(hub.missed(0).len(), 3);
+    }
+
+    #[test]
+    fn a_quiet_stream_is_pinged_well_inside_the_fronts_idle_limit() {
+        let quiet = Duration::from_millis(20);
+        let (tx, rx) = mpsc::sync_channel::<String>(1);
+        // Nothing came: a ping goes out, so the connection isn't silent.
+        assert_eq!(next_frame(&rx, quiet).as_deref(), Some(": ping\n\n"));
+        tx.send("data: 1\n\n".to_string()).unwrap();
+        assert_eq!(next_frame(&rx, quiet).as_deref(), Some("data: 1\n\n"));
+        drop(tx);
+        assert_eq!(next_frame(&rx, quiet), None);
+        // The HTTPS front closes a connection with nothing sent for its idle
+        // limit; three pings fit inside, so one late ping doesn't end a stream.
+        assert!(crate::remote_tls::IDLE >= PING * 3);
+    }
+
+    #[test]
+    fn only_a_short_plain_id_can_be_a_browsers_chat() {
+        let access = WebAccess::default();
+        let long = "a".repeat(65);
+        for bad in ["", long.as_str(), "../x", "c 1", "c\n1", "caf\u{e9}"] {
+            assert!(!access.adopt(bad), "{bad:?}");
+            assert!(!access.owns(bad), "{bad:?}");
+        }
+        let longest = "a".repeat(64);
+        for good in [
+            "c1",
+            "shell-mh2k3j4f-ab12cd",
+            "pulse-post_1",
+            longest.as_str(),
+        ] {
+            assert!(access.adopt(good), "{good}");
+            assert!(access.owns(good), "{good}");
+        }
     }
 
     #[test]

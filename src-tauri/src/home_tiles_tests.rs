@@ -348,3 +348,38 @@ fn updates_opens_its_page_and_shows_what_the_page_last_found() {
     assert_eq!(v.text.caption, "Hades II · 2 system packages");
     assert_eq!(v.text.detail.as_deref(), Some("GPU driver 560.35"));
 }
+
+#[test]
+fn the_journal_tile_opens_a_mission_chat_only_for_a_viewer_who_sees_it() {
+    let question = |mission: Option<&str>| journal::Question {
+        id: "q1".into(),
+        question: "Which router?".into(),
+        status: "Investigating".into(),
+        active: true,
+        options: Vec::new(),
+        leaning: None,
+        chosen: None,
+        mission: mission.map(str::to_string),
+    };
+    let page = journal::Page {
+        active: vec![question(Some("shell-desktop-1")), question(None)],
+        history: Vec::new(),
+    };
+    let open = Some(TileAction::OpenChat {
+        id: "shell-desktop-1".into(),
+    });
+
+    // A paired browser that didn't start the chat gets no way into it, and
+    // no Journal page to fall back to.
+    let stranger = journal_view(&page, &Viewer::Web(&|_| false));
+    assert_eq!(stranger.rows[0].label, "Which router?");
+    assert_eq!(stranger.rows[0].tap, None);
+    assert_eq!(stranger.rows[1].tap, None);
+
+    let owner = journal_view(&page, &Viewer::Web(&|id| id == "shell-desktop-1"));
+    assert_eq!(owner.rows[0].tap, open);
+
+    let desktop = journal_view(&page, &Viewer::Desktop);
+    assert_eq!(desktop.rows[0].tap, open);
+    assert_eq!(desktop.rows[1].tap, Some(TileAction::nav("journal")));
+}

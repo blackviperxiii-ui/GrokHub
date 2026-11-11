@@ -516,6 +516,62 @@ describe("Pulse", () => {
     }
   });
 
+  it("stops looking for the new post when Pulse closes", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      api.getPulse.mockResolvedValue(PAGE);
+      api.getFeedPrompt.mockResolvedValue({ text: "Default text", isDefault: true, note: "" });
+      api.saveFeedPrompt.mockResolvedValue({ text: "Default text x", isDefault: false, note: "" });
+      const view = render(<Pulse onRun={() => {}} />);
+
+      await screen.findByRole("listitem", { name: TITLE });
+      await userEvent.click(screen.getByRole("button", { name: "Edit feed instructions" }));
+      const box = await screen.findByLabelText("What should your feed cover?");
+      await vi.waitFor(() => expect(box).toHaveValue("Default text"));
+      await userEvent.type(box, " x");
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      expect(await screen.findByRole("status")).toHaveTextContent(SAVED_NOTE);
+      expect(api.getPulse).toHaveBeenCalledTimes(1);
+
+      view.unmount();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(api.getPulse).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a look still out when Pulse closes does not start another", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      api.getPulse.mockResolvedValue(PAGE);
+      api.getFeedPrompt.mockResolvedValue({ text: "Default text", isDefault: true, note: "" });
+      api.saveFeedPrompt.mockResolvedValue({ text: "Default text x", isDefault: false, note: "" });
+      const view = render(<Pulse onRun={() => {}} />);
+
+      await screen.findByRole("listitem", { name: TITLE });
+      await userEvent.click(screen.getByRole("button", { name: "Edit feed instructions" }));
+      const box = await screen.findByLabelText("What should your feed cover?");
+      await vi.waitFor(() => expect(box).toHaveValue("Default text"));
+      await userEvent.type(box, " x");
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      expect(await screen.findByRole("status")).toHaveTextContent(SAVED_NOTE);
+      expect(api.getPulse).toHaveBeenCalledTimes(1);
+
+      let answer: (page: PulsePage) => void = () => {};
+      api.getPulse.mockImplementationOnce(() => new Promise<PulsePage>((done) => (answer = done)));
+      await vi.advanceTimersByTimeAsync(4000);
+      expect(api.getPulse).toHaveBeenCalledTimes(2);
+
+      view.unmount();
+      answer(PAGE);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(api.getPulse).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("Cancel closes the instructions without saving", async () => {
     api.getPulse.mockResolvedValue(PAGE);
     api.getFeedPrompt.mockResolvedValue({ text: "Default text", isDefault: true, note: "" });

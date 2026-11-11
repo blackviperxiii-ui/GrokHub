@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { autoSetup, TEXT_STEPS, type Act, type AutoReply, type Line, type Note } from "./autoSetupApi";
 import { PRODUCT_NAME } from "./brand";
 import { Toggle } from "./Toggle";
+import { useModalFocus } from "./ui";
 
 /** Away this long, then back: a good moment for a visible change. */
 export const AWAY_MS = 30 * 60 * 1000;
@@ -68,6 +69,8 @@ export function useAutoSetup() {
 /** The first-run window: welcome, a few questions, then what it set. */
 export function FirstRun({ reply, act }: { reply: AutoReply; act: (a: Act) => void }) {
   const [started, setStarted] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useModalFocus(box);
   let body;
   if (reply.summary) {
     body = <Summary reply={reply} act={act} />;
@@ -133,6 +136,7 @@ export function FirstRun({ reply, act }: { reply: AutoReply; act: (a: Act) => vo
   return (
     <div className="first-run-backdrop">
       <div
+        ref={box}
         className="card first-run"
         role="dialog"
         aria-modal="true"
