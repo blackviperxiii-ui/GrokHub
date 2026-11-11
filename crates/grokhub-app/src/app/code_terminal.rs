@@ -32,11 +32,11 @@ const MIN_ROWS: u16 = 2;
 const MAX_ROWS: u16 = 500;
 const MIN_COLS: u16 = 2;
 const MAX_COLS: u16 = 1000;
-const FONT_SIZE: f32 = 13.0;
+const FONT_SIZE: f32 = crate::theme::TYPE_MONO;
 /// The screen's height in points.
 const SCREEN_HEIGHT: f32 = 360.0;
 /// Space between the screen's edge and the text, like the tab's other wells.
-const INSET: f32 = 10.0;
+const INSET: f32 = crate::theme::SPACING_12;
 /// The section title and the line shown once the shell has ended.
 pub(super) const TITLE: &str = "Terminal";
 pub(super) const ENDED: &str = "The shell ended. Open the terminal again to start a new one.";
