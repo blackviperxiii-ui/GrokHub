@@ -32,7 +32,7 @@ export function useDismiss<T extends HTMLElement>(open: boolean, close: () => vo
 }
 
 const TABBABLE = "a[href], button, input, select, textarea, video[controls], [tabindex]";
-/** The open windows, newest last. Only the newest holds the keyboard. */
+/** The open windows, newest last. Only the newest one on screen holds the keyboard. */
 const modals: RefObject<HTMLElement | null>[] = [];
 
 /** Keep the keyboard in the window `box` holds while `open`: Tab wraps from its
@@ -45,7 +45,10 @@ export function useModalFocus(box: RefObject<HTMLElement | null>, open = true) {
     modals.push(box);
     function onKey(event: KeyboardEvent) {
       const el = box.current;
-      if (event.key !== "Tab" || !el || modals[modals.length - 1] !== box) return;
+      if (event.key !== "Tab" || !el) return;
+      // A window left open on a page that is now hidden holds nothing.
+      const shown = modals.filter((m) => m.current && !m.current.closest("[hidden]"));
+      if (shown[shown.length - 1] !== box) return;
       const stops = [...el.querySelectorAll<HTMLElement>(TABBABLE)].filter(
         (s) => s.tabIndex >= 0 && !s.matches(":disabled"),
       );
@@ -61,7 +64,8 @@ export function useModalFocus(box: RefObject<HTMLElement | null>, open = true) {
     return () => {
       document.removeEventListener("keydown", onKey);
       modals.splice(modals.indexOf(box), 1);
-      if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
+      // The opener may be far off screen (a shortcut opened the window): don't scroll to it.
+      if (opener instanceof HTMLElement && opener.isConnected) opener.focus({ preventScroll: true });
     };
   }, [box, open]);
 }
@@ -137,9 +141,11 @@ export function ExternalLink({ href, children }: { href: string; children: React
     event.preventDefault();
     void openExternal(href).catch(() => {});
   }
-  // A middle click or "open in new tab" follows the address itself, so only a web page gets one.
+  // A middle click or "open in new tab" follows the address itself, so only a
+  // web page is a link. Anything else is its text, with nothing to press.
+  if (!externalUrlOk(href)) return <>{children}</>;
   return (
-    <a href={externalUrlOk(href) ? href : undefined} target="_blank" rel="noopener noreferrer" onClick={open}>
+    <a href={href} target="_blank" rel="noopener noreferrer" onClick={open}>
       {children}
     </a>
   );

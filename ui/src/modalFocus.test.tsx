@@ -159,4 +159,56 @@ describe("a window over the page", () => {
     await userEvent.tab();
     expect(screen.getByRole("button", { name: "Keep" })).toHaveFocus();
   });
+
+  it("a window in a hidden part of the app leaves Tab to the page that is shown", async () => {
+    const stay = () => {};
+    render(
+      <>
+        <div hidden>
+          <DeleteMessageDialog reply={false} onConfirm={stay} onClose={stay} />
+        </div>
+        <button type="button">one</button>
+        <button type="button">two</button>
+      </>,
+    );
+    const one = screen.getByRole("button", { name: "one" });
+    const two = screen.getByRole("button", { name: "two" });
+    one.focus();
+    await userEvent.tab();
+    expect(two).toHaveFocus();
+    await userEvent.tab({ shift: true });
+    expect(one).toHaveFocus();
+  });
+
+  it("a shown window holds the keyboard when a hidden one opened after it", async () => {
+    const stay = () => {};
+    render(
+      <>
+        <button type="button">behind</button>
+        <ClearChatDialog onConfirm={stay} onClose={stay} />
+        <div hidden>
+          <DeleteMessageDialog reply={false} onConfirm={stay} onClose={stay} />
+        </div>
+      </>,
+    );
+    const first = screen.getByRole("button", { name: "Clear chat" });
+    const last = screen.getByRole("button", { name: "Keep" });
+    last.focus();
+    await userEvent.tab();
+    expect(first).toHaveFocus();
+    await userEvent.tab({ shift: true });
+    expect(last).toHaveFocus();
+  });
+
+  it("closing gives focus back without scrolling the page to the opener", async () => {
+    render(<Host dialog={(c) => <Shortcuts keys={[{ keys: "Ctrl+K", action: "Command palette" }]} onClose={c} />} />);
+    const opener = screen.getByRole("button", { name: "opener" });
+    await userEvent.click(opener);
+    await waitFor(() => expect(document.querySelector('[aria-modal="true"]')).not.toBeNull());
+    const focus = vi.spyOn(opener, "focus");
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(document.querySelector('[aria-modal="true"]')).toBeNull());
+    expect(focus.mock.calls).toEqual([[{ preventScroll: true }]]);
+    expect(opener).toHaveFocus();
+  });
 });

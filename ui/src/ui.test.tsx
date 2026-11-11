@@ -54,17 +54,30 @@ describe("outside links", () => {
     expect(transport.call).toHaveBeenCalledWith("open_external", { url: "https://example.com/x" });
   });
 
-  it("a link that isn't a web page carries no address to follow", () => {
+  it("a link that isn't a web page is plain text: no link, no address, nothing to press", async () => {
+    transport.inShell.mockReturnValue(true);
+    transport.call.mockClear();
     render(
       <>
-        <ExternalLink href="https://example.com/x">source</ExternalLink>
-        <ExternalLink href="file:///home/user/notes.txt">a file</ExternalLink>
-        <ExternalLink href="javascript:alert(1)">a script</ExternalLink>
+        <p>
+          <ExternalLink href="https://example.com/x">source</ExternalLink>
+        </p>
+        <p>
+          <ExternalLink href="file:///home/user/notes.txt">a file</ExternalLink>
+        </p>
+        <p>
+          <ExternalLink href="javascript:alert(1)">a script</ExternalLink>
+        </p>
       </>,
     );
     expect(screen.getByText("source")).toHaveAttribute("href", "https://example.com/x");
-    expect(screen.getByText("a file")).not.toHaveAttribute("href");
-    expect(screen.getByText("a script")).not.toHaveAttribute("href");
+    expect(screen.getAllByRole("link").map((a) => a.textContent)).toEqual(["source"]);
+    expect(document.querySelectorAll("a")).toHaveLength(1);
+    expect(screen.getByText("a file").outerHTML).toBe("<p>a file</p>");
+    expect(screen.getByText("a script").outerHTML).toBe("<p>a script</p>");
+    await userEvent.click(screen.getByText("a file"));
+    await userEvent.click(screen.getByText("a script"));
+    expect(transport.call).not.toHaveBeenCalled();
   });
 });
 

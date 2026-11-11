@@ -129,12 +129,16 @@ export function DeploySettings() {
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // Runs each time this page shows. A command typed in and not saved keeps the
+  // edit; untouched, the box takes the fresh one.
+  const refresh = useEffectEvent((next: CodeDeployPlan) => {
+    const was = plan;
+    setPlan(next);
+    if (!was || command.trim() === was.command) setCommand(next.command);
+  });
   useEffect(() => {
     codeDeployPlan().then(
-      (next) => {
-        setPlan(next);
-        setCommand(next.command);
-      },
+      (next) => refresh(next),
       (err) => setNote(String(err)),
     );
   }, []);

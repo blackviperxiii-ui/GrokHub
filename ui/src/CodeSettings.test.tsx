@@ -143,6 +143,38 @@ describe("Settings → Code", () => {
     expect(screen.getByRole("textbox", { name: "Also protected" })).toHaveValue("main, release");
   });
 
+  it("keeps a typed deploy command when the page shows again", async () => {
+    api.codeTestRemembered.mockResolvedValue({ command: null });
+    const on = { ...DEPLOY_OFF, deployEnabled: true, command: "npm run deploy", blocked: null };
+    api.codeDeployPlan.mockResolvedValue(on);
+    const view = render(<Shown shown />);
+    const box = await screen.findByRole("textbox", { name: "Deploy command" });
+    expect(box).toHaveValue("npm run deploy");
+    await userEvent.clear(box);
+    await userEvent.type(box, "make deploy-staging");
+    api.codeDeployPlan.mockResolvedValue({ ...on, command: "npm run release", remembered: "npm run release" });
+    view.rerender(<Shown shown={false} />);
+    view.rerender(<Shown shown />);
+    await waitFor(() => expect(api.codeDeployPlan).toHaveBeenCalledTimes(2));
+    await settle();
+    expect(screen.getByRole("textbox", { name: "Deploy command" })).toHaveValue("make deploy-staging");
+    expect(screen.getByText("npm run release")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save deploy command" })).toBeEnabled();
+  });
+
+  it("an untouched deploy command takes the fresh one when the page shows again", async () => {
+    api.codeTestRemembered.mockResolvedValue({ command: null });
+    const on = { ...DEPLOY_OFF, deployEnabled: true, command: "npm run deploy", blocked: null };
+    api.codeDeployPlan.mockResolvedValue(on);
+    const view = render(<Shown shown />);
+    expect(await screen.findByRole("textbox", { name: "Deploy command" })).toHaveValue("npm run deploy");
+    api.codeDeployPlan.mockResolvedValue({ ...on, command: "npm run release" });
+    view.rerender(<Shown shown={false} />);
+    view.rerender(<Shown shown />);
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Deploy command" })).toHaveValue("npm run release"));
+    expect(screen.getByRole("button", { name: "Save deploy command" })).toBeDisabled();
+  });
+
   it("shows why a PR base was refused", async () => {
     api.codeTestRemembered.mockResolvedValue({ command: null });
     api.saveCodeShip.mockRejectedValue("The PR base can't be main: main is never pushed to.");

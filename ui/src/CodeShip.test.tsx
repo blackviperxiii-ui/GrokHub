@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen } from "@testing-library/react";
+import { Activity } from "react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodeActivityEntry, CodeShipPlan } from "./api";
@@ -32,6 +33,18 @@ function plan(action: "push" | "pr", over: Partial<CodeShipPlan> = {}): CodeShip
     ...over,
   };
 }
+
+/** The section as the app holds it: mounted once, hidden while another tab shows. */
+function Tab({ shown }: { shown: boolean }) {
+  return (
+    <Activity mode={shown ? "visible" : "hidden"}>
+      <CodeShip />
+    </Activity>
+  );
+}
+
+/** Let every answer already on its way land before looking at the page. */
+const settle = () => act(() => new Promise<void>((done) => setTimeout(done, 0)));
 
 describe("Code tab → Push and PR", () => {
   beforeEach(() => {
@@ -144,5 +157,53 @@ describe("Code tab → Push and PR", () => {
     await userEvent.click(screen.getByRole("button", { name: "Push" }));
     expect(api.codeShipRun).toHaveBeenCalledTimes(1);
     expect(api.codeShipRun).toHaveBeenLastCalledWith("push", true, "git push --porcelain origin HEAD:refs/heads/code/b");
+  });
+
+  it("when the tab shows again, a confirm card stays for the same command and goes for another branch's", async () => {
+    let branch = "code/a";
+    api.codeShipPlan.mockImplementation((action) =>
+      Promise.resolve(plan(action, { branch, command: `git push --porcelain origin HEAD:refs/heads/${branch}` })),
+    );
+    const view = render(<Tab shown />);
+    await userEvent.click(await screen.findByRole("button", { name: "Push code/a" }));
+    expect(await screen.findByRole("group", { name: SHIP_CONFIRM_PUSH })).toHaveTextContent(
+      "git push --porcelain origin HEAD:refs/heads/code/a",
+    );
+    expect(api.codeShipPlan).toHaveBeenCalledTimes(4);
+
+    view.rerender(<Tab shown={false} />);
+    view.rerender(<Tab shown />);
+    await waitFor(() => expect(api.codeShipPlan).toHaveBeenCalledTimes(6));
+    await settle();
+    expect(screen.getByRole("group", { name: SHIP_CONFIRM_PUSH })).toHaveTextContent(
+      "git push --porcelain origin HEAD:refs/heads/code/a",
+    );
+
+    branch = "code/b";
+    view.rerender(<Tab shown={false} />);
+    view.rerender(<Tab shown />);
+    expect(await screen.findByRole("button", { name: "Push code/b" })).toBeEnabled();
+    await settle();
+    expect(screen.queryByRole("group", { name: SHIP_CONFIRM_PUSH })).toBeNull();
+    expect(api.codeShipRun).not.toHaveBeenCalled();
+  });
+
+  it("making a branch closes an open confirm card at once, before the new plan is read", async () => {
+    api.codeShipPlan.mockImplementation((action) =>
+      Promise.resolve(plan(action, { branch: "code/a", command: "git push --porcelain origin HEAD:refs/heads/code/a" })),
+    );
+    api.codeNewBranch.mockResolvedValue("code/b");
+    render(<CodeShip />);
+    await userEvent.click(await screen.findByRole("button", { name: "Push code/a" }));
+    expect(await screen.findByRole("group", { name: SHIP_CONFIRM_PUSH })).toHaveTextContent(
+      "git push --porcelain origin HEAD:refs/heads/code/a",
+    );
+    // The plan for the new branch never answers in this test.
+    api.codeShipPlan.mockImplementation(() => new Promise<CodeShipPlan>(() => {}));
+    await userEvent.type(screen.getByRole("textbox", { name: "New branch" }), "code/b");
+    await userEvent.click(screen.getByRole("button", { name: "Make branch" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("On code/b now.");
+    expect(screen.queryByRole("group", { name: SHIP_CONFIRM_PUSH })).toBeNull();
+    expect(api.codeShipRun).not.toHaveBeenCalled();
   });
 });

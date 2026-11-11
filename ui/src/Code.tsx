@@ -50,9 +50,11 @@ export function Code({ onTask }: { onTask: (task: CodeTask) => void }) {
   const [runNote, setRunNote] = useState<string | null>(null);
   const [activityKey, setActivityKey] = useState(0);
 
-  // The file whose diff is open, and the newest diff request: an answer to an older one is dropped.
+  // The file whose diff is on screen, the newest change to that pane, and the
+  // newest file picked: an answer to an older one is dropped.
   const openPath = useRef<string | null>(null);
   const diffAsk = useRef(0);
+  const picked = useRef(0);
 
   /** Read the open diff again, or close it when its file is no longer changed. */
   const rereadDiff = useCallback(async (files: CodeRepo["files"]) => {
@@ -128,16 +130,17 @@ export function Code({ onTask }: { onTask: (task: CodeTask) => void }) {
 
   async function open(path: string) {
     setNote(null);
-    const was = openPath.current;
-    openPath.current = path;
-    const ask = ++diffAsk.current;
+    const pick = ++picked.current;
     try {
       const next = await codeDiff(path);
-      if (ask === diffAsk.current) setDiff(next);
+      if (pick !== picked.current) return;
+      // Only a file that opened takes the pane: a failed pick leaves the diff
+      // on screen, and a re-read of it still out, as they were.
+      openPath.current = path;
+      diffAsk.current += 1;
+      setDiff(next);
     } catch (err) {
-      if (ask !== diffAsk.current) return;
-      openPath.current = was;
-      setNote(String(err));
+      if (pick === picked.current) setNote(String(err));
     }
   }
 

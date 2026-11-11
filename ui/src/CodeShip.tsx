@@ -41,8 +41,7 @@ export function CodeShip({ onShipped }: { onShipped?: () => void }) {
   const [output, setOutput] = useState("");
   const [activity, setActivity] = useState<CodeActivityEntry[]>([]);
 
-  const refresh = useCallback(async () => {
-    const [nextPush, nextPr, log] = await Promise.all([codeShipPlan("push"), codeShipPlan("pr"), codeActivity()]);
+  const show = useCallback((nextPush: CodeShipPlan, nextPr: CodeShipPlan, log: CodeActivityEntry[]) => {
     setPush(nextPush);
     setPr(nextPr);
     setActivity(log);
@@ -52,19 +51,21 @@ export function CodeShip({ onShipped }: { onShipped?: () => void }) {
       const now = open.action === "push" ? nextPush : nextPr;
       return now.command === open.command ? open : null;
     });
-    return { push: nextPush, pr: nextPr };
   }, []);
 
+  const refresh = useCallback(async () => {
+    const [nextPush, nextPr, log] = await Promise.all([codeShipPlan("push"), codeShipPlan("pr"), codeActivity()]);
+    show(nextPush, nextPr, log);
+    return { push: nextPush, pr: nextPr };
+  }, [show]);
+
+  // Runs each time the tab shows, so a card left open for another branch's command goes too.
   useEffect(() => {
     Promise.all([codeShipPlan("push"), codeShipPlan("pr"), codeActivity()]).then(
-      ([nextPush, nextPr, log]) => {
-        setPush(nextPush);
-        setPr(nextPr);
-        setActivity(log);
-      },
+      ([nextPush, nextPr, log]) => show(nextPush, nextPr, log),
       (err) => setNote(String(err)),
     );
-  }, []);
+  }, [show]);
 
   async function start(action: CodeShipAction) {
     if (busy) return;
@@ -111,6 +112,8 @@ export function CodeShip({ onShipped }: { onShipped?: () => void }) {
     setNote(null);
     try {
       const made = await codeNewBranch(name);
+      // An open card shows the command for the branch just left.
+      setConfirming(null);
       setBranchName("");
       setNote(`On ${made} now.`);
       onShipped?.();
