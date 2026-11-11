@@ -25,6 +25,7 @@ export type View =
   | "objectives"
   | "chat"
   | "code"
+  | "command"
   | "history"
   | "pulse"
   | "imagine"
@@ -97,6 +98,7 @@ export const VIEW_LABELS: Record<View, string> = {
   objectives: "Objectives",
   chat: "Chat",
   code: "Code",
+  command: "Command line",
   history: "History",
   pulse: "Pulse",
   imagine: "Imagine",
@@ -138,13 +140,16 @@ export function views(caps: Capabilities): View[] {
   ];
 }
 
-/** Every page the palette opens: the tabs, and Objectives right after Home.
- * Objectives has no tab of its own; Home's objectives tiles open it too.
- * Updates & Drivers opens from its Home tile only. */
+/** Every page the palette opens: the tabs, Objectives right after Home, and
+ * the Command line right after Code. Neither has a tab of its own; Home's
+ * objectives tiles open Objectives too. Updates & Drivers opens from its Home
+ * tile only. */
 export function pageViews(caps: Capabilities): View[] {
   const tabs = views(caps);
   const at = tabs.indexOf("home") + 1;
-  return [...tabs.slice(0, at), "objectives", ...tabs.slice(at)];
+  const pages: View[] = [...tabs.slice(0, at), "objectives", ...tabs.slice(at)];
+  const code = pages.indexOf("code");
+  return code < 0 ? pages : [...pages.slice(0, code + 1), "command", ...pages.slice(code + 1)];
 }
 
 /** The rows for `query`, in order: suggestions (while nothing is typed),

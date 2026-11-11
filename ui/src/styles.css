@@ -4787,6 +4787,34 @@ label.toggle-row {
   margin-top: 8px;
 }
 
+/* Command line: a `$` before the box, and short lists of past lines. */
+.code-test-row .command-box-line {
+  flex: 1 1 16rem;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.code-test-row .command-box-line input {
+  flex: 1;
+  font-family: ui-monospace, monospace;
+}
+
+.command-box-prompt {
+  font-family: ui-monospace, monospace;
+  color: var(--muted);
+}
+
+.command-box-list {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .code-settings .toggle-row {
   margin: 8px 0;
 }

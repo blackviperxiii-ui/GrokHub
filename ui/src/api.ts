@@ -3135,6 +3135,36 @@ export function codeTestForget(): Promise<CodeTestRemembered> {
   return invoke<CodeTestRemembered>("code_test_forget");
 }
 
+/** The Command page: the project folder's name and the lines it remembers. */
+export interface CommandBoxView {
+  project: string;
+  remembered: string[];
+}
+
+/** What the Command page does with a line: queue it to the agent now, ask
+ * first (a first run, or a destructive line every time), or refuse it. */
+export type CommandBoxVerdict =
+  | { verdict: "queue"; command: string; prompt: string }
+  | { verdict: "confirm"; command: string; destructive: boolean }
+  | { verdict: "blocked"; command: string; message: string };
+
+export function commandBoxView(): Promise<CommandBoxView> {
+  return invoke<CommandBoxView>("command_box_view");
+}
+
+export function commandBoxCheck(line: string): Promise<CommandBoxVerdict> {
+  return invoke<CommandBoxVerdict>("command_box_check", { line });
+}
+
+/** The yes on a first run: the checks run again, and the agent's message comes back. */
+export function commandBoxApprove(line: string): Promise<string> {
+  return invoke<string>("command_box_approve", { line });
+}
+
+export function commandBoxForget(): Promise<CommandBoxView> {
+  return invoke<CommandBoxView>("command_box_forget");
+}
+
 export function onCodeRun(
   handler: (chunk: CodeRunChunk) => void,
 ): Promise<UnlistenFn> {

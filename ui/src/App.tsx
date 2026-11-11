@@ -66,6 +66,7 @@ import { OnboardStage } from "./GetToKnowYou";
 const loaders = {
   agents: () => import("./Agents").then((m) => ({ default: m.Agents })),
   code: () => import("./Code").then((m) => ({ default: m.Code })),
+  command: () => import("./CommandBox").then((m) => ({ default: m.CommandBox })),
   connectors: () => import("./Connectors").then((m) => ({ default: m.Connectors })),
   imagine: () => import("./Imagine").then((m) => ({ default: m.Imagine })),
   devices: () => import("./Devices").then((m) => ({ default: m.Devices })),
@@ -89,6 +90,7 @@ const History = lazy(loaders.history);
 const Home = lazy(loaders.home);
 const Journal = lazy(loaders.journal);
 const Code = lazy(loaders.code);
+const CommandBox = lazy(loaders.command);
 const Library = lazy(loaders.library);
 const Memory = lazy(loaders.memory);
 const Objectives = lazy(loaders.objectives);
@@ -690,6 +692,16 @@ export function App() {
           <Code
             onTask={({ prompt, conversationId }) => {
               setPrefill((now) => ({ text: prompt, n: (now?.n ?? 0) + 1, conversationId }));
+              setView("chat");
+            }}
+          />
+        </Page>
+      )}
+      {opened.has("command") && !caps.remote && (
+        <Page shown={view === "command"}>
+          <CommandBox
+            onRun={(prompt) => {
+              setPrefill((now) => ({ text: prompt, n: (now?.n ?? 0) + 1, send: true }));
               setView("chat");
             }}
           />
