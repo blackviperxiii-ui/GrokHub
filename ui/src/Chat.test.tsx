@@ -1450,7 +1450,8 @@ describe("Chat queue", () => {
     await userEvent.type(screen.getByLabelText("Message"), "use staging{Enter}");
     rerender(chat({ op: "remove", index: 0, n: 1 }));
     await waitFor(() => expect(screen.getByLabelText("Message")).toHaveValue("then deploy"));
-    expect(onQueue).toHaveBeenLastCalledWith(id, ["use staging"]);
+    // The queue is reported from an effect, which can run after the box shows the words.
+    await waitFor(() => expect(onQueue).toHaveBeenLastCalledWith(id, ["use staging"]));
     rerender(chat({ op: "steer", index: 0, n: 2 }));
     await waitFor(() => expect(api.steerChat).toHaveBeenCalledWith(id, "use staging"));
     await waitFor(() => expect(onQueue).toHaveBeenLastCalledWith(id, []));
