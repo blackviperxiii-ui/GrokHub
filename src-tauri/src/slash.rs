@@ -10,8 +10,6 @@ pub const IN_THE_CABIN: &str = "In the cabin";
 /// A row the paired browser can't run.
 pub const ON_YOUR_COMPUTER: &str = "On your computer";
 pub const NOT_YET: &str = "Not in this app yet";
-pub const EXPORT_MARKDOWN_ONLY: &str =
-    "This window saves chats as Markdown. HTML and JSON exports are in the cabin.";
 
 /// One command the shell runs.
 pub struct ShellCmd {
@@ -55,7 +53,114 @@ pub const SHELL_SLASH: &[ShellCmd] = &[
     row("/connectors", "Open Connectors", "/connectors"),
     ShellCmd {
         desktop_only: true,
+        ..row("/rename", "Rename this chat…", "/rename ")
+    },
+    ShellCmd {
+        desktop_only: true,
+        ..row("/pin", "Pin or unpin this chat", "/pin")
+    },
+    ShellCmd {
+        desktop_only: true,
+        ..row("/delete", "Delete this chat (asks first)", "/delete")
+    },
+    row("/sessions", "Past chats", "/sessions"),
+    ShellCmd {
+        desktop_only: true,
+        ..row("/retry", "Ask the last message again", "/retry")
+    },
+    ShellCmd {
+        desktop_only: true,
+        ..row("/undo", "Undo the reply in progress", "/undo")
+    },
+    ShellCmd {
+        desktop_only: true,
+        ..row("/stop", "Stop the reply in progress", "/stop")
+    },
+    ShellCmd {
+        desktop_only: true,
+        ..row("/compact", "Summarize older turns to free room", "/compact")
+    },
+    row("/context", "How full this chat's context is", "/context"),
+    row("/usage", "Tokens and cost in this chat", "/usage"),
+    ShellCmd {
+        desktop_only: true,
+        ..row("/rewind", "Look back at the agent's file edits", "/rewind")
+    },
+    ShellCmd {
+        desktop_only: true,
+        ..row(
+            "/rewind files",
+            "Put the last edited files back (asks first)",
+            "/rewind files",
+        )
+    },
+    ShellCmd {
+        desktop_only: true,
+        ..row(
+            "/rewind step",
+            "List edit steps, or restore one",
+            "/rewind step",
+        )
+    },
+    ShellCmd {
+        desktop_only: true,
+        ..row("/project", "Show the bound project", "/project")
+    },
+    ShellCmd {
+        desktop_only: true,
+        ..row("/project new", "Make a project…", "/project new ")
+    },
+    ShellCmd {
+        desktop_only: true,
+        ..row("/project bind", "Work in a folder…", "/project bind ")
+    },
+    ShellCmd {
+        desktop_only: true,
+        ..row("/project clear", "Unbind the project", "/project clear")
+    },
+    ShellCmd {
+        desktop_only: true,
+        ..row(
+            "/project rename",
+            "Rename the bound project…",
+            "/project rename ",
+        )
+    },
+    ShellCmd {
+        desktop_only: true,
+        ..row("/project move", "Move it into a folder…", "/project move ")
+    },
+    ShellCmd {
+        desktop_only: true,
+        ..row(
+            "/project folder",
+            "Make a project folder…",
+            "/project folder ",
+        )
+    },
+    ShellCmd {
+        desktop_only: true,
+        ..row(
+            "/project delete",
+            "Remove the bound project (asks first)",
+            "/project delete",
+        )
+    },
+    ShellCmd {
+        desktop_only: true,
         ..row("/export", "Save this chat to your Chats folder", "/export")
+    },
+    ShellCmd {
+        desktop_only: true,
+        ..row(
+            "/export html",
+            "Save this chat as a web page",
+            "/export html",
+        )
+    },
+    ShellCmd {
+        desktop_only: true,
+        ..row("/export json", "Save this chat as JSON", "/export json")
     },
     ShellCmd {
         ready: false,
@@ -92,6 +197,21 @@ pub enum Effect {
     Notice { text: String },
     /// `/export`: the chat saves this conversation and shows where it went.
     Export,
+    /// `/export html` and `/export json`.
+    ExportAs { format: &'static str },
+    /// `/retry`: ask the last message again.
+    Retry,
+    /// `/undo`: take back the reply in progress.
+    Undo,
+    /// `/stop`: stop the reply in progress.
+    Stop,
+    /// `/compact`: have the engine summarize the older turns.
+    Compact,
+    /// A destructive command waiting for its yes: show `prompt`, and run
+    /// `yes` when the person agrees.
+    Confirm { prompt: String, yes: String },
+    /// `/delete yes` removed this chat.
+    Deleted { id: String, title: String },
 }
 
 /// What `run` needs done outside this module.
@@ -99,6 +219,24 @@ pub enum Effect {
 pub enum Action {
     Effect(Effect),
     Remember(String),
+    /// A command that acts on the saved chat or the project list.
+    Op(Op),
+}
+
+/// What `slash_ops` runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Op {
+    Rename(String),
+    Pin,
+    Delete { yes: bool },
+    Sessions,
+    Context,
+    Usage,
+    RewindNone,
+    RewindList,
+    RewindStep(u64),
+    RewindFiles { yes: bool },
+    Project(crate::projects::Op),
 }
 
 /// The command word, when `line` is a slash command at all. `/usr/bin` and
@@ -177,7 +315,7 @@ pub fn hits(draft: &str, remote: bool) -> Vec<Hit> {
 pub fn help() -> String {
     let mut lines: Vec<String> = SHELL_SLASH
         .iter()
-        .filter(|c| c.ready)
+        .filter(|c| c.ready && !c.cmd.contains(' '))
         .map(|c| format!("{} — {}", c.insert.trim_end(), c.hint.trim_end_matches('…')))
         .collect();
     lines.push("Other commands run in the cabin.".into());
@@ -190,6 +328,11 @@ pub fn parse(line: &str, remote: bool) -> Result<Action, String> {
         return Err("That isn't a command.".into());
     };
     let rest = line.trim_start()[word.len()..].trim();
+    let word = match word.as_str() {
+        "/title" => "/rename".to_string(),
+        "/close" => "/delete".to_string(),
+        other => other.to_string(),
+    };
     let Some(cmd) = find(&word) else {
         if grokhub_core::parse_slash(line).is_some()
             || !grokhub_core::filter_slash_hits(&word, &[]).is_empty()
@@ -217,10 +360,18 @@ pub fn parse(line: &str, remote: bool) -> Result<Action, String> {
             view: "automations",
         },
         "/connectors" => Effect::Open { view: "connectors" },
-        "/export" => match text.as_deref().map(str::to_ascii_lowercase).as_deref() {
-            None | Some("md" | "markdown") => Effect::Export,
-            Some(_) => return Err(EXPORT_MARKDOWN_ONLY.into()),
+        "/export" => match grokhub_core::ChatExport::parse(rest) {
+            Some(grokhub_core::ChatExport::Markdown) => Effect::Export,
+            Some(grokhub_core::ChatExport::Html) => Effect::ExportAs { format: "html" },
+            Some(grokhub_core::ChatExport::Json) => Effect::ExportAs { format: "json" },
+            None => return Err(grokhub_core::EXPORT_FORMATS_HINT.into()),
         },
+        "/retry" => Effect::Retry,
+        "/undo" => Effect::Undo,
+        "/stop" => Effect::Stop,
+        "/compact" => Effect::Compact,
+        "/rename" | "/pin" | "/delete" | "/sessions" | "/context" | "/usage" | "/rewind"
+        | "/project" => return op(line, &word).map(Action::Op),
         "/remember" => {
             return match text {
                 Some(note) => Ok(Action::Remember(note)),
@@ -232,6 +383,60 @@ pub fn parse(line: &str, remote: bool) -> Result<Action, String> {
     Ok(Action::Effect(effect))
 }
 
+/// A line ending in `yes` for a destructive command, without the yes.
+fn split_yes(line: &str) -> (String, bool) {
+    let t = line.trim();
+    let lower = t.to_ascii_lowercase();
+    if let Some(head) = lower.strip_suffix(" yes") {
+        if matches!(
+            head.trim(),
+            "/delete"
+                | "/close"
+                | "/project delete"
+                | "/rewind files"
+                | "/rewind --files"
+                | "/rewind --code"
+        ) {
+            return (t[..head.len()].to_string(), true);
+        }
+    }
+    (t.to_string(), false)
+}
+
+const PROJECT_USAGE: &str =
+    "Use /project new <name>, show, bind <folder>, clear, rename <name>, move <folder>, folder <name> or delete.";
+
+/// Reads the commands that act on a saved chat or the project list, through
+/// the registry the cabin parses with.
+fn op(line: &str, word: &str) -> Result<Op, String> {
+    use crate::projects::Op as P;
+    use grokhub_core::Slash;
+    let (line, yes) = split_yes(line);
+    let parsed = grokhub_core::parse_slash(&line);
+    Ok(match parsed {
+        Some(Slash::Rename(title)) => Op::Rename(title),
+        Some(Slash::Pin) => Op::Pin,
+        Some(Slash::Delete) => Op::Delete { yes },
+        Some(Slash::Sessions) => Op::Sessions,
+        Some(Slash::Context) => Op::Context,
+        Some(Slash::Usage) => Op::Usage,
+        Some(Slash::Rewind) => Op::RewindNone,
+        Some(Slash::RewindStep(None)) => Op::RewindList,
+        Some(Slash::RewindStep(Some(n))) => Op::RewindStep(n),
+        Some(Slash::RewindFiles) => Op::RewindFiles { yes },
+        Some(Slash::ProjectShow) => Op::Project(P::Show),
+        Some(Slash::ProjectNew(name)) => Op::Project(P::New(name)),
+        Some(Slash::ProjectBind(Some(path))) => Op::Project(P::Bind(path)),
+        Some(Slash::ProjectClear) => Op::Project(P::Clear),
+        Some(Slash::ProjectRename(name)) => Op::Project(P::Rename(name)),
+        Some(Slash::ProjectMove(folder)) => Op::Project(P::Move(folder)),
+        Some(Slash::ProjectFolder(name)) => Op::Project(P::Folder(name)),
+        Some(Slash::ProjectDelete) => Op::Project(P::Delete { yes }),
+        _ if word == "/rename" => return Err("Type the new name after /rename.".into()),
+        _ => return Err(PROJECT_USAGE.into()),
+    })
+}
+
 /// Runs what `parse` read. A note goes to `workspace`'s memory with its
 /// secrets redacted.
 pub fn apply(action: Action, workspace: &std::path::Path) -> Result<Effect, String> {
@@ -240,6 +445,7 @@ pub fn apply(action: Action, workspace: &std::path::Path) -> Result<Effect, Stri
         Action::Remember(note) => Ok(Effect::Notice {
             text: crate::memory::add(workspace, &note, false)?,
         }),
+        Action::Op(_) => Err("That command needs a saved chat.".into()),
     }
 }
 
@@ -370,7 +576,7 @@ mod tests {
         }
         assert_eq!(
             parse("/export html", false),
-            Err(EXPORT_MARKDOWN_ONLY.into())
+            Ok(Action::Effect(Effect::ExportAs { format: "html" }))
         );
         assert_eq!(
             parse("/export", true),
@@ -423,5 +629,206 @@ mod tests {
         let notes = crate::memory::load(&ws).expect("load");
         assert!(notes.workspace.contains("the deploy key is [redacted]"));
         assert!(!notes.workspace.contains("sk-abcdefghijklmnopqrstuv"));
+    }
+
+    fn op_of(line: &str) -> Op {
+        match parse(line, false) {
+            Ok(Action::Op(op)) => op,
+            other => panic!("{line}: {other:?}"),
+        }
+    }
+
+    fn effect_of(line: &str) -> Effect {
+        match parse(line, false) {
+            Ok(Action::Effect(effect)) => effect,
+            other => panic!("{line}: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn chat_commands_read_the_same_as_the_cabin_reads_them() {
+        use crate::projects::Op as P;
+        // The cabin's own fixtures: each line parses to this `Slash` there.
+        assert_eq!(
+            grokhub_core::parse_slash("/pin"),
+            Some(grokhub_core::Slash::Pin)
+        );
+        assert_eq!(
+            grokhub_core::parse_slash("/delete"),
+            Some(grokhub_core::Slash::Delete)
+        );
+        assert_eq!(op_of("/rename Pier light"), Op::Rename("Pier light".into()));
+        assert_eq!(op_of("/title Pier light"), Op::Rename("Pier light".into()));
+        assert_eq!(
+            parse("/rename", false),
+            Err("Type the new name after /rename.".into())
+        );
+        assert_eq!(op_of("/pin"), Op::Pin);
+        assert_eq!(op_of("/sessions"), Op::Sessions);
+        assert_eq!(op_of("/context"), Op::Context);
+        assert_eq!(op_of("/usage"), Op::Usage);
+        assert_eq!(effect_of("/retry"), Effect::Retry);
+        assert_eq!(effect_of("/undo"), Effect::Undo);
+        assert_eq!(effect_of("/stop"), Effect::Stop);
+        assert_eq!(effect_of("/compact"), Effect::Compact);
+        assert_eq!(op_of("/rewind"), Op::RewindNone);
+        assert_eq!(op_of("/rewind step"), Op::RewindList);
+        assert_eq!(op_of("/rewind step 3"), Op::RewindStep(3));
+        assert_eq!(op_of("/rewind files"), Op::RewindFiles { yes: false });
+        assert_eq!(op_of("/rewind --files"), Op::RewindFiles { yes: false });
+        assert_eq!(op_of("/project"), Op::Project(P::Show));
+        assert_eq!(op_of("/project show"), Op::Project(P::Show));
+        assert_eq!(
+            op_of("/project new Night watch"),
+            Op::Project(P::New("Night watch".into()))
+        );
+        assert_eq!(
+            op_of("/project bind ~/code"),
+            Op::Project(P::Bind("~/code".into()))
+        );
+        assert_eq!(
+            op_of("/project ~/code"),
+            Op::Project(P::Bind("~/code".into()))
+        );
+        assert_eq!(op_of("/project clear"), Op::Project(P::Clear));
+        assert_eq!(
+            op_of("/project rename Dawn"),
+            Op::Project(P::Rename("Dawn".into()))
+        );
+        assert_eq!(
+            op_of("/project move Cabin"),
+            Op::Project(P::Move("Cabin".into()))
+        );
+        assert_eq!(
+            op_of("/project folder Cabin"),
+            Op::Project(P::Folder("Cabin".into()))
+        );
+        assert_eq!(
+            op_of("/project delete"),
+            Op::Project(P::Delete { yes: false })
+        );
+        assert_eq!(
+            parse("/project nope", false),
+            Err(PROJECT_USAGE.to_string())
+        );
+        assert_eq!(
+            parse("/project bind", false),
+            Err(PROJECT_USAGE.to_string())
+        );
+    }
+
+    #[test]
+    fn destructive_commands_change_nothing_without_a_yes() {
+        use crate::projects::Op as P;
+        assert_eq!(op_of("/delete"), Op::Delete { yes: false });
+        assert_eq!(op_of("/delete please"), Op::Delete { yes: false });
+        assert_eq!(op_of("/delete yes"), Op::Delete { yes: true });
+        assert_eq!(op_of("/CLOSE Yes"), Op::Delete { yes: true });
+        assert_eq!(op_of("/rewind files yes"), Op::RewindFiles { yes: true });
+        assert_eq!(
+            op_of("/project delete yes"),
+            Op::Project(P::Delete { yes: true })
+        );
+        // A yes on a command that doesn't ask is just text it ignores.
+        assert_eq!(op_of("/rename yes"), Op::Rename("yes".into()));
+    }
+
+    #[test]
+    fn export_takes_md_html_and_json() {
+        assert_eq!(effect_of("/export"), Effect::Export);
+        assert_eq!(effect_of("/export md"), Effect::Export);
+        assert_eq!(
+            effect_of("/export html"),
+            Effect::ExportAs { format: "html" }
+        );
+        assert_eq!(
+            effect_of("/EXPORT JSON"),
+            Effect::ExportAs { format: "json" }
+        );
+        assert_eq!(
+            parse("/export xml", false),
+            Err("Export takes md, html, or json".into())
+        );
+    }
+
+    #[test]
+    fn the_browser_gets_only_the_read_only_commands() {
+        for line in ["/context", "/usage", "/sessions"] {
+            assert!(parse(line, true).is_ok(), "{line}");
+        }
+        for line in [
+            "/rename x",
+            "/pin",
+            "/delete",
+            "/retry",
+            "/undo",
+            "/stop",
+            "/compact",
+            "/rewind",
+            "/rewind files",
+            "/project",
+            "/project delete",
+            "/export html",
+        ] {
+            let word = line.split_whitespace().next().expect("word");
+            assert_eq!(
+                parse(line, true),
+                Err(format!("{word} works on your computer.")),
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
+    fn none_of_these_say_in_the_cabin() {
+        for word in [
+            "/rename",
+            "/pin",
+            "/delete",
+            "/sessions",
+            "/retry",
+            "/undo",
+            "/rewind",
+            "/compact",
+            "/context",
+            "/usage",
+            "/stop",
+            "/project",
+            "/export",
+        ] {
+            let rows = hits(word, false);
+            let row = rows
+                .iter()
+                .find(|h| h.cmd == word)
+                .unwrap_or_else(|| panic!("{word} is listed"));
+            assert_eq!(row.disabled, None, "{word}");
+            assert!(
+                rows.iter().all(
+                    |h| h.disabled.as_deref() != Some(IN_THE_CABIN) || !h.cmd.starts_with(word)
+                ),
+                "{word}"
+            );
+        }
+        let rewind = hits("/rewind", false);
+        assert_eq!(
+            cmds(&rewind),
+            vec!["/rewind", "/rewind files", "/rewind step"]
+        );
+        let project = hits("/proj", false);
+        assert_eq!(
+            cmds(&project),
+            vec![
+                "/project",
+                "/project new",
+                "/project bind",
+                "/project clear",
+                "/project rename",
+                "/project move",
+                "/project folder",
+                "/project delete"
+            ]
+        );
+        assert!(help().contains("/delete — Delete this chat (asks first)"));
+        assert!(!help().contains("/project new"));
     }
 }
