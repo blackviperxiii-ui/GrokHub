@@ -1,11 +1,9 @@
 import {
   memo,
-  startTransition,
   useEffect,
   useEffectEvent,
   useRef,
   useState,
-  ViewTransition,
   type FormEvent,
   type KeyboardEvent,
 } from "react";
@@ -472,31 +470,23 @@ function LogItem({
       return <AssistantBubble text={item.text} streaming={Boolean(item.streaming)} onMenu={menu} />;
     }
     case "tool":
-      return (
-        <ViewTransition>
-          <ToolCard title={item.title} status={item.status} detail={item.detail} />
-        </ViewTransition>
-      );
+      return <ToolCard title={item.title} status={item.status} detail={item.detail} />;
     case "permission":
       return (
-        <ViewTransition>
-          <PermissionCard
-            item={item}
-            onAnswer={(a) => onAnswer(item.id, a)}
-            onStopAsking={onStopAsking && (() => onStopAsking(item.id))}
-          />
-        </ViewTransition>
+        <PermissionCard
+          item={item}
+          onAnswer={(a) => onAnswer(item.id, a)}
+          onStopAsking={onStopAsking && (() => onStopAsking(item.id))}
+        />
       );
     case "elicit":
       return (
-        <ViewTransition>
-          <ElicitCard
-            key={item.id}
-            item={item}
-            editable={editable}
-            onAnswer={(action, value, field) => onAnswerCard(item, action, value, field)}
-          />
-        </ViewTransition>
+        <ElicitCard
+          key={item.id}
+          item={item}
+          editable={editable}
+          onAnswer={(action, value, field) => onAnswerCard(item, action, value, field)}
+        />
       );
     case "slash":
       return (
@@ -850,7 +840,7 @@ export function Chat({
       }
       // A helper's question shows whether or not a reply runs.
       if (helper) {
-        if (id === conversationId) startTransition(() => setItems((now) => withHelperAsk(now, event)));
+        if (id === conversationId) setItems((now) => withHelperAsk(now, event));
         return;
       }
       // An event that lands after the turn ended must not reopen it.
@@ -860,8 +850,9 @@ export function Chat({
       else if (event.kind === "goal") setGoalAsk({ id: event.id, title: event.title });
       else if (event.kind === "done") setItems(event.stop === HALTED_STOP ? settleHalted : settle);
       else if (event.kind === "text") setItems((now) => applyEvent(now, event));
-      // A card is a transition, so the webview can fade it in; text streams as is.
-      else startTransition(() => setItems((now) => applyEvent(now, event)));
+      // Not a transition: one would hold the page's next updates while the
+      // card eases in, and typing in the box then loses its first letters.
+      else setItems((now) => applyEvent(now, event));
     }).then((unlisten) => {
       if (dropped) unlisten();
       else stop = unlisten;
