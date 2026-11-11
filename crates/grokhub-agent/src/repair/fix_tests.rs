@@ -109,6 +109,19 @@ fn steps_are_classified_by_rules_soft_hard_and_floor() {
             "Remove-Item -Path $env:TEMP\\* -Recurse -Force",
             StepClass::Hard(HardClass::Delete),
         ),
+        // `ri` is Remove-Item, also inside a script block.
+        (
+            "Get-ChildItem build | % { ri $_ -Recurse -Force }",
+            StepClass::Hard(HardClass::Delete),
+        ),
+        (
+            "foreach ($f in $files) { ri $f }",
+            StepClass::Hard(HardClass::Delete),
+        ),
+        (
+            "if (Test-Path build) { ri build -Recurse }",
+            StepClass::Hard(HardClass::Delete),
+        ),
         (
             "rm -rf ~/.cache/thumbnails",
             StepClass::Hard(HardClass::Delete),
