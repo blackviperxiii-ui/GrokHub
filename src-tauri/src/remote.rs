@@ -1155,6 +1155,45 @@ mod tests {
         }
     }
 
+    /// Every Code tab command runs code, pushes, deploys or reads the project
+    /// on the computer: none is a web command. The names are read from the
+    /// window's own handler list, so a new one is covered the day it is added.
+    #[test]
+    fn no_code_tab_command_is_a_web_command() {
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        let handlers = src
+            .split("generate_handler![")
+            .nth(1)
+            .and_then(|rest| rest.split("])").next())
+            .expect("the handler list in lib.rs");
+        let code: Vec<&str> = handlers
+            .split(',')
+            .map(str::trim)
+            .filter(|name| name.starts_with("code_") || name.ends_with("_code_ship"))
+            .collect();
+        // The list was really read: the commands that run things are in it.
+        for name in [
+            "code_test_run",
+            "code_run_stop",
+            "code_deploy_run",
+            "code_deploy_save",
+            "code_ship_run",
+            "code_new_branch",
+            "code_secret_set",
+            "code_file_write",
+            "code_term_open",
+            "save_code_ship",
+        ] {
+            assert!(code.contains(&name), "{name} is missing from {code:?}");
+        }
+        let on_the_web: Vec<&str> = code
+            .iter()
+            .copied()
+            .filter(|name| web_command(name))
+            .collect();
+        assert_eq!(on_the_web, Vec::<&str>::new());
+    }
+
     #[test]
     fn the_web_has_the_workboard_but_not_resume() {
         for name in [

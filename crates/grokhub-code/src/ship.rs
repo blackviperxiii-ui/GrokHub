@@ -462,9 +462,12 @@ fn git_line(dir: &Path, args: &[&str]) -> Option<String> {
     (out.status.success() && !line.is_empty()).then_some(line)
 }
 
-/// The checked-out branch, or `None` on a detached HEAD.
+/// The checked-out branch, or `None` on a detached HEAD. Read as the full
+/// ref: git's short name becomes `heads/<name>` when a tag has the same name.
 pub fn current_branch(dir: &Path) -> Option<String> {
-    git_line(dir, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+    git_line(dir, &["symbolic-ref", "--quiet", "HEAD"])?
+        .strip_prefix("refs/heads/")
+        .map(str::to_string)
 }
 
 /// The default branch from the local `origin/HEAD` (no network). `None`
@@ -472,14 +475,40 @@ pub fn current_branch(dir: &Path) -> Option<String> {
 pub fn default_branch(dir: &Path) -> Option<String> {
     git_line(
         dir,
-        &[
-            "symbolic-ref",
-            "--quiet",
-            "--short",
-            "refs/remotes/origin/HEAD",
-        ],
-    )
-    .map(|r| r.strip_prefix("origin/").unwrap_or(&r).to_string())
+        &["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
+    )?
+    .strip_prefix("refs/remotes/origin/")
+    .map(str::to_string)
+}
+
+/// True when the repo has a pre-push hook that git would run. The app's own
+/// push runs no hooks, so the confirm can say this one is passed over.
+fn has_pre_push_hook(dir: &Path) -> bool {
+    // Not `git_cmd::git()`: that points the hooks folder at the null device,
+    // and this asks where the repo's own hooks folder is. Nothing is run.
+    let mut c = Command::new("git");
+    c.args(["rev-parse", "--git-path", "hooks/pre-push"])
+        .current_dir(dir)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_TERMINAL_PROMPT", "0");
+    hide_windows_console(&mut c);
+    let Ok(out) = c.output() else {
+        return false;
+    };
+    let line = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if !out.status.success() || line.is_empty() {
+        return false;
+    }
+    let Ok(meta) = std::fs::metadata(dir.join(line)) else {
+        return false;
+    };
+    #[cfg(unix)]
+    let runs = std::os::unix::fs::PermissionsExt::mode(&meta.permissions()) & 0o111 != 0;
+    #[cfg(not(unix))]
+    let runs = true;
+    meta.is_file() && runs
 }
 
 /// The host a push to origin goes to, `None` with no origin. `git push
@@ -613,6 +642,9 @@ pub struct Plan {
     pub auto_base: String,
     pub app_made: bool,
     pub pr_url: Option<String>,
+    /// A push only: the repo has a pre-push hook, and the app's push does
+    /// not run it.
+    pub skips_hook: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -683,6 +715,7 @@ fn plan_with(config_dir: &Path, dir: &Path, cfg: &CodeShip, action: Action, prob
         auto_base: cfg.auto_base.clone(),
         app_made: false,
         pr_url: None,
+        skips_hook: action == Action::Push && has_pre_push_hook(dir),
     };
     let ctx = match context(dir, config_dir, &probe) {
         Ok(ctx) => ctx,

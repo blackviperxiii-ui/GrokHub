@@ -369,7 +369,7 @@ pub(super) fn load_job(
         activity: {
             // A held secret value never shows, whatever wrote the line.
             let held = secrets::held_for(config, workspace);
-            activity::list(config, ACTIVITY_ROWS)
+            activity::list_for(config, workspace, ACTIVITY_ROWS)
                 .into_iter()
                 .map(|e| super::code_ship_ui::clean_entry(e, &held))
                 .collect()

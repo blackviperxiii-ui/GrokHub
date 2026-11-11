@@ -1867,6 +1867,13 @@ async fn code_test_run(
     .await?
 }
 
+/// Code tab: stop the test run or deploy in progress, and everything it
+/// started. False when nothing was running. Desktop only.
+#[tauri::command]
+async fn code_run_stop() -> Result<bool, String> {
+    off_main(code_runs::stop).await
+}
+
 /// Settings → Code: the remembered test command for this project, if any.
 #[tauri::command]
 async fn code_test_remembered(
@@ -1925,13 +1932,14 @@ async fn code_new_branch(state: State<'_, ShellState>, name: String) -> Result<S
     off_main(move || code_ship::new_branch(&config, &dir, &cfg, &name)).await?
 }
 
-/// Code tab: the newest pushes, PRs, branches and blocked attempts.
+/// Code tab: this project's newest pushes, PRs, branches and blocked attempts.
 #[tauri::command]
 async fn code_activity_list(
     state: State<'_, ShellState>,
 ) -> Result<Vec<code_activity::Entry>, String> {
+    let dir = workspace(&state);
     let config = state.config_dir.clone();
-    off_main(move || code_activity::list(&config, code_activity::SHOW)).await
+    off_main(move || code_activity::list_for(&config, &dir, code_activity::SHOW)).await
 }
 
 /// Settings → Code → Secrets: this project's secret names (never the values).
@@ -4342,6 +4350,7 @@ pub fn run() {
             code_builtins,
             code_test_plan,
             code_test_run,
+            code_run_stop,
             code_test_remembered,
             code_test_forget,
             code_ship_plan,
@@ -4511,6 +4520,8 @@ pub fn run() {
             // What the learning engine holds in memory is written on the way out.
             if let tauri::RunEvent::Exit = event {
                 grokhub_core::learn::hub::flush();
+                // A test run or deploy does not outlive the app.
+                code_runs::stop();
             }
         }),
         Err(err) => {
