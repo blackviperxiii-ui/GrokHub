@@ -55,6 +55,9 @@ export function GrokSignIn({
   const live = useRef(false);
   // When the code on screen stops being good, by this computer's clock.
   const deadline = useRef(0);
+  // Which code is on screen, counted from the first, so a poll that answers
+  // late knows the code it asked about is gone.
+  const round = useRef(0);
 
   function stop() {
     if (timer.current !== null) window.clearTimeout(timer.current);
@@ -67,13 +70,18 @@ export function GrokSignIn({
     if (live.current) timer.current = window.setTimeout(() => void poll(), seconds * 1000);
   }
 
+  function expire() {
+    setCode(null);
+    fail("The code ran out. Start again.");
+  }
+
   async function poll() {
     timer.current = null;
     if (ranOut(deadline.current)) {
-      setCode(null);
-      fail("The code ran out. Start again.");
+      expire();
       return;
     }
+    const asked = round.current;
     polling.current = true;
     let got: GrokSignInPoll;
     try {
@@ -82,7 +90,10 @@ export function GrokSignIn({
       // The shell drops the code only with a "failed" answer. A poll that
       // rejects (no answer from xAI, say) left it held, so ask again.
       const why = String(err);
-      if (why === NO_CODE) {
+      if (asked !== round.current) {
+        // An earlier code's poll: it says nothing about the one on screen.
+        wait(interval.current);
+      } else if (why === NO_CODE) {
         setCode(null);
         fail(why);
       } else {
@@ -112,13 +123,15 @@ export function GrokSignIn({
 
   // Settings sits in an <Activity>: hiding it runs this cleanup and showing it
   // runs the effect again, so a code still on screen goes back to waiting. A
-  // poll still out re-arms itself when it answers.
-  const resume = useEffectEvent((seconds: number) => {
-    if (!polling.current) wait(interval.current || seconds);
+  // poll still out re-arms itself when it answers. A code that ran out while
+  // the page was hidden goes at once.
+  const resume = useEffectEvent(() => {
+    if (ranOut(deadline.current)) expire();
+    else if (!polling.current) wait(interval.current);
   });
   useEffect(() => {
     live.current = code !== null;
-    if (code) resume(code.interval);
+    if (code) resume();
     return () => {
       live.current = false;
       stop();
@@ -130,8 +143,10 @@ export function GrokSignIn({
     setBusy(true);
     try {
       const got = await startGrokSignIn();
-      interval.current = 0;
+      // Never 0 while a code is up: a poll still out waits this long too.
+      interval.current = got.interval;
       deadline.current = Date.now() + got.expiresIn * 1000;
+      round.current += 1;
       setTrouble(null);
       setCode(got);
     } catch (err) {

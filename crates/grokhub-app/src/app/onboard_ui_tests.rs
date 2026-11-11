@@ -173,6 +173,83 @@ fn save_names_a_notes_file_that_is_not_text_and_leaves_its_bytes_alone() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// The text the stage paints in a 1100x720 window, in paint order. Two
+/// passes, because a window's first pass only measures it.
+fn painted(app: &mut Cabin) -> Vec<String> {
+    fn text_of(shape: &egui::Shape, out: &mut Vec<String>) {
+        match shape {
+            egui::Shape::Text(t) => out.push(t.galley.job.text.clone()),
+            egui::Shape::Vec(all) => all.iter().for_each(|s| text_of(s, out)),
+            _ => {}
+        }
+    }
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_on(&ctx);
+    let raw = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(1100.0, 720.0),
+        )),
+        ..Default::default()
+    };
+    let mut texts = Vec::new();
+    for _ in 0..2 {
+        texts.clear();
+        let out = crate::theme::test_pass(&ctx, raw.clone(), |ui| app.paint_onboard(ui.ctx()));
+        for clipped in &out.shapes {
+            text_of(&clipped.shape, &mut texts);
+        }
+    }
+    texts
+}
+
+#[test]
+fn review_paints_its_note_and_the_saved_screen_says_left_alone_once() {
+    let root = temp_root("painted");
+    std::fs::write(root.join("app.json"), "{}\n").unwrap();
+    let memory = root.join("memory").join("MEMORY.md");
+    std::fs::write(&memory, [0xff, 0xfe, b'o', 0x00, b'l', 0x00, b'd', 0x00]).unwrap();
+    let _pin = crate::config::TestConfigDir::set(root.clone());
+    let _agent = grokhub_agent::perm::ConfigGuard::set(root.clone());
+    let mut app = Cabin::quiet_for_test();
+    app.open_onboard(false);
+    app.setup.onboard.answers.call_me = "Sam".into();
+    app.setup.onboard.answers.routines = "Gym before work".into();
+    app.onboard_go(Step::Review);
+    let review = painted(&mut app);
+    let count = |texts: &[String], line: &str| texts.iter().filter(|t| *t == line).count();
+    assert_eq!(count(&review, "Check what I'll save"), 1, "{review:?}");
+    assert_eq!(
+        count(
+            &review,
+            "This is exactly what Save writes. Edit or delete anything first."
+        ),
+        1,
+        "{review:?}"
+    );
+    assert_eq!(
+        count(
+            &review,
+            "MEMORY.md is not plain text (UTF-8); Save leaves it alone."
+        ),
+        1,
+        "{review:?}"
+    );
+    app.onboard_save();
+    assert_eq!(app.setup.onboard.step, Step::Done);
+    // The whole Saved screen: the title, one line, one button.
+    assert_eq!(
+        painted(&mut app),
+        [
+            "Saved",
+            "Saved USER.md, SOUL.md. MEMORY.md is not plain text (UTF-8); it was left alone. \
+             Edit any of it later in Settings → Personal.",
+            "Done"
+        ]
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
 #[test]
 fn save_that_wrote_nothing_still_names_the_file_it_left_alone() {
     let root = temp_root("too-big");

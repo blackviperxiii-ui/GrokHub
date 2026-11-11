@@ -300,6 +300,170 @@ describe("Sign in with Grok", () => {
     expect(api.pollGrokSignIn).toHaveBeenCalledTimes(1);
   });
 
+  it("a new code starts without the last code's failed check", async () => {
+    api.pollGrokSignIn.mockRejectedValue("xAI didn't answer.");
+    render(<GrokSignIn signedIn={null} onChange={() => {}} />);
+    await userEvent.click(screen.getByRole("button", { name: "Sign in with Grok" }));
+    await screen.findByLabelText("Sign-in code");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1100);
+    });
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Still waiting for you to approve it on x.ai. The last check failed: xAI didn't answer.",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await userEvent.click(screen.getByRole("button", { name: "Sign in with Grok" }));
+    await screen.findByLabelText("Sign-in code");
+    expect(screen.getByRole("status").textContent).toBe("Waiting for you to approve it on x.ai…");
+  });
+
+  it("Cancel after a failed check takes the code down and asks nothing more", async () => {
+    api.pollGrokSignIn.mockRejectedValue("xAI didn't answer.");
+    render(<GrokSignIn signedIn={null} onChange={() => {}} />);
+    await userEvent.click(screen.getByRole("button", { name: "Sign in with Grok" }));
+    await screen.findByLabelText("Sign-in code");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1100);
+    });
+    expect(api.pollGrokSignIn).toHaveBeenCalledTimes(1);
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10000);
+    });
+    expect(api.pollGrokSignIn).toHaveBeenCalledTimes(1);
+    expect(screen.queryByLabelText("Sign-in code")).not.toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sign in with Grok" })).toBeInTheDocument();
+  });
+
+  it("a check that fails after Cancel asks nothing more and says nothing", async () => {
+    let lose: (why: string) => void = () => {};
+    api.pollGrokSignIn.mockReturnValue(
+      new Promise<GrokSignInPoll>((_, reject) => {
+        lose = reject;
+      }),
+    );
+    render(<GrokSignIn signedIn={null} onChange={() => {}} />);
+    await userEvent.click(screen.getByRole("button", { name: "Sign in with Grok" }));
+    await screen.findByLabelText("Sign-in code");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1100);
+    });
+    expect(api.pollGrokSignIn).toHaveBeenCalledTimes(1);
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await act(async () => {
+      lose("xAI didn't answer.");
+      await vi.advanceTimersByTimeAsync(10000);
+    });
+    expect(api.pollGrokSignIn).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sign in with Grok" })).toBeInTheDocument();
+  });
+
+  it("hidden and shown between failed checks, it still asks once per interval", async () => {
+    api.startGrokSignIn.mockResolvedValue({ ...CODE, interval: 2 });
+    api.pollGrokSignIn.mockRejectedValue("xAI didn't answer.");
+    const page = (mode: "visible" | "hidden") => (
+      <Activity mode={mode}>
+        <GrokSignIn signedIn={null} onChange={() => {}} />
+      </Activity>
+    );
+    const { rerender } = render(page("visible"));
+    await userEvent.click(screen.getByRole("button", { name: "Sign in with Grok" }));
+    await screen.findByLabelText("Sign-in code");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2100);
+    });
+    expect(api.pollGrokSignIn).toHaveBeenCalledTimes(1);
+    rerender(page("hidden"));
+    rerender(page("visible"));
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Still waiting for you to approve it on x.ai. The last check failed: xAI didn't answer.",
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500);
+    });
+    expect(api.pollGrokSignIn).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(api.pollGrokSignIn).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(api.pollGrokSignIn).toHaveBeenCalledTimes(3);
+  });
+
+  it("a check of the last code that fails under a new code is not asked again at once", async () => {
+    let lose: (why: string) => void = () => {};
+    api.startGrokSignIn
+      .mockResolvedValueOnce({ ...CODE, interval: 5 })
+      .mockResolvedValueOnce({ ...CODE, userCode: "WXYZ-1234", interval: 5 });
+    api.pollGrokSignIn
+      .mockReturnValueOnce(
+        new Promise<GrokSignInPoll>((_, reject) => {
+          lose = reject;
+        }),
+      )
+      .mockRejectedValue("xAI is busy.");
+    render(<GrokSignIn signedIn={null} onChange={() => {}} />);
+    await userEvent.click(screen.getByRole("button", { name: "Sign in with Grok" }));
+    await screen.findByLabelText("Sign-in code");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5100);
+    });
+    // The first code's check is out, with no answer yet.
+    expect(api.pollGrokSignIn).toHaveBeenCalledTimes(1);
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await userEvent.click(screen.getByRole("button", { name: "Sign in with Grok" }));
+    expect(await screen.findByLabelText("Sign-in code")).toHaveTextContent("WXYZ-1234");
+    await act(async () => {
+      lose("xAI didn't answer.");
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    // The old check says nothing about the new code, and nothing is asked early.
+    expect(api.pollGrokSignIn).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("status").textContent).toBe("Waiting for you to approve it on x.ai…");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4100);
+    });
+    // The new code's own first check, one interval later.
+    expect(api.pollGrokSignIn).toHaveBeenCalledTimes(2);
+    expect(screen.getByLabelText("Sign-in code")).toHaveTextContent("WXYZ-1234");
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Still waiting for you to approve it on x.ai. The last check failed: xAI is busy.",
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(api.pollGrokSignIn).toHaveBeenCalledTimes(3);
+  });
+
+  it("a code that ran out while Settings was hidden is gone as soon as it is shown", async () => {
+    api.startGrokSignIn.mockResolvedValue({ ...CODE, interval: 5, expiresIn: 8 });
+    api.pollGrokSignIn.mockResolvedValue({ status: "pending", interval: 5 });
+    const page = (mode: "visible" | "hidden") => (
+      <Activity mode={mode}>
+        <GrokSignIn signedIn={null} onChange={() => {}} />
+      </Activity>
+    );
+    const { rerender } = render(page("visible"));
+    await userEvent.click(screen.getByRole("button", { name: "Sign in with Grok" }));
+    await screen.findByLabelText("Sign-in code");
+    rerender(page("hidden"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60000);
+    });
+    rerender(page("visible"));
+    expect(screen.queryByLabelText("Sign-in code")).not.toBeInTheDocument();
+    expect(screen.getByRole("status").textContent).toBe("The code ran out. Start again.");
+    expect(screen.getByRole("button", { name: "Sign in with Grok" })).toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10000);
+    });
+    expect(api.pollGrokSignIn).not.toHaveBeenCalled();
+  });
+
   it("a start error shows in words", async () => {
     api.startGrokSignIn.mockRejectedValue("Offline only is on, so Loadout can't reach the internet.");
     render(<GrokSignIn signedIn={null} onChange={() => {}} />);
