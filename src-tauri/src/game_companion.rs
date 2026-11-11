@@ -171,10 +171,7 @@ pub fn set_note(dir: &Path, app_id: u32, text: &str) -> Result<String, String> {
 
 /// The note for a game, if any.
 pub fn get_note(dir: &Path, app_id: u32) -> String {
-    gc::load_notes(dir)
-        .get(app_id)
-        .unwrap_or("")
-        .to_string()
+    gc::load_notes(dir).get(app_id).unwrap_or("").to_string()
 }
 
 /// News for a Steam library game since it was last played.
@@ -230,10 +227,14 @@ mod tests {
 
     #[test]
     fn companion_notes_round_trip_and_frame_shows_guides() {
-        let dir = std::env::temp_dir().join(format!("shell-companion-frame-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("shell-companion-frame-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        assert_eq!(set_note(&dir, 620, "finish the co-op").unwrap(), "finish the co-op");
+        assert_eq!(
+            set_note(&dir, 620, "finish the co-op").unwrap(),
+            "finish the co-op"
+        );
         assert_eq!(get_note(&dir, 620), "finish the co-op");
         let f = frame(
             &dir,
