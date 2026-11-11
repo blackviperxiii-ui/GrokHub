@@ -872,18 +872,24 @@ fn stream(req: Request, streams: &Streams, since: Option<u64>) {
         return;
     }
     loop {
-        let text = match rx.recv_timeout(PING) {
-            Ok(text) => text,
-            Err(RecvTimeoutError::Timeout) => ": ping\n\n".to_string(),
+        let Some(text) = next_frame(&rx, PING) else {
             // Web access went off: end the response, so the page knows.
-            Err(RecvTimeoutError::Disconnected) => {
-                let _ = out.write_all(b"0\r\n\r\n").and_then(|()| out.flush());
-                return;
-            }
+            let _ = out.write_all(b"0\r\n\r\n").and_then(|()| out.flush());
+            return;
         };
         if chunk(&mut out, &text).is_err() {
             return;
         }
+    }
+}
+
+/// What a stream writes next: the frame that came, or a ping once none came
+/// for `quiet`. `None` when web access went off.
+fn next_frame(rx: &mpsc::Receiver<String>, quiet: Duration) -> Option<String> {
+    match rx.recv_timeout(quiet) {
+        Ok(text) => Some(text),
+        Err(RecvTimeoutError::Timeout) => Some(": ping\n\n".to_string()),
+        Err(RecvTimeoutError::Disconnected) => None,
     }
 }
 
@@ -1275,6 +1281,14 @@ mod tests {
 
     #[test]
     fn a_quiet_stream_is_pinged_well_inside_the_fronts_idle_limit() {
+        let quiet = Duration::from_millis(20);
+        let (tx, rx) = mpsc::sync_channel::<String>(1);
+        // Nothing came: a ping goes out, so the connection isn't silent.
+        assert_eq!(next_frame(&rx, quiet).as_deref(), Some(": ping\n\n"));
+        tx.send("data: 1\n\n".to_string()).unwrap();
+        assert_eq!(next_frame(&rx, quiet).as_deref(), Some("data: 1\n\n"));
+        drop(tx);
+        assert_eq!(next_frame(&rx, quiet), None);
         // The HTTPS front closes a connection with nothing sent for its idle
         // limit; three pings fit inside, so one late ping doesn't end a stream.
         assert!(crate::remote_tls::IDLE >= PING * 3);

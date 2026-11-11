@@ -204,6 +204,36 @@ fn hosts() {
     ] {
         assert_eq!(host_of(github), Host::GitHub, "{github}");
     }
+    // github.com in front of the `@`: git, ssh or curl connect to the host
+    // after it. git also decodes `%2f` in an ssh or git URL before it looks
+    // for the host, so the host there ends at the decoded `/`.
+    let read_as_github: Vec<&str> = [
+        "https://github.com\\@evil.example/o/r",
+        "http://github.com\\@evil.example/o/r",
+        "ssh://github.com?@evil.example/o/r",
+        "ssh://github.com#@evil.example/o/r",
+        "ssh://github.com\\x@evil.example/o/r",
+        "ssh://git@github.com?x@evil.example:2222/o/r",
+        "ssh://evil.example%2f@github.com/o/r",
+        "ssh://git%40evil.example%2fx@github.com/o/r",
+        "git://evil.example%2f@github.com/o/r",
+        "git+ssh://evil.example%2F@github.com/o/r",
+    ]
+    .into_iter()
+    .filter(|url| host_of(url) != Host::Other)
+    .collect();
+    assert_eq!(read_as_github, Vec::<&str>::new());
+    // The other two names git has for ssh, and a sign-in name with an
+    // encoded `@`, which curl leaves alone.
+    let read_as_other: Vec<&str> = [
+        "git+ssh://git@github.com/o/r.git",
+        "ssh+git://git@github.com/o/r.git",
+        "https://user%40example.com@github.com/o/r",
+    ]
+    .into_iter()
+    .filter(|url| host_of(url) != Host::GitHub)
+    .collect();
+    assert_eq!(read_as_other, Vec::<&str>::new());
     let mut f = facts("code/x", Some("main"), true, Pr::None);
     f.host = Host::Other;
     assert_eq!(guard(&CodeShip::default(), &f), Err(Blocked::HostOff));
@@ -651,6 +681,59 @@ mod repo {
         assert_eq!(done.summary, "Pushed code/b to origin.");
         assert_eq!(origin_sha(&f, "code/b").as_deref(), Some(head.as_str()));
         assert_eq!(origin_sha(&f, "code/a"), None);
+        let _ = std::fs::remove_dir_all(&f.root);
+    }
+
+    /// `git push origin` sends to every push URL of origin, so one that
+    /// isn't GitHub makes the push a push to another host.
+    #[test]
+    fn a_second_push_url_on_another_host_is_not_a_github_push() {
+        let f = fixture("pushurls");
+        let cfg = CodeShip::default();
+        sh_git(&f.work, &["switch", "-c", "code/x"]);
+        commit(&f.work, "x\n");
+        sh_git(
+            &f.work,
+            &[
+                "remote",
+                "set-url",
+                "--push",
+                "origin",
+                "git@github.com:o/r.git",
+            ],
+        );
+        assert_eq!(push_host(&f.work), Some(Host::GitHub));
+        sh_git(
+            &f.work,
+            &[
+                "remote",
+                "set-url",
+                "--add",
+                "--push",
+                "origin",
+                f.bare.to_str().unwrap(),
+            ],
+        );
+        assert_eq!(push_host(&f.work), Some(Host::Other));
+        let plan = plan_with(&f.config, &f.work, &cfg, Action::Push, None);
+        assert_eq!(
+            plan.blocked.as_deref(),
+            Some("Pushing to this git host is off in Settings → Code.")
+        );
+        assert_eq!(
+            ship_with(
+                &f.config,
+                &f.work,
+                &cfg,
+                Action::Push,
+                true,
+                Some("git push --porcelain origin HEAD:refs/heads/code/x"),
+                None,
+            )
+            .unwrap_err(),
+            "Pushing to this git host is off in Settings → Code."
+        );
+        assert_eq!(origin_sha(&f, "code/x"), None);
         let _ = std::fs::remove_dir_all(&f.root);
     }
 

@@ -228,12 +228,20 @@ pub fn host_of(url: &str) -> Host {
     let host = match url.split_once("://") {
         Some((scheme, rest)) => {
             let scheme = scheme.to_ascii_lowercase();
-            if !["http", "https", "ssh", "git"].contains(&scheme.as_str()) {
+            // `git+ssh` and `ssh+git` are git's other names for ssh.
+            let known = ["http", "https", "ssh", "git", "git+ssh", "ssh+git"];
+            if !known.contains(&scheme.as_str()) {
                 return Host::Other;
             }
-            // Sign-in details end at the last `@` before the path, query or
-            // fragment; an `@` further along is not part of the host.
-            let authority = rest.split(['/', '?', '#', '\\']).next().unwrap_or("");
+            // The host is what follows the last `@` before the first `/`.
+            // git, ssh and curl disagree on where that part ends when it has
+            // a `?`, `#` or `\`, and git decodes `%2f` in an ssh or git URL
+            // before it looks, so such a URL is never GitHub.
+            let authority = rest.split('/').next().unwrap_or("");
+            let web = scheme == "http" || scheme == "https";
+            if authority.contains(['?', '#', '\\']) || (!web && authority.contains('%')) {
+                return Host::Other;
+            }
             let host = authority
                 .rsplit_once('@')
                 .map(|(_, h)| h)
@@ -462,9 +470,15 @@ pub fn default_branch(dir: &Path) -> Option<String> {
     .map(|r| r.strip_prefix("origin/").unwrap_or(&r).to_string())
 }
 
-/// Where a push to origin goes.
-pub fn push_url(dir: &Path) -> Option<String> {
-    git_line(dir, &["remote", "get-url", "--push", "origin"])
+/// The host a push to origin goes to, `None` with no origin. `git push
+/// origin` sends to every push URL, so it is GitHub only when all are.
+pub fn push_host(dir: &Path) -> Option<Host> {
+    let urls = git_line(dir, &["remote", "get-url", "--push", "--all", "origin"])?;
+    Some(if urls.lines().all(|url| host_of(url) == Host::GitHub) {
+        Host::GitHub
+    } else {
+        Host::Other
+    })
 }
 
 fn head_sha(dir: &Path) -> Option<String> {
@@ -610,11 +624,10 @@ type Probe = Option<(Host, Pr)>;
 fn context(dir: &Path, config_dir: &Path, probe: &Probe) -> Result<Ctx, Blocked> {
     let branch = current_branch(dir).ok_or(Blocked::Detached)?;
     branch_ok(&branch)?;
-    let url = push_url(dir).ok_or(Blocked::NoRemote)?;
+    let host = push_host(dir).ok_or(Blocked::NoRemote)?;
     let (host, pr) = match probe {
         Some((host, pr)) => (*host, pr.clone()),
         None => {
-            let host = host_of(&url);
             let pr = if host == Host::GitHub {
                 pr_of(dir, &branch)
             } else {
@@ -873,10 +886,9 @@ pub fn new_branch(
     });
     save_made(config_dir, &store)?;
     let ctx = Ctx { key, facts };
-    let url = push_url(dir).unwrap_or_default();
     let ctx = Ctx {
         facts: Facts {
-            host: host_of(&url),
+            host: push_host(dir).unwrap_or(Host::Other),
             ..ctx.facts
         },
         ..ctx
