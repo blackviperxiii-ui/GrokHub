@@ -18,6 +18,7 @@ mod brand_guard;
 pub mod capabilities;
 pub mod changes;
 pub mod chips;
+pub mod command_box;
 // The Code tab's logic lives in grokhub-code (shared with the cabin); the
 // old module names stay so the commands below and settings read the same.
 pub use grokhub_code::activity as code_activity;
@@ -1995,6 +1996,49 @@ async fn code_test_forget(
     let dir = workspace(&state);
     let config = state.config_dir.clone();
     off_main(move || code_runs::forget_test(&config, &dir)).await?
+}
+
+/// Command page: the project folder's name and the lines it remembers.
+#[tauri::command]
+async fn command_box_view(state: State<'_, ShellState>) -> Result<command_box::View, String> {
+    let dir = workspace(&state);
+    let config = state.config_dir.clone();
+    off_main(move || command_box::view(&config, &dir)).await
+}
+
+/// Command page: whether a line goes to the agent now, asks first, or is
+/// refused (forbidden, outside the project, or stopped by the push guard).
+#[tauri::command]
+async fn command_box_check(
+    state: State<'_, ShellState>,
+    line: String,
+) -> Result<command_box::Verdict, String> {
+    let dir = workspace(&state);
+    let config = state.config_dir.clone();
+    let ship = current(&state).code_ship;
+    off_main(move || command_box::check(&config, &dir, &line, ship)).await
+}
+
+/// Command page: the yes on a first run. The checks run again, the line is
+/// remembered for this repo, and the agent's message comes back to queue.
+#[tauri::command]
+async fn command_box_approve(state: State<'_, ShellState>, line: String) -> Result<String, String> {
+    let dir = workspace(&state);
+    let config = state.config_dir.clone();
+    let ship = current(&state).code_ship;
+    off_main(move || command_box::approve(&config, &dir, &line, ship)).await?
+}
+
+/// Command page: forget this repo's remembered lines, so each asks again.
+#[tauri::command]
+async fn command_box_forget(state: State<'_, ShellState>) -> Result<command_box::View, String> {
+    let dir = workspace(&state);
+    let config = state.config_dir.clone();
+    off_main(move || {
+        command_box::forget(&config, &command_box::repo_key(&dir))?;
+        Ok(command_box::view(&config, &dir))
+    })
+    .await?
 }
 
 /// Code tab: what a push or "Open PR into" would run, and whether it asks first.
@@ -4689,6 +4733,10 @@ pub fn run() {
             code_test_run,
             code_test_remembered,
             code_test_forget,
+            command_box_view,
+            command_box_check,
+            command_box_approve,
+            command_box_forget,
             code_ship_plan,
             code_ship_run,
             code_new_branch,
