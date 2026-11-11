@@ -140,6 +140,7 @@ impl Screen {
         true
     }
 
+    #[cfg(test)]
     pub(super) fn size(&self) -> GridSize {
         self.size
     }
@@ -157,11 +158,13 @@ impl Screen {
         self.term.scroll_display(Scroll::Bottom);
     }
 
+    #[cfg(test)]
     pub(super) fn display_offset(&self) -> usize {
         self.term.grid().display_offset()
     }
 
     /// The visible screen as text, one string per row, trailing spaces cut.
+    #[cfg(test)]
     pub(super) fn lines(&self) -> Vec<String> {
         let rows = usize::from(self.size.rows);
         let mut out = vec![String::new(); rows];
