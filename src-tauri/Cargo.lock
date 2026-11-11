@@ -2022,6 +2022,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "grokhub-code"
+version = "3.5.0"
+dependencies = [
+ "grokhub-agent",
+ "grokhub-core",
+ "keyring",
+ "portable-pty",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "grokhub-core"
 version = "3.5.0"
 dependencies = [
@@ -2089,13 +2101,13 @@ version = "3.5.0"
 dependencies = [
  "base64 0.23.1",
  "grokhub-agent",
+ "grokhub-code",
  "grokhub-core",
  "grokhub-desktop",
  "grokhub-fps-probe",
  "image",
  "keyring",
  "minisign-verify",
- "portable-pty",
  "rcgen",
  "rustls",
  "semver",
