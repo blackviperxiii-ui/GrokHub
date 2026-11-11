@@ -3267,7 +3267,15 @@ async fn mods_games(state: State<'_, ShellState>) -> Result<mods::GamesView, Str
         }
         let store = grokhub_core::mods::discover::Store::load(&dir);
         let prefs = grokhub_core::mods::suggest::Prefs::load(&dir);
-        mods::games_view(&rail, &store, &prefs, adult_ok, offline, mods::sweeping(), now_ms / 1000)
+        mods::games_view(
+            &rail,
+            &store,
+            &prefs,
+            adult_ok,
+            offline,
+            mods::sweeping(),
+            now_ms / 1000,
+        )
     })
     .await
 }
@@ -3290,7 +3298,15 @@ async fn mods_browse(
         let mut q = grokhub_core::mods::Query::browse(mods::browse_of(&list)?);
         q.page = page;
         let offline = grokhub_core::offline::enabled();
-        Ok(mods::search(&mods::client(&dir), &game, src, &q, adult_ok, offline, now_ms))
+        Ok(mods::search(
+            &mods::client(&dir),
+            &game,
+            src,
+            &q,
+            adult_ok,
+            offline,
+            now_ms,
+        ))
     })
     .await?
 }
@@ -3313,7 +3329,15 @@ async fn mods_search(
         let mut q = grokhub_core::mods::Query::search(text.trim());
         q.page = page;
         let offline = grokhub_core::offline::enabled();
-        Ok(mods::search(&mods::client(&dir), &game, src, &q, adult_ok, offline, now_ms))
+        Ok(mods::search(
+            &mods::client(&dir),
+            &game,
+            src,
+            &q,
+            adult_ok,
+            offline,
+            now_ms,
+        ))
     })
     .await?
 }
@@ -3332,7 +3356,14 @@ async fn mods_new_finds(
     off_main(move || {
         let now_ms = grokhub_core::now_ms();
         let (_, src) = mods::game_source(&mods::rail_now(now_ms), &game, &source)?;
-        Ok(mods::new_finds(&dir, &game, src, page, adult_ok, now_ms / 1000))
+        Ok(mods::new_finds(
+            &dir,
+            &game,
+            src,
+            page,
+            adult_ok,
+            now_ms / 1000,
+        ))
     })
     .await?
 }
@@ -3348,7 +3379,14 @@ async fn mods_for_you(state: State<'_, ShellState>) -> Result<Vec<mods::ForYouRo
         let rail = mods::rail_now(now_ms);
         let root = grokhub_core::steam::detect_root();
         let client = mods::client(&dir);
-        let picked = mods::for_you(&dir, &client, &rail, adult_ok, root.as_deref(), now_ms / 1000);
+        let picked = mods::for_you(
+            &dir,
+            &client,
+            &rail,
+            adult_ok,
+            root.as_deref(),
+            now_ms / 1000,
+        );
         mods::for_you_rows(&rail, &picked)
     })
     .await
