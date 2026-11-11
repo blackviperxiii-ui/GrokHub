@@ -1,0 +1,1 @@
+- The desktop app can record your screen with `/record` (a still every 2 seconds into your Recordings folder, with a red clock and Stop in the top bar, `/record stop` and Halt) and check your audio with `/audiocheck`, as the cabin does. Recording asks first and nothing is sent anywhere.
