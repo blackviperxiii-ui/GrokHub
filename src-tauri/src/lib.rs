@@ -5,6 +5,7 @@
 #![cfg_attr(not(test), warn(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod agent;
+pub mod ai_models;
 #[cfg(desktop)]
 mod app_guard;
 pub mod attach;
@@ -2841,6 +2842,79 @@ async fn imagine_image(state: State<'_, ShellState>, name: String) -> Result<Str
 }
 
 #[tauri::command]
+async fn get_ai_models(state: State<'_, ShellState>) -> Result<ai_models::AiModelsView, String> {
+    capabilities::needs(capabilities::current().local_ai, "AI models")?;
+    let dir = state.config_dir.clone();
+    off_main(move || ai_models::view(&dir, "")).await
+}
+
+/// Posts the key's approval card; nothing is saved until `answer_ai_models_card`.
+#[tauri::command]
+async fn add_ai_provider(
+    state: State<'_, ShellState>,
+    base_url: String,
+    key: String,
+) -> Result<ai_models::Card, String> {
+    capabilities::needs(capabilities::current().local_ai, "AI models")?;
+    let dir = state.config_dir.clone();
+    off_main(move || ai_models::start_add(&dir, &base_url, key)).await?
+}
+
+#[tauri::command]
+async fn allow_ai_provider(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<ai_models::Card, String> {
+    capabilities::needs(capabilities::current().local_ai, "AI models")?;
+    let dir = state.config_dir.clone();
+    off_main(move || ai_models::start_allow(&dir, &id)).await?
+}
+
+#[tauri::command]
+async fn answer_ai_models_card(
+    id: String,
+    approve: bool,
+) -> Result<ai_models::AiModelsView, String> {
+    capabilities::needs(capabilities::current().local_ai, "AI models")?;
+    off_main(move || ai_models::answer(&id, approve)).await?
+}
+
+#[tauri::command]
+async fn remove_ai_provider(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<ai_models::AiModelsView, String> {
+    capabilities::needs(capabilities::current().local_ai, "AI models")?;
+    let dir = state.config_dir.clone();
+    off_main(move || ai_models::remove_provider(&dir, &id)).await?
+}
+
+#[tauri::command]
+async fn save_ai_spend(
+    state: State<'_, ShellState>,
+    cap: u32,
+    ceiling: u32,
+) -> Result<ai_models::AiModelsView, String> {
+    capabilities::needs(capabilities::current().local_ai, "AI models")?;
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        ai_models::save_spend(&dir, cap, ceiling)?;
+        Ok::<_, String>(ai_models::view(&dir, "Saved."))
+    })
+    .await?
+}
+
+#[tauri::command]
+async fn revoke_ai_premium(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<ai_models::AiModelsView, String> {
+    capabilities::needs(capabilities::current().local_ai, "AI models")?;
+    let dir = state.config_dir.clone();
+    off_main(move || ai_models::revoke_premium(&dir, &id)).await?
+}
+
+#[tauri::command]
 async fn get_local_ai(state: State<'_, ShellState>) -> Result<local_ai::LocalAiView, String> {
     capabilities::needs(capabilities::current().local_ai, "Local AI")?;
     let dir = state.config_dir.clone();
@@ -4095,6 +4169,13 @@ pub fn run() {
             imagine_generate,
             imagine_cancel,
             imagine_image,
+            get_ai_models,
+            add_ai_provider,
+            allow_ai_provider,
+            answer_ai_models_card,
+            remove_ai_provider,
+            save_ai_spend,
+            revoke_ai_premium,
             get_local_ai,
             save_local_ai,
             start_local_engine_download,
