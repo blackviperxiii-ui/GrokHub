@@ -3149,6 +3149,121 @@ export function gameOsrsRefresh(): Promise<OsrsView> {
   return invoke<OsrsView>("game_osrs_refresh");
 }
 
+export interface DestinyView {
+  status: string;
+  hasKey: boolean;
+  hasName: boolean;
+  bungieName: string | null;
+  profileLine: string | null;
+  note: string;
+  howTo: string;
+  keyHint: string;
+  nameHint: string;
+}
+
+export interface DestinyKeyCard {
+  id: string;
+  action: string;
+}
+
+export interface PoeView {
+  title: string;
+  appId: number;
+  status: string;
+  empty: string | null;
+  note: string;
+}
+
+export interface EliteView {
+  title: string;
+  status: string;
+  empty: string | null;
+  note: string;
+}
+
+export interface FactorioView {
+  status: string;
+  warning: string | null;
+  action: string | null;
+  note: string;
+  empty: string | null;
+  userDir: string | null;
+}
+
+export interface StardewView {
+  title: string;
+  status: string;
+  empty: string | null;
+  note: string;
+}
+
+export interface MinecraftView {
+  title: string;
+  status: string;
+  empty: string | null;
+  note: string;
+}
+
+export interface RocketLeagueView {
+  title: string;
+  status: string;
+  howTo: boolean;
+  iniLine: string;
+  note: string;
+}
+
+export function gameDestiny(): Promise<DestinyView> {
+  return invoke<DestinyView>("game_destiny");
+}
+
+export function gameDestinyRefresh(): Promise<DestinyView> {
+  return invoke<DestinyView>("game_destiny_refresh");
+}
+
+export function gameDestinyStartKey(key: string): Promise<DestinyKeyCard> {
+  return invoke<DestinyKeyCard>("game_destiny_start_key", { key });
+}
+
+export function gameDestinyAnswerKey(id: string, approve: boolean): Promise<DestinyView> {
+  return invoke<DestinyView>("game_destiny_answer_key", { id, approve });
+}
+
+export function gameDestinySaveName(name: string): Promise<DestinyView> {
+  return invoke<DestinyView>("game_destiny_save_name", { name });
+}
+
+export function gameDestinyRemove(): Promise<DestinyView> {
+  return invoke<DestinyView>("game_destiny_remove");
+}
+
+export function gamePoe(appId: number): Promise<PoeView> {
+  return invoke<PoeView>("game_poe", { appId });
+}
+
+export function gameElite(): Promise<EliteView> {
+  return invoke<EliteView>("game_elite");
+}
+
+export function gameFactorio(): Promise<FactorioView> {
+  return invoke<FactorioView>("game_factorio");
+}
+
+export function gameFactorioMod(dir: string, install: boolean): Promise<FactorioView> {
+  return invoke<FactorioView>("game_factorio_mod", { dir, install });
+}
+
+export function gameStardew(): Promise<StardewView> {
+  return invoke<StardewView>("game_stardew");
+}
+
+export function gameMinecraft(): Promise<MinecraftView> {
+  return invoke<MinecraftView>("game_minecraft");
+}
+
+export function gameRl(): Promise<RocketLeagueView> {
+  return invoke<RocketLeagueView>("game_rl");
+}
+
 /** A Home tile's Turn on, for a switch that needs nothing else. */
 export function homeTurnOn(feature: string): Promise<void> {
   return invoke<void>("home_turn_on", { feature });
