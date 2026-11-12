@@ -4,10 +4,11 @@
 //! beat is stale (the cabin runs the same helpers when it is open), the same
 //! rule as `net_watch`. Nothing is read while both helpers are off.
 //!
-//! The shell has no GPU reader, so wind-down's busy check always comes back
-//! unsure and, failing closed, never sleeps the PC here; the Settings page says
-//! so. The one-time set-up card isn't posted here either: the page offers the
-//! idle times itself.
+//! GPU busy comes from `grokhub_desktop::signals` (nvidia-smi / AMD sysfs /
+//! Windows PDH), with this process left out of the total. A PC that still
+//! can't see a game, fullscreen or GPU signal stays blind and the Settings
+//! page says so. The one-time set-up card isn't posted here: the page offers
+//! the idle times itself.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -55,11 +56,16 @@ pub fn start(config_dir: PathBuf, app: AppHandle) {
 /// One fresh reading of this PC, blocking on the OS readers.
 pub fn read_machine() -> Machine {
     use grokhub_desktop::signals;
+    let external_gpu_pct = signals::external_gpu_pct(Some(std::process::id()));
+    // Fullscreen is Windows-only in `signals`. When the GPU reader answered,
+    // treat a missing fullscreen as clear so Linux can sleep once GPU and
+    // game are known; games still block through `game()`.
+    let fullscreen = signals::fullscreen().or_else(|| external_gpu_pct.map(|_| false));
     Machine {
         idle_secs: signals::idle_secs(),
         game: signals::game(),
-        fullscreen: signals::fullscreen(),
-        external_gpu_pct: None,
+        fullscreen,
+        external_gpu_pct,
     }
 }
 
