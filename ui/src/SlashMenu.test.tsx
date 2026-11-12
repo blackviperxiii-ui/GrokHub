@@ -12,7 +12,10 @@ const api = vi.hoisted(() => ({
   addAutomation: vi.fn<(text: string) => Promise<unknown[]>>(),
 }));
 
-vi.mock("./api", () => ({
+vi.mock("./api", async () => {
+  const { chatTabApiStubs } = await import("./chatTabApiStubs");
+  return {
+  ...chatTabApiStubs(),
   quickChips: () => Promise.resolve([]),
   chipOutcome: () => Promise.resolve(true),
   sendChat: api.sendChat,
@@ -37,7 +40,8 @@ vi.mock("./api", () => ({
   stageAttachmentPaths: vi.fn(),
   pickAttachments: vi.fn(),
   removeAttachment: vi.fn(),
-}));
+};
+});
 
 import { Chat, NO_PLAN, PLAN_NEXT, UNDO_NA } from "./Chat";
 import { isSlashCommand } from "./SlashMenu";

@@ -8,7 +8,10 @@ const api = vi.hoisted(() => ({
   sendChat: vi.fn<(...args: unknown[]) => Promise<string>>(),
 }));
 
-vi.mock("./api", () => ({
+vi.mock("./api", async () => {
+  const { chatTabApiStubs } = await import("./chatTabApiStubs");
+  return {
+  ...chatTabApiStubs(),
   quickChips: () => Promise.resolve([]),
   chipOutcome: () => Promise.resolve(true),
   // No chat saved from an earlier launch.
@@ -43,7 +46,8 @@ vi.mock("./api", () => ({
   stageAttachmentPaths: vi.fn(),
   pickAttachments: vi.fn(),
   removeAttachment: vi.fn(),
-}));
+};
+});
 
 import { Chat } from "./Chat";
 import { appendDraft, closeMic, MIC_DENIED } from "./Mic";

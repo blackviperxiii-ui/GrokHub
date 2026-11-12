@@ -1,0 +1,1 @@
+- Chat: Hangout TALK/TYPE mode and a tab strip that can archive, soft-delete, and restore chats, matching the cabin.

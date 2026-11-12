@@ -15,7 +15,10 @@ const api = vi.hoisted(() => ({
 
 vi.mock("./autoSetupApi", () => ({ settingAsk: () => Promise.resolve(null) }));
 
-vi.mock("./api", () => ({
+vi.mock("./api", async () => {
+  const { chatTabApiStubs } = await import("./chatTabApiStubs");
+  return {
+  ...chatTabApiStubs(),
   quickChips: () => Promise.resolve([]),
   chipOutcome: () => Promise.resolve(true),
   sendChat: api.sendChat,
@@ -41,7 +44,8 @@ vi.mock("./api", () => ({
   stageAttachmentPaths: vi.fn(),
   pickAttachments: vi.fn(),
   removeAttachment: vi.fn(),
-}));
+};
+});
 
 import { Chat, SLASH_RUNNING, SLASH_WAITS, SLASH_WAITS_REMOTE } from "./Chat";
 
