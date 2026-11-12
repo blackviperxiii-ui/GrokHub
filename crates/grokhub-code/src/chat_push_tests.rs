@@ -1,5 +1,4 @@
 use super::*;
-use crate::ship::{Host, Pr, ShipMode};
 
 fn refused(command: &str) -> String {
     match read(command) {
@@ -127,6 +126,7 @@ fn only_the_plain_form_reaches_the_guard() {
 #[cfg(unix)]
 mod repo {
     use super::*;
+    use crate::ship::{Host, Pr, ShipMode};
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
