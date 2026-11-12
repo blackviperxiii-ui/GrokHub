@@ -311,12 +311,12 @@ elif command -v dnf >/dev/null; then
   fi
 fi
 
-move_cabin_login
-
 if command -v systemctl >/dev/null && [[ "$SYSTEM" -eq 0 ]]; then
   systemctl --user daemon-reload >/dev/null 2>&1 || true
   systemctl --user enable --now grokhub-hub.service >/dev/null 2>&1 || true
 fi
+
+move_cabin_login
 
 mkdir -p "$CONFIG_DIR"
 printf '%s\n' "$ROOT" > "$CONFIG_DIR/source"
