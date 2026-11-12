@@ -15,21 +15,22 @@ import {
   type ModRow,
   type ModSuggestion,
 } from "./api";
+import { InstalledTab, InstallSheet, ModDrawerPanel, StepLine, useInstall } from "./ModsInstall";
 
-export type ModsTab = ModList | "newFinds";
+export type ModsTab = ModList | "newFinds" | "installed";
 
 export const TAB_LABELS: Record<ModsTab, string> = {
   popular: "Popular",
   trending: "Trending",
   newFinds: "New finds",
   updated: "Updated",
+  installed: "Installed",
 };
-const TABS: ModsTab[] = ["popular", "trending", "newFinds", "updated"];
+const TABS: ModsTab[] = ["popular", "trending", "newFinds", "updated", "installed"];
 
 export const SUBTITLE = "Safe, sanctioned mods for the games on this PC.";
 export const NO_GAMES = "No moddable games found";
 export const NOTHING = "Nothing here yet.";
-export const INSTALL_SOON = "Installing comes in the next update.";
 /** How long typing must pause before a search goes out. */
 export const QUERY_WAIT_MS = 400;
 
@@ -40,11 +41,11 @@ export function shortCount(n: number): string {
   return String(n);
 }
 
-/** One mod row: name, author, summary, counts, Open page, and Install
- * (disabled until the install sheet ships). */
-function Row({ mod }: { mod: ModRow }) {
+/** One mod row: name, author, summary, counts, Open page, and View, which
+ * opens its drawer with the files to install. */
+function Row({ mod, open, onView }: { mod: ModRow; open: boolean; onView: () => void }) {
   return (
-    <li className="mods-row card">
+    <li className="mods-row card" aria-current={open || undefined}>
       {mod.iconUrl ? (
         <img className="mods-icon" src={mod.iconUrl} alt="" draggable={false} />
       ) : (
@@ -63,8 +64,8 @@ function Row({ mod }: { mod: ModRow }) {
         <button type="button" onClick={() => void openUrl(mod.pageUrl).catch(() => {})}>
           Open page
         </button>
-        <button type="button" disabled title={INSTALL_SOON}>
-          Install
+        <button type="button" aria-expanded={open} onClick={onView}>
+          View
         </button>
       </div>
     </li>
@@ -122,6 +123,8 @@ export function Mods() {
   const [got, setGot] = useState<{ key: string; page: ModPage } | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [showCant, setShowCant] = useState(false);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const install = useInstall();
   const ask = useRef(0);
 
   function loadRail() {
@@ -155,13 +158,13 @@ export function Mods() {
   // Until the answer for what is picked now comes, the list shows Looking.
   const page = got?.key === key ? got.page : null;
   useEffect(() => {
-    if (!gameId || !src) return;
+    if (!gameId || !src || (tab === "installed" && !asked)) return;
     const n = ++ask.current;
     const asking = asked
       ? modsSearch(gameId, src, asked, pageNo)
       : tab === "newFinds"
         ? modsNewFinds(gameId, src, pageNo)
-        : modsBrowse(gameId, src, tab, pageNo);
+        : modsBrowse(gameId, src, tab as ModList, pageNo);
     asking.then(
       (p) => {
         if (n !== ask.current) return;
@@ -176,6 +179,7 @@ export function Mods() {
   }, [gameId, src, tab, asked, pageNo, key]);
 
   function pick(id: string) {
+    setOpenId(null);
     setPickedId(id);
     setSourceId(null);
     setPageNo(0);
@@ -202,6 +206,7 @@ export function Mods() {
     loadForYou();
   }
 
+  const opened = page?.mods.find((m) => m.id === openId) ?? null;
   const subtitle = [SUBTITLE, view?.status].filter(Boolean).join(" ");
 
   return (
@@ -254,6 +259,7 @@ export function Mods() {
                   <div>
                     <h2>{game.name}</h2>
                     <p className="card-status">{game.modeNote}</p>
+                    <StepLine install={install} />
                   </div>
                   <button type="button" onClick={() => void hideSuggestions(game)}>
                     {game.suggestionsHidden ? "Show suggestions for this game" : "Hide suggestions for this game"}
@@ -302,27 +308,52 @@ export function Mods() {
                     onChange={(e) => setQuery(e.target.value)}
                   />
                 </div>
-                {page === null && <p className="empty">Looking…</p>}
-                {page?.note && <p className="note">{page.note}</p>}
-                {page && page.mods.length === 0 && !page.note && <p className="empty">{NOTHING}</p>}
-                {page && page.mods.length > 0 && (
-                  <ul className="mods-list" aria-label="Mods">
-                    {page.mods.map((m) => (
-                      <Row key={m.id} mod={m} />
-                    ))}
-                  </ul>
-                )}
-                {page && (page.more || pageNo > 0) && (
-                  <div className="mods-pager">
-                    <button type="button" disabled={pageNo === 0} onClick={() => setPageNo((p) => p - 1)}>
-                      Previous
-                    </button>
-                    <span className="card-status">
-                      Page {pageNo + 1} · {page.mods.length} shown
-                    </span>
-                    <button type="button" disabled={!page.more} onClick={() => setPageNo((p) => p + 1)}>
-                      Next
-                    </button>
+                {tab === "installed" && !asked ? (
+                  <InstalledTab game={game} install={install} />
+                ) : (
+                  <div
+                    className="mods-browse"
+                    // The cabin's drawer: 340 wide beside the list, 16 apart.
+                    style={
+                      opened ? { display: "grid", gridTemplateColumns: "minmax(240px, 1fr) 340px", gap: 16, alignItems: "start" } : undefined
+                    }
+                  >
+                    <div>
+                    {page === null && <p className="empty">Looking…</p>}
+                    {page?.note && <p className="note">{page.note}</p>}
+                    {page && page.mods.length === 0 && !page.note && <p className="empty">{NOTHING}</p>}
+                    {page && page.mods.length > 0 && (
+                      <ul className="mods-list" aria-label="Mods">
+                        {page.mods.map((m) => (
+                          <Row key={m.id} mod={m} open={m.id === openId} onView={() => setOpenId(m.id)} />
+                        ))}
+                      </ul>
+                    )}
+                    {page && (page.more || pageNo > 0) && (
+                      <div className="mods-pager">
+                        <button type="button" disabled={pageNo === 0} onClick={() => setPageNo((p) => p - 1)}>
+                          Previous
+                        </button>
+                        <span className="card-status">
+                          Page {pageNo + 1} · {page.mods.length} shown
+                        </span>
+                        <button type="button" disabled={!page.more} onClick={() => setPageNo((p) => p + 1)}>
+                          Next
+                        </button>
+                      </div>
+                    )}
+                    </div>
+                    {opened && source && (
+                      <ModDrawerPanel
+                        game={game}
+                        source={source.id}
+                        sourceLabel={source.label}
+                        mod={opened}
+                        offline={view.offline}
+                        install={install}
+                        onClose={() => setOpenId(null)}
+                      />
+                    )}
                   </div>
                 )}
               </>
@@ -330,6 +361,7 @@ export function Mods() {
           </div>
         </div>
       )}
+      <InstallSheet install={install} />
     </section>
   );
 }

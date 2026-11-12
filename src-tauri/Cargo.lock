@@ -2142,6 +2142,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "webkit2gtk",
+ "zip",
 ]
 
 [[package]]
