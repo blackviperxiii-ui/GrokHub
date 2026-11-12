@@ -19,6 +19,7 @@ import { CodeDeploy } from "./CodeDeploy";
 import { CodeProjects, folderName } from "./CodeProjects";
 import type { View } from "./Palette";
 import { CodeShip } from "./CodeShip";
+import { CodeRevert } from "./CodeRevert";
 import { inShell } from "./transport";
 import { useCardFocus } from "./ui";
 
@@ -512,6 +513,15 @@ function CodeWorkspace({ agentBusy, onAsk }: { agentBusy: boolean; onAsk: (promp
         )}
       </div>
       {repo?.isRepo && <CodeShip refreshKey={activityKey} onShipped={() => void load()} />}
+      {repo?.isRepo && (
+        <CodeRevert
+          refreshKey={activityKey}
+          onReverted={() => {
+            setActivityKey((n) => n + 1);
+            void load();
+          }}
+        />
+      )}
       {repo?.isRepo && <CodeDeploy onDeployed={() => setActivityKey((n) => n + 1)} />}
       {builtins && builtins.length > 0 && (
         <div className="code-skills">
