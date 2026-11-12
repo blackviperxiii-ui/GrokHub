@@ -664,7 +664,7 @@ mod tests {
     /// set, so a background job reads the line; the call is refused there.
     /// `spawn_subagent`'s `redo` argument (a new worktree helper redoes work
     /// that conflicted) and its words in the description added 49 to
-    /// Chat/Agent (11_743 → 11_792), Plan/Ask (7_526 → 7_575) and background
+    /// Chat/Agent (11_743 → 11_792, and 11_798 measured with eager look_at_screen beside them), Plan/Ask (7_526 → 7_575) and background
     /// (10_229 → 10_278).
     #[test]
     fn eager_schema_payload_stays_within_budget_per_profile() {
@@ -678,13 +678,13 @@ mod tests {
                 // +150 for the shell's outside_sandbox arg (HX-11), +143 for grep's modes,
                 // +334 for eager look_at_screen,
                 // +57 for the merge_subagent_work index line, +49 for spawn_subagent's redo.
-                11_792,
+                11_798,
             ),
             (
                 "agent",
                 profile(PermMode::Always, false, true),
                 full.clone(),
-                11_792,
+                11_798,
             ),
             (
                 "plan/ask",
