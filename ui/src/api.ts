@@ -2804,6 +2804,39 @@ export function interestAct(
   return invoke<InterestPage>("interest_act", { topic, act });
 }
 
+/** Settings → Pulse → Sources (src-tauri/src/pulse_digests.rs). */
+export interface DailyDropSettings {
+  enabled: boolean;
+  hackerNews: boolean;
+  reddit: boolean;
+  webSearch: boolean;
+  github: boolean;
+  youtube: boolean;
+  rss: boolean;
+}
+
+export interface HobbyPathSettings {
+  tips: boolean;
+  projects: boolean;
+}
+
+export interface PulseSourcesView {
+  dailyDrop: DailyDropSettings;
+  askOffersEnabled: boolean;
+  hobbyPaths: HobbyPathSettings;
+  releaseRadarOn: boolean;
+}
+
+export function getPulseSources(): Promise<PulseSourcesView> {
+  return invoke<PulseSourcesView>("get_pulse_sources");
+}
+
+export function savePulseSources(
+  view: PulseSourcesView,
+): Promise<PulseSourcesView> {
+  return invoke<PulseSourcesView>("save_pulse_sources", { view });
+}
+
 /** Settings → Permissions (src-tauri/src/permissions.rs). */
 export type RuleKind = "allow" | "ask" | "deny";
 

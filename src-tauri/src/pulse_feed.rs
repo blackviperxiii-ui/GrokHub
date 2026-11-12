@@ -480,6 +480,7 @@ fn tick(
     }
     let _ = run_once(config_dir, &model, client.as_ref(), net().as_ref(), now);
     let _ = run_ideas(config_dir, &model, client.as_ref(), now);
+    let _ = crate::pulse_digests::run_due(config_dir, now);
     RUNNING.store(false, Ordering::SeqCst);
 }
 
