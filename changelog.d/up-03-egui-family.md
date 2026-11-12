@@ -1,0 +1,1 @@
+- Cabin: egui family stays on 0.37 (eframe/egui_extras, egui_plot 0.38, egui_stack 0.25.9, egui-pop-phosphor); overlay toasts stay out — status lines use the bell only.
