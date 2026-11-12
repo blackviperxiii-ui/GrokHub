@@ -175,7 +175,7 @@ pub(super) fn paint_drag_ghost(ctx: &egui::Context, title: &str) {
     let Some(pos) = ctx.pointer_interact_pos() else {
         return;
     };
-    egui::Area::new(egui::Id::new("board-drag-ghost"))
+    egui::Area::new(egui::Id::unique("board-drag-ghost"))
         .order(egui::Order::Tooltip)
         .fixed_pos(pos + egui::vec2(12.0, 8.0))
         .interactable(false)
@@ -1205,7 +1205,7 @@ page_body(ui, "history", |ui| {
                             let zone_rect = egui::Rect::from_min_max(top, egui::pos2(top.x + w, bottom));
                             let zone = ui.interact(
                                 zone_rect,
-                                egui::Id::new("board-drop-follow"),
+                                egui::Id::unique("board-drop-follow"),
                                 egui::Sense::hover(),
                             );
                             if let Some(drag) = zone.dnd_hover_payload::<BoardDrag>() {
@@ -1264,7 +1264,7 @@ page_body(ui, "history", |ui| {
                                 );
                                 let zone = ui.interact(
                                     zone_rect,
-                                    egui::Id::new(("board-drop", i)),
+                                    egui::Id::unique(("board-drop", i)),
                                     egui::Sense::hover(),
                                 );
                                 if let Some(drag) = zone.dnd_hover_payload::<BoardDrag>() {

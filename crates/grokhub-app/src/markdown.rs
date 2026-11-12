@@ -93,7 +93,7 @@ pub fn measure_markdown_width(ui: &Ui, text: &str, wrap: f32) -> f32 {
 
 /// Temp slot for a code block whose Copy was clicked this frame.
 fn code_copy_id() -> Id {
-    Id::new("cabin-md-code-copy")
+    Id::unique("cabin-md-code-copy")
 }
 
 /// The code a block's Copy asked for, once.
@@ -281,7 +281,7 @@ fn table(
     ui.add_space(2.0);
     // No stripes: the theme's faint fill is opaque and a stripe painted for row 1
     // covered the header's descenders. The header gets a hairline instead.
-    egui::Grid::new(ui.id().with(("md-table", key)))
+    egui::Grid::new(ui.scope_id().with(("md-table", key)))
         .striped(false)
         .spacing(spacing)
         .min_col_width(0.0)

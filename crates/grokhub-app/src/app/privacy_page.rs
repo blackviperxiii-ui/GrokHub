@@ -90,7 +90,7 @@ pub(super) const MODELS_MOVED: &str =
 
 /// The Offline only switch, its confirm, and any save error.
 pub(super) fn paint_offline_row(ui: &mut egui::Ui) {
-    let id = egui::Id::new(OFFLINE_ROW_ID);
+    let id = egui::Id::unique(OFFLINE_ROW_ID);
     let mut row: OfflineRow = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_default();
     // The cabin's config dir (the same folder `offline::set` uses outside tests).
     let dir = crate::config::config_dir();
@@ -602,7 +602,7 @@ impl Cabin {
             crate::cards::settings_toggle(ui, "Encrypted memory", sealed_hint, &mut sealed);
         });
         ui.add_space(16.0);
-        let armed_id = egui::Id::new(WIPE_ARMED_ID);
+        let armed_id = egui::Id::unique(WIPE_ARMED_ID);
         let armed = ui
             .ctx()
             .data(|d| d.get_temp::<bool>(armed_id))
@@ -982,7 +982,7 @@ mod tests {
         let ctx = egui::Context::default();
         crate::theme::install_fonts_on(&ctx);
         if let Some(row) = row {
-            ctx.data_mut(|d| d.insert_temp(egui::Id::new(OFFLINE_ROW_ID), row));
+            ctx.data_mut(|d| d.insert_temp(egui::Id::unique(OFFLINE_ROW_ID), row));
         }
         let input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(

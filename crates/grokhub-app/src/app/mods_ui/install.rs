@@ -666,7 +666,7 @@ pub(super) fn sheet(ctx: &egui::Context) {
     };
     let sheet = *sheet;
     let mut act = None;
-    egui::Modal::new(egui::Id::new("mods-install-sheet"))
+    egui::Modal::new(egui::Id::unique("mods-install-sheet"))
         .backdrop_color(egui::Color32::from_black_alpha(153))
         .frame(
             egui::Frame::NONE

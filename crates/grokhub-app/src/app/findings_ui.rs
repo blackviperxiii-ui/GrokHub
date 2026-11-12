@@ -69,7 +69,7 @@ pub(super) fn paint_findings_fixes(ui: &mut egui::Ui, card: &Findings) -> Option
     ui.horizontal_wrapped(|ui| {
         ui.add_space(super::chat_ui::result_text_inset());
         if let Some(hint) = do_all_hint(card) {
-            let id = ui.id().with("findings-do-all");
+            let id = ui.scope_id().with("findings-do-all");
             if crate::cards::felt_pill_at(ui, Some(id), DO_ALL, crate::cards::PillStyle::Solid)
                 .on_hover_text(hint)
                 .clicked_by(egui::PointerButton::Primary)
@@ -78,14 +78,14 @@ pub(super) fn paint_findings_fixes(ui: &mut egui::Ui, card: &Findings) -> Option
             }
         }
         for (n, fix) in card.fixes.iter().enumerate() {
-            let id = ui.id().with(("findings-fix", n));
+            let id = ui.scope_id().with(("findings-fix", n));
             if crate::cards::felt_pill_at(ui, Some(id), &fix.label, crate::cards::PillStyle::Solid)
                 .clicked_by(egui::PointerButton::Primary)
             {
                 hit = Some(FindingsAct::Run(fix.prompt()));
             }
         }
-        let id = ui.id().with("findings-dismiss");
+        let id = ui.scope_id().with("findings-dismiss");
         if crate::cards::felt_pill_at(ui, Some(id), DISMISS, crate::cards::PillStyle::Ghost)
             .clicked_by(egui::PointerButton::Primary)
         {

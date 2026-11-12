@@ -389,12 +389,12 @@ impl Cabin {
             picked: Some(Pick::Steam(app_id)),
             ..Default::default()
         };
-        ctx.data_mut(|d| d.insert_temp(egui::Id::new(LIBRARY_VIEW_ID), view));
+        ctx.data_mut(|d| d.insert_temp(egui::Id::unique(LIBRARY_VIEW_ID), view));
         self.set_nav_id("library");
     }
 
     pub(super) fn ui_library(&mut self, ui: &mut egui::Ui) {
-        let id = egui::Id::new(LIBRARY_VIEW_ID);
+        let id = egui::Id::unique(LIBRARY_VIEW_ID);
         let mut view: LibraryView = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_else(first_view);
         let now = now_ms();
         let (found, games) = self.steam_library(now);

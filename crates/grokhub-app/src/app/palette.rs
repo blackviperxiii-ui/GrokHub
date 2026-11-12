@@ -74,7 +74,7 @@ impl Cabin {
         // Picking a page anywhere else closes the palette: a nav change since it
         // opened, or a click outside it (not the click that opened it).
         let opening = self.palette_focus;
-        let nav_key = egui::Id::new("palette-opened-on");
+        let nav_key = egui::Id::unique("palette-opened-on");
         let here = self.nav_id().to_string();
         if opening {
             ctx.data_mut(|d| d.insert_temp(nav_key, here.clone()));

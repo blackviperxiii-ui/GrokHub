@@ -39,7 +39,7 @@ pub(super) fn merged_native_history(cli_home: Option<&Path>) -> Vec<grokhub_agen
 fn cached_merged_rows(ui: &egui::Ui) -> Vec<grokhub_agent::HistoryRow> {
     let r#gen = grokhub_agent::history_generation();
     let now = now_ms();
-    let id = egui::Id::new("native-history-cache");
+    let id = egui::Id::unique("native-history-cache");
     if let Some(hit) = ui.data(|data| data.get_temp::<HistoryCache>(id)) {
         if hit.r#gen == r#gen && now.saturating_sub(hit.at) < 2_000 {
             return hit.rows;
@@ -96,7 +96,7 @@ impl Cabin {
             .size(crate::theme::TYPE_CAPTION)
             .color(crate::theme::subtle()),
         );
-        let draft_id = egui::Id::new("native-history-rename");
+        let draft_id = egui::Id::unique("native-history-rename");
         let mut draft = ui
             .data(|data| data.get_temp::<RenameDraft>(draft_id))
             .unwrap_or_default();

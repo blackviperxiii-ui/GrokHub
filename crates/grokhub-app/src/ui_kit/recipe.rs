@@ -165,7 +165,7 @@ pub fn button(
     ui.painter().galley(text_pos, galley, look.ink);
     let resp = crate::theme::pointing(resp);
     let enabled = resp.enabled();
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
     resp
 }
 

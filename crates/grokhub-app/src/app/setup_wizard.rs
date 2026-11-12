@@ -338,7 +338,7 @@ impl Cabin {
             return;
         };
         let mut act = WizardAct::None;
-        let modal = egui::Modal::new(egui::Id::new("setup-wizard"))
+        let modal = egui::Modal::new(egui::Id::unique("setup-wizard"))
             .backdrop_color(egui::Color32::from_black_alpha(153))
             .frame(
                 egui::Frame::NONE

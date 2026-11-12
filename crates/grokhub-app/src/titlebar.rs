@@ -65,7 +65,7 @@ pub fn titlebar_chrome_btn(ui: &mut egui::Ui, kind: ChromeBtn) -> egui::Response
     paint_chrome_glyph(ui, rect, kind, color, pose);
     let name = titlebar_chrome_tip(kind, false);
     let enabled = resp.enabled();
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, name));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, name));
     resp
 }
 
@@ -214,7 +214,7 @@ pub fn edge_resize(ctx: &egui::Context, maximized: bool) {
         return;
     }
     for (dir, rect) in edge_grips(ctx.content_rect()) {
-        egui::Area::new(egui::Id::new(("edge-resize", format!("{dir:?}"))))
+        egui::Area::new(egui::Id::unique(("edge-resize", format!("{dir:?}"))))
             .order(egui::Order::Foreground)
             .fixed_pos(rect.min)
             .show(ctx, |ui| {

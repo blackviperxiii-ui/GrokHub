@@ -36,7 +36,7 @@ pub fn chip(ui: &mut Ui, label: &str, outlined: bool, enabled: bool) -> Response
             crate::theme::fg(),
         )
     };
-    let id = ui.id().with(("ui-kit-chip", label));
+    let id = ui.scope_id().with(("ui-kit-chip", label));
     let font = FontId::proportional(crate::theme::TYPE_CAPTION);
     let galley = ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font, text));
     let pad = egui::vec2(crate::theme::SPACING_8, crate::theme::SPACING_4);

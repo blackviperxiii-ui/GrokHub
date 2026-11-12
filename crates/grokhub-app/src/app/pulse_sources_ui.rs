@@ -911,7 +911,7 @@ impl Cabin {
             ui.horizontal(|ui| {
                 let edit = ui.add(
                     egui::TextEdit::singleline(draft)
-                        .id(egui::Id::new(("pulse-source-add", kind.key())))
+                        .id(egui::Id::unique(("pulse-source-add", kind.key())))
                         .hint_text(hint)
                         .desired_width(300.0),
                 );

@@ -646,7 +646,7 @@ impl Cabin {
     /// Refresh grok_usage from the open native session. Does not paint — the
     /// persistent "Native · tokens · pool" bar was removed (usage lives in Settings).
     pub(super) fn sync_native_usage(&mut self, ui: &mut egui::Ui) {
-        let checked_id = ui.id().with("native-usage-sid");
+        let checked_id = ui.scope_id().with("native-usage-sid");
         let sid = self
             .threads
             .get(self.thread_idx)

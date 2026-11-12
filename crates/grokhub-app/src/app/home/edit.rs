@@ -181,7 +181,7 @@ impl Cabin {
             }
         }
         let screen = ctx.content_rect();
-        egui::Area::new(egui::Id::new("home-edit-overlay"))
+        egui::Area::new(egui::Id::unique("home-edit-overlay"))
             .fixed_pos(screen.min)
             .order(egui::Order::Foreground)
             .interactable(true)

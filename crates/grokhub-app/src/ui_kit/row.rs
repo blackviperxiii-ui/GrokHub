@@ -56,7 +56,7 @@ fn paint_control(ui: &mut Ui, label: &str, control: SettingRowControl<'_>) {
         SettingRowControl::Select { selected, labels } => {
             let current = labels.get(*selected).copied().unwrap_or("—");
             // Rows share a parent id, so the label keeps each select apart.
-            ComboBox::from_id_salt(ui.id().with(("select", label)))
+            ComboBox::from_id_salt(ui.scope_id().with(("select", label)))
                 .selected_text(current)
                 .width(crate::theme::MIN_HIT * 4.0)
                 .show_ui(ui, |ui| {

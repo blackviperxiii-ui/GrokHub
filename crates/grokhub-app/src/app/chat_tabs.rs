@@ -98,7 +98,7 @@ impl Cabin {
                         // Deck HARD DONE: paint the overflow list open without a click.
                         if force_open {
                             let origin = egui::pos2(resp.rect.left(), resp.rect.bottom() + 4.0);
-                            egui::Area::new(egui::Id::new("deck-tab-overflow"))
+                            egui::Area::new(egui::Id::unique("deck-tab-overflow"))
                                 .order(egui::Order::Foreground)
                                 .fixed_pos(origin)
                                 .show(ui.ctx(), |ui| {
@@ -349,7 +349,7 @@ impl Cabin {
                 egui::pos2(rect.right() - 10.0, rect.center().y),
                 egui::vec2(14.0, 14.0),
             );
-            let close_id = ui.id().with(("chat-tab-close", i));
+            let close_id = ui.scope_id().with(("chat-tab-close", i));
             let close_resp = ui.interact(close_rect, close_id, egui::Sense::click());
             paint_tab_close(ui, close_rect, close_resp.hovered());
             if close_resp.clicked() {

@@ -429,7 +429,7 @@ pub(in crate::app) fn game_cover(
     app_id: u32,
     kind: CoverKind,
 ) -> Option<Cover> {
-    let id = egui::Id::new(ART_SLOTS_ID);
+    let id = egui::Id::unique(ART_SLOTS_ID);
     let key = (app_id, kind);
     let mut slots: HashMap<Key, Slot> = ctx.data(|d| d.get_temp(id)).unwrap_or_default();
     let slot = match slots.get(&key).cloned() {

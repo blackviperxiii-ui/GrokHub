@@ -29,7 +29,7 @@ impl Cabin {
                 self.home_header(ui);
                 ui.add_space(GAP);
                 let w = ui.available_width();
-                let compose_id = egui::Id::new(COMPOSE_H_ID);
+                let compose_id = egui::Id::unique(COMPOSE_H_ID);
                 let compose_h = ui
                     .ctx()
                     .data(|d| d.get_temp::<f32>(compose_id))
@@ -189,7 +189,7 @@ impl Cabin {
     }
 
     fn home_compose(&mut self, ui: &mut egui::Ui, actions: &mut Vec<ModuleAction>) {
-        let id = egui::Id::new(DRAFT_ID);
+        let id = egui::Id::unique(DRAFT_ID);
         let mut draft: String = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_default();
         ui.add_space(GAP);
         if super::super::loadout_home::deck_shot_requested() {
@@ -222,7 +222,7 @@ impl Cabin {
                         egui::TextEdit::singleline(&mut draft)
                             .frame(egui::Frame::NONE)
                             .hint_text("Assign an objective or ask anything…")
-                            .vertical_align(egui::Align::Center)
+                            .align(egui::Align2::LEFT_CENTER)
                             .font(egui::FontId::proportional(crate::theme::TYPE_LABEL)),
                     );
                     if edit.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {

@@ -1405,17 +1405,17 @@ pub mod row {
     pub(crate) fn begin_chip_dismiss_hits(ui: &egui::Ui) {
         ui.ctx().data_mut(|d| {
             d.insert_temp(
-                egui::Id::new("qchip-dismiss-hits"),
+                egui::Id::unique("qchip-dismiss-hits"),
                 Vec::<egui::Rect>::new(),
             );
-            d.insert_temp(egui::Id::new("qchip-pills"), Vec::<egui::Rect>::new());
+            d.insert_temp(egui::Id::unique("qchip-pills"), Vec::<egui::Rect>::new());
         });
     }
 
     #[cfg(test)]
     pub(crate) fn remember_chip_dismiss_hit(ui: &egui::Ui, rect: egui::Rect) {
         ui.ctx().data_mut(|d| {
-            let id = egui::Id::new("qchip-dismiss-hits");
+            let id = egui::Id::unique("qchip-dismiss-hits");
             let mut hits = d.get_temp::<Vec<egui::Rect>>(id).unwrap_or_default();
             hits.push(rect);
             d.insert_temp(id, hits);
@@ -1425,7 +1425,7 @@ pub mod row {
     #[cfg(test)]
     pub(crate) fn remember_chip_pill(ui: &egui::Ui, rect: egui::Rect) {
         ui.ctx().data_mut(|d| {
-            let id = egui::Id::new("qchip-pills");
+            let id = egui::Id::unique("qchip-pills");
             let mut pills = d.get_temp::<Vec<egui::Rect>>(id).unwrap_or_default();
             pills.push(rect);
             d.insert_temp(id, pills);
@@ -1713,7 +1713,7 @@ pub mod row {
                         break;
                     }
                     used += add;
-                    let chip_id = ui.id().with(("qchip", i));
+                    let chip_id = ui.scope_id().with(("qchip", i));
                     let color = quick_chip_fg(c.primary);
                     let paint = chip_paint_label(&c.label);
                     let why = if c.hint.is_empty() && paint != c.label {

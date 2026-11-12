@@ -130,7 +130,7 @@ type CachedWeek = (Instant, Option<objectives::YourWeek>);
 
 /// Monday's "Your week", read again every [`GOALS_REFRESH`].
 fn dock_your_week(ctx: &egui::Context) -> Option<objectives::YourWeek> {
-    let id = egui::Id::new(WEEK_ID);
+    let id = egui::Id::unique(WEEK_ID);
     if let Some((at, w)) = ctx.data(|d| d.get_temp::<CachedWeek>(id)) {
         if at.elapsed() < GOALS_REFRESH {
             return w;
@@ -150,7 +150,7 @@ impl Cabin {
     /// The saved goals, read again every [`GOALS_REFRESH`] or after a change.
     pub(in crate::app) fn dock_goals(&self, ctx: &egui::Context) -> Objectives {
         type Cached = (Instant, Objectives);
-        let id = egui::Id::new(GOALS_ID);
+        let id = egui::Id::unique(GOALS_ID);
         let changed = GOALS_CHANGED.swap(false, Ordering::Relaxed);
         if changed {
             super::super::loadout_home::forget_xp(ctx);
@@ -301,7 +301,7 @@ impl Cabin {
             Ok((o, refused)) => {
                 ctx.data_mut(|d| {
                     d.insert_temp::<(Instant, Objectives)>(
-                        egui::Id::new(GOALS_ID),
+                        egui::Id::unique(GOALS_ID),
                         (Instant::now(), o),
                     )
                 });
@@ -312,9 +312,9 @@ impl Cabin {
         };
         ctx.data_mut(|d| match error {
             Some(e) => {
-                d.insert_temp(egui::Id::new(ADD_ERROR_ID), e);
+                d.insert_temp(egui::Id::unique(ADD_ERROR_ID), e);
             }
-            None => d.remove::<String>(egui::Id::new(ADD_ERROR_ID)),
+            None => d.remove::<String>(egui::Id::unique(ADD_ERROR_ID)),
         });
     }
 
@@ -426,7 +426,7 @@ impl Cabin {
         if let Some(id) = track {
             self.apply_goal_acts(ui.ctx(), vec![GoalAct::Track { id }]);
             ui.ctx()
-                .data_mut(|d| d.remove::<CachedWeek>(egui::Id::new(WEEK_ID)));
+                .data_mut(|d| d.remove::<CachedWeek>(egui::Id::unique(WEEK_ID)));
         }
     }
 
@@ -443,7 +443,7 @@ impl Cabin {
                 tracking.len().to_string()
             };
             header(ui, true, "My goals", &count, crate::theme::amber());
-            let draft_id = egui::Id::new(DRAFT_ID);
+            let draft_id = egui::Id::unique(DRAFT_ID);
             let mut draft: String = ui.ctx().data(|d| d.get_temp(draft_id)).unwrap_or_default();
             let mut submit = false;
             ui.horizontal(|ui| {
@@ -463,7 +463,7 @@ impl Cabin {
             ui.ctx().data_mut(|d| d.insert_temp(draft_id, draft));
             if let Some(e) = ui
                 .ctx()
-                .data(|d| d.get_temp::<String>(egui::Id::new(ADD_ERROR_ID)))
+                .data(|d| d.get_temp::<String>(egui::Id::unique(ADD_ERROR_ID)))
             {
                 ui.label(
                     RichText::new(e)

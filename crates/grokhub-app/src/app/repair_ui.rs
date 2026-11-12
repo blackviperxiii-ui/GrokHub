@@ -737,7 +737,7 @@ fn fix_card_ui(
         crate::theme::border()
     };
     ui.add_space(8.0);
-    let card_id = egui::Id::new(("fix-card", id.0, id.1));
+    let card_id = egui::Id::unique(("fix-card", id.0, id.1));
     let enter_t = crate::motion::approval_enter_t(ui, card_id, true);
     let slot = ui
         .available_rect_before_wrap()

@@ -461,7 +461,7 @@ pub fn felt_pill_at(
         ui, id, label, base_fill, text_color, rounding, min_size, stroke, strong,
     );
     let enabled = resp.enabled();
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
     resp
 }
 
@@ -544,9 +544,7 @@ fn felt_segment_styled(
         text_color,
     );
     let enabled = resp.enabled();
-    resp.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, selected, label)
-    });
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, selected, label));
     resp
 }
 
@@ -571,9 +569,7 @@ pub fn felt_tab(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
             look.ink,
         );
         let enabled = resp.enabled();
-        resp.widget_info(|| {
-            egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, active, label)
-        });
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, active, label));
         return resp.clicked();
     }
     let base_fill = crate::theme::blend_color(Color32::TRANSPARENT, crate::theme::fg(), on_t);
@@ -593,9 +589,7 @@ pub fn felt_tab(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
         text_color,
     );
     let enabled = resp.enabled();
-    resp.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, active, label)
-    });
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, active, label));
     resp.clicked()
 }
 
@@ -909,7 +903,7 @@ fn paint_switch(ui: &mut egui::Ui, on: bool, size: egui::Vec2) -> egui::Response
 fn finish_switch(resp: egui::Response, on: bool) -> bool {
     let enabled = resp.enabled();
     let name = switch_access_name(on);
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, on, name));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, enabled, on, name));
     resp.clicked()
 }
 
@@ -1054,7 +1048,7 @@ fn grant_pill(ui: &mut egui::Ui, label: &str) -> egui::Response {
         true,
     );
     let enabled = resp.enabled();
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
     resp
 }
 
@@ -1393,7 +1387,7 @@ struct TileRowPass {
 }
 
 fn tile_pass_id() -> egui::Id {
-    egui::Id::new("grokhub-tile-row-pass")
+    egui::Id::unique("grokhub-tile-row-pass")
 }
 
 fn tile_body_font() -> FontId {
@@ -1501,7 +1495,7 @@ fn tile_action_gap(extra: f32) -> f32 {
 
 fn next_tile_row_id(ui: &egui::Ui) -> egui::Id {
     let frame = ui.ctx().cumulative_pass_nr();
-    let seq_id = ui.id().with("grokhub-tile-row-seq");
+    let seq_id = ui.scope_id().with("grokhub-tile-row-seq");
     let (seen, seq) = ui
         .ctx()
         .data(|d| d.get_temp::<(u64, u32)>(seq_id))
@@ -1509,7 +1503,7 @@ fn next_tile_row_id(ui: &egui::Ui) -> egui::Id {
     let seq = if seen == frame { seq } else { 0 };
     ui.ctx()
         .data_mut(|d| d.insert_temp(seq_id, (frame, seq + 1)));
-    ui.id().with(("grokhub-tile-row", seq))
+    ui.scope_id().with(("grokhub-tile-row", seq))
 }
 
 fn begin_tile_slot(ctx: &egui::Context) -> Option<(f32, f32)> {
@@ -1746,7 +1740,7 @@ fn imagine_still_rgba(bytes: &[u8]) -> image::RgbaImage {
 }
 
 fn imagine_still_tex(ctx: &egui::Context, key: &str) -> (TextureHandle, [usize; 2]) {
-    let id = egui::Id::new(("imagine-still", key));
+    let id = egui::Id::unique(("imagine-still", key));
     if let Some(hit) = ctx.data(|d| d.get_temp::<(TextureHandle, [usize; 2])>(id)) {
         return hit;
     }
@@ -1910,7 +1904,11 @@ pub fn imagine_stage(
     ui.scope_builder(egui::UiBuilder::new().max_rect(media), |ui| {
         ui.set_clip_rect(media);
         imagine_result_hero(ui, path);
-        let resp = ui.interact(media, egui::Id::new("imagine-stage-media"), Sense::click());
+        let resp = ui.interact(
+            media,
+            egui::Id::unique("imagine-stage-media"),
+            Sense::click(),
+        );
         let click = imagine_media_click(path);
         if resp.clicked() {
             match click {
@@ -2184,7 +2182,11 @@ fn imagine_photo_tile(
     idx: usize,
     now_ms: u64,
 ) -> bool {
-    let resp = ui.interact(rect, egui::Id::new(("imagine-tile", idx)), Sense::click());
+    let resp = ui.interact(
+        rect,
+        egui::Id::unique(("imagine-tile", idx)),
+        Sense::click(),
+    );
     let (key_a, key_b, fade) = imagine_frame_pair(scene, now_ms);
     let (tex, size) = imagine_still_tex(ui.ctx(), key_a);
     let uv = cover_uv(size[0] as f32, size[1] as f32, rect.width(), rect.height());
@@ -2215,7 +2217,7 @@ fn imagine_photo_tile(
 }
 
 fn imagine_disk_tex(ctx: &egui::Context, path: &str) -> (TextureHandle, [usize; 2]) {
-    let id = egui::Id::new(("imagine-disk", path));
+    let id = egui::Id::unique(("imagine-disk", path));
     if let Some(hit) = ctx.data(|d| d.get_temp::<(TextureHandle, [usize; 2])>(id)) {
         return hit;
     }
@@ -2235,7 +2237,7 @@ fn imagine_disk_tex(ctx: &egui::Context, path: &str) -> (TextureHandle, [usize; 
 }
 
 fn imagine_disk_pending_tex(ctx: &egui::Context) -> (TextureHandle, [usize; 2]) {
-    let id = egui::Id::new("imagine-disk-pending");
+    let id = egui::Id::unique("imagine-disk-pending");
     if let Some(hit) = ctx.data(|d| d.get_temp::<(TextureHandle, [usize; 2])>(id)) {
         return hit;
     }
@@ -2314,7 +2316,7 @@ fn imagine_disk_tile(
 ) -> bool {
     let resp = ui.interact(
         rect,
-        egui::Id::new(("imagine-wall", idx, gif.id.as_str())),
+        egui::Id::unique(("imagine-wall", idx, gif.id.as_str())),
         Sense::click(),
     );
     if grokhub_core::imagine_is_video_path(&gif.path_a) {
@@ -3435,7 +3437,7 @@ mod tests {
             });
         });
         let hits = ctx
-            .data(|d| d.get_temp::<Vec<egui::Rect>>(egui::Id::new("qchip-dismiss-hits")))
+            .data(|d| d.get_temp::<Vec<egui::Rect>>(egui::Id::unique("qchip-dismiss-hits")))
             .unwrap_or_default();
         (act, out.platform_output.cursor_icon, hits)
     }
@@ -3627,7 +3629,7 @@ mod tests {
             });
         }
         let pills = ctx
-            .data(|d| d.get_temp::<Vec<egui::Rect>>(egui::Id::new("qchip-pills")))
+            .data(|d| d.get_temp::<Vec<egui::Rect>>(egui::Id::unique("qchip-pills")))
             .unwrap_or_default();
         (col, pills)
     }
@@ -4048,7 +4050,7 @@ mod tests {
             .and_then(|s| s.split("pub fn switch_access_name(").next())
             .expect("settings_switch");
         assert!(
-            switch.contains("WidgetType::Checkbox") && switch.contains("switch_access_name"),
+            switch.contains("Role::CheckBox") && switch.contains("switch_access_name"),
             "the settings switch is a named checkbox: {switch}"
         );
         let seg = src

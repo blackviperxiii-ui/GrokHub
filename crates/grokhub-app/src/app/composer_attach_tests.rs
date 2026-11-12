@@ -273,3 +273,44 @@ fn drop_hint_line_matches_shipped_wording() {
         "Drop to use as the Imagine reference — 3 files"
     );
 }
+
+#[test]
+fn paste_image_event_writes_a_png() {
+    let img = egui::ColorImage::new([2, 2], vec![egui::Color32::RED; 4]);
+    let path = Cabin::write_paste_image(&img).expect("temp png");
+    assert!(path.extension().is_some_and(|e| e == "png"));
+    let meta = std::fs::metadata(&path).expect("png on disk");
+    assert!(meta.len() > 0);
+    let decoded = image::open(&path).expect("readable png");
+    assert_eq!(decoded.width(), 2);
+    assert_eq!(decoded.height(), 2);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn composer_paste_path_reads_paste_image_events() {
+    let src = include_str!("attach_tray.rs");
+    let paste = src
+        .split("fn try_composer_attach_paste(")
+        .nth(1)
+        .and_then(|s| s.split("fn ui_attach_tray(").next())
+        .expect("try_composer_attach_paste");
+    assert!(
+        paste.contains("Event::PasteImage") && paste.contains("write_paste_image"),
+        "composer paste must prefer egui PasteImage: {paste}"
+    );
+}
+
+#[test]
+fn composer_pill_uses_completion_popup_for_slash() {
+    let chat = include_str!("chat_ui.rs");
+    let pill = chat
+        .split("ComposerStackSlot::Pill =>")
+        .nth(1)
+        .and_then(|s| s.split("ComposerStackSlot::").next())
+        .unwrap_or(chat);
+    assert!(
+        pill.contains("CompletionPopup::new") && pill.contains("slash_completion_suggestions"),
+        "Pill TextEdit must use CompletionPopup for slash: {pill}"
+    );
+}
