@@ -116,8 +116,9 @@ fn linux_gpu(own: Option<u32>) -> Option<u8> {
     );
     if let Some(util) = util.as_deref() {
         let pmon = match own {
-            Some(_) if grokhub_core::local_governor::parse_nvidia_util(util)
-                .is_some_and(|t| t > grokhub_core::local_governor::GPU_BUSY_PCT) =>
+            Some(_)
+                if grokhub_core::local_governor::parse_nvidia_util(util)
+                    .is_some_and(|t| t > grokhub_core::local_governor::GPU_BUSY_PCT) =>
             {
                 run("nvidia-smi", &["pmon", "-c", "1", "-s", "u"])
             }
@@ -133,16 +134,21 @@ fn linux_gpu(own: Option<u32>) -> Option<u8> {
     grokhub_core::wind_down::external_gpu_from_amd_busy(texts.iter().map(String::as_str))
 }
 
-/// PDH `\GPU Engine(*)\Utilization Percentage`, kept warm across ticks.
+/// PDH `\GPU Engine(*)\Utilization Percentage`, kept warm on this thread
+/// (handles aren't `Send`).
 #[cfg(windows)]
 fn windows_gpu(own: Option<u32>) -> Option<u8> {
-    use std::sync::Mutex;
-    static PDH: Mutex<Option<Pdh>> = Mutex::new(None);
-    let mut slot = PDH.lock().unwrap_or_else(|e| e.into_inner());
-    if slot.is_none() {
-        *slot = Pdh::open();
+    use std::cell::RefCell;
+    thread_local! {
+        static PDH: RefCell<Option<Pdh>> = const { RefCell::new(None) };
     }
-    slot.as_ref().and_then(|p| p.sample(own))
+    PDH.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot.is_none() {
+            *slot = Pdh::open();
+        }
+        slot.as_ref().and_then(|p| p.sample(own))
+    })
 }
 
 /// A PDH query on `\GPU Engine(*)\Utilization Percentage`.
