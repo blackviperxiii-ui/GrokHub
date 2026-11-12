@@ -1,0 +1,1 @@
+- Shell: game watcher help takes the product name from brand.json.
