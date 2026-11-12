@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Install grokhub + grokhub-hub from this clone.
+# Install the Tauri shell (grokhub-shell) + grokhub-hub from this clone.
 #   --channel beta    fetch origin, check out the beta branch, build, install
 #   --channel stable  same for main (stable = main)
-#   --app cabin       the egui cabin (grokhub) plus the hub; the default
-#   --app shell       the Tauri shell (grokhub-shell) plus the hub
+#   --app shell       the Tauri shell (grokhub-shell) plus the hub; the default
+#   --app cabin       the old egui cabin (grokhub) plus the hub
 #   --app both        both apps plus the hub
 # The channel is remembered in $GROKHUB_CONFIG/channel (the install receipt),
 # so a plain ./scripts/install.sh --user and the in-app Update stay on it.
@@ -14,11 +14,12 @@ PREFIX="${PREFIX:-$HOME/.local}"
 SYSTEM=0
 CHANNEL=""
 DRY_RUN=0
-# Which app to build. No --app keeps today's install: the cabin and the hub.
-APP=cabin
+# Which app to build. No --app installs the shell and the hub, and moves a
+# cabin install over to the shell (see move_cabin_login below).
+APP=shell
 
 usage() {
-  echo "usage: $0 [--user|--system] [--prefix=DIR] [--channel beta|stable] [--app cabin|shell|both] [--dry-run]"
+  echo "usage: $0 [--user|--system] [--prefix=DIR] [--channel beta|stable] [--app shell|cabin|both] [--dry-run]"
 }
 
 set_channel() {
@@ -35,7 +36,7 @@ set_app() {
   case "$1" in
     cabin|shell|both) APP="$1" ;;
     *)
-      echo "error: --app takes cabin, shell or both, not '$1'" >&2
+      echo "error: --app takes shell, cabin or both, not '$1'" >&2
       exit 2
       ;;
   esac
@@ -58,7 +59,7 @@ while [[ $# -gt 0 ]]; do
     --app=*) set_app "${1#--app=}" ;;
     --app)
       if [[ $# -lt 2 ]]; then
-        echo "error: --app takes cabin, shell or both" >&2
+        echo "error: --app takes shell, cabin or both" >&2
         exit 2
       fi
       set_app "$2"
@@ -238,6 +239,38 @@ if [[ -d "$ROOT/packaging/icons/hicolor" ]]; then
   cp -a "$ROOT/packaging/icons/hicolor/." "$PREFIX/share/icons/hicolor/"
 fi
 
+# A cabin install that started at login through grokhub.service starts the
+# shell at login instead: the same autostart entry the shell's own Start at
+# login switch writes (named after the product, Exec with --autostart), so the
+# switch shows it as on. The unit is turned off, not deleted, and the cabin
+# binary stays where it is. Only for a shell-only user install.
+move_cabin_login() {
+  local unit="$HOME/.config/systemd/user/grokhub.service"
+  [[ "$SYSTEM" -eq 0 && "$WANT_SHELL" -eq 1 && "$WANT_CABIN" -eq 0 ]] || return 0
+  [[ -f "$unit" ]] || return 0
+  local enabled=0
+  if [[ -e "$HOME/.config/systemd/user/graphical-session.target.wants/grokhub.service" ]]; then
+    enabled=1
+  fi
+  if command -v systemctl >/dev/null 2>&1; then
+    if systemctl --user is-enabled grokhub.service >/dev/null 2>&1; then
+      enabled=1
+    fi
+    systemctl --user disable grokhub.service >/dev/null 2>&1 || true
+  fi
+  [[ "$enabled" -eq 1 ]] || return 0
+  local product
+  product="$(sed -n 's/^[[:space:]]*"productName":[[:space:]]*"\([^"]*\)".*/\1/p' "$ROOT/brand/brand.json" | head -n1)"
+  [[ -n "$product" ]] || return 0
+  local entry="$HOME/.config/autostart/$product.desktop"
+  if [[ ! -f "$entry" ]]; then
+    mkdir -p "$(dirname "$entry")"
+    printf '[Desktop Entry]\nType=Application\nVersion=1.0\nName=%s\nComment=%s startup script\nExec=%s --autostart\nStartupNotify=false\nTerminal=false' \
+      "$product" "$product" "$PREFIX/bin/grokhub-shell" >"$entry"
+  fi
+  echo "moved start at login from the cabin to the shell ($entry)"
+}
+
 if [[ "$SYSTEM" -eq 0 ]]; then
   install -Dm644 "$ROOT/packaging/systemd/grokhub-hub.service" \
     "$HOME/.config/systemd/user/grokhub-hub.service"
@@ -249,7 +282,7 @@ if [[ "$SYSTEM" -eq 0 ]]; then
   fi
 fi
 
-# Overlay-safe package install. Never fail the cabin overlay if sudo/pkg is
+# Overlay-safe package install. Never fail the overlay if sudo/pkg is
 # missing. Never call sudo without a TTY; remember a declined prompt.
 PKG_SKIP_FILE="${GROKHUB_CONFIG:-$HOME/.config/GrokHub}/skip-pkg-prompt"
 try_pkgs() {
@@ -306,6 +339,8 @@ elif command -v dnf >/dev/null; then
     try_pkgs dnf dnf install -y ffmpeg alsa-utils
   fi
 fi
+
+move_cabin_login
 
 if command -v systemctl >/dev/null && [[ "$SYSTEM" -eq 0 ]]; then
   systemctl --user daemon-reload >/dev/null 2>&1 || true

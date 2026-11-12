@@ -19,9 +19,11 @@ rustup default stable
 git clone https://github.com/blackviperxiii-ui/GrokHub.git
 cd GrokHub
 cargo test --workspace
-./scripts/install.sh --user
-grokhub
+./scripts/install.sh --user     # the Tauri shell + hub (needs nodejs, npm, webkit2gtk-4.1)
+grokhub-shell
 ```
+
+`./scripts/install.sh --user --app cabin` still builds the old egui cabin while it is being retired.
 
 Or without installing:
 
