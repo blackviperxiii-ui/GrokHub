@@ -187,7 +187,222 @@ pub enum UiEvent {
         secret: bool,
         /// Answers to tap for a question from Grok; the recommended one first.
         options: Vec<ElicitChoice>,
+        /// Predicted replies for this card (`grokhub_core::reply_chips`),
+        /// ranked by the person's past picks. Filled in by `serve`, which
+        /// owns the chip memory; helper asks carry none.
+        chips: Vec<ReplyChipWire>,
     },
+    /// A `report_findings` card: what the run found, with one pill per fix.
+    /// A pill puts its fix in the composer; nothing runs until it is sent.
+    Findings {
+        items: Vec<WireFinding>,
+        fixes: Vec<WireFix>,
+        /// The Do all batch's prompts, when two or more fixes can run
+        /// together (`Findings::do_all`).
+        do_all: Option<Vec<String>>,
+    },
+    /// The reply's `Finished` block as a card. `body` is the reply with the
+    /// block taken out, so the page swaps the bubble's text for it.
+    Recap {
+        body: String,
+        lines: Vec<WireRecapLine>,
+        needs_you: Vec<String>,
+        undo: Vec<String>,
+        /// The turn's tool steps, for the card's details fold.
+        steps: Vec<WireStep>,
+    },
+    /// The evidence receipt for the turn that just ended: what the harness
+    /// recorded, in the cabin receipt's shape (`harness::run_evidence`).
+    Evidence {
+        summary: String,
+        goal: String,
+        goal_detail: String,
+        plan: Vec<String>,
+        actions: Vec<String>,
+        checks: Vec<String>,
+        changes: Vec<String>,
+        confidence: String,
+        recovery: String,
+        tool_ran_not_verified: bool,
+    },
+}
+
+/// One finding on a findings card.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WireFinding {
+    /// "high", "medium", "low" or "info".
+    pub severity: String,
+    pub text: String,
+}
+
+/// One fix pill on a findings card. `prompt` is what the pill puts in the
+/// composer (`Fix::prompt`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WireFix {
+    pub label: String,
+    pub prompt: String,
+}
+
+/// One line of a recap card.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WireRecapLine {
+    /// "done", "partly" or "notDone".
+    pub status: String,
+    pub text: String,
+}
+
+/// One tool step in a recap card's details fold.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WireStep {
+    pub title: String,
+    pub failed: bool,
+}
+
+/// One predicted reply for a card that waits on the person.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplyChipWire {
+    /// What the pick is remembered under (`plan:go`, `ask:yes`).
+    pub key: String,
+    pub label: String,
+    /// "send", "prefill" or "dismiss".
+    pub act: String,
+    /// What Send sends, or what Prefill puts in the box. Empty for Dismiss.
+    pub text: String,
+}
+
+fn reply_chip_wire(chip: &grokhub_core::reply_chips::ReplyChip) -> ReplyChipWire {
+    use grokhub_core::reply_chips::ReplyAct;
+    let (act, text) = match &chip.act {
+        ReplyAct::Send(text) => ("send", text.clone()),
+        ReplyAct::Prefill(text) => ("prefill", text.clone()),
+        ReplyAct::Dismiss => ("dismiss", String::new()),
+    };
+    ReplyChipWire {
+        key: chip.key.clone(),
+        label: chip.label.clone(),
+        act: act.to_string(),
+        text,
+    }
+}
+
+/// The predicted replies for a card that waits: a plan's replies, or a
+/// question's options ranked by past picks. Connector forms get none.
+pub fn elicit_chips(
+    config_dir: &std::path::Path,
+    server: &str,
+    message: &str,
+    options: &[ElicitChoice],
+) -> Vec<ReplyChipWire> {
+    let mem = grokhub_core::load_chip_memory(config_dir);
+    let chips = if server == "Plan" {
+        grokhub_core::reply_chips::plan_reply_chips(message, &mem)
+    } else if !options.is_empty() {
+        grokhub_core::reply_chips::question_reply_chips(options, &mem)
+    } else {
+        Vec::new()
+    };
+    chips.iter().map(reply_chip_wire).collect()
+}
+
+/// Remembers a picked reply chip, so the next waiting card ranks it higher.
+pub fn note_reply_pick(config_dir: &std::path::Path, key: &str) {
+    let mut mem = grokhub_core::load_chip_memory(config_dir);
+    grokhub_core::reply_chips::remember_reply_pick(&mut mem, key, grokhub_core::now_ms());
+    let _ = grokhub_core::save_chip_memory(config_dir, &mem);
+}
+
+/// The findings card for a `report_findings` body, parsed by core. A body
+/// core can't read keeps the old plain-text shape, so a card never shows
+/// raw JSON or nothing (LO-51).
+fn findings_event(body: &str) -> UiEvent {
+    match grokhub_core::findings::Findings::parse(body) {
+        Some(card) => UiEvent::Findings {
+            items: card
+                .items
+                .iter()
+                .map(|f| WireFinding {
+                    severity: f.severity.label().to_lowercase(),
+                    text: f.text.clone(),
+                })
+                .collect(),
+            fixes: card
+                .fixes
+                .iter()
+                .map(|f| WireFix {
+                    label: f.label.clone(),
+                    prompt: f.prompt(),
+                })
+                .collect(),
+            do_all: card.do_all().map(|batch| batch.prompts()),
+        },
+        None => UiEvent::Text {
+            text: format!("\n\n{}", body.trim()),
+        },
+    }
+}
+
+/// The turn's recap card, when the reply ends with a `Finished` block and
+/// the turn ran at least one tool — the cabin's rule for painting the card.
+fn recap_event(
+    reply: &str,
+    tool_rows: &[(String, grokhub_core::turn_timeline::ToolRow)],
+) -> Option<UiEvent> {
+    use grokhub_core::recap::RecapStatus;
+    if tool_rows.is_empty() {
+        return None;
+    }
+    let (body, recap) = grokhub_core::recap::split_recap(reply)?;
+    Some(UiEvent::Recap {
+        body,
+        lines: recap
+            .lines
+            .iter()
+            .map(|line| WireRecapLine {
+                status: match line.status {
+                    RecapStatus::Done => "done",
+                    RecapStatus::Partly => "partly",
+                    RecapStatus::NotDone => "notDone",
+                }
+                .to_string(),
+                text: line.text.clone(),
+            })
+            .collect(),
+        needs_you: recap.needs_you,
+        undo: recap.undo,
+        steps: tool_rows
+            .iter()
+            .map(|(_, row)| WireStep {
+                title: row.title.clone(),
+                failed: grokhub_core::turn_timeline::tool_status_failed(&row.status),
+            })
+            .collect(),
+    })
+}
+
+/// The evidence receipt for the chat's newest harness turn, rebuilt from
+/// the span log exactly as the cabin's receipt is.
+fn evidence_event(config_dir: &std::path::Path, chat_id: &str) -> Option<UiEvent> {
+    use grokhub_agent::harness as hx;
+    let (spans, _) = hx::read_spans_tail(config_dir, chat_id, hx::SPAN_SEARCH_LINES);
+    let turn = hx::latest_evidence_turn(&spans, chat_id)?;
+    let ev = hx::run_evidence(&spans, chat_id, turn, None, None)?;
+    Some(UiEvent::Evidence {
+        summary: hx::evidence_summary(&ev),
+        goal: ev.goal,
+        goal_detail: ev.goal_detail,
+        plan: ev.plan,
+        actions: ev.actions,
+        checks: ev.checks,
+        changes: ev.changes,
+        confidence: ev.confidence,
+        recovery: ev.recovery,
+        tool_ran_not_verified: ev.tool_ran_not_verified,
+    })
 }
 
 /// The follow-ups card for a finished reply, if this turn earns one.
@@ -214,11 +429,7 @@ pub fn ui_event(event: AcpEvent) -> Option<UiEvent> {
         AcpEvent::Err(message) => UiEvent::Error { message },
         AcpEvent::Done { stop_reason } => UiEvent::Done { stop: stop_reason },
         AcpEvent::Plan(text) => UiEvent::Plan { text },
-        // The shell has no findings card yet: the card's plain list follows
-        // the reply, so it never shows raw JSON or nothing (LO-51).
-        AcpEvent::Findings(body) => UiEvent::Text {
-            text: format!("\n\n{}", body.trim()),
-        },
+        AcpEvent::Findings(body) => findings_event(&body),
         AcpEvent::Elicit(ask) => UiEvent::Elicit {
             id: ask.tool_call_id,
             server: ask.server_name,
@@ -229,6 +440,7 @@ pub fn ui_event(event: AcpEvent) -> Option<UiEvent> {
             field_title: ask.field_title,
             secret: ask.secret,
             options: ask.options,
+            chips: Vec::new(),
         },
         _ => return None,
     })
@@ -965,10 +1177,23 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
         // A tool call the model wrote as text never shows (LO-51).
         let mut tool_tags = grokhub_core::tool_tags::ToolTagFilter::new();
         let mut raw = String::new();
+        // The turn's tool rows, keyed by call id in first-seen order: the
+        // recap card's details fold reads them at Done.
+        let mut tool_rows: Vec<(String, grokhub_core::turn_timeline::ToolRow)> = Vec::new();
         let ran = engine.prompt(&message.text, message.image.as_deref(), &mut |event| {
             let Some(mut ui) = ui_event(event) else {
                 return;
             };
+            if let UiEvent::Elicit {
+                server,
+                message,
+                options,
+                chips,
+                ..
+            } = &mut ui
+            {
+                *chips = elicit_chips(&config_dir, server, message, options);
+            }
             if let UiEvent::Done { stop: s } = &mut ui {
                 // Halt cancels a waiting tool too; the turn reads as halted.
                 if halted.load(Ordering::SeqCst) {
@@ -995,6 +1220,22 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                     }
                     reply.push_str(text);
                 }
+                UiEvent::Tool {
+                    id,
+                    title,
+                    status,
+                    detail,
+                } => {
+                    let row = grokhub_core::turn_timeline::ToolRow {
+                        status: status.clone(),
+                        title: title.clone(),
+                        detail: detail.clone(),
+                    };
+                    match tool_rows.iter_mut().find(|(seen, _)| seen == id) {
+                        Some((_, kept)) => *kept = row,
+                        None => tool_rows.push((id.clone(), row)),
+                    }
+                }
                 UiEvent::Done { stop: s } => {
                     stop = s.clone();
                     let (tail, block) = trailer.finish();
@@ -1006,6 +1247,17 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                     if !tail.is_empty() {
                         reply.push_str(&tail);
                         emit(UiEvent::Text { text: tail });
+                    }
+                    // The turn's extras, before Done as the Goal card is:
+                    // the recap card for its Finished block, then the
+                    // evidence receipt the harness recorded for it.
+                    if route.session != SessionMode::Btw {
+                        if let Some(card) = recap_event(&reply, &tool_rows) {
+                            emit(card);
+                        }
+                        if let Some(receipt) = evidence_event(&config_dir, &conversation_id) {
+                            emit(receipt);
+                        }
                     }
                     let btw = route.session == SessionMode::Btw;
                     if route.suggestions && crate::chips::follow_ups_wanted(btw, s) {
@@ -1238,6 +1490,92 @@ mod tests {
         }
     }
 
+    /// Runs one tool call, then answers with a fixed reply text, so a test
+    /// can script what the reply says (a `Finished` block, say).
+    struct Scripted {
+        name: &'static str,
+        arguments: String,
+        reply: &'static str,
+        requests: Mutex<Vec<ResponsesRequest>>,
+    }
+
+    impl Scripted {
+        fn new(name: &'static str, arguments: serde_json::Value, reply: &'static str) -> Arc<Self> {
+            Arc::new(Self {
+                name,
+                arguments: arguments.to_string(),
+                reply,
+                requests: Mutex::new(Vec::new()),
+            })
+        }
+    }
+
+    impl ModelClient for Scripted {
+        fn stream(
+            &self,
+            req: &ResponsesRequest,
+            _cancel: &CancelToken,
+            sink: &mut dyn FnMut(StreamEvent),
+        ) -> Result<TurnOutput, ClientError> {
+            let mut requests = self.requests.lock().expect("requests");
+            requests.push(req.clone());
+            if requests.len() == 1 {
+                return Ok(TurnOutput {
+                    calls: vec![FunctionCall {
+                        call_id: "call-1".into(),
+                        name: self.name.into(),
+                        arguments: self.arguments.clone(),
+                    }],
+                    ..TurnOutput::default()
+                });
+            }
+            sink(StreamEvent::TextDelta(self.reply.into()));
+            Ok(TurnOutput {
+                text: self.reply.into(),
+                ..TurnOutput::default()
+            })
+        }
+    }
+
+    fn start_scripted(
+        client: Arc<Scripted>,
+        workspace: &std::path::Path,
+        config: &std::path::Path,
+    ) -> Run {
+        let session = Arc::new(Session::spawn_with(
+            "gate-test",
+            config.to_path_buf(),
+            fake_desktop,
+        ));
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&events);
+        let route = Route {
+            client,
+            auth_kind: AuthKind::ApiKey,
+            workspace: workspace.to_path_buf(),
+            mode: PermMode::Ask,
+            desktop: false,
+            session: SessionMode::Chat,
+            voice: String::new(),
+            voice_session: None,
+            suggestions: true,
+        };
+        let runner = Arc::clone(&session);
+        let result = std::thread::spawn(move || {
+            runner.prompt(
+                "do the thing",
+                Vec::new(),
+                route,
+                Box::new(move |event| sink.lock().expect("events").push(event)),
+            )
+        });
+        Run {
+            session,
+            events,
+            result,
+        }
+    }
+
     fn wait_for_permission(run: &Run) -> UiEvent {
         for _ in 0..400 {
             let found = run
@@ -1417,6 +1755,7 @@ mod tests {
                 field_title: String::new(),
                 secret: false,
                 options: Vec::new(),
+                chips: elicit_chips(&config, "Plan", "1. Read main.rs\n2. Fix the typo", &[],),
             }
         );
         assert!(run.events.lock().expect("events").contains(&UiEvent::Plan {
@@ -1557,6 +1896,78 @@ mod tests {
     }
 
     #[test]
+    fn a_finished_block_with_tool_rows_emits_one_recap() {
+        let (workspace, config) = (temp_dir("recap-ws"), temp_dir("recap-cfg"));
+        std::fs::write(workspace.join("a.txt"), "alpha").expect("seed");
+        let client = Scripted::new(
+            "read_file",
+            serde_json::json!({"target_file": "a.txt"}),
+            "Fixed it.\n\nFinished\n- Done: Read the file\n- Not done: Ship it\nNeeds you: Pick a name",
+        );
+        let run = start_scripted(client, &workspace, &config);
+
+        assert_eq!(run.result.join().expect("join"), Ok("end_turn".to_string()));
+        let events = run.events.lock().expect("events");
+        let recaps: Vec<&UiEvent> = events
+            .iter()
+            .filter(|event| matches!(event, UiEvent::Recap { .. }))
+            .collect();
+        assert_eq!(recaps.len(), 1, "{events:?}");
+        let UiEvent::Recap {
+            body,
+            lines,
+            needs_you,
+            undo,
+            steps,
+        } = recaps[0]
+        else {
+            unreachable!()
+        };
+        assert_eq!(body, "Fixed it.");
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].status, "done");
+        assert_eq!(lines[1].status, "notDone");
+        assert_eq!(needs_you, &vec!["Pick a name".to_string()]);
+        assert!(undo.is_empty());
+        assert_eq!(steps.len(), 1);
+        assert!(!steps[0].failed);
+    }
+
+    #[test]
+    fn a_findings_call_emits_a_card_with_a_pill_per_fix() {
+        let (workspace, config) = (temp_dir("findings-ws"), temp_dir("findings-cfg"));
+        let client = OneTool::new(
+            "report_findings",
+            serde_json::json!({
+                "findings": [{"severity": "high", "text": "Port 53 is taken by another service"}],
+                "fixes": [
+                    {"label": "Fix port 53 conflict", "goal": "Stop the other service and restart"},
+                    {"label": "Explain all", "goal": "Explain each finding in plain words"}
+                ]
+            }),
+        );
+        let run = start(Arc::clone(&client), &workspace, &config);
+
+        assert_eq!(run.result.join().expect("join"), Ok("end_turn".to_string()));
+        let events = run.events.lock().expect("events");
+        let cards: Vec<&UiEvent> = events
+            .iter()
+            .filter(|event| matches!(event, UiEvent::Findings { .. }))
+            .collect();
+        assert_eq!(cards.len(), 1, "{events:?}");
+        let UiEvent::Findings { items, fixes, .. } = cards[0] else {
+            unreachable!()
+        };
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].severity, "high");
+        assert_eq!(fixes.len(), 2);
+        assert_eq!(
+            fixes[0].prompt,
+            "Fix port 53 conflict: Stop the other service and restart"
+        );
+    }
+
+    #[test]
     fn engine_events_map_to_ui_events() {
         assert_eq!(
             ui_event(AcpEvent::Text("hi".into())),
@@ -1586,13 +1997,31 @@ mod tests {
                 text: "1. Read".into()
             })
         );
-        // No findings card in the shell yet: its plain list follows the reply.
+        // A body core can't parse as a findings card keeps the old shape:
+        // its plain list follows the reply.
         assert_eq!(
             ui_event(AcpEvent::Findings(
                 "Findings\n\n- Info: tokens go to the vendor".into()
             )),
             Some(UiEvent::Text {
                 text: "\n\nFindings\n\n- Info: tokens go to the vendor".into()
+            })
+        );
+        // A real card parses into items and one pill per fix.
+        assert_eq!(
+            ui_event(AcpEvent::Findings(
+                "Findings from this run\n\n- High: Port 53 is taken\n\nOne-tap fixes\n\n- Fix port 53 conflict: Stop the other service".into()
+            )),
+            Some(UiEvent::Findings {
+                items: vec![WireFinding {
+                    severity: "high".into(),
+                    text: "Port 53 is taken".into(),
+                }],
+                fixes: vec![WireFix {
+                    label: "Fix port 53 conflict".into(),
+                    prompt: "Fix port 53 conflict: Stop the other service".into(),
+                }],
+                do_all: None,
             })
         );
         let card = serde_json::to_value(UiEvent::Elicit {
@@ -1609,6 +2038,7 @@ mod tests {
                 description: "calm".into(),
                 recommended: true,
             }],
+            chips: Vec::new(),
         })
         .expect("json");
         assert_eq!(
@@ -1617,7 +2047,8 @@ mod tests {
                 "kind": "elicit", "id": "ask-1", "server": "Question", "message": "Which color?",
                 "mode": "form", "url": "", "fieldName": "answer", "fieldTitle": "Your answer",
                 "secret": false,
-                "options": [{"label": "Blue", "description": "calm", "recommended": true}]
+                "options": [{"label": "Blue", "description": "calm", "recommended": true}],
+                "chips": []
             })
         );
         let chip: SessionMode = serde_json::from_str("\"btw\"").expect("chip");

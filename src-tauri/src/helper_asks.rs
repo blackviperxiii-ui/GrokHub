@@ -56,6 +56,12 @@ pub fn waiting(chat: &str) -> Vec<UiEvent> {
     pending().waiting(chat)
 }
 
+/// Every helper question still waiting, by chat: the decision inbox's
+/// helper rows.
+pub fn all_waiting() -> Vec<(String, UiEvent)> {
+    pending().all_waiting()
+}
+
 /// The question `id` in `chat` was answered.
 pub fn answered(chat: &str, id: &str) {
     pending().answered(chat, id);
@@ -97,6 +103,18 @@ impl Pending {
             .get(chat)
             .cloned()
             .unwrap_or_default()
+    }
+
+    /// Every chat's asks, chats in id order so the inbox's rows don't
+    /// shuffle between reads.
+    pub fn all_waiting(&self) -> Vec<(String, UiEvent)> {
+        let asks = self.asks.lock().unwrap_or_else(|e| e.into_inner());
+        let mut chats: Vec<&String> = asks.keys().collect();
+        chats.sort();
+        chats
+            .into_iter()
+            .flat_map(|chat| asks[chat].iter().map(move |ui| (chat.clone(), ui.clone())))
+            .collect()
     }
 
     /// The ask `id` was answered (or its chat closed it).
@@ -144,6 +162,7 @@ fn ask_event(event: SideEvent) -> Option<UiEvent> {
             field_title: ask.field_title,
             secret: ask.secret,
             options: ask.options,
+            chips: Vec::new(),
         }),
         SideEvent::Task { .. } | SideEvent::Plan { .. } => None,
     }
