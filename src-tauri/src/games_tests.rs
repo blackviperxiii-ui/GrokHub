@@ -38,7 +38,13 @@ fn wow_view_lists_flavors_and_empty_saved() {
     assert!(view.caption.contains("Retail"));
     assert!(view.caption.contains("Battle.net"));
     assert_eq!(view.flavors.len(), 1);
-    assert_eq!(view.flavors[0].addon_line, "Loadout addon not installed");
+    assert_eq!(
+        view.flavors[0].addon_line,
+        format!(
+            "{} addon not installed",
+            grokhub_core::brand::product_name()
+        )
+    );
     assert_eq!(view.flavors[0].action.as_deref(), Some("Install addon"));
     assert_eq!(
         view.flavors[0].empty_saved.as_deref(),
@@ -76,12 +82,20 @@ fn wow_install_and_remove_addon_updates_the_row() {
 
     wow_addon::install(&install, &WowFlavor::Retail.dir(&install)).expect("install");
     let mid = wow_view_from(&games, true, None, SystemTime::UNIX_EPOCH);
-    assert!(mid.flavors[0].addon_line.starts_with("Loadout addon "));
+    assert!(mid.flavors[0]
+        .addon_line
+        .starts_with(&format!("{} addon ", grokhub_core::brand::product_name())));
     assert_eq!(mid.flavors[0].action.as_deref(), Some("Remove addon"));
 
     wow_addon::remove(&WowFlavor::Retail.dir(&install)).expect("remove");
     let after = wow_view_from(&games, true, None, SystemTime::UNIX_EPOCH);
-    assert_eq!(after.flavors[0].addon_line, "Loadout addon not installed");
+    assert_eq!(
+        after.flavors[0].addon_line,
+        format!(
+            "{} addon not installed",
+            grokhub_core::brand::product_name()
+        )
+    );
     let _ = fs::remove_dir_all(&root);
 }
 
