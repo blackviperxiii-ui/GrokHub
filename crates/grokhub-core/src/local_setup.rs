@@ -193,6 +193,50 @@ pub struct LocalModel {
     pub parts: &'static [ModelPart],
     /// What it is good at (`local_skills`); unset scores are worked out.
     pub skills: crate::local_skills::Skills,
+    /// What the catalog knows of it before it runs here.
+    pub profile: LocalProfile,
+}
+
+/// A chat model's built-in profile, derived by `.github/scripts/local_profiles.py`
+/// from the catalog row. Every figure is an estimate until measured (the row's
+/// `estimate` list says which); the speed test replaces any tok/s here.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LocalProfile {
+    /// The context window it was trained for, in tokens, known before download.
+    pub ctx_max: Option<u32>,
+    /// Generation speed on each hardware tier's reference GPU, where it fits.
+    pub tok_s_tier: TierSpeeds,
+    /// Light enough to run beside a game and good enough to be worth it: the
+    /// gaming swap's pick.
+    pub gaming_safe: bool,
+}
+
+/// Estimated tok/s per hardware tier (`autotune::device::Tier`); `None` where
+/// the model doesn't fit that tier's VRAM.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct TierSpeeds {
+    #[serde(rename = "T1")]
+    pub t1: Option<u32>,
+    #[serde(rename = "T2")]
+    pub t2: Option<u32>,
+    #[serde(rename = "T3")]
+    pub t3: Option<u32>,
+    #[serde(rename = "T4")]
+    pub t4: Option<u32>,
+}
+
+impl TierSpeeds {
+    pub fn for_tier(&self, tier: crate::autotune::device::Tier) -> Option<u32> {
+        use crate::autotune::device::Tier;
+        match tier {
+            Tier::T0 => None,
+            Tier::T1 => self.t1,
+            Tier::T2 => self.t2,
+            Tier::T3 => self.t3,
+            Tier::T4 => self.t4,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -238,6 +282,12 @@ struct CatalogRow {
     drafter: Option<String>,
     min_budget: Budgets,
     tok_s: TokS,
+    #[serde(default)]
+    ctx_max: Option<u32>,
+    #[serde(default)]
+    tok_s_tier: TierSpeeds,
+    #[serde(default)]
+    gaming_safe: bool,
     #[serde(default)]
     parts: Vec<PartRow>,
     #[serde(default)]
@@ -328,6 +378,11 @@ fn to_model(r: CatalogRow) -> Option<LocalModel> {
         drafter: r.drafter.map(leak),
         min_budget: r.min_budget,
         tok_s: r.tok_s,
+        profile: LocalProfile {
+            ctx_max: r.ctx_max,
+            tok_s_tier: r.tok_s_tier,
+            gaming_safe: r.gaming_safe,
+        },
         parts,
         skills: r.skills,
     })
@@ -369,6 +424,11 @@ pub fn local_models() -> &'static [LocalModel] {
 }
 
 impl LocalModel {
+    /// Calls tools (the catalog's `tools` badge).
+    pub fn tools(&self) -> bool {
+        self.badges.contains(&"tools")
+    }
+
     /// The file's name in the Hugging Face repo: `remote_file` when set, else
     /// `file`. Several repos ship the same name, so a drafter can download
     /// under a name of its own.
@@ -565,6 +625,55 @@ mod tests {
             ram_mb,
             free_disk_mb,
         }
+    }
+
+    #[test]
+    fn every_chat_model_ships_with_a_profile() {
+        for m in standard_models() {
+            let p = m.profile;
+            let ctx = p
+                .ctx_max
+                .unwrap_or_else(|| panic!("{} has no ctx_max", m.id));
+            assert!(
+                ctx >= m.ctx_default,
+                "{} trained window under its default",
+                m.id
+            );
+            if m.run_mb <= 20_000 {
+                assert!(p.tok_s_tier.t4.is_some(), "{} fits a 24 GB card", m.id);
+            }
+            // Speeds rise with the tier, and a tier it fits implies every bigger one.
+            let tiers = [
+                p.tok_s_tier.t1,
+                p.tok_s_tier.t2,
+                p.tok_s_tier.t3,
+                p.tok_s_tier.t4,
+            ];
+            for pair in tiers.windows(2) {
+                if let Some(low) = pair[0] {
+                    assert!(
+                        pair[1].is_some_and(|high| high > low),
+                        "{}: {tiers:?}",
+                        m.id
+                    );
+                }
+            }
+            if p.gaming_safe {
+                assert!(
+                    m.run_mb <= 4_608,
+                    "{} is too heavy to share with a game",
+                    m.id
+                );
+            }
+        }
+        assert!(
+            standard_models().any(|m| m.profile.gaming_safe && !m.optional),
+            "a game always has a recommended model to swap to"
+        );
+        assert_eq!(
+            model_by_id("gemma-4-e2b-it-abliterated-q4_k").map(|m| m.tools()),
+            Some(true)
+        );
     }
 
     #[test]
