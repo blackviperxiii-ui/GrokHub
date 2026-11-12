@@ -3850,6 +3850,17 @@ fn age(path: &Path) -> Option<Duration> {
         .and_then(|at| at.elapsed().ok())
 }
 
+/// Makes `path` an empty file modified now. Writing nothing to a file that
+/// is already empty leaves its time alone on Windows, so the time is set.
+fn touch(path: &Path) -> std::io::Result<()> {
+    std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(path)?
+        .set_modified(std::time::SystemTime::now())
+}
+
 /// The real folders right inside `dir`, with their names.
 fn folders(dir: &Path) -> Vec<(String, PathBuf)> {
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -4100,7 +4111,7 @@ fn tidy_harness(root: &Path) {
     }
     let stamp = harness.join("gc.stamp");
     let due = age(&stamp).is_some_and(|age| age > GC_EVERY);
-    if (due || !stamp.exists()) && std::fs::write(&stamp, b"").is_ok() && due {
+    if (due || !stamp.exists()) && touch(&stamp).is_ok() && due {
         let _ = Store::open(root).and_then(|store| store.git(&["gc", "--quiet"]));
     }
 }
@@ -7331,7 +7342,7 @@ mod tests {
         let err = unsettled(&root, &proj);
         let start = format!(
             "The helper work list could not be read: {}: ",
-            root.join("chat/work.json").display()
+            root.join("chat").join("work.json").display()
         );
         assert!(err.starts_with(&start), "{err}");
         let _ = std::fs::remove_dir_all(&base);
@@ -9105,9 +9116,11 @@ mod tests {
         let away = base.join("elsewhere");
         std::fs::rename(&proj, &away).unwrap();
 
+        // The record keeps the folder as git names it, which on Windows
+        // can differ from `proj` in its slashes and short names.
         let gone = format!(
             "the project folder {} can't be found. Put it back where it was, then try again.",
-            proj.display()
+            work.project.display()
         );
         for how in [Resume::Finish, Resume::PutBack] {
             assert_eq!(
