@@ -17,6 +17,20 @@ const api = vi.hoisted(() => ({
 
 vi.mock("./api", () => api);
 
+const install = vi.hoisted(() => ({
+  modsFiles: vi.fn(),
+  modsInstalled: vi.fn(),
+  modsPlanInstall: vi.fn(),
+  modsPlanUninstall: vi.fn(),
+  modsPickupDownload: vi.fn(),
+  modsWaitForBrowser: vi.fn(),
+  modsConfirm: vi.fn(),
+  modsCancel: vi.fn(),
+  onModsJob: vi.fn(() => Promise.resolve(() => {})),
+}));
+
+vi.mock("./modsInstallApi", () => install);
+
 import { Mods, NO_GAMES, NOTHING, shortCount, SUBTITLE } from "./Mods";
 
 function game(over: Partial<ModGame> = {}): ModGame {
@@ -103,13 +117,43 @@ describe("Mods", () => {
     expect(screen.getByText(/Easy Anti-Cheat/)).toBeInTheDocument();
   });
 
-  it("browses the first game's preferred source and keeps Install off", async () => {
+  it("browses the first game's preferred source and opens a mod's files from View", async () => {
+    const user = userEvent.setup();
+    install.modsFiles.mockResolvedValue({
+      files: [{ id: "f1", name: "Sodium 0.6.0", line: "0.6.0 · 1.2 MB", offer: { kind: "install" }, waiting: false }],
+      blocked: null,
+      needs: [],
+      about: "Renders faster.",
+      note: null,
+    });
     render(<Mods />);
     const list = within(await screen.findByRole("list", { name: "Mods" }));
     expect(list.getByText("Sodium")).toBeInTheDocument();
     expect(api.modsBrowse).toHaveBeenCalledWith("minecraft", "modrinth", "popular", 0);
-    for (const b of list.getAllByRole("button", { name: "Install" })) expect(b).toBeDisabled();
+    expect(list.queryByRole("button", { name: "Install" })).not.toBeInTheDocument();
     expect(screen.getByRole("group", { name: "Source" })).toBeInTheDocument();
+    await user.click(list.getAllByRole("button", { name: "View" })[0]);
+    const drawer = within(await screen.findByRole("complementary", { name: "Sodium details" }));
+    expect(await drawer.findByText("0.6.0 · 1.2 MB")).toBeInTheDocument();
+    expect(install.modsFiles).toHaveBeenCalledWith("minecraft", "modrinth", "1", "The fastest rendering optimization mod.");
+    expect(drawer.getByRole("button", { name: "Install" })).toBeEnabled();
+  });
+
+  it("lists what is installed on the Installed tab without asking a source", async () => {
+    const user = userEvent.setup();
+    install.modsInstalled.mockResolvedValue({
+      ours: [{ key: "modrinth:AANobbMI", name: "Sodium", version: "0.6.0", offlineOnly: null }],
+      others: [],
+      recovered: null,
+    });
+    render(<Mods />);
+    await screen.findByRole("list", { name: "Mods" });
+    api.modsBrowse.mockClear();
+    await user.click(screen.getByRole("button", { name: "Installed" }));
+    const rows = within(await screen.findByRole("list", { name: "Installed mods" }));
+    expect(rows.getByText("Sodium")).toBeInTheDocument();
+    expect(install.modsInstalled).toHaveBeenCalledWith("minecraft");
+    expect(api.modsBrowse).not.toHaveBeenCalled();
   });
 
   it("searches after typing pauses", async () => {

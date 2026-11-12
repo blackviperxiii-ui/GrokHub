@@ -64,6 +64,7 @@ pub mod memory;
 mod mission;
 pub mod model_library;
 pub mod mods;
+pub mod mods_install;
 #[cfg(desktop)]
 mod net_watch;
 mod nudges;
@@ -5562,6 +5563,14 @@ pub fn run() {
             mods_for_you,
             mods_not_for_me,
             mods_hide_game,
+            mods_install::mods_files,
+            mods_install::mods_plan_install,
+            mods_install::mods_wait_for_browser,
+            mods_install::mods_pickup_download,
+            mods_install::mods_plan_uninstall,
+            mods_install::mods_confirm,
+            mods_install::mods_cancel,
+            mods_install::mods_installed,
             home_turn_on,
             home_setup,
             home_setup_steps,

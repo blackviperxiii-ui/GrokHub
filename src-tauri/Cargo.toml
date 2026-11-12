@@ -63,6 +63,8 @@ semver = "1"
 [dev-dependencies]
 # Proves the updater's signature check on a throwaway key (shell_update.rs).
 minisign-verify = "0.3"
+# Fixture archives for the Mods install tests (mods_install_tests.rs).
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 # Computer-use runs on the desktop OSes only; phones never build it.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
