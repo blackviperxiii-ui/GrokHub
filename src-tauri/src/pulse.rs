@@ -429,6 +429,22 @@ pub fn post_digest(
     Ok(added)
 }
 
+/// Change the store under its lock: `f` edits the cards and returns how
+/// many it added; the store is saved only when that is above zero. The
+/// weekly self-review posts its cards through this.
+pub fn edit_cards(
+    config_dir: &Path,
+    f: &mut dyn FnMut(&mut Vec<UpdateCard>) -> usize,
+) -> Result<usize, String> {
+    let _store = store();
+    let mut cards = load_unlocked(config_dir)?;
+    let added = f(&mut cards);
+    if added > 0 {
+        save(config_dir, &cards)?;
+    }
+    Ok(added)
+}
+
 /// Add one idea run's ideas. Returns how many landed.
 pub fn add_ideas(
     config_dir: &Path,
