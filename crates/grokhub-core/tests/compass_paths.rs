@@ -336,15 +336,15 @@ fn a_moved_file_or_renamed_identifier_is_reported() {
     let dir = compass_dir(&root);
     let mut words = HashSet::new();
     tokenize_into("pub fn load_json() {}\npub struct AppConfig;", &mut words);
-    let text = "- `crates/grokhub-app/src/config.rs` owns `load_json` and `AppConfig`.\n\
-                - `crates/grokhub-app/src/konfig.rs` was renamed.\n\
+    let text = "- `crates/grokhub-core/src/app_json.rs` owns `load_json` and `AppConfig`.\n\
+                - `crates/grokhub-core/src/app_jsn.rs` was renamed.\n\
                 - `load_json_v2` and `grokhub_core::NoSuchThing` are gone.\n\
                 - See [the index](README.md) and [old](gone.md).\n";
     let problems = reference_problems("fixture.md", text, &root, &dir, &words);
     assert_eq!(
         problems,
         vec![
-            "fixture.md: repo path `crates/grokhub-app/src/konfig.rs` does not exist".to_string(),
+            "fixture.md: repo path `crates/grokhub-core/src/app_jsn.rs` does not exist".to_string(),
             "fixture.md: identifier `load_json_v2` (`load_json_v2`) is not in the tree".to_string(),
             "fixture.md: identifier `grokhub_core::NoSuchThing` (`grokhub_core`) is not in the tree".to_string(),
             "fixture.md: identifier `grokhub_core::NoSuchThing` (`NoSuchThing`) is not in the tree".to_string(),

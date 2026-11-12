@@ -1,4 +1,4 @@
-# AGENTS.md — GrokHub cabin notes
+# AGENTS.md — GrokHub notes
 
 ## Base branch
 Feature/fix PRs → `beta`; every agent squash-merges its own PR into `beta` as soon as CI is green (no review hold). `.github/`, clippy, and release-script changes ship the same way. Only `beta` → `main` promotion, tags, and releases need the maintainer's approval. Hotfixes → `main` only with the maintainer's approval, then merge-back PR into beta (merge commit). No version bump on beta PRs — add `changelog.d/<slug>.md`; promotions run `cargo xtask bump`.
@@ -10,7 +10,7 @@ Prefer Grok Build on the box (roles: explore, plan, implementer). Cursor Cloud p
 Read the compass file before editing a module: `docs/compass/README.md` lists one short map per crate and hot module (owns, change recipe, what breaks, gotchas). Fix it in the same PR when you move code; `compass_paths` fails on stale paths.
 
 ## Cross-platform recode
-Tauri 2 + React + TS shell approved (2026-10-23); egui cabin ships until parity. Plan and decisions: `docs/cross-platform/README.md`.
+Tauri 2 + React + TS shell approved (2026-10-23); it replaced the egui cabin. Plan and decisions: `docs/cross-platform/README.md`.
 
 ## Quality gates
 Semgrep before Ready. dyl-review quick for draft asks — never dyl-ready-pr merge/babysit. Continual Learning keeps this file current.

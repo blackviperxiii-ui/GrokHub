@@ -21,18 +21,12 @@ chmod +x "$TMP/shim/cargo" "$TMP/shim/git"
 "$REAL_GIT" init -q --bare -b beta "$TMP/origin.git"
 "$REAL_GIT" clone -q "$TMP/origin.git" "$TMP/work" 2>/dev/null
 W="$TMP/work"
-mkdir -p "$W/scripts" "$W/crates/grokhub-app/src/app" "$W/crates/grokhub-core/src/slash"
+mkdir -p "$W/scripts" "$W/crates/grokhub-core/src/slash"
 cp "$SRC/scripts/ci-guards.sh" "$W/scripts/ci-guards.sh"
 cp -r "$SRC/scripts/ci-guards.d" "$W/scripts/ci-guards.d"
-for f in crates/grokhub-app/src/app/mod.rs crates/grokhub-app/src/cards.rs \
-  crates/grokhub-core/src/slash/mod.rs crates/grokhub-app/src/app/tests.rs \
-  crates/grokhub-app/src/app/persist.rs crates/grokhub-app/src/app/projects.rs \
-  crates/grokhub-app/src/app/dock_ui.rs; do
-  printf 'fn main() {}\n' >"$W/$f"
-done
+printf 'fn main() {}\n' >"$W/crates/grokhub-core/src/slash/mod.rs"
 printf '[workspace.package]\nversion = "1.0.0"\n\n[workspace.dependencies]\n' >"$W/Cargo.toml"
-printf 'name = "grokhub-app"\nversion = "1.0.0"\n' >"$W/Cargo.lock"
-printf 'assert_eq!(env!("CARGO_PKG_VERSION"), "1.0.0");\n' >"$W/crates/grokhub-app/src/cli.rs"
+printf 'name = "grokhub-core"\nversion = "1.0.0"\n' >"$W/Cargo.lock"
 printf '1.0.0\n' >"$W/VERSION"
 mkdir -p "$W/packaging/windows"
 printf '#define MyAppName "Old"\n#ifndef MyAppVersion\n  #define MyAppVersion "1.0.0"\n#endif\n' >"$W/packaging/windows/grokhub.iss"
@@ -141,11 +135,6 @@ commit_pr
 run_guard fail "unparseable Cargo.toml version fails"
 
 fresh_pr
-printf '// no version assert here\n' >"$W/crates/grokhub-app/src/cli.rs"
-commit_pr
-run_guard fail "cli.rs missing cabin_reports_version line fails"
-
-fresh_pr
 sed -i 's/"Old"/"New"/' "$W/packaging/windows/grokhub.iss"
 commit_pr
 run_guard pass "grokhub.iss name edit without a version change passes"
@@ -167,34 +156,14 @@ commit_pr
 LABELS=dependencies run_guard fail "Cargo.lock without grokhub versions fails"
 
 fresh_pr
-printf 'name = "grokhub-app"\nversion = "1.0.0"\n\nname = "grokhub-proto"\nversion = "1.0.0"\n' >"$W/Cargo.lock"
+printf 'name = "grokhub-core"\nversion = "1.0.0"\n\nname = "grokhub-proto"\nversion = "1.0.0"\n' >"$W/Cargo.lock"
 commit_pr
 LABELS=dependencies run_guard pass "new grokhub crate at the current version passes"
 
 fresh_pr
-printf 'name = "grokhub-app"\nversion = "1.0.1"\n' >"$W/Cargo.lock"
+printf 'name = "grokhub-core"\nversion = "1.0.1"\n' >"$W/Cargo.lock"
 commit_pr
 LABELS=dependencies run_guard fail "grokhub-* lock version bump without release fails"
-
-fresh_pr
-printf 'fn f() {\n    std::thread::spawn(|| {});\n}\n' >>"$W/crates/grokhub-app/src/app/persist.rs"
-commit_pr
-run_guard fail "raw thread::spawn in a persist path fails"
-
-fresh_pr
-printf 'fn f() {\n    let _ = fs::write("x", "y");\n}\n' >>"$W/crates/grokhub-app/src/app/projects.rs"
-commit_pr
-run_guard fail "raw fs::write in a persist path fails"
-
-fresh_pr
-printf 'fn f() {\n    // ci-guard: allow-raw-io test reason\n    std::thread::spawn(|| {});\n}\n' >>"$W/crates/grokhub-app/src/app/dock_ui.rs"
-commit_pr
-run_guard pass "marked raw spawn in a persist path passes"
-
-fresh_pr
-rm "$W/crates/grokhub-app/src/app/persist.rs"
-commit_pr
-run_guard fail "missing raw-io guarded file fails"
 
 fresh_pr
 printf '      - uses: actions/cache@v4\n' >>"$W/.github/workflows/ci.yml"

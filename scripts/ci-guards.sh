@@ -9,7 +9,6 @@
 #   40) VERSION copies disagree (cargo xtask bump --check)
 #   50) the linux or windows job in ci.yml could skip, and so pass as a
 #       required check, when the changes job fails
-#   60) a persist path spawns a thread or writes a file outside PersistService
 #   70) a workflow or composite action uses an action by tag or branch instead
 #       of a full commit SHA, or no workflow file can be read
 #   75) a workflow step merges downloaded artifacts without a pattern, or with

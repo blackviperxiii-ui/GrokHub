@@ -14,8 +14,7 @@ fn git(dir: &Path, args: &[&str]) -> Option<String> {
     (!s.is_empty()).then_some(s)
 }
 
-/// Newest stable `vMAJOR.MINOR.PATCH` tag, by semver (the cabin's rule in
-/// `crates/grokhub-app/build.rs`).
+/// Newest stable `vMAJOR.MINOR.PATCH` tag, by semver.
 fn newest_stable_tag(tags: &str) -> Option<&str> {
     let mut best: Option<((u64, u64, u64), &str)> = None;
     for tag in tags.lines().map(str::trim) {

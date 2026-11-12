@@ -1,5 +1,4 @@
-// Renders a reply's Markdown (./markdown) as React elements, the way the cabin
-// paints it (crates/grokhub-app/src/markdown.rs). Text only ever lands in the
+// Renders a reply's Markdown (./markdown) as React elements. Text only ever lands in the
 // DOM as text nodes: no dangerouslySetInnerHTML, so `<script>` or raw HTML in a
 // reply shows as the characters it is.
 import { memo, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";

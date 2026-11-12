@@ -81,8 +81,8 @@ jobs:
       cross: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/') }}
       phone_android: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')) || github.event_name == 'merge_group' || ((github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && steps.paths.outputs.phone == 'true') }}
       phone_ios: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/') }}
-      # windows-release: nightly and manual only. release.yml's windows-installer
-      # builds and packs every tag and beta push, and runs the pack-script tests.
+      # windows-release: nightly and manual only. release.yml's shell-bundles
+      # builds the Windows installer for every tag and beta push.
       release: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
       # windows on PRs: skipped (still reports, so the required check passes)
       # when the PR only touches ui/, docs, or workflows other than this one.
@@ -310,9 +310,9 @@ jobs:
       # run in parallel. nextest skips doctests; `cargo test --doc` runs them.
       - run: cargo nextest run --workspace --locked --profile ci
       - run: cargo test --doc --workspace --locked
-      - run: cargo build -p grokhub-app -p grokhub-hub
-      - name: Cabin binary exists
-        run: test -x target/debug/grokhub && test -x target/debug/grokhub-hub
+      - run: cargo build -p grokhub-hub
+      - name: Hub binary exists
+        run: test -x target/debug/grokhub-hub
   # Supply chain: known advisories (RustSec), licenses, wildcard deps and
   # crate sources, per deny.toml.
   deny:
@@ -664,14 +664,11 @@ jobs:
           shared-key: windows-release
           cache-on-failure: true
           save-if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}
-      - run: cargo build --release --locked -p grokhub-app -p grokhub-hub
-      - name: Cabin binaries exist
+      - run: cargo build --release --locked -p grokhub-hub
+      - name: Hub binary exists
         shell: pwsh
         run: |
-          if (-not (Test-Path target/release/grokhub.exe)) { throw 'missing grokhub.exe' }
           if (-not (Test-Path target/release/grokhub-hub.exe)) { throw 'missing grokhub-hub.exe' }
-      # Deck and web search screenshots moved to deck-shots.yml (manual runs
-      # only): they took over 30 minutes and never gated anything.
       - name: Pack script locks
         shell: pwsh
         run: ./scripts/make-windows-release.tests.ps1

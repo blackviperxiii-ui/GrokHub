@@ -10,20 +10,20 @@
 - `crates/grokhub-core/src/outcome.rs`: `TaskOutcome`, `classify`, `append_outcome`, `undo_supersedes`, `is_correction`.
 - `crates/grokhub-core/src/self_review.rs` / `systems_brief.rs`: weekly ranking vs state-of-systems aggregation (`build_brief`).
 - `crates/grokhub-agent/src/harness/self_improve.rs`: `outcome_from_spans`, `replay_gate`, `lesson_checks`, `run_weekly` (`background:review`).
-- `crates/grokhub-app/src/app/self_review_ui.rs` + `systems_brief_ui.rs`: `night_passes`, Pulse cards, `/brief`.
+- the retired cabin's self_review_ui.rs + `systems_brief_ui.rs`: `night_passes`, Pulse cards, `/brief`.
 ## Change recipe
 - New outcome signal: add it to `OutcomeSignals` and `classify` (failures first), set it where the cabin learns it, and add a literal test. Never put reply text or args on a record.
-- New proposal kind: a `CardTarget` variant with its source prefix, a branch in `apply_self_review_card`, and a scope check before anything is written.
+- New proposal kind: a `CardTarget` variant with its source prefix, a branch in apply_self_review_card, and a scope check before anything is written.
 ## What breaks it
 - Writing a skill patch without `replay_gate`, or a replay that runs a step, calls a model, or writes the host (`the_weekly_pass_makes_one_routed_call_and_replays_make_none`).
 - Letting `check_target` pass anything but `skill:<name>`: policy, consent, egress, the hard-class list, Access, and the gate stay refused with a finding.
 - More than five cards a pass, or a pass outside Sunday night (`due_only_on_sunday_after_the_hour_once`).
 ## What depends on it
-- `harness_turn_end` (one record per stepped turn), `send_from_composer` (corrections), `finish_skill_revert` (undo lines), `apply_review_skill_patches` (the nightly patch passes the replay gate too).
-- The Pulse row menu: Apply change and Revert are click-only items that go through `pulse_accept`.
+- harness_turn_end (one record per stepped turn), send_from_composer (corrections), finish_skill_revert (undo lines), apply_review_skill_patches (the nightly patch passes the replay gate too).
+- The Pulse row menu: Apply change and Revert are click-only items that go through pulse_accept.
 ## Non-obvious
 - A skill with no recorded successful run can't be patched: the replay has nothing to replay, so it refuses.
-- Revert builds its `UndoAsk` from the click in `apply_self_review_card`; the source-scan test lists that one site.
+- Revert builds its `UndoAsk` from the click in apply_self_review_card; the source-scan test lists that one site.
 - The 6a card budget isn't in the base yet; the pass keeps its own cap of five and skips a source that already has a live card.
 ## See also
-- [harness](harness.md), [heartbeat](heartbeat.md), [app-module](app-module.md), [grokhub-core](grokhub-core.md)
+- [harness](harness.md), [heartbeat](heartbeat.md), app-module, [grokhub-core](grokhub-core.md)

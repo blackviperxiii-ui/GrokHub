@@ -72,8 +72,6 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("crates/grokhub-agent/src/client.rs", 1, "XaiClient::once: egress guard (api.x.ai); a refusal is Protocol, never retried"),
     ("crates/grokhub-agent/src/ws_mode.rs", 2, "WsPool::turn (TCP connect, then the WebSocket upgrade): XaiClient::over_socket runs the egress guard (api.x.ai) first; a refusal is Protocol, never retried"),
     ("crates/grokhub-agent/src/route/providers.rs", 1, "providers you added: guard_provider / provider_or_park"),
-    ("crates/grokhub-app/src/xai.rs", 1, "cabin Grok calls (STT, TTS, Imagine): egress_ok"),
-    ("crates/grokhub-app/src/stt_stream.rs", 1, "voice mode streaming speech-to-text (api.x.ai WebSocket): egress_ok before the TCP connect; also off behind a proxy"),
     // Model registry, probes, connectivity.
     ("crates/grokhub-agent/src/route/sources.rs", 1, "model listing: egress guard; token probe: offline::check_url"),
     ("crates/grokhub-core/src/connectivity.rs", 1, "default_http_client (facade agent) for the re-probe: run_probe_if_due sends nothing while on; the net log speed test calls offline::refuse first"),
@@ -84,34 +82,19 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("crates/grokhub-agent/src/tools/media.rs", 1, "Imagine media: egress guard"),
     ("crates/grokhub-agent/src/memory_embed.rs", 1, "memory recall's embedding model from Hugging Face (HX-12): offline::refuse, then egress guard + public_only on every hop; a pinned hash check before a file is kept"),
     ("crates/grokhub-agent/src/sandbox/proxy.rs", 2, "sandboxed shell's egress proxy (HX-11): egress guard on every CONNECT and request before it dials the host or the app's own upstream proxy; the Unix-socket bridge only dials that same proxy on loopback"),
-    ("crates/grokhub-app/src/app/pulse_ui.rs", 1, "Pulse previews: egress_ok"),
-    ("crates/grokhub-app/src/app/pulse_sources_ui.rs", 1, "Pulse sources: egress_ok on every hop"),
     ("src-tauri/src/voice.rs", 1, "push-to-talk speech to text: guard_quiet (chat data) before the POST; the test override is plain-http loopback only"),
     ("crates/grokhub-agent/src/xai_keychain.rs", 1, "Sign in with Grok (desktop app and grokhub-hub --oauth) to xAI's auth host: guard_quiet (codes and tokens only); the test override is loopback only"),
     ("src-tauri/src/pulse_feed.rs", 2, "Pulse feed: guard_quiet + public_only_resolve; LoopbackNet is loopback only"),
-    ("crates/grokhub-app/src/github.rs", 1, "GitHub tool: egress_ok"),
     ("crates/grokhub-agent/src/mods_net.rs", 1, "mod sources (both shells): offline::refuse + guard_quiet on every hop"),
-    ("crates/grokhub-app/src/driver_blocklist.rs", 1, "Microsoft's driver blocklist (Windows, monthly): offline::refuse + egress_ok on every hop, public_only"),
     ("crates/grokhub-agent/src/plugins.rs", 2, "marketplace index: egress guard; plugin git clone: offline::check_url"),
-    ("crates/grokhub-app/src/app/library_ui/game_art.rs", 1, "store art: egress_ok"),
     ("src-tauri/src/pc_files_run.rs", 1, "PC helpers printer alerts: the user's printer only, LAN-only host check before every GET, no redirects (a public host is refused); the net log speed test calls offline::refuse first"),
     ("src-tauri/src/library.rs", 1, "Library store art: guard_quiet + public_only resolve, no redirects; Play only spawns the OS opener for steam://rungameid/<digits>"),
-    ("crates/grokhub-app/src/app/gw2_ui.rs", 1, "Guild Wars 2 API: egress_ok"),
-    ("crates/grokhub-app/src/app/destiny_ui.rs", 1, "Bungie.net API: egress_ok"),
-    ("crates/grokhub-app/src/app/battlenet_ui.rs", 1, "Battle.net sign-in token and WoW profile API: egress_ok"),
-    ("crates/grokhub-app/src/app/osrs_ui.rs", 1, "OSRS hiscores: egress_ok"),
     ("src-tauri/src/games.rs", 3, "GW2, OSRS and Destiny companion refresh: guard_quiet before each GET/POST; Offline only maps to the cabin's game-specific refuse lines"),
     // MCP (HTTP transport + OAuth) and the MCP registry.
     ("crates/grokhub-agent/src/mcp/http.rs", 1, "connect / ping / call and OAuth sign-in (mcp/oauth.rs): egress guard; loopback servers still go"),
     ("crates/grokhub-core/src/mcp_catalog.rs", 1, "registry refresh: guard_mcp_registry_url refuses while on"),
     // Sign-in, updates, downloads.
-    ("crates/grokhub-app/src/oauth.rs", 1, "xAI sign-in (auth_agent callers): egress_ok"),
-    ("crates/grokhub-app/src/imagine_auth.rs", 1, "Imagine sign-in (auth_agent callers): egress_ok"),
-    ("crates/grokhub-app/src/update.rs", 1, "latest tag check: egress_ok"),
-    ("crates/grokhub-app/src/release_update.rs", 1, "release download: egress_ok; the plan is refused first (update_cmds_*)"),
     ("crates/grokhub-core/src/update.rs", 2, "git fetch of the channel tips: offline::refuse"),
-    ("crates/grokhub-app/src/app/model_download_ui.rs", 1, "Hugging Face model: egress_ok + model_download::download refuses while on"),
-    ("crates/grokhub-app/src/app/local_ai_ui.rs", 1, "engine download: runtime_download_url_ok + download_engine refuse while on"),
     ("src-tauri/src/shell_update.rs", 1, "shell self-update release list: guard_quiet + public_only; the plugin's check and download refuse first (offline::refuse)"),
     ("src-tauri/src/local_engine.rs", 2, "engine and HF downloads: runtime_download_url_ok, download_engine and model_download::download refuse while on"),
     // On-device model (loopback only).
@@ -122,10 +105,7 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("crates/grokhub-agent/src/route/local_image.rs", 1, "picture guard against its own loopback llama-server"),
     ("crates/grokhub-agent/src/route/local_spec.rs", 2, "speed test and refusal check against the loopback sidecar"),
     // The app's own desktop, CDP, hub and LAN features.
-    ("crates/grokhub-app/src/desktop.rs", 3, "hub health and CDP HTTP (loopback_agent), CDP websocket: loopback via egress_ok"),
     ("crates/grokhub-hub/src/doctor.rs", 1, "--doctor reads its own hub's /v1/health on 127.0.0.1 only"),
-    ("crates/grokhub-app/src/app/print_alerts_ui.rs", 1, "the user's printer: LAN, allowed (a public host is refused by egress_ok)"),
-    ("crates/grokhub-app/src/app/lan_host.rs", 1, "UDP connect to TEST-NET-1 to read the LAN address: sends nothing"),
     ("src-tauri/src/remote.rs", 2, "UDP connect to TEST-NET-1 to read the LAN address (sends nothing), and an empty TCP connect to its own web access server to wake its worker pool"),
     ("src-tauri/src/remote_tls.rs", 1, "Web access TLS front proxies to its own loopback server"),
     // Game companions: loopback game clients only (game-data paths are not changed).
@@ -135,7 +115,6 @@ const GUARDED: &[(&str, usize, &str)] = &[
     // Words in lists, not spawns.
     ("crates/grokhub-agent/src/perm/risk.rs", 1, "downloader word list for shell risk"),
     ("crates/grokhub-agent/src/auto_review/routine_git.rs", 2, "routine git verbs list"),
-    ("crates/grokhub-app/src/app/loadout_home.rs", 1, "home feed word list"),
     ("crates/grokhub-core/src/companion/wardrobe.rs", 1, "tool-title mood word list"),
 ];
 

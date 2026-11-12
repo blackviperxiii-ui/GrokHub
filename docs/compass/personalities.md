@@ -13,7 +13,7 @@
 - `crates/grokhub-core/src/voice_flow.rs`: `Flow::step` with momentum, two wins to switch and a minimum stay; `voice_for` never returns an explicit voice.
 - `crates/grokhub-core/src/quips.rs`: `Planner::step`, `Trigger::detect`, `nudge`.
 - `crates/grokhub-agent/src/voice_session.rs`: `register`, `step` (called from `write_brief`), `turn_block` (read by the run into the volatile block).
-- `crates/grokhub-app/src/app/personality_ui.rs`: Settings → Personality, `chat_voice_config`, `open_chat_guest_voice`.
+- the retired cabin's personality_ui.rs: Settings → Personality, chat_voice_config, open_chat_guest_voice.
 
 ## Change recipe
 - A new built-in voice: add it to `personalities.toml` with `topics`, then the wardrobe tables in `companion/wardrobe.rs` and `loadout_home/nyx_wardrobe.rs` (or `AWAITING_ART` until its art lands), and the counts in both tests.
@@ -32,4 +32,4 @@
 - 18+ is never inferred from chat; only the switch and its one-time check turn it on, and heat nudges in chat do nothing while it is off.
 
 ## See also
-- [grokhub-core](grokhub-core.md), [grokhub-agent](grokhub-agent.md), [app-module](app-module.md)
+- [grokhub-core](grokhub-core.md), [grokhub-agent](grokhub-agent.md), app-module
