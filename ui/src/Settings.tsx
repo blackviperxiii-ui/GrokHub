@@ -26,8 +26,10 @@ import { Interests } from "./Interests";
 import { AiModels } from "./AiModels";
 import { LocalAi } from "./LocalAi";
 import { Permissions } from "./Permissions";
+import { GameWatch } from "./GameWatch";
 import { PcHelpers } from "./PcHelpers";
 import { ScreenshotExplain } from "./ScreenshotExplain";
+import { SteamPulseSources } from "./SteamPulseSources";
 import { Personality } from "./Personality";
 import { Playbooks } from "./Playbooks";
 import { Learned } from "./Learned";
@@ -265,6 +267,7 @@ export function Settings({
               />
             )}
             {section === "behavior" && <ScreenshotExplain />}
+            {section === "behavior" && <GameWatch />}
             {section === "behavior" && <WorkboardTidy />}
             {section === "appearance" && (
               <Appearance
@@ -283,6 +286,7 @@ export function Settings({
             {section === "pcHelpers" && caps.autoSetup && <PcHelpers />}
             {section === "code" && caps.code && <CodeSettings />}
             {section === "pulse" && caps.pulse && <Interests />}
+            {section === "pulse" && caps.pulse && <SteamPulseSources />}
             {section === "localAi" && caps.localAi && <LocalAi />}
             {section === "aiModels" && caps.localAi && <AiModels />}
             {section === "webAccess" && caps.webAccess && <WebAccess />}

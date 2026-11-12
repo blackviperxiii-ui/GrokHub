@@ -1,0 +1,1 @@
+- Shell: opt-in game watcher (GSI cfg write/remove) and Pulse Steam achievement / wishlist Settings rows, same keys and defaults as the cabin.

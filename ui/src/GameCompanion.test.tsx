@@ -12,6 +12,7 @@ const api = vi.hoisted(() => ({
 }));
 
 vi.mock("./api", () => api);
+vi.mock("./GameWatch", () => ({ GameWatch: () => <p>Game watcher compact</p> }));
 
 import { GameCompanion, NEWS_UNAVAILABLE, NO_NEWS, noteIdFor } from "./GameCompanion";
 

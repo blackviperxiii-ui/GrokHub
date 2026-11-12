@@ -19,6 +19,7 @@ mod brand_guard;
 pub mod capabilities;
 pub mod changes;
 pub mod chips;
+mod code_agent;
 mod code_rollback;
 mod code_sessions;
 pub mod command_box;
@@ -39,6 +40,7 @@ pub mod diagnostics;
 pub mod episode;
 pub mod export;
 pub mod game_companion;
+pub mod game_watch;
 pub mod games;
 pub mod goals;
 mod helper_asks;
@@ -687,6 +689,9 @@ async fn chat_turn(
     let config_dir = state.config_dir.clone();
     // A Code tab session works in its own project's folder, not the app's.
     let own_folder = state.code_sessions.of(&conversation_id);
+    // Its agent pushes through the Code tab's push guard and codes with the
+    // bundled skills always on.
+    code_agent::bind(&state.config_dir, &conversation_id, own_folder.is_some());
     if capabilities::current().pulse {
         // What the person says in chat steers the Feed writer's taste note.
         pulse_feed::note_chat(&config_dir, &text, grokhub_core::now_ms());
@@ -1162,6 +1167,7 @@ fn close_chat(state: State<'_, ShellState>, conversation_id: String) {
 fn end_chat(state: &ShellState, conversation_id: &str) {
     drop_worker(state, conversation_id);
     state.code_sessions.forget(conversation_id);
+    code_agent::bind(&state.config_dir, conversation_id, false);
     if current(state).last_chat == conversation_id {
         set_last_chat(state, "");
     }
@@ -3192,10 +3198,91 @@ async fn companion_set_note(
 }
 
 #[tauri::command]
-async fn game_wow() -> Result<games::WowView, String> {
+async fn get_game_watch(state: State<'_, ShellState>) -> Result<game_watch::GameWatch, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || game_watch::read(&dir)).await
+}
+
+#[tauri::command]
+async fn set_game_watch(
+    state: State<'_, ShellState>,
+    on: bool,
+) -> Result<game_watch::GameWatch, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || game_watch::set(&dir, on, None, grokhub_core::game_watch_gsi::GSI_PORT))
+        .await?
+}
+
+#[tauri::command]
+async fn get_steam_pulse(state: State<'_, ShellState>) -> Result<steam_checks::SteamPulse, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || steam_checks::pulse_status(&dir)).await
+}
+
+#[tauri::command]
+async fn set_steam_achievements(
+    state: State<'_, ShellState>,
+    on: bool,
+) -> Result<steam_checks::SteamPulse, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || steam_checks::set_achievements(&dir, on)).await?
+}
+
+#[tauri::command]
+async fn set_steam_wishlist(
+    state: State<'_, ShellState>,
+    on: bool,
+) -> Result<steam_checks::SteamPulse, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || steam_checks::set_wishlist(&dir, on)).await?
+}
+
+#[tauri::command]
+async fn set_steam_wishlist_threshold(
+    state: State<'_, ShellState>,
+    threshold: String,
+) -> Result<steam_checks::SteamPulse, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || steam_checks::set_threshold(&dir, &threshold)).await?
+}
+
+#[tauri::command]
+async fn save_steam_id(
+    state: State<'_, ShellState>,
+    draft: String,
+    use_local: bool,
+) -> Result<steam_checks::SteamPulse, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || steam_checks::save_id(&dir, &draft, use_local)).await?
+}
+
+#[tauri::command]
+async fn forget_steam_id(state: State<'_, ShellState>) -> Result<steam_checks::SteamPulse, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || steam_checks::forget_id(&dir)).await?
+}
+
+#[tauri::command]
+async fn steam_check_now(
+    state: State<'_, ShellState>,
+    module: String,
+) -> Result<steam_checks::SteamPulse, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || steam_checks::check_now(&dir, &module)).await?
+}
+
+#[tauri::command]
+async fn game_wow(state: State<'_, ShellState>) -> Result<games::WowView, String> {
     capabilities::needs(capabilities::current().library, "Library")?;
-    // Shell has no game-watcher switch yet; companion screens follow combat log when possible.
-    off_main(|| games::wow_view(true)).await
+    let dir = state.config_dir.clone();
+    off_main(move || games::wow_view(game_watch::is_on(&dir))).await
 }
 
 #[tauri::command]
@@ -5771,6 +5858,15 @@ pub fn run() {
             battlenet_open_folder,
             companion_frame,
             companion_set_note,
+            get_game_watch,
+            set_game_watch,
+            get_steam_pulse,
+            set_steam_achievements,
+            set_steam_wishlist,
+            set_steam_wishlist_threshold,
+            save_steam_id,
+            forget_steam_id,
+            steam_check_now,
             game_wow,
             game_wow_addon,
             game_gw2,

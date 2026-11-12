@@ -1175,7 +1175,7 @@ impl Run<'_, '_> {
             return GateOutcome::Allow;
         }
         let desk = tools::desk_flags(&call.name, &self.k.gate, Some(self.k.desktop));
-        match gate::decide_with(
+        let base = gate::decide_with(
             &self.k.gate,
             &call.name,
             &call.arguments,
@@ -1183,6 +1183,15 @@ impl Run<'_, '_> {
             desk,
             self.k.workspace,
             self.k.perms,
+        );
+        // A Code tab session's own guard (its push guard) after the gate.
+        match crate::code_guard::apply(
+            &self.ep.chat_id,
+            &call.name,
+            &call.arguments,
+            self.k.workspace,
+            self.k.perms,
+            base,
         ) {
             Decision::Run => GateOutcome::Allow,
             Decision::Ask => GateOutcome::Park {

@@ -50,6 +50,8 @@ const api = vi.hoisted(() => ({
   gameStardew: vi.fn(),
   gameMinecraft: vi.fn(),
   gameRl: vi.fn(),
+  getGameWatch: vi.fn<() => Promise<{ on: boolean; note: string }>>(),
+  setGameWatch: vi.fn<(on: boolean) => Promise<{ on: boolean; note: string }>>(),
 }));
 
 vi.mock("./api", () => api);
@@ -146,6 +148,7 @@ describe("Library", () => {
     api.getBattlenet.mockResolvedValue({ found: false, games: [] });
     api.getMission.mockResolvedValue({ mission: null, xp: EMPTY_XP });
     api.companionFrame.mockResolvedValue({ note: "", news: [], guidesUrl: null });
+    api.getGameWatch.mockResolvedValue({ on: false, note: "" });
     api.gameWow.mockResolvedValue({
       title: "WORLD OF WARCRAFT",
       running: false,

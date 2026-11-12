@@ -6,6 +6,7 @@
 #![cfg_attr(not(test), warn(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod activity;
+pub mod chat_push;
 pub mod deploy;
 pub mod files;
 pub mod repo;
