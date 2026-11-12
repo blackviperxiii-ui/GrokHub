@@ -305,10 +305,7 @@ fn write_notes_file(path: &Path, body: &str) -> Result<(), String> {
     if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
         let prev = path.with_file_name(format!("{name}.prev"));
         if path.exists()
-            && std::fs::metadata(path)
-                .map(|m| m.len())
-                .unwrap_or(u64::MAX)
-                <= NOTES_CAP
+            && std::fs::metadata(path).map(|m| m.len()).unwrap_or(u64::MAX) <= NOTES_CAP
         {
             let _ = std::fs::copy(path, &prev);
         }
@@ -1503,10 +1500,8 @@ mod tests {
         assert_eq!(archive_setting().days, 14);
         assert_eq!(set_retention(180).unwrap().days, 180);
         assert_eq!(set_archive(30).unwrap().days, 30);
-        let text = std::fs::read_to_string(
-            grokhub_agent::perm::config_dir().join("app.json"),
-        )
-        .unwrap();
+        let text =
+            std::fs::read_to_string(grokhub_agent::perm::config_dir().join("app.json")).unwrap();
         assert!(text.contains("\"amrRetentionDays\": 180"), "{text}");
         assert!(text.contains("\"chatArchiveDays\": 30"), "{text}");
         assert_eq!(retention_days(), 180);
